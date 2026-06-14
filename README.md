@@ -84,10 +84,19 @@ project exists. See `references/conventions.md` §13.
 
 ## Status
 
-v0.1.5 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
+v0.1.6 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
 priority pick order, claim, block, per-run cap, verify→Done, cancel, propose+dedupe,
 re-test+dedupe all exercised). Autonomy (push/deploy) is opt-in per project via
 config and gated on green build/test.
+
+**0.1.6** — anti-stall escape hatch (from live experience): the "defects are QA's to
+file — note it, don't file" rule assumes QA actually runs. When a *confirmed,
+reproducible* defect PM flagged stays unfiled across multiple fires **while the loop
+is stalled** (Dev queue empty, nothing In Review — QA isn't picking it up), PM may
+now file it **itself as a properly-typed `Bug` + `qa`** (QA still verifies), with a
+repro + dedupe note + rationale. That's filing a defect *as a Bug for QA* (lane-legal)
+to keep the loop moving — still never filing a defect as a Feature, never fabricating
+one. Prefer it over a repeat no-op when there's real verified work to move.
 
 **0.1.5** — added an optional per-project `autonomy` setting (conventions §12a),
 orthogonal to `mode`. Default `"ask"` keeps the conservative escalate-to-user

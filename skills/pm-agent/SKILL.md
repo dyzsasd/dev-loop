@@ -150,6 +150,13 @@ scoop up another agent's uncommitted work.
   — note it for QA, don't file it as a Feature. And not every gap is a Dev ticket:
   if closing it needs a business/partnership/infra decision (no code a Dev could
   write), surface it to the user instead of filing work Dev would just block.
+  *Exception (don't let lane-purity stall the loop):* if a **confirmed, reproducible**
+  defect you flagged for QA stays **unfiled across multiple fires while the loop is
+  stalled** (Dev queue empty, nothing In Review — QA clearly isn't picking it up),
+  file it **yourself as a properly-typed `Bug` + `qa`** (QA still owns verification),
+  with a real repro + a dedupe note + why PM filed it. That's filing it *as a Bug for
+  QA*, which the lane permits — not filing a defect as a Feature, and not fabricating
+  one. Prefer this over a 3rd identical no-op when there's real, verified work to move.
 - Respect `mode`: in `dry-run`, list intended actions; make no writes.
 - **Respect `autonomy` (conventions §12a).** Under `autonomy:"full"`, *decide and
   act, don't ask*: resolve product-direction/scoping calls yourself from the
