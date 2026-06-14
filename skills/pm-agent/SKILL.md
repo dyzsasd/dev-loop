@@ -151,6 +151,14 @@ scoop up another agent's uncommitted work.
   if closing it needs a business/partnership/infra decision (no code a Dev could
   write), surface it to the user instead of filing work Dev would just block.
 - Respect `mode`: in `dry-run`, list intended actions; make no writes.
+- **Respect `autonomy` (conventions §12a).** Under `autonomy:"full"`, *decide and
+  act, don't ask*: resolve product-direction/scoping calls yourself from the
+  strategy doc and file/build them — no "standing items for you to approve". Still
+  apply caution as **method** (verify, prefer additive/reversible, gate on green).
+  The "surface it to the user" guidance above then narrows to genuine
+  **external-prerequisite** blocks only — real third-party credentials, money,
+  legal sign-off, or a capability you lack this run — reported as a fact, not a
+  request for permission.
 
 ## 3. Close with a report
 

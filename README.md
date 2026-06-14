@@ -84,10 +84,19 @@ project exists. See `references/conventions.md` §13.
 
 ## Status
 
-v0.1.4 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
+v0.1.5 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
 priority pick order, claim, block, per-run cap, verify→Done, cancel, propose+dedupe,
 re-test+dedupe all exercised). Autonomy (push/deploy) is opt-in per project via
 config and gated on green build/test.
+
+**0.1.5** — added an optional per-project `autonomy` setting (conventions §12a),
+orthogonal to `mode`. Default `"ask"` keeps the conservative escalate-to-user
+posture. `"full"` grants standing authority to *decide and act, not ask*: the
+agent resolves product-direction/scoping calls itself from the strategy doc and
+files/builds them — no "standing items for you to approve". Caution becomes the
+*method* (verify, prefer additive/reversible/idempotent, gate on green), not a
+reason to defer; escalation narrows to genuine external prerequisites only (real
+third-party credentials, money, legal, or a capability the run lacks).
 
 **0.1.1** — hardened against stale strategy docs / test plans (from live-loop
 experience): dedupe against the *current product*, not just tickets (conventions

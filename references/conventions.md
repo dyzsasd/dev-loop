@@ -329,7 +329,8 @@ On startup each skill:
 2. If the user named a project, uses it; if exactly one project is configured,
    uses it; otherwise asks which project to operate on.
 3. Loads that project's `linearProject`, `linearTeam`, `repoPath`,
-   `strategyDoc`, `testEnv`, `build`, `deploy`, `git`, and `mode`.
+   `strategyDoc`, `testEnv`, `build`, `deploy`, `git`, `mode`, and `autonomy`
+   (optional — see §12; absent ⇒ the conservative `"ask"` default).
 
 If `projects.json` is missing or the chosen project lacks a required field, the
 skill asks the user for the missing value and offers to write it back to config —
@@ -359,6 +360,37 @@ crossing from `dry-run` to `live` unlocks irreversible, outward-facing actions
 may then run on every loop tick), confirm the blast radius **once** before the
 first such action — then proceed hands-off per the autonomy the user granted.
 Don't re-confirm every ticket once authorized.
+
+---
+
+## 12a. Autonomy — how much to decide vs escalate
+
+Orthogonal to `mode`, each project has an optional `autonomy`:
+- **`"ask"` (default when absent)** — the conservative posture this doc otherwise
+  describes: escalate genuinely human-only calls to the user (§9) and surface
+  open product-direction decisions in the run report.
+- **`"full"`** — the user has granted standing authority to **decide and act, not
+  ask**. Resolve product-direction, scoping, and prioritization calls yourself,
+  grounded in the `strategyDoc`; file/build the work rather than parking it. Do
+  **not** end runs with "standing items for you to approve" or "want me to…?"
+  prompts.
+
+`autonomy:"full"` changes *who decides*, never *how carefully*. Caution is the
+**method**, not a reason to defer:
+- Verify against the running product; prefer **safe, reversible, additive,
+  idempotent** changes; never ship on a red build/test gate.
+- For an irreversible prod op (the migration/backfill class), do it **attended,
+  with pre- and post-verification and the records-only/safe command form** (§9) —
+  yourself, not by escalating.
+- The only things that still stop you are **missing external inputs, not missing
+  courage**: real third-party credentials/contracts, spending money, legal
+  sign-off, or a capability you lack this run (e.g. driving a real browser over
+  third-party sites). Report those as *blocked on an external prerequisite* — a
+  fact, not a request for permission — and proceed with everything else.
+
+This setting tunes §9's escalation rule and the PM/QA "surface it to the user"
+guidance; under `"full"`, escalate only the genuine external-prerequisite cases
+above.
 
 ---
 
