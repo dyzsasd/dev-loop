@@ -82,6 +82,15 @@ comment and either **resolve** (add the missing info / fix acceptance criteria,
 remove `blocked` + `needs-pm`, leave in `Todo`) or **cancel** (`Canceled`/
 `Duplicate` with a reason). See conventions §9.
 
+**Also catch half-unblocked & since-authorized tickets — `blocked` alone under-counts.**
+A ticket you previously **escalated** to the user can become resolvable out-of-band: the
+user grants the decision in a **comment**, or someone strips `blocked` but leaves a stale
+`needs-pm`. A `label:"blocked"` query then returns *empty* and you'd silently skip it. So
+each run also scan `label:"dev-loop"` + `label:"pm"` for **`needs-pm` tickets that no longer
+carry `blocked`** (and re-read the latest comment on anything you parked last run). If the
+user has supplied the missing decision/authorization, the block is resolved — finish the
+job: clear the stale `needs-pm`, and act.
+
 **Default to resolving — and actually unblock.** If Dev's block is a question, a
 design/scoping decision, or a missing detail *you can answer*, answer it in the
 ticket **and remove `blocked` + `needs-pm`** so Dev can pick it up. Supplying the
@@ -92,6 +101,18 @@ test*) so Dev can proceed safely, then unblock. Escalate to the user (leaving it
 blocked) **only** when the decision is genuinely theirs — an irreversible/
 destructive prod action (e.g. a prod DB migration), real money, legal, or a
 security sign-off a human must own. Don't punt an answerable design call to the user.
+
+**When the now-unblocked action is itself sensitive/irreversible, execute it attended —
+don't route it to unattended Dev.** If the user just authorized a one-off destructive-class
+op (a prod DB migration, a data backfill), resolving it by handing it to Dev's auto-pick set
+means it runs **unattended** on the next Dev fire — exactly the wrong place for an
+irreversible action. Instead, do it yourself in this PM run, with verification on both
+sides: confirm the precondition (e.g. that the schema objects already exist before
+`migrate resolve --applied` records them) *before* acting, use the **safe records-only**
+form of the command (never the variant that mutates data — `migrate deploy`/`db push`), and
+re-check the end state (`migrate status` clean) *after*. Then mark it Done with the evidence.
+Staging discipline still applies (conventions §7): commit only your ticket's files; never
+scoop up another agent's uncommitted work.
 
 ### Job C — Propose new features from the strategy doc
 1. Read `strategyDoc`. It is your north star — **only propose work that advances a

@@ -84,7 +84,7 @@ project exists. See `references/conventions.md` §13.
 
 ## Status
 
-v0.1.3 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
+v0.1.4 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
 priority pick order, claim, block, per-run cap, verify→Done, cancel, propose+dedupe,
 re-test+dedupe all exercised). Autonomy (push/deploy) is opt-in per project via
 config and gated on green build/test.
@@ -109,3 +109,14 @@ build-behind-a-flag-off-by-default) so Dev can proceed. Escalate to the user onl
 for genuinely human-only calls (irreversible prod ops, money, legal, security
 sign-off). Supplying the info **is** the resolution; "answered but left blocked" is
 not.
+
+**0.1.4** — close the escalation loop (from live experience). A standing
+user-escalation usually resolves *out-of-band*: the human authorizes/decides in a
+**comment** and `blocked` gets stripped while a stale `needs-*` lingers — so a plain
+`label:"blocked"` query misses it. Job B now also re-reads parked tickets' latest
+comments and treats a `needs-*` label without `blocked` as "finish the job" (PM
+SKILL §Job B + conventions §9). And when the now-unblocked action is itself
+sensitive/irreversible (e.g. a user-authorized prod DB migration), the **owner
+executes it attended** — verify precondition → safe/records-only command form (never
+the data-mutating variant) → verify end state — rather than routing an irreversible
+op into another agent's unattended auto-pick set.

@@ -282,6 +282,17 @@ regression test — so Dev proceeds safely), not by replying and leaving it park
 Reserve a standing block / user-escalation for decisions only a human can own:
 irreversible/destructive prod actions, money, legal, or security sign-off.
 
+**A standing escalation can resolve out-of-band — re-scan, don't fire-and-forget.**
+When you escalate to the user, the resolution often arrives as a **comment** on the ticket
+(an authorization, the decision you asked for), and `blocked` may get stripped while a stale
+`needs-*` lingers — so a plain `label:"blocked"` query misses it. Each run, also re-read the
+latest comment on tickets you parked, and treat a `needs-*` label without `blocked` as
+"finish the job." Once the human supplies the decision, the block is resolved: clear the
+stale routing label and act. If the now-unblocked action is itself sensitive/irreversible,
+the **owner executes it attended** (verify precondition → use the safe/records-only command
+form → verify end state), rather than routing an irreversible op into another agent's
+unattended auto-pick set.
+
 Dev's pick query (§5) must exclude `blocked` tickets.
 
 > Optional board nicety: the user may add a real "Blocked" workflow state in the
