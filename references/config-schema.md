@@ -16,6 +16,7 @@ ship/deploy settings. One file, many products.
       "repoPath":      "/abs/path/to/repo",   // where Dev works (required for dev-agent)
       "strategyDoc":   "docs/strategy.md",    // PM's north star, relative to repoPath (required for pm-agent)
       "mode":          "live",        // "live" | "dry-run"  (see conventions §12)
+      "autonomy":      "ask",         // "ask" (default) | "full" — who decides vs escalates (see conventions §12a)
 
       "testEnv": {                    // where QA + verification run
         "baseUrl":     "https://monpick.vercel.app",
@@ -55,9 +56,18 @@ ship/deploy settings. One file, many products.
   (install the browser driver, create a venv, etc.). QA runs it when the tooling
   named in `testCommand` is missing, so a fresh machine or a scheduled run isn't
   blocked by an absent harness. Keep it idempotent.
-- **Autonomy** is expressed entirely through `git` + `deploy`. The fully-autonomous
-  "push + deploy to prod" mode is `autoCommit/autoPush/autoDeploy: true` with a
-  `deploy.command`. To put a human in the loop, set `autoPush`/`autoDeploy: false`.
+- **Two orthogonal kinds of autonomy** (conventions §12a):
+  - *How code lands* — the `git` + `deploy` flags. Fully hands-off shipping is
+    `autoCommit/autoPush/autoDeploy: true` with a `deploy.command`; to put a human
+    in the loop on landing, set `autoPush`/`autoDeploy: false`.
+  - *How much the agents decide vs escalate* — the top-level `autonomy` field.
+    `"ask"` (default) keeps the conservative posture (escalate genuinely human-only
+    calls to the user, surface open product-direction decisions). `"full"` grants
+    standing authority to **decide and act, not ask**: resolve scoping/product-
+    direction calls from the `strategyDoc`, do irreversible prod ops attended
+    (pre/post-verify + records-only form), and stop only for genuine **external
+    prerequisites** (real credentials, money, legal) — never an interactive prompt.
+    Caution stays the method, not a reason to defer.
 - **Safety**: there is no MonPick Linear project yet. Either create a dedicated
   project (recommended) or point `linearProject` at one you own. The `dev-loop`
   label (conventions §2) is what actually protects the human backlog, but a

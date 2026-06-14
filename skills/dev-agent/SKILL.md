@@ -27,13 +27,13 @@ blocked protocols, safety, config) — they override this file on conflict:
 
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project, and load `linearProject`, `linearTeam`, `repoPath`,
-`strategyDoc`, `build`, `git`, `deploy`, and `mode`. If that path doesn't resolve
+`strategyDoc`, `build`, `git`, `deploy`, `mode`, and `autonomy` (§12a). If that path doesn't resolve
 (e.g. `${CLAUDE_PLUGIN_DATA}` expands to an empty or `-local` dir), fall back to
 `~/.claude/plugins/data/dev-loop/projects.json` or search
 `~/.claude/plugins/data/**/projects.json` before asking the user.
 
 **Open every run** with a one-line summary: project, Linear project/team,
-`repoPath`, and `mode`. Also state the ship policy you'll follow from config
+`repoPath`, `mode`, and `autonomy` (§12a). Also state the ship policy you'll follow from config
 (`autoCommit`/`autoPush`/`autoDeploy` + `deploy.command`) so the user knows
 whether this run will touch prod. In `dry-run`: groom and write code locally if
 helpful, but make **no** Linear mutations, **no** push, and **no** deploy — print
@@ -85,6 +85,16 @@ moved. A correct slice shipped + a clear follow-up beats a giant half-built
 deploy. (Still *block* — don't split — when the ticket is **unclear**; splitting
 is for clear-but-large.)
 
+**Dormant-behind-a-flag is the other answer — don't re-split it.** When the
+gate-unverifiable part is already scoped (by the owner, or sensibly by you) to
+ship *disabled in prod* — a feature flag that's OFF by default so the page/endpoint
+returns 404/no-op until a human flips it after manual QA — build the **whole**
+ticket and ship it dormant. The flag already contains the exact risk a split would
+defer, so fragmenting a feature the owner deliberately designed to ship dormant
+just creates churn. Make the gates verify the *OFF* state (flag off → 404/no-op,
+zero public surface), unit-test the security-critical core (token/authz/rate-limit),
+and hand off with the explicit human enable-then-QA step spelled out.
+
 ### Step 5 — Gate before shipping
 Run the project's `build` commands (`typecheck`, `build`, `test`) in order. If any
 fails: fix it, or if you can't, revert your change and **block** the ticket with
@@ -117,7 +127,10 @@ Only after green gates:
   and any time you're overriding the configured `mode` mid-run (conventions §12) —
   confirm the blast radius with the user before that first irreversible deploy,
   unless they've already authorized hands-off shipping this session.** Once
-  authorized, proceed per config without re-asking on every ticket.
+  authorized, proceed per config without re-asking on every ticket. **Under
+  `autonomy:"full"` (§12a) that authorization is standing — do not pause for a
+  confirmation even on the first prod deploy; ship per config and report the blast
+  radius as a fact.**
 If any of these is `false`, stop at that step and note it in the report (a human
 will take it from there).
 
@@ -138,6 +151,19 @@ can verify. Then loop to Step 1.
 - Respect `mode` and the `git`/`deploy` flags exactly — they encode the user's
   autonomy choice. When `autoDeploy` is on, you are shipping to real users; treat
   the green-gate rule as inviolable.
+- **Respect `autonomy` (conventions §12a).** Under `autonomy:"full"`, *decide and
+  act, don't ask* — make scoping/splitting/prioritization calls yourself and ship
+  per config; never pause for an interactive human confirmation (not even before
+  the first prod deploy). Caution stays the **method**: verify against the running
+  product, prefer additive/reversible/idempotent changes, gate on green. Genuine
+  *ticket-content* ambiguity still routes to PM/QA via a Linear **block** (§9) —
+  that's the async escalation path, not a human prompt. An irreversible prod op
+  (migration/backfill) you do **attended yourself** (pre/post-verify + the
+  records-only/safe command form), not by escalating. The only real stoppers are
+  **missing external inputs, not missing courage** — real third-party
+  credentials/contracts, spending money, legal sign-off, or a capability you lack
+  this run; report those as *blocked on an external prerequisite* (a fact) and
+  proceed with everything else.
 
 ## 3. Close with a report
 

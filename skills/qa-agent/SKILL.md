@@ -27,7 +27,7 @@ they override this file on conflict:
 
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project, and load `linearProject`, `linearTeam`, `repoPath`, `testEnv`,
-and `mode`. If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to
+`mode`, and `autonomy` (§12a). If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to
 an empty/`-local` dir), fall back to `~/.claude/plugins/data/dev-loop/projects.json`
 or search `~/.claude/plugins/data/**/projects.json` before asking the user.
 **If `testEnv` is missing or unclear, ask the user where to test before touching
@@ -41,7 +41,8 @@ than silently skipping tests because the harness isn't there. Offer to persist a
 working `testEnv.setup` to config so the next run is self-sufficient.
 
 **Open every run** with a one-line summary: project, Linear project/team, the
-test environment you'll use, and `mode` (`live` vs `dry-run`). In `dry-run`, make
+test environment you'll use, `mode` (`live` vs `dry-run`), and `autonomy` (§12a).
+In `dry-run`, make
 no Linear mutations — print the bugs you *would* file.
 
 > Safety: scope every Linear query with `label:"dev-loop"` + project; only touch
@@ -57,8 +58,21 @@ swept (a 5-minute loop will otherwise re-probe an unchanged product forever):
   per-project the repo SHA you last fully swept and when.
 - Each run, compute `git -C <repoPath> rev-parse HEAD`. If **Job A and Job B are
   both empty** AND `HEAD` is unchanged since that SHA, the testable surface hasn't
-  moved: skip Job C, report a one-line no-op ("no In Review/blocked work; HEAD
-  unchanged at `<sha>` — nothing new to test"), and stop.
+  moved: skip Job C and report a one-line no-op ("no In Review/blocked work; HEAD
+  unchanged at `<sha>` — nothing new to test"). **But don't bare-no-op forever** —
+  after a few consecutive idle fires on a static board, invest the fire in *new*
+  coverage instead of repeating the empty report: pick a surface / router /
+  persona-flow you have **not** swept before and audit it for the high-yield bug
+  classes in Job C (start with a cheap read-only static/API pass; only prod-probe
+  if it looks real). New coverage is *not* "re-testing an unchanged build" —
+  re-running already-green checks is. File only real, reproducible defects; a clean
+  audit is a healthy result you note and move on from. Rotate the surface each idle
+  fire so breadth grows rather than re-walking the same flows. **Track swept
+  surfaces in `qa-state.json`, and once the whole testable surface is covered,
+  stop expanding** — revert to the terse no-op until the diff or board moves again.
+  Re-auditing already-clean surfaces is the same zero-signal waste the change-gate
+  exists to prevent; coverage expansion is a *finite* backlog, not a perpetual
+  make-work loop.
 - Otherwise run Job C. A **new SHA means regression risk** — focus the sweep on
   what those commits touched (`git diff --stat <lastSweptSha>..HEAD`). After
   verifying, record the **SHA you actually swept** — NOT end-of-run `HEAD`, which
@@ -105,7 +119,11 @@ value. For each, do exactly one of:
   human-gated or destructive task back into Dev's auto-pick set is harmful. If it
   isn't already triaged, comment why it's parked and who it's waiting on; then
   surface it in your report. *Telling an information-block (yours to clear) apart
-  from a decision-block (not yours) is the core judgement of this job.*
+  from a decision-block (not yours) is the core judgement of this job.* Under
+  `autonomy:"full"` (§12a), "→ the user" narrows to a genuine **external
+  prerequisite** only (real credentials, money, legal sign-off); product/scope
+  calls still route to PM via Linear, and a Dev-owned prod op (Dev does it
+  attended) is *not* a human-escalation — never an interactive prompt.
 
 ### Job C — Hunt new bugs (happy paths + edge cases)
 1. Decide *what* to test from evidence, not vibes: read recent `dev-loop` tickets
@@ -154,6 +172,14 @@ value. For each, do exactly one of:
   productive. A trustworthy board beats ticket count.
 - **Stay in your lane.** A *missing capability* (not a defect) is a Feature for PM —
   note it for PM, don't file it as a Bug.
+- **Respect `autonomy` (conventions §12a).** Under `autonomy:"full"`, *decide and
+  act, don't ask*: triage, file, and re-test on your own judgement; clear
+  information-blocks yourself and route decision-blocks to PM via Linear — never an
+  interactive human prompt. Caution stays the **method** (reproduce before filing,
+  clean up shared-env state, don't pollute prod). Escalate to the *user* only a
+  genuine **external prerequisite** — real credentials, money, legal sign-off, or a
+  harness capability you lack this run — reported as a fact, not a request for
+  permission.
 - **Don't re-test an unchanged build.** Re-running already-green checks against
   the same SHA burns cycles for zero signal (see the change-gate preflight). Spend
   effort where the diff or the board actually moved.
