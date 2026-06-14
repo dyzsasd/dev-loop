@@ -1,0 +1,32 @@
+{
+  "defaultProject": "monpick",
+  "projects": {
+    "monpick": {
+      "linearTeam": "Citronetic",
+      "linearProject": "MonPick",
+      "repoPath": "/Users/shuai/workspace/citronetic/monpick",
+      "strategyDoc": "shopmy-analysis/15-parity-report.md",
+      "mode": "dry-run",
+      "testEnv": {
+        "baseUrl": "https://monpick.vercel.app",
+        "testCommand": "cd tests && python3 {suite}",
+        "notes": "Playwright Python suites in tests/. Personas: demo-creator@monpick.dev / password123 (creator), demo-brand@monpick.dev / password123 (brand), demo-shopper@monpick.dev / password123 (shopper)."
+      },
+      "build": {
+        "typecheck": "npx tsc --noEmit",
+        "build": "pnpm build",
+        "test": "pnpm exec tsx tests/*.test.ts"
+      },
+      "git": {
+        "defaultBranch": "main",
+        "autoCommit": true,
+        "autoPush": true,
+        "autoDeploy": true
+      },
+      "deploy": {
+        "command": "vercel --prod --yes"
+      },
+      "blockedStateName": null
+    }
+  }
+}

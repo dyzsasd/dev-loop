@@ -1,0 +1,5 @@
+.DS_Store
+*.log
+node_modules/
+# user-editable runtime config lives in ${CLAUDE_PLUGIN_DATA}, not in the repo
+projects.json
