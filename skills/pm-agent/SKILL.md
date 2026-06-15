@@ -58,6 +58,17 @@ otherwise re-explore an unchanged build and re-report "nothing to file" forever:
   shipped work may close existing gaps or open new ones. After exploring, record the
   **SHA you actually explored** (not end-of-run `HEAD`, which can move mid-run while a
   parallel Dev ships) so an unevaluated commit re-surfaces next run.
+- **Steady-state: don't re-hunt a feature-complete product every drain.** A fresh
+  Job C *is* sometimes warranted on an unchanged `HEAD` — when the structured
+  backlog is exhausted (you filed and verified everything) or the user pushes back
+  on cached no-ops — and you should run it then. But gap-hunting is *finite*: once a
+  real hunt comes back near-empty (≈0–1 fileable gaps, the rest verified
+  feature-complete), record that in `pm-state.json` and **revert to the terse
+  HEAD-unchanged no-op**. Do not re-run the expensive multi-agent hunt on every
+  subsequent idle fire — re-hunt only when `HEAD` moves *materially* (new commits
+  opening new surface) or the user redirects. Re-hunting a static, mature product is
+  the same zero-signal make-work the change-gate exists to prevent (mirrors the QA
+  agent's "once the whole testable surface is covered, stop expanding").
 
 ### Job A — Verify In Review items you own (clear the finish line first)
 Dev's finished work is the most valuable thing to move. Query:

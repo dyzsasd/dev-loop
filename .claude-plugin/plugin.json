@@ -2,7 +2,7 @@
   "name": "dev-loop",
   "displayName": "dev-loop — PM / QA / Dev",
   "description": "Three autonomous agents — PM, QA, and Dev — that run a software-development loop coordinated entirely through Linear ticket state. PM proposes and verifies features from a strategy doc; QA hunts and re-tests bugs; Dev pulls Todo tickets in priority order, implements, gates, and ships. Every ticket the system touches carries a `dev-loop` label so it never disturbs the human backlog.",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "author": {
     "name": "Shuai"
   },

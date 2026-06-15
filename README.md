@@ -84,10 +84,21 @@ project exists. See `references/conventions.md` §13.
 
 ## Status
 
-v0.1.7 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
+v0.1.8 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
 priority pick order, claim, block, per-run cap, verify→Done, cancel, propose+dedupe,
 re-test+dedupe all exercised). Autonomy (push/deploy) is opt-in per project via
 config and gated on green build/test.
+
+**0.1.8** — PM steady-state guard (from live experience): the change-gate stops a PM
+re-running Job C on an *unchanged* `HEAD`, but a long live run exposed the adjacent
+trap — once the structured backlog is exhausted, a PM legitimately runs a fresh Job C
+on an unchanged HEAD (or when the user pushes back on cached no-ops), and could then
+keep re-hunting a *feature-complete* product on every idle fire. Added a PM preflight
+bullet: after a real hunt comes back near-empty, record it and revert to the terse
+HEAD-unchanged no-op; re-hunt only on **material** HEAD movement or user redirect
+(mirrors the QA agent's existing "once the whole testable surface is covered, stop
+expanding"). Prevents the expensive multi-agent gap-hunt from becoming zero-signal
+make-work.
 
 **0.1.7** — project-scope every blocked/needs-* query template (from live experience).
 The Safety callouts always said "scope every query by `project`", and the In Review /
