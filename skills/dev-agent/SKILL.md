@@ -31,6 +31,10 @@ pick the project, and load `linearProject`, `linearTeam`, `repoPath`,
 (e.g. `${CLAUDE_PLUGIN_DATA}` expands to an empty or `-local` dir), fall back to
 `~/.claude/plugins/data/dev-loop/projects.json` or search
 `~/.claude/plugins/data/**/projects.json` before asking the user.
+(`strategyDoc` may be a repo file relative to `repoPath` **or** a Linear document —
+`{ "linearDocument": "<id|slug|url>" }` / a `linear.app/.../document/` URL. When you
+need it under `autonomy:"full"` to resolve scoping, read a Linear doc with
+`get_document`; Dev never *writes* the strategy doc — that's PM's job.)
 
 **Open every run** with a one-line summary: project, Linear project/team,
 `repoPath`, `mode`, and `autonomy` (§12a). Also state the ship policy you'll follow from config

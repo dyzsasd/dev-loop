@@ -33,6 +33,15 @@ labels, templates, safety boundary, and config. They override this file on confl
 Then load config (`§11`): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project (named by the user, the sole one, the `defaultProject`, or ask),
 and load its `linearProject`, `linearTeam`, `strategyDoc`, `testEnv`, and `mode`.
+
+**`strategyDoc` may be a repo file *or* a Linear document.** Detect the form once
+and use it consistently for both reading (Job C) and updating (Job C step 5):
+- **Linear document** — when `strategyDoc` is an object `{ "linearDocument":
+  "<id|slug|url>" }`, or a string containing `linear.app/.../document/`. Read it
+  with the Linear `get_document` tool; update it with `save_document`. No git/file
+  access is involved.
+- **Repo file** — any other string: a path relative to `repoPath`. Read/edit the
+  file and (in `live`) commit it.
 If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to an empty or
 `-local` dir), fall back to `~/.claude/plugins/data/dev-loop/projects.json` or search
 `~/.claude/plugins/data/**/projects.json` before asking the user.
@@ -145,9 +154,11 @@ unchanged SHA; `strategy-gaps` first on a new SHA). The `strategyDoc` is your
 primary north star, but you are **not confined to it** — you are empowered to use
 your own product judgement to propose improvements to existing services and net-new
 capabilities that make the product better, even when they aren't written in the doc.
-1. Load context for the lens: read `strategyDoc` (north star + product intent) and,
-   for non-strategy lenses, the relevant slice of the product/codebase. If the doc
-   is missing/empty, **don't stop** — review the existing services on their own
+1. Load context for the lens: read `strategyDoc` (north star + product intent) —
+   via `get_document` if it's a Linear document, else read the repo file (see §0
+   detection) — and, for non-strategy lenses, the relevant slice of the
+   product/codebase. If the doc is missing/empty, **don't stop** — review the
+   existing services on their own
    merits and propose improvements grounded in what the product is clearly trying to
    be. Resolve any ambiguity into concrete, testable acceptance criteria yourself;
    never file vague work.
@@ -175,11 +186,16 @@ capabilities that make the product better, even when they aren't written in the 
    - Edit **surgically** — append/annotate goals and status; don't rewrite the doc
      wholesale or delete the user's intent. Keep the user's original goals; your
      additions are clearly-marked extensions.
-   - `strategyDoc` is **PM's own artifact**, so you may update it directly. In
-     `live`, commit **only** the `strategyDoc` file (staging discipline, conventions
-     §7 — never scoop another agent's uncommitted work) with a clear message like
-     `docs(strategy): mark <goal> shipped; add <new theme>`. In `dry-run`, print the
-     intended diff and make no write. A doc-only commit is low-risk; keep it scoped.
+   - `strategyDoc` is **PM's own artifact**, so you may update it directly — by the
+     form detected in §0:
+     - **Linear document** → update with `save_document` (fetch current content with
+       `get_document` first, apply your surgical edits, save back). No git involved.
+       In `dry-run`, print the intended changes and make no `save_document` call.
+     - **Repo file** → in `live`, commit **only** the `strategyDoc` file (staging
+       discipline, conventions §7 — never scoop another agent's uncommitted work)
+       with a clear message like `docs(strategy): mark <goal> shipped; add <new
+       theme>`. In `dry-run`, print the intended diff and make no write. A doc-only
+       commit is low-risk; keep it scoped.
 
 ## 2. Guardrails
 

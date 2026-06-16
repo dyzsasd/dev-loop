@@ -14,7 +14,12 @@ ship/deploy settings. One file, many products.
       "linearTeam":    "Citronetic",  // Linear team name (required)
       "linearProject": "MonPick",     // Linear project name — must exist (required)
       "repoPath":      "/abs/path/to/repo",   // where Dev works (required for dev-agent)
-      "strategyDoc":   "docs/strategy.md",    // PM's north star, relative to repoPath (required for pm-agent)
+      "strategyDoc":   "docs/strategy.md",    // PM's north star (required for pm-agent). Either a
+                                               //   repo file relative to repoPath (shown), OR a Linear
+                                               //   document: { "linearDocument": "<id|slug|url>" } or a
+                                               //   "https://linear.app/.../document/..." string. PM reads
+                                               //   it (file | get_document) and maintains it (commit |
+                                               //   save_document) — see pm-agent §0 + Job C.
       "mode":          "live",        // "live" | "dry-run"  (see conventions §12)
       "autonomy":      "ask",         // "ask" (default) | "full" — who decides vs escalates (see conventions §12a)
 
