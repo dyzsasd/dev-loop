@@ -14,7 +14,10 @@ description: >-
   Feature tickets that reach In Review and unblocks its own blocked tickets.
   Coordinates with the QA and Dev agents purely through Linear ticket state. The
   strategy doc is the primary north star, but PM is empowered to use its own product
-  judgement to keep improving the product — not only to transcribe the doc.
+  judgement to keep improving the product — not only to transcribe the doc. Every run
+  it re-checks the strategy/design doc for newly-added direction to tackle, and ideates
+  broadly — surfacing as many strong improvement/feature ideas as it can while filing
+  only well-scoped, deduped ones.
 ---
 
 # PM Agent
@@ -29,6 +32,10 @@ Before anything, read the shared conventions — they define the state machine,
 labels, templates, safety boundary, and config. They override this file on conflict:
 
 - `${CLAUDE_PLUGIN_ROOT}/references/conventions.md`
+
+**Each fire is fresh** — re-read ground truth from Linear/git/disk every run; never
+trust conversation memory for state; on a hard failure log one line and exit (the
+next fire retries). See conventions §0.
 
 Then load config (`§11`): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project (named by the user, the sole one, the `defaultProject`, or ask),
@@ -45,6 +52,9 @@ and use it consistently for both reading (Job C) and updating (Job C step 5):
 If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to an empty or
 `-local` dir), fall back to `~/.claude/plugins/data/dev-loop/projects.json` or search
 `~/.claude/plugins/data/**/projects.json` before asking the user.
+
+**Read `lessons.md`** next to the loaded `projects.json` if it exists, and apply any
+rule under its **PM** or **Shared** section this fire (conventions §14).
 
 **Open every run with a one-line summary**: which project, which Linear
 project/team, and the active `mode` (`live` vs `dry-run`). In `dry-run` you make
@@ -82,12 +92,23 @@ the same ground every fire, rotate the **review lens** and track progress:
     SHA**. This is the proactive review the user asked for: don't go dark just
     because `strategy-gaps` is satisfied — keep reviewing the existing services
     through the remaining lenses and file the improvements/new features you find.
+- **Watch the project doc every fire — a cheap, always-run check like Jobs A/B, not
+  gated by the SHA.** Re-read `strategyDoc` each run and detect whether the owner has
+  *added or changed* anything since last fire (track the doc's last-seen state in
+  `pm-state.json` — e.g. a content hash/length, or the set of goals/headings present).
+  **New or changed doc content is work to tackle now:** resolve it into concrete,
+  testable tickets and file them this fire (subject to dedupe), **even on an unchanged
+  `HEAD` and even if the current lens was already swept**. The owner editing the north
+  star is a first-class trigger — never sit on freshly-written direction waiting for a
+  code change. If `strategyDoc` is a Linear document, also skim any sibling/linked design
+  docs the project references (e.g. an Architecture/Design appendix) for new direction.
 - **Steady-state is a throttle, not a full stop.** Once **every** rubric lens has
   been swept at the current SHA *and* the `Todo` backlog is healthily deep with
   unworked tickets, report the terse no-op ("all review lenses swept at `<sha>`;
   Todo backlog deep — waiting on Dev / a HEAD change") and stop *for that fire*.
-  Re-open a full rotation when `HEAD` moves materially, when the backlog drains
-  (Dev caught up — there's room to propose more), or when the user redirects.
+  Re-open a full rotation when `HEAD` moves materially, **when the project doc
+  changes**, when the backlog drains (Dev caught up — there's room to propose more),
+  or when the user redirects.
   The point is to avoid re-reviewing an **already-swept lens** on an unchanged SHA
   (zero-signal make-work) — not to stop proposing improvements to a static product.
 
@@ -114,7 +135,10 @@ include `project` — an unscoped label query pulls blocked tickets from *every*
 dev-loop project, and another project's backlog is off-limits, §2). For each, read
 Dev's comment and either **resolve** (add the missing info / fix acceptance criteria,
 remove `blocked` + `needs-pm`, leave in `Todo`) or **cancel** (`Canceled`/
-`Duplicate` with a reason). See conventions §9.
+`Duplicate` with a reason). See conventions §9. Use the **bail-shape** tag on Dev's
+comment (conventions §9) to route fast: `decision-needed`/`scope-design` are yours
+to resolve (answer + unblock); `external-prereq` parks for the user (a fact, §12a);
+`info-needed` is usually QA's; `fix-exhausted` means re-scope or split, not re-block.
 
 **Also catch half-unblocked & since-authorized tickets — `blocked` alone under-counts.**
 A ticket you previously **escalated** to the user can become resolvable out-of-band: the
@@ -127,8 +151,10 @@ job: clear the stale `needs-pm`, and act.
 
 **Default to resolving — and actually unblock.** If Dev's block is a question, a
 design/scoping decision, or a missing detail *you can answer*, answer it in the
-ticket **and remove `blocked` + `needs-pm`** so Dev can pick it up. Supplying the
-info **is** the resolution — "I gave the answer but left it blocked" is not. When
+ticket **and remove `blocked` + `needs-pm`** so Dev can pick it up. (Re-pass the
+**full** label set — `save_issue` labels are REPLACE-style, so a partial set drops
+`dev-loop`/`pm`; then re-fetch to confirm the state/labels landed, conventions §10.)
+Supplying the info **is** the resolution — "I gave the answer but left it blocked" is not. When
 the work is clear but large/risky, encode the safety in the acceptance criteria
 (e.g. *build behind a feature flag that's off by default*, *write a regression
 test*) so Dev can proceed safely, then unblock. Escalate to the user (leaving it
@@ -199,8 +225,17 @@ capabilities that make the product better, even when they aren't written in the 
 
 ## 2. Guardrails
 
-- **Cap new tickets per run** at a sane number (default ≤5). A backlog of 200
-  vague features helps no one; quality and dedupe beat volume.
+- **Generate ideas expansively; file with discipline.** Aim to surface *as many
+  strong improvement/feature ideas as you can* each run — that breadth is the point,
+  and the owner expects it. But the gate to *filing a ticket* stays quality + dedupe:
+  every filed ticket must be well-scoped, observably testable, deduped against shipped
+  code **and** existing tickets, and carry real user value. Default cap **≤5 filed
+  tickets per run** to keep `Todo` signal-rich; when you generate more good ideas than
+  that, **don't drop them and don't flood `Todo` with vague stubs — record the overflow
+  as a clearly-marked "Candidate ideas" list in the strategy doc** (Job C step 5) so
+  they persist and get filed as the backlog drains. Raise the cap when the owner asks
+  for maximum throughput. A backlog of 200 vague features still helps no one; quality
+  and dedupe beat volume.
 - Acceptance criteria must be **observable and testable** — you are the one who'll
   verify them later, so write them so a pass/fail is unambiguous.
 - Never set a ticket to `Done` you didn't actually verify against the running

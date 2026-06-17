@@ -25,6 +25,10 @@ they override this file on conflict:
 
 - `${CLAUDE_PLUGIN_ROOT}/references/conventions.md`
 
+**Each fire is fresh** — re-read ground truth from Linear/git/disk every run; never
+trust conversation memory for state; on a hard failure log one line and exit (the
+next fire retries). See conventions §0.
+
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project, and load `linearProject`, `linearTeam`, `repoPath`, `testEnv`,
 `mode`, and `autonomy` (§12a). If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to
@@ -39,6 +43,9 @@ against real prod unless config says so.
 missing, run `testEnv.setup` once — or install it into a throwaway venv — rather
 than silently skipping tests because the harness isn't there. Offer to persist a
 working `testEnv.setup` to config so the next run is self-sufficient.
+
+**Read `lessons.md`** next to the loaded `projects.json` if it exists, and apply any
+rule under its **QA** or **Shared** section this fire (conventions §14).
 
 **Open every run** with a one-line summary: project, Linear project/team, the
 test environment you'll use, `mode` (`live` vs `dry-run`), and `autonomy` (§12a).
@@ -98,19 +105,26 @@ For each (oldest first):
 3. **Reproduces no more** → `state:"Done"`, comment what you re-ran.
    **Still broken / regressed** → `state:"Todo"`, comment the still-failing repro
    and any new symptom. (Verify-fail is first-class — never leave it In Review.)
+   **Couldn't actually run** (env down, harness crash, repro un-runnable this fire)
+   → **inconclusive, NOT a pass.** Do **not** move it to Done — leave it In Review,
+   comment the reason (one line), and re-verify next fire. A verdict without
+   evidence (an observed repro result / screenshot) is an opinion, not a pass: never
+   mark a bug Done you couldn't actually re-run.
 
 ### Job B — Unblock work Dev is waiting on for information
 First query your own: `project` + `label:"dev-loop"` + `label:"qa"` + `label:"blocked"`. Then
 **widen to every `project` + `label:"dev-loop"` + `label:"blocked"` ticket** and read Dev's
 latest comment. (Keep `project` in *both* queries — the widening is across owners
-within this project, never across projects; another project's backlog is off-limits, §2.) When Dev (or PM) blocked a ticket because it **needs more
+within this project, never across projects; another project's backlog is off-limits, §2.) **Route by the bail-shape tag** (conventions §9): `info-needed` is yours to clear (supply the repro/account/clarification, then unblock); `decision-needed`/`scope-design` → leave for PM; `external-prereq` → park + escalate to the user as a fact (§12a); `fix-exhausted` → add what you can (a sharper repro/expected) and re-queue, don't just re-block. When Dev (or PM) blocked a ticket because it **needs more
 information** — an unclear or re-requested repro, missing reproduction steps, an
 ambiguous expected-vs-actual, a test account or seed data — *supplying that is
 QA's job even when the ticket isn't tagged `needs-qa`*. A blocked ticket nobody
 can pick up is the loop's most expensive stall, so clearing info-blocks is high
 value. For each, do exactly one of:
 - **Resolve** (the common, valuable case) — you can supply the missing facts: add
-  the repro / info / concrete expected behaviour, remove `blocked` (+ `needs-qa`),
+  the repro / info / concrete expected behaviour, remove `blocked` (+ `needs-qa`)
+  (re-pass the **full** label set — `save_issue` labels are REPLACE-style, so a
+  partial set drops `dev-loop`/`qa`; then re-fetch to verify, conventions §10),
   leave in `Todo` so Dev can pick it up.
 - **Cancel** — it's invalid / duplicate / obsolete: `Canceled`/`Duplicate` with a
   reason (conventions §9).
@@ -158,6 +172,15 @@ value. For each, do exactly one of:
    matching severity (1=Urgent for broken core flows/data leaks), `state:"Todo"`,
    set `project`.
 
+**Result vocabulary — file for every non-pass, route severity by label.** Classify
+each finding: `pass` (works) → nothing; `fail` (a real defect, reproduces) → `Bug`
+(+`edge-case` if off-path), priority by severity; `drift` (passes but a human should
+see it — deprecation, visual/schema drift, missing empty/error/loading state,
+slow-but-passing) → `Improvement` + `qa` (NOT a `Bug` — it isn't broken), priority
+Low/Medium; `inconclusive` (couldn't run / unparseable) → treat as `drift` and note
+the reason, never as a clean pass. Severity is expressed by **label + priority**,
+not by whether a ticket exists — drift still gets a ticket so it isn't lost.
+
 ## 2. Guardrails
 
 - A bug without a reproducible repro is not a bug — confirm it reproduces before
@@ -173,6 +196,13 @@ value. For each, do exactly one of:
   productive. A trustworthy board beats ticket count.
 - **Stay in your lane.** A *missing capability* (not a defect) is a Feature for PM —
   note it for PM, don't file it as a Bug.
+- **Inconclusive is never a pass.** If you couldn't actually run a check (env/harness
+  problem), say so and retry next fire — never record 'Done'/'clean' for a test that
+  didn't run. A verdict needs observed evidence (a repro result, a screenshot), or
+  it's just an opinion.
+- **No real user data in tickets (conventions §16).** The test env may be backed by
+  production data — summarize repros *around* any PII, never paste real user records
+  into a Bug body, and put no secrets in comments.
 - **Respect `autonomy` (conventions §12a).** Under `autonomy:"full"`, *decide and
   act, don't ask*: triage, file, and re-test on your own judgement; clear
   information-blocks yourself and route decision-blocks to PM via Linear — never an

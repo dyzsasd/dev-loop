@@ -6,6 +6,8 @@ file. If a rule here conflicts with a skill's body, this file wins — keeping t
 three agents interoperable is the whole point.
 
 ## Table of contents
+0. [Prime directive — every fire is fresh](#0-prime-directive--every-fire-is-fresh)
+- [Topology at a glance](#topology-at-a-glance)
 1. [What the loop is](#1-what-the-loop-is)
 2. [Safety boundary — the `dev-loop` label](#2-safety-boundary--the-dev-loop-label)
 3. [Linear state machine](#3-linear-state-machine)
@@ -19,6 +21,62 @@ three agents interoperable is the whole point.
 11. [Per-project config](#11-per-project-config)
 12. [Dry-run vs live](#12-dry-run-vs-live)
 13. [First-run setup](#13-first-run-setup)
+14. [Lessons file — per-operator corrections](#14-lessons-file--per-operator-corrections)
+15. [Test coverage — every Bug/Feature earns a regression test](#15-test-coverage--every-bugfeature-earns-a-regression-test)
+16. [Security doctrine](#16-security-doctrine)
+
+---
+
+## 0. Prime directive — every fire is fresh
+
+These agents run on a recurring loop; each fire is a fresh, possibly-compacted
+session. Treat this and the skill file as the **complete** instruction set — you
+need no external context to proceed.
+
+- **Each fire re-executes every step from the top.** Do NOT skip a step because
+  you remember doing it last fire — you may be a fresh session with compacted memory.
+- **Never trust conversation memory for state.** State lives in Linear (ticket
+  state/labels/comments), in git (`HEAD`, `git log`), and on disk (the
+  `*-state.json` files, §11). Go read it directly every fire — don't infer it
+  from what the conversation "remembers".
+- **Don't abort because context feels thin.** Missing conversation context is
+  normal on a fresh fire; it is not a reason to stop.
+- **On a genuine hard failure, log ONE line and exit cleanly** — the next fire
+  retries. Never halt mid-flight waiting for a human (that violates the
+  autonomous-loop posture, §12a). *If you had already taken a side-effecting
+  action this fire* (filed/moved a ticket, committed, deployed), still write the
+  normal close-report (each skill's §3) before exiting, so the state stays
+  auditable. Genuine external-prerequisite blocks are recorded on the ticket
+  (§9), not raised as an interactive prompt.
+
+---
+
+## Topology at a glance
+
+The one-screen map every agent reads first. Detail is one hop away in the
+numbered sections below.
+
+| Agent | Owns (files + verifies) | Picks up | Hands off via |
+|---|---|---|---|
+| **PM** | `Feature`, `Improvement`(`pm`) | In Review `pm` items; `blocked`+`needs-pm`; review lenses (Job C preflight) | Linear state + labels |
+| **QA** | `Bug`, `Improvement`(`qa`), `coverage` | In Review `qa` items; info-blocks; new-bug sweep | Linear state + labels |
+| **Dev** | (ships everyone's tickets) | `Todo` in pick order (§5), excluding `blocked` | In Review, for the owner |
+
+State machine: `Todo → In Progress → In Review → Done` (verify-fail returns to
+`Todo`; `Canceled`/`Duplicate` are terminal; `blocked` is a **label**, not a
+state, §9). Eligibility = the `dev-loop` label (§2); owner = the `pm`/`qa` label
+(§4); routing = `needs-pm`/`needs-qa`/`coverage`/`edge-case`.
+
+**What NOT to confuse:**
+- **Block ≠ cancel.** Block = needs info/decision, stays alive at `Todo`+`blocked`
+  (§9). Cancel = invalid/obsolete, terminal.
+- **Defect ≠ capability gap.** A defect is a `Bug` (QA's). A missing capability is
+  a `Feature` (PM's). Stay in your lane (PM/QA guardrails).
+- **Verify against the running product / the diff — not the claim.** Owners verify
+  by exercising the product (PM/QA Job A); Dev self-reviews against its own diff
+  (Dev Step 5.5). Never trust a hand-off comment's claim of what was done.
+- **Inconclusive ≠ pass.** A check that couldn't actually run is not a green
+  (QA Job A).
 
 ---
 
@@ -111,10 +169,15 @@ Labels do triple duty: typing, ownership/routing, and workflow signalling.
 - `Feature` — new capability. Owner = PM.
 - `Bug` — defect. Owner = QA.
 - `Improvement` — polish / refactor / UX nit. Owner defaults to PM (`pm`) so it
-  has a verifier; tag `qa` instead when QA filed it.
+  has a verifier; tag `qa` instead when QA filed it (exception: a `coverage`
+  Improvement is `qa`-owned even though Dev files it — see the sub-type below).
 
 **Sub-type (optional, additive):**
 - `edge-case` — a bug found off the happy path (affects Dev ordering, §5).
+- `coverage` — a follow-up to add a regression test/flow for a shipped
+  `Bug`/`Feature` that couldn't be covered in the fix itself (§15). Filed by Dev,
+  owned by `qa` (QA verifies the test exists and passes); implemented like any
+  other `Todo` ticket.
 
 **Ownership / routing (every ticket carries exactly one owner label):**
 - `pm` — PM owns it (PM verifies). On every `Feature`, and on `Improvement`s by
@@ -265,7 +328,18 @@ dependency, or a suspected-but-unconfirmed duplicate — it does **not** guess:
 2. Remove its own assignment and move the ticket back to `Todo` (it is not being
    worked) — the `blocked` label keeps it out of the normal pick set.
 3. Add a comment stating **exactly** what's missing or wrong and what would
-   unblock it.
+   unblock it, and **tag the bail shape** on the first line so the right owner
+   routes it deterministically (no human prompt — async triage):
+   `Bail-shape: <info-needed | decision-needed | scope-design | external-prereq | fix-exhausted>`.
+   - **info-needed** (missing repro/seed/account/clarification) → QA can clear it
+     (QA Job B), even if not tagged `needs-qa`.
+   - **decision-needed / scope-design** (a product/scoping call) → PM (`needs-pm`)
+     or the bug's owner.
+   - **external-prereq** (real credentials/money/legal, or a capability this run
+     lacks) → park for the user; report as a fact (§12a), don't retry.
+   - **fix-exhausted** (tried, couldn't make the gates/self-review pass) → don't
+     blindly re-attempt; it needs new info or a different approach. Cap blind
+     retries at 2 — the 3rd is a block, not another attempt.
 
 PM/QA, on each run, check for **their** blocked tickets
 (`project` + `label:"dev-loop"` + `label:"blocked"` + their owner label — always
@@ -315,6 +389,30 @@ Dev's pick query (§5) must exclude `blocked` tickets.
 Never page through the whole workspace. If a result is still huge, your filter is
 too broad — narrow it before reading.
 
+### Linear MCP write hazards (read before any `save_issue`)
+
+Four footguns that silently corrupt the loop — every skill must handle them:
+
+1. **`labels` is REPLACE-style on update.** `save_issue(labels:[X])` overwrites the
+   **entire** label set — it does not add X. (Unlike `blocks`/`relatedTo`, which are
+   append-only with dedicated `remove*` params, `labels` has no add/remove
+   primitive.) To add or remove ONE label (e.g. add `blocked`, drop `needs-pm`),
+   first read the ticket's current labels, then re-pass the **full** intended set.
+   Forgetting this drops `dev-loop` and breaks the safety firewall (§2) and pickup
+   eligibility on the same call.
+2. **State-name matching is fuzzy — verify after every move.** A `save_issue` with
+   `state:"In Review"` can silently route to a different same-category state. After
+   EVERY state transition, re-fetch the ticket (`get_issue`) and confirm `.state` is
+   exactly what you set. If it isn't, retry once; if it still won't land, leave a
+   one-line comment and treat the ticket as untouched this fire (don't build on an
+   unverified move). (If the operator set `blockedStateName`/added real states, the
+   same verify-after-write applies.)
+3. **`list_issues` takes ONE label filter.** For a multi-label slice (e.g.
+   `dev-loop` AND `pm` AND `blocked`), filter Linear by the **most specific** label
+   plus `project`, then narrow the rest client-side. Never widen the query to dodge
+   this — the `dev-loop` + `project` scope (§2) is non-negotiable.
+4. **Pass markdown with real newlines, never escaped `\n`.**
+
 ---
 
 ## 11. Per-project config
@@ -337,6 +435,12 @@ On startup each skill:
 If `projects.json` is missing or the chosen project lacks a required field, the
 skill asks the user for the missing value and offers to write it back to config —
 it never guesses repo paths, URLs, or deploy commands.
+
+**Runtime files in the data dir.** Alongside `projects.json`, each agent keeps
+local per-operator state next to it: `pm-state.json` / `qa-state.json` (the
+last-reviewed/swept SHA and swept review-lenses (PM) / swept surfaces (QA)), and an
+optional `lessons.md` (per-operator behavioral corrections, §14). These are
+machine-local — never committed, never shared; created lazily on first run.
 
 ---
 
@@ -401,8 +505,83 @@ above.
 Idempotent; safe to re-run. Before the first live run against a workspace:
 1. Ensure the workflow labels exist (create only the missing ones via
    `create_issue_label` on the configured team): `dev-loop`, `pm`, `qa`,
-   `edge-case`, `blocked`, `needs-pm`, `needs-qa`. (`Bug`/`Feature`/`Improvement`
-   already exist — reuse, don't duplicate.)
+   `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`.
+   (`Bug`/`Feature`/`Improvement` already exist — reuse, don't duplicate.)
 2. Ensure the `linearProject` exists; if not, ask the user before creating it.
 3. Confirm `strategyDoc` is readable and `testEnv`/`build`/`deploy` commands are
    correct with the user (these gate real deploys).
+
+---
+
+## 14. Lessons file — per-operator corrections
+
+A `lessons.md` next to the loaded `projects.json` (§11) lets the operator correct
+agent behavior per-product **without forking this plugin's skills**. Each skill
+reads it at the very top of every fire (right after conventions + config) and
+applies any rule under its section that fire.
+
+Layout — one section per agent plus a shared section:
+
+```
+## Shared
+## PM
+## QA
+## Dev
+```
+
+Each entry is a short rule with a one-line **Why** and **How to apply**. A rule may
+pre-empt an action: *if a rule would have skipped or changed work you were about to
+do, honor it.* Keep it lean (supersede stale rules, don't accumulate) — a wrong
+rule is worse than none.
+
+**Local vs durable.** `lessons.md` is **local per-operator** machine state — never
+committed, never shared. Patterns that should hold for *every* operator of this
+plugin go in this conventions file; product-direction that should hold for every PM
+run goes in the `strategyDoc`. `lessons.md` is the fast, private override layer.
+
+If the file is absent, proceed normally — it is optional.
+
+---
+
+## 15. Test coverage — every Bug/Feature earns a regression test
+
+A fix isn't done until a regression test exists, or one is tracked to be added —
+otherwise the same bug silently regresses on a later ship. When Dev ships a `Bug`
+fix or a `Feature`, it MUST do exactly one of:
+
+- **(A) Same run** — add/extend a test in the repo's test harness
+  (`build.test` / the `testEnv` suite) that fails before the fix and passes after,
+  and run it as part of the Step-5 gate; **or**
+- **(B) Default for the loop** — file ONE follow-up ticket titled
+  `[coverage] add regression test for <ticket-id>: <one line>`, labeled `dev-loop`
+  + `Improvement` + `qa` + `coverage`, priority Low, `relatedTo` the original, in
+  `Todo`, with crisp ACs naming the flow to cover. It then flows the **normal**
+  path: a later Dev fire implements the test, and QA (its owner) verifies it. File
+  it (deduped, §8) **before** moving the parent to `In Review` — same mandatory-
+  filing discipline as a split (Dev §4).
+
+**Exemptions** (no follow-up needed; state it in the hand-off): docs-only changes,
+pure refactors with no behavior change, and fixes in code with no externally
+testable surface (add a unit test in the fix instead and note it).
+
+---
+
+## 16. Security doctrine
+
+These agents hold real credentials (Linear, GitHub, deploy/Vercel, and possibly a
+prod DB) and ship unattended. Hard rules:
+
+- **No secrets in the repo or in tickets.** Never commit passwords/tokens/keys or
+  paste them into Linear comments. Reference where to obtain them (`.env.local`, a
+  vault, "ask user") — config (§11) holds none.
+- **No PII in ticket bodies, commits, or the strategy doc.** A repro or commit
+  message must summarize *around* real user data, never quote it verbatim. (The
+  test env may be backed by production data — treat every record as real.)
+- **Least-scope, read-where-possible.** Prefer the safe/records-only form of any
+  command (§9/§12a); never run a data-mutating variant as a "gate" (Dev §5).
+- **Stop-and-surface on unexpected access — don't probe.** If an agent finds it has
+  broader access than the task needs (e.g. write where you expected read, a project
+  outside `dev-loop` scope), **stop and surface the discrepancy to the user as a
+  fact** before doing anything with it. Do **not** probe to confirm the access. This
+  is the one case where surfacing is correct even under `autonomy:"full"` — it's an
+  external safety fact, not a product decision.

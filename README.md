@@ -78,16 +78,32 @@ Each project has a `mode`:
 ## First-run setup
 
 On the first `live` run against a workspace the agents ensure the workflow labels
-exist (`dev-loop`, `pm`, `qa`, `edge-case`, `blocked`, `needs-pm`, `needs-qa`;
-`Bug`/`Feature`/`Improvement` are reused if present) and that the target Linear
-project exists. See `references/conventions.md` §13.
+exist (`dev-loop`, `pm`, `qa`, `edge-case`, `blocked`, `needs-pm`, `needs-qa`,
+`coverage`; `Bug`/`Feature`/`Improvement` are reused if present) and that the target
+Linear project exists. See `references/conventions.md` §13.
 
 ## Status
 
-v0.1.9 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
+v0.2.0 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
 priority pick order, claim, block, per-run cap, verify→Done, cancel, propose+dedupe,
 re-test+dedupe all exercised). Autonomy (push/deploy) is opt-in per project via
 config and gated on green build/test.
+
+**0.2.0** — hardening pass adapting the mature jinko-brain agent harness to our
+autonomy-first posture (machine gates, never human prompts): a **prime directive**
+(conventions §0) making each fire stateless-safe under auto-compaction; **Linear MCP
+write-hazard** rules (§10: labels are REPLACE-style, verify-after-write on fuzzy
+state-matching); an autonomous **self-review ship gate** (Dev Step 5.5: spec-
+compliance + a code-review pass; Critical/High blocks the ship or blocks the ticket
+as `fix-exhausted` — never waits for a human, never routes code-fixing to PM/QA); a
+**test-coverage definition-of-done** (§15: every Bug/Feature adds a regression test
+or files a `[coverage]` follow-up); a **per-operator `lessons.md`** every agent reads
+at run-start (§14, tune behavior without forking skills); QA **result vocabulary**
+(pass/fail/drift/inconclusive — `inconclusive ≠ pass`); Dev **orphan-recovery** (Step
+0, reclaim crash-stranded In Progress tickets); a **bail-shape** taxonomy on blocked
+tickets (§9, async routing, no human prompt); a **security doctrine** (§16); and a
+**Topology-at-a-glance** map. (Deferred: per-ticket cooldowns, config genericisation,
+queue-depth self-pacing.)
 
 **0.1.9** — Dev split-follow-up enforcement (from live experience): the dev-agent's
 split rule already told Dev to *file* a follow-up ticket for the deferred slice, but

@@ -78,4 +78,13 @@ ship/deploy settings. One file, many products.
   label (conventions §2) is what actually protects the human backlog, but a
   dedicated project keeps the board clean.
 - Secrets (passwords, tokens) are **not** stored here — reference how to obtain
-  them (`.env.local`, a vault, "ask user") in `testEnv.notes`.
+  them (`.env.local`, a vault, "ask user") in `testEnv.notes`. See the security
+  doctrine (conventions §16).
+- **`lessons.md`** (optional) lives next to `projects.json` and holds per-operator
+  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`). Each skill
+  reads it at run-start and applies its section that fire (conventions §14). Local
+  machine state — never committed.
+- **Agent state files** (`pm-state.json`, `qa-state.json`) live next to
+  `projects.json` and hold per-project loop state: last-reviewed/swept SHA, swept
+  review lenses (PM), swept surfaces (QA). Local per-operator runtime state — never
+  committed, never shared. Created lazily on first run.

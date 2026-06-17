@@ -25,6 +25,10 @@ blocked protocols, safety, config) — they override this file on conflict:
 
 - `${CLAUDE_PLUGIN_ROOT}/references/conventions.md`
 
+**Each fire is fresh** — re-read ground truth from Linear/git/disk every run; never
+trust conversation memory for state, and on a hard failure log one line and exit
+(the next fire retries). See conventions §0.
+
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project, and load `linearProject`, `linearTeam`, `repoPath`,
 `strategyDoc`, `build`, `git`, `deploy`, `mode`, and `autonomy` (§12a). If that path doesn't resolve
@@ -36,10 +40,17 @@ pick the project, and load `linearProject`, `linearTeam`, `repoPath`,
 need it under `autonomy:"full"` to resolve scoping, read a Linear doc with
 `get_document`; Dev never *writes* the strategy doc — that's PM's job.)
 
+**Read `lessons.md`** next to the loaded `projects.json` if it exists, and apply any
+rule under its **Dev** or **Shared** section this fire (conventions §14). A lesson
+can pre-empt an action — if a rule would have you skip or block something, honor it.
+
 **Open every run** with a one-line summary: project, Linear project/team,
 `repoPath`, `mode`, and `autonomy` (§12a). Also state the ship policy you'll follow from config
 (`autoCommit`/`autoPush`/`autoDeploy` + `deploy.command`) so the user knows
-whether this run will touch prod. In `dry-run`: groom and write code locally if
+whether this run will touch prod. **Your ship gates are, in order: build/test
+(Step 5) → self-review (Step 5.5: spec-compliance + a code-review pass, blocks on
+Critical/High) → ship (Step 6)** — a red build OR an unresolved Critical/High
+self-review finding never ships. In `dry-run`: groom and write code locally if
 helpful, but make **no** Linear mutations, **no** push, and **no** deploy — print
 what you would do.
 
@@ -47,6 +58,19 @@ what you would do.
 > `dev-loop`-labelled tickets (conventions §2).
 
 ## 1. The work loop (repeat up to the per-run cap)
+
+### Step 0 — Reclaim your orphans (crash recovery)
+A prior fire may have claimed a ticket (state `In Progress`, assignee you; §7) and
+then crashed/compacted out mid-work, stranding it — no agent re-picks an
+`In Progress` ticket, so it stalls forever. First thing each fire: query
+`project` + `label:"dev-loop"` + `state:"In Progress"` assigned to you. For each,
+check for a shipped artifact (a commit referencing the ticket id on
+`git.defaultBranch`; or, if `autoPush:false`, a local commit). If there's no
+artifact, it's an **orphan** from an aborted run: unassign, reset to `Todo` (re-pass
+the **full** label set so you don't drop `dev-loop`/owner labels, §10), comment
+`Orphaned — state cleared from a prior aborted run; re-queued.`, then verify the
+move landed (§10). If an artifact exists, the prior fire got far — verify and
+finish/hand it off rather than redoing it.
 
 ### Step 1 — Pick the top ticket
 Query `Todo` tickets: `project` + `label:"dev-loop"`, **excluding** `blocked`.
@@ -57,6 +81,11 @@ Take the top one.
 ### Step 2 — Claim it (atomic, conventions §7)
 `save_issue`: `state:"In Progress"`, `assignee:"me"`. Re-fetch; if it's not
 assigned to you / not In Progress, another Dev won the race — pick the next.
+(This re-fetch is the verify-after-write guard from conventions §10 — apply it to
+**every** state move you make this run, e.g. the In Review hand-off (Step 7) and any
+block (Step 3): Linear state-matching is fuzzy, so confirm the move landed. And when
+adding/removing a label, re-pass the **full** label set — `save_issue` labels are
+REPLACE-style — or you'll drop `dev-loop`/owner labels.)
 
 ### Step 3 — Groom it
 - **Duplicate?** Search `dev-loop` tickets (§8). If it duplicates another, set
@@ -70,13 +99,20 @@ assigned to you / not In Progress, another Dev won the race — pick the next.
 - **Enough info?** It needs clear, testable acceptance criteria and (for bugs) a
   real repro. If it's missing, contradictory, or under-specified — **block it**
   (conventions §9): add `blocked` + `needs-pm`(feature)/`needs-qa`(bug), unassign,
-  move back to `Todo`, comment exactly what's missing. Do **not** guess. Pick next.
+  move back to `Todo`, comment exactly what's missing. Tag the bail shape on the
+  comment's first line (`Bail-shape: info-needed | decision-needed | scope-design |
+  external-prereq | fix-exhausted`, §9) so the right owner picks it up. Do **not**
+  guess. Pick next.
 
 ### Step 4 — Implement
 Work in `repoPath`. Read the surrounding code and match its conventions (the
 repo's own CLAUDE.md / style). Make the smallest change that satisfies **all**
-acceptance criteria. Cover the change with a test when the repo supports it
-(e.g. a regression test for a bug — that's how the owner's re-test will pass).
+acceptance criteria. **Cover the change (conventions §15).** For a `Bug` or `Feature`, either add a
+regression test in the repo's harness this run (fails before, passes after — run it
+in the Step-5 gate), OR file a deduped `[coverage]` follow-up (`Improvement` + `qa`
++ `coverage`, `relatedTo` the parent) **before** hand-off so a later Dev fire writes
+it and QA verifies it. Docs-only / pure-refactor / no-testable-surface are exempt —
+say so in the hand-off (add a unit test for the no-surface case).
 
 **Too big, or a part the gates can't verify? Split it.** If a ticket is too large
 to ship safely in one pass — or its riskiest part can't be checked by
@@ -129,6 +165,34 @@ Two gate traps that silently *under*-test — don't be fooled by a fast green:
   test you added, and **report exactly which tests you skipped and why** — never
   silently pass off a partial run as full coverage.
 
+### Step 5.5 — Self-review the diff (autonomous gate, not a human wait)
+After the build/test gates pass but **before** shipping, review your own diff —
+this is the `autonomy:"full"` analogue of a code reviewer: a machine gate, never a
+pause for a human.
+
+1. **Spec compliance first.** Read your actual diff (`git diff` / staged changes)
+   line-by-line against the ticket's acceptance criteria — verify against the
+   **diff**, not your memory of what you intended (the two drift). Flag three
+   classes: MISSING (an AC not implemented), EXTRA / over-built (code not traceable
+   to any AC — scope creep), MISUNDERSTANDING (built the wrong thing). Any MISSING or
+   MISUNDERSTANDING → fix it before shipping; unjustified EXTRA → trim it (the ticket
+   is the contract).
+2. **Code quality.** Run a code-review pass on the diff: if a `code-review`
+   skill/command is available in this environment, invoke it (effort `medium`);
+   otherwise do the equivalent yourself — scan the diff for correctness bugs,
+   security issues, and obvious regressions. Treat **Critical/High** findings as
+   blocking: fix them this run if you can. If you can't, **revert the change** and
+   **block** the ticket (§9) tagged `Bail-shape: fix-exhausted` with the findings —
+   do **not** route code-fixing to PM/QA (they don't write code), and never wait for
+   a human; the next Dev fire (or the operator via `lessons.md`) retries.
+   Medium/Low/nits are non-blocking — apply the cheap ones, note the rest in the
+   hand-off.
+3. **Skip for trivial diffs** — a docs-only / typo / single-line config change
+   doesn't need Stage 1 or the full review; note that you skipped it and why.
+
+A self-review that surfaces a real Critical bug and blocks the ship is a SUCCESS,
+not a failure — it protected `defaultBranch` and real users.
+
 ### Step 6 — Ship (per config)
 Only after green gates:
 - If `git.autoCommit`: make sure you're on `git.defaultBranch` first; if that
@@ -156,6 +220,10 @@ pointer to the acceptance criteria so the owner (PM for features, QA for bugs)
 can verify. **If you shipped only part of the ticket's ACs, the handoff MUST cite
 the follow-up ticket ID you filed this run for the rest (see the split rule) — a
 "split to a follow-up" with no filed ID is incomplete; file it now, then hand off.**
+**Likewise, a `Bug`/`Feature` hand-off MUST state its coverage outcome
+(conventions §15): the regression test you added this run, OR the `[coverage]`
+follow-up ticket ID you filed this run, OR the exemption reason. "I'll add a test
+later" with no test and no filed ticket is incomplete.**
 Then loop to Step 1.
 
 ## 2. Guardrails
@@ -164,6 +232,11 @@ Then loop to Step 1.
   breadth; a correct shipped ticket beats five half-built ones. Cheap grooming
   outcomes (a block or a duplicate) don't consume the cap.
 - One ticket = one focused change/commit. Don't fold unrelated work together.
+- **Self-review is a real gate, not theater (Step 5.5).** Verify the diff against
+  the ticket's ACs (catch MISSING/EXTRA/MISUNDERSTANDING) and run a code-review
+  pass; a Critical/High finding blocks the ship exactly like a red build. This is
+  the `autonomy:"full"` replacement for a human reviewer — it never waits for a
+  human, it decides and acts (fix, or block as `fix-exhausted`).
 - If you touch shared infra that could affect other in-flight tickets, say so in
   the report.
 - Respect `mode` and the `git`/`deploy` flags exactly — they encode the user's
