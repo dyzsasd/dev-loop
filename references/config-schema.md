@@ -1,8 +1,9 @@
 # dev-loop — Config schema
 
-The PM/QA/Dev agents read `${CLAUDE_PLUGIN_DATA}/projects.json`. It maps each
-product to its Linear project, its repo, its test environment, and its
-ship/deploy settings. One file, many products.
+The dev-loop agents (PM / QA / Dev / Sweep / Reflect) read
+`${CLAUDE_PLUGIN_DATA}/projects.json`. It maps each product to its Linear project, its
+repo, its test environment, and its ship/deploy settings. One file, many products.
+`/dev-loop:init` gathers and writes this file with you (operator-present setup).
 
 ## Schema
 
@@ -84,9 +85,17 @@ ship/deploy settings. One file, many products.
   them (`.env.local`, a vault, "ask user") in `testEnv.notes`. See the security
   doctrine (conventions §16).
 - **`lessons.md`** (optional) lives next to `projects.json` and holds per-operator
-  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`). Each skill
-  reads it at run-start and applies its section that fire (conventions §14). Local
-  machine state — never committed.
+  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/
+  `Reflect`). Each skill reads it at run-start and applies its section that fire
+  (conventions §14). Local machine state — never committed. The **Reflect** agent (the
+  daily retrospective role) is the one agent that *writes* this file — it curates it
+  from recurring, evidence-cited patterns it observes across runs (conventions §17).
+  Reflect may edit only `lessons.md` autonomously (reversible, per-operator); it must
+  NOT auto-edit the SKILLs or `conventions.md` — those changes are drafted as proposals
+  for the human. Reflect bounds its window from Linear + git (always present) and the
+  `*-state.json` files; if a launcher happens to tee agent output to
+  `logs/<agent>-<date>.log` in the data dir, it reads that too, but degrades silently
+  when absent. It writes no new config keys.
 - **`deploy.healthCheck`** (optional): a URL (must return 2xx) or a command (must
   exit 0) that Dev runs in Step 6.5 right after an unattended prod deploy. On a
   repeated failure Dev rolls the deploy back (revert + redeploy) rather than leaving
@@ -94,4 +103,8 @@ ship/deploy settings. One file, many products.
 - **Agent state files** (`pm-state.json`, `qa-state.json`) live next to
   `projects.json` and hold per-project loop state: last-reviewed/swept SHA, swept
   review lenses (PM), swept surfaces (QA). Local per-operator runtime state — never
-  committed, never shared. Created lazily on first run.
+  committed, never shared. Created lazily on first run, or up-front by `/dev-loop:init`
+  (which also seeds the `lessons.md` skeleton next to this file and gathers/writes back
+  the per-project fields above WITH the operator — operator-present setup, so asking
+  for unknowable values like `repoPath`/`linearProject`/`deploy.command` is expected
+  there, unlike the unattended loop agents). Creates only what's missing.

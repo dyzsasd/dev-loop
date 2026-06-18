@@ -1,8 +1,8 @@
 {
   "name": "dev-loop",
   "displayName": "dev-loop — PM / QA / Dev",
-  "description": "Four autonomous agents — PM, QA, Dev, and Sweep — that run a software-development loop coordinated entirely through Linear ticket state. PM proposes and verifies features from a strategy doc; QA hunts and re-tests bugs; Dev pulls Todo tickets in priority order, implements, self-reviews, ships, and smoke-checks prod (auto-revert on a break); Sweep is a lifecycle janitor that fixes tickets falling through the cracks (missing/wrong owner labels, orphaned In Progress). Every ticket the system touches carries a `dev-loop` label so it never disturbs the human backlog.",
-  "version": "0.3.0",
+  "description": "Five autonomous agents — PM, QA, Dev, Sweep, and Reflect — that run a software-development loop coordinated entirely through Linear ticket state. PM proposes and verifies features from a strategy doc; QA hunts and re-tests bugs; Dev pulls Todo tickets in priority order, implements, self-reviews, ships, and smoke-checks prod (auto-revert on a break); Sweep is a lifecycle janitor that fixes tickets falling through the cracks (missing/wrong owner labels, orphaned In Progress); Reflect is a daily retrospective that studies the loop's own behavior and curates the per-operator lessons.md from recurring evidence (drafting, never auto-applying, structural changes). A one-time `init` setup command (not a loop agent) bootstraps a product into the loop — config, Linear labels/project, strategy doc, test env, runtime files — and prints a readiness checklist. Every ticket the system touches carries a `dev-loop` label so it never disturbs the human backlog.",
+  "version": "0.4.0",
   "author": {
     "name": "Shuai"
   },

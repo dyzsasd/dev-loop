@@ -1,9 +1,9 @@
 # dev-loop — Shared Conventions
 
-The single source of truth for the **PM / QA / Dev / Sweep** agents that run an
-autonomous software-development loop coordinated through **Linear**. All four skills
-load this file. If a rule here conflicts with a skill's body, this file wins —
-keeping the four agents interoperable is the whole point.
+The single source of truth for the **PM / QA / Dev / Sweep / Reflect** agents that
+run an autonomous software-development loop coordinated through **Linear**. All five
+skills load this file. If a rule here conflicts with a skill's body, this file wins —
+keeping the five agents interoperable is the whole point.
 
 ## Table of contents
 0. [Prime directive — every fire is fresh](#0-prime-directive--every-fire-is-fresh)
@@ -24,6 +24,7 @@ keeping the four agents interoperable is the whole point.
 14. [Lessons file — per-operator corrections](#14-lessons-file--per-operator-corrections)
 15. [Test coverage — every Bug/Feature earns a regression test](#15-test-coverage--every-bugfeature-earns-a-regression-test)
 16. [Security doctrine](#16-security-doctrine)
+17. [Self-evolution boundary — what the Reflect agent may change](#17-self-evolution-boundary--what-the-reflect-agent-may-change)
 
 ---
 
@@ -62,6 +63,7 @@ numbered sections below.
 | **QA** | `Bug`, `Improvement`(`qa`), `coverage` | In Review `qa` items; info-blocks; new-bug sweep | Linear state + labels |
 | **Dev** | (ships everyone's tickets) | `Todo` in pick order (§5), excluding `blocked` | In Review, for the owner |
 | **Sweep** | (nothing — hygiene only) | Tickets that fall through the cracks: missing/wrong owner label, orphaned `In Progress`, stale signals (cross-owner) | re-label/re-route → the right owner |
+| **Reflect** | (nothing — observes the loop) | The loop's own behavior over a window: tickets/git/logs/throughput/QA outcomes (read-only) | `lessons.md` (autonomous) + a drafted proposal in the report (never auto-applies SKILL/conventions) |
 
 State machine: `Todo → In Progress → In Review → Done` (verify-fail returns to
 `Todo`; `Canceled`/`Duplicate` are terminal; `blocked` is a **label**, not a
@@ -83,11 +85,12 @@ state, §9). Eligibility = the `dev-loop` label (§2); owner = the `pm`/`qa` lab
 
 ## 1. What the loop is
 
-Four agents, each triggered manually by the user (`/pm-agent`, `/qa-agent`,
-`/dev-agent`, `/sweep-agent`). They never call each other directly — they hand off
-**entirely through Linear ticket state**, so any of them can run at any time, in any
-order, even concurrently. Linear is the shared blackboard. (PM/QA/Dev are the core
-producing loop; Sweep is a slower-cadence janitor layered on top.)
+Five agents, each triggered manually by the user (`/pm-agent`, `/qa-agent`,
+`/dev-agent`, `/sweep-agent`, `/reflect-agent`). They never call each other directly —
+they hand off **entirely through Linear ticket state**, so any of them can run at any
+time, in any order, even concurrently. Linear is the shared blackboard. (PM/QA/Dev are
+the core producing loop; Sweep is a slower-cadence janitor layered on top; Reflect is
+the slowest — a daily retrospective that observes the loop and curates `lessons.md`.)
 
 ```
         PM ──proposes feature──┐                 ┌──QA proposes bug──┐
@@ -113,6 +116,13 @@ producing loop; Sweep is a slower-cadence janitor layered on top.)
   (invisible to every owner query), orphaned `In Progress`, stale signals — and
   reports board health. **Hygiene only**: it never verifies, implements, files
   Features/Bugs, or ships.
+- **Reflect** is the retrospective + self-evolution role (slowest cadence — daily):
+  it studies the loop's **own** behavior over a window (tickets, git/deploy, run logs,
+  throughput, QA outcomes), emits a retrospective, and **curates `lessons.md`** (§14)
+  from recurring evidence. **Observe + curate only**: no product work (never files
+  Features/Bugs, ships, or verifies); may autonomously edit only `lessons.md` —
+  structural changes to the SKILLs/this file are **drafted as proposals, never
+  auto-applied** (§17).
 
 The verifier of a ticket is always **its owner** (the agent that filed it),
 identified by the owner label (§4). This is how PM picks up its features and QA
@@ -509,6 +519,14 @@ above.
 
 ## 13. First-run setup
 
+**Prefer `/dev-loop:init` over wiring a project by hand.** The `init` skill
+(`skills/init/SKILL.md`) is the canonical one-time, idempotent, **operator-present**
+bootstrap (NOT a loop agent): it turns this checklist into an explicit, verifiable
+flow — gather/validate config, ensure labels + the Linear project, verify/scaffold
+the strategy doc, smoke the test env + build, create the runtime files — and ends
+with a per-item readiness report. The loop agents still re-apply the label/project
+checks below defensively on a first live run, so this checklist remains the contract:
+
 Idempotent; safe to re-run. Before the first live run against a workspace:
 1. Ensure the workflow labels exist (create only the missing ones via
    `create_issue_label` on the configured team): `dev-loop`, `pm`, `qa`,
@@ -517,6 +535,9 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
 2. Ensure the `linearProject` exists; if not, ask the user before creating it.
 3. Confirm `strategyDoc` is readable and `testEnv`/`build`/`deploy` commands are
    correct with the user (these gate real deploys).
+4. Create the runtime files next to `projects.json` if absent: `pm-state.json`,
+   `qa-state.json`, and a `lessons.md` skeleton (§11, §14). (`/dev-loop:init` does
+   this for you.)
 
 ---
 
@@ -527,6 +548,13 @@ agent behavior per-product **without forking this plugin's skills**. Each skill
 reads it at the very top of every fire (right after conventions + config) and
 applies any rule under its section that fire.
 
+**Reflect is the curator of this file.** Every other agent only *reads* its own
+section; the Reflect agent (§17) also *writes* it — adding/superseding/pruning
+evidence-cited rules from recurring patterns it observes across runs. Reflect may edit
+`lessons.md` autonomously because it is reversible, per-operator, and never committed;
+it must NOT auto-edit this conventions file or the SKILLs (it drafts those as
+proposals — §17).
+
 Layout — one section per agent plus a shared section:
 
 ```
@@ -534,6 +562,8 @@ Layout — one section per agent plus a shared section:
 ## PM
 ## QA
 ## Dev
+## Sweep
+## Reflect
 ```
 
 Each entry is a short rule with a one-line **Why** and **How to apply**. A rule may
@@ -592,3 +622,36 @@ prod DB) and ship unattended. Hard rules:
   fact** before doing anything with it. Do **not** probe to confirm the access. This
   is the one case where surfacing is correct even under `autonomy:"full"` — it's an
   external safety fact, not a product decision.
+
+---
+
+## 17. Self-evolution boundary — what the Reflect agent may change
+
+The **Reflect** agent (the daily retrospective role) is the one agent that modifies
+the loop's own operating instructions, so it carries a special hazard: a daily
+self-modifying loop with no review compounds errors. The boundary is bright:
+
+- **MAY edit autonomously: `lessons.md` only.** It is the scoped, **reversible**,
+  **per-operator**, never-committed override layer (§14). Reflect curates it from
+  **recurring** evidence (≥2 occurrences), every rule citing its evidence (ticket IDs
+  / commit shas / window), superseding and pruning to keep it lean. Every change is
+  reported so the operator can veto it.
+- **MUST NOT auto-rewrite: this `conventions.md` or any agent's SKILL file** (the
+  core, shared, committed instruction set). A change there is **drafted as a proposal
+  in the report** — optionally a single `[reflect-proposal]` Linear ticket for the
+  human — and **never applied** by an agent. That proposal ticket is filed **`blocked`
+  + `needs-pm` with `Bail-shape: external-prereq`** so the firewall is mechanical, not
+  aspirational: `blocked` keeps it out of Dev's pick set (§5), and `external-prereq`
+  makes PM park it for the human (PM Job B) rather than unblock it back into Dev — a
+  change to the plugin's own code is the operator's to apply. (Reusing `external-prereq`
+  here is **deliberate**, not a misclassification — a plugin self-edit is a
+  human-operator prerequisite; don't "correct" it to `decision-needed`/`scope-design`,
+  which PM would resolve straight back into Dev.) A correction that should
+  hold for *every* operator belongs here (conventions) or in the `strategyDoc`
+  (product direction), reached via that human-reviewed proposal — not via `lessons.md`.
+
+This is the one principled exception to §12a's "decide and act": self-modification of
+the core operating instructions is **surfaced, not executed**, exactly like the
+security stop-and-surface case (§16). Reflect is otherwise **read-only on Linear
+product tickets** — it observes the loop; it never files Features/Bugs, ships,
+verifies, or relabels/re-routes (those are PM/QA/Dev/Sweep).

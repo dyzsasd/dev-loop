@@ -1,10 +1,11 @@
 # dev-loop
 
-Four autonomous agents — **PM**, **QA**, **Dev**, and **Sweep** — that run a
-software-development loop **coordinated entirely through Linear ticket state**. They
-never call each other directly; Linear is the shared blackboard. Trigger each one
+Five autonomous agents — **PM**, **QA**, **Dev**, **Sweep**, and **Reflect** — that
+run a software-development loop **coordinated entirely through Linear ticket state**.
+They never call each other directly; Linear is the shared blackboard. Trigger each one
 manually when you want that role to take a turn. (PM/QA/Dev are the core producing
-loop, shown below; **Sweep** is a slower-cadence lifecycle janitor.)
+loop, shown below; **Sweep** is a slower-cadence lifecycle janitor; **Reflect** is the
+slowest — a daily retrospective that observes the loop and curates `lessons.md`.)
 
 ```
         PM ──proposes feature──┐                 ┌──QA proposes bug──┐
@@ -27,10 +28,16 @@ loop, shown below; **Sweep** is a slower-cadence lifecycle janitor.)
 | **`qa-agent`** | Runs happy-path + edge-case tests in the configured test env, files **Bug** tickets, and **re-tests** bugs that reach `In Review`. |
 | **`dev-agent`** | Pulls `Todo` tickets in a fixed priority order, grooms them (enough info? duplicate?), implements, runs build/test gates, self-reviews the diff, ships per config, smoke-checks prod (auto-revert on a break), and moves them to `In Review`. Blocks anything it can't act on rather than guessing. |
 | **`sweep-agent`** | Lifecycle janitor (slower cadence). Owns the cracks between the three owner-scoped agents: fixes tickets with a missing/wrong owner label (invisible to every other agent's queries), resets orphaned `In Progress` from crashed runs, nudges stale signals, and reports board health. Hygiene only — never verifies, implements, or ships. |
+| **`reflect-agent`** | Retrospective + self-evolution role (slowest cadence — daily). Studies the loop's **own** behavior over a window (tickets, git/deploy, run logs, throughput, QA outcomes), emits a daily retrospective, and **curates `lessons.md`** from recurring, evidence-cited patterns. Observe + curate only — never files Features/Bugs, ships, or verifies. May autonomously edit only `lessons.md` (reversible, per-operator); structural changes to the SKILLs/conventions are **drafted as proposals, never auto-applied**. |
+
+> **`init` is a setup command, not a loop agent.** `/dev-loop:init` runs once (safe
+> to re-run) to wire a product into dev-loop — config, Linear labels/project, strategy
+> doc, test env, runtime files — and prints a readiness checklist. It never files
+> tickets, verifies, or ships. See **First-run setup** below.
 
 The full rules — state machine, label taxonomy, ticket templates, priority order,
 and the claim / dedupe / blocked protocols — live in
-[`references/conventions.md`](references/conventions.md). All four skills read it.
+[`references/conventions.md`](references/conventions.md). All five skills read it.
 
 ## Safety boundary
 
@@ -55,7 +62,8 @@ claude --plugin-dir /path/to/dev-loop
 }
 ```
 then `/plugin install dev-loop@local`. Verify with `/plugin list`; the skills appear
-as `/dev-loop:pm-agent`, `/dev-loop:qa-agent`, `/dev-loop:dev-agent`.
+as `/dev-loop:pm-agent`, `/dev-loop:qa-agent`, `/dev-loop:dev-agent`,
+`/dev-loop:sweep-agent`, `/dev-loop:reflect-agent`.
 
 ## Configure
 
@@ -79,12 +87,37 @@ Each project has a `mode`:
 
 ## First-run setup
 
-On the first `live` run against a workspace the agents ensure the workflow labels
-exist (`dev-loop`, `pm`, `qa`, `edge-case`, `blocked`, `needs-pm`, `needs-qa`,
-`coverage`; `Bug`/`Feature`/`Improvement` are reused if present) and that the target
-Linear project exists. See `references/conventions.md` §13.
+**Run `/dev-loop:init` once.** It's a one-time, idempotent **setup command** (not a
+loop agent) that, with you present, gathers the per-project config, ensures the
+workflow labels and the Linear project exist (asking before creating the project),
+verifies or scaffolds the strategy doc, smoke-checks the test env + build, creates
+the runtime files (`pm-state.json` / `qa-state.json` / `lessons.md`), and prints a
+per-item **readiness checklist** before you flip `mode:"live"`. It creates only
+what's missing and overwrites nothing — safe to re-run. See `skills/init/SKILL.md`.
+
+(As a backstop, the loop agents also re-apply the label/project checks defensively on
+the first `live` run — ensuring `dev-loop`, `pm`, `qa`, `edge-case`, `blocked`,
+`needs-pm`, `needs-qa`, `coverage`, and the target project. `Bug`/`Feature`/
+`Improvement` are reused if present. See `references/conventions.md` §13.)
 
 ## Status
+
+v0.4.0 — added a 5th agent, **`reflect-agent`** — the daily retrospective +
+self-evolution role (slowest cadence). It is **meta**: instead of product work it
+studies the loop's **own** behavior over a window (tickets by type/owner/bail-shape,
+git + deploy/rollback, the agent run logs, Todo→Done throughput, QA
+fail/drift/inconclusive counts), then emits a retrospective and **curates `lessons.md`**
+(conventions §14) — adding/superseding/pruning concise rules from *recurring* evidence,
+each citing its ticket IDs / commit shas, reporting every change so the operator can
+veto it. **Hard safety boundary** (new conventions §17): Reflect may autonomously edit
+only `lessons.md` (reversible, per-operator, never-committed) and **must NOT
+auto-rewrite the plugin's own SKILL files or `conventions.md`** — a daily
+self-modifying loop with no review compounds errors, so structural changes are
+**drafted as a proposal** (optionally a `[reflect-proposal]` Linear ticket), never
+applied. Read-only on Linear product tickets; never files Features/Bugs, ships,
+verifies, or relabels. Anti-thrash: a quiet window → terse no-op. Run it on the
+slowest schedule (daily) with whatever launcher you use — a `/loop`, a cron, or your
+own tmux pane; the plugin ships no harness of its own.
 
 v0.3.0 — validated end-to-end in an isolated sandbox (one full PM→Dev→QA cycle:
 priority pick order, claim, block, per-run cap, verify→Done, cancel, propose+dedupe,
