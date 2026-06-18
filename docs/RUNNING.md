@@ -1,0 +1,160 @@
+# Running dev-loop
+
+How to onboard a project, launch the five agents, pick a model per agent, and
+resume. Assumes the plugin is installed (`/plugin list` shows `dev-loop`) and the
+[Requirements](../README.md#requirements) are met (Claude Code, Linear MCP — for the
+`linear` backend — `gh`, a repo, a Linear team/project).
+
+---
+
+## 1. Onboard a project (new project)
+
+Run the setup command **once** — it is idempotent and operator-present:
+
+```
+/dev-loop:init
+```
+
+It will, with you in the loop:
+1. **Confirm `repoPath`** (echoed back — the loop *commits from it*, so this is a gate).
+2. **Ask the backend** — `linear` (coordinate through Linear) or `local` (a machine-local
+   file board in the data dir; no Linear needed). See [conventions §18](../references/conventions.md#18-backend--linear-vs-local).
+3. Gather/validate the per-project config and write it to
+   `~/.claude/plugins/data/dev-loop/projects.json` (creating only what's missing).
+4. **linear**: ensure the workflow labels + the Linear project exist (asking before
+   creating the project). **local**: scaffold `board/` (`tickets/`, `counter.json`) and
+   require a repo-file `strategyDoc`.
+5. Smoke-check the test env + build, create the runtime files
+   (`pm-state.json` / `qa-state.json` / `lessons.md`), and print a **readiness checklist**.
+
+When the checklist is green, set `"mode": "live"` in `projects.json` (init leaves new
+projects in `dry-run` for first contact) and launch the agents (next section).
+
+> Re-running `/dev-loop:init` on an existing project is safe — it re-checks and
+> re-prints the readiness report, overwriting nothing.
+
+---
+
+## 2. Launch the agents
+
+The plugin **ships no harness** — pick whichever fits. Both run the same five skills:
+`/dev-loop:pm-agent`, `qa-agent`, `dev-agent`, `sweep-agent`, `reflect-agent`.
+
+### A. Agent View — native, recommended (`claude agents`)
+
+[Agent View](https://code.claude.com/docs/agent-view) (Claude Code ≥ 2.1.139) is one
+screen for all your background sessions — *Needs input / Running / Done* — that keep
+running with no terminal attached.
+
+```
+claude agents            # open the view (scoped: claude agents --cwd ~/path)
+```
+
+Then dispatch each agent as its own self-looping row (a slash command typed in the view
+becomes a new background session; `/loop` makes it recurring):
+
+```
+/loop 5m  /dev-loop:pm-agent
+/loop 5m  /dev-loop:qa-agent
+/loop 5m  /dev-loop:dev-agent
+/loop 30m /dev-loop:sweep-agent
+/loop 24h /dev-loop:reflect-agent
+```
+
+Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent output),
+`claude stop <id>` (stop). `Space` peeks a row, `Enter` attaches.
+
+> **Model note:** a dispatched Agent View session uses the **view's** model (set the view
+> with `claude agents --model <m>`). For *different* models per agent, use the launcher
+> below (or open separate views). Agent View applies one model per view.
+
+### B. Local tmux launcher — mixed models, one command
+
+A small launcher (kept in your data dir, **not** part of the plugin) opens a `dev-loop`
+tmux session with one pane per agent, each a headless `claude` loop, and reads your
+per-agent `models` from config so every pane gets its own `--model`:
+
+```
+~/.claude/plugins/data/dev-loop/run-loop.sh            # PM/QA/Dev + Sweep; Reflect off
+MODE=once   ~/.claude/plugins/data/dev-loop/run-loop.sh   # one pass each, then stop (good first test)
+REFLECT=1   ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the daily Reflect pane
+SWEEP=0     ~/.claude/plugins/data/dev-loop/run-loop.sh   # omit the janitor pane
+PROJECT=foo ~/.claude/plugins/data/dev-loop/run-loop.sh   # pick a project key
+```
+
+It prints a blast-radius banner (project, mode, autonomy, ship flags, models) before
+starting. Detach `Ctrl-b d` · reattach `tmux attach -t dev-loop` · stop all
+`tmux kill-session -t dev-loop`. Logs tee to `~/.claude/plugins/data/dev-loop/logs/`.
+
+---
+
+## 3. Per-agent models
+
+The model is chosen **at launch** (a SKILL can't set its own model), via a per-project
+`models` map in `projects.json`:
+
+```jsonc
+"models": { "pm": "opus", "qa": "sonnet", "dev": "opus", "sweep": "haiku", "reflect": "sonnet" }
+```
+
+Pick by where reasoning/correctness matters most vs. mechanical/high-frequency work:
+
+| Agent | Suggested | Why |
+|---|---|---|
+| **dev** | `opus` | hardest — implements, self-reviews the diff, fixes |
+| **pm** | `opus` | product/scoping judgment + review |
+| **qa** | `sonnet` | capable + cheaper; runs often |
+| **reflect** | `sonnet` | careful curation, but runs only daily |
+| **sweep** | `haiku` | mechanical hygiene |
+
+Tune to budget — all-`sonnet` is fine; put only `dev` on `opus` to economize. The tmux
+launcher (B) applies this map automatically. In Agent View (A), set the view's model and
+accept one model per view, or run mixed models through the launcher.
+
+---
+
+## 4. Cadence
+
+Agents self-throttle (idle fires are cheap no-ops), so tighter intervals are safe:
+
+| Agent(s) | Cadence | Why |
+|---|---|---|
+| PM / QA / Dev | ~5 min | the producing loop |
+| Sweep | ~30 min | janitorial; re-walking an unchanged board is waste |
+| Reflect | daily | reflects *after* a day of churn |
+
+---
+
+## 5. Resume / restart
+
+**There is no special resume step — the agents are stateless per fire** (conventions §0).
+All state lives in Linear (or the local board), git, and the `*-state.json` files, never
+in conversation memory. So to resume after stopping (or a crash, a reboot, a laptop
+sleep): **just launch the agents again** — each re-reads ground truth and continues
+exactly where the board left off.
+
+- **Agent View:** background sessions persist across sleep and reappear in `claude
+  agents`; they stop only if the machine powers off. After a reboot, re-dispatch the
+  `/loop …` lines from §2A. To rejoin a specific session: `claude attach <id>`.
+- **tmux launcher:** if the `dev-loop` session is gone, re-run `run-loop.sh`. If it
+  still exists, `tmux attach -t dev-loop`.
+- A single in-flight fire that died mid-ticket is **self-healing**: Dev's Step 0
+  reclaims a ticket it left stranded `In Progress` on the next fire (orphan-recovery),
+  and Sweep catches the rest.
+
+---
+
+## 6. Stop
+
+- **Agent View:** `claude stop <id>` per session (or stop them all from the view).
+- **tmux:** `tmux kill-session -t dev-loop`.
+
+---
+
+## Safety
+
+`mode:"live"` + `autonomy:"full"` + `autoPush`/`autoDeploy` = **unattended commits,
+pushes, and prod deploys with no human gate** — the intended power of the loop. Try
+`mode:"dry-run"` or a single `MODE=once` pass first. The `dev-loop` label (or, in local
+mode, the board directory) is the firewall that keeps the loop off your human backlog
+(conventions §2).

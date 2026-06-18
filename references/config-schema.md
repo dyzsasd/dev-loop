@@ -26,6 +26,9 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       "backend":       "linear",      // "linear" (default when absent) | "local" — coordination substrate (see conventions §18)
       "localBoard":    null,          // local backend only: override board dir; null → ${CLAUDE_PLUGIN_DATA}/<key>/board/
       "ticketPrefix":  "DL",          // local backend only: ID prefix for board tickets (e.g. "DL-1"); ignored for linear
+      "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). Omit → your default model.
+        "pm": "opus", "qa": "sonnet", "dev": "opus", "sweep": "haiku", "reflect": "sonnet"
+      },
 
       "testEnv": {                    // where QA + verification run
         "baseUrl":     "https://monpick.vercel.app",
@@ -99,6 +102,15 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `*-state.json` files; if a launcher happens to tee agent output to
   `logs/<agent>-<date>.log` in the data dir, it reads that too, but degrades silently
   when absent. It writes no new config keys.
+- **`models`** (optional): a per-agent model map the **launcher** applies at session
+  start (`claude --model <m> …`) — the model is a *launch-time* choice, not something a
+  SKILL sets, so this is consumed by `run-loop.sh` / your launch command, not by the
+  agents. Omit (or omit an agent) → that session uses your default model. Recommended
+  mapping by where reasoning/correctness matters most vs. mechanical/high-frequency
+  work: **`dev`** and **`pm`** → `opus` (Dev implements + self-reviews + fixes; PM makes
+  product/scoping calls), **`qa`** and **`reflect`** → `sonnet` (capable + cheaper; QA
+  runs often, Reflect runs daily), **`sweep`** → `haiku` (mechanical hygiene). Tune to
+  your budget — e.g. all-`sonnet` is fine; put only `dev` on `opus` to economize.
 - **`backend`** (optional; default `"linear"`): the coordination substrate
   (conventions §18). `"linear"` is the Linear MCP, exactly as today — absent ⇒
   `"linear"`, so existing projects are unchanged. `"local"` uses a machine-local file

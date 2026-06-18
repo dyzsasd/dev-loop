@@ -467,7 +467,9 @@ On startup each skill:
    (optional — see §12; absent ⇒ the conservative `"ask"` default). It also loads
    `backend` (`"linear"` | `"local"`; **absent ⇒ `"linear"`**, so existing projects
    are unchanged) and, for `local`, the optional `localBoard` path and `ticketPrefix`
-   (§18).
+   (§18). (A per-agent `models` map may also be set, but it is applied by the
+   **launcher** at session start — `claude --model …` — not loaded or chosen by the
+   agents; see config-schema.md and `docs/RUNNING.md`.)
 
 If `projects.json` is missing or the chosen project lacks a required field, the
 skill asks the user for the missing value and offers to write it back to config —

@@ -123,23 +123,32 @@ first `live` run — see `references/conventions.md` §13.)
 
 ## Run the loop
 
-The plugin **ships no harness** — you choose how to fire the agents:
+Onboard a project once with **`/dev-loop:init`** (above), then launch the agents. The
+plugin **ships no harness** — choose how to fire them:
 
-- **Manually**, one turn at a time: `/dev-loop:pm-agent`, then `/dev-loop:dev-agent`, etc.
-- **On a schedule**, via Claude Code's `/loop`, a cron, or your own tmux launcher — one
-  long-lived session per agent.
+- **Agent View** (native, recommended) — `claude agents`, then dispatch each as a
+  self-looping background session: `/loop 5m /dev-loop:pm-agent`, `/loop 5m
+  /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent`, `/loop 30m /dev-loop:sweep-agent`,
+  `/loop 24h /dev-loop:reflect-agent`. Monitor/attach/stop from one screen.
+- **A local tmux launcher** — one pane per agent, mixed per-agent models in one command.
+- **Manually**, one turn at a time, for a single pass.
 
-Cadence guidance (they self-throttle, so idle fires are cheap no-ops):
+Per-agent **models** (`models` in config): the model is chosen at launch — put `dev`/`pm`
+on `opus` (judgment-heavy), `qa`/`reflect` on `sonnet`, `sweep` on `haiku`; tune to budget.
 
-| Agent(s) | Cadence | Why |
-|---|---|---|
-| PM / QA / Dev | fast (~5 min) | the producing loop — propose, test, build, ship |
-| Sweep | slower (~30 min) | janitorial; re-relabeling an unchanged board is waste |
-| Reflect | daily | reflects *after* a day of churn, not during it |
+Cadence (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
+~30 min, Reflect daily.
+
+**Resume is a non-event** — the agents are stateless per fire (conventions §0): state
+lives in Linear/the local board + git + the state files. To resume after a stop, crash,
+or reboot, just launch them again; each re-reads ground truth and continues.
+
+📖 **Full guide — onboarding, both launch methods, per-agent models, resume, stop:**
+[`docs/RUNNING.md`](docs/RUNNING.md).
 
 > ⚠️ **`mode:"live"` + `autonomy:"full"` + `autoPush`/`autoDeploy` = unattended commits,
 > pushes, and prod deploys with no human gate.** That's the intended power of the loop —
-> but try `mode:"dry-run"` (or a single manual pass) first to see what it would do.
+> but try `mode:"dry-run"` (or a single `MODE=once` pass) first to see what it would do.
 
 ## Safety boundary
 
@@ -168,8 +177,10 @@ load-bearing.
 
 ## Status
 
-**v0.5.0** — five agents (PM/QA/Dev/Sweep/Reflect) + the `init` setup command; validated
+**v0.6.0** — five agents (PM/QA/Dev/Sweep/Reflect) + the `init` setup command; validated
 end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
 (push/deploy) is opt-in per project and gated on a green build. Coordination is
 backend-pluggable — Linear (default) or a machine-local file board (`backend:"local"`,
-conventions §18). Full history in [`CHANGELOG.md`](CHANGELOG.md).
+conventions §18). Agents take **per-agent models** at launch (`models` config), run via
+Agent View or a local launcher, and **resume by just relaunching** (stateless per fire) —
+see [`docs/RUNNING.md`](docs/RUNNING.md). Full history in [`CHANGELOG.md`](CHANGELOG.md).

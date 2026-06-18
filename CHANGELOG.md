@@ -3,6 +3,21 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.6.0 — per-agent models, run guide, resume
+- **Per-agent models** (`models` config): the model is chosen at *launch* (a SKILL
+  can't set its own), so a per-project map — e.g. `dev`/`pm` → `opus`, `qa`/`reflect`
+  → `sonnet`, `sweep` → `haiku` — is applied by the launcher (`run-loop.sh` reads it and
+  passes `--model` per pane). Tune to budget; omit ⇒ default model. Documented in
+  config-schema + conventions §11.
+- **`docs/RUNNING.md`** — the full run guide: onboarding a project (`/dev-loop:init`),
+  the two launch methods (Agent View `claude agents` + `/loop` dispatch, and a local
+  tmux launcher), per-agent models, cadence, **resume**, and stop.
+- **Resume is a non-event** — documented: the agents are stateless per fire (§0), so
+  after a stop/crash/reboot you just relaunch; state lives in Linear/the local board +
+  git + state files. Agent View sessions persist across sleep; a mid-ticket crash
+  self-heals via Dev Step 0 + Sweep.
+- README "Run the loop" rewritten around Agent View + the model dial + resume.
+
 ## 0.5.0 — pluggable backend (Linear | local)
 - **`backend` config dial** (conventions §18, config-schema.md): per-project choice of
   coordination substrate. **`"linear"` (default when absent)** is the Linear MCP, exactly
