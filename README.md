@@ -42,6 +42,10 @@ schedule, and the product builds and improves itself.
   loop. Its one hard limit: it may edit `lessons.md` autonomously but **never** rewrites
   the agents' own instructions; structural changes are *proposed* for a human, never
   auto-applied. (See [self-evolution](#self-evolution) below.)
+- **You steer it by reviewing, not by editing code.** Every agent writes
+  **daily / weekly / monthly reports**; drop a **点评** (a critique) next to any report and
+  the agent distills it into a `lessons.md` rule it obeys from then on — see
+  [reports & operator review](#reports--operator-review-点评) below.
 
 ## The agents
 
@@ -118,6 +122,11 @@ Three orthogonal dials per project (plus an optional `repos[]` for multi-repo pr
   Set `repos[]` to span repos: each ticket targets one via a `repo:<name>` label, with
   per-repo build/branch/deploy resolution and a doc-home repo for the strategy doc. See
   [conventions §19](references/conventions.md#19-multiple-repos).
+- **`reports.sink`** (optional) — `"files"` (default; reports live as machine-local files
+  in the data dir) vs `"linear"` (host reports + the `点评` channel in Linear, for a
+  **cloud / remote** runtime where you can't reach the data dir). Absent ⇒ `"files"`.
+  Default-off and decoupled from `backend`; the `linear` sink carries §16 guardrails. See
+  [conventions §23](references/conventions.md#23-reports-in-linear--the-reportssink-option).
 
 Full schema + field reference: [`references/config-schema.md`](references/config-schema.md).
 
@@ -130,7 +139,8 @@ the PM doc-base `Current state` (or runs a short strategy interview for greenfie
 gathers the config (incl. any extra `repos[]`), ensures the workflow labels + the Linear
 project exist (and one `repo:<name>` label per repo when multi-repo — asking before
 creating the project), verifies or scaffolds the strategy doc-base, smoke-checks the test
-env + build, creates the runtime files (`pm-state.json` / `qa-state.json` / `lessons.md`),
+env + build, creates the runtime files (`pm-state.json` / `qa-state.json` / `lessons.md`,
+plus the per-agent `reports/` tree, §22),
 optionally adopts named pre-existing human tickets (per-ticket operator confirmation,
 never bulk), and prints a per-item **readiness checklist** before you flip `mode:"live"`.
 It creates only what's missing and overwrites nothing.
@@ -194,6 +204,35 @@ load-bearing.
   `[reflect-proposal]` ticket filed `blocked` so no agent can pick it up) for the human
   operator to apply. Self-modification of the core instructions is *surfaced, not
   executed* — the one principled exception to "decide and act".
+
+## Reports & operator review (点评)
+
+Every agent leaves a durable trail of what it did, and you steer it by **reviewing that
+trail** — no code or skill edits.
+
+- **Reports.** Each agent writes a **daily** running log, rolled up into a **weekly** and a
+  **monthly** summary, under `${CLAUDE_PLUGIN_DATA}/<project-key>/reports/<agent>/`. They're
+  machine-local, never committed, and §16-bound (summaries + counts + ticket-IDs/SHAs — no
+  secrets/PII). A no-op fire writes nothing, so the log tracks real work, not fire count.
+- **点评 (operator review).** To critique a report, drop a sibling **`<report>.review.md`**
+  next to it with free-form prose. At its next run-start the agent reads any **un-acted**
+  review and **distills it into one `lessons.md` rule under its own section** — which it
+  then obeys on every subsequent fire. That's the whole loop: **report → your 点评 → lesson
+  → changed behavior.**
+- **The firewall stays intact** (conventions §17/§22). An agent may write a `lessons.md`
+  rule *only* into its own section and *only* from a real, cited operator review — your
+  written 点评 is the human authorization. `## Shared` and other agents' sections stay
+  Reflect's alone; a structural ask becomes a proposal, never a self-edit. Anti-spoof:
+  agents never author a `*.review.md`, so any review file is operator-authored by
+  construction (ticket/log text can't masquerade as a 点评).
+- **Cloud / remote? Host it in Linear.** Set **`reports.sink:"linear"`** (default-off) and
+  reports become per-agent Linear **Documents** in a dedicated reports project, with the
+  点评 as a **comment** on the doc — so you read and critique from a browser / phone. Same
+  firewall by a channel split (the agent writes only the doc *body*, never a comment, so
+  every comment is operator-authored), plus mandatory §16 guardrails (a fail-closed scrub,
+  and `signal`/`ops`/`dev` pinned local-only by default). See
+  [conventions §22](references/conventions.md#22-reports--operator-review--daily--weekly--monthly)
+  + [§23](references/conventions.md#23-reports-in-linear--the-reportssink-option).
 
 ## Status
 
