@@ -514,6 +514,20 @@ machine-local — never committed, never shared; created lazily on first run. **
 `${CLAUDE_PLUGIN_DATA}/<project-key>/board/` (`tickets/`, `counter.json`), or wherever
 `localBoard` points — under the same machine-local, never-committed rule.
 
+**Bounded retention + atomic writes (state files are a working set, not an archive).**
+`pm-state.json` / `qa-state.json` exist to answer a fixed set of look-back questions —
+*has any watched repo's HEAD moved since I last reviewed/swept?* (the per-repo SHA map,
+§19) and *which lenses/surfaces have I already covered at that SHA?* — so they must stay
+**bounded**, the same discipline `lessons.md` follows (§14). Persist only that look-back,
+**overwritten in place**; do **not** accumulate one key per ticket touched (verification
+scratch belongs in the Linear ticket and its comments, which dedup (§8) and re-test read
+directly — never these files). If transient notes are kept, cap them to a small rolling
+window (last ~20 / ~14 days) and prune the tail on each write. **Write atomically** —
+serialize to a temp file in the **same directory**, then rename over the target (the same
+atomic-rename the local-board lock uses, §18) — so a partial/interrupted write can never
+leave invalid JSON. (An unbounded append already grew `qa-state.json` past 330 KB, and a
+non-atomic write is the likely cause of the one `pm-state.json` corruption on record.)
+
 ---
 
 ## 12. Dry-run vs live

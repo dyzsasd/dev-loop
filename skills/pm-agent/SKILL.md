@@ -106,6 +106,14 @@ the same ground every fire, rotate the **review lens** and track progress:
     SHA**. This is the proactive review the user asked for: don't go dark just
     because `strategy-gaps` is satisfied — keep reviewing the existing services
     through the remaining lenses and file the improvements/new features you find.
+- **Keep `pm-state.json` bounded, and write it atomically (§11).** Persist only the
+  look-back this preflight reads: the per-repo last-reviewed SHA map, the swept-lens
+  list at that SHA (with timestamps), and the `docWatch` state — each **overwritten in
+  place**, not appended to. Don't accumulate an unbounded per-ticket key (a note per
+  feature you file/verify); that belongs in the Linear ticket, not here. Always write
+  via a **temp file in the same dir + atomic rename** over the target, so an interrupted
+  write can never leave invalid JSON — a partial write is the likely cause of the one
+  `pm-state.json` corruption on record (175 KB live file reset to a `.corrupt-bak`).
 - **Watch the project doc every fire — a cheap, always-run check like Jobs A/B, not
   gated by the SHA.** Re-read `strategyDoc` each run and detect whether the owner has
   *added or changed* anything since last fire (track the doc's last-seen state in

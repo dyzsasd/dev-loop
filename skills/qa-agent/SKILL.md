@@ -96,6 +96,18 @@ swept (a 5-minute loop will otherwise re-probe an unchanged product forever):
   verifying, record the **SHA you actually swept** — NOT end-of-run `HEAD`, which
   can move mid-run while you test. Leaving the marker behind re-surfaces any commit
   you haven't finished verifying (so nothing is silently skipped).
+- **Keep `qa-state.json` bounded, and write it atomically (§11).** It exists to
+  answer two look-back questions only — *has any watched repo's HEAD moved since I
+  last swept?* (the per-repo SHA map) and *which surfaces have I already covered?*
+  (`sweptSurfaces`). Persist **only** that: the per-repo swept SHAs + timestamps and
+  a compact `sweptSurfaces` map (one entry per surface, **overwritten in place** — not
+  an append log). Do **not** accumulate an unbounded per-ticket key (one note per bug
+  you verify) — that history belongs in the Linear ticket and its comments, not here;
+  dedup (§8) and re-test (Job A) read Linear, never this file. If you keep transient
+  notes at all, cap them to a small rolling window (last ~20 entries / ~14 days) and
+  prune the tail on each write. Always write via a **temp file in the same dir + atomic
+  rename** over the target, so an interrupted write can never leave invalid JSON — a
+  partial write is the likely cause of the one `pm-state.json` corruption on record.
 - **Catch self-closed `qa` bugs.** Dev (or the loop) may move a `qa` bug
   `In Review → Done` in seconds — faster than your poll — so Job A never sees it at
   `In Review`. Don't let that skip verification: if a `qa` bug is `Done` but its fix
