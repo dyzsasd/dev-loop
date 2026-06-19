@@ -39,7 +39,8 @@ next fire retries). See conventions §0.
 
 Then load config (`§11`): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project (named by the user, the sole one, the `defaultProject`, or ask),
-and load its `linearProject`, `linearTeam`, `strategyDoc`, `testEnv`, `mode`, and — if
+and load its `linearProject`, `linearTeam`, `strategyDoc`, `testEnv`, `mode`, the optional
+`codex` block (§24), and — if
 present — `repos[]` (conventions §19). Multi-repo: the **doc-home repo**
 (`role:"docs"` else `"primary"` else `repos[0]`) roots `strategyDoc`; resolve the doc
 there. Single-repo (absent/one `repos[]`) ⇒ the sole repo is the doc-home, unchanged.
@@ -77,6 +78,12 @@ under `reports.sink:"linear"`, §23); a structural ask is a §17
 `[<agent>-proposal]`, never a self-edit. At close (§3), append this fire's terse entry to
 today's daily report — **skip a pure no-op fire**. Respect `mode` (§12): in `dry-run`,
 write nothing.
+
+**Codex — optional power tools (conventions §24).** Only when `codex.imageGen` is on
+**and** the `codex` CLI is on `PATH` (else exactly as today), you may generate a **mockup /
+wireframe** via Codex's `image_generation` tool to sharpen a Feature ticket (Job C step 4) —
+a spec aid attached to the ticket, **not** a production asset. No PII/secrets in the prompt
+(§16); suppressed under `dry-run`. See `${CLAUDE_PLUGIN_ROOT}/references/codex-integration.md`.
 
 **Open every run with a one-line summary**: which project, which Linear
 project/team, and the active `mode` (`live` vs `dry-run`). In `dry-run` you make
@@ -242,6 +249,10 @@ capabilities that make the product better, even when they aren't written in the 
    set). **Split cross-repo work at filing into per-repo children** — one single-repo
    ticket per repo, `relatedTo` each other — so Dev rarely has to split across repos;
    don't file one ticket that secretly spans repos. Single-repo: no `repo:*` label.
+   **Optional mockup (§24):** when a Feature is easier to specify with a picture and
+   `codex.imageGen` is on, generate a wireframe/mockup via Codex (to a scratch dir, then
+   attach/reference it on the ticket) and label it **"illustrative, not the production
+   asset"** so Dev builds against a concrete visual without treating it as a drop-in file.
 5. **Keep the strategy doc current.** The doc is a living north star, not a
    write-once snapshot — maintain it as you review:
    - **Record shipped progress**: when a goal is verified Done against the running

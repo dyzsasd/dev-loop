@@ -234,9 +234,36 @@ trail** — no code or skill edits.
   [conventions §22](references/conventions.md#22-reports--operator-review--daily--weekly--monthly)
   + [§23](references/conventions.md#23-reports-in-linear--the-reportssink-option).
 
+## Codex integration (optional)
+
+The loop can use **OpenAI Codex** as an optional power tool — wired through the
+[codex-plugin-cc](https://github.com/openai/codex-plugin-cc) companion plugin plus the
+`codex` CLI. It's **opt-in and absent ⇒ 100% unchanged**: with no `codex` config block
+(or no `codex` CLI on `PATH`), every agent behaves exactly as before. See
+[conventions §24](references/conventions.md#24-codex--optional-power-tools) and the full
+playbook in [`references/codex-integration.md`](references/codex-integration.md).
+
+What it adds (each independently gated):
+- **Independent review** — Dev's self-review (Step 5.5) and Architect can run a *second
+  model* over the diff/codebase (`/codex:review`, `/codex:adversarial-review`). Advisory:
+  Critical/High block like Dev's own, but Codex never touches Linear and never gets a veto.
+- **Image generation** — the one thing the loop can't do itself. **PM** generates
+  mockups/wireframes to sharpen Feature tickets; **Dev** generates real UI assets (icons,
+  illustrations, OG cards, placeholders) an acceptance criterion requires, committed into
+  `codex.assetsDir` and shipped through the normal gates. Uses Codex's native
+  `image_generation` tool (the PNG lands in `~/.codex/generated_images/…` and is copied out).
+- **Delegate / rescue** — Dev can hand a stuck ticket to Codex for **one** pass before it
+  blocks `fix-exhausted`; the patch ships only if it passes Dev's own gates + self-review.
+
+**Setup:** `npm i -g @openai/codex && codex login`, install the plugin
+(`/plugin marketplace add openai/codex-plugin-cc` → `/plugin install codex@openai-codex`
+→ `/codex:setup`), then add a `codex` block to the project in `projects.json` (see
+[config-schema](references/config-schema.md)). Codex uses your local `codex login` auth —
+no secret in config; usage counts against your ChatGPT/Codex limits.
+
 ## Status
 
-**v0.10.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
+**v0.11.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
 **outward** observe-and-file agents (conventions §21) — **Ops** (watches running prod,
 files `incident` Bugs with an anti-flap re-check + dedupe), **Architect** (audits
 whole-codebase tech health on a rotating, SHA-gated dimension, files `tech-debt`
@@ -253,6 +280,11 @@ how it works (conventions §22). For a cloud / remote runtime, an opt-in
 and critique from a browser (default-off; §23).
 The loop coordinates **one or many repos** (`repos[]`; tickets target a repo via a
 `repo:<name>` label, per-repo build/branch/deploy) — single-repo is 100% unchanged.
+New in v0.11.0: an opt-in **Codex companion** (conventions §24, via codex-plugin-cc + the
+`codex` CLI) gives the loop an independent second-model **review** (Dev Step 5.5 +
+Architect), **image generation** (PM mockups + Dev production assets — the one capability
+the agents lack), and a one-shot **rescue** before a `fix-exhausted` block — all advisory,
+gated per sub-flag, never touching Linear; absent ⇒ 100% unchanged.
 Validated end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
 (push/deploy) is opt-in per project and gated on a green build. Coordination is
 backend-pluggable — Linear (default) or a machine-local file board (`backend:"local"`,

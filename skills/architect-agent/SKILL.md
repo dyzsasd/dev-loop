@@ -51,9 +51,11 @@ dimensions you've swept at those SHAs), re-read from disk every fire.
 
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`, pick the project,
 and load `linearProject`, `linearTeam`, `repoPath`, `build`, `git`, `mode`,
-`autonomy` (§12a), and — if present — `repos[]` (conventions §19; absent/one ⇒
-single-repo = just `repoPath`, unchanged). **Architect needs no new config** — it
-reuses `repos[]` / `repoPath` / `build`. If that path doesn't resolve (e.g.
+`autonomy` (§12a), the optional `codex` block (§24), and — if present — `repos[]`
+(conventions §19; absent/one ⇒
+single-repo = just `repoPath`, unchanged). **Architect needs no architect-specific
+config** — it reuses `repos[]` / `repoPath` / `build` (the shared `codex` block, §24, is
+the only optional add). If that path doesn't resolve (e.g.
 `${CLAUDE_PLUGIN_DATA}` expands to an empty/`-local` dir), fall back to
 `~/.claude/plugins/data/dev-loop/projects.json` or search
 `~/.claude/plugins/data/**/projects.json` before asking the user.
@@ -152,7 +154,11 @@ the architecture the code should follow. Then for the chosen dimension, audit th
 codebase **as a whole** (not a diff): grep/read the relevant surfaces, run the read-only dependency/CVE scan if that's the dimension,
 and collect concrete findings — each with a file/path locus and why it's debt. Favor
 **high-signal, durable** findings over nits (a real layering violation or a CVE beats
-a style quibble). Cap how much you surface (Job 3's per-run cap) — quality over
+a style quibble). **Optional second opinion (§24):** when `codex.review` is on and the
+`codex` CLI is present, you may run a Codex review on the dimension's surfaces
+(`codex exec review -C <repo> < /dev/null`, or `/codex:adversarial-review` to pressure-test
+an architectural call) — advisory input to your findings, **read-only**, never a code edit
+or a Linear write (you still observe-and-file per §21). Cap how much you surface (Job 3's per-run cap) — quality over
 volume; a flood of tech-debt tickets is its own backlog spam.
 
 ### Job 3 — File `tech-debt` Improvements (dedupe hard, capped)
