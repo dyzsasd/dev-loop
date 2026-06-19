@@ -1,6 +1,6 @@
 # dev-loop — Config schema
 
-The dev-loop agents (PM / QA / Dev / Sweep / Reflect) read
+The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect / Signal) read
 `${CLAUDE_PLUGIN_DATA}/projects.json`. It maps each product to its Linear project, its
 repo, its test environment, and its ship/deploy settings. One file, many products.
 `/dev-loop:init` gathers and writes this file with you (operator-present setup).
@@ -39,8 +39,8 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       "backend":       "linear",      // "linear" (default when absent) | "local" — coordination substrate (see conventions §18)
       "localBoard":    null,          // local backend only: override board dir; null → ${CLAUDE_PLUGIN_DATA}/<key>/board/
       "ticketPrefix":  "DL",          // local backend only: ID prefix for board tickets (e.g. "DL-1"); ignored for linear
-      "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). Omit → your default model.
-        "pm": "opus", "qa": "sonnet", "dev": "opus", "sweep": "haiku", "reflect": "sonnet"
+      "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). DEFAULT is opus for EVERY agent; tune an agent DOWN to economize.
+        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "signal": "opus"
       },
 
       "testEnv": {                    // where QA + verification run
@@ -68,6 +68,17 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "healthCheck": null                     // optional: a URL that must return 2xx, OR a command
                                                 //   that must exit 0, run by Dev Step 6.5 after deploy.
                                                 //   null → Dev hits testEnv.baseUrl root (non-5xx).
+      },
+      "ops": {                        // OPTIONAL — ops-agent only (conventions §21). Absent ⇒ Ops polls only the resolved deploy.healthCheck + testEnv.baseUrl root.
+        "checks":         [],         // optional: extra synthetic probes — each a URL (must return 2xx) or a command (must exit 0)
+        "criticalRoutes": [],         // optional: core user-flow paths/URLs that must be up — string path/URL or { "url": "...", "expectStatus": 200 }
+        "logsCommand":    null        // optional: a READ-ONLY logs/metrics command for an error-rate/5xx signal (never mutating)
+      },
+      "signal": {                     // OPTIONAL — signal-agent only (conventions §21). Absent OR sources empty ⇒ Signal gracefully NO-OPs.
+        "sources": [                  // each: one external real-user signal source + how to read it (MCP tool / API / command). Read-only.
+          { "name": "support", "type": "inbox",  "read": "<mcp-tool-or-command>" },
+          { "name": "sentry",  "type": "errors", "read": "<mcp-tool-or-command>" }
+        ]
       },
 
       "blockedStateName": null        // set to a real Linear state name if you add a "Blocked" column; else null → use the `blocked` label
@@ -104,8 +115,8 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   them (`.env.local`, a vault, "ask user") in `testEnv.notes`. See the security
   doctrine (conventions §16).
 - **`lessons.md`** (optional) lives next to `projects.json` and holds per-operator
-  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/
-  `Reflect`). Each skill reads it at run-start and applies its section that fire
+  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Signal`).
+  Each skill reads it at run-start and applies its section that fire
   (conventions §14). Local machine state — never committed. The **Reflect** agent (the
   daily retrospective role) is the one agent that *writes* this file — it curates it
   from recurring, evidence-cited patterns it observes across runs (conventions §17).
@@ -118,12 +129,12 @@ repo, its test environment, and its ship/deploy settings. One file, many product
 - **`models`** (optional): a per-agent model map the **launcher** applies at session
   start (`claude --model <m> …`) — the model is a *launch-time* choice, not something a
   SKILL sets, so this is consumed by `run-loop.sh` / your launch command, not by the
-  agents. Omit (or omit an agent) → that session uses your default model. Recommended
-  mapping by where reasoning/correctness matters most vs. mechanical/high-frequency
-  work: **`dev`** and **`pm`** → `opus` (Dev implements + self-reviews + fixes; PM makes
-  product/scoping calls), **`qa`** and **`reflect`** → `sonnet` (capable + cheaper; QA
-  runs often, Reflect runs daily), **`sweep`** → `haiku` (mechanical hygiene). Tune to
-  your budget — e.g. all-`sonnet` is fine; put only `dev` on `opus` to economize.
+  agents. **The default is `opus` for EVERY agent** (the launcher applies `--model opus`
+  per pane unless you override) — maximize correctness across the whole loop. Tune an
+  agent **down** (`sonnet`/`haiku`) only to economize — e.g. the mechanical/high-frequency
+  ones (`sweep`, `qa`, `ops`, `signal`) tolerate `sonnet` well; the reasoning-heavy ones
+  (`dev`, `pm`, `architect`, `reflect`) are where `opus` earns its keep. Omitting an
+  agent ⇒ it falls back to the launcher's opus default.
 - **`backend`** (optional; default `"linear"`): the coordination substrate
   (conventions §18). `"linear"` is the Linear MCP, exactly as today — absent ⇒
   `"linear"`, so existing projects are unchanged. `"local"` uses a machine-local file
@@ -149,9 +160,32 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   exit 0) that Dev runs in Step 6.5 right after an unattended prod deploy. On a
   repeated failure Dev rolls the deploy back (revert + redeploy) rather than leaving
   prod broken. Absent → Dev smoke-checks `testEnv.baseUrl` root for a non-5xx.
-- **Agent state files** (`pm-state.json`, `qa-state.json`) live next to
+- **`ops`** (optional; `ops-agent` only, conventions §21): probes for the Ops/SRE
+  watcher of RUNNING prod. `ops.checks` (extra synthetic probes — URL/2xx or
+  command/exit-0), `ops.criticalRoutes` (core user-flow paths that must be up), and a
+  read-only `ops.logsCommand` (error-rate/5xx signal) are **all optional**; absent ⇒ Ops
+  polls only the resolved per-repo `deploy.healthCheck` + `testEnv.baseUrl` root. Ops
+  re-checks before filing (anti-flap), files/refreshes ONE `Bug`+`qa`+`incident` (Urgent
+  when prod is down), dedupes via `ops-state.json`, and never rolls back. Opt-in to launch.
+- **`signal`** (optional; `signal-agent` only, conventions §21): `signal.sources[]`
+  lists external real-user signal sources (a support inbox, an error tracker, a feedback
+  channel, app-store reviews) and how to read each (an MCP tool / API / command —
+  **read-only**). **Absent or empty ⇒ Signal gracefully NO-OPs** — so a project that
+  configures nothing is unaffected. Signal tracks a per-source last-seen cursor in
+  `signal-state.json` (never re-ingests), dedupes hard (one ticket per issue, reports
+  linked), files a defect → `Bug`+`qa`+`signal` or a request → `Feature`+`pm`+`signal`,
+  and is **PII-strict** (§16). **Architect needs no new config** — it reuses
+  `repos[]`/`build`.
+- **`models`** now covers eight agents and **defaults to `opus` for all of them** (the
+  launcher applies `--model opus` per pane unless overridden); tune an agent down to
+  economize. The three outward agents are **opt-in to launch** (off by default in the
+  launcher) and don't change any inward agent's behavior.
+- **Agent state files** (`pm-state.json`, `qa-state.json`, and the outward agents'
+  `ops-state.json` / `architect-state.json` / `signal-state.json`, §21) live next to
   `projects.json` and hold per-project loop state: last-reviewed/swept SHA, swept
-  review lenses (PM), swept surfaces (QA). **Multi-repo (conventions §19):** the
+  review lenses (PM), swept surfaces (QA); Ops's open incidents + last-check;
+  Architect's per-repo SHA map + swept audit dimensions; Signal's per-source last-seen
+  cursors + source→ticket map. **Multi-repo (conventions §19):** the
   last-reviewed/swept SHA becomes a **per-repo map** `{ "<repo-name>": "<sha>" }` (one
   entry per `repos[]`); a new SHA in *any* watched repo re-opens the sweep. Single-repo
   keeps the single-SHA form, unchanged. Local per-operator runtime state — never

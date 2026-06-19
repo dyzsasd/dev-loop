@@ -1,9 +1,11 @@
 # dev-loop — Shared Conventions
 
-The single source of truth for the **PM / QA / Dev / Sweep / Reflect** agents that
-run an autonomous software-development loop coordinated through **Linear**. All five
-skills load this file. If a rule here conflicts with a skill's body, this file wins —
-keeping the five agents interoperable is the whole point.
+The single source of truth for the **PM / QA / Dev / Sweep / Reflect / Ops / Architect /
+Signal** agents that run an autonomous software-development loop coordinated through
+**Linear**. All eight skills load this file. If a rule here conflicts with a skill's
+body, this file wins — keeping the eight agents interoperable is the whole point. (The
+five inward agents form the build loop; the three outward observe-and-file agents —
+Ops/Architect/Signal — are defined in §21.)
 
 ## Table of contents
 0. [Prime directive — every fire is fresh](#0-prime-directive--every-fire-is-fresh)
@@ -28,6 +30,7 @@ keeping the five agents interoperable is the whole point.
 18. [Backend — Linear vs local](#18-backend--linear-vs-local)
 19. [Multiple repos](#19-multiple-repos)
 20. [PM knowledge base](#20-pm-knowledge-base-the-doc-base)
+21. [Outward-facing agents — Ops / Architect / Signal](#21-outward-facing-agents--ops--architect--signal)
 
 ---
 
@@ -67,6 +70,9 @@ numbered sections below.
 | **Dev** | (ships everyone's tickets) | `Todo` in pick order (§5), excluding `blocked` | In Review, for the owner |
 | **Sweep** | (nothing — hygiene only) | Tickets that fall through the cracks: missing/wrong owner label, orphaned `In Progress`, stale signals (cross-owner) | re-label/re-route → the right owner |
 | **Reflect** | (nothing — observes the loop) | The loop's own behavior over a window: tickets/git/logs/throughput/QA outcomes (read-only) | `lessons.md` (autonomous) + a drafted proposal in the report (never auto-applies SKILL/conventions) |
+| **Ops** *(outward · observe-and-file §21)* | (nothing — watches running prod) | RUNNING prod over time: health checks / baseUrl / critical routes / logs (read-only); CONFIRMED+REPEATED degradation only (anti-flap) | files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod down) — never rolls back (Dev's Step 6.5) |
+| **Architect** *(outward · observe-and-file §21)* | (nothing — audits whole-codebase tech health) | the codebase as a whole on a rotating dimension (drift/dup/dead-code/dep-CVE/consistency/missing-abstractions), SHA-gated (§19), read-only | files `Improvement`+`qa`+`tech-debt` — never implements (Dev does) |
+| **Signal** *(outward · observe-and-file §21)* | (nothing — ingests real-user signal) | external user signal from configured `signal.sources` (support/errors/feedback/reviews), read-only, per-source cursor; no source ⇒ no-op | files `Bug`+`qa`+`signal` (defect) / a low-priority `[signal-request]` `Feature`+`pm`+`signal` note-ticket (request, never a doc-base write) — PII-safe (§16) |
 
 State machine: `Todo → In Progress → In Review → Done` (verify-fail returns to
 `Todo`; `Canceled`/`Duplicate` are terminal; `blocked` is a **label**, not a
@@ -81,6 +87,12 @@ state, §9). Eligibility = the `dev-loop` label (§2); owner = the `pm`/`qa` lab
 - **Verify against the running product / the diff — not the claim.** Owners verify
   by exercising the product (PM/QA Job A); Dev self-reviews against its own diff
   (Dev Step 5.5). Never trust a hand-off comment's claim of what was done.
+- **Inward ≠ outward.** The five inward agents build the product
+  (PM/QA/Dev/Sweep/Reflect); the three outward agents (Ops/Architect/Signal, §21) only
+  **observe external/whole-system reality and file** — they never implement, ship,
+  verify, or roll back.
+- **Running prod ≠ the diff.** Ops watches running production over time (incidents); QA
+  tests the diff/board. Different surfaces.
 - **Inconclusive ≠ pass.** A check that couldn't actually run is not a green
   (QA Job A).
 
@@ -88,8 +100,9 @@ state, §9). Eligibility = the `dev-loop` label (§2); owner = the `pm`/`qa` lab
 
 ## 1. What the loop is
 
-Five agents, each triggered manually by the user (`/pm-agent`, `/qa-agent`,
-`/dev-agent`, `/sweep-agent`, `/reflect-agent`). They never call each other directly —
+Eight agents, each triggered manually by the user (`/pm-agent`, `/qa-agent`,
+`/dev-agent`, `/sweep-agent`, `/reflect-agent`, `/ops-agent`, `/architect-agent`,
+`/signal-agent`). They never call each other directly —
 they hand off **entirely through Linear ticket state**, so any of them can run at any
 time, in any order, even concurrently. Linear is the shared blackboard. (PM/QA/Dev are
 the core producing loop; Sweep is a slower-cadence janitor layered on top; Reflect is
@@ -126,6 +139,13 @@ the slowest — a daily retrospective that observes the loop and curates `lesson
   Features/Bugs, ships, or verifies); may autonomously edit only `lessons.md` —
   structural changes to the SKILLs/this file are **drafted as proposals, never
   auto-applied** (§17).
+- **Ops / Architect / Signal** are the three **outward** observe-and-file agents (§21):
+  Ops watches running prod and files `incident` Bugs (anti-flap: confirmed+repeated
+  only); Architect audits whole-codebase tech health on a rotating, SHA-gated dimension
+  and files `tech-debt` Improvements; Signal ingests real-user signal from configured
+  sources (graceful no-op if none) and files `signal` Bugs/Features (PII-safe).
+  **Observe + file only**: none implements, ships, verifies, or rolls back — they route
+  work to the inward agents.
 
 The verifier of a ticket is always **its owner** (the agent that filed it),
 identified by the owner label (§4). This is how PM picks up its features and QA
@@ -215,6 +235,15 @@ Labels do triple duty: typing, ownership/routing, and workflow signalling.
 
 **Sub-type (optional, additive):**
 - `edge-case` — a bug found off the happy path (affects Dev ordering, §5).
+- `incident` — a RUNNING-prod degradation Ops confirmed (anti-flap) and filed. On a
+  `Bug`; owned by `qa`; Urgent when prod is down / a core flow is broken. Filed/refreshed
+  by Ops (§21).
+- `tech-debt` — a whole-codebase technical-health finding (refactor / hardening /
+  dep-bump / CVE). On an `Improvement`; owned by **`qa`** (refactor safety = tests-green
+  / behavior-unchanged is QA-verifiable, §21). Filed by Architect (§21).
+- `signal` — a ticket originating from external real-user signal. On a `Bug` (`qa`) for
+  a user-reported defect, or a `Feature` (`pm`) for a request. Filed by Signal (§21),
+  which references the source and never pastes PII (§16).
 - `coverage` — a follow-up to add a regression test/flow for a shipped
   `Bug`/`Feature` that couldn't be covered in the fix itself (§15). Filed by Dev,
   owned by `qa` (QA verifies the test exists and passes); implemented like any
@@ -234,8 +263,8 @@ Improvements); QA verifies those tagged `qa` (Bugs + Improvements).
 - `needs-pm` / `needs-qa` — routes a blocked ticket to the right owner.
 
 `Bug`, `Feature`, `Improvement` already exist in the workspace. The rest are
-created once at setup (§13). Priority/urgency is **not** a label — it is Linear's
-native `priority` field (§5).
+created once at setup (§13; including `incident`/`tech-debt`/`signal`, §21).
+Priority/urgency is **not** a label — it is Linear's native `priority` field (§5).
 
 ---
 
@@ -599,8 +628,8 @@ checks below defensively on a first live run, so this checklist remains the cont
 Idempotent; safe to re-run. Before the first live run against a workspace:
 1. Ensure the workflow labels exist (create only the missing ones via
    `create_issue_label` on the configured team): `dev-loop`, `pm`, `qa`,
-   `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`.
-   (`Bug`/`Feature`/`Improvement` already exist — reuse, don't duplicate.)
+   `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`, `incident`, `tech-debt`,
+   `signal`. (`Bug`/`Feature`/`Improvement` already exist — reuse, don't duplicate.)
 2. Ensure the `linearProject` exists; if not, ask the user before creating it.
 3. Confirm `strategyDoc` is readable and `testEnv`/`build`/`deploy` commands are
    correct with the user (these gate real deploys).
@@ -639,6 +668,9 @@ Layout — one section per agent plus a shared section:
 ## Dev
 ## Sweep
 ## Reflect
+## Ops
+## Architect
+## Signal
 ```
 
 Each entry is a short rule with a one-line **Why** and **How to apply**. A rule may
@@ -1047,7 +1079,7 @@ The doc-base has these EXACT sections (verbatim headings):
 - **Current state** — what's actually built/shipped right now (the living "as-is";
   seeded once by init from brownfield mapping, then owned by PM).
 - **Personas** — the user types the product serves (also QA's persona list).
-- **Glossary** — domain terms with definitions, so all five agents share vocabulary.
+- **Glossary** — domain terms with definitions, so all eight agents share vocabulary.
 - **Decisions (running log)** — a dated, append-only log of product-direction /
   scoping calls and their rationale.
 - **Candidate ideas** — the overflow parking lot (PM guardrails): strong ideas not yet
@@ -1073,3 +1105,83 @@ document → `get_document`/`save_document`), per pm-agent §0.
   `Decisions (running log)`, and keeps `Personas`/`Glossary` accurate as features ship
   (PM Job C step 5). So init never overwrites PM, and PM never re-seeds what init
   already wrote.
+
+---
+
+## 21. Outward-facing agents — Ops / Architect / Signal
+
+The first five agents (PM/QA/Dev/Sweep/Reflect) are **inward / build-facing** — a
+closed build factory that proposes, tests, builds, cleans up, and reflects on itself.
+Three **outward** agents connect that factory to realities it otherwise can't see:
+
+| Agent | Reality it watches | Cadence |
+|---|---|---|
+| **Ops** | RUNNING production over time (deploy-independent) | tight (~10–15 min) |
+| **Architect** | the whole codebase's technical health over time | slow (daily-ish) |
+| **Signal** | real users (support / errors / feedback / reviews) | periodic (config-driven) |
+
+### The shared observe-and-file contract
+All three obey ONE contract — defined here once; their SKILLs reference it rather than
+restating it:
+- **Observe + file, never produce.** They read external/whole-system reality and FILE
+  (or refresh/link) tickets. They **never** implement, ship, verify, or roll back —
+  those belong to Dev/PM/QA. They are a richer Sweep/Reflect: read reality, route work
+  to the right inward agent.
+- **Read-only on what they observe** (prod / code / sources). No mutating commands, no
+  edits, no actions that change the observed system.
+- **Stateless per fire** (§0), each with its own state file next to `projects.json` —
+  `ops-state.json` / `architect-state.json` / `signal-state.json` — re-read from disk
+  every fire; conversation memory is never trusted.
+- **Scoped to the `dev-loop` label** (§2) and **backend-aware** (§18) and **multi-repo
+  aware** (§19) — same firewall, templates, and reports as every other agent.
+- **`autonomy:"full"` = file, never an interactive human prompt.** The §16
+  stop-and-surface carve-out (a found secret/PII; broader-than-read access) is reported
+  as a **fact**, not a request for permission. A **confirmed un-routable outage** is
+  NOT a §16 case — Ops still **files the incident**, tagged `blocked` +
+  `Bail-shape: external-prereq` (§9), and reports it as a fact; it never waits on a
+  prompt.
+- **Each ends with a §3-style report.**
+
+They **own distinct axes** (don't confuse them with the inward agents): Ops = running
+prod (vs QA's diff/board tests); Architect = product CODE health over time (vs PM's
+product gaps, Dev's local diff, QA's runtime defects, Sweep's board, Reflect's loop
+process); Signal = real-user-driven (vs QA's synthetic tests, PM's strategy-driven
+ideation).
+
+### Ops anti-flap + incident-dedup rule
+Prod has transient blips, so Ops acts **only on a CONFIRMED, REPEATED degradation**:
+on a failing probe it **re-checks** (≥2 spaced re-probes, not a single retry — a cold
+start clears on the 2nd) and treats the degradation as real only when it fails every
+re-probe AND (it was already failing last fire, or the surface is clearly down — a hard
+5xx/connection-refused) — a probe that recovers on any re-probe is logged, **not filed**. On a real degradation it
+files (or **refreshes** an existing open) a `Bug` + `qa` + **`incident`**, priority
+**Urgent** when prod is down / a core flow is broken (so Dev's Urgent-bug-first pick,
+§5, grabs it). It **dedupes against the one open incident** (`ops-state.json` + a
+scoped `incident` query) — refresh it, **never** spam a new ticket per fire. Ops does
+**not** auto-rollback (Dev owns Step-6.5) — it may NOTE a suspected bad deploy.
+Multi-repo (§19): tie the incident to the likely repo (`repo:<name>`) when one
+healthCheck identifies it, else leave it for triage — never guess a repo.
+
+### Signal source-dependency + PII rule
+Signal ingests from configured `signal.sources` (§11): **if none is configured it is a
+graceful no-op** (nothing to observe — back-compat). It tracks a **per-source
+last-seen cursor** (`signal-state.json`) so it never re-ingests, and **dedupes hard** —
+one ticket per distinct issue, many reports linked to it, never refiled. **PII is
+CRITICAL** (§16): support/feedback data is real user data — Signal summarizes
+**around** it and **references the source** (link/id), never pasting real
+PII/credentials into a ticket. It triages a user **defect** → `Bug` + `qa` +
+`signal`, and a **request** → a single **low-priority `Feature` + `pm` + `signal`**
+note-ticket for PM to triage/dedupe (clear+aligned ones at a normal priority). Signal
+**never writes the doc-base** — PM owns it (§20); routing a request is always a ticket,
+never a strategyDoc edit.
+
+### The new sub-type labels
+These additive sub-type labels (§4) tag the outward agents' tickets so the right owner
+verifies and so the board is filterable:
+- **`incident`** — on Ops `Bug`s (owner `qa`).
+- **`tech-debt`** — on Architect `Improvement`s (owner **`qa`** — a refactor's safety is
+  "build/tests green + the named debt gone + no behavior change", QA-verifiable, not a
+  product-exercise; same qa-Improvement precedent as `coverage`, §15).
+- **`signal`** — on Signal tickets (`Bug` → `qa`; `Feature` → `pm`).
+
+They are provisioned once at setup alongside the other workflow labels (§13).

@@ -3,6 +3,45 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.8.0 — outward agents (Ops / Architect / Signal)
+- **Three OUTWARD observe-and-file agents** (conventions §21) join the five inward ones,
+  connecting the closed build factory to (a) running prod, (b) whole-codebase health, and
+  (c) real users. All three are read-only on what they observe, stateless per fire with
+  their own state file, scoped to `dev-loop` (§2), backend-aware (§18), multi-repo aware
+  (§19), and `autonomy:full` = file-never-prompt (except the §16 stop-and-surface fact).
+  None implements, ships, verifies, or rolls back — they route work to PM/QA/Dev.
+  - **`ops-agent`** (Ops/SRE; tight ~10–15 min): polls running prod — per-repo
+    `deploy.healthCheck` + `testEnv.baseUrl` + optional `ops.criticalRoutes`/`ops.checks`/
+    `ops.logsCommand`. **Anti-flap**: re-checks a failing probe and acts only on a
+    CONFIRMED, REPEATED degradation (cross-fire) — never a transient blip. Files (or
+    REFRESHES, via `ops-state.json` + a scoped `incident` query) a `Bug`+`qa`+`incident`
+    with a QA-checkable health AC, Urgent when prod is down (so Dev's §5 grabs it). Never
+    auto-rolls-back (Dev's Step 6.5); an un-routable outage is filed `blocked`+`external-prereq` (§9).
+  - **`architect-agent`** (tech-debt; slow, daily-ish): audits the codebase **as a whole**
+    on a **rotating** dimension (architecture-drift / duplication / dead-code /
+    dependency-staleness+CVE / cross-module consistency / missing-abstractions), gated by
+    the per-repo SHA change-gate (§19) — on an active repo the real bound is dedup + a
+    per-run cap. Reads the doc-base/CLAUDE.md baseline first. Files `Improvement`+`qa`+
+    `tech-debt` (refactor safety = tests-green/behavior-unchanged is QA-verifiable, §15);
+    read-only on code (CVE scans use the audit/list form); never implements.
+  - **`signal-agent`** (real-user intake; periodic): ingests configured `signal.sources`
+    (support inbox / error tracker / feedback channel / app-store reviews, each read-only).
+    **No source ⇒ graceful no-op.** Per-source last-seen cursor + per-issue fingerprint in
+    `signal-state.json` (never re-ingests; dedupes hard). Triages a defect → `Bug`+`qa`+
+    `signal`, a request → `Feature`+`pm`+`signal` note-ticket (never a doc-base write).
+    **PII-strict** (§16): a mandatory scrub pass before every write; references the source.
+- **New sub-type labels** (§4): `incident` (Ops Bug → `qa`), `tech-debt` (Architect
+  Improvement → `qa`), `signal` (Signal Bug → `qa` / Feature → `pm`). Provisioned at setup
+  alongside the existing labels (§13).
+- **New config blocks** (config-schema): optional `ops` (`checks`/`criticalRoutes`/
+  `logsCommand`) and `signal` (`sources[]`; absent ⇒ no-op). The `models` map gains
+  `ops`/`architect`/`signal` and now **defaults to `opus` for every agent**.
+- **Launcher** (`run-loop.sh`): the three outward panes are **opt-in / off by default**
+  (like Reflect) — `OPS`/`ARCHITECT`/`SIGNAL` gate vars + `*_SLEEP` (Ops ~10 min,
+  Architect daily, Signal hourly) + `MODEL_*`; every pane defaults to `--model opus`.
+- **Back-compat**: a project that configures none of this is unaffected — the three agents
+  are opt-in to launch, and Signal no-ops with no sources. Version → 0.8.0.
+
 ## 0.7.0 — onboarding overhaul + multi-repo
 - **`init` becomes DETECT → MAP → ASSEMBLE → LOAD** (skills/init/SKILL.md): it detects
   the project **shape** — greenfield (no code/baseUrl/build yet), brownfield (existing

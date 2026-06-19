@@ -1,6 +1,6 @@
 # Running dev-loop
 
-How to onboard a project, launch the five agents, pick a model per agent, and
+How to onboard a project, launch the eight agents, pick a model per agent, and
 resume. Assumes the plugin is installed (`/plugin list` shows `dev-loop`) and the
 [Requirements](../README.md#requirements) are met (Claude Code, Linear MCP — for the
 `linear` backend — `gh`, a repo, a Linear team/project).
@@ -44,8 +44,10 @@ projects in `dry-run` for first contact) and launch the agents (next section).
 
 ## 2. Launch the agents
 
-The plugin **ships no harness** — pick whichever fits. Both run the same five skills:
-`/dev-loop:pm-agent`, `qa-agent`, `dev-agent`, `sweep-agent`, `reflect-agent`.
+The plugin **ships no harness** — pick whichever fits. Both run the same eight skills:
+`/dev-loop:pm-agent`, `qa-agent`, `dev-agent`, `sweep-agent`, `reflect-agent`, and the
+three opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`,
+`signal-agent`.
 
 ### A. Agent View — native, recommended (`claude agents`)
 
@@ -66,6 +68,9 @@ becomes a new background session; `/loop` makes it recurring):
 /loop 5m  /dev-loop:dev-agent
 /loop 30m /dev-loop:sweep-agent
 /loop 24h /dev-loop:reflect-agent
+/loop 10m /dev-loop:ops-agent        # OUTWARD (§21), opt-in — watches running prod (anti-flap)
+/loop 24h /dev-loop:architect-agent  # OUTWARD (§21), opt-in — whole-codebase tech-debt audit
+/loop 1h  /dev-loop:signal-agent     # OUTWARD (§21), opt-in — real-user signal intake (no-op if no sources)
 ```
 
 Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent output),
@@ -87,6 +92,9 @@ MODE=once   ~/.claude/plugins/data/dev-loop/run-loop.sh   # one pass each, then 
 REFLECT=1   ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the daily Reflect pane
 SWEEP=0     ~/.claude/plugins/data/dev-loop/run-loop.sh   # omit the janitor pane
 PROJECT=foo ~/.claude/plugins/data/dev-loop/run-loop.sh   # pick a project key
+OPS=1       ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Ops (prod-watch) pane (~10m; off by default)
+ARCHITECT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Architect (tech-debt) pane (daily; off by default)
+SIGNAL=1    ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Signal (user-intake) pane (hourly; off; no-op if no sources)
 ```
 
 It prints a blast-radius banner (project, mode, autonomy, ship flags, models) before
@@ -101,22 +109,28 @@ The model is chosen **at launch** (a SKILL can't set its own model), via a per-p
 `models` map in `projects.json`:
 
 ```jsonc
-"models": { "pm": "opus", "qa": "sonnet", "dev": "opus", "sweep": "haiku", "reflect": "sonnet" }
+"models": { "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "signal": "opus" }
 ```
 
-Pick by where reasoning/correctness matters most vs. mechanical/high-frequency work:
+**Every agent defaults to `opus`** — maximize correctness across the whole loop. Tune an
+agent **down** only to economize; the table shows where `opus` matters most vs. where a
+cheaper model is tolerable:
 
-| Agent | Suggested | Why |
-|---|---|---|
-| **dev** | `opus` | hardest — implements, self-reviews the diff, fixes |
-| **pm** | `opus` | product/scoping judgment + review |
-| **qa** | `sonnet` | capable + cheaper; runs often |
-| **reflect** | `sonnet` | careful curation, but runs only daily |
-| **sweep** | `haiku` | mechanical hygiene |
+| Agent | Default | Could economize to | Why |
+|---|---|---|---|
+| **dev** | `opus` | — | hardest — implements, self-reviews the diff, fixes |
+| **pm** | `opus` | — | product/scoping judgment + review |
+| **architect** | `opus` | — | whole-codebase reasoning about debt/abstractions |
+| **reflect** | `opus` | `sonnet` | careful curation, but runs only daily |
+| **qa** | `opus` | `sonnet` | capable; runs often |
+| **ops** | `opus` | `sonnet` | mechanical polling + anti-flap judgement; runs often |
+| **signal** | `opus` | `sonnet` | triage + PII-safe summarization; periodic |
+| **sweep** | `opus` | `haiku` | mechanical hygiene |
 
-Tune to budget — all-`sonnet` is fine; put only `dev` on `opus` to economize. The tmux
-launcher (B) applies this map automatically. In Agent View (A), set the view's model and
-accept one model per view, or run mixed models through the launcher.
+The tmux launcher applies this map automatically and **defaults each pane to `--model
+opus`** when the map omits an agent. In Agent View, set the view's model (e.g.
+`claude agents --model opus`); it's one model per view, so run mixed models through the
+launcher if you economize some agents.
 
 ---
 
@@ -129,6 +143,9 @@ Agents self-throttle (idle fires are cheap no-ops), so tighter intervals are saf
 | PM / QA / Dev | ~5 min | the producing loop |
 | Sweep | ~30 min | janitorial; re-walking an unchanged board is waste |
 | Reflect | daily | reflects *after* a day of churn |
+| Ops *(opt-in)* | ~10–15 min | watches running prod; tight polls are the point, but self-throttles |
+| Architect *(opt-in)* | daily | whole-codebase audit; SHA-gate makes most fires no-ops |
+| Signal *(opt-in)* | hourly / daily | real-user intake; no-op when no sources or no new signal |
 
 ---
 

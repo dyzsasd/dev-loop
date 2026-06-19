@@ -188,7 +188,8 @@ Ensure the §4/§13 workflow-label set exists on the configured `linearTeam`. Fi
 `list_issue_labels` for the team and diff against the required set; **create only the
 missing ones** via `create_issue_label`:
 
-`dev-loop`, `pm`, `qa`, `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`.
+`dev-loop`, `pm`, `qa`, `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`,
+`incident`, `tech-debt`, `signal` (the last three are the outward agents' sub-labels, §21).
 
 **Multi-repo only (conventions §19):** also create one **`repo:<name>`** label per
 `repos[]` entry (e.g. `repo:web`, `repo:api`). **Single-repo provisions none** — the
@@ -284,9 +285,8 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   points at a non-empty, non-board directory, **refuse and flag it** (don't risk
   globbing another project's files, §18 firewall). If the board already exists, leave
   it untouched and just note it. Skip entirely for `backend:"linear"`.
-- `lessons.md` — a skeleton with one section header per agent plus the shared
-  section, in this exact order (note the **`## Reflect`** header — a fifth agent,
-  reflect-agent, is being added):
+- `lessons.md` — a skeleton with one section header per agent (all eight) plus the
+  shared section, in this exact order (conventions §14):
 
   ```markdown
   # dev-loop lessons — per-operator corrections (local, never committed)
@@ -305,6 +305,12 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   ## Sweep
 
   ## Reflect
+
+  ## Ops
+
+  ## Architect
+
+  ## Signal
   ```
 
   Leave the sections empty — the operator adds rules later (conventions §14). If

@@ -112,9 +112,15 @@ Pull the window's raw signal — all read-only, all scoped to the `dev-loop` lab
 project (§2):
 - **Linear:** tickets filed / closed (`Done`) / blocked / canceled in the window,
   grouped by **type** (`Feature`/`Bug`/`Improvement`/`coverage`), **owner**
-  (`pm`/`qa`), and **bail-shape** (§9: `info-needed`/`decision-needed`/`scope-design`/
-  `external-prereq`/`fix-exhausted`). Use tight, scoped queries (§10) — never page the
-  workspace.
+  (`pm`/`qa`), **bail-shape** (§9: `info-needed`/`decision-needed`/`scope-design`/
+  `external-prereq`/`fix-exhausted`), and the **outward sub-labels** (§21:
+  `incident`/`tech-debt`/`signal`) — so the retro covers the outward agents too (e.g. a
+  rising `incident` rate = prod instability; a growing `tech-debt` backlog = code rot; a
+  `signal` spike = a user-facing problem). Use tight, scoped queries (§10) — never page
+  the workspace.
+- **Outward-agent state (if those agents run):** read `ops-state.json` (open incidents /
+  recurrence), `architect-state.json` (swept dimensions), `signal-state.json` (per-source
+  cursors / volume) next to `projects.json` — they're optional; skip silently if absent.
 - **Throughput:** Todo→Done cycle time (oldest-open age, median time-in-state),
   per-run cap utilization, how many runs shipped 0.
 - **QA outcomes:** fail / drift / inconclusive counts (`inconclusive ≠ pass`,
@@ -147,7 +153,7 @@ valves FIRST, then add within budget** — never the reverse, or the file only g
    (or the `strategyDoc`), and once it's promoted, **delete it from `lessons.md`**.
 4. **ADD** — only now, and only within budget: for each pattern that recurs in Job 1
    (≥2 occurrences — a one-off is *reported*, not codified), distill ONE concise rule
-   under the right agent section (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`), in the
+   under the right agent section (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Signal`), in the
    §14 shape (rule + one-line **Why** + **How to apply**), stamped `added:`/`last-seen:`.
    **If that section is already at budget (~6 rules), you may NOT add without first
    removing one** via steps 1–3 — the budget is a forcing function (§14), not a hope.

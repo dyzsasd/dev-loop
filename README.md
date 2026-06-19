@@ -1,9 +1,12 @@
 # dev-loop
 
-Five autonomous agents — **PM**, **QA**, **Dev**, **Sweep**, and **Reflect** — that run
-a software-development loop **coordinated entirely through Linear ticket state**. They
-never call each other directly; Linear is the shared blackboard. Trigger each one
-manually, or run them on a schedule, and the product builds and improves itself.
+Eight autonomous agents — **PM**, **QA**, **Dev**, **Sweep**, **Reflect**, **Ops**,
+**Architect**, and **Signal** — that run a software-development loop **coordinated
+entirely through Linear ticket state**. They never call each other directly; Linear is
+the shared blackboard. Five are inward / build-facing; three (Ops/Architect/Signal) are
+**outward** observe-and-file agents that connect the loop to running prod,
+whole-codebase health, and real users. Trigger each one manually, or run them on a
+schedule, and the product builds and improves itself.
 
 ```
         PM ──proposes feature──┐                 ┌──QA proposes bug──┐
@@ -49,6 +52,9 @@ manually, or run them on a schedule, and the product builds and improves itself.
 | **`dev-agent`** | Pulls `Todo` tickets in priority order, grooms (enough info? duplicate? already done?), implements, gates on build/test, **self-reviews the diff**, ships per config, **smoke-checks prod (auto-revert on a break)**, and hands off to `In Review`. Blocks rather than guesses. |
 | **`sweep-agent`** | Lifecycle janitor (slower cadence). Owns the cracks between the owner-scoped agents: fixes missing/wrong owner labels (invisible to every other query), resets orphaned `In Progress` from crashed runs, nudges stale signals, reports board health. Hygiene only. |
 | **`reflect-agent`** | Retrospective + self-evolution (slowest cadence, daily). Studies the loop's **own** behavior and **curates `lessons.md`** from recurring, evidence-cited patterns. Observe + curate only; may autonomously edit only `lessons.md` — structural changes are **drafted as proposals, never auto-applied**. |
+| **`ops-agent`** | **Outward** (§21): Ops/SRE watcher of RUNNING prod (tight ~10–15 min cadence). Polls per-repo `deploy.healthCheck` + `baseUrl` + optional critical routes/logs and, on a **confirmed, repeated** degradation (anti-flap: re-checks first), files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod is down). Observe-and-file only — never rolls back (Dev's Step 6.5). |
+| **`architect-agent`** | **Outward** (§21): whole-codebase tech-health auditor (slow, daily-ish). Audits the codebase on a **rotating** dimension (drift / duplication / dead-code / dep-staleness+CVE / consistency / missing-abstractions), SHA-gated (§19), and files `Improvement`+`qa`+`tech-debt`. Read-only on code — never implements. |
+| **`signal-agent`** | **Outward** (§21): real-user signal intake (periodic). Ingests configured `signal.sources` (support / errors / feedback / reviews), triages each issue → `Bug`+`qa`+`signal` (defect) or `Feature`+`pm` (request). Read-only + PII-safe (§16); **no source ⇒ graceful no-op**. |
 
 > **`init` is a setup command, not a loop agent.** `/dev-loop:init` runs once (safe to
 > re-run) to wire a product into dev-loop — config, Linear labels/project, strategy doc,
@@ -57,7 +63,7 @@ manually, or run them on a schedule, and the product builds and improves itself.
 
 The full rules — state machine, label taxonomy, ticket templates, priority order, the
 claim / dedupe / blocked protocols, and the self-evolution boundary — live in
-[`references/conventions.md`](references/conventions.md). All five skills read it first.
+[`references/conventions.md`](references/conventions.md). All eight skills read it first.
 
 ## Requirements
 
@@ -84,7 +90,8 @@ claude --plugin-dir /path/to/dev-loop
 ```
 then `/plugin install dev-loop@local`. Verify with `/plugin list`; the skills appear as
 `/dev-loop:pm-agent`, `/dev-loop:qa-agent`, `/dev-loop:dev-agent`,
-`/dev-loop:sweep-agent`, `/dev-loop:reflect-agent`, and `/dev-loop:init`.
+`/dev-loop:sweep-agent`, `/dev-loop:reflect-agent`, `/dev-loop:ops-agent`,
+`/dev-loop:architect-agent`, `/dev-loop:signal-agent`, and `/dev-loop:init`.
 
 ## Configure
 
@@ -139,15 +146,18 @@ plugin **ships no harness** — choose how to fire them:
 - **Agent View** (native, recommended) — `claude agents`, then dispatch each as a
   self-looping background session: `/loop 5m /dev-loop:pm-agent`, `/loop 5m
   /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent`, `/loop 30m /dev-loop:sweep-agent`,
-  `/loop 24h /dev-loop:reflect-agent`. Monitor/attach/stop from one screen.
-- **A local tmux launcher** — one pane per agent, mixed per-agent models in one command.
+  `/loop 24h /dev-loop:reflect-agent`, plus the optional outward agents (§21)
+  `/loop 10m /dev-loop:ops-agent`, `/loop 24h /dev-loop:architect-agent`,
+  `/loop 1h /dev-loop:signal-agent`. Monitor/attach/stop from one screen.
+- **A local tmux launcher** — one pane per agent, per-agent models in one command.
 - **Manually**, one turn at a time, for a single pass.
 
-Per-agent **models** (`models` in config): the model is chosen at launch — put `dev`/`pm`
-on `opus` (judgment-heavy), `qa`/`reflect` on `sonnet`, `sweep` on `haiku`; tune to budget.
+Per-agent **models** (`models` in config): the model is chosen at launch and **defaults
+to `opus` for every agent**; tune an agent **down** (`sonnet`/`haiku`) only to
+economize the mechanical/high-frequency ones (`sweep`/`qa`/`ops`/`signal`).
 
 Cadence (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
-~30 min, Reflect daily.
+~30 min, Reflect daily. Outward (opt-in): Ops ~10 min, Signal hourly/daily, Architect daily.
 
 **Resume is a non-event** — the agents are stateless per fire (conventions §0): state
 lives in Linear/the local board + git + the state files. To resume after a stop, crash,
@@ -187,9 +197,15 @@ load-bearing.
 
 ## Status
 
-**v0.7.0** — five agents (PM/QA/Dev/Sweep/Reflect) + the `init` setup command, now a
-DETECT → MAP → ASSEMBLE → LOAD onboarding flow (greenfield interview, brownfield read-only
-mapping, operator-confirmed ticket adoption) that scaffolds a fixed-heading PM doc-base.
+**v0.8.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
+**outward** observe-and-file agents (conventions §21) — **Ops** (watches running prod,
+files `incident` Bugs with an anti-flap re-check + dedupe), **Architect** (audits
+whole-codebase tech health on a rotating, SHA-gated dimension, files `tech-debt`
+Improvements), **Signal** (ingests configured real-user `signal.sources`, files
+`signal` Bugs/Features, PII-safe; no source ⇒ no-op) — all read-only, never
+implement/ship/verify. Plus the `init` DETECT → MAP → ASSEMBLE → LOAD onboarding flow
+(greenfield interview, brownfield read-only mapping, operator-confirmed ticket adoption)
+that scaffolds a fixed-heading PM doc-base.
 The loop coordinates **one or many repos** (`repos[]`; tickets target a repo via a
 `repo:<name>` label, per-repo build/branch/deploy) — single-repo is 100% unchanged.
 Validated end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
