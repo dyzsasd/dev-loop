@@ -16,14 +16,21 @@ Run the setup command **once** — it is idempotent and operator-present:
 ```
 
 It will, with you in the loop:
-1. **Confirm `repoPath`** (echoed back — the loop *commits from it*, so this is a gate).
+1. **Detect the project shape & confirm repos.** init detects greenfield (no code yet) /
+   brownfield (existing code) / adopting (pre-existing human tickets), and single- vs
+   multi-repo. It echoes back each `repoPath` / `repos[].path` (the loop *commits from
+   them*, so this is a gate). Greenfield runs a short strategy interview; brownfield is
+   read-only-mapped into the doc-base `Current state`.
 2. **Ask the backend** — `linear` (coordinate through Linear) or `local` (a machine-local
    file board in the data dir; no Linear needed). See [conventions §18](../references/conventions.md#18-backend--linear-vs-local).
 3. Gather/validate the per-project config and write it to
    `~/.claude/plugins/data/dev-loop/projects.json` (creating only what's missing).
 4. **linear**: ensure the workflow labels + the Linear project exist (asking before
-   creating the project). **local**: scaffold `board/` (`tickets/`, `counter.json`) and
-   require a repo-file `strategyDoc`.
+   creating the project), plus one `repo:<name>` label per `repos[]` entry when
+   multi-repo. **local**: scaffold `board/` (`tickets/`, `counter.json`) and require a
+   repo-file `strategyDoc`. Either way, scaffold the PM doc-base headings (Vision / Goals
+   / Non-goals / Current state / Personas / Glossary / Decisions / Candidate ideas) in
+   the doc-home repo, seeding `Current state` from brownfield mapping if available.
 5. Smoke-check the test env + build, create the runtime files
    (`pm-state.json` / `qa-state.json` / `lessons.md`), and print a **readiness checklist**.
 

@@ -29,6 +29,25 @@
         "command": "vercel --prod --yes"
       },
       "blockedStateName": null
+    },
+    "acme-suite": {
+      "_comment": "MULTI-REPO EXAMPLE (conventions §19). monpick above stays single-repo via top-level repoPath/build/git — back-compat. Here repos[] replaces a single repoPath; each ticket targets a repo via a repo:<name> label. role docs/primary picks the doc-home repo for strategyDoc; lang is informational; build/defaultBranch/deploy/contributorSkill resolve per-repo else top-level; autoCommit/autoPush/autoDeploy stay product-level in git.",
+      "linearTeam": "Acme",
+      "linearProject": "Acme Suite",
+      "repos": [
+        { "name": "web", "path": "/abs/path/to/acme-web", "role": "primary", "lang": "ts", "defaultBranch": "main", "deploy": { "command": "vercel --prod --yes", "healthCheck": "https://acme.example.com" } },
+        { "name": "api", "path": "/abs/path/to/acme-api", "role": "docs", "lang": "go", "defaultBranch": "main", "build": { "typecheck": "go build ./...", "test": "go test ./..." }, "deploy": { "command": "flyctl deploy", "healthCheck": "https://api.acme.example.com/healthz" } }
+      ],
+      "strategyDoc": "docs/strategy.md",
+      "mode": "dry-run",
+      "autonomy": "ask",
+      "testEnv": {
+        "baseUrl": "https://acme.example.com",
+        "notes": "One product baseUrl (conventions §19 limit: the api repo has no URL of its own). Personas in a vault — ask user."
+      },
+      "build": { "typecheck": "pnpm -r typecheck", "build": "pnpm -r build" },
+      "git": { "defaultBranch": "main", "autoCommit": true, "autoPush": true, "autoDeploy": false },
+      "blockedStateName": null
     }
   }
 }

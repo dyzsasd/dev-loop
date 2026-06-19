@@ -97,7 +97,7 @@ cp config/projects.example.json ~/.claude/plugins/data/dev-loop/projects.json
 # then edit: map each Linear project → repo, strategy doc, test env, git/deploy flags
 ```
 
-Three orthogonal dials per project:
+Three orthogonal dials per project (plus an optional `repos[]` for multi-repo products — see [conventions §19](references/conventions.md#19-multiple-repos)):
 - **`mode`** — `"dry-run"` (analyze + print what it *would* do; no writes) vs `"live"`
   (create/transition tickets and, for Dev, commit/push/deploy per `git`/`deploy`).
 - **`autonomy`** — `"ask"` (escalate human-only calls) vs `"full"` (decide and act; no
@@ -106,17 +106,27 @@ Three orthogonal dials per project:
   (a machine-local file board in the data dir, same state machine + protocols, no
   Linear required). Absent ⇒ `"linear"`. See
   [conventions §18](references/conventions.md#18-backend--linear-vs-local).
+- **`repos[]`** (optional) — one product, many repos. Absent (or a single entry) ⇒
+  single-repo, using top-level `repoPath`/`build`/`git`/`deploy`, **100% unchanged**.
+  Set `repos[]` to span repos: each ticket targets one via a `repo:<name>` label, with
+  per-repo build/branch/deploy resolution and a doc-home repo for the strategy doc. See
+  [conventions §19](references/conventions.md#19-multiple-repos).
 
 Full schema + field reference: [`references/config-schema.md`](references/config-schema.md).
 
 ## Set up a project
 
 **Run `/dev-loop:init` once.** It's an idempotent, operator-present setup command that
-gathers the config, ensures the workflow labels + the Linear project exist (asking before
-creating the project), verifies or scaffolds the strategy doc, smoke-checks the test env
-+ build, creates the runtime files (`pm-state.json` / `qa-state.json` / `lessons.md`), and
-prints a per-item **readiness checklist** before you flip `mode:"live"`. It creates only
-what's missing and overwrites nothing.
+runs a **DETECT → MAP → ASSEMBLE → LOAD** flow: it detects the project shape (greenfield /
+brownfield / adopting; single- or multi-repo), read-only-maps a brownfield codebase into
+the PM doc-base `Current state` (or runs a short strategy interview for greenfield),
+gathers the config (incl. any extra `repos[]`), ensures the workflow labels + the Linear
+project exist (and one `repo:<name>` label per repo when multi-repo — asking before
+creating the project), verifies or scaffolds the strategy doc-base, smoke-checks the test
+env + build, creates the runtime files (`pm-state.json` / `qa-state.json` / `lessons.md`),
+optionally adopts named pre-existing human tickets (per-ticket operator confirmation,
+never bulk), and prints a per-item **readiness checklist** before you flip `mode:"live"`.
+It creates only what's missing and overwrites nothing.
 
 (As a backstop, the loop agents also re-apply the label/project checks defensively on the
 first `live` run — see `references/conventions.md` §13.)
@@ -177,8 +187,12 @@ load-bearing.
 
 ## Status
 
-**v0.6.0** — five agents (PM/QA/Dev/Sweep/Reflect) + the `init` setup command; validated
-end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
+**v0.7.0** — five agents (PM/QA/Dev/Sweep/Reflect) + the `init` setup command, now a
+DETECT → MAP → ASSEMBLE → LOAD onboarding flow (greenfield interview, brownfield read-only
+mapping, operator-confirmed ticket adoption) that scaffolds a fixed-heading PM doc-base.
+The loop coordinates **one or many repos** (`repos[]`; tickets target a repo via a
+`repo:<name>` label, per-repo build/branch/deploy) — single-repo is 100% unchanged.
+Validated end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
 (push/deploy) is opt-in per project and gated on a green build. Coordination is
 backend-pluggable — Linear (default) or a machine-local file board (`backend:"local"`,
 conventions §18). Agents take **per-agent models** at launch (`models` config), run via

@@ -31,7 +31,12 @@ trust conversation memory for state, and on a hard failure log one line and exit
 
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project, and load `linearProject`, `linearTeam`, `repoPath`,
-`strategyDoc`, `build`, `git`, `deploy`, `mode`, and `autonomy` (§12a). If that path doesn't resolve
+`strategyDoc`, `build`, `git`, `deploy`, `mode`, `autonomy` (§12a), and — if present —
+`repos[]` (conventions §19). **Resolve the target repo per ticket:** absent/one
+`repos[]` ⇒ single-repo, the implicit target is `repoPath` and every step below behaves
+exactly as today. With multiple repos, the ticket's `repo:<name>` label names the
+target; resolve that repo's effective `build`/`defaultBranch`/`deploy`/`contributorSkill`
+(repo value else top-level, §19) and use them in Steps 0/4/5/6/6.5. If that path doesn't resolve
 (e.g. `${CLAUDE_PLUGIN_DATA}` expands to an empty or `-local` dir), fall back to
 `~/.claude/plugins/data/dev-loop/projects.json` or search
 `~/.claude/plugins/data/**/projects.json` before asking the user.
@@ -74,8 +79,12 @@ A prior fire may have claimed a ticket (state `In Progress`, assignee you; §7) 
 then crashed/compacted out mid-work, stranding it — no agent re-picks an
 `In Progress` ticket, so it stalls forever. First thing each fire: query
 `project` + `label:"dev-loop"` + `state:"In Progress"` assigned to you. For each,
-check for a shipped artifact (a commit referencing the ticket id on
-`git.defaultBranch`; or, if `autoPush:false`, a local commit). If there's no
+check for a shipped artifact on **the target repo's resolved `defaultBranch`** (the repo
+named by the ticket's `repo:<name>` label, §19; single-repo ⇒ `repoPath` +
+`git.defaultBranch`, unchanged): a commit referencing the ticket id; or, if
+`autoPush:false`, a local commit. **If the target repo is unresolvable** (no/contradictory
+`repo:<name>` label in a multi-repo project) **leave it** — don't grep a guessed tree;
+it'll be handled as a missing-target block in Step 3 (§19). If there's no
 artifact, it's an **orphan** from an aborted run: unassign, reset to `Todo` (re-pass
 the **full** label set so you don't drop `dev-loop`/owner labels, §10), comment
 `Orphaned — state cleared from a prior aborted run; re-queued.`, then verify the
@@ -106,6 +115,11 @@ REPLACE-style — or you'll drop `dev-loop`/owner labels.)
   with the evidence (files / refs), move it straight to `In Review` for the owner to
   verify, and pick the next ticket — or set `Duplicate`/`Canceled` if truly obsolete.
   Re-implementing done work is waste.
+- **Repo target? (multi-repo only, §19)** In a multi-repo project the ticket must carry
+  exactly one `repo:<name>` label naming an existing `repos[]` entry. If it's missing or
+  contradictory, **block it** (§9) — `Bail-shape: info-needed`, or `scope-design` if the
+  work spans repos and needs splitting — routed to the owner; **never default to
+  `repos[0]`** (wrong-tree hazard). Single-repo projects skip this check.
 - **Enough info?** It needs clear, testable acceptance criteria and (for bugs) a
   real repro. If it's missing, contradictory, or under-specified — **block it**
   (conventions §9): add `blocked` + `needs-pm`(feature)/`needs-qa`(bug), unassign,
@@ -115,8 +129,11 @@ REPLACE-style — or you'll drop `dev-loop`/owner labels.)
   guess. Pick next.
 
 ### Step 4 — Implement
-Work in `repoPath`. Read the surrounding code and match its conventions (the
-repo's own CLAUDE.md / style). Make the smallest change that satisfies **all**
+Work in **the target repo's path** (the `repos[]` entry for the ticket's `repo:<name>`
+label; single-repo ⇒ `repoPath`, unchanged — §19). **Before coding, read the repo's
+contributor skill** if one is resolved (`repos[].contributorSkill` else top-level
+`contributorSkill`) and follow it; **when absent, fall back to reading the repo's own
+CLAUDE.md** (today's behavior) and match its conventions/style. Make the smallest change that satisfies **all**
 acceptance criteria. **Cover the change (conventions §15).** For a `Bug` or `Feature`, either add a
 regression test in the repo's harness this run (fails before, passes after — run it
 in the Step-5 gate), OR file a deduped `[coverage]` follow-up (`Improvement` + `qa`
@@ -130,7 +147,10 @@ typecheck/build/test (e.g. a signup-funnel or other critical UI flow that only a
 human/visual QA can confirm) — ship the foundational, low-risk, *testable* slice
 now and file follow-up ticket(s) for the deferred slice(s): create them with the
 same type/owner labels + `dev-loop`, `relatedTo` the original, in `Todo`, with
-crisp ACs. Note in the original's handoff exactly which ACs you satisfied vs.
+crisp ACs. **Every Dev-filed ticket (splits and `[coverage]` follow-ups) inherits the
+parent's `repo:<name>` target (§19);** when a split actually crosses into a *different*
+repo, the mandatory handoff must cite the new ticket ID **and** set its `repo:<name>`
+target to that other repo. Note in the original's handoff exactly which ACs you satisfied vs.
 moved. A correct slice shipped + a clear follow-up beats a giant half-built
 deploy. (Still *block* — don't split — when the ticket is **unclear**; splitting
 is for clear-but-large.)
@@ -157,7 +177,9 @@ zero public surface), unit-test the security-critical core (token/authz/rate-lim
 and hand off with the explicit human enable-then-QA step spelled out.
 
 ### Step 5 — Gate before shipping
-Run the project's `build` commands (`typecheck`, `build`, `test`) in order. If any
+Run **the target repo's resolved `build` commands** (`typecheck`, `build`, `test`) in
+order (the repo's `build` else top-level `build`, §19; single-repo ⇒ top-level `build`,
+unchanged). If any
 fails: fix it, or if you can't, revert your change and **block** the ticket with
 the failure output. **Never push or deploy a red build.** A broken `defaultBranch`
 blocks every other agent — protect it.
@@ -205,14 +227,19 @@ not a failure — it protected `defaultBranch` and real users.
 
 ### Step 6 — Ship (per config)
 Only after green gates:
-- If `git.autoCommit`: make sure you're on `git.defaultBranch` first; if that
-  branch doesn't exist in the repo, commit on the repo's current branch and note
+- If `git.autoCommit`: make sure you're on **the target repo's resolved `defaultBranch`**
+  first (`repos[].defaultBranch` else `git.defaultBranch`, §19; single-repo unchanged);
+  if that branch doesn't exist in the repo, commit on the repo's current branch and note
   it — never create a divergent branch. Commit with a message referencing the
   ticket id (e.g. `feat(...): … (CIT-123)`), following the repo's commit
   conventions and co-author trailer rules.
 - If `git.autoPush`: push.
-- If `git.autoDeploy` and `deploy.command` is set: run it, and confirm it
-  succeeded before moving on. **The first time a run would deploy to production —
+- If `git.autoDeploy` and **the target repo's resolved `deploy.command`** is set: run it,
+  and confirm it succeeded before moving on. (Resolved deploy = `repos[].deploy` else
+  top-level `deploy`, §19. A target repo that resolves to **no** deploy **skips deploy
+  entirely** and NEVER inherits another repo's `deploy.command`/`healthCheck`. Remember
+  there is no cross-repo deploy barrier — only per-repo or idempotent deploys are safe,
+  §19. Single-repo ⇒ top-level `deploy`, unchanged.) **The first time a run would deploy to production —
   and any time you're overriding the configured `mode` mid-run (conventions §12) —
   confirm the blast radius with the user before that first irreversible deploy,
   unless they've already authorized hands-off shipping this session.** Once
@@ -228,17 +255,22 @@ will take it from there).
 `deploy.command`). Shipping unattended to prod means a green build can still break
 prod at runtime (bad env var, a migration, a 500 on a core route) — so confirm prod
 is alive before walking away:
-1. **Smoke-check prod.** Run `deploy.healthCheck` if config provides it (a URL that
-   must return 2xx, or a command that must exit 0); otherwise GET `testEnv.baseUrl`
-   root and require a non-5xx response. Keep the check tiny and high-signal (the
+1. **Smoke-check prod.** Run **the target repo's resolved `deploy.healthCheck`** if
+   config provides it (a URL that must return 2xx, or a command that must exit 0;
+   `repos[].deploy.healthCheck` else top-level, §19); otherwise GET `testEnv.baseUrl`
+   root and require a non-5xx response **only when the target repo IS the deployed
+   product surface** (a repo with no URL of its own has no `baseUrl` to hit — note the
+   §19 per-repo testEnv gap). If the target repo resolves to no deploy, you didn't deploy
+   — skip Step 6.5 entirely. Keep the check tiny and high-signal (the
    homepage + at most one critical route) — this is a liveness gate, not a test run.
 2. **On failure, retry once** (guard against a flaky cold start / transient blip).
 3. **If it still fails, the deploy broke prod — roll back, don't leave it broken.**
-   Revert the commit(s) you shipped this run on `git.defaultBranch`
-   (`git revert --no-edit <commit(s)>` — revert *all* of them if the ticket shipped
-   more than one, e.g. a separate regression-test commit), push, re-run
-   `deploy.command`, and confirm the smoke check now passes (prod restored to
-   the prior good state). Then reopen the ticket to `Todo` with `Bail-shape:
+   Revert the commit(s) you shipped this run on **the target repo's resolved
+   `defaultBranch`** (`git revert --no-edit <commit(s)>` — revert *all* of them if the
+   ticket shipped more than one, e.g. a separate regression-test commit), push, re-run
+   **that repo's resolved `deploy.command`** (§19; single-repo ⇒ top-level
+   `defaultBranch`/`deploy`, unchanged), and confirm the smoke check now passes (prod
+   restored to the prior good state). Then reopen the ticket to `Todo` with `Bail-shape:
    fix-exhausted` (§9), commenting what broke, the reverted commit sha, and that prod
    was restored. **A reverted prod-breaker is a SUCCESS** — it protected real users;
    the fix retries next fire. Never leave prod red waiting for a human.

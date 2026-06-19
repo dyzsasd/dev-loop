@@ -26,6 +26,8 @@ keeping the five agents interoperable is the whole point.
 16. [Security doctrine](#16-security-doctrine)
 17. [Self-evolution boundary — what the Reflect agent may change](#17-self-evolution-boundary--what-the-reflect-agent-may-change)
 18. [Backend — Linear vs local](#18-backend--linear-vs-local)
+19. [Multiple repos](#19-multiple-repos)
+20. [PM knowledge base](#20-pm-knowledge-base-the-doc-base)
 
 ---
 
@@ -150,6 +152,18 @@ Hard rules, no exceptions:
 This single label is the firewall between the autonomous loop and the human
 backlog. Treat it as load-bearing.
 
+**One narrow carve-out — `init` only, never a loop agent.** During operator-present
+setup, `init` MAY *adopt* a **named, pre-existing human ticket** into the loop — the one
+place an agent crosses the human backlog — but only **per-ticket, with explicit operator
+confirmation for that specific ticket, NEVER in bulk**. Adopting means adding the full
+label set (`dev-loop` + type + owner + `repo:<name>` where multi-repo) and reconciling
+the ticket to §6 conformance (type + owner + repo + acceptance criteria) — an
+unreconciled adoptee strands. The loop agents (PM/QA/Dev/Sweep/Reflect) may **never** do
+this. Separately, `init` MAY perform **read-only**, firewall-scoped
+(`label:"dev-loop"` + `project`) listing of existing loop tickets for its board
+report/reconcile; that read is distinct from the gated write-import and disturbs
+nothing.
+
 **In `local` mode the board *directory* is the firewall** (§18): a dedicated,
 machine-local ticket store with no human backlog in it, so the human-backlog axis of
 isolation is structural rather than label-enforced. Tickets still carry `dev-loop` and queries still scope to
@@ -264,6 +278,9 @@ Why this matters / which strategy-doc goal it serves.
 ## Affected area
 Route / module / surface (e.g. `/checkout`, `productRouter.addByUrl`).
 
+## Repo
+Target repo (multi-repo only). Informational — the authoritative target is the `repo:<name>` label (§19).
+
 ## How to verify
 Exact steps PM will run in the test env to mark this Done.
 ```
@@ -287,12 +304,20 @@ URL / build / persona / device used.
 ## Severity & scope
 Who/what is affected, how often.
 
+## Repo
+Target repo (multi-repo only). Informational — the authoritative target is the `repo:<name>` label (§19).
+
 ## Acceptance criteria
 - [ ] The repro above no longer reproduces
 ```
 
 Set the title as a crisp imperative (`Add …`, `Fix …`). PM/QA fill the template,
-set type+owner labels, set `priority`, attach `dev-loop`, and set `project`.
+set type+owner labels, set `priority`, attach `dev-loop`, set `project`, and set the
+repo target (a `repo:<name>` label, in both backends) — **multi-repo only** (§19). The
+`## Repo` body line is informational; the **label is authoritative**. In a multi-repo
+project the repo target is a **required** field: a ticket without it strands (Sweep
+flags it) or gets blocked by Dev rather than guessing a tree (§19). Single-repo
+projects carry no `repo:*` label — the sole repo is implicit.
 
 ---
 
@@ -338,6 +363,11 @@ test plans are point-in-time snapshots that go stale as the product ships. Befor
 filing, confirm the gap (or bug) still exists in the **current** product/codebase,
 not merely in the doc. Never file work that's already done; if it's done but
 unverified, that's a line in your report, not a new ticket.
+
+**Multi-repo (§19):** dedupe-against-reality scans **all** of `repos[]`, not just
+`repoPath` — the capability may already exist in a sibling repo. But dedupe is scoped
+**within** a `repo:<name>` target: the per-repo children of one cross-repo feature
+(same title, different `repo:<name>`) are **not** duplicates — never collapse them.
 
 During **grooming**, if Dev finds the picked ticket duplicates another, set
 `state="Duplicate"`, set `duplicateOf` to the canonical ticket, comment, and move
@@ -770,7 +800,7 @@ title: Add CSV export to the link manager
 type: Feature                 # Feature | Bug | Improvement
 state: In Review              # §3 names, verbatim
 owner: pm                     # pm | qa (§4)
-labels: [dev-loop, Feature, pm]   # FULL label set (§4); dev-loop always present
+labels: [dev-loop, Feature, pm, repo:web]   # FULL label set (§4); dev-loop always present; repo:<name> is the repo target (multi-repo only, §19)
 priority: 2                   # 1=Urgent 2=High 3=Medium 4=Low 0=None (§5)
 assignee: null                # a per-fire claim token when claimed (§7), else null
 relatedTo: [DL-9]             # append-only (merge on write)
@@ -803,8 +833,8 @@ verify-after-write (§7/§10):
 
 | Linear MCP op | Local op |
 |---|---|
-| `list_issues` (scoped `project`+`label`+`state`) | glob `tickets/*.md` **within this board dir only** (ignore temp/lock files — they are not `*.md`), parse frontmatter, filter in-process by the same predicates (label ∈ `labels[]`, `state`, `priority`, type) |
-| `list_issues` with a free-text `query` (§8 dedupe / ideation) | the same glob+filter, then a substring/keyword scan over each candidate's `title` + body |
+| `list_issues` (scoped `project`+`label`+`state`) | glob `tickets/*.md` **within this board dir only** (ignore temp/lock files — they are not `*.md`), parse frontmatter, filter in-process by the same predicates (label ∈ `labels[]` — including the `repo:<name>` target where present, §19 — `state`, `priority`, type) |
+| `list_issues` with a free-text `query` (§8 dedupe / ideation) | the same glob+filter, then a substring/keyword scan over each candidate's `title` + body. **Multi-repo (§19):** scan across all repos, but dedupe within a `repo:<name>` target — per-repo children of one feature are not dupes |
 | `get_issue` | read `tickets/<ID>.md` |
 | `save_issue` (create) | allocate an ID (below), exclusively create `tickets/<ID>.md` |
 | `save_issue` (update) | read-modify-rewrite frontmatter under the per-ticket lock (below); **labels REPLACE-style** — re-pass the FULL set (§10 #1); **append-only lists (`relatedTo`) merge** — re-read, union, write; append a state-move comment; bump `updated` |
@@ -856,3 +886,176 @@ is **dedicated** (empty or dev-loop-scaffolded) before use. Tickets still carry 
 `dev-loop` label for parity (same code path, templates, reports across backends). The
 §2 rules — never widen the blast radius, no bulk-mutate, one ticket at a time — apply
 verbatim; "scope by `project`" means "operate only within this board dir".
+
+---
+
+## 19. Multiple repos
+
+Everything above assumes **one product = one repo** (`repoPath`). That stays the
+default and is **100% unchanged**: a project with a top-level `repoPath` and no
+`repos[]` is single-repo, the target repo is **implicit**, and the loop emits **zero**
+routing artifacts for it — no `repo:<name>` label on tickets, no repo frontmatter
+field, no repo filtering in any query, and no `repo:*` label provisioning at init.
+Multi-repo is strictly opt-in via a `repos[]` array in config (§11, config-schema.md).
+
+### Read-side normalization (never written back)
+Wherever an agent needs "the repos of this project", normalize **on read**:
+- `repos[]` present → use it verbatim.
+- `repos[]` absent → synthesize a single implicit entry
+  `[{ path: <repoPath>, name: <project-key> }]`.
+
+This normalization is **read-side only**. init MUST NOT rewrite an existing
+`repoPath`-only config into `repos[]` form — that is what keeps single-repo projects
+byte-for-byte as today. `len(repos) == 1` is treated **identically** to the absent
+case: one implicit target, no routing artifacts.
+
+If **both** `repoPath` and `repos[]` are set: `repos[]` **wins**; init warns and
+verifies `repoPath` is one of the `repos[].path` entries.
+
+### Resolution rule (define once, used everywhere)
+For any per-repo-overridable setting, the **effective** value for a given repo is:
+the repo's own value **if present**, else the **top-level** value.
+
+| Setting | Per-repo override | Falls back to |
+|---|---|---|
+| `build` (typecheck/build/test) | `repos[].build` | top-level `build` |
+| `defaultBranch` | `repos[].defaultBranch` | `git.defaultBranch` |
+| `deploy` (command + healthCheck) | `repos[].deploy` | top-level `deploy` |
+| `contributorSkill` | `repos[].contributorSkill` | top-level `contributorSkill` (absent ⇒ read the repo's `CLAUDE.md`, today's behavior) |
+| `lang` (informational only) | `repos[].lang` | top-level `lang` |
+
+The synthesized single-repo entry inherits **all** top-level `build`/`git`/`deploy`,
+which remain the authoritative single-repo source — so resolution on a single-repo
+project returns exactly today's values.
+
+- `autoCommit` / `autoPush` / `autoDeploy` are **product-level**, in the `git` block —
+  they are **not** per-repo. Only `defaultBranch` is per-repo overridable.
+- A repo whose resolved `deploy` is empty (neither `repos[].deploy` nor a top-level
+  `deploy`) **skips deploy entirely** and NEVER inherits another repo's
+  `deploy.command`/`healthCheck`.
+- `repos[].role` is **load-bearing**: a `"docs"` or `"primary"` role designates the
+  **doc-home repo** (below). `repos[].lang` is **informational** (a contributor hint
+  for Dev) — no logic wires to it; never compute behavior from it.
+
+### The repo target is a label: `repo:<name>` (both backends)
+Each multi-repo ticket carries exactly one **`repo:<name>`** label naming its target
+repo (the `name` from `repos[]`). This reuses §4/§18's single abstraction: in the
+**Linear** backend it is a Linear label in the ticket's label set; in the **local**
+backend it is a string in the ticket file's `labels:[]` frontmatter array — repo-as-
+label **is** the local frontmatter; there is no dedicated frontmatter field. The
+existing label-in-`labels[]` filter and the REPLACE-style full-set discipline (§10 #1,
+§18) apply unchanged: to set or keep the repo target, re-pass the **full** label set.
+Single-repo projects carry **no** `repo:*` label — the sole repo is implicit.
+
+### Missing / wrong repo target
+In a **multi-repo** project the repo target is a §6 required field. If a ticket Dev
+picks has **no** (or a contradictory) `repo:<name>` label, Dev does **not** guess and
+does **not** default to `repos[0]` (wrong-tree hazard, §7): it **blocks** the ticket
+(§9) — `Bail-shape: info-needed`, or `scope-design` if the work genuinely spans repos
+and needs splitting — routed to the owner. Sweep Job 1 likewise **flags** a missing/
+contradictory repo label for the owner; it never guesses a repo, exactly as it never
+guesses a type.
+
+### Doc-home repo
+The product-level `strategyDoc` / doc-set (§20) lives in one **doc-home** repo: the
+`repos[]` entry with `role:"docs"`, else `role:"primary"`, else `repos[0]`. PM reads
+and commits the doc there (Job C step 5), init scaffolds it there, and any strategy-
+doc reference (e.g. a Reflect §17 promote-to-`strategyDoc` proposal) targets that
+repo. A `strategyDoc` path resolves relative to the doc-home repo; an explicit repo-
+qualified path (`"<repo-name>:docs/strategy.md"`) is also allowed and overrides the
+default. Single-repo: the doc-home is the sole repo (today's behavior).
+
+### Per-repo change-gate
+PM and QA gate their expensive sweeps on "did the watched code move" (preflight). With
+multiple repos, `pm-state.json` / `qa-state.json` store a **per-repo SHA map**
+`{ "<repo-name>": "<sha>" }` instead of a single SHA. Each fire, compute HEAD for
+**every** repo in `repos[]`:
+- **A new SHA = ANY watched repo moved** since its recorded SHA. Run the diff-focus
+  (`git -C <repo> log <lastSha>..HEAD`, `git -C <repo> diff --stat`) **per moved
+  repo**, and **reset the review lenses** (PM) / focus the sweep (QA) if **any** repo
+  moved.
+- Record the per-repo SHA you actually reviewed (not end-of-run HEAD), per repo.
+- A repo with **no commits yet** (no HEAD) is tolerated — treat it as "no commits yet"
+  (greenfield, see the init SKILL), not an error.
+
+Reflect's Job 1 iterates `repos[]` (the union of HEADs / commit logs). §8 dedupe-
+against-reality scans **all** repos, not just `repoPath`. Single-repo: the map has one
+entry; behavior is identical to today's single SHA.
+
+### Orphan reclaim is per target repo
+Dev Step 0 and Sweep Job 2 grep for a shipped artifact on the **target repo's**
+resolved `defaultBranch` (the repo named by the ticket's `repo:<name>` label). If the
+target repo is **unresolvable** (no/contradictory label, so no tree to grep), be
+conservative: Dev **leaves** the ticket (it is then picked up as a missing-target
+block, above) and Sweep **flags** it for the operator — **never reclaim** against a
+guessed tree.
+
+### Cross-repo work
+- **PM splits at filing.** Work that spans repos is filed by PM as **per-repo
+  children** (each a single `repo:<name>` target), `relatedTo` each other, so Dev
+  rarely has to split across repos.
+- **When Dev must split across repos** (Step 4), the mandatory split rule extends: the
+  handoff must cite the **new ticket ID** AND set its **`repo:<name>`** target.
+- **Inheritance.** §15 `[coverage]` follow-ups and **all** Dev-filed tickets inherit
+  the **parent's** `repo:<name>` target.
+- **Dedupe.** §8 must NOT collapse the per-repo children of one feature as duplicates —
+  the same title across different `repo:<name>` targets is *not* a duplicate.
+
+### Known state limitations (be honest)
+The loop coordinates only through ticket state; it has **no cross-repo deploy barrier**
+("wait until all contributing repos have landed before deploying"). A multi-repo
+deploy is therefore only safe when each repo is **independently deployable** (per-repo
+deploy) OR the product deploy is **idempotent and re-runnable** (re-running as each
+repo lands converges). Don't assume an atomic multi-repo release.
+
+`testEnv` / `baseUrl` is currently **one per product**, not per repo: QA verifies
+against a single product surface, which can't directly address an API-only or library
+repo that has no URL. Treat this as a known gap (a per-repo `testEnv` may be added
+later); for now QA exercises the product surface and notes any repo with no testable
+surface of its own.
+
+---
+
+## 20. PM knowledge base (the doc-base)
+
+The `strategyDoc` (§11) is PM's north star. As a product grows, a single file gets
+thin; PM's knowledge base is that doc evolved into a small, fixed-heading **doc-base**
+PM keeps current. **A flat single-file `strategyDoc` is still fully supported** —
+single-repo linear projects with a flat `strategyDoc` behave **exactly as today**. The
+headings below are what init scaffolds for a *new* doc and what PM maintains; they are
+not a new requirement imposed on an existing flat doc (PM reads whatever is there).
+
+### The field set (defined once — identical names in init and PM)
+The doc-base has these EXACT sections (verbatim headings):
+- **Vision** — the one-paragraph north star: what the product is and for whom.
+- **Goals (north star)** — the durable outcomes to pursue.
+- **Non-goals** — explicitly out of scope, so the loop doesn't drift into them.
+- **Current state** — what's actually built/shipped right now (the living "as-is";
+  seeded once by init from brownfield mapping, then owned by PM).
+- **Personas** — the user types the product serves (also QA's persona list).
+- **Glossary** — domain terms with definitions, so all five agents share vocabulary.
+- **Decisions (running log)** — a dated, append-only log of product-direction /
+  scoping calls and their rationale.
+- **Candidate ideas** — the overflow parking lot (PM guardrails): strong ideas not yet
+  filed, persisted so they aren't lost and get filed as the backlog drains.
+
+init Step 4 scaffolds these exact headings; the greenfield interview fills them;
+brownfield mapping seeds **Current state**. PM maintains them thereafter. The names are
+identical across §20 / init / PM so no agent invents a variant.
+
+### Where it lives
+In the **doc-home repo** (§19). A single flat file containing these headings IS the
+doc-base; a larger product may split it into a doc set under the same path. Read and
+maintain it exactly as `strategyDoc` is today (repo file → read/commit; Linear
+document → `get_document`/`save_document`), per pm-agent §0.
+
+### init ↔ PM handoff (no double-write)
+- **init seeds `Current state` exactly once, if absent** (from brownfield mapping,
+  operator-confirmed) and scaffolds the empty headings. It never rewrites existing
+  content.
+- **PM owns the doc-base thereafter.** Augmenting `Current state` is **append-only of
+  the missing section**, never a rewrite of existing content. PM records shipped
+  progress in `Current state`, appends product-direction/scoping calls to the
+  `Decisions (running log)`, and keeps `Personas`/`Glossary` accurate as features ship
+  (PM Job C step 5). So init never overwrites PM, and PM never re-seeds what init
+  already wrote.

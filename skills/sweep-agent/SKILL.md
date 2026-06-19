@@ -40,8 +40,9 @@ trust conversation memory for state; on a hard failure log one line and exit (th
 next fire retries). See conventions §0.
 
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`, pick the
-project, and load `linearProject`, `linearTeam`, `repoPath`, `git`, `mode`, and
-`autonomy` (§12a). If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}`
+project, and load `linearProject`, `linearTeam`, `repoPath`, `git`, `mode`,
+`autonomy` (§12a), and — if present — `repos[]` (conventions §19; absent/one ⇒
+single-repo = just `repoPath`, unchanged). If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}`
 expands to an empty/`-local` dir), fall back to
 `~/.claude/plugins/data/dev-loop/projects.json` or search
 `~/.claude/plugins/data/**/projects.json` before asking the user.
@@ -81,6 +82,11 @@ its owner label is picked up by **nobody**. Find and fix them:
   - **Missing type label** (no `Feature`/`Bug`/`Improvement`) → if the title/body
     make the type unambiguous, set it; if genuinely ambiguous, leave a comment
     flagging it for the operator and report it (don't guess a type).
+  - **Missing/contradictory repo target** (multi-repo only, §19): no `repo:<name>`
+    label, or one that names no existing `repos[]` entry → **flag it for the owner** in
+    a comment and report it. **Never guess a repo** (same discipline as never guessing a
+    type) — a wrong target ships to the wrong tree. Single-repo projects have no
+    `repo:*` labels; skip this check.
 A ticket stuck `In Review` is *usually* this bug — fixing the owner label is what
 lets PM/QA finally verify it.
 
@@ -88,9 +94,12 @@ lets PM/QA finally verify it.
 A Dev fire that claimed a ticket (state `In Progress`, §7) and then crashed strands
 it — and Dev's own Step 0 only reclaims tickets assigned to **that** Dev. Catch the
 rest: query `project` + `label:"dev-loop"` + `state:"In Progress"`. For each with
-**no shipped artifact** (no commit referencing the ticket id on `git.defaultBranch`;
-or, if `autoPush:false`, no local commit) **and** no `updatedAt` movement for a
-clear interval (default ≥6h), it's an orphan: unassign, reset to `Todo` (full label
+**no shipped artifact** on **the target repo's resolved `defaultBranch`** (the repo
+named by the ticket's `repo:<name>` label, §19; single-repo ⇒ `git.defaultBranch`,
+unchanged) — no commit referencing the ticket id; or, if `autoPush:false`, no local
+commit — **and** no `updatedAt` movement for a clear interval (default ≥6h), it's an
+orphan: (**if the target repo is unresolvable**, don't grep a guessed tree — **flag it
+for the operator** and leave it, never reclaim, §19.) unassign, reset to `Todo` (full label
 set, then verify), comment `Orphaned — reset from a stalled/aborted run; re-queued.`
 If a shipped artifact exists, **leave it** — Dev will reconcile it; don't fight a
 run that got far.

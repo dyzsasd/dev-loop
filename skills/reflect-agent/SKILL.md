@@ -57,8 +57,9 @@ trust conversation memory for state; on a hard failure log one line and exit (th
 next fire retries). See conventions §0.
 
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`, pick the
-project, and load `linearProject`, `linearTeam`, `repoPath`, `git`, `mode`, and
-`autonomy` (§12a). If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}`
+project, and load `linearProject`, `linearTeam`, `repoPath`, `git`, `mode`,
+`autonomy` (§12a), and — if present — `repos[]` (conventions §19; absent/one ⇒
+single-repo = just `repoPath`, unchanged). If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}`
 expands to an empty/`-local` dir), fall back to
 `~/.claude/plugins/data/dev-loop/projects.json` or search
 `~/.claude/plugins/data/**/projects.json` before asking the user.
@@ -98,7 +99,8 @@ Linear ticket — and print the lesson diffs and proposals you *would* make.
 ### Job 0 — Anti-thrash check (bail fast on a quiet window)
 Reflection is cheap signal only when something actually happened. Determine the
 window since the last reflection (from the state file / your last report) and check
-for **any** activity: new commits on `git.defaultBranch` in `repoPath`, any deploy
+for **any** activity: new commits on the resolved `defaultBranch` of **any** repo in
+`repos[]` (single-repo ⇒ `git.defaultBranch` in `repoPath`, unchanged — §19), any deploy
 or rollback events, any tickets created / closed / blocked / canceled / moved in the
 window. **If nothing changed — no new commits, no closed/changed tickets — emit a
 terse no-op** ("Nothing since the last reflection at <when>; no retro, no lesson
@@ -118,8 +120,9 @@ project (§2):
 - **QA outcomes:** fail / drift / inconclusive counts (`inconclusive ≠ pass`,
   §Topology) — a rising inconclusive rate means the test env is flaky, not that the
   product is fine.
-- **git + deploy:** `git log` on `defaultBranch` in `repoPath` for the window
-  (commits, reverts) and any deploy/rollback events (Dev Step 6.5 auto-reverts leave
+- **git + deploy:** `git log` on the resolved `defaultBranch` of **each** repo in
+  `repos[]` for the window — iterate the repos (single-repo ⇒ just `repoPath`, unchanged
+  — §19) — (commits, reverts) and any deploy/rollback events (Dev Step 6.5 auto-reverts leave
   a `git revert` + a `Bail-shape: fix-exhausted` reopen — count these as smoke/
   rollback incidents).
 - **Run logs (optional — only if present):** if a launcher tees agent output to

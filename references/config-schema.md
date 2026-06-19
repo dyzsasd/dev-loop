@@ -14,13 +14,26 @@ repo, its test environment, and its ship/deploy settings. One file, many product
     "<key>": {                        // short slug you'll refer to (e.g. "monpick", "geo")
       "linearTeam":    "Citronetic",  // Linear team name (required)
       "linearProject": "MonPick",     // Linear project name — must exist (required)
-      "repoPath":      "/abs/path/to/repo",   // where Dev works (required for dev-agent)
+      "repoPath":      "/abs/path/to/repo",   // where Dev works (required for dev-agent). SINGLE-repo (default). For multi-repo, add repos[] below.
+      "repos": [                      // OPTIONAL — multi-repo only (conventions §19). Absent ⇒ single-repo: top-level repoPath/build/git/deploy are authoritative, 100% unchanged.
+        {
+          "name":          "web",                 // repo target name → becomes a `repo:<name>` label on tickets (both backends)
+          "path":          "/abs/path/to/web",    // this repo's working copy (Dev commits here for repo:web tickets)
+          "role":          "primary",             // "docs" | "primary" | other. LOAD-BEARING: "docs" else "primary" else repos[0] is the DOC-HOME repo (roots strategyDoc)
+          "lang":          "ts",                  // INFORMATIONAL contributor hint only — no logic reads it
+          "contributorSkill": null,               // optional per-repo skill Dev reads before coding; absent ⇒ top-level contributorSkill, else read this repo's CLAUDE.md
+          "defaultBranch": "main",                // per-repo override; absent ⇒ git.defaultBranch (autoCommit/autoPush/autoDeploy stay product-level in git)
+          "build":         null,                  // per-repo override of the top-level build gates; absent ⇒ top-level build
+          "deploy":        null                   // per-repo override; absent ⇒ top-level deploy. A repo resolving to NO deploy SKIPS deploy (never inherits another repo's)
+        }
+      ],
       "strategyDoc":   "docs/strategy.md",    // PM's north star (required for pm-agent). Either a
                                                //   repo file relative to repoPath (shown), OR a Linear
                                                //   document: { "linearDocument": "<id|slug|url>" } or a
                                                //   "https://linear.app/.../document/..." string. PM reads
                                                //   it (file | get_document) and maintains it (commit |
                                                //   save_document) — see pm-agent §0 + Job C.
+      "contributorSkill": null,       // optional: a Claude skill carrying this repo's conventions (test cmds, architecture). Dev invokes it before coding; absent ⇒ Dev reads the repo's CLAUDE.md. Per-repo override lives in repos[].contributorSkill (§19).
       "mode":          "live",        // "live" | "dry-run"  (see conventions §12)
       "autonomy":      "ask",         // "ask" (default) | "full" — who decides vs escalates (see conventions §12a)
       "backend":       "linear",      // "linear" (default when absent) | "local" — coordination substrate (see conventions §18)
@@ -120,13 +133,28 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   are ignored under `"linear"`. In `"local"` mode `strategyDoc` must be a **repo file**
   (a Linear document can't back a local board), and `/dev-loop:init` scaffolds `board/`
   while skipping the Linear label/project steps.
+- **`repos`** (optional; default absent ⇒ single-repo, conventions §19): an array of
+  `{ name, path, role, lang, contributorSkill?, defaultBranch?, build?, deploy? }`
+  entries for a **multi-repo** product. Absent (or a single entry) ⇒ the top-level
+  `repoPath`/`build`/`git`/`deploy` remain authoritative and the loop emits **zero**
+  routing artifacts (no `repo:<name>` labels, no provisioning) — single-repo is 100%
+  unchanged. **Resolution:** each per-repo-overridable setting (`build`, `defaultBranch`,
+  `deploy`, `contributorSkill`, `lang`) is the repo's value if present, else the
+  top-level value; `autoCommit`/`autoPush`/`autoDeploy` stay product-level in `git`.
+  `role` is load-bearing (`"docs"`/`"primary"` picks the **doc-home** repo that roots
+  `strategyDoc`); `lang` is informational. Multi-repo tickets carry a `repo:<name>`
+  label (the authoritative target). If both `repoPath` and `repos` are set, `repos`
+  wins and init verifies `repoPath` is among them.
 - **`deploy.healthCheck`** (optional): a URL (must return 2xx) or a command (must
   exit 0) that Dev runs in Step 6.5 right after an unattended prod deploy. On a
   repeated failure Dev rolls the deploy back (revert + redeploy) rather than leaving
   prod broken. Absent → Dev smoke-checks `testEnv.baseUrl` root for a non-5xx.
 - **Agent state files** (`pm-state.json`, `qa-state.json`) live next to
   `projects.json` and hold per-project loop state: last-reviewed/swept SHA, swept
-  review lenses (PM), swept surfaces (QA). Local per-operator runtime state — never
+  review lenses (PM), swept surfaces (QA). **Multi-repo (conventions §19):** the
+  last-reviewed/swept SHA becomes a **per-repo map** `{ "<repo-name>": "<sha>" }` (one
+  entry per `repos[]`); a new SHA in *any* watched repo re-opens the sweep. Single-repo
+  keeps the single-SHA form, unchanged. Local per-operator runtime state — never
   committed, never shared. Created lazily on first run, or up-front by `/dev-loop:init`
   (which also seeds the `lessons.md` skeleton next to this file and gathers/writes back
   the per-project fields above WITH the operator — operator-present setup, so asking

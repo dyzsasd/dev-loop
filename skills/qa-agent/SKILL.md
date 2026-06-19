@@ -31,7 +31,8 @@ next fire retries). See conventions §0.
 
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project, and load `linearProject`, `linearTeam`, `repoPath`, `testEnv`,
-`mode`, and `autonomy` (§12a). If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to
+`mode`, `autonomy` (§12a), and — if present — `repos[]` (conventions §19; absent/one ⇒
+single-repo = just `repoPath`, unchanged). If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to
 an empty/`-local` dir), fall back to `~/.claude/plugins/data/dev-loop/projects.json`
 or search `~/.claude/plugins/data/**/projects.json` before asking the user.
 **If `testEnv` is missing or unclear, ask the user where to test before touching
@@ -69,9 +70,12 @@ edge-case battery is expensive, so don't re-run it against a build you've alread
 swept (a 5-minute loop will otherwise re-probe an unchanged product forever):
 - Keep a small `qa-state.json` **next to the `projects.json` you loaded**, holding
   per-project the repo SHA you last fully swept and when.
-- Each run, compute `git -C <repoPath> rev-parse HEAD`. If **Job A and Job B are
-  both empty** AND `HEAD` is unchanged since that SHA, the testable surface hasn't
-  moved: skip Job C and report a one-line no-op ("no In Review/blocked work; HEAD
+- Each run, compute HEAD for **every** repo in `repos[]` (single-repo ⇒ just `repoPath`,
+  unchanged); `qa-state.json` holds a **per-repo SHA map** (§19). **Greenfield:** a
+  repo with no commits yet / no `testEnv.baseUrl` has no testable surface — **no-op
+  until one exists** (note it, don't invent tests). If **Job A and Job B are both
+  empty** AND **no** watched repo's `HEAD` has moved since its recorded SHA, the testable
+  surface hasn't moved: skip Job C and report a one-line no-op ("no In Review/blocked work; HEAD
   unchanged at `<sha>` — nothing new to test"). **But don't bare-no-op forever** —
   after a few consecutive idle fires on a static board, invest the fire in *new*
   coverage instead of repeating the empty report: pick a surface / router /
@@ -86,8 +90,9 @@ swept (a 5-minute loop will otherwise re-probe an unchanged product forever):
   Re-auditing already-clean surfaces is the same zero-signal waste the change-gate
   exists to prevent; coverage expansion is a *finite* backlog, not a perpetual
   make-work loop.
-- Otherwise run Job C. A **new SHA means regression risk** — focus the sweep on
-  what those commits touched (`git diff --stat <lastSweptSha>..HEAD`). After
+- Otherwise run Job C. A **new SHA in any watched repo means regression risk** — focus the
+  sweep on what those commits touched, **per moved repo**
+  (`git -C <repo> diff --stat <lastSweptSha>..HEAD`, §19). After
   verifying, record the **SHA you actually swept** — NOT end-of-run `HEAD`, which
   can move mid-run while you test. Leaving the marker behind re-surfaces any commit
   you haven't finished verifying (so nothing is silently skipped).
@@ -148,8 +153,9 @@ value. For each, do exactly one of:
 
 ### Job C — Hunt new bugs (happy paths + edge cases)
 1. Decide *what* to test from evidence, not vibes: read recent `dev-loop` tickets
-   moved to `Done`/`In Review` and recent commits in `repoPath`
-   (`git log --oneline -30`) to see what changed and therefore what's at risk.
+   moved to `Done`/`In Review` and recent commits **across every repo in `repos[]`**
+   (`git -C <repo> log --oneline -30`; single-repo ⇒ just `repoPath`, unchanged — §19)
+   to see what changed and therefore what's at risk.
 2. **Happy paths**: walk the core flows end to end for each relevant persona
    (`testEnv.notes` lists them; if the product has no personas — e.g. a library —
    exercise every public entry point/surface instead) — the things that *must* work.
@@ -176,7 +182,11 @@ value. For each, do exactly one of:
    tickets: the bug template (conventions §6) with a *real, minimal* repro,
    labels `dev-loop` + `Bug` + `qa` (+ `edge-case` if applicable), a `priority`
    matching severity (1=Urgent for broken core flows/data leaks), `state:"Todo"`,
-   set `project`.
+   set `project`. **Multi-repo (§19):** set the bug's `repo:<name>` target (re-pass the
+   full label set) — map the broken surface to its repo (the route/module you reproduced
+   it in; if a bug genuinely spans repos, file per-repo children, `relatedTo`). If you
+   can't determine the repo, file it anyway and note the uncertainty so Dev blocks for a
+   target rather than guessing. Single-repo: no `repo:*` label.
 
 **Result vocabulary — file for every non-pass, route severity by label.** Classify
 each finding: `pass` (works) → nothing; `fail` (a real defect, reproduces) → `Bug`

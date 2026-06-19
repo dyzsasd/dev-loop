@@ -39,7 +39,10 @@ next fire retries). See conventions §0.
 
 Then load config (`§11`): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project (named by the user, the sole one, the `defaultProject`, or ask),
-and load its `linearProject`, `linearTeam`, `strategyDoc`, `testEnv`, and `mode`.
+and load its `linearProject`, `linearTeam`, `strategyDoc`, `testEnv`, `mode`, and — if
+present — `repos[]` (conventions §19). Multi-repo: the **doc-home repo**
+(`role:"docs"` else `"primary"` else `repos[0]`) roots `strategyDoc`; resolve the doc
+there. Single-repo (absent/one `repos[]`) ⇒ the sole repo is the doc-home, unchanged.
 
 **`strategyDoc` may be a repo file *or* a Linear document.** Detect the form once
 and use it consistently for both reading (Job C) and updating (Job C step 5):
@@ -90,11 +93,15 @@ the same ground every fire, rotate the **review lens** and track progress:
   (cross-page design/terminology/parity between similar surfaces),
   `competitive-parity` (table-stakes a comparable product has that this lacks),
   `polish-performance` (perceived speed, responsiveness, mobile). PM may add lenses.
-- Each run, compute `git -C <repoPath> rev-parse HEAD`.
-  - **New SHA** → the product moved; reset the swept-lens list (shipped work can
-    open/close gaps) and diff what changed (`git log --oneline <lastSha>..HEAD`,
-    `git diff --stat`) to focus the first lens. Record the **SHA you actually
-    reviewed**, not end-of-run `HEAD` (it can move mid-run while Dev ships).
+- Each run, compute HEAD for **every** repo in `repos[]` (single-repo ⇒ just `repoPath`,
+  unchanged); `pm-state.json` holds a **per-repo SHA map** (§19).
+  - **New SHA = ANY watched repo moved** → the product moved; reset the swept-lens list
+    (shipped work can open/close gaps) and diff what changed **per moved repo**
+    (`git -C <repo> log --oneline <lastSha>..HEAD`, `git -C <repo> diff --stat`) to focus
+    the first lens. Record the **per-repo SHA you actually reviewed**, not end-of-run
+    `HEAD` (it can move mid-run while Dev ships). A repo with **no commits yet** (no HEAD)
+    is greenfield — treat it as "no commits yet → propose the MVP from the strategy doc",
+    not an error.
   - **Unchanged SHA** → run Job C against the **next lens not yet swept at this
     SHA**. This is the proactive review the user asked for: don't go dark just
     because `strategy-gaps` is satisfied — keep reviewing the existing services
@@ -196,7 +203,10 @@ capabilities that make the product better, even when they aren't written in the 
    be. Resolve any ambiguity into concrete, testable acceptance criteria yourself;
    never file vague work.
 2. Exercise the real product at `testEnv.baseUrl` as a user would, examining it
-   through the active lens. Look for: missing/half-built capabilities, dead-end or
+   through the active lens. **Greenfield cold-start exception:** if there is no
+   `testEnv.baseUrl`, no `build`, and the repo(s) are empty/commitless, **skip
+   'exercise the product'** — ideate the MVP **from the strategy doc only** (Vision /
+   Goals (north star) / MVP) and file the foundational tickets that bootstrap it. Look for: missing/half-built capabilities, dead-end or
    inconsistent flows, missing empty/error/loading states, weak conversion or
    retention, decisions unsupported by exposed metrics, trust/safety gaps,
    cross-surface inconsistency, and table-stakes a comparable product has.
@@ -208,6 +218,10 @@ capabilities that make the product better, even when they aren't written in the 
    refinement of something that already exists → **Improvement**. Use the template
    (conventions §6), labels `dev-loop` + `Feature`/`Improvement` + `pm`, a
    `priority` (1=Urgent…4=Low) reflecting impact, `state:"Todo"`, set `project`.
+   **Multi-repo (§19):** set the ticket's `repo:<name>` target (re-pass the full label
+   set). **Split cross-repo work at filing into per-repo children** — one single-repo
+   ticket per repo, `relatedTo` each other — so Dev rarely has to split across repos;
+   don't file one ticket that secretly spans repos. Single-repo: no `repo:*` label.
 5. **Keep the strategy doc current.** The doc is a living north star, not a
    write-once snapshot — maintain it as you review:
    - **Record shipped progress**: when a goal is verified Done against the running
@@ -216,6 +230,13 @@ capabilities that make the product better, even when they aren't written in the 
      theme, or capability you've decided to pursue (the "beyond the doc" work you're
      now filing), add it to the doc so the next PM run treats it as part of the north
      star — not a stray idea re-discovered from scratch each time.
+   - **Maintain the doc-base (conventions §20).** The `strategyDoc` carries fixed
+     headings — Vision / Goals (north star) / Non-goals / Current state / Personas /
+     Glossary / Decisions (running log) / Candidate ideas. Keep `Current state` accurate
+     as features ship (**append-only** — never rewrite what init seeded), append every
+     product-direction/scoping call to the `Decisions (running log)` with its rationale,
+     and keep `Personas`/`Glossary` current. Commit it in the **doc-home repo** (§19).
+     A flat single-file doc without these headings is fine — maintain it as-is.
    - Edit **surgically** — append/annotate goals and status; don't rewrite the doc
      wholesale or delete the user's intent. Keep the user's original goals; your
      additions are clearly-marked extensions.

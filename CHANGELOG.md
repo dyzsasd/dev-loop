@@ -3,6 +3,32 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.7.0 — onboarding overhaul + multi-repo
+- **`init` becomes DETECT → MAP → ASSEMBLE → LOAD** (skills/init/SKILL.md): it detects
+  the project **shape** — greenfield (no code/baseUrl/build yet), brownfield (existing
+  code), adopting (pre-existing human tickets) — and single- vs multi-repo; **MAP**s a
+  brownfield codebase **read-only** (a Task/Explore subagent, per repo; non-fatal on
+  failure) to seed the doc-base `Current state`; **ASSEMBLE**s config/labels/doc-base/
+  runtime files; and **LOAD**s (operator-confirmed, per-ticket, never bulk) any named
+  pre-existing human ticket into the loop. Greenfield runs a strategy interview and skips
+  product smoke-tests.
+- **PM doc-base** (conventions §20): the `strategyDoc` gains a fixed field set — Vision /
+  Goals (north star) / Non-goals / Current state / Personas / Glossary / Decisions
+  (running log) / Candidate ideas. init scaffolds the headings (seeding `Current state`
+  from brownfield mapping once); PM owns them thereafter (append-only). A flat
+  single-file `strategyDoc` still works exactly as today.
+- **Multi-repo** (conventions §19; config `repos[]`): a product can span repos. Tickets
+  target a repo via a **`repo:<name>` label** (both backends — Linear label / local
+  `labels[]`). Per-repo resolution of `build`/`defaultBranch`/`deploy`/`contributorSkill`
+  (repo value else top-level); `autoCommit`/`autoPush`/`autoDeploy` stay product-level.
+  Per-repo change-gate (`pm-state.json`/`qa-state.json` hold a per-repo SHA map), per-
+  target-repo orphan reclaim, doc-home repo (`role:"docs"/"primary"`), and cross-repo
+  splitting into per-repo children. **Single-repo is 100% unchanged**: absent `repos[]`
+  (or one entry) emits zero routing artifacts; normalization is read-side only.
+- **Honest limits**: no cross-repo deploy barrier (per-repo or idempotent deploys only);
+  one `testEnv`/`baseUrl` per product (per-repo testEnv is a known gap).
+- **Version** bumped to 0.7.0; README/RUNNING/config-schema/plugin.json updated.
+
 ## 0.6.0 — per-agent models, run guide, resume
 - **Per-agent models** (`models` config): the model is chosen at *launch* (a SKILL
   can't set its own), so a per-project map — e.g. `dev`/`pm` → `opus`, `qa`/`reflect`
