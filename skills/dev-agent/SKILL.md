@@ -31,7 +31,8 @@ trust conversation memory for state, and on a hard failure log one line and exit
 
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project, and load `linearProject`, `linearTeam`, `repoPath`,
-`strategyDoc`, `build`, `git`, `deploy`, `mode`, `autonomy` (§12a), and — if present —
+`strategyDoc`, `build`, `git`, `deploy`, `mode`, `autonomy` (§12a), the optional `codex`
+block (§24), and — if present —
 `repos[]` (conventions §19). **Resolve the target repo per ticket:** absent/one
 `repos[]` ⇒ single-repo, the implicit target is `repoPath` and every step below behaves
 exactly as today. With multiple repos, the ticket's `repo:<name>` label names the
@@ -69,6 +70,17 @@ under `reports.sink:"linear"`, §23); a structural ask is a §17
 `[<agent>-proposal]`, never a self-edit. At close (§3), append this fire's terse entry to
 today's daily report — **skip a pure no-op fire**. Respect `mode` (§12): in `dry-run`,
 write nothing.
+
+**Codex — optional power tools (conventions §24).** Only when `codex.enabled` **and** the
+`codex` CLI is on `PATH` (else behave exactly as today — a missing Codex is a graceful
+fallback, never an error). When on, Codex may assist three steps below, each gated by its
+sub-flag: an **independent review** of your diff (`codex.review` → Step 5.5 stage 2), an
+**image asset** an AC requires (`codex.imageGen` → Step 4, into `codex.assetsDir`), and a
+**one-shot rescue** of a stuck ticket before you block `fix-exhausted` (`codex.rescue` →
+Step 5.5 / §9). Codex is **advisory** — it never touches Linear, never bypasses your gates
+(§5/§5.5/§6.5), `mode`, `autonomy`, or §16, and you own the ship. Use the non-interactive
+`codex exec` forms (`< /dev/null`, `-C <target repo>`); see
+`${CLAUDE_PLUGIN_ROOT}/references/codex-integration.md` for the exact commands.
 
 **Open every run** with a one-line summary: project, Linear project/team,
 `repoPath`, `mode`, and `autonomy` (§12a). Also state the ship policy you'll follow from config
@@ -153,6 +165,16 @@ in the Step-5 gate), OR file a deduped `[coverage]` follow-up (`Improvement` + `
 it and QA verifies it. Docs-only / pure-refactor / no-testable-surface are exempt —
 say so in the hand-off (add a unit test for the no-surface case).
 
+**Image assets an AC requires (optional, §24).** If a ticket needs an image the code
+ships — an icon, illustration, OG/social card, placeholder, favicon — **and** `codex.imageGen`
+is on, generate it via Codex's `image_generation` tool into `codex.assetsDir` (the ticket's
+`repo:<name>` tree). The tool saves to `~/.codex/generated_images/<session>/ig_*.png`, **not**
+the path you name (Codex's "saved to X" is unreliable) — so copy the generated file out to
+`codex.assetsDir`; needs `--sandbox workspace-write` and `< /dev/null` (see
+`references/codex-integration.md`). The asset then ships like any file: stage only it + its
+referencing code (§7), and it's a §15 coverage exemption (the *code using* it still isn't).
+No PII/secrets in the prompt (§16). In `dry-run`, don't write it into the shipping tree.
+
 **Too big, or a part the gates can't verify? Split it.** If a ticket is too large
 to ship safely in one pass — or its riskiest part can't be checked by
 typecheck/build/test (e.g. a signup-funnel or other critical UI flow that only a
@@ -224,13 +246,24 @@ pause for a human.
 2. **Code quality.** Run a code-review pass on the diff: if a `code-review`
    skill/command is available in this environment, invoke it (effort `medium`);
    otherwise do the equivalent yourself — scan the diff for correctness bugs,
-   security issues, and obvious regressions. Treat **Critical/High** findings as
+   security issues, and obvious regressions. **When `codex.review` is on (§24), also
+   run an independent Codex review** (`codex exec review -C <repo> < /dev/null`, or
+   `/codex:review`) as a *second model* on the diff — an **additional** advisory pass,
+   not a replacement for this self-review; run both. Treat **Critical/High** findings
+   (yours **or** Codex's) as
    blocking: fix them this run if you can. If you can't, **revert the change** and
    **block** the ticket (§9) tagged `Bail-shape: fix-exhausted` with the findings —
    do **not** route code-fixing to PM/QA (they don't write code), and never wait for
    a human; the next Dev fire (or the operator via `lessons.md`) retries.
+   (A Codex finding you judge a false positive isn't a veto — you may proceed, but say
+   so in the hand-off so the owner sees the disagreement.)
    Medium/Low/nits are non-blocking — apply the cheap ones, note the rest in the
-   hand-off.
+   hand-off. **Before blocking `fix-exhausted`, if `codex.rescue` is on (§24)** you may
+   hand the stuck task to Codex for **one** pass (`/codex:rescue …` or a write-capable
+   `codex exec`); ship its patch **only** if it then passes these same Step-5 gates +
+   this self-review, else discard it and block as above. One rescue, not a retry loop
+   (it counts inside §9's 2-retry cap); re-read `git status` and stage only this
+   ticket's files (§7) — never blind-commit what Codex left in the tree.
 3. **Skip for trivial diffs** — a docs-only / typo / single-line config change
    doesn't need Stage 1 or the full review; note that you skipped it and why.
 

@@ -28,6 +28,16 @@
       "deploy": {
         "command": "vercel --prod --yes"
       },
+      "codex": {
+        "_comment": "OPTIONAL Codex companion (conventions §24). Absent OR enabled:false OR codex CLI not on PATH ⇒ never invoked (100% unchanged). Needs the `codex` CLI (npm i -g @openai/codex; codex login) + the codex-plugin-cc plugin.",
+        "enabled": true,
+        "review": true,
+        "rescue": false,
+        "imageGen": true,
+        "assetsDir": "public/generated",
+        "model": null,
+        "effort": null
+      },
       "blockedStateName": null
     },
     "acme-suite": {
