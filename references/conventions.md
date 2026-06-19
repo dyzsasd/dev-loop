@@ -33,6 +33,7 @@ Ops/Architect/Signal — are defined in §21.)
 21. [Outward-facing agents — Ops / Architect / Signal](#21-outward-facing-agents--ops--architect--signal)
 22. [Reports & operator review — daily / weekly / monthly](#22-reports--operator-review--daily--weekly--monthly)
 23. [Reports in Linear — the `reports.sink` option](#23-reports-in-linear--the-reportssink-option)
+24. [Codex — optional power tools](#24-codex--optional-power-tools)
 
 ---
 
@@ -1545,3 +1546,86 @@ review-distillation entirely** — the linear sink degrades to a **read-only rep
 operator still reads reports; no behavior change, no infinite re-distill from a single
 authorization). Flipping `files` → `linear` is **forward-only**: prior local reports stay on
 disk and are not backfilled (no dual-source reconciliation).
+
+---
+
+## 24. Codex — optional power tools
+
+The loop may reach for **OpenAI Codex** (the `codex` CLI + the **codex-plugin-cc**
+companion plugin) as an **optional accelerant** — an *independent reviewer*, an *image
+generator*, and a *second-engine rescue*. This section is the canonical contract; the
+detailed how-to (commands, flags, the verified image recipe) is
+[`references/codex-integration.md`](codex-integration.md). Each consuming SKILL carries
+just a one-line pointer back here.
+
+**Opt-in, and absent ⇒ 100% unchanged.** Codex is used **only** when both are true:
+the project's `codex` block has `enabled:true` (§11), **and** the `codex` CLI is on
+`PATH`. If either is false, every agent behaves exactly as today — no review call, no
+image step, no rescue, no new prompt. Same opt-in philosophy as `backend` (§18),
+`repos[]` (§19), and `reports.sink` (§23). A missing Codex (not installed / not logged
+in) is a **graceful fallback**, never an error: treat it like `codex.enabled:false` and
+proceed without Codex (it is a §12a external-prerequisite *fact*, not a block).
+
+**Advisory, never authoritative.** Codex is an input to the dev-loop agent's existing
+judgment — it never bypasses the firewall (§2), `mode` (§12), `autonomy` (§12a), the
+ship gates (Dev §5/§5.5/§6/§6.5), the coverage rule (§15), or the security doctrine
+(§16). Codex **never touches Linear/the board** (§2) — it only ever touches code,
+files, or a review of them; all ticket state stays with the agent via the backend (§18).
+
+**Deterministic, non-interactive forms only.** The agents run unattended (§0/§12a), so
+they drive `codex exec` (synchronous, returns when done) rather than the plugin's
+`--background` + `/codex:status` polling (that flow is for an attended operator). Every
+loop invocation closes stdin (`< /dev/null` — else `codex exec` waits on stdin and
+hangs the fire), sets `-C <target repo>` (the ticket's `repo:<name>` tree, §19), uses
+`approval never` + an explicit `--sandbox` (never a form that pauses for a human), and
+respects `codex.model`/`codex.effort` only when set. Sub-flags gate each capability
+independently (`review` / `imageGen` / `rescue`); a missing sub-flag ⇒ that capability
+is off.
+
+The three capabilities (each detailed in `references/codex-integration.md`):
+
+1. **Independent review (read-only) — Dev Step 5.5, Architect.** When `codex.review` is
+   on, Codex is the concrete "`code-review` skill/command" Dev Step 5.5 stage 2 already
+   reaches for, and an optional second opinion for Architect (`/codex:review`,
+   `/codex:adversarial-review`, or `codex exec review`). It is an **additional** pass,
+   **not** a replacement for Dev's own self-review — run both. Dev treats Codex's
+   **Critical/High** findings exactly like its own (blocking: fix this run, or revert +
+   block `fix-exhausted`, §9); Medium/Low are non-blocking. Codex disagreeing with the
+   author is **signal, not a veto** — Dev may proceed over a believed false-positive but
+   must say so in the hand-off. Read-only, so it may run (and print) even under
+   `dry-run`.
+
+2. **Image generation — PM mockups, Dev production assets.** This is the one capability
+   the loop genuinely **lacks** (the agents can't draw). Codex's native
+   `image_generation` tool (verify `codex features list | grep image_generation`)
+   produces real PNGs. **Verified mechanism (load-bearing):** the tool **always** saves
+   to `~/.codex/generated_images/<session-id>/ig_<hash>.png` — it does **not** honor a
+   filename/size you name in the prompt, and Codex's own "saved to <path>" line is a
+   confabulation. So the agent must **locate that generated file and copy it out** to the
+   target (drive the copy from the agent side using the exec session id, or instruct
+   Codex to `cp` it itself — `references/codex-integration.md`). Requires `--sandbox
+   workspace-write` (the `exec` default is read-only and silently writes nothing). Dev
+   (Step 4): generate an AC-required asset **into the repo** under `codex.assetsDir`,
+   stage **only** that file + its referencing code (§7), and ship it through the normal
+   gates — a static generated asset is a §15 coverage *exemption* (note it), the code
+   using it is not. PM (Job C): generate a **mockup** to a scratch dir and
+   attach/reference it on the Feature ticket as *"illustrative, not the production
+   asset."* §16: **never** put PII/secrets into an image prompt. Under `dry-run`: no
+   shipping-tree write, no commit — describe/scratch only.
+
+3. **Delegate / rescue — Dev, before a `fix-exhausted` block.** When `codex.rescue` is
+   on, Dev may hand a stuck ticket to Codex for **one** pass (`/codex:rescue` or a
+   write-capable `codex exec`) before blocking — a different engine often breaks a stall.
+   Hard caps: **one** rescue attempt (it sits *inside* §9's "cap blind retries at 2",
+   not on top), and Codex's patch ships **only** if it passes Dev's own Step-5 gates
+   **and** Step-5.5 self-review; otherwise Dev discards it and blocks `fix-exhausted` as
+   it would have. Codex shares the **same checkout** (§7): re-read `git status`, review
+   the diff, stage only this ticket's files — never blind-commit what Codex left. Writes
+   code, so: no rescue under `dry-run`.
+
+**Config** (§11; full schema in `config-schema.md`): an optional `codex` block —
+`{ enabled, review, rescue, imageGen, assetsDir, model?, effort? }`. Absent ⇒ off. No
+secret lives here — Codex uses your local `codex login` auth/config (§16). Prerequisites
+(install the CLI, `codex login`, install codex-plugin-cc) are operator-present, one-time;
+`/dev-loop:init` notes the option in its readiness checklist when a `codex` block is
+present but does **not** install the vendor CLI for you.

@@ -80,6 +80,15 @@ repo, its test environment, and its ship/deploy settings. One file, many product
           { "name": "sentry",  "type": "errors", "read": "<mcp-tool-or-command>" }
         ]
       },
+      "codex": {                      // OPTIONAL — Codex companion (conventions §24). Absent OR enabled:false OR codex CLI not on PATH ⇒ never invoked (today's behavior).
+        "enabled":   true,            // master switch (false/absent ⇒ off)
+        "review":    true,            // Dev Step 5.5 + Architect may run an INDEPENDENT codex review (advisory; Critical/High block like Dev's own)
+        "rescue":    false,           // Dev may delegate ONE rescue pass to codex before a fix-exhausted block (still gated on Dev's own gates)
+        "imageGen":  true,            // PM mockups + Dev production assets via codex's native image_generation tool
+        "assetsDir": "public/generated", // repo-relative dir Dev commits generated assets into (multi-repo: the ticket's repo:<name> tree)
+        "model":     null,            // optional: pin a codex model (e.g. "gpt-5.4-mini"); null ⇒ codex's own default / its config.toml
+        "effort":    null             // optional: none|minimal|low|medium|high|xhigh; null ⇒ codex default
+      },
 
       "blockedStateName": null        // set to a real Linear state name if you add a "Blocked" column; else null → use the `blocked` label
     }
@@ -176,6 +185,24 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   linked), files a defect → `Bug`+`qa`+`signal` or a request → `Feature`+`pm`+`signal`,
   and is **PII-strict** (§16). **Architect needs no new config** — it reuses
   `repos[]`/`build`.
+- **`codex`** (optional; conventions §24 + `references/codex-integration.md`; **absent ⇒
+  off, 100% unchanged**): wires the **Codex** companion (`codex` CLI + the codex-plugin-cc
+  plugin) as an optional accelerant. Used **only** when `codex.enabled:true` **and** the
+  `codex` CLI is on `PATH` — otherwise every agent behaves exactly as today (a missing
+  Codex is a graceful fallback, not an error). Sub-flags gate each capability independently:
+  `review` (Dev Step 5.5 + Architect run an **independent, advisory** codex review — a
+  second model on the diff/codebase; Critical/High block like Dev's own, never a veto),
+  `imageGen` (PM mockups + Dev production assets via Codex's native `image_generation` tool
+  — the one thing the loop can't do itself; assets land in `assetsDir` and ship through the
+  normal gates), and `rescue` (Dev delegates **one** pass to Codex before a `fix-exhausted`
+  block; its patch ships only if it passes Dev's own gates + self-review). `assetsDir` is
+  the repo-relative dir Dev commits generated assets into; `model`/`effort` optionally pin
+  Codex's model/reasoning (null ⇒ Codex defaults / its `config.toml`). **No secret here** —
+  Codex uses your local `codex login` auth (§16). Codex is **advisory and never touches
+  Linear** — it only ever touches code/files/a review of them; the agent owns every ship.
+  Prereqs (install `@openai/codex`, `codex login`, install codex-plugin-cc) are
+  operator-present and one-time; `/dev-loop:init` notes the option but won't install the
+  vendor CLI.
 - **`models`** now covers eight agents and **defaults to `opus` for all of them** (the
   launcher applies `--model opus` per pane unless overridden); tune an agent down to
   economize. The three outward agents are **opt-in to launch** (off by default in the

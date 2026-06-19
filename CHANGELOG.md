@@ -3,6 +3,41 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.11.0 — optional Codex companion (review · image-gen · rescue)
+- **Opt-in `codex` config block** (conventions §24; **absent OR `enabled:false` OR no
+  `codex` CLI on `PATH` ⇒ 100% unchanged**, same philosophy as `backend`/`repos[]`/
+  `reports.sink`). Wires **OpenAI Codex** (the `codex` CLI + the
+  [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) companion plugin) as an
+  **advisory accelerant** — it never touches Linear/the board (§2), never bypasses the
+  gates (Dev §5/§5.5/§6.5), `mode` (§12), `autonomy` (§12a), coverage (§15), or §16; the
+  dev-loop agent owns every decision and ship. A missing/unauth'd Codex is a **graceful
+  fallback**, never an error.
+- **Three independently-gated capabilities:**
+  - **`review`** — Dev Step 5.5 stage 2 (the "`code-review` skill/command" it already
+    reaches for) + Architect run an **independent second-model** review of the diff/codebase
+    (`codex exec review` / `/codex:review` / `/codex:adversarial-review`). An *additional*
+    pass, not a replacement for Dev's self-review; Critical/High block like Dev's own, but a
+    believed false-positive is no veto (note the disagreement in the hand-off).
+  - **`imageGen`** — the one thing the loop can't do itself. **Dev** generates AC-required
+    production assets into `codex.assetsDir` (shipped through the normal gates; a §15
+    coverage exemption); **PM** generates mockups/wireframes to sharpen Feature tickets
+    (illustrative, not production). Uses Codex's native `image_generation` tool — **verified
+    mechanism:** the PNG always lands in `~/.codex/generated_images/<session>/ig_*.png`
+    (the named path/size is ignored and Codex's "saved to X" is a confabulation), so the
+    agent copies it out; requires `--sandbox workspace-write` + `< /dev/null`.
+  - **`rescue`** — Dev hands a stuck ticket to Codex for **one** pass before a
+    `fix-exhausted` block (inside §9's 2-retry cap); the patch ships only if it passes Dev's
+    own gates + self-review, and Dev stages only its ticket's files (§7, shared checkout).
+- **Determinism for the unattended loop:** agents drive synchronous `codex exec` forms
+  (`< /dev/null`, `-C <repo>`, `approval never` + explicit `--sandbox`), not the plugin's
+  `--background`/`/codex:status` polling (that's for an attended operator). No secret in
+  config — Codex uses local `codex login` auth (§16).
+- New `references/codex-integration.md` playbook; conventions §24 + ToC; one bounded §0
+  pointer per consuming SKILL (Dev/PM/Architect) with inline hooks at the natural steps;
+  config-schema + `projects.example.json` (`codex` block); README "Codex integration"
+  section; version 0.10.0→0.11.0. **Inward QA/Sweep/Reflect/Ops/Signal unchanged** (they
+  may use a read-only Codex review for their own analysis but nothing is wired by default).
+
 ## 0.10.0 — optional Linear-hosted reports (`reports.sink`)
 - **Opt-in `reports.sink: "files" | "linear"`** (conventions §23; **absent ⇒ `files`**, so
   v0.9.0 behaves byte-for-byte). `linear` routes the report **body** + the **点评** channel
