@@ -203,6 +203,16 @@ blocked) **only** when the decision is genuinely theirs — an irreversible/
 destructive prod action (e.g. a prod DB migration), real money, legal, or a
 security sign-off a human must own. Don't punt an answerable design call to the user.
 
+**Notify the operator when you leave a ticket human-parked.** When you escalate / leave a
+ticket `blocked` + `needs-pm` with `Bail-shape: external-prereq` (incl. a `[reflect-proposal]`,
+§17) and a `notify` block is configured (§11), and the ticket doesn't already carry
+`notified`, **emit the §9 operator notification** (a Slack/Lark webhook ping — out-of-band,
+since a Linear self-mention is suppressed under the shared identity), then add `notified` on
+a successful POST (full label set, §10). This is the only place the loop pings you for a
+human-park; absent a `notify` block it's a no-op. See conventions §9 (Notifying the operator
+on a human-park) for the message allow-list, payload, failure handling, secrets, and dry-run
+rules.
+
 **When the now-unblocked action is itself sensitive/irreversible, execute it attended —
 don't route it to unattended Dev.** If the user just authorized a one-off destructive-class
 op (a prod DB migration, a data backfill), resolving it by handing it to Dev's auto-pick set

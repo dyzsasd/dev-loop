@@ -189,7 +189,9 @@ Ensure the §4/§13 workflow-label set exists on the configured `linearTeam`. Fi
 missing ones** via `create_issue_label`:
 
 `dev-loop`, `pm`, `qa`, `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`,
-`incident`, `tech-debt`, `signal` (the last three are the outward agents' sub-labels, §21).
+`incident`, `tech-debt`, `signal` (the last three are the outward agents' sub-labels, §21),
+and `notified` (PM's once-per-ticket marker for the operator-notify on a human-park, §9 —
+harmless if no `notify` block is configured).
 
 **Multi-repo only (conventions §19):** also create one **`repo:<name>`** label per
 `repos[]` entry (e.g. `repo:web`, `repo:api`). **Single-repo provisions none** — the

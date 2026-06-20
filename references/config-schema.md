@@ -89,6 +89,12 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "model":     null,            // optional: pin a codex model (e.g. "gpt-5.4-mini"); null ⇒ codex's own default / its config.toml
         "effort":    null             // optional: none|minimal|low|medium|high|xhigh; null ⇒ codex default
       },
+      "notify": {                     // OPTIONAL — PM only (conventions §9). Absent ⇒ NO-OP (no out-of-band ping; full back-compat).
+        "type":       "lark",         // "slack" | "lark" — picks the webhook payload shape
+        "webhookEnv": "DEVLOOP_NOTIFY_WEBHOOK",  // PREFERRED: name of an env var holding the webhook URL (a §16 secret). Or inline "webhook": "..." (machine-local only; never commit/echo).
+        "secretEnv":  null,           // lark only, optional: env-var name for the bot signing secret (if signature verification is on). Or inline "secret"; §16-class.
+        "events":     ["human-parked"]  // default; the only event today — a ticket left blocked+needs-pm with Bail-shape: external-prereq
+      },
 
       "blockedStateName": null        // set to a real Linear state name if you add a "Blocked" column; else null → use the `blocked` label
     }
@@ -203,6 +209,17 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   Prereqs (install `@openai/codex`, `codex login`, install codex-plugin-cc) are
   operator-present and one-time; `/dev-loop:init` notes the option but won't install the
   vendor CLI.
+- **`notify`** (optional; PM only, conventions §9): pings the operator **out-of-band** when
+  a ticket is left human-parked (`blocked`+`needs-pm`+`Bail-shape: external-prereq`) — the
+  fix for a parked ticket sitting unseen. `type` is `"slack"` | `"lark"`; the webhook URL is
+  a **§16 secret** — set `webhookEnv` (an env-var name; **preferred**) or, since
+  `projects.json` is machine-local/never-committed, an inline `webhook` (never commit or echo
+  it). Lark signature verification uses `secretEnv`/`secret` (§16-class too). PM announces
+  each parked ticket **once** (the `notified` label, §4), POSTs with a short timeout, treats
+  only a 2xx (Lark: + body `code==0`) as success, and **never** writes the URL into a
+  ticket/comment/report/log. **Absent ⇒ NO-OP** (no ping, no extra work — full back-compat).
+  Out-of-band by design: a Linear @mention would be a self-mention (shared identity) and
+  suppressed.
 - **`models`** now covers eight agents and **defaults to `opus` for all of them** (the
   launcher applies `--model opus` per pane unless overridden); tune an agent down to
   economize. The three outward agents are **opt-in to launch** (off by default in the

@@ -3,6 +3,31 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.12.0 — operator notification on a human-park (Slack / Lark)
+- **Opt-in `notify` config** (conventions §9; **absent ⇒ no-op**, full back-compat). When a
+  ticket is left **human-parked** — `blocked` + `needs-pm` with `Bail-shape: external-prereq`
+  (incl. a `[reflect-proposal]`, §17) — **PM pings the operator out-of-band** via a **Slack
+  or Lark** incoming webhook. Fixes the failure where a parked ticket (e.g. CIT-562) sat
+  unseen for days.
+  - **Out-of-band by design**: the agents + operator share one Linear identity, so a Linear
+    @mention is a self-mention Linear suppresses — a webhook is the channel.
+  - **Trigger = `external-prereq` only** (not `decision-needed`/`scope-design`, which PM
+    resolves itself under autonomy:full — paging for those is noise); **fail-closed** on an
+    unparseable bail-shape. PM is the sole owner (not Sweep — no state file, lane, latency).
+  - **Announced exactly once** via the new `notified` label (§4; survives state resets,
+    operator-visible — chosen over a pm-state set whose reset would re-spam every parked
+    ticket). Dropped on unpark so a genuine re-park re-announces.
+  - **Safety**: message built from a closed allow-list `{project, id, ≤80-char title,
+    bail-shape, url}` (never shell-interpolated); POST with `--max-time`, success = HTTP 2xx
+    (Lark: + body `code==0`), mark `notified` only on success; on failure log one **id-only**
+    line + surface in the report (no channel spam — a failing webhook delivers nothing). The
+    webhook URL + Lark `secret` are **§16-class** — never committed / echoed into a
+    ticket/comment/report/log; prefer `webhookEnv`/`secretEnv`. Dry-run posts/marks nothing.
+- conventions §9 notify subsection + §4 `notified` label; PM Job B one-line wiring; init
+  provisions `notified`; config-schema + projects.example.json `notify` block;
+  README/plugin.json/CHANGELOG. Version 0.11.0→0.12.0 (plugin.json **and** the local
+  marketplace.json — the CIT-562 cache-refresh gate).
+
 ## 0.11.0 — optional Codex companion (review · image-gen · rescue)
 - **Opt-in `codex` config block** (conventions §24; **absent OR `enabled:false` OR no
   `codex` CLI on `PATH` ⇒ 100% unchanged**, same philosophy as `backend`/`repos[]`/

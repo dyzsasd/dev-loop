@@ -38,6 +38,12 @@
         "model": null,
         "effort": null
       },
+      "notify": {
+        "_comment": "OPTIONAL (conventions §9): ping the operator on a human-park (blocked+needs-pm+Bail-shape: external-prereq) via a Slack/Lark webhook. webhookEnv names an env var holding the webhook URL (a §16 secret — NEVER inline a real URL in a committed file). Absent => no-op. type: slack | lark.",
+        "type": "lark",
+        "webhookEnv": "DEVLOOP_NOTIFY_WEBHOOK",
+        "events": ["human-parked"]
+      },
       "blockedStateName": null
     },
     "acme-suite": {

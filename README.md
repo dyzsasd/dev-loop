@@ -127,6 +127,14 @@ Three orthogonal dials per project (plus an optional `repos[]` for multi-repo pr
   **cloud / remote** runtime where you can't reach the data dir). Absent ⇒ `"files"`.
   Default-off and decoupled from `backend`; the `linear` sink carries §16 guardrails. See
   [conventions §23](references/conventions.md#23-reports-in-linear--the-reportssink-option).
+- **`notify`** (optional) — when a ticket is left **human-parked** for you
+  (`blocked`+`needs-pm`+`Bail-shape: external-prereq`), PM pings you **out-of-band** via a
+  **Slack or Lark** incoming webhook, so a parked ticket never sits unseen. `type:
+  "slack"|"lark"`; the webhook URL is a secret (set `webhookEnv`, or inline since
+  `projects.json` is machine-local). Announced **once** (the `notified` label), secret-safe,
+  dry-run-gated. Absent ⇒ no-op. Out-of-band because a Linear @mention is a self-mention
+  (shared identity) and gets suppressed. See
+  [conventions §9](references/conventions.md#9-the-blocked-protocol).
 
 Full schema + field reference: [`references/config-schema.md`](references/config-schema.md).
 
@@ -263,7 +271,7 @@ no secret in config; usage counts against your ChatGPT/Codex limits.
 
 ## Status
 
-**v0.11.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
+**v0.12.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
 **outward** observe-and-file agents (conventions §21) — **Ops** (watches running prod,
 files `incident` Bugs with an anti-flap re-check + dedupe), **Architect** (audits
 whole-codebase tech health on a rotating, SHA-gated dimension, files `tech-debt`
@@ -285,6 +293,10 @@ New in v0.11.0: an opt-in **Codex companion** (conventions §24, via codex-plugi
 Architect), **image generation** (PM mockups + Dev production assets — the one capability
 the agents lack), and a one-shot **rescue** before a `fix-exhausted` block — all advisory,
 gated per sub-flag, never touching Linear; absent ⇒ 100% unchanged.
+New in v0.12.0: an opt-in **`notify`** block pings you on **Slack / Lark** when a ticket is
+left **human-parked** (`blocked`+`needs-pm`+`external-prereq`), so a parked ticket never
+sits unseen — out-of-band (a Linear self-mention is suppressed under the shared identity),
+announced once, secret-safe; absent ⇒ no-op (conventions §9).
 Validated end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
 (push/deploy) is opt-in per project and gated on a green build. Coordination is
 backend-pluggable — Linear (default) or a machine-local file board (`backend:"local"`,

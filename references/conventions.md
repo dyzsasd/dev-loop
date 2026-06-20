@@ -264,6 +264,9 @@ Improvements); QA verifies those tagged `qa` (Bugs + Improvements).
 **Workflow signalling:**
 - `blocked` — Dev couldn't proceed; needs owner attention (§9).
 - `needs-pm` / `needs-qa` — routes a blocked ticket to the right owner.
+- `notified` — set by PM after it has announced a human-parked ticket to the operator's
+  out-of-band channel (§9 notify), so it is announced exactly once. Dropped when the ticket
+  is unparked. Only meaningful when a `notify` block is configured (§11); harmless otherwise.
 
 `Bug`, `Feature`, `Improvement` already exist in the workspace. The rest are
 created once at setup (§13; including `incident`/`tech-debt`/`signal`, §21).
@@ -459,6 +462,56 @@ form → verify end state), rather than routing an irreversible op into another 
 unattended auto-pick set.
 
 Dev's pick query (§5) must exclude `blocked` tickets.
+
+### Notifying the operator on a human-park (optional — the `notify` config, §11)
+
+When a ticket is **left human-parked for the operator** — `blocked` + `needs-pm` with
+`Bail-shape: external-prereq` (a real credential / money / legal / security prerequisite,
+or a capability this run lacks; this also covers a `[reflect-proposal]`, §17, and any
+genuine human-only escalation the owner leaves blocked) — the loop should **actively ping
+the operator out-of-band**. It must be out-of-band (a Slack / Lark webhook), **not** a
+Linear @mention: the agents and the operator share one Linear identity, so a self-mention is
+suppressed and can't be the channel. The owner is **PM** (Job B is where the human-park
+decision is made); no other agent notifies, and Reflect (read-only on tickets, §17) never
+POSTs — PM announces a Reflect-filed parked proposal on its next observe. The trigger is
+**`external-prereq` only** — `decision-needed` / `scope-design` are PM's to resolve
+(§12a), not to page you for; if the bail-shape tag is missing/unparseable, **fail closed**
+(do not notify). Absent a `notify` block ⇒ skip entirely (no POST, no extra work — true
+no-op).
+
+For each human-parked ticket that does **not** already carry the `notified` label:
+1. **Build a §16-safe one-line message from a closed allow-list only** — `{project, ticket
+   id, bail-shape (one of the §9 enum values), the title truncated to ≤ 80 chars with
+   newlines / control chars stripped, the Linear URL derived from the id}`. No other
+   ticket / source text, no secrets, no full record. JSON-encode the title; never splice it
+   through a shell (`curl --data @-` / stdin, never `-d "...$TITLE..."`). The webhook URL +
+   any `secret` are read **only** from the resolved project's `notify` config — never from
+   any ticket / comment / source field (so a crafted ticket can't redirect the POST).
+2. **POST to the configured webhook with a short timeout** (`--max-time 10`):
+   - `slack` → `{"text": <msg>}`; success = HTTP **2xx**.
+   - `lark` → `{"msg_type":"text","content":{"text":<msg>}}`; if a `secret` / `secretEnv`
+     is set, add `{"timestamp":<unix-s>,"sign": base64(HMAC-SHA256(key="<ts>\n<secret>",
+     data=""))}`. Success = HTTP 2xx **and** body `code == 0` (a 200 with `code != 0` —
+     e.g. a sign mismatch — is a **failure**).
+3. **On success only**, add `notified` to the ticket's **full** label set (REPLACE-style —
+   re-pass `dev-loop` + type + owner + `blocked` + `needs-pm` + `notified`, then re-fetch to
+   confirm, §10 hazards #1/#2). The next run sees `notified` and skips. When you later
+   **unpark** the ticket (remove `blocked` / `needs-pm`), drop `notified` in the **same**
+   write, so a genuine re-park re-announces.
+4. **On failure**, log one **id-only** line (`notify POST failed (type=<t>, ticket=<id>) —
+   will retry`) — never the URL, the response body, or the secret — do **not** add
+   `notified`, and continue the fire (it retries next run; a failing webhook delivers
+   nothing, so there is no channel spam). Surface "operator-notify failing for N ticket(s)"
+   (ids only) in the close-report so a misconfigured webhook is visible, not silent.
+
+Multiple new parks in one fire may be sent as one digest POST (each id + title + url);
+mark **every** included ticket `notified` only after that POST succeeds, none on failure.
+
+**Secrets + dry-run.** The webhook URL and any Lark `secret` are **§16-class** — never
+committed, never written to a ticket / comment / report / log; refer to the channel only by
+its `type` (`Slack` / `Lark`), never the URL. Under `mode:"dry-run"` (§12): print
+`[dry-run] would notify <type>: <msg>` (the message line + the channel type, **never** the
+URL), make **no** POST, and add **no** `notified` label.
 
 > Optional board nicety: the user may add a real "Blocked" workflow state in the
 > Linear UI. If they do, set `blockedStateName` in config and the agents will use
