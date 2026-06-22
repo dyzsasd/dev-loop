@@ -1045,10 +1045,18 @@ per-agent attribution**, structural per-project scoping, and a native event feed
   §8 dedupe) and `relatedTo` (**append-only** — re-passing unions into the set, never
   replaces; §4 splits, §15 coverage); both surface on `get_issue`. `parentId`/`blockedBy`/
   `blocks` are intentionally absent — blocking is the `blocked` label (§9).
-- **strategyDoc + documents.** First-class hub documents are deferred (a later phase). For
-  now, under `service` the `strategyDoc` is a **repo file** (read/edit/commit), exactly as in
-  `local` mode (§11, pm-agent §0); service-mode setup rejects a `{linearDocument}` strategyDoc
-  and the hub exposes no document tools.
+- **strategyDoc + documents (P4).** Under `service` the `strategyDoc` is a **repo file** by
+  default (read/edit/commit, as in `local`). Set **`hub.docs:true`** (or a `{ "hubDoc": "<kind>" }`
+  strategyDoc) to make the strategy + the Director's roadmap **first-class hub documents** —
+  versioned, attributable, optimistic-CAS (`doc.save` returns CONFLICT, never last-write-wins),
+  and **operator-published**: any agent appends `draft` versions via `doc.save`, but only the
+  **operator** (DEVLOOP_ACTOR=`operator`) may flip a draft→`current` via `doc.publish`. Tools:
+  `doc.list/get/save/history/diff/publish`. **§17 firewall (structural):** doc tools are
+  **DB-only — they touch no filesystem and `kind` is a CHECKed enum of product-doc kinds**, so a
+  doc can never be a SKILL/conventions/code file; a loop self-edit stays a §17 proposal applied
+  by the operator's git commit. The operator-publish gate is **cooperative role-attribution
+  (DEVLOOP_ACTOR), not anti-spoof** on one host — it guards honest-but-buggy agents + injection,
+  not a determined local actor (the truly-unforgeable authorization stays outside the hub, §16).
 - **Reflect's activity window.** In place of Linear's activity feed (or the local comment log
   + git), Reflect reconstructs the window from the hub's **`list_events`** — an append-only
   feed of `issue.create` / `issue.transition` (with `from`/`to`) / `comment.add`, each

@@ -172,7 +172,9 @@ The agents are product-agnostic; everything product-specific lives in
      from a typo'd `DEVLOOP_PROJECT`, and prefixes must be distinct since ticket ids are a global
      key); and register the `dev-loop-hub` MCP server via a product-repo `.mcp.json` (copy
      `config/mcp.example.json`, set the abs path; per-pane `DEVLOOP_ACTOR` gives per-agent
-     identity — `docs/RUNNING.md` §4a). Then `npm run doctor` → `DOCTOR_OK`. `"linear"` keeps the
+     identity — `docs/RUNNING.md` §4a). Then `npm run doctor` → `DOCTOR_OK`. For a NEW (greenfield)
+     service project, OFFER hub-native docs (`hub.docs:true`, §18 P4 — versioned + operator-published
+     strategyDoc/roadmap); never auto-migrate an existing repo-file strategyDoc. `"linear"` keeps the
      unchanged flow.
 4. **Write the gathered values back** to `projects.json` (in `live`), preserving all
    other projects untouched and pretty-printing valid JSON. Set `defaultProject` if

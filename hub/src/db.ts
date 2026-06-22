@@ -93,6 +93,37 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, id);
+-- ── P4 documents: versioned, attributable, operator-published product docs ────
+-- §17 firewall is STRUCTURAL: docs live ONLY in these tables; NO doc tool touches the
+-- filesystem (no fs import, no path arg) — a doc can never represent a SKILL/conventions/code file.
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  kind TEXT NOT NULL CHECK(kind IN ('strategy','roadmap','decisions','notes')), -- PRODUCT docs only; no code-ish kind exists
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','current')),
+  current_version INTEGER NOT NULL DEFAULT 0,   -- 0 = never published; else the live PUBLISHED version
+  created_by TEXT NOT NULL,                     -- actor HANDLE (like tickets.created_by), not a FK to actors(id)
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_id, slug),
+  UNIQUE(project_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id, kind);
+CREATE TABLE IF NOT EXISTS document_versions (
+  id TEXT PRIMARY KEY,
+  doc_id TEXT NOT NULL REFERENCES documents(id),
+  version INTEGER NOT NULL,                      -- 1-based, monotonic per doc, append-only
+  body TEXT NOT NULL DEFAULT '',                 -- §16: author-side discipline (same trust as ticket bodies), never a fs path
+  status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','current')),
+  summary TEXT NOT NULL DEFAULT '',
+  base_version INTEGER NOT NULL DEFAULT 0,       -- the version edited FROM; the optimistic-CAS key
+  author TEXT NOT NULL,                          -- actor HANDLE
+  created_at TEXT NOT NULL,
+  UNIQUE(doc_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_docversions_doc ON document_versions(doc_id, version);
 `;
 
 // ─── Open ──────────────────────────────────────────────────────────────────
@@ -118,6 +149,24 @@ export function nextTicketId(db: DatabaseSync, projectId: string): string {
     .get(projectId) as { ticket_seq: number; ticket_prefix: string } | undefined;
   if (!row) throw new Error(`unknown project ${projectId}`);
   return `${row.ticket_prefix}-${row.ticket_seq}`;
+}
+
+// ─── Line diff (P4 doc.diff — LCS-based unified-ish diff; pure JS, zero dep) ──
+export function unifiedDiff(a: string, b: string): string {
+  const al = a.split("\n"), bl = b.split("\n");
+  const m = al.length, n = bl.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--)
+    dp[i][j] = al[i] === bl[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out: string[] = []; let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (al[i] === bl[j]) { out.push("  " + al[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push("- " + al[i++]); }
+    else { out.push("+ " + bl[j++]); }
+  }
+  while (i < m) out.push("- " + al[i++]);
+  while (j < n) out.push("+ " + bl[j++]);
+  return out.join("\n");
 }
 
 // ─── Identity guards (P3 — kill the phantom-actor silent-corruption bug) ─────

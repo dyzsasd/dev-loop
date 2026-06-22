@@ -1,6 +1,12 @@
 # dev-loop Hub — Architecture
 
-> Status: **proposal for operator sign-off (LK8). No code is written against this until the operator approves it AND the P0 spike (below) passes.**
+> **Build status (live):** P0 (de-risk) ✅ · P2 (hub MVP + `service` backend) ✅ v0.13.0 · P3
+> (isolation guards, doctor) ✅ v0.14.0 · **P4 (versioned documents) ✅ v0.15.0** · P5–P8 remain
+> (discussion+Director / channel / Linear mirror / 2nd CLI). Where this doc says a capability is
+> "deferred to P4" etc., consult the CHANGELOG + conventions §18 for what has actually shipped.
+> The hub uses built-in `node:sqlite` (not better-sqlite3 — P0 found zero native deps possible).
+>
+> Status (original): **proposal for operator sign-off (LK8). No code is written against this until the operator approves it AND the P0 spike (below) passes.**
 > Audience: the operator, and the eight loop agents that will eventually coordinate through it.
 > Companion: `references/conventions.md` (the shared brain — every section here references it by `§`).
 

@@ -3,6 +3,28 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.15.0 — hub P4: first-class versioned documents
+- **Hub-native versioned documents** (opt-in, `hub.docs:true` under `backend:"service"`): the
+  strategyDoc + the Director's roadmap can live as **hub documents** instead of a repo file —
+  versioned, attributable, diffable, and **operator-published**. Tools: `doc.list/get/save/
+  history/diff/publish`.
+  - **Optimistic concurrency:** `doc.save` takes a `baseVersion` and returns **CONFLICT** if a
+    newer version exists (never last-write-wins); the check+write is atomic across processes via
+    `BEGIN IMMEDIATE`. Versions are append-only; `doc.diff` is a pure-JS line diff (zero dep).
+  - **Operator-publish gate:** any agent appends `draft` versions; only the **operator**
+    (`DEVLOOP_ACTOR=operator`) may flip a draft→`current` via `doc.publish`. So a stale north-star
+    can't be silently replaced by an agent's draft — PM reads `current` until the operator
+    reviews+publishes (`doc.get` surfaces `unpublished:true` for a not-yet-published draft).
+    Honest: this is **cooperative role-attribution, not anti-spoof** on one host.
+  - **§17 firewall is STRUCTURAL:** doc tools are **DB-only** (no filesystem path, no `fs`) and
+    `kind` is a CHECKed enum of product-doc kinds (`strategy/roadmap/decisions/notes`) — a doc can
+    never be a SKILL/conventions/code file. A loop self-edit stays a §17 proposal + operator git
+    commit. (Verified by a grep assertion in the test.)
+  - **Default unchanged:** under `service` the strategyDoc stays a **repo file** unless `hub.docs`
+    / a `{ "hubDoc": "<kind>" }` strategyDoc is set; linear/local untouched. PM ports across all
+    three via one §0 indirection. `hub/test/docs.ts` certifies it (versioning, CAS conflict,
+    operator-publish, unpublished fallback, per-project isolation). hub → 0.3.0.
+
 ## 0.14.0 — hub P3: isolation guards, doctor, certified boundary
 - **P3 re-scoped honestly.** P2 made the hub **process-per-project** (one server pinned to one
   project; every query `WHERE project_id=?`), so cross-project isolation is **already

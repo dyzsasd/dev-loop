@@ -271,7 +271,7 @@ no secret in config; usage counts against your ChatGPT/Codex limits.
 
 ## Status
 
-**v0.14.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
+**v0.15.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
 **outward** observe-and-file agents (conventions §21) — **Ops** (watches running prod,
 files `incident` Bugs with an anti-flap re-check + dedupe), **Architect** (audits
 whole-codebase tech health on a rotating, SHA-gated dimension, files `tech-debt`
@@ -303,7 +303,9 @@ that gives the loop **real per-agent identity** (every write attributable, not L
 shared user) and is CLI-portable; the SKILLs port unchanged (the hub mirrors the Linear
 op-shapes 1:1). Linear stays the default. v0.14.0 hardens it (P3): per-project isolation is
 certified by a test, phantom actor/project typos are refused at startup, ticket prefixes are
-kept unique, and `dev-loop-hub doctor` health-checks the SoR.
+kept unique, and `dev-loop-hub doctor` health-checks the SoR. v0.15.0 (P4) adds opt-in
+hub-native **versioned documents** (the strategyDoc/roadmap as operator-published, diffable,
+optimistic-CAS docs; §17 firewall kept structural — docs are DB-only, never a code file).
 Validated end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
 (push/deploy) is opt-in per project and gated on a green build. Coordination is
 backend-pluggable — Linear (default), a machine-local file board (`backend:"local"`), or the

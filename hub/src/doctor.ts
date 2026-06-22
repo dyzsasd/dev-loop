@@ -35,7 +35,7 @@ export function runDoctor(dbPath: string): boolean {
 
   // 4. Counts + per-project, and the unique-prefix integrity check (the real multi-project guard)
   const c = (sql: string) => (db!.prepare(sql).get() as { c: number }).c;
-  info(`projects=${c("SELECT count(*) c FROM projects")} tickets=${c("SELECT count(*) c FROM tickets")} actors=${c("SELECT count(*) c FROM actors")} events=${c("SELECT count(*) c FROM events")}`);
+  info(`projects=${c("SELECT count(*) c FROM projects")} tickets=${c("SELECT count(*) c FROM tickets")} docs=${c("SELECT count(*) c FROM documents")} actors=${c("SELECT count(*) c FROM actors")} events=${c("SELECT count(*) c FROM events")}`);
   const projects = db.prepare("SELECT id, key, ticket_prefix FROM projects ORDER BY key").all() as { id: string; key: string; ticket_prefix: string }[];
   const countByProject = db.prepare("SELECT count(*) c FROM tickets WHERE project_id = ?");
   for (const p of projects) {

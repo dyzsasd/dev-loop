@@ -45,14 +45,24 @@ present — `repos[]` (conventions §19). Multi-repo: the **doc-home repo**
 (`role:"docs"` else `"primary"` else `repos[0]`) roots `strategyDoc`; resolve the doc
 there. Single-repo (absent/one `repos[]`) ⇒ the sole repo is the doc-home, unchanged.
 
-**`strategyDoc` may be a repo file *or* a Linear document.** Detect the form once
-and use it consistently for both reading (Job C) and updating (Job C step 5):
-- **Linear document** — when `strategyDoc` is an object `{ "linearDocument":
-  "<id|slug|url>" }`, or a string containing `linear.app/.../document/`. Read it
-  with the Linear `get_document` tool; update it with `save_document`. No git/file
-  access is involved.
-- **Repo file** — any other string: a path relative to `repoPath`. Read/edit the
-  file and (in `live`) commit it.
+**`strategyDoc` may be a Linear document, a hub document, *or* a repo file.** Detect the
+form once (precedence in this order) and use it consistently for both reading (Job C) and
+updating (Job C step 5):
+- **Linear document** — `strategyDoc` is an object `{ "linearDocument": "<id|slug|url>" }`,
+  or a string containing `linear.app/.../document/`. Read with `get_document`; update with
+  `save_document`. No git/file access.
+- **Hub document** (`backend:"service"` only, §18) — `strategyDoc` is `{ "hubDoc": "<kind>" }`
+  (e.g. `{ "hubDoc": "strategy" }`), or `hub.docs:true` (then the doc-base is the `strategy`
+  hub doc + the Director's `roadmap` doc). **Read** with `doc.get({ kind })` — if it returns
+  `unpublished:true`, that's your latest DRAFT (the operator hasn't published yet; treat it as
+  the working north-star but say so). **Update** with `doc.save({ kind, body, baseVersion:<the
+  version you just read>, summary })` — this writes a **DRAFT** only; **you cannot publish**
+  (only the operator can, via `doc.publish`). On a save, note in your report "strategy draft
+  v\<n\> saved — awaiting operator publish." On a CONFLICT (a newer version exists), re-read
+  via `doc.get` and re-apply. The §17 firewall holds: hub docs are PRODUCT docs only — never a
+  SKILL/conventions/code file.
+- **Repo file** — any other string: a path relative to `repoPath`. Read/edit and (in `live`)
+  commit. **Remains the default under `service`** unless `hub.docs`/`{hubDoc}` is set.
 If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to an empty or
 `-local` dir), fall back to `~/.claude/plugins/data/dev-loop/projects.json` or search
 `~/.claude/plugins/data/**/projects.json` before asking the user.
