@@ -168,6 +168,17 @@ agent that did it, not the single shared Linear user.
    pane's launching shell at parse time — so one registered server attributes each pane to
    the right agent. (Approve the server once on first use; no Claude restart needed.)
 3. Set `backend:"service"` in `projects.json`; keep `strategyDoc` a **repo file**.
+4. **Create the project in the hub once** (the hub refuses to auto-create a board from a typo'd
+   `DEVLOOP_PROJECT`, and each project needs a **unique ticket prefix** since ticket ids are a
+   global key):
+   ```bash
+   node <dev-loop>/hub/src/seed.ts <project-key> "<Project Name>" <UNIQUE-PREFIX>
+   # e.g.  node ~/dev-loop/hub/src/seed.ts monpick "MonPick" MP
+   ```
+   (Or set `DEVLOOP_CREATE_PROJECT=1` on the first launch.) Then health-check it:
+   `cd <dev-loop>/hub && DEVLOOP_HUB_DB=~/.dev-loop/hub.db npm run doctor` → `DOCTOR_OK`. Keep
+   `hub.db` **outside** any product repo (the template defaults to `~/.dev-loop/hub.db`); if it
+   must live in a repo, gitignore `hub.db*` (doctor will tell you if it's exposed).
 
 **Launch — set the identity per pane.** Each pane exports its agent + project before the
 `/loop` (the hub reads them); the `.mcp.json` `${…}` expansion carries them into the hub

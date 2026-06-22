@@ -26,9 +26,18 @@ export function ensureActors(db: DatabaseSync): void {
   ins.run(randomUUID(), "operator", "human", "Operator", nowIso());
 }
 
+export function findProject(db: DatabaseSync, key: string): string | null {
+  const r = db.prepare("SELECT id FROM projects WHERE key=?").get(key) as { id: string } | undefined;
+  return r?.id ?? null;
+}
+
 export function ensureProject(db: DatabaseSync, key: string, name: string, prefix = "DL"): string {
   const existing = db.prepare("SELECT id FROM projects WHERE key=?").get(key) as { id: string } | undefined;
   if (existing) return existing.id;
+  // ticket ids are a GLOBAL primary key, so two projects sharing one hub.db MUST have distinct
+  // prefixes or their tickets collide on insert (the real multi-project bug P3 closes).
+  const clash = db.prepare("SELECT key FROM projects WHERE ticket_prefix=?").get(prefix) as { key: string } | undefined;
+  if (clash) throw new Error(`ticket prefix '${prefix}' already used by project '${clash.key}'; pick a unique prefix for '${key}'`);
   const id = randomUUID();
   db.prepare(
     "INSERT INTO projects(id,key,name,ticket_prefix,ticket_seq,created_at) VALUES (?,?,?,?,0,?)",

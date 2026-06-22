@@ -6,16 +6,42 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { z } from "zod";
-import { openDb, nowIso, nextTicketId, logEvent, STATES, type State, type Ticket } from "./db.ts";
-import { ensureSeed } from "./seed.ts";
+import { openDb, nowIso, nextTicketId, logEvent, actorExists, listActorHandles, STATES, type State, type Ticket } from "./db.ts";
+import { ensureActors, ensureProject, findProject } from "./seed.ts";
 
 // ─── Environment / identity ──────────────────────────────────────────────────
 const DB_PATH = process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`;
 const PROJECT_KEY = process.env.DEVLOOP_PROJECT ?? "demo";
 const ACTOR = process.env.DEVLOOP_ACTOR ?? "operator"; // who this MCP client IS (the attribution win)
 
+// `dev-loop-hub doctor` — read-only health check (no server, no auto-create).
+if (process.argv[2] === "doctor") {
+  const { runDoctor } = await import("./doctor.ts");
+  process.exit(runDoctor(DB_PATH) ? 0 : 1);
+}
+
 const db = openDb(DB_PATH);
-const projectId = ensureSeed(db, PROJECT_KEY, process.env.DEVLOOP_PROJECT_NAME ?? PROJECT_KEY);
+ensureActors(db); // the 8 agents + operator are always present (needed for attribution + the guard below)
+
+// P3/G1 — phantom-actor guard: a typo'd DEVLOOP_ACTOR would silently write an unattributable
+// author into created_by / events.actor / comments.author. Refuse to start instead (exit non-zero
+// ⇒ the MCP client can't connect ⇒ the failure is visible to the launching pane).
+if (!actorExists(db, ACTOR)) {
+  console.error(`[hub] DEVLOOP_ACTOR='${ACTOR}' is not a known actor. Valid: ${listActorHandles(db).join(", ")}. Fix DEVLOOP_ACTOR in the launcher.`);
+  process.exit(1);
+}
+
+// P3/G2 — phantom-project guard: a typo'd DEVLOOP_PROJECT must NOT silently auto-create an empty
+// board the agent then works in by mistake. The project must already exist; create it deliberately
+// once (`node src/seed.ts <key> <name> <UNIQUE_PREFIX>`) or opt in with DEVLOOP_CREATE_PROJECT=1.
+const projectId =
+  process.env.DEVLOOP_CREATE_PROJECT === "1"
+    ? ensureProject(db, PROJECT_KEY, process.env.DEVLOOP_PROJECT_NAME ?? PROJECT_KEY, process.env.DEVLOOP_TICKET_PREFIX ?? "DL")
+    : findProject(db, PROJECT_KEY);
+if (!projectId) {
+  console.error(`[hub] unknown project '${PROJECT_KEY}'. Create it once: \`node ${import.meta.dirname}/seed.ts ${PROJECT_KEY} "<name>" <UNIQUE_PREFIX>\` (or set DEVLOOP_CREATE_PROJECT=1). Refusing to auto-create a phantom board from a typo.`);
+  process.exit(1);
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
@@ -88,6 +114,7 @@ server.registerTool("save_issue", {
   },
 }, async (a) => {
   if (a.state && !STATES.includes(a.state as State)) return err(`invalid state '${a.state}'; one of ${STATES.join(", ")}`);
+  if (a.assignee && a.assignee !== "me" && !actorExists(db, a.assignee)) return err(`unknown assignee '${a.assignee}'; one of ${listActorHandles(db).join(", ")} (or "me"/null)`);
   const t = nowIso();
   if (!a.id) {
     if (!a.title) return err("title required to create a ticket");

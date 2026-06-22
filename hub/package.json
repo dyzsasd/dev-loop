@@ -1,6 +1,6 @@
 {
   "name": "dev-loop-hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Local MCP system-of-record for the dev-loop agents (per-agent identity, tickets/comments/labels/events over node:sqlite). Zero native deps, zero build step (Node >=23 type-stripping + built-in node:sqlite). See ../docs/HUB-ARCHITECTURE.md.",
@@ -8,9 +8,13 @@
     "dev-loop-hub": "src/server.ts"
   },
   "scripts": {
-    "start": "node src/server.ts",
+    "start": "DEVLOOP_CREATE_PROJECT=1 node src/server.ts",
     "seed": "node src/seed.ts",
-    "smoke": "node test/smoke.ts"
+    "doctor": "node src/server.ts doctor",
+    "smoke": "node test/smoke.ts",
+    "loop": "node test/loop.ts",
+    "isolation": "node test/isolation.ts",
+    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts"
   },
   "engines": {
     "node": ">=23.6"

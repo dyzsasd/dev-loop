@@ -3,6 +3,32 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.14.0 — hub P3: isolation guards, doctor, certified boundary
+- **P3 re-scoped honestly.** P2 made the hub **process-per-project** (one server pinned to one
+  project; every query `WHERE project_id=?`), so cross-project isolation is **already
+  structural** — stronger than a per-call project arg (there's no arg to pass wrong). So P3
+  isn't "build isolation"; it's closing the silent-corruption bugs that model leaves open,
+  certifying the boundary, and a health check. **Membership/RBAC is DEFERRED to P5** (it
+  authorizes nothing under process-pinning; it earns its keep only when one daemon serves many
+  projects).
+- **Phantom-actor guard:** a typo'd `DEVLOOP_ACTOR` used to silently write an unattributable
+  author (`created_by`/`events.actor`/`comments.author`) — corrupting the hub's headline win.
+  The server now refuses to start on an unknown actor (`exit(1)` ⇒ the MCP client can't connect
+  ⇒ visible to the pane), and `save_issue` rejects an unknown `assignee` arg (Linear parity).
+- **Phantom-project guard:** an unknown `DEVLOOP_PROJECT` no longer silently auto-creates an
+  empty board the agent then works in by mistake — the project must exist, or you opt in with
+  `DEVLOOP_CREATE_PROJECT=1`. Onboarding gains an explicit one-time create step (RUNNING.md §4a
+  + init §13).
+- **Unique ticket-prefix enforced** (a real multi-project bug): ticket ids are a global key, so
+  two projects sharing one `hub.db` with the same prefix collide — `ensureProject` now rejects a
+  duplicate prefix, and `doctor` flags it.
+- **`dev-loop-hub doctor`** — a read-only health check (never auto-creates): DB-openable, WAL,
+  `quick_check`, per-project counts, unique-prefix integrity, and a §17 secrecy guard (the
+  `hub.db` must be outside any repo, or gitignored — it caught a real exposure in testing).
+- **`hub/test/isolation.ts`** certifies + regression-locks the boundary: two projects on one WAL
+  db prove a pinned process sees only its own rows and cannot get/mutate/comment another's by id;
+  plus negative guards (phantom actor + unknown project refused at connect). hub → 0.2.0.
+
 ## 0.13.0 — the local hub: a `service` backend (per-agent identity)
 - **A third coordination backend, `backend:"service"`** (conventions §18; opt-in, Linear
   stays the default). Routes every ticket op to a **local hub** — a machine-local MCP

@@ -120,6 +120,15 @@ export function nextTicketId(db: DatabaseSync, projectId: string): string {
   return `${row.ticket_prefix}-${row.ticket_seq}`;
 }
 
+// ─── Identity guards (P3 — kill the phantom-actor silent-corruption bug) ─────
+export function actorExists(db: DatabaseSync, handle: string): boolean {
+  return db.prepare("SELECT 1 FROM actors WHERE handle = ? AND active = 1").get(handle) !== undefined;
+}
+export function listActorHandles(db: DatabaseSync): string[] {
+  return (db.prepare("SELECT handle FROM actors WHERE active = 1 ORDER BY handle").all() as { handle: string }[])
+    .map((r) => r.handle);
+}
+
 export function logEvent(
   db: DatabaseSync,
   e: { project_id: string; ticket_id?: string | null; actor: string; kind: string; data?: unknown },

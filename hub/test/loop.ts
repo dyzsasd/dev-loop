@@ -13,7 +13,7 @@ async function as(actor: string): Promise<Client> {
   const c = new Client({ name: `t-${actor}`, version: "0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "monpick", DEVLOOP_HUB_DB: DB },
+    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "monpick", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1" },
   }));
   return c;
 }

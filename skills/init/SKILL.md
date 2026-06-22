@@ -166,10 +166,14 @@ The agents are product-agnostic; everything product-specific lives in
      Linear document can't back a local board — reject one if configured). For `"service"`
      (the local hub, §18; see `docs/HUB-ARCHITECTURE.md`): gather the optional `hub.db` path
      + `ticketPrefix`; `strategyDoc` is likewise a **repo file** (reject `{linearDocument}`);
-     and tell the operator the two setup steps the loop can't self-configure — `cd <dev-loop>/hub
-     && npm install` once, and register the `dev-loop-hub` MCP server via a product-repo
-     `.mcp.json` (copy `config/mcp.example.json`, set the abs path; per-pane `DEVLOOP_ACTOR`
-     gives per-agent identity — `docs/RUNNING.md` §4a). `"linear"` keeps the unchanged flow.
+     and tell the operator the three setup steps the loop can't self-configure — `cd <dev-loop>/hub
+     && npm install` once; **create the project in the hub once** with a UNIQUE ticket prefix
+     (`node <dev-loop>/hub/src/seed.ts <key> "<name>" <PREFIX>` — the hub refuses to auto-create
+     from a typo'd `DEVLOOP_PROJECT`, and prefixes must be distinct since ticket ids are a global
+     key); and register the `dev-loop-hub` MCP server via a product-repo `.mcp.json` (copy
+     `config/mcp.example.json`, set the abs path; per-pane `DEVLOOP_ACTOR` gives per-agent
+     identity — `docs/RUNNING.md` §4a). Then `npm run doctor` → `DOCTOR_OK`. `"linear"` keeps the
+     unchanged flow.
 4. **Write the gathered values back** to `projects.json` (in `live`), preserving all
    other projects untouched and pretty-printing valid JSON. Set `defaultProject` if
    this is the only/first project. In `dry-run`, print the exact JSON block you'd
