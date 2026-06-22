@@ -16,8 +16,10 @@ export interface Ticket {
   type: string;            // Feature | Bug | Improvement
   state: State;
   assignee: string | null; // actor handle
-  priority: number;        // 0 none .. 4 low (Linear convention)
-  labels: string[];        // REPLACE-style label set (mirrors Linear save_issue semantics)
+  priority: number;        // §5: 1=Urgent 2=High 3=Medium 4=Low 0=None (Linear convention)
+  labels: string[];        // REPLACE-style label set (mirrors Linear save_issue semantics, §10#1)
+  duplicateOf: string | null; // §8 dedupe canonical pointer (scalar set)
+  relatedTo: string[];     // §4 splits / §15 coverage sibling links (append-only merge, §18)
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -65,6 +67,8 @@ CREATE TABLE IF NOT EXISTS tickets (
   assignee TEXT,
   priority INTEGER NOT NULL DEFAULT 0,
   labels TEXT NOT NULL DEFAULT '[]',   -- JSON array; REPLACE-style on save_issue (mirrors Linear)
+  duplicate_of TEXT,                   -- §8 dedupe canonical pointer (scalar; pairs with state Duplicate)
+  related_to TEXT NOT NULL DEFAULT '[]', -- §4 splits / §15 coverage siblings (JSON array; append-only merge, §18 line 965)
   created_by TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

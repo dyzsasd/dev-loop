@@ -24,9 +24,15 @@ const err = (message: string) => ({ isError: true, content: [{ type: "text" as c
 interface TicketRow {
   id: string; project_id: string; title: string; description: string; type: string;
   state: State; assignee: string | null; priority: number; labels: string;
-  created_by: string; created_at: string; updated_at: string;
+  duplicate_of: string | null; related_to: string; created_by: string; created_at: string; updated_at: string;
 }
-const toTicket = (r: TicketRow): Ticket => ({ ...r, labels: JSON.parse(r.labels) as string[] });
+const toTicket = (r: TicketRow): Ticket => ({
+  id: r.id, project_id: r.project_id, title: r.title, description: r.description, type: r.type,
+  state: r.state, assignee: r.assignee, priority: r.priority,
+  labels: JSON.parse(r.labels) as string[],
+  duplicateOf: r.duplicate_of, relatedTo: JSON.parse(r.related_to) as string[],
+  created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at,
+});
 const getRow = (id: string): TicketRow | undefined =>
   db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as TicketRow | undefined;
 const resolveAssignee = (a: string | null | undefined): string | null =>
@@ -55,8 +61,8 @@ server.registerTool("list_issues", {
   if (a.type) out = out.filter((t) => t.type === a.type);
   const want = [...(a.labels ?? []), ...(a.label ? [a.label] : [])];
   if (want.length) out = out.filter((t) => want.every((l) => t.labels.includes(l)));
-  if (a.query) { const q = a.query.toLowerCase(); out = out.filter((t) => t.title.toLowerCase().includes(q)); }
-  return ok(out.slice(0, a.limit ?? 100));
+  if (a.query) { const q = a.query.toLowerCase(); out = out.filter((t) => t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)); } // §8 dedupe scans title+body (§18 line 962)
+  return ok(a.limit ? out.slice(0, a.limit) : out); // no implicit cap — Sweep scans the full non-terminal set (§10 narrows via filters)
 });
 
 // ─── get_issue (ticket + its comments) ────────────────────────────────────────
@@ -77,6 +83,8 @@ server.registerTool("save_issue", {
     type: z.string().optional(), state: z.string().optional(),
     assignee: z.string().nullable().optional(), priority: z.number().int().min(0).max(4).optional(),
     labels: z.array(z.string()).optional(),
+    duplicateOf: z.string().nullable().optional(), // §8 dedupe scalar (pair with state Duplicate); undefined=keep
+    relatedTo: z.array(z.string()).optional(),     // §4 splits / §15 coverage; APPEND-ONLY union (§18 line 965)
   },
 }, async (a) => {
   if (a.state && !STATES.includes(a.state as State)) return err(`invalid state '${a.state}'; one of ${STATES.join(", ")}`);
@@ -84,10 +92,11 @@ server.registerTool("save_issue", {
   if (!a.id) {
     if (!a.title) return err("title required to create a ticket");
     const id = nextTicketId(db, projectId);
-    db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,created_by,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, projectId, a.title, a.description ?? "", a.type ?? "Feature", (a.state as State) ?? "Todo",
-      resolveAssignee(a.assignee), a.priority ?? 0, JSON.stringify(a.labels ?? []), ACTOR, t, t);
+      resolveAssignee(a.assignee), a.priority ?? 0, JSON.stringify(a.labels ?? []),
+      a.duplicateOf ?? null, JSON.stringify(a.relatedTo ?? []), ACTOR, t, t);
     logEvent(db, { project_id: projectId, ticket_id: id, actor: ACTOR, kind: "issue.create", data: { title: a.title, type: a.type } });
     return ok(toTicket(getRow(id)!));
   }
@@ -99,9 +108,13 @@ server.registerTool("save_issue", {
     assignee: a.assignee === undefined ? cur.assignee : resolveAssignee(a.assignee),
     priority: a.priority ?? cur.priority,
     labels: a.labels ? JSON.stringify(a.labels) : cur.labels, // REPLACE-style (§10#1 mimicked)
+    duplicate_of: a.duplicateOf === undefined ? cur.duplicate_of : a.duplicateOf, // scalar set; undefined=keep
+    related_to: a.relatedTo // APPEND-ONLY union (re-read ∪ passed), never replace (§18 line 965)
+      ? JSON.stringify([...new Set([...(JSON.parse(cur.related_to) as string[]), ...a.relatedTo])])
+      : cur.related_to,
   };
-  db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,updated_at=? WHERE id=? AND project_id=?`)
-    .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, t, a.id, projectId);
+  db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
+    .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, next.duplicate_of, next.related_to, t, a.id, projectId);
   if (next.state !== cur.state)
     logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.transition", data: { from: cur.state, to: next.state } });
   else
@@ -120,8 +133,11 @@ server.registerTool("save_comment",
     return ok({ id, ticket_id: issueId, author: ACTOR, body, created_at: t });
   });
 server.registerTool("list_comments",
-  { description: "List a ticket's comments.", inputSchema: { issueId: z.string() } },
-  async ({ issueId }) => ok(db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(issueId)));
+  { description: "List a ticket's comments (chronological; the tail is the latest).", inputSchema: { issueId: z.string() } },
+  async ({ issueId }) => {
+    if (!getRow(issueId)) return err(`no such ticket ${issueId} in ${PROJECT_KEY}`); // project-scope guard (parity with get_issue)
+    return ok(db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(issueId));
+  });
 
 // ─── labels ──────────────────────────────────────────────────────────────────
 server.registerTool("list_issue_labels", { description: "List the project's labels.", inputSchema: {} },
