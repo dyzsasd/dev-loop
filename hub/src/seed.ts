@@ -4,8 +4,11 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { openDb, nowIso } from "./db.ts";
 
-// The current dev-loop agents + the human operator. `director` is added when that ships.
-const AGENT_HANDLES = ["pm", "qa", "dev", "sweep", "reflect", "ops", "architect", "signal"];
+// The live dev-loop agents + the human operator. P5 repurposed `signal` → `director`.
+const AGENT_HANDLES = ["pm", "qa", "dev", "sweep", "reflect", "ops", "architect", "director"];
+// `signal` retired into `director` (P5): kept as an INACTIVE actor so its historical comment/event
+// attribution stays readable, but refused for NEW writes (actorExists/G1 filter active=1).
+const RETIRED_HANDLES = ["signal"];
 
 // §4 label taxonomy (+ the `notified` workflow label from §9 notify).
 const LABELS: Array<{ name: string; kind: string }> = [
@@ -20,10 +23,11 @@ const LABELS: Array<{ name: string; kind: string }> = [
 
 export function ensureActors(db: DatabaseSync): void {
   const ins = db.prepare(
-    "INSERT OR IGNORE INTO actors(id,handle,kind,display_name,active,created_at) VALUES (?,?,?,?,1,?)",
+    "INSERT OR IGNORE INTO actors(id,handle,kind,display_name,active,created_at) VALUES (?,?,?,?,?,?)",
   );
-  for (const h of AGENT_HANDLES) ins.run(randomUUID(), h, "agent", h.toUpperCase(), nowIso());
-  ins.run(randomUUID(), "operator", "human", "Operator", nowIso());
+  for (const h of AGENT_HANDLES) ins.run(randomUUID(), h, "agent", h.toUpperCase(), 1, nowIso());
+  for (const h of RETIRED_HANDLES) ins.run(randomUUID(), h, "agent", h.toUpperCase(), 0, nowIso());
+  ins.run(randomUUID(), "operator", "human", "Operator", 1, nowIso());
 }
 
 export function findProject(db: DatabaseSync, key: string): string | null {

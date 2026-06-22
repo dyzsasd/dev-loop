@@ -44,7 +44,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "docs":        false          // P4: false (default) ⇒ strategyDoc is a repo file (as P2/P3). true ⇒ the strategy + roadmap live as hub documents (versioned, attributable, optimistic-CAS, OPERATOR-PUBLISHED via doc.publish). Or pin one doc: strategyDoc: { "hubDoc": "strategy" }. §17: hub docs are PRODUCT docs only — never a SKILL/conventions/code file.
       },
       "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). DEFAULT is opus for EVERY agent; tune an agent DOWN to economize.
-        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "signal": "opus"
+        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus"
       },
 
       "testEnv": {                    // where QA + verification run
@@ -78,8 +78,12 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "criticalRoutes": [],         // optional: core user-flow paths/URLs that must be up — string path/URL or { "url": "...", "expectStatus": 200 }
         "logsCommand":    null        // optional: a READ-ONLY logs/metrics command for an error-rate/5xx signal (never mutating)
       },
-      "signal": {                     // OPTIONAL — signal-agent only (conventions §21). Absent OR sources empty ⇒ Signal gracefully NO-OPs.
-        "sources": [                  // each: one external real-user signal source + how to read it (MCP tool / API / command). Read-only.
+      "director": {                   // OPTIONAL — director-agent only (conventions §25). Absent ⇒ Director NO-OPs; PM owns strategy (today's behavior). REQUIRES backend:"service".
+        "roadmapCadence":  "weekly",  // how often the full sync-panel roadmap sprint runs; routine fires just chair the open board
+        "maxRounds":       3,         // hard cap on discussion rounds per topic (termination guarantee)
+        "roundFireBudget": 3,         // Director fires a round may stay open before forced synthesis (a STATE-FREE clock vs topic.round_opened_at)
+        "directionNote":   null,      // optional: a path or { "hubDoc": "<kind>" } the operator drops direction into between /director-agent asks
+        "signalSources": [            // optional: the OLD signal.sources shape, folded in as ONE coarse real-user input (read-only, PII-strict §16). Empty ⇒ skip.
           { "name": "support", "type": "inbox",  "read": "<mcp-tool-or-command>" },
           { "name": "sentry",  "type": "errors", "read": "<mcp-tool-or-command>" }
         ]
@@ -151,8 +155,8 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   agents. **The default is `opus` for EVERY agent** (the launcher applies `--model opus`
   per pane unless you override) — maximize correctness across the whole loop. Tune an
   agent **down** (`sonnet`/`haiku`) only to economize — e.g. the mechanical/high-frequency
-  ones (`sweep`, `qa`, `ops`, `signal`) tolerate `sonnet` well; the reasoning-heavy ones
-  (`dev`, `pm`, `architect`, `reflect`) are where `opus` earns its keep. Omitting an
+  ones (`sweep`, `qa`, `ops`) tolerate `sonnet` well; the reasoning-heavy ones
+  (`dev`, `pm`, `architect`, `reflect`, `director`) are where `opus` earns its keep. Omitting an
   agent ⇒ it falls back to the launcher's opus default.
 - **`backend`** (optional; default `"linear"`): the coordination substrate
   (conventions §18). `"linear"` is the Linear MCP, exactly as today — absent ⇒
@@ -194,14 +198,17 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   polls only the resolved per-repo `deploy.healthCheck` + `testEnv.baseUrl` root. Ops
   re-checks before filing (anti-flap), files/refreshes ONE `Bug`+`qa`+`incident` (Urgent
   when prod is down), dedupes via `ops-state.json`, and never rolls back. Opt-in to launch.
-- **`signal`** (optional; `signal-agent` only, conventions §21): `signal.sources[]`
-  lists external real-user signal sources (a support inbox, an error tracker, a feedback
-  channel, app-store reviews) and how to read each (an MCP tool / API / command —
-  **read-only**). **Absent or empty ⇒ Signal gracefully NO-OPs** — so a project that
-  configures nothing is unaffected. Signal tracks a per-source last-seen cursor in
-  `signal-state.json` (never re-ingests), dedupes hard (one ticket per issue, reports
-  linked), files a defect → `Bug`+`qa`+`signal` or a request → `Feature`+`pm`+`signal`,
-  and is **PII-strict** (§16). **Architect needs no new config** — it reuses
+- **`director`** (optional; `director-agent` only, conventions §25; **requires
+  `backend:"service"`**): turns on the discussion board + the Director. `roadmapCadence`
+  paces the sync-panel roadmap sprint; `maxRounds` + `roundFireBudget` are the **topic
+  termination** guarantee (a topic ALWAYS closes — a stalled round goes ripe off the hub's
+  `round_opened_at` clock, state-free); `directionNote` is where the operator drops
+  direction between asks; `signalSources[]` is the **old `signal.sources` shape** folded in
+  as one coarse, read-only, **PII-strict** (§16) real-user input. **Absent ⇒ the Director
+  NO-OPs and PM owns strategy** (today's behavior); a `director` block under a
+  non-`service` backend is a config error → the Director no-ops with a warning. The Director
+  DRAFTS the kind:"roadmap" doc; the **operator publishes** it (P4 gate); a discussion
+  decision is data, never an auto-applied change (§17). **Architect needs no new config** — it reuses
   `repos[]`/`build`.
 - **`codex`** (optional; conventions §24 + `references/codex-integration.md`; **absent ⇒
   off, 100% unchanged**): wires the **Codex** companion (`codex` CLI + the codex-plugin-cc
@@ -236,9 +243,9 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   launcher applies `--model opus` per pane unless overridden); tune an agent down to
   economize. The three outward agents are **opt-in to launch** (off by default in the
   launcher) and don't change any inward agent's behavior.
-- **Agent state files** (`pm-state.json`, `qa-state.json`, and the outward agents'
-  `ops-state.json` / `architect-state.json` / `signal-state.json`, §21) live next to
-  `projects.json` and hold per-project loop state: last-reviewed/swept SHA, swept
+- **Agent state files** (`pm-state.json`, `qa-state.json`, and the outward observe-and-file
+  agents' `ops-state.json` / `architect-state.json`, §21) live next to `projects.json` and
+  hold per-project loop state: last-reviewed/swept SHA, swept
   review lenses (PM), swept surfaces (QA); Ops's open incidents + last-check;
   Architect's per-repo SHA map + swept audit dimensions; Signal's per-source last-seen
   cursors + source→ticket map. **Multi-repo (conventions §19):** the
@@ -275,6 +282,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   default**, and carries the §23 guardrails. Linear-sink-only keys:
   `reports.linearProject` / `reports.linearInitiative` (the **dedicated** reports container,
   never the §20 doc-base), `reports.localOnlyAgents` (agents pinned to files regardless —
-  **defaults to `signal-agent` + `ops-agent` + `dev-agent`**, the highest-PII authors), and
+  **defaults to `director-agent` + `ops-agent` + `dev-agent`**, the highest-PII authors
+  — the Director inherits Signal's `signalSources` PII exposure), and
   `reports.reviewToken` (the operator's **opaque** high-entropy 点评 sentinel — not a
   dictionary word). `lessons.md` stays machine-local in both sinks.

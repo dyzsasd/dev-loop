@@ -124,6 +124,32 @@ CREATE TABLE IF NOT EXISTS document_versions (
   UNIQUE(doc_id, version)
 );
 CREATE INDEX IF NOT EXISTS idx_docversions_doc ON document_versions(doc_id, version);
+-- ── P5 discussion board: the Director chairs; invited agents post per round ────
+CREATE TABLE IF NOT EXISTS topics (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  question TEXT NOT NULL,
+  invited TEXT NOT NULL DEFAULT '[]',          -- JSON array of actor handles
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')),
+  round INTEGER NOT NULL DEFAULT 1,
+  round_opened_at TEXT NOT NULL,               -- wall-clock for the state-free termination budget
+  opened_by TEXT NOT NULL,                     -- the chair (authority = opened_by)
+  opened_at TEXT NOT NULL,
+  closed_at TEXT,
+  decision TEXT                                -- inline terminal decision (set on close); DATA, never auto-applied (§17)
+);
+CREATE INDEX IF NOT EXISTS idx_topics_project_status ON topics(project_id, status);
+CREATE TABLE IF NOT EXISTS posts (
+  id TEXT PRIMARY KEY,
+  topic_id TEXT NOT NULL REFERENCES topics(id),
+  round INTEGER NOT NULL,
+  author TEXT NOT NULL,                         -- actor HANDLE (attribution)
+  kind TEXT NOT NULL DEFAULT 'perspective' CHECK(kind IN ('perspective','synthesis')),
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(topic_id, round, author, kind)         -- one perspective per (round, author); chair's synthesis coexists
+);
+CREATE INDEX IF NOT EXISTS idx_posts_topic ON posts(topic_id, round, created_at);
 `;
 
 // ─── Open ──────────────────────────────────────────────────────────────────

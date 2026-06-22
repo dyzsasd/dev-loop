@@ -139,8 +139,10 @@ project (§2):
   `signal` spike = a user-facing problem). Use tight, scoped queries (§10) — never page
   the workspace.
 - **Outward-agent state (if those agents run):** read `ops-state.json` (open incidents /
-  recurrence), `architect-state.json` (swept dimensions), `signal-state.json` (per-source
-  cursors / volume) next to `projects.json` — they're optional; skip silently if absent.
+  recurrence) and `architect-state.json` (swept dimensions) next to `projects.json` — optional;
+  skip silently if absent. The **Director keeps no state file** (the hub IS its state, §25) —
+  read its activity from the hub instead (`topic.list` / `list_events`) when a `director` config
+  is present.
 - **Throughput:** Todo→Done cycle time (oldest-open age, median time-in-state),
   per-run cap utilization, how many runs shipped 0.
 - **QA outcomes:** fail / drift / inconclusive counts (`inconclusive ≠ pass`,
@@ -173,7 +175,7 @@ valves FIRST, then add within budget** — never the reverse, or the file only g
    (or the `strategyDoc`), and once it's promoted, **delete it from `lessons.md`**.
 4. **ADD** — only now, and only within budget: for each pattern that recurs in Job 1
    (≥2 occurrences — a one-off is *reported*, not codified), distill ONE concise rule
-   under the right agent section (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Signal`), in the
+   under the right agent section (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Director`), in the
    §14 shape (rule + one-line **Why** + **How to apply**), stamped `added:`/`last-seen:`.
    **If that section is already at budget (~6 rules), you may NOT add without first
    removing one** via steps 1–3 — the budget is a forcing function (§14), not a hope.

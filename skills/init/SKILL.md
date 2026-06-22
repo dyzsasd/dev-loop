@@ -327,7 +327,7 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
 
   ## Architect
 
-  ## Signal
+  ## Director
   ```
 
   Leave the sections empty — the operator adds rules later (conventions §14). If
@@ -350,7 +350,7 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   dictionary word — it must never collide with agent/ingested text); (4) get the operator's
   **attestation** that the reports container has no outbound integration sync and no
   non-operator subscribers (the MCP can't enumerate integrations, so this can't be
-  runtime-checked); (5) keep `signal-agent` + `ops-agent` + `dev-agent` in
+  runtime-checked); (5) keep `director-agent` + `ops-agent` + `dev-agent` in
   `reports.localOnlyAgents` (the **default** — highest-PII × highest-cadence; only remove one
   if the operator accepts the risk). `reports-state.json` is created lazily by the agents. In
   `dry-run`, print these steps; provision nothing.
