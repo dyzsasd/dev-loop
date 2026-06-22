@@ -1,5 +1,9 @@
 .DS_Store
 *.log
 node_modules/
+# hub: local SQLite system-of-record is machine-local runtime state, never committed
+*.db
+*.db-wal
+*.db-shm
 # user-editable runtime config lives in ${CLAUDE_PLUGIN_DATA}, not in the repo
 projects.json
