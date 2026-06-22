@@ -1,12 +1,13 @@
 # dev-loop
 
 Eight autonomous agents — **PM**, **QA**, **Dev**, **Sweep**, **Reflect**, **Ops**,
-**Architect**, and **Signal** — that run a software-development loop **coordinated
-entirely through Linear ticket state**. They never call each other directly; Linear is
-the shared blackboard. Five are inward / build-facing; three (Ops/Architect/Signal) are
-**outward** observe-and-file agents that connect the loop to running prod,
-whole-codebase health, and real users. Trigger each one manually, or run them on a
-schedule, and the product builds and improves itself.
+**Architect**, and **Director** — that run a software-development loop **coordinated
+entirely through ticket state**. They never call each other directly; the board is the
+shared blackboard. Five are inward / build-facing; three (Ops/Architect/Director) are
+**outward** agents — Ops/Architect observe-and-file (running prod, whole-codebase health),
+and the **Director** coordinates: it chairs a cross-agent discussion board and drafts the
+operator-published roadmap (the optional hub `service` backend, §25). Trigger each one
+manually, or run them on a schedule, and the product builds and improves itself.
 
 ```
         PM ──proposes feature──┐                 ┌──QA proposes bug──┐
@@ -58,7 +59,7 @@ schedule, and the product builds and improves itself.
 | **`reflect-agent`** | Retrospective + self-evolution (slowest cadence, daily). Studies the loop's **own** behavior and **curates `lessons.md`** from recurring, evidence-cited patterns. Observe + curate only; may autonomously edit only `lessons.md` — structural changes are **drafted as proposals, never auto-applied**. |
 | **`ops-agent`** | **Outward** (§21): Ops/SRE watcher of RUNNING prod (tight ~10–15 min cadence). Polls per-repo `deploy.healthCheck` + `baseUrl` + optional critical routes/logs and, on a **confirmed, repeated** degradation (anti-flap: re-checks first), files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod is down). Observe-and-file only — never rolls back (Dev's Step 6.5). |
 | **`architect-agent`** | **Outward** (§21): whole-codebase tech-health auditor (slow, daily-ish). Audits the codebase on a **rotating** dimension (drift / duplication / dead-code / dep-staleness+CVE / consistency / missing-abstractions), SHA-gated (§19), and files `Improvement`+`qa`+`tech-debt`. Read-only on code — never implements. |
-| **`signal-agent`** | **Outward** (§21): real-user signal intake (periodic). Ingests configured `signal.sources` (support / errors / feedback / reviews), triages each issue → `Bug`+`qa`+`signal` (defect) or `Feature`+`pm` (request). Read-only + PII-safe (§16); **no source ⇒ graceful no-op**. |
+| **`director-agent`** | **Outward** (§21/§25): the human-facing coordinator that owns DIRECTION (daily-ish + on-demand; the optional hub `service` backend). Chairs a cross-agent **discussion board** (opens topics → role-lens agents post per-round → synthesize → a **decision**) and **drafts** the kind:"roadmap" doc the **operator publishes**; folds optional real-user `signalSources` (PII-safe, §16). Coordinates + drafts — never implements/ships/verifies; a structural ask is a `[director-proposal]` (§17). **No `director` config ⇒ graceful no-op** (PM owns strategy). |
 
 > **`init` is a setup command, not a loop agent.** `/dev-loop:init` runs once (safe to
 > re-run) to wire a product into dev-loop — config, Linear labels/project, strategy doc,
@@ -95,7 +96,7 @@ claude --plugin-dir /path/to/dev-loop
 then `/plugin install dev-loop@local`. Verify with `/plugin list`; the skills appear as
 `/dev-loop:pm-agent`, `/dev-loop:qa-agent`, `/dev-loop:dev-agent`,
 `/dev-loop:sweep-agent`, `/dev-loop:reflect-agent`, `/dev-loop:ops-agent`,
-`/dev-loop:architect-agent`, `/dev-loop:signal-agent`, and `/dev-loop:init`.
+`/dev-loop:architect-agent`, `/dev-loop:director-agent`, and `/dev-loop:init`.
 
 ## Configure
 
@@ -166,7 +167,7 @@ plugin **ships no harness** — choose how to fire them:
   /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent`, `/loop 30m /dev-loop:sweep-agent`,
   `/loop 24h /dev-loop:reflect-agent`, plus the optional outward agents (§21)
   `/loop 10m /dev-loop:ops-agent`, `/loop 24h /dev-loop:architect-agent`,
-  `/loop 1h /dev-loop:signal-agent`. Monitor/attach/stop from one screen.
+  `/loop 24h /dev-loop:director-agent`. Monitor/attach/stop from one screen.
 - **A local tmux launcher** — one pane per agent, per-agent models in one command.
 - **Manually**, one turn at a time, for a single pass.
 
@@ -175,7 +176,7 @@ to `opus` for every agent**; tune an agent **down** (`sonnet`/`haiku`) only to
 economize the mechanical/high-frequency ones (`sweep`/`qa`/`ops`/`signal`).
 
 Cadence (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
-~30 min, Reflect daily. Outward (opt-in): Ops ~10 min, Signal hourly/daily, Architect daily.
+~30 min, Reflect daily. Outward (opt-in): Ops ~10 min, Architect daily, Director daily/on-demand.
 
 **Resume is a non-event** — the agents are stateless per fire (conventions §0): state
 lives in Linear/the local board + git + the state files. To resume after a stop, crash,
@@ -275,9 +276,10 @@ no secret in config; usage counts against your ChatGPT/Codex limits.
 **outward** observe-and-file agents (conventions §21) — **Ops** (watches running prod,
 files `incident` Bugs with an anti-flap re-check + dedupe), **Architect** (audits
 whole-codebase tech health on a rotating, SHA-gated dimension, files `tech-debt`
-Improvements), **Signal** (ingests configured real-user `signal.sources`, files
-`signal` Bugs/Features, PII-safe; no source ⇒ no-op) — all read-only, never
-implement/ship/verify. Plus the `init` DETECT → MAP → ASSEMBLE → LOAD onboarding flow
+Improvements), **Director** (chairs the §25 discussion board and drafts the
+operator-published roadmap, folding optional real-user `signalSources`, PII-safe; no
+`director` config ⇒ no-op) — Ops/Architect read-only; the Director coordinates + drafts;
+none implement/ship/verify. Plus the `init` DETECT → MAP → ASSEMBLE → LOAD onboarding flow
 (greenfield interview, brownfield read-only mapping, operator-confirmed ticket adoption)
 that scaffolds a fixed-heading PM doc-base.
 Every agent also writes **daily / weekly / monthly reports** to the data dir

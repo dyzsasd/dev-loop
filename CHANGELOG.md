@@ -3,6 +3,42 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.16.0 — hub P5: the discussion board + the Director
+- **A second coordination plane (opt-in, `backend:"service"` + a `director` config; absent ⇒
+  byte-for-byte today's behavior).** The agents coordinate through ticket state but never
+  deliberate directly; P5 adds a hub-native **discussion board** where the **Director** poses a
+  question and the role-lens agents (PM/QA/Dev/Architect) answer, and the Director synthesizes a
+  **decision** and folds it into the roadmap. Board + roadmap are hub tables/docs — per-project
+  isolated, attributable to `DEVLOOP_ACTOR`, §17-firewalled (DB-only; a decision is **data**,
+  never an action).
+- **Board tools** (`topic.open/list/get`, `post.add`, `topic.synthesize`, `topic.close`):
+  - `topic.open` makes the caller the **chair** (`opened_by`); invited handles are validated.
+  - `post.add` is **invited-only, your-lane, once-per-round, append-only** — wrapped in
+    `BEGIN IMMEDIATE` so the round-read + insert is atomic against a concurrent round-bump.
+  - `synthesize`/`close` are **chair-gated** (`ACTOR === opened_by`); `synthesize` writes a
+    synthesis post + optionally bumps the round, `close` records the terminal **decision**.
+    `topic.list` returns each open topic's `round`, `round_opened_at`, `pending` invitees, and
+    your `youArePending` in one cheap call.
+- **A topic ALWAYS terminates** — `director.maxRounds` caps rounds; a stalled/zero-post round
+  goes ripe off the topic's `round_opened_at` wall-clock × `roundFireBudget` (a **state-free**
+  ripeness test — no fire-counter file); a silent invitee is **recorded, never waited on**.
+- **The Director** (repurposed from the old **Signal** agent — stays at 8 agents; the real-user
+  intake folds in as one optional `director.signalSources` input). It **owns DIRECTION**: chairs
+  the board, opens topics inviting the role-lenses, runs a sync-panel roadmap sprint (internal
+  multi-lens deliberation — honest, since a loop pane has no Task tool), and **drafts** the
+  kind:"roadmap" doc that the **operator publishes** (the P4 gate IS the human sign-off). PM now
+  **reads** the published roadmap as its north-star and executes; it proposes direction **up** to
+  the Director rather than rewriting it. Stateless per fire with **no state file** — the hub IS
+  the state. `signal` actor retired to `active=0` (old attribution stays readable; new writes
+  refused).
+- **§17 holds end-to-end:** a discussion decision and the roadmap are PRODUCT artifacts; a
+  structural ask becomes a `[director-proposal]` ticket (operator applies via git), never a
+  self-edit. One bounded §0 board line added to PM/QA/Dev/Architect (gated on
+  `backend:"service"` + a `director` config; fail-closed if the board tools are absent — never
+  blocks). `hub/test/board.ts` certifies it (open/post/synthesize/close, invited-only,
+  once-per-round, chair-gate, round-bump, closed-topic CONFLICT, attribution, isolation, and a
+  §17 no-fs-tool invariant). conventions §25 + §21 reframed; hub → 0.4.0.
+
 ## 0.15.0 — hub P4: first-class versioned documents
 - **Hub-native versioned documents** (opt-in, `hub.docs:true` under `backend:"service"`): the
   strategyDoc + the Director's roadmap can live as **hub documents** instead of a repo file —

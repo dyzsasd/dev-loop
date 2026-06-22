@@ -49,7 +49,7 @@ projects in `dry-run` for first contact) and launch the agents (next section).
 The plugin **ships no harness** — pick whichever fits. Both run the same eight skills:
 `/dev-loop:pm-agent`, `qa-agent`, `dev-agent`, `sweep-agent`, `reflect-agent`, and the
 three opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`,
-`signal-agent`.
+`director-agent`.
 
 ### A. Agent View — native, recommended (`claude agents`)
 
@@ -72,7 +72,7 @@ becomes a new background session; `/loop` makes it recurring):
 /loop 24h /dev-loop:reflect-agent
 /loop 10m /dev-loop:ops-agent        # OUTWARD (§21), opt-in — watches running prod (anti-flap)
 /loop 24h /dev-loop:architect-agent  # OUTWARD (§21), opt-in — whole-codebase tech-debt audit
-/loop 1h  /dev-loop:signal-agent     # OUTWARD (§21), opt-in — real-user signal intake (no-op if no sources)
+/loop 24h /dev-loop:director-agent   # OUTWARD (§21/§25), opt-in — chairs the discussion board + drafts the roadmap (service backend; no-op without a director config)
 ```
 
 Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent output),
