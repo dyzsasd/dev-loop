@@ -70,8 +70,12 @@ evidence — tickets by type/owner/bail-shape, comments — from a machine-local
 board with identical state machine and labels. Read every `list_issues`/`get_issue`/
 comment query below as "via the configured backend (§18)." **In local mode the
 window's activity comes from the dated comment log + git** (each state move appends a
-comment, §18), not a Linear activity feed. (Reflect is read-only on product tickets
-either way; its `lessons.md` edits and the optional proposal ticket are unchanged.)
+comment, §18), not a Linear activity feed. **In `service` mode the window comes from the
+hub's `list_events` feed** — append-only `issue.create`/`issue.transition` (with `from`/`to`)
+/`comment.add`, each carrying the actor + timestamp (§18); this is a per-agent-attributed
+upgrade over Linear's feed, so cycle-time/throughput/attribution reconstruct faithfully.
+(Reflect is read-only on product tickets either way; its `lessons.md` edits and the optional
+proposal ticket are unchanged.)
 
 **Read `lessons.md`** next to the loaded `projects.json` if it exists (conventions
 §14) — for you it is both **input and output**: you apply any rule under its

@@ -271,7 +271,7 @@ no secret in config; usage counts against your ChatGPT/Codex limits.
 
 ## Status
 
-**v0.12.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
+**v0.13.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
 **outward** observe-and-file agents (conventions §21) — **Ops** (watches running prod,
 files `incident` Bugs with an anti-flap re-check + dedupe), **Architect** (audits
 whole-codebase tech health on a rotating, SHA-gated dimension, files `tech-debt`
@@ -297,9 +297,14 @@ New in v0.12.0: an opt-in **`notify`** block pings you on **Slack / Lark** when 
 left **human-parked** (`blocked`+`needs-pm`+`external-prereq`), so a parked ticket never
 sits unseen — out-of-band (a Linear self-mention is suppressed under the shared identity),
 announced once, secret-safe; absent ⇒ no-op (conventions §9).
+New in v0.13.0: an opt-in **`backend:"service"`** — a **local hub** (an MCP system-of-record
+over built-in `node:sqlite`, zero native deps; [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md))
+that gives the loop **real per-agent identity** (every write attributable, not Linear's single
+shared user) and is CLI-portable; the SKILLs port unchanged (the hub mirrors the Linear
+op-shapes 1:1). Linear stays the default.
 Validated end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
 (push/deploy) is opt-in per project and gated on a green build. Coordination is
-backend-pluggable — Linear (default) or a machine-local file board (`backend:"local"`,
-conventions §18). Agents take **per-agent models** at launch (`models` config), run via
+backend-pluggable — Linear (default), a machine-local file board (`backend:"local"`), or the
+local hub (`backend:"service"`), conventions §18. Agents take **per-agent models** at launch (`models` config), run via
 Agent View or a local launcher, and **resume by just relaunching** (stateless per fire) —
 see [`docs/RUNNING.md`](docs/RUNNING.md). Full history in [`CHANGELOG.md`](CHANGELOG.md).

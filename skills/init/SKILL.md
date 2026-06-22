@@ -159,12 +159,17 @@ The agents are product-agnostic; everything product-specific lives in
      (`defaultBranch`/`autoCommit`/`autoPush`/`autoDeploy`), `deploy`
      (`command`/`healthCheck`), and `blockedStateName` (null unless they added a
      real Blocked column).
-   - `backend` (`"linear"` default / `"local"`, §18) — **ask which substrate** this
-     project uses. For `"local"`, also gather the optional `localBoard` (board dir
+   - `backend` (`"linear"` default / `"local"` / `"service"`, §18) — **ask which substrate**
+     this project uses. For `"local"`, also gather the optional `localBoard` (board dir
      override; default `${CLAUDE_PLUGIN_DATA}/<key>/board/`) and `ticketPrefix` (ID
      prefix, default `"DL"`), and note that `strategyDoc` **must be a repo file** (a
-     Linear document can't back a local board — reject one if configured). `"linear"`
-     keeps the unchanged flow below.
+     Linear document can't back a local board — reject one if configured). For `"service"`
+     (the local hub, §18; see `docs/HUB-ARCHITECTURE.md`): gather the optional `hub.db` path
+     + `ticketPrefix`; `strategyDoc` is likewise a **repo file** (reject `{linearDocument}`);
+     and tell the operator the two setup steps the loop can't self-configure — `cd <dev-loop>/hub
+     && npm install` once, and register the `dev-loop-hub` MCP server via a product-repo
+     `.mcp.json` (copy `config/mcp.example.json`, set the abs path; per-pane `DEVLOOP_ACTOR`
+     gives per-agent identity — `docs/RUNNING.md` §4a). `"linear"` keeps the unchanged flow.
 4. **Write the gathered values back** to `projects.json` (in `live`), preserving all
    other projects untouched and pretty-printing valid JSON. Set `defaultProject` if
    this is the only/first project. In `dry-run`, print the exact JSON block you'd
@@ -176,11 +181,13 @@ The agents are product-agnostic; everything product-specific lives in
 > config (conventions §16): reference where to obtain them (`.env.local`, a vault,
 > "ask user") in `testEnv.notes`.
 
-> **If `backend:"local"` (§18): skip Steps 2–3 entirely** — there are no Linear labels
-> to provision (labels are just strings in the ticket frontmatter) and no Linear
-> project to create (the board directory is the project container). Do Step 4's
-> strategy-doc check (requiring a **repo file**), Steps 5–7 as written, and scaffold
-> the local board in Step 7's board sub-item. For `backend:"linear"` (default), do
+> **If `backend:"local"` or `"service"` (§18): skip Steps 2–3 entirely** — there are no
+> Linear labels to provision and no Linear project to create (the board dir / the hub
+> project row is the container; the hub pre-seeds the §4 label set on project create). Do
+> Step 4's strategy-doc check (requiring a **repo file**), Steps 5–7 as written, and — for
+> `local` — scaffold the board in Step 7's board sub-item; for `service`, the hub creates its
+> own schema/project lazily on first connect (just confirm `hub/` deps are installed + the
+> `.mcp.json` is registered). For `backend:"linear"` (default), do
 > Steps 2–3 unchanged.
 
 ### Step 2 — Linear labels (create only the missing ones)

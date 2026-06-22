@@ -3,6 +3,35 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.13.0 — the local hub: a `service` backend (per-agent identity)
+- **A third coordination backend, `backend:"service"`** (conventions §18; opt-in, Linear
+  stays the default). Routes every ticket op to a **local hub** — a machine-local MCP
+  system-of-record over **built-in `node:sqlite`** (zero native deps; Node ≥ 23.6 type-strips
+  the `.ts` so there's also zero build step). Full architecture in `docs/HUB-ARCHITECTURE.md`
+  (vetted via design → 3-critic → synthesis; the critics forced a gated ladder P0→P8, not a
+  big-bang rebuild).
+  - **The win Linear can't give: real per-agent identity.** Each agent pane connects as a
+    DISTINCT actor (`DEVLOOP_ACTOR`, launcher-set), so every move / comment / event is
+    attributable — not the single shared Linear user that forced the §9/§23 provenance hacks.
+    `assignee:"me"` resolves to that actor; an append-only `list_events` feed records
+    `issue.create`/`transition`/`comment.add` with actor+timestamp (Reflect's window source).
+  - **SKILLs port unchanged.** The hub MCP mirrors the Linear op-shapes 1:1 (`list_issues`/
+    `get_issue`/`save_issue`/`save_comment`/`list_comments`/`list_issue_labels`/
+    `create_issue_label`/`get_project`); a backend-operation audit across all 8 SKILLs +
+    §6/§7/§8/§9/§10/§18 (adversarially re-checked) confirmed zero rewrite once three additive
+    gaps closed: `relatedTo` (append-only, §4/§15), `duplicateOf` (scalar, §8), and a
+    title+body dedupe query. Footguns are designed out as a bonus: `state` is a CHECK enum (a
+    typo errors instead of mis-routing, killing §10#2), and id allocation is race-safe.
+  - **CLI-portable** (MCP): any MCP-capable CLI registers `dev-loop-hub` (a `.mcp.json` whose
+    `env` expands the per-pane `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`; verified
+    against Claude Code v2.1.185). `strategyDoc` stays a repo file (first-class hub docs are a
+    later phase); `mode`/`autonomy` stay authoritative in `projects.json`.
+- New `hub/` package (its own 0.1.0; pure-JS deps), `config/mcp.example.json`, a
+  `docs/RUNNING.md` §4a service-launch section, the §18 `service` subsection + op-mapping note,
+  the Reflect §0 `list_events` branch, and config-schema `backend:"service"` + `hub` block.
+  Validated end-to-end by `hub/test/loop.ts` (the real loop flows across distinct actor
+  processes). NOT yet the live in-CLI run — that + the kill/continue gate are next.
+
 ## 0.12.0 — operator notification on a human-park (Slack / Lark)
 - **Opt-in `notify` config** (conventions §9; **absent ⇒ no-op**, full back-compat). When a
   ticket is left **human-parked** — `blocked` + `needs-pm` with `Bail-shape: external-prereq`
