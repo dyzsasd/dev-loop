@@ -36,9 +36,12 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       "contributorSkill": null,       // optional: a Claude skill carrying this repo's conventions (test cmds, architecture). Dev invokes it before coding; absent ⇒ Dev reads the repo's CLAUDE.md. Per-repo override lives in repos[].contributorSkill (§19).
       "mode":          "live",        // "live" | "dry-run"  (see conventions §12)
       "autonomy":      "ask",         // "ask" (default) | "full" — who decides vs escalates (see conventions §12a)
-      "backend":       "linear",      // "linear" (default when absent) | "local" — coordination substrate (see conventions §18)
+      "backend":       "linear",      // "linear" (default when absent) | "local" | "service" — coordination substrate (see conventions §18)
       "localBoard":    null,          // local backend only: override board dir; null → ${CLAUDE_PLUGIN_DATA}/<key>/board/
-      "ticketPrefix":  "DL",          // local backend only: ID prefix for board tickets (e.g. "DL-1"); ignored for linear
+      "ticketPrefix":  "DL",          // local/service backend: ID prefix for tickets (e.g. "DL-1"); ignored for linear
+      "hub": {                        // service backend only (conventions §18; see docs/HUB-ARCHITECTURE.md). The local MCP system-of-record.
+        "db":          null           // path to the hub SQLite file; null → ${DEVLOOP_HUB_DB:-~/.dev-loop/hub.db}. Registered as an MCP server (`dev-loop-hub`) via .mcp.json; identity per-pane via DEVLOOP_ACTOR (see docs/RUNNING.md). Machine-local, never committed.
+      },
       "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). DEFAULT is opus for EVERY agent; tune an agent DOWN to economize.
         "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "signal": "opus"
       },
@@ -158,7 +161,15 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   overrides the board path; `ticketPrefix` sets the ID prefix (default `"DL"`). Both
   are ignored under `"linear"`. In `"local"` mode `strategyDoc` must be a **repo file**
   (a Linear document can't back a local board), and `/dev-loop:init` scaffolds `board/`
-  while skipping the Linear label/project steps.
+  while skipping the Linear label/project steps. `"service"` routes to the **local hub**
+  — a machine-local MCP system-of-record (`hub.db`, node:sqlite; see
+  `docs/HUB-ARCHITECTURE.md`) registered as the `dev-loop-hub` MCP server, whose tools
+  mirror the Linear op-shapes 1:1 so the SKILLs port unchanged. Its win over Linear:
+  **real per-agent identity** — each pane sets `DEVLOOP_ACTOR` (launcher-set; see
+  `docs/RUNNING.md`) so every write is attributable, not the single shared Linear user.
+  `hub.db` path via `hub.db` / `DEVLOOP_HUB_DB`; `strategyDoc` is a **repo file** (as in
+  `local`; first-class hub docs are a later phase); `ticketPrefix` applies. Like `local`,
+  the hub is machine-local runtime state, never committed.
 - **`repos`** (optional; default absent ⇒ single-repo, conventions §19): an array of
   `{ name, path, role, lang, contributorSkill?, defaultBranch?, build?, deploy? }`
   entries for a **multi-repo** product. Absent (or a single entry) ⇒ the top-level

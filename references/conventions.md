@@ -874,21 +874,23 @@ verifies, or relabels/re-routes (those are PM/QA/Dev/Sweep).
 
 ---
 
-## 18. Backend — Linear vs local
+## 18. Backend — Linear, local, or the hub service
 
 Everything above describes the loop coordinating through **Linear** (the MCP, the
 state machine §3, labels §4, claim §7, dedupe §8, blocked §9, querying §10). That
 substrate is one **backend**. The loop can equally coordinate through a **local file
-store** with the *same* state machine, label semantics, and protocols — only the
-storage primitive changes. This section is the **single abstraction point**: every
-"ticket operation" each skill performs maps to one of two backends, defined once here.
-Each skill's §0 carries just one line — "all ticket operations go through the
-configured backend (§18)" — instead of re-stating every job in backend terms.
+store**, or through the **local hub service** (an MCP system of record — see
+`docs/HUB-ARCHITECTURE.md`) — with the *same* state machine, label semantics, and
+protocols; only the storage primitive changes. This section is the **single
+abstraction point**: every "ticket operation" each skill performs maps to one of these
+backends, defined once here. Each skill's §0 carries just one line — "all ticket
+operations go through the configured backend (§18)" — instead of re-stating every job
+in backend terms.
 
 **Default is `linear`.** `backend` absent ⇒ `"linear"`, so existing behavior is
-**100% unchanged**; `local` is strictly opt-in via per-project config (§11) and
-bootstrapped by `/dev-loop:init`. Every rule elsewhere in this document is
-backend-agnostic — this section is the only place the two diverge.
+**100% unchanged**; `local` and `service` are strictly opt-in via per-project config
+(§11) and bootstrapped by `/dev-loop:init`. Every rule elsewhere in this document is
+backend-agnostic — this section is the only place they diverge.
 
 ### Local board layout
 The local board is **machine-local per-operator runtime state** — it lives in the
@@ -971,6 +973,11 @@ The §10 query discipline still applies: fetch the narrow slice you need (filter
 most specific predicate; `get_issue` one file when that's all you need), never read
 every file blindly.
 
+**Service backend:** every op above maps to the **identically-named hub MCP tool**
+(`list_issues`/`get_issue`/`save_issue`/`save_comment`/`list_comments`/`list_issue_labels`/
+`create_issue_label`/`get_project`) with the same args + semantics — see *The `service`
+backend* below.
+
 ### ID allocation (race-safe via exclusive create)
 `counter.json` (`{ "prefix": "...", "next": N }`, `prefix` from `ticketPrefix` (§11)
 or `"DL"`) is a **start hint, not the source of truth**. The **atomic claim is the
@@ -1011,6 +1018,49 @@ is **dedicated** (empty or dev-loop-scaffolded) before use. Tickets still carry 
 `dev-loop` label for parity (same code path, templates, reports across backends). The
 §2 rules — never widen the blast radius, no bulk-mutate, one ticket at a time — apply
 verbatim; "scope by `project`" means "operate only within this board dir".
+
+### The `service` backend — the local hub (MCP system of record)
+`backend:"service"` routes every ticket operation to the **local hub** — a machine-local
+MCP server backed by `node:sqlite` (see `docs/HUB-ARCHITECTURE.md`) — instead of Linear or
+the file board. It is the path to what Linear's shared identity can't give the loop: **real
+per-agent attribution**, structural per-project scoping, and a native event feed. Opt-in;
+`backend` absent ⇒ `linear` (unchanged).
+
+- **Op mapping — 1:1 with the Linear MCP.** The hub exposes tools with the **same names and
+  arg shapes** as the Linear MCP (`list_issues`/`get_issue`/`save_issue`/`save_comment`/
+  `list_comments`/`list_issue_labels`/`create_issue_label`/`get_project`), so every job ports
+  with **zero prose rewrite** — same filters, same REPLACE-style labels (§10#1), same
+  verify-after-write (§7/§10#2). The only divergences are improvements: `state` is a CHECKed
+  enum (a typo'd state **errors** instead of silently mis-routing — this *kills* the §10#2
+  fuzzy-match footgun), and ticket-id allocation is race-safe in-transaction.
+- **Identity (the headline win).** Each agent pane connects as a **distinct actor** via the
+  `DEVLOOP_ACTOR` env var (set per-pane by the launcher, resolved by the hub on every call).
+  `assignee:"me"` (the §7 claim) resolves to that actor, and every move / comment / event is
+  stamped with it — the board is **attributable**, not Linear's single shared identity. The
+  operator is its own actor.
+- **Project.** One hub process serves one project, pinned by `DEVLOOP_PROJECT` (ambient — not
+  passed per call). The cross-project firewall (§2) is **structural**: a hub process only ever
+  touches its own project's rows.
+- **Relations.** `save_issue` takes `duplicateOf` (scalar — set it with `state:"Duplicate"`,
+  §8 dedupe) and `relatedTo` (**append-only** — re-passing unions into the set, never
+  replaces; §4 splits, §15 coverage); both surface on `get_issue`. `parentId`/`blockedBy`/
+  `blocks` are intentionally absent — blocking is the `blocked` label (§9).
+- **strategyDoc + documents.** First-class hub documents are deferred (a later phase). For
+  now, under `service` the `strategyDoc` is a **repo file** (read/edit/commit), exactly as in
+  `local` mode (§11, pm-agent §0); service-mode setup rejects a `{linearDocument}` strategyDoc
+  and the hub exposes no document tools.
+- **Reflect's activity window.** In place of Linear's activity feed (or the local comment log
+  + git), Reflect reconstructs the window from the hub's **`list_events`** — an append-only
+  feed of `issue.create` / `issue.transition` (with `from`/`to`) / `comment.add`, each
+  carrying the actor + timestamp (a strict upgrade: true per-agent attribution). No manual
+  state-move comment is required — the hub logs the transition event automatically (like
+  Linear's feed).
+- **Setup.** The hub is registered as an MCP server in the CLI (a `.mcp.json` naming
+  `dev-loop-hub` → `node <hub>/src/server.ts`, with `env` expanding the per-pane
+  `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`); the launcher sets those per agent pane
+  (see `docs/RUNNING.md`). The hub DB (`hub.db`, WAL) is machine-local runtime state, never
+  committed (like the local board). `mode`/`autonomy` stay authoritative in `projects.json`
+  (the hub project row is advisory).
 
 ---
 

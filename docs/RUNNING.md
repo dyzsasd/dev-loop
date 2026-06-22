@@ -151,6 +151,41 @@ Agents self-throttle (idle fires are cheap no-ops), so tighter intervals are saf
 
 ---
 
+## 4a. Backend: the local hub (`backend:"service"`)
+
+By default the loop coordinates through **Linear**. Set `backend:"service"` (conventions
+§18) to coordinate through the **local hub** instead — a machine-local MCP system-of-record
+(`hub.db`, node:sqlite; see [`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md)). The win over
+Linear: **real per-agent identity** — every ticket move / comment is attributable to the
+agent that did it, not the single shared Linear user.
+
+**One-time setup:**
+1. Install the hub deps once: `cd <dev-loop>/hub && npm install` (pure JS — no native build;
+   needs Node ≥ 23.6 for built-in `node:sqlite` + `.ts` type-stripping).
+2. Register the hub as an MCP server. Copy [`config/mcp.example.json`](../config/mcp.example.json)
+   to your **product repo root** as `.mcp.json`, and set the absolute `args` path to
+   `<dev-loop>/hub/src/server.ts`. Its `env` block expands `${DEVLOOP_ACTOR}` etc. from each
+   pane's launching shell at parse time — so one registered server attributes each pane to
+   the right agent. (Approve the server once on first use; no Claude restart needed.)
+3. Set `backend:"service"` in `projects.json`; keep `strategyDoc` a **repo file**.
+
+**Launch — set the identity per pane.** Each pane exports its agent + project before the
+`/loop` (the hub reads them); the `.mcp.json` `${…}` expansion carries them into the hub
+process:
+
+```bash
+DEVLOOP_ACTOR=pm   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:pm-agent
+DEVLOOP_ACTOR=qa   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:qa-agent
+DEVLOOP_ACTOR=dev  DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:dev-agent
+# …sweep/reflect/ops/architect likewise, each with its own DEVLOOP_ACTOR
+```
+
+The tmux launcher (§2B) sets these per pane for you. Verify a pane is wired with
+`DEVLOOP_ACTOR=pm claude mcp list` → `dev-loop-hub … ✓ Connected`, and `whoami` inside a
+session returns `pm`. The hub DB is machine-local runtime state — never committed.
+
+---
+
 ## 5. Resume / restart
 
 **There is no special resume step — the agents are stateless per fire** (conventions §0).

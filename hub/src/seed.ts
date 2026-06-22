@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { openDb, nowIso } from "./db.ts";
 
-// The current dev-loop agents (v0.12.0) + the human operator. `director` is added when that ships.
+// The current dev-loop agents + the human operator. `director` is added when that ships.
 const AGENT_HANDLES = ["pm", "qa", "dev", "sweep", "reflect", "ops", "architect", "signal"];
 
 // §4 label taxonomy (+ the `notified` workflow label from §9 notify).
