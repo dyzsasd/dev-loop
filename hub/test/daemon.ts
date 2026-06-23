@@ -40,7 +40,7 @@ const pm = await as("pm"), op = await as("operator");
 const feat = await call(pm, "save_issue", { title: "Daemon foundation", type: "Feature", labels: ["dev-loop", "Feature", "pm"], priority: 2 });
 const bug = await call(pm, "save_issue", { title: "A defect to fix", type: "Bug", labels: ["dev-loop", "Bug", "qa"], priority: 1 });
 await call(pm, "save_comment", { issueId: feat.id, body: "kicking this off" });
-await call(pm, "save_issue", { id: bug.id, state: "In Review" }); // give the board >1 state
+await call(pm, "save_issue", { id: bug.id, state: "In Review", relatedTo: [feat.id] }); // give the board >1 state + a relation (DL-8)
 // a published roadmap doc (operator-only publish gate)
 await call(op, "doc.save", { slug: "roadmap", kind: "roadmap", title: "Product Roadmap", body: "# Roadmap\n- DL-1 daemon foundation\n", baseVersion: 0 });
 await call(op, "doc.publish", { kind: "roadmap", version: 1 });
@@ -84,6 +84,12 @@ ok(view.status === 200 && view.type.includes("text/html"), "GET /ticket/:id → 
 ok(view.text.includes("Daemon foundation") && view.text.includes("kicking this off"), "detail view shows the title/description and the attributed pm comment");
 const ghost = await getHtml("/ticket/DMN-999");
 ok(ghost.status === 404 && ghost.type.includes("text/html"), "GET /ticket/<unknown> → 404 HTML");
+
+// DL-8 — the detail view surfaces relatedTo / duplicateOf as click-through links, ONLY when present
+const relView = await getHtml(`/ticket/${bug.id}`);          // bug relatedTo=[feat.id]
+ok(relView.text.includes("<dt>Related</dt>") && relView.text.includes(`href="/ticket/${feat.id}"`), "DL-8: a ticket with relatedTo → a Related row linking to /ticket/<id>");
+const noRelView = await getHtml(`/ticket/${feat.id}`);       // feat has no relations
+ok(!noRelView.text.includes("<dt>Related</dt>") && !noRelView.text.includes("Duplicate of"), "DL-8: a ticket with no relations → no Related/Duplicate row (no dangling labels)");
 
 // GET /api — the JSON API index (moved off / when DL-2 took the root for the UI)
 const root = await get("/api");

@@ -163,13 +163,18 @@ function ticketPage(db: DatabaseSync, projectId: string, id: string): string | n
   const commentsHtml = comments.length
     ? comments.map((c) => `<div class="comment"><div class="c-head"><b>${esc(c.author)}</b><time>${esc(c.created_at)}</time></div><pre>${esc(c.body)}</pre></div>`).join("")
     : `<p class="empty">No comments yet.</p>`;
+  // DL-8: surface the hub relationships (relatedTo / duplicateOf) as click-through links — but ONLY
+  // when present, so an unrelated ticket renders no dangling row (AC). Read-only GET navigation.
+  const relLink = (rid: string) => `<a class="lbl" href="/ticket/${encodeURIComponent(rid)}">${esc(rid)}</a>`;
+  const relatedRow = t.relatedTo?.length ? `<dt>Related</dt><dd>${t.relatedTo.map(relLink).join(" ")}</dd>` : "";
+  const dupRow = t.duplicateOf ? `<dt>Duplicate of</dt><dd>${relLink(t.duplicateOf)}</dd>` : "";
   return `<a class="back" href="/">← board</a><article class="detail">`
     + `<div class="card-top"><span class="id">${esc(t.id)}</span><span class="badge t-${esc(t.type)}">${esc(t.type)}</span><span class="badge">${esc(t.state)}</span></div>`
     + `<h1>${esc(t.title)}</h1>`
     + `<dl class="meta"><dt>Owner</dt><dd>${esc(ownerOf(t.labels))}</dd>`
     + `<dt>Priority</dt><dd>${esc(prioOf(t.priority))}</dd>`
     + `<dt>Assignee</dt><dd>${esc(t.assignee ?? "—")}</dd>`
-    + `<dt>Labels</dt><dd>${t.labels.map((l: string) => `<span class="lbl">${esc(l)}</span>`).join("")}</dd></dl>`
+    + `<dt>Labels</dt><dd>${t.labels.map((l: string) => `<span class="lbl">${esc(l)}</span>`).join("")}</dd>${relatedRow}${dupRow}</dl>`
     + `<h3>Description</h3><pre>${esc(t.description)}</pre>`
     + `<h3>Comments<span class="count" style="margin-left:.4rem">${comments.length}</span></h3>${commentsHtml}</article>`;
 }
