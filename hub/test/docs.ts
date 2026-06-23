@@ -61,6 +61,20 @@ const currents = histAfter.filter((v: any) => v.status === "current");
 ok(currents.length === 1 && currents[0].version === 1, "publish v1 after v2 → exactly ONE version row is 'current' (the ledger never holds two)");
 ok((await call(pm, "doc.get", { kind: "strategy" })).data.version === 1, "doc.get tracks the re-published current_version=1");
 
-for (const c of [pm, reflect, operator, beta]) await c.close();
+// DL-9: doc.save keyed identity on slug alone, so a cross-kind save at an existing slug silently
+// appended into / clobbered the wrong doc. A kind that contradicts the stored doc must now be
+// REJECTED (kind is immutable identity) and leave the existing doc's kind + title untouched.
+// Uses a dedicated project so the strategy doc lives at slug "main" (the docp project above already
+// holds a strategy doc, and a UNIQUE(project_id,kind) constraint allows only one per kind).
+const dq = await as("pm", "docq", "DQ");
+ok((await call(dq, "doc.save", { slug: "main", kind: "strategy", title: "Strategy Doc", body: "STRATEGY CONTENT", baseVersion: 0 })).data.version === 1, "DL-9 setup: strategy doc created at slug 'main' (v1)");
+const crossKind = await call(dq, "doc.save", { slug: "main", kind: "roadmap", title: "Roadmap", body: "ROADMAP CONTENT", baseVersion: 1 });
+ok(crossKind.isError, "DL-9: cross-kind doc.save (roadmap at a strategy slug) → CONFLICT, not a silent append");
+const afterCross = (await call(dq, "doc.get", { slug: "main" })).data;
+ok(afterCross.kind === "strategy" && afterCross.title === "Strategy Doc", "DL-9: the existing doc's kind + title are UNCHANGED by the rejected cross-kind save");
+ok((await call(dq, "doc.history", { slug: "main" })).data.length === 1, "DL-9: no stray version appended — slug 'main' still has exactly 1 version");
+ok((await call(dq, "doc.save", { slug: "main", kind: "strategy", body: "STRATEGY V2", baseVersion: 1 })).data.version === 2, "DL-9 control: a same-kind save at the slug still appends (v2) — the guard blocks only a kind MISMATCH");
+
+for (const c of [pm, reflect, operator, beta, dq]) await c.close();
 console.log(fails === 0 ? "\nHUB_DOCS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

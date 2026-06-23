@@ -263,6 +263,12 @@ server.registerTool("doc.save", {
       db.exec("COMMIT");
       return ok({ doc: a.slug, kind: a.kind, version: 1, status: "draft" });
     }
+    // A document's kind is immutable identity: a save whose kind contradicts the stored doc at this
+    // slug is targeting the WRONG document, so refuse it (DL-9) instead of silently appending into /
+    // clobbering the existing doc. Checked BEFORE the CAS — a baseVersion comparison against the
+    // wrong doc is meaningless. (Keeps slug effectively unique per project: two kinds can never
+    // share a slug, so resolveDoc-by-slug stays correct.)
+    if (a.kind !== d.kind) { db.exec("ROLLBACK"); return err(`CONFLICT: slug '${a.slug}' is a '${d.kind}' document — refusing a '${a.kind}' save (a document's kind is immutable; use a distinct slug)`); }
     const latest = latestVersion(d.id);
     if (a.baseVersion !== latest) { db.exec("ROLLBACK"); return err(`CONFLICT: '${a.slug}' is at version ${latest}, your baseVersion ${a.baseVersion} is stale — re-read (doc.get) and re-apply`); }
     const nv = latest + 1;
