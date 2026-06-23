@@ -88,7 +88,10 @@ const toTicket = (r: TicketRow): Ticket => ({
 const getRow = (id: string): TicketRow | undefined =>
   db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as TicketRow | undefined;
 const resolveAssignee = (a: string | null | undefined): string | null =>
-  a === undefined ? null : a === "me" ? ACTOR : a;
+  a === undefined || a === null ? null
+  : a === "me" ? ACTOR
+  : a.trim() === "" ? null   // empty/whitespace-only → unassigned (null), never stored verbatim (DL-6)
+  : a;
 
 const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 
