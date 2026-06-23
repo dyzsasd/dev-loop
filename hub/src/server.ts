@@ -11,11 +11,36 @@ import { ensureActors, ensureProject, findProject } from "./seed.ts";
 import { sendVia, pollVia, type Provider, type OutboundMsg, type InboundMsg, type Creds } from "./channel.ts";
 import { findByMarker, createIssue, updateIssue, type MirrorIssue } from "./linear.ts";
 import { DOC_KINDS, resolveDoc, latestVersion, docSave, docPublish } from "./docstore.ts";
+import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
 
 // ─── Environment / identity ──────────────────────────────────────────────────
 const DB_PATH = process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`;
-const PROJECT_KEY = process.env.DEVLOOP_PROJECT ?? "demo";
+// DL-13: an EXPLICIT DEVLOOP_PROJECT always wins; only an unset/EMPTY value falls back to resolving the
+// project from the process cwd (an agent launched inside a project folder auto-pins it). A present-but-
+// empty "" must NOT become the literal key; "demo"/"default" are NOT sentinels (an operator may pin them).
+const explicitProject = process.env.DEVLOOP_PROJECT?.trim();
+let PROJECT_KEY: string;
+let projectFromCwd = false;
+if (explicitProject) {
+  PROJECT_KEY = explicitProject;
+} else {
+  const cfg = loadProjectsConfig();
+  const resolved = cfg ? resolveProjectFromCwd(process.cwd(), cfg) : null;
+  if (resolved) { PROJECT_KEY = resolved; projectFromCwd = true; }
+  else { PROJECT_KEY = "demo"; } // unchanged default when cwd matches nothing (backward-compatible)
+}
 const ACTOR = process.env.DEVLOOP_ACTOR ?? "operator"; // who this MCP client IS (the attribution win)
+
+// `dev-loop-hub resolve-project [--cwd <path>]` (DL-13) — print the project KEY whose repo CONTAINS the
+// cwd (default: process.cwd()), or exit non-zero with no output. The launcher reuses THIS matcher so the
+// launcher, the hub fallback, and any prose agree on exactly ONE rule.
+if (process.argv[2] === "resolve-project") {
+  const cwd = process.argv[3] === "--cwd" && process.argv[4] ? process.argv[4] : process.cwd();
+  const cfg = loadProjectsConfig();
+  const key = cfg ? resolveProjectFromCwd(cwd, cfg) : null;
+  if (key) { console.log(key); process.exit(0); }
+  process.exit(1); // no match → empty stdout, non-zero → the launcher leaves DEVLOOP_PROJECT unset
+}
 
 // `dev-loop-hub doctor` — read-only health check (no server, no auto-create).
 if (process.argv[2] === "doctor") {
@@ -66,7 +91,10 @@ const projectId =
     ? ensureProject(db, PROJECT_KEY, process.env.DEVLOOP_PROJECT_NAME ?? PROJECT_KEY, process.env.DEVLOOP_TICKET_PREFIX ?? "DL")
     : findProject(db, PROJECT_KEY);
 if (!projectId) {
-  console.error(`[hub] unknown project '${PROJECT_KEY}'. Create it once: \`node ${import.meta.dirname}/seed.ts ${PROJECT_KEY} "<name>" <UNIQUE_PREFIX>\` (or set DEVLOOP_CREATE_PROJECT=1). Refusing to auto-create a phantom board from a typo.`);
+  // DL-13: a cwd-RESOLVED project that isn't seeded errors LOUDLY here (clear source) — it must not have
+  // silently fallen through to `demo` (it didn't: a cwd match returns the real key, which lands here).
+  const src = projectFromCwd ? `resolved from cwd '${process.cwd()}'` : `from DEVLOOP_PROJECT='${PROJECT_KEY}'`;
+  console.error(`[hub] project '${PROJECT_KEY}' (${src}) is not seeded in the hub DB. Create it once: \`node ${import.meta.dirname}/seed.ts ${PROJECT_KEY} "<name>" <UNIQUE_PREFIX>\` (or set DEVLOOP_CREATE_PROJECT=1). Refusing to auto-create a phantom board.`);
   process.exit(1);
 }
 
