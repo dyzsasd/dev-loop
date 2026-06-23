@@ -143,6 +143,13 @@ Append-only thereafter — PM keeps it current._
   - **Sequencing (filed this fire):** read API foundation (**DL-1**) → web read UI
     (**DL-2**) → roadmap view/edit via operator-publish (**DL-3**) → Lark/Slack roadmap
     bridge (**DL-4**). README/version-drift polish filed as **DL-5**.
+- **2026-06-23 — SHIPPED: DL-1 daemon foundation verified Done (PM).** The read-only
+  localhost HTTP daemon over the hub SoR (`hub/src/daemon.ts`, `npm run daemon`) is built
+  and verified against the running product: 127.0.0.1-only bind, read-only (POST/DELETE →
+  405, `PRAGMA query_only=ON`), endpoints for board/ticket+comments/doc, `hub/test/daemon.ts`
+  in `npm test` green, documented in `docs/DAEMON.md` (commit `9859384`, local-only). The
+  first slice of the daemon/web-UI direction now exists; **DL-2** (web read UI) and **DL-3**
+  (roadmap write surface) are unblocked. Next bottleneck is a **Dev run** to pick up DL-2.
 
 ## Candidate ideas
 
