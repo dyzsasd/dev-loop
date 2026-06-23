@@ -174,6 +174,18 @@ Append-only thereafter — PM keeps it current._
   milestone (DL-2→DL-1, DL-3→[DL-1,DL-2], DL-4→DL-3) is invisible and unclickable in the UI →
   filed **DL-8** (Improvement, pm, **Low** — deliberately kept behind the milestone-critical DL-3
   in Dev's pick order). Loop remains **Dev-bottlenecked** (DL-3 is the next piece).
+- **2026-06-23 — SHIPPED (Dev): DL-7 daemon 400-fix (`ccefa3e`, In Review → QA-owned).** Dev
+  shipped the malformed-percent-escape fix (the three id/kind daemon routes now return 400, not
+  500, on a bad percent-escape). QA-owned Bug — QA verifies. New code SHA → PM review lenses reset.
+- **2026-06-23 — NEW OPERATOR DIRECTION (chat): surface the daily report in the hub web UI →
+  filed DL-10.** The operator asked to **see the daily report on the hub web interface**. This is
+  the read half of the previously-parked "Reports + 点评 in the web UI" idea, now unblocked (DL-1
+  daemon + DL-2 web read UI shipped). Filed **DL-10** (Feature, pm, **High/P2**) — a read-only
+  Reports view in the daemon UI that reads the §22 reports tree from the **filesystem** (a new read
+  source, separate from the hub DB), localhost-only + read-only + path-traversal-safe (cf. DL-7),
+  excluding the operator's `*.review.md` 点评 siblings from the listing. Accepting a 点评 *from* the
+  UI (a write path) stays a follow-up. This makes the operator's **observe-and-steer** flow
+  browser-reachable — a direct step toward the Vision's "view and manage the loop from a browser."
 
 ## Candidate ideas
 
@@ -192,11 +204,11 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   operator vs. non-operator roadmap stakeholders beyond the single operator-publish gate.
 - **Reports + 点评 review in the web UI** (ux-flows lens, PM 2026-06-23): the operator's
   *observe-and-steer* flow is today purely file-based (read `reports/<agent>/**`, drop a
-  `<report>.review.md` 点评 sibling). The Vision's "view and manage the loop from a browser"
-  naturally extends to surfacing those reports and accepting a 点评 from the web UI — closing
-  the operator-feedback loop without a terminal. Deferred: depends on the unbuilt daemon read
-  surface (DL-1/DL-2); file as that foundation lands so it doesn't dilute a Dev-bottlenecked
-  Todo now.
+  `<report>.review.md` 点评 sibling). **UPDATE 2026-06-23:** the operator asked for this directly,
+  and the **read half** is now filed as **DL-10** (surface the daily/weekly/monthly reports in the
+  web UI). **Remaining follow-up:** accepting a **点评 *from* the web UI** (a write path that drops
+  a `<report>.review.md` sibling) — closes the operator-feedback loop without a terminal; file once
+  DL-10 lands (it reuses DL-10's reports view + needs a guarded write path, like DL-3's roadmap edit).
 - **Web-UI fidelity polish (ux-flows lens, PM 2026-06-23, overflow).** Lower-value read-view
   refinements found alongside DL-8, parked to keep the Dev-bottlenecked Todo signal-rich: (a)
   ticket/comment bodies render as **raw markdown** inside a `<pre>` block — a tiny inline
