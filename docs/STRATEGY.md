@@ -288,6 +288,8 @@ Append-only thereafter — PM keeps it current._
 
 - **2026-06-23 — SHIPPED: DL-16 web-UI markdown rendering + timestamps verified Done (PM).** Dev's commit `a09d453` renders the ticket description + comments via the existing `renderMarkdown` (no longer raw `<pre>`) and shows created/updated timestamps; XSS-inert (esc-first, asserted for an injected `<script>` in both description + comment); gate green. The ticket detail now matches the roadmap/reports views (Linear-like). **All 15 buildable tickets this session are Done (DL-1…DL-11, DL-13/14/15/16); the only open item is DL-12** (cwd §11/SKILL agent-side wording, §17-gated — awaiting the operator's git commit). Dev queue empty; next operator-gated theme = 点评-from-the-web-UI (§22 carve-out, Candidate ideas) or the supporting goals.
 
+- **2026-06-23 — REVIEWED + FILED: 6-lens proactive sweep at `8ad763b` (PM) → DL-17…DL-20.** Backlog had drained (15/15 buildable Done) so the rotation re-opened; swept the 6 remaining rubric lenses (conversion-retention, data-analytics, trust-safety, consistency, competitive-parity, polish-performance — strategy-gaps + ux-flows were already swept at this SHA), each grounded in source and adversarially vetted (9 candidates → 6 survived → top 5 ranked, 1 dropped). **All survivors are BUILDABLE** (hub/src + docs only; no §17/§22 carve-out) — chosen deliberately over operator-gated proposals to keep Dev productive while DL-12 + the 点评-from-UI carve-out await the operator. Filed: **DL-17** (P2 Feature, data-analytics — a read-only `/activity` view over the existing-but-unsurfaced `events` ledger: throughput / cycle-time / per-agent activity, the metrics the observe+steer Vision needs; verified daemon.ts has zero SELECTs on `events` though db.ts:86 + `list_events` exist); **DL-18** (P3 Improvement, conversion-retention — RUNNING.md never mentions the daemon/web-UI, so the canonical onboarding dead-ends before the shipped observe surface; docs-only cross-link to DAEMON.md, verified `grep` returns no matches today); **DL-19** (P3 Improvement, trust-safety — the only write surface, `POST /roadmap/{save,publish}`, has no Origin/Host/Referer guard, so a same-origin-exempt urlencoded CSRF or DNS-rebind reaches it past the 127.0.0.1 bind; add an Origin + Host allowlist, defense-in-depth on the operator-gated DL-3 path); **DL-20** (P3 Improvement, competitive-parity — `boardPage()` renders ALL tickets with no filter while `/api/tickets` already filters by state/type/label; add server-side filter/search to the HTML board, no client JS). **Parked (overflow, not flooding Todo):** the P4 board summary-band + a nav active-highlight (see Candidate ideas). All 8 rubric lenses now swept at `8ad763b`; next fires go quiet until HEAD moves, the doc changes, the backlog drains again, or the operator redirects.
+
 ## Candidate ideas
 
 _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL-1…DL-5 on
@@ -327,3 +329,15 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   the detail view omits **created/updated timestamps**; (c) an unknown **non-API** path returns
   JSON (`{"error":"not found"}`) instead of the friendly HTML 404 the ghost-ticket route already
   serves. File as the daemon backlog drains.
+- **Board summary band (data-analytics lens, PM 2026-06-23 — P4 polish, parked from the 6-lens sweep).**
+  `boardPage()` renders one section per state with only a per-column count; no at-a-glance composition
+  by **type / owner / priority** above the columns. Pure read-only aggregate over the existing
+  `query_only` db (no new table, no write route). **Deliberately parked rather than filed** — it overlaps
+  the same `boardPage()` surface as the filed DL-20 (filter/search) and is convenience polish at the
+  current ~16-ticket scale; file it (or fold it into DL-20's implementation) when the board grows or
+  DL-20 lands. Buildable when filed — no §17/§22 gate.
+- **Web-UI header nav: active-surface highlight (consistency lens, PM 2026-06-23 — marginal, parked).**
+  Highlight the current surface in the header nav (board / roadmap / reports / the DL-17 `/activity`).
+  Cosmetic parity polish with no observe/steer payoff — fold into a future nav pass alongside the
+  `/activity` nav link DL-17 adds, rather than its own ticket. (The "labeled board item" half was
+  redundant with the existing wordmark-as-home at `daemon.ts:127`.)
