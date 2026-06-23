@@ -38,7 +38,7 @@ trust conversation memory for state; on a hard failure log one line and exit (th
 next fire retries). See conventions §0.
 
 Then load config (`§11`): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
-pick the project (named by the user, the sole one, the `defaultProject`, or ask),
+pick the project (named by the user, the **cwd-matched project (§11)**, the sole one, the `defaultProject`, or ask),
 and load its `linearProject`, `linearTeam`, `strategyDoc`, `testEnv`, `mode`, the optional
 `codex` block (§24), and — if
 present — `repos[]` (conventions §19). Multi-repo: the **doc-home repo**

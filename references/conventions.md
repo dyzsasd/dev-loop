@@ -588,8 +588,15 @@ On startup each skill:
    `-local` data dir (the install name and the data dir can differ), fall back to
    `~/.claude/plugins/data/dev-loop/projects.json`, or search
    `~/.claude/plugins/data/**/projects.json`, before asking the user.
-2. If the user named a project, uses it; if exactly one project is configured,
-   uses it; otherwise asks which project to operate on.
+2. **Project selection ladder** (in order): (a) if the user **named** a project, use
+   it; (b) else if the cwd is at or under **exactly one** project's `repoPath` (or any
+   `repos[].path`, §19), **auto-select it** — canonical `realpath` + segment-boundary
+   containment, nearest-ancestor wins on overlap, two distinct projects tying at equal
+   depth ⇒ ambiguous ⇒ fall through (never guess); (c) else if exactly **one** project is
+   configured, use it; (d) else use **`defaultProject`** if set; (e) else ask. Precedence:
+   **explicit choice > cwd-match > configured default > prompt** — cwd is the default
+   DRIVER, never an override. Strictly additive: a cwd outside every repo ⇒ today's
+   behavior. (For the hub backend the same ladder applies to `DEVLOOP_PROJECT`: §18.)
 3. Loads that project's `linearProject`, `linearTeam`, `repoPath`,
    `strategyDoc`, `testEnv`, `build`, `deploy`, `git`, `mode`, and `autonomy`
    (optional — see §12; absent ⇒ the conservative `"ask"` default). It also loads
@@ -1051,9 +1058,11 @@ per-agent attribution**, structural per-project scoping, and a native event feed
   `assignee:"me"` (the §7 claim) resolves to that actor, and every move / comment / event is
   stamped with it — the board is **attributable**, not Linear's single shared identity. The
   operator is its own actor.
-- **Project.** One hub process serves one project, pinned by `DEVLOOP_PROJECT` (ambient — not
-  passed per call). The cross-project firewall (§2) is **structural**: a hub process only ever
-  touches its own project's rows.
+- **Project.** One hub process serves one project, pinned by `DEVLOOP_PROJECT` **when set
+  (non-empty)**; otherwise the hub derives its project from `process.cwd()`→`repoPath` (the §11
+  ladder), so `DEVLOOP_PROJECT` is **optional** (a launcher spawning the server with cwd inside a
+  repo need not set it). Identity is still ambient — not passed per call. The cross-project
+  firewall (§2) is **unchanged + structural**: a hub process only ever touches its own project's rows.
 - **Relations.** `save_issue` takes `duplicateOf` (scalar — set it with `state:"Duplicate"`,
   §8 dedupe) and `relatedTo` (**append-only** — re-passing unions into the set, never
   replaces; §4 splits, §15 coverage); both surface on `get_issue`. `parentId`/`blockedBy`/
@@ -1890,7 +1899,9 @@ CLI (Codex, opencode, …) against the *same* `hub.db`. Full setup in
 [`docs/PORTABILITY.md`](../docs/PORTABILITY.md); the load-bearing rules:
 
 - **One env contract, set by any launcher per pane:** `DEVLOOP_ACTOR` (the per-agent identity),
-  `DEVLOOP_PROJECT`, `DEVLOOP_HUB_DB`, and the SKILLs' config-resolution vars `CLAUDE_PLUGIN_ROOT` /
+  `DEVLOOP_PROJECT` (**optional** — when unset/empty the hub derives the project from the spawned
+  process's cwd→`repoPath`, §11/§18; set it to pin one explicitly), `DEVLOOP_HUB_DB`, and the SKILLs'
+  config-resolution vars `CLAUDE_PLUGIN_ROOT` /
   `CLAUDE_PLUGIN_DATA` (just env-var names — despite "CLAUDE", *any* CLI's launcher exports them, so
   the SKILL bodies need **zero edits**; a thin wrapper also substitutes the `${...}` placeholders into
   the SKILL body before feeding it as the prompt, since a second CLI has no plugin loader to do it).
