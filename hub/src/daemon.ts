@@ -295,6 +295,30 @@ const statusForDocErr = (msg: string): number =>
       : msg.includes("baseVersion must be 0") ? 400
         : 409;
 
+// DL-19: CSRF + DNS-rebinding guard for the write routes. The daemon is http localhost-only, so the
+// ONLY legitimate origin is the host the operator's own browser connected to. Refuse:
+//  (a) a Host that isn't 127.0.0.1/localhost — a DNS-rebound name resolving to 127.0.0.1 reaches the
+//      bind, and the loopback bind alone never validates Host (the rebinding bypass), and
+//  (b) a cross-origin Origin/Referer — a urlencoded form is a CORS "simple request" (no preflight),
+//      so a page the operator visits can auto-submit to these routes as the operator (textbook CSRF).
+// An ABSENT Origin AND Referer is allowed: a browser CSRF auto-submit always carries Origin, so absence
+// means a non-browser client (curl / the operator's own tooling / tests) — not the CSRF vector, and it
+// must keep working. Origin is preferred over Referer when present.
+// INVARIANT: this literal Host allowlist is sufficient ONLY because the server binds the v4 loopback
+// (127.0.0.1) ONLY — see the `HOST = "127.0.0.1"` bind below. If that bind ever widens (0.0.0.0, ::1,
+// a LAN address), this guard must widen with it (resolve/validate accordingly), or it silently weakens.
+const LOCAL_HOST = /^(127\.0\.0\.1|localhost)(:\d+)?$/;
+function writeOriginOk(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (!host || !LOCAL_HOST.test(host)) return false;            // (a) foreign/rebound Host → refuse before any write
+  const allowed = `http://${host}`;                             // the daemon is http localhost-only (the served page's origin)
+  const origin = req.headers.origin;
+  if (origin !== undefined) return origin === allowed;          // (b) Origin present → must be same-origin
+  const referer = req.headers.referer;
+  if (referer !== undefined) { try { return new URL(referer).origin === allowed; } catch { return false; } }
+  return true;                                                  // no Origin/Referer → non-browser client (allowed)
+}
+
 async function handleRoadmapWrite(action: "save" | "publish", req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string): Promise<void> {
   let form: URLSearchParams;
   // If the body was rejected (too large / aborted), the socket may already be destroyed — only respond
@@ -465,6 +489,9 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
       //    docstore (DB-doc-only — no filesystem path ⇒ §17 firewall). Present ONLY when a write
       //    connection + actor were supplied; otherwise the daemon stays GET-only (DL-1/DL-2 behavior).
       if (method === "POST" && canWrite && (path === "/roadmap/save" || path === "/roadmap/publish")) {
+        // DL-19: refuse a cross-origin (CSRF) or foreign-Host (DNS-rebinding) write BEFORE any docSave/
+        // docPublish — the guard runs ahead of handleRoadmapWrite, so a refused request never mutates.
+        if (!writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
         await handleRoadmapWrite(path === "/roadmap/save" ? "save" : "publish", req, res, db, writeDb!, projectId, projectKey, actor!);
         return;
       }
