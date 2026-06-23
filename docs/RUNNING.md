@@ -51,6 +51,11 @@ The plugin **ships no harness** — pick whichever fits. Both run the same eight
 three opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`,
 `director-agent`.
 
+> **Another CLI?** On the `backend:"service"` hub the loop is **CLI-portable** — the same agents
+> + hub run on Codex / opencode against the same `hub.db`. See
+> [`PORTABILITY.md`](PORTABILITY.md) (conventions §26) for the env contract, per-CLI MCP
+> registration, the headless wrapper, and the **identity gate** you run before onboarding a CLI.
+
 ### A. Agent View — native, recommended (`claude agents`)
 
 [Agent View](https://code.claude.com/docs/agent-view) (Claude Code ≥ 2.1.139) is one
