@@ -164,6 +164,16 @@ Append-only thereafter — PM keeps it current._
   Vision now exists; the **roadmap view/edit** half is **DL-3** (the first write surface,
   via the operator-publish gate), which is now unblocked for Dev. Next bottleneck is a
   **Dev run** to pick up DL-3 (then DL-5 polish; DL-4 waits on DL-3).
+- **2026-06-23 — ux-flows lens swept over the new web UI (PM); filed DL-8.** First proactive
+  (non-strategy-gaps) review at HEAD `894c164`, now that DL-1/DL-2 shipped a real web surface.
+  Exercised the **running** daemon UI (board + ticket detail + error pages), not the diff. The
+  board is solid: core state columns always render, Backlog/Canceled/Duplicate appear only when
+  populated (terminals last), empty columns show `—`, HTML is escaped, the detail has a working
+  `← board` back-link, and ghost tickets get a friendly HTML 404. **One genuine gap:** the ticket
+  detail drops `relatedTo`/`duplicateOf`, so the dependency chain that sequences this very
+  milestone (DL-2→DL-1, DL-3→[DL-1,DL-2], DL-4→DL-3) is invisible and unclickable in the UI →
+  filed **DL-8** (Improvement, pm, **Low** — deliberately kept behind the milestone-critical DL-3
+  in Dev's pick order). Loop remains **Dev-bottlenecked** (DL-3 is the next piece).
 
 ## Candidate ideas
 
@@ -187,3 +197,10 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   the operator-feedback loop without a terminal. Deferred: depends on the unbuilt daemon read
   surface (DL-1/DL-2); file as that foundation lands so it doesn't dilute a Dev-bottlenecked
   Todo now.
+- **Web-UI fidelity polish (ux-flows lens, PM 2026-06-23, overflow).** Lower-value read-view
+  refinements found alongside DL-8, parked to keep the Dev-bottlenecked Todo signal-rich: (a)
+  ticket/comment bodies render as **raw markdown** inside a `<pre>` block — a tiny inline
+  markdown→HTML renderer (no native deps, hub doctrine) would match the "Linear-like" Vision; (b)
+  the detail view omits **created/updated timestamps**; (c) an unknown **non-API** path returns
+  JSON (`{"error":"not found"}`) instead of the friendly HTML 404 the ghost-ticket route already
+  serves. File as the daemon backlog drains.
