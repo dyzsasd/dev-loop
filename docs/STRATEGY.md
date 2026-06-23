@@ -95,12 +95,15 @@ Append-only thereafter — PM keeps it current._
   Lark/Slack** (DL-4 — a chat `roadmap`/`roadmap edit` bridge that lands DRAFTs, §16-scrubbed,
   never auto-published). So the operator can now view+manage the loop from a browser AND propose
   roadmap edits from chat, with the operator-publish gate intact throughout. **Remaining (smaller)
-  gaps:** **reports/点评 view in the web UI** (DL-10, In Progress), **cwd-based project
-  auto-selection** (DL-12 proposal awaiting operator + DL-13), web-UI polish (DL-8 relatedTo, DL-14
-  conflict-draft-preservation), README drift (DL-5), and the deferred candidates (inter-agent
-  discussion daemon; multi-stakeholder roadmap auth; accepting a 点评 *from* the web UI). The next
-  theme, once this milestone's tail drains, is the **supporting goals** (hub/`service` hardening +
-  broader portability) — see Goals.
+  gaps:** ~~reports view in the web UI (DL-10)~~ **SHIPPED** (verified Done — the daemon now serves
+  a read-only `/reports` view over the §22 reports tree; the operator can read pm/qa/dev dailies
+  from the browser), **cwd-based project auto-selection** (DL-12 proposal awaiting operator + DL-13
+  In Progress), web-UI polish (DL-8 relatedTo, DL-14 conflict-draft-preservation), README drift
+  (DL-5), and the deferred candidates (inter-agent discussion daemon; multi-stakeholder roadmap
+  auth; **accepting a 点评 *from* the web UI** — the remaining half of the reports-in-UI idea, a
+  write path). With DL-10, the operator's **observe** loop is browser-complete (board · tickets ·
+  reports · roadmap view/edit · steer-from-chat). The next theme, once this milestone's tail
+  drains, is the **supporting goals** (hub/`service` hardening + broader portability) — see Goals.
 
 ## Personas
 
@@ -241,6 +244,17 @@ Append-only thereafter — PM keeps it current._
   loop from a browser and steer the roadmap from chat, operator-publish gate intact. DL-11 (mirror)
   also verified by QA, so the full suite is green again. Bottleneck remains Dev: DL-10 (reports
   view) In Progress; DL-13/DL-14/DL-8/DL-5 queued; DL-12 awaits the operator's commit.
+- **2026-06-23 — SHIPPED: DL-10 agent reports view verified Done (PM).** Dev shipped a read-only
+  `/reports` view in the daemon web UI (commit `db93750`): the board header links to it, the index
+  lists agents (pm/qa/dev) + their dated daily/weekly/monthly reports, and each renders read-only
+  with back-links. The reports root is resolved from `DEVLOOP_REPORTS_DIR` else the first-existing
+  data-dir candidate (it found the real `~/.claude/plugins/data/dev-loop/dev-loop/reports`). Verified
+  against the **running daemon on the real reports tree** — it renders the actual PM/QA/Dev dailies;
+  path-traversal → 400/404 (strict segment validation + resolved-path-within-root), POST → 405
+  (read-only), absent tree → friendly empty state, and the dated-report grammar inherently excludes
+  `*.review.md`/`*.review.acted`. **This closes the operator's "see the daily report in the web UI"
+  ask** and makes the **observe** loop browser-complete (board · tickets · reports · roadmap). The
+  remaining half — accepting a **点评 FROM the web UI** (a write path) — stays a Candidate idea.
 
 ## Candidate ideas
 
