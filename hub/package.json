@@ -1,6 +1,6 @@
 {
   "name": "dev-loop-hub",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "Local MCP system-of-record for the dev-loop agents (per-agent identity, tickets/comments/labels/events over node:sqlite). Zero native deps, zero build step (Node >=23 type-stripping + built-in node:sqlite). See ../docs/HUB-ARCHITECTURE.md.",

@@ -3,6 +3,28 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.20.0 — hub daemon + web UI + roadmap bridge + cwd project auto-pin (self-hosted milestone)
+Shipped by the dev-loop loop **dogfooding itself on the hub** (`backend:"service"`, project `dev-loop`,
+per-agent attribution) — 22 tickets, all Done, all built/tested by the autonomous loop and §17-firewalled
+(the one conventions/SKILL change, DL-12, was operator-applied).
+- **Daemon + read-only web UI** (DL-1/DL-2) — `npm run daemon` (`hub/src/daemon.ts`): a **127.0.0.1-only**
+  HTTP read surface over the hub SoR (zero native deps, no build step), port `8787` (override
+  `DEVLOOP_DAEMON_PORT`). Serves the board, ticket+comments, docs, daily reports (DL-10), and an
+  activity/throughput view over the events ledger (DL-17), with server-side board filter/search (DL-20)
+  and markdown rendering (DL-16).
+- **Roadmap view/edit + Lark/Slack bridge** (DL-3/DL-4) — the web UI can VIEW and EDIT the kind:"roadmap"
+  doc; a Lark/Slack bridge to view + propose roadmap edits. Write routes carry an **Origin/Host guard**
+  (CSRF + DNS-rebinding defense, DL-19); the editor preserves typed text on a rejected save (DL-14).
+- **cwd→project auto-pin** (DL-12 operator-applied §17 wording + DL-13 code + DL-15 launcher/docs) —
+  launch an agent from inside a project's repo and the hub + SKILLs **auto-select that project**;
+  `DEVLOOP_PROJECT` is now **optional** (§11 ladder gains a cwd rung + the restored `defaultProject`
+  rung; §18/§26 updated). Certified by `hub/test/resolve-project.ts`.
+- **Self-hardening** — bug fixes: empty-string assignee (DL-6), path percent-escape 500→400 (DL-7),
+  doc.save cross-kind identity (DL-9), DRYRUN mirror.push write (DL-11), a flaky loop test (DL-21),
+  create_issue_label silent-success (DL-22). RUNNING.md surfaces the daemon/web UI (DL-18).
+- 10 hub test suites green (smoke/loop/isolation/docs/board/channel/mirror/identity/resolve-project/daemon).
+  plugin + marketplace → 0.20.0; hub → 0.7.0.
+
 ## 0.19.2 — self-hosting hygiene + cache-refresh bump
 - **`.gitignore` now excludes `.mcp.json`** — a self-hosting / service-backend setup (or `/dev-loop:init`)
   writes a machine-local `.mcp.json` (abs paths, per-pane `${DEVLOOP_ACTOR}`); the committed template
