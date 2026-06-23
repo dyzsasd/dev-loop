@@ -54,6 +54,13 @@ ok((await call(operator, "doc.publish", { kind: "strategy", version: 99 })).isEr
 // per-project isolation
 ok((await call(beta, "doc.get", { kind: "strategy" })).isError, "a different project CANNOT read this project's doc (isolation)");
 
+// single-current invariant (Codex review): re-publishing v1 after v2 leaves EXACTLY one version 'current'
+await call(operator, "doc.publish", { kind: "strategy", version: 1 });
+const histAfter = (await call(pm, "doc.history", { kind: "strategy" })).data;
+const currents = histAfter.filter((v: any) => v.status === "current");
+ok(currents.length === 1 && currents[0].version === 1, "publish v1 after v2 → exactly ONE version row is 'current' (the ledger never holds two)");
+ok((await call(pm, "doc.get", { kind: "strategy" })).data.version === 1, "doc.get tracks the re-published current_version=1");
+
 for (const c of [pm, reflect, operator, beta]) await c.close();
 console.log(fails === 0 ? "\nHUB_DOCS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

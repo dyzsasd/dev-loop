@@ -22,22 +22,28 @@ if (process.argv[2] === "doctor") {
   process.exit(runDoctor(DB_PATH) ? 0 : 1);
 }
 
-// `dev-loop-hub identity-check` — P8 portability helper: print what THIS process's env resolves to
-// (the per-agent identity the hub would attribute writes to) and whether the server would start.
-// A launcher/CI uses it to confirm DEVLOOP_* is wired before a fire. NOTE: this reflects the CURRENT
-// process env; the REAL per-CLI gate is calling `whoami` THROUGH the CLI's MCP spawn (docs/PORTABILITY.md)
-// — only that proves the CLI propagates env to the spawned subprocess. Exit 1 if the actor would be
-// REFUSED (db present + unknown actor → the G1 phantom-actor guard), else 0.
+// `dev-loop-hub identity-check [--expect <actor>[/<project>]]` — P8 portability helper: print what THIS
+// process's env resolves to (the per-agent identity the hub would attribute writes to) + whether the
+// server would start. NOTE: this reflects the CURRENT process env; the REAL per-CLI gate is calling
+// `whoami` THROUGH the CLI's MCP spawn (docs/PORTABILITY.md) — only that proves the CLI propagates env
+// to the spawned subprocess. With `--expect` (or DEVLOOP_EXPECT_ACTOR / DEVLOOP_EXPECT_PROJECT) it ALSO
+// catches MIS-attribution: a wrong-but-valid actor (Codex review) fails, not just an unknown one. Exit 1
+// if the actor would be REFUSED (db present + unknown actor → the G1 guard) OR mismatches the expectation.
 if (process.argv[2] === "identity-check") {
   const { existsSync } = await import("node:fs");
+  const expFlag = process.argv[3] === "--expect" ? process.argv[4] : undefined;
+  const expectActor = (expFlag?.split("/")[0]) || process.env.DEVLOOP_EXPECT_ACTOR || undefined;
+  const expectProject = (expFlag?.split("/")[1]) || process.env.DEVLOOP_EXPECT_PROJECT || undefined;
   const dbPresent = existsSync(DB_PATH);
   let actorKnown: boolean | null = null;
   if (dbPresent) {
     try { const d = openDb(DB_PATH); actorKnown = actorExists(d, ACTOR); d.close(); } catch { actorKnown = null; }
   }
+  const matchesExpectation = (!expectActor || expectActor === ACTOR) && (!expectProject || expectProject === PROJECT_KEY);
   const wouldStart = !dbPresent || actorKnown === true; // db absent ⇒ would be seeded; else the actor must be known
-  console.log(JSON.stringify({ actor: ACTOR, project: PROJECT_KEY, db: DB_PATH, dbPresent, actorKnown, wouldStart }));
-  process.exit(wouldStart ? 0 : 1);
+  const pass = wouldStart && matchesExpectation;
+  console.log(JSON.stringify({ actor: ACTOR, project: PROJECT_KEY, db: DB_PATH, dbPresent, actorKnown, wouldStart, expectActor: expectActor ?? null, expectProject: expectProject ?? null, matchesExpectation, pass }));
+  process.exit(pass ? 0 : 1);
 }
 
 const db = openDb(DB_PATH);
@@ -147,25 +153,31 @@ server.registerTool("save_issue", {
     logEvent(db, { project_id: projectId, ticket_id: id, actor: ACTOR, kind: "issue.create", data: { title: a.title, type: a.type } });
     return ok(toTicket(getRow(id)!));
   }
-  const cur = getRow(a.id);
-  if (!cur) return err(`no such ticket ${a.id} in ${PROJECT_KEY}`);
-  const next = {
-    title: a.title ?? cur.title, description: a.description ?? cur.description, type: a.type ?? cur.type,
-    state: (a.state as State) ?? cur.state,
-    assignee: a.assignee === undefined ? cur.assignee : resolveAssignee(a.assignee),
-    priority: a.priority ?? cur.priority,
-    labels: a.labels ? JSON.stringify(a.labels) : cur.labels, // REPLACE-style (§10#1 mimicked)
-    duplicate_of: a.duplicateOf === undefined ? cur.duplicate_of : a.duplicateOf, // scalar set; undefined=keep
-    related_to: a.relatedTo // APPEND-ONLY union (re-read ∪ passed), never replace (§18 line 965)
-      ? JSON.stringify([...new Set([...(JSON.parse(cur.related_to) as string[]), ...a.relatedTo])])
-      : cur.related_to,
-  };
-  db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
-    .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, next.duplicate_of, next.related_to, t, a.id, projectId);
-  if (next.state !== cur.state)
-    logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.transition", data: { from: cur.state, to: next.state } });
-  else
-    logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.update", data: {} });
+  // update branch — atomic read-merge-write (Codex review): the APPEND-ONLY relatedTo union must not
+  // lose a concurrent link to a last-write-wins race, so read-cur → merge → write is one BEGIN IMMEDIATE txn.
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const cur = getRow(a.id);
+    if (!cur) { db.exec("ROLLBACK"); return err(`no such ticket ${a.id} in ${PROJECT_KEY}`); }
+    const next = {
+      title: a.title ?? cur.title, description: a.description ?? cur.description, type: a.type ?? cur.type,
+      state: (a.state as State) ?? cur.state,
+      assignee: a.assignee === undefined ? cur.assignee : resolveAssignee(a.assignee),
+      priority: a.priority ?? cur.priority,
+      labels: a.labels ? JSON.stringify(a.labels) : cur.labels, // REPLACE-style (§10#1 mimicked)
+      duplicate_of: a.duplicateOf === undefined ? cur.duplicate_of : a.duplicateOf, // scalar set; undefined=keep
+      related_to: a.relatedTo // APPEND-ONLY union (re-read ∪ passed), never replace (§18 line 965)
+        ? JSON.stringify([...new Set([...(JSON.parse(cur.related_to) as string[]), ...a.relatedTo])])
+        : cur.related_to,
+    };
+    db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
+      .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, next.duplicate_of, next.related_to, t, a.id, projectId);
+    if (next.state !== cur.state)
+      logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.transition", data: { from: cur.state, to: next.state } });
+    else
+      logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.update", data: {} });
+    db.exec("COMMIT");
+  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
   return ok(toTicket(getRow(a.id)!));
 });
 
@@ -286,9 +298,16 @@ server.registerTool("doc.publish", {
   const v = db.prepare("SELECT version FROM document_versions WHERE doc_id=? AND version=?").get(d.id, a.version);
   if (!v) return err(`no version ${a.version} of ${d.slug} to publish`);
   const t = nowIso();
-  db.prepare("UPDATE document_versions SET status='current' WHERE doc_id=? AND version=?").run(d.id, a.version);
-  db.prepare("UPDATE documents SET status='current', current_version=?, updated_at=? WHERE id=?").run(a.version, t, d.id);
-  logEvent(db, { project_id: projectId, actor: ACTOR, kind: "doc.publish", data: { slug: d.slug, version: a.version } });
+  // single-current invariant (Codex review): publishing vN after vM must leave EXACTLY one version
+  // row marked 'current' — reset all to draft, then mark the chosen one, atomically.
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE document_versions SET status='draft' WHERE doc_id=? AND status='current'").run(d.id);
+    db.prepare("UPDATE document_versions SET status='current' WHERE doc_id=? AND version=?").run(d.id, a.version);
+    db.prepare("UPDATE documents SET status='current', current_version=?, updated_at=? WHERE id=?").run(a.version, t, d.id);
+    logEvent(db, { project_id: projectId, actor: ACTOR, kind: "doc.publish", data: { slug: d.slug, version: a.version } });
+    db.exec("COMMIT");
+  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
   return ok({ doc: d.slug, status: "current", current_version: a.version });
 });
 
@@ -388,6 +407,9 @@ server.registerTool("topic.synthesize", {
     if (!t) { db.exec("ROLLBACK"); return err(`no topic ${a.topicId} in ${PROJECT_KEY}`); }
     if (t.status !== "open") { db.exec("ROLLBACK"); return err(`CONFLICT: topic ${a.topicId} is closed`); }
     if (t.opened_by !== ACTOR) { db.exec("ROLLBACK"); return err(`FORBIDDEN: only the chair '${t.opened_by}' may synthesize topic ${a.topicId}`); }
+    // pre-check the once-per-round synthesis (Codex review): a clean CONFLICT, not a raw UNIQUE error
+    const dupSyn = db.prepare("SELECT 1 FROM posts WHERE topic_id=? AND round=? AND author=? AND kind='synthesis'").get(a.topicId, t.round, ACTOR);
+    if (dupSyn) { db.exec("ROLLBACK"); return err(`CONFLICT: already synthesized round ${t.round} — bump with nextRound:true or close`); }
     db.prepare("INSERT INTO posts(id,topic_id,round,author,kind,body,created_at) VALUES (?,?,?,?,'synthesis',?,?)")
       .run(randomUUID(), a.topicId, t.round, ACTOR, a.body, ts);
     let round = t.round;
@@ -436,11 +458,21 @@ const resolveCreds = (c: ChannelRow): Creds =>
     : { appId: process.env[c.config_ref], appSecret: c.secret_ref ? process.env[c.secret_ref] : undefined };
 // strip control chars + truncate — outbound text never carries raw bytes that could break a payload (§16/§9 step 1)
 const clean = (s: string, max: number): string => s.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, max);
+// §16 (Codex review): a *Ref is an ENV-VAR NAME, never a literal secret. Reject anything that isn't an
+// env-name shape, and anything that looks like an actual token — so a caller can't persist a secret to the DB.
+const TOKEN_PREFIXES = /^(xox[abp]-|lin_api_|lin_oauth_|sk-|ghp_|Bearer\s)/i;
+const isEnvName = (s: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) && !TOKEN_PREFIXES.test(s) && s.length <= 100;
+// defense-in-depth (Codex review): before persisting/returning a provider error, redact anything
+// token-shaped + bound the length — even though channel.ts/linear.ts already construct secret-free messages.
+const scrubErr = (m: string): string =>
+  m.replace(/\b(xox[abp]-[\w-]+|lin_(?:api|oauth)_[\w-]+|sk-[\w-]+|ghp_[\w-]+|eyJ[\w.-]{20,})\b/g, "***").slice(0, 120);
 
 server.registerTool("channel.register", {
   description: "Idempotently register/update this project's IM channel from config. Stores ONLY the ENV-VAR NAMES (configRef = bot token / lark app_id; secretRef = lark app_secret) + the room id — NEVER a token/secret.",
   inputSchema: { provider: z.enum(["slack", "lark"]), configRef: z.string().min(1), secretRef: z.string().optional(), channelRef: z.string().min(1) },
 }, async (a) => {
+  if (!isEnvName(a.configRef)) return err(`configRef must be an ENV-VAR NAME (e.g. DEVLOOP_CHANNEL_TOKEN), not the secret value itself`);
+  if (a.secretRef && !isEnvName(a.secretRef)) return err(`secretRef must be an ENV-VAR NAME, not the secret value itself`);
   const t = nowIso();
   const existing = db.prepare("SELECT id FROM channels WHERE project_id=? AND provider=? AND channel_ref=?").get(projectId, a.provider, a.channelRef) as { id: string } | undefined;
   if (existing) {
@@ -501,7 +533,7 @@ server.registerTool("channel.send", {
   try {
     await sendVia(ch.provider as Provider, resolveCreds(ch), ch.channel_ref, msg, fetch);
   } catch (e) {
-    return err(`channel send failed: ${(e as Error).message}`); // secret-free by construction (channel.ts)
+    return err(`channel send failed: ${scrubErr((e as Error).message)}`); // secret-free by construction (channel.ts) + scrubbed
   }
   const t = nowIso();
   db.prepare("INSERT INTO channel_messages(id,channel_id,project_id,direction,provider_msg_id,body,kind,created_at) VALUES (?,?,?,?,?,?,?,?)")
@@ -529,12 +561,14 @@ server.registerTool("channel.poll", {
       fetched = await pollVia(ch.provider as Provider, resolveCreds(ch), ch.channel_ref, cursor, fetch);
     }
   } catch (e) {
-    return err(`channel poll failed: ${(e as Error).message}`); // cursor unchanged → next fire retries
+    return err(`channel poll failed: ${scrubErr((e as Error).message)}`); // cursor unchanged → next fire retries
   }
   const t = nowIso();
   db.exec("BEGIN IMMEDIATE"); // PHASE 3 — atomic dedup-insert + cursor advance
   try {
-    const ins = db.prepare("INSERT OR IGNORE INTO channel_messages(id,channel_id,project_id,direction,provider_msg_id,author_ref,body,acted,created_at,provider_ts) VALUES (?,?,?,?,?,?,?,0,?,?)");
+    // ON CONFLICT DO NOTHING (not OR IGNORE, Codex review): suppress ONLY the dedup-key conflict —
+    // any OTHER constraint failure (e.g. a malformed message) must throw → ROLLBACK → cursor NOT advanced.
+    const ins = db.prepare("INSERT INTO channel_messages(id,channel_id,project_id,direction,provider_msg_id,author_ref,body,acted,created_at,provider_ts) VALUES (?,?,?,?,?,?,?,0,?,?) ON CONFLICT(channel_id,direction,provider_msg_id) DO NOTHING");
     let inserted = 0;
     for (const m of fetched.messages) {
       const r = ins.run(randomUUID(), ch.id, projectId, "inbound", m.providerMsgId, m.authorRef, m.text, t, m.providerTs);
@@ -608,6 +642,7 @@ server.registerTool("mirror.push", {
     limit: z.number().int().min(1).max(500).optional(),
   },
 }, async (a) => {
+  if (!isEnvName(a.tokenEnv)) return err(`tokenEnv must be an ENV-VAR NAME (e.g. DEVLOOP_LINEAR_TOKEN), not the secret value itself`);
   const token = process.env[a.tokenEnv];
   if (!token && !MIRROR_DRYRUN) return err(`mirror token env '${a.tokenEnv}' is unset`);
   const rows = db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC LIMIT ?").all(projectId, a.limit ?? 500) as TicketRow[];
@@ -620,31 +655,36 @@ server.registerTool("mirror.push", {
     const hash = mirrorHash(t, stateId);
     let row = db.prepare("SELECT id,hub_id,linear_id,last_pushed_hash FROM mirror_map WHERE project_id=? AND hub_kind='ticket' AND hub_id=?").get(projectId, t.id) as MirrorRow | undefined;
     if (row && row.linear_id && row.last_pushed_hash === hash) { skipped++; continue; } // incremental skip (unchanged)
-    const existedBefore = !!row;
-    if (!row) { // mapping-row-FIRST: record intent before the remote create → a crash never orphans/dups
+    if (!row) {
+      // mapping-row-FIRST: record intent BEFORE the remote create → a crash never orphans a Linear
+      // issue (a NULL-id row on the next fire reconciles by marker). The UNIQUE(project,kind,hub_id)
+      // makes two concurrent pushers' INSERTs serialize — the loser throws + retries (no dup row).
       const rid = randomUUID();
       db.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,created_at) VALUES (?,?,'ticket',?,?)").run(rid, projectId, t.id, nowIso());
       row = { id: rid, hub_id: t.id, linear_id: null, last_pushed_hash: null };
     }
     try {
       if (!row.linear_id) {
-        // a pre-existing NULL row may be a prior crashed create → reconcile by the title marker first; a
-        // fresh row (inserted this fire) cannot have a prior create, so create directly.
-        const linearId = MIRROR_DRYRUN ? `dry-${t.id}`
-          : existedBefore
-            ? (await findByMarker(fetch, token!, `[hub:${t.id}]`)) ?? (await createIssue(fetch, token!, a.teamId, a.projectId ?? null, issue))
-            : await createIssue(fetch, token!, a.teamId, a.projectId ?? null, issue);
+        // ALWAYS reconcile-by-marker before creating (Codex review): closes the concurrent-create
+        // window (a racing pusher's issue is found, not duplicated), and on a crashed-create retry
+        // the existing issue is ADOPTED + UPDATED to current content (never left stale). A genuinely
+        // new ticket: findByMarker returns null → create. (Full concurrency-safety still assumes the
+        // single-Sweep-per-project model; a lease is over-engineering for one writer.)
+        const found = MIRROR_DRYRUN ? null : await findByMarker(fetch, token!, `[hub:${t.id}]`);
+        let linearId: string;
+        if (found) { await updateIssue(fetch, token!, found, issue); linearId = found; } // adopt + push current content (fixes stale-reconcile)
+        else { linearId = MIRROR_DRYRUN ? `dry-${t.id}` : await createIssue(fetch, token!, a.teamId, a.projectId ?? null, issue); }
         db.prepare("UPDATE mirror_map SET linear_id=?, last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(linearId, hash, nowIso(), row.id);
-        created++; ops.push({ op: "create", hubId: t.id, title: issue.title, body: issue.description, stateId: stateId ?? null });
+        created++; ops.push({ op: found ? "reconcile" : "create", hubId: t.id, title: issue.title, body: issue.description, stateId: stateId ?? null });
       } else {
         if (!MIRROR_DRYRUN) await updateIssue(fetch, token!, row.linear_id, issue);
         db.prepare("UPDATE mirror_map SET last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(hash, nowIso(), row.id);
         updated++; ops.push({ op: "update", hubId: t.id, title: issue.title, body: issue.description, stateId: stateId ?? null });
       }
     } catch (e) {
-      // leave the row (linear_id as-is, hash NOT advanced) → next push retries; never throw the token
+      // leave the row (linear_id as-is, hash NOT advanced) → next push retries; never persist the token
       failed++;
-      logEvent(db, { project_id: projectId, actor: ACTOR, kind: "mirror.error", data: { hubId: t.id, error: (e as Error).message } });
+      logEvent(db, { project_id: projectId, actor: ACTOR, kind: "mirror.error", data: { hubId: t.id, error: scrubErr((e as Error).message) } });
     }
   }
   logEvent(db, { project_id: projectId, actor: ACTOR, kind: "mirror.push", data: { created, updated, skipped, failed } });
