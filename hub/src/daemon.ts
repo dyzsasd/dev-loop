@@ -118,6 +118,9 @@ code{font:.92em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg)
 .rlevel{display:flex;gap:.4rem;align-items:baseline;flex-wrap:wrap;margin:.25rem 0}
 .rkey{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut);min-width:3.5rem}
 .lbl{cursor:pointer}a.lbl:hover{border-color:var(--mut);color:var(--ink)}
+.filterbar{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:0 0 .8rem}
+.filterbar .chips{display:flex;gap:.3rem;flex-wrap:wrap;margin-left:.2rem}
+.filterbar .clearall{border-style:dashed}
 `;
 
 function page(title: string, project: string, inner: string): string {
@@ -136,10 +139,37 @@ function cardHtml(t: ReturnType<typeof toTicket>): string {
     + `<span class="prio p${esc(t.priority)}">${esc(prioOf(t.priority))}</span></div></a>`;
 }
 
+// DL-20: the board filter/search keys — mirror the /api/tickets filter semantics (state/type/label,
+// + assignee) plus a free-text `q` over id/title. Server-side + read-only; no client JS, no build step.
+interface BoardFilters { state?: string; type?: string; label?: string; assignee?: string; q?: string }
+const FILTER_KEYS = ["state", "type", "label", "assignee", "q"] as const;
+
 // Board: tickets grouped into state columns. Core workflow columns always render (even empty);
-// Backlog/Canceled/Duplicate and any other state show only when populated, terminals last.
-function boardPage(db: DatabaseSync, projectId: string, projectKey: string): string {
-  const tickets = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
+// Backlog/Canceled/Duplicate and any other state show only when populated, terminals last. DL-20 adds
+// optional server-side filter/search (from the GET / query string) + a clearable, deep-linkable control row.
+function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filters: BoardFilters = {}): string {
+  let tickets = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
+  const f = filters;
+  // mirror /api/tickets: each present (non-empty) filter narrows the set; q matches id/title, case-insensitive
+  if (f.state) tickets = tickets.filter((t) => t.state === f.state);
+  if (f.type) tickets = tickets.filter((t) => t.type === f.type);
+  if (f.label) tickets = tickets.filter((t) => t.labels.includes(f.label!));
+  if (f.assignee) tickets = tickets.filter((t) => t.assignee === f.assignee);
+  if (f.q) { const q = f.q.toLowerCase(); tickets = tickets.filter((t) => String(t.id).toLowerCase().includes(q) || String(t.title ?? "").toLowerCase().includes(q)); }
+
+  // control row: active filters as clearable chips + a free-text search form; both reflected in the URL
+  // query string (deep-linkable). A chip's link drops just that key; "clear all" → "/". esc() everything (AC4).
+  const active = FILTER_KEYS.filter((k) => f[k]);
+  const href = (omit?: string) => { const p = new URLSearchParams(); for (const k of FILTER_KEYS) if (f[k] && k !== omit) p.set(k, f[k]!); const s = p.toString(); return s ? `/?${s}` : "/"; };
+  const chips = active.map((k) => `<a class="lbl" href="${esc(href(k))}">${esc(k)}: ${esc(f[k])} ✕</a>`).join(" ");
+  const hidden = (["state", "type", "label", "assignee"] as const).map((k) => f[k] ? `<input type="hidden" name="${k}" value="${esc(f[k])}">` : "").join("");
+  const controls = `<form class="filterbar" method="get" action="/">${hidden}`
+    + `<input type="text" name="q" value="${esc(f.q ?? "")}" placeholder="search id / title" spellcheck="false">`
+    + `<button type="submit">search</button>`
+    + (active.length ? `<a class="lbl clearall" href="/">clear all</a>` : "")
+    + (chips ? `<span class="chips">${chips}</span>` : "")
+    + `</form>`;
+
   const byState = new Map<string, ReturnType<typeof toTicket>[]>();
   for (const t of tickets) (byState.get(t.state) ?? byState.set(t.state, []).get(t.state)!).push(t);
   const states = [
@@ -151,7 +181,12 @@ function boardPage(db: DatabaseSync, projectId: string, projectKey: string): str
     const body = cards.length ? cards.map(cardHtml).join("") : `<p class="empty">—</p>`;
     return `<section class="col"><h2>${esc(s)}<span class="count">${cards.length}</span></h2>${body}</section>`;
   }).join("");
-  return `<div class="board">${cols}</div>` + (tickets.length === 0 ? `<p class="empty">No tickets in ${esc(projectKey)} yet.</p>` : "");
+  // empty state (AC3): when nothing matches, show the existing empty element — filter-aware so it reads
+  // accurately ("none match" when filtering vs. "none yet" on a genuinely empty board).
+  const empty = tickets.length === 0
+    ? (active.length ? `<p class="empty">No tickets match the active filters.</p>` : `<p class="empty">No tickets in ${esc(projectKey)} yet.</p>`)
+    : "";
+  return controls + `<div class="board">${cols}</div>` + empty;
 }
 
 // Ticket detail: full description + comments. Returns null when the ticket is absent (→ 404).
@@ -500,8 +535,13 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
         return json(res, 405, { error: "read-only daemon: only GET is allowed" });
       }
 
-      // GET / — the web UI board (DL-2): server-rendered HTML, read-only, columns by state.
-      if (path === "/") return htmlOut(res, 200, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey)));
+      // GET / — the web UI board (DL-2): server-rendered HTML, read-only, columns by state. DL-20:
+      // optional server-side filter/search via the query string (state/type/label/assignee + free-text q).
+      if (path === "/") {
+        const sp = url.searchParams;
+        const filters = { state: sp.get("state") ?? undefined, type: sp.get("type") ?? undefined, label: sp.get("label") ?? undefined, assignee: sp.get("assignee") ?? undefined, q: sp.get("q") ?? undefined };
+        return htmlOut(res, 200, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, filters)));
+      }
 
       // GET /roadmap — the roadmap doc view + edit form (+ operator-only publish) (DL-3).
       if (path === "/roadmap") {

@@ -80,6 +80,26 @@ ok(board.text.includes(bug.id) && board.text.includes("A defect to fix"), "board
 ok(board.text.includes(">Todo<") && board.text.includes(">In Review<"), "board shows state columns (Todo + In Review)");
 ok(board.text.includes(`/ticket/${feat.id}`), "board cards link to the ticket detail route");
 
+// ─── DL-20: web-UI board server-side filter/search (mirrors /api/tickets) ───
+// the seed: feat = Feature/Todo/pm "Daemon foundation"; bug = Bug/Done/qa "A defect to fix"
+const fCard = `/ticket/${feat.id}`, bCard = `/ticket/${bug.id}`;
+ok(board.text.includes(fCard) && board.text.includes(bCard), "DL-20: unfiltered GET / shows ALL cards (baseline, unchanged)");
+const byType = await getHtml("/?type=Bug");
+ok(byType.text.includes(bCard) && !byType.text.includes(fCard), "DL-20 AC1: GET /?type=Bug → only the Bug card");
+const byState = await getHtml("/?state=Todo");
+ok(byState.text.includes(fCard) && !byState.text.includes(bCard), "DL-20 AC1: GET /?state=Todo → only the Todo card (feat)");
+const byLabel = await getHtml("/?label=qa");
+ok(byLabel.text.includes(bCard) && !byLabel.text.includes(fCard), "DL-20 AC1: GET /?label=qa → only the qa-owned card (bug)");
+const byQTitle = await getHtml("/?q=DEFECT");        // bug title "A defect to fix" — case-insensitive
+ok(byQTitle.text.includes(bCard) && !byQTitle.text.includes(fCard), "DL-20 AC2: free-text ?q= matches title case-insensitively (→ bug)");
+const byQId = await getHtml(`/?q=${feat.id.toLowerCase()}`);
+ok(byQId.text.includes(fCard) && !byQId.text.includes(bCard), "DL-20 AC2: ?q= matches ticket id case-insensitively (→ feat)");
+ok(byState.text.includes("clear all") && byState.text.includes("state: Todo"), "DL-20 AC3: active filters render a clearable control row (chip + clear-all)");
+ok(byState.text.includes('name="state" value="Todo"') && byState.text.includes('name="q"'), "DL-20 AC3: the active filter is preserved in the search form (a q-search keeps it) — deep-linkable via the URL");
+const noMatch = await getHtml("/?state=Backlog");    // nothing is in Backlog
+ok(!noMatch.text.includes(fCard) && !noMatch.text.includes(bCard) && noMatch.text.includes("No tickets match"), "DL-20 AC3: a no-match filter → empty state, no cards");
+ok(byQTitle.text.includes('class="board"'), "DL-20 AC4/AC1: a filtered board still renders the state columns (only matching cards), no client JS");
+
 // GET /ticket/:id — the detail UI shows the full description + comments
 const view = await getHtml(`/ticket/${feat.id}`);
 ok(view.status === 200 && view.type.includes("text/html"), "GET /ticket/:id → 200 text/html (detail view)");
