@@ -41,6 +41,7 @@ const feat = await call(pm, "save_issue", { title: "Daemon foundation", type: "F
 const bug = await call(pm, "save_issue", { title: "A defect to fix", type: "Bug", labels: ["dev-loop", "Bug", "qa"], priority: 1 });
 await call(pm, "save_comment", { issueId: feat.id, body: "kicking this off — **go** <script>x()</script>" }); // DL-16: comment markdown + an XSS-injection
 await call(pm, "save_issue", { id: bug.id, state: "In Review", relatedTo: [feat.id] }); // give the board >1 state + a relation (DL-8)
+await call(pm, "save_issue", { id: bug.id, state: "Done" }); // DL-17: a Done transition → exercises the activity throughput + cycle-time paths
 // a published roadmap doc (operator-only publish gate)
 await call(op, "doc.save", { slug: "roadmap", kind: "roadmap", title: "Product Roadmap", body: "# Roadmap\n- DL-1 daemon foundation\n", baseVersion: 0 });
 await call(op, "doc.publish", { kind: "roadmap", version: 1 });
@@ -97,6 +98,25 @@ ok(view.text.includes('<input type="checkbox" disabled> todo box'), "DL-16: a `-
 ok(view.text.includes("<strong>go</strong>"), "DL-16: comment bodies render markdown too (consistent with the description)");
 ok(view.text.includes("<dt>Created</dt>") && view.text.includes("<dt>Updated</dt>"), "DL-16: the detail meta shows created + updated timestamps");
 ok(view.text.includes("&lt;script&gt;alert(1)") && !view.text.includes("<script>alert(1)") && !view.text.includes("<script>x()"), "DL-16/XSS: an injected <script> in the description AND the comment is escaped/inert (renderMarkdown esc-first)");
+
+// ─── DL-17: read-only activity & throughput view over the events ledger ───
+const act = await getHtml("/activity");
+ok(act.status === 200 && act.type.includes("text/html"), "DL-17: GET /activity → 200 text/html (activity view)");
+ok(act.text.includes("<!doctype html") && act.text.includes("<h1>Activity</h1>"), "DL-17: /activity is an HTML page titled Activity");
+// AC1 — the recent-events feed shows the seeded create / transition(from→to) / comment events, newest-first
+ok(act.text.includes(feat.id) && act.text.includes("created"), "DL-17 AC1: feed shows an issue.create event (ticket id + 'created')");
+ok(act.text.includes("moved") && act.text.includes("→") && act.text.includes(">Done<"), "DL-17 AC1: feed shows an issue.transition with from→to (the In Review→Done move)");
+ok(act.text.includes("commented on"), "DL-17 AC1: feed shows the comment.add event");
+// AC2 — throughput: count of transitions into Done in a recent window (the bug reached Done during seeding)
+ok(act.text.includes("Throughput") && act.text.includes("into Done"), "DL-17 AC2: a throughput section counts transitions into Done");
+// AC3 — per-actor activity counts over the window (pm did every seed write)
+ok(act.text.includes("Per-actor activity") && act.text.includes(">pm<"), "DL-17 AC3: per-actor activity lists the actor (pm)");
+// AC4 — cycle time per recently-Done ticket (the bug: create → Done)
+ok(act.text.includes("Cycle time") && act.text.includes(bug.id), "DL-17 AC4: cycle-time section lists the recently-Done ticket");
+// AC1/AC6 — the header nav links to /activity (rendered on every page, e.g. the board)
+ok(board.text.includes('href="/activity"'), "DL-17 AC1/AC6: the header nav links to /activity");
+// AC7 — non-GET is refused 405 (read-only), consistent with the other read routes
+ok((await get("/activity", "POST")).status === 405, "DL-17 AC7: POST /activity → 405 (read-only daemon)");
 
 // GET /api — the JSON API index (moved off / when DL-2 took the root for the UI)
 const root = await get("/api");

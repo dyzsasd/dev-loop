@@ -124,7 +124,7 @@ function page(title: string, project: string, inner: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">`
     + `<meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>`
     + `<style>${STYLE}</style></head><body>`
-    + `<header><a class="home" href="/">dev-loop</a><span class="proj">${esc(project)}</span><nav><a href="/roadmap">roadmap</a> · <a href="/reports">reports</a></nav></header>`
+    + `<header><a class="home" href="/">dev-loop</a><span class="proj">${esc(project)}</span><nav><a href="/roadmap">roadmap</a> · <a href="/activity">activity</a> · <a href="/reports">reports</a></nav></header>`
     + `<main>${inner}</main></body></html>`;
 }
 
@@ -365,6 +365,89 @@ function reportPage(root: string, agent: string, level: string, date: string): {
     + `<h1>${esc(date)}</h1><div class="doc">${renderMarkdown(body)}</div></article>` };
 }
 
+// ── DL-17: activity & throughput view over the events ledger (read-only) ─────────────────────────
+// A human-facing read over the append-only `events` table (issue.create / issue.transition{from,to} /
+// comment.add, written by the MCP server at server.ts). Pure GET through the query_only `db`: no write
+// path, no new MCP tool call, no new table. Robust to a null ticket_id and to empty/malformed `data`
+// JSON — a bad row is skipped (metrics) or shown plainly (feed), never breaking the page (AC5).
+const DAY_MS = 86_400_000;
+// Defensive JSON parse of an event's `data` blob — empty / malformed / non-object → {} instead of throwing.
+function eventData(s: unknown): Record<string, any> {
+  if (typeof s !== "string" || s === "") return {};
+  try { const v = JSON.parse(s); return v && typeof v === "object" ? (v as Record<string, any>) : {}; } catch { return {}; }
+}
+// Human-readable elapsed (ms → "3d 4h" / "2h 5m" / "12m" / "<1m"); NaN/negative → "—".
+function humanDur(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ${h % 24}h`;
+  if (h > 0) return `${h}h ${m % 60}m`;
+  if (m > 0) return `${m}m`;
+  return "<1m";
+}
+// One feed line per event, formatted by kind; every interpolation passes through esc() (AC6). A null
+// ticket_id renders no link (AC5); unknown kinds (issue.update / topic.*) fall through to a plain line.
+function eventLine(e: Record<string, any>): string {
+  const d = eventData(e.data);
+  const who = `<b>${esc(e.actor)}</b>`;
+  const tlink = e.ticket_id ? ` <a class="lbl" href="/ticket/${encodeURIComponent(e.ticket_id)}">${esc(e.ticket_id)}</a>` : "";
+  let what: string;
+  switch (e.kind) {
+    case "issue.create": what = `created${tlink} <span class="badge">${esc(d.type ?? "?")}</span> ${esc(d.title ?? "")}`; break;
+    case "issue.transition": what = `moved${tlink} <span class="lbl">${esc(d.from ?? "?")}</span> → <span class="lbl">${esc(d.to ?? "?")}</span>`; break;
+    case "comment.add": what = `commented on${tlink || " a ticket"}`; break;
+    default: what = `${esc(e.kind)}${tlink}`; break;
+  }
+  return `<div class="rlevel"><span class="rkey">${esc(e.created_at)}</span><span>${who} ${what}</span></div>`;
+}
+
+// GET /activity — recent events + throughput (Done transitions), per-actor counts, and cycle time, all
+// read through the query_only `db`. `nowMs` is injected (the daemon passes Date.now()) so the helper is
+// pure/testable. Windows: 7d + 30d for throughput; 30d for per-actor + cycle-time recency.
+function activityPage(db: DatabaseSync, projectId: string, projectKey: string, nowMs: number): string {
+  const since30 = new Date(nowMs - 30 * DAY_MS).toISOString();
+  const since7 = new Date(nowMs - 7 * DAY_MS).toISOString();
+
+  // Recent feed — newest-first, bounded (the three named kinds get rich formatting; others fall through).
+  const feed = db.prepare("SELECT ticket_id,actor,kind,data,created_at FROM events WHERE project_id=? ORDER BY id DESC LIMIT 100").all(projectId) as Record<string, any>[];
+
+  // Transitions in the last 30d → Done throughput + the set of recently-Done tickets for cycle time.
+  const trans = db.prepare("SELECT ticket_id,data,created_at FROM events WHERE project_id=? AND kind='issue.transition' AND created_at>=? ORDER BY id").all(projectId, since30) as Record<string, any>[];
+  let done7 = 0, done30 = 0;
+  const doneAt = new Map<string, string>();                                   // ticket_id → latest Done-transition time (in window)
+  for (const e of trans) {
+    if (eventData(e.data).to !== "Done") continue;                            // malformed data → skipped, never breaks (AC5)
+    done30++; if (e.created_at >= since7) done7++;
+    if (e.ticket_id) { const prev = doneAt.get(e.ticket_id); if (!prev || e.created_at > prev) doneAt.set(e.ticket_id, e.created_at); }  // null ticket_id → counted in throughput, no cycle row (AC5)
+  }
+
+  // Per-actor activity over the same 30d window.
+  const actors = db.prepare("SELECT actor,count(*) n FROM events WHERE project_id=? AND created_at>=? GROUP BY actor ORDER BY n DESC, actor").all(projectId, since30) as { actor: string; n: number }[];
+
+  // Cycle time per recently-Done ticket: elapsed from the ticket's create (else first Todo transition) to
+  // its Done transition. When that start anchor is missing (incomplete history), render a graceful fallback.
+  const cycle = [...doneAt.entries()].sort((a, b) => (a[1] < b[1] ? 1 : -1)).map(([tid, done]) => {
+    const hist = db.prepare("SELECT kind,data,created_at FROM events WHERE project_id=? AND ticket_id=? AND (kind='issue.create' OR kind='issue.transition') ORDER BY id").all(projectId, tid) as Record<string, any>[];
+    let start: string | undefined;
+    for (const e of hist) if (e.kind === "issue.create") { start = e.created_at; break; }
+    if (!start) for (const e of hist) if (eventData(e.data).to === "Todo") { start = e.created_at; break; }
+    return { tid, done, label: start ? humanDur(Date.parse(done) - Date.parse(start)) : "— (incomplete history)" };
+  });
+
+  const metricRow = (k: string, v: string) => `<div class="rlevel"><span class="rkey">${esc(k)}</span><span>${v}</span></div>`;
+  const throughput = `<h3>Throughput — transitions into Done</h3>`
+    + metricRow("last 7d", `<b>${esc(done7)}</b>`) + metricRow("last 30d", `<b>${esc(done30)}</b>`);
+  const actorSection = `<h3>Per-actor activity — last 30 days</h3>`
+    + (actors.length ? actors.map((a) => metricRow(a.actor, `<b>${esc(a.n)}</b> event${Number(a.n) === 1 ? "" : "s"}`)).join("") : `<p class="empty">No activity in the last 30 days.</p>`);
+  const cycleSection = `<h3>Cycle time — recently Done</h3>`
+    + (cycle.length ? cycle.map((c) => `<div class="rlevel"><span class="rkey">${esc(c.tid)}</span><span>cycle <b>${esc(c.label)}</b> · Done ${esc(c.done)}</span></div>`).join("") : `<p class="empty">No tickets reached Done in the last 30 days.</p>`);
+  const feedSection = `<h3>Recent activity<span class="count" style="margin-left:.4rem">${feed.length}</span></h3>`
+    + (feed.length ? feed.map(eventLine).join("") : `<p class="empty">No activity recorded yet.</p>`);
+
+  return `<a class="back" href="/">← board</a><article class="detail"><h1>Activity</h1>`
+    + throughput + actorSection + cycleSection + feedSection + `</article>`;
+}
+
 // Build the HTTP server over an already-opened, project-resolved db. Exported so tests (and a later
 // in-process embed) can start it without the CLI bootstrap below. GET routes issue ONLY SELECTs; the
 // optional DL-3 /roadmap/* POST routes write the roadmap doc through the separate `writeDb` connection.
@@ -396,6 +479,12 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
       // GET /roadmap — the roadmap doc view + edit form (+ operator-only publish) (DL-3).
       if (path === "/roadmap") {
         return htmlOut(res, 200, page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: canWrite, canPublish: canWrite && actor === "operator" })));
+      }
+
+      // GET /activity — read-only activity & throughput over the events ledger (DL-17). Pure SELECTs
+      // through the query_only db; Date.now() injected so activityPage stays pure/testable.
+      if (path === "/activity") {
+        return htmlOut(res, 200, page(`activity · ${projectKey}`, projectKey, activityPage(db, projectId, projectKey, Date.now())));
       }
 
       // GET /reports — the agent reports index (DL-10, read-only filesystem view; empty state if absent).
