@@ -89,15 +89,18 @@ Append-only thereafter — PM keeps it current._
   one-way Linear mirror, P8 second-CLI portability — **all daemon-free**.
 - **Operator steering:** every agent writes daily/weekly/monthly reports; a sibling
   `<report>.review.md` (点评) is distilled into a `lessons.md` rule the agent then obeys.
-- **Obvious gaps vs. the Vision:** _(updated 2026-06-23 PM)_ the **daemon** (DL-1), a
-  read-only **board/ticket web UI** (DL-2), and the **roadmap view/edit write surface** (DL-3 —
-  the daemon's first write path, through the operator-publish gate) now exist (verified Done).
-  Remaining gaps: **no Lark/Slack roadmap bridge** (DL-4, Todo — now unblocked by DL-3), **no
-  reports/点评 view in the web UI** (DL-10, Todo), **cwd-based project auto-selection** (DL-12
-  proposal + DL-13, Todo), and the inter-agent "discussion board" + Lark/Slack channel still
-  exist as **poll-based, no-daemon** mechanisms (the deferred candidate). The "Linear-like web
-  app" half of the Vision (board + tickets + roadmap view/edit) is now substantially built; the
-  remaining headline gap is the **Lark/Slack roadmap bridge** (steer from chat).
+- **Obvious gaps vs. the Vision:** _(updated 2026-06-23 PM)_ **the headline Vision arc is SHIPPED
+  (all verified Done):** **daemon** (DL-1) → read-only **board/ticket web UI** (DL-2) → **roadmap
+  view/edit** write surface via the operator-publish gate (DL-3) → **steer the roadmap from
+  Lark/Slack** (DL-4 — a chat `roadmap`/`roadmap edit` bridge that lands DRAFTs, §16-scrubbed,
+  never auto-published). So the operator can now view+manage the loop from a browser AND propose
+  roadmap edits from chat, with the operator-publish gate intact throughout. **Remaining (smaller)
+  gaps:** **reports/点评 view in the web UI** (DL-10, In Progress), **cwd-based project
+  auto-selection** (DL-12 proposal awaiting operator + DL-13), web-UI polish (DL-8 relatedTo, DL-14
+  conflict-draft-preservation), README drift (DL-5), and the deferred candidates (inter-agent
+  discussion daemon; multi-stakeholder roadmap auth; accepting a 点评 *from* the web UI). The next
+  theme, once this milestone's tail drains, is the **supporting goals** (hub/`service` hardening +
+  broader portability) — see Goals.
 
 ## Personas
 
@@ -225,6 +228,19 @@ Append-only thereafter — PM keeps it current._
   daemon, so the gate can't drift. The **roadmap view/edit half of the Vision now exists**; **DL-4**
   (Lark/Slack roadmap bridge, depends on DL-3) is now **unblocked**. _(Note: full `npm test` shows
   5 `mirror`-suite failures = the independent, In-Progress DL-11, unrelated to DL-3.)_
+- **2026-06-23 — SHIPPED: DL-4 Lark/Slack roadmap bridge verified Done (PM) → the headline Vision
+  arc is COMPLETE.** Dev shipped the roadmap-over-chat bridge (commit `a770bdd`, in `channel.poll`
+  so the agents are unchanged): a chat `roadmap` → a §16-safe summary reply; a `roadmap edit <text>`
+  → a roadmap **DRAFT** via `doc.save` (CAS), **never published** (there is deliberately no publish
+  command — publishing stays the operator-actor `doc.publish` gate, DL-3). Channel content is
+  scrubbed before it lands in a doc (Slack/AWS tokens, email, phone → `***`); credentials are
+  env-var NAMES only and the token never crosses the tool boundary; inbound text is treated as DATA
+  from an UNVERIFIED author. Verified green: `cd hub && npm test` end-to-end (9/9 suites; the DL-4
+  channel suite asserts every AC + the false-positive hardening that a casual `roadmap:` musing is
+  NOT captured as an edit). **DL-1→DL-2→DL-3→DL-4 are all Done** — the operator can view+manage the
+  loop from a browser and steer the roadmap from chat, operator-publish gate intact. DL-11 (mirror)
+  also verified by QA, so the full suite is green again. Bottleneck remains Dev: DL-10 (reports
+  view) In Progress; DL-13/DL-14/DL-8/DL-5 queued; DL-12 awaits the operator's commit.
 
 ## Candidate ideas
 
