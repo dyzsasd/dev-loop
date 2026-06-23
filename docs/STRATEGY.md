@@ -105,7 +105,7 @@ Append-only thereafter — PM keeps it current._
   commit) and an **optional machine-local `run-loop.sh` enable step** (export the resolved
   `DEVLOOP_PROJECT` + the correct per-pane `DEVLOOP_ACTOR` — the latter also fixes a pre-existing drift
   where panes attribute to `operator`; deferred to the operator since `run-loop.sh` is an untracked
-  machine-local launcher, not a repo deliverable). Then: web-UI polish: DL-8 relatedTo — **SHIPPED** (verified Done — ticket detail now shows clickable Related/Duplicate-of links), DL-14 conflict-draft-preservation — In Progress; **README drift (DL-5) — SHIPPED** (Status headline now
+  machine-local launcher, not a repo deliverable). Then: web-UI polish: DL-8 relatedTo — **SHIPPED** (verified Done — ticket detail now shows clickable Related/Duplicate-of links), DL-14 conflict-draft-preservation — **SHIPPED** (verified Done); **README drift (DL-5) — SHIPPED** (Status headline now
   v0.19.2 with the P5–P8 history; verified Done); and the deferred candidates (inter-agent discussion daemon; multi-stakeholder roadmap
   auth; **accepting a 点评 *from* the web UI** — the remaining half of the reports-in-UI idea, a
   write path). With DL-10, the operator's **observe** loop is browser-complete (board · tickets ·
@@ -282,6 +282,8 @@ Append-only thereafter — PM keeps it current._
 
 - **2026-06-23 — SHIPPED: DL-8 relatedTo/duplicateOf in the web UI verified Done (PM).** Dev's commit `1fbeaf2` adds click-through Related / Duplicate-of links to the ticket detail (shown only when present — no dangling rows). Verified live: `/ticket/DL-3` → a Related row linking DL-1/DL-2; `/ticket/DL-1` → no row; read-only preserved; daemon-test asserts both. The board's dependency chain is now navigable in the browser. Backlog now down to **DL-14** (roadmap-editor conflict draft-preservation, In Progress) + **DL-12** (cwd §11/SKILL wording, parked for operator).
 
+- **2026-06-23 — SHIPPED: DL-14 roadmap-editor conflict-draft-preservation verified Done (PM) → MILESTONE COMPLETE (14/15).** Dev's commit `ebd2868` makes a rejected roadmap save (CAS conflict / validation error) preserve the user's typed text + refresh the hidden baseVersion (no data-loss; verified via the daemon conflict integration test). **The entire operator-set milestone is now shipped + verified**: daemon (DL-1) → web board/tickets (DL-2) → roadmap view/edit (DL-3) → Lark/Slack steer (DL-4) → reports-in-UI (DL-10) → cwd auto-pin (DL-13/15) → README accuracy (DL-5) → web-UI polish (DL-8 relations, DL-14 conflict-preserve) → plus QA bug-fixes DL-6/7/9/11. **Dev queue is empty.** The only open item is **DL-12** (cwd §11/SKILL agent-side wording, §17-gated — awaiting the operator's git commit) + the optional machine-local `run-loop.sh` enable step. **Next theme (backlog drained → ready to re-open):** the supporting goals (hub/`service` hardening + broader portability — note hardening/tests lean Architect/QA lane) and the deferred candidates (点评-from-the-web-UI, which needs the §22 carve-out proposal noted in Candidate ideas; inter-agent discussion daemon; multi-stakeholder roadmap auth). Awaiting operator prioritization of the next theme.
+
 ## Candidate ideas
 
 _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL-1…DL-5 on
@@ -301,9 +303,19 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   *observe-and-steer* flow is today purely file-based (read `reports/<agent>/**`, drop a
   `<report>.review.md` 点评 sibling). **UPDATE 2026-06-23:** the operator asked for this directly,
   and the **read half** is now filed as **DL-10** (surface the daily/weekly/monthly reports in the
-  web UI). **Remaining follow-up:** accepting a **点评 *from* the web UI** (a write path that drops
-  a `<report>.review.md` sibling) — closes the operator-feedback loop without a terminal; file once
-  DL-10 lands (it reuses DL-10's reports view + needs a guarded write path, like DL-3's roadmap edit).
+  web UI). **Remaining follow-up (DL-10 has now landed):** accepting a **点评 *from* the web UI** (a
+  write path that drops a `<report>.review.md` sibling) — closes the operator-feedback loop without a
+  terminal; reuses DL-10's reports view + a guarded write path like DL-3's roadmap edit. **⚠️ §17/§22
+  firewall constraint (load-bearing — do NOT file as a naive Dev ticket):** conventions §22 states
+  *"agents never write a `*.review.md` file — ever,"* because that's exactly what makes any on-disk
+  review operator-authored-by-construction (the spoof-proof trust boundary). A daemon write path
+  therefore needs a **conventions §22 carve-out** — "the localhost daemon MAY write a `*.review.md`
+  ONLY for an operator-submitted 点评 via the web UI (the operator IS the author; localhost-trust),
+  attributed/audited as such" — which is a **§17-gated `[pm-proposal]`** (operator applies), paired
+  with a buildable daemon `POST /reports/<agent>/<level>/<date>/review` slice (path-validated, §16-safe,
+  CSRF/same-origin-guarded since it's a write). Scope it like the cwd feature (DL-12 proposal +
+  DL-13/15 buildable) — i.e. a small design pass, not a one-shot ticket. Awaiting operator
+  prioritization vs. the supporting goals (hub hardening + portability) now that the milestone is done.
 - **Web-UI fidelity polish (ux-flows lens, PM 2026-06-23, overflow).** Lower-value read-view
   refinements found alongside DL-8, parked to keep the Dev-bottlenecked Todo signal-rich: (a)
   ticket/comment bodies render as **raw markdown** inside a `<pre>` block — a tiny inline
