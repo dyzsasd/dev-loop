@@ -284,6 +284,8 @@ Append-only thereafter — PM keeps it current._
 
 - **2026-06-23 — SHIPPED: DL-14 roadmap-editor conflict-draft-preservation verified Done (PM) → MILESTONE COMPLETE (14/15).** Dev's commit `ebd2868` makes a rejected roadmap save (CAS conflict / validation error) preserve the user's typed text + refresh the hidden baseVersion (no data-loss; verified via the daemon conflict integration test). **The entire operator-set milestone is now shipped + verified**: daemon (DL-1) → web board/tickets (DL-2) → roadmap view/edit (DL-3) → Lark/Slack steer (DL-4) → reports-in-UI (DL-10) → cwd auto-pin (DL-13/15) → README accuracy (DL-5) → web-UI polish (DL-8 relations, DL-14 conflict-preserve) → plus QA bug-fixes DL-6/7/9/11. **Dev queue is empty.** The only open item is **DL-12** (cwd §11/SKILL agent-side wording, §17-gated — awaiting the operator's git commit) + the optional machine-local `run-loop.sh` enable step. **Next theme (backlog drained → ready to re-open):** the supporting goals (hub/`service` hardening + broader portability — note hardening/tests lean Architect/QA lane) and the deferred candidates (点评-from-the-web-UI, which needs the §22 carve-out proposal noted in Candidate ideas; inter-agent discussion daemon; multi-stakeholder roadmap auth). Awaiting operator prioritization of the next theme.
 
+- **2026-06-23 — FILED: DL-16 web-UI detail polish (PM, post-milestone).** With the operator-set milestone complete and the Dev queue empty, re-opened the review rotation and filed the parked buildable polish (Improvement, pm, Low): render the ticket **description + comments** via the existing `renderMarkdown` (today they're raw `<pre>` while roadmap/reports already render markdown — DL-3/DL-10) + show created/updated timestamps. **Chosen deliberately over filing another operator-gated proposal**: it's buildable now (no §17 gate, reuses existing code), keeping the loop productive while DL-12 (cwd §11/SKILL) + the 点评-from-UI §22-carve-out (Candidate ideas) await the operator. Next operator-gated initiative when you engage: 点评-from-the-web-UI (needs the §22 carve-out).
+
 ## Candidate ideas
 
 _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL-1…DL-5 on
@@ -316,7 +318,7 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   CSRF/same-origin-guarded since it's a write). Scope it like the cwd feature (DL-12 proposal +
   DL-13/15 buildable) — i.e. a small design pass, not a one-shot ticket. Awaiting operator
   prioritization vs. the supporting goals (hub hardening + portability) now that the milestone is done.
-- **Web-UI fidelity polish (ux-flows lens, PM 2026-06-23, overflow).** Lower-value read-view
+- **Web-UI fidelity polish (ux-flows lens, PM 2026-06-23).** **UPDATE 2026-06-23: filed as DL-16** (items a+b: render markdown ticket/comment bodies via the existing renderMarkdown + show created/updated timestamps), now that the milestone backlog drained. Item (c) below (non-API path → JSON not HTML-404) remains a minor optional note. Lower-value read-view
   refinements found alongside DL-8, parked to keep the Dev-bottlenecked Todo signal-rich: (a)
   ticket/comment bodies render as **raw markdown** inside a `<pre>` block — a tiny inline
   markdown→HTML renderer (no native deps, hub doctrine) would match the "Linear-like" Vision; (b)
