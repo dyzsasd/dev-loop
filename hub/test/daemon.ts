@@ -138,6 +138,83 @@ ok(post.status === 405, "POST /api/tickets → 405 (read-only daemon — no muta
 const del = await get(`/api/tickets/${feat.id}`, "DELETE");
 ok(del.status === 405, "DELETE /api/tickets/:id → 405 (read-only)");
 
+// ─── DL-3: roadmap view/edit write surface — markdown render, CAS, operator-publish gate, §17 firewall ───
+// Writable daemons take a SEPARATE writable connection + an actor; the read connection stays query_only.
+// One runs as the OPERATOR (may publish), one as a NON-operator (drafts only).
+async function startWritable(actor: string): Promise<{ base: string; close: () => void }> {
+  const wdb = openDb(DB);                                   // writable — backs ONLY the /roadmap/* routes
+  const rdb = openDb(DB); rdb.exec("PRAGMA query_only=ON");
+  const srv = createDaemon({ db: rdb, projectId, projectKey: "dmn", writeDb: wdb, actor });
+  srv.listen(0, "127.0.0.1"); await once(srv, "listening");
+  const p = (srv.address() as { port: number }).port;
+  return { base: `http://127.0.0.1:${p}`, close: () => { srv.close(); rdb.close(); wdb.close(); } };
+}
+async function postForm(b: string, path: string, fields: Record<string, string>): Promise<{ status: number; location: string | null; text: string }> {
+  const r = await fetch(b + path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields).toString(), redirect: "manual" });
+  return { status: r.status, location: r.headers.get("location"), text: await r.text() };
+}
+const gettext = async (b: string, path: string) => { const r = await fetch(b + path); return { status: r.status, text: await r.text() }; };
+
+const opd = await startWritable("operator");
+const devd = await startWritable("dev");          // a non-operator actor
+const verifier = await as("pm");                  // an MCP client to inspect doc state precisely
+
+// AC1 — GET /roadmap renders the current roadmap doc (markdown) + version/status, + the edit/publish controls.
+const rm = await gettext(opd.base, "/roadmap");
+ok(rm.status === 200 && rm.text.includes("<li>DL-1 daemon foundation</li>"), "GET /roadmap → 200 with the roadmap body RENDERED from markdown (- item → <li>)");
+ok(rm.text.includes("Published (v1)"), "roadmap view shows the version/status (published v1)");
+ok(rm.text.includes('action="/roadmap/save"'), "roadmap shows the edit form (draft-save)");
+ok(rm.text.includes('action="/roadmap/publish"'), "operator daemon shows the publish control");
+
+// AC2 — edit saves a DRAFT via the CAS; it does NOT publish (published current stays v1).
+const save = await postForm(opd.base, "/roadmap/save", { baseVersion: "1", body: "# Roadmap\n- DL-1 daemon foundation\n- DL-2 web UI\n", summary: "add DL-2" });
+ok(save.status === 303 && save.location === "/roadmap", "POST /roadmap/save → 303 redirect (Post/Redirect/Get)");
+ok((await get("/api/docs/roadmap")).body.current_version === 1, "after save, the PUBLISHED current is still v1 (a draft never auto-publishes)");
+const rm2 = await gettext(opd.base, "/roadmap");
+ok(rm2.text.includes("Draft (v2, unpublished)") && rm2.text.includes("<li>DL-2 web UI</li>"), "roadmap now shows the v2 DRAFT (unpublished) with the new content");
+
+// AC2 — optimistic CAS: a stale baseVersion is surfaced as a CONFLICT (409), never last-write-wins.
+const stale = await postForm(opd.base, "/roadmap/save", { baseVersion: "1", body: "STALE OVERWRITE", summary: "racing" });
+ok(stale.status === 409 && /CONFLICT/.test(stale.text), "stale baseVersion → 409 CONFLICT (no last-write-wins)");
+ok((await call(verifier, "doc.history", { kind: "roadmap" })).length === 2, "the rejected stale save created NO new version — still exactly 2 (v1 published + v2 draft)");
+
+// AC3 — only the OPERATOR may publish; a non-operator daemon must not (UI hides it AND the endpoint 403s).
+const devView = await gettext(devd.base, "/roadmap");
+ok(!devView.text.includes('action="/roadmap/publish"') && devView.text.includes('action="/roadmap/save"'), "non-operator UI hides publish, still offers draft-save");
+const devPub = await postForm(devd.base, "/roadmap/publish", { version: "2" });
+ok(devPub.status === 403 && /FORBIDDEN/.test(devPub.text), "non-operator POST /roadmap/publish → 403 FORBIDDEN (operator-publish gate)");
+ok((await call(verifier, "doc.get", { kind: "roadmap" })).current_version === 1, "after the forbidden publish attempt, published current is STILL v1");
+
+// AC3 — the operator CAN publish the v2 draft → current.
+const opPub = await postForm(opd.base, "/roadmap/publish", { version: "2" });
+ok(opPub.status === 303 && opPub.location === "/roadmap", "operator POST /roadmap/publish → 303 (published)");
+const nowPub = await call(verifier, "doc.get", { kind: "roadmap" });
+ok(nowPub.current_version === 2 && nowPub.version === 2, "operator publish moved the live roadmap → v2");
+
+// AC4 — §17 firewall: the write path is DB-doc-only and ALWAYS targets kind:"roadmap". Caller form input
+// (a crafted slug/kind/path) cannot redirect the write off the roadmap doc or to a filesystem path —
+// the daemon never reads those fields; the write goes through docstore (no fs API in the write path).
+const inject = await postForm(opd.base, "/roadmap/save", { baseVersion: "2", body: "firewall probe", slug: "../../etc/passwd", kind: "strategy", path: "/etc/passwd" });
+ok(inject.status === 303, "save with injected slug/kind/path fields → still 303 (the extra fields are ignored)");
+const docsAfter = await call(verifier, "doc.list", {});
+ok(docsAfter.length === 1 && docsAfter.every((d: any) => d.kind === "roadmap"), "no stray doc created — every write targeted kind:'roadmap' (slug/kind/path injection ignored; §17 firewall)");
+ok((await call(verifier, "doc.history", { kind: "roadmap" })).length === 3, "the injected save appended to the roadmap doc (v3), proving the target was never redirected");
+
+// a non-roadmap mutating route is still refused on the writable daemon (only /roadmap/* writes)
+ok((await postForm(opd.base, "/api/tickets", {})).status === 405, "POST to a non-roadmap route on the writable daemon → 405 (only /roadmap/* writes)");
+
+// DL-3 hardening (adversarial review): an over-limit POST body must NOT hang the handler —
+// parseFormBody always settles (over-limit → reject), so the request returns fast instead of dangling.
+let settled = false;
+await Promise.race([
+  postForm(opd.base, "/roadmap/save", { body: "x".repeat(1_100_000) }).then(() => { settled = true; }, () => { settled = true; }),
+  new Promise((r) => setTimeout(r, 3000)),
+]);
+ok(settled, "an over-limit (>1MB) POST body settles fast (no hang) — the handler never dangles");
+
+await verifier.close();
+opd.close();
+devd.close();
 server.close();
 ddb.close();
 

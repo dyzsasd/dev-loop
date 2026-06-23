@@ -10,6 +10,7 @@ import { openDb, nowIso, nextTicketId, logEvent, actorExists, listActorHandles, 
 import { ensureActors, ensureProject, findProject } from "./seed.ts";
 import { sendVia, pollVia, type Provider, type OutboundMsg, type InboundMsg, type Creds } from "./channel.ts";
 import { findByMarker, createIssue, updateIssue, type MirrorIssue } from "./linear.ts";
+import { DOC_KINDS, resolveDoc, latestVersion, docSave, docPublish } from "./docstore.ts";
 
 // ─── Environment / identity ──────────────────────────────────────────────────
 const DB_PATH = process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`;
@@ -219,15 +220,9 @@ server.registerTool("list_events",
   async ({ limit }) => ok(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? ORDER BY id DESC LIMIT ?").all(projectId, limit ?? 50)));
 
 // ─── P4 documents — versioned, attributable, operator-published (project-scoped) ──────
-const DOC_KINDS = ["strategy", "roadmap", "decisions", "notes"] as const;
-interface DocRow { id: string; project_id: string; kind: string; slug: string; title: string; status: string; current_version: number; created_by: string; created_at: string; updated_at: string; }
-const resolveDoc = (slug?: string, kind?: string): DocRow | undefined =>
-  slug ? db.prepare("SELECT * FROM documents WHERE project_id=? AND slug=?").get(projectId, slug) as DocRow | undefined
-       : kind ? db.prepare("SELECT * FROM documents WHERE project_id=? AND kind=?").get(projectId, kind) as DocRow | undefined
-              : undefined;
-const latestVersion = (docId: string): number =>
-  (db.prepare("SELECT max(version) v FROM document_versions WHERE doc_id=?").get(docId) as { v: number | null }).v ?? 0;
-
+// The CAS + operator-publish logic lives in docstore.ts (shared verbatim with the DL-3 daemon write
+// surface, so the two can never drift on the publish gate). These handlers are thin adapters:
+// pass (db, projectId, ACTOR, args) and map the DocResult to ok()/err().
 server.registerTool("doc.list", { description: "List this project's documents (no bodies).", inputSchema: { kind: z.string().optional() } },
   async (a) => ok((a.kind
     ? db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? AND kind=? ORDER BY kind").all(projectId, a.kind)
@@ -237,9 +232,9 @@ server.registerTool("doc.get", {
   description: "Get a document by slug or kind. Omit version → the published (current) version; if never published, the latest DRAFT with unpublished:true. version=N → that historical version.",
   inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive().optional() },
 }, async (a) => {
-  const d = resolveDoc(a.slug, a.kind);
+  const d = resolveDoc(db, projectId, a.slug, a.kind);
   if (!d) return err(`no document ${a.slug ?? a.kind} in ${PROJECT_KEY}`);
-  const ver = a.version ?? (d.current_version > 0 ? d.current_version : latestVersion(d.id));
+  const ver = a.version ?? (d.current_version > 0 ? d.current_version : latestVersion(db, d.id));
   if (ver === 0) return ok({ ...d, version: 0, body: "", unpublished: true, empty: true });
   const v = db.prepare("SELECT version,body,status,summary,base_version,author,created_at FROM document_versions WHERE doc_id=? AND version=?").get(d.id, ver) as Record<string, unknown> | undefined;
   if (!v) return err(`no version ${ver} of ${d.slug}`);
@@ -250,50 +245,24 @@ server.registerTool("doc.save", {
   description: "Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the doc's latest version, else CONFLICT (never last-write-wins). NEVER publishes — only the operator can (doc.publish).",
   inputSchema: { slug: z.string(), kind: z.enum(DOC_KINDS), title: z.string().optional(), body: z.string(), baseVersion: z.number().int().min(0), summary: z.string().optional() },
 }, async (a) => {
-  const t = nowIso();
-  db.exec("BEGIN IMMEDIATE"); // RESERVED lock before the read → cross-process CAS is atomic (§7)
-  try {
-    const d = db.prepare("SELECT * FROM documents WHERE project_id=? AND slug=?").get(projectId, a.slug) as DocRow | undefined;
-    if (!d) {
-      if (a.baseVersion !== 0) { db.exec("ROLLBACK"); return err(`baseVersion must be 0 to create a new doc '${a.slug}'`); }
-      const id = randomUUID();
-      db.prepare("INSERT INTO documents(id,project_id,kind,slug,title,status,current_version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'draft',0,?,?,?)").run(id, projectId, a.kind, a.slug, a.title ?? a.slug, ACTOR, t, t);
-      db.prepare("INSERT INTO document_versions(id,doc_id,version,body,status,summary,base_version,author,created_at) VALUES (?,?,1,?,'draft',?,0,?,?)").run(randomUUID(), id, a.body, a.summary ?? "", ACTOR, t);
-      logEvent(db, { project_id: projectId, actor: ACTOR, kind: "doc.save", data: { slug: a.slug, version: 1, base: 0 } });
-      db.exec("COMMIT");
-      return ok({ doc: a.slug, kind: a.kind, version: 1, status: "draft" });
-    }
-    // A document's kind is immutable identity: a save whose kind contradicts the stored doc at this
-    // slug is targeting the WRONG document, so refuse it (DL-9) instead of silently appending into /
-    // clobbering the existing doc. Checked BEFORE the CAS — a baseVersion comparison against the
-    // wrong doc is meaningless. (Keeps slug effectively unique per project: two kinds can never
-    // share a slug, so resolveDoc-by-slug stays correct.)
-    if (a.kind !== d.kind) { db.exec("ROLLBACK"); return err(`CONFLICT: slug '${a.slug}' is a '${d.kind}' document — refusing a '${a.kind}' save (a document's kind is immutable; use a distinct slug)`); }
-    const latest = latestVersion(d.id);
-    if (a.baseVersion !== latest) { db.exec("ROLLBACK"); return err(`CONFLICT: '${a.slug}' is at version ${latest}, your baseVersion ${a.baseVersion} is stale — re-read (doc.get) and re-apply`); }
-    const nv = latest + 1;
-    db.prepare("INSERT INTO document_versions(id,doc_id,version,body,status,summary,base_version,author,created_at) VALUES (?,?,?,?,'draft',?,?,?,?)").run(randomUUID(), d.id, nv, a.body, a.summary ?? "", a.baseVersion, ACTOR, t);
-    db.prepare("UPDATE documents SET title=?, updated_at=? WHERE id=?").run(a.title ?? d.title, t, d.id);
-    logEvent(db, { project_id: projectId, actor: ACTOR, kind: "doc.save", data: { slug: a.slug, version: nv, base: a.baseVersion } });
-    db.exec("COMMIT");
-    return ok({ doc: a.slug, kind: d.kind, version: nv, status: "draft" });
-  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
+  const r = docSave(db, projectId, ACTOR, a);
+  return r.ok ? ok(r.data) : err(r.error);
 });
 
 server.registerTool("doc.history", { description: "A document's version ledger (no bodies; newest first).", inputSchema: { slug: z.string().optional(), kind: z.string().optional() } },
   async (a) => {
-    const d = resolveDoc(a.slug, a.kind);
+    const d = resolveDoc(db, projectId, a.slug, a.kind);
     if (!d) return err(`no document ${a.slug ?? a.kind}`);
     return ok(db.prepare("SELECT version,status,author,summary,base_version,created_at FROM document_versions WHERE doc_id=? ORDER BY version DESC").all(d.id));
   });
 
 server.registerTool("doc.diff", { description: "Line diff between two versions of a document.", inputSchema: { slug: z.string().optional(), kind: z.string().optional(), from: z.number().int().positive(), to: z.number().int().positive() } },
   async (a) => {
-    const d = resolveDoc(a.slug, a.kind);
+    const d = resolveDoc(db, projectId, a.slug, a.kind);
     if (!d) return err(`no document ${a.slug ?? a.kind}`);
     const body = (n: number) => (db.prepare("SELECT body FROM document_versions WHERE doc_id=? AND version=?").get(d.id, n) as { body: string } | undefined)?.body;
     const fromBody = body(a.from), toBody = body(a.to);
-    if (fromBody === undefined || toBody === undefined) return err(`missing version (have up to ${latestVersion(d.id)})`);
+    if (fromBody === undefined || toBody === undefined) return err(`missing version (have up to ${latestVersion(db, d.id)})`);
     return ok({ from: a.from, to: a.to, fromBody, toBody, unified: unifiedDiff(fromBody, toBody) });
   });
 
@@ -301,23 +270,8 @@ server.registerTool("doc.publish", {
   description: "OPERATOR-ONLY: publish a draft version → current (the live doc). Cooperative role-gate (DEVLOOP_ACTOR=operator), not anti-spoof — see §18/HUB-ARCHITECTURE §16.",
   inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive() },
 }, async (a) => {
-  if (ACTOR !== "operator") return err("FORBIDDEN: only the operator may publish a doc draft→current");
-  const d = resolveDoc(a.slug, a.kind);
-  if (!d) return err(`no document ${a.slug ?? a.kind}`);
-  const v = db.prepare("SELECT version FROM document_versions WHERE doc_id=? AND version=?").get(d.id, a.version);
-  if (!v) return err(`no version ${a.version} of ${d.slug} to publish`);
-  const t = nowIso();
-  // single-current invariant (Codex review): publishing vN after vM must leave EXACTLY one version
-  // row marked 'current' — reset all to draft, then mark the chosen one, atomically.
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare("UPDATE document_versions SET status='draft' WHERE doc_id=? AND status='current'").run(d.id);
-    db.prepare("UPDATE document_versions SET status='current' WHERE doc_id=? AND version=?").run(d.id, a.version);
-    db.prepare("UPDATE documents SET status='current', current_version=?, updated_at=? WHERE id=?").run(a.version, t, d.id);
-    logEvent(db, { project_id: projectId, actor: ACTOR, kind: "doc.publish", data: { slug: d.slug, version: a.version } });
-    db.exec("COMMIT");
-  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
-  return ok({ doc: d.slug, status: "current", current_version: a.version });
+  const r = docPublish(db, projectId, ACTOR, a);
+  return r.ok ? ok(r.data) : err(r.error);
 });
 
 // ─── P5 discussion board — the Director chairs; invited agents post per round ──────
