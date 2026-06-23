@@ -3,6 +3,15 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.19.2 — self-hosting hygiene + cache-refresh bump
+- **`.gitignore` now excludes `.mcp.json`** — a self-hosting / service-backend setup (or `/dev-loop:init`)
+  writes a machine-local `.mcp.json` (abs paths, per-pane `${DEVLOOP_ACTOR}`); the committed template
+  stays `config/mcp.example.json`. This keeps a generated `.mcp.json` from being accidentally committed
+  by the loop. No code/SKILL change.
+- Version bump (plugin + marketplace → 0.19.2) to force a `/plugin update` cache refresh, so a fresh
+  session re-initializing a project via `/dev-loop:init` loads the full P5–P8 + 0.19.1 plugin (not a
+  stale cached copy — the marketplace-version-sync discipline).
+
 ## 0.19.1 — hardening from the Codex adversarial review (P4–P8)
 After the P0→P8 build, a cross-model adversarial review (OpenAI gpt-5.5 via the `codex` CLI; full
 report in `docs/reviews/codex-2026-06-P4-P8.md`) ran `npm test` (passed) and audited the hub. No
