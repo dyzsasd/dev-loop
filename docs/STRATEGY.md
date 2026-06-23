@@ -105,8 +105,7 @@ Append-only thereafter — PM keeps it current._
   commit) and an **optional machine-local `run-loop.sh` enable step** (export the resolved
   `DEVLOOP_PROJECT` + the correct per-pane `DEVLOOP_ACTOR` — the latter also fixes a pre-existing drift
   where panes attribute to `operator`; deferred to the operator since `run-loop.sh` is an untracked
-  machine-local launcher, not a repo deliverable). Then: web-UI polish (DL-8 relatedTo — In Progress,
-  DL-14 conflict-draft-preservation — Todo); **README drift (DL-5) — SHIPPED** (Status headline now
+  machine-local launcher, not a repo deliverable). Then: web-UI polish: DL-8 relatedTo — **SHIPPED** (verified Done — ticket detail now shows clickable Related/Duplicate-of links), DL-14 conflict-draft-preservation — In Progress; **README drift (DL-5) — SHIPPED** (Status headline now
   v0.19.2 with the P5–P8 history; verified Done); and the deferred candidates (inter-agent discussion daemon; multi-stakeholder roadmap
   auth; **accepting a 点评 *from* the web UI** — the remaining half of the reports-in-UI idea, a
   write path). With DL-10, the operator's **observe** loop is browser-complete (board · tickets ·
@@ -280,6 +279,8 @@ Append-only thereafter — PM keeps it current._
 - **2026-06-23 — SHIPPED: DL-15 cwd→project wiring (templates + docs) verified Done (PM).** Dev shipped the repo-tracked slice (commit `8329bdf`): the 3 MCP config templates default `DEVLOOP_PROJECT` to **empty** per-file correctly — `mcp.example.json` shell-expanded `${DEVLOOP_PROJECT:-}`, but `codex.toml`/`opencode.json` **literal `""`** (NOT shell contexts — the exact hole the DL-13 ticket flagged), plus precedence docs in RUNNING.md/PORTABILITY.md/config-schema.md. Gate green. **The launcher (`run-loop.sh`) AC is correctly deferred as an OPERATOR enable step** — it's an untracked machine-local file outside the repo, so Dev won't silently mutate the operator's live launcher with no git review; cwd auto-pin already works without it for a repo-cwd-spawned hub (DL-13). The operator enable step (also fixes the pre-existing `DEVLOOP_ACTOR`→`operator` attribution drift): in `run-loop.sh`, export per-pane `DEVLOOP_ACTOR=<agent>` + `DEVLOOP_PROJECT="$(… resolve-project --cwd "$REPO")"`. **Net: the buildable cwd→project feature is complete (DL-13+DL-15); only DL-12 (operator §11/SKILL commit) + the optional launcher step remain.**
 
 - **2026-06-23 — SHIPPED: DL-5 README reconciled to v0.19.2 verified Done (PM).** Dev's commit `147dd86` fixed the stale README Status headline (v0.15.0 → **v0.19.2**) and added the post-0.15 version history (P5 board+Director, P6 channel, P7 Linear mirror, P8 portability). Docs-only (§15-exempt). Satisfies the operator-facing-docs goal's README-accuracy item. _(Future: the "All daemon-free" line is accurate for released v0.x; when the daemon work (DL-1…DL-15, currently local-only, autoPush=false) is cut as a release, the README needs a daemon update — file at release time.)_
+
+- **2026-06-23 — SHIPPED: DL-8 relatedTo/duplicateOf in the web UI verified Done (PM).** Dev's commit `1fbeaf2` adds click-through Related / Duplicate-of links to the ticket detail (shown only when present — no dangling rows). Verified live: `/ticket/DL-3` → a Related row linking DL-1/DL-2; `/ticket/DL-1` → no row; read-only preserved; daemon-test asserts both. The board's dependency chain is now navigable in the browser. Backlog now down to **DL-14** (roadmap-editor conflict draft-preservation, In Progress) + **DL-12** (cwd §11/SKILL wording, parked for operator).
 
 ## Candidate ideas
 
