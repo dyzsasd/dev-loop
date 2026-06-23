@@ -5,9 +5,10 @@
       "type": "local",
       "command": ["node", "<ABS-PATH-TO-dev-loop>/hub/src/server.ts"],
       "environment": {
-        "DEVLOOP_PROJECT": "default",
+        "DEVLOOP_PROJECT": "",
         "DEVLOOP_HUB_DB": "/ABSOLUTE/PATH/.dev-loop/hub.db"
       },
+      "_DEVLOOP_PROJECT_note": "literal empty (NOT shell-expanded here) ⇒ the hub auto-resolves the project from the spawned process's cwd (DL-13); set a non-empty value to pin one explicitly, or omit the key.",
       "enabled": true
     }
   }

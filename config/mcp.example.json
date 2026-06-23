@@ -1,5 +1,5 @@
 {
-  "_comment": "TEMPLATE for backend:\"service\" (conventions §18; docs/HUB-ARCHITECTURE.md). Copy to your PRODUCT repo root as `.mcp.json` (or pass via `claude --mcp-config`). Replace <ABS-PATH-TO-dev-loop> with the absolute path to your dev-loop checkout. The ${VAR} values are expanded by Claude Code at config-parse time from each pane's launching shell, so a per-pane `DEVLOOP_ACTOR` makes the one hub server attribute that pane's writes to the right agent (per-agent identity — the whole point). Defaults after `:-` apply if the launcher didn't set the var.",
+  "_comment": "TEMPLATE for backend:\"service\" (conventions §18; docs/HUB-ARCHITECTURE.md). Copy to your PRODUCT repo root as `.mcp.json` (or pass via `claude --mcp-config`). Replace <ABS-PATH-TO-dev-loop> with the absolute path to your dev-loop checkout. The ${VAR} values are expanded by Claude Code at config-parse time from each pane's launching shell, so a per-pane `DEVLOOP_ACTOR` makes the one hub server attribute that pane's writes to the right agent (per-agent identity — the whole point). Defaults after `:-` apply if the launcher didn't set the var. DEVLOOP_PROJECT defaults to EMPTY (`:-`): when unset the hub auto-resolves the project from the spawned process's cwd (DL-13 — see references/config-schema.md `Project resolution`); set it explicitly to override.",
   "mcpServers": {
     "dev-loop-hub": {
       "type": "stdio",
@@ -7,7 +7,7 @@
       "args": ["<ABS-PATH-TO-dev-loop>/hub/src/server.ts"],
       "env": {
         "DEVLOOP_ACTOR": "${DEVLOOP_ACTOR:-operator}",
-        "DEVLOOP_PROJECT": "${DEVLOOP_PROJECT:-default}",
+        "DEVLOOP_PROJECT": "${DEVLOOP_PROJECT:-}",
         "DEVLOOP_HUB_DB": "${DEVLOOP_HUB_DB:-${HOME}/.dev-loop/hub.db}"
       }
     }

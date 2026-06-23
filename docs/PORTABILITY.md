@@ -21,7 +21,7 @@ CLI sets these per agent pane — that is the entire portability contract:
 | Var | Meaning | Who sets it |
 |---|---|---|
 | `DEVLOOP_ACTOR` | the per-agent identity (`pm`/`qa`/`dev`/`sweep`/`reflect`/`ops`/`architect`/`director`) — the attribution win | the launcher, **per pane** |
-| `DEVLOOP_PROJECT` | the project key (pins this hub process to one project) | the launcher |
+| `DEVLOOP_PROJECT` | the project key (pins this hub process to one project) | the launcher — **optional (DL-13):** when unset/empty the hub auto-resolves the project from the spawned process's **cwd** (the repo it was launched in), so a launcher that spawns the MCP server with `cwd` inside a repo need not set it. **Portability caveat:** this works only if the CLI spawns the MCP subprocess with that cwd; some CLIs spawn from a fixed dir, so the launcher exporting `DEVLOOP_PROJECT` (via `dev-loop-hub resolve-project`) stays the robust primary mechanism |
 | `DEVLOOP_HUB_DB` | absolute path to the shared `hub.db` | the launcher |
 | `CLAUDE_PLUGIN_ROOT` | the dev-loop checkout root — the SKILLs read `${CLAUDE_PLUGIN_ROOT}/references/conventions.md` | the launcher (despite the name, it's just the SKILLs' config-resolution var — **any** CLI's launcher can export it) |
 | `CLAUDE_PLUGIN_DATA` | the data dir — the SKILLs read `${CLAUDE_PLUGIN_DATA}/projects.json` | the launcher (or rely on the SKILLs' `~/.claude/plugins/data/dev-loop/` fallback) |

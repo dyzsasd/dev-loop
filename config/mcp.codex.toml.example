@@ -19,4 +19,7 @@ command = "node"
 args = ["<ABS-PATH-TO-dev-loop>/hub/src/server.ts"]
 # STATIC, shared-across-panes vars ONLY. DEVLOOP_ACTOR is intentionally ABSENT — it rides the
 # per-pane process env (see the warning above). Use an ABSOLUTE db path (TOML env is not shell-expanded).
-env = { DEVLOOP_PROJECT = "default", DEVLOOP_HUB_DB = "/ABSOLUTE/PATH/.dev-loop/hub.db" }
+# DEVLOOP_PROJECT = "" (literal empty — TOML is NOT shell-expanded, so never use `${DEVLOOP_PROJECT:-}`,
+# which would be a literal string and fail the G2 phantom-project guard). Empty ⇒ the hub auto-resolves
+# the project from the spawned process's cwd (DL-13); set a non-empty value here to pin one explicitly.
+env = { DEVLOOP_PROJECT = "", DEVLOOP_HUB_DB = "/ABSOLUTE/PATH/.dev-loop/hub.db" }

@@ -187,7 +187,15 @@ agent that did it, not the single shared Linear user.
 
 **Launch — set the identity per pane.** Each pane exports its agent + project before the
 `/loop` (the hub reads them); the `.mcp.json` `${…}` expansion carries them into the hub
-process:
+process.
+
+**Project precedence (DL-13):** explicit `DEVLOOP_PROJECT` (non-empty) **>** the process **cwd**
+(the repo it was launched in — matched against the configured `repoPath`/`repos[]`) **>** the
+`demo` default. So `DEVLOOP_PROJECT` is **optional** when you launch from inside a project's repo:
+unset/empty falls back to the cwd match (`dev-loop-hub resolve-project [--cwd <path>]` is the shared
+matcher). A cwd that matches a configured-but-unseeded project **errors loudly** (it does not
+silently fall through to `demo`); a cwd outside every repo → `demo`. Set `DEVLOOP_PROJECT` explicitly
+to override the cwd, or to be unambiguous in a launcher that spawns the MCP server from a fixed dir.
 
 ```bash
 DEVLOOP_ACTOR=pm   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:pm-agent
