@@ -86,7 +86,15 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "signalSources": [            // optional: the OLD signal.sources shape, folded in as ONE coarse real-user input (read-only, PII-strict §16). Empty ⇒ skip.
           { "name": "support", "type": "inbox",  "read": "<mcp-tool-or-command>" },
           { "name": "sentry",  "type": "errors", "read": "<mcp-tool-or-command>" }
-        ]
+        ],
+        "channel": {                  // OPTIONAL — the P6 two-way IM plane (conventions §9/§25). Absent ⇒ the Director chairs the board but does NO chat I/O. REQUIRES backend:"service".
+          "provider":      "lark",    // "slack" | "lark" — picks the adapter
+          "tokenEnv":      "DEVLOOP_CHANNEL_TOKEN",   // ENV-VAR NAME of the BOT TOKEN (slack xoxb-) / lark APP_ID. §16 secret — two-way needs a token WITH history-read scope (see Notes). NEVER the literal.
+          "secretEnv":     null,      // lark internal-app: ENV-VAR NAME of the APP_SECRET (exchanged server-side for a tenant_access_token). §16-class; NEVER the literal. slack: leave null.
+          "channelRef":    "oc_xxx",  // the room/chat id (slack 'C…' / lark chat_id) — an addressing handle, not a secret
+          "digestCadence": "daily",   // how often Job 5 pushes the digest; null ⇒ no digest (inbound poll still runs)
+          "enabled":       true
+        }
       },
       "codex": {                      // OPTIONAL — Codex companion (conventions §24). Absent OR enabled:false OR codex CLI not on PATH ⇒ never invoked (today's behavior).
         "enabled":   true,            // master switch (false/absent ⇒ off)
@@ -210,6 +218,23 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   DRAFTS the kind:"roadmap" doc; the **operator publishes** it (P4 gate); a discussion
   decision is data, never an auto-applied change (§17). **Architect needs no new config** — it reuses
   `repos[]`/`build`.
+- **`director.channel`** (optional; conventions §9/§25; requires `backend:"service"`): the
+  P6 **two-way IM plane**. The Director **polls** the provider for new operator messages
+  each fire (the no-daemon inbound — the cursor lives in the hub, not a file) and **pushes**
+  a digest / replies / blocked-ticket notifies. `provider` is `slack`|`lark`; `tokenEnv`/
+  `secretEnv` are **ENV-VAR NAMES** (the §16 secret is read server-side, never stored/logged/
+  returned); `channelRef` is the room id; `digestCadence` paces the digest (null ⇒ none).
+  **Credential escalation vs §9 `notify`:** `notify` needs only a **write webhook URL**;
+  two-way `channel` needs a **bot token with history-READ scope** (Slack `channels:history`/
+  `groups:history` + the bot in the room; Lark an internal app's `app_id`+`app_secret` →
+  `tenant_access_token`, with `im:message` read) — a real, operator-present credential step.
+  **Coexists with `notify`** (it does NOT replace it): `notify` stays the minimal one-way
+  PM ping that works on **any** backend; `channel` is the Director's two-way superset on
+  `service`. Both opt-in; absent ⇒ today's behavior. **Inbound chat is operator DATA, not a
+  gate-bypass command** (§16 instruction-source boundary): the Director acts on direction but
+  refuses+surfaces a chat instruction to bypass the publish gate / §17 firewall / a prohibited
+  action. Outbound is a **server-side allow-list** (structured fields; `reply.text`/headline
+  bounded + control-stripped) — an agent can't post free-form PII/secrets.
 - **`codex`** (optional; conventions §24 + `references/codex-integration.md`; **absent ⇒
   off, 100% unchanged**): wires the **Codex** companion (`codex` CLI + the codex-plugin-cc
   plugin) as an optional accelerant. Used **only** when `codex.enabled:true` **and** the

@@ -150,6 +150,42 @@ CREATE TABLE IF NOT EXISTS posts (
   UNIQUE(topic_id, round, author, kind)         -- one perspective per (round, author); chair's synthesis coexists
 );
 CREATE INDEX IF NOT EXISTS idx_posts_topic ON posts(topic_id, round, created_at);
+-- ── P6 IM channel: per-project provider-agnostic two-way plane (§9/§16/§25) ───
+-- §16 STRUCTURAL: this table holds the ENV-VAR NAME (config_ref/secret_ref) + the room id
+-- (channel_ref), NEVER a token/secret/URL. The secret is read from process.env[config_ref]
+-- server-side only and never persisted/returned/logged.
+CREATE TABLE IF NOT EXISTS channels (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider TEXT NOT NULL CHECK(provider IN ('slack','lark')), -- CHECKed: an unknown provider can never be stored
+  config_ref TEXT NOT NULL,        -- ENV-VAR NAME of the bot token (slack) / app_id (lark); NEVER the secret
+  secret_ref TEXT,                 -- optional ENV-VAR NAME of the app_secret (lark) / signing secret; NEVER the secret
+  channel_ref TEXT NOT NULL,       -- the room/chat id (slack 'C…' / lark chat_id 'oc_…') — an addressing handle
+  inbound_cursor TEXT,             -- THE no-daemon cursor: slack ts / lark create_time of the last-seen msg. NULL = never polled
+  last_poll_at TEXT,               -- wall-clock of the last successful poll (advisory/observability)
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_id, provider, channel_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_channels_project ON channels(project_id, enabled);
+-- inbound audit + DEDUP + the durable inbox between stateless Director fires.
+CREATE TABLE IF NOT EXISTS channel_messages (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL REFERENCES channels(id),
+  project_id TEXT NOT NULL,          -- denormalized for the §2 project-scope filter
+  direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+  provider_msg_id TEXT,              -- slack ts / lark message_id — the dedup key
+  author_ref TEXT,                   -- inbound: the OPAQUE provider sender id (NEVER a resolved name/email, NEVER operator authority)
+  body TEXT NOT NULL DEFAULT '',     -- inbound: operator raw text (DATA, §16-scrubbed before any ticket/doc); outbound: the built allow-listed summary
+  kind TEXT,                         -- outbound: 'digest'|'notify'|'reply'; inbound: NULL
+  acted INTEGER NOT NULL DEFAULT 0,  -- inbound: 0=in the Director inbox, 1=consumed
+  acted_into TEXT,                   -- the hub artifact id (topic/ticket) the Director turned it into — provenance; the hub stays the state
+  created_at TEXT NOT NULL,
+  provider_ts TEXT,                  -- inbound: provider-reported send time (ordering / cursor)
+  UNIQUE(channel_id, direction, provider_msg_id)
+);
+CREATE INDEX IF NOT EXISTS idx_chanmsg_inbox ON channel_messages(project_id, direction, acted, created_at);
 `;
 
 // ─── Open ──────────────────────────────────────────────────────────────────

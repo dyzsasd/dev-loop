@@ -1,13 +1,15 @@
 # dev-loop Hub — Architecture
 
 > **Build status (live):** P0 (de-risk) ✅ · P2 (hub MVP + `service` backend) ✅ v0.13.0 · P3
-> (isolation guards, doctor) ✅ v0.14.0 · P4 (versioned documents) ✅ v0.15.0 · **P5 (discussion
-> board + Director) ✅ v0.16.0** · P6–P8 remain (channel / Linear mirror / 2nd CLI). **The
-> "daemon arrives at P5" framing below is SUPERSEDED:** P5 shipped with **NO daemon** — the
-> Director runs as a **loop agent** (per-fire chairing over the shared WAL db), and decisions are
-> **inline** on the topic (not a separate table). A daemon stays deferred (P6's inbound webhooks
-> are the first thing a per-fire stdio process genuinely can't own). Where this doc says a
-> capability is "deferred to PN", consult the CHANGELOG + conventions §18/§25 for what shipped.
+> (isolation guards, doctor) ✅ v0.14.0 · P4 (versioned documents) ✅ v0.15.0 · P5 (discussion
+> board + Director) ✅ v0.16.0 · **P6 (two-way IM channel) ✅ v0.17.0** · P7–P8 remain (Linear
+> mirror / 2nd CLI). **The "daemon arrives at P5/P6" framing below is SUPERSEDED — there is STILL
+> NO daemon.** P5's Director is a **loop agent** (per-fire chairing; decisions **inline** on the
+> topic). P6's channel is **POLL-based**: the Director reaches OUT each fire (`channel.poll` =
+> an outbound history read since a hub-stored cursor) — a loopback stdio process needs no inbound
+> endpoint. A daemon is deferred to *if/when* a PUSH-webhook channel is wanted (sub-fire-latency
+> chat), which P6 deliberately does not build. Where this doc says a capability is "deferred to
+> PN", consult the CHANGELOG + conventions §18/§25 for what shipped.
 > The hub uses built-in `node:sqlite` (not better-sqlite3 — P0 found zero native deps possible).
 >
 > Status (original): **proposal for operator sign-off (LK8). No code is written against this until the operator approves it AND the P0 spike (below) passes.**
@@ -112,7 +114,7 @@ P2  SQLite hub MVP  ── stdio shim + ONE shared SQLite-WAL file, NO daemon,
 P3  server-enforced multi-project isolation
 P4  versioned documents (§20 doc-base + roadmap), operator-gated publish
 P5  discussion board + Director ── NO daemon (loop-agent chairing; decisions inline)
-P6  provider-agnostic IM channel (two-way operator chat + digests)
+P6  provider-agnostic IM channel ── two-way, POLL-based (NO daemon); digests + inbound
 P7  one-way Linear mirror (human visibility; §23 parity; split-brain enforced)
 P8  2nd CLI (Codex / opencode) behind a per-CLI headless identity test
    (parallel, operator-driven, §17-gated) ── the footgun-removal SKILL rewrite
@@ -133,15 +135,18 @@ Why this and not the always-on HTTP daemon the facets proposed:
 - **It removes "run a reliable daemon" from the entire MVP risk surface** — no cold-start, no wedged-but-listening process, no pidfile races, no `/healthz` identity probe, no launchd/systemd unit.
 - **Multi-process WAL is correct, not "broken."** (Facet B's justification for rejecting stdio was technically wrong.) SQLite WAL is *designed* for multiple processes/connections against one file with full ACID. The §7 claim is atomic in this model (§7).
 
-**The daemon did NOT arrive at P5 (this paragraph's original prediction is superseded).** P5
-shipped the discussion board + Director with **no daemon**: the Director runs as a **loop agent**
-that chairs on each fire (re-reading the board + roadmap over the shared WAL db — the hub IS its
-state, no background worker), exactly like every other agent. Chairing, the sync-panel, and
-roadmap drafting are all per-fire PULL work; topic termination is **state-free** (a `round_opened_at`
-wall-clock the Director reads, not a daemon timer). **The daemon now arrives only when something
-genuinely can't be per-fire pull** — the first such thing is **P6's inbound channel webhooks** (an
-endpoint must be reachable between fires). When it does arrive, the stdio shim becomes a **thin
-proxy** to a loopback daemon (`127.0.0.1:4319/mcp`, written to `hub.port` for discovery) — **the
+**The daemon did NOT arrive at P5 OR P6 (this paragraph's original prediction is superseded).**
+P5 shipped the board + Director with **no daemon** (a loop agent that chairs on each fire over the
+shared WAL db — the hub IS its state; termination is **state-free** off `round_opened_at`). **P6's
+two-way channel is also daemon-free, by choosing POLL over push:** a loopback stdio process owns no
+inbound endpoint, so the Director **reaches OUT** each fire — `channel.poll()` does an outbound
+history read since the hub-stored `channels.inbound_cursor`, ingests new operator messages, and
+returns them; `channel.send()` posts. Both are ordinary outbound HTTPS a stdio process makes fine.
+The cost is **latency = the fire cadence** (a direction/status/digest plane, not real-time chat;
+an on-demand `/director-agent` fire is the fast-turn escape). **A daemon arrives ONLY if a
+PUSH-webhook channel is ever wanted** (sub-fire-latency operator chat needs a reachable endpoint a
+loopback lacks) — which P6 deliberately does not build. When/if it does, the stdio shim becomes a
+**thin proxy** to a loopback daemon (`127.0.0.1:4319/mcp`, written to `hub.port`) — **the
 agent-facing transport stays stdio, identity stays via env**, so the broken HTTP-header path is
 never used by Claude Code.
 
@@ -276,7 +281,8 @@ CREATE VIRTUAL TABLE tickets_fts USING fts5(title, body_md, content='tickets', c
 -- P3: labels(project_id, name, kind)   -- a registry, only if free-string labels prove insufficient
 -- P4: documents(project_id, slug, kind∈{strategy,roadmap,design,risk,decisions,note}, status∈{draft,current}, current_version)
 --     document_versions(document_id, version, body_md, author_id, summary, base_version)   -- optimistic CAS
--- P5 (SHIPPED): topics / posts (discussion; the DECISION is INLINE on topics, no separate table); channels (P6, config_ref = ENV-VAR NAME, never the secret)
+-- P5 (SHIPPED): topics / posts (discussion; the DECISION is INLINE on topics, no separate table)
+-- P6 (SHIPPED): channels + channel_messages (two-way IM; config_ref = ENV-VAR NAME, never the secret; inbound_cursor = the no-daemon poll cursor)
 -- P7: mirror_map(project_id, hub_ticket_id, linear_issue_id, last_pushed_rev, last_comment_seq)
 ```
 
@@ -304,7 +310,7 @@ Note the MVP **does not** ship `agent_tokens`, `project_members`, a `labels` reg
 
 **Additive, hardened primitives are exposed but UNUSED until the §17-gated SKILL rewrite (§21):** `ticket.add_labels` / `ticket.remove_labels` (kill the §10#1 REPLACE footgun), `ticket.transition({to_state,comment})` (enum-safe, no re-fetch), and `events.list(...)` (the attribution feed Reflect/Director read). Shipping them additively while the MVP still honors the old REPLACE/verify-after-write shape is what lets us claim "zero SKILL rewrite" **and** "a clean path to remove the footguns later" without contradiction.
 
-`channel.notify` (P6) builds the §9 §16-safe allow-listed message **server-side** ({project, ticket id, bail-shape enum, title ≤80, url}) and posts via an env-referenced secret — the webhook URL/secret **never** crosses the MCP boundary.
+`channel.send/poll/status/register/ack` (P6, SHIPPED) build the §9 §16-safe allow-listed message **server-side** (notify: {project, ticket id, bail-shape}; digest: counts + bounded ids; reply: bounded text) and post via an env-referenced secret — the webhook/token **never** crosses the MCP boundary. `channel.poll` adds the inbound half: an outbound history read since the hub cursor (the no-daemon two-way READ).
 
 ---
 
@@ -315,7 +321,7 @@ Note the MVP **does not** ship `agent_tokens`, `project_members`, a `labels` reg
 ```jsonc
 "backend": "service",                 // "linear" (default, absent ⇒ this) | "local" | "service"
 "hub": {                              // required only when backend:"service"
-  "transport": "stdio",               // stdio throughout (P2–P5); "http" only if a daemon ever lands (P6+ inbound webhooks)
+  "transport": "stdio",               // stdio throughout (P2–P6 are all daemon-free); "http" only if a PUSH-webhook channel is ever added
   "project": "monpick",
   "actorEnv": "DEVLOOP_ACTOR"         // the launcher-set env var (NO token literal — §16)
 }
@@ -412,7 +418,7 @@ monpick today: `backend` absent (⇒ linear), `linearProject:MonPick`, a Linear-
 
 1. (P2+) Start the hub; create the isolated `monpick` project; register actors pm/qa/dev/sweep/reflect/ops/architect/director + operator; the launcher exports per-pane `DEVLOOP_ACTOR`.
 2. `dev-loop-hub import linear --project monpick --team Citronetic --linear-project MonPick` (read-only on Linear, resumable): tickets + comments + relations → hub, preserving state/labels/priority/title/body/timestamps. **History attribution is honestly lossy:** pre-hub Linear comments were one shared identity → most import under a `linear-import` pseudo-actor; only comments carrying a `— <agent> (run …)` prefix recover an author. Go-forward history is fully attributable; imported history is not — do not oversell "no history lost" as "full provenance recovered."
-3. Apply the config diff (`backend:"service"` + the `hub` block; `linearProject` retained only as a future mirror target; `notify`→`channel` when P6 lands; `strategyDoc`→a P4 hub roadmap doc the Director drafts and the operator publishes).
+3. Apply the config diff (`backend:"service"` + the `hub` block; `linearProject` retained only as a future mirror target; `notify` COEXISTS with the P6 `director.channel` two-way superset; `strategyDoc`→a P4 hub roadmap doc the Director drafts and the operator publishes).
 4. **Cutover is atomic per project, and ENFORCED (§15):** the launcher refuses to arm both a `linear`-backed and a `service`-backed fire for monpick; `doctor` flags a dual-backend config. Never run two backends for one project concurrently.
 5. Verify: one PM fire + one Dev fire on the hub — confirm `whoami` attribution, the §3 state machine, the atomic claim, and that Reflect/reports actually consume the author field. Resume the loop. Linear remains a read-only archive; nothing deleted.
 
@@ -444,14 +450,14 @@ monpick today: `backend` absent (⇒ linear), `linearProject:MonPick`, a Linear-
 | P3 isolation | 3–5 d | Project scope binds to the connection/shim, not an agent-passed arg |
 | P4 versioned docs | ~1 w | Docs-as-rows beats a git-tracked markdown file enough to justify the build |
 | P5 discussion board + Director (NO daemon — loop-agent) | ~1 w | Is multi-agent discussion signal not noise; topic termination |
-| P6 channel | ~1 w | Inbound webhooks need a reachable endpoint a loopback daemon lacks (poll/tunnel) |
+| P6 channel (two-way, POLL-based, NO daemon) | ~1 w | Poll latency = fire cadence (a direction plane, not real-time chat); a push webhook would need a tunnel — deferred |
 | P7 Linear mirror | ~1 w | A lossy one-way mirror is useful, not confusing |
 | P8 2nd CLI | 3–5 d / CLI | Per-CLI identity-on-tool-call parity (the headless test) |
 | (parallel) footgun SKILL rewrite | 3–5 d | Coordinated, human-reviewed §17 pass over 8 SKILLs |
 
 Full P0–P8 ≈ **3–4 months part-time**.
 
-**Steady-state maintenance (a first-class cost, not a footnote).** The build is not the expensive part. Today the loop is markdown prompts + someone else's MCP: zero build, zero deps, zero process, zero CVE surface, git-diffable. Past P2 the operator owns **a TypeScript service** (though P0's discovery of built-in `node:sqlite` + `.ts` type-stripping **eliminated the originally-feared native dependency AND the build step** — no `better-sqlite3`, no node-gyp/prebuild pain, no lockfile-of-natives), plus **schema migrations that can corrupt the SoR** (and, only if a daemon ever lands at P6+, **a daemon to keep alive** — crash recovery, restart-on-boot, stale locks; through P5 there is **no daemon**). The operator signed up for prompts and now runs a small database product. Mitigations: pin Node (≥23.6 for type-stripping), migration tests, keep the surface tiny — but the cost is permanent.
+**Steady-state maintenance (a first-class cost, not a footnote).** The build is not the expensive part. Today the loop is markdown prompts + someone else's MCP: zero build, zero deps, zero process, zero CVE surface, git-diffable. Past P2 the operator owns **a TypeScript service** (though P0's discovery of built-in `node:sqlite` + `.ts` type-stripping **eliminated the originally-feared native dependency AND the build step** — no `better-sqlite3`, no node-gyp/prebuild pain, no lockfile-of-natives), plus **schema migrations that can corrupt the SoR** (and, only if a PUSH-webhook channel is ever added, **a daemon to keep alive** — crash recovery, restart-on-boot, stale locks; through **P6 there is no daemon** — the channel is poll-based). The operator signed up for prompts and now runs a small database product. Mitigations: pin Node (≥23.6 for type-stripping), migration tests, keep the surface tiny — but the cost is permanent.
 
 **The kill/continue gate (after P2 — the operator signs).** Continue to P3+ **only if all three hold:**
 1. the loop demonstrably runs **at least as well** on the hub as on the file board (no regression in throughput, claim correctness, or dedupe quality);

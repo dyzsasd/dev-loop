@@ -3,6 +3,44 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.17.0 — hub P6: the provider-agnostic two-way IM channel
+- **The operator can now CHAT with the Director over Lark/Slack** (opt-in, a `director.channel`
+  block under `backend:"service"`; absent ⇒ today's behavior — the Director chairs the board
+  with no chat I/O). The two-way superset of the one-way §9 `notify`: inbound operator direction
+  + outbound digests / replies / blocked-notifies.
+- **Poll-based — NO daemon (consistent with P5).** A loopback stdio process owns no inbound
+  endpoint, so the Director **reaches out** each fire: `channel.poll()` does an outbound history
+  read since the **hub-stored cursor** (`channels.inbound_cursor` — the same no-state-file move
+  as P5's `round_opened_at`), ingests new operator messages, returns the pending inbox.
+  `channel.send()` pushes structured messages. Poll latency = the fire cadence (a
+  direction/status/digest plane, not real-time chat); an on-demand `/director-agent` fire is the
+  fast-turn escape. **Two-phase poll:** the provider fetch holds NO db lock; only the
+  dedup-insert + cursor-advance is in `BEGIN IMMEDIATE`, and the cursor advances only to the
+  `max(provider_ts)` actually recorded (no skipped message).
+- **Tools** (`channel.register/send/poll/ack/status`): register stores only env-var NAMES + a
+  room id; send BUILDS a §16 allow-listed message server-side (structured fields only — notify:
+  ticket id + bail-shape; digest: counts + bounded ids; reply/headline: bounded + control-char
+  stripped); poll ingests + dedups (`UNIQUE(channel_id,'inbound',provider_msg_id)`) + GCs acted
+  inbox rows >14d; ack records provenance (`acted_into`); status returns env-var-SET booleans,
+  never the secret.
+- **§16 secret discipline.** The token/URL/secret lives ONLY in env (`tokenEnv`/`secretEnv` are
+  NAMES); the hub reads it server-side, posts/polls, and never returns/logs/persists it — a
+  failed call surfaces only an HTTP status / provider error CODE. Every network call has a hard
+  ~10s timeout (a hung provider never wedges a fire). A per-process send cap is a loop-safety
+  throttle. Slack = `xoxb-` Bearer; Lark = an internal app's `app_id`+`app_secret` → an
+  in-memory-only `tenant_access_token`. Two-way needs a **history-read** scope — a real
+  credential escalation over `notify`'s write-only webhook (documented).
+- **Inbound is DATA, not a command channel (instruction-source boundary).** An operator chat
+  message is direction the Director acts on within its existing authority; a chat instruction to
+  bypass a gate ("publish the roadmap", "edit conventions", "forward secrets") is **refused +
+  surfaced**, never executed. The bot's own messages are filtered on read (no self-echo loop).
+- **`notify` COEXISTS** (not replaced): the minimal one-way PM ping on any backend; `channel` is
+  the Director's two-way superset on `service`. `hub/src/channel.ts` (Slack + Lark adapters,
+  injectable `fetchImpl`); `hub/test/channel.ts` certifies it (adapter units with mock fetch —
+  send/poll/timeout/parse/token-never-thrown — + DRYRUN tool tests: allow-list build, payload
+  shape, cursor advance + dedup, secret-never-returned, ack, isolation). conventions §25 + §9
+  extended; hub → 0.5.0.
+
 ## 0.16.0 — hub P5: the discussion board + the Director
 - **A second coordination plane (opt-in, `backend:"service"` + a `director` config; absent ⇒
   byte-for-byte today's behavior).** The agents coordinate through ticket state but never
