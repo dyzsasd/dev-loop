@@ -154,6 +154,15 @@ function ticketPage(db: DatabaseSync, projectId: string, id: string): string | n
     + `<h3>Comments<span class="count" style="margin-left:.4rem">${comments.length}</span></h3>${commentsHtml}</article>`;
 }
 
+// Defensively decode a single URL path segment. A malformed / incomplete percent-escape
+// (e.g. "%", "%ZZ", an incomplete UTF-8 sequence "%E0%A4") makes decodeURIComponent throw a
+// URIError — that is a CLIENT error, so callers surface 400 (matching the daemon's existing
+// "bad request url" → 400 contract) instead of letting it fall through to the generic 500 catch
+// (DL-7). Returns null when the segment cannot be decoded.
+function decodeSeg(seg: string): string | null {
+  try { return decodeURIComponent(seg); } catch { return null; }
+}
+
 // Build the HTTP server over an already-opened, project-resolved db. Exported so tests (and a later
 // in-process embed) can start it without the CLI bootstrap below. The handler issues ONLY SELECTs.
 export function createDaemon({ db, projectId, projectKey }: DaemonOpts): Server {
@@ -173,7 +182,8 @@ export function createDaemon({ db, projectId, projectKey }: DaemonOpts): Server 
 
       // GET /ticket/:id — the web UI detail view (DL-2): full description + comments.
       if (seg[0] === "ticket" && seg.length === 2) {
-        const id = decodeURIComponent(seg[1]);
+        const id = decodeSeg(seg[1]);
+        if (id === null) return json(res, 400, { error: "malformed percent-escape in path" });
         const inner = ticketPage(db, projectId, id);
         if (!inner) return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="/">← board</a><p class="empty">No ticket ${esc(id)} in ${esc(projectKey)}.</p>`));
         return htmlOut(res, 200, page(`${id} · ${projectKey}`, projectKey, inner));
@@ -202,7 +212,8 @@ export function createDaemon({ db, projectId, projectKey }: DaemonOpts): Server 
 
       // GET /api/tickets/:id — one ticket with its comments.
       if (seg[0] === "api" && seg[1] === "tickets" && seg.length === 3) {
-        const id = decodeURIComponent(seg[2]);
+        const id = decodeSeg(seg[2]);
+        if (id === null) return json(res, 400, { error: "malformed percent-escape in path" });
         const r = db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as Record<string, any> | undefined;
         if (!r) return json(res, 404, { error: `no such ticket ${id} in ${projectKey}` });
         const comments = db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(id);
@@ -216,7 +227,8 @@ export function createDaemon({ db, projectId, projectKey }: DaemonOpts): Server 
 
       // GET /api/docs/:kind — the current roadmap/strategy doc (published version, else latest draft).
       if (seg[0] === "api" && seg[1] === "docs" && seg.length === 3) {
-        const key = decodeURIComponent(seg[2]);
+        const key = decodeSeg(seg[2]);
+        if (key === null) return json(res, 400, { error: "malformed percent-escape in path" });
         const d = (db.prepare("SELECT * FROM documents WHERE project_id=? AND kind=?").get(projectId, key)
           ?? db.prepare("SELECT * FROM documents WHERE project_id=? AND slug=?").get(projectId, key)) as Record<string, any> | undefined;
         if (!d) return json(res, 404, { error: `no document '${key}' in ${projectKey}` });
