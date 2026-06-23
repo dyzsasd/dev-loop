@@ -3,7 +3,8 @@
 // the same WAL db and asserts every read endpoint, the 404s, the read-only 405, and the 127.0.0.1 bind.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { rmSync } from "node:fs";
+import { rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { openDb } from "../src/db.ts";
@@ -211,6 +212,46 @@ await Promise.race([
   new Promise((r) => setTimeout(r, 3000)),
 ]);
 ok(settled, "an over-limit (>1MB) POST body settles fast (no hang) — the handler never dangles");
+
+// ── DL-10: agent reports view (read-only filesystem source) — seed a temp §22 reports tree ───────
+const RROOT = "/tmp/hub-reports/reports";
+try { rmSync("/tmp/hub-reports", { recursive: true }); } catch {}
+mkdirSync(join(RROOT, "dev-agent", "daily"), { recursive: true });
+mkdirSync(join(RROOT, "dev-agent", "weekly"), { recursive: true });
+mkdirSync(join(RROOT, "pm-agent", "daily"), { recursive: true });
+writeFileSync(join(RROOT, "dev-agent", "daily", "2026-06-23.md"), "# Dev daily 2026-06-23\n- shipped DL-10\n");
+writeFileSync(join(RROOT, "dev-agent", "daily", "2026-06-22.md"), "# Dev daily 2026-06-22\n");
+writeFileSync(join(RROOT, "dev-agent", "daily", "2026-06-23.md.review.md"), "operator 点评: nice\n"); // must be EXCLUDED
+writeFileSync(join(RROOT, "dev-agent", "weekly", "2026-W26.md"), "# Dev weekly\n");
+writeFileSync(join(RROOT, "pm-agent", "daily", "2026-06-23.md"), "# PM daily\n");
+process.env.DEVLOOP_REPORTS_DIR = RROOT;
+
+// AC1 — /reports lists agents + their dated reports (most-recent first), weekly included, review-sibling excluded
+const repIdx = await getHtml("/reports");
+ok(repIdx.status === 200 && repIdx.type.includes("text/html"), "GET /reports → 200 HTML (reports index)");
+ok(repIdx.text.includes("dev-agent") && repIdx.text.includes("pm-agent"), "reports index lists the agent dirs");
+ok(repIdx.text.includes("2026-06-23") && repIdx.text.includes("2026-06-22") && repIdx.text.includes("2026-W26"), "lists daily + weekly dated reports");
+ok(repIdx.text.indexOf("2026-06-23") < repIdx.text.indexOf("2026-06-22"), "dailies are most-recent-first");
+ok(!repIdx.text.includes("点评"), "the *.review.md 点评 sibling is EXCLUDED from the listing (§22)");
+ok(repIdx.text.includes('href="/reports/dev-agent/daily/2026-06-23"'), "each report links to its per-report route");
+
+// AC2 — a selected report renders read-only (markdown rendered) with a back-link (no dead end)
+const repView = await getHtml("/reports/dev-agent/daily/2026-06-23");
+ok(repView.status === 200 && repView.text.includes("<li>shipped DL-10</li>") && repView.text.includes("← reports"), "GET /reports/<agent>/<level>/<date> → 200, renders markdown + a back-link");
+
+// AC path-safety — traversal / garbage segments → 400 (not 500); valid-but-absent → 404
+ok((await get("/reports/..%2f..%2f..%2fetc%2fpasswd/daily/2026-06-23")).status === 400, "a traversal agent segment → 400 (not 500)");
+ok((await get("/reports/dev-agent/daily/..%2f..%2fsecret")).status === 400, "a traversal date segment → 400");
+ok((await get("/reports/dev-agent/bogus/2026-06-23")).status === 400, "a bad level → 400");
+ok((await get("/reports/dev-agent/daily/2026-1")).status === 400, "a non-grammar date → 400");
+ok((await get("/reports/dev-agent/daily/2025-01-01")).status === 404, "a valid-grammar but absent report → 404");
+
+// AC empty state — an absent reports tree shows a friendly empty page, not a 500
+process.env.DEVLOOP_REPORTS_DIR = "/tmp/hub-reports-absent-xyz";
+const repEmpty = await getHtml("/reports");
+ok(repEmpty.status === 200 && repEmpty.text.includes("No reports found"), "an absent reports tree → friendly empty state (200, not 500)");
+delete process.env.DEVLOOP_REPORTS_DIR;
+try { rmSync("/tmp/hub-reports", { recursive: true }); } catch {}
 
 await verifier.close();
 opd.close();

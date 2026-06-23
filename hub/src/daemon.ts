@@ -16,6 +16,8 @@
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists } from "./db.ts";
 import { findProject } from "./seed.ts";
@@ -112,13 +114,17 @@ button{font:inherit;padding:.4rem .85rem;border:1px solid var(--line);border-rad
 .n-err{background:#dc26261f;border:1px solid #dc262655;color:#dc2626}.n-ok{background:#16a34a1f;border:1px solid #16a34a55;color:#16a34a}
 .doc h1,.doc h2,.doc h3{margin:.7rem 0 .3rem;font-size:1rem}.doc ul,.doc ol{margin:.3rem 0;padding-left:1.3rem}.doc p{margin:.4rem 0}.doc hr{border:0;border-top:1px solid var(--line);margin:.7rem 0}
 code{font:.92em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);padding:0 .25rem;border-radius:4px}
+.ragent{margin:.9rem 0}.ragent h3{margin:.2rem 0 .4rem}
+.rlevel{display:flex;gap:.4rem;align-items:baseline;flex-wrap:wrap;margin:.25rem 0}
+.rkey{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut);min-width:3.5rem}
+.lbl{cursor:pointer}a.lbl:hover{border-color:var(--mut);color:var(--ink)}
 `;
 
 function page(title: string, project: string, inner: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">`
     + `<meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>`
     + `<style>${STYLE}</style></head><body>`
-    + `<header><a class="home" href="/">dev-loop</a><span class="proj">${esc(project)}</span><nav><a href="/roadmap">roadmap</a></nav></header>`
+    + `<header><a class="home" href="/">dev-loop</a><span class="proj">${esc(project)}</span><nav><a href="/roadmap">roadmap</a> · <a href="/reports">reports</a></nav></header>`
     + `<main>${inner}</main></body></html>`;
 }
 
@@ -306,6 +312,50 @@ async function handleRoadmapWrite(action: "save" | "publish", req: IncomingMessa
   return r.ok ? redirect(res, "/roadmap") : rerender(r.error); // non-operator → 403; missing version → 404
 }
 
+// ── DL-10: agent reports view (read-only, FILESYSTEM source — separate from the hub DB) ──────────
+// The §22 reports tree is machine-local markdown. Resolve its root: DEVLOOP_REPORTS_DIR if set, else the
+// FIRST EXISTING of a few candidates (the on-disk layout varies — both <data>/<project>/reports and a
+// flat <data>/reports exist in the wild); falls back to the AC-formula path for the empty state.
+const REPORT_DATED: Record<string, RegExp> = { daily: /^\d{4}-\d{2}-\d{2}$/, weekly: /^\d{4}-W\d{2}$/, monthly: /^\d{4}-\d{2}$/ };
+function reportsRoot(projectKey: string): string {
+  if (process.env.DEVLOOP_REPORTS_DIR) return process.env.DEVLOOP_REPORTS_DIR;
+  const bases = [process.env.CLAUDE_PLUGIN_DATA, join(homedir(), ".claude", "plugins", "data", "dev-loop")].filter(Boolean) as string[];
+  const candidates = bases.flatMap((b) => [join(b, projectKey, "reports"), join(b, "reports")]);
+  for (const c of candidates) { try { if (statSync(c).isDirectory()) return c; } catch { /* not here */ } }
+  return candidates[0]; // AC-formula path; may not exist → empty state at read time
+}
+const lsSubdirs = (p: string): string[] => { try { return readdirSync(p, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch { return []; } };
+// Only the §22 dated-report files for the level — this inherently EXCLUDES *.review.md / *.review.acted.
+const lsDated = (p: string, level: string): string[] => { const re = REPORT_DATED[level]; try { return re ? readdirSync(p).filter((f) => f.endsWith(".md") && re.test(f.slice(0, -3))).sort().reverse() : []; } catch { return []; } };
+
+// GET /reports — agents + their dated reports (daily is the must-have; weekly/monthly when present).
+function reportsIndexPage(root: string): string {
+  const agents = lsSubdirs(root).sort();
+  const sections = agents.map((agent) => {
+    const levels = ["daily", "weekly", "monthly"].map((level) => {
+      const files = lsDated(join(root, agent, level), level);
+      if (!files.length) return "";
+      const items = files.map((f) => { const d = f.slice(0, -3); return `<a class="lbl" href="/reports/${encodeURIComponent(agent)}/${level}/${encodeURIComponent(d)}">${esc(d)}</a>`; }).join(" ");
+      return `<div class="rlevel"><span class="rkey">${esc(level)}</span>${items}</div>`;
+    }).filter(Boolean).join("");
+    return levels ? `<section class="ragent"><h3>${esc(agent)}</h3>${levels}</section>` : "";
+  }).filter(Boolean).join("");
+  return `<a class="back" href="/">← board</a><article class="detail"><h1>Reports</h1>`
+    + (sections || `<p class="empty">No reports found yet under <code>${esc(root)}</code>.</p>`) + `</article>`;
+}
+// GET /reports/<agent>/<level>/<date> — one report, read-only. "badpath" → 400 (traversal/garbage), null → 404.
+function reportPage(root: string, agent: string, level: string, date: string): { html: string } | "badpath" | null {
+  // strict segment validation defeats path traversal BEFORE any fs access: agent is a single safe name
+  // (no `.`/`/`/`..`), level is one of the three, date matches the §22 grammar for that level.
+  if (!/^[A-Za-z0-9_-]+$/.test(agent) || !(level in REPORT_DATED) || !REPORT_DATED[level].test(date)) return "badpath";
+  const file = resolve(root, agent, level, `${date}.md`);
+  if (!file.startsWith(resolve(root) + sep)) return "badpath"; // defense-in-depth: the resolved path must stay within root
+  let body: string; try { body = readFileSync(file, "utf8"); } catch { return null; }
+  return { html: `<a class="back" href="/reports">← reports</a> · <a class="back" href="/">board</a>`
+    + `<article class="detail"><div class="card-top"><span class="id">${esc(agent)}</span><span class="badge">${esc(level)}</span></div>`
+    + `<h1>${esc(date)}</h1><div class="doc">${renderMarkdown(body)}</div></article>` };
+}
+
 // Build the HTTP server over an already-opened, project-resolved db. Exported so tests (and a later
 // in-process embed) can start it without the CLI bootstrap below. GET routes issue ONLY SELECTs; the
 // optional DL-3 /roadmap/* POST routes write the roadmap doc through the separate `writeDb` connection.
@@ -337,6 +387,20 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
       // GET /roadmap — the roadmap doc view + edit form (+ operator-only publish) (DL-3).
       if (path === "/roadmap") {
         return htmlOut(res, 200, page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: canWrite, canPublish: canWrite && actor === "operator" })));
+      }
+
+      // GET /reports — the agent reports index (DL-10, read-only filesystem view; empty state if absent).
+      if (path === "/reports") {
+        return htmlOut(res, 200, page(`reports · ${projectKey}`, projectKey, reportsIndexPage(reportsRoot(projectKey))));
+      }
+      // GET /reports/<agent>/<level>/<date> — one report, read-only (path-validated → 400 traversal, 404 absent).
+      if (seg[0] === "reports" && seg.length === 4) {
+        const agent = decodeSeg(seg[1]), level = decodeSeg(seg[2]), date = decodeSeg(seg[3]);
+        if (agent === null || level === null || date === null) return json(res, 400, { error: "malformed percent-escape in path" });
+        const r = reportPage(reportsRoot(projectKey), agent, level, date);
+        if (r === "badpath") return json(res, 400, { error: "invalid report path" });
+        if (r === null) return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="/reports">← reports</a><p class="empty">No report ${esc(agent)}/${esc(level)}/${esc(date)}.</p>`));
+        return htmlOut(res, 200, page(`${date} · ${agent} · ${projectKey}`, projectKey, r.html));
       }
 
       // GET /ticket/:id — the web UI detail view (DL-2): full description + comments.
