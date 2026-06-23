@@ -134,6 +134,20 @@ operator (and the other agents) see systemic drift:
 - oldest `In Review` age (a large number means verification is lagging);
 - anything you fixed this fire (Jobs 1–2) and anything you flagged for the operator.
 
+### Job 5 — Mirror the hub outward (optional `mirror` config, `backend:"service"` only)
+If `backend:"service"` **and** a `mirror` config is present (conventions §18), reflect the
+hub's tickets outward to Linear for **human visibility** — hygiene-adjacent ("keep the
+outside view current"). Call `mirror.push({ teamId, tokenEnv, projectId?, stateMap?, limit? })`
+once with the config's values (the `tokenEnv` is the env-var **NAME** — the hub reads the
+Linear token **server-side**; you never see or pass the secret). It is **ONE-WAY** (hub →
+Linear) and **incremental** (an unchanged ticket is skipped by content hash), so a fire is
+cheap when nothing changed. The hub **never reads Linear as truth**; a human edit on a
+mirrored issue is overwritten next push (the banner says so). **Never block** on the mirror —
+a failed push (`failed > 0`) is logged + retried next fire, not a fire failure. Absent a
+`mirror` config, or under `backend:"linear"`/`"local"` (no hub to mirror from) ⇒ **skip
+entirely** (fail-closed). Report the `created/updated/skipped/failed` counts. Respect `mode`
+(§12): in `dry-run`, the hub's `DEVLOOP_MIRROR_DRYRUN` makes this a no-network preview.
+
 ## 2. Guardrails
 - **Hygiene only.** Never verify a ticket, write code, file a Feature/Bug/Improvement
   for new work, or ship/deploy. Your only mutations are label/owner/route fixes and

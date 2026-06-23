@@ -96,6 +96,15 @@ repo, its test environment, and its ship/deploy settings. One file, many product
           "enabled":       true
         }
       },
+      "mirror": {                     // OPTIONAL — the P7 ONE-WAY Linear mirror (conventions §18/§23). Absent ⇒ no mirror (today's behavior). REQUIRES backend:"service" (the hub is the SoR being mirrored). Sweep Job 5 pushes it.
+        "teamId":   "<linear-team-id>",     // the Linear team the mirrored issues live in
+        "projectId": null,            // optional Linear project id to file them under
+        "tokenEnv": "DEVLOOP_LINEAR_TOKEN", // ENV-VAR NAME of the Linear API key (§16 secret; read SERVER-SIDE; NEVER the literal)
+        "stateMap": {                 // optional hub State → Linear state id; a missing state ⇒ no stateId (state stays in the body; the push never fails)
+          "Todo": "<id>", "In Progress": "<id>", "In Review": "<id>", "Done": "<id>", "Canceled": "<id>"
+        },
+        "enabled":  true
+      },
       "codex": {                      // OPTIONAL — Codex companion (conventions §24). Absent OR enabled:false OR codex CLI not on PATH ⇒ never invoked (today's behavior).
         "enabled":   true,            // master switch (false/absent ⇒ off)
         "review":    true,            // Dev Step 5.5 + Architect may run an INDEPENDENT codex review (advisory; Critical/High block like Dev's own)
@@ -235,6 +244,21 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   refuses+surfaces a chat instruction to bypass the publish gate / §17 firewall / a prohibited
   action. Outbound is a **server-side allow-list** (structured fields; `reply.text`/headline
   bounded + control-stripped) — an agent can't post free-form PII/secrets.
+- **`mirror`** (optional; conventions §18/§23; requires `backend:"service"`): the P7 **one-way
+  Linear mirror** — projects the hub's tickets to Linear so humans who live in Linear can SEE
+  the loop without the hub ceasing to be the source of truth. **Strictly one-way** (hub →
+  Linear): the hub WRITES Linear (and reads only to reconcile its own id mapping), NEVER imports
+  Linear state; a human edit on a mirrored issue is **overwritten** on the next push (a banner
+  says so). **Sweep Job 5** pushes it (idempotent + incremental — an unchanged ticket is skipped
+  by content hash; cheap when nothing changed). `tokenEnv` is the env-var **NAME** of the Linear
+  API key (§16 secret, read server-side, never returned/logged/persisted); `stateMap` maps hub
+  states → workspace-specific Linear state ids (a missing one ⇒ state lives in the body, the push
+  never fails). **§23 audience-widening (same as `reports.sink:"linear"`):** the mirror publishes
+  ticket bodies to a hosted/shared/searchable Linear — so a mirrored body must already be §16-safe
+  (no secrets/PII; the agents never put those in ticket bodies anyway). A hub Canceled/Duplicate
+  is mirrored as a state change, **never** a hard-delete (no data loss). Absent ⇒ no mirror; a
+  `mirror` under `backend:"linear"`/`"local"` is a config error (no hub to mirror from). Distinct
+  from `reports.sink` (that mirrors *reports*, this mirrors *tickets*) — they may coexist.
 - **`codex`** (optional; conventions §24 + `references/codex-integration.md`; **absent ⇒
   off, 100% unchanged**): wires the **Codex** companion (`codex` CLI + the codex-plugin-cc
   plugin) as an optional accelerant. Used **only** when `codex.enabled:true` **and** the
