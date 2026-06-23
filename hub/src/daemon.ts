@@ -7,8 +7,9 @@
 //
 // The agents are UNCHANGED: they keep coordinating through the MCP server (`server.ts`); this is
 // an additive human-facing read surface, NOT a new coordinator (strategyDoc Decisions log,
-// 2026-06-23). Write paths (roadmap edit) build on this later (DL-3); the web UI is DL-2 — which
-// will serve HTML at `/`, replacing this module's JSON API index there.
+// 2026-06-23). DL-2 added a server-rendered web UI at `/` (board + ticket detail) and moved the
+// JSON API index to `/api`; the `/api/*` JSON endpoints are unchanged. Write paths (roadmap edit)
+// build on this later (DL-3).
 //
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
@@ -45,6 +46,114 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(s);
 }
 
+function htmlOut(res: ServerResponse, status: number, body: string): void {
+  res.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store",
+  });
+  res.end(body);
+}
+
+// ─── tiny inline web UI (DL-2): server-rendered, read-only, zero build step ───
+// The board + ticket pages are plain HTML rendered server-side from the same read-only db
+// connection the JSON API uses (PRAGMA query_only=ON) — no client JS, no bundler, no native
+// deps. Every interpolated DB value passes through esc() (localhost-only + read-only, but the
+// SoR holds arbitrary agent-authored text, so we escape it rather than trust it).
+const PRIORITY: Record<number, string> = { 1: "Urgent", 2: "High", 3: "Medium", 4: "Low", 0: "None" };
+const CORE_STATES = ["Todo", "In Progress", "In Review", "Done"]; // always shown (Linear-like board)
+const STATE_ORDER = ["Backlog", "Todo", "In Progress", "In Review", "Done", "Canceled", "Duplicate"];
+const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+function esc(s: unknown): string { return String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]); }
+function ownerOf(labels: string[]): string { return labels.includes("pm") ? "pm" : labels.includes("qa") ? "qa" : "—"; }
+function prioOf(p: number): string { return PRIORITY[p] ?? String(p); }
+
+const STYLE = `
+:root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--line:#e2e5ea;--ink:#1c1e21;--mut:#6b7280}
+@media(prefers-color-scheme:dark){:root{--bg:#15171a;--card:#1e2126;--line:#2c3036;--ink:#e6e8eb;--mut:#9aa3af}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+header{display:flex;align-items:baseline;gap:.6rem;padding:.7rem 1rem;border-bottom:1px solid var(--line)}
+header .home{font-weight:700;text-decoration:none;color:var(--ink)}header .proj{color:var(--mut)}
+main{padding:1rem}
+.board{display:flex;gap:.8rem;align-items:flex-start;overflow-x:auto}
+.col{flex:0 0 260px;background:transparent}
+.col h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut);margin:.2rem .2rem .5rem;font-weight:600}
+.col .count{background:var(--line);color:var(--mut);border-radius:999px;padding:0 .45rem;margin-left:.3rem;font-size:.72rem}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.55rem .6rem;margin-bottom:.5rem;text-decoration:none;color:inherit}
+.card:hover{border-color:var(--mut)}
+.card-top{display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem}
+.id{font:600 .72rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mut)}
+.title{font-weight:500;margin:.1rem 0}
+.card-meta{display:flex;gap:.5rem;align-items:center;margin-top:.35rem;font-size:.74rem;color:var(--mut)}
+.badge{font-size:.68rem;border:1px solid var(--line);border-radius:4px;padding:0 .35rem;color:var(--mut)}
+.badge.t-Feature{color:#2563eb;border-color:#2563eb55}.badge.t-Bug{color:#dc2626;border-color:#dc262655}.badge.t-Improvement{color:#16a34a;border-color:#16a34a55}
+.prio.p1{color:#dc2626;font-weight:600}.prio.p2{color:#d97706}
+.empty{color:var(--mut);font-size:.8rem;padding:.3rem .2rem}
+.back{display:inline-block;margin-bottom:.8rem;color:var(--mut);text-decoration:none}.back:hover{color:var(--ink)}
+.detail{max-width:760px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.1rem 1.3rem}
+.detail h1{font-size:1.4rem;margin:.4rem 0 .8rem}
+.meta{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .8rem;margin:.6rem 0 1rem}
+.meta dt{color:var(--mut)}.meta dd{margin:0}
+.lbl{font-size:.7rem;border:1px solid var(--line);border-radius:4px;padding:0 .35rem;color:var(--mut);margin-right:.25rem}
+pre{white-space:pre-wrap;word-wrap:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-x:auto}
+h3{margin:1.2rem 0 .4rem;font-size:.95rem}
+.comment{margin:.5rem 0}.c-head{font-size:.78rem;color:var(--mut);margin-bottom:.2rem}.c-head time{margin-left:.4rem}
+`;
+
+function page(title: string, project: string, inner: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>`
+    + `<style>${STYLE}</style></head><body>`
+    + `<header><a class="home" href="/">dev-loop</a><span class="proj">${esc(project)}</span></header>`
+    + `<main>${inner}</main></body></html>`;
+}
+
+function cardHtml(t: ReturnType<typeof toTicket>): string {
+  return `<a class="card" href="/ticket/${encodeURIComponent(t.id)}">`
+    + `<div class="card-top"><span class="id">${esc(t.id)}</span><span class="badge t-${esc(t.type)}">${esc(t.type)}</span></div>`
+    + `<div class="title">${esc(t.title)}</div>`
+    + `<div class="card-meta"><span class="owner">${esc(ownerOf(t.labels))}</span>`
+    + `<span class="prio p${esc(t.priority)}">${esc(prioOf(t.priority))}</span></div></a>`;
+}
+
+// Board: tickets grouped into state columns. Core workflow columns always render (even empty);
+// Backlog/Canceled/Duplicate and any other state show only when populated, terminals last.
+function boardPage(db: DatabaseSync, projectId: string, projectKey: string): string {
+  const tickets = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
+  const byState = new Map<string, ReturnType<typeof toTicket>[]>();
+  for (const t of tickets) (byState.get(t.state) ?? byState.set(t.state, []).get(t.state)!).push(t);
+  const states = [
+    ...STATE_ORDER.filter((s) => CORE_STATES.includes(s) || byState.has(s)),
+    ...[...byState.keys()].filter((s) => !STATE_ORDER.includes(s)),
+  ];
+  const cols = states.map((s) => {
+    const cards = byState.get(s) ?? [];
+    const body = cards.length ? cards.map(cardHtml).join("") : `<p class="empty">—</p>`;
+    return `<section class="col"><h2>${esc(s)}<span class="count">${cards.length}</span></h2>${body}</section>`;
+  }).join("");
+  return `<div class="board">${cols}</div>` + (tickets.length === 0 ? `<p class="empty">No tickets in ${esc(projectKey)} yet.</p>` : "");
+}
+
+// Ticket detail: full description + comments. Returns null when the ticket is absent (→ 404).
+function ticketPage(db: DatabaseSync, projectId: string, id: string): string | null {
+  const r = db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as Record<string, any> | undefined;
+  if (!r) return null;
+  const t = toTicket(r);
+  const comments = db.prepare("SELECT author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(id) as Record<string, any>[];
+  const commentsHtml = comments.length
+    ? comments.map((c) => `<div class="comment"><div class="c-head"><b>${esc(c.author)}</b><time>${esc(c.created_at)}</time></div><pre>${esc(c.body)}</pre></div>`).join("")
+    : `<p class="empty">No comments yet.</p>`;
+  return `<a class="back" href="/">← board</a><article class="detail">`
+    + `<div class="card-top"><span class="id">${esc(t.id)}</span><span class="badge t-${esc(t.type)}">${esc(t.type)}</span><span class="badge">${esc(t.state)}</span></div>`
+    + `<h1>${esc(t.title)}</h1>`
+    + `<dl class="meta"><dt>Owner</dt><dd>${esc(ownerOf(t.labels))}</dd>`
+    + `<dt>Priority</dt><dd>${esc(prioOf(t.priority))}</dd>`
+    + `<dt>Assignee</dt><dd>${esc(t.assignee ?? "—")}</dd>`
+    + `<dt>Labels</dt><dd>${t.labels.map((l: string) => `<span class="lbl">${esc(l)}</span>`).join("")}</dd></dl>`
+    + `<h3>Description</h3><pre>${esc(t.description)}</pre>`
+    + `<h3>Comments<span class="count" style="margin-left:.4rem">${comments.length}</span></h3>${commentsHtml}</article>`;
+}
+
 // Build the HTTP server over an already-opened, project-resolved db. Exported so tests (and a later
 // in-process embed) can start it without the CLI bootstrap below. The handler issues ONLY SELECTs.
 export function createDaemon({ db, projectId, projectKey }: DaemonOpts): Server {
@@ -59,11 +168,22 @@ export function createDaemon({ db, projectId, projectKey }: DaemonOpts): Server 
     const seg = path.split("/").filter(Boolean); // [] for "/"
 
     try {
-      // GET / — JSON API index. (DL-2 replaces this root with the web UI.)
-      if (path === "/") {
+      // GET / — the web UI board (DL-2): server-rendered HTML, read-only, columns by state.
+      if (path === "/") return htmlOut(res, 200, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey)));
+
+      // GET /ticket/:id — the web UI detail view (DL-2): full description + comments.
+      if (seg[0] === "ticket" && seg.length === 2) {
+        const id = decodeURIComponent(seg[1]);
+        const inner = ticketPage(db, projectId, id);
+        if (!inner) return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="/">← board</a><p class="empty">No ticket ${esc(id)} in ${esc(projectKey)}.</p>`));
+        return htmlOut(res, 200, page(`${id} · ${projectKey}`, projectKey, inner));
+      }
+
+      // GET /api — JSON API index (was GET / before DL-2 added the web UI at the root).
+      if (path === "/api") {
         return json(res, 200, {
           name: "dev-loop-hub daemon", project: projectKey, readOnly: true,
-          endpoints: ["/api/health", "/api/tickets", "/api/tickets/:id", "/api/docs", "/api/docs/:kind"],
+          ui: "/", endpoints: ["/api/health", "/api/tickets", "/api/tickets/:id", "/api/docs", "/api/docs/:kind"],
         });
       }
 

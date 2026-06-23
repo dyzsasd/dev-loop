@@ -44,7 +44,9 @@ The daemon refuses to serve a project that hasn't been seeded (start the hub onc
 
 | Method · path | Returns |
 |---|---|
-| `GET /` | JSON API index (the project + the endpoint list). DL-2 replaces this root with the web UI. |
+| `GET /` | the **web UI** board (DL-2): server-rendered HTML, tickets in columns by state |
+| `GET /ticket/:id` | the **web UI** ticket detail (DL-2): HTML with the full description + comments; `404` HTML if unknown |
+| `GET /api` | JSON API index (the project + the endpoint list; was `GET /` before DL-2 took the root for the UI) |
 | `GET /api/health` | `{ ok: true, project }` — liveness |
 | `GET /api/tickets` | the board: all tickets for the project. Filters: `?state=`, `?type=`, `?label=`, `?limit=` |
 | `GET /api/tickets/:id` | one ticket with its comments; `404` if unknown |
@@ -54,6 +56,7 @@ The daemon refuses to serve a project that hasn't been seeded (start the hub onc
 Quick check:
 
 ```sh
+open http://127.0.0.1:8787/                       # the web UI board (or curl it for the HTML)
 curl -s http://127.0.0.1:8787/api/health
 curl -s 'http://127.0.0.1:8787/api/tickets?state=Todo'
 curl -s http://127.0.0.1:8787/api/tickets/DL-1
@@ -64,4 +67,5 @@ curl -s http://127.0.0.1:8787/api/docs/roadmap
 
 `hub/test/daemon.ts` (wired into `npm test`) seeds a project with tickets + a published roadmap
 through the real MCP write path, starts the daemon in-process on an ephemeral localhost port, and
-asserts every read endpoint, the `404`s, the read-only `405`, and the `127.0.0.1` bind.
+asserts the web UI (board HTML renders the seeded tickets, ticket detail shows description +
+comments), every JSON read endpoint, the `404`s, the read-only `405`, and the `127.0.0.1` bind.

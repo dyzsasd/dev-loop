@@ -62,9 +62,31 @@ async function get(path: string, method = "GET"): Promise<{ status: number; body
   return { status: r.status, body };
 }
 
-// GET / — JSON API index
-const root = await get("/");
-ok(root.status === 200 && root.body.project === "dmn" && root.body.endpoints.includes("/api/tickets"), "GET / → 200 API index naming the project + endpoints");
+async function getHtml(path: string): Promise<{ status: number; type: string; text: string }> {
+  const r = await fetch(base + path);
+  return { status: r.status, type: r.headers.get("content-type") ?? "", text: await r.text() };
+}
+
+// ─── DL-2: the server-rendered web UI (board at /, ticket detail at /ticket/:id) ───
+// GET / — the board UI renders the seeded tickets grouped into state columns
+const board = await getHtml("/");
+ok(board.status === 200 && board.type.includes("text/html"), "GET / → 200 text/html (web UI board)");
+ok(board.text.includes("<!doctype html") && board.text.includes('class="board"'), "board page is an HTML doc with the board container");
+ok(board.text.includes(feat.id) && board.text.includes("Daemon foundation"), "board renders the seeded Feature card (id + title)");
+ok(board.text.includes(bug.id) && board.text.includes("A defect to fix"), "board renders the seeded Bug card (id + title)");
+ok(board.text.includes(">Todo<") && board.text.includes(">In Review<"), "board shows state columns (Todo + In Review)");
+ok(board.text.includes(`/ticket/${feat.id}`), "board cards link to the ticket detail route");
+
+// GET /ticket/:id — the detail UI shows the full description + comments
+const view = await getHtml(`/ticket/${feat.id}`);
+ok(view.status === 200 && view.type.includes("text/html"), "GET /ticket/:id → 200 text/html (detail view)");
+ok(view.text.includes("Daemon foundation") && view.text.includes("kicking this off"), "detail view shows the title/description and the attributed pm comment");
+const ghost = await getHtml("/ticket/DMN-999");
+ok(ghost.status === 404 && ghost.type.includes("text/html"), "GET /ticket/<unknown> → 404 HTML");
+
+// GET /api — the JSON API index (moved off / when DL-2 took the root for the UI)
+const root = await get("/api");
+ok(root.status === 200 && root.body.project === "dmn" && root.body.endpoints.includes("/api/tickets") && root.body.ui === "/", "GET /api → 200 JSON index naming the project, endpoints, and the UI root");
 
 // GET /api/health
 const health = await get("/api/health");
