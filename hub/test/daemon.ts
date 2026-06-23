@@ -7,6 +7,7 @@ import { rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
+import { request as httpRequest } from "node:http";
 import { openDb } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
 import { createDaemon } from "../src/daemon.ts";
@@ -248,6 +249,34 @@ await Promise.race([
   new Promise((r) => setTimeout(r, 3000)),
 ]);
 ok(settled, "an over-limit (>1MB) POST body settles fast (no hang) — the handler never dangles");
+
+// ── DL-19: CSRF (cross-origin) + DNS-rebinding (foreign Host) guard on the write routes ───────────
+// fetch() forbids setting Origin/Host (browser-forbidden header names), so use a raw node:http request
+// to forge them. Connects to 127.0.0.1:<port> but sends whatever Origin/Host headers we choose.
+function rawPost(port: number, path: string, extraHeaders: Record<string, string>, body: string): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const r = httpRequest({ hostname: "127.0.0.1", port, method: "POST", path,
+      headers: { "content-type": "application/x-www-form-urlencoded", "content-length": Buffer.byteLength(body), ...extraHeaders } },
+      (res) => { let d = ""; res.setEncoding("utf8"); res.on("data", (c) => (d += c)); res.on("end", () => resolve({ status: res.statusCode ?? 0, text: d })); });
+    r.on("error", reject); r.end(body);
+  });
+}
+const opPort = Number(new URL(opd.base).port);
+const baseV = (await call(verifier, "doc.history", { kind: "roadmap" })).length;          // current latest version (= count); a valid CAS base, so a block (not a conflict) is what stops the write
+const form19 = (b: string) => new URLSearchParams({ baseVersion: String(baseV), body: b, summary: "dl19" }).toString();
+
+// (a) a foreign Origin (valid local Host) → 403 CSRF refusal, no roadmap mutation
+const csrfO = await rawPost(opPort, "/roadmap/save", { origin: "http://evil.example" }, form19("CSRF via a foreign Origin"));
+ok(csrfO.status === 403, `DL-19 AC1: POST /roadmap/save with a foreign Origin → 403 (got ${csrfO.status})`);
+// (b) a foreign Host (DNS-rebinding) → 403 refusal before any write
+const rebind = await rawPost(opPort, "/roadmap/save", { host: "evil.example" }, form19("DNS rebinding via a foreign Host"));
+ok(rebind.status === 403, `DL-19 AC2: POST /roadmap/save with a foreign Host → 403 (got ${rebind.status})`);
+// AC4 — neither rejected write changed the document (no docSave ran): version count unchanged
+ok((await call(verifier, "doc.history", { kind: "roadmap" })).length === baseV, "DL-19 AC4: the rejected CSRF + rebinding writes created NO new version (no mutation)");
+// (c) AC3 — a legit SAME-origin browser submit (matching Origin + Host) still saves end-to-end
+const sameO = await rawPost(opPort, "/roadmap/save", { origin: `http://127.0.0.1:${opPort}`, host: `127.0.0.1:${opPort}` }, form19("same-origin save still works"));
+ok(sameO.status === 303, `DL-19 AC3: a same-origin submit (matching Origin/Host) still saves → 303 (got ${sameO.status})`);
+ok((await call(verifier, "doc.history", { kind: "roadmap" })).length === baseV + 1, "DL-19 AC3: the same-origin save DID create a new draft (the guard allows legitimate writes)");
 
 // ── DL-10: agent reports view (read-only filesystem source) — seed a temp §22 reports tree ───────
 const RROOT = "/tmp/hub-reports/reports";
