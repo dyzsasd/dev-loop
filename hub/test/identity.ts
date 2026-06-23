@@ -4,6 +4,8 @@
 // (the same G1 guard the server enforces at startup) so a mis-wired launcher can't write unattributably.
 import { rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const DB = "/tmp/hub-identity/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -51,6 +53,51 @@ const mism = checkExpect("qa", "dev"); // qa is a VALID actor but NOT the intend
 ok(mism.code === 1 && mism.data.matchesExpectation === false, "identity-check --expect dev with DEVLOOP_ACTOR=qa → exit 1 (catches a wrong-but-valid mis-attribution, not just unknown)");
 const matchExp = checkExpect("dev", "dev");
 ok(matchExp.code === 0 && matchExp.data.pass === true, "identity-check --expect dev with DEVLOOP_ACTOR=dev → pass");
+
+// ─── DL-6: an empty-string assignee must never be stored verbatim ─────────────
+// save_issue keyed its actor-existence guard on truthiness, so assignee:"" slipped
+// past it (whitespace + unknown handles are correctly rejected) and was stored as
+// "" — an unattributable non-actor limbo value, violating the "assignee is always
+// null or a known actor handle" invariant this suite guards. It must normalize to
+// null (the documented "null clears" semantics) on BOTH create and update.
+async function hub(actor: string): Promise<Client> {
+  const c = new Client({ name: `idtest-${actor}`, version: "0.0.0" });
+  await c.connect(new StdioClientTransport({
+    command: "node", args: ["src/server.ts"],
+    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "idp", DEVLOOP_HUB_DB: DB },
+  }));
+  return c;
+}
+async function call(c: Client, name: string, args: Record<string, unknown>): Promise<{ ok: boolean; data: any }> {
+  const r: any = await c.callTool({ name, arguments: args });
+  const text = r.content?.[0]?.text ?? "{}";
+  let data: any; try { data = JSON.parse(text); } catch { data = text; }
+  return { ok: !r.isError, data };
+}
+
+const devc = await hub("dev");
+
+// create with assignee:"" → normalized to null, NOT stored verbatim as ""
+const created = await call(devc, "save_issue", { title: "DL-6 empty-assignee create", type: "Bug", labels: ["dev-loop", "Bug", "qa"], assignee: "" });
+ok(created.ok && created.data.assignee === null, `save_issue create assignee:"" → stored as null, not "" (got ${JSON.stringify(created.data?.assignee)})`);
+const cid = created.data.id;
+
+// update path: a valid assignee must not be clobbered to "" — "" clears it to null
+await call(devc, "save_issue", { id: cid, assignee: "qa" });
+const cleared = await call(devc, "save_issue", { id: cid, assignee: "" });
+ok(cleared.ok && cleared.data.assignee === null, `save_issue update assignee "qa"→"" → cleared to null, not "" (got ${JSON.stringify(cleared.data?.assignee)})`);
+
+// controls — unchanged: whitespace-only + unknown handles stay REJECTED
+const ws = await call(devc, "save_issue", { id: cid, assignee: "  " });
+ok(!ws.ok, 'save_issue assignee:"  " (whitespace) → still rejected (unchanged control)');
+const unk = await call(devc, "save_issue", { id: cid, assignee: "hacker" });
+ok(!unk.ok, 'save_issue assignee:"hacker" (unknown) → still rejected (unchanged control)');
+
+// and a real claim still resolves to the acting actor
+const claimed = await call(devc, "save_issue", { id: cid, assignee: "me" });
+ok(claimed.ok && claimed.data.assignee === "dev", 'save_issue assignee:"me" → resolves to the acting actor (dev)');
+
+await devc.close();
 
 console.log(fails === 0 ? "\nIDENTITY_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
