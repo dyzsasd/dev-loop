@@ -181,8 +181,11 @@ const rm2 = await gettext(opd.base, "/roadmap");
 ok(rm2.text.includes("Draft (v2, unpublished)") && rm2.text.includes("<li>DL-2 web UI</li>"), "roadmap now shows the v2 DRAFT (unpublished) with the new content");
 
 // AC2 — optimistic CAS: a stale baseVersion is surfaced as a CONFLICT (409), never last-write-wins.
-const stale = await postForm(opd.base, "/roadmap/save", { baseVersion: "1", body: "STALE OVERWRITE", summary: "racing" });
+const stale = await postForm(opd.base, "/roadmap/save", { baseVersion: "1", body: "STALE OVERWRITE — keep my edit", summary: "racing" });
 ok(stale.status === 409 && /CONFLICT/.test(stale.text), "stale baseVersion → 409 CONFLICT (no last-write-wins)");
+// DL-14: the rejected re-render keeps the user's typed text (not the DB body) + refreshes baseVersion to the current latest (2)
+ok(stale.text.includes("STALE OVERWRITE — keep my edit") && stale.text.includes('name="body"'), "DL-14: a rejected save preserves the submitted text in the textarea (not reverted to the DB body)");
+ok(stale.text.includes('name="baseVersion" value="2"'), "DL-14: the rejected re-render refreshes baseVersion to the current latest, so an immediate re-submit targets the right base");
 ok((await call(verifier, "doc.history", { kind: "roadmap" })).length === 2, "the rejected stale save created NO new version — still exactly 2 (v1 published + v2 draft)");
 
 // AC3 — only the OPERATOR may publish; a non-operator daemon must not (UI hides it AND the endpoint 403s).

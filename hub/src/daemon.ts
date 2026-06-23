@@ -242,7 +242,7 @@ function redirect(res: ServerResponse, location: string): void {
 // GET /roadmap — render the kind:"roadmap" document (rendered markdown) + version/status, plus the edit
 // form and (operator-only) publish control. Reads through the query_only `db`. slug/kind are NEVER form
 // fields: the write routes hard-target the roadmap doc, so caller input can't redirect the write (§17).
-function roadmapPage(db: DatabaseSync, projectId: string, opts: { writable: boolean; canPublish: boolean; notice?: { kind: "error" | "ok"; msg: string } }): string {
+function roadmapPage(db: DatabaseSync, projectId: string, opts: { writable: boolean; canPublish: boolean; notice?: { kind: "error" | "ok"; msg: string }; submittedBody?: string }): string {
   const d = db.prepare("SELECT * FROM documents WHERE project_id=? AND kind='roadmap'").get(projectId) as Record<string, any> | undefined;
   const latest = d ? ((db.prepare("SELECT max(version) v FROM document_versions WHERE doc_id=?").get(d.id) as { v: number | null }).v ?? 0) : 0;
   const published = d ? d.current_version : 0;
@@ -264,7 +264,7 @@ function roadmapPage(db: DatabaseSync, projectId: string, opts: { writable: bool
     controls = `<h3>Edit — saves a DRAFT (never publishes)</h3>`
       + `<form method="post" action="/roadmap/save">`
       + `<input type="hidden" name="baseVersion" value="${latest}">`              // server-derived CAS base; a stale base is rejected, not overwritten
-      + `<textarea name="body" rows="16" spellcheck="false">${esc(body)}</textarea>`
+      + `<textarea name="body" rows="16" spellcheck="false">${esc(opts.submittedBody ?? body)}</textarea>`  // DL-14: on a rejected save, keep the user's typed text (?? — an empty submission stays empty), not the DB body
       + `<label>Summary (optional) <input type="text" name="summary" placeholder="what changed"></label>`
       + `<button type="submit">Save draft</button></form>`;
     if (latest > 0) {
@@ -302,14 +302,17 @@ async function handleRoadmapWrite(action: "save" | "publish", req: IncomingMessa
   catch (e) { if (!res.headersSent && !res.destroyed) json(res, 400, { error: (e as Error).message }); return; }
   // Resolve the roadmap doc's slug SERVER-SIDE (never from the form) so the write target can't be redirected.
   const slug = resolveDoc(writeDb, projectId, undefined, "roadmap")?.slug ?? "roadmap";
-  const rerender = (msg: string) =>
-    htmlOut(res, statusForDocErr(msg), page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: true, canPublish: actor === "operator", notice: { kind: "error", msg } })));
+  // DL-14: on a rejected re-render, preserve the user's submitted body in the textarea (so a CAS
+  // conflict / validation error doesn't discard a substantial edit). roadmapPage recomputes the hidden
+  // `baseVersion` from the current latest, so an immediate re-submit targets the right base.
+  const rerender = (msg: string, submittedBody?: string) =>
+    htmlOut(res, statusForDocErr(msg), page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: true, canPublish: actor === "operator", notice: { kind: "error", msg }, submittedBody })));
 
   if (action === "save") {
     const baseVersion = Number(form.get("baseVersion"));
     if (!Number.isInteger(baseVersion) || baseVersion < 0) return json(res, 400, { error: "baseVersion must be a non-negative integer" });
     const r = docSave(writeDb, projectId, actor, { slug, kind: "roadmap", body: form.get("body") ?? "", baseVersion, summary: form.get("summary") ?? undefined });
-    return r.ok ? redirect(res, "/roadmap") : rerender(r.error); // a stale baseVersion → 409 CONFLICT, surfaced (no last-write-wins)
+    return r.ok ? redirect(res, "/roadmap") : rerender(r.error, form.get("body") ?? ""); // 409 CONFLICT (stale base) — surfaced, and the typed edit is preserved (DL-14)
   }
   const version = Number(form.get("version"));
   if (!Number.isInteger(version) || version <= 0) return json(res, 400, { error: "version must be a positive integer" });
