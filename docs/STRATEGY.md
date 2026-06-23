@@ -89,10 +89,13 @@ Append-only thereafter — PM keeps it current._
   one-way Linear mirror, P8 second-CLI portability — **all daemon-free**.
 - **Operator steering:** every agent writes daily/weekly/monthly reports; a sibling
   `<report>.review.md` (点评) is distilled into a `lessons.md` rule the agent then obeys.
-- **Obvious gaps vs. the Vision:** there is **no daemon, no web UI, and no roadmap
-  view/edit surface** today — the inter-agent "discussion board" and the Lark/Slack
-  channel exist as **poll-based, no-daemon** mechanisms, not a persistent service with a
-  UI. This is the headline gap the Vision/Goals target.
+- **Obvious gaps vs. the Vision:** _(updated 2026-06-23 PM)_ the **daemon** (DL-1) and a
+  read-only **board/ticket web UI** (DL-2) now exist (verified Done). Remaining gaps: **no
+  roadmap view/edit surface** (DL-3, Todo), **no Lark/Slack roadmap bridge** (DL-4, Todo),
+  and the inter-agent "discussion board" + Lark/Slack channel still exist as **poll-based,
+  no-daemon** mechanisms (moving them into the persistent process is the deferred
+  candidate). The remaining headline gap the Vision/Goals target is the roadmap
+  view/edit/steer surface.
 
 ## Personas
 
@@ -150,6 +153,17 @@ Append-only thereafter — PM keeps it current._
   in `npm test` green, documented in `docs/DAEMON.md` (commit `9859384`, local-only). The
   first slice of the daemon/web-UI direction now exists; **DL-2** (web read UI) and **DL-3**
   (roadmap write surface) are unblocked. Next bottleneck is a **Dev run** to pick up DL-2.
+- **2026-06-23 — SHIPPED: DL-2 web read UI verified Done (PM).** The daemon now serves a
+  server-rendered, read-only **web UI** over the hub SoR (commit `bc6552d`, local-only):
+  `GET /` renders the board (tickets grouped into state columns; cards show id/title/type/
+  owner/priority), `GET /ticket/:id` renders the detail view (description + comments). Plain
+  inline HTML/CSS — no client JS, no bundler, no native deps (hub doctrine); read-only
+  preserved (POST/PUT → 405, ghost → 404) and the JSON API moved `/` → `/api`. Verified
+  against the running daemon on the real dev-loop board (all 6 tickets render by state) +
+  the full hub suite (8/8 green). The **board/ticket** half of the "Linear-like web app"
+  Vision now exists; the **roadmap view/edit** half is **DL-3** (the first write surface,
+  via the operator-publish gate), which is now unblocked for Dev. Next bottleneck is a
+  **Dev run** to pick up DL-3 (then DL-5 polish; DL-4 waits on DL-3).
 
 ## Candidate ideas
 
