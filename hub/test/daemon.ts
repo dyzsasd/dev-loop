@@ -37,9 +37,9 @@ async function call(c: Client, name: string, args: Record<string, unknown>): Pro
 }
 
 const pm = await as("pm"), op = await as("operator");
-const feat = await call(pm, "save_issue", { title: "Daemon foundation", type: "Feature", labels: ["dev-loop", "Feature", "pm"], priority: 2 });
+const feat = await call(pm, "save_issue", { title: "Daemon foundation", type: "Feature", labels: ["dev-loop", "Feature", "pm"], priority: 2, description: "# Foundation\n- item one\n- [ ] todo box\n**bold** & <script>alert(1)</script>" }); // DL-16: markdown + an XSS-injection
 const bug = await call(pm, "save_issue", { title: "A defect to fix", type: "Bug", labels: ["dev-loop", "Bug", "qa"], priority: 1 });
-await call(pm, "save_comment", { issueId: feat.id, body: "kicking this off" });
+await call(pm, "save_comment", { issueId: feat.id, body: "kicking this off — **go** <script>x()</script>" }); // DL-16: comment markdown + an XSS-injection
 await call(pm, "save_issue", { id: bug.id, state: "In Review", relatedTo: [feat.id] }); // give the board >1 state + a relation (DL-8)
 // a published roadmap doc (operator-only publish gate)
 await call(op, "doc.save", { slug: "roadmap", kind: "roadmap", title: "Product Roadmap", body: "# Roadmap\n- DL-1 daemon foundation\n", baseVersion: 0 });
@@ -90,6 +90,13 @@ const relView = await getHtml(`/ticket/${bug.id}`);          // bug relatedTo=[f
 ok(relView.text.includes("<dt>Related</dt>") && relView.text.includes(`href="/ticket/${feat.id}"`), "DL-8: a ticket with relatedTo → a Related row linking to /ticket/<id>");
 const noRelView = await getHtml(`/ticket/${feat.id}`);       // feat has no relations
 ok(!noRelView.text.includes("<dt>Related</dt>") && !noRelView.text.includes("Duplicate of"), "DL-8: a ticket with no relations → no Related/Duplicate row (no dangling labels)");
+
+// DL-16 — ticket + comment bodies render via renderMarkdown (not raw <pre>); meta shows timestamps; XSS inert
+ok(view.text.includes("<h1>Foundation</h1>") && view.text.includes("<li>item one</li>") && view.text.includes("<strong>bold</strong>"), "DL-16: the description renders markdown (heading/list/bold → HTML, not literal ##/**)");
+ok(view.text.includes('<input type="checkbox" disabled> todo box'), "DL-16: a `- [ ]` item renders a disabled checkbox");
+ok(view.text.includes("<strong>go</strong>"), "DL-16: comment bodies render markdown too (consistent with the description)");
+ok(view.text.includes("<dt>Created</dt>") && view.text.includes("<dt>Updated</dt>"), "DL-16: the detail meta shows created + updated timestamps");
+ok(view.text.includes("&lt;script&gt;alert(1)") && !view.text.includes("<script>alert(1)") && !view.text.includes("<script>x()"), "DL-16/XSS: an injected <script> in the description AND the comment is escaped/inert (renderMarkdown esc-first)");
 
 // GET /api — the JSON API index (moved off / when DL-2 took the root for the UI)
 const root = await get("/api");

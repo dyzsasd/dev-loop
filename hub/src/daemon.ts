@@ -161,7 +161,7 @@ function ticketPage(db: DatabaseSync, projectId: string, id: string): string | n
   const t = toTicket(r);
   const comments = db.prepare("SELECT author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(id) as Record<string, any>[];
   const commentsHtml = comments.length
-    ? comments.map((c) => `<div class="comment"><div class="c-head"><b>${esc(c.author)}</b><time>${esc(c.created_at)}</time></div><pre>${esc(c.body)}</pre></div>`).join("")
+    ? comments.map((c) => `<div class="comment"><div class="c-head"><b>${esc(c.author)}</b><time>${esc(c.created_at)}</time></div><div class="doc">${renderMarkdown(c.body)}</div></div>`).join("")
     : `<p class="empty">No comments yet.</p>`;
   // DL-8: surface the hub relationships (relatedTo / duplicateOf) as click-through links — but ONLY
   // when present, so an unrelated ticket renders no dangling row (AC). Read-only GET navigation.
@@ -174,8 +174,9 @@ function ticketPage(db: DatabaseSync, projectId: string, id: string): string | n
     + `<dl class="meta"><dt>Owner</dt><dd>${esc(ownerOf(t.labels))}</dd>`
     + `<dt>Priority</dt><dd>${esc(prioOf(t.priority))}</dd>`
     + `<dt>Assignee</dt><dd>${esc(t.assignee ?? "—")}</dd>`
+    + `<dt>Created</dt><dd>${esc(t.created_at)}</dd><dt>Updated</dt><dd>${esc(t.updated_at)}</dd>`  // DL-16
     + `<dt>Labels</dt><dd>${t.labels.map((l: string) => `<span class="lbl">${esc(l)}</span>`).join("")}</dd>${relatedRow}${dupRow}</dl>`
-    + `<h3>Description</h3><pre>${esc(t.description)}</pre>`
+    + `<h3>Description</h3><div class="doc">${renderMarkdown(t.description)}</div>`  // DL-16: rendered markdown (XSS-safe via renderMarkdown), not raw <pre>
     + `<h3>Comments<span class="count" style="margin-left:.4rem">${comments.length}</span></h3>${commentsHtml}</article>`;
 }
 
@@ -203,7 +204,7 @@ function renderMarkdown(md: string): string {
     if (/^\s*$/.test(line)) { closeList(); continue; }
     if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { closeList(); const l = m[1].length; out.push(`<h${l}>${inline(m[2])}</h${l}>`); continue; }
     if (/^(---|\*\*\*|___)\s*$/.test(line)) { closeList(); out.push("<hr>"); continue; }
-    if ((m = line.match(/^\s*[-*]\s+(.*)$/))) { if (listTag !== "ul") { closeList(); out.push("<ul>"); listTag = "ul"; } out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if ((m = line.match(/^\s*[-*]\s+(.*)$/))) { if (listTag !== "ul") { closeList(); out.push("<ul>"); listTag = "ul"; } const cb = m[1].match(/^\[([ xX])\]\s+([\s\S]*)$/); out.push(cb ? `<li><input type="checkbox" disabled${cb[1] === " " ? "" : " checked"}> ${inline(cb[2])}</li>` : `<li>${inline(m[1])}</li>`); continue; } // DL-16: a `- [ ]`/`- [x]` item → a disabled checkbox (the text is already esc'd → XSS-safe)
     if ((m = line.match(/^\s*\d+\.\s+(.*)$/))) { if (listTag !== "ol") { closeList(); out.push("<ol>"); listTag = "ol"; } out.push(`<li>${inline(m[1])}</li>`); continue; }
     closeList(); out.push(`<p>${inline(line)}</p>`);
   }
