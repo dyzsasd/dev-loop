@@ -65,6 +65,18 @@ function mockFetch(handler: (url: string, init: { body?: string; headers?: Recor
   ok(r.messages.length === 2 && r.messages[0].text === "first" && r.cursor === "100.2", "slack pollVia → human msgs only (bot filtered), cursor = max ts");
 }
 
+// slack history PAGINATION — a >1-page backlog is fully drained, nothing skipped (Codex review fix)
+{
+  let n = 0;
+  const f = mockFetch(() => {
+    n++;
+    if (n === 1) return { status: 200, body: { ok: true, has_more: true, response_metadata: { next_cursor: "PAGE2" }, messages: [{ ts: "10", user: "U1", text: "p1a" }, { ts: "11", user: "U1", text: "p1b" }] } };
+    return { status: 200, body: { ok: true, messages: [{ ts: "12", user: "U2", text: "p2a" }] } };
+  });
+  const r = await pollVia("slack", { token: "t" }, "C1", null, f);
+  ok(n === 2 && r.messages.length === 3 && r.cursor === "12", "slack pollVia pages through has_more → all 3 msgs collected, cursor = global max (no skip)");
+}
+
 // lark — token exchange THEN send; the exchange + send both routed via the mock
 {
   const calls: string[] = [];
@@ -118,6 +130,9 @@ ok((await call(director, "channel.status")).data.configured === false, "channel.
 // register (env-var NAME only, never a secret)
 const reg = (await call(director, "channel.register", { provider: "slack", configRef: "DEVLOOP_CHANNEL_TOKEN", channelRef: "C777" })).data;
 ok(reg.provider === "slack" && reg.channelRef === "C777", "channel.register → stored provider + room id");
+
+// §16 — channel.register REJECTS a literal token passed where an env-var NAME belongs (Codex review)
+ok((await call(director, "channel.register", { provider: "slack", configRef: "xoxb-LITERAL-SECRET", channelRef: "C9" })).isError, "channel.register rejects a literal token in configRef (names only — no secret reaches the DB)");
 
 // send notify — DRYRUN returns the BUILT allow-listed lines (title resolved server-side, no free-form path)
 const tk = (await call(director, "save_issue", { title: "A very long ticket title that should be truncated to eighty characters for the channel notify line", type: "Bug" })).data;

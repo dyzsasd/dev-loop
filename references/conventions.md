@@ -1898,8 +1898,9 @@ CLI (Codex, opencode, …) against the *same* `hub.db`. Full setup in
   AND a safety control: a CLI that fails to propagate `DEVLOOP_ACTOR` to the spawned MCP subprocess
   would **mis-attribute** every write. Verify with `whoami` THROUGH the CLI (set `DEVLOOP_ACTOR=dev`,
   ask it to call `whoami`, expect actor `dev`; `operator`/anything-else ⇒ FAIL, do **not** onboard —
-  **fail closed**). `dev-loop-hub identity-check` is the launcher-side sanity check; `whoami` proves
-  the CLI's spawn delivered the env. The G1 phantom-actor guard already refuses an unknown actor.
+  **fail closed**). `dev-loop-hub identity-check --expect <actor>` is the launcher-side sanity check
+  (it catches a wrong-but-valid actor, not just an unknown one); `whoami` proves the CLI's spawn
+  delivered the env. The G1 phantom-actor guard already refuses an unknown actor.
 - **Everything else is CLI-independent.** §17 (no self-edits; structural changes = operator git
   commit) is prompt-gated + git-backed; §16 secrets stay in env; identity stays **cooperative
   attribution** (not anti-spoof) on every CLI; no daemon anywhere. **Claude Code is 100% unchanged**

@@ -3,6 +3,39 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.19.1 — hardening from the Codex adversarial review (P4–P8)
+After the P0→P8 build, a cross-model adversarial review (OpenAI gpt-5.5 via the `codex` CLI; full
+report in `docs/reviews/codex-2026-06-P4-P8.md`) ran `npm test` (passed) and audited the hub. No
+CRITICAL; verdict "fix-first". The real findings, fixed:
+- **P6 `channel.poll` could SKIP messages (HIGH).** A single 50-item page advanced the cursor to the
+  page max past unfetched older messages. `pollVia` now **pages** through Slack `has_more`/`next_cursor`
+  + Lark `has_more`/`page_token` until drained, with a runaway guard that THROWS (cursor unadvanced)
+  rather than skip; `normalize()`'s strictly-after-cursor filter + the UNIQUE dedup make over-fetch
+  harmless. (test: a 2-page Slack fixture is fully collected.)
+- **P7 mirror crash-recovery could leave Linear stale (HIGH).** A crashed-create retry that reconciled
+  an existing issue by the `[hub:id]` marker wrote the new hash WITHOUT updating Linear. `mirror.push`
+  now **always reconciles before create** AND `updateIssue`s a reconciled issue to current content
+  before advancing the hash — also narrowing the concurrent-create-duplicate window (full safety still
+  assumes the single-Sweep-per-project model; documented).
+- **`save_issue` update was a read-then-write race (HIGH).** The append-only `relatedTo` merge could
+  lose a concurrent link. The update (read-cur → merge → write) is now one `BEGIN IMMEDIATE` txn.
+- **§16 ref validation (MEDIUM).** `channel.register` / `mirror.push` now reject a value passed where
+  an ENV-VAR NAME belongs (env-name shape + token-prefix denylist) — a secret can't be persisted to
+  the DB. (test: `channel.register` rejects a literal `xoxb-…`.)
+- **`channel.poll` insert (MEDIUM).** `INSERT OR IGNORE` → `ON CONFLICT(channel_id,direction,
+  provider_msg_id) DO NOTHING` so only the dedup conflict is suppressed; any other insert failure
+  rolls back without advancing the cursor.
+- **`doc.publish` single-current invariant (MEDIUM).** Publishing vN after vM left two version rows
+  `status='current'`; publish now resets all to draft then marks the chosen one, in a txn. (test added.)
+- **`identity-check --expect <actor>` (MEDIUM).** The gate now catches a WRONG-but-valid actor
+  (mis-attribution), not just unknown/unset; `--expect` (or `DEVLOOP_EXPECT_ACTOR`) fails on mismatch.
+  (test added; PORTABILITY.md + §26 updated.)
+- **Provider error scrub (MEDIUM) + `topic.synthesize` clean CONFLICT (LOW).** Persisted/returned
+  provider errors are run through a token-shaped redactor; a repeat same-round synthesize returns a
+  structured CONFLICT instead of a raw UNIQUE error.
+Accepted-as-is: the `whoami`/`identity-check` db-path field (operator's own machine; diagnostic). hub
+→ 0.6.2; plugin + marketplace → 0.19.1.
+
 ## 0.19.0 — hub P8: second-CLI portability (Codex / opencode)
 - **The loop is no longer Claude-Code-only.** Because the hub is a plain stdio MCP server with
   env-based identity and no daemon, the same agents + hub + per-agent identity run on a second coding

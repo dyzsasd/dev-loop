@@ -98,9 +98,12 @@ onboarded only after it passes this gate.
 
 ```bash
 DEVLOOP_ACTOR=dev DEVLOOP_PROJECT=<key> DEVLOOP_HUB_DB=<path> \
-  node <dev-loop>/hub/src/server.ts identity-check
-# → {"actor":"dev","project":"<key>","db":"<path>","dbPresent":true,"actorKnown":true,"wouldStart":true}
-# exit 0 = the env resolves to a known actor; exit 1 = it would be REFUSED (fail-closed).
+  node <dev-loop>/hub/src/server.ts identity-check --expect dev
+# → {"actor":"dev",...,"wouldStart":true,"matchesExpectation":true,"pass":true}
+# exit 0 = the env resolves to a known actor AND matches the expected one; exit 1 = REFUSED or MISMATCH.
+# Pass `--expect <actor>[/<project>]` (or DEVLOOP_EXPECT_ACTOR / DEVLOOP_EXPECT_PROJECT) so the gate
+# catches a WRONG-but-valid actor (mis-attribution), not just an unknown/unset one — a launcher
+# should always assert against the identity it INTENDED.
 ```
 
 **The real per-CLI gate** (does the CLI propagate that env *through its MCP spawn*?): run a one-shot
