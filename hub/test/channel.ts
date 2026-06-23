@@ -179,6 +179,50 @@ ok(st.configRefSet === true && !JSON.stringify(st).includes("xoxb-"), "channel.s
 ok((await call(beta, "channel.status")).data.configured === false, "a different project sees no channel (isolation)");
 ok((await call(beta, "channel.poll")).isError, "channel.poll in a project with no channel → err (isolation)");
 
-for (const c of [director, beta, directorF]) await c.close();
+// ── DL-4: roadmap-over-chat bridge — channel.poll auto-handles a summary request + an edit→DRAFT ──
+const rmSetup = await as("operator", "rmp", "RM"); // operator: seed + publish the roadmap doc, register the channel
+await call(rmSetup, "doc.save", { slug: "roadmap", kind: "roadmap", title: "Product Roadmap", body: "# Roadmap\n- ship the bridge\n", baseVersion: 0 });
+await call(rmSetup, "doc.publish", { kind: "roadmap", version: 1 });
+await call(rmSetup, "channel.register", { provider: "slack", configRef: "DEVLOOP_CHANNEL_TOKEN", channelRef: "C-RM" });
+
+// a director polls with a fixture of inbound chat: a summary request, an edit (with a secret+email to scrub), and a normal message
+const RM_FIX = JSON.stringify([
+  { providerMsgId: "300.1", authorRef: "U7", text: "roadmap", providerTs: "300.1" },
+  { providerMsgId: "300.2", authorRef: "U7", text: "roadmap edit # Roadmap v2\n- ship the bridge\n- then DL-13\nsecret xoxb-LEAKED key AKIAIOSFODNN7EXAMPLE ping me@evil.com 415-555-0142", providerTs: "300.2" },
+  { providerMsgId: "300.3", authorRef: "U7", text: "what about the mobile app?", providerTs: "300.3" },
+  { providerMsgId: "300.4", authorRef: "U7", text: "roadmap: maybe we discuss mobile next quarter", providerTs: "300.4" },
+]);
+const rmDir = await (async () => {
+  const env: Record<string, string> = { ...process.env, DEVLOOP_ACTOR: "director", DEVLOOP_PROJECT: "rmp", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1", DEVLOOP_CHANNEL_DRYRUN: "1", DEVLOOP_CHANNEL_TOKEN: "xoxb-DRYRUNSECRET", DEVLOOP_CHANNEL_FIXTURE: RM_FIX };
+  const c = new Client({ name: "chan-rm-dir", version: "0" });
+  await c.connect(new StdioClientTransport({ command: "node", args: ["src/server.ts"], env }));
+  return c;
+})();
+const rmPoll = (await call(rmDir, "channel.poll")).data;
+
+// AC1 — a `roadmap` request → a §16-safe summary (handled in poll, not left pending)
+const summ = rmPoll.roadmapHandled.find((h: any) => h.type === "summary");
+ok(!!summ && summ.lines.join(" ").includes("published v1"), "DL-4: a `roadmap` msg → a summary reply showing the version/status");
+ok(summ.lines.join("\n").includes("ship the bridge"), "DL-4: the summary carries the roadmap excerpt");
+
+// AC2 — a `roadmap: <text>` edit → a DRAFT via doc.save, NOT published
+const edit = rmPoll.roadmapHandled.find((h: any) => h.type === "edit");
+ok(!!edit && /draft v2/.test(edit.result), "DL-4: a `roadmap: <text>` msg → a roadmap DRAFT v2 (doc.save)");
+ok((await call(rmSetup, "doc.get", { kind: "roadmap" })).data.current_version === 1, "DL-4: the chat edit did NOT publish — published current stays v1");
+ok((await call(rmSetup, "doc.history", { kind: "roadmap" })).data.length === 2, "DL-4: the chat edit appended exactly one new draft (v2)");
+
+// AC4/§16 — the persisted draft keeps the content but scrubs secrets (incl. third-party shapes) + PII
+const v2 = (await call(rmSetup, "doc.get", { kind: "roadmap", version: 2 })).data;
+ok(v2.body.includes("then DL-13") && !v2.body.includes("xoxb-LEAKED") && !v2.body.includes("AKIAIOSFODNN7EXAMPLE") && !v2.body.includes("me@evil.com") && !v2.body.includes("415-555-0142") && v2.body.includes("***"), "DL-4/§16: the chat-edit draft is persisted but secrets (Slack+AWS), email, and phone are scrubbed (***)");
+
+// only the explicit `roadmap` / `roadmap edit` commands are auto-handled; everything else — INCLUDING a
+// casual `roadmap:` musing — still flows to the Director's pending inbox (false-positive hardening)
+ok(rmPoll.roadmapHandled.length === 2, "DL-4: exactly 2 commands auto-handled (summary + edit) — the `roadmap:` musing is NOT captured as an edit");
+ok(rmPoll.pending.some((p: any) => p.text.includes("mobile app")) && rmPoll.pending.some((p: any) => p.text.includes("maybe we discuss mobile")), "DL-4: a non-command msg AND a `roadmap:` musing both stay pending for the Director");
+
+// §16 — the token never appears in the poll result
+ok(!JSON.stringify(rmPoll).includes("xoxb-") && !JSON.stringify(rmPoll).includes("DRYRUNSECRET"), "DL-4/§16: the channel token never appears in the poll result");
+
+for (const c of [director, beta, directorF, rmSetup, rmDir]) await c.close();
 console.log(fails === 0 ? "\nCHANNEL_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
