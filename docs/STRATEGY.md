@@ -286,6 +286,8 @@ Append-only thereafter — PM keeps it current._
 
 - **2026-06-23 — FILED: DL-16 web-UI detail polish (PM, post-milestone).** With the operator-set milestone complete and the Dev queue empty, re-opened the review rotation and filed the parked buildable polish (Improvement, pm, Low): render the ticket **description + comments** via the existing `renderMarkdown` (today they're raw `<pre>` while roadmap/reports already render markdown — DL-3/DL-10) + show created/updated timestamps. **Chosen deliberately over filing another operator-gated proposal**: it's buildable now (no §17 gate, reuses existing code), keeping the loop productive while DL-12 (cwd §11/SKILL) + the 点评-from-UI §22-carve-out (Candidate ideas) await the operator. Next operator-gated initiative when you engage: 点评-from-the-web-UI (needs the §22 carve-out).
 
+- **2026-06-23 — SHIPPED: DL-16 web-UI markdown rendering + timestamps verified Done (PM).** Dev's commit `a09d453` renders the ticket description + comments via the existing `renderMarkdown` (no longer raw `<pre>`) and shows created/updated timestamps; XSS-inert (esc-first, asserted for an injected `<script>` in both description + comment); gate green. The ticket detail now matches the roadmap/reports views (Linear-like). **All 15 buildable tickets this session are Done (DL-1…DL-11, DL-13/14/15/16); the only open item is DL-12** (cwd §11/SKILL agent-side wording, §17-gated — awaiting the operator's git commit). Dev queue empty; next operator-gated theme = 点评-from-the-web-UI (§22 carve-out, Candidate ideas) or the supporting goals.
+
 ## Candidate ideas
 
 _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL-1…DL-5 on
