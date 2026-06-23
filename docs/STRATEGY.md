@@ -97,8 +97,11 @@ Append-only thereafter — PM keeps it current._
   roadmap edits from chat, with the operator-publish gate intact throughout. **Remaining (smaller)
   gaps:** ~~reports view in the web UI (DL-10)~~ **SHIPPED** (verified Done — the daemon now serves
   a read-only `/reports` view over the §22 reports tree; the operator can read pm/qa/dev dailies
-  from the browser), **cwd-based project auto-selection** (DL-12 proposal awaiting operator + DL-13
-  In Progress), web-UI polish (DL-8 relatedTo, DL-14 conflict-draft-preservation), README drift
+  from the browser), **cwd-based project auto-selection** — the **hub resolver + auto-pin is SHIPPED**
+  (DL-13 verified Done; from a repo checkout with no `DEVLOOP_PROJECT` the hub now auto-selects that
+  project — the dogfood case `cwd=dev-loop repo → "dev-loop"` is fixed), with the **launcher/config/docs
+  wiring** as DL-15 (Dev split, Todo) and the **§11/SKILL agent-side wording** as DL-12 (operator's
+  commit); web-UI polish (DL-8 relatedTo, DL-14 conflict-draft-preservation), README drift
   (DL-5), and the deferred candidates (inter-agent discussion daemon; multi-stakeholder roadmap
   auth; **accepting a 点评 *from* the web UI** — the remaining half of the reports-in-UI idea, a
   write path). With DL-10, the operator's **observe** loop is browser-complete (board · tickets ·
@@ -255,6 +258,19 @@ Append-only thereafter — PM keeps it current._
   `*.review.md`/`*.review.acted`. **This closes the operator's "see the daily report in the web UI"
   ask** and makes the **observe** loop browser-complete (board · tickets · reports · roadmap). The
   remaining half — accepting a **点评 FROM the web UI** (a write path) — stays a Candidate idea.
+- **2026-06-23 — SHIPPED: DL-13 cwd→project hub auto-resolution verified Done (PM); Dev split the
+  wiring into DL-15.** Dev shipped the resolver (`hub/src/resolve-project.ts`: realpath +
+  segment-boundary containment + longest-prefix + ambiguity→none + `repos[]`) and the hub fallback
+  (`server.ts`: explicit `DEVLOOP_PROJECT?.trim()` wins; empty/unset → cwd-resolve; no-match → `demo`
+  backward-compatibly; DB-missing cwd-match → loud exit-1 via the P3/G2 guard), plus a
+  `dev-loop-hub resolve-project [--cwd]` subcommand. Verified **live against the real `projects.json`**:
+  the operator's motivating bug is fixed — `cwd=/Users/shuai/workspace/dev-loop` + unset env → `dev-loop`
+  (not `monpick`); `monpick` sibling → `monpick` (no cross-match); nested `hub/` → `dev-loop`; outside
+  every repo → no guess (exit 1). Full `npm test` green incl. the new RESOLVE_PROJECT suite (explicit
+  wins; empty+under-repo auto-pins). **Dev legitimately split** the config-template / launcher / docs
+  ACs into **DL-15** (Feature/pm, relatedTo DL-13) — the part that makes a folder-launched agent fully
+  hands-off end-to-end. So the operator's "launch from the folder" ask now has: hub auto-pin ✅ (DL-13);
+  launcher+config+docs ⏳ (DL-15, Dev); agent-side §11/SKILL wording ⏳ (DL-12, operator commit).
 
 ## Candidate ideas
 
