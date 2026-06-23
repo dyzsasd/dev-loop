@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "DEVLOOP_CREATE_PROJECT=1 node src/server.ts",
+    "daemon": "node src/daemon.ts",
     "seed": "node src/seed.ts",
     "doctor": "node src/server.ts doctor",
     "identity-check": "node src/server.ts identity-check",
@@ -20,7 +21,8 @@
     "channel": "node test/channel.ts",
     "mirror": "node test/mirror.ts",
     "identity": "node test/identity.ts",
-    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts"
+    "daemon-test": "node test/daemon.ts",
+    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts && node test/daemon.ts"
   },
   "engines": {
     "node": ">=23.6"
