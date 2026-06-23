@@ -89,13 +89,15 @@ Append-only thereafter — PM keeps it current._
   one-way Linear mirror, P8 second-CLI portability — **all daemon-free**.
 - **Operator steering:** every agent writes daily/weekly/monthly reports; a sibling
   `<report>.review.md` (点评) is distilled into a `lessons.md` rule the agent then obeys.
-- **Obvious gaps vs. the Vision:** _(updated 2026-06-23 PM)_ the **daemon** (DL-1) and a
-  read-only **board/ticket web UI** (DL-2) now exist (verified Done). Remaining gaps: **no
-  roadmap view/edit surface** (DL-3, Todo), **no Lark/Slack roadmap bridge** (DL-4, Todo),
-  and the inter-agent "discussion board" + Lark/Slack channel still exist as **poll-based,
-  no-daemon** mechanisms (moving them into the persistent process is the deferred
-  candidate). The remaining headline gap the Vision/Goals target is the roadmap
-  view/edit/steer surface.
+- **Obvious gaps vs. the Vision:** _(updated 2026-06-23 PM)_ the **daemon** (DL-1), a
+  read-only **board/ticket web UI** (DL-2), and the **roadmap view/edit write surface** (DL-3 —
+  the daemon's first write path, through the operator-publish gate) now exist (verified Done).
+  Remaining gaps: **no Lark/Slack roadmap bridge** (DL-4, Todo — now unblocked by DL-3), **no
+  reports/点评 view in the web UI** (DL-10, Todo), **cwd-based project auto-selection** (DL-12
+  proposal + DL-13, Todo), and the inter-agent "discussion board" + Lark/Slack channel still
+  exist as **poll-based, no-daemon** mechanisms (the deferred candidate). The "Linear-like web
+  app" half of the Vision (board + tickets + roadmap view/edit) is now substantially built; the
+  remaining headline gap is the **Lark/Slack roadmap bridge** (steer from chat).
 
 ## Personas
 
@@ -209,6 +211,20 @@ Append-only thereafter — PM keeps it current._
     `backend:"service"` (backward-compatible: explicit env still wins; no-match ⇒ today's behavior).
   - **Decision:** keep the agent-side spec change human-gated (§17) while letting Dev ship the
     backend:"service" mechanism now; sequence the docs note alongside, not as a hard block.
+- **2026-06-23 — SHIPPED: DL-3 roadmap view/edit write surface verified Done (PM).** Dev shipped
+  the daemon's **first write surface** (commit `b316424`): `GET /roadmap` renders the
+  `kind:"roadmap"` doc (markdown) + version/status, an edit form saves **DRAFT** versions via the
+  existing `doc.save` CAS, and an **operator-only** publish control promotes a draft → current —
+  all through the hub's operator-publish gate. Verified against the running daemon (not the diff):
+  `daemon-test` DAEMON_OK (18 assertions — draft-save 303, draft-never-auto-publishes, stale
+  baseVersion→409 CONFLICT, non-operator publish→403 / control hidden, operator publish→v2, and
+  the **§17 firewall**: a save with injected slug/kind/path fields is accepted but the extras are
+  ignored — every write hard-targets `kind:"roadmap"`, so the daemon can never write a
+  SKILL/conventions/code file) + `docs` HUB_DOCS_OK. Architecture: the CAS + operator-publish
+  logic was extracted to a shared `hub/src/docstore.ts` used by BOTH the MCP server and the
+  daemon, so the gate can't drift. The **roadmap view/edit half of the Vision now exists**; **DL-4**
+  (Lark/Slack roadmap bridge, depends on DL-3) is now **unblocked**. _(Note: full `npm test` shows
+  5 `mirror`-suite failures = the independent, In-Progress DL-11, unrelated to DL-3.)_
 
 ## Candidate ideas
 
