@@ -159,3 +159,10 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   drains and concrete gaps surface).
 - **Multi-stakeholder roadmap auth** (future persona): once the web UI exists, distinguish
   operator vs. non-operator roadmap stakeholders beyond the single operator-publish gate.
+- **Reports + 点评 review in the web UI** (ux-flows lens, PM 2026-06-23): the operator's
+  *observe-and-steer* flow is today purely file-based (read `reports/<agent>/**`, drop a
+  `<report>.review.md` 点评 sibling). The Vision's "view and manage the loop from a browser"
+  naturally extends to surfacing those reports and accepting a 点评 from the web UI — closing
+  the operator-feedback loop without a terminal. Deferred: depends on the unbuilt daemon read
+  surface (DL-1/DL-2); file as that foundation lands so it doesn't dilute a Dev-bottlenecked
+  Todo now.
