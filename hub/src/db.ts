@@ -186,6 +186,23 @@ CREATE TABLE IF NOT EXISTS channel_messages (
   UNIQUE(channel_id, direction, provider_msg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_chanmsg_inbox ON channel_messages(project_id, direction, acted, created_at);
+-- ── P7 one-way Linear mirror: hub → Linear projection map (the hub is the SoR) ─
+-- §16: holds Linear ids + a content hash, NEVER a token/secret. linear_id NULL = a create is
+-- pending (the row is written BEFORE the remote create, so a crash never orphans/double-creates --
+-- a NULL-id retry reconciles by the [hub:id] title marker). The hash is computed from HUB
+-- fields only, so a human edit on the Linear side never changes it (one-way; hub state always wins).
+CREATE TABLE IF NOT EXISTS mirror_map (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  hub_kind TEXT NOT NULL DEFAULT 'ticket' CHECK(hub_kind IN ('ticket')), -- tickets only for P7; docs/topics deferred
+  hub_id TEXT NOT NULL,
+  linear_id TEXT,                  -- the mirrored Linear issue id; NULL = create pending (crash-safe)
+  last_pushed_hash TEXT,           -- sha256 of the HUB-derived mirror content; an unchanged ticket is SKIPPED (incremental)
+  last_pushed_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(project_id, hub_kind, hub_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mirror_project ON mirror_map(project_id, hub_kind);
 `;
 
 // ─── Open ──────────────────────────────────────────────────────────────────

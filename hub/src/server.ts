@@ -3,12 +3,13 @@
 // Tools mirror the Linear MCP op-shapes 1:1 so the agent SKILLs port unchanged (conventions §18).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { z } from "zod";
 import { openDb, nowIso, nextTicketId, logEvent, actorExists, listActorHandles, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { ensureActors, ensureProject, findProject } from "./seed.ts";
 import { sendVia, pollVia, type Provider, type OutboundMsg, type InboundMsg, type Creds } from "./channel.ts";
+import { findByMarker, createIssue, updateIssue, type MirrorIssue } from "./linear.ts";
 
 // ─── Environment / identity ──────────────────────────────────────────────────
 const DB_PATH = process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`;
@@ -558,5 +559,86 @@ server.registerTool("channel.status", {
     inboxPending: pending,
   });
 });
+
+// ─── P7 one-way Linear mirror — hub → Linear projector (NO daemon; idempotent; §16) ──────
+// STRICTLY ONE-WAY: the hub WRITES Linear + reads ONLY to reconcile its own mapping. A human edit
+// on Linear is OVERWRITTEN next push (the content hash is HUB-derived, so hub state always wins).
+// The token is read SERVER-SIDE from env[tokenEnv]; the caller passes only the NAME (§16).
+const MIRROR_DRYRUN = process.env.DEVLOOP_MIRROR_DRYRUN === "1";
+const MIRROR_BANNER = "> 🤖 Mirrored from the dev-loop hub — edits here are IGNORED and overwritten on the next push. Give direction via the Director (conventions §25).";
+
+interface MirrorRow { id: string; hub_id: string; linear_id: string | null; last_pushed_hash: string | null; }
+const mirrorTitle = (t: Ticket): string => `${t.title} [hub:${t.id}]`;
+const mirrorBody = (t: Ticket): string => [
+  MIRROR_BANNER, "",
+  `**hub:** ${t.id} · **type:** ${t.type} · **state:** ${t.state} · **priority:** ${t.priority} · **owner:** ${t.assignee ?? "—"}`,
+  t.labels.length ? `**labels:** ${t.labels.join(", ")}` : "",
+  t.relatedTo.length ? `**related:** ${t.relatedTo.join(", ")}` : "",
+  t.duplicateOf ? `**duplicate of:** ${t.duplicateOf}` : "",
+  "", t.description || "_(no description)_",
+].filter((l) => l !== "").join("\n");
+const mirrorHash = (t: Ticket, stateId: string | undefined): string =>
+  createHash("sha256").update(JSON.stringify({ title: mirrorTitle(t), body: mirrorBody(t), stateId: stateId ?? null })).digest("hex");
+
+server.registerTool("mirror.push", {
+  description: "ONE-WAY push: project hub tickets → Linear issues (create-or-update, idempotent + incremental — an unchanged ticket is skipped by content hash). The hub NEVER reads Linear as truth; a human Linear edit is overwritten. `tokenEnv` is the env-var NAME (the §16 secret is read server-side). A missing stateMap entry ⇒ no stateId (state stays in the body; never fails the push). DRYRUN returns the would-push ops, no network.",
+  inputSchema: {
+    teamId: z.string().min(1),
+    tokenEnv: z.string().min(1),
+    projectId: z.string().optional(),
+    stateMap: z.record(z.string(), z.string()).optional(), // hub State → Linear state id
+    limit: z.number().int().min(1).max(500).optional(),
+  },
+}, async (a) => {
+  const token = process.env[a.tokenEnv];
+  if (!token && !MIRROR_DRYRUN) return err(`mirror token env '${a.tokenEnv}' is unset`);
+  const rows = db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC LIMIT ?").all(projectId, a.limit ?? 500) as TicketRow[];
+  const tickets = rows.map(toTicket);
+  let created = 0, updated = 0, skipped = 0, failed = 0;
+  const ops: { op: string; hubId: string; title: string; body: string; stateId: string | null }[] = [];
+  for (const t of tickets) {
+    const stateId = a.stateMap?.[t.state]; // missing ⇒ undefined ⇒ no stateId (fallback: state is in the body)
+    const issue: MirrorIssue = { title: mirrorTitle(t), description: mirrorBody(t), stateId };
+    const hash = mirrorHash(t, stateId);
+    let row = db.prepare("SELECT id,hub_id,linear_id,last_pushed_hash FROM mirror_map WHERE project_id=? AND hub_kind='ticket' AND hub_id=?").get(projectId, t.id) as MirrorRow | undefined;
+    if (row && row.linear_id && row.last_pushed_hash === hash) { skipped++; continue; } // incremental skip (unchanged)
+    const existedBefore = !!row;
+    if (!row) { // mapping-row-FIRST: record intent before the remote create → a crash never orphans/dups
+      const rid = randomUUID();
+      db.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,created_at) VALUES (?,?,'ticket',?,?)").run(rid, projectId, t.id, nowIso());
+      row = { id: rid, hub_id: t.id, linear_id: null, last_pushed_hash: null };
+    }
+    try {
+      if (!row.linear_id) {
+        // a pre-existing NULL row may be a prior crashed create → reconcile by the title marker first; a
+        // fresh row (inserted this fire) cannot have a prior create, so create directly.
+        const linearId = MIRROR_DRYRUN ? `dry-${t.id}`
+          : existedBefore
+            ? (await findByMarker(fetch, token!, `[hub:${t.id}]`)) ?? (await createIssue(fetch, token!, a.teamId, a.projectId ?? null, issue))
+            : await createIssue(fetch, token!, a.teamId, a.projectId ?? null, issue);
+        db.prepare("UPDATE mirror_map SET linear_id=?, last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(linearId, hash, nowIso(), row.id);
+        created++; ops.push({ op: "create", hubId: t.id, title: issue.title, body: issue.description, stateId: stateId ?? null });
+      } else {
+        if (!MIRROR_DRYRUN) await updateIssue(fetch, token!, row.linear_id, issue);
+        db.prepare("UPDATE mirror_map SET last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(hash, nowIso(), row.id);
+        updated++; ops.push({ op: "update", hubId: t.id, title: issue.title, body: issue.description, stateId: stateId ?? null });
+      }
+    } catch (e) {
+      // leave the row (linear_id as-is, hash NOT advanced) → next push retries; never throw the token
+      failed++;
+      logEvent(db, { project_id: projectId, actor: ACTOR, kind: "mirror.error", data: { hubId: t.id, error: (e as Error).message } });
+    }
+  }
+  logEvent(db, { project_id: projectId, actor: ACTOR, kind: "mirror.push", data: { created, updated, skipped, failed } });
+  return ok({ created, updated, skipped, failed, dryrun: MIRROR_DRYRUN, ...(MIRROR_DRYRUN ? { ops } : {}) });
+});
+
+server.registerTool("mirror.status", { description: "Mirror coverage: mapped tickets, total tickets, last push time. No secret, no Linear read.", inputSchema: {} },
+  async () => {
+    const mapped = (db.prepare("SELECT count(*) c FROM mirror_map WHERE project_id=? AND hub_kind='ticket'").get(projectId) as { c: number }).c;
+    const tickets = (db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c;
+    const last = (db.prepare("SELECT max(last_pushed_at) m FROM mirror_map WHERE project_id=?").get(projectId) as { m: string | null }).m;
+    return ok({ mapped, tickets, lastPush: last });
+  });
 
 await server.connect(new StdioServerTransport());

@@ -3,6 +3,39 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.18.0 — hub P7: the one-way Linear mirror (human visibility)
+- **Linear demoted to a push-only mirror.** The hub is the source of truth; an opt-in `mirror`
+  config (under `backend:"service"`) projects the hub's tickets OUT to Linear so humans who live
+  in Linear can SEE the loop — without Linear becoming a second SoR. Absent ⇒ no mirror (today's
+  behavior); a `mirror` under `backend:"linear"`/`"local"` is a config error (no hub to mirror).
+- **Strictly one-way + split-brain enforced.** The hub WRITES Linear and reads ONLY to reconcile
+  its own id mapping — it NEVER imports Linear state as truth. Every mirrored issue carries a
+  banner ("🤖 Mirrored from the dev-loop hub — edits here are IGNORED and overwritten; give
+  direction via the Director"), re-applied each push. The content hash is HUB-derived, so a human
+  edit on Linear is overwritten on the next push (hub state always wins). A hub Canceled/Duplicate
+  mirrors as a state change, **never** a hard-delete (no data loss). There is **no** mirror.pull /
+  import / sync-from-Linear tool — only `mirror.push` / `mirror.status`.
+- **Idempotent, incremental, crash-safe.** `mirror_map` (hub id → Linear id + content hash) skips
+  an unchanged ticket (incremental — a fire is cheap when nothing changed). The map row is written
+  **before** the remote create (linear_id NULL = create pending), and a NULL-id retry **reconciles
+  by the `[hub:id]` title marker** before creating — so a crash between issueCreate and recording
+  the mapping never orphans or double-creates. A failed push leaves the row un-advanced and retries
+  next fire (never throws the token).
+- **§16 secret discipline (inherited from P6).** The Linear API key lives ONLY in env (`tokenEnv`
+  is the NAME); the hub reads it server-side, calls the Linear GraphQL API, and never returns/logs/
+  persists it — a failure surfaces only an HTTP status / truncated Linear error. Every call has a
+  hard ~10s timeout. State mapping is a config `stateMap` (hub State → workspace-specific Linear
+  state id) with a no-fail fallback (a missing state ⇒ no stateId; state stays in the body).
+- **Daemon-free.** **Sweep Job 5** runs the push on its slow cadence (hygiene-adjacent: "reflect
+  the hub outward"); it's an ordinary outbound HTTPS call (the P6 pattern), gated on
+  `backend:"service"` + a `mirror` config, fail-closed, never blocks the fire.
+- `hub/src/linear.ts` (GraphQL adapter — createIssue/updateIssue/findByMarker, injectable
+  `fetchImpl`, hard timeout); `hub/test/mirror.ts` certifies it (adapter units with mock fetch —
+  create/update/find/error/timeout, token-never-thrown — + DRYRUN tool tests: create-then-update
+  idempotency, incremental hash-skip, banner + marker in the body, stateMap fallback, cancel-not-
+  deleted, secret-never-returned, one-way no-pull-tool, isolation). conventions §18 + config-schema
+  + Sweep extended; hub → 0.6.0.
+
 ## 0.17.0 — hub P6: the provider-agnostic two-way IM channel
 - **The operator can now CHAT with the Director over Lark/Slack** (opt-in, a `director.channel`
   block under `backend:"service"`; absent ⇒ today's behavior — the Director chairs the board

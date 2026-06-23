@@ -55,7 +55,7 @@ manually, or run them on a schedule, and the product builds and improves itself.
 | **`pm-agent`** | Reads the strategy doc, exercises the real product, files **Feature** tickets, proactively reviews for improvements, **verifies** features that reach `In Review`, unblocks its own blocked tickets, and keeps the strategy doc current. |
 | **`qa-agent`** | Runs happy-path + edge-case tests in the configured test env, files **Bug** tickets (and `drift` → Improvement), **re-tests** bugs that reach `In Review`, and clears info-blocks for Dev. |
 | **`dev-agent`** | Pulls `Todo` tickets in priority order, grooms (enough info? duplicate? already done?), implements, gates on build/test, **self-reviews the diff**, ships per config, **smoke-checks prod (auto-revert on a break)**, and hands off to `In Review`. Blocks rather than guesses. |
-| **`sweep-agent`** | Lifecycle janitor (slower cadence). Owns the cracks between the owner-scoped agents: fixes missing/wrong owner labels (invisible to every other query), resets orphaned `In Progress` from crashed runs, nudges stale signals, reports board health. Hygiene only. |
+| **`sweep-agent`** | Lifecycle janitor (slower cadence). Owns the cracks between the owner-scoped agents: fixes missing/wrong owner labels (invisible to every other query), resets orphaned `In Progress` from crashed runs, nudges stale signals, reports board health. Hygiene only. On the hub `service` backend it also runs the optional **one-way Linear mirror** push (Job 5 — hub → Linear for human visibility; idempotent, incremental, split-brain enforced). |
 | **`reflect-agent`** | Retrospective + self-evolution (slowest cadence, daily). Studies the loop's **own** behavior and **curates `lessons.md`** from recurring, evidence-cited patterns. Observe + curate only; may autonomously edit only `lessons.md` — structural changes are **drafted as proposals, never auto-applied**. |
 | **`ops-agent`** | **Outward** (§21): Ops/SRE watcher of RUNNING prod (tight ~10–15 min cadence). Polls per-repo `deploy.healthCheck` + `baseUrl` + optional critical routes/logs and, on a **confirmed, repeated** degradation (anti-flap: re-checks first), files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod is down). Observe-and-file only — never rolls back (Dev's Step 6.5). |
 | **`architect-agent`** | **Outward** (§21): whole-codebase tech-health auditor (slow, daily-ish). Audits the codebase on a **rotating** dimension (drift / duplication / dead-code / dep-staleness+CVE / consistency / missing-abstractions), SHA-gated (§19), and files `Improvement`+`qa`+`tech-debt`. Read-only on code — never implements. |
@@ -308,6 +308,10 @@ certified by a test, phantom actor/project typos are refused at startup, ticket 
 kept unique, and `dev-loop-hub doctor` health-checks the SoR. v0.15.0 (P4) adds opt-in
 hub-native **versioned documents** (the strategyDoc/roadmap as operator-published, diffable,
 optimistic-CAS docs; §17 firewall kept structural — docs are DB-only, never a code file).
+v0.16.0 (P5) adds the **discussion board + Director** (a loop agent, no daemon); v0.17.0 (P6)
+the optional **two-way Lark/Slack channel** (poll-based, §16-secret-safe); v0.18.0 (P7) the
+optional **one-way Linear mirror** (the hub pushes its tickets to Linear for human visibility —
+split-brain enforced, Linear never read back as truth). All daemon-free.
 Validated end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
 (push/deploy) is opt-in per project and gated on a green build. Coordination is
 backend-pluggable — Linear (default), a machine-local file board (`backend:"local"`), or the

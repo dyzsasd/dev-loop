@@ -1069,6 +1069,18 @@ per-agent attribution**, structural per-project scoping, and a native event feed
   by the operator's git commit. The operator-publish gate is **cooperative role-attribution
   (DEVLOOP_ACTOR), not anti-spoof** on one host — it guards honest-but-buggy agents + injection,
   not a determined local actor (the truly-unforgeable authorization stays outside the hub, §16).
+- **Discussion board + Director (P5), two-way channel (P6).** The `service` backend also hosts
+  the §25 discussion board (`topic.*`/`post.add`) the Director chairs, and an optional two-way
+  IM channel (`channel.*`, §9/§25) the operator chats over. Both opt-in (a `director` /
+  `director.channel` config); see §25.
+- **One-way Linear mirror (P7).** Optionally project the hub's tickets OUT to Linear for human
+  visibility (a `mirror` config; **Sweep Job 5** runs `mirror.push`). **Strictly one-way** — the
+  hub WRITES Linear (reads only to reconcile its own id mapping), NEVER imports Linear state;
+  a human edit on a mirrored issue is **overwritten** next push (a pinned banner says so), so
+  **Linear never becomes a second source of truth.** Idempotent + incremental (unchanged tickets
+  skipped by content hash), §16 (the Linear token is an env-var NAME, read server-side), and
+  audience-widening like `reports.sink:"linear"` (§23) — a mirrored body must be §16-safe. A hub
+  Canceled/Duplicate mirrors as a state change, never a hard-delete. Absent ⇒ no mirror.
 - **Reflect's activity window.** In place of Linear's activity feed (or the local comment log
   + git), Reflect reconstructs the window from the hub's **`list_events`** — an append-only
   feed of `issue.create` / `issue.transition` (with `from`/`to`) / `comment.add`, each

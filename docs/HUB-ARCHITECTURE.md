@@ -2,14 +2,14 @@
 
 > **Build status (live):** P0 (de-risk) ✅ · P2 (hub MVP + `service` backend) ✅ v0.13.0 · P3
 > (isolation guards, doctor) ✅ v0.14.0 · P4 (versioned documents) ✅ v0.15.0 · P5 (discussion
-> board + Director) ✅ v0.16.0 · **P6 (two-way IM channel) ✅ v0.17.0** · P7–P8 remain (Linear
-> mirror / 2nd CLI). **The "daemon arrives at P5/P6" framing below is SUPERSEDED — there is STILL
-> NO daemon.** P5's Director is a **loop agent** (per-fire chairing; decisions **inline** on the
-> topic). P6's channel is **POLL-based**: the Director reaches OUT each fire (`channel.poll` =
-> an outbound history read since a hub-stored cursor) — a loopback stdio process needs no inbound
-> endpoint. A daemon is deferred to *if/when* a PUSH-webhook channel is wanted (sub-fire-latency
-> chat), which P6 deliberately does not build. Where this doc says a capability is "deferred to
-> PN", consult the CHANGELOG + conventions §18/§25 for what shipped.
+> board + Director) ✅ v0.16.0 · P6 (two-way IM channel) ✅ v0.17.0 · **P7 (one-way Linear mirror)
+> ✅ v0.18.0** · P8 remains (2nd CLI). **The "daemon arrives at P5/P6" framing below is SUPERSEDED
+> — there is STILL NO daemon.** P5's Director is a **loop agent**; P6's channel is **POLL-based**
+> (the Director reaches OUT each fire — a loopback needs no inbound endpoint); P7's mirror is a
+> **per-fire push** Sweep runs (an ordinary outbound HTTPS call, the P6 pattern). A daemon is
+> deferred to *if/when* a PUSH-webhook channel is wanted (sub-fire-latency chat), which is not
+> built. Where this doc says a capability is "deferred to PN", consult the CHANGELOG + conventions
+> §18/§25 for what shipped.
 > The hub uses built-in `node:sqlite` (not better-sqlite3 — P0 found zero native deps possible).
 >
 > Status (original): **proposal for operator sign-off (LK8). No code is written against this until the operator approves it AND the P0 spike (below) passes.**
@@ -115,7 +115,7 @@ P3  server-enforced multi-project isolation
 P4  versioned documents (§20 doc-base + roadmap), operator-gated publish
 P5  discussion board + Director ── NO daemon (loop-agent chairing; decisions inline)
 P6  provider-agnostic IM channel ── two-way, POLL-based (NO daemon); digests + inbound
-P7  one-way Linear mirror (human visibility; §23 parity; split-brain enforced)
+P7  one-way Linear mirror ── per-fire push (Sweep); split-brain enforced; NO daemon
 P8  2nd CLI (Codex / opencode) behind a per-CLI headless identity test
    (parallel, operator-driven, §17-gated) ── the footgun-removal SKILL rewrite
 ```
@@ -283,7 +283,7 @@ CREATE VIRTUAL TABLE tickets_fts USING fts5(title, body_md, content='tickets', c
 --     document_versions(document_id, version, body_md, author_id, summary, base_version)   -- optimistic CAS
 -- P5 (SHIPPED): topics / posts (discussion; the DECISION is INLINE on topics, no separate table)
 -- P6 (SHIPPED): channels + channel_messages (two-way IM; config_ref = ENV-VAR NAME, never the secret; inbound_cursor = the no-daemon poll cursor)
--- P7: mirror_map(project_id, hub_ticket_id, linear_issue_id, last_pushed_rev, last_comment_seq)
+-- P7 (SHIPPED): mirror_map(project_id, hub_kind, hub_id, linear_id, last_pushed_hash, last_pushed_at) — the hash skips unchanged tickets; linear_id NULL = create pending (crash-safe, reconciled by the [hub:id] title marker)
 ```
 
 Note the MVP **does not** ship `agent_tokens`, `project_members`, a `labels` registry, `documents`, `document_versions`, `topics/posts/decisions`, `channels`, or `mirror_map`. Labels are free strings in `ticket_labels` (init seeds the §4 set; `repo:<name>` on demand) — a registry is added in P3 only if free strings prove insufficient.
@@ -350,14 +350,37 @@ These are **not** MVP. LK5 is reinterpreted as "shape the schema so they can att
 
 ---
 
-## 15. The Linear mirror — deferred, §23 parity, split-brain enforced (P7)
+## 15. The Linear mirror — SHIPPED v0.18.0 (one-way, split-brain enforced) (P7)
 
-Cut from the MVP. When built, it is **one-way (hub→Linear), opt-in, default-off, human-visibility only — never sold as disaster recovery.**
+Built in P7 (`hub/src/linear.ts` + the `mirror.push`/`mirror.status` tools; **Sweep Job 5**
+runs the push, daemon-free). **One-way (hub→Linear), opt-in (a `mirror` config), default-off,
+human-visibility only — never disaster recovery.**
 
-- **What syncs:** title, body **summary**, state (§3 names), labels, priority; new comments — at **§23 parity**: summary prose + counts + ticket-IDs/SHAs only, **never** raw comment/log/metric bodies. A `localOnly` carve-out withholds tickets authored by `signal`/`ops`/`dev` (highest-PII × highest-cadence) — they go summary-only or not at all. Init-time **audience attestation** (no outbound integration sync, no non-operator subscribers) and a **distinct-Linear-target-per-project** check (two hub projects must never mirror into one Linear project).
-- **Anti-second-SoR:** the hub **never** reads Linear state as truth; a human edit on the mirror is overwritten next push; a pinned banner says "Mirrored — edits ignored; give direction via the Director."
-- **Honest limit:** one Linear token ⇒ Linear re-collapses to one identity (attribution is hub-only); a `[pm]:`/`[dev]:` comment prefix is a cosmetic restore. The same §16 fail-closed scrub as §23 runs before every push.
-- **Split-brain is ENFORCED, not prose (§22 cutover):** the launcher refuses to arm a `linear`-backed fire for a project whose hub `mode` is `live`; the mirror refuses to push until the project's Linear source is flagged read-only; `dev-loop-hub doctor` flags any project configured for both backends at once.
+- **What syncs (SHIPPED):** per ticket — the title (+ a `[hub:<id>]` marker), a body carrying the
+  split-brain banner + the hub fields (id/type/state/priority/owner-handle/labels/related/duplicate)
+  + the ticket description, and the **state via a config `stateMap`** (hub State → workspace-specific
+  Linear state id; a missing entry ⇒ no `stateId`, state stays in the body — the push never fails).
+  Idempotent + **incremental** (an unchanged ticket is skipped by a HUB-derived content hash).
+  **DEFERRED:** comment sync, and a `localOnly` per-author carve-out (`signal`/`ops`/`dev`) — for
+  now the §23 rule that ticket bodies are already §16-safe (no secrets/PII) carries the
+  audience-widening; the mirror inherits exactly that concern.
+- **Anti-second-SoR (ENFORCED by construction):** the hub **never** reads Linear state as truth —
+  there is **no** `mirror.pull`/import/sync-from-Linear tool, and the content hash is HUB-derived,
+  so a human edit on Linear is overwritten on the next push; a pinned banner says "Mirrored — edits
+  IGNORED and overwritten; give direction via the Director." The hub reads Linear ONLY to reconcile
+  its own `mirror_map` id (the `[hub:id]` marker), never to import state.
+- **Crash-safe idempotency:** `mirror_map` is written **before** the remote create (`linear_id`
+  NULL = create pending); a NULL-id retry **reconciles by the title marker** before creating, so a
+  crash between `issueCreate` and recording the mapping never orphans or double-creates. A failed
+  push leaves the row un-advanced and retries next fire.
+- **§16 / honest limit:** the Linear API key is an env-var **NAME** in config, read server-side,
+  never returned/logged/persisted; every call has a hard ~10s timeout. One Linear token ⇒ Linear
+  re-collapses to one identity (attribution is hub-only) — the owner-handle in the mirrored body is
+  a cosmetic restore. A hub Canceled/Duplicate mirrors as a state change, **never** a hard-delete.
+- **Split-brain (PARTIAL):** one-way is enforced *in the tool surface* (no read-as-truth path) +
+  the banner. **DEFERRED:** the launcher/`doctor` dual-backend refusal (refuse to arm a `linear`-backed
+  fire for a `live` hub project; flag a project configured for both) — re-openable if a project ever
+  runs both backends at once.
 
 ---
 
@@ -451,7 +474,7 @@ monpick today: `backend` absent (⇒ linear), `linearProject:MonPick`, a Linear-
 | P4 versioned docs | ~1 w | Docs-as-rows beats a git-tracked markdown file enough to justify the build |
 | P5 discussion board + Director (NO daemon — loop-agent) | ~1 w | Is multi-agent discussion signal not noise; topic termination |
 | P6 channel (two-way, POLL-based, NO daemon) | ~1 w | Poll latency = fire cadence (a direction plane, not real-time chat); a push webhook would need a tunnel — deferred |
-| P7 Linear mirror | ~1 w | A lossy one-way mirror is useful, not confusing |
+| P7 Linear mirror (one-way, Sweep push, NO daemon) | ~1 w | A lossy one-way mirror is useful, not confusing; split-brain stays enforced |
 | P8 2nd CLI | 3–5 d / CLI | Per-CLI identity-on-tool-call parity (the headless test) |
 | (parallel) footgun SKILL rewrite | 3–5 d | Coordinated, human-reviewed §17 pass over 8 SKILLs |
 
