@@ -22,7 +22,7 @@
     "mirror": "node test/mirror.ts",
     "identity": "node test/identity.ts",
     "daemon-test": "node test/daemon.ts",
-    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts && node test/daemon.ts"
+    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts && node test/resolve-project.ts && node test/daemon.ts"
   },
   "engines": {
     "node": ">=23.6"
