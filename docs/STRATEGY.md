@@ -99,9 +99,14 @@ Append-only thereafter — PM keeps it current._
   a read-only `/reports` view over the §22 reports tree; the operator can read pm/qa/dev dailies
   from the browser), **cwd-based project auto-selection** — the **hub resolver + auto-pin is SHIPPED**
   (DL-13 verified Done; from a repo checkout with no `DEVLOOP_PROJECT` the hub now auto-selects that
-  project — the dogfood case `cwd=dev-loop repo → "dev-loop"` is fixed), with the **launcher/config/docs
-  wiring** as DL-15 (Dev split, Todo) and the **§11/SKILL agent-side wording** as DL-12 (operator's
-  commit); web-UI polish (DL-8 relatedTo, DL-14 conflict-draft-preservation), README drift
+  project — the dogfood case `cwd=dev-loop repo → "dev-loop"` is fixed); the **config templates + docs**
+  (DL-15) are **SHIPPED** too — so cwd auto-pin works end-to-end for a CLI that spawns the hub with the
+  repo cwd. Remaining for fully hands-off: the **§11/SKILL agent-side wording** (DL-12, operator's git
+  commit) and an **optional machine-local `run-loop.sh` enable step** (export the resolved
+  `DEVLOOP_PROJECT` + the correct per-pane `DEVLOOP_ACTOR` — the latter also fixes a pre-existing drift
+  where panes attribute to `operator`; deferred to the operator since `run-loop.sh` is an untracked
+  machine-local launcher, not a repo deliverable). Then: web-UI polish (DL-8 relatedTo, DL-14
+  conflict-draft-preservation), README drift
   (DL-5), and the deferred candidates (inter-agent discussion daemon; multi-stakeholder roadmap
   auth; **accepting a 点评 *from* the web UI** — the remaining half of the reports-in-UI idea, a
   write path). With DL-10, the operator's **observe** loop is browser-complete (board · tickets ·
@@ -271,6 +276,8 @@ Append-only thereafter — PM keeps it current._
   ACs into **DL-15** (Feature/pm, relatedTo DL-13) — the part that makes a folder-launched agent fully
   hands-off end-to-end. So the operator's "launch from the folder" ask now has: hub auto-pin ✅ (DL-13);
   launcher+config+docs ⏳ (DL-15, Dev); agent-side §11/SKILL wording ⏳ (DL-12, operator commit).
+
+- **2026-06-23 — SHIPPED: DL-15 cwd→project wiring (templates + docs) verified Done (PM).** Dev shipped the repo-tracked slice (commit `8329bdf`): the 3 MCP config templates default `DEVLOOP_PROJECT` to **empty** per-file correctly — `mcp.example.json` shell-expanded `${DEVLOOP_PROJECT:-}`, but `codex.toml`/`opencode.json` **literal `""`** (NOT shell contexts — the exact hole the DL-13 ticket flagged), plus precedence docs in RUNNING.md/PORTABILITY.md/config-schema.md. Gate green. **The launcher (`run-loop.sh`) AC is correctly deferred as an OPERATOR enable step** — it's an untracked machine-local file outside the repo, so Dev won't silently mutate the operator's live launcher with no git review; cwd auto-pin already works without it for a repo-cwd-spawned hub (DL-13). The operator enable step (also fixes the pre-existing `DEVLOOP_ACTOR`→`operator` attribution drift): in `run-loop.sh`, export per-pane `DEVLOOP_ACTOR=<agent>` + `DEVLOOP_PROJECT="$(… resolve-project --cwd "$REPO")"`. **Net: the buildable cwd→project feature is complete (DL-13+DL-15); only DL-12 (operator §11/SKILL commit) + the optional launcher step remain.**
 
 ## Candidate ideas
 
