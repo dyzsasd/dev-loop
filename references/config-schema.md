@@ -192,6 +192,18 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `hub.db` path via `hub.db` / `DEVLOOP_HUB_DB`; `strategyDoc` is a **repo file** (as in
   `local`; first-class hub docs are a later phase); `ticketPrefix` applies. Like `local`,
   the hub is machine-local runtime state, never committed.
+- **Project resolution (`backend:"service"`, DL-13).** The hub picks its project by this
+  precedence: **explicit `DEVLOOP_PROJECT`** (a non-empty, trimmed value — `""` is treated as
+  unset, and `"demo"`/`"default"` are NOT sentinels: an operator may legitimately pin a project
+  keyed `demo`/`default`) **>** the spawned process's **cwd** matched against each project's
+  `repoPath`/`repos[].path` (§19; realpath-canonical, segment-boundary safe so `/work/repo` ≠
+  `/work/repo-2`, nearest-ancestor wins, an ambiguous tie or a cwd outside every repo → no match)
+  **>** the `demo` default. A cwd that resolves to a **configured-but-unseeded** project **errors
+  loudly** (it never silently falls through to `demo`). The shared matcher is exposed as
+  `dev-loop-hub resolve-project [--cwd <path>]` so a launcher reuses exactly one rule. So
+  `DEVLOOP_PROJECT` is **optional** when an agent is launched from inside a project's repo; the
+  `.mcp.json`/launcher templates default it to empty for that reason (see `config/mcp.*.example`,
+  `docs/RUNNING.md`).
 - **`repos`** (optional; default absent ⇒ single-repo, conventions §19): an array of
   `{ name, path, role, lang, contributorSkill?, defaultBranch?, build?, deploy? }`
   entries for a **multi-repo** product. Absent (or a single entry) ⇒ the top-level
