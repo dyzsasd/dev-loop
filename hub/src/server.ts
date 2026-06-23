@@ -623,7 +623,10 @@ server.registerTool("mirror.push", {
       // issue (a NULL-id row on the next fire reconciles by marker). The UNIQUE(project,kind,hub_id)
       // makes two concurrent pushers' INSERTs serialize — the loser throws + retries (no dup row).
       const rid = randomUUID();
-      db.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,created_at) VALUES (?,?,'ticket',?,?)").run(rid, projectId, t.id, nowIso());
+      // DRYRUN is side-effect-free (§12, DL-11): keep the mapping row IN MEMORY only. Persisting it
+      // poisons a later live push — an unchanged ticket is skipped (never created) and a changed one
+      // gets stuck updating a non-existent `dry-<id>`. The in-memory row still drives the logic + ops.
+      if (!MIRROR_DRYRUN) db.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,created_at) VALUES (?,?,'ticket',?,?)").run(rid, projectId, t.id, nowIso());
       row = { id: rid, hub_id: t.id, linear_id: null, last_pushed_hash: null };
     }
     try {
@@ -637,11 +640,11 @@ server.registerTool("mirror.push", {
         let linearId: string;
         if (found) { await updateIssue(fetch, token!, found, issue); linearId = found; } // adopt + push current content (fixes stale-reconcile)
         else { linearId = MIRROR_DRYRUN ? `dry-${t.id}` : await createIssue(fetch, token!, a.teamId, a.projectId ?? null, issue); }
-        db.prepare("UPDATE mirror_map SET linear_id=?, last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(linearId, hash, nowIso(), row.id);
+        if (!MIRROR_DRYRUN) db.prepare("UPDATE mirror_map SET linear_id=?, last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(linearId, hash, nowIso(), row.id); // DRYRUN: never persist the dry-<id> sentinel/hash (DL-11)
         created++; ops.push({ op: found ? "reconcile" : "create", hubId: t.id, title: issue.title, body: issue.description, stateId: stateId ?? null });
       } else {
         if (!MIRROR_DRYRUN) await updateIssue(fetch, token!, row.linear_id, issue);
-        db.prepare("UPDATE mirror_map SET last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(hash, nowIso(), row.id);
+        if (!MIRROR_DRYRUN) db.prepare("UPDATE mirror_map SET last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(hash, nowIso(), row.id); // DRYRUN: don't advance the persisted hash (DL-11)
         updated++; ops.push({ op: "update", hubId: t.id, title: issue.title, body: issue.description, stateId: stateId ?? null });
       }
     } catch (e) {
