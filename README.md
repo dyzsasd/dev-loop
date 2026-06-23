@@ -311,7 +311,10 @@ optimistic-CAS docs; §17 firewall kept structural — docs are DB-only, never a
 v0.16.0 (P5) adds the **discussion board + Director** (a loop agent, no daemon); v0.17.0 (P6)
 the optional **two-way Lark/Slack channel** (poll-based, §16-secret-safe); v0.18.0 (P7) the
 optional **one-way Linear mirror** (the hub pushes its tickets to Linear for human visibility —
-split-brain enforced, Linear never read back as truth). All daemon-free.
+split-brain enforced, Linear never read back as truth); v0.19.0 (P8) **second-CLI portability** —
+the same agents + hub run on Codex/opencode against the same db, gated on a per-CLI
+identity-propagation test ([`docs/PORTABILITY.md`](docs/PORTABILITY.md); Claude Code unchanged).
+All daemon-free.
 Validated end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
 (push/deploy) is opt-in per project and gated on a green build. Coordination is
 backend-pluggable — Linear (default), a machine-local file board (`backend:"local"`), or the

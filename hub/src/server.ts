@@ -22,6 +22,24 @@ if (process.argv[2] === "doctor") {
   process.exit(runDoctor(DB_PATH) ? 0 : 1);
 }
 
+// `dev-loop-hub identity-check` — P8 portability helper: print what THIS process's env resolves to
+// (the per-agent identity the hub would attribute writes to) and whether the server would start.
+// A launcher/CI uses it to confirm DEVLOOP_* is wired before a fire. NOTE: this reflects the CURRENT
+// process env; the REAL per-CLI gate is calling `whoami` THROUGH the CLI's MCP spawn (docs/PORTABILITY.md)
+// — only that proves the CLI propagates env to the spawned subprocess. Exit 1 if the actor would be
+// REFUSED (db present + unknown actor → the G1 phantom-actor guard), else 0.
+if (process.argv[2] === "identity-check") {
+  const { existsSync } = await import("node:fs");
+  const dbPresent = existsSync(DB_PATH);
+  let actorKnown: boolean | null = null;
+  if (dbPresent) {
+    try { const d = openDb(DB_PATH); actorKnown = actorExists(d, ACTOR); d.close(); } catch { actorKnown = null; }
+  }
+  const wouldStart = !dbPresent || actorKnown === true; // db absent ⇒ would be seeded; else the actor must be known
+  console.log(JSON.stringify({ actor: ACTOR, project: PROJECT_KEY, db: DB_PATH, dbPresent, actorKnown, wouldStart }));
+  process.exit(wouldStart ? 0 : 1);
+}
+
 const db = openDb(DB_PATH);
 ensureActors(db); // the 8 agents + operator are always present (needed for attribution + the guard below)
 

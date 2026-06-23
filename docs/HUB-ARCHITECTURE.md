@@ -2,14 +2,15 @@
 
 > **Build status (live):** P0 (de-risk) ✅ · P2 (hub MVP + `service` backend) ✅ v0.13.0 · P3
 > (isolation guards, doctor) ✅ v0.14.0 · P4 (versioned documents) ✅ v0.15.0 · P5 (discussion
-> board + Director) ✅ v0.16.0 · P6 (two-way IM channel) ✅ v0.17.0 · **P7 (one-way Linear mirror)
-> ✅ v0.18.0** · P8 remains (2nd CLI). **The "daemon arrives at P5/P6" framing below is SUPERSEDED
-> — there is STILL NO daemon.** P5's Director is a **loop agent**; P6's channel is **POLL-based**
-> (the Director reaches OUT each fire — a loopback needs no inbound endpoint); P7's mirror is a
-> **per-fire push** Sweep runs (an ordinary outbound HTTPS call, the P6 pattern). A daemon is
-> deferred to *if/when* a PUSH-webhook channel is wanted (sub-fire-latency chat), which is not
-> built. Where this doc says a capability is "deferred to PN", consult the CHANGELOG + conventions
-> §18/§25 for what shipped.
+> board + Director) ✅ v0.16.0 · P6 (two-way IM channel) ✅ v0.17.0 · P7 (one-way Linear mirror)
+> ✅ v0.18.0 · **P8 (second-CLI portability) ✅ v0.19.0** — **the full P0→P8 ladder is shipped.**
+> **The "daemon arrives at P5/P6" framing below is SUPERSEDED — there is STILL NO daemon.** P5's
+> Director is a **loop agent**; P6's channel is **POLL-based** (the Director reaches OUT each fire —
+> a loopback needs no inbound endpoint); P7's mirror is a **per-fire push** Sweep runs; P8 is
+> packaging + an env contract + the per-CLI identity gate (the hub was already a portable stdio MCP).
+> A daemon is deferred to *if/when* a PUSH-webhook channel is wanted (sub-fire-latency chat), which
+> is not built. Where this doc says a capability is "deferred to PN", consult the CHANGELOG +
+> conventions §18/§25/§26 + docs/PORTABILITY.md for what shipped.
 > The hub uses built-in `node:sqlite` (not better-sqlite3 — P0 found zero native deps possible).
 >
 > Status (original): **proposal for operator sign-off (LK8). No code is written against this until the operator approves it AND the P0 spike (below) passes.**
@@ -116,8 +117,9 @@ P4  versioned documents (§20 doc-base + roadmap), operator-gated publish
 P5  discussion board + Director ── NO daemon (loop-agent chairing; decisions inline)
 P6  provider-agnostic IM channel ── two-way, POLL-based (NO daemon); digests + inbound
 P7  one-way Linear mirror ── per-fire push (Sweep); split-brain enforced; NO daemon
-P8  2nd CLI (Codex / opencode) behind a per-CLI headless identity test
-   (parallel, operator-driven, §17-gated) ── the footgun-removal SKILL rewrite
+P8  2nd CLI (Codex / opencode) ── env contract + per-CLI MCP registration + the
+   identity-propagation gate (whoami); ZERO SKILL edits (launcher sets the env).
+   [the footgun-removal SKILL rewrite stays a SEPARATE, deferred, §17-gated pass]
 ```
 
 Each phase is independently shippable and the loop keeps running on the hub from P2 onward.
@@ -429,7 +431,7 @@ Status of each target (web-verified; the blocker is flagged):
 - **opencode [HOST, P8]** — remote MCP with `headers`; `opencode run`; commands/agents/skills files.
 - **zcode (Z.AI) [CONSUMER ONLY — scoped OUT]** — MCP-capable but a **GUI ADE with no documented headless run mode and no file-based command packaging**. It can consume the hub interactively; it **cannot** be a scheduled-fire loop host. Not targeted. (If Z.AI later ships a headless CLI, revisit.)
 
-**The P8 gate (the missing test the critique named):** before any CLI is declared a host, a **per-CLI headless integration test must assert the per-agent identity lands on a TOOL CALL** (not merely on `mcp list`/connect) under that CLI's headless mode (`claude -p` / `codex exec` / `opencode run`). A CLI/version exhibiting the header-drop class of bug is **unsupported for the header path** and must use the stdio shim.
+**The P8 gate (SHIPPED v0.19.0):** before any CLI is declared a host, a **per-CLI headless test asserts the per-agent identity lands on a TOOL CALL** (not merely on `mcp list`/connect) under that CLI's headless mode (`claude -p` / `codex exec` / `opencode run`). The probe is the hub's **`whoami`** tool (it echoes the resolved `actor`): set `DEVLOOP_ACTOR=dev`, call `whoami` through the CLI, expect `dev` — `operator`/anything-else ⇒ FAIL, do not onboard (fail closed). `dev-loop-hub identity-check` is the launcher-side sanity check; the full procedure + per-CLI config templates are in **`docs/PORTABILITY.md`** (conventions §26). A CLI/version exhibiting the header-drop class of bug is **unsupported for the header path** and must use the stdio shim (which the whole hub design already mandates).
 
 ---
 

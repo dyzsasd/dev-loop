@@ -3,6 +3,36 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.19.0 — hub P8: second-CLI portability (Codex / opencode)
+- **The loop is no longer Claude-Code-only.** Because the hub is a plain stdio MCP server with
+  env-based identity and no daemon, the same agents + hub + per-agent identity run on a second coding
+  CLI (Codex, opencode, …) against the *same* `hub.db`. **Claude Code is 100% unchanged** — P8 is
+  purely additive + opt-in.
+- **One CLI-agnostic env contract** (any launcher sets it per pane): `DEVLOOP_ACTOR` /
+  `DEVLOOP_PROJECT` / `DEVLOOP_HUB_DB` + the SKILLs' config-resolution vars `CLAUDE_PLUGIN_ROOT` /
+  `CLAUDE_PLUGIN_DATA` (just env-var names — any CLI's launcher exports them, so the SKILL bodies need
+  **zero edits**; a thin wrapper substitutes the `${...}` placeholders into the SKILL body before
+  feeding it as the prompt, since a second CLI has no plugin loader).
+- **The identity gate** (the §5 onboarding test — per-agent identity is the headline win AND a safety
+  control): a CLI is onboarded only after it PASSES — set `DEVLOOP_ACTOR=dev`, ask it to call the
+  hub's `whoami` through its headless MCP spawn, expect actor `dev`; `operator`/anything-else ⇒ FAIL
+  (the CLI isn't propagating per-pane identity → **do not onboard**, fail closed). New
+  `dev-loop-hub identity-check` CLI mode is the launcher-side sanity check (prints the resolved
+  actor/project/db + `wouldStart`; exit 1 if the actor would be refused). `hub/test/identity.ts`
+  certifies the contract (env→resolution, fail-closed on unknown actor, the `operator`-default
+  mis-attribution signal, no secret in output).
+- **Docs + config:** `docs/PORTABILITY.md` (the env contract, per-CLI MCP registration + headless
+  wrapper + the identity gate + what stays the same), `config/mcp.codex.toml.example` +
+  `config/mcp.opencode.json.example` (best-effort, **⚠️ marked operator-verify** — formats/env-
+  propagation must be confirmed against the installed CLI, never invented), conventions §26,
+  RUNNING.md cross-ref.
+- **CLI-independent invariants confirmed:** §17 firewall (prompt-gated + git-backed), §16 secrets
+  (env, server-side), cooperative-not-anti-spoof identity, no daemon — all hold on every CLI. The
+  Director sync-panel already has an internal-deliberation fallback for a CLI lacking a Task tool
+  (§25). plugin + marketplace → 0.19.0; hub → 0.6.1.
+- *Designed inline* (the design workflow hit sustained server 529s); Codex/opencode specifics are
+  flagged operator-verify rather than asserted — the final Codex review is the independent cross-check.
+
 ## 0.18.0 — hub P7: the one-way Linear mirror (human visibility)
 - **Linear demoted to a push-only mirror.** The hub is the source of truth; an opt-in `mirror`
   config (under `backend:"service"`) projects the hub's tickets OUT to Linear so humans who live

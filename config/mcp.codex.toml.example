@@ -1,0 +1,22 @@
+# TEMPLATE for backend:"service" on the CODEX CLI (dev-loop P8 portability; see docs/PORTABILITY.md).
+# Merge this into ~/.codex/config.toml. Replace <ABS-PATH-TO-dev-loop> with your dev-loop checkout.
+#
+# ⚠️ VERIFY against your installed Codex version (formats drift):
+#   (1) the exact [mcp_servers.<name>] schema (command / args / env keys);
+#   (2) whether Codex PROPAGATES THE LAUNCHING PROCESS ENV to the spawned MCP subprocess.
+# Per-pane identity is load-bearing: DEVLOOP_ACTOR differs per agent pane (pm/qa/dev/...), so it
+# CANNOT live in this GLOBAL, shared-across-panes file — it must ride the PROCESS ENV that each
+# pane's launcher exports before invoking `codex`. This template therefore puts only the STATIC,
+# shared vars here and leaves DEVLOOP_ACTOR to the process env.
+#
+# CONFIRM IT WORKS with the identity gate (the P8 §5 test, docs/PORTABILITY.md):
+#   DEVLOOP_ACTOR=dev codex exec "call the dev-loop-hub whoami tool and print only the actor field"
+#   → must print "dev". If it prints "operator" (the default) or anything else, Codex is NOT
+#   propagating per-pane identity → do NOT onboard it until fixed (e.g. a per-pane --config override).
+
+[mcp_servers.dev-loop-hub]
+command = "node"
+args = ["<ABS-PATH-TO-dev-loop>/hub/src/server.ts"]
+# STATIC, shared-across-panes vars ONLY. DEVLOOP_ACTOR is intentionally ABSENT — it rides the
+# per-pane process env (see the warning above). Use an ABSOLUTE db path (TOML env is not shell-expanded).
+env = { DEVLOOP_PROJECT = "default", DEVLOOP_HUB_DB = "/ABSOLUTE/PATH/.dev-loop/hub.db" }

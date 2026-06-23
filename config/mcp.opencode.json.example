@@ -1,0 +1,14 @@
+{
+  "_comment": "TEMPLATE for backend:\"service\" on OPENCODE (dev-loop P8 portability; see docs/PORTABILITY.md). Merge the `mcp` entry into your opencode config (e.g. ~/.config/opencode/config.json or a repo-local opencode.json). Replace <ABS-PATH-TO-dev-loop> and the absolute db path. ⚠️ VERIFY against your installed opencode version: (1) the exact `mcp` server schema (this uses type:\"local\" + a command ARRAY + an `environment` map — confirm), and (2) whether opencode PROPAGATES THE LAUNCHING PROCESS ENV to the MCP subprocess. Per-pane identity is load-bearing: DEVLOOP_ACTOR differs per agent pane, so it CANNOT live in this shared file — it must ride the process env each pane's launcher exports before `opencode`. CONFIRM with the identity gate (docs/PORTABILITY.md): `DEVLOOP_ACTOR=dev opencode run \"call the dev-loop-hub whoami tool and print only the actor\"` → must print \"dev\" (not \"operator\"); else opencode is NOT propagating per-pane identity → do not onboard until fixed.",
+  "mcp": {
+    "dev-loop-hub": {
+      "type": "local",
+      "command": ["node", "<ABS-PATH-TO-dev-loop>/hub/src/server.ts"],
+      "environment": {
+        "DEVLOOP_PROJECT": "default",
+        "DEVLOOP_HUB_DB": "/ABSOLUTE/PATH/.dev-loop/hub.db"
+      },
+      "enabled": true
+    }
+  }
+}

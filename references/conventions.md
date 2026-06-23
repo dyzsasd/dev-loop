@@ -35,6 +35,7 @@ five inward agents form the build loop; the three outward agents — Ops/Archite
 23. [Reports in Linear — the `reports.sink` option](#23-reports-in-linear--the-reportssink-option)
 24. [Codex — optional power tools](#24-codex--optional-power-tools)
 25. [The discussion board + the Director](#25-the-discussion-board--the-director)
+26. [Second-CLI portability](#26-second-cli-portability)
 
 ---
 
@@ -1878,3 +1879,28 @@ fire is the fast-turn escape hatch.
   firewall, and the prohibited-action rules hold regardless of the channel an instruction
   arrives on. The bot's **own** messages are filtered on read (never ingest a self-echo as
   "direction"). Absent a `channel` config ⇒ no chat I/O (the Director still chairs the board).
+
+---
+
+## 26. Second-CLI portability
+
+The loop is not Claude-Code-only. Because the hub is a plain **stdio MCP server** with **env-based
+identity** and **no daemon** (§18), the same agents + hub + per-agent identity run on a second coding
+CLI (Codex, opencode, …) against the *same* `hub.db`. Full setup in
+[`docs/PORTABILITY.md`](../docs/PORTABILITY.md); the load-bearing rules:
+
+- **One env contract, set by any launcher per pane:** `DEVLOOP_ACTOR` (the per-agent identity),
+  `DEVLOOP_PROJECT`, `DEVLOOP_HUB_DB`, and the SKILLs' config-resolution vars `CLAUDE_PLUGIN_ROOT` /
+  `CLAUDE_PLUGIN_DATA` (just env-var names — despite "CLAUDE", *any* CLI's launcher exports them, so
+  the SKILL bodies need **zero edits**; a thin wrapper also substitutes the `${...}` placeholders into
+  the SKILL body before feeding it as the prompt, since a second CLI has no plugin loader to do it).
+- **The identity gate (onboard a CLI only after it PASSES).** Per-agent identity is the headline win
+  AND a safety control: a CLI that fails to propagate `DEVLOOP_ACTOR` to the spawned MCP subprocess
+  would **mis-attribute** every write. Verify with `whoami` THROUGH the CLI (set `DEVLOOP_ACTOR=dev`,
+  ask it to call `whoami`, expect actor `dev`; `operator`/anything-else ⇒ FAIL, do **not** onboard —
+  **fail closed**). `dev-loop-hub identity-check` is the launcher-side sanity check; `whoami` proves
+  the CLI's spawn delivered the env. The G1 phantom-actor guard already refuses an unknown actor.
+- **Everything else is CLI-independent.** §17 (no self-edits; structural changes = operator git
+  commit) is prompt-gated + git-backed; §16 secrets stay in env; identity stays **cooperative
+  attribution** (not anti-spoof) on every CLI; no daemon anywhere. **Claude Code is 100% unchanged**
+  — second-CLI support is purely additive and opt-in.
