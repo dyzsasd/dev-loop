@@ -233,11 +233,19 @@ server.registerTool("list_comments",
 // ─── labels ──────────────────────────────────────────────────────────────────
 server.registerTool("list_issue_labels", { description: "List the project's labels.", inputSchema: {} },
   async () => ok(db.prepare("SELECT name,kind FROM labels WHERE project_id=? ORDER BY kind,name").all(projectId)));
+// The kinds the labels.kind CHECK constraint allows (db.ts L57). Validated UP FRONT so INSERT OR IGNORE
+// can only ever ignore a genuine duplicate name — never silently swallow a CHECK(kind) violation and
+// then masquerade as success (DL-22: a bad kind returned ok{} while the row was dropped).
+const LABEL_KINDS = ["marker", "type", "owner", "subtype", "workflow", "repo"] as const;
 server.registerTool("create_issue_label",
   { description: "Create a label if missing (idempotent).", inputSchema: { name: z.string(), kind: z.string().optional() } },
   async ({ name, kind }) => {
-    db.prepare("INSERT OR IGNORE INTO labels(id,project_id,name,kind) VALUES (?,?,?,?)").run(randomUUID(), projectId, name, kind ?? "workflow");
-    return ok({ name, kind: kind ?? "workflow" });
+    const nm = name.trim();
+    if (!nm) return err("label name required (non-empty, non-whitespace)"); // DL-22: reject empty/whitespace, no junk row
+    const k = kind ?? "workflow";
+    if (!LABEL_KINDS.includes(k as (typeof LABEL_KINDS)[number])) return err(`invalid kind '${k}'; one of ${LABEL_KINDS.join("/")}`); // DL-22: clean err, never a fake success
+    db.prepare("INSERT OR IGNORE INTO labels(id,project_id,name,kind) VALUES (?,?,?,?)").run(randomUUID(), projectId, nm, k);
+    return ok({ name: nm, kind: k }); // idempotent: UNIQUE(project_id,name) → re-create of an existing name is a no-op, still ok
   });
 
 // ─── projects (minimal) + events (attribution audit) ─────────────────────────

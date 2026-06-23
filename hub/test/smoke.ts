@@ -21,6 +21,11 @@ async function call(c: Client, name: string, args: Record<string, unknown> = {})
   if (r.isError) throw new Error(`${name} failed: ${text}`);
   return JSON.parse(text);
 }
+// DL-22: capture the raw envelope (isError + parsed body) WITHOUT throwing — to assert clean error responses.
+async function callRaw(c: Client, name: string, args: Record<string, unknown> = {}): Promise<{ isError: boolean; data: any }> {
+  const r: any = await c.callTool({ name, arguments: args });
+  return { isError: !!r.isError, data: JSON.parse(r.content?.[0]?.text ?? "{}") };
+}
 const assert = (cond: boolean, msg: string) => { if (!cond) { console.error("❌ " + msg); process.exit(1); } console.log("✅ " + msg); };
 
 const pm = await as("pm"), dev = await as("dev"), qa = await as("qa"), op = await as("operator");
@@ -49,6 +54,17 @@ const actors = new Set(events.map((e: any) => e.actor));
 assert(actors.has("pm") && actors.has("dev") && actors.has("qa"), `attribution log shows distinct actors: ${[...actors].join(", ")}`);
 console.log("\nattribution trail:");
 for (const e of [...events].reverse()) console.log(`  ${e.actor.padEnd(9)} ${e.kind.padEnd(18)} ${e.ticket_id ?? ""}`);
+
+// ─── DL-22: create_issue_label validates kind + name — no silent-success / no junk rows ───
+const badKind = await callRaw(qa, "create_issue_label", { name: "ghostkind", kind: "bogus-kind" });
+assert(badKind.isError && /invalid kind/.test(badKind.data.error ?? ""), "DL-22: create_issue_label with a kind outside the CHECK set → clean err (not a fake success)");
+assert(!(await call(qa, "list_issue_labels", {})).some((l: any) => l.name === "ghostkind"), "DL-22: the bad-kind label was NOT silently created (no dropped-row masquerade)");
+assert((await callRaw(qa, "create_issue_label", { name: "   " })).isError, "DL-22: a whitespace-only name → clean err (no junk registry row)");
+assert((await callRaw(qa, "create_issue_label", { name: "" })).isError, "DL-22: an empty name → clean err");
+const good = await callRaw(qa, "create_issue_label", { name: "shiny", kind: "marker" });
+assert(!good.isError && good.data.name === "shiny" && good.data.kind === "marker", "DL-22: a valid create → ok");
+assert(!(await callRaw(qa, "create_issue_label", { name: "shiny", kind: "marker" })).isError, "DL-22: re-creating an existing label → ok (idempotent)");
+assert((await call(qa, "list_issue_labels", {})).filter((l: any) => l.name === "shiny").length === 1, "DL-22: idempotent — exactly one 'shiny' row, no duplicate");
 
 for (const c of [pm, dev, qa, op]) await c.close();
 console.log("\nHUB_SMOKE_OK");
