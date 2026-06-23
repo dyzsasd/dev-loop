@@ -4,10 +4,19 @@
 // step as a DISTINCT actor process sharing one WAL db. Proves P2 SKILL-portability end-to-end.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const DB = "/tmp/hub-loop/hub.db";
-for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
+// DL-21: a UNIQUE temp dir per invocation (mkdtempSync), not a fixed `/tmp/hub-loop/hub.db`. The old
+// fixed path was rm'd at start and reopened by 5 concurrent server connections — but a still-terminating
+// server from the PREVIOUS `npm test` run (clients are closed but child exit isn't awaited before
+// process.exit) could collide with that rm/recreate, splitting the WAL/-shm/inode across this run's
+// connections so some writes/reads hit a different db state → intermittent events/dedupe failures. A
+// fresh unique dir can't be held by any prior-run process, so the SoR is isolated regardless of run/suite
+// order. Cleaned up at the end.
+const DIR = mkdtempSync(join(tmpdir(), "hub-loop-"));
+const DB = join(DIR, "hub.db");
 
 async function as(actor: string): Promise<Client> {
   const c = new Client({ name: `t-${actor}`, version: "0" });
@@ -80,5 +89,6 @@ ok(actors.has("pm") && actors.has("dev") && actors.has("qa") && actors.has("swee
 ok(kinds.has("issue.create") && kinds.has("issue.transition") && kinds.has("comment.add"), "events carry issue.create/transition/comment.add (Reflect window source)");
 
 for (const c of [pm, dev, qa, sweep, reflect]) await c.close();
+try { rmSync(DIR, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ } // DL-21: remove this run's unique db dir
 console.log(fails === 0 ? "\nHUB_LOOP_OK — every P2 op-contract flow verified" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
