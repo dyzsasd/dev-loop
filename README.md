@@ -272,7 +272,7 @@ no secret in config; usage counts against your ChatGPT/Codex limits.
 
 ## Status
 
-**v0.15.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
+**v0.19.2** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
 **outward** observe-and-file agents (conventions §21) — **Ops** (watches running prod,
 files `incident` Bugs with an anti-flap re-check + dedupe), **Architect** (audits
 whole-codebase tech health on a rotating, SHA-gated dimension, files `tech-debt`
