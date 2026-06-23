@@ -120,6 +120,18 @@ ok(roadmap.status === 200 && roadmap.body.status === "current" && roadmap.body.c
 const noDoc = await get("/api/docs/strategy");
 ok(noDoc.status === 404, "GET /api/docs/<absent kind> → 404");
 
+// ─── DL-7: a malformed percent-escape in a path segment is a CLIENT error (400), never a 500 ───
+// decodeURIComponent throws URIError on "%", "%ZZ", or an incomplete UTF-8 escape "%E0%A4"; each
+// route must surface 400 instead of letting it fall through to the generic 500 catch. Covers the
+// web route (/ticket/:id) AND both /api routes (/api/tickets/:id, /api/docs/:kind).
+for (const p of ["/ticket/%", "/ticket/%ZZ", "/ticket/%E0%A4", "/api/tickets/%", "/api/docs/%"]) {
+  const bad = await get(p);
+  ok(bad.status === 400, `GET ${p} (malformed percent-escape) → 400, not 500 (got ${bad.status})`);
+}
+// the daemon stays alive and serves a normal request after a malformed one (no crash)
+const afterBad = await get("/api/health");
+ok(afterBad.status === 200 && afterBad.body.ok === true, "daemon serves normally after a malformed-escape request");
+
 // READ-ONLY: any mutating method is refused
 const post = await get("/api/tickets", "POST");
 ok(post.status === 405, "POST /api/tickets → 405 (read-only daemon — no mutation surface)");
