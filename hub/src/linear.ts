@@ -6,7 +6,10 @@
 // reconcile its own mapping (findByMarker) — it NEVER imports Linear state back as truth.
 export type FetchImpl = typeof fetch;
 const timeoutMs = (): number => Number(process.env.DEVLOOP_MIRROR_TIMEOUT_MS) || 10_000;
-const ENDPOINT = "https://api.linear.app/graphql";
+// The endpoint defaults to the real Linear; DEVLOOP_LINEAR_API_URL overrides it (an integration-test /
+// self-hosted seam). §16 is unaffected — the token is still a function arg, never placed in the URL —
+// and env is already the trust boundary for the token, so this adds no new exposure. Read at call time.
+const endpoint = (): string => process.env.DEVLOOP_LINEAR_API_URL || "https://api.linear.app/graphql";
 
 export interface MirrorIssue { title: string; description: string; stateId?: string; }
 
@@ -16,7 +19,7 @@ async function gql(
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs());
   try {
-    const res = await fetchImpl(ENDPOINT, {
+    const res = await fetchImpl(endpoint(), {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: token }, // Linear personal API key (no "Bearer")
       body: JSON.stringify({ query, variables }),

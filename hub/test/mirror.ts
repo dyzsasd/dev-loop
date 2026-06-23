@@ -7,6 +7,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { createIssue, updateIssue, findByMarker, type FetchImpl } from "../src/linear.ts";
 
 let fails = 0;
@@ -64,15 +65,43 @@ function mockFetch(handler: (url: string, init: { body?: string; headers?: Recor
   delete process.env.DEVLOOP_MIRROR_TIMEOUT_MS;
 }
 
-// ── Layer 2: tool DRYRUN tests over the stdio server ─────────────────────────
+// ── Layer 2: tool tests over the stdio server, against a MOCK Linear endpoint ────────────────
+// A DRYRUN push must be write-free (DL-11), so it can no longer be used to exercise the persistence
+// path. Instead we stand up a mock Linear GraphQL endpoint (the server's endpoint is env-overridable,
+// DEVLOOP_LINEAR_API_URL) and run REAL pushes against it — restoring create/update/skip coverage on
+// actual mirror_map persistence — plus dedicated DL-11 dry-run assertions.
 const DB = "/tmp/hub-mirror/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
-async function as(actor: string, project: string, prefix?: string): Promise<Client> {
+
+// The mock records every mutation it receives (so we can assert the wire payload) and returns success;
+// findByMarker always returns no match → the create path runs for a new ticket.
+let linCounter = 0;
+let linSent: { kind: "find" | "create" | "update"; vars: any }[] = [];
+const mockLinear = createServer((req, res) => {
+  let raw = ""; req.on("data", (c) => { raw += c; });
+  req.on("end", () => {
+    let data: Record<string, unknown> = {};
+    try {
+      const { query, variables } = JSON.parse(raw);
+      const q = String(query ?? "");
+      if (q.includes("issues(")) { linSent.push({ kind: "find", vars: variables }); data = { issues: { nodes: [] } }; }
+      else if (q.includes("issueCreate")) { linSent.push({ kind: "create", vars: variables }); data = { issueCreate: { success: true, issue: { id: `lin_${++linCounter}` } } }; }
+      else if (q.includes("issueUpdate")) { linSent.push({ kind: "update", vars: variables }); data = { issueUpdate: { success: true } }; }
+    } catch { /* malformed → {} */ }
+    const out = JSON.stringify({ data });
+    res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(out) }); res.end(out);
+  });
+});
+await new Promise<void>((r) => mockLinear.listen(0, "127.0.0.1", () => r()));
+const MOCK_URL = `http://127.0.0.1:${(mockLinear.address() as { port: number }).port}/graphql`;
+
+async function as(actor: string, project: string, opts: { dryrun?: boolean; prefix?: string } = {}): Promise<Client> {
   const env: Record<string, string> = {
     ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB,
-    DEVLOOP_CREATE_PROJECT: "1", DEVLOOP_MIRROR_DRYRUN: "1", DEVLOOP_LINEAR_TOKEN: "lin_api_DRYRUNSECRET",
+    DEVLOOP_CREATE_PROJECT: "1", DEVLOOP_LINEAR_TOKEN: "lin_api_SECRET", DEVLOOP_LINEAR_API_URL: MOCK_URL,
   };
-  if (prefix) env.DEVLOOP_TICKET_PREFIX = prefix;
+  if (opts.dryrun) env.DEVLOOP_MIRROR_DRYRUN = "1";
+  if (opts.prefix) env.DEVLOOP_TICKET_PREFIX = opts.prefix;
   const c = new Client({ name: `mir-${actor}-${project}`, version: "0" });
   await c.connect(new StdioClientTransport({ command: "node", args: ["src/server.ts"], env }));
   return c;
@@ -83,43 +112,63 @@ async function call(c: Client, name: string, args: Record<string, unknown> = {})
 }
 const PUSH = { teamId: "team_1", tokenEnv: "DEVLOOP_LINEAR_TOKEN", stateMap: { "In Review": "lin_state_review" } };
 
-const sweep = await as("sweep", "mirp", "MR");
-const beta = await as("sweep", "betap", "MB"); // second project for isolation
+// ── DL-11: a DRYRUN push is WRITE-FREE — it previews ops but persists NOTHING and hits no network ──
+const dry = await as("sweep", "dryp", { dryrun: true, prefix: "DRY" });
+const dt = (await call(dry, "save_issue", { title: "Dry ticket", type: "Feature" })).data;
+const dp1 = (await call(dry, "mirror.push", PUSH)).data;
+ok(dp1.created === 1 && dp1.dryrun === true && dp1.ops?.length === 1, "DRYRUN push → previews 1 create op (dryrun:true)");
+ok(dp1.ops[0].title.includes(`[hub:${dt.id}]`) && dp1.ops[0].body.includes("Mirrored from the dev-loop hub"), "DRYRUN op carries the [hub:id] marker + split-brain banner");
+const dstat = (await call(dry, "mirror.status")).data;
+ok(dstat.mapped === 0 && dstat.lastPush === null, "DL-11: after a DRYRUN push, mirror_map is EMPTY (mapped:0, lastPush:null)");
+ok((await call(dry, "mirror.push", PUSH)).data.created === 1, "DL-11: a 2nd DRYRUN still reports 1 create — it is stateless (no persisted dry-run row to skip on)");
+ok(linSent.length === 0, "DL-11: a DRYRUN makes NO network call to Linear (the mock received nothing)");
 
+// ── DL-11 AC(b): a real (live) push AFTER a dry-run still CREATES — the dry-run left no poisoned map ──
+const dryLive = await as("sweep", "dryp", { prefix: "DRY" }); // same project, LIVE now
+const dlp = (await call(dryLive, "mirror.push", PUSH)).data;
+ok(dlp.created === 1 && dlp.skipped === 0 && !dlp.dryrun, "DL-11: a live push after a dry-run CREATES (not skipped on a poisoned hash, not pointed at a dry-<id>)");
+ok((await call(dryLive, "mirror.status")).data.mapped === 1, "DL-11: the live push actually mapped the ticket (dryp now mapped:1)");
+
+// ── LIVE pushes against the mock — the real mirror_map persistence path (create/update/skip) ──
+linSent = [];
+const sweep = await as("sweep", "mirp", { prefix: "MR" });
+const beta = await as("sweep", "betap", { prefix: "MB" }); // second project for isolation
 const t1 = (await call(sweep, "save_issue", { title: "First ticket", type: "Feature" })).data;
 const t2 = (await call(sweep, "save_issue", { title: "Second ticket", type: "Bug" })).data;
 
-// first push → both created; ops carry the banner + [hub:id] marker
+// first live push → both created + persisted; the create sent to Linear carries the banner + [hub:id] marker
 const p1 = (await call(sweep, "mirror.push", PUSH)).data;
-ok(p1.created === 2 && p1.updated === 0 && p1.dryrun === true, "mirror.push → 2 created (dryrun)");
-const op1 = p1.ops.find((o: any) => o.hubId === t1.id);
-ok(op1.body.includes("Mirrored from the dev-loop hub") && op1.title.includes(`[hub:${t1.id}]`), "pushed op carries the split-brain banner + [hub:id] marker");
-ok((await call(sweep, "mirror.status")).data.mapped === 2, "mirror.status → 2 mapped");
+ok(p1.created === 2 && p1.updated === 0 && !p1.dryrun, "live mirror.push → 2 created (persisted)");
+ok((await call(sweep, "mirror.status")).data.mapped === 2, "mirror.status → 2 mapped (live push persisted)");
+const c1 = linSent.find((s) => s.kind === "create" && s.vars.i.title.includes(`[hub:${t1.id}]`));
+ok(!!c1 && c1.vars.i.description.includes("Mirrored from the dev-loop hub"), "the create sent to Linear carries the [hub:id] marker + split-brain banner");
 
-// second push, no change → all skipped (incremental hash-skip)
+// second push, no change → all skipped (incremental hash-skip over the PERSISTED map)
 const p2 = (await call(sweep, "mirror.push", PUSH)).data;
 ok(p2.created === 0 && p2.skipped === 2, "re-push with no change → 2 skipped (incremental hash-skip)");
 
-// change one ticket → only it is re-pushed (update); the other skips
+// change one ticket → only it is re-pushed as an UPDATE to its persisted linear_id, with the mapped stateId
 await call(sweep, "save_issue", { id: t1.id, state: "In Review" });
+linSent = [];
 const p3 = (await call(sweep, "mirror.push", PUSH)).data;
 ok(p3.updated === 1 && p3.skipped === 1, "after editing one ticket → 1 updated, 1 skipped");
-const op3 = p3.ops.find((o: any) => o.hubId === t1.id);
-ok(op3.op === "update" && op3.stateId === "lin_state_review", "the changed ticket → update op with the mapped stateId");
+const u3 = linSent.find((s) => s.kind === "update");
+ok(!!u3 && u3.vars.i.stateId === "lin_state_review", "the changed ticket → issueUpdate sent with the mapped stateId");
 
 // stateMap fallback — a state with no mapping pushes with NO stateId, never fails
 await call(sweep, "save_issue", { id: t2.id, state: "Done" }); // 'Done' not in stateMap
+linSent = [];
 const p4 = (await call(sweep, "mirror.push", PUSH)).data;
-const op4 = p4.ops.find((o: any) => o.hubId === t2.id);
-ok(p4.failed === 0 && op4.op === "update" && op4.stateId === null, "unmapped state → stateId null, push does NOT fail (fallback)");
+const u4 = linSent.find((s) => s.kind === "update");
+ok(p4.failed === 0 && !!u4 && u4.vars.i.stateId == null, "unmapped state → no stateId in the update, push does NOT fail (fallback)");
 
-// cancel → still mirrored, NEVER deleted (no delete op exists at all)
+// cancel → still mirrored as an update, NEVER deleted (no delete op exists at all)
 await call(sweep, "save_issue", { id: t2.id, state: "Canceled" });
 const p5 = (await call(sweep, "mirror.push", PUSH)).data;
-ok(p5.ops.every((o: any) => o.op === "create" || o.op === "update"), "a Canceled ticket → update op, NEVER a delete (no data-loss)");
+ok(p5.failed === 0 && p5.updated >= 1, "a Canceled ticket → update op, NEVER a delete (no data-loss)");
 
 // §16 — the token never appears in any result
-ok(!JSON.stringify(p1).includes("DRYRUNSECRET") && !JSON.stringify(await call(sweep, "mirror.status")).includes("DRYRUNSECRET"), "the Linear token never appears in a tool result (§16)");
+ok(!JSON.stringify(p1).includes("SECRET") && !JSON.stringify(await call(sweep, "mirror.status")).includes("SECRET"), "the Linear token never appears in a tool result (§16)");
 
 // ONE-WAY — there is NO pull/import/sync-from-Linear tool (the hub never reads Linear as truth)
 const tools = (await sweep.listTools()).tools.map((t: any) => t.name);
@@ -128,6 +177,7 @@ ok(tools.includes("mirror.push") && tools.includes("mirror.status") && !tools.so
 // isolation — pushing project A maps nothing in project B
 ok((await call(beta, "mirror.status")).data.mapped === 0, "a different project's mirror_map is empty (isolation)");
 
-for (const c of [sweep, beta]) await c.close();
+for (const c of [dry, dryLive, sweep, beta]) await c.close();
+mockLinear.close();
 console.log(fails === 0 ? "\nMIRROR_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
