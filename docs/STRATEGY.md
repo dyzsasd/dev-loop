@@ -186,6 +186,29 @@ Append-only thereafter — PM keeps it current._
   excluding the operator's `*.review.md` 点评 siblings from the listing. Accepting a 点评 *from* the
   UI (a write path) stays a follow-up. This makes the operator's **observe-and-steer** flow
   browser-reachable — a direct step toward the Vision's "view and manage the loop from a browser."
+- **2026-06-23 — NEW OPERATOR DIRECTION (chat): launch an agent from a project's folder → it
+  auto-selects the project matching the cwd, no `DEVLOOP_PROJECT` env var.** Motivating dogfood
+  bug: in this repo `cwd=/Users/shuai/workspace/dev-loop` but `defaultProject=monpick`, so today's
+  selection ladder (named → sole → defaultProject → ask) picks the **wrong** project. Designed +
+  adversarially reviewed via a workflow; split on the **§17 boundary** into two filed tickets:
+  - **DL-12 `[pm-proposal]` (§17-GATED, parked for operator):** the contract/wording change —
+    insert a **cwd rung** into the conventions §11 selection ladder (precedence **explicit >
+    cwd-match > configured-default > prompt/error**; realpath + segment-boundary containment +
+    nearest-ancestor; ambiguous tie ⇒ fall through), plus §18/§26 (`DEVLOOP_PROJECT` becomes
+    *optional*, hub falls back to cwd) and the pm-agent SKILL §0 chain. Also restores a
+    **pre-existing bug**: §11 step 2 is missing the `defaultProject` rung the SKILL/launcher already
+    use. Edits conventions.md + a SKILL file ⇒ **only the operator may apply it** (git commit);
+    filed `blocked`+`needs-pm`+`Bail-shape: external-prereq` (§17). This is the entire agent-side
+    deliverable and the only fix for `backend:"linear"` projects.
+  - **DL-13 Feature (BUILDABLE, Dev):** the hub/launcher/config/docs half — a shared cwd→project
+    resolver + a `server.ts` cwd fallback when `DEVLOOP_PROJECT` is empty/unset, per-file `.mcp.json`
+    template fixes (codex/opencode are **not** shell contexts → literal `""`/omit, not
+    `${DEVLOOP_PROJECT:-}`), launcher reconciliation (also fixes today's drift: `run-loop.sh`
+    exports neither `DEVLOOP_PROJECT` nor `DEVLOOP_ACTOR`, so panes silently attribute to
+    `operator`), and docs. Touches **no** canonical doc → **independently shippable** for
+    `backend:"service"` (backward-compatible: explicit env still wins; no-match ⇒ today's behavior).
+  - **Decision:** keep the agent-side spec change human-gated (§17) while letting Dev ship the
+    backend:"service" mechanism now; sequence the docs note alongside, not as a hard block.
 
 ## Candidate ideas
 
