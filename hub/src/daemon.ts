@@ -13,17 +13,21 @@
 //
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { openDb } from "./db.ts";
+import { openDb, actorExists } from "./db.ts";
 import { findProject } from "./seed.ts";
+import { resolveDoc, docSave, docPublish } from "./docstore.ts";
 
 export interface DaemonOpts {
-  db: DatabaseSync;
+  db: DatabaseSync;          // read connection (PRAGMA query_only=ON) — every GET route reads through this
   projectId: string;
   projectKey: string;
+  // DL-3 roadmap write surface (optional — absent ⇒ the daemon stays GET-only, exactly as DL-1/DL-2):
+  writeDb?: DatabaseSync;    // a SEPARATE writable connection used ONLY by the /roadmap/* write routes
+  actor?: string;            // the daemon's identity — attributes writes + gates publish (operator-only)
 }
 
 // ticket row → API shape (mirrors the MCP server's toTicket; labels/related_to are JSON columns).
@@ -98,13 +102,23 @@ main{padding:1rem}
 pre{white-space:pre-wrap;word-wrap:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-x:auto}
 h3{margin:1.2rem 0 .4rem;font-size:.95rem}
 .comment{margin:.5rem 0}.c-head{font-size:.78rem;color:var(--mut);margin-bottom:.2rem}.c-head time{margin-left:.4rem}
+nav{margin-left:auto}nav a{color:var(--mut);text-decoration:none}nav a:hover{color:var(--ink)}
+form{margin:.7rem 0}form label{display:block;margin:.45rem 0;color:var(--mut);font-size:.82rem}
+textarea{display:block;width:100%;margin:.3rem 0;padding:.6rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+input[type=text]{padding:.3rem .45rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+button{font:inherit;padding:.4rem .85rem;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);cursor:pointer}button:hover{border-color:var(--mut)}
+.pub{margin-top:.5rem}
+.notice{padding:.5rem .7rem;border-radius:8px;margin:.6rem 0;font-size:.85rem}
+.n-err{background:#dc26261f;border:1px solid #dc262655;color:#dc2626}.n-ok{background:#16a34a1f;border:1px solid #16a34a55;color:#16a34a}
+.doc h1,.doc h2,.doc h3{margin:.7rem 0 .3rem;font-size:1rem}.doc ul,.doc ol{margin:.3rem 0;padding-left:1.3rem}.doc p{margin:.4rem 0}.doc hr{border:0;border-top:1px solid var(--line);margin:.7rem 0}
+code{font:.92em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);padding:0 .25rem;border-radius:4px}
 `;
 
 function page(title: string, project: string, inner: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">`
     + `<meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>`
     + `<style>${STYLE}</style></head><body>`
-    + `<header><a class="home" href="/">dev-loop</a><span class="proj">${esc(project)}</span></header>`
+    + `<header><a class="home" href="/">dev-loop</a><span class="proj">${esc(project)}</span><nav><a href="/roadmap">roadmap</a></nav></header>`
     + `<main>${inner}</main></body></html>`;
 }
 
@@ -163,22 +177,167 @@ function decodeSeg(seg: string): string | null {
   try { return decodeURIComponent(seg); } catch { return null; }
 }
 
-// Build the HTTP server over an already-opened, project-resolved db. Exported so tests (and a later
-// in-process embed) can start it without the CLI bootstrap below. The handler issues ONLY SELECTs.
-export function createDaemon({ db, projectId, projectKey }: DaemonOpts): Server {
-  return createServer((req, res) => {
-    // READ-ONLY: anything but GET/HEAD is refused — the daemon never mutates the SoR (DL-1 AC).
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      return json(res, 405, { error: "read-only daemon: only GET is allowed" });
+// ─── DL-3: roadmap view/edit ──────────────────────────────────────────────────
+// A tiny, dependency-free, XSS-safe markdown renderer for the roadmap view. The body is arbitrary
+// agent-authored text, so we esc() FIRST (no user content can then inject a tag), and only THEN apply a
+// closed set of block/inline transforms that emit ONLY our own <h*>/<ul>/<ol>/<li>/<strong>/<code>/<hr>/<p>.
+function renderMarkdown(md: string): string {
+  const inline = (s: string) => s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  const out: string[] = [];
+  let listTag: "ul" | "ol" | null = null;
+  const closeList = () => { if (listTag) { out.push(`</${listTag}>`); listTag = null; } };
+  for (const raw of esc(md).split("\n")) {
+    const line = raw.trimEnd();
+    let m: RegExpMatchArray | null;
+    if (/^\s*$/.test(line)) { closeList(); continue; }
+    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { closeList(); const l = m[1].length; out.push(`<h${l}>${inline(m[2])}</h${l}>`); continue; }
+    if (/^(---|\*\*\*|___)\s*$/.test(line)) { closeList(); out.push("<hr>"); continue; }
+    if ((m = line.match(/^\s*[-*]\s+(.*)$/))) { if (listTag !== "ul") { closeList(); out.push("<ul>"); listTag = "ul"; } out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if ((m = line.match(/^\s*\d+\.\s+(.*)$/))) { if (listTag !== "ol") { closeList(); out.push("<ol>"); listTag = "ol"; } out.push(`<li>${inline(m[1])}</li>`); continue; }
+    closeList(); out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList();
+  return out.join("\n");
+}
+
+// Read an application/x-www-form-urlencoded body (the roadmap edit/publish forms), bounded so a runaway
+// upload can't exhaust memory. Localhost-only, but defensive anyway. Two correctness points: accumulate
+// Buffers and decode ONCE at the end (a per-chunk `buf.toString()` mangles a multibyte char split across
+// a TCP read boundary), and ALWAYS settle the Promise — on over-limit (reject + destroy), normal end,
+// error, OR a premature 'close' (a destroyed/aborted socket emits 'close' but neither 'end' nor 'error',
+// which would otherwise dangle the awaiting handler forever).
+const MAX_BODY = 1_000_000; // 1 MB of body bytes — a roadmap doc is text; orders of magnitude above any real edit
+function parseFormBody(req: IncomingMessage): Promise<URLSearchParams> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let len = 0, settled = false;
+    const settle = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
+    req.on("data", (c: Buffer) => {
+      len += c.length;
+      if (len > MAX_BODY) { settle(() => reject(new Error("request body too large"))); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on("end", () => settle(() => resolve(new URLSearchParams(Buffer.concat(chunks).toString("utf8")))));
+    req.on("error", (e) => settle(() => reject(e)));
+    req.on("close", () => settle(() => reject(new Error("request closed before it completed"))));
+  });
+}
+
+function redirect(res: ServerResponse, location: string): void {
+  res.writeHead(303, { location, "content-length": 0 }); // 303 See Other — POST→GET (Post/Redirect/Get)
+  res.end();
+}
+
+// GET /roadmap — render the kind:"roadmap" document (rendered markdown) + version/status, plus the edit
+// form and (operator-only) publish control. Reads through the query_only `db`. slug/kind are NEVER form
+// fields: the write routes hard-target the roadmap doc, so caller input can't redirect the write (§17).
+function roadmapPage(db: DatabaseSync, projectId: string, opts: { writable: boolean; canPublish: boolean; notice?: { kind: "error" | "ok"; msg: string } }): string {
+  const d = db.prepare("SELECT * FROM documents WHERE project_id=? AND kind='roadmap'").get(projectId) as Record<string, any> | undefined;
+  const latest = d ? ((db.prepare("SELECT max(version) v FROM document_versions WHERE doc_id=?").get(d.id) as { v: number | null }).v ?? 0) : 0;
+  const published = d ? d.current_version : 0;
+  const showVer = latest;            // view + edit the LATEST version (draft or published) so the edit loop builds on the newest
+  const cur = (d && showVer > 0) ? (db.prepare("SELECT version,body,status FROM document_versions WHERE doc_id=? AND version=?").get(d.id, showVer) as Record<string, any>) : undefined;
+  const body = cur?.body ?? "";
+
+  const notice = opts.notice ? `<p class="notice ${opts.notice.kind === "error" ? "n-err" : "n-ok"}">${esc(opts.notice.msg)}</p>` : "";
+  const meta = d
+    ? `<dl class="meta"><dt>Status</dt><dd>${esc(d.status)}</dd>`
+      + `<dt>Latest version</dt><dd>v${latest}${latest > 0 ? ` (${esc(cur?.status ?? "draft")})` : ""}</dd>`
+      + `<dt>Published</dt><dd>${published > 0 ? `v${published}` : "none — draft only"}</dd></dl>`
+    : `<p class="empty">No roadmap document yet — saving below creates the first draft.</p>`;
+  const view = `<h3>${latest > 0 ? (latest === published ? `Published (v${latest})` : `Draft (v${latest}, unpublished)`) : "Roadmap"}</h3>`
+    + (body ? `<div class="doc">${renderMarkdown(body)}</div>` : `<p class="empty">(empty)</p>`);
+
+  let controls = "";
+  if (opts.writable) {
+    controls = `<h3>Edit — saves a DRAFT (never publishes)</h3>`
+      + `<form method="post" action="/roadmap/save">`
+      + `<input type="hidden" name="baseVersion" value="${latest}">`              // server-derived CAS base; a stale base is rejected, not overwritten
+      + `<textarea name="body" rows="16" spellcheck="false">${esc(body)}</textarea>`
+      + `<label>Summary (optional) <input type="text" name="summary" placeholder="what changed"></label>`
+      + `<button type="submit">Save draft</button></form>`;
+    if (latest > 0) {
+      controls += opts.canPublish
+        ? `<form method="post" action="/roadmap/publish" class="pub"><input type="hidden" name="version" value="${latest}">`
+          + `<button type="submit">Publish v${latest} → current</button></form>`
+        : `<p class="empty">Publishing a draft → current is <b>operator-only</b>. This daemon runs as a non-operator actor, so the publish control is hidden (§16/§17).</p>`;
     }
+  } else {
+    controls = `<p class="empty">This daemon is read-only — no write surface is configured.</p>`;
+  }
+
+  return `<a class="back" href="/">← board</a><article class="detail">`
+    + `<div class="card-top"><span class="id">roadmap</span><span class="badge">${esc(d?.status ?? "—")}</span></div>`
+    + `<h1>${esc(d?.title ?? "Roadmap")}</h1>` + notice + meta + view + controls + `</article>`;
+}
+
+// POST /roadmap/save | /roadmap/publish — the ONLY write routes. Both hard-target the kind:"roadmap"
+// document through docstore (DB-doc-only; no filesystem path ⇒ §17 firewall). save → a DRAFT via the
+// CAS (a stale baseVersion is surfaced as a CONFLICT, never last-write-wins); publish → operator-gated.
+// Map a docstore error message (the store returns prose, not codes) to the right HTTP status: the
+// operator gate → 403, a missing doc/version → 404, the create-precondition → 400, else a genuine
+// CAS / kind-immutability conflict → 409.
+const statusForDocErr = (msg: string): number =>
+  msg.startsWith("FORBIDDEN") ? 403
+    : /^no (document|version)\b/.test(msg) ? 404
+      : msg.includes("baseVersion must be 0") ? 400
+        : 409;
+
+async function handleRoadmapWrite(action: "save" | "publish", req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string): Promise<void> {
+  let form: URLSearchParams;
+  // If the body was rejected (too large / aborted), the socket may already be destroyed — only respond
+  // when the response is still writable, so we never throw write-after-destroy into the outer catch.
+  try { form = await parseFormBody(req); }
+  catch (e) { if (!res.headersSent && !res.destroyed) json(res, 400, { error: (e as Error).message }); return; }
+  // Resolve the roadmap doc's slug SERVER-SIDE (never from the form) so the write target can't be redirected.
+  const slug = resolveDoc(writeDb, projectId, undefined, "roadmap")?.slug ?? "roadmap";
+  const rerender = (msg: string) =>
+    htmlOut(res, statusForDocErr(msg), page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: true, canPublish: actor === "operator", notice: { kind: "error", msg } })));
+
+  if (action === "save") {
+    const baseVersion = Number(form.get("baseVersion"));
+    if (!Number.isInteger(baseVersion) || baseVersion < 0) return json(res, 400, { error: "baseVersion must be a non-negative integer" });
+    const r = docSave(writeDb, projectId, actor, { slug, kind: "roadmap", body: form.get("body") ?? "", baseVersion, summary: form.get("summary") ?? undefined });
+    return r.ok ? redirect(res, "/roadmap") : rerender(r.error); // a stale baseVersion → 409 CONFLICT, surfaced (no last-write-wins)
+  }
+  const version = Number(form.get("version"));
+  if (!Number.isInteger(version) || version <= 0) return json(res, 400, { error: "version must be a positive integer" });
+  const r = docPublish(writeDb, projectId, actor, { kind: "roadmap", version });
+  return r.ok ? redirect(res, "/roadmap") : rerender(r.error); // non-operator → 403; missing version → 404
+}
+
+// Build the HTTP server over an already-opened, project-resolved db. Exported so tests (and a later
+// in-process embed) can start it without the CLI bootstrap below. GET routes issue ONLY SELECTs; the
+// optional DL-3 /roadmap/* POST routes write the roadmap doc through the separate `writeDb` connection.
+export function createDaemon({ db, projectId, projectKey, writeDb, actor }: DaemonOpts): Server {
+  const canWrite = !!writeDb && !!actor;
+  return createServer(async (req, res) => {
+    const method = req.method ?? "GET";
     let url: URL;
     try { url = new URL(req.url ?? "/", "http://127.0.0.1"); } catch { return json(res, 400, { error: "bad request url" }); }
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const seg = path.split("/").filter(Boolean); // [] for "/"
 
     try {
+      // ── DL-3 write surface: the ONLY non-GET routes. They hard-target the kind:"roadmap" doc through
+      //    docstore (DB-doc-only — no filesystem path ⇒ §17 firewall). Present ONLY when a write
+      //    connection + actor were supplied; otherwise the daemon stays GET-only (DL-1/DL-2 behavior).
+      if (method === "POST" && canWrite && (path === "/roadmap/save" || path === "/roadmap/publish")) {
+        await handleRoadmapWrite(path === "/roadmap/save" ? "save" : "publish", req, res, db, writeDb!, projectId, projectKey, actor!);
+        return;
+      }
+      // READ-ONLY for everything else: any other non-GET is refused — the read surface never mutates (DL-1 AC).
+      if (method !== "GET" && method !== "HEAD") {
+        return json(res, 405, { error: "read-only daemon: only GET is allowed" });
+      }
+
       // GET / — the web UI board (DL-2): server-rendered HTML, read-only, columns by state.
       if (path === "/") return htmlOut(res, 200, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey)));
+
+      // GET /roadmap — the roadmap doc view + edit form (+ operator-only publish) (DL-3).
+      if (path === "/roadmap") {
+        return htmlOut(res, 200, page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: canWrite, canPublish: canWrite && actor === "operator" })));
+      }
 
       // GET /ticket/:id — the web UI detail view (DL-2): full description + comments.
       if (seg[0] === "ticket" && seg.length === 2) {
@@ -263,10 +422,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error(`[daemon] unknown project '${PROJECT_KEY}'. Seed it first (e.g. start the hub, or \`node src/seed.ts ${PROJECT_KEY} "<name>" <PREFIX>\`). Refusing to serve a phantom board.`);
     process.exit(1);
   }
-  const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY });
+  // DL-3: a SECOND, writable connection backs ONLY the /roadmap/* write routes — the read `db` above
+  // stays query_only, so the daemon's read surface remains structurally read-only. DEVLOOP_ACTOR (default
+  // operator, matching the MCP server) attributes writes and gates publish; refuse a phantom actor
+  // (G1-style) so a write can never land unattributable authorship.
+  const ACTOR = process.env.DEVLOOP_ACTOR ?? "operator";
+  const writeDb = openDb(DB_PATH);
+  if (!actorExists(writeDb, ACTOR)) {
+    console.error(`[daemon] DEVLOOP_ACTOR='${ACTOR}' is not a known actor — refusing to start the roadmap write surface with an unattributable identity. Seed actors via the hub first.`);
+    process.exit(1);
+  }
+  const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR });
   server.listen(PORT, HOST, () => {
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : PORT;
-    console.log(`[daemon] dev-loop-hub read API for '${PROJECT_KEY}' → http://${HOST}:${port}/  (read-only, localhost-only)`);
+    console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${HOST}:${port}/  (reads read-only; /roadmap editable, localhost-only)`);
   });
 }
