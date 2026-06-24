@@ -30,9 +30,38 @@ than by editing agent code.
 
 ## Goals (north star)
 
-**Top priority (operator, 2026-06-23):** the **daemon**, a **web interface**, and
-**Lark/Slack integration** that lets users **plug into and edit the roadmap** (and feed
-direction back into the loop). This leads the milestone.
+**SHIPPED (operator, 2026-06-23):** the daemon + web UI + roadmap view/edit + Lark/Slack
+bridge (DL-1 / DL-2 / DL-3 / DL-4) — that milestone's top priority, all Done.
+
+**Top priority (operator, 2026-06-24): a TURNKEY LOCAL EXPERIENCE.** Today the daemon (web
+UI) and the MCP server are SEPARATE processes the operator must start by hand, and installing
+the plugin does **not** bring the web UI up. Close that gap — two threads:
+
+1. **Auto-start the web UI on install / session.** Opening the plugin in a `service`-backend
+   project should bring up that project's daemon web UI **automatically** — no manual
+   `npm run daemon`. Design the lifecycle deliberately: resolve the project from cwd
+   (§11 / DL-13); **one** daemon per project on a stable per-project port; **never** double-start
+   if one is already running; localhost-only (§16); a clean stop/restart story; survives across
+   sessions; a no-op (and no error) for a non-service project. The plugin-packaging piece (a
+   SessionStart hook or equivalent in the plugin manifest) edits the plugin's OWN config, so
+   THAT half lands as a §17 `[pm-proposal]` for operator git-commit; the hub/launcher/docs/code
+   half is Dev-buildable.
+
+2. **Unify MCP ↔ the daemon (the daemon as the single coordination point).** Today MCP (the
+   stdio `server.ts`) and the daemon (HTTP) are two processes sharing `hub.db`. Move toward the
+   daemon being the persistent service that serves **both** the web UI **and** the agents'
+   MCP / write API in one process — so agents and humans act through one running service, not N
+   per-pane stdio spawns. This is the Vision's "daemon owns coordination." Build it
+   **additively**: a new transport option (e.g. the stdio MCP becomes a thin client to the
+   loopback daemon), with the existing stdio MCP path kept 100% working and the read-only daemon
+   unchanged for those who want it; preserve per-agent identity (`DEVLOOP_ACTOR`), localhost-only,
+   and the §16/§17 firewall end-to-end.
+
+**Constraints for both:** strictly additive + opt-in (a project not using it is byte-for-byte
+unaffected); no regression to today's stdio MCP or read-only daemon; localhost-only (§16);
+per-agent identity preserved; any SKILL/conventions/plugin-config edit goes through §17
+(operator-committed). The E2E target: *install the plugin → the web UI is up → in Claude, an MCP
+ticket change shows in the web UI* — with zero manual daemon start.
 
 Supporting goals (all in scope this milestone):
 - **Harden the hub / `service` backend** — robustness, tests, `doctor` coverage, and edge
