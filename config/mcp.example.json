@@ -1,5 +1,5 @@
 {
-  "_comment": "TEMPLATE for backend:\"service\" (conventions §18; docs/HUB-ARCHITECTURE.md). Copy to your PRODUCT repo root as `.mcp.json` (or pass via `claude --mcp-config`). Replace <ABS-PATH-TO-dev-loop> with the absolute path to your dev-loop checkout. The ${VAR} values are expanded by Claude Code at config-parse time from each pane's launching shell, so a per-pane `DEVLOOP_ACTOR` makes the one hub server attribute that pane's writes to the right agent (per-agent identity — the whole point). Defaults after `:-` apply if the launcher didn't set the var. DEVLOOP_PROJECT defaults to EMPTY (`:-`): when unset the hub auto-resolves the project from the spawned process's cwd (DL-13 — see references/config-schema.md `Project resolution`); set it explicitly to override.",
+  "_comment": "TEMPLATE for backend:\"service\" (conventions §18; docs/HUB-ARCHITECTURE.md). Copy to your PRODUCT repo root as `.mcp.json` (or pass via `claude --mcp-config`). Replace <ABS-PATH-TO-dev-loop> with the absolute path to your dev-loop checkout. The ${VAR} values are expanded by Claude Code at config-parse time from each pane's launching shell, so a per-pane `DEVLOOP_ACTOR` makes the one hub server attribute that pane's writes to the right agent (per-agent identity — the whole point). Defaults after `:-` apply if the launcher didn't set the var; keep these single-level (`${VAR:-literal}`) — do NOT nest `${...}` inside a default, because a CLI with non-recursive interpolation closes the OUTER group on the inner `}` and the value resolves to a literal path (DL-44). DEVLOOP_PROJECT defaults to EMPTY (`:-`): when unset the hub auto-resolves the project from the spawned process's cwd (DL-13 — see references/config-schema.md `Project resolution`); set it explicitly to override. The hub DB path is intentionally NOT set here: the server defaults to `~/.dev-loop/hub.db` (homedir-relative) when DEVLOOP_HUB_DB is unset, so the single shared system-of-record needs no config; to point at a non-default DB, export DEVLOOP_HUB_DB in the launching shell (the server reads it from the inherited environment).",
   "mcpServers": {
     "dev-loop-hub": {
       "type": "stdio",
@@ -7,8 +7,7 @@
       "args": ["<ABS-PATH-TO-dev-loop>/hub/src/server.ts"],
       "env": {
         "DEVLOOP_ACTOR": "${DEVLOOP_ACTOR:-operator}",
-        "DEVLOOP_PROJECT": "${DEVLOOP_PROJECT:-}",
-        "DEVLOOP_HUB_DB": "${DEVLOOP_HUB_DB:-${HOME}/.dev-loop/hub.db}"
+        "DEVLOOP_PROJECT": "${DEVLOOP_PROJECT:-}"
       }
     }
   }

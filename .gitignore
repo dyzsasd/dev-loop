@@ -5,6 +5,11 @@ node_modules/
 *.db
 *.db-wal
 *.db-shm
+# DL-44: a CLI whose .mcp.json interpolation mis-expands a nested ${...} env value forks the hub db to a
+# literal path and drops a stray `${HOME` dir into the tree (note the db files there end in `}`, so the
+# *.db rules above miss them). The real fix removed the nested default from the templates; this is
+# belt-and-suspenders so such a stray — any ${...}-literal path — can never be committed.
+${*
 # hub daemon lifecycle runfile (DL-41): machine-local pid/port, never committed (defaults to ~/.dev-loop,
 # but covered here in case an operator points DEVLOOP_RUN_DIR/DEVLOOP_HUB_DB inside the repo)
 daemon-*.json

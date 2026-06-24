@@ -23,10 +23,11 @@
     "identity": "node test/identity.ts",
     "daemon-test": "node test/daemon.ts",
     "lifecycle": "node test/lifecycle.ts",
-    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts && node test/resolve-project.ts && node test/daemon.ts && node test/lifecycle.ts && node test/blocked.ts && node test/migrate.ts && node test/release.ts",
+    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts && node test/resolve-project.ts && node test/daemon.ts && node test/lifecycle.ts && node test/blocked.ts && node test/migrate.ts && node test/release.ts && node test/mcp-config.ts",
     "blocked": "node test/blocked.ts",
     "migrate": "node test/migrate.ts",
-    "release": "node test/release.ts"
+    "release": "node test/release.ts",
+    "mcp-config": "node test/mcp-config.ts"
   },
   "engines": {
     "node": ">=23.6"
