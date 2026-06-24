@@ -1,24 +1,90 @@
-// dev-loop hub — shared ticket-write primitives (DL-29 / design §11 subsystem D).
-// The daemon's opt-in human web-write routes (create/comment/move/assign) call these so a board-driven
-// write is behaviourally identical to an agent-driven one: the SAME state set (STATES), the SAME
-// attribution + event-log discipline (logEvent), the SAME unknown-assignee guard (actorExists). They take
-// a WRITABLE connection — NEVER the daemon's query_only read connection — and the caller's resolved actor.
-//
-// NOTE (convergence, tracked follow-up): the MCP server's `save_issue`/`save_comment` (server.ts) still
-// hold their own inline write logic; these primitives are the single home both should eventually share.
-// They mirror that logic here so the daemon path is correct today; folding server.ts onto them is a
-// separate, test-guarded refactor (it surgery's the loop's core SoR write path, so it earns its own fire).
+// dev-loop hub — the single home for ticket/comment writes (DL-29 daemon routes + DL-35 server.ts convergence).
+// EVERY ticket INSERT/UPDATE and comment INSERT in the hub lives here (grep: no other src file writes the
+// tickets/comments tables). Two callers share these:
+//   • the MCP server (server.ts save_issue/save_comment) — the agent write path; it computes its own merge
+//     (REPLACE labels, APPEND-only relatedTo, DL-24 assignTo) inside its own BEGIN IMMEDIATE txn, then calls
+//     the raw mechanics below to do the write + log the event.
+//   • the daemon's opt-in human web-write routes (create/comment/move/assign) — the board write path; the
+//     narrow primitives (createTicket/addComment/moveTicket/assignTicket) wrap the same mechanics.
+// The mechanics take a WRITABLE connection (NEVER the daemon's query_only read connection) and the caller's
+// resolved actor. Attribution + the event-log discipline (logEvent) + the unknown-assignee guard
+// (actorExists) + the state set (STATES) are uniform across both paths by construction.
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
 
 export type WriteResult = { ok: true; id: string } | { ok: false; status: number; error: string };
 
+// Fully-resolved column values for a create. The caller resolves defaults/aliases (state, assignee, labels…)
+// before calling — the mechanic does no policy, only the write.
+export interface NewTicketFields {
+  title: string; description: string; type: string; state: string;
+  assignee: string | null; priority: number; labels: string[];
+  duplicateOf: string | null; relatedTo: string[];
+}
+// Fully-merged next-row values for an update. labels/related_to are the PRE-SERIALIZED JSON strings exactly as
+// stored (the caller owns REPLACE-vs-append policy); duplicate_of is the scalar column value.
+export interface TicketUpdateFields {
+  title: string; description: string; type: string; state: string;
+  assignee: string | null; priority: number;
+  labels: string; duplicate_of: string | null; related_to: string;
+}
+// A stored row, narrowed to the columns an update copies (moveTicket/assignTicket read the row to rewrite it).
+type StoredRow = TicketUpdateFields;
+
 const exists = (db: DatabaseSync, projectId: string, id: string): boolean =>
   !!db.prepare("SELECT 1 FROM tickets WHERE id=? AND project_id=?").get(id, projectId);
+const rowFor = (db: DatabaseSync, projectId: string, id: string): StoredRow | undefined =>
+  db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?")
+    .get(id, projectId) as StoredRow | undefined;
 
-// Create a Todo ticket (no labels/assignee by default — a human can move/assign/label it after). Mirrors
-// the MCP create branch: id from nextTicketId, created_by = actor, an issue.create event.
+// ─── the raw mechanics: the ONLY tickets/comments writers in the hub ──────────
+
+// THE ticket INSERT. Allocates the id, writes all 14 columns, logs issue.create. `createEventData` is passed
+// in so each caller logs exactly what it logged before this convergence (the MCP path logs the RAW {title,type}
+// — type possibly undefined when omitted — which differs from the resolved type written to the row).
+export function insertTicket(
+  db: DatabaseSync, projectId: string, actor: string, f: NewTicketFields, createEventData: Record<string, unknown>,
+): string {
+  const id = nextTicketId(db, projectId);
+  const t = nowIso();
+  db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, projectId, f.title, f.description, f.type, f.state, f.assignee, f.priority, JSON.stringify(f.labels), f.duplicateOf, JSON.stringify(f.relatedTo), actor, t, t);
+  logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.create", data: createEventData });
+  return id;
+}
+
+// THE ticket UPDATE. Writes the caller-merged `next` row, logs issue.transition (with the resolved assignee)
+// on a real state change else issue.update. TXN-AGNOSTIC: it never BEGINs/COMMITs — the MCP's atomic
+// read-merge-write txn (and the daemon's single-op writes) stay the caller's concern.
+export function updateTicketRow(
+  db: DatabaseSync, projectId: string, actor: string, id: string, fromState: string, next: TicketUpdateFields,
+): void {
+  const t = nowIso();
+  db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
+    .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, next.duplicate_of, next.related_to, t, id, projectId);
+  logEvent(db, next.state !== fromState
+    ? { project_id: projectId, ticket_id: id, actor, kind: "issue.transition", data: { from: fromState, to: next.state, assignee: next.assignee } }
+    : { project_id: projectId, ticket_id: id, actor, kind: "issue.update", data: {} });
+}
+
+// THE comment INSERT. Mechanic only — existence/body policy is the caller's. Returns the new id + timestamp
+// (the MCP echoes them back to the caller). Body is operator/agent DATA — stored verbatim, esc()'d at render
+// (never a command-verb parser, never a channel scrub).
+export function insertComment(
+  db: DatabaseSync, projectId: string, actor: string, ticketId: string, body: string,
+): { id: string; createdAt: string } {
+  const id = randomUUID();
+  const t = nowIso();
+  db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES (?,?,?,?,?)").run(id, ticketId, actor, body, t);
+  logEvent(db, { project_id: projectId, ticket_id: ticketId, actor, kind: "comment.add", data: {} });
+  return { id, createdAt: t };
+}
+
+// ─── daemon human-write primitives: narrow wrappers over the mechanics above ──
+
+// Create a Todo ticket (no labels/assignee by default — a human can move/assign/label it after).
 export function createTicket(
   db: DatabaseSync, projectId: string, actor: string,
   a: { title: string; description?: string; type?: string },
@@ -26,52 +92,42 @@ export function createTicket(
   const title = (a.title ?? "").trim();
   if (!title) return { ok: false, status: 400, error: "title required" };
   const type = a.type ?? "Feature";
-  const id = nextTicketId(db, projectId);
-  const t = nowIso();
-  db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(id, projectId, title, a.description ?? "", type, "Todo", null, 0, JSON.stringify([]), null, JSON.stringify([]), actor, t, t);
-  logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.create", data: { title, type } });
+  const id = insertTicket(db, projectId, actor,
+    { title, description: a.description ?? "", type, state: "Todo", assignee: null, priority: 0, labels: [], duplicateOf: null, relatedTo: [] },
+    { title, type });
   return { ok: true, id };
 }
 
-// Add a comment (author = actor). Body is operator DATA — stored verbatim, esc()'d at render (never a
-// command-verb parser, never a channel scrub). Mirrors the MCP save_comment.
+// Add a comment (author = actor). A web form must not post an empty body → 400 (the MCP agent path does not
+// enforce this; the guard is the daemon's policy, the INSERT mechanic is shared).
 export function addComment(db: DatabaseSync, projectId: string, actor: string, id: string, body: string): WriteResult {
   if (!exists(db, projectId, id)) return { ok: false, status: 404, error: `no such ticket ${id}` };
   if (!(body ?? "").trim()) return { ok: false, status: 400, error: "comment body required" };
-  const cid = randomUUID(); const t = nowIso();
-  db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES (?,?,?,?,?)").run(cid, id, actor, body, t);
-  logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "comment.add", data: {} });
+  insertComment(db, projectId, actor, id, body);
   return { ok: true, id };
 }
 
-// Move a ticket to a new state. Honors the STATES set (the tickets.state CHECK's mirror) — an unknown
-// state is rejected, never written. A real transition logs issue.transition (else issue.update). This is
-// a deliberate single-field write: it does NOT apply the DL-24 assignTo directive (that is the agent
-// save_issue path; a human board move is an explicit state set). Transition-guard parity rides "the
-// engine" (AC2: "if/when the engine lands").
+// Move a ticket to a new state. Honors the STATES set (the tickets.state CHECK's mirror) — an unknown state is
+// rejected, never written. A deliberate single-field intent: it reads the row and rewrites it with only `state`
+// changed (so the shared UPDATE mechanic does the write). Does NOT apply the DL-24 assignTo directive — a human
+// board move is an explicit state set (that directive is the agent save_issue path's).
 export function moveTicket(db: DatabaseSync, projectId: string, actor: string, id: string, toState: string): WriteResult {
   if (!STATES.includes(toState as State)) return { ok: false, status: 400, error: `invalid state '${toState}'; one of ${STATES.join(", ")}` };
-  const cur = db.prepare("SELECT state FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as { state: string } | undefined;
+  const cur = rowFor(db, projectId, id);
   if (!cur) return { ok: false, status: 404, error: `no such ticket ${id}` };
-  const t = nowIso();
-  db.prepare("UPDATE tickets SET state=?,updated_at=? WHERE id=? AND project_id=?").run(toState, t, id, projectId);
-  logEvent(db, cur.state !== toState
-    ? { project_id: projectId, ticket_id: id, actor, kind: "issue.transition", data: { from: cur.state, to: toState } }
-    : { project_id: projectId, ticket_id: id, actor, kind: "issue.update", data: {} });
+  updateTicketRow(db, projectId, actor, id, cur.state, { ...cur, state: toState });
   return { ok: true, id };
 }
 
-// Assign (or unassign) a ticket. Empty/whitespace → unassigned (null); a non-empty handle must be a known
-// actor (mirrors the MCP unknown-assignee guard) — no "me" alias here (a web form names a handle).
+// Assign (or unassign) a ticket. Empty/whitespace → unassigned (null); a non-empty handle must be a known actor
+// (mirrors the MCP unknown-assignee guard) — no "me" alias here (a web form names a handle). Reads the row and
+// rewrites it with only `assignee` changed (state unchanged ⇒ the shared mechanic logs issue.update).
 export function assignTicket(db: DatabaseSync, projectId: string, actor: string, id: string, assignee: string): WriteResult {
-  if (!exists(db, projectId, id)) return { ok: false, status: 404, error: `no such ticket ${id}` };
+  const cur = rowFor(db, projectId, id);
+  if (!cur) return { ok: false, status: 404, error: `no such ticket ${id}` };
   const raw = (assignee ?? "").trim();
   const resolved = raw === "" ? null : raw;
   if (resolved !== null && !actorExists(db, resolved)) return { ok: false, status: 400, error: `unknown assignee '${resolved}'` };
-  const t = nowIso();
-  db.prepare("UPDATE tickets SET assignee=?,updated_at=? WHERE id=? AND project_id=?").run(resolved, t, id, projectId);
-  logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.update", data: {} });
+  updateTicketRow(db, projectId, actor, id, cur.state, { ...cur, assignee: resolved });
   return { ok: true, id };
 }

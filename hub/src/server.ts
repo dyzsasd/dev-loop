@@ -6,12 +6,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { randomUUID, createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { z } from "zod";
-import { openDb, nowIso, nextTicketId, logEvent, actorExists, listActorHandles, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
+import { openDb, nowIso, logEvent, actorExists, listActorHandles, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { ensureActors, ensureProject, findProject } from "./seed.ts";
 import { sendVia, pollVia, getEnabledChannel, resolveCreds, scrubErr, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type OutboundMsg, type InboundMsg, type Creds, type ChannelRow } from "./channel.ts";
 import { findByMarker, createIssue, updateIssue, type MirrorIssue } from "./linear.ts";
 import { DOC_KINDS, resolveDoc, latestVersion, docSave, docPublish } from "./docstore.ts";
 import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
+import { insertTicket, updateTicketRow, insertComment } from "./ticketwrite.ts"; // DL-35: the single ticket/comment write home
 
 // ─── Environment / identity ──────────────────────────────────────────────────
 const DB_PATH = process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`;
@@ -205,16 +206,15 @@ server.registerTool("save_issue", {
 }, async (a) => {
   if (a.state && !STATES.includes(a.state as State)) return err(`invalid state '${a.state}'; one of ${STATES.join(", ")}`);
   if (a.assignee && a.assignee !== "me" && !actorExists(db, a.assignee)) return err(`unknown assignee '${a.assignee}'; one of ${listActorHandles(db).join(", ")} (or "me"/null)`);
-  const t = nowIso();
   if (!a.id) {
     if (!a.title) return err("title required to create a ticket");
-    const id = nextTicketId(db, projectId);
-    db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      id, projectId, a.title, a.description ?? "", a.type ?? "Feature", (a.state as State) ?? "Todo",
-      resolveAssignee(a.assignee), a.priority ?? 0, JSON.stringify(a.labels ?? []),
-      a.duplicateOf ?? null, JSON.stringify(a.relatedTo ?? []), ACTOR, t, t);
-    logEvent(db, { project_id: projectId, ticket_id: id, actor: ACTOR, kind: "issue.create", data: { title: a.title, type: a.type } });
+    // DL-35: the create INSERT + issue.create event now live in ticketwrite.insertTicket. Event data stays
+    // the RAW {title,type} this path has always logged (type may be undefined when omitted) — byte-identical.
+    const id = insertTicket(db, projectId, ACTOR,
+      { title: a.title, description: a.description ?? "", type: a.type ?? "Feature", state: (a.state as State) ?? "Todo",
+        assignee: resolveAssignee(a.assignee), priority: a.priority ?? 0, labels: a.labels ?? [],
+        duplicateOf: a.duplicateOf ?? null, relatedTo: a.relatedTo ?? [] },
+      { title: a.title, type: a.type });
     return ok(toTicket(getRow(id)!));
   }
   // update branch — atomic read-merge-write (Codex review): the APPEND-ONLY relatedTo union must not
@@ -240,12 +240,10 @@ server.registerTool("save_issue", {
       const resolved = resolveAssignTo(cur.state, next.state, JSON.parse(next.labels) as string[]);
       if (resolved !== null) next.assignee = resolved; // null = leave untouched (no directive / "—" sentinel / unknown handle)
     }
-    db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
-      .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, next.duplicate_of, next.related_to, t, a.id, projectId);
-    if (next.state !== cur.state)
-      logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.transition", data: { from: cur.state, to: next.state, assignee: next.assignee } });
-    else
-      logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.update", data: {} });
+    // DL-35: the UPDATE + transition/update event now live in ticketwrite.updateTicketRow. The atomic
+    // read-merge-write txn (and the `next` merge above: REPLACE labels, APPEND-only relatedTo, DL-24 assignTo)
+    // stay here — the mechanic is txn-agnostic, so this BEGIN IMMEDIATE block still owns atomicity.
+    updateTicketRow(db, projectId, ACTOR, a.id, cur.state, next);
     db.exec("COMMIT");
   } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
   return ok(toTicket(getRow(a.id)!));
@@ -256,10 +254,10 @@ server.registerTool("save_comment",
   { description: "Add a comment to a ticket (authored as you).", inputSchema: { issueId: z.string(), body: z.string() } },
   async ({ issueId, body }) => {
     if (!getRow(issueId)) return err(`no such ticket ${issueId}`);
-    const id = randomUUID(); const t = nowIso();
-    db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES (?,?,?,?,?)").run(id, issueId, ACTOR, body, t);
-    logEvent(db, { project_id: projectId, ticket_id: issueId, actor: ACTOR, kind: "comment.add", data: {} });
-    return ok({ id, ticket_id: issueId, author: ACTOR, body, created_at: t });
+    // DL-35: the comment INSERT + comment.add event now live in ticketwrite.insertComment. The MCP path
+    // keeps its own existence check + err string and does NOT enforce a non-empty body (byte-identical).
+    const { id, createdAt } = insertComment(db, projectId, ACTOR, issueId, body);
+    return ok({ id, ticket_id: issueId, author: ACTOR, body, created_at: createdAt });
   });
 server.registerTool("list_comments",
   { description: "List a ticket's comments (chronological; the tail is the latest).", inputSchema: { issueId: z.string() } },
