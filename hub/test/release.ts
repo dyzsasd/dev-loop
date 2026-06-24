@@ -11,6 +11,7 @@ import { once } from "node:events";
 import { openDb } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
 import { createDaemon } from "../src/daemon.ts";
+import { moveTicket } from "../src/ticketwrite.ts"; // DL-38: the daemon's move primitive (shares the gate)
 
 const DB = "/tmp/hub-release/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch { /* */ } }
@@ -104,6 +105,53 @@ const activity = await (await fetch(`http://127.0.0.1:${port}/activity`)).text()
 ok(activity.includes("promoted") && activity.includes("env:dev") && activity.includes("env:prod"),
   "DL-32: /activity renders the issue.promote events (promoted … → …)");
 daemon.close(); ddb.close();
+
+// ════ DL-38: the staging-deploy gate — In Progress → In Review requires env:dev when the repo deploys ════
+// Enforced in the shared write path (ticketwrite.updateTicketRow), so it covers BOTH the MCP save_issue
+// transition AND the daemon's moveTicket primitive. Default off; carve-out for non-deploying repos.
+const wdb = openDb(DB); // a writable conn to exercise the daemon move primitive directly
+const inProgress = async (title: string, labels: string[] = FULL) => {
+  const t = await call(pm, "save_issue", { title, type: "Feature", labels });
+  await call(dev, "save_issue", { id: t.id, state: "In Progress", assignee: "me" });
+  return t.id;
+};
+
+// gate ON + single-repo deploys (hasDeploy) + no env:dev ⇒ In Progress → In Review REJECTED (MCP path)
+setRelease({ requireDeployBeforeReview: true, hasDeploy: true });
+const s1 = await inProgress("needs staging");
+const sRej = await callRaw(dev, "save_issue", { id: s1, state: "In Review" });
+ok(sRej.isError && /staging-deploy/.test(sRej.data.error ?? ""), "DL-38: gate on + repo deploys + no env:dev ⇒ In Progress→In Review rejected (MCP)");
+ok((await call(dev, "get_issue", { id: s1 })).state === "In Progress", "DL-38: the rejected transition did NOT move the ticket");
+await call(dev, "save_issue", { id: s1, labels: [...FULL, "env:dev"] }); // earn env:dev (a non-transition update)
+const sOk = await callRaw(dev, "save_issue", { id: s1, state: "In Review" });
+ok(!sOk.isError && sOk.data.state === "In Review", "DL-38: gate on + env:dev present ⇒ the transition succeeds");
+
+// carve-out: gate ON but the repo does NOT deploy (no hasDeploy/deployRepos) ⇒ succeeds without env:dev (no deadlock)
+setRelease({ requireDeployBeforeReview: true });
+const s2 = await inProgress("no-deploy repo");
+const sCarve = await callRaw(dev, "save_issue", { id: s2, state: "In Review" });
+ok(!sCarve.isError && sCarve.data.state === "In Review", "DL-38: carve-out — a non-deploying repo bypasses the gate (no deadlock)");
+
+// multi-repo: a repo:<name> ∈ deployRepos is gated; a repo NOT in the list is bypassed
+setRelease({ requireDeployBeforeReview: true, deployRepos: ["web"] });
+const s3 = await inProgress("repo web gated", [...FULL, "repo:web"]);
+ok((await callRaw(dev, "save_issue", { id: s3, state: "In Review" })).isError, "DL-38: multi-repo — repo:web ∈ deployRepos + no env:dev ⇒ rejected");
+const s4 = await inProgress("repo api bypassed", [...FULL, "repo:api"]);
+ok(!(await callRaw(dev, "save_issue", { id: s4, state: "In Review" })).isError, "DL-38: multi-repo — repo:api ∉ deployRepos ⇒ bypassed (carve-out)");
+
+// default off: no release config ⇒ the transition succeeds without env:dev (unchanged behavior)
+setRelease(null);
+const s5 = await inProgress("default off");
+ok(!(await callRaw(dev, "save_issue", { id: s5, state: "In Review" })).isError, "DL-38: default off ⇒ transition succeeds without env:dev (unchanged)");
+
+// the daemon surface: moveTicket (what the daemon /move route calls) goes through the SAME shared path ⇒ gated too
+setRelease({ requireDeployBeforeReview: true, hasDeploy: true });
+const s6 = await inProgress("daemon move");
+const mRej = moveTicket(wdb, projectId, "operator", s6, "In Review");
+ok(!mRej.ok && /staging-deploy/.test((mRej as { error?: string }).error ?? ""), "DL-38: the daemon move primitive enforces the SAME gate (shared write path)");
+await call(dev, "save_issue", { id: s6, labels: [...FULL, "env:dev"] });
+ok(moveTicket(wdb, projectId, "operator", s6, "In Review").ok, "DL-38: daemon move with env:dev present ⇒ allowed");
+wdb.close();
 
 for (const c of [dev, op, pm]) await c.close();
 adb.close();

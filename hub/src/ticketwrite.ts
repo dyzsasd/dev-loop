@@ -38,6 +38,40 @@ const rowFor = (db: DatabaseSync, projectId: string, id: string): StoredRow | un
   db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?")
     .get(id, projectId) as StoredRow | undefined;
 
+// ─── release/env config + the staging-deploy gate (DL-32 / DL-38, design §7) ──
+export interface ReleaseConfig {
+  prodPromotionGate?: string;          // DL-32: "human" gates ADDING env:prod (enforced ACTOR-side in server.ts)
+  requireDeployBeforeReview?: boolean; // DL-38: the staging-deploy gate (this file)
+  deployRepos?: string[];              // DL-38 opt-(a): repos that deploy — match the ticket's repo:<name> label
+  hasDeploy?: boolean;                 // DL-38 opt-(a): the single-repo project deploys
+}
+// Read settings_json.workflow.release fresh (a live, operator-set, opt-in config). Malformed ⇒ {} (fail-open).
+export function loadRelease(db: DatabaseSync, projectId: string): ReleaseConfig {
+  try {
+    const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
+    const r = (row?.settings_json ? JSON.parse(row.settings_json) : {})?.workflow?.release;
+    return r && typeof r === "object" ? r : {};
+  } catch { return {}; } // never brick a write on malformed config
+}
+// DL-38 staging-deploy gate (design §7). Enforced in updateTicketRow below — the shared write path — so it
+// covers BOTH the MCP save_issue transition AND the daemon board-move automatically. The In Progress → In
+// Review transition is REJECTED when requireDeployBeforeReview is on AND the ticket's repo deploys (its
+// repo:<name> ∈ deployRepos, or single-repo hasDeploy) AND it lacks env:dev. A non-deploying repo bypasses
+// (carve-out — else docs-only/no-deploy work could never earn env:dev and would deadlock). No ACTOR context.
+function stagingDeployRejection(db: DatabaseSync, projectId: string, fromState: string, next: TicketUpdateFields): string | null {
+  if (!(fromState === "In Progress" && next.state === "In Review")) return null; // only this edge is gated
+  const rel = loadRelease(db, projectId);
+  if (rel.requireDeployBeforeReview !== true) return null; // default off ⇒ unchanged behavior
+  const labels = JSON.parse(next.labels) as string[];
+  const repoLabel = labels.find((l) => l.startsWith("repo:"));
+  const repoDeploys = repoLabel
+    ? Array.isArray(rel.deployRepos) && rel.deployRepos.includes(repoLabel.slice(5))
+    : rel.hasDeploy === true; // single-repo (no repo:<name> label)
+  if (!repoDeploys) return null;                // carve-out: a non-deploying repo never needs env:dev (no deadlock)
+  if (labels.includes("env:dev")) return null;  // gate satisfied — staged
+  return `staging-deploy gate: In Progress → In Review requires env:dev (this repo deploys and requireDeployBeforeReview is on)`;
+}
+
 // ─── the raw mechanics: the ONLY tickets/comments writers in the hub ──────────
 
 // THE ticket INSERT. Allocates the id, writes all 14 columns, logs issue.create. `createEventData` is passed
@@ -55,18 +89,23 @@ export function insertTicket(
   return id;
 }
 
-// THE ticket UPDATE. Writes the caller-merged `next` row, logs issue.transition (with the resolved assignee)
-// on a real state change else issue.update. TXN-AGNOSTIC: it never BEGINs/COMMITs — the MCP's atomic
-// read-merge-write txn (and the daemon's single-op writes) stay the caller's concern.
+// THE ticket UPDATE — the post-DL-35 converged "applyTicketWrite" path. Enforces the DL-38 staging-deploy
+// gate FIRST (so both the MCP save_issue transition and the daemon board-move are covered automatically),
+// then writes the caller-merged `next` row and logs issue.transition (with the resolved assignee) on a real
+// state change else issue.update. TXN-AGNOSTIC: it never BEGINs/COMMITs — the MCP's atomic read-merge-write
+// txn (and the daemon's single-op writes) stay the caller's concern; a gate rejection writes NOTHING.
 export function updateTicketRow(
   db: DatabaseSync, projectId: string, actor: string, id: string, fromState: string, next: TicketUpdateFields,
-): void {
+): WriteResult {
+  const gate = stagingDeployRejection(db, projectId, fromState, next);
+  if (gate) return { ok: false, status: 400, error: gate };
   const t = nowIso();
   db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
     .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, next.duplicate_of, next.related_to, t, id, projectId);
   logEvent(db, next.state !== fromState
     ? { project_id: projectId, ticket_id: id, actor, kind: "issue.transition", data: { from: fromState, to: next.state, assignee: next.assignee } }
     : { project_id: projectId, ticket_id: id, actor, kind: "issue.update", data: {} });
+  return { ok: true, id };
 }
 
 // THE comment INSERT. Mechanic only — existence/body policy is the caller's. Returns the new id + timestamp
@@ -115,8 +154,7 @@ export function moveTicket(db: DatabaseSync, projectId: string, actor: string, i
   if (!STATES.includes(toState as State)) return { ok: false, status: 400, error: `invalid state '${toState}'; one of ${STATES.join(", ")}` };
   const cur = rowFor(db, projectId, id);
   if (!cur) return { ok: false, status: 404, error: `no such ticket ${id}` };
-  updateTicketRow(db, projectId, actor, id, cur.state, { ...cur, state: toState });
-  return { ok: true, id };
+  return updateTicketRow(db, projectId, actor, id, cur.state, { ...cur, state: toState }); // propagates the DL-38 gate
 }
 
 // Assign (or unassign) a ticket. Empty/whitespace → unassigned (null); a non-empty handle must be a known actor
@@ -128,6 +166,5 @@ export function assignTicket(db: DatabaseSync, projectId: string, actor: string,
   const raw = (assignee ?? "").trim();
   const resolved = raw === "" ? null : raw;
   if (resolved !== null && !actorExists(db, resolved)) return { ok: false, status: 400, error: `unknown assignee '${resolved}'` };
-  updateTicketRow(db, projectId, actor, id, cur.state, { ...cur, assignee: resolved });
-  return { ok: true, id };
+  return updateTicketRow(db, projectId, actor, id, cur.state, { ...cur, assignee: resolved }); // assignee-only ⇒ no transition ⇒ gate never fires
 }
