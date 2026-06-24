@@ -27,7 +27,7 @@ import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts"
 import { resolveDoc, docSave, docPublish } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket, type WriteResult } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
-import { getEnabledChannel, resolveCreds, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type FetchImpl } from "./channel.ts";
+import { getEnabledChannel, resolveCreds, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Transport, type FetchImpl } from "./channel.ts";
 
 export interface DaemonOpts {
   db: DatabaseSync;          // read connection (PRAGMA query_only=ON) — every GET route reads through this
@@ -910,10 +910,14 @@ export async function blockedNotifyTick(opts: {
       if (CHANNEL_DRYRUN) {
         // DL-34: dry-run is WRITE-FREE (the DL-11 invariant) — preview only, NO marker / NO ledger
         // event — so a later LIVE tick on the same DB still fires the first real ping, and the
-        // events ledger never gains a phantom "notified" that never sent.
-        console.error(`[daemon] [dry-run] would notify human-blocked ${t.id}`);
+        // events ledger never gains a phantom "notified" that never sent. DL-52: the preview names the
+        // channel type (provider/transport) + the §16-safe message line — never the webhook URL/secret.
+        console.error(`[daemon] [dry-run] would notify human-blocked ${t.id} via ${ch.provider}/${ch.transport ?? "bot"}: ${line}`);
       } else {
-        await sendVia(ch.provider as Provider, resolveCreds(ch), ch.channel_ref, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch);
+        // DL-52: pass the channel's transport — a 'webhook' channel pings the incoming-webhook URL (no bot
+        // app); 'bot'/absent ⇒ the existing provider-API send, unchanged. blockedNotifyTick's OWN logic
+        // (due-ness, the DL-33 per-tick cap, the marker) is untouched — it just threads transport through.
+        await sendVia(ch.provider as Provider, resolveCreds(ch), ch.channel_ref, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, (ch.transport as Transport) ?? "bot");
         logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: "human_blocked.notified", data: { provider: ch.provider } }); // marker ONLY on a real send
       }
       sent++;

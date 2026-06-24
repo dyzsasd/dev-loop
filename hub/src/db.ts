@@ -31,6 +31,10 @@ export const STATES: State[] =
 // CHECK clause built FROM `STATES` so the fresh-DB schema (below) and the v1 migration (openDb)
 // can never drift — one source of truth for the legal state set. (DL-25: Human-Blocked added.)
 const STATE_CHECK = STATES.map((s) => `'${s}'`).join(", ");
+// DL-52: same no-drift discipline for channels.transport — the CHECK in BOTH the fresh SCHEMA and the v2
+// ALTER is built from this one source, so adding a transport later can't desync the create vs the migrate.
+const TRANSPORTS = ["bot", "webhook"] as const;
+const TRANSPORT_CHECK = TRANSPORTS.map((t) => `'${t}'`).join(", ");
 
 // ─── Schema ────────────────────────────────────────────────────────────────
 const SCHEMA = `
@@ -156,19 +160,22 @@ CREATE INDEX IF NOT EXISTS idx_posts_topic ON posts(topic_id, round, created_at)
 -- ── P6 IM channel: per-project provider-agnostic two-way plane (§9/§16/§25) ───
 -- §16 STRUCTURAL: this table holds the ENV-VAR NAME (config_ref/secret_ref) + the room id
 -- (channel_ref), NEVER a token/secret/URL. The secret is read from process.env[config_ref]
--- server-side only and never persisted/returned/logged.
+-- server-side only and never persisted/returned/logged. (DL-52: for transport='webhook', config_ref
+-- is the env-var NAME of the incoming-webhook URL and secret_ref the optional sign-secret name — still
+-- NAMES, never the literal URL/secret.)
 CREATE TABLE IF NOT EXISTS channels (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
   provider TEXT NOT NULL CHECK(provider IN ('slack','lark')), -- CHECKed: an unknown provider can never be stored
-  config_ref TEXT NOT NULL,        -- ENV-VAR NAME of the bot token (slack) / app_id (lark); NEVER the secret
+  config_ref TEXT NOT NULL,        -- ENV-VAR NAME of the bot token (slack) / app_id (lark) — OR the incoming-webhook URL when transport='webhook'; NEVER the secret/URL literal
   secret_ref TEXT,                 -- optional ENV-VAR NAME of the app_secret (lark) / signing secret; NEVER the secret
-  channel_ref TEXT NOT NULL,       -- the room/chat id (slack 'C…' / lark chat_id 'oc_…') — an addressing handle
+  channel_ref TEXT NOT NULL,       -- the room/chat id (slack 'C…' / lark chat_id 'oc_…') — an addressing handle (unused by transport='webhook', which posts to the URL directly)
   inbound_cursor TEXT,             -- THE no-daemon cursor: slack ts / lark create_time of the last-seen msg. NULL = never polled
   last_poll_at TEXT,               -- wall-clock of the last successful poll (advisory/observability)
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  transport TEXT NOT NULL DEFAULT 'bot' CHECK(transport IN (${TRANSPORT_CHECK})), -- DL-52: 'bot' = provider bot API (default; existing channels unchanged) | 'webhook' = one-way incoming-webhook (no bot app)
   UNIQUE(project_id, provider, channel_ref)
 );
 CREATE INDEX IF NOT EXISTS idx_channels_project ON channels(project_id, enabled);
@@ -217,11 +224,14 @@ CREATE INDEX IF NOT EXISTS idx_mirror_project ON mirror_map(project_id, hub_kind
 // query_only (daemon sets it after openDb returns), so the read connection still migrates cleanly.
 const tableExists = (db: DatabaseSync, name: string): boolean =>
   !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+const columnExists = (db: DatabaseSync, table: string, col: string): boolean =>
+  (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col);
 const userVersion = (db: DatabaseSync): number =>
   (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
 
+const SCHEMA_VERSION = 2; // bump when adding a migration below (DL-25 → v1; DL-52 channels.transport → v2)
 function migrate(db: DatabaseSync): void {
-  if (userVersion(db) >= 1) return; // fast path: already current, no txn
+  if (userVersion(db) >= SCHEMA_VERSION) return; // fast path: already current, no txn
   db.exec("PRAGMA foreign_keys=OFF");
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -254,6 +264,17 @@ function migrate(db: DatabaseSync): void {
       `);
       db.exec("PRAGMA user_version=1");
     }
+    if (userVersion(db) < 2) {
+      // v2 (DL-52): add channels.transport ('bot'|'webhook', default 'bot'). Additive ALTER — a new column
+      // with a default backfills existing rows to 'bot', so every existing channel is byte-for-byte
+      // unchanged (unlike v1's CHECK-widen, an ADD COLUMN needs no table rebuild). Guarded on column
+      // presence: a brand-new / channel-less DB had its channels table created WITH transport by the SCHEMA
+      // re-exec above ⇒ skip the ALTER (no "duplicate column" error); a real pre-v2 DB has channels WITHOUT
+      // it ⇒ the ALTER adds + backfills the column.
+      if (tableExists(db, "channels") && !columnExists(db, "channels", "transport"))
+        db.exec(`ALTER TABLE channels ADD COLUMN transport TEXT NOT NULL DEFAULT 'bot' CHECK(transport IN (${TRANSPORT_CHECK}))`);
+      db.exec("PRAGMA user_version=2");
+    }
     db.exec("COMMIT");
   } catch (e) {
     try { db.exec("ROLLBACK"); } catch { /* */ }
@@ -272,8 +293,8 @@ export function openDb(path: string): DatabaseSync {
   db.exec("PRAGMA busy_timeout=5000"); // wait out a concurrent writer instead of erroring
   const fresh = !tableExists(db, "tickets");
   db.exec(SCHEMA);
-  if (fresh) db.exec("PRAGMA user_version=1"); // brand-new DB already has the current CHECK — no rebuild
-  else migrate(db);                            // existing DB — apply pending migrations (idempotent)
+  if (fresh) db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`); // brand-new DB already has the current schema — no migration
+  else migrate(db);                                           // existing DB — apply pending migrations (idempotent)
   return db;
 }
 

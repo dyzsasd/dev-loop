@@ -60,6 +60,10 @@ const TICKETS_BEFORE = 4, COMMENTS_BEFORE = 2;
   ["Todo", "In Progress", "In Review", "Done"].forEach((st, i) => ins.run("T" + i, "p", "ticket " + i, st));
   v0.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES('c0','T0','pm','first','t')").run();
   v0.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES('c1','T1','qa','second','t')").run();
+  // DL-52: a pre-v2 channels table (NO transport column) + a row — proves the v2 ALTER adds transport AND
+  // backfills the existing row to 'bot' (existing channels byte-for-byte unchanged). Pre-DL-52 column shape.
+  v0.exec("CREATE TABLE channels (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), provider TEXT NOT NULL CHECK(provider IN ('slack','lark')), config_ref TEXT NOT NULL, secret_ref TEXT, channel_ref TEXT NOT NULL, inbound_cursor TEXT, last_poll_at TEXT, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(project_id, provider, channel_ref));");
+  v0.prepare("INSERT INTO channels(id,project_id,provider,config_ref,channel_ref,created_at,updated_at) VALUES('ch','p','slack','TOK','C1','t','t')").run();
   v0.exec("PRAGMA user_version=0");
   // sanity — this really IS a v0 DB: version 0 AND the old CHECK rejects 'Human-Blocked'.
   ok(uv(v0) === 0 && rejects(v0, "X", "Human-Blocked"), "DL-27: fixture is a genuine v0 DB (user_version=0; old CHECK rejects 'Human-Blocked')");
@@ -68,7 +72,7 @@ const TICKETS_BEFORE = 4, COMMENTS_BEFORE = 2;
 
 // ── run the REAL migration via openDb() ──────────────────────────────────────
 const db = openDb(PATH);
-ok(uv(db) === 1, "DL-27: openDb migrated the v0 DB → user_version=1");
+ok(uv(db) === 2, "DL-27/DL-52: openDb migrated the v0 DB → user_version=2 (v1 state-widen + v2 channels.transport)");
 ok(count(db, "tickets") === TICKETS_BEFORE && count(db, "comments") === COMMENTS_BEFORE, "DL-27: migration is lossless (ticket + comment row counts preserved)");
 // FK children kept: the DROP+RENAME (with foreign_keys OFF) left no dangling comment→ticket references.
 ok((db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length === 0, "DL-27: FK children kept — foreign_key_check finds no violations after the rebuild");
@@ -77,11 +81,17 @@ ok((db.prepare("SELECT t.id FROM comments c JOIN tickets t ON t.id=c.ticket_id W
 const hbInsertable = !rejects(db, "HB", "Human-Blocked");
 ok(hbInsertable && (db.prepare("SELECT state FROM tickets WHERE id='HB'").get() as { state: string }).state === "Human-Blocked", "DL-27: post-migration CHECK accepts 'Human-Blocked'");
 ok(rejects(db, "BAD", "Nonsense"), "DL-27: the widened CHECK still rejects a bogus state ('Nonsense')");
+// DL-52 v2: the ALTER added channels.transport, backfilled the existing row to 'bot', CHECK live.
+ok((db.prepare("PRAGMA table_info(channels)").all() as { name: string }[]).some((c) => c.name === "transport"), "DL-52: v2 migration added the channels.transport column (ALTER on a pre-v2 channels table)");
+ok((db.prepare("SELECT transport FROM channels WHERE id='ch'").get() as { transport: string }).transport === "bot", "DL-52: the existing channel row backfilled to transport='bot' (existing channels byte-for-byte unchanged)");
+let badTransport = false;
+try { db.prepare("INSERT INTO channels(id,project_id,provider,config_ref,channel_ref,transport,created_at,updated_at) VALUES('ch2','p','slack','TOK','C2','bogus','t','t')").run(); } catch { badTransport = true; }
+ok(badTransport, "DL-52: the transport CHECK rejects a value outside {bot,webhook}");
 db.close();
 
-// ── idempotent re-open: a second openDb on the now-v1 DB is the fast-path no-op (no re-migrate, data intact) ──
+// ── idempotent re-open: a second openDb on the now-v2 DB is the fast-path no-op (no re-migrate, data intact) ──
 const db2 = openDb(PATH);
-ok(uv(db2) === 1 && count(db2, "tickets") === TICKETS_BEFORE + 1, "DL-27: re-opening a v1 DB is idempotent (still v1; the prior HB row persists, no double-migrate)");
+ok(uv(db2) === 2 && count(db2, "tickets") === TICKETS_BEFORE + 1, "DL-27/DL-52: re-opening a v2 DB is idempotent (still v2; the prior HB row persists, no double-migrate)");
 db2.close();
 
 clean(PATH);

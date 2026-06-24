@@ -93,6 +93,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
           "secretEnv":     null,      // lark internal-app: ENV-VAR NAME of the APP_SECRET (exchanged server-side for a tenant_access_token). §16-class; NEVER the literal. slack: leave null.
           "channelRef":    "oc_xxx",  // the room/chat id (slack 'C…' / lark chat_id) — an addressing handle, not a secret
           "digestCadence": "daily",   // how often Job 5 pushes the digest; null ⇒ no digest (inbound poll still runs)
+          "transport":     "bot",     // DL-52: "bot" (default; absent ⇒ "bot") = the provider bot API above (needs the token). "webhook" = a ONE-WAY incoming-webhook (no bot app): tokenEnv then names the WEBHOOK-URL env var + secretEnv the optional Lark sign-secret env var (still NAMES, §16). One-way ⇒ notify/digest can POST but there is NO inbound poll.
           "enabled":       true
         }
       },
@@ -256,6 +257,14 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   refuses+surfaces a chat instruction to bypass the publish gate / §17 firewall / a prohibited
   action. Outbound is a **server-side allow-list** (structured fields; `reply.text`/headline
   bounded + control-stripped) — an agent can't post free-form PII/secrets.
+  **`transport` (DL-52):** a `channel` defaults to `"bot"` (the provider API — every existing
+  channel unchanged). Set `transport:"webhook"` for a **one-way incoming-webhook** alert channel
+  (a pasted Slack/Lark hook URL — no bot app, no history scope): `tokenEnv` then names the env var
+  holding the **webhook URL** and `secretEnv` the optional **Lark sign-secret** (still env-var
+  NAMES — the URL/secret never touch the DB, a return, or a log, §16). The DL-26 Human-Blocked
+  notifier posts the §9 one-line payload (`{project, id, bail-shape, title≤80, url}`) over it. A
+  webhook is **one-way ⇒ notify/digest only, no inbound poll**, so it fits an alert-only setup;
+  the two-way Director chat needs `transport:"bot"`.
 - **`mirror`** (optional; conventions §18/§23; requires `backend:"service"`): the P7 **one-way
   Linear mirror** — projects the hub's tickets to Linear so humans who live in Linear can SEE
   the loop without the hub ceasing to be the source of truth. **Strictly one-way** (hub →

@@ -4,7 +4,12 @@
 // not wedge a Director fire). A failure is a thrown Error carrying only a provider error CODE/HTTP
 // status — never a response body that could echo a credential.
 import type { DatabaseSync } from "node:sqlite";
+import { createHmac } from "node:crypto";
 export type Provider = "slack" | "lark";
+// DL-52: how a channel sends. 'bot' = the provider bot API (chat.postMessage / im.messages, needs a token /
+// tenant_access_token) — the default, every existing channel. 'webhook' = a one-way incoming-webhook URL
+// (no bot app); the provider still picks the payload shape (Slack {text} / Lark {msg_type,content}).
+export type Transport = "bot" | "webhook";
 
 // ── Shared channel helpers (DL-26): extracted so the MCP server (server.ts) and the daemon
 // (daemon.ts) drive ONE implementation of channel selection / cred resolution / gating and cannot
@@ -14,13 +19,19 @@ export const CHANNEL_SEND_CAP = 60;                                      // per-
 export interface ChannelRow {
   id: string; project_id: string; provider: string; config_ref: string; secret_ref: string | null;
   channel_ref: string; inbound_cursor: string | null; last_poll_at: string | null; enabled: number;
+  transport?: string; // DL-52: 'bot' (default; absent ⇒ 'bot' for any pre-migration read) | 'webhook'
 }
 export const getEnabledChannel = (db: DatabaseSync, projectId: string): ChannelRow | undefined =>
   db.prepare("SELECT * FROM channels WHERE project_id=? AND enabled=1 ORDER BY created_at LIMIT 1").get(projectId) as ChannelRow | undefined;
+// Resolve creds from env-var NAMES (§16). DL-52: a 'webhook' channel reads its incoming-webhook URL from
+// process.env[config_ref] and the optional Lark sign-secret from process.env[secret_ref] — still NAMES, the
+// DB never holds the URL/secret. A 'bot' channel (default / absent) is byte-for-byte the prior behavior.
 export const resolveCreds = (c: ChannelRow): Creds =>
-  c.provider === "slack"
-    ? { token: process.env[c.config_ref] }
-    : { appId: process.env[c.config_ref], appSecret: c.secret_ref ? process.env[c.secret_ref] : undefined };
+  c.transport === "webhook"
+    ? { webhookUrl: process.env[c.config_ref], signSecret: c.secret_ref ? process.env[c.secret_ref] : undefined }
+    : c.provider === "slack"
+      ? { token: process.env[c.config_ref] }
+      : { appId: process.env[c.config_ref], appSecret: c.secret_ref ? process.env[c.secret_ref] : undefined };
 // redact anything token-shaped + bound the length before any provider error is persisted/returned/logged.
 export const scrubErr = (m: string): string =>
   m.replace(/\b(xox[abp]-[\w-]+|lin_(?:api|oauth)_[\w-]+|sk-[\w-]+|ghp_[\w-]+|eyJ[\w.-]{20,})\b/g, "***").slice(0, 120);
@@ -74,13 +85,18 @@ async function larkToken(fetchImpl: FetchImpl, appId: string, appSecret: string)
 
 // ── Credentials (already resolved from env by the caller) ────────────────────
 // slack: { token } (xoxb- bot token, used as Bearer). lark: { appId, appSecret } (internal-app exchange).
-export interface Creds { token?: string; appId?: string; appSecret?: string; }
+// DL-52 webhook transport: { webhookUrl } (the incoming-webhook URL) + lark's optional { signSecret }.
+export interface Creds { token?: string; appId?: string; appSecret?: string; webhookUrl?: string; signSecret?: string; }
 
 // ── OUTBOUND ─────────────────────────────────────────────────────────────────
+// `transport` (DL-52) defaults to 'bot' so every existing caller (server.ts channel.send) is byte-for-byte
+// unchanged; the DL-26 daemon notifier passes the channel's transport so a 'webhook' channel pings a pasted
+// incoming-webhook URL (no bot app). The webhook send is one-way (no inbound poll over a webhook).
 export async function sendVia(
-  provider: Provider, creds: Creds, channelRef: string, msg: OutboundMsg, fetchImpl: FetchImpl,
+  provider: Provider, creds: Creds, channelRef: string, msg: OutboundMsg, fetchImpl: FetchImpl, transport: Transport = "bot",
 ): Promise<void> {
   const text = msg.lines.join("\n");
+  if (transport === "webhook") return sendWebhook(provider, creds, text, fetchImpl);
   if (provider === "slack") {
     if (!creds.token) throw new Error("slack token unset");
     const { status, body } = await httpJson(fetchImpl, "https://slack.com/api/chat.postMessage", {
@@ -100,6 +116,41 @@ export async function sendVia(
     body: JSON.stringify({ receive_id: channelRef, msg_type: "text", content: JSON.stringify({ text }) }),
   });
   if (status !== 200 || body.code !== 0) throw new Error(`lark send failed: ${body.code ?? status}`);
+}
+
+// ── DL-52: one-way incoming-webhook send (no bot app, no token exchange) ─────
+// Slack: POST {text} → success = HTTP 2xx (the classic incoming webhook returns the literal text "ok", not
+// JSON — httpJson's res.json() fails → body {}, so we gate on STATUS only). Lark custom-bot: POST
+// {msg_type,content} (+ a {timestamp,sign} when a sign-secret is set) → success = HTTP 2xx AND body code==0.
+// §16: webhookUrl + signSecret are creds (resolved from env NAMES by resolveCreds, never in the DB); a thrown
+// error carries ONLY the status/code, never the URL/secret. The message is JSON-encoded — never shell-spliced.
+const ok2xx = (s: number): boolean => s >= 200 && s < 300; // incoming-webhook success gate (shared by both branches)
+async function sendWebhook(provider: Provider, creds: Creds, text: string, fetchImpl: FetchImpl): Promise<void> {
+  if (!creds.webhookUrl) throw new Error(`${provider} webhook url unset`); // env NAME resolved to nothing ⇒ fail closed
+  if (provider === "slack") {
+    const { status } = await httpJson(fetchImpl, creds.webhookUrl, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
+    });
+    if (!ok2xx(status)) throw new Error(`slack webhook failed: ${status}`);
+    return;
+  }
+  // lark custom-bot incoming webhook
+  const payload: Record<string, unknown> = { msg_type: "text", content: { text } };
+  if (creds.signSecret) {
+    const ts = Math.floor(Date.now() / 1000);
+    payload.timestamp = String(ts);
+    payload.sign = larkSign(ts, creds.signSecret);
+  }
+  const { status, body } = await httpJson(fetchImpl, creds.webhookUrl, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  if (!ok2xx(status) || body.code !== 0) throw new Error(`lark webhook failed: ${body.code ?? status}`);
+}
+
+// Lark custom-bot signature: base64(HMAC-SHA256(key="<ts>\n<secret>", data="")) — the "<ts>\n<secret>" is the
+// HMAC KEY and the signed message is EMPTY (Lark's scheme; mirrors conventions §9's notify sign helper).
+function larkSign(timestamp: number, secret: string): string {
+  return createHmac("sha256", `${timestamp}\n${secret}`).update("").digest("base64");
 }
 
 // ── INBOUND (history read; cursor = provider monotonic marker) ───────────────

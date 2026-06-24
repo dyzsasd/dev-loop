@@ -102,6 +102,60 @@ function mockFetch(handler: (url: string, init: { body?: string; headers?: Recor
   ok(r.messages.length === 1 && r.messages[0].text === "hey" && r.cursor === "1700000001", "lark pollVia → user msgs only (app filtered), cursor = max create_time");
 }
 
+// ── DL-52: one-way incoming-webhook transport (the 6th sendVia arg) ──────────
+// slack webhook → POST {text} to the webhook URL; success on HTTP 2xx (the hook returns "ok" text, not JSON)
+{
+  let seen: { url: string; init: { body?: string } } | null = null;
+  const f = mockFetch((url, init) => { seen = { url, init }; return { status: 200, body: {} }; });
+  await sendVia("slack", { webhookUrl: "https://hooks.example/SLACK" }, "ignored", { kind: "notify", lines: ["alert here"] }, f, "webhook");
+  ok(!!seen && seen!.url === "https://hooks.example/SLACK" && JSON.parse(seen!.init.body!).text === "alert here", "DL-52: slack webhook → POST {text} to the incoming-webhook URL");
+}
+// slack webhook non-2xx → throws the status, never the URL (§16)
+{
+  const f = mockFetch(() => ({ status: 404, body: {} }));
+  let msg = "";
+  try { await sendVia("slack", { webhookUrl: "https://hooks.example/SECRETPATH" }, "x", { kind: "notify", lines: ["x"] }, f, "webhook"); } catch (e) { msg = (e as Error).message; }
+  ok(msg.includes("404") && !msg.includes("SECRETPATH") && !msg.includes("hooks.example"), "DL-52/§16: a failed slack webhook throws the status, never the URL");
+}
+// lark webhook, NO sign secret → POST {msg_type,content}; success on 2xx AND code:0
+{
+  let seen: { url: string; init: { body?: string } } | null = null;
+  const f = mockFetch((url, init) => { seen = { url, init }; return { status: 200, body: { code: 0 } }; });
+  await sendVia("lark", { webhookUrl: "https://open.larksuite.com/hook/LARK" }, "x", { kind: "notify", lines: ["lark alert"] }, f, "webhook");
+  const payload = JSON.parse(seen!.init.body!);
+  ok(seen!.url.includes("/hook/LARK") && payload.msg_type === "text" && payload.content.text === "lark alert" && !("sign" in payload), "DL-52: lark webhook (no secret) → {msg_type:text,content:{text}}, no sign");
+}
+// lark webhook WITH a sign secret → adds {timestamp, sign} (base64 HMAC); the raw secret never appears
+{
+  let seen: { init: { body?: string } } | null = null;
+  const f = mockFetch((_u, init) => { seen = { init }; return { status: 200, body: { code: 0 } }; });
+  await sendVia("lark", { webhookUrl: "https://open.larksuite.com/hook/LARK", signSecret: "S3CR3T" }, "x", { kind: "notify", lines: ["signed"] }, f, "webhook");
+  const payload = JSON.parse(seen!.init.body!);
+  ok(typeof payload.timestamp === "string" && typeof payload.sign === "string" && /^[A-Za-z0-9+/]+=*$/.test(payload.sign), "DL-52: lark webhook + sign-secret → adds {timestamp, sign} (base64 HMAC-SHA256)");
+  ok(!JSON.stringify(payload).includes("S3CR3T"), "DL-52/§16: the lark sign-secret never appears in the payload (only its HMAC)");
+}
+// lark webhook returns 200 but code!=0 → failure (success requires 2xx AND code==0)
+{
+  const f = mockFetch(() => ({ status: 200, body: { code: 19021 } }));
+  let msg = "";
+  try { await sendVia("lark", { webhookUrl: "https://x/y" }, "x", { kind: "notify", lines: ["x"] }, f, "webhook"); } catch (e) { msg = (e as Error).message; }
+  ok(msg.includes("19021"), "DL-52: lark webhook 200-but-code!=0 → failure (2xx AND code==0 required)");
+}
+// webhook url unset (the env NAME resolved to nothing) → fails closed, never a silent no-op
+{
+  const f = mockFetch(() => ({ status: 200, body: {} }));
+  let msg = "";
+  try { await sendVia("slack", { webhookUrl: undefined }, "x", { kind: "notify", lines: ["x"] }, f, "webhook"); } catch (e) { msg = (e as Error).message; }
+  ok(/webhook url unset/.test(msg), "DL-52: a webhook with an unset URL env → throws 'webhook url unset' (fails closed)");
+}
+// bot transport is the DEFAULT — omitting the 6th arg routes to the provider API (back-compat unchanged)
+{
+  let url = "";
+  const f = mockFetch((u) => { url = u; return { status: 200, body: { ok: true } }; });
+  await sendVia("slack", { token: "xoxb-t" }, "C1", { kind: "notify", lines: ["x"] }, f); // no transport arg
+  ok(url.includes("chat.postMessage"), "DL-52: omitting transport ⇒ 'bot' (provider API) — existing callers unchanged");
+}
+
 // ── Layer 2: tool DRYRUN tests over the stdio server ─────────────────────────
 const DB = "/tmp/hub-channel/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
