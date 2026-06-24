@@ -338,6 +338,51 @@ ok(repEmpty.status === 200 && repEmpty.text.includes("No reports found"), "an ab
 delete process.env.DEVLOOP_REPORTS_DIR;
 try { rmSync("/tmp/hub-reports", { recursive: true }); } catch {}
 
+// ── DL-29: opt-in human web-write routes (create/comment/move/assign) — gated by humanWrite.enabled,
+// the same localhost CSRF/DNS-rebinding guard, attributed to the daemon actor (operator). Reuses `opd`
+// (operator writable daemon); humanWrite is read FRESH per request so a live toggle takes effect. ───────
+const setHumanWrite = (on: boolean) => { const s = openDb(DB); s.prepare("UPDATE projects SET settings_json=? WHERE id=?").run(JSON.stringify({ humanWrite: { enabled: on } }), projectId); s.close(); };
+
+// AC1 — humanWrite DISABLED ⇒ POST is not a write route → falls through to 405 (byte-identical read-only).
+ok((await postForm(opd.base, "/ticket", { title: "should 405" })).status === 405, "DL-29 AC1: POST /ticket with humanWrite DISABLED → 405 (byte-identical read-only)");
+ok(!(await gettext(opd.base, "/")).text.includes('action="/ticket"'), "DL-29: board shows NO create form when humanWrite disabled");
+
+setHumanWrite(true);
+// AC1/AC3 — same-origin create (postForm sends no Origin ⇒ allowed) → 303 PRG; attributed to operator; reads back.
+const created = await postForm(opd.base, "/ticket", { title: "Human-filed via board", type: "Bug" });
+ok(created.status === 303 && /^\/ticket\/DMN-\d+$/.test(created.location ?? ""), `DL-29 AC1: POST /ticket (enabled, same-origin) → 303 to the new ticket (got ${created.status} ${created.location})`);
+const nid = (created.location ?? "").split("/").pop()!;
+const nt = (await get(`/api/tickets/${nid}`)).body;
+ok(nt.title === "Human-filed via board" && nt.type === "Bug" && nt.state === "Todo", "DL-29: the created ticket reads back (title/type/Todo) via the API + board");
+ok(nt.created_by === "operator", "DL-29 AC3: the web-created ticket is attributed to operator");
+// AC1/AC3 — comment (operator, verbatim body — operator DATA, never parsed).
+ok((await postForm(opd.base, `/ticket/${nid}/comment`, { body: "moving this along" })).status === 303, "DL-29 AC1: POST /ticket/:id/comment → 303");
+const wc = (await get(`/api/tickets/${nid}`)).body;
+ok(wc.comments.length === 1 && wc.comments[0].author === "operator" && wc.comments[0].body === "moving this along", "DL-29 AC3: the comment appears, attributed to operator, body verbatim");
+// AC2 — /move honors the STATES set: a valid move lands; a non-STATES value → 400, no change.
+ok((await postForm(opd.base, `/ticket/${nid}/move`, { state: "In Review" })).status === 303, "DL-29 AC1: POST /ticket/:id/move → 303");
+ok((await get(`/api/tickets/${nid}`)).body.state === "In Review", "DL-29 AC3: the move landed (state=In Review)");
+ok((await postForm(opd.base, `/ticket/${nid}/move`, { state: "Nonsense" })).status === 400, "DL-29 AC2: POST /move with a non-STATES value → 400 (honors the tickets.state CHECK)");
+ok((await get(`/api/tickets/${nid}`)).body.state === "In Review", "DL-29 AC2: the rejected move did NOT change the state");
+// AC1/AC3 — assign a known actor, reject an unknown one, unassign on empty.
+ok((await postForm(opd.base, `/ticket/${nid}/assign`, { assignee: "qa" })).status === 303, "DL-29 AC1: POST /ticket/:id/assign (known actor) → 303");
+ok((await get(`/api/tickets/${nid}`)).body.assignee === "qa", "DL-29 AC3: the assignee landed (qa)");
+ok((await postForm(opd.base, `/ticket/${nid}/assign`, { assignee: "ghost" })).status === 400, "DL-29: assign to an UNKNOWN actor → 400 (guarded, never written)");
+ok((await postForm(opd.base, `/ticket/${nid}/assign`, { assignee: "" })).status === 303 && (await get(`/api/tickets/${nid}`)).body.assignee === null, "DL-29: assign with an empty handle → unassigned (null)");
+// render — the forms appear only when enabled (the dormant flag drives the UI too).
+const tHtml = (await gettext(opd.base, `/ticket/${nid}`)).text;
+ok(tHtml.includes(`action="/ticket/${nid}/comment"`) && tHtml.includes(`action="/ticket/${nid}/move"`) && tHtml.includes(`action="/ticket/${nid}/assign"`), "DL-29: the ticket page renders the comment/move/assign forms when enabled");
+ok((await gettext(opd.base, "/")).text.includes('action="/ticket"'), "DL-29: the board renders the create form when enabled");
+// AC1 — the localhost CSRF / DNS-rebinding guard covers these routes too (reuse the Origin/Host forger).
+const op29Port = Number(new URL(opd.base).port);
+const cbody = new URLSearchParams({ title: "csrf attempt" }).toString();
+ok((await rawPost(op29Port, "/ticket", { origin: "http://evil.example" }, cbody)).status === 403, "DL-29 AC1: cross-origin POST /ticket → 403 (CSRF guard)");
+ok((await rawPost(op29Port, "/ticket", { host: "evil.example" }, cbody)).status === 403, "DL-29 AC1: foreign-Host POST /ticket → 403 (DNS-rebinding guard)");
+const cnt29 = (await get("/api/tickets")).body.length;
+setHumanWrite(false);
+ok((await postForm(opd.base, "/ticket", { title: "should 405 again" })).status === 405, "DL-29 AC1: flipping humanWrite OFF live → POST /ticket → 405 again (per-request flag gate)");
+ok((await get("/api/tickets")).body.length === cnt29, "DL-29: the refused CSRF/rebinding + disabled writes created NO tickets");
+
 await verifier.close();
 opd.close();
 devd.close();
