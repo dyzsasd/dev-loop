@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { z } from "zod";
 import { openDb, nowIso, nextTicketId, logEvent, actorExists, listActorHandles, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { ensureActors, ensureProject, findProject } from "./seed.ts";
-import { sendVia, pollVia, type Provider, type OutboundMsg, type InboundMsg, type Creds } from "./channel.ts";
+import { sendVia, pollVia, getEnabledChannel, resolveCreds, scrubErr, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type OutboundMsg, type InboundMsg, type Creds, type ChannelRow } from "./channel.ts";
 import { findByMarker, createIssue, updateIssue, type MirrorIssue } from "./linear.ts";
 import { DOC_KINDS, resolveDoc, latestVersion, docSave, docPublish } from "./docstore.ts";
 import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
@@ -122,6 +122,38 @@ const resolveAssignee = (a: string | null | undefined): string | null =>
   : a.trim() === "" ? null   // empty/whitespace-only → unassigned (null), never stored verbatim (DL-6)
   : a;
 
+// ─── workflow-config: per-transition assignTo directive (DL-24 / design §10 D1) ──
+// assignee = who-acts-NEXT; the pm/qa owner label stays who-VERIFIES (two orthogonal axes).
+// On a real transition where the caller left assignee implicit, an optional per-edge directive in
+// projects.settings_json may materialize the next assignee. OFF by default: no workflow block ⇒
+// resolveAssignTo returns null everywhere ⇒ no implicit write ⇒ byte-identical to pre-feature.
+const ownerHandleOf = (labels: string[]): string | null =>
+  labels.includes("pm") ? "pm" : labels.includes("qa") ? "qa" : null; // null = the "—" sentinel ⇒ fail-closed
+function loadTransitions(): Record<string, { assignTo?: string | null }> {
+  try {
+    const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
+    const s = row?.settings_json ? JSON.parse(row.settings_json) : {};
+    const tr = s?.workflow?.transitions;
+    return tr && typeof tr === "object" ? tr : {};
+  } catch { return {}; } // malformed config ⇒ treated as absent (fail-open), never bricks a write
+}
+// Resolve the assignTo directive for a from→to edge to a concrete handle, or null = leave untouched.
+// owner→ownerHandleOf(labels) ("—" ⇒ untouched); self→ACTOR; "<handle>"→validated; null/absent→untouched.
+function resolveAssignTo(from: string, to: string, labels: string[]): string | null {
+  const dir = loadTransitions()[`${from}->${to}`];
+  if (!dir || dir.assignTo === undefined || dir.assignTo === null) return null;
+  const v = dir.assignTo;
+  if (v === "owner") {
+    const o = ownerHandleOf(labels);
+    if (!o) console.error(`[assignTo] ${from}->${to}: owner directive but ticket has no pm/qa label — assignee left untouched`);
+    return o;
+  }
+  if (v === "self") return ACTOR;
+  if (actorExists(db, v)) return v;
+  console.error(`[assignTo] ${from}->${to}: unknown handle '${v}' — assignee left untouched`);
+  return null;
+}
+
 const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 
 // ─── whoami ──────────────────────────────────────────────────────────────────
@@ -202,10 +234,16 @@ server.registerTool("save_issue", {
         ? JSON.stringify([...new Set([...(JSON.parse(cur.related_to) as string[]), ...a.relatedTo])])
         : cur.related_to,
     };
+    // DL-24: per-transition assignTo directive — only on a real transition AND when the caller left
+    // assignee implicit (an explicit assignee always wins). OFF unless settings_json declares the edge.
+    if (next.state !== cur.state && a.assignee === undefined) {
+      const resolved = resolveAssignTo(cur.state, next.state, JSON.parse(next.labels) as string[]);
+      if (resolved !== null) next.assignee = resolved; // null = leave untouched (no directive / "—" sentinel / unknown handle)
+    }
     db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
       .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, next.duplicate_of, next.related_to, t, a.id, projectId);
     if (next.state !== cur.state)
-      logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.transition", data: { from: cur.state, to: next.state } });
+      logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.transition", data: { from: cur.state, to: next.state, assignee: next.assignee } });
     else
       logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.update", data: {} });
     db.exec("COMMIT");
@@ -440,31 +478,17 @@ server.registerTool("topic.close", {
 // ─── P6 IM channel — provider-agnostic two-way plane (poll-based, NO daemon) ──────
 // §16: secrets live ONLY in env (config_ref/secret_ref are env-var NAMES); the hub reads them
 // server-side, builds the §16 allow-listed message, posts/polls — the token NEVER returns/logs.
-const CHANNEL_DRYRUN = process.env.DEVLOOP_CHANNEL_DRYRUN === "1"; // test/offline: build + cursor logic, no network
+// channel selection / cred resolution / gating / scrubErr now live in channel.ts (shared with the
+// daemon's Human-Blocked notifier so the two send paths can't drift, DL-26).
 let channelSendsThisProcess = 0;                                  // loop-safety cap (a buggy/injected Director can't spam)
-const CHANNEL_SEND_CAP = 60;
 const INBOX_GC_DAYS = 14;
-
-interface ChannelRow {
-  id: string; project_id: string; provider: string; config_ref: string; secret_ref: string | null;
-  channel_ref: string; inbound_cursor: string | null; last_poll_at: string | null; enabled: number;
-}
-const getChannel = (): ChannelRow | undefined =>
-  db.prepare("SELECT * FROM channels WHERE project_id=? AND enabled=1 ORDER BY created_at LIMIT 1").get(projectId) as ChannelRow | undefined;
-const resolveCreds = (c: ChannelRow): Creds =>
-  c.provider === "slack"
-    ? { token: process.env[c.config_ref] }
-    : { appId: process.env[c.config_ref], appSecret: c.secret_ref ? process.env[c.secret_ref] : undefined };
+const getChannel = (): ChannelRow | undefined => getEnabledChannel(db, projectId);
 // strip control chars + truncate — outbound text never carries raw bytes that could break a payload (§16/§9 step 1)
 const clean = (s: string, max: number): string => s.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, max);
 // §16 (Codex review): a *Ref is an ENV-VAR NAME, never a literal secret. Reject anything that isn't an
 // env-name shape, and anything that looks like an actual token — so a caller can't persist a secret to the DB.
 const TOKEN_PREFIXES = /^(xox[abp]-|lin_api_|lin_oauth_|sk-|ghp_|Bearer\s)/i;
 const isEnvName = (s: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) && !TOKEN_PREFIXES.test(s) && s.length <= 100;
-// defense-in-depth (Codex review): before persisting/returning a provider error, redact anything
-// token-shaped + bound the length — even though channel.ts/linear.ts already construct secret-free messages.
-const scrubErr = (m: string): string =>
-  m.replace(/\b(xox[abp]-[\w-]+|lin_(?:api|oauth)_[\w-]+|sk-[\w-]+|ghp_[\w-]+|eyJ[\w.-]{20,})\b/g, "***").slice(0, 120);
 
 server.registerTool("channel.register", {
   description: "Idempotently register/update this project's IM channel from config. Stores ONLY the ENV-VAR NAMES (configRef = bot token / lark app_id; secretRef = lark app_secret) + the room id — NEVER a token/secret.",
