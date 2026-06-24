@@ -122,6 +122,38 @@ const resolveAssignee = (a: string | null | undefined): string | null =>
   : a.trim() === "" ? null   // empty/whitespace-only → unassigned (null), never stored verbatim (DL-6)
   : a;
 
+// ─── workflow-config: per-transition assignTo directive (DL-24 / design §10 D1) ──
+// assignee = who-acts-NEXT; the pm/qa owner label stays who-VERIFIES (two orthogonal axes).
+// On a real transition where the caller left assignee implicit, an optional per-edge directive in
+// projects.settings_json may materialize the next assignee. OFF by default: no workflow block ⇒
+// resolveAssignTo returns null everywhere ⇒ no implicit write ⇒ byte-identical to pre-feature.
+const ownerHandleOf = (labels: string[]): string | null =>
+  labels.includes("pm") ? "pm" : labels.includes("qa") ? "qa" : null; // null = the "—" sentinel ⇒ fail-closed
+function loadTransitions(): Record<string, { assignTo?: string | null }> {
+  try {
+    const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
+    const s = row?.settings_json ? JSON.parse(row.settings_json) : {};
+    const tr = s?.workflow?.transitions;
+    return tr && typeof tr === "object" ? tr : {};
+  } catch { return {}; } // malformed config ⇒ treated as absent (fail-open), never bricks a write
+}
+// Resolve the assignTo directive for a from→to edge to a concrete handle, or null = leave untouched.
+// owner→ownerHandleOf(labels) ("—" ⇒ untouched); self→ACTOR; "<handle>"→validated; null/absent→untouched.
+function resolveAssignTo(from: string, to: string, labels: string[]): string | null {
+  const dir = loadTransitions()[`${from}->${to}`];
+  if (!dir || dir.assignTo === undefined || dir.assignTo === null) return null;
+  const v = dir.assignTo;
+  if (v === "owner") {
+    const o = ownerHandleOf(labels);
+    if (!o) console.error(`[assignTo] ${from}->${to}: owner directive but ticket has no pm/qa label — assignee left untouched`);
+    return o;
+  }
+  if (v === "self") return ACTOR;
+  if (actorExists(db, v)) return v;
+  console.error(`[assignTo] ${from}->${to}: unknown handle '${v}' — assignee left untouched`);
+  return null;
+}
+
 const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 
 // ─── whoami ──────────────────────────────────────────────────────────────────
@@ -202,10 +234,16 @@ server.registerTool("save_issue", {
         ? JSON.stringify([...new Set([...(JSON.parse(cur.related_to) as string[]), ...a.relatedTo])])
         : cur.related_to,
     };
+    // DL-24: per-transition assignTo directive — only on a real transition AND when the caller left
+    // assignee implicit (an explicit assignee always wins). OFF unless settings_json declares the edge.
+    if (next.state !== cur.state && a.assignee === undefined) {
+      const resolved = resolveAssignTo(cur.state, next.state, JSON.parse(next.labels) as string[]);
+      if (resolved !== null) next.assignee = resolved; // null = leave untouched (no directive / "—" sentinel / unknown handle)
+    }
     db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
       .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, next.duplicate_of, next.related_to, t, a.id, projectId);
     if (next.state !== cur.state)
-      logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.transition", data: { from: cur.state, to: next.state } });
+      logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.transition", data: { from: cur.state, to: next.state, assignee: next.assignee } });
     else
       logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.update", data: {} });
     db.exec("COMMIT");
