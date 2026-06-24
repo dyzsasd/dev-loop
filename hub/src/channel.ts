@@ -32,6 +32,28 @@ export const resolveCreds = (c: ChannelRow): Creds =>
     : c.provider === "slack"
       ? { token: process.env[c.config_ref] }
       : { appId: process.env[c.config_ref], appSecret: c.secret_ref ? process.env[c.secret_ref] : undefined };
+// DL-59: the §9 one-way `notify` webhook (from projects.json) as a send TARGET the daemon's Human-Blocked
+// notifier can fire over the DL-52 'webhook' transport — closing the L2 leak where the daemon resolved ONLY
+// the DB `channels` table, so a `service` project configured with ONLY a §9 notify webhook (no registered bot
+// channel) got NO human-park alert. §16: the URL (+ the optional Lark sign-secret) are read HERE, server-side,
+// from the notify block — a literal (machine-local config, e.g. MonPick's) OR an env-var NAME (`webhookEnv`/
+// `secretEnv`, the §16-preferred form) — and NEVER touch the DB / a log / a returned value. A `webhookEnv`
+// whose env is unset resolves to `undefined`, so the send fails closed (sendWebhook throws "webhook url unset")
+// — exactly the §9 fail-closed-and-retry. Only slack/lark providers; the notify webhook is one-way.
+export interface NotifyTarget { provider: Provider; creds: Creds; }
+export function resolveNotifyWebhook(notify: unknown): NotifyTarget | null {
+  if (!notify || typeof notify !== "object") return null;
+  const n = notify as { type?: unknown; webhook?: unknown; webhookEnv?: unknown; secret?: unknown; secretEnv?: unknown; events?: unknown };
+  const provider: Provider | null = n.type === "slack" ? "slack" : n.type === "lark" ? "lark" : null;
+  if (!provider) return null;                                                       // only slack/lark webhooks
+  if (Array.isArray(n.events) && !n.events.includes("human-parked")) return null;   // operator scoped this event out (§9 events)
+  if (typeof n.webhook !== "string" && typeof n.webhookEnv !== "string") return null; // no webhook configured ⇒ not a target
+  const webhookUrl = typeof n.webhook === "string" ? n.webhook
+    : typeof n.webhookEnv === "string" ? process.env[n.webhookEnv] : undefined;     // env unset ⇒ undefined ⇒ fail closed at send
+  const signSecret = typeof n.secret === "string" ? n.secret
+    : typeof n.secretEnv === "string" ? process.env[n.secretEnv] : undefined;
+  return { provider, creds: { webhookUrl, signSecret } };
+}
 // redact anything token-shaped + bound the length before any provider error is persisted/returned/logged.
 export const scrubErr = (m: string): string =>
   m.replace(/\b(xox[abp]-[\w-]+|lin_(?:api|oauth)_[\w-]+|sk-[\w-]+|ghp_[\w-]+|eyJ[\w.-]{20,})\b/g, "***").slice(0, 120);

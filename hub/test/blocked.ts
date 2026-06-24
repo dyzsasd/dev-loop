@@ -5,7 +5,7 @@
 // The live cases inject a stub fetchImpl (no network); the dry-run case runs in a CHILD process
 // because DEVLOOP_CHANNEL_DRYRUN is read once at channel.ts import time.
 import { openDb } from "../src/db.ts";
-import { blockedNotifyTick } from "../src/daemon.ts";
+import { blockedNotifyTick, startBlockedNotifier } from "../src/daemon.ts";
 import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import type { FetchImpl } from "../src/channel.ts";
@@ -142,6 +142,84 @@ const base = (db: ReturnType<typeof openDb>) =>
   ok(res.markers === 0 && res.fetched === false, "DL-52/DL-34: a webhook channel under dry-run → NO network call, NO marker (write-free)");
   ok(res.previewHasWebhook && res.previewHasId, "DL-52: the dry-run preview names the transport (webhook) + the ticket id (the intended POST)");
   clean(WDB);
+}
+
+// ── DL-59: the §9 `notify` webhook (projects.json) is the daemon notifier's FALLBACK when no DB channel ──
+// exists — closes the L2 leak where a `service` project with ONLY a notify webhook got NO human-park alert.
+{
+  // webhook-only: no registered DB channel, a §9 notify block (slack literal webhook) → the notifier POSTs to it
+  const db = seed("/tmp/dl-blk-notify-only.db", 1);
+  db.prepare("DELETE FROM channels").run(); // ONLY the §9 notify webhook, no DB channel
+  const cap: { url: string; body: string }[] = [];
+  const capFetch: FetchImpl = (async (url, init) => { cap.push({ url: String(url), body: String((init as { body?: string })?.body ?? "") }); return { status: 200, json: async () => ({}) } as unknown as Response; }) as FetchImpl;
+  const n = await blockedNotifyTick({ ...base(db), nowMs: Date.now(), fetchImpl: capFetch, notify: { type: "slack", webhook: "https://hooks.test/notify-9" } });
+  ok(n === 1 && cap.length === 1 && cap[0].url === "https://hooks.test/notify-9", "DL-59: notify-only project (no DB channel) → the daemon fires the §9 notify webhook (L2 closed; was a true no-op)");
+  ok(JSON.parse(cap[0].body).text.includes("HB0") && evc(db) === 1, "DL-59: the §9 notify webhook carries the one-line (ticket id) + the marker is written on success");
+  db.close();
+}
+{
+  // BOTH a DB bot channel AND a §9 notify webhook → exactly ONE send (the DB channel wins), never a double-send
+  const db = seed("/tmp/dl-blk-both.db", 1); // seed() leaves an enabled slack BOT channel (config_ref TESTTOK)
+  const cap: string[] = [];
+  const capFetch: FetchImpl = (async (url) => { cap.push(String(url)); return { status: 200, json: async () => ({ ok: true }) } as unknown as Response; }) as FetchImpl;
+  const n = await blockedNotifyTick({ ...base(db), nowMs: Date.now(), fetchImpl: capFetch, notify: { type: "slack", webhook: "https://hooks.test/SHOULD-NOT-FIRE" } });
+  ok(n === 1 && cap.length === 1, "DL-59: both a DB channel AND a §9 notify webhook → exactly ONE send (no double-send)");
+  ok(cap[0].includes("slack.com/api/chat.postMessage") && !cap.some((u) => u.includes("SHOULD-NOT-FIRE")) && evc(db) === 1, "DL-59: the DB channel takes precedence (bot API hit; the §9 notify webhook NOT fired)");
+  db.close();
+}
+{
+  // a §9 notify webhook whose URL env-var is UNSET → fails closed (no POST, no marker; retried next tick)
+  const db = seed("/tmp/dl-blk-notify-unset.db", 1);
+  db.prepare("DELETE FROM channels").run();
+  let called = false;
+  const noFetch: FetchImpl = (async () => { called = true; return { status: 200, json: async () => ({}) } as unknown as Response; }) as FetchImpl;
+  const n = await blockedNotifyTick({ ...base(db), nowMs: Date.now(), fetchImpl: noFetch, notify: { type: "slack", webhookEnv: "DEFINITELY_UNSET_NOTIFY_ENV" } });
+  ok(n === 0 && !called && evc(db) === 0, "DL-59: a §9 notify webhook with an unset URL env → fails closed (no POST, no marker — retried next tick)");
+  db.close();
+}
+{
+  // a notify block with NO webhook source + no DB channel → true no-op; and the startBlockedNotifier guard
+  const db = seed("/tmp/dl-blk-notify-empty.db", 1);
+  db.prepare("DELETE FROM channels").run();
+  const n = await blockedNotifyTick({ ...base(db), nowMs: Date.now(), notify: { type: "slack" } });
+  ok(n === 0, "DL-59: a notify block with no webhook source + no DB channel → true no-op");
+  db.prepare("DELETE FROM tickets").run(); // 0 HB tickets ⇒ the immediate tick has nothing to send…
+  // …and the §9 webhook rides an UNSET env, so even a future stray HB ticket fails closed BEFORE any network
+  // (startBlockedNotifier threads no fetchImpl into its immediate run(), which would otherwise use real fetch).
+  const t1 = startBlockedNotifier({ writeDb: db, projectId: "p", projectKey: "k", baseUrl: "http://127.0.0.1:8787", cadenceHours: 1, notify: { type: "slack", webhookEnv: "DEFINITELY_UNSET_NOTIFY_ENV" } });
+  ok(t1 !== null, "DL-59: startBlockedNotifier starts the timer for a notify-only project (a resolvable §9 webhook, no DB channel)");
+  if (t1) clearInterval(t1);
+  const t2 = startBlockedNotifier({ writeDb: db, projectId: "p", projectKey: "k", baseUrl: "http://127.0.0.1:8787", cadenceHours: 1, notify: undefined });
+  ok(t2 === null, "DL-59: startBlockedNotifier is a true no-op when neither a DB channel nor a §9 notify webhook exists");
+  if (t2) clearInterval(t2);
+  db.close();
+}
+{
+  // dry-run: a notify-only project previews (no network, no marker) — DL-34 write-free class. Child process
+  // because DEVLOOP_CHANNEL_DRYRUN is read once at channel.ts import.
+  const NDB = "/tmp/dl-blk-notify-dry.db";
+  clean(NDB);
+  const childNotifyDry = `
+    import { openDb } from "${CWD}/src/db.ts";
+    import { blockedNotifyTick } from "${CWD}/src/daemon.ts";
+    const db = openDb(process.env.DDB);
+    db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','k','n','t')").run();
+    db.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('HB','p','t','Human-Blocked',0,'[]','[]','pm','t','t')").run();
+    let preview = "", fetched = false;
+    const origErr = console.error; console.error = (m) => { preview += String(m) + "\\n"; };
+    const f = async () => { fetched = true; return { status: 200, json: async () => ({}) }; };
+    const n = await blockedNotifyTick({ writeDb: db, projectId: "p", projectKey: "k", baseUrl: "http://127.0.0.1:8787", cadenceMs: 3600000, nowMs: Date.now(), fetchImpl: f, notify: { type: "slack", webhook: "https://hooks.test/notify-dry" } });
+    console.error = origErr;
+    const markers = db.prepare("SELECT count(*) c FROM events WHERE kind='human_blocked.notified'").get().c;
+    console.log(JSON.stringify({ n, fetched, markers, previewHasNotify: preview.includes("§9 notify"), previewHasId: preview.includes("HB") }));
+    db.close();
+  `;
+  const out = execFileSync("node", ["--input-type=module", "-e", childNotifyDry],
+    { env: { ...process.env, DDB: NDB, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
+  const res = JSON.parse(out.trim().split("\n").pop() as string);
+  ok(res.markers === 0 && res.fetched === false, "DL-59/DL-34: a notify-only project under dry-run → NO network, NO marker (write-free)");
+  ok(res.previewHasNotify && res.previewHasId, "DL-59: the dry-run preview names the §9 notify target + the ticket id");
+  clean(NDB);
 }
 
 console.log(fails === 0 ? "\nBLOCKED_OK" : `\n${fails} CHECK(S) FAILED`);

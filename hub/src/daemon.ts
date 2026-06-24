@@ -27,7 +27,7 @@ import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts"
 import { resolveDoc, docSave, docPublish } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket, type WriteResult } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
-import { getEnabledChannel, resolveCreds, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Transport, type FetchImpl } from "./channel.ts";
+import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Transport, type FetchImpl } from "./channel.ts";
 
 export interface DaemonOpts {
   db: DatabaseSync;          // read connection (PRAGMA query_only=ON) — every GET route reads through this
@@ -884,11 +884,20 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
 // query_only read connection. Absent a channel OR humanBlockedReminderHours≤0 ⇒ no timer (true no-op).
 export async function blockedNotifyTick(opts: {
   writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
-  cadenceMs: number; nowMs: number; fetchImpl?: FetchImpl;
+  cadenceMs: number; nowMs: number; fetchImpl?: FetchImpl; notify?: unknown;
 }): Promise<number> {
   const { writeDb, projectId, projectKey, baseUrl, cadenceMs, nowMs } = opts;
-  const ch = getEnabledChannel(writeDb, projectId);
-  if (!ch) return 0; // channel removed/disabled since startup ⇒ nothing to do
+  // DL-59: resolve ONE send target. The DB `channels` row (getEnabledChannel) takes PRECEDENCE so a project
+  // with a registered bot/webhook channel is byte-for-byte unchanged; the §9 `notify` webhook (projects.json,
+  // resolveNotifyWebhook) is the FALLBACK that closes the L2 leak (a notify-only project previously got NO
+  // alert — a true no-op here). Choosing exactly one target means a project configured with BOTH can never
+  // double-send the same park (the AC's no-double-send), at no extra marker/state cost.
+  const dbCh = getEnabledChannel(writeDb, projectId);
+  const nt = dbCh ? null : resolveNotifyWebhook(opts.notify);
+  if (!dbCh && !nt) return 0; // no DB channel AND no §9 notify webhook ⇒ nothing to do (true no-op)
+  const target = dbCh
+    ? { provider: dbCh.provider as Provider, creds: resolveCreds(dbCh), channelRef: dbCh.channel_ref, transport: (dbCh.transport as Transport) ?? "bot", label: `${dbCh.provider}/${dbCh.transport ?? "bot"}` }
+    : { provider: nt!.provider, creds: nt!.creds, channelRef: "", transport: "webhook" as Transport, label: `${nt!.provider}/webhook (§9 notify)` };
   const rows = writeDb.prepare(
     "SELECT id,title FROM tickets WHERE project_id=? AND state='Human-Blocked' ORDER BY updated_at",
   ).all(projectId) as { id: string; title: string }[];
@@ -912,13 +921,14 @@ export async function blockedNotifyTick(opts: {
         // event — so a later LIVE tick on the same DB still fires the first real ping, and the
         // events ledger never gains a phantom "notified" that never sent. DL-52: the preview names the
         // channel type (provider/transport) + the §16-safe message line — never the webhook URL/secret.
-        console.error(`[daemon] [dry-run] would notify human-blocked ${t.id} via ${ch.provider}/${ch.transport ?? "bot"}: ${line}`);
+        console.error(`[daemon] [dry-run] would notify human-blocked ${t.id} via ${target.label}: ${line}`);
       } else {
-        // DL-52: pass the channel's transport — a 'webhook' channel pings the incoming-webhook URL (no bot
-        // app); 'bot'/absent ⇒ the existing provider-API send, unchanged. blockedNotifyTick's OWN logic
-        // (due-ness, the DL-33 per-tick cap, the marker) is untouched — it just threads transport through.
-        await sendVia(ch.provider as Provider, resolveCreds(ch), ch.channel_ref, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, (ch.transport as Transport) ?? "bot");
-        logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: "human_blocked.notified", data: { provider: ch.provider } }); // marker ONLY on a real send
+        // DL-52/DL-59: pass the resolved target's transport — a 'webhook' target (a DB webhook channel OR the
+        // §9 notify webhook) pings the incoming-webhook URL (no bot app); a 'bot' DB channel ⇒ the provider-API
+        // send, unchanged. blockedNotifyTick's OWN logic (due-ness, the DL-33 per-tick cap, the marker) is
+        // untouched — it just threads the chosen target through (one send + one marker per due ticket).
+        await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+        logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: "human_blocked.notified", data: { provider: target.provider } }); // marker ONLY on a real send
       }
       sent++;
     } catch (e) {
@@ -931,10 +941,12 @@ export async function blockedNotifyTick(opts: {
 
 export function startBlockedNotifier(opts: {
   writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
-  cadenceHours: number; tickMs?: number;
+  cadenceHours: number; tickMs?: number; notify?: unknown;
 }): ReturnType<typeof setInterval> | null {
   if (!(opts.cadenceHours > 0)) return null;                          // disabled
-  if (!getEnabledChannel(opts.writeDb, opts.projectId)) return null;  // no channel ⇒ true no-op
+  // DL-59: start if EITHER a registered DB channel OR the §9 `notify` webhook is configured — a notify-only
+  // project must no longer be a no-op. `notify` flows through `...opts` into each blockedNotifyTick run.
+  if (!getEnabledChannel(opts.writeDb, opts.projectId) && !resolveNotifyWebhook(opts.notify)) return null; // neither ⇒ true no-op
   const cadenceMs = opts.cadenceHours * 3_600_000;
   const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_BLOCKED_TICK_MS) || 60_000);
   const run = () => { void blockedNotifyTick({ ...opts, cadenceMs, nowMs: Date.now() }); };
@@ -1252,12 +1264,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const row = writeDb.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
     cadenceHours = Number(JSON.parse(row?.settings_json ?? "{}")?.humanBlockedReminderHours) || 0;
   } catch { cadenceHours = 0; }
+  // DL-59: also resolve the §9 `notify` webhook (projects.json) so a project with ONLY a notify webhook (no
+  // registered bot/webhook channel) still receives Human-Blocked reminders — the daemon is the single emitter
+  // on `service`. §16: the block stays in config/env; the daemon reads it but never writes it to the DB.
+  let notify: unknown;
+  try { notify = (loadProjectsConfig()?.projects?.[PROJECT_KEY] as { notify?: unknown } | undefined)?.notify; } catch { notify = undefined; }
   server.listen(PORT, HOST, () => {
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : PORT;
     console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${HOST}:${port}/  (reads read-only; /roadmap editable, localhost-only)`);
     // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
-    const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, cadenceHours });
-    if (notifier) console.log(`[daemon] Human-Blocked notifier active (every ${cadenceHours}h via the configured channel)`);
+    const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, cadenceHours, notify });
+    if (notifier) console.log(`[daemon] Human-Blocked notifier active (every ${cadenceHours}h via the configured channel / §9 notify webhook)`);
   });
 }
