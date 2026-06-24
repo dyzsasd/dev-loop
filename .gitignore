@@ -10,9 +10,10 @@ node_modules/
 # *.db rules above miss them). The real fix removed the nested default from the templates; this is
 # belt-and-suspenders so such a stray — any ${...}-literal path — can never be committed.
 ${*
-# hub daemon lifecycle runfile (DL-41): machine-local pid/port, never committed (defaults to ~/.dev-loop,
-# but covered here in case an operator points DEVLOOP_RUN_DIR/DEVLOOP_HUB_DB inside the repo)
+# hub daemon lifecycle runfile (DL-41) + cold-start lock (DL-46): machine-local pid/port, never committed
+# (defaults to ~/.dev-loop, but covered here in case an operator points DEVLOOP_RUN_DIR/DEVLOOP_HUB_DB into the repo)
 daemon-*.json
+daemon-*.lock*
 # user-editable runtime config lives in ${CLAUDE_PLUGIN_DATA}, not in the repo
 projects.json
 # self-hosting: machine-local MCP registration (abs paths); the committed template is config/mcp.example.json
