@@ -438,7 +438,10 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   `query_only` db (no new table, no write route). **Deliberately parked rather than filed** — it overlaps
   the same `boardPage()` surface as the filed DL-20 (filter/search) and is convenience polish at the
   current ~16-ticket scale; file it (or fold it into DL-20's implementation) when the board grows or
-  DL-20 lands. Buildable when filed — no §17/§22 gate.
+  DL-20 lands. Buildable when filed — no §17/§22 gate. **UPDATE 2026-06-24: gate opened — DL-20 verified
+  Done and the board grew ~16→44, so this is no longer DL-20-overlapping polish at a small scale. Confirmed
+  not built (`boardPage()` still renders per-column counts only, daemon.ts:245). Filed as DL-45** (Improvement,
+  pm, Low; read-only aggregate over the existing rows, respects DL-20 filters + DL-31 swimlanes).
 - **Web-UI header nav: active-surface highlight (consistency lens, PM 2026-06-23 — marginal, parked).**
   Highlight the current surface in the header nav (board / roadmap / reports / the DL-17 `/activity`).
   Cosmetic parity polish with no observe/steer payoff — fold into a future nav pass alongside the
