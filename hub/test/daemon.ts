@@ -147,6 +147,21 @@ ok(root.status === 200 && root.body.project === "dmn" && root.body.endpoints.inc
 const health = await get("/api/health");
 ok(health.status === 200 && health.body.ok === true && health.body.project === "dmn", "GET /api/health → ok:true for the project");
 
+// ── DL-41: /api/health is a REAL DB-writable liveness check, NOT a static {ok:true} — a bound-but-wedged
+// daemon (write connection dead → SoR unwritable) reads NOT healthy (503), so the lifecycle up/status
+// recover it instead of no-op'ing onto a dead process. Uses a throwaway writable daemon we then wedge.
+const hwrite = openDb(DB);
+const hread = openDb(DB); hread.exec("PRAGMA query_only=ON");
+const hsrv = createDaemon({ db: hread, projectId, projectKey: "dmn", writeDb: hwrite, actor: "operator" });
+hsrv.listen(0, "127.0.0.1"); await once(hsrv, "listening");
+const hbase = `http://127.0.0.1:${(hsrv.address() as { port: number }).port}`;
+const hLive = await fetch(hbase + "/api/health"); const hLiveBody = await hLive.json();
+ok(hLive.status === 200 && hLiveBody.ok === true, "DL-41: /api/health → 200 ok:true while the SoR is writable (a real read+write probe, not a static 200)");
+hwrite.close();                       // simulate a bound-but-wedged daemon: its write connection is dead
+const hWedged = await fetch(hbase + "/api/health"); const hWedgedBody = await hWedged.json().catch(() => ({}));
+ok(hWedged.status === 503 && hWedgedBody.ok === false, "DL-41: a wedged (unwritable) SoR → /api/health 503 ok:false (lifecycle then reclaims it)");
+hsrv.close(); hread.close();
+
 // GET /api/tickets — full board
 const all = await get("/api/tickets");
 const featCard = all.body.find((t: any) => t.id === feat.id);

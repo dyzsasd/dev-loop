@@ -14,13 +14,16 @@
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
+import { createServer as netCreateServer } from "node:net";
+import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { pathToFileURL } from "node:url";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { readdirSync, readFileSync, statSync, writeFileSync, unlinkSync, mkdirSync, openSync, closeSync, renameSync } from "node:fs";
+import { join, resolve, sep, dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, logEvent, STATES } from "./db.ts";
 import { findProject } from "./seed.ts";
+import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { resolveDoc, docSave, docPublish } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket, type WriteResult } from "./ticketwrite.ts";
 import { getEnabledChannel, resolveCreds, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type FetchImpl } from "./channel.ts";
@@ -61,6 +64,31 @@ function htmlOut(res: ServerResponse, status: number, body: string): void {
     "cache-control": "no-store",
   });
   res.end(body);
+}
+
+// DL-41: a REAL `/api/health` liveness check — NOT a static {ok:true}. Proves the SoR is reachable (a
+// trivial read) AND writable (acquire+release the RESERVED write lock without mutating), so a
+// bound-but-wedged daemon (port open, but DB gone/corrupt/readonly/disk-full/closed) reads as NOT
+// healthy and the lifecycle's `up`/`status` (which probe this endpoint) recover it instead of no-op'ing
+// onto a dead process. A read-only daemon (no writeDb) verifies reachability only — it has no write
+// surface to probe. §16-safe: no mutation persists (BEGIN IMMEDIATE → ROLLBACK), errors are scrubbed.
+function healthLiveness(db: DatabaseSync, writeDb?: DatabaseSync): { ok: boolean; error?: string } {
+  try {
+    db.prepare("SELECT 1").get(); // read liveness: the connection + DB file are reachable & not corrupt
+    if (writeDb) {
+      // BEGIN IMMEDIATE takes the reserved write lock; ROLLBACK releases it — nothing persists. A
+      // SQLITE_BUSY means another writer holds it ⇒ the SoR IS writable (just momentarily contended) ⇒
+      // healthy; only a non-busy error (readonly fs / corrupt / disk-full / closed handle) is a real wedge.
+      try { writeDb.exec("BEGIN IMMEDIATE; ROLLBACK;"); }
+      catch (e) {
+        try { writeDb.exec("ROLLBACK"); } catch { /* no open txn to undo */ }
+        if (!/busy|locked/i.test(String((e as Error)?.message ?? e))) throw e;
+      }
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: scrubErr(String((e as Error)?.message ?? e)) };
+  }
 }
 
 // ─── tiny inline web UI (DL-2): server-rendered, read-only, zero build step ───
@@ -703,8 +731,12 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
         });
       }
 
-      // GET /api/health — liveness.
-      if (path === "/api/health") return json(res, 200, { ok: true, project: projectKey });
+      // GET /api/health — a REAL DB-writable liveness check (DL-41), not a static 200: a bound-but-wedged
+      // daemon (SoR unreadable/unwritable) returns 503 ok:false so the lifecycle `up`/`status` recover it.
+      if (path === "/api/health") {
+        const h = healthLiveness(db, writeDb);
+        return json(res, h.ok ? 200 : 503, h.ok ? { ok: true, project: projectKey } : { ok: false, project: projectKey, error: h.error });
+      }
 
       // GET /api/tickets — board, project-scoped (§2), filter by state/type/label/assignee (+ optional limit).
       if (path === "/api/tickets") {
@@ -822,6 +854,185 @@ export function startBlockedNotifier(opts: {
   timer.unref?.();  // never keep the process alive solely for the notifier
   run();            // immediate first tick — a fresh park is announced without waiting a full interval
   return timer;
+}
+
+// ─── DL-41: idempotent per-project daemon lifecycle (up | down | status) ──────────────────────────
+// A thin, additive wrapper around the SAME foreground boot below. `up` resolves the project (cwd or
+// DEVLOOP_PROJECT), picks a stable per-project port, and spawns THIS file detached so the web UI
+// survives the launching shell; `down`/`status` operate on a machine-local runfile. Designed so the
+// DL-42 SessionStart hook can call `up` unconditionally: a non-service / unresolved project is a clean
+// no-op + exit 0, and a second `up` never double-starts. The foreground boot path (`npm run daemon`)
+// is NOT touched by any of this — the lifecycle dispatch is a separate top-level branch that exits
+// before the foreground `if` is reached.
+interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; }
+
+// The runfile lives next to the hub DB (machine-local, never committed — ~/.dev-loop by default), one
+// file per project so distinct projects never clobber each other. DEVLOOP_RUN_DIR overrides for tests.
+function lcDbPath(): string { return process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`; }
+function lcRunDir(): string { return process.env.DEVLOOP_RUN_DIR ?? dirname(lcDbPath()); }
+function lcRunfile(key: string): string { return join(lcRunDir(), `daemon-${key}.json`); }
+function lcReadRun(key: string): RunInfo | null {
+  try { return JSON.parse(readFileSync(lcRunfile(key), "utf8")) as RunInfo; } catch { return null; }
+}
+function lcWriteRun(info: RunInfo): void {
+  mkdirSync(lcRunDir(), { recursive: true });
+  const f = lcRunfile(info.project), tmp = `${f}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(info, null, 2));
+  renameSync(tmp, f); // atomic replace (§11 atomic-write discipline) — a partial write never yields invalid JSON
+}
+function lcRemoveRun(key: string): void { try { unlinkSync(lcRunfile(key)); } catch { /* already gone */ } }
+
+// A stable, deterministic per-project port (FNV-1a of the key → a fixed high port) so the URL is the
+// same across restarts even before a runfile exists; probed for freeness at `up` time so a hash
+// collision between two projects just shifts the loser to the next free port (then records it).
+function lcPortFor(key: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return 20000 + (h % 20000); // 20000–39999: clear of the registered-port crush and the 8787 default
+}
+function lcIsAlive(pid: number): boolean {
+  if (!pid || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; }
+}
+// Stop a pid gracefully: SIGTERM, wait up to graceMs, then escalate to SIGKILL so a wedged/slow daemon
+// is never leaked. Shared by `down` and `up`'s reclaim + failed-spawn paths (one shutdown semantics).
+async function lcStop(pid: number, graceMs = 3000): Promise<void> {
+  if (!lcIsAlive(pid)) return;
+  try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline && lcIsAlive(pid)) await new Promise((r) => setTimeout(r, 100));
+  if (lcIsAlive(pid)) { try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ } }
+}
+function lcTryBind(port: number, host: string): Promise<boolean> {
+  return new Promise((res) => {
+    const s = netCreateServer();
+    s.once("error", () => res(false));
+    s.listen(port, host, () => s.close(() => res(true)));
+  });
+}
+async function lcFreePort(start: number, host: string, tries = 64): Promise<number> {
+  for (let i = 0; i < tries; i++) {
+    const p = start + i;
+    if (p > 65535) break;
+    if (await lcTryBind(p, host)) return p;
+  }
+  return start; // give up probing — the spawned daemon will surface EADDRINUSE loudly rather than silently
+}
+async function lcProbe(url: string, key: string, timeoutMs = 1000): Promise<boolean> {
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
+    if (r.status !== 200) return false;
+    const b = (await r.json().catch(() => null)) as { ok?: boolean; project?: string } | null;
+    return !!b && b.ok === true && b.project === key; // confirm it's OUR project on that port, not a stranger
+  } catch { return false; }
+}
+async function lcWaitHealthy(url: string, key: string, totalMs = 8000): Promise<boolean> {
+  const deadline = Date.now() + totalMs;
+  while (Date.now() < deadline) {
+    if (await lcProbe(url, key, 800)) return true;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return false;
+}
+// Resolve the project key like the MCP server / DL-13 launcher: explicit DEVLOOP_PROJECT wins; else
+// match cwd against the configured repo paths. null ⇒ unresolved (the caller no-ops, never guesses).
+function lcResolveKey(): string | null {
+  const explicit = process.env.DEVLOOP_PROJECT?.trim();
+  if (explicit) return explicit; // parity with server.ts:22 — a present-but-empty/whitespace value is NOT a key
+  const cfg = loadProjectsConfig();
+  return cfg ? resolveProjectFromCwd(process.cwd(), cfg) : null;
+}
+
+async function daemonUp(): Promise<number> {
+  const key = lcResolveKey();
+  if (!key) { console.log("[daemon] up: no project resolved from cwd and DEVLOOP_PROJECT is unset — nothing to start."); return 0; }
+  // Serveable ⇔ seeded in the hub DB. A non-service / unknown project is never in the hub ⇒ clean no-op.
+  const dbPath = lcDbPath();
+  let serveable = false;
+  try { const probe = openDb(dbPath); try { serveable = !!findProject(probe, key); } finally { probe.close(); } } catch { serveable = false; }
+  if (!serveable) { console.log(`[daemon] up: '${key}' is not a service-backend hub project (not seeded) — nothing to start.`); return 0; }
+
+  const host = "127.0.0.1"; // §16 localhost-only
+  const existing = lcReadRun(key);
+  if (existing && lcIsAlive(existing.pid)) {
+    if (await lcProbe(existing.url, key)) { console.log(`[daemon] up: already running for '${key}' → ${existing.url} (pid ${existing.pid})`); return 0; }
+    // alive but not answering /api/health (now a real DB-writable probe) — a bound-but-wedged daemon;
+    // fully stop it (SIGTERM→SIGKILL) so we cleanly restart on its port rather than no-op onto a dead one.
+    await lcStop(existing.pid);
+  }
+  // port: explicit env override > recorded (stable across restarts) > deterministic; probe for free.
+  const envPort = process.env.DEVLOOP_DAEMON_PORT ? Number(process.env.DEVLOOP_DAEMON_PORT) : 0;
+  const port = envPort > 0 ? envPort : await lcFreePort(existing?.port || lcPortFor(key), host);
+  const url = `http://${host}:${port}`;
+
+  const self = fileURLToPath(import.meta.url);
+  mkdirSync(lcRunDir(), { recursive: true });
+  const logFd = openSync(join(lcRunDir(), `daemon-${key}.log`), "a");
+  const child = spawn(process.execPath, [self], {
+    detached: true,                                   // survive the launching session (DL-42 hook)
+    stdio: ["ignore", logFd, logFd],
+    env: { ...process.env, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
+  });
+  child.unref();
+  closeSync(logFd);
+  if (!child.pid) { console.error("[daemon] up: failed to spawn the daemon process."); return 1; }
+
+  if (!(await lcWaitHealthy(url, key))) {
+    console.error(`[daemon] up: spawned daemon for '${key}' did not become healthy at ${url} (see ${join(lcRunDir(), `daemon-${key}.log`)}).`);
+    await lcStop(child.pid); // never leak a slow/wedged child — escalate to SIGKILL if SIGTERM doesn't take
+    return 1;
+  }
+  lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString() });
+  console.log(`[daemon] up: started '${key}' → ${url} (pid ${child.pid})`);
+  return 0;
+}
+
+async function daemonDown(): Promise<number> {
+  const key = lcResolveKey();
+  if (!key) { console.log("[daemon] down: no project resolved — nothing to stop."); return 0; }
+  const info = lcReadRun(key);
+  if (!info) { console.log(`[daemon] down: no daemon recorded for '${key}'.`); return 0; }
+  if (lcIsAlive(info.pid)) {
+    await lcStop(info.pid); // SIGTERM→SIGKILL; stops a wedged daemon too (down must work even when unhealthy)
+    console.log(`[daemon] down: stopped '${key}' (pid ${info.pid}).`);
+  } else {
+    console.log(`[daemon] down: '${key}' was not running (stale runfile cleared).`);
+  }
+  lcRemoveRun(key);
+  return 0;
+}
+
+async function daemonStatus(): Promise<number> {
+  const key = lcResolveKey();
+  if (!key) { console.log("[daemon] status: no project resolved (DEVLOOP_PROJECT unset, cwd outside every repo)."); return 0; }
+  const info = lcReadRun(key);
+  if (info && lcIsAlive(info.pid) && (await lcProbe(info.url, key))) {
+    console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid})`);
+    return 0;
+  }
+  if (info && !lcIsAlive(info.pid)) lcRemoveRun(key); // a dead pid must never read as "running" — clear it
+  console.log(`[daemon] status: '${key}' stopped.`);
+  return 0;
+}
+
+// Exported so the `dev-loop-hub` bin (server.ts) can delegate `dev-loop-hub daemon <sub>` to the SAME
+// lifecycle (the named command the DL-42 hook invokes). Importing daemon.ts is side-effect-free: both
+// CLI `if` blocks below key on argv[1]===daemon.ts, which is false when server.ts is the entry point.
+// `ensure` is an accepted alias for `up` (the design's `daemon ensure` — idempotent one-per-project start).
+export type LifecycleSub = "up" | "ensure" | "down" | "status";
+export const LIFECYCLE_SUBS: readonly LifecycleSub[] = ["up", "ensure", "down", "status"];
+export async function daemonLifecycle(sub: LifecycleSub): Promise<void> {
+  const code = sub === "up" || sub === "ensure" ? await daemonUp() : sub === "down" ? await daemonDown() : await daemonStatus();
+  process.exit(code);
+}
+
+// DL-41 dispatch — a lifecycle subcommand handles itself and exits; ANY other invocation (incl. the
+// bare `npm run daemon`) falls through to today's foreground boot below, byte-for-byte unchanged.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+    && LIFECYCLE_SUBS.includes(process.argv[2] as LifecycleSub)) {
+  await daemonLifecycle(process.argv[2] as LifecycleSub); // calls process.exit — never returns
 }
 
 // ─── CLI entry: `npm run daemon` — open db, resolve project (same guard as the MCP server), listen ──

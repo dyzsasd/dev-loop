@@ -45,11 +45,44 @@ Environment (same contract as the MCP server, `docs/RUNNING.md`):
 |---|---|---|
 | `DEVLOOP_PROJECT` | the project to serve (must already exist) | `demo` |
 | `DEVLOOP_HUB_DB` | path to the hub SQLite db | `~/.dev-loop/hub.db` |
-| `DEVLOOP_DAEMON_PORT` | listen port | `8787` |
+| `DEVLOOP_DAEMON_PORT` | listen port (the foreground boot; also forces `daemon up`'s port when set) | `8787` foreground / a stable per-project port for `daemon up` |
 | `DEVLOOP_ACTOR` | identity that **attributes** daemon writes and gates roadmap **publish** (only `operator` may publish; any other known actor gets drafts only). Must be a known actor or the daemon refuses to start the write surface. | `operator` |
+| `DEVLOOP_RUN_DIR` | dir for the `daemon up` runfile + log (DL-41) | the hub DB's dir (`~/.dev-loop`) |
 
 The daemon refuses to serve a project that hasn't been seeded (start the hub once, or
 `node src/seed.ts <key> "<name>" <PREFIX>`) — it never auto-creates a board.
+
+### Managed lifecycle — `daemon up | down | status` (DL-41)
+
+For a hands-off / auto-started web UI, the daemon has an **idempotent per-project lifecycle**
+(additive — `npm run daemon`, the foreground boot above, is unchanged):
+
+```sh
+cd hub
+DEVLOOP_PROJECT=<project-key> node src/daemon.ts up      # or: node src/server.ts daemon up  (`ensure` is an alias for `up`)
+# → [daemon] up: started '<project-key>' → http://127.0.0.1:<port>  (pid …)
+node src/daemon.ts status                                # → RUNNING → <url> (pid …)  | stopped
+node src/daemon.ts down                                  # → stops this project's daemon, clears the runfile
+```
+
+- **Project resolution.** `DEVLOOP_PROJECT` wins (trimmed; an empty/whitespace value is treated as
+  unset, matching the MCP server); otherwise the project is resolved from the cwd (the DL-13 matcher).
+  A **non-service / unresolved / unseeded** project is a clean **no-op + exit 0** (never an error) — so
+  an unconditional auto-start hook (DL-42) is safe. `ensure` is an accepted alias for `up`.
+- **Real liveness, not a port ping.** `up`/`status` probe **`GET /api/health`**, which is a real
+  **DB-writable** liveness check (a trivial read + acquire/release of the reserved write lock, no
+  mutation) — so a **bound-but-wedged** daemon (port open, SoR unreadable/unwritable) returns `503`
+  and is treated as NOT running: `up` reclaims it instead of no-op'ing onto a dead process.
+- **One daemon per project, stable port.** `up` records `{pid, port, url}` in a machine-local
+  runfile `<DEVLOOP_RUN_DIR>/daemon-<project>.json` (default `~/.dev-loop/`, never committed) and
+  serves on a **deterministic per-project port** (20000–39999, derived from the key, probed free),
+  so distinct projects never collide and the URL is **stable across restarts**.
+- **Never double-starts.** A second `up` while a healthy daemon is already listening is a no-op
+  that prints the existing URL. A **stale** runfile (its pid is dead) never reads as running — `up`
+  cleanly restarts, `status`/`down` report stopped.
+- **Detached + localhost-only.** `up` spawns the daemon **detached** so it survives the launching
+  shell, bound to **127.0.0.1 only** (§16). Both `node src/daemon.ts up` and the bin form
+  `dev-loop-hub daemon up` (via `src/server.ts`) drive the same lifecycle.
 
 ## Read endpoints
 

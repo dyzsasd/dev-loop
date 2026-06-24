@@ -73,6 +73,20 @@ if (process.argv[2] === "identity-check") {
   process.exit(pass ? 0 : 1);
 }
 
+// `dev-loop-hub daemon <up|down|status>` — DL-41 per-project daemon lifecycle (the named command the
+// DL-42 auto-start hook invokes). Delegated to daemon.ts; importing it is side-effect-free here (its CLI
+// guards key on argv[1]===daemon.ts, false when server.ts is the entry), so the MCP boot path below is
+// 100% untouched — the bare `dev-loop-hub` (argv[2] undefined) skips straight past this block.
+if (process.argv[2] === "daemon") {
+  const { daemonLifecycle, LIFECYCLE_SUBS } = await import("./daemon.ts");
+  const sub = process.argv[3] ?? "";
+  if (!(LIFECYCLE_SUBS as readonly string[]).includes(sub)) {
+    console.error(`[hub] usage: dev-loop-hub daemon <${LIFECYCLE_SUBS.join("|")}> (got '${sub || "—"}')`);
+    process.exit(2);
+  }
+  await daemonLifecycle(sub as (typeof LIFECYCLE_SUBS)[number]); // resolves project from env/cwd; calls process.exit
+}
+
 const db = openDb(DB_PATH);
 ensureActors(db); // the 8 agents + operator are always present (needed for attribution + the guard below)
 
