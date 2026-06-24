@@ -882,6 +882,56 @@ function lcWriteRun(info: RunInfo): void {
 }
 function lcRemoveRun(key: string): void { try { unlinkSync(lcRunfile(key)); } catch { /* already gone */ } }
 
+// DL-46: a per-project cold-start lock. Two near-simultaneous `up`s otherwise both spawn a daemon, and the
+// loser's health probe is answered by the WINNER on the SAME url — so both believe they started and both
+// write the runfile (last-writer-wins records the loser's now-dead pid, orphaning the live winner; `down`
+// then can't stop it). Serializing cold start under an O_EXCL lock (the §18 file-lock discipline) makes the
+// second `up` wait, then re-read the runfile INSIDE the lock and find the winner already healthy → clean
+// no-op, no second spawn, no write. Stale-lock recovery (holder dead, or older than staleMs) guarantees a
+// crashed `up` never deadlocks the next one.
+interface LockInfo { pid: number; at: string; }
+function lcLockfile(key: string): string { return join(lcRunDir(), `daemon-${key}.lock`); }
+function lcReadLock(key: string): LockInfo | null {
+  try { return JSON.parse(readFileSync(lcLockfile(key), "utf8")) as LockInfo; } catch { return null; }
+}
+// staleMs MUST exceed daemonUp's worst-case in-lock hold (lcStop ≤3s + lcWaitHealthy ≤8s + probing ≈ ≤15s)
+// so a legitimately-busy live holder is never broken, AND stay well under totalMs so stale-recovery wins
+// before a waiter's own acquire deadline fires (else a pid-reused stale lock is breakable only at the exact
+// instant the waiter gives up). 30s/60s gives ~2× margin on each side.
+async function lcAcquireLock(key: string, totalMs = 60000, staleMs = 30000): Promise<() => void> {
+  const lf = lcLockfile(key);
+  mkdirSync(lcRunDir(), { recursive: true });
+  const deadline = Date.now() + totalMs;
+  for (;;) {
+    try {
+      // `wx` = O_CREAT|O_EXCL|O_WRONLY — the OS guarantees exactly one creator wins (atomic, race-free).
+      writeFileSync(lf, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
+      let released = false;
+      // Ownership-checked release: only remove the lock if it's still OURS. If our hold somehow outlived
+      // staleMs and another `up` broke + re-took it, deleting unconditionally would clobber the NEW owner's
+      // lock and re-admit a concurrent cold start — so re-read and unlink only when the pid is still ours.
+      return () => { if (released) return; released = true; try { if (lcReadLock(key)?.pid === process.pid) unlinkSync(lf); } catch { /* already gone */ } };
+    } catch (e) {
+      if ((e as { code?: string }).code !== "EEXIST") throw e;            // a real fs error, not "held"
+      const h = lcReadLock(key);
+      // Stale ⇔ holder gone, or older than staleMs (a crashed `up`, or a dead holder whose pid got recycled).
+      // `!(age <= staleMs)` (not `age > staleMs`) so a missing/corrupt `at` → NaN → stale (never trust an
+      // unparseable lock to be fresh).
+      const age = h ? Date.now() - Date.parse(h.at) : Infinity;
+      if (!h || !lcIsAlive(h.pid) || !(age <= staleMs)) {
+        // Break ATOMICALLY: rename the stale lock aside — exactly one racer's rename wins; the rest get
+        // ENOENT and just retry. An unlink-then-create break is NOT atomic (two racers could both unlink and
+        // both create, both "acquiring"); the wx-create at the loop top then arbitrates the single winner.
+        const aside = `${lf}.${process.pid}.stale`;
+        try { renameSync(lf, aside); unlinkSync(aside); } catch { /* another racer broke it first */ }
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error(`could not acquire daemon cold-start lock for '${key}' (held by pid ${h.pid})`);
+      await new Promise((r) => setTimeout(r, 100));                       // held by a live, fresh `up` — wait
+    }
+  }
+}
+
 // A stable, deterministic per-project port (FNV-1a of the key → a fixed high port) so the URL is the
 // same across restarts even before a runfile exists; probed for freeness at `up` time so a hash
 // collision between two projects just shifts the loser to the next free port (then records it).
@@ -955,38 +1005,55 @@ async function daemonUp(): Promise<number> {
   if (!serveable) { console.log(`[daemon] up: '${key}' is not a service-backend hub project (not seeded) — nothing to start.`); return 0; }
 
   const host = "127.0.0.1"; // §16 localhost-only
-  const existing = lcReadRun(key);
-  if (existing && lcIsAlive(existing.pid)) {
-    if (await lcProbe(existing.url, key)) { console.log(`[daemon] up: already running for '${key}' → ${existing.url} (pid ${existing.pid})`); return 0; }
-    // alive but not answering /api/health (now a real DB-writable probe) — a bound-but-wedged daemon;
-    // fully stop it (SIGTERM→SIGKILL) so we cleanly restart on its port rather than no-op onto a dead one.
-    await lcStop(existing.pid);
+  // Fast path (lock-free): a healthy daemon is already running ⇒ no-op without taking the lock. This is the
+  // common case (the DL-42 hook fires `up` on every pane, but the daemon is usually already up), so routine
+  // `up`s never serialize on the lock — only an actual cold start does.
+  const pre = lcReadRun(key);
+  if (pre && lcIsAlive(pre.pid) && await lcProbe(pre.url, key)) {
+    console.log(`[daemon] up: already running for '${key}' → ${pre.url} (pid ${pre.pid})`);
+    return 0;
   }
-  // port: explicit env override > recorded (stable across restarts) > deterministic; probe for free.
-  const envPort = process.env.DEVLOOP_DAEMON_PORT ? Number(process.env.DEVLOOP_DAEMON_PORT) : 0;
-  const port = envPort > 0 ? envPort : await lcFreePort(existing?.port || lcPortFor(key), host);
-  const url = `http://${host}:${port}`;
+  // DL-46: serialize cold start under the per-project lock — the second concurrent `up` waits here, then
+  // re-reads the runfile below and no-ops on the winner (no second spawn, no last-writer-wins runfile race).
+  let release: () => void;
+  try { release = await lcAcquireLock(key); }
+  catch (e) { console.error(`[daemon] up: ${(e as Error).message}`); return 1; }
+  try {
+    const existing = lcReadRun(key);
+    if (existing && lcIsAlive(existing.pid)) {
+      if (await lcProbe(existing.url, key)) { console.log(`[daemon] up: already running for '${key}' → ${existing.url} (pid ${existing.pid})`); return 0; }
+      // alive but not answering /api/health (now a real DB-writable probe) — a bound-but-wedged daemon;
+      // fully stop it (SIGTERM→SIGKILL) so we cleanly restart on its port rather than no-op onto a dead one.
+      await lcStop(existing.pid);
+    }
+    // port: explicit env override > recorded (stable across restarts) > deterministic; probe for free.
+    const envPort = process.env.DEVLOOP_DAEMON_PORT ? Number(process.env.DEVLOOP_DAEMON_PORT) : 0;
+    const port = envPort > 0 ? envPort : await lcFreePort(existing?.port || lcPortFor(key), host);
+    const url = `http://${host}:${port}`;
 
-  const self = fileURLToPath(import.meta.url);
-  mkdirSync(lcRunDir(), { recursive: true });
-  const logFd = openSync(join(lcRunDir(), `daemon-${key}.log`), "a");
-  const child = spawn(process.execPath, [self], {
-    detached: true,                                   // survive the launching session (DL-42 hook)
-    stdio: ["ignore", logFd, logFd],
-    env: { ...process.env, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
-  });
-  child.unref();
-  closeSync(logFd);
-  if (!child.pid) { console.error("[daemon] up: failed to spawn the daemon process."); return 1; }
+    const self = fileURLToPath(import.meta.url);
+    mkdirSync(lcRunDir(), { recursive: true });
+    const logFd = openSync(join(lcRunDir(), `daemon-${key}.log`), "a");
+    const child = spawn(process.execPath, [self], {
+      detached: true,                                   // survive the launching session (DL-42 hook)
+      stdio: ["ignore", logFd, logFd],
+      env: { ...process.env, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
+    });
+    child.unref();
+    closeSync(logFd);
+    if (!child.pid) { console.error("[daemon] up: failed to spawn the daemon process."); return 1; }
 
-  if (!(await lcWaitHealthy(url, key))) {
-    console.error(`[daemon] up: spawned daemon for '${key}' did not become healthy at ${url} (see ${join(lcRunDir(), `daemon-${key}.log`)}).`);
-    await lcStop(child.pid); // never leak a slow/wedged child — escalate to SIGKILL if SIGTERM doesn't take
-    return 1;
+    if (!(await lcWaitHealthy(url, key))) {
+      console.error(`[daemon] up: spawned daemon for '${key}' did not become healthy at ${url} (see ${join(lcRunDir(), `daemon-${key}.log`)}).`);
+      await lcStop(child.pid); // never leak a slow/wedged child — escalate to SIGKILL if SIGTERM doesn't take
+      return 1;
+    }
+    lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString() });
+    console.log(`[daemon] up: started '${key}' → ${url} (pid ${child.pid})`);
+    return 0;
+  } finally {
+    release();
   }
-  lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString() });
-  console.log(`[daemon] up: started '${key}' → ${url} (pid ${child.pid})`);
-  return 0;
 }
 
 async function daemonDown(): Promise<number> {
