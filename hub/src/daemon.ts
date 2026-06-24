@@ -19,9 +19,10 @@ import { pathToFileURL } from "node:url";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { openDb, actorExists, logEvent } from "./db.ts";
+import { openDb, actorExists, logEvent, STATES } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { resolveDoc, docSave, docPublish } from "./docstore.ts";
+import { createTicket, addComment, moveTicket, assignTicket, type WriteResult } from "./ticketwrite.ts";
 import { getEnabledChannel, resolveCreds, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type FetchImpl } from "./channel.ts";
 
 export interface DaemonOpts {
@@ -150,7 +151,7 @@ const FILTER_KEYS = ["state", "type", "label", "assignee", "q"] as const;
 // Board: tickets grouped into state columns. Core workflow columns always render (even empty);
 // Backlog/Canceled/Duplicate and any other state show only when populated, terminals last. DL-20 adds
 // optional server-side filter/search (from the GET / query string) + a clearable, deep-linkable control row.
-function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filters: BoardFilters = {}): string {
+function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filters: BoardFilters = {}, canWrite = false): string {
   let tickets = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
   const f = filters;
   // mirror /api/tickets: each present (non-empty) filter narrows the set; q matches id/title, case-insensitive
@@ -189,11 +190,19 @@ function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filt
   const empty = tickets.length === 0
     ? (active.length ? `<p class="empty">No tickets match the active filters.</p>` : `<p class="empty">No tickets in ${esc(projectKey)} yet.</p>`)
     : "";
-  return controls + `<div class="board">${cols}</div>` + empty;
+  // DL-29: opt-in "new ticket" form (only when humanWrite is enabled — gated upstream). POST → the daemon
+  // create route, then PRG to the new ticket. esc() the option values (our own constants, but uniform).
+  const newForm = canWrite
+    ? `<form class="newticket" method="post" action="/ticket">`
+      + `<input type="text" name="title" placeholder="New ticket title" required spellcheck="false">`
+      + `<select name="type"><option>Feature</option><option>Bug</option><option>Improvement</option></select>`
+      + `<button type="submit">+ New ticket</button></form>`
+    : "";
+  return controls + newForm + `<div class="board">${cols}</div>` + empty;
 }
 
 // Ticket detail: full description + comments. Returns null when the ticket is absent (→ 404).
-function ticketPage(db: DatabaseSync, projectId: string, id: string): string | null {
+function ticketPage(db: DatabaseSync, projectId: string, id: string, canWrite = false): string | null {
   const r = db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as Record<string, any> | undefined;
   if (!r) return null;
   const t = toTicket(r);
@@ -215,7 +224,17 @@ function ticketPage(db: DatabaseSync, projectId: string, id: string): string | n
     + `<dt>Created</dt><dd>${esc(t.created_at)}</dd><dt>Updated</dt><dd>${esc(t.updated_at)}</dd>`  // DL-16
     + `<dt>Labels</dt><dd>${t.labels.map((l: string) => `<span class="lbl">${esc(l)}</span>`).join("")}</dd>${relatedRow}${dupRow}</dl>`
     + `<h3>Description</h3><div class="doc">${renderMarkdown(t.description)}</div>`  // DL-16: rendered markdown (XSS-safe via renderMarkdown), not raw <pre>
-    + `<h3>Comments<span class="count" style="margin-left:.4rem">${comments.length}</span></h3>${commentsHtml}</article>`;
+    + `<h3>Comments<span class="count" style="margin-left:.4rem">${comments.length}</span></h3>${commentsHtml}`
+    // DL-29: opt-in human actions (only when humanWrite is enabled — gated upstream). Each POSTs to a
+    // daemon write route then PRG-redirects back here. All interpolated values esc()'d; comment/assignee
+    // are operator DATA (stored verbatim, never parsed). Move offers the STATES set, current pre-selected.
+    + (canWrite
+      ? `<h3>Actions</h3>`
+        + `<form class="act" method="post" action="/ticket/${encodeURIComponent(id)}/comment"><textarea name="body" rows="3" placeholder="Add a comment" required spellcheck="false"></textarea><button type="submit">Comment</button></form>`
+        + `<form class="act" method="post" action="/ticket/${encodeURIComponent(id)}/move"><select name="state">${STATES.map((s) => `<option${s === t.state ? " selected" : ""}>${esc(s)}</option>`).join("")}</select><button type="submit">Move</button></form>`
+        + `<form class="act" method="post" action="/ticket/${encodeURIComponent(id)}/assign"><input type="text" name="assignee" value="${esc(t.assignee ?? "")}" placeholder="assignee handle (blank = unassign)" spellcheck="false"><button type="submit">Assign</button></form>`
+      : "")
+    + `</article>`;
 }
 
 // Defensively decode a single URL path segment. A malformed / incomplete percent-escape
@@ -383,6 +402,42 @@ async function handleRoadmapWrite(action: "save" | "publish", req: IncomingMessa
   return r.ok ? redirect(res, "/roadmap") : rerender(r.error); // non-operator → 403; missing version → 404
 }
 
+// ─── DL-29: opt-in human web-write surface (design §11 subsystem D) ──────────────────────────────
+// POST /ticket (create) · /ticket/:id/comment · /ticket/:id/move · /ticket/:id/assign. Present ONLY when
+// a write connection + actor exist (canWrite) AND settings_json.humanWrite.enabled is true. Read FRESH per
+// request so the operator can flip the flag without a daemon restart. Absent/false ⇒ these POSTs are NOT
+// matched and fall through to the read-only 405 (byte-identical to today). The same localhost CSRF /
+// DNS-rebinding guard as /roadmap/* (writeOriginOk) runs BEFORE any write.
+function humanWriteEnabled(db: DatabaseSync, projectId: string): boolean {
+  try {
+    const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
+    return JSON.parse(row?.settings_json ?? "{}")?.humanWrite?.enabled === true;
+  } catch { return false; }
+}
+function isTicketWriteRoute(seg: string[]): boolean {
+  return (seg.length === 1 && seg[0] === "ticket")
+    || (seg.length === 3 && seg[0] === "ticket" && (seg[2] === "comment" || seg[2] === "move" || seg[2] === "assign"));
+}
+async function handleTicketWrite(seg: string[], req: IncomingMessage, res: ServerResponse, writeDb: DatabaseSync, projectId: string, actor: string): Promise<void> {
+  let form: URLSearchParams;
+  try { form = await parseFormBody(req); }
+  catch (e) { if (!res.headersSent && !res.destroyed) json(res, 400, { error: (e as Error).message }); return; }
+  const send = (r: WriteResult, location: string) =>
+    r.ok ? redirect(res, location) : json(res, r.status, { error: r.error });
+
+  if (seg.length === 1) { // POST /ticket — create, then PRG to the new ticket
+    const r = createTicket(writeDb, projectId, actor, { title: form.get("title") ?? "", description: form.get("description") ?? undefined, type: form.get("type") ?? undefined });
+    return send(r, r.ok ? `/ticket/${encodeURIComponent(r.id)}` : "");
+  }
+  const id = decodeSeg(seg[1]);
+  if (id === null) return json(res, 400, { error: "malformed percent-escape in path" });
+  const back = `/ticket/${encodeURIComponent(id)}`;
+  const verb = seg[2];
+  if (verb === "comment") return send(addComment(writeDb, projectId, actor, id, form.get("body") ?? ""), back);
+  if (verb === "move") return send(moveTicket(writeDb, projectId, actor, id, form.get("state") ?? ""), back);
+  return send(assignTicket(writeDb, projectId, actor, id, form.get("assignee") ?? ""), back);
+}
+
 // ── DL-10: agent reports view (read-only, FILESYSTEM source — separate from the hub DB) ──────────
 // The §22 reports tree is machine-local markdown. Resolve its root: DEVLOOP_REPORTS_DIR if set, else the
 // FIRST EXISTING of a few candidates (the on-disk layout varies — both <data>/<project>/reports and a
@@ -533,6 +588,14 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
         await handleRoadmapWrite(path === "/roadmap/save" ? "save" : "publish", req, res, db, writeDb!, projectId, projectKey, actor!);
         return;
       }
+      // DL-29: opt-in human ticket-write routes — present ONLY when canWrite AND humanWrite.enabled. When
+      // disabled (or absent), these POSTs are NOT matched and fall through to the 405 below (byte-identical
+      // read-only). Origin/Host guard runs BEFORE any write, exactly like /roadmap/*.
+      if (method === "POST" && canWrite && humanWriteEnabled(db, projectId) && isTicketWriteRoute(seg)) {
+        if (!writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
+        await handleTicketWrite(seg, req, res, writeDb!, projectId, actor!);
+        return;
+      }
       // READ-ONLY for everything else: any other non-GET is refused — the read surface never mutates (DL-1 AC).
       if (method !== "GET" && method !== "HEAD") {
         return json(res, 405, { error: "read-only daemon: only GET is allowed" });
@@ -543,7 +606,7 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
       if (path === "/") {
         const sp = url.searchParams;
         const filters = { state: sp.get("state") ?? undefined, type: sp.get("type") ?? undefined, label: sp.get("label") ?? undefined, assignee: sp.get("assignee") ?? undefined, q: sp.get("q") ?? undefined };
-        return htmlOut(res, 200, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, filters)));
+        return htmlOut(res, 200, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, filters, canWrite && humanWriteEnabled(db, projectId))));
       }
 
       // GET /roadmap — the roadmap doc view + edit form (+ operator-only publish) (DL-3).
@@ -575,7 +638,7 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
       if (seg[0] === "ticket" && seg.length === 2) {
         const id = decodeSeg(seg[1]);
         if (id === null) return json(res, 400, { error: "malformed percent-escape in path" });
-        const inner = ticketPage(db, projectId, id);
+        const inner = ticketPage(db, projectId, id, canWrite && humanWriteEnabled(db, projectId));
         if (!inner) return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="/">← board</a><p class="empty">No ticket ${esc(id)} in ${esc(projectKey)}.</p>`));
         return htmlOut(res, 200, page(`${id} · ${projectKey}`, projectKey, inner));
       }
