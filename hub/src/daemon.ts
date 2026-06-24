@@ -888,24 +888,46 @@ function lcRemoveRun(key: string): void { try { unlinkSync(lcRunfile(key)); } ca
 // then can't stop it). Serializing cold start under an O_EXCL lock (the §18 file-lock discipline) makes the
 // second `up` wait, then re-read the runfile INSIDE the lock and find the winner already healthy → clean
 // no-op, no second spawn, no write. Stale-lock recovery (holder dead, or older than staleMs) guarantees a
-// crashed `up` never deadlocks the next one.
+// crashed `up` never deadlocks the next one. DL-51: that stale-break is itself serialized under a break-mutex
+// (see lcAcquireLock) so concurrent breakers can't re-admit a 2nd cold start by clobbering a fresh lock.
 interface LockInfo { pid: number; at: string; }
 function lcLockfile(key: string): string { return join(lcRunDir(), `daemon-${key}.lock`); }
-function lcReadLock(key: string): LockInfo | null {
-  try { return JSON.parse(readFileSync(lcLockfile(key), "utf8")) as LockInfo; } catch { return null; }
+function lcReadLockAt(path: string): LockInfo | null {
+  try { return JSON.parse(readFileSync(path, "utf8")) as LockInfo; } catch { return null; }
 }
+function lcReadLock(key: string): LockInfo | null { return lcReadLockAt(lcLockfile(key)); }
 // staleMs MUST exceed daemonUp's worst-case in-lock hold (lcStop ≤3s + lcWaitHealthy ≤8s + probing ≈ ≤15s)
 // so a legitimately-busy live holder is never broken, AND stay well under totalMs so stale-recovery wins
 // before a waiter's own acquire deadline fires (else a pid-reused stale lock is breakable only at the exact
 // instant the waiter gives up). 30s/60s gives ~2× margin on each side.
 async function lcAcquireLock(key: string, totalMs = 60000, staleMs = 30000): Promise<() => void> {
   const lf = lcLockfile(key);
+  const bf = `${lf}.break`; // DL-51: a dedicated O_EXCL break-mutex that serializes stale-lock breaking (below)
   mkdirSync(lcRunDir(), { recursive: true });
   const deadline = Date.now() + totalMs;
+  const stamp = (): string => JSON.stringify({ pid: process.pid, at: new Date().toISOString() });
+  // Stale ⇔ holder gone, or older than staleMs (a crashed `up`, or a dead holder whose pid got recycled).
+  // `!(age <= staleMs)` (not `age > staleMs`) so a missing/corrupt `at` → NaN → stale (never trust an
+  // unparseable lock to be fresh). A dead pid reads stale immediately (no need to wait out staleMs).
+  const isStale = (h: LockInfo | null): boolean => {
+    const age = h ? Date.now() - Date.parse(h.at) : Infinity;
+    return !h || !lcIsAlive(h.pid) || !(age <= staleMs);
+  };
+  // Throw once we've waited out totalMs on a LIVE holder/breaker. A stale lock is always broken (the break
+  // path below is never deadline-gated), so a recoverable stale lock present at the deadline is cleared and
+  // acquired, not reported as a hard failure (preserving the pre-DL-51 break-past-the-deadline behavior).
+  const checkDeadline = (): void => {
+    if (Date.now() < deadline) return;
+    const h = lcReadLock(key);
+    throw new Error(`could not acquire daemon cold-start lock for '${key}'${h ? ` (held by pid ${h.pid})` : ""}`);
+  };
   for (;;) {
     try {
       // `wx` = O_CREAT|O_EXCL|O_WRONLY — the OS guarantees exactly one creator wins (atomic, race-free).
-      writeFileSync(lf, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
+      // This wx-create is the SINGLE arbiter of who acquires: the stale-break below only ever REMOVES a
+      // stale lock so a wx-create can proceed — it never itself grants ownership — so two racers can never
+      // both acquire, even if both decide to break.
+      writeFileSync(lf, stamp(), { flag: "wx" });
       let released = false;
       // Ownership-checked release: only remove the lock if it's still OURS. If our hold somehow outlived
       // staleMs and another `up` broke + re-took it, deleting unconditionally would clobber the NEW owner's
@@ -913,21 +935,28 @@ async function lcAcquireLock(key: string, totalMs = 60000, staleMs = 30000): Pro
       return () => { if (released) return; released = true; try { if (lcReadLock(key)?.pid === process.pid) unlinkSync(lf); } catch { /* already gone */ } };
     } catch (e) {
       if ((e as { code?: string }).code !== "EEXIST") throw e;            // a real fs error, not "held"
-      const h = lcReadLock(key);
-      // Stale ⇔ holder gone, or older than staleMs (a crashed `up`, or a dead holder whose pid got recycled).
-      // `!(age <= staleMs)` (not `age > staleMs`) so a missing/corrupt `at` → NaN → stale (never trust an
-      // unparseable lock to be fresh).
-      const age = h ? Date.now() - Date.parse(h.at) : Infinity;
-      if (!h || !lcIsAlive(h.pid) || !(age <= staleMs)) {
-        // Break ATOMICALLY: rename the stale lock aside — exactly one racer's rename wins; the rest get
-        // ENOENT and just retry. An unlink-then-create break is NOT atomic (two racers could both unlink and
-        // both create, both "acquiring"); the wx-create at the loop top then arbitrates the single winner.
-        const aside = `${lf}.${process.pid}.stale`;
-        try { renameSync(lf, aside); unlinkSync(aside); } catch { /* another racer broke it first */ }
-        continue;
+      if (!isStale(lcReadLock(key))) { checkDeadline(); await new Promise((r) => setTimeout(r, 100)); continue; } // live, fresh `up` — wait
+      // DL-51 — break a stale lock under a dedicated O_EXCL break-mutex. Breaking lf directly is a TOCTOU that
+      // re-admits a 2nd cold start (the DL-46 orphan): two `up`s both read the OLD lock stale; one breaks it and
+      // wx-creates a FRESH lock, and the other's path-keyed remove (which cannot say "only if STILL the stale
+      // one") then clobbers that VALID lock. Under the mutex exactly ONE racer breaks at a time and re-confirms
+      // staleness while holding it: while `lf` exists nobody can wx-create over it and only the mutex-holder
+      // removes it, so this read→remove only ever deletes a STILL-stale lock; a fresh lock is left intact. The
+      // top-of-loop wx-create stays the SOLE arbiter of acquisition, so a break can never itself admit a second.
+      try {
+        writeFileSync(bf, stamp(), { flag: "wx" });                       // sole breaker
+        try { if (isStale(lcReadLock(key))) { try { unlinkSync(lf); } catch { /* already gone */ } } }
+        // Ownership-checked release (mirrors the lf release): only unlink bf if it's still OURS, so we never
+        // clobber a mutex a racer legitimately re-took (the same hazard the lf release guards against).
+        finally { try { if (lcReadLockAt(bf)?.pid === process.pid) unlinkSync(bf); } catch { /* already released */ } }
+      } catch (be) {
+        if ((be as { code?: string }).code !== "EEXIST") throw be;
+        // Another racer holds the break-mutex: clear a dead/stale breaker (a crash mid-break can't wedge the
+        // next `up`); wait out a live breaker (it holds the mutex for only a couple of fs ops).
+        if (isStale(lcReadLockAt(bf))) { try { unlinkSync(bf); } catch { /* already gone */ } }
+        else { checkDeadline(); await new Promise((r) => setTimeout(r, 100)); }
       }
-      if (Date.now() >= deadline) throw new Error(`could not acquire daemon cold-start lock for '${key}' (held by pid ${h.pid})`);
-      await new Promise((r) => setTimeout(r, 100));                       // held by a live, fresh `up` — wait
+      // loop: the stale lock (if any) is now gone → the wx-create at the top arbitrates the single acquirer.
     }
   }
 }
