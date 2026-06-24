@@ -645,8 +645,6 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
 // the events ledger, so a daemon restart never double-sends and needs no counter. This is the daemon's
 // ONE write to the SoR (the human_blocked.notified event), done via the writable `writeDb`, NEVER the
 // query_only read connection. Absent a channel OR humanBlockedReminderHours≤0 ⇒ no timer (true no-op).
-let blockedSendsThisProcess = 0; // per-process loop-safety cap (mirrors the MCP server's channel cap)
-
 export async function blockedNotifyTick(opts: {
   writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
   cadenceMs: number; nowMs: number; fetchImpl?: FetchImpl;
@@ -657,10 +655,13 @@ export async function blockedNotifyTick(opts: {
   const rows = writeDb.prepare(
     "SELECT id,title FROM tickets WHERE project_id=? AND state='Human-Blocked' ORDER BY updated_at",
   ).all(projectId) as { id: string; title: string }[];
+  // DL-33: PER-TICK loop-safety cap — `sent` resets every invocation, so a long-running daemon never
+  // goes permanently silent (a per-PROCESS counter would become a lifetime ceiling on this persistent
+  // process, unlike the MCP server's short-lived per-fire process).
   let sent = 0;
   for (const t of rows) {
-    if (blockedSendsThisProcess >= CHANNEL_SEND_CAP) break; // loop-safety throttle
-    // Stateless due-ness: the last human_blocked.notified event for this ticket. None ⇒ first ping (due now).
+    if (sent >= CHANNEL_SEND_CAP) break; // bound sends THIS tick only (resets next tick)
+    // Stateless due-ness: the last REAL human_blocked.notified event. None ⇒ first ping (due now).
     const last = writeDb.prepare(
       "SELECT MAX(created_at) m FROM events WHERE ticket_id=? AND kind='human_blocked.notified'",
     ).get(t.id) as { m: string | null };
@@ -670,13 +671,15 @@ export async function blockedNotifyTick(opts: {
     const line = `[${projectKey}] human-blocked: ${t.id} ${cleanLine(t.title, 80)} · ${baseUrl}/ticket/${t.id}`;
     try {
       if (CHANNEL_DRYRUN) {
-        // build + mark (no network) so the cadence throttle is exercised without spamming every tick
-        logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: "human_blocked.notified", data: { provider: ch.provider, dryrun: true } });
+        // DL-34: dry-run is WRITE-FREE (the DL-11 invariant) — preview only, NO marker / NO ledger
+        // event — so a later LIVE tick on the same DB still fires the first real ping, and the
+        // events ledger never gains a phantom "notified" that never sent.
+        console.error(`[daemon] [dry-run] would notify human-blocked ${t.id}`);
       } else {
         await sendVia(ch.provider as Provider, resolveCreds(ch), ch.channel_ref, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch);
-        logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: "human_blocked.notified", data: { provider: ch.provider } });
+        logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: "human_blocked.notified", data: { provider: ch.provider } }); // marker ONLY on a real send
       }
-      blockedSendsThisProcess++; sent++;
+      sent++;
     } catch (e) {
       // id-only log, NO marker written ⇒ retried next tick (never echo the secret/body)
       console.error(`[daemon] human-blocked notify failed for ${t.id}: ${scrubErr((e as Error).message)}`);
