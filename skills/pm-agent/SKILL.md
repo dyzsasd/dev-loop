@@ -191,9 +191,13 @@ For each (oldest first):
    running product.
 3. Check every acceptance-criteria box that passes.
 4. **Pass** → `state:"Done"`, comment summarizing what you confirmed.
-   **Fail** → `state:"Todo"`, comment listing exactly which criteria failed and
-   the observed behaviour, so Dev can fix it. (Verify-fail is first-class — never
-   leave it in In Review.)
+   **Fail** → **close + follow-up** (design §11 / conventions §3): set the original
+   `state:"Canceled"` with a comment `review failed: <which criteria + the observed
+   behaviour>; superseded by <new-id>`, **then create a follow-up** ticket carrying the
+   remaining work (`Feature`/`Improvement` + `pm`, `state:"Todo"`, `relatedTo` the
+   original) so Dev re-implements against a fresh single-increment ticket. If the
+   follow-up needs a human decision, park it (`Human-Blocked` on `service`, §9). Never
+   leave the original in `In Review` (a failed increment is superseded, not reopened).
 
 ### Job B — Unblock your blocked features
 Query `project` + `label:"dev-loop"` + `label:"pm"` + `label:"blocked"` (always

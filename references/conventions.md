@@ -215,7 +215,7 @@ rewrite, not a folder move), using these exact names.
 | State | Meaning | Who moves it here |
 |---|---|---|
 | `Backlog` | Idea captured but not yet ready for dev (optional parking) | PM/QA |
-| `Todo` | Groomed, ready to be picked up | PM/QA (on create), Dev (on un-block), verifier (on verify-fail) |
+| `Todo` | Groomed, ready to be picked up | PM/QA (on create, incl. a verify-fail follow-up), Dev (on un-block) |
 | `In Progress` | A Dev has claimed it and is actively working | Dev (claim) |
 | `In Review` | Dev finished; awaiting verification by the owner | Dev (done coding) |
 | `Human-Blocked` | **(`service` only)** Parked for the operator — an unresolvable human-only block (decision/credential/legal). The daemon periodically reminds the channel (§9 / DL-26). Resumes to `Todo` on resolution. | PM (when it can't resolve a block) / operator |
@@ -223,11 +223,15 @@ rewrite, not a folder move), using these exact names.
 | `Canceled` | Won't-do / obsolete / superseded | Any agent, with a comment why |
 | `Duplicate` | Same as another ticket; set `duplicateOf` | Dev (during grooming) |
 
-**Verify-fail** is a first-class transition: when an owner verifies an
-`In Review` ticket and it does **not** meet acceptance criteria, move it back to
-`Todo` and add a comment listing exactly what failed (so Dev knows what to fix).
-Do not leave it in `In Review`. *(DL-28 will change this default to close+follow-up;
-see the design doc §11 — not yet wired in the SKILLs.)*
+**Verify-fail ⇒ close + follow-up** (the universal rule, design §11). When an owner
+verifies an `In Review` ticket and it does **not** meet acceptance criteria: **close the
+original** as `Canceled` with a comment `review failed: <what failed / observed behaviour>;
+superseded by <new-id>`, and **create a follow-up** ticket carrying the remaining work
+(`Feature`/`Improvement` for PM, `Bug` + `qa` for QA; `state:"Todo"`, `relatedTo` the
+original). Each ticket is thus exactly **one verified increment**, and a failed one is
+**superseded, never silently reopened** — so the history shows what shipped-but-failed vs
+what's now queued. If the follow-up needs a human decision, park it (`Human-Blocked` on
+`service`, §9). Never leave the original in `In Review`.
 
 **`Human-Blocked` (service backend)** is the real-state form of the §9 human-park.
 When PM cannot resolve a block (it needs a genuine human decision / credential / legal
