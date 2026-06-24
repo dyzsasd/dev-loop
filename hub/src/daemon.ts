@@ -88,7 +88,13 @@ main{padding:1rem}
 .board{display:flex;gap:.8rem;align-items:flex-start;overflow-x:auto}
 .col{flex:0 0 260px;background:transparent}
 .col h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut);margin:.2rem .2rem .5rem;font-weight:600}
-.col .count{background:var(--line);color:var(--mut);border-radius:999px;padding:0 .45rem;margin-left:.3rem;font-size:.72rem}
+.col .count,.lane-h .count{background:var(--line);color:var(--mut);border-radius:999px;padding:0 .45rem;margin-left:.3rem;font-size:.72rem}
+.swimlanes{display:flex;flex-direction:column;gap:1.1rem}
+.lane{border-top:1px solid var(--line);padding-top:.55rem}
+.lane-h{font-size:.85rem;font-weight:600;margin:.1rem .2rem .55rem;color:var(--ink)}
+.who{color:var(--ink);font-weight:500}
+.group-tg{display:inline-flex;align-items:center;gap:.25rem;margin-left:.2rem;font-size:.72rem;color:var(--mut)}
+.lbl.on{color:var(--ink);border-color:var(--mut);background:var(--card)}
 .card{display:block;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.55rem .6rem;margin-bottom:.5rem;text-decoration:none;color:inherit}
 .card:hover{border-color:var(--mut)}
 .card-top{display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem}
@@ -140,6 +146,9 @@ function cardHtml(t: ReturnType<typeof toTicket>): string {
     + `<div class="card-top"><span class="id">${esc(t.id)}</span><span class="badge t-${esc(t.type)}">${esc(t.type)}</span></div>`
     + `<div class="title">${esc(t.title)}</div>`
     + `<div class="card-meta"><span class="owner">${esc(ownerOf(t.labels))}</span>`
+    // DL-31: assignee chip — gated (rendered only when assigned), so unassigned cards stay clean. The
+    // operator reported the board never showed who a ticket is assigned to; this surfaces it on the card.
+    + (t.assignee ? `<span class="who">@${esc(t.assignee)}</span>` : "")
     + `<span class="prio p${esc(t.priority)}">${esc(prioOf(t.priority))}</span></div></a>`;
 }
 
@@ -151,7 +160,7 @@ const FILTER_KEYS = ["state", "type", "label", "assignee", "q"] as const;
 // Board: tickets grouped into state columns. Core workflow columns always render (even empty);
 // Backlog/Canceled/Duplicate and any other state show only when populated, terminals last. DL-20 adds
 // optional server-side filter/search (from the GET / query string) + a clearable, deep-linkable control row.
-function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filters: BoardFilters = {}, canWrite = false): string {
+function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filters: BoardFilters = {}, canWrite = false, group?: string): string {
   let tickets = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
   const f = filters;
   // mirror /api/tickets: each present (non-empty) filter narrows the set; q matches id/title, case-insensitive
@@ -161,30 +170,70 @@ function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filt
   if (f.assignee) tickets = tickets.filter((t) => t.assignee === f.assignee);
   if (f.q) { const q = f.q.toLowerCase(); tickets = tickets.filter((t) => String(t.id).toLowerCase().includes(q) || String(t.title ?? "").toLowerCase().includes(q)); }
 
-  // control row: active filters as clearable chips + a free-text search form; both reflected in the URL
-  // query string (deep-linkable). A chip's link drops just that key; "clear all" → "/". esc() everything (AC4).
+  // DL-31: ?group=assignee (validated upstream to the one known value) switches the board to assignee
+  // swimlanes. swim===false is byte-identical to the pre-DL-31 board apart from the always-present group
+  // toggle. The URL helper carries `group` so filter/search/chip links keep the active view (deep-linkable).
+  const swim = group === "assignee";
+  const qstr = (over: { omit?: string; group?: string | null } = {}) => {
+    const p = new URLSearchParams();
+    for (const k of FILTER_KEYS) if (f[k] && k !== over.omit) p.set(k, f[k]!);
+    const g = over.group === undefined ? group : over.group; // null ⇒ explicitly drop group
+    if (g) p.set("group", g);
+    const s = p.toString(); return s ? `/?${s}` : "/";
+  };
+
+  // control row: active filters as clearable chips + a free-text search form + a state↔assignee group
+  // toggle; all reflected in the URL. A chip's link drops just that key but keeps the group view;
+  // "clear all" drops every filter but keeps the view. esc() everything (AC4).
   const active = FILTER_KEYS.filter((k) => f[k]);
-  const href = (omit?: string) => { const p = new URLSearchParams(); for (const k of FILTER_KEYS) if (f[k] && k !== omit) p.set(k, f[k]!); const s = p.toString(); return s ? `/?${s}` : "/"; };
-  const chips = active.map((k) => `<a class="lbl" href="${esc(href(k))}">${esc(k)}: ${esc(f[k])} ✕</a>`).join(" ");
-  const hidden = (["state", "type", "label", "assignee"] as const).map((k) => f[k] ? `<input type="hidden" name="${k}" value="${esc(f[k])}">` : "").join("");
+  const chips = active.map((k) => `<a class="lbl" href="${esc(qstr({ omit: k }))}">${esc(k)}: ${esc(f[k])} ✕</a>`).join(" ");
+  const hidden = (["state", "type", "label", "assignee"] as const).map((k) => f[k] ? `<input type="hidden" name="${k}" value="${esc(f[k])}">` : "").join("")
+    + (group ? `<input type="hidden" name="group" value="${esc(group)}">` : "");
+  const groupToggle = `<span class="group-tg">group:`
+    + `<a class="lbl${swim ? "" : " on"}" href="${esc(qstr({ group: null }))}">state</a>`
+    + `<a class="lbl${swim ? " on" : ""}" href="${esc(qstr({ group: "assignee" }))}">assignee</a></span>`;
   const controls = `<form class="filterbar" method="get" action="/">${hidden}`
     + `<input type="text" name="q" value="${esc(f.q ?? "")}" placeholder="search id / title" spellcheck="false">`
     + `<button type="submit">search</button>`
-    + (active.length ? `<a class="lbl clearall" href="/">clear all</a>` : "")
+    + (active.length ? `<a class="lbl clearall" href="${esc(swim ? "/?group=assignee" : "/")}">clear all</a>` : "")
+    + groupToggle
     + (chips ? `<span class="chips">${chips}</span>` : "")
     + `</form>`;
 
-  const byState = new Map<string, ReturnType<typeof toTicket>[]>();
-  for (const t of tickets) (byState.get(t.state) ?? byState.set(t.state, []).get(t.state)!).push(t);
+  // Column ordering computed ONCE over the full filtered set so every swimlane shares an aligned column
+  // layout (CORE_STATES always render; populated extras appended, non-STATE_ORDER states last).
+  const allByState = new Map<string, ReturnType<typeof toTicket>[]>();
+  for (const t of tickets) (allByState.get(t.state) ?? allByState.set(t.state, []).get(t.state)!).push(t);
   const states = [
-    ...STATE_ORDER.filter((s) => CORE_STATES.includes(s) || byState.has(s)),
-    ...[...byState.keys()].filter((s) => !STATE_ORDER.includes(s)),
+    ...STATE_ORDER.filter((s) => CORE_STATES.includes(s) || allByState.has(s)),
+    ...[...allByState.keys()].filter((s) => !STATE_ORDER.includes(s)),
   ];
-  const cols = states.map((s) => {
-    const cards = byState.get(s) ?? [];
-    const body = cards.length ? cards.map(cardHtml).join("") : `<p class="empty">—</p>`;
-    return `<section class="col"><h2>${esc(s)}<span class="count">${cards.length}</span></h2>${body}</section>`;
-  }).join("");
+  const columnsFor = (subset: ReturnType<typeof toTicket>[]): string => {
+    const byState = new Map<string, ReturnType<typeof toTicket>[]>();
+    for (const t of subset) (byState.get(t.state) ?? byState.set(t.state, []).get(t.state)!).push(t);
+    const cols = states.map((s) => {
+      const cards = byState.get(s) ?? [];
+      const body = cards.length ? cards.map(cardHtml).join("") : `<p class="empty">—</p>`;
+      return `<section class="col"><h2>${esc(s)}<span class="count">${cards.length}</span></h2>${body}</section>`;
+    }).join("");
+    return `<div class="board">${cols}</div>`;
+  };
+
+  let boardHtml: string;
+  if (swim) {
+    // one lane per distinct assignee (sorted), with the unassigned lane last; each lane reuses the shared
+    // aligned columns. Assignee labels esc()'d (operator-controlled DATA → never trusted as markup).
+    const named = [...new Set(tickets.map((t) => t.assignee).filter((a): a is string => !!a))].sort();
+    const lanesKeys: (string | null)[] = [...named, ...(tickets.some((t) => !t.assignee) ? [null] : [])];
+    boardHtml = `<div class="swimlanes">` + lanesKeys.map((a) => {
+      const subset = tickets.filter((t) => (a === null ? !t.assignee : t.assignee === a));
+      const label = a === null ? "unassigned" : `@${a}`;
+      return `<section class="lane"><h2 class="lane-h">${esc(label)}<span class="count">${subset.length}</span></h2>${columnsFor(subset)}</section>`;
+    }).join("") + `</div>`;
+  } else {
+    boardHtml = columnsFor(tickets);
+  }
+
   // empty state (AC3): when nothing matches, show the existing empty element — filter-aware so it reads
   // accurately ("none match" when filtering vs. "none yet" on a genuinely empty board).
   const empty = tickets.length === 0
@@ -198,7 +247,7 @@ function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filt
       + `<select name="type"><option>Feature</option><option>Bug</option><option>Improvement</option></select>`
       + `<button type="submit">+ New ticket</button></form>`
     : "";
-  return controls + newForm + `<div class="board">${cols}</div>` + empty;
+  return controls + newForm + boardHtml + empty;
 }
 
 // Ticket detail: full description + comments. Returns null when the ticket is absent (→ 404).
@@ -606,7 +655,9 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
       if (path === "/") {
         const sp = url.searchParams;
         const filters = { state: sp.get("state") ?? undefined, type: sp.get("type") ?? undefined, label: sp.get("label") ?? undefined, assignee: sp.get("assignee") ?? undefined, q: sp.get("q") ?? undefined };
-        return htmlOut(res, 200, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, filters, canWrite && humanWriteEnabled(db, projectId))));
+        // DL-31: validate ?group to the single known view ("assignee" → swimlanes); anything else ⇒ default board.
+        const group = sp.get("group") === "assignee" ? "assignee" : undefined;
+        return htmlOut(res, 200, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, filters, canWrite && humanWriteEnabled(db, projectId), group)));
       }
 
       // GET /roadmap — the roadmap doc view + edit form (+ operator-only publish) (DL-3).
@@ -654,12 +705,14 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
       // GET /api/health — liveness.
       if (path === "/api/health") return json(res, 200, { ok: true, project: projectKey });
 
-      // GET /api/tickets — board, project-scoped (§2), filter by state/type/label (+ optional limit).
+      // GET /api/tickets — board, project-scoped (§2), filter by state/type/label/assignee (+ optional limit).
       if (path === "/api/tickets") {
         let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
         const state = url.searchParams.get("state"); if (state) out = out.filter((t) => t.state === state);
         const type = url.searchParams.get("type"); if (type) out = out.filter((t) => t.type === type);
         const label = url.searchParams.get("label"); if (label) out = out.filter((t) => t.labels.includes(label));
+        // DL-31: honor ?assignee (was silently ignored → board/API parity; the GET / board already filters it).
+        const assignee = url.searchParams.get("assignee"); if (assignee) out = out.filter((t) => t.assignee === assignee);
         const limit = Number(url.searchParams.get("limit")); if (Number.isFinite(limit) && limit > 0) out = out.slice(0, limit);
         return json(res, 200, out);
       }

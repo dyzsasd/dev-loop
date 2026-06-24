@@ -383,6 +383,29 @@ setHumanWrite(false);
 ok((await postForm(opd.base, "/ticket", { title: "should 405 again" })).status === 405, "DL-29 AC1: flipping humanWrite OFF live → POST /ticket → 405 again (per-request flag gate)");
 ok((await get("/api/tickets")).body.length === cnt29, "DL-29: the refused CSRF/rebinding + disabled writes created NO tickets");
 
+// ── DL-31: assignee chip on cards (gated) + ?group=assignee swimlanes + /api/tickets ?assignee filter ──
+// assign one ticket so there's a named-assignee lane (feat→dev) alongside the unassigned ones (bug, …).
+// Direct DB write (same pattern as setHumanWrite) — exercises the read paths regardless of actor registry.
+const setAssignee = (id: string, who: string) => { const s = openDb(DB); s.prepare("UPDATE tickets SET assignee=? WHERE id=? AND project_id=?").run(who, id, projectId); s.close(); };
+setAssignee(feat.id, "dev");
+// /api/tickets ?assignee — was silently ignored before DL-31; now narrows to that assignee (board/API parity).
+const byAssignee = (await get("/api/tickets?assignee=dev")).body;
+ok(byAssignee.length >= 1 && byAssignee.every((t: any) => t.assignee === "dev") && byAssignee.some((t: any) => t.id === feat.id) && !byAssignee.some((t: any) => t.id === bug.id), "DL-31: GET /api/tickets?assignee=dev → only dev's ticket(s) (the param was silently ignored before)");
+// card assignee chip — gated (rendered only when assigned), so the operator can see who owns each card.
+const chipBoard = await getHtml("/");
+ok(chipBoard.text.includes('class="who"') && chipBoard.text.includes("@dev"), "DL-31: cards render the assignee chip (gated) — @dev surfaces on the board");
+// ?group=assignee → swimlanes (one lane per assignee + an unassigned lane), reusing the aligned columns.
+const swim = await getHtml("/?group=assignee");
+ok(swim.text.includes('class="swimlanes"') && swim.text.includes('class="lane-h"') && swim.text.includes("@dev") && swim.text.includes("unassigned"), "DL-31: ?group=assignee renders assignee swimlanes incl. an unassigned lane");
+ok(swim.text.includes('class="board"'), "DL-31: each swimlane reuses the aligned state columns (.board) — server-rendered, no client JS");
+// the group toggle is the discoverable, deep-linkable entry point; filters preserve the active view.
+ok(chipBoard.text.includes('href="/?group=assignee"'), "DL-31: the default board exposes a group→assignee toggle link");
+const swimFiltered = await getHtml("/?group=assignee&type=Bug");
+ok(swimFiltered.text.includes('name="group" value="assignee"'), "DL-31: a filter within the swimlane view preserves group (hidden input carries it through a search)");
+ok(swimFiltered.text.includes('class="lbl clearall" href="/?group=assignee"'), "DL-31: 'clear all' in the swimlane view drops every filter but KEEPS the view (→ /?group=assignee, not a no-op)");
+ok((await getHtml("/?type=Bug")).text.includes('class="lbl clearall" href="/"'), "DL-31: 'clear all' on the default (non-grouped) board still clears to / (unchanged from DL-20)");
+ok(swimFiltered.text.includes(bCard) && !swimFiltered.text.includes(fCard), "DL-31: filters still narrow within swimlanes (?type=Bug → only the Bug card, feat excluded)");
+
 await verifier.close();
 opd.close();
 devd.close();
