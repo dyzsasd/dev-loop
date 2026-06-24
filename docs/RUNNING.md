@@ -208,22 +208,26 @@ The tmux launcher (§2B) sets these per pane for you. Verify a pane is wired wit
 `DEVLOOP_ACTOR=pm claude mcp list` → `dev-loop-hub … ✓ Connected`, and `whoami` inside a
 session returns `pm`. The hub DB is machine-local runtime state — never committed.
 
-### Observe the loop — the read-only web UI
+### Observe the loop — the localhost web UI
 
-The hub ships a localhost HTTP **read surface** over the same `hub.db` — a server-rendered
-board plus ticket / roadmap / reports viewers and a JSON API — so you can *watch* the loop
-without touching the system of record. Start it alongside the agents:
+The hub ships a localhost HTTP surface over the same `hub.db` — a server-rendered board
+(filters + assignee swimlanes) plus ticket / roadmap / reports / activity viewers and a JSON
+API — so you can *watch* the loop without touching the system of record. Start it alongside the
+agents:
 
 ```bash
 cd <dev-loop>/hub && DEVLOOP_PROJECT=<project-key> npm run daemon
-# → http://127.0.0.1:8787/   (the board; read-only, localhost-only)
+# → http://127.0.0.1:8787/   (the board; read by default, localhost-only)
 ```
 
-It is **read-only and localhost-only** by construction — it binds `127.0.0.1` only (never
-`0.0.0.0`) and opens the DB with `PRAGMA query_only=ON`, so it is an *observe* surface, **not**
-a control plane: the agents keep coordinating through the MCP server, unchanged. For the full
-endpoint + env reference (port override, the `/api/*` JSON routes, etc.) see
-[`DAEMON.md`](DAEMON.md). (Hub backend only — the daemon reads `hub.db`.)
+It is **localhost-only** (binds `127.0.0.1` only, never `0.0.0.0`) and **read by default** —
+every `GET` is served by a `PRAGMA query_only=ON` connection. Opt-in, operator-configured
+**write surfaces** exist (the roadmap editor, and human ticket web-write), each guarded by the
+localhost Host+Origin boundary; see [`DAEMON.md`](DAEMON.md) to enable them. Either way the agents
+keep coordinating through the **MCP server**, not the daemon — it stays an *observe-first* human
+surface, not the loop's control plane. For the full endpoint + env reference (port override, the
+`/api/*` JSON routes, the opt-in write routes) see [`DAEMON.md`](DAEMON.md). (Hub backend only —
+the daemon reads `hub.db`.)
 
 ---
 
