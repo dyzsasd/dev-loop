@@ -8,60 +8,90 @@
 
 ## Vision
 
-A self-evolving, autonomous multi-agent development loop that builds and maintains
-software through a shared ticket blackboard, steered by operator **review (点评)** rather
-than by editing agent code.
+dev-loop is a **standalone, long-lived coordination daemon** with **interchangeable AI-CLI
+clients**. The daemon is the system of record (the `node:sqlite` hub), the coordination
+service, the local web UI, and the agent-facing API — one persistent localhost process per
+project. Any coding-agent CLI — Claude Code, Codex, opencode, … — connects TO this daemon as
+an interchangeable client (via a thin stdio MCP shim, the `dev-loop` CLI, or a per-CLI plugin)
+to operate tickets, post discussion, read the board, and steer the roadmap. The agents stay
+**stateless per fire**; the daemon owns the shared state they coordinate through.
 
-**Forward direction (operator, 2026-06-23):** evolve dev-loop toward a long-running
-**daemon** that:
-- serves a **local, Linear-like web app** for viewing and managing the loop (board,
-  tickets, roadmap);
-- owns **inter-agent communication and discussion** (the coordination plane the agents
-  talk through);
-- bridges to **external communication tools** (Slack, Lark, …) so the operator and other
-  stakeholders can **view and edit the roadmap** — and steer direction — from the tools
-  they already use.
+The loop still builds and maintains software through a shared ticket blackboard, steered by
+operator **review (点评)** rather than by editing agent code. What changes is the substrate:
+coordination moves from "N per-pane stdio processes + an optional read-only web view, all
+poking one SQLite file" to "one daemon that owns the writer and serves both humans (web UI,
+roadmap edit, chat bridge) and agents (the coordination API) from a single running service."
 
-> ⚠️ This is a deliberate pivot from today's **daemon-free** design (see `Current state`
-> and `Decisions`). The agents and hub are currently no-daemon by principle; the new
-> direction introduces a persistent process. PM must reconcile the two — what stays
-> stateless-per-fire, what moves into the daemon, and how the §17 self-evolution firewall
-> and §2/§16 safety boundaries hold once a daemon + web UI + external write-paths exist.
+**Scope now — SINGLE-HOST, MULTI-CLI.** One machine, one trusted operator, multiple CLIs all
+talking to ONE local daemon over loopback (127.0.0.1). Identity stays **cooperative
+attribution** (`DEVLOOP_ACTOR` per pane, forwarded to the daemon) — honest, not anti-spoof:
+on one host any local process can name any actor, so attribution is an accountability and
+accident-prevention aid, not a wall. **Remote / multi-user / network deployment and a real
+token-auth model are an explicitly DEFERRED later phase** — named as the boundary, not built.
+
+**This is a deliberate reversal of the prior "no daemon" doctrine** (HUB-ARCHITECTURE §6/§14):
+the hub was daemon-free by principle, with a daemon foreseen only if a push-webhook chat was
+ever wanted. The operator has decided the daemon IS the destination — it is what makes the web
+UI turnkey and lets the daemon own coordination. The reversal is bounded and honest: the
+daemon is **localhost-only**, agents stay **stateless per fire**, and **the existing
+daemon-free paths keep working byte-for-byte** — the stdio MCP server, the read-only web
+daemon, and the `linear` / `local` / `service` backends are all preserved. The new
+daemon-primary path is **strictly additive and opt-in**: a project that doesn't enable it is
+unaffected.
+
+The transport is chosen to dodge a known trap: each CLI talks to the daemon through a **thin
+stdio MCP shim** that carries identity via an **environment variable**, never an HTTP
+`Authorization` header — because headless `claude -p` drops that header on tool calls, which
+would silently strip attribution from every fire. The per-CLI **identity gate** (call
+`whoami` through the CLI, expect the launcher-set actor) stays the onboarding test for every
+new client.
+
+The invariants are non-negotiable and transport-independent: the **§17 self-evolution
+firewall** (no agent ever auto-edits a SKILL / conventions / plugin / code file — structural
+changes are operator git commits, surfaced as proposals), **§2 project isolation** (one daemon
+= one pinned project, no cross-project endpoint), and **§16 secrets/localhost-only** (binds
+127.0.0.1 only; secrets live in env, referenced by name, read server-side; the SoR holds no
+plaintext credential). The phased build is in `docs/design/daemon-multicli-repositioning.md`.
 
 ## Goals (north star)
 
 **SHIPPED (operator, 2026-06-23):** the daemon + web UI + roadmap view/edit + Lark/Slack
-bridge (DL-1 / DL-2 / DL-3 / DL-4) — that milestone's top priority, all Done.
+bridge (DL-1 / DL-2 / DL-3 / DL-4) — all Done.
 
-**Top priority (operator, 2026-06-24): a TURNKEY LOCAL EXPERIENCE.** Today the daemon (web
-UI) and the MCP server are SEPARATE processes the operator must start by hand, and installing
-the plugin does **not** bring the web UI up. Close that gap — two threads:
+**Top priority (operator, 2026-06-24): the STANDALONE-DAEMON + MULTI-CLI repositioning** (Vision
+above). Build it as an additive, phased arc — each phase independently shippable, the loop runnable
+throughout, every current path (stdio MCP, read-only daemon, `linear`/`local`/`service` backends,
+the Claude plugin) unbroken byte-for-byte. **Full design + critique-folded decisions:
+`docs/design/daemon-multicli-repositioning.md`.** PM drives the backlog from these phases:
 
-1. **Auto-start the web UI on install / session.** Opening the plugin in a `service`-backend
-   project should bring up that project's daemon web UI **automatically** — no manual
-   `npm run daemon`. Design the lifecycle deliberately: resolve the project from cwd
-   (§11 / DL-13); **one** daemon per project on a stable per-project port; **never** double-start
-   if one is already running; localhost-only (§16); a clean stop/restart story; survives across
-   sessions; a no-op (and no error) for a non-service project. The plugin-packaging piece (a
-   SessionStart hook or equivalent in the plugin manifest) edits the plugin's OWN config, so
-   THAT half lands as a §17 `[pm-proposal]` for operator git-commit; the hub/launcher/docs/code
-   half is Dev-buildable.
+- **P1 — Turnkey on-ramp.** `dev-loop daemon ensure` (pidfile + `hub.port` + a real `/api/health`
+  liveness check, no double-start, one-per-project on a cwd-resolved port, DL-13) + auto-start the
+  web UI on install/session (a Claude `SessionStart` hook — the hook half is a §17 `[pm-proposal]`
+  for operator git-commit; the lifecycle/CLI half is Dev-buildable). Mount the agent op API
+  (`POST /api/op/*`) DORMANT, gated on an explicit `hub.transport:"daemon"` setting (**default-off**
+  → a current read-only-daemon project gets ZERO new surface). E2E: install → web UI up → an MCP
+  ticket change shows in the UI, zero manual `npm run daemon`.
+- **P2 — The thin stdio MCP shim.** `shim.ts` proxies tool calls to the loopback daemon op API;
+  identity rides env→`X-Devloop-Actor` (dodges the `claude -p` header-drop). Relies on the existing
+  WAL + `busy_timeout` serialization (single-writer is a P3 optimization, not a P2 prerequisite).
+- **P3 — Daemon as canonical single writer** (+ periodic `wal_checkpoint(TRUNCATE)`); the direct-db
+  stdio `server.ts` stays a back-compat fallback.
+- **P4 — Standalone packaging.** `npm i -g dev-loop` (core + daemon + shim + CLI + CLI-agnostic
+  shared prompts), Claude-independent; reshape the Claude plugin to thin; a single-version release
+  script stamps `package.json` + `plugin.json` + `marketplace.json`; the shim path via a `dev-loop`
+  PATH bin.
+- **P5 — Multi-CLI hardening.** Certify a 2nd CLI (Codex) end-to-end on the daemon-primary path; add
+  MCP-over-HTTP only if it passes the header identity gate.
+- **Phase B — DEFERRED (named, not built):** remote / multi-host / multi-user + the `agent_tokens`
+  auth model. The daemon's per-request actor-resolution function is the seam it slots into.
 
-2. **Unify MCP ↔ the daemon (the daemon as the single coordination point).** Today MCP (the
-   stdio `server.ts`) and the daemon (HTTP) are two processes sharing `hub.db`. Move toward the
-   daemon being the persistent service that serves **both** the web UI **and** the agents'
-   MCP / write API in one process — so agents and humans act through one running service, not N
-   per-pane stdio spawns. This is the Vision's "daemon owns coordination." Build it
-   **additively**: a new transport option (e.g. the stdio MCP becomes a thin client to the
-   loopback daemon), with the existing stdio MCP path kept 100% working and the read-only daemon
-   unchanged for those who want it; preserve per-agent identity (`DEVLOOP_ACTOR`), localhost-only,
-   and the §16/§17 firewall end-to-end.
-
-**Constraints for both:** strictly additive + opt-in (a project not using it is byte-for-byte
-unaffected); no regression to today's stdio MCP or read-only daemon; localhost-only (§16);
-per-agent identity preserved; any SKILL/conventions/plugin-config edit goes through §17
-(operator-committed). The E2E target: *install the plugin → the web UI is up → in Claude, an MCP
-ticket change shows in the web UI* — with zero manual daemon start.
+**Hard invariants (transport-independent, every phase):** §17 firewall (no agent auto-edits a
+SKILL/conventions/plugin/code file — structural changes are operator-committed proposals);
+§2 isolation (one daemon = one pinned project, no cross-project endpoint); §16 (binds 127.0.0.1
+only; secrets in env by name); identity is **cooperative, not anti-spoof** on one host (honest);
+every mutating op-API endpoint passes the `writeOriginOk` CSRF/DNS-rebind guard first. Honest
+caveat: `doc.publish` over the op API becomes a cooperative (claim-based) gate vs today's
+daemon-process-identity gate — acceptable on one trusted host, revisit under Phase B.
 
 Supporting goals (all in scope this milestone):
 - **Harden the hub / `service` backend** — robustness, tests, `doctor` coverage, and edge
