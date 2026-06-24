@@ -12,7 +12,7 @@ import { sendVia, pollVia, getEnabledChannel, resolveCreds, scrubErr, CHANNEL_DR
 import { findByMarker, createIssue, updateIssue, type MirrorIssue } from "./linear.ts";
 import { DOC_KINDS, resolveDoc, latestVersion, docSave, docPublish } from "./docstore.ts";
 import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
-import { insertTicket, updateTicketRow, insertComment } from "./ticketwrite.ts"; // DL-35: the single ticket/comment write home
+import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts"; // DL-35: the single ticket/comment write home
 
 // ─── Environment / identity ──────────────────────────────────────────────────
 const DB_PATH = process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`;
@@ -162,18 +162,12 @@ function resolveAssignTo(from: string, to: string, labels: string[]): string | n
 // (projects.json), not in the hub's settings_json; that carve-out signal is a PM design decision.
 const ENV_LABELS = ["env:dev", "env:prod"];
 const envLabelsOf = (labels: string[]): string[] => labels.filter((l) => ENV_LABELS.includes(l)).sort();
-function loadRelease(): { prodPromotionGate?: string } {
-  try {
-    const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
-    const r = (row?.settings_json ? JSON.parse(row.settings_json) : {})?.workflow?.release;
-    return r && typeof r === "object" ? r : {};
-  } catch { return {}; } // malformed config ⇒ treated as absent (fail-open), never bricks a write
-}
 // Reject a non-operator ADDING env:prod when prodPromotionGate is "human". Cooperative attribution, NOT
 // anti-spoof (an agent can set DEVLOOP_ACTOR; the real human-only boundary is the daemon's localhost path).
 // Demotion (removing env:prod) is NEVER gated, so a rollback can't trip the gate. Returns an err string, or null to allow.
+// (The release config reader lives in ticketwrite.ts — loadRelease — shared with the DL-38 staging gate.)
 function prodPromotionRejection(oldLabels: string[], newLabels: string[]): string | null {
-  if (loadRelease().prodPromotionGate !== "human") return null;
+  if (loadRelease(db, projectId).prodPromotionGate !== "human") return null;
   const adding = newLabels.includes("env:prod") && !oldLabels.includes("env:prod");
   return adding && ACTOR !== "operator"
     ? `env:prod promotion is human-gated (prodPromotionGate:"human"): only the operator may add env:prod`
@@ -274,7 +268,9 @@ server.registerTool("save_issue", {
     // DL-35: the UPDATE + transition/update event now live in ticketwrite.updateTicketRow. The atomic
     // read-merge-write txn (and the `next` merge above: REPLACE labels, APPEND-only relatedTo, DL-24 assignTo)
     // stay here — the mechanic is txn-agnostic, so this BEGIN IMMEDIATE block still owns atomicity.
-    updateTicketRow(db, projectId, ACTOR, a.id, cur.state, next);
+    // DL-38: updateTicketRow now enforces the staging-deploy gate and may reject ⇒ ROLLBACK, no write/event.
+    const wr = updateTicketRow(db, projectId, ACTOR, a.id, cur.state, next);
+    if (!wr.ok) { db.exec("ROLLBACK"); return err(wr.error); }
     // DL-32: emit issue.promote {from,to} on any env:* label-set change (promotion cycle-time; no new state).
     const fromEnv = envLabelsOf(oldLabels).join(","), toEnv = envLabelsOf(newLabels).join(",");
     if (fromEnv !== toEnv) logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.promote", data: { from: fromEnv, to: toEnv } });
