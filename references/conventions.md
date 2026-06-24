@@ -203,11 +203,14 @@ board dir" — and a glob must never escape it (the cross-project axis still app
 
 Your Linear team has these workflow states (Linear's defaults; use the **name** with
 `save_issue`'s `state` field): `Backlog`, `Todo`, `In Progress`, `In Review`,
-`Done`, `Canceled`, `Duplicate`. There is **no "Blocked" or "Processing" state** —
-"Processing" maps to `In Progress`, and "Blocked" is a label (§9), not a state.
-These same state names are authoritative in both backends — in `local` mode (§18) the
-state lives in the ticket file's frontmatter `state:` field (a field rewrite, not a
-folder move), using these exact names.
+`Done`, `Canceled`, `Duplicate` — plus, on the **`service` backend (§18)**,
+`Human-Blocked` (a parking state for an unresolvable human-only block, §9 / DL-25/DL-26).
+There is **no "Processing" state** ("Processing" maps to `In Progress`). "Blocked"
+behaviour is **per-backend**: on `linear`/`local` it stays a **label** (§9), not a
+state; on `service` an unresolvable human-only block becomes the real **`Human-Blocked`
+state** (below + §9). These state names are authoritative in both backends — in `local`
+mode (§18) the state lives in the ticket file's frontmatter `state:` field (a field
+rewrite, not a folder move), using these exact names.
 
 | State | Meaning | Who moves it here |
 |---|---|---|
@@ -215,6 +218,7 @@ folder move), using these exact names.
 | `Todo` | Groomed, ready to be picked up | PM/QA (on create), Dev (on un-block), verifier (on verify-fail) |
 | `In Progress` | A Dev has claimed it and is actively working | Dev (claim) |
 | `In Review` | Dev finished; awaiting verification by the owner | Dev (done coding) |
+| `Human-Blocked` | **(`service` only)** Parked for the operator — an unresolvable human-only block (decision/credential/legal). The daemon periodically reminds the channel (§9 / DL-26). Resumes to `Todo` on resolution. | PM (when it can't resolve a block) / operator |
 | `Done` | Verified passing against acceptance criteria | Owner (PM/QA) |
 | `Canceled` | Won't-do / obsolete / superseded | Any agent, with a comment why |
 | `Duplicate` | Same as another ticket; set `duplicateOf` | Dev (during grooming) |
@@ -222,7 +226,19 @@ folder move), using these exact names.
 **Verify-fail** is a first-class transition: when an owner verifies an
 `In Review` ticket and it does **not** meet acceptance criteria, move it back to
 `Todo` and add a comment listing exactly what failed (so Dev knows what to fix).
-Do not leave it in `In Review`.
+Do not leave it in `In Review`. *(DL-28 will change this default to close+follow-up;
+see the design doc §11 — not yet wired in the SKILLs.)*
+
+**`Human-Blocked` (service backend)** is the real-state form of the §9 human-park.
+When PM cannot resolve a block (it needs a genuine human decision / credential / legal
+sign-off), on `service` it moves the ticket to **`Human-Blocked`** instead of the
+`blocked` + `needs-pm` + `external-prereq` label park. The persistent daemon detects the
+state structurally and periodically pings the configured Slack/Lark channel until it's
+resolved (DL-26; cadence = `settings_json.humanBlockedReminderHours`, default off). The
+operator (or PM, once unblocked out-of-band) moves it back to **`Todo`**. Dev never
+picks it up (it isn't `Todo`). On `linear`/`local` (no daemon; adding a state is costly)
+the label-based park (§9) remains; `blockedStateName` config names the real state where
+a backend has one.
 
 ---
 
