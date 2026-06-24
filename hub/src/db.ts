@@ -6,7 +6,7 @@ import { dirname } from "node:path";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 export type State =
-  | "Backlog" | "Todo" | "In Progress" | "In Review" | "Done" | "Canceled" | "Duplicate";
+  | "Backlog" | "Todo" | "In Progress" | "In Review" | "Human-Blocked" | "Done" | "Canceled" | "Duplicate";
 
 export interface Ticket {
   id: string;
@@ -27,7 +27,10 @@ export interface Ticket {
 
 // The dev-loop state machine (§3). CHECKed so a fuzzy/typo state can never be stored (kills §10#2).
 export const STATES: State[] =
-  ["Backlog", "Todo", "In Progress", "In Review", "Done", "Canceled", "Duplicate"];
+  ["Backlog", "Todo", "In Progress", "In Review", "Human-Blocked", "Done", "Canceled", "Duplicate"];
+// CHECK clause built FROM `STATES` so the fresh-DB schema (below) and the v1 migration (openDb)
+// can never drift — one source of truth for the legal state set. (DL-25: Human-Blocked added.)
+const STATE_CHECK = STATES.map((s) => `'${s}'`).join(", ");
 
 // ─── Schema ────────────────────────────────────────────────────────────────
 const SCHEMA = `
@@ -63,7 +66,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   type TEXT NOT NULL DEFAULT 'Feature',
-  state TEXT NOT NULL DEFAULT 'Todo' CHECK(state IN ('Backlog','Todo','In Progress','In Review','Done','Canceled','Duplicate')),
+  state TEXT NOT NULL DEFAULT 'Todo' CHECK(state IN (${STATE_CHECK})),
   assignee TEXT,
   priority INTEGER NOT NULL DEFAULT 0,
   labels TEXT NOT NULL DEFAULT '[]',   -- JSON array; REPLACE-style on save_issue (mirrors Linear)
@@ -205,6 +208,61 @@ CREATE TABLE IF NOT EXISTS mirror_map (
 CREATE INDEX IF NOT EXISTS idx_mirror_project ON mirror_map(project_id, hub_kind);
 `;
 
+// ─── Schema migrations (PRAGMA user_version) ─────────────────────────────────
+// SQLite cannot ALTER a CHECK constraint, so widening tickets.state means rebuilding the table
+// (the documented table-redefinition procedure). Keyed by user_version so every opener applies
+// pending migrations exactly once, idempotently; the version is re-checked UNDER the write lock so
+// concurrent openers (server + daemon, two connections) can't double-migrate. foreign_keys must be
+// toggled OUTSIDE the txn (the PRAGMA is a no-op inside one). Runs BEFORE any caller sets
+// query_only (daemon sets it after openDb returns), so the read connection still migrates cleanly.
+const tableExists = (db: DatabaseSync, name: string): boolean =>
+  !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+const userVersion = (db: DatabaseSync): number =>
+  (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+
+function migrate(db: DatabaseSync): void {
+  if (userVersion(db) >= 1) return; // fast path: already current, no txn
+  db.exec("PRAGMA foreign_keys=OFF");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (userVersion(db) < 1) {
+      // v1 (DL-25): widen tickets.state CHECK to include 'Human-Blocked'. Lossless rebuild:
+      // explicit column copy (never SELECT *), FK off so comments(ticket_id)/mirror_map children
+      // survive the DROP+RENAME, PK + index recreated. CHECK comes from STATE_CHECK (no drift).
+      db.exec(`
+        CREATE TABLE tickets_new (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id),
+          title TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          type TEXT NOT NULL DEFAULT 'Feature',
+          state TEXT NOT NULL DEFAULT 'Todo' CHECK(state IN (${STATE_CHECK})),
+          assignee TEXT,
+          priority INTEGER NOT NULL DEFAULT 0,
+          labels TEXT NOT NULL DEFAULT '[]',
+          duplicate_of TEXT,
+          related_to TEXT NOT NULL DEFAULT '[]',
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO tickets_new (id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at)
+          SELECT id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at FROM tickets;
+        DROP TABLE tickets;
+        ALTER TABLE tickets_new RENAME TO tickets;
+        CREATE INDEX IF NOT EXISTS idx_tickets_project_state ON tickets(project_id, state);
+      `);
+      db.exec("PRAGMA user_version=1");
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch { /* */ }
+    db.exec("PRAGMA foreign_keys=ON");
+    throw e;
+  }
+  db.exec("PRAGMA foreign_keys=ON");
+}
+
 // ─── Open ──────────────────────────────────────────────────────────────────
 export function openDb(path: string): DatabaseSync {
   mkdirSync(dirname(path), { recursive: true });
@@ -212,7 +270,10 @@ export function openDb(path: string): DatabaseSync {
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
   db.exec("PRAGMA busy_timeout=5000"); // wait out a concurrent writer instead of erroring
+  const fresh = !tableExists(db, "tickets");
   db.exec(SCHEMA);
+  if (fresh) db.exec("PRAGMA user_version=1"); // brand-new DB already has the current CHECK — no rebuild
+  else migrate(db);                            // existing DB — apply pending migrations (idempotent)
   return db;
 }
 

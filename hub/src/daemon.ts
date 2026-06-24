@@ -68,7 +68,9 @@ function htmlOut(res: ServerResponse, status: number, body: string): void {
 // SoR holds arbitrary agent-authored text, so we escape it rather than trust it).
 const PRIORITY: Record<number, string> = { 1: "Urgent", 2: "High", 3: "Medium", 4: "Low", 0: "None" };
 const CORE_STATES = ["Todo", "In Progress", "In Review", "Done"]; // always shown (Linear-like board)
-const STATE_ORDER = ["Backlog", "Todo", "In Progress", "In Review", "Done", "Canceled", "Duplicate"];
+// Human-Blocked (DL-25) is a parking state — ordered after In Review, but rendered ONLY when populated
+// (like Backlog/Canceled/Duplicate), so an empty Human-Blocked column never clutters a healthy board.
+const STATE_ORDER = ["Backlog", "Todo", "In Progress", "In Review", "Human-Blocked", "Done", "Canceled", "Duplicate"];
 const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 function esc(s: unknown): string { return String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]); }
 function ownerOf(labels: string[]): string { return labels.includes("pm") ? "pm" : labels.includes("qa") ? "qa" : "—"; }
