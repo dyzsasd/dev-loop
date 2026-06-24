@@ -4,7 +4,7 @@
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { execFileSync } from "node:child_process";
-import { openDb } from "./db.ts";
+import { DatabaseSync } from "node:sqlite";
 
 export function runDoctor(dbPath: string): boolean {
   let ok = true;
@@ -20,10 +20,29 @@ export function runDoctor(dbPath: string): boolean {
     return false;
   }
 
-  // 2. Writable / openable (opening an EXISTING file; schema create-if-not-exists is a no-op)
-  let db;
-  try { db = openDb(dbPath); pass("db opens read-write"); }
-  catch (e) { fail(`db not openable: ${(e as Error).message}`); return false; }
+  // 2. Open the db READ-ONLY. doctor's whole contract is to be non-destructive (§17/§18): it must
+  //    NEVER create or initialize a db. openDb() runs `CREATE TABLE IF NOT EXISTS`, which would
+  //    materialize the full schema into an empty / truncated file (0 → ~200KB) and falsely green a
+  //    destroyed SoR (DL-54). Read-only mode makes create-if-not-exists impossible for ANY input.
+  let db: DatabaseSync;
+  try { db = new DatabaseSync(dbPath, { readOnly: true }); db.exec("PRAGMA busy_timeout=5000"); db.exec("PRAGMA foreign_keys=ON"); }
+  catch (e) { fail(`db not openable (read-only): ${(e as Error).message}`); return false; }
+
+  // 2b. A 0-byte file IS a valid (empty) SQLite db, so the read-only open above SUCCEEDS on a
+  //     truncated / zeroed / placeholder file — it just carries no schema; a non-SQLite file throws
+  //     on the first read. Either way it is not a system-of-record: report INVALID and write nothing.
+  const HUB_TABLES = ["projects", "tickets", "documents", "topics", "actors", "events"]; // every table step 4 below counts — so a partial/foreign db fails HERE, cleanly, not mid-check
+  let missing: string[];
+  try {
+    const present = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((r) => r.name));
+    missing = HUB_TABLES.filter((t) => !present.has(t));
+  } catch (e) { fail(`db INVALID — not a readable SQLite database: ${(e as Error).message}`); db.close(); return false; }
+  if (missing.length) {
+    fail(`db INVALID — empty / truncated / non-hub file (missing hub tables: ${missing.join(", ")}); not a system-of-record`);
+    db.close();
+    return false;
+  }
+  pass("db opens read-only and carries the hub schema");
 
   // 3. PRAGMAs
   const jm = (db.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
