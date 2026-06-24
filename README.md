@@ -272,7 +272,7 @@ no secret in config; usage counts against your ChatGPT/Codex limits.
 
 ## Status
 
-**v0.19.2** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
+**v0.20.0** — eight agents: the five inward (PM/QA/Dev/Sweep/Reflect) plus three
 **outward** observe-and-file agents (conventions §21) — **Ops** (watches running prod,
 files `incident` Bugs with an anti-flap re-check + dedupe), **Architect** (audits
 whole-codebase tech health on a rotating, SHA-gated dimension, files `tech-debt`
@@ -314,7 +314,16 @@ optional **one-way Linear mirror** (the hub pushes its tickets to Linear for hum
 split-brain enforced, Linear never read back as truth); v0.19.0 (P8) **second-CLI portability** —
 the same agents + hub run on Codex/opencode against the same db, gated on a per-CLI
 identity-propagation test ([`docs/PORTABILITY.md`](docs/PORTABILITY.md); Claude Code unchanged).
-All daemon-free.
+v0.20.0 adds the **localhost hub daemon + web UI** — a persistent read surface over the hub
+(board, ticket detail, the roadmap editor, reports, activity) plus a cwd→project auto-pin
+([`docs/DAEMON.md`](docs/DAEMON.md)). The agent loop stays **daemon-free**: the agents coordinate
+through the MCP server, not the daemon, which is an additive human surface.
+Landed on `main` since 0.20.0 (the autonomous loop's own output): the **agile-for-AI workflow
+redesign** (W1–W3 — per-transition `assignTo`, parent-close on a W3 done, the **`Human-Blocked`**
+state + reminders, and close+follow-up on a verify-fail), assignee **swimlanes** on the board, the
+opt-in **human web-write** surface (operator-set, localhost-guarded), and **release/env gating**
+(`env:dev`/`env:prod` labels with a human prod-promotion gate + a staging-deploy gate) — all opt-in,
+default-off.
 Validated end-to-end in an isolated sandbox and battle-tested across long live runs. Autonomy
 (push/deploy) is opt-in per project and gated on a green build. Coordination is
 backend-pluggable — Linear (default), a machine-local file board (`backend:"local"`), or the
