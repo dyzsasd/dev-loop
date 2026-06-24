@@ -22,9 +22,10 @@
     "mirror": "node test/mirror.ts",
     "identity": "node test/identity.ts",
     "daemon-test": "node test/daemon.ts",
-    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts && node test/resolve-project.ts && node test/daemon.ts && node test/blocked.ts && node test/migrate.ts",
+    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts && node test/resolve-project.ts && node test/daemon.ts && node test/blocked.ts && node test/migrate.ts && node test/release.ts",
     "blocked": "node test/blocked.ts",
-    "migrate": "node test/migrate.ts"
+    "migrate": "node test/migrate.ts",
+    "release": "node test/release.ts"
   },
   "engines": {
     "node": ">=23.6"

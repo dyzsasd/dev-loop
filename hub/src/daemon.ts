@@ -561,6 +561,7 @@ function eventLine(e: Record<string, any>): string {
   switch (e.kind) {
     case "issue.create": what = `created${tlink} <span class="badge">${esc(d.type ?? "?")}</span> ${esc(d.title ?? "")}`; break;
     case "issue.transition": what = `moved${tlink} <span class="lbl">${esc(d.from ?? "?")}</span> → <span class="lbl">${esc(d.to ?? "?")}</span>`; break;
+    case "issue.promote": what = `promoted${tlink} <span class="lbl">${esc(d.from || "—")}</span> → <span class="lbl">${esc(d.to || "—")}</span>`; break; // DL-32 env-label change
     case "comment.add": what = `commented on${tlink || " a ticket"}`; break;
     default: what = `${esc(e.kind)}${tlink}`; break;
   }

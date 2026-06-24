@@ -19,6 +19,9 @@ const LABELS: Array<{ name: string; kind: string }> = [
   { name: "tech-debt", kind: "subtype" }, { name: "signal", kind: "subtype" }, { name: "coverage", kind: "subtype" },
   { name: "blocked", kind: "workflow" }, { name: "needs-pm", kind: "workflow" },
   { name: "needs-qa", kind: "workflow" }, { name: "notified", kind: "workflow" },
+  // DL-32 (design §7): release/env labels — no new state, no schema ALTER. They ride this ensureLabels
+  // backfill (INSERT OR IGNORE, idempotent), not a dedicated migration.
+  { name: "env:dev", kind: "workflow" }, { name: "env:prod", kind: "workflow" },
 ];
 
 export function ensureActors(db: DatabaseSync): void {

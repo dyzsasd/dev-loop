@@ -155,6 +155,31 @@ function resolveAssignTo(from: string, to: string, labels: string[]): string | n
   return null;
 }
 
+// ─── release / env gating (DL-32 / design §7 — opt-in, default off) ───────────
+// env:dev / env:prod are workflow-kind LABELs (no new state, no schema ALTER). These helpers gate prod
+// promotion and feed the issue.promote lifecycle event. The staging-deploy gate (requireDeployBeforeReview)
+// is a deferred follow-up — it needs the hub to learn a repo's deploy-capability, which lives agent-side
+// (projects.json), not in the hub's settings_json; that carve-out signal is a PM design decision.
+const ENV_LABELS = ["env:dev", "env:prod"];
+const envLabelsOf = (labels: string[]): string[] => labels.filter((l) => ENV_LABELS.includes(l)).sort();
+function loadRelease(): { prodPromotionGate?: string } {
+  try {
+    const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
+    const r = (row?.settings_json ? JSON.parse(row.settings_json) : {})?.workflow?.release;
+    return r && typeof r === "object" ? r : {};
+  } catch { return {}; } // malformed config ⇒ treated as absent (fail-open), never bricks a write
+}
+// Reject a non-operator ADDING env:prod when prodPromotionGate is "human". Cooperative attribution, NOT
+// anti-spoof (an agent can set DEVLOOP_ACTOR; the real human-only boundary is the daemon's localhost path).
+// Demotion (removing env:prod) is NEVER gated, so a rollback can't trip the gate. Returns an err string, or null to allow.
+function prodPromotionRejection(oldLabels: string[], newLabels: string[]): string | null {
+  if (loadRelease().prodPromotionGate !== "human") return null;
+  const adding = newLabels.includes("env:prod") && !oldLabels.includes("env:prod");
+  return adding && ACTOR !== "operator"
+    ? `env:prod promotion is human-gated (prodPromotionGate:"human"): only the operator may add env:prod`
+    : null;
+}
+
 const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 
 // ─── whoami ──────────────────────────────────────────────────────────────────
@@ -208,6 +233,8 @@ server.registerTool("save_issue", {
   if (a.assignee && a.assignee !== "me" && !actorExists(db, a.assignee)) return err(`unknown assignee '${a.assignee}'; one of ${listActorHandles(db).join(", ")} (or "me"/null)`);
   if (!a.id) {
     if (!a.title) return err("title required to create a ticket");
+    const promoReject = prodPromotionRejection([], a.labels ?? []); // DL-32: can't be born env:prod by a non-operator
+    if (promoReject) return err(promoReject);
     // DL-35: the create INSERT + issue.create event now live in ticketwrite.insertTicket. Event data stays
     // the RAW {title,type} this path has always logged (type may be undefined when omitted) — byte-identical.
     const id = insertTicket(db, projectId, ACTOR,
@@ -240,10 +267,17 @@ server.registerTool("save_issue", {
       const resolved = resolveAssignTo(cur.state, next.state, JSON.parse(next.labels) as string[]);
       if (resolved !== null) next.assignee = resolved; // null = leave untouched (no directive / "—" sentinel / unknown handle)
     }
+    // DL-32: prod-promotion gate — reject a non-operator ADDING env:prod (default off). Demotion is allowed.
+    const oldLabels = JSON.parse(cur.labels) as string[], newLabels = JSON.parse(next.labels) as string[];
+    const promoReject = prodPromotionRejection(oldLabels, newLabels);
+    if (promoReject) { db.exec("ROLLBACK"); return err(promoReject); }
     // DL-35: the UPDATE + transition/update event now live in ticketwrite.updateTicketRow. The atomic
     // read-merge-write txn (and the `next` merge above: REPLACE labels, APPEND-only relatedTo, DL-24 assignTo)
     // stay here — the mechanic is txn-agnostic, so this BEGIN IMMEDIATE block still owns atomicity.
     updateTicketRow(db, projectId, ACTOR, a.id, cur.state, next);
+    // DL-32: emit issue.promote {from,to} on any env:* label-set change (promotion cycle-time; no new state).
+    const fromEnv = envLabelsOf(oldLabels).join(","), toEnv = envLabelsOf(newLabels).join(",");
+    if (fromEnv !== toEnv) logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.promote", data: { from: fromEnv, to: toEnv } });
     db.exec("COMMIT");
   } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
   return ok(toTicket(getRow(a.id)!));
