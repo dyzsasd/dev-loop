@@ -245,10 +245,15 @@ rules.
 **On the `service` backend, prefer the `Human-Blocked` STATE over the label park (conventions §3).**
 When the block is genuinely human-only, move the ticket to **`state:"Human-Blocked"`** (a real
 parking state on `service`, DL-25): the persistent daemon then detects it structurally and
-periodically reminds the configured Slack/Lark channel on its own (DL-26, cadence =
-`settings_json.humanBlockedReminderHours`) — you don't emit the one-shot `notify` yourself. Resume
-by moving it back to **`Todo`** once the human resolves it out-of-band. On `linear`/`local` (no
-daemon) keep the label-based park above. Dev never picks a `Human-Blocked` ticket (it isn't `Todo`).
+periodically reminds the operator on its own (DL-26, cadence =
+`settings_json.humanBlockedReminderHours`). **On `service` the daemon is the single operator-alert
+emitter for BOTH transports** — a registered bot/webhook `channel` (DL-52) *or* the §9 `notify`
+webhook block (DL-59 teaches the notifier to read `notify` as the fallback), so a webhook-only
+`service` project is covered without a registered channel — therefore **you don't emit the one-shot
+`notify` yourself on `service`** (doing so would double-ping). Resume by moving it back to
+**`Todo`** once the human resolves it out-of-band. On `linear`/`local` (no daemon) keep the
+label-based park above — there PM **is** the §9 emitter. Dev never picks a `Human-Blocked` ticket
+(it isn't `Todo`).
 
 **When the now-unblocked action is itself sensitive/irreversible, execute it attended —
 don't route it to unattended Dev.** If the user just authorized a one-off destructive-class

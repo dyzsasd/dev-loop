@@ -120,6 +120,44 @@ Before gathering config, establish the shape (it changes later steps):
    ready** in the Step 8 report (same weight as an unset `repoPath` — Dev can't commit
    into a non-repo).
 
+### Step 0.5 — CHOOSE YOUR TICKET SYSTEM (backend) — surface the choice up front
+Before field-gathering, ask the operator **which ticket system this project coordinates through**
+(conventions §18). This is a first-class fork, not a buried config key — surface the tradeoffs so
+the choice is informed:
+
+- **`linear` (default — cloud).** Tickets live in Linear; the Linear app is the UI; team-visible.
+  Tradeoff: one **shared** Linear identity for all agents (no per-agent attribution); a human-park
+  alert is the §9 webhook on the **label** park.
+- **`service` (local daemon — recommended for "no-cloud AND I want a UI/identity").** A local
+  `node:sqlite` hub (`docs/HUB-ARCHITECTURE.md`): **real per-agent identity**, a **web-UI board**,
+  the §25 discussion board / Director, versioned operator-published docs, and the canonical
+  **`Human-Blocked` state** with a **daemon-reminded** operator alert. Optional one-way `mirror`
+  pushes tickets to Linear for human visibility **without** migrating.
+- **`local` (file board — zero-cloud, minimal).** A machine-local markdown board; the same work
+  plane. **Caveat to state plainly:** on `local` the human-park is **LABEL-ONLY** — there is **no
+  `Human-Blocked` state and no daemon reminder** (no persistent process to remind), so a parked
+  ticket pings only via the §9 webhook on the label park, and only when an agent fires.
+
+The backend-dependent control flow already routes correctly downstream (Steps 2–3 are skipped for
+`local`/`service`); this step is **surfacing the choice + its consequences**, not new control flow.
+
+**Operator-alert channel-linking (do it here, all backends).** `init` historically never set up
+notifications, so alerts were silently OFF until a ticket parked unseen. Ask now: **none / Lark /
+Slack.** The simple/default path is a **webhook** — paste an incoming-webhook URL, stored §16 as an
+**env-var NAME** (never the literal). On `service`, register the `channels` row (`transport:
+"webhook"`) + set `settings_json.humanBlockedReminderHours`; on `linear`/`local`, record it as the
+§9 `notify` block. A **bot** app (history-read scope) is the **advanced opt-in** — only when the
+operator also wants the two-way §25 Director chat. **"none" ⇒ today's behavior (alerts off).**
+
+**`service` auto-wiring (the turnkey bootstrap).** For `backend:"service"`, `init` performs a
+**one-time bootstrap**: install hub deps → seed the project (idempotent: actors + the §4 labels +
+a unique ticket prefix) → `doctor` → a one-time `daemon up` + `/api/health` liveness check, then
+**verify the plugin's `SessionStart` hook is present** (`hooks/hooks.json`, DL-42) — the hook is
+the **steady-state lifecycle owner**; init's `daemon up` is only a **same-session convenience**, not
+a parallel owner (both are idempotent). Also merge (never clobber) the product repo `.mcp.json` to
+register `dev-loop-hub`, env-name-only. *(The bootstrap mechanics are DL-60/DL-61; this step
+invokes them.)*
+
 ### Step 1 — Config: the project block in `projects.json`
 The agents are product-agnostic; everything product-specific lives in
 `${CLAUDE_PLUGIN_DATA}/projects.json` (conventions §11; schema in config-schema.md).
@@ -377,8 +415,12 @@ what's still needed. One line per check, grouped:
 
 - **Config**: project block present; required-by-role fields (`repoPath` for Dev,
   `strategyDoc` for PM, `testEnv` for QA); `mode`; `autonomy`; git/deploy flags.
-- **Backend**: which substrate (`linear`/`local`, §18); for `local`, the board dir +
-  `counter.json` present.
+- **Backend**: which substrate (`linear`/`local`/`service`, §18); for `local`, the board dir +
+  `counter.json` present; for `service`, the hub project seeded (unique prefix) + `doctor` green +
+  the daemon up with its **web-UI board URL** + the `SessionStart` hook present (DL-42) + the
+  `.mcp.json` actor wiring + `mirror` status (on/off). **Operator-alert** (all backends): the
+  chosen channel — `webhook`/`bot`/`none` — and, for `service`, `humanBlockedReminderHours`
+  (✗/— if alerts are off so a silent-park risk is visible, not hidden).
 - **Shape & repos** (§19): detected shape (greenfield / brownfield / adopting);
   single- vs multi-repo; each `repos[].path` exists; the doc-home repo; for greenfield,
   **git ready** (✗ if `git init` was declined — loop not ready, same weight as unset

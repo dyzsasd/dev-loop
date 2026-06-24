@@ -490,13 +490,20 @@ Dev's pick query (§5) must exclude `blocked` tickets.
 
 ### Notifying the operator on a human-park (optional — the `notify` config, §11)
 
-> **`notify` (one-way) vs the §25 `director.channel` (two-way).** This `notify` block stays
-> the **minimal one-way PM ping** — a write-only webhook, no read scope, works on **any**
-> backend. The richer **two-way** operator channel (the operator *chats* with the Director —
-> inbound direction + digests + replies) is the Director's `director.channel` block on
-> `backend:"service"` (conventions §25). They **coexist**; `channel` does not replace
-> `notify`. A blocked-ticket ping is `notify`'s job (or, under a `channel`, the Director's
-> `channel.send kind:"notify"` superset). Both opt-in; absent ⇒ no pinging.
+> **One operator-alert channel, two transports — `{transport: "webhook" | "bot"}`.** A
+> human-park alert is **one concept** with a transport discriminator. **`webhook` is the
+> one-way DEFAULT** — paste an incoming-webhook URL (stored §16 as an env-var NAME), write-only,
+> no read scope, works on **any** backend; this is the `notify` block below. **`bot` is the
+> opt-in superset** — a provider bot app (`app_id`/token) that *also* powers the two-way §25
+> `director.channel` where the operator **chats** with the Director (inbound direction + digests
+> + replies), `backend:"service"` only. **Trigger by backend:** on `service` the canonical
+> trigger is the **`Human-Blocked` state** and the persistent **daemon is the single emitter** —
+> it fires over a registered `channels` row (bot *or* webhook, DL-52) **or** this §9 `notify`
+> webhook block as the fallback (DL-59), so a webhook-only `service` project is still covered;
+> on `linear`/`local` (no daemon, no real state) the trigger is the **label park** below and
+> **PM** is the emitter. `§9 notify` is **not** superseded — it is the cross-backend one-way
+> floor; the §25 bot `channel` is the service-only two-way ceiling. All opt-in; absent ⇒ no
+> pinging.
 
 When a ticket is **left human-parked for the operator** — `blocked` + `needs-pm` with
 `Bail-shape: external-prereq` (a real credential / money / legal / security prerequisite,
@@ -955,6 +962,46 @@ in backend terms.
 **100% unchanged**; `local` and `service` are strictly opt-in via per-project config
 (§11) and bootstrapped by `/dev-loop:init`. Every rule elsewhere in this document is
 backend-agnostic — this section is the only place they diverge.
+
+### Backend parity — the work plane, the surface plane, and switching
+The backends are **unified on the work plane and honestly divergent on the surface plane** —
+naming the line is what keeps "the same loop, three substrates" a real guarantee rather than a
+slogan.
+
+- **The WORK PLANE is identical** across `linear`/`local`/`service`: the state set + legal
+  transitions (§3, incl. the verify-fail close+follow-up rule), who-does-what (Dev claims/ships,
+  PM/QA verify, §5 pick order, §7 claim, §8 dedupe), the agent loop, §9a human-intake, the §4
+  label taxonomy, and reports (§22/§23 — `reports.sink` is backend-decoupled). This is the bulk
+  of the loop and it is a contract, not a coincidence.
+- **The SURFACE PLANE is a deliberate per-backend superset**, and parity there is genuinely
+  impossible (not a missing feature): real **per-agent identity** + the **web UI/observability**
+  + the **§25 discussion board / Director** + the **two-way IM channel** + versioned
+  operator-published hub docs are **`service`-only**; cloud **human-visibility** + the native
+  Linear app are **`linear`-only**; `local` is the zero-cloud floor (and the one backend with no
+  board view — steer a "no-cloud but I want a UI/identity" operator to `service`, not `local`).
+- **Operator-notification is CONVERGING, not a today-identity:** the one-way webhook alert is the
+  cross-backend floor (DL-52 transport + DL-59 daemon-reads-`notify`); the §25 bot channel is the
+  service two-way ceiling. See §9 for the unified `{transport}` model.
+
+**`park-for-operator(ticket, bail-shape)` — one abstract op, realized per backend.** Parking a
+ticket for a human-only block is **real-state-if-present-else-label**: on `service` it is the real
+**`Human-Blocked` state** (daemon-reminded, DL-26); on `linear` it is the `blocked`+`needs-pm`
+label park **unless** the operator added a real Blocked column and set `blockedStateName` (then a
+real state); on `local` it is **label-only, full stop** — `Human-Blocked` is **not** a
+local-usable frontmatter state (the §3 local state set is the seven classic names) and
+`blockedStateName` cannot resolve to it, so there is no daemon and no state-reminder there. The
+**abstract behavior is invariant** ("the ticket leaves Dev's pick set until the human resolves it,
+then resumes to `Todo`"); only the mechanism + the reminder differ.
+
+**Switching a project's backend is chosen at init — changing it later is a data migration, not a
+config edit (deferred).** `backend` is set once at `/dev-loop:init`; flipping it on a project that
+**already has tickets** is out of scope today. The only cross-store seam is the **one-way
+hub→Linear `mirror` (a projection for human visibility, not a bridge)** — Linear is never read
+back as truth (split-brain is enforced). A future importer **cannot preserve source ticket ids as
+the primary key**: hub ids are a **global key** minted from `ticket_prefix`+`ticket_seq` and
+`seed.ts` hard-throws on a prefix clash, so e.g. a `CIT-345` reassigns to `<PREFIX>-N` and the
+source id must ride as a separate **`externalId`** — a data-fidelity loss, not just orphaning.
+**If the operator wants Linear visibility without migrating ⇒ `service` + `mirror`.**
 
 ### Local board layout
 The local board is **machine-local per-operator runtime state** — it lives in the
