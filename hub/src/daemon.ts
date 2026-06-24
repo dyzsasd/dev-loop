@@ -19,9 +19,10 @@ import { pathToFileURL } from "node:url";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { openDb, actorExists } from "./db.ts";
+import { openDb, actorExists, logEvent } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { resolveDoc, docSave, docPublish } from "./docstore.ts";
+import { getEnabledChannel, resolveCreds, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type FetchImpl } from "./channel.ts";
 
 export interface DaemonOpts {
   db: DatabaseSync;          // read connection (PRAGMA query_only=ON) — every GET route reads through this
@@ -68,7 +69,9 @@ function htmlOut(res: ServerResponse, status: number, body: string): void {
 // SoR holds arbitrary agent-authored text, so we escape it rather than trust it).
 const PRIORITY: Record<number, string> = { 1: "Urgent", 2: "High", 3: "Medium", 4: "Low", 0: "None" };
 const CORE_STATES = ["Todo", "In Progress", "In Review", "Done"]; // always shown (Linear-like board)
-const STATE_ORDER = ["Backlog", "Todo", "In Progress", "In Review", "Done", "Canceled", "Duplicate"];
+// Human-Blocked (DL-25) is a parking state — ordered after In Review, but rendered ONLY when populated
+// (like Backlog/Canceled/Duplicate), so an empty Human-Blocked column never clutters a healthy board.
+const STATE_ORDER = ["Backlog", "Todo", "In Progress", "In Review", "Human-Blocked", "Done", "Canceled", "Duplicate"];
 const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 function esc(s: unknown): string { return String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]); }
 function ownerOf(labels: string[]): string { return labels.includes("pm") ? "pm" : labels.includes("qa") ? "qa" : "—"; }
@@ -635,6 +638,68 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
   });
 }
 
+// ─── DL-26: Human-Blocked periodic notifier (service backend, option b) ───────
+// On `service` the daemon owns the ENTIRE Human-Blocked notification lifecycle: the FIRST ping the
+// moment a ticket is detected in the state (no human_blocked.notified marker yet ⇒ due now) AND the
+// periodic reminders thereafter (now − last marker ≥ cadence). Due-ness is computed STATELESS from
+// the events ledger, so a daemon restart never double-sends and needs no counter. This is the daemon's
+// ONE write to the SoR (the human_blocked.notified event), done via the writable `writeDb`, NEVER the
+// query_only read connection. Absent a channel OR humanBlockedReminderHours≤0 ⇒ no timer (true no-op).
+let blockedSendsThisProcess = 0; // per-process loop-safety cap (mirrors the MCP server's channel cap)
+
+export async function blockedNotifyTick(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  cadenceMs: number; nowMs: number; fetchImpl?: FetchImpl;
+}): Promise<number> {
+  const { writeDb, projectId, projectKey, baseUrl, cadenceMs, nowMs } = opts;
+  const ch = getEnabledChannel(writeDb, projectId);
+  if (!ch) return 0; // channel removed/disabled since startup ⇒ nothing to do
+  const rows = writeDb.prepare(
+    "SELECT id,title FROM tickets WHERE project_id=? AND state='Human-Blocked' ORDER BY updated_at",
+  ).all(projectId) as { id: string; title: string }[];
+  let sent = 0;
+  for (const t of rows) {
+    if (blockedSendsThisProcess >= CHANNEL_SEND_CAP) break; // loop-safety throttle
+    // Stateless due-ness: the last human_blocked.notified event for this ticket. None ⇒ first ping (due now).
+    const last = writeDb.prepare(
+      "SELECT MAX(created_at) m FROM events WHERE ticket_id=? AND kind='human_blocked.notified'",
+    ).get(t.id) as { m: string | null };
+    const due = !last.m || (nowMs - Date.parse(last.m)) >= cadenceMs;
+    if (!due) continue;
+    // §16 allow-list line: id + truncated title + localhost url ONLY. No description/labels/PII/secrets.
+    const line = `[${projectKey}] human-blocked: ${t.id} ${cleanLine(t.title, 80)} · ${baseUrl}/ticket/${t.id}`;
+    try {
+      if (CHANNEL_DRYRUN) {
+        // build + mark (no network) so the cadence throttle is exercised without spamming every tick
+        logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: "human_blocked.notified", data: { provider: ch.provider, dryrun: true } });
+      } else {
+        await sendVia(ch.provider as Provider, resolveCreds(ch), ch.channel_ref, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch);
+        logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: "human_blocked.notified", data: { provider: ch.provider } });
+      }
+      blockedSendsThisProcess++; sent++;
+    } catch (e) {
+      // id-only log, NO marker written ⇒ retried next tick (never echo the secret/body)
+      console.error(`[daemon] human-blocked notify failed for ${t.id}: ${scrubErr((e as Error).message)}`);
+    }
+  }
+  return sent;
+}
+
+export function startBlockedNotifier(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  cadenceHours: number; tickMs?: number;
+}): ReturnType<typeof setInterval> | null {
+  if (!(opts.cadenceHours > 0)) return null;                          // disabled
+  if (!getEnabledChannel(opts.writeDb, opts.projectId)) return null;  // no channel ⇒ true no-op
+  const cadenceMs = opts.cadenceHours * 3_600_000;
+  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_BLOCKED_TICK_MS) || 60_000);
+  const run = () => { void blockedNotifyTick({ ...opts, cadenceMs, nowMs: Date.now() }); };
+  const timer = setInterval(run, tickMs);
+  timer.unref?.();  // never keep the process alive solely for the notifier
+  run();            // immediate first tick — a fresh park is announced without waiting a full interval
+  return timer;
+}
+
 // ─── CLI entry: `npm run daemon` — open db, resolve project (same guard as the MCP server), listen ──
 // Only runs when executed directly (not on import — the test imports createDaemon and starts it itself).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -662,9 +727,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(1);
   }
   const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR });
+  // DL-26: read the per-project Human-Blocked reminder cadence (settings_json.humanBlockedReminderHours).
+  let cadenceHours = 0;
+  try {
+    const row = writeDb.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
+    cadenceHours = Number(JSON.parse(row?.settings_json ?? "{}")?.humanBlockedReminderHours) || 0;
+  } catch { cadenceHours = 0; }
   server.listen(PORT, HOST, () => {
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : PORT;
     console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${HOST}:${port}/  (reads read-only; /roadmap editable, localhost-only)`);
+    // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
+    const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, cadenceHours });
+    if (notifier) console.log(`[daemon] Human-Blocked notifier active (every ${cadenceHours}h via the configured channel)`);
   });
 }

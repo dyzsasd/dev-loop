@@ -3,7 +3,29 @@
 // NEVER logs/returns a token/secret. Every network call has a HARD timeout (a hung provider must
 // not wedge a Director fire). A failure is a thrown Error carrying only a provider error CODE/HTTP
 // status — never a response body that could echo a credential.
+import type { DatabaseSync } from "node:sqlite";
 export type Provider = "slack" | "lark";
+
+// ── Shared channel helpers (DL-26): extracted so the MCP server (server.ts) and the daemon
+// (daemon.ts) drive ONE implementation of channel selection / cred resolution / gating and cannot
+// drift. All are pure (db/projectId passed in); resolveCreds reads ONLY env-var NAMES (§16). ──
+export const CHANNEL_DRYRUN = process.env.DEVLOOP_CHANNEL_DRYRUN === "1"; // test/offline: build, no network
+export const CHANNEL_SEND_CAP = 60;                                      // per-process loop-safety throttle
+export interface ChannelRow {
+  id: string; project_id: string; provider: string; config_ref: string; secret_ref: string | null;
+  channel_ref: string; inbound_cursor: string | null; last_poll_at: string | null; enabled: number;
+}
+export const getEnabledChannel = (db: DatabaseSync, projectId: string): ChannelRow | undefined =>
+  db.prepare("SELECT * FROM channels WHERE project_id=? AND enabled=1 ORDER BY created_at LIMIT 1").get(projectId) as ChannelRow | undefined;
+export const resolveCreds = (c: ChannelRow): Creds =>
+  c.provider === "slack"
+    ? { token: process.env[c.config_ref] }
+    : { appId: process.env[c.config_ref], appSecret: c.secret_ref ? process.env[c.secret_ref] : undefined };
+// redact anything token-shaped + bound the length before any provider error is persisted/returned/logged.
+export const scrubErr = (m: string): string =>
+  m.replace(/\b(xox[abp]-[\w-]+|lin_(?:api|oauth)_[\w-]+|sk-[\w-]+|ghp_[\w-]+|eyJ[\w.-]{20,})\b/g, "***").slice(0, 120);
+// strip control chars + truncate — outbound text never carries raw bytes that could break a payload (§16/§9).
+export const cleanLine = (s: string, max: number): string => s.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, max);
 
 // The provider-agnostic internal shapes. The server BUILDS `lines` from a §16 allow-list (so this
 // module never sees free-form unbounded prose); the adapter only renders + sends them.

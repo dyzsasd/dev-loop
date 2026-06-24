@@ -224,3 +224,34 @@ All four are structural ⇒ one operator-applied `[pm-proposal]` set via git (§
 - **`[pm-proposal] D3a` — promote `Human-Blocked` to a real state** (Feature, P2, M): enum + CHECK + `user_version` rebuild migration in `openDb` + daemon `STATE_ORDER`; generalize `blockedStateName`; resume-to-`Todo`.
 - **`[pm-proposal] D3b` — daemon periodic `Human-Blocked` notifier** (Feature, P2, L): `setInterval` (gated on channel + `humanBlockedReminderHours`), stateless due-ness via `human_blocked.notified` events, writable connection, extract shared `channel-send.ts`. **Depends on D3a.**
 - The earlier §9 items covering assignee / W3 / blocked-lane are **superseded** by these; the workflow-config engine, swimlanes, and release/env-gating items remain valid and compose with `workflow.transitions` (D1's `assignTo` is the first directive under that map).
+
+---
+
+## 11. Locked decisions (FINAL — this section is authoritative on conflict)
+
+Round-3 operator decisions. Every design question is now pinned; nothing below is open.
+
+### Built & verified (PR #3 — flip the hub tickets to Done on merge)
+- **D1 — explicit `assignee` + `assignTo` directive.** `assignee` = who-acts-next; `pm`/`qa` label = who-verifies. Per-transition `assignTo` (owner|self|<handle>|null) in `settings_json.workflow.transitions`; **OFF by default**, recommended opt-in `In Progress→In Review: owner`. (DL-24)
+- **D2 — W3 intake parent-close + mandatory child→parent `relatedTo` back-link.** (DL-23)
+- **D3a — `Human-Blocked` real state** (service) + `user_version` table-rebuild migration. (DL-25)
+- **D3b — daemon notifier, option (b):** on `service` the daemon owns the whole Human-Blocked lifecycle (first ping on detection + reminders); §9 PM one-shot stays for linear/local. (DL-26)
+
+### Decided — TO BUILD
+- **Review-fail ⇒ ALWAYS close + follow-up (universal, NOT per-config, NOT reopen-to-Todo).** When the owner verifies an In-Review ticket and it fails: set the **original → `Canceled`** with a comment `review failed: <what>; superseded by <new-id>`, and **create a follow-up** (`Feature`/`Improvement`, `Todo`, `relatedTo` the original) carrying the remaining work. If the follow-up needs a human decision → move it to `Human-Blocked` (service) / park it (linear/local). *Each ticket is thus exactly one verified increment; a failed one is superseded, never silently reopened.* Pure conventions §9 + PM SKILL Job A change — **no hub code**. (DL-28)
+- **W3 human web-write surface ⇒ BUILD.** Daemon `POST /ticket`, `/ticket/:id/comment`, `/ticket/:id/move`, `/ticket/:id/assign`, gated by `settings_json.humanWrite.enabled` **and** `writeOriginOk` (the localhost Host+Origin check — the **real** trust boundary), attributed to `operator`, routed through the shared write path. Comments/descriptions are operator **DATA**: `esc()` at render, **no** `scrubChannel` port, **no** command-verb parser. Forms render on the board/ticket pages only when `canHumanWrite`. (DL-29)
+- **`Human-Blocked` wiring into conventions §3 + agent SKILLs** (closes the doc/code gap on shipped D3a/D3b): document it as the parking state on `service`; **resume → `Todo`**; **PM moves a ticket to `Human-Blocked`** when it can't resolve a block (the service-backend replacement for the `blocked`+`needs-pm`+`external-prereq` park); Dev never picks it (it's not `Todo`); §9 escalation updated. (DL-30)
+
+### Decided — POLICY
+- **Prod-promotion / operator-only gate = COOPERATIVE `ACTOR==='operator'`** — documented explicitly as cooperative-attribution, **NOT anti-spoof** (an agent can set `DEVLOOP_ACTOR`). The real boundary for any genuine human-only action is the daemon's `writeOriginOk` localhost path (W3). Release/env gating itself stays **designed-not-built** (§7); when built, its prod gate uses this idiom.
+- **Transition-guard engine = DEFERRED.** Only the `assignTo` directive ships now. W1/W2/W3 remain **convention-driven** (agents follow conventions; the hub does **not** hard-reject an out-of-graph state move). The `settings_json.workflow` namespace stays reserved for when we revisit. No `auditCoverage`/whitelist enforcement this round.
+- **Multi-backend `Human-Blocked`:** `service` = real state; `linear`/`local` = the `blocked` label fallback (`blockedStateName` names a real state where a backend has one). Conventions state this per-backend split.
+- **D3b cadence:** `humanBlockedReminderHours` default **0 (off)**; requires a configured channel; tick 60s (`DEVLOOP_BLOCKED_TICK_MS` override).
+
+### Designed-not-built (valid future work; explicitly out of this round)
+- **Assignee swimlanes** (`?group=assignee`) + card assignee chip + the `/api/tickets?assignee` filter fix. (DL-31)
+- **Release / environment gating** (W1: `env:dev`/`env:prod` labels, deploy gate, prod-promotion gate, `issue.promote`). (DL-32)
+These do **not** depend on the deferred transition engine.
+
+### Coverage
+- **DL-27** — fold the D3a-migration + D3b-notifier regression tests into `npm test`.
