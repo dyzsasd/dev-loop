@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { z } from "zod";
 import { openDb, nowIso, nextTicketId, logEvent, actorExists, listActorHandles, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { ensureActors, ensureProject, findProject } from "./seed.ts";
-import { sendVia, pollVia, type Provider, type OutboundMsg, type InboundMsg, type Creds } from "./channel.ts";
+import { sendVia, pollVia, getEnabledChannel, resolveCreds, scrubErr, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type OutboundMsg, type InboundMsg, type Creds, type ChannelRow } from "./channel.ts";
 import { findByMarker, createIssue, updateIssue, type MirrorIssue } from "./linear.ts";
 import { DOC_KINDS, resolveDoc, latestVersion, docSave, docPublish } from "./docstore.ts";
 import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
@@ -478,31 +478,17 @@ server.registerTool("topic.close", {
 // ─── P6 IM channel — provider-agnostic two-way plane (poll-based, NO daemon) ──────
 // §16: secrets live ONLY in env (config_ref/secret_ref are env-var NAMES); the hub reads them
 // server-side, builds the §16 allow-listed message, posts/polls — the token NEVER returns/logs.
-const CHANNEL_DRYRUN = process.env.DEVLOOP_CHANNEL_DRYRUN === "1"; // test/offline: build + cursor logic, no network
+// channel selection / cred resolution / gating / scrubErr now live in channel.ts (shared with the
+// daemon's Human-Blocked notifier so the two send paths can't drift, DL-26).
 let channelSendsThisProcess = 0;                                  // loop-safety cap (a buggy/injected Director can't spam)
-const CHANNEL_SEND_CAP = 60;
 const INBOX_GC_DAYS = 14;
-
-interface ChannelRow {
-  id: string; project_id: string; provider: string; config_ref: string; secret_ref: string | null;
-  channel_ref: string; inbound_cursor: string | null; last_poll_at: string | null; enabled: number;
-}
-const getChannel = (): ChannelRow | undefined =>
-  db.prepare("SELECT * FROM channels WHERE project_id=? AND enabled=1 ORDER BY created_at LIMIT 1").get(projectId) as ChannelRow | undefined;
-const resolveCreds = (c: ChannelRow): Creds =>
-  c.provider === "slack"
-    ? { token: process.env[c.config_ref] }
-    : { appId: process.env[c.config_ref], appSecret: c.secret_ref ? process.env[c.secret_ref] : undefined };
+const getChannel = (): ChannelRow | undefined => getEnabledChannel(db, projectId);
 // strip control chars + truncate — outbound text never carries raw bytes that could break a payload (§16/§9 step 1)
 const clean = (s: string, max: number): string => s.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, max);
 // §16 (Codex review): a *Ref is an ENV-VAR NAME, never a literal secret. Reject anything that isn't an
 // env-name shape, and anything that looks like an actual token — so a caller can't persist a secret to the DB.
 const TOKEN_PREFIXES = /^(xox[abp]-|lin_api_|lin_oauth_|sk-|ghp_|Bearer\s)/i;
 const isEnvName = (s: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) && !TOKEN_PREFIXES.test(s) && s.length <= 100;
-// defense-in-depth (Codex review): before persisting/returning a provider error, redact anything
-// token-shaped + bound the length — even though channel.ts/linear.ts already construct secret-free messages.
-const scrubErr = (m: string): string =>
-  m.replace(/\b(xox[abp]-[\w-]+|lin_(?:api|oauth)_[\w-]+|sk-[\w-]+|ghp_[\w-]+|eyJ[\w.-]{20,})\b/g, "***").slice(0, 120);
 
 server.registerTool("channel.register", {
   description: "Idempotently register/update this project's IM channel from config. Stores ONLY the ENV-VAR NAMES (configRef = bot token / lark app_id; secretRef = lark app_secret) + the room id — NEVER a token/secret.",
