@@ -748,7 +748,11 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
         return json(res, 200, { kind: d.kind, slug: d.slug, title: d.title, status: d.status, current_version: d.current_version, ...v, ...(d.current_version === 0 ? { unpublished: true } : {}) });
       }
 
-      return json(res, 404, { error: `not found: ${path}` });
+      // DL-36: an unknown /api/* path is a machine client → JSON 404 (unchanged). An unknown NON-API path is
+      // a page navigation (a typo'd URL) → serve the friendly HTML 404, like the ghost-ticket route, instead
+      // of a raw-JSON dead-end. Read-only; query_only preserved.
+      if (seg[0] === "api") return json(res, 404, { error: `not found: ${path}` });
+      return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="/">← board</a><p class="empty">No page <code>${esc(path)}</code> in ${esc(projectKey)}.</p>`));
     } catch (e) {
       return json(res, 500, { error: (e as Error).message });
     }

@@ -167,6 +167,12 @@ ok(detail.status === 200 && detail.body.id === feat.id && Array.isArray(detail.b
 const missing = await get("/api/tickets/DMN-999");
 ok(missing.status === 404, "GET /api/tickets/<unknown> → 404");
 
+// ─── DL-36: an unknown NON-API path → friendly HTML 404; an unknown /api/* path → JSON 404 (unchanged) ───
+const htmlMiss = await getHtml("/totally/bogus");
+ok(htmlMiss.status === 404 && htmlMiss.type.includes("text/html") && htmlMiss.text.includes("No page") && htmlMiss.text.includes("/totally/bogus"), "DL-36: unknown non-API path → 404 text/html friendly page (not a raw-JSON dead-end)");
+const apiMiss = await get("/api/totally/bogus");
+ok(apiMiss.status === 404 && !!apiMiss.body?.error, "DL-36: unknown /api/* path → 404 application/json (machine path unchanged)");
+
 // GET /api/docs + /api/docs/:kind — the roadmap document
 const docs = await get("/api/docs");
 ok(docs.status === 200 && docs.body.some((d: any) => d.kind === "roadmap" && d.status === "current"), "GET /api/docs → lists the published roadmap");
