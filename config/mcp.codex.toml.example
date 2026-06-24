@@ -14,6 +14,12 @@
 #   → must print "dev". If it prints "operator" (the default) or anything else, Codex is NOT
 #   propagating per-pane identity → do NOT onboard it until fixed (e.g. a per-pane --config override).
 
+# OPT-IN daemon transport (DL-55, P2): to route the core ticket tools through the ONE running daemon
+# instead of opening hub.db directly, change args to `.../hub/src/shim.ts` (from `.../hub/src/server.ts`).
+# REQUIRES the per-project daemon up (DL-42 auto-start or `npm run daemon`) + settings_json.hub.transport=
+# "daemon" (DL-43). The shim discovers the loopback port from the DL-41 runfile `~/.dev-loop/daemon-<key>.json`
+# (override with DEVLOOP_HUB_PORT) — never hardcodes 8787. Scope this increment: the 5 core ticket tools +
+# whoami; doc.*/topic.*/channel.* still need the default server.ts entry below.
 [mcp_servers.dev-loop-hub]
 command = "node"
 args = ["<ABS-PATH-TO-dev-loop>/hub/src/server.ts"]
