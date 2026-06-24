@@ -6,9 +6,10 @@
 // The fix (a per-project O_EXCL lock in daemonUp, §18) serializes cold start: the second `up` waits, finds the
 // winner already healthy, and no-ops. This test fires overlapping `up`s and asserts, every trial: the runfile
 // points at a LIVE daemon actually serving health, and after `down` NOTHING still listens (0 untracked leak).
-// HALF the trials pre-seed a STALE lock (a crashed `up`'s leftover) so the concurrent ATOMIC stale-break path
-// (rename-aside, not unlink-then-create — two racers must not both "break" and both acquire) is exercised too.
-// Deterministic-pass post-fix; ~99.6% to catch a regression across the trials.
+// HALF the trials pre-seed a STALE lock (a crashed `up`'s leftover) so the concurrent stale-break path is
+// exercised too — DL-51 serializes that break under a dedicated O_EXCL break-mutex and re-confirms staleness
+// while holding it, so two racers can't both "break" a stale lock and clobber each other's fresh re-take (the
+// DL-46 TOCTOU the rename-aside break re-admitted). Deterministic-pass post-fix.
 //
 // Runs against an ISOLATED temp DB + DEVLOOP_RUN_DIR (never the operator's ~/.dev-loop). cwd = hub/ (npm).
 import { spawn, execFileSync } from "node:child_process";
