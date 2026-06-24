@@ -530,6 +530,30 @@ URL), make **no** POST, and add **no** `notified` label.
 > Linear UI. If they do, set `blockedStateName` in config and the agents will use
 > the state instead of the label. Until then, the label is authoritative.
 
+### 9a. W3 — human-initiated intake (parent → Dev children; parent-close + back-link)
+
+A human may file work **directly into the loop** by creating a `dev-loop`-labelled
+ticket in `Todo` assigned to PM (the intake owner). This is **not** the §2 human
+backlog — a `dev-loop`-labelled ticket born in this project's board is loop-fair-game;
+only an *un*-labelled ticket in the separate human backlog stays off-limits (init-only
+adoption). PM **grooms** the parent into concrete Dev children, then **closes the
+parent** — but the children must stay navigable back to it. Mechanics, in this order:
+
+1. **File each child** with `relatedTo:[<parent-id>]` — **child→parent is MANDATORY.**
+   The child's own `relatedTo` row is the link that survives the parent going `Done`
+   (the board renders a ticket's `relatedTo` unconditionally, with no state gate), so a
+   reader on any child can always reach the originating parent.
+2. **Back-link the parent** in one write — `relatedTo:[<child1>,<child2>,…]` **and** a
+   comment listing the child IDs (`Groomed into: DL-x, DL-y`). Strongly recommended: the
+   dated comment is durable provenance after the parent closes.
+3. **Only then** move the parent to `Done` (verify-after-write). **Closing the parent
+   before the children are filed and back-linked is forbidden** — a late child with no
+   `relatedTo` strands the lineage.
+
+This rides entirely on the existing append-only `relatedTo` union (no `parentId` field —
+deliberately, §18) and adds no new state. All human↔PM discussion on the intake flows
+through the parent's comments.
+
 ---
 
 ## 10. Querying Linear without drowning

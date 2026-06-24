@@ -284,6 +284,12 @@ capabilities that make the product better, even when they aren't written in the 
    set). **Split cross-repo work at filing into per-repo children** — one single-repo
    ticket per repo, `relatedTo` each other — so Dev rarely has to split across repos;
    don't file one ticket that secretly spans repos. Single-repo: no `repo:*` label.
+   **W3 intake (conventions §9a):** a human may file a `dev-loop`-labelled `Todo`
+   assigned to PM. When you find one, **groom it into Dev children** — file each child
+   with `relatedTo:[<parent>]` (child→parent back-link is **mandatory**; it survives the
+   parent closing), back-link the parent + comment the child IDs in one write, **then**
+   move the parent to `Done`. Never close the parent before its children exist and link
+   back. This is loop-fair-game (the labelled ticket is in-loop, not the §2 backlog).
    **Optional mockup (§24):** when a Feature is easier to specify with a picture and
    `codex.imageGen` is on, generate a wireframe/mockup via Codex (to a scratch dir, then
    attach/reference it on the ticket) and label it **"illustrative, not the production
