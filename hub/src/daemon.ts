@@ -26,6 +26,7 @@ import { findProject } from "./seed.ts";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { resolveDoc, docSave, docPublish } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket, type WriteResult } from "./ticketwrite.ts";
+import { agentOp, AGENT_WRITE_OPS, isAgentOp } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
 import { getEnabledChannel, resolveCreds, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type FetchImpl } from "./channel.ts";
 
 export interface DaemonOpts {
@@ -353,7 +354,11 @@ function renderMarkdown(md: string): string {
 // error, OR a premature 'close' (a destroyed/aborted socket emits 'close' but neither 'end' nor 'error',
 // which would otherwise dangle the awaiting handler forever).
 const MAX_BODY = 1_000_000; // 1 MB of body bytes — a roadmap doc is text; orders of magnitude above any real edit
-function parseFormBody(req: IncomingMessage): Promise<URLSearchParams> {
+// Bounded read of the full request body as bytes, settling EXACTLY ONCE on every terminal event (over-limit
+// reject+destroy / normal end / error / premature 'close' — a destroyed socket emits 'close' but neither
+// 'end' nor 'error', which would otherwise dangle the awaiting handler forever). The decode is the caller's
+// — one read loop shared by parseFormBody (urlencoded forms) and parseJsonBody (the DL-43 op-API).
+function readBodyBytes(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let len = 0, settled = false;
@@ -363,11 +368,13 @@ function parseFormBody(req: IncomingMessage): Promise<URLSearchParams> {
       if (len > MAX_BODY) { settle(() => reject(new Error("request body too large"))); req.destroy(); return; }
       chunks.push(c);
     });
-    req.on("end", () => settle(() => resolve(new URLSearchParams(Buffer.concat(chunks).toString("utf8")))));
+    req.on("end", () => settle(() => resolve(Buffer.concat(chunks)))); // decode ONCE at the end (a per-chunk toString mangles a multibyte char split across a TCP read)
     req.on("error", (e) => settle(() => reject(e)));
     req.on("close", () => settle(() => reject(new Error("request closed before it completed"))));
   });
 }
+const parseFormBody = (req: IncomingMessage): Promise<URLSearchParams> =>
+  readBodyBytes(req).then((b) => new URLSearchParams(b.toString("utf8")));
 
 function redirect(res: ServerResponse, location: string): void {
   res.writeHead(303, { location, "content-length": 0 }); // 303 See Other — POST→GET (Post/Redirect/Get)
@@ -513,6 +520,72 @@ async function handleTicketWrite(seg: string[], req: IncomingMessage, res: Serve
   if (verb === "comment") return send(addComment(writeDb, projectId, actor, id, form.get("body") ?? ""), back);
   if (verb === "move") return send(moveTicket(writeDb, projectId, actor, id, form.get("state") ?? ""), back);
   return send(assignTicket(writeDb, projectId, actor, id, form.get("assignee") ?? ""), back);
+}
+
+// ─── DL-43: opt-in daemon agent op-API (/api/op/*) — the MCP↔daemon unification foundation (P1) ───────────
+// A DORMANT, default-OFF loopback surface serving the 5 core ticket ops (agentops.ts, mirroring server.ts
+// 1:1) so a later increment's thin stdio MCP shim (P2) can proxy to the daemon instead of opening hub.db
+// directly. Gated on settings_json.hub.transport==="daemon" (read FRESH per request, the DL-29 humanWrite
+// pattern): unset/≠"daemon" ⇒ the /api/op/* mount is dormant → 404 and every read/roadmap surface is
+// byte-for-byte unchanged. server.ts (the stdio transport) is 100% untouched. handleAgentOp owns the full
+// endpoint pipeline: writeOriginOk (DL-19 CSRF/DNS-rebind wall) → the X-Devloop-Actor header → the G1
+// phantom-actor guard → (writes only) the dry-run mode gate → dispatch. Read ops use the query_only `db`;
+// write ops use the writable `writeDb` (the same connection the human-write routes write through).
+function agentApiEnabled(db: DatabaseSync, projectId: string): boolean {
+  try {
+    const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
+    return JSON.parse(row?.settings_json ?? "{}")?.hub?.transport === "daemon";
+  } catch { return false; } // malformed config ⇒ dormant (fail-closed: a write surface never opens on bad config)
+}
+// The project's mode (live|dry-run), read fresh per request so an operator flip takes effect without a
+// restart. Honoring it server-side (design Decision #4) gates the op-API WRITE ops under dry-run — a
+// defense-in-depth atop the agent-side mode authority (§12/§18: the hub row is advisory). A malformed /
+// missing value reads as "live" (fail-OPEN to the working default — never silently wedge a live write path).
+function projectMode(db: DatabaseSync, projectId: string): string {
+  try {
+    const row = db.prepare("SELECT mode FROM projects WHERE id=?").get(projectId) as { mode?: string } | undefined;
+    return row?.mode ?? "live";
+  } catch { return "live"; }
+}
+
+// Read the op-API's JSON args via the shared bounded reader (readBodyBytes). An empty body ⇒ {} (a no-arg op
+// like list_issues). A non-object JSON value (array/number/null) ⇒ {} — the ops read named fields, so a
+// non-object is "no args", never thrown; only un-parseable JSON rejects (→ the caller's 400).
+function parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  return readBodyBytes(req).then((b) => {
+    const raw = b.toString("utf8").trim();
+    if (!raw) return {};
+    let v: unknown;
+    try { v = JSON.parse(raw); } catch { throw new Error("invalid JSON body"); }
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  });
+}
+
+// Handle POST /api/op/<op>. Identity rides X-Devloop-Actor (cooperative single-host attribution, §18 — NOT
+// anti-spoof; the real human boundary stays the operator-publish gate). Pipeline order is load-bearing: the
+// CSRF/Host wall runs BEFORE the actor/body are read, and a write is mode-gated before any mutation.
+async function handleAgentOp(op: string, req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string): Promise<void> {
+  if (!isAgentOp(op)) return json(res, 404, { error: `unknown op '${op}'` });
+  // (1) CSRF / DNS-rebinding wall FIRST — uniform over every op. A non-browser agent client (the shim, curl,
+  //     tests) sends no Origin ⇒ allowed; a browser cross-origin / foreign-Host POST is refused before anything.
+  if (!writeOriginOk(req)) return json(res, 403, { error: "op refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
+  // (2) actor from the header, validated against `actors` (the G1 phantom-actor guard — every write/comment
+  //     must be attributable, exactly like the stdio server's DEVLOOP_ACTOR start guard).
+  const actor = (req.headers["x-devloop-actor"] as string | undefined)?.trim();
+  if (!actor) return json(res, 400, { error: "missing X-Devloop-Actor header (the caller's actor)" });
+  if (!actorExists(writeDb, actor)) return json(res, 400, { error: `unknown actor '${actor}'` });
+  const isWrite = AGENT_WRITE_OPS.has(op);
+  // (3) honor `mode` server-side (design Decision #4): a WRITE op in a dry-run project is refused (defense-in-
+  //     depth atop agent-side mode authority). Live ⇒ byte-identical to the stdio path (reads are never gated).
+  if (isWrite && projectMode(db, projectId) === "dry-run") return json(res, 403, { error: `project '${projectKey}' is in dry-run mode — the op-API refuses writes (mode honored server-side; §12/§18)` });
+  // (4) parse the JSON args (bounded). A rejected body may have destroyed the socket — guard the response.
+  let args: Record<string, unknown>;
+  try { args = await parseJsonBody(req); }
+  catch (e) { if (!res.headersSent && !res.destroyed) json(res, 400, { error: (e as Error).message }); return; }
+  // (5) dispatch — writes through writeDb (atomic txn + attributed event in ticketwrite), reads through the
+  //     query_only db. agentOp mirrors server.ts; an op-level validation/not-found maps to its HTTP status.
+  const r = agentOp(op, isWrite ? writeDb : db, projectId, projectKey, actor, args);
+  return json(res, r.status, r.body);
 }
 
 // ── DL-10: agent reports view (read-only, FILESYSTEM source — separate from the hub DB) ──────────
@@ -673,6 +746,17 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
         if (!writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
         await handleTicketWrite(seg, req, res, writeDb!, projectId, actor!);
         return;
+      }
+      // DL-43: opt-in agent op-API — POST /api/op/<op>, active ONLY when canWrite AND the project opted in
+      // (settings_json.hub.transport==="daemon", read FRESH). The WHOLE /api/op/* path is owned here so a
+      // DORMANT mount (flag off, or a read-only daemon, or a non-POST/garbled op path) 404s — an absent
+      // mount, not the generic non-GET 405 — leaving every existing surface byte-for-byte unchanged.
+      if (seg[0] === "api" && seg[1] === "op") {
+        if (method === "POST" && canWrite && seg.length === 3 && agentApiEnabled(db, projectId)) {
+          await handleAgentOp(seg[2], req, res, db, writeDb!, projectId, projectKey);
+          return;
+        }
+        return json(res, 404, { error: `not found: ${path}` });
       }
       // READ-ONLY for everything else: any other non-GET is refused — the read surface never mutates (DL-1 AC).
       if (method !== "GET" && method !== "HEAD") {
