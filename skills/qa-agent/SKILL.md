@@ -148,8 +148,11 @@ For each (oldest first):
    comment there and dedupe (don't reopen this one or file a duplicate); a
    brand-new separate defect → file it in Job C.
 3. **Reproduces no more** → `state:"Done"`, comment what you re-ran.
-   **Still broken / regressed** → `state:"Todo"`, comment the still-failing repro
-   and any new symptom. (Verify-fail is first-class — never leave it In Review.)
+   **Still broken / regressed** → **close + follow-up** (design §11 / conventions §3):
+   set the original `state:"Canceled"` with a comment `re-test failed: <still-failing
+   repro + any new symptom>; superseded by <new-id>`, **then file a follow-up** `Bug` +
+   `qa` (`state:"Todo"`, `relatedTo` the original) with the repro. Never leave the
+   original in In Review (a failed increment is superseded, not reopened).
    **Couldn't actually run** (env down, harness crash, repro un-runnable this fire)
    → **inconclusive, NOT a pass.** Do **not** move it to Done — leave it In Review,
    comment the reason (one line), and re-verify next fire. A verdict without
