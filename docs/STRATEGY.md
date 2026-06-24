@@ -337,7 +337,7 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   CSRF/same-origin-guarded since it's a write). Scope it like the cwd feature (DL-12 proposal +
   DL-13/15 buildable) — i.e. a small design pass, not a one-shot ticket. Awaiting operator
   prioritization vs. the supporting goals (hub hardening + portability) now that the milestone is done.
-- **Web-UI fidelity polish (ux-flows lens, PM 2026-06-23).** **UPDATE 2026-06-23: filed as DL-16** (items a+b: render markdown ticket/comment bodies via the existing renderMarkdown + show created/updated timestamps), now that the milestone backlog drained. Item (c) below (non-API path → JSON not HTML-404) remains a minor optional note. Lower-value read-view
+- **Web-UI fidelity polish (ux-flows lens, PM 2026-06-23).** **UPDATE 2026-06-23: filed as DL-16** (items a+b: render markdown ticket/comment bodies via the existing renderMarkdown + show created/updated timestamps), now that the milestone backlog drained. **UPDATE 2026-06-24: item (c) confirmed live + filed as DL-36** (ux-flows sweep at `dfa5f9b`: `/totally/bogus` → JSON 404 while `/ticket/<missing>` → HTML 404; serve the friendly HTML 404 for non-API paths, keep `/api/*` JSON). All three sub-items now filed. Lower-value read-view
   refinements found alongside DL-8, parked to keep the Dev-bottlenecked Todo signal-rich: (a)
   ticket/comment bodies render as **raw markdown** inside a `<pre>` block — a tiny inline
   markdown→HTML renderer (no native deps, hub doctrine) would match the "Linear-like" Vision; (b)
