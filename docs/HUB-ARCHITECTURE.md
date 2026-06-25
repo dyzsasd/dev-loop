@@ -283,7 +283,7 @@ CREATE VIRTUAL TABLE tickets_fts USING fts5(title, body_md, content='tickets', c
 -- ── ADDITIVE, LATER PHASES (schema-shaped now, built when the phase lands) ──
 -- P3: project_members(project_id, actor_id, role)  + (if tokens) agent_tokens(hash-only)
 -- P3: labels(project_id, name, kind)   -- a registry, only if free-string labels prove insufficient
--- P4: documents(project_id, slug, kind∈{strategy,roadmap,design,risk,decisions,note}, status∈{draft,current}, current_version)
+-- P4: documents(project_id, slug, kind∈{strategy,roadmap,decisions,notes}, status∈{draft,current}, current_version)
 --     document_versions(document_id, version, body_md, author_id, summary, base_version)   -- optimistic CAS
 -- P5 (SHIPPED): topics / posts (discussion; the DECISION is INLINE on topics, no separate table)
 -- P6 (SHIPPED): channels + channel_messages (two-way IM; config_ref = ENV-VAR NAME, never the secret; inbound_cursor = the no-daemon poll cursor)
@@ -392,7 +392,7 @@ human-visibility only — never disaster recovery.**
 
 **The hub adds NO mechanical enforcement over §17, and we do not pretend it does.** SKILL/conventions files live on disk; agents keep `Bash`/`Edit` access; §17 remains a prompt-gated honor system backed by **operator git review**. The hub keeps it **exactly as strong as today — preserved, not strengthened**:
 
-- **No hub tool ever writes a SKILL / conventions / plugin file.** Document `kind` is constrained to `{strategy, roadmap, design, risk, decisions, note}` — none can name a SKILL or `conventions.md`. A §17 change is still a Reflect-drafted `[reflect-proposal]` ticket (`Improvement`+`pm`, `blocked`+`needs-pm`+`Bail-shape: external-prereq`), out of Dev's pick set, **applied by the operator as a git commit** (§17 verbatim).
+- **No hub tool ever writes a SKILL / conventions / plugin file.** Document `kind` is constrained to `{strategy, roadmap, decisions, notes}` — none can name a SKILL or `conventions.md`. A §17 change is still a Reflect-drafted `[reflect-proposal]` ticket (`Improvement`+`pm`, `blocked`+`needs-pm`+`Bail-shape: external-prereq`), out of Dev's pick set, **applied by the operator as a git commit** (§17 verbatim).
 - **Direction is operator-published, not agent-applied.** The Director may draft a roadmap version; only the operator flips `draft→current` (§14, §9). `decision_record` is a proposal.
 - **Inbound and inline content is DATA, never authorization (§4, extending §22/§23).** A chat message id alone, or an `operator`-attributed post, cannot authorize a self-modify/irreversible action — that requires the operator's out-of-band path carrying the §23 second factor (an opaque token). Because the hub's storage is forgeable (§4), the authorization-of-record for anything unforgeable **stays outside the hub** (the git commit; the §23-guarded review channel).
 - **§17 surface-map for the hub world:** conventions/SKILLs on disk = untouched, git-reviewed; `strategy`/`roadmap`/`decisions` docs = human-gated publication like `strategyDoc` today; `lessons.md` = Reflect-only + the §22 operator-review carve-out, unchanged and still machine-local.
