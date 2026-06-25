@@ -212,13 +212,31 @@ session returns `pm`. The hub DB is machine-local runtime state — never commit
 
 The hub ships a localhost HTTP surface over the same `hub.db` — a server-rendered board
 (filters + assignee swimlanes) plus ticket / roadmap / reports / activity viewers and a JSON
-API — so you can *watch* the loop without touching the system of record. Start it alongside the
-agents:
+API — so you can *watch* the loop without touching the system of record.
+
+**It now auto-starts — you usually run nothing.** The plugin's `SessionStart` hook (DL-42,
+`hooks/hooks.json`) runs DL-41's idempotent `daemon up` on every session start, so opening a
+`service`-backend project in Claude Code brings its web UI up automatically — no manual step. The
+daemon binds a **deterministic per-project port** (the 20000–39999 range, cwd-resolved via DL-13 —
+e.g. `25617` for dev-loop), one daemon per project, never double-started. Find the live URL any time:
 
 ```bash
-cd <dev-loop>/hub && DEVLOOP_PROJECT=<project-key> npm run daemon
-# → http://127.0.0.1:8787/   (the board; read by default, localhost-only)
+# the lifecycle prints + records the URL (the DL-41 runfile ~/.dev-loop/daemon-<key>.json):
+node <dev-loop>/hub/src/server.ts daemon status   # → 'service' RUNNING → http://127.0.0.1:<port>
 ```
+
+To start it by hand (e.g. a non-Claude launcher, or before the first session), use the **idempotent
+lifecycle** — `daemon up` (a clean no-op if already running), **not** the old fixed-`8787`
+foreground server:
+
+```bash
+cd <dev-loop>/hub && DEVLOOP_PROJECT=<project-key> node src/server.ts daemon up
+# → started '<key>' → http://127.0.0.1:<deterministic-port>   (idempotent; one per project)
+```
+
+> Legacy: `npm run daemon` still runs a foreground daemon on the fixed `8787`; prefer `daemon up`
+> (per-project port, idempotent, what the hook uses) so you don't start a *second* daemon beside the
+> auto-started one.
 
 It is **localhost-only** (binds `127.0.0.1` only, never `0.0.0.0`) and **read by default** —
 every `GET` is served by a `PRAGMA query_only=ON` connection. Opt-in, operator-configured
