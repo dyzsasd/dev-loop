@@ -72,6 +72,10 @@ const eventsBy = async (actor: string, kind: string, ticketId: string): Promise<
 // ═══ DORMANT by default — settings_json.hub.transport unset ⇒ every /api/op/* path 404s ═══════════════
 ok((await op("save_issue", { title: "x" }, DEV)).status === 404, "flag-off: POST /api/op/save_issue → 404 (mount dormant, no hub.transport)");
 ok((await op("list_issues", {}, DEV)).status === 404, "flag-off: POST /api/op/list_issues → 404 (reads dormant too)");
+// DL-62: the widened doc/event ops are dormant too while the flag is off (default-off, zero new surface)
+ok((await op("doc.list", {}, DEV)).status === 404, "flag-off: POST /api/op/doc.list → 404 (doc reads dormant too)");
+ok((await op("doc.save", { slug: "x", kind: "strategy", body: "y", baseVersion: 0 }, { "x-devloop-actor": "pm" })).status === 404, "flag-off: POST /api/op/doc.save → 404 (doc writes dormant too)");
+ok((await op("list_events", {}, DEV)).status === 404, "flag-off: POST /api/op/list_events → 404 (events dormant too)");
 // the existing read + roadmap surfaces are byte-for-byte unchanged while the op-API is dormant
 const tBefore = await getJson("/api/tickets");
 ok(tBefore.status === 200 && tBefore.body.length === 1 && tBefore.body[0].id === feat.id, "flag-off: GET /api/tickets unchanged (the read surface still serves)");
@@ -120,6 +124,54 @@ ok(rel2.relatedTo.includes(bugId) && rel2.relatedTo.includes("AGP-zzz"), "op sav
 const lc = await op("list_comments", { issueId: feat.id }, DEV);
 ok(lc.status === 200 && Array.isArray(lc.body) && lc.body.some((c: any) => c.author === "dev"), "op list_comments → the dev-authored comment");
 
+// ═══ DL-62: the doc/event family via the op-API (mirrors server.ts list_events + doc.*) ════════════════
+// list_events — the attribution feed (Reflect's window) already holds the attributed writes above; byte-parity with stdio
+const ev = await op("list_events", { limit: 200 }, DEV);
+const evStdio = await call(verifier, "list_events", { limit: 200 });
+ok(ev.status === 200 && Array.isArray(ev.body) && ev.body.some((e: any) => e.actor === "qa" && e.kind === "issue.create"), "op list_events → the attributed feed (qa issue.create present)");
+ok(JSON.stringify(ev.body) === JSON.stringify(evStdio), "parity: op list_events ≡ stdio list_events (byte-identical)");
+
+// doc.save (CREATE) attributed to X-Devloop-Actor (pm), a DRAFT via the CAS — never auto-published
+const ds = await op("doc.save", { slug: "strat", kind: "strategy", title: "Strategy", body: "v1 body", baseVersion: 0 }, { "x-devloop-actor": "pm" });
+ok(ds.status === 200 && ds.body.version === 1 && ds.body.status === "draft", `op doc.save (new) → draft v1 (got ${JSON.stringify(ds.body)})`);
+ok((await call(verifier, "doc.history", { slug: "strat" }))[0].author === "pm", "doc.save landed attributed to pm (doc.history on the stdio path — cross-path attribution)");
+ok((await call(verifier, "list_events", { limit: 50 })).some((e: any) => e.actor === "pm" && e.kind === "doc.save"), "list_events confirms a doc.save attributed to pm");
+
+// reads mirror the stdio server byte-for-byte
+const dg = await op("doc.get", { slug: "strat" }, DEV);
+ok(dg.status === 200 && JSON.stringify(dg.body) === JSON.stringify(await call(verifier, "doc.get", { slug: "strat" })) && dg.body.unpublished === true, "parity: op doc.get ≡ stdio doc.get (unpublished draft)");
+const dlOp = await op("doc.list", {}, DEV);
+ok(dlOp.status === 200 && JSON.stringify(dlOp.body) === JSON.stringify(await call(verifier, "doc.list", {})), "parity: op doc.list ≡ stdio doc.list");
+ok(JSON.stringify((await op("doc.history", { slug: "strat" }, DEV)).body) === JSON.stringify(await call(verifier, "doc.history", { slug: "strat" })), "parity: op doc.history ≡ stdio doc.history");
+
+// CAS: a stale baseVersion → 409 CONFLICT (never last-write-wins); a kind-clash at an existing slug → 409 (kind immutable)
+const stale = await op("doc.save", { slug: "strat", kind: "strategy", body: "racey", baseVersion: 0 }, { "x-devloop-actor": "pm" });
+ok(stale.status === 409 && /CONFLICT/.test(stale.body.error), `op doc.save stale base → 409 CONFLICT (got ${stale.status} ${JSON.stringify(stale.body)})`);
+ok((await op("doc.save", { slug: "strat", kind: "notes", body: "x", baseVersion: 1 }, { "x-devloop-actor": "pm" })).status === 409, "op doc.save with a mismatched kind at an existing slug → 409 (a doc's kind is immutable)");
+
+// append a real v2, then doc.diff parity (unified diff over the version bodies)
+await op("doc.save", { slug: "strat", kind: "strategy", body: "v2 body", baseVersion: 1 }, { "x-devloop-actor": "pm" });
+const diff = await op("doc.diff", { slug: "strat", from: 1, to: 2 }, DEV);
+ok(diff.status === 200 && JSON.stringify(diff.body) === JSON.stringify(await call(verifier, "doc.diff", { slug: "strat", from: 1, to: 2 })) && /v1 body/.test(diff.body.fromBody) && /v2 body/.test(diff.body.toBody), "parity: op doc.diff ≡ stdio doc.diff (unified diff over version bodies)");
+
+// operator-publish gate (cooperative role-attribution, §18): a non-operator → 403; the operator → 200 current
+const pubByPm = await op("doc.publish", { slug: "strat", version: 2 }, { "x-devloop-actor": "pm" });
+ok(pubByPm.status === 403 && /only the operator/.test(pubByPm.body.error), `op doc.publish as pm → 403 (cooperative operator gate; got ${pubByPm.status})`);
+const pub = await op("doc.publish", { slug: "strat", version: 2 }, { "x-devloop-actor": "operator" });
+ok(pub.status === 200 && pub.body.status === "current" && pub.body.current_version === 2, `op doc.publish as operator → v2 current (got ${JSON.stringify(pub.body)})`);
+
+// doc guards: a ghost slug → 404; a missing version to publish → 404; invalid kind → 400; the CSRF/rebind wall covers doc writes
+ok((await op("doc.get", { slug: "nope" }, DEV)).status === 404, "guard: doc.get of a ghost slug → 404");
+ok((await op("doc.publish", { slug: "strat", version: 99 }, { "x-devloop-actor": "operator" })).status === 404, "guard: doc.publish of a missing version → 404");
+ok((await op("doc.save", { slug: "bad", kind: "bogus", body: "y", baseVersion: 0 }, { "x-devloop-actor": "pm" })).status === 400, "guard: doc.save invalid kind → 400 (mirrors the zod DOC_KINDS enum)");
+// the op-API parses raw JSON (no zod) → numeric/string inputs are re-validated by hand to mirror server.ts's schema (a clean 400, never a node:sqlite bind-throw 500 or a synthetic success)
+ok((await op("list_events", { limit: "all" }, DEV)).status === 400, "guard: list_events non-integer limit → 400 (not a 500 from a bad LIMIT bind)");
+ok((await op("list_events", { limit: 10000 }, DEV)).status === 400, "guard: list_events limit over the cap → 400 (mirrors zod .max(500))");
+ok((await op("doc.get", { slug: "strat", version: 0 }, DEV)).status === 400, "guard: doc.get version:0 → 400 (mirrors zod .positive(), not a synthetic empty-doc 200)");
+ok((await op("doc.save", { slug: "strat", kind: "strategy", body: "z", baseVersion: 2, title: {} }, { "x-devloop-actor": "pm" })).status === 400, "guard: doc.save non-string title → 400 (not a 500 from an object bound into the INSERT)");
+ok((await op("doc.save", { slug: "strat", kind: "strategy", body: "csrf", baseVersion: 2 }, { "x-devloop-actor": "pm", origin: "http://evil.example" })).status === 403, "guard: cross-origin doc.save → 403 (CSRF wall covers the doc write)");
+ok((await op("doc.publish", { slug: "strat", version: 1 }, { "x-devloop-actor": "operator", host: "evil.example" })).status === 403, "guard: foreign Host doc.publish → 403 (DNS-rebinding wall)");
+
 // ═══ endpoint pipeline guards ═════════════════════════════════════════════════════════════════════════
 ok((await op("save_comment", { issueId: feat.id, body: "no actor" }, {})).status === 400, "guard: missing X-Devloop-Actor → 400");
 ok((await op("save_comment", { issueId: feat.id, body: "ghost" }, { "x-devloop-actor": "ghost" })).status === 400, "guard: unknown actor 'ghost' → 400 (G1 phantom-actor guard)");
@@ -149,6 +201,10 @@ const commentsBeforeDry = (await op("list_comments", { issueId: feat.id }, DEV))
 ok((await op("save_comment", { issueId: feat.id, body: "should be refused" }, DEV)).status === 403, "mode: a WRITE op under dry-run → 403 (mode honored server-side)");
 ok((await op("list_issues", {}, DEV)).status === 200, "mode: a READ op under dry-run still serves (reads are never mode-gated)");
 ok((await op("list_comments", { issueId: feat.id }, DEV)).body.length === commentsBeforeDry, "mode: the refused dry-run write wrote NOTHING (comment count unchanged)");
+// DL-62: a doc WRITE is mode-gated server-side too (doc.save ∈ AGENT_WRITE_OPS); the refused write appends nothing
+const docHistBeforeDry = (await call(verifier, "doc.history", { slug: "strat" })).length;
+ok((await op("doc.save", { slug: "strat", kind: "strategy", body: "dry-run draft", baseVersion: 2 }, { "x-devloop-actor": "pm" })).status === 403, "mode: a doc.save under dry-run → 403 (doc write mode-gated server-side too)");
+ok((await call(verifier, "doc.history", { slug: "strat" })).length === docHistBeforeDry, "mode: the refused dry-run doc.save appended NO new version");
 setMode("live");
 ok((await op("save_comment", { issueId: feat.id, body: "live again" }, DEV)).status === 200, "mode: flipping back to live → the write succeeds again (read fresh per request)");
 
@@ -160,6 +216,7 @@ ok(stdioComment.author === "pm", "back-compat: the stdio MCP save_comment still 
 setTransport(false);
 ok((await op("list_issues", {}, DEV)).status === 404, "flag-off (live toggle): op list_issues → 404 again (dormant)");
 ok((await op("save_comment", { issueId: feat.id, body: "nope" }, DEV)).status === 404, "flag-off (live toggle): op save_comment → 404 again");
+ok((await op("doc.list", {}, DEV)).status === 404, "flag-off (live toggle): op doc.list → 404 again (the doc family goes dormant with the flag)");
 ok((await getJson("/api/tickets")).status === 200, "flag-off (live toggle): GET /api/tickets still serves (read surface unchanged)");
 
 await pm.close();

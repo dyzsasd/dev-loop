@@ -9,14 +9,15 @@
 // makes — so the CLI never makes an authed HTTP call and the headless `claude -p` Authorization-header drop
 // (HUB-ARCHITECTURE §6) never touches identity.
 //
-// SCOPE (DL-55): the 5 core ticket tools (list_issues/get_issue/save_issue/save_comment/list_comments) + a
-// LOCAL whoami. doc.*/topic.*/channel.*/mirror.*/list_events/label ops are the sequenced (3/n) increment,
-// NOT here — so the shim is not yet a 100% server.ts drop-in. The shim holds NO SoR / NO ticket logic
-// (Decision #3): a pure thin client over the op-API (which mirrors server.ts 1:1 via agentops.ts).
+// SCOPE: the 5 core ticket tools (list_issues/get_issue/save_issue/save_comment/list_comments) + a LOCAL
+// whoami (DL-55), PLUS (DL-62) the doc/event family — list_events + doc.list/get/history/diff/save/publish.
+// topic.*/post.add + channel.* + mirror.* + the label ops are the sequenced (4/n) increment, NOT here — so
+// the shim is not YET a 100% server.ts drop-in. The shim holds NO SoR / NO ticket-or-doc logic (Decision #3):
+// a pure thin client over the op-API (which mirrors server.ts 1:1 via agentops.ts + the shared docstore).
 //
-// PARITY TRIPWIRE: the tool names + zod inputSchemas below MUST stay byte-identical to server.ts's 5 core
-// tools (the shim is meant to be a drop-in transport for them). A change to a core tool's name/schema in
-// server.ts must land here too.
+// PARITY TRIPWIRE: the tool names + zod inputSchemas below MUST stay byte-identical to server.ts's tools
+// (the shim is a drop-in transport for them). A change to a proxied tool's name/schema in server.ts must
+// land here too.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { request as httpRequest } from "node:http";
@@ -25,6 +26,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
+import { DOC_KINDS } from "./docstore.ts"; // the doc-kind enum ONLY (the same const server.ts uses) — a shared schema constant, not SoR/doc logic; keeps doc.save's enum from drifting (the shim stays a thin client)
 
 // ─── identity + project (mirror server.ts:18-33) ────────────────────────────────
 // Identity rides DEVLOOP_ACTOR (launcher-set per pane); an EXPLICIT DEVLOOP_PROJECT wins, else resolve the
@@ -174,6 +176,31 @@ server.registerTool("save_comment",
 server.registerTool("list_comments",
   { description: "List a ticket's comments (chronological; the tail is the latest).", inputSchema: { issueId: z.string() } },
   async (a) => proxy("list_comments", a));
+
+// ─── events (Reflect's activity window) ─────────────────────────────────────────
+server.registerTool("list_events",
+  { description: "Recent attribution/audit events (who did what).", inputSchema: { limit: z.number().int().positive().max(500).optional() } },
+  async (a) => proxy("list_events", a));
+
+// ─── P4 documents — read + draft (CAS), operator-published; proxied to the op-API (names/schemas ≡ server.ts) ──
+server.registerTool("doc.list", { description: "List this project's documents (no bodies).", inputSchema: { kind: z.string().optional() } },
+  async (a) => proxy("doc.list", a));
+server.registerTool("doc.get", {
+  description: "Get a document by slug or kind. Omit version → the published (current) version; if never published, the latest DRAFT with unpublished:true. version=N → that historical version.",
+  inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive().optional() },
+}, async (a) => proxy("doc.get", a));
+server.registerTool("doc.save", {
+  description: "Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the doc's latest version, else CONFLICT (never last-write-wins). NEVER publishes — only the operator can (doc.publish).",
+  inputSchema: { slug: z.string(), kind: z.enum(DOC_KINDS), title: z.string().optional(), body: z.string(), baseVersion: z.number().int().min(0), summary: z.string().optional() },
+}, async (a) => proxy("doc.save", a));
+server.registerTool("doc.history", { description: "A document's version ledger (no bodies; newest first).", inputSchema: { slug: z.string().optional(), kind: z.string().optional() } },
+  async (a) => proxy("doc.history", a));
+server.registerTool("doc.diff", { description: "Line diff between two versions of a document.", inputSchema: { slug: z.string().optional(), kind: z.string().optional(), from: z.number().int().positive(), to: z.number().int().positive() } },
+  async (a) => proxy("doc.diff", a));
+server.registerTool("doc.publish", {
+  description: "OPERATOR-ONLY: publish a draft version → current (the live doc). Cooperative role-gate (DEVLOOP_ACTOR=operator), not anti-spoof — see §18/HUB-ARCHITECTURE §16.",
+  inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive() },
+}, async (a) => proxy("doc.publish", a));
 
 await server.connect(new StdioServerTransport());
 console.error(`[shim] dev-loop-hub daemon-transport shim ready: actor=${ACTOR} project=${PROJECT_KEY} runfile=${RUNFILE}`);

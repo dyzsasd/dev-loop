@@ -24,7 +24,7 @@ import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, logEvent, STATES } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
-import { resolveDoc, docSave, docPublish } from "./docstore.ts";
+import { resolveDoc, docSave, docPublish, statusForDocErr } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket, type WriteResult } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
 import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Transport, type FetchImpl } from "./channel.ts";
@@ -427,14 +427,8 @@ function roadmapPage(db: DatabaseSync, projectId: string, opts: { writable: bool
 // POST /roadmap/save | /roadmap/publish — the ONLY write routes. Both hard-target the kind:"roadmap"
 // document through docstore (DB-doc-only; no filesystem path ⇒ §17 firewall). save → a DRAFT via the
 // CAS (a stale baseVersion is surfaced as a CONFLICT, never last-write-wins); publish → operator-gated.
-// Map a docstore error message (the store returns prose, not codes) to the right HTTP status: the
-// operator gate → 403, a missing doc/version → 404, the create-precondition → 400, else a genuine
-// CAS / kind-immutability conflict → 409.
-const statusForDocErr = (msg: string): number =>
-  msg.startsWith("FORBIDDEN") ? 403
-    : /^no (document|version)\b/.test(msg) ? 404
-      : msg.includes("baseVersion must be 0") ? 400
-        : 409;
+// `statusForDocErr` (the docstore-error → HTTP-status map) now lives in docstore.ts so this roadmap path
+// and the DL-43/DL-62 agent op-API can't drift on it.
 
 // DL-19: CSRF + DNS-rebinding guard for the write routes. The daemon is http localhost-only, so the
 // ONLY legitimate origin is the host the operator's own browser connected to. Refuse:
