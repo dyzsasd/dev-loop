@@ -20,3 +20,5 @@ daemon-*.log
 projects.json
 # self-hosting: machine-local MCP registration (abs paths); the committed template is config/mcp.example.json
 .mcp.json
+# P4: the published npm build artifact (built on prepack, never committed)
+hub/dist/

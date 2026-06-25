@@ -1,13 +1,25 @@
 {
-  "name": "dev-loop-hub",
-  "version": "0.7.0",
-  "private": true,
+  "name": "dev-loop",
+  "version": "0.20.0",
   "type": "module",
-  "description": "Local MCP system-of-record for the dev-loop agents (per-agent identity, tickets/comments/labels/events over node:sqlite). Zero native deps, zero build step (Node >=23 type-stripping + built-in node:sqlite). See ../docs/HUB-ARCHITECTURE.md.",
+  "description": "Standalone local coordination hub for the dev-loop agents — a zero-build, zero-native-dep MCP system-of-record over node:sqlite with per-agent identity, a localhost web-UI daemon, an opt-in agent op-API + thin stdio shim, and a CLI-portable transport (Claude Code / Codex / opencode). See https://github.com/dyzsasd/dev-loop (docs/HUB-ARCHITECTURE.md, docs/PORTABILITY.md).",
+  "keywords": ["dev-loop", "agents", "mcp", "sqlite", "daemon", "sdlc", "automation", "coordination", "tickets", "claude-code", "codex"],
+  "homepage": "https://github.com/dyzsasd/dev-loop#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/dyzsasd/dev-loop.git", "directory": "hub" },
+  "bugs": { "url": "https://github.com/dyzsasd/dev-loop/issues" },
+  "license": "MIT",
+  "author": { "name": "Shuai" },
   "bin": {
-    "dev-loop-hub": "src/server.ts"
+    "dev-loop": "dist/cli.js",
+    "dev-loop-hub": "dist/server.js"
   },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "start": "DEVLOOP_CREATE_PROJECT=1 node src/server.ts",
     "daemon": "node src/daemon.ts",
     "seed": "node src/seed.ts",
@@ -15,6 +27,7 @@
     "init-service-test": "node test/init-service.ts",
     "mcp-merge": "node src/mcp-merge.ts",
     "mcp-merge-test": "node test/mcp-merge.ts",
+    "release-version": "node src/release-version.ts",
     "doctor": "node src/server.ts doctor",
     "identity-check": "node src/server.ts identity-check",
     "smoke": "node test/smoke.ts",
@@ -30,8 +43,9 @@
     "shim": "DEVLOOP_CHANNEL_DRYRUN=1 DEVLOOP_CHANNEL_TOKEN=xoxb-DRYRUNSECRET DEVLOOP_MIRROR_DRYRUN=1 node test/shim.ts",
     "lifecycle": "node test/lifecycle.ts",
     "lifecycle-race": "node test/lifecycle-race.ts",
-    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts && node test/resolve-project.ts && node test/daemon.ts && DEVLOOP_CHANNEL_DRYRUN=1 DEVLOOP_CHANNEL_TOKEN=xoxb-DRYRUNSECRET DEVLOOP_MIRROR_DRYRUN=1 node test/agent-api.ts && DEVLOOP_CHANNEL_DRYRUN=1 DEVLOOP_CHANNEL_TOKEN=xoxb-DRYRUNSECRET DEVLOOP_MIRROR_DRYRUN=1 node test/shim.ts && node test/lifecycle.ts && node test/lifecycle-race.ts && node test/blocked.ts && node test/migrate.ts && node test/release.ts && node test/mcp-config.ts && node test/init-service.ts && node test/mcp-merge.ts && node test/wal-checkpoint.ts",
+    "test": "node test/smoke.ts && node test/loop.ts && node test/isolation.ts && node test/docs.ts && node test/board.ts && node test/channel.ts && node test/mirror.ts && node test/identity.ts && node test/resolve-project.ts && node test/daemon.ts && DEVLOOP_CHANNEL_DRYRUN=1 DEVLOOP_CHANNEL_TOKEN=xoxb-DRYRUNSECRET DEVLOOP_MIRROR_DRYRUN=1 node test/agent-api.ts && DEVLOOP_CHANNEL_DRYRUN=1 DEVLOOP_CHANNEL_TOKEN=xoxb-DRYRUNSECRET DEVLOOP_MIRROR_DRYRUN=1 node test/shim.ts && node test/lifecycle.ts && node test/lifecycle-race.ts && node test/blocked.ts && node test/migrate.ts && node test/release.ts && node test/mcp-config.ts && node test/init-service.ts && node test/mcp-merge.ts && node test/wal-checkpoint.ts && node test/version-sync.ts",
     "wal-checkpoint": "node test/wal-checkpoint.ts",
+    "version-sync": "node test/version-sync.ts",
     "blocked": "node test/blocked.ts",
     "migrate": "node test/migrate.ts",
     "release": "node test/release.ts",
@@ -43,5 +57,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
   }
 }
