@@ -105,8 +105,24 @@ function prodPromotionRejection(db: DatabaseSync, projectId: string, actor: stri
 
 // ─── the 5 ops ─────────────────────────────────────────────────────────────────
 
+// Shared input-shape guard: a JSON array whose every element is a string — mirrors zod's z.array(z.string()).
+// The op-API parses raw JSON (no zod), so list_issues + save_issue both re-check `labels` by hand with this
+// (a non-array would crash a `[...]` spread or be JSON.stringify'd into the column → a 500); one definition the
+// two ops share so they can't drift (DL-65 hoisted opSaveIssue's original local helper to module scope).
+const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+
 export interface ListIssuesArgs { state?: string; assignee?: string; type?: string; label?: string; labels?: string[]; query?: string; limit?: number }
 function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: ListIssuesArgs): OpResult {
+  // Re-validate the raw-JSON arg shapes the stdio path gets from zod (server.ts: query/assignee
+  // z.string().optional(), labels z.array(z.string()).optional()). Without this a non-string `query`
+  // (.toLowerCase() below), a non-array `labels` (the [...] spread below), or a non-string truthy `assignee`
+  // (resolveAssignee → .trim()) throws a TypeError → the daemon's catch → an HTTP 500 echoing the raw JS error,
+  // where the zod path returns a clean 400. Same guard class as opSaveIssue's labels / the doc-READ selectors
+  // (docSelectorErr, DL-63) — the last unguarded read op (DL-65). state/type/label are compared (never bound or
+  // method-called), so they keep today's behavior and need no guard.
+  if (a.query !== undefined && typeof a.query !== "string") return errR(400, "query must be a string");
+  if (a.labels !== undefined && !isStrArr(a.labels)) return errR(400, "labels must be an array of strings");
+  if (a.assignee !== undefined && typeof a.assignee !== "string") return errR(400, "assignee must be a string");
   let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as TicketRow[]).map(toTicket);
   if (a.state) out = out.filter((t) => t.state === a.state);
   if (a.assignee) out = out.filter((t) => t.assignee === resolveAssignee(actor, a.assignee));
@@ -137,7 +153,6 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
   // re-checks the SAME shapes by hand. The array fields are load-bearing: a non-array labels/relatedTo would
   // be JSON.stringify'd into the column and later crash a `t.labels.includes()` / `[...]` spread (a 500
   // poison-pill on every subsequent list_issues), so reject them up front — matching zod's array-of-strings.
-  const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
   if (a.labels !== undefined && !isStrArr(a.labels)) return errR(400, "labels must be an array of strings");
   if (a.relatedTo !== undefined && !isStrArr(a.relatedTo)) return errR(400, "relatedTo must be an array of strings");
   if (a.priority !== undefined && (typeof a.priority !== "number" || !Number.isInteger(a.priority) || a.priority < 0 || a.priority > 4)) return errR(400, `invalid priority; an integer 0..4`);
