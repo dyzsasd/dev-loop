@@ -102,6 +102,7 @@ const CORE_STATES = ["Todo", "In Progress", "In Review", "Done"]; // always show
 // Human-Blocked (DL-25) is a parking state — ordered after In Review, but rendered ONLY when populated
 // (like Backlog/Canceled/Duplicate), so an empty Human-Blocked column never clutters a healthy board.
 const STATE_ORDER = ["Backlog", "Todo", "In Progress", "In Review", "Human-Blocked", "Done", "Canceled", "Duplicate"];
+const TERMINAL_STATES = ["Done", "Canceled", "Duplicate"]; // DL-45: excluded from the composition summary band (the band shows the shape of OPEN work)
 const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 function esc(s: unknown): string { return String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]); }
 function ownerOf(labels: string[]): string { return labels.includes("pm") ? "pm" : labels.includes("qa") ? "qa" : "—"; }
@@ -160,6 +161,9 @@ code{font:.92em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg)
 .filterbar{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:0 0 .8rem}
 .filterbar .chips{display:flex;gap:.3rem;flex-wrap:wrap;margin-left:.2rem}
 .filterbar .clearall{border-style:dashed}
+.summary{display:flex;gap:1rem;flex-wrap:wrap;align-items:center;margin:0 0 .8rem;padding:.4rem .55rem;background:var(--card);border:1px solid var(--line);border-radius:8px}
+.summary .sum-grp{display:flex;gap:.3rem;flex-wrap:wrap}
+.summary .lbl{cursor:default}.summary .lbl b{color:var(--ink);font-weight:600}
 `;
 
 function page(title: string, project: string, inner: string): string {
@@ -276,7 +280,22 @@ function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filt
       + `<select name="type"><option>Feature</option><option>Bug</option><option>Improvement</option></select>`
       + `<button type="submit">+ New ticket</button></form>`
     : "";
-  return controls + newForm + boardHtml + empty;
+  // DL-45: an at-a-glance composition summary band over the NON-TERMINAL tickets of the (filtered) set — by
+  // type, owner, and priority. A pure read-only aggregate over the rows already fetched + filtered above, so it
+  // always agrees with the columns below it (and with the swimlanes, which split this same `tickets` set). The
+  // terminal states (Done/Canceled/Duplicate) are excluded — the band shows the shape of OPEN work. Hidden when
+  // there is no open work (an empty / all-terminal set) so it never renders an all-zero strip.
+  const open = tickets.filter((t) => !TERMINAL_STATES.includes(t.state));
+  const sumChip = (label: string, n: number) => `<span class="lbl">${esc(label)} <b>${n}</b></span>`;
+  const sumGrp = (chips: string) => `<span class="sum-grp">${chips}</span>`;
+  const summary = open.length
+    ? `<div class="summary" title="composition of the ${open.length} open (non-terminal) ticket(s)${active.length ? ", filtered" : ""}">`
+      + sumGrp(["Feature", "Bug", "Improvement"].map((ty) => sumChip(ty, open.filter((t) => t.type === ty).length)).join(""))
+      + sumGrp(["pm", "qa"].map((o) => sumChip(o, open.filter((t) => ownerOf(t.labels) === o).length)).join(""))
+      + sumGrp([1, 2, 3, 4, 0].map((p) => sumChip(prioOf(p), open.filter((t) => t.priority === p).length)).join(""))
+      + `</div>`
+    : "";
+  return controls + newForm + summary + boardHtml + empty;
 }
 
 // Ticket detail: full description + comments. Returns null when the ticket is absent (→ 404).
