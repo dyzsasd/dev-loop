@@ -84,6 +84,12 @@ ok((await op("topic.open", { question: "q", invited: ["dev"] }, { "x-devloop-act
 // DL-67: the channel family is dormant too while the flag is off (default-off, zero new surface)
 ok((await op("channel.status", {}, DEV)).status === 404, "flag-off: POST /api/op/channel.status → 404 (channel reads dormant too)");
 ok((await op("channel.register", { provider: "slack", configRef: "X", channelRef: "C" }, { "x-devloop-actor": "pm" })).status === 404, "flag-off: POST /api/op/channel.register → 404 (channel writes dormant too)");
+// DL-68: the P7 mirror + label/project family is dormant too while the flag is off (default-off, zero new surface)
+ok((await op("mirror.status", {}, DEV)).status === 404, "flag-off: POST /api/op/mirror.status → 404 (mirror reads dormant too)");
+ok((await op("mirror.push", { teamId: "t", tokenEnv: "DEVLOOP_LINEAR_TOKEN" }, DEV)).status === 404, "flag-off: POST /api/op/mirror.push → 404 (mirror writes dormant too)");
+ok((await op("list_issue_labels", {}, DEV)).status === 404, "flag-off: POST /api/op/list_issue_labels → 404 (label reads dormant too)");
+ok((await op("create_issue_label", { name: "x", kind: "marker" }, { "x-devloop-actor": "pm" })).status === 404, "flag-off: POST /api/op/create_issue_label → 404 (label writes dormant too)");
+ok((await op("get_project", {}, DEV)).status === 404, "flag-off: POST /api/op/get_project → 404 (project read dormant too)");
 // the existing read + roadmap surfaces are byte-for-byte unchanged while the op-API is dormant
 const tBefore = await getJson("/api/tickets");
 ok(tBefore.status === 200 && tBefore.body.length === 1 && tBefore.body[0].id === feat.id, "flag-off: GET /api/tickets unchanged (the read surface still serves)");
@@ -279,6 +285,39 @@ ok((await op("channel.ack", { messageId: 5 }, DEV)).status === 400, "op channel.
 ok((await op("channel.register", { provider: "bogus", configRef: "X", channelRef: "C" }, DEV)).status === 400, "op channel.register invalid provider → 400");
 ok((await op("channel.register", { provider: "slack", configRef: "DEVLOOP_CHANNEL_TOKEN", channelRef: "C2" }, { ...DEV, origin: "http://evil.example" })).status === 403, "op channel.register cross-origin → 403 (CSRF/DNS-rebind wall covers the channel write)");
 
+// ═══ DL-68: the P7 mirror + label/project family via the op-API (mirrors server.ts; mirror.push DRYRUN = build-no-network) ══
+// reads mirror the stdio server byte-for-byte (the differential-parity AC)
+const llOp = await op("list_issue_labels", {}, DEV);
+ok(llOp.status === 200 && JSON.stringify(llOp.body) === JSON.stringify(await call(verifier, "list_issue_labels", {})), "parity: op list_issue_labels ≡ stdio list_issue_labels (byte-identical)");
+const gpOp = await op("get_project", {}, DEV);
+ok(gpOp.status === 200 && JSON.stringify(gpOp.body) === JSON.stringify(await call(verifier, "get_project", {})) && gpOp.body.key === "agp", "parity: op get_project ≡ stdio get_project (byte-identical)");
+const msOp = await op("mirror.status", {}, DEV);
+ok(msOp.status === 200 && JSON.stringify(msOp.body) === JSON.stringify(await call(verifier, "mirror.status", {})), "parity: op mirror.status ≡ stdio mirror.status (byte-identical)");
+// create_issue_label (write) attributed to dev via X-Devloop-Actor; the label appears on the stdio path; DL-22 holds
+const clOp = await op("create_issue_label", { name: "op-made-label", kind: "subtype" }, DEV);
+ok(clOp.status === 200 && clOp.body.name === "op-made-label" && clOp.body.kind === "subtype", `op create_issue_label → 200 {name,kind} (got ${JSON.stringify(clOp.body)})`);
+ok(await eventsByKind("dev", "label.create"), "list_events confirms label.create attributed to dev (the identity win, label family)");
+ok((await call(verifier, "list_issue_labels", {})).some((l: any) => l.name === "op-made-label"), "the op-API-created label is visible on the stdio path (one db)");
+ok((await op("create_issue_label", { name: "ghostkind", kind: "bogus-kind" }, DEV)).status === 400, "DL-22: op create_issue_label bad kind → clean 400 (not a fake success)");
+ok(!(await call(verifier, "list_issue_labels", {})).some((l: any) => l.name === "ghostkind"), "DL-22: the bad-kind label was NOT created on the op-API path (no dropped-row masquerade)");
+ok((await op("create_issue_label", { name: "   " }, DEV)).status === 400, "DL-22: op create_issue_label whitespace-only name → clean 400 (no junk row)");
+ok((await op("create_issue_label", { name: 5 }, DEV)).status === 400, "op create_issue_label non-string name → 400 (DL-63 hand-validation, not a 500)");
+ok((await op("create_issue_label", { name: "op-made-label", kind: "subtype" }, DEV)).status === 200, "op create_issue_label re-create → 200 (idempotent on UNIQUE(project,name))");
+ok((await call(verifier, "list_issue_labels", {})).filter((l: any) => l.name === "op-made-label").length === 1, "idempotent: exactly one 'op-made-label' row");
+// mirror.push (write, DRYRUN: build-no-network) attributed to dev → previews ops, persists NO mirror_map row (DL-11)
+const mpOp = await op("mirror.push", { teamId: "team_1", tokenEnv: "DEVLOOP_LINEAR_TOKEN" }, DEV);
+ok(mpOp.status === 200 && mpOp.body.dryrun === true && Array.isArray(mpOp.body.ops) && mpOp.body.ops.length >= 1, `op mirror.push (DRYRUN) → previews would-push ops, dryrun:true (got created=${mpOp.body.created}, ops=${mpOp.body.ops?.length})`);
+ok(mpOp.body.ops.every((o: any) => o.title.includes("[hub:") && o.body.includes("Mirrored from the dev-loop hub")), "op mirror.push DRYRUN ops carry the [hub:id] marker + split-brain banner");
+ok(await eventsByKind("dev", "mirror.push"), "list_events confirms mirror.push attributed to dev (the identity win, mirror family)");
+ok((await op("mirror.status", {}, DEV)).body.mapped === 0, "DL-11: after a DRYRUN op mirror.push, mirror_map is still EMPTY (mapped:0 — no poisoned row persisted)");
+ok((await op("mirror.push", { teamId: "t", tokenEnv: "lin_api_LITERALSECRET" }, DEV)).status === 400, "§16: op mirror.push rejects a literal token in tokenEnv → 400 (env NAMES only, no secret to the DB)");
+ok((await op("mirror.push", { teamId: 5, tokenEnv: "DEVLOOP_LINEAR_TOKEN" }, DEV)).status === 400, "op mirror.push non-string teamId → 400 (DL-63 hand-validation, not a node:sqlite bind 500)");
+ok((await op("mirror.push", { teamId: "t", tokenEnv: "DEVLOOP_LINEAR_TOKEN", stateMap: "x" }, DEV)).status === 400, "op mirror.push non-object stateMap → 400");
+ok((await op("mirror.push", { teamId: "t", tokenEnv: "DEVLOOP_LINEAR_TOKEN", limit: 0 }, DEV)).status === 400, "op mirror.push out-of-range limit → 400 (mirrors zod 1..500)");
+// the CSRF/DNS-rebind wall covers the 2 new writes (the design-#4 guard order applies to the new endpoints too)
+ok((await op("create_issue_label", { name: "csrf-label" }, { ...DEV, origin: "http://evil.example" })).status === 403, "op create_issue_label cross-origin → 403 (CSRF/DNS-rebind wall covers the new label write)");
+ok((await op("mirror.push", { teamId: "t", tokenEnv: "DEVLOOP_LINEAR_TOKEN" }, { ...DEV, origin: "http://evil.example" })).status === 403, "op mirror.push cross-origin → 403 (CSRF/DNS-rebind wall covers the new mirror write)");
+
 // ═══ endpoint pipeline guards ═════════════════════════════════════════════════════════════════════════
 ok((await op("save_comment", { issueId: feat.id, body: "no actor" }, {})).status === 400, "guard: missing X-Devloop-Actor → 400");
 ok((await op("save_comment", { issueId: feat.id, body: "ghost" }, { "x-devloop-actor": "ghost" })).status === 400, "guard: unknown actor 'ghost' → 400 (G1 phantom-actor guard)");
@@ -328,6 +367,10 @@ ok((await op("list_comments", { issueId: feat.id }, DEV)).body.length === commen
 const docHistBeforeDry = (await call(verifier, "doc.history", { slug: "strat" })).length;
 ok((await op("doc.save", { slug: "strat", kind: "strategy", body: "dry-run draft", baseVersion: 2 }, { "x-devloop-actor": "pm" })).status === 403, "mode: a doc.save under dry-run → 403 (doc write mode-gated server-side too)");
 ok((await call(verifier, "doc.history", { slug: "strat" })).length === docHistBeforeDry, "mode: the refused dry-run doc.save appended NO new version");
+// DL-68: the 2 new writes are mode-gated server-side too (mirror.push / create_issue_label ∈ AGENT_WRITE_OPS)
+ok((await op("create_issue_label", { name: "drylabel" }, DEV)).status === 403, "mode: a create_issue_label under dry-run → 403 (the new label write is mode-gated server-side)");
+ok(!(await call(verifier, "list_issue_labels", {})).some((l: any) => l.name === "drylabel"), "mode: the refused dry-run create_issue_label wrote NO label");
+ok((await op("mirror.push", { teamId: "t", tokenEnv: "DEVLOOP_LINEAR_TOKEN" }, DEV)).status === 403, "mode: a mirror.push under dry-run → 403 (the new mirror write is mode-gated server-side)");
 setMode("live");
 ok((await op("save_comment", { issueId: feat.id, body: "live again" }, DEV)).status === 200, "mode: flipping back to live → the write succeeds again (read fresh per request)");
 
@@ -342,6 +385,8 @@ ok((await op("save_comment", { issueId: feat.id, body: "nope" }, DEV)).status ==
 ok((await op("doc.list", {}, DEV)).status === 404, "flag-off (live toggle): op doc.list → 404 again (the doc family goes dormant with the flag)");
 ok((await op("topic.list", {}, DEV)).status === 404, "flag-off (live toggle): op topic.list → 404 again (the board family goes dormant with the flag)");
 ok((await op("channel.status", {}, DEV)).status === 404, "flag-off (live toggle): op channel.status → 404 again (the channel family goes dormant with the flag)");
+ok((await op("mirror.status", {}, DEV)).status === 404, "flag-off (live toggle): op mirror.status → 404 again (the mirror family goes dormant with the flag)");
+ok((await op("get_project", {}, DEV)).status === 404, "flag-off (live toggle): op get_project → 404 again (the label/project family goes dormant with the flag)");
 ok((await getJson("/api/tickets")).status === 200, "flag-off (live toggle): GET /api/tickets still serves (read surface unchanged)");
 
 await pm.close();
