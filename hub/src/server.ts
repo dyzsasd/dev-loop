@@ -3,16 +3,15 @@
 // Tools mirror the Linear MCP op-shapes 1:1 so the agent SKILLs port unchanged (conventions §18).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { randomUUID, createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { z } from "zod";
 import { openDb, nowIso, logEvent, actorExists, listActorHandles, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { ensureActors, ensureProject, findProject } from "./seed.ts";
-import { scrubErr } from "./channel.ts"; // DL-67: the channel send/poll/cred transport stays in channel.ts; its HANDLER logic moved to channelstore.ts. scrubErr is still used by the P7 mirror's error path below.
-import { findByMarker, createIssue, updateIssue, type MirrorIssue } from "./linear.ts";
 import { DOC_KINDS, resolveDoc, latestVersion, docSave, docPublish } from "./docstore.ts";
 import { topicList, topicGet, topicOpen, postAdd, topicSynthesize, topicClose } from "./topicstore.ts"; // DL-64: the shared discussion-board read+write logic + role gates (the docstore.ts precedent), so the op-API and this server can't drift
-import { channelRegister, channelSend, channelPoll, channelAck, channelStatus, isEnvName } from "./channelstore.ts"; // DL-67: the shared IM-channel handler logic + DL-4 roadmap bridge (the topicstore precedent) — one impl for this server + the op-API. isEnvName (env-NAME §16 guard) is reused by the P7 mirror below.
+import { channelRegister, channelSend, channelPoll, channelAck, channelStatus } from "./channelstore.ts"; // DL-67: the shared IM-channel handler logic + DL-4 roadmap bridge (the topicstore precedent) — one impl for this server + the op-API.
+import { mirrorPush, mirrorStatus } from "./mirrorstore.ts"; // DL-68: the shared P7 mirror.push handler + mirror.status (reuses linear.ts transport + channelstore's isEnvName) — one impl for this server + the op-API.
+import { createLabel, listLabels, getProject } from "./labelstore.ts"; // DL-68: the shared label/project ops (incl. the single LABEL_KINDS source for the DL-22 reject) — one impl for this server + the op-API.
 import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
 import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts"; // DL-35: the single ticket/comment write home
 
@@ -312,27 +311,16 @@ server.registerTool("list_comments",
     return ok(db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(issueId));
   });
 
-// ─── labels ──────────────────────────────────────────────────────────────────
+// ─── labels (shared labelstore — one LABEL_KINDS source + the DL-22 reject, reused by the op-API) ──────
 server.registerTool("list_issue_labels", { description: "List the project's labels.", inputSchema: {} },
-  async () => ok(db.prepare("SELECT name,kind FROM labels WHERE project_id=? ORDER BY kind,name").all(projectId)));
-// The kinds the labels.kind CHECK constraint allows (db.ts L57). Validated UP FRONT so INSERT OR IGNORE
-// can only ever ignore a genuine duplicate name — never silently swallow a CHECK(kind) violation and
-// then masquerade as success (DL-22: a bad kind returned ok{} while the row was dropped).
-const LABEL_KINDS = ["marker", "type", "owner", "subtype", "workflow", "repo"] as const;
+  async () => ok(listLabels(db, projectId)));
 server.registerTool("create_issue_label",
   { description: "Create a label if missing (idempotent).", inputSchema: { name: z.string(), kind: z.string().optional() } },
-  async ({ name, kind }) => {
-    const nm = name.trim();
-    if (!nm) return err("label name required (non-empty, non-whitespace)"); // DL-22: reject empty/whitespace, no junk row
-    const k = kind ?? "workflow";
-    if (!LABEL_KINDS.includes(k as (typeof LABEL_KINDS)[number])) return err(`invalid kind '${k}'; one of ${LABEL_KINDS.join("/")}`); // DL-22: clean err, never a fake success
-    db.prepare("INSERT OR IGNORE INTO labels(id,project_id,name,kind) VALUES (?,?,?,?)").run(randomUUID(), projectId, nm, k);
-    return ok({ name: nm, kind: k }); // idempotent: UNIQUE(project_id,name) → re-create of an existing name is a no-op, still ok
-  });
+  async ({ name, kind }) => { const r = createLabel(db, projectId, { name, kind }); return r.ok ? ok(r.data) : err(r.error); });
 
 // ─── projects (minimal) + events (attribution audit) ─────────────────────────
 server.registerTool("get_project", { description: "The active project.", inputSchema: {} },
-  async () => ok(db.prepare("SELECT id,key,name,ticket_prefix,mode,autonomy FROM projects WHERE id=?").get(projectId)));
+  async () => ok(getProject(db, projectId)));
 server.registerTool("list_events",
   { description: "Recent attribution/audit events (who did what).", inputSchema: { limit: z.number().int().positive().max(500).optional() } },
   async ({ limit }) => ok(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? ORDER BY id DESC LIMIT ?").all(projectId, limit ?? 50)));
@@ -477,26 +465,11 @@ server.registerTool("channel.status", {
   inputSchema: {},
 }, async () => ok(channelStatus(db, projectId)));
 
-// ─── P7 one-way Linear mirror — hub → Linear projector (NO daemon; idempotent; §16) ──────
-// STRICTLY ONE-WAY: the hub WRITES Linear + reads ONLY to reconcile its own mapping. A human edit
-// on Linear is OVERWRITTEN next push (the content hash is HUB-derived, so hub state always wins).
-// The token is read SERVER-SIDE from env[tokenEnv]; the caller passes only the NAME (§16).
-const MIRROR_DRYRUN = process.env.DEVLOOP_MIRROR_DRYRUN === "1";
-const MIRROR_BANNER = "> 🤖 Mirrored from the dev-loop hub — edits here are IGNORED and overwritten on the next push. Give direction via the Director (conventions §25).";
-
-interface MirrorRow { id: string; hub_id: string; linear_id: string | null; last_pushed_hash: string | null; }
-const mirrorTitle = (t: Ticket): string => `${t.title} [hub:${t.id}]`;
-const mirrorBody = (t: Ticket): string => [
-  MIRROR_BANNER, "",
-  `**hub:** ${t.id} · **type:** ${t.type} · **state:** ${t.state} · **priority:** ${t.priority} · **owner:** ${t.assignee ?? "—"}`,
-  t.labels.length ? `**labels:** ${t.labels.join(", ")}` : "",
-  t.relatedTo.length ? `**related:** ${t.relatedTo.join(", ")}` : "",
-  t.duplicateOf ? `**duplicate of:** ${t.duplicateOf}` : "",
-  "", t.description || "_(no description)_",
-].filter((l) => l !== "").join("\n");
-const mirrorHash = (t: Ticket, stateId: string | undefined): string =>
-  createHash("sha256").update(JSON.stringify({ title: mirrorTitle(t), body: mirrorBody(t), stateId: stateId ?? null })).digest("hex");
-
+// ─── P7 one-way Linear mirror — hub → Linear projector (shared mirrorstore; NO daemon; idempotent; §16) ──────
+// The handler logic (ticket-fetch → hash-skip → mapping-row-FIRST → reconcile-by-marker → create/update/skip/
+// fail, the DL-11 side-effect-free DRYRUN) lives in mirrorstore.ts (reusing linear.ts's transport AS-IS + the
+// §16 isEnvName guard), shared VERBATIM with the daemon op-API so the two can never drift. These are thin
+// adapters: pass (db, projectId, ACTOR, args) and map the MirrorResult to ok()/err().
 server.registerTool("mirror.push", {
   description: "ONE-WAY push: project hub tickets → Linear issues (create-or-update, idempotent + incremental — an unchanged ticket is skipped by content hash). The hub NEVER reads Linear as truth; a human Linear edit is overwritten. `tokenEnv` is the env-var NAME (the §16 secret is read server-side). A missing stateMap entry ⇒ no stateId (state stays in the body; never fails the push). DRYRUN returns the would-push ops, no network.",
   inputSchema: {
@@ -506,65 +479,9 @@ server.registerTool("mirror.push", {
     stateMap: z.record(z.string(), z.string()).optional(), // hub State → Linear state id
     limit: z.number().int().min(1).max(500).optional(),
   },
-}, async (a) => {
-  if (!isEnvName(a.tokenEnv)) return err(`tokenEnv must be an ENV-VAR NAME (e.g. DEVLOOP_LINEAR_TOKEN), not the secret value itself`);
-  const token = process.env[a.tokenEnv];
-  if (!token && !MIRROR_DRYRUN) return err(`mirror token env '${a.tokenEnv}' is unset`);
-  const rows = db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC LIMIT ?").all(projectId, a.limit ?? 500) as TicketRow[];
-  const tickets = rows.map(toTicket);
-  let created = 0, updated = 0, skipped = 0, failed = 0;
-  const ops: { op: string; hubId: string; title: string; body: string; stateId: string | null }[] = [];
-  for (const t of tickets) {
-    const stateId = a.stateMap?.[t.state]; // missing ⇒ undefined ⇒ no stateId (fallback: state is in the body)
-    const issue: MirrorIssue = { title: mirrorTitle(t), description: mirrorBody(t), stateId };
-    const hash = mirrorHash(t, stateId);
-    let row = db.prepare("SELECT id,hub_id,linear_id,last_pushed_hash FROM mirror_map WHERE project_id=? AND hub_kind='ticket' AND hub_id=?").get(projectId, t.id) as MirrorRow | undefined;
-    if (row && row.linear_id && row.last_pushed_hash === hash) { skipped++; continue; } // incremental skip (unchanged)
-    if (!row) {
-      // mapping-row-FIRST: record intent BEFORE the remote create → a crash never orphans a Linear
-      // issue (a NULL-id row on the next fire reconciles by marker). The UNIQUE(project,kind,hub_id)
-      // makes two concurrent pushers' INSERTs serialize — the loser throws + retries (no dup row).
-      const rid = randomUUID();
-      // DRYRUN is side-effect-free (§12, DL-11): keep the mapping row IN MEMORY only. Persisting it
-      // poisons a later live push — an unchanged ticket is skipped (never created) and a changed one
-      // gets stuck updating a non-existent `dry-<id>`. The in-memory row still drives the logic + ops.
-      if (!MIRROR_DRYRUN) db.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,created_at) VALUES (?,?,'ticket',?,?)").run(rid, projectId, t.id, nowIso());
-      row = { id: rid, hub_id: t.id, linear_id: null, last_pushed_hash: null };
-    }
-    try {
-      if (!row.linear_id) {
-        // ALWAYS reconcile-by-marker before creating (Codex review): closes the concurrent-create
-        // window (a racing pusher's issue is found, not duplicated), and on a crashed-create retry
-        // the existing issue is ADOPTED + UPDATED to current content (never left stale). A genuinely
-        // new ticket: findByMarker returns null → create. (Full concurrency-safety still assumes the
-        // single-Sweep-per-project model; a lease is over-engineering for one writer.)
-        const found = MIRROR_DRYRUN ? null : await findByMarker(fetch, token!, `[hub:${t.id}]`);
-        let linearId: string;
-        if (found) { await updateIssue(fetch, token!, found, issue); linearId = found; } // adopt + push current content (fixes stale-reconcile)
-        else { linearId = MIRROR_DRYRUN ? `dry-${t.id}` : await createIssue(fetch, token!, a.teamId, a.projectId ?? null, issue); }
-        if (!MIRROR_DRYRUN) db.prepare("UPDATE mirror_map SET linear_id=?, last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(linearId, hash, nowIso(), row.id); // DRYRUN: never persist the dry-<id> sentinel/hash (DL-11)
-        created++; ops.push({ op: found ? "reconcile" : "create", hubId: t.id, title: issue.title, body: issue.description, stateId: stateId ?? null });
-      } else {
-        if (!MIRROR_DRYRUN) await updateIssue(fetch, token!, row.linear_id, issue);
-        if (!MIRROR_DRYRUN) db.prepare("UPDATE mirror_map SET last_pushed_hash=?, last_pushed_at=? WHERE id=?").run(hash, nowIso(), row.id); // DRYRUN: don't advance the persisted hash (DL-11)
-        updated++; ops.push({ op: "update", hubId: t.id, title: issue.title, body: issue.description, stateId: stateId ?? null });
-      }
-    } catch (e) {
-      // leave the row (linear_id as-is, hash NOT advanced) → next push retries; never persist the token
-      failed++;
-      logEvent(db, { project_id: projectId, actor: ACTOR, kind: "mirror.error", data: { hubId: t.id, error: scrubErr((e as Error).message) } });
-    }
-  }
-  logEvent(db, { project_id: projectId, actor: ACTOR, kind: "mirror.push", data: { created, updated, skipped, failed } });
-  return ok({ created, updated, skipped, failed, dryrun: MIRROR_DRYRUN, ...(MIRROR_DRYRUN ? { ops } : {}) });
-});
+}, async (a) => { const r = await mirrorPush(db, projectId, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
 
 server.registerTool("mirror.status", { description: "Mirror coverage: mapped tickets, total tickets, last push time. No secret, no Linear read.", inputSchema: {} },
-  async () => {
-    const mapped = (db.prepare("SELECT count(*) c FROM mirror_map WHERE project_id=? AND hub_kind='ticket'").get(projectId) as { c: number }).c;
-    const tickets = (db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c;
-    const last = (db.prepare("SELECT max(last_pushed_at) m FROM mirror_map WHERE project_id=?").get(projectId) as { m: string | null }).m;
-    return ok({ mapped, tickets, lastPush: last });
-  });
+  async () => ok(mirrorStatus(db, projectId)));
 
 await server.connect(new StdioServerTransport());

@@ -40,19 +40,27 @@ import { topicList, topicGet, topicOpen, postAdd, topicSynthesize, topicClose, s
 // raw JSON → each handler hand-validates the shapes server.ts gets from zod (DL-63: a non-string arg → 400, never a 500).
 import { channelRegister, channelSend, channelPoll, channelAck, channelStatus, statusForChannelErr,
   type ChannelRegisterArgs, type ChannelSendArgs, type ChannelAckArgs } from "./channelstore.ts";
+// DL-68 P7 mirror + label/project — the FINAL slice. mirror.push's handler (reusing linear.ts's transport AS-IS)
+// + mirror.status are reused VERBATIM from the shared mirrorstore (so the op-API + server.ts can't drift on the
+// DL-11 DRYRUN invariant / reconcile-by-marker idempotency), and the label/project ops + the SINGLE LABEL_KINDS /
+// DL-22 reject from labelstore. mirror.push is ASYNC (Linear network / dryrun build) → agentOp returns a Promise.
+import { mirrorPush, mirrorStatus, type MirrorPushArgs } from "./mirrorstore.ts";
+import { createLabel, listLabels, getProject } from "./labelstore.ts";
 
 export interface OpResult { status: number; body: unknown }
 const okR = (body: unknown): OpResult => ({ status: 200, body });
 const errR = (status: number, error: string): OpResult => ({ status, body: { error } });
 
-// The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family. topic.*/post.add +
-// channel.* + mirror.* + the label ops are the sequenced (4/n) increment, NOT here. The op names are the
-// `/api/op/<op>` path segments and the MCP tool names (dotted for the doc family) — byte-identical to server.ts.
+// The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-64) the discussion
+// board + (DL-67) the IM channel + (DL-68) mirror.* + the label/project ops — the FINAL slice, so the op-API now
+// mirrors ALL 29 server.ts tools 1:1 (the shim becomes a 100% drop-in). The op names are the `/api/op/<op>` path
+// segments and the MCP tool names (dotted for the doc/topic/channel/mirror families) — byte-identical to server.ts.
 export const AGENT_OPS = [
   "list_issues", "get_issue", "save_issue", "save_comment", "list_comments",
   "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish",
   "topic.list", "topic.get", "topic.open", "post.add", "topic.synthesize", "topic.close", // DL-64 discussion board
   "channel.register", "channel.send", "channel.poll", "channel.ack", "channel.status", // DL-67 IM channel (channel.status is the only read)
+  "mirror.push", "mirror.status", "list_issue_labels", "create_issue_label", "get_project", // DL-68 P7 mirror + label/project (mirror.status/list_issue_labels/get_project are reads)
 ] as const;
 export type AgentOp = (typeof AGENT_OPS)[number];
 // The MUTATING subset — the daemon applies writeOriginOk + the dry-run mode gate to exactly these (reads
@@ -60,7 +68,8 @@ export type AgentOp = (typeof AGENT_OPS)[number];
 // doc.publish join the ticket writes; the doc/event reads stay read-only (parity with the read ticket ops).
 export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish",
   "topic.open", "post.add", "topic.synthesize", "topic.close", // DL-64: the 4 board writes
-  "channel.register", "channel.send", "channel.poll", "channel.ack"]); // DL-67: the 4 channel writes (register/send/poll/ack mutate the channels/channel_messages tables); channel.status stays a read (query_only)
+  "channel.register", "channel.send", "channel.poll", "channel.ack", // DL-67: the 4 channel writes (register/send/poll/ack mutate the channels/channel_messages tables); channel.status stays a read (query_only)
+  "mirror.push", "create_issue_label"]); // DL-68: the 2 writes (mirror.push → mirror_map + the one-way Linear network write; create_issue_label → labels). mirror.status/list_issue_labels/get_project stay reads (query_only)
 export const isAgentOp = (s: string): s is AgentOp => (AGENT_OPS as readonly string[]).includes(s);
 
 // ─── row → API shape + readers (verbatim mirror of server.ts toTicket/getRow) ──
@@ -419,6 +428,51 @@ function opChannelStatus(db: DatabaseSync, projectId: string): OpResult {
   return okR(channelStatus(db, projectId)); // read; never origin/actor-gated upstream (parity with the read ticket/doc/topic ops)
 }
 
+// ─── DL-68: P7 mirror (mirror.push/mirror.status) + label/project (list_issue_labels/create_issue_label/
+//     get_project) — thin op-API wrappers over the shared mirrorstore/labelstore ──
+// Mirror the doc/topic/channel pattern: hand-validate the raw-JSON inputs to a clean 400 (server.ts gets these
+// from zod — the DL-63/DL-65 lesson), then delegate to the shared store. mirror.push / create_issue_label errors
+// are all client 400s (bad input / unset-or-literal token / DL-22 empty-name / bad-kind) — no 404/409 here, and
+// a failed Linear network call is counted in `failed`, never an op error. mirror.push is ASYNC (Linear network /
+// dryrun build) → it returns a Promise. The 3 reads take the query_only db (not in AGENT_WRITE_OPS).
+
+// ASYNC (mirrorPush awaits the Linear transport / the DRYRUN build). Hand-validate the shapes server.ts gets
+// from zod (teamId/tokenEnv non-empty strings, projectId optional string, stateMap an object, limit int 1..500)
+// so a bad type is a clean 400, never a node:sqlite bind-throw 500 or a crash inside mirrorPush.
+async function opMirrorPush(db: DatabaseSync, projectId: string, actor: string, a: { teamId?: unknown; tokenEnv?: unknown; projectId?: unknown; stateMap?: unknown; limit?: unknown }): Promise<OpResult> {
+  if (typeof a.teamId !== "string" || !a.teamId) return errR(400, "teamId required (a non-empty string)");
+  if (typeof a.tokenEnv !== "string" || !a.tokenEnv) return errR(400, "tokenEnv required (a non-empty string)");
+  if (a.projectId !== undefined && typeof a.projectId !== "string") return errR(400, "projectId must be a string");
+  if (a.stateMap !== undefined && (typeof a.stateMap !== "object" || a.stateMap === null || Array.isArray(a.stateMap))) return errR(400, "stateMap must be an object");
+  if (a.limit !== undefined && (!Number.isInteger(a.limit) || (a.limit as number) < 1 || (a.limit as number) > 500)) return errR(400, "limit must be an integer 1..500");
+  const r = await mirrorPush(db, projectId, actor, a as MirrorPushArgs);
+  return r.ok ? okR(r.data) : errR(400, r.error); // §16-safe error (isEnvName / scrubErr inside mirrorstore); the token never appears
+}
+
+function opMirrorStatus(db: DatabaseSync, projectId: string): OpResult {
+  return okR(mirrorStatus(db, projectId)); // read; coverage counts, no secret, no Linear read
+}
+
+function opListLabels(db: DatabaseSync, projectId: string): OpResult {
+  return okR(listLabels(db, projectId)); // read
+}
+
+// `db` MUST be a WRITABLE connection. Validation (DL-22 empty-name + LABEL_KINDS) lives in the shared createLabel
+// so server.ts + the op-API can't drift. The attributed `label.create` event is logged HERE (the identity win)
+// — server.ts's create_issue_label stays byte-identical (it logs none); both paths return {name,kind} identically.
+function opCreateLabel(db: DatabaseSync, projectId: string, actor: string, a: { name?: unknown; kind?: unknown }): OpResult {
+  if (typeof a.name !== "string") return errR(400, "name required (a string)"); // server.ts zod: name z.string() — a non-string would crash createLabel's .trim()
+  if (a.kind !== undefined && typeof a.kind !== "string") return errR(400, "kind must be a string");
+  const r = createLabel(db, projectId, a as { name: string; kind?: string });
+  if (!r.ok) return errR(400, r.error); // DL-22: empty-name / bad-kind → a clean 400, never a fake success with a dropped row
+  logEvent(db, { project_id: projectId, actor, kind: "label.create", data: { name: r.data.name, kind: r.data.kind } });
+  return okR(r.data);
+}
+
+function opGetProject(db: DatabaseSync, projectId: string): OpResult {
+  return okR(getProject(db, projectId)); // read
+}
+
 // Dispatch one op. `db` is the WRITABLE connection for the write ops (save_issue/save_comment) and may be
 // the daemon's query_only read connection for the read ops — the daemon passes the right one per op. `actor`
 // is already resolved+validated by the daemon (the G1 guard). `args` is the parsed JSON body (a non-object
@@ -448,5 +502,10 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "channel.poll": return opChannelPoll(db, projectId, projectKey, actor);
     case "channel.ack": return opChannelAck(db, projectId, projectKey, actor, args as { messageId?: unknown; actedInto?: unknown });
     case "channel.status": return opChannelStatus(db, projectId);
+    case "mirror.push": return opMirrorPush(db, projectId, actor, args as { teamId?: unknown; tokenEnv?: unknown; projectId?: unknown; stateMap?: unknown; limit?: unknown });
+    case "mirror.status": return opMirrorStatus(db, projectId);
+    case "list_issue_labels": return opListLabels(db, projectId);
+    case "create_issue_label": return opCreateLabel(db, projectId, actor, args as { name?: unknown; kind?: unknown });
+    case "get_project": return opGetProject(db, projectId);
   }
 }

@@ -12,10 +12,11 @@
 // SCOPE: the 5 core ticket tools (list_issues/get_issue/save_issue/save_comment/list_comments) + a LOCAL
 // whoami (DL-55), PLUS (DL-62) the doc/event family — list_events + doc.list/get/history/diff/save/publish,
 // PLUS (DL-64) the discussion-board family — topic.list/get/open + post.add + topic.synthesize/close,
-// PLUS (DL-67) the IM channel family — channel.register/send/poll/ack/status. mirror.* + the label ops +
-// get_project are the sequenced (6/n) increment, NOT here — so the shim is not YET a 100% server.ts drop-in.
-// The shim holds NO SoR / NO ticket/doc/topic/channel logic (Decision #3): a pure thin client over the op-API
-// (which mirrors server.ts 1:1 via agentops.ts + the shared docstore/topicstore/channelstore).
+// PLUS (DL-67) the IM channel family — channel.register/send/poll/ack/status, PLUS (DL-68) P7 mirror +
+// label/project — mirror.push/mirror.status + list_issue_labels/create_issue_label/get_project. That is the
+// FINAL slice: the shim now proxies ALL 29 server.ts tools — a 100% server.ts drop-in.
+// The shim holds NO SoR / NO ticket/doc/topic/channel/mirror logic (Decision #3): a pure thin client over the
+// op-API (which mirrors server.ts 1:1 via agentops.ts + the shared docstore/topicstore/channelstore/mirrorstore/labelstore).
 //
 // PARITY TRIPWIRE: the tool names + zod inputSchemas below MUST stay byte-identical to server.ts's tools
 // (the shim is a drop-in transport for them). A change to a proxied tool's name/schema in server.ts must
@@ -263,6 +264,29 @@ server.registerTool("channel.status", {
   description: "Channel config + cursor + inbox depth. Returns the ENV-VAR NAMES and whether they are SET (boolean), NEVER the secret values.",
   inputSchema: {},
 }, async (a) => proxy("channel.status", a));
+
+// ─── P7 one-way Linear mirror — proxied to the op-API (names/schemas ≡ server.ts; the Sweep §18-P7 projector) ──
+server.registerTool("mirror.push", {
+  description: "ONE-WAY push: project hub tickets → Linear issues (create-or-update, idempotent + incremental — an unchanged ticket is skipped by content hash). The hub NEVER reads Linear as truth; a human Linear edit is overwritten. `tokenEnv` is the env-var NAME (the §16 secret is read server-side). A missing stateMap entry ⇒ no stateId (state stays in the body; never fails the push). DRYRUN returns the would-push ops, no network.",
+  inputSchema: {
+    teamId: z.string().min(1),
+    tokenEnv: z.string().min(1),
+    projectId: z.string().optional(),
+    stateMap: z.record(z.string(), z.string()).optional(),
+    limit: z.number().int().min(1).max(500).optional(),
+  },
+}, async (a) => proxy("mirror.push", a));
+server.registerTool("mirror.status", { description: "Mirror coverage: mapped tickets, total tickets, last push time. No secret, no Linear read.", inputSchema: {} },
+  async (a) => proxy("mirror.status", a));
+
+// ─── labels + project (minimal) — proxied to the op-API (names/schemas ≡ server.ts) ──
+server.registerTool("list_issue_labels", { description: "List the project's labels.", inputSchema: {} },
+  async (a) => proxy("list_issue_labels", a));
+server.registerTool("create_issue_label",
+  { description: "Create a label if missing (idempotent).", inputSchema: { name: z.string(), kind: z.string().optional() } },
+  async (a) => proxy("create_issue_label", a));
+server.registerTool("get_project", { description: "The active project.", inputSchema: {} },
+  async (a) => proxy("get_project", a));
 
 await server.connect(new StdioServerTransport());
 console.error(`[shim] dev-loop-hub daemon-transport shim ready: actor=${ACTOR} project=${PROJECT_KEY} runfile=${RUNFILE}`);

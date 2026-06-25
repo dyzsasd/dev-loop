@@ -223,6 +223,31 @@ try {
   ok(chPoll.new === 1 && chPoll.pending.length === 1, `shim channel.poll → ingests the fixture msg, pending=1 (got new=${chPoll.new}, pending=${chPoll.pending?.length})`);
   ok((await call(devShim, "channel.ack", { messageId: chPoll.pending[0].messageId })).acted === true, "shim channel.ack → marks the message consumed (attributed via env→X-Devloop-Actor)");
 
+  // ═══ (DL-68) the P7 mirror + label/project family through the shim — the FINAL slice → a 100% drop-in (DRYRUN) ══
+  // differential parity on the 3 reads: shim ≡ the direct-db stdio server, byte-identical
+  ok(JSON.stringify(await call(devShim, "list_issue_labels", {})) === JSON.stringify(await call(pm, "list_issue_labels", {})), "differential parity: shim list_issue_labels ≡ stdio list_issue_labels (byte-identical)");
+  ok(JSON.stringify(await call(devShim, "get_project", {})) === JSON.stringify(await call(pm, "get_project", {})), "differential parity: shim get_project ≡ stdio get_project (byte-identical)");
+  ok(JSON.stringify(await call(devShim, "mirror.status", {})) === JSON.stringify(await call(pm, "mirror.status", {})), "differential parity: shim mirror.status ≡ stdio mirror.status (byte-identical)");
+  // create_issue_label (write) through the shim → attributed to the shim's actor (dev); round-trips; DL-22 holds
+  const clShim = await call(devShim, "create_issue_label", { name: "shim-made-label", kind: "subtype" });
+  ok(clShim.name === "shim-made-label" && clShim.kind === "subtype", `shim create_issue_label (DEVLOOP_ACTOR=dev) → round-trips {name,kind} (got ${JSON.stringify(clShim)})`);
+  ok((await call(pm, "list_events", { limit: 50 })).some((e: any) => e.actor === "dev" && e.kind === "label.create"), "list_events (stdio) confirms the shim's create_issue_label attributed to dev (the identity win, label family)");
+  ok((await call(pm, "list_issue_labels", {})).some((l: any) => l.name === "shim-made-label"), "the shim-created label is visible on the stdio path (one db)");
+  const clBad = await callRaw(devShim, "create_issue_label", { name: "shim-ghostkind", kind: "bogus-kind" });
+  ok(clBad.isError && /invalid kind/.test(clBad.text), "DL-22: shim create_issue_label bad kind → clean error (not a fake success)");
+  ok(!(await call(pm, "list_issue_labels", {})).some((l: any) => l.name === "shim-ghostkind"), "DL-22: the bad-kind label was NOT created via the shim (no dropped-row masquerade)");
+  // mirror.push (write, DRYRUN: build-no-network) through the shim → previews ops; differential parity shim ≡ stdio
+  const mpShim = await call(devShim, "mirror.push", { teamId: "team_1", tokenEnv: "DEVLOOP_LINEAR_TOKEN" });
+  ok(mpShim.dryrun === true && Array.isArray(mpShim.ops) && mpShim.ops.length >= 1, `shim mirror.push (DRYRUN) → previews would-push ops, dryrun:true (got ops=${mpShim.ops?.length})`);
+  ok((await call(pm, "list_events", { limit: 50 })).some((e: any) => e.actor === "dev" && e.kind === "mirror.push"), "list_events (stdio) confirms the shim's mirror.push attributed to dev (the identity win, mirror family)");
+  const mpStdio = await call(pm, "mirror.push", { teamId: "team_1", tokenEnv: "DEVLOOP_LINEAR_TOKEN" });
+  ok(JSON.stringify(mpShim.ops) === JSON.stringify(mpStdio.ops), "differential parity: shim mirror.push DRYRUN ops ≡ stdio mirror.push DRYRUN ops (byte-identical would-push, no network)");
+  ok((await call(devShim, "mirror.status", {})).mapped === 0, "DL-11: after DRYRUN mirror.push via shim + stdio, mirror_map is still EMPTY (mapped:0 — no poisoned row persisted)");
+  // THE 100% DROP-IN TRIPWIRE: the shim proxies EVERY server.ts tool (a future server.ts tool not proxied trips this)
+  const stdioTools = (await pm.listTools()).tools.map((t: any) => t.name).sort();
+  const shimTools = (await devShim.listTools()).tools.map((t: any) => t.name).sort();
+  ok(JSON.stringify(stdioTools) === JSON.stringify(shimTools) && shimTools.length === 29, `the shim proxies ALL ${stdioTools.length} server.ts tools — a 100% drop-in (got shim=${shimTools.length}, stdio=${stdioTools.length})`);
+
   // ═══ port discovery via a DEVLOOP_HUB_PORT OVERRIDE (no runfile present) — proves 8787 is not hardcoded ════
   const overrideShim = await shim({ DEVLOOP_ACTOR: "dev", DEVLOOP_RUN_DIR: EMPTY_RUN, DEVLOOP_HUB_PORT: String(port) });
   const ovli = await call(overrideShim, "list_issues", {});
@@ -239,6 +264,8 @@ try {
   ok(dormantTopic.isError && /dormant/i.test(dormantTopic.text) && /hub\.transport/.test(dormantTopic.text), "dormant op-API → the board family gets the same clear hint (topic.list)");
   const dormantChan = await callRaw(devShim, "channel.status", {}); // DL-67: the channel family gets the SAME clear dormant hint
   ok(dormantChan.isError && /dormant/i.test(dormantChan.text) && /hub\.transport/.test(dormantChan.text), "dormant op-API → the channel family gets the same clear hint (channel.status)");
+  const dormantMir = await callRaw(devShim, "mirror.status", {}); // DL-68: the mirror/label family gets the SAME clear dormant hint
+  ok(dormantMir.isError && /dormant/i.test(dormantMir.text) && /hub\.transport/.test(dormantMir.text), "dormant op-API → the mirror/label family gets the same clear hint (mirror.status)");
   setTransport(true);
   ok(Array.isArray(await call(devShim, "list_issues", {})), "re-enabling hub.transport → the shim works again (settings read fresh, no restart)");
 
@@ -258,6 +285,8 @@ try {
   ok(topicDown.isError && /not reachable/i.test(topicDown.text), "daemon-down → the board ops get the same clear 'not reachable' error (shared proxy())");
   const chanDown = await callRaw(downShim, "channel.status", {}); // DL-67: the channel ops share proxy() → the same clear error
   ok(chanDown.isError && /not reachable/i.test(chanDown.text), "daemon-down → the channel ops get the same clear 'not reachable' error (shared proxy())");
+  const mirDown = await callRaw(downShim, "mirror.status", {}); // DL-68: the mirror/label ops share proxy() → the same clear error
+  ok(mirDown.isError && /not reachable/i.test(mirDown.text), "daemon-down → the mirror/label ops get the same clear 'not reachable' error (shared proxy())");
 
   // ═══ back-compat: the stdio server path is byte-for-byte unaffected (server.ts untouched by DL-55) ═══════
   const stdioComment = await call(pm, "save_comment", { issueId: feat.id, body: "stdio still works" });
