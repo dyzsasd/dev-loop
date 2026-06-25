@@ -1,0 +1,16 @@
+{
+  "//": "P4 publish build: node refuses to type-strip .ts under node_modules, so the PUBLISHED package ships compiled JS (dist/). This mirrors node's own strip-only behavior — noCheck (no type-checking, like the zero-build dev run) + rewriteRelativeImportExtensions (./x.ts import specifiers → ./x.js in emit). In-repo dev still runs the .ts in src/ directly; only the npm artifact is built (on prepack).",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2023",
+    "lib": ["es2023"],
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noCheck": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"]
+}
