@@ -3,6 +3,31 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.21.0 — standalone daemon + multi-CLI: turnkey on-ramp, npm package, Codex certified
+The **standalone-daemon + single-host multi-CLI repositioning** (design `docs/design/daemon-multicli-repositioning.md`),
+shipped as an additive P1–P5 arc — the loop ran throughout, every prior path (stdio MCP, read-only daemon,
+`linear`/`local`/`service` backends, the Claude plugin) unchanged byte-for-byte.
+- **P1 — Turnkey on-ramp.** Idempotent per-project daemon lifecycle `daemon up|down|status` (DL-41,
+  deterministic per-project port, real `/api/health` liveness, no double-start); a plugin **`SessionStart`
+  hook** auto-starts the web UI each session (DL-42, operator-applied §17); the dormant agent **op-API**
+  `POST /api/op/*` gated on `hub.transport:"daemon"` (DL-43, default-off).
+- **P2 — Thin stdio shim → 100% `server.ts` drop-in.** `shim.ts` proxies tool calls to the loopback daemon
+  op-API (identity via env→`X-Devloop-Actor`, dodging the `claude -p` header-drop); shipped family-by-family
+  to all 29 tools (DL-55/62/64/67/68).
+- **P3 — Dispatch convergence + single writer.** `server.ts`'s MCP handlers converge onto the shared
+  `agentops` ops (DL-69, one definition per policy, differential-parity proven); the daemon's one long-lived
+  writable connection gets a periodic `wal_checkpoint(TRUNCATE)` (DL-70).
+- **P4 — Standalone npm package.** `npm i -g dev-loop` (free name): a `dev-loop` CLI (serve/shim/daemon/
+  init-service/mcp-merge/seed/doctor/identity-check) + bins, a publish build (node won't type-strip under
+  `node_modules` → ships compiled `dist/`, in-repo dev stays zero-build), and a **single-version stamp**
+  across `package.json`+`plugin.json`+`marketplace.json` with a guard test (DL-71).
+- **P5 — Codex certified.** End-to-end on `codex-cli 0.142.0`: MCP transport + data tools round-trip; per-pane
+  identity rides a **`-c` override** (Codex doesn't propagate the launching process env) — `docs/PORTABILITY.md` §4a (DL-72).
+- **Operator-alert + backend choice.** One operator-alert channel `{transport: webhook|bot}` — the simple
+  webhook now fires on the canonical `Human-Blocked` state (DL-52/59); `init` gained a first-class "choose your
+  ticket system" step + service auto-wiring, and §18 a Backend-parity spec (work-plane identical / surface-plane
+  superset / deferred backend-switch seam) (DL-50/53/56/60/61). `Phase B` (remote/multi-user auth) named, deferred.
+
 ## 0.20.0 — hub daemon + web UI + roadmap bridge + cwd project auto-pin (self-hosted milestone)
 Shipped by the dev-loop loop **dogfooding itself on the hub** (`backend:"service"`, project `dev-loop`,
 per-agent attribution) — 22 tickets, all Done, all built/tested by the autonomous loop and §17-firewalled

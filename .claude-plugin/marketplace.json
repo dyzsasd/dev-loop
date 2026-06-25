@@ -6,7 +6,7 @@
     {
       "name": "dev-loop",
       "source": "./",
-      "version": "0.20.0",
+      "version": "0.21.0",
       "description": "Eight autonomous agents that run a software-development loop coordinated through ticket state — Linear (default), a machine-local file board, or a local node:sqlite hub (per-agent identity, web UI/daemon, discussion board, Lark/Slack channel, one-way Linear mirror; CLI-portable). See README + docs/HUB-ARCHITECTURE.md."
     }
   ]
