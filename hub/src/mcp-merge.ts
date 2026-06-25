@@ -31,6 +31,12 @@ function buildEntry(templatePath: string, hubServerPath: string, projectKey: str
   // produce a NESTED ${...} (the DL-44 SoR-fork footgun) in the product .mcp.json — reject it loudly rather
   // than write a malformed config. Real project keys are plain identifiers, so this never bites in practice.
   if (/[${}]/.test(projectKey)) throw new Error(`project key ${JSON.stringify(projectKey)} contains '$', '{', or '}', which would break the .mcp.json \${VAR:-default} interpolation (DL-44) — use a plain identifier key`);
+  // DL-66: the hub server path lands verbatim in the entry's `args` (line below) — another interpolated
+  // .mcp.json string position — so a path carrying `$`/`{`/`}` would nest a `${...}` that Claude Code
+  // mis-expands at parse-time interpolation, corrupting the resolved hub path and breaking the launch in that
+  // pane. Guard it symmetrically with projectKey above; a real absolute checkout path never contains these
+  // (same defense-in-depth bar the team set for the projectKey side in DL-44).
+  if (/[${}]/.test(hubServerPath)) throw new Error(`hub server path ${JSON.stringify(hubServerPath)} contains '$', '{', or '}', which would nest a \${...} in the .mcp.json args that Claude Code mis-expands at parse-time interpolation, corrupting the resolved hub path (DL-66) — use a path without those characters`);
   const e = structuredClone(src) as { args?: unknown[]; env?: Record<string, string> };
   const args = (e.args ?? []) as unknown[];
   const idx = args.findIndex((a) => typeof a === "string" && a.endsWith("server.ts"));
