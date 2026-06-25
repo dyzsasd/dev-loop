@@ -597,7 +597,9 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
   catch (e) { if (!res.headersSent && !res.destroyed) json(res, 400, { error: (e as Error).message }); return; }
   // (5) dispatch — writes through writeDb (atomic txn + attributed event in ticketwrite), reads through the
   //     query_only db. agentOp mirrors server.ts; an op-level validation/not-found maps to its HTTP status.
-  const r = agentOp(op, isWrite ? writeDb : db, projectId, projectKey, actor, args);
+  //     AWAIT: agentOp returns OpResult|Promise<OpResult> — the DL-67 channel.send/poll ops are async (network/
+  //     dryrun build); the sync ops resolve immediately, so awaiting them is a no-op (back-compat).
+  const r = await agentOp(op, isWrite ? writeDb : db, projectId, projectKey, actor, args);
   return json(res, r.status, r.body);
 }
 

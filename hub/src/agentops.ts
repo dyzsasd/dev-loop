@@ -33,6 +33,13 @@ import { resolveDoc, latestVersion, docSave, docPublish, statusForDocErr, DOC_KI
 // shapes server.ts gets from zod (the DL-63 read-handler lesson — a non-string id/body must 400, never a 500).
 import { topicList, topicGet, topicOpen, postAdd, topicSynthesize, topicClose, statusForTopicErr,
   type TopicOpenArgs, type PostAddArgs, type TopicSynthesizeArgs, type TopicCloseArgs } from "./topicstore.ts";
+// DL-67 channel family — the channel register/send/poll/ack/status HANDLER logic + the DL-4 roadmap bridge are
+// reused VERBATIM from the shared, side-effect-free channelstore (exactly as the doc/topic families reuse
+// docstore/topicstore), so the op-API and the stdio server.ts can never drift. channel.send/poll are ASYNC
+// (network/dryrun), so agentOp returns OpResult|Promise<OpResult> and the daemon awaits it. The op-API parses
+// raw JSON → each handler hand-validates the shapes server.ts gets from zod (DL-63: a non-string arg → 400, never a 500).
+import { channelRegister, channelSend, channelPoll, channelAck, channelStatus, statusForChannelErr,
+  type ChannelRegisterArgs, type ChannelSendArgs, type ChannelAckArgs } from "./channelstore.ts";
 
 export interface OpResult { status: number; body: unknown }
 const okR = (body: unknown): OpResult => ({ status: 200, body });
@@ -45,13 +52,15 @@ export const AGENT_OPS = [
   "list_issues", "get_issue", "save_issue", "save_comment", "list_comments",
   "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish",
   "topic.list", "topic.get", "topic.open", "post.add", "topic.synthesize", "topic.close", // DL-64 discussion board
+  "channel.register", "channel.send", "channel.poll", "channel.ack", "channel.status", // DL-67 IM channel (channel.status is the only read)
 ] as const;
 export type AgentOp = (typeof AGENT_OPS)[number];
 // The MUTATING subset — the daemon applies writeOriginOk + the dry-run mode gate to exactly these (reads
 // never mutate, so they bypass both). Kept here next to AGENT_OPS so the two lists can't drift. doc.save /
 // doc.publish join the ticket writes; the doc/event reads stay read-only (parity with the read ticket ops).
 export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish",
-  "topic.open", "post.add", "topic.synthesize", "topic.close"]); // DL-64: the 4 board writes join the write set; topic.list/get stay reads
+  "topic.open", "post.add", "topic.synthesize", "topic.close", // DL-64: the 4 board writes
+  "channel.register", "channel.send", "channel.poll", "channel.ack"]); // DL-67: the 4 channel writes (register/send/poll/ack mutate the channels/channel_messages tables); channel.status stays a read (query_only)
 export const isAgentOp = (s: string): s is AgentOp => (AGENT_OPS as readonly string[]).includes(s);
 
 // ─── row → API shape + readers (verbatim mirror of server.ts toTicket/getRow) ──
@@ -358,11 +367,63 @@ function opTopicClose(db: DatabaseSync, projectId: string, projectKey: string, a
   return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
 }
 
+// ─── DL-67: the IM channel family (channel.*) — thin op-API wrappers over the shared channelstore ──
+// Mirror the doc/topic pattern: hand-validate the raw-JSON inputs to a clean 400 (server.ts gets these from
+// zod — the DL-63 lesson), then delegate to channelstore (which owns the §16 line-build, the DL-4 roadmap
+// bridge, the per-process send cap, and the channels/channel_messages writes); a ChannelResult error maps to
+// its HTTP status via statusForChannelErr. channel.send/poll are ASYNC (network/dryrun) → they return Promises.
+// channel.status is the only READ (query_only db, not in AGENT_WRITE_OPS); the 4 writes take writeDb.
+
+function opChannelRegister(db: DatabaseSync, projectId: string, actor: string, a: { provider?: unknown; configRef?: unknown; secretRef?: unknown; channelRef?: unknown }): OpResult {
+  if (a.provider !== "slack" && a.provider !== "lark") return errR(400, `provider must be "slack" or "lark"`);
+  if (typeof a.configRef !== "string" || !a.configRef) return errR(400, "configRef required (a non-empty string)");
+  if (a.secretRef !== undefined && typeof a.secretRef !== "string") return errR(400, "secretRef must be a string");
+  if (typeof a.channelRef !== "string" || !a.channelRef) return errR(400, "channelRef required (a non-empty string)");
+  const r = channelRegister(db, projectId, actor, a as ChannelRegisterArgs);
+  return r.ok ? okR(r.data) : errR(statusForChannelErr(r.error), r.error);
+}
+
+// ASYNC (channelSend awaits sendVia / the DRYRUN build). Hand-validate the fields channelSend method-calls or
+// binds (a wrong type would 500): ticketId (a SELECT bind), text + digest.headline (cleanLine→.replace),
+// digest.openProposals (.slice/.map + cleanLine each). The numeric digest fields only feed template strings
+// (coerced), so they need no guard — parity with the doc-family numeric handling.
+async function opChannelSend(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { kind?: unknown; ticketId?: unknown; bailShape?: unknown; digest?: unknown; replyTo?: unknown; text?: unknown }): Promise<OpResult> {
+  if (a.kind !== "notify" && a.kind !== "digest" && a.kind !== "reply") return errR(400, `kind must be one of notify, digest, reply`);
+  if (a.ticketId !== undefined && typeof a.ticketId !== "string") return errR(400, "ticketId must be a string");
+  if (a.text !== undefined && typeof a.text !== "string") return errR(400, "text must be a string");
+  if (a.bailShape !== undefined && typeof a.bailShape !== "string") return errR(400, "bailShape must be a string");
+  if (a.digest !== undefined) {
+    if (typeof a.digest !== "object" || a.digest === null || Array.isArray(a.digest)) return errR(400, "digest must be an object");
+    const d = a.digest as Record<string, unknown>;
+    if (d.headline !== undefined && typeof d.headline !== "string") return errR(400, "digest.headline must be a string");
+    if (d.openProposals !== undefined && !isStrArr(d.openProposals)) return errR(400, "digest.openProposals must be an array of strings");
+  }
+  const r = await channelSend(db, projectId, projectKey, actor, a as ChannelSendArgs);
+  return r.ok ? okR(r.data) : errR(statusForChannelErr(r.error), r.error);
+}
+
+// ASYNC (channelPoll awaits pollVia / the DRYRUN build + the DL-4 bridge). No input (the fixture rides env).
+async function opChannelPoll(db: DatabaseSync, projectId: string, projectKey: string, actor: string): Promise<OpResult> {
+  const r = await channelPoll(db, projectId, projectKey, actor);
+  return r.ok ? okR(r.data) : errR(statusForChannelErr(r.error), r.error);
+}
+
+function opChannelAck(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { messageId?: unknown; actedInto?: unknown }): OpResult {
+  if (typeof a.messageId !== "string") return errR(400, "messageId must be a string");
+  if (a.actedInto !== undefined && typeof a.actedInto !== "string") return errR(400, "actedInto must be a string");
+  const r = channelAck(db, projectId, projectKey, actor, a as ChannelAckArgs);
+  return r.ok ? okR(r.data) : errR(statusForChannelErr(r.error), r.error);
+}
+
+function opChannelStatus(db: DatabaseSync, projectId: string): OpResult {
+  return okR(channelStatus(db, projectId)); // read; never origin/actor-gated upstream (parity with the read ticket/doc/topic ops)
+}
+
 // Dispatch one op. `db` is the WRITABLE connection for the write ops (save_issue/save_comment) and may be
 // the daemon's query_only read connection for the read ops — the daemon passes the right one per op. `actor`
 // is already resolved+validated by the daemon (the G1 guard). `args` is the parsed JSON body (a non-object
 // body is normalized to {} by the caller). Throws only on a genuine DB fault (→ the daemon's 500 catch).
-export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projectKey: string, actor: string, args: Record<string, unknown>): OpResult {
+export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projectKey: string, actor: string, args: Record<string, unknown>): OpResult | Promise<OpResult> {
   switch (op) {
     case "list_issues": return opListIssues(db, projectId, actor, args as ListIssuesArgs);
     case "get_issue": return opGetIssue(db, projectId, projectKey, args as { id?: string });
@@ -382,5 +443,10 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "post.add": return opPostAdd(db, projectId, projectKey, actor, args as { topicId?: unknown; body?: unknown });
     case "topic.synthesize": return opTopicSynthesize(db, projectId, projectKey, actor, args as { topicId?: unknown; body?: unknown; nextRound?: unknown });
     case "topic.close": return opTopicClose(db, projectId, projectKey, actor, args as { topicId?: unknown; decision?: unknown });
+    case "channel.register": return opChannelRegister(db, projectId, actor, args as { provider?: unknown; configRef?: unknown; secretRef?: unknown; channelRef?: unknown });
+    case "channel.send": return opChannelSend(db, projectId, projectKey, actor, args as { kind?: unknown; ticketId?: unknown; bailShape?: unknown; digest?: unknown; replyTo?: unknown; text?: unknown });
+    case "channel.poll": return opChannelPoll(db, projectId, projectKey, actor);
+    case "channel.ack": return opChannelAck(db, projectId, projectKey, actor, args as { messageId?: unknown; actedInto?: unknown });
+    case "channel.status": return opChannelStatus(db, projectId);
   }
 }

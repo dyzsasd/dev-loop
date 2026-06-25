@@ -205,6 +205,24 @@ try {
   const postClosed = await callRaw(devShim, "post.add", { topicId: topId, body: "too late" });
   ok(postClosed.isError && /closed/.test(postClosed.text), "shim post.add into a closed topic → rejected (CONFLICT)");
 
+  // ═══ (DL-67) the IM channel family through the shim — proxied to the widened op-API (DRYRUN build-no-network) ══
+  const chReg = await call(devShim, "channel.register", { provider: "slack", configRef: "DEVLOOP_CHANNEL_TOKEN", channelRef: "C-SH" });
+  ok(chReg.provider === "slack" && chReg.channelRef === "C-SH", `shim channel.register (DEVLOOP_ACTOR=dev) → stored, proxied to the op-API (got ${JSON.stringify(chReg)})`);
+  ok((await call(pm, "list_events", { limit: 50 })).some((e: any) => e.actor === "dev" && e.kind === "channel.register"), "list_events (stdio) confirms the shim's channel.register attributed to dev (the identity win, channel family)");
+  // channel.status (read) → NAMES + set-flags, never the token; differential parity shim ≡ stdio (byte-identical)
+  const chSt = await call(devShim, "channel.status", {});
+  ok(chSt.configured === true && chSt.provider === "slack" && !JSON.stringify(chSt).includes("xoxb-"), "shim channel.status → configured, NAMES + set-flags, never the token value (§16)");
+  ok(JSON.stringify(chSt) === JSON.stringify(await call(pm, "channel.status", {})), "differential parity: shim channel.status ≡ stdio channel.status (byte-identical)");
+  // channel.send notify (DRYRUN) → built §16 allow-listed line carrying the ticket id (no network)
+  const chSend = await call(devShim, "channel.send", { kind: "notify", ticketId: feat.id, bailShape: "decision-needed" });
+  ok(chSend.dryrun === true && chSend.lines.join(" ").includes(feat.id), `shim channel.send notify (dryrun) → built allow-listed line carries the ticket id (got ${JSON.stringify(chSend.lines)})`);
+  // channel.poll with a fixture → ingest + pending; channel.ack drops it (the two-way bridge works over the shim)
+  process.env.DEVLOOP_CHANNEL_FIXTURE = JSON.stringify([{ providerMsgId: "950.1", authorRef: "U1", text: "hi director", providerTs: "950.1" }]);
+  const chPoll = await call(devShim, "channel.poll", {});
+  delete process.env.DEVLOOP_CHANNEL_FIXTURE;
+  ok(chPoll.new === 1 && chPoll.pending.length === 1, `shim channel.poll → ingests the fixture msg, pending=1 (got new=${chPoll.new}, pending=${chPoll.pending?.length})`);
+  ok((await call(devShim, "channel.ack", { messageId: chPoll.pending[0].messageId })).acted === true, "shim channel.ack → marks the message consumed (attributed via env→X-Devloop-Actor)");
+
   // ═══ port discovery via a DEVLOOP_HUB_PORT OVERRIDE (no runfile present) — proves 8787 is not hardcoded ════
   const overrideShim = await shim({ DEVLOOP_ACTOR: "dev", DEVLOOP_RUN_DIR: EMPTY_RUN, DEVLOOP_HUB_PORT: String(port) });
   const ovli = await call(overrideShim, "list_issues", {});
@@ -219,6 +237,8 @@ try {
   ok(dormantDoc.isError && /dormant/i.test(dormantDoc.text) && /hub\.transport/.test(dormantDoc.text), "dormant op-API → the new doc family gets the same clear hint (doc.list), not a hang/opaque error");
   const dormantTopic = await callRaw(pmShim, "topic.list", {}); // DL-64: the board family gets the SAME clear dormant hint
   ok(dormantTopic.isError && /dormant/i.test(dormantTopic.text) && /hub\.transport/.test(dormantTopic.text), "dormant op-API → the board family gets the same clear hint (topic.list)");
+  const dormantChan = await callRaw(devShim, "channel.status", {}); // DL-67: the channel family gets the SAME clear dormant hint
+  ok(dormantChan.isError && /dormant/i.test(dormantChan.text) && /hub\.transport/.test(dormantChan.text), "dormant op-API → the channel family gets the same clear hint (channel.status)");
   setTransport(true);
   ok(Array.isArray(await call(devShim, "list_issues", {})), "re-enabling hub.transport → the shim works again (settings read fresh, no restart)");
 
@@ -236,6 +256,8 @@ try {
   ok(docDown.isError && /not reachable/i.test(docDown.text), "daemon-down → the new doc ops get the same clear 'not reachable' error (shared proxy(), no hang/opaque 500)");
   const topicDown = await callRaw(downShim, "topic.get", { id: "nope" }); // DL-64: the board ops share proxy() → the same clear error
   ok(topicDown.isError && /not reachable/i.test(topicDown.text), "daemon-down → the board ops get the same clear 'not reachable' error (shared proxy())");
+  const chanDown = await callRaw(downShim, "channel.status", {}); // DL-67: the channel ops share proxy() → the same clear error
+  ok(chanDown.isError && /not reachable/i.test(chanDown.text), "daemon-down → the channel ops get the same clear 'not reachable' error (shared proxy())");
 
   // ═══ back-compat: the stdio server path is byte-for-byte unaffected (server.ts untouched by DL-55) ═══════
   const stdioComment = await call(pm, "save_comment", { issueId: feat.id, body: "stdio still works" });
