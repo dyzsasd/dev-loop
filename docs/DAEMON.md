@@ -123,6 +123,29 @@ All require `writeOriginOk` (localhost `Host` + same-origin `Origin`, DL-19) and
 Each write redirects (303 PRG) back to the affected page on success; the board/ticket pages render the
 create/comment/move/assign **forms only when the write surface is enabled**.
 
+## Agent op-API — `POST /api/op/<op>` (DL-43/P2, opt-in)
+
+The **agent** write/read surface (distinct from the human web-write above): the thin stdio MCP shim
+(`hub/src/shim.ts`) proxies its tool calls here instead of opening `hub.db` directly, so all writes
+serialize through the one daemon process (the P3 single-writer path). **Default-off** — absent the
+opt-in it returns `404`, byte-identical to a pure read surface.
+
+- **Enable:** set the project's `settings_json.hub.transport = "daemon"` (read **fresh per request**),
+  then point the MCP `args` at `hub/src/shim.ts` instead of `hub/src/server.ts` (same per-pane
+  `DEVLOOP_ACTOR`). See `references/config-schema.md` (`hub.transport`).
+- **Shape:** `POST /api/op/<op>` with a JSON body; `<op>` mirrors the MCP tools 1:1 — the shim is a
+  **100% `server.ts` drop-in** (all 29 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
+  `list_comments`/`whoami` · `doc.*`/`list_events` · `topic.*`/`post.add` · `channel.*` · `mirror.*` ·
+  labels/`get_project`).
+- **Identity:** the actor rides the **`X-Devloop-Actor`** header (the shim forwards its per-pane
+  `DEVLOOP_ACTOR`), dodging the `claude -p` Authorization-header-drop; the daemon validates it against
+  the `actors` table (cooperative attribution, single-host — §16, not anti-spoof).
+- **Gate:** every **mutating** op passes `writeOriginOk` (the DL-19 localhost `Host`+`Origin` CSRF /
+  DNS-rebind wall) **first**, then resolves the pinned project (§2) and appends an attributed event.
+  Honest caveat: `doc.publish` over the op-API is a **cooperative** (claim-based) gate vs the
+  daemon-process-identity gate of the human `POST /roadmap/publish` — acceptable on one trusted host,
+  revisited under the deferred Phase B auth model.
+
 ### Enabling human web-write (DL-29)
 
 Off by default — with no config the `POST /ticket*` routes are absent (they `405`, byte-identical to a

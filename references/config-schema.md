@@ -41,7 +41,8 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       "ticketPrefix":  "DL",          // local/service backend: ID prefix for tickets (e.g. "DL-1"); ignored for linear
       "hub": {                        // service backend only (conventions §18; see docs/HUB-ARCHITECTURE.md). The local MCP system-of-record.
         "db":          null,          // path to the hub SQLite file; null → ${DEVLOOP_HUB_DB:-~/.dev-loop/hub.db}. Registered as an MCP server (`dev-loop-hub`) via .mcp.json; identity per-pane via DEVLOOP_ACTOR (see docs/RUNNING.md). Machine-local, never committed.
-        "docs":        false          // P4: false (default) ⇒ strategyDoc is a repo file (as P2/P3). true ⇒ the strategy + roadmap live as hub documents (versioned, attributable, optimistic-CAS, OPERATOR-PUBLISHED via doc.publish). Or pin one doc: strategyDoc: { "hubDoc": "strategy" }. §17: hub docs are PRODUCT docs only — never a SKILL/conventions/code file.
+        "docs":        false,         // P4: false (default) ⇒ strategyDoc is a repo file (as P2/P3). true ⇒ the strategy + roadmap live as hub documents (versioned, attributable, optimistic-CAS, OPERATOR-PUBLISHED via doc.publish). Or pin one doc: strategyDoc: { "hubDoc": "strategy" }. §17: hub docs are PRODUCT docs only — never a SKILL/conventions/code file.
+        "transport":   "stdio"        // DL-43/P2: "stdio" (default) ⇒ each pane's MCP server opens hub.db DIRECTLY (today's behavior, zero new surface). "daemon" ⇒ OPT-IN: the agent op-API on the loopback daemon (`POST /api/op/<op>`, read fresh per request) is live, and the thin stdio shim (hub/src/shim.ts) proxies tool calls to it instead of opening the DB — identity rides env→the `X-Devloop-Actor` header (dodges the `claude -p` Authorization-drop). Every mutating endpoint passes the writeOriginOk CSRF/DNS-rebind guard first (§16, 127.0.0.1-only). See docs/HUB-ARCHITECTURE.md + docs/design/daemon-multicli-repositioning.md.
       },
       "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). DEFAULT is opus for EVERY agent; tune an agent DOWN to economize.
         "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus"
@@ -262,7 +263,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   (a pasted Slack/Lark hook URL — no bot app, no history scope): `tokenEnv` then names the env var
   holding the **webhook URL** and `secretEnv` the optional **Lark sign-secret** (still env-var
   NAMES — the URL/secret never touch the DB, a return, or a log, §16). The DL-26 Human-Blocked
-  notifier posts the §9 one-line payload (`{project, id, bail-shape, title≤80, url}`) over it. A
+  notifier posts the §16-safe one-line payload (`{project, id, title≤80, url}`) over it. A
   webhook is **one-way ⇒ notify/digest only, no inbound poll**, so it fits an alert-only setup;
   the two-way Director chat needs `transport:"bot"`.
 - **`mirror`** (optional; conventions §18/§23; requires `backend:"service"`): the P7 **one-way
