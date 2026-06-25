@@ -147,6 +147,42 @@ try {
   const lsStdio = await call(pm, "list_issues", {});
   ok(JSON.stringify(lsShim) === JSON.stringify(lsStdio), "differential parity: shim list_issues ≡ stdio list_issues (byte-identical)");
 
+  // ═══ (DL-62) the doc/event family through the shim — proxied to the widened op-API ═══════════════════════
+  // list_events through the shim ≡ stdio (parity) and surfaces the attributed writes above (Reflect's window)
+  const evShim = await call(devShim, "list_events", { limit: 200 });
+  const evStdio = await call(pm, "list_events", { limit: 200 });
+  ok(JSON.stringify(evShim) === JSON.stringify(evStdio), "differential parity: shim list_events ≡ stdio list_events (byte-identical attribution feed)");
+  ok(evShim.some((e: any) => e.actor === "qa" && e.kind === "issue.create"), "shim list_events surfaces the qa-attributed issue.create (Reflect's window now works on the shim)");
+
+  // doc.save through the shim lands a DRAFT attributed to the SHIM's actor (pm) — the headline identity win, for docs
+  const pmShim = await shim({ DEVLOOP_ACTOR: "pm", DEVLOOP_RUN_DIR: RUN_DIR });
+  const ds1 = await call(pmShim, "doc.save", { slug: "strat", kind: "strategy", title: "Strategy", body: "v1 body", baseVersion: 0 });
+  ok(ds1.doc === "strat" && ds1.version === 1 && ds1.status === "draft", `shim doc.save (new) → draft v1 (got ${JSON.stringify(ds1)})`);
+  const dh = await call(pmShim, "doc.history", { slug: "strat" });
+  ok(Array.isArray(dh) && dh[0].version === 1 && dh[0].author === "pm" && dh[0].status === "draft", "shim doc.history → v1 authored by pm (attribution via env→X-Devloop-Actor)");
+  ok((await call(pm, "list_events", { limit: 50 })).some((e: any) => e.actor === "pm" && e.kind === "doc.save"), "list_events (stdio) confirms the shim's doc.save attributed to pm");
+
+  // differential parity on the doc reads: shim ≡ stdio, byte-identical
+  ok(JSON.stringify(await call(pmShim, "doc.get", { slug: "strat" })) === JSON.stringify(await call(pm, "doc.get", { slug: "strat" })), "differential parity: shim doc.get ≡ stdio doc.get (unpublished draft)");
+  ok(JSON.stringify(await call(pmShim, "doc.list", {})) === JSON.stringify(await call(pm, "doc.list", {})), "differential parity: shim doc.list ≡ stdio doc.list");
+
+  // CAS: a stale baseVersion → CONFLICT (never last-write-wins)
+  const docConflict = await callRaw(pmShim, "doc.save", { slug: "strat", kind: "strategy", body: "racey", baseVersion: 0 });
+  ok(docConflict.isError && /CONFLICT/.test(docConflict.text), `shim doc.save stale baseVersion → CONFLICT, not last-write-wins (got ${docConflict.text})`);
+
+  // append a real v2 (correct base), then doc.diff parity
+  await call(pmShim, "doc.save", { slug: "strat", kind: "strategy", body: "v2 body", baseVersion: 1 });
+  const diffShim = await call(pmShim, "doc.diff", { slug: "strat", from: 1, to: 2 });
+  ok(JSON.stringify(diffShim) === JSON.stringify(await call(pm, "doc.diff", { slug: "strat", from: 1, to: 2 })) && /v1 body/.test(diffShim.fromBody) && /v2 body/.test(diffShim.toBody), "differential parity: shim doc.diff ≡ stdio doc.diff (unified diff)");
+
+  // operator-publish gate (cooperative): a non-operator shim CANNOT publish; an operator shim CAN
+  const docPubByPm = await callRaw(pmShim, "doc.publish", { slug: "strat", version: 2 });
+  ok(docPubByPm.isError && /only the operator/.test(docPubByPm.text), `shim doc.publish as pm → rejected (cooperative operator gate; got ${docPubByPm.text})`);
+  const opShim = await shim({ DEVLOOP_ACTOR: "operator", DEVLOOP_RUN_DIR: RUN_DIR });
+  const docPub = await call(opShim, "doc.publish", { slug: "strat", version: 2 });
+  ok(docPub.status === "current" && docPub.current_version === 2, `shim doc.publish as operator → v2 current (got ${JSON.stringify(docPub)})`);
+  ok((await call(pmShim, "doc.get", { slug: "strat" })).version === 2 && (await call(pm, "doc.get", { slug: "strat" })).status === "current", "after publish, shim doc.get resolves to the published current v2");
+
   // ═══ port discovery via a DEVLOOP_HUB_PORT OVERRIDE (no runfile present) — proves 8787 is not hardcoded ════
   const overrideShim = await shim({ DEVLOOP_ACTOR: "dev", DEVLOOP_RUN_DIR: EMPTY_RUN, DEVLOOP_HUB_PORT: String(port) });
   const ovli = await call(overrideShim, "list_issues", {});
@@ -157,6 +193,8 @@ try {
   const dormant = await callRaw(devShim, "list_issues", {});
   ok(dormant.isError && /dormant/i.test(dormant.text) && /hub\.transport/.test(dormant.text), `dormant op-API → clear MCP error naming hub.transport (got ${JSON.stringify(dormant.text)})`);
   ok(!/not found:/.test(dormant.text), "dormant error is the actionable hint, not a raw 'not found' passthrough");
+  const dormantDoc = await callRaw(pmShim, "doc.list", {}); // DL-62: the widened doc ops get the SAME clear dormant hint
+  ok(dormantDoc.isError && /dormant/i.test(dormantDoc.text) && /hub\.transport/.test(dormantDoc.text), "dormant op-API → the new doc family gets the same clear hint (doc.list), not a hang/opaque error");
   setTransport(true);
   ok(Array.isArray(await call(devShim, "list_issues", {})), "re-enabling hub.transport → the shim works again (settings read fresh, no restart)");
 
@@ -170,6 +208,8 @@ try {
   const refusedShim = await shim({ DEVLOOP_ACTOR: "dev", DEVLOOP_RUN_DIR: EMPTY_RUN, DEVLOOP_HUB_PORT: String(closedPort) });
   const refused = await callRaw(refusedShim, "list_issues", {});
   ok(refused.isError && /not reachable/i.test(refused.text), `a stale runfile / dead daemon (ECONNREFUSED) → clear error, no opaque 500 (got ${JSON.stringify(refused.text)})`);
+  const docDown = await callRaw(downShim, "doc.get", { slug: "strat" }); // DL-62: the daemon-down clear error applies to the new ops too (shared proxy())
+  ok(docDown.isError && /not reachable/i.test(docDown.text), "daemon-down → the new doc ops get the same clear 'not reachable' error (shared proxy(), no hang/opaque 500)");
 
   // ═══ back-compat: the stdio server path is byte-for-byte unaffected (server.ts untouched by DL-55) ═══════
   const stdioComment = await call(pm, "save_comment", { issueId: feat.id, body: "stdio still works" });

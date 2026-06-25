@@ -206,6 +206,8 @@ Certain actions must never be performed by an agent. In the hub they have **no M
 
 **Honest scope of this protection.** Because a determined/compromised agent can bypass MCP and write `hub.db` directly (§4), "no tool surface" defends against honest-but-buggy agents and prompt-injection-via-MCP — **not** a malicious process. That is why the *truly* unforgeable authorizations (self-modify, irreversible prod ops) are kept **outside** the hub entirely (§16), where the existing §17/§22/§23 firewalls already put them.
 
+**Publish over the agent op-API is cooperative (DL-43/DL-62).** The list above is the stdio/CLI form, where the daemon process's own `DEVLOOP_ACTOR` gates publish. When `doc.publish` is instead reached over the opt-in **agent op-API** (`hub.transport:"daemon"` → `POST /api/op/doc.publish`), the operator gate is **cooperative/claim-based** — it trusts the client-declared `X-Devloop-Actor:operator` header — not a daemon-process identity. This is the accepted single-host posture (honest cooperative attribution, **not** anti-spoof), revisited only under the deferred remote/auth phase; the §17 firewall is unaffected (a doc is DB-only, `kind` ∈ a CHECKed enum, never a SKILL/conventions/code file).
+
 ---
 
 ## 10. Multi-project isolation — the §2 firewall, made structural

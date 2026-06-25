@@ -28,6 +28,14 @@ read connection.
   are guarded by **`writeOriginOk`** — the request's `Host` must be `127.0.0.1`/`localhost` **and** the
   `Origin` (when sent) same-origin, else `403` (the CSRF / DNS-rebinding boundary, DL-19) — plus the
   operator / `humanWrite` gates below.
+- **Agent op-API publish is *cooperative* (DL-43/DL-62).** When `settings_json.hub.transport:"daemon"` is
+  set, the daemon also mounts the agent op-API (`POST /api/op/*`, default-off ⇒ `404`, same `writeOriginOk`
+  wall), which from DL-62 serves the document/event family (`doc.save`/`doc.publish` + the doc reads +
+  `list_events`). It resolves identity from the **`X-Devloop-Actor`** request header, so **`doc.publish`
+  over the op-API is a *cooperative* operator gate** — it trusts the client-declared `…:operator` — distinct
+  from the stdio `server.ts` publish gate, which reads the daemon **process's own** `DEVLOOP_ACTOR`. Same
+  single-host cooperative attribution, **not** anti-spoof (§16); revisited only under the deferred remote/auth
+  phase. (Full op-API config + reference: DL-58.)
 - **One project.** Like the MCP server, it serves exactly the project named by `DEVLOOP_PROJECT`
   and refuses to start against an unknown/phantom project (the §2 firewall is structural).
 

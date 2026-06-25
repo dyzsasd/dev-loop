@@ -22,6 +22,16 @@ export interface DocRow {
 // an HTTP status. `error` carries the same human message the MCP `err()` used (CONFLICT / FORBIDDEN / …).
 export type DocResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
+// Map a docstore error message (the store returns prose, not codes) to the right HTTP status, so EVERY
+// caller that surfaces a DocResult over HTTP — the DL-3 roadmap write routes AND the DL-43/DL-62 agent
+// op-API — maps it IDENTICALLY from this one place (no drift): the operator gate → 403, a missing
+// doc/version → 404, the create-precondition → 400, else a genuine CAS / kind-immutability conflict → 409.
+export const statusForDocErr = (msg: string): number =>
+  msg.startsWith("FORBIDDEN") ? 403
+    : /^no (document|version)\b/.test(msg) ? 404
+      : msg.includes("baseVersion must be 0") ? 400
+        : 409;
+
 export const resolveDoc = (db: DatabaseSync, projectId: string, slug?: string, kind?: string): DocRow | undefined =>
   slug ? db.prepare("SELECT * FROM documents WHERE project_id=? AND slug=?").get(projectId, slug) as DocRow | undefined
        : kind ? db.prepare("SELECT * FROM documents WHERE project_id=? AND kind=?").get(projectId, kind) as DocRow | undefined
