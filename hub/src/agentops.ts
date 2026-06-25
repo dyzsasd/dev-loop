@@ -213,13 +213,25 @@ function opListEvents(db: DatabaseSync, projectId: string, a: { limit?: number }
   return okR(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? ORDER BY id DESC LIMIT ?").all(projectId, a.limit ?? 50));
 }
 
+// Mirror server.ts's zod (the doc tools' `slug`/`kind` are OPTIONAL STRINGS). The op-API parses raw JSON
+// with no zod, so a present-but-non-string slug/kind must 400 HERE — otherwise it binds into resolveDoc's
+// parameterized query and node:sqlite throws "Provided value cannot be bound" → an HTTP 500 echoing the raw
+// driver string (same class as opSaveIssue's non-array / opDocDiff's non-int guards, extended to the doc-READ
+// selectors — DL-63). Absent (undefined) is fine: a read selects by slug OR kind, and doc.list by neither.
+const docSelectorErr = (a: { slug?: unknown; kind?: unknown }): string | null =>
+  a.slug !== undefined && typeof a.slug !== "string" ? "slug must be a string"
+    : a.kind !== undefined && typeof a.kind !== "string" ? "kind must be a string"
+      : null;
+
 function opDocList(db: DatabaseSync, projectId: string, a: { kind?: string }): OpResult {
+  const bad = docSelectorErr(a); if (bad) return errR(400, bad);
   return okR(a.kind
     ? db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? AND kind=? ORDER BY kind").all(projectId, a.kind)
     : db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? ORDER BY kind").all(projectId));
 }
 
 function opDocGet(db: DatabaseSync, projectId: string, projectKey: string, a: { slug?: string; kind?: string; version?: number }): OpResult {
+  const bad = docSelectorErr(a); if (bad) return errR(400, bad);
   // mirror server.ts's zod (version: int>0, optional). Re-check by hand (no zod on the op-API path): an
   // out-of-range version must 400 like the stdio path, not fall through to the version===0 empty-doc branch.
   if (a.version !== undefined && (!Number.isInteger(a.version) || (a.version as number) <= 0)) return errR(400, "version must be a positive integer");
@@ -233,12 +245,14 @@ function opDocGet(db: DatabaseSync, projectId: string, projectKey: string, a: { 
 }
 
 function opDocHistory(db: DatabaseSync, projectId: string, a: { slug?: string; kind?: string }): OpResult {
+  const bad = docSelectorErr(a); if (bad) return errR(400, bad);
   const d = resolveDoc(db, projectId, a.slug, a.kind);
   if (!d) return errR(404, `no document ${a.slug ?? a.kind}`);
   return okR(db.prepare("SELECT version,status,author,summary,base_version,created_at FROM document_versions WHERE doc_id=? ORDER BY version DESC").all(d.id));
 }
 
 function opDocDiff(db: DatabaseSync, projectId: string, a: { slug?: string; kind?: string; from?: number; to?: number }): OpResult {
+  const bad = docSelectorErr(a); if (bad) return errR(400, bad);
   // from/to come from zod (int>0) on the stdio/shim path; the op-API parses raw JSON, so re-check by hand —
   // a non-int bind would otherwise throw inside node:sqlite → a 500 instead of a clean 400 (opSaveIssue precedent).
   if (!Number.isInteger(a.from) || (a.from as number) <= 0) return errR(400, "from must be a positive integer");

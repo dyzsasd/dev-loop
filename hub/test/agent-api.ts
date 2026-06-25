@@ -169,6 +169,17 @@ ok((await op("list_events", { limit: "all" }, DEV)).status === 400, "guard: list
 ok((await op("list_events", { limit: 10000 }, DEV)).status === 400, "guard: list_events limit over the cap → 400 (mirrors zod .max(500))");
 ok((await op("doc.get", { slug: "strat", version: 0 }, DEV)).status === 400, "guard: doc.get version:0 → 400 (mirrors zod .positive(), not a synthetic empty-doc 200)");
 ok((await op("doc.save", { slug: "strat", kind: "strategy", body: "z", baseVersion: 2, title: {} }, { "x-devloop-actor": "pm" })).status === 400, "guard: doc.save non-string title → 400 (not a 500 from an object bound into the INSERT)");
+// DL-63: the doc READ handlers re-check slug/kind as strings too (the write path + server.ts zod already do).
+// A non-string slug/kind would otherwise bind into resolveDoc and node:sqlite throws → an HTTP 500 echoing the
+// raw driver string; each read selector must return a clean 400 (the parity gap DL-62 left on the read path).
+ok((await op("doc.get", { slug: {} }, DEV)).status === 400, "guard: doc.get non-string slug → 400 (not a 500 from a node:sqlite bind-throw)");
+ok((await op("doc.get", { kind: {} }, DEV)).status === 400, "guard: doc.get non-string kind → 400");
+ok((await op("doc.history", { slug: [1] }, DEV)).status === 400, "guard: doc.history non-string slug → 400");
+ok((await op("doc.diff", { slug: {}, from: 1, to: 2 }, DEV)).status === 400, "guard: doc.diff non-string slug → 400 (not a bind-throw 500)");
+ok((await op("doc.list", { kind: {} }, DEV)).status === 400, "guard: doc.list non-string kind → 400");
+// AC #2: the 400 body is a clean message, never the raw node:sqlite "Provided value cannot be bound…" string
+const dgBadSlug = await op("doc.get", { slug: {} }, DEV);
+ok(dgBadSlug.status === 400 && !/cannot be bound/i.test(JSON.stringify(dgBadSlug.body)), "doc.get non-string slug: a clean 400 body, not the raw 'Provided value cannot be bound' driver string");
 ok((await op("doc.save", { slug: "strat", kind: "strategy", body: "csrf", baseVersion: 2 }, { "x-devloop-actor": "pm", origin: "http://evil.example" })).status === 403, "guard: cross-origin doc.save → 403 (CSRF wall covers the doc write)");
 ok((await op("doc.publish", { slug: "strat", version: 1 }, { "x-devloop-actor": "operator", host: "evil.example" })).status === 403, "guard: foreign Host doc.publish → 403 (DNS-rebinding wall)");
 
