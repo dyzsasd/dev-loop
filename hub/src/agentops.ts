@@ -1,30 +1,31 @@
-// dev-loop hub — the agent op-API ops as plain functions, for the DL-43 daemon agent op-API (/api/op/*):
-// the 5 CORE ticket ops + (DL-62) the doc/event family (list_events + doc.list/get/history/diff/save/publish).
+// dev-loop hub — the agent op-API ops as plain functions: the SINGLE definition of every ticket/read policy
+// the hub exposes. BOTH transports dispatch through these: the DL-43 daemon agent op-API (/api/op/*) and —
+// since DL-69 (the dispatch-sharing refactor) — the stdio MCP server (server.ts), whose 27 op-backed tool
+// handlers are now thin call-throughs to agentOp() (server.ts's toMcp() maps {status,body}→MCP ok()/err()).
+// So each policy — the read SELECTs, the save_issue/save_comment orchestration (the DL-24 per-transition
+// assignTo + the DL-32 prod-promotion gate + the REPLACE-labels/APPEND-relatedTo merge), and the doc/topic/
+// channel/mirror/label families (which also reuse the shared ticketwrite/docstore/topicstore/channelstore/
+// mirrorstore/labelstore) — has EXACTLY ONE definition. The old "edit both files" drift tripwire is RETIRED:
+// a change to any policy now lands in ONE place, and the differential-parity suite (test/shim.ts +
+// test/agent-api.ts, shim ≡ stdio for all 29 tools) is the structural guard against a future re-divergence.
 //
-// This MIRRORS the stdio MCP server's handlers (server.ts: list_issues / get_issue / save_issue /
-// save_comment / list_comments) 1:1 — same filters, the same REPLACE-style labels + APPEND-only relatedTo
-// merge, the DL-24 per-transition assignTo directive, and the DL-32 prod-promotion gate — reusing the
-// shared ticketwrite.ts mechanics (DL-35) so the op-API behaves IDENTICALLY to the stdio server. server.ts
-// stays the canonical stdio transport, 100% UNTOUCHED by DL-43 (its AC); this is the additive daemon-side
-// mirror that P2's thin stdio shim will proxy to. The two policy copies are deliberately duplicated here
-// (server.ts can't be edited this increment) — converging them onto this module is the sequenced P2/(2-n)
-// follow-up (the "dispatch-sharing refactor", design §40). Until then, a change to save_issue policy must
-// land in BOTH files; this header is the tripwire.
-//
-// Each function takes a hub connection + the caller's already-resolved+validated actor (the daemon resolves
-// it from the X-Devloop-Actor header and the G1 phantom-actor guard BEFORE calling here) and returns an
-// HTTP-shaped { status, body } the daemon serializes as JSON — the same payloads the stdio path returns via
-// ok()/err(), with err() mapped to the right HTTP status. NO env read, NO mode gate, NO transport here: the
-// daemon op-API layer owns the endpoint pipeline (writeOriginOk → actor → mode-honoring); this module is
-// pure ticket policy, exactly like the stdio handlers.
+// Each function takes a hub connection + the caller's already-resolved+validated actor (server.ts resolves it
+// from DEVLOOP_ACTOR + the G1 phantom-actor guard; the daemon from the X-Devloop-Actor header) and returns an
+// HTTP-shaped { status, body }: the daemon serializes it as JSON; server.ts's toMcp() maps it to ok()/err()
+// (a 200 → ok(body); a non-200 → err(body.error)). NO env read, NO mode gate, NO transport here — each
+// transport owns its own pipeline (server.ts the stdio identity; the daemon op-API writeOriginOk → actor →
+// mode-honoring) AROUND these pure-policy ops. (whoami + create_issue_label stay native in server.ts: whoami
+// is transport-specific identity, not an op; create_issue_label's policy already lives once in labelstore, and
+// the op logs an op-API-only label.create attribution event server.ts deliberately does not — DL-69 kept it
+// native so the stdio path stays byte-identical.)
 import { DatabaseSync } from "node:sqlite";
-import { actorExists, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
+import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
 // gate) + the docstore-error→HTTP-status map are reused VERBATIM from the shared, side-effect-free docstore
-// (exactly as the 5 ticket ops reuse ticketwrite.ts), so the op-API and the stdio server.ts can never drift
-// on the publish gate or the CAS. The doc READS (doc.list/get/history/diff) + list_events are plain SELECTs
-// duplicated 1:1 from server.ts below (server.ts can't be edited this increment — the drift tripwire header).
+// (exactly as the 5 ticket ops reuse ticketwrite.ts), so both transports share one publish gate + one CAS.
+// The doc READS (doc.list/get/history/diff) + list_events are the SINGLE definition of those SELECTs — since
+// DL-69 server.ts's handlers dispatch through them (no longer a 1:1 duplicate of a server.ts copy).
 import { resolveDoc, latestVersion, docSave, docPublish, statusForDocErr, DOC_KINDS, type DocSaveArgs, type DocPublishArgs } from "./docstore.ts";
 // DL-64 discussion-board family — the topic/post reads + writes (incl. the §25 chair/invited role gates +
 // the round/append rules) + the error→HTTP-status map are reused VERBATIM from the shared, side-effect-free
@@ -161,7 +162,7 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
 }
 
 function opGetIssue(db: DatabaseSync, projectId: string, projectKey: string, a: { id?: string }): OpResult {
-  if (!a.id) return errR(400, "id required");
+  if (a.id === undefined) return errR(400, "id required"); // === undefined, NOT falsy: a zod-valid empty-string id ("" passes the bare z.string()) must fall through to the not-found lookup, byte-identical to the pre-DL-69 native handler; this guard exists only to stop an undefined → node:sqlite bind-crash
   const r = getRow(db, projectId, a.id);
   if (!r) return errR(404, `no such ticket ${a.id} in ${projectKey}`);
   const comments = db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(a.id);
@@ -184,7 +185,7 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
   if (a.relatedTo !== undefined && !isStrArr(a.relatedTo)) return errR(400, "relatedTo must be an array of strings");
   if (a.priority !== undefined && (typeof a.priority !== "number" || !Number.isInteger(a.priority) || a.priority < 0 || a.priority > 4)) return errR(400, `invalid priority; an integer 0..4`);
   if (a.state && !STATES.includes(a.state as State)) return errR(400, `invalid state '${a.state}'; one of ${STATES.join(", ")}`);
-  if (a.assignee && a.assignee !== "me" && !actorExists(db, a.assignee)) return errR(400, `unknown assignee '${a.assignee}' (or "me"/null)`);
+  if (a.assignee && a.assignee !== "me" && !actorExists(db, a.assignee)) return errR(400, `unknown assignee '${a.assignee}'; one of ${listActorHandles(db).join(", ")} (or "me"/null)`); // DL-69: the message is byte-identical to server.ts's (the single source) — agent-api.ts asserts only status 400
   if (!a.id) {
     if (!a.title) return errR(400, "title required to create a ticket");
     const promoReject = prodPromotionRejection(db, projectId, actor, [], a.labels ?? []);
@@ -230,7 +231,7 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
 
 // `db` MUST be a WRITABLE connection (the comment INSERT + comment.add event go through insertComment).
 function opSaveComment(db: DatabaseSync, projectId: string, actor: string, a: { issueId?: string; body?: string }): OpResult {
-  if (!a.issueId) return errR(400, "issueId required");
+  if (a.issueId === undefined) return errR(400, "issueId required"); // === undefined, NOT falsy (DL-69): a zod-valid empty-string issueId must fall through to the not-found lookup, byte-identical to the pre-refactor native handler
   if (typeof a.body !== "string") return errR(400, "body required");
   if (!getRow(db, projectId, a.issueId)) return errR(404, `no such ticket ${a.issueId}`);
   const { id, createdAt } = insertComment(db, projectId, actor, a.issueId, a.body);
@@ -238,7 +239,7 @@ function opSaveComment(db: DatabaseSync, projectId: string, actor: string, a: { 
 }
 
 function opListComments(db: DatabaseSync, projectId: string, projectKey: string, a: { issueId?: string }): OpResult {
-  if (!a.issueId) return errR(400, "issueId required");
+  if (a.issueId === undefined) return errR(400, "issueId required"); // === undefined, NOT falsy (DL-69): a zod-valid empty-string issueId must fall through to the not-found lookup, byte-identical to the pre-refactor native handler
   if (!getRow(db, projectId, a.issueId)) return errR(404, `no such ticket ${a.issueId} in ${projectKey}`);
   return okR(db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(a.issueId));
 }
@@ -311,7 +312,7 @@ function opDocDiff(db: DatabaseSync, projectId: string, a: { slug?: string; kind
 // (a stale baseVersion → CONFLICT, never last-write-wins) lives inside docSave, shared with server.ts.
 function opDocSave(db: DatabaseSync, projectId: string, actor: string, a: Partial<DocSaveArgs>): OpResult {
   // re-validate the zod shapes the stdio/shim path enforces (slug/body required, kind ∈ DOC_KINDS, baseVersion int≥0)
-  if (typeof a.slug !== "string" || !a.slug) return errR(400, "slug required (a non-empty string)");
+  if (typeof a.slug !== "string") return errR(400, "slug required (a string)"); // type-only, NOT non-empty (DL-69): a zod-valid empty-string slug must reach docSave (which creates/handles it), byte-identical to the pre-refactor native handler; only undefined/non-string is rejected (the INSERT-bind guard)
   if (typeof a.body !== "string") return errR(400, "body required (a string)");
   if (a.title !== undefined && typeof a.title !== "string") return errR(400, "title must be a string"); // server.ts zod: title/summary optional strings — a non-string would bind into the INSERT → a 500
   if (a.summary !== undefined && typeof a.summary !== "string") return errR(400, "summary must be a string");
@@ -458,8 +459,11 @@ function opListLabels(db: DatabaseSync, projectId: string): OpResult {
 }
 
 // `db` MUST be a WRITABLE connection. Validation (DL-22 empty-name + LABEL_KINDS) lives in the shared createLabel
-// so server.ts + the op-API can't drift. The attributed `label.create` event is logged HERE (the identity win)
-// — server.ts's create_issue_label stays byte-identical (it logs none); both paths return {name,kind} identically.
+// so server.ts + the op-API can't drift. The attributed `label.create` event is logged HERE (the identity win).
+// DL-69 note: this is the ONE op server.ts does NOT dispatch through — its create_issue_label stays a native
+// createLabel call that logs NO event, so the stdio path stays byte-identical (routing it here would ADD that
+// event to stdio = new behavior, out of scope for a behavior-preserving refactor). Unifying that attribution
+// onto the stdio path is a deliberate behavior change for a follow-up; both paths return {name,kind} identically.
 function opCreateLabel(db: DatabaseSync, projectId: string, actor: string, a: { name?: unknown; kind?: unknown }): OpResult {
   if (typeof a.name !== "string") return errR(400, "name required (a string)"); // server.ts zod: name z.string() — a non-string would crash createLabel's .trim()
   if (a.kind !== undefined && typeof a.kind !== "string") return errR(400, "kind must be a string");

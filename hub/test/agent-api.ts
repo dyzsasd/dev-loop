@@ -357,6 +357,37 @@ ok((await op("bogus_op", {}, DEV)).status === 404, "guard: unknown op name → 4
 const cntAfterGuards = (await getJson("/api/tickets")).body.length;
 ok(cntAfterGuards === 2, "no refused/invalid write mutated state (still exactly the seed Feature + the qa Bug)");
 
+// ═══ DL-69 single-source cross-path: the DL-24 assignTo + DL-32 prod-gate policies behave IDENTICALLY ═══════
+// via the op-API AND the stdio server. After the dispatch-sharing refactor server.ts's save_issue runs the
+// SAME agentops.opSaveIssue the op-API runs, so these two historically-drift-prone policies (the "edit both
+// files" tripwire DL-69 retired) MUST match on both transports — this assertion ENFORCES the single source.
+const setWorkflow = (s: Record<string, unknown>) => { const c = openDb(DB); c.prepare("UPDATE projects SET settings_json=? WHERE id=?").run(JSON.stringify(s), projectId); c.close(); };
+const rawStdio = async (c: Client, name: string, args: Record<string, unknown>) => { const r: any = await c.callTool({ name, arguments: args }); return { isError: !!r.isError, data: JSON.parse(r.content?.[0]?.text ?? "{}") }; };
+setWorkflow({ hub: { transport: "daemon" }, workflow: { release: { prodPromotionGate: "human" }, transitions: { "Todo->In Progress": { assignTo: "owner" } } } });
+const PML = ["dev-loop", "Feature", "pm"];
+// DL-32 prod-gate: a non-operator ADDING env:prod is rejected the SAME way on BOTH paths; the operator is allowed.
+const gOp = await op("save_issue", { title: "x-gate op", type: "Feature", labels: PML }, QA);          // a fresh pm-owned Todo
+ok((await op("save_issue", { id: gOp.body.id, labels: [...PML, "env:prod"] }, DEV)).status === 403, "DL-69/DL-32: op save_issue — a non-operator adding env:prod → 403 (human-gated)");
+const gStd = await call(pm, "save_issue", { title: "x-gate stdio", type: "Feature", labels: PML });     // a fresh pm-owned Todo (stdio)
+const gStdDev = await rawStdio(verifier, "save_issue", { id: gStd.id, labels: [...PML, "env:prod"] });
+ok(gStdDev.isError && /human-gated/.test(gStdDev.data.error ?? ""), "DL-69/DL-32: stdio save_issue — a non-operator adding env:prod → rejected human-gated (SAME gate as the op path)");
+ok((await op("save_issue", { id: gOp.body.id, labels: [...PML, "env:prod"] }, OPER)).body.labels.includes("env:prod"), "DL-69/DL-32: op save_issue — the operator CAN add env:prod (the gate allows operator)");
+// DL-24 assignTo: a Todo→In Progress transition with IMPLICIT assignee materializes the owner (pm) — identical on BOTH paths.
+const aOp = await op("save_issue", { id: gOp.body.id, state: "In Progress" }, DEV);                     // pm-owned; assignee left implicit
+ok(aOp.body.assignee === "pm" && aOp.body.state === "In Progress", `DL-69/DL-24: op Todo→In Progress (implicit assignee) materializes the owner pm (got ${aOp.body.assignee})`);
+const aStd = await rawStdio(verifier, "save_issue", { id: gStd.id, state: "In Progress" });             // implicit assignee
+ok(!aStd.isError && aStd.data.assignee === "pm" && aStd.data.state === "In Progress", `DL-69/DL-24: stdio Todo→In Progress (implicit assignee) materializes the owner pm — IDENTICAL to the op path (got ${aStd.data.assignee})`);
+setWorkflow({ hub: { transport: "daemon" } });                                                          // restore (release/transitions off) for the mode + toggle-off sections below
+
+// DL-69 byte-identical edge (the self-review catch): the op input guards check `=== undefined`, NOT falsy, so a
+// zod-valid EMPTY-STRING id/issueId/slug falls through to the SAME downstream as the pre-refactor native handler
+// (a not-found lookup / a docSave create), never a synthetic "X required" 400. Reachable: the stdio zod is bare z.string().
+ok((await op("get_issue", { id: "" }, DEV)).status === 404, `DL-69: op get_issue id:"" → 404 not-found (empty-string falls through, not a synthetic 400)`);
+const giEmpty = await rawStdio(verifier, "get_issue", { id: "" });
+ok(giEmpty.isError && /no such ticket/.test(giEmpty.data.error ?? ""), `DL-69: stdio get_issue id:"" → 'no such ticket' (byte-identical to pre-refactor — NOT a 400)`);
+const dsEmpty = await op("doc.save", { slug: "", kind: "notes", body: "x", baseVersion: 0 }, { "x-devloop-actor": "pm" }); // kind:notes is unused in agp (no UNIQUE(project,kind) clash); slug:"" must REACH docSave (create), not hit a synthetic slug-required 400
+ok(dsEmpty.status === 200, `DL-69: op doc.save slug:"" reaches docSave (creates), not the slug-required 400 (got ${dsEmpty.status} ${JSON.stringify(dsEmpty.body)})`);
+
 // ═══ honor `mode` server-side: a WRITE under dry-run is refused; reads are NOT gated (design Decision #4) ═══
 setMode("dry-run");
 const commentsBeforeDry = (await op("list_comments", { issueId: feat.id }, DEV)).body.length;

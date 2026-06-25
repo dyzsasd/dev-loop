@@ -5,15 +5,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { homedir } from "node:os";
 import { z } from "zod";
-import { openDb, nowIso, logEvent, actorExists, listActorHandles, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
+import { openDb, actorExists, listActorHandles } from "./db.ts";
 import { ensureActors, ensureProject, findProject } from "./seed.ts";
-import { DOC_KINDS, resolveDoc, latestVersion, docSave, docPublish } from "./docstore.ts";
-import { topicList, topicGet, topicOpen, postAdd, topicSynthesize, topicClose } from "./topicstore.ts"; // DL-64: the shared discussion-board read+write logic + role gates (the docstore.ts precedent), so the op-API and this server can't drift
-import { channelRegister, channelSend, channelPoll, channelAck, channelStatus } from "./channelstore.ts"; // DL-67: the shared IM-channel handler logic + DL-4 roadmap bridge (the topicstore precedent) — one impl for this server + the op-API.
-import { mirrorPush, mirrorStatus } from "./mirrorstore.ts"; // DL-68: the shared P7 mirror.push handler + mirror.status (reuses linear.ts transport + channelstore's isEnvName) — one impl for this server + the op-API.
-import { createLabel, listLabels, getProject } from "./labelstore.ts"; // DL-68: the shared label/project ops (incl. the single LABEL_KINDS source for the DL-22 reject) — one impl for this server + the op-API.
+import { DOC_KINDS } from "./docstore.ts"; // the doc-kind enum for doc.save's zod schema (the handler itself dispatches through agentops.ts)
+import { createLabel } from "./labelstore.ts"; // DL-69: create_issue_label stays a native handler (see agentops.ts opCreateLabel — the only op server.ts does NOT dispatch through, to keep the stdio path byte-identical)
 import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
-import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts"; // DL-35: the single ticket/comment write home
+import { agentOp, type OpResult, type AgentOp } from "./agentops.ts"; // DL-69: the SINGLE definition of every ticket/read policy — every op-backed handler below dispatches through agentOp()
 
 // ─── Environment / identity ──────────────────────────────────────────────────
 const DB_PATH = process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`;
@@ -118,76 +115,19 @@ if (!projectId) {
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const err = (message: string) => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }] });
 
-interface TicketRow {
-  id: string; project_id: string; title: string; description: string; type: string;
-  state: State; assignee: string | null; priority: number; labels: string;
-  duplicate_of: string | null; related_to: string; created_by: string; created_at: string; updated_at: string;
-}
-const toTicket = (r: TicketRow): Ticket => ({
-  id: r.id, project_id: r.project_id, title: r.title, description: r.description, type: r.type,
-  state: r.state, assignee: r.assignee, priority: r.priority,
-  labels: JSON.parse(r.labels) as string[],
-  duplicateOf: r.duplicate_of, relatedTo: JSON.parse(r.related_to) as string[],
-  created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at,
-});
-const getRow = (id: string): TicketRow | undefined =>
-  db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as TicketRow | undefined;
-const resolveAssignee = (a: string | null | undefined): string | null =>
-  a === undefined || a === null ? null
-  : a === "me" ? ACTOR
-  : a.trim() === "" ? null   // empty/whitespace-only → unassigned (null), never stored verbatim (DL-6)
-  : a;
-
-// ─── workflow-config: per-transition assignTo directive (DL-24 / design §10 D1) ──
-// assignee = who-acts-NEXT; the pm/qa owner label stays who-VERIFIES (two orthogonal axes).
-// On a real transition where the caller left assignee implicit, an optional per-edge directive in
-// projects.settings_json may materialize the next assignee. OFF by default: no workflow block ⇒
-// resolveAssignTo returns null everywhere ⇒ no implicit write ⇒ byte-identical to pre-feature.
-const ownerHandleOf = (labels: string[]): string | null =>
-  labels.includes("pm") ? "pm" : labels.includes("qa") ? "qa" : null; // null = the "—" sentinel ⇒ fail-closed
-function loadTransitions(): Record<string, { assignTo?: string | null }> {
-  try {
-    const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
-    const s = row?.settings_json ? JSON.parse(row.settings_json) : {};
-    const tr = s?.workflow?.transitions;
-    return tr && typeof tr === "object" ? tr : {};
-  } catch { return {}; } // malformed config ⇒ treated as absent (fail-open), never bricks a write
-}
-// Resolve the assignTo directive for a from→to edge to a concrete handle, or null = leave untouched.
-// owner→ownerHandleOf(labels) ("—" ⇒ untouched); self→ACTOR; "<handle>"→validated; null/absent→untouched.
-function resolveAssignTo(from: string, to: string, labels: string[]): string | null {
-  const dir = loadTransitions()[`${from}->${to}`];
-  if (!dir || dir.assignTo === undefined || dir.assignTo === null) return null;
-  const v = dir.assignTo;
-  if (v === "owner") {
-    const o = ownerHandleOf(labels);
-    if (!o) console.error(`[assignTo] ${from}->${to}: owner directive but ticket has no pm/qa label — assignee left untouched`);
-    return o;
-  }
-  if (v === "self") return ACTOR;
-  if (actorExists(db, v)) return v;
-  console.error(`[assignTo] ${from}->${to}: unknown handle '${v}' — assignee left untouched`);
-  return null;
-}
-
-// ─── release / env gating (DL-32 / design §7 — opt-in, default off) ───────────
-// env:dev / env:prod are workflow-kind LABELs (no new state, no schema ALTER). These helpers gate prod
-// promotion and feed the issue.promote lifecycle event. The staging-deploy gate (requireDeployBeforeReview)
-// is a deferred follow-up — it needs the hub to learn a repo's deploy-capability, which lives agent-side
-// (projects.json), not in the hub's settings_json; that carve-out signal is a PM design decision.
-const ENV_LABELS = ["env:dev", "env:prod"];
-const envLabelsOf = (labels: string[]): string[] => labels.filter((l) => ENV_LABELS.includes(l)).sort();
-// Reject a non-operator ADDING env:prod when prodPromotionGate is "human". Cooperative attribution, NOT
-// anti-spoof (an agent can set DEVLOOP_ACTOR; the real human-only boundary is the daemon's localhost path).
-// Demotion (removing env:prod) is NEVER gated, so a rollback can't trip the gate. Returns an err string, or null to allow.
-// (The release config reader lives in ticketwrite.ts — loadRelease — shared with the DL-38 staging gate.)
-function prodPromotionRejection(oldLabels: string[], newLabels: string[]): string | null {
-  if (loadRelease(db, projectId).prodPromotionGate !== "human") return null;
-  const adding = newLabels.includes("env:prod") && !oldLabels.includes("env:prod");
-  return adding && ACTOR !== "operator"
-    ? `env:prod promotion is human-gated (prodPromotionGate:"human"): only the operator may add env:prod`
-    : null;
-}
+// ─── DL-69 dispatch-sharing: every op-backed handler is a thin call-through to the shared agentOp() ──────
+// Each ticket/read policy lives ONCE in agentops.ts; the handlers below forward their zod-validated args to
+// agentOp() and map the returned { status, body } to the MCP ok()/err() shape via toMcp() — the SAME mapping
+// the DL-55 stdio shim applies to the op-API HTTP response (shim.ts: 200 → ok(body); non-200 → err(body.error)),
+// so a dispatched handler is BYTE-IDENTICAL to the pre-refactor native one (the differential-parity suite,
+// shim ≡ stdio for all 29 tools, is the structural guard). The zod inputSchemas stay on each registerTool
+// (identical names/schemas), so the op's raw-JSON input guards stay zod-shadowed on this stdio path —
+// unchanged behavior. agentOp reads NO env/mode/transport (the agentops.ts contract): server.ts owns the
+// DEVLOOP_ACTOR identity + the G1 guard (above) and passes ACTOR in; the daemon op-API owns its own pipeline
+// around the SAME ops. whoami + create_issue_label stay native below (see their handlers).
+const toMcp = (r: OpResult) => (r.status === 200 ? ok(r.body) : err((r.body as { error: string }).error));
+const dispatch = async (op: AgentOp, a: unknown) =>
+  toMcp(await agentOp(op, db, projectId, PROJECT_KEY, ACTOR, (a ?? {}) as Record<string, unknown>));
 
 const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 
@@ -204,27 +144,12 @@ server.registerTool("list_issues", {
     label: z.string().optional(), labels: z.array(z.string()).optional(), query: z.string().optional(),
     limit: z.number().int().positive().max(250).optional(),
   },
-}, async (a) => {
-  let rows = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as TicketRow[]);
-  let out = rows.map(toTicket);
-  if (a.state) out = out.filter((t) => t.state === a.state);
-  if (a.assignee) out = out.filter((t) => t.assignee === resolveAssignee(a.assignee));
-  if (a.type) out = out.filter((t) => t.type === a.type);
-  const want = [...(a.labels ?? []), ...(a.label ? [a.label] : [])];
-  if (want.length) out = out.filter((t) => want.every((l) => t.labels.includes(l)));
-  if (a.query) { const q = a.query.toLowerCase(); out = out.filter((t) => t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)); } // §8 dedupe scans title+body (§18 line 962)
-  return ok(a.limit ? out.slice(0, a.limit) : out); // no implicit cap — Sweep scans the full non-terminal set (§10 narrows via filters)
-});
+}, async (a) => dispatch("list_issues", a));
 
 // ─── get_issue (ticket + its comments) ────────────────────────────────────────
 server.registerTool("get_issue",
   { description: "Get one ticket with its comments.", inputSchema: { id: z.string() } },
-  async ({ id }) => {
-    const r = getRow(id);
-    if (!r) return err(`no such ticket ${id} in ${PROJECT_KEY}`);
-    const comments = db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(id);
-    return ok({ ...toTicket(r), comments });
-  });
+  async (a) => dispatch("get_issue", a));
 
 // ─── save_issue (create or update; REPLACE-style labels; mirrors Linear) ──────
 server.registerTool("save_issue", {
@@ -237,148 +162,57 @@ server.registerTool("save_issue", {
     duplicateOf: z.string().nullable().optional(), // §8 dedupe scalar (pair with state Duplicate); undefined=keep
     relatedTo: z.array(z.string()).optional(),     // §4 splits / §15 coverage; APPEND-ONLY union (§18 line 965)
   },
-}, async (a) => {
-  if (a.state && !STATES.includes(a.state as State)) return err(`invalid state '${a.state}'; one of ${STATES.join(", ")}`);
-  if (a.assignee && a.assignee !== "me" && !actorExists(db, a.assignee)) return err(`unknown assignee '${a.assignee}'; one of ${listActorHandles(db).join(", ")} (or "me"/null)`);
-  if (!a.id) {
-    if (!a.title) return err("title required to create a ticket");
-    const promoReject = prodPromotionRejection([], a.labels ?? []); // DL-32: can't be born env:prod by a non-operator
-    if (promoReject) return err(promoReject);
-    // DL-35: the create INSERT + issue.create event now live in ticketwrite.insertTicket. Event data stays
-    // the RAW {title,type} this path has always logged (type may be undefined when omitted) — byte-identical.
-    const id = insertTicket(db, projectId, ACTOR,
-      { title: a.title, description: a.description ?? "", type: a.type ?? "Feature", state: (a.state as State) ?? "Todo",
-        assignee: resolveAssignee(a.assignee), priority: a.priority ?? 0, labels: a.labels ?? [],
-        duplicateOf: a.duplicateOf ?? null, relatedTo: a.relatedTo ?? [] },
-      { title: a.title, type: a.type });
-    return ok(toTicket(getRow(id)!));
-  }
-  // update branch — atomic read-merge-write (Codex review): the APPEND-ONLY relatedTo union must not
-  // lose a concurrent link to a last-write-wins race, so read-cur → merge → write is one BEGIN IMMEDIATE txn.
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const cur = getRow(a.id);
-    if (!cur) { db.exec("ROLLBACK"); return err(`no such ticket ${a.id} in ${PROJECT_KEY}`); }
-    const next = {
-      title: a.title ?? cur.title, description: a.description ?? cur.description, type: a.type ?? cur.type,
-      state: (a.state as State) ?? cur.state,
-      assignee: a.assignee === undefined ? cur.assignee : resolveAssignee(a.assignee),
-      priority: a.priority ?? cur.priority,
-      labels: a.labels ? JSON.stringify(a.labels) : cur.labels, // REPLACE-style (§10#1 mimicked)
-      duplicate_of: a.duplicateOf === undefined ? cur.duplicate_of : a.duplicateOf, // scalar set; undefined=keep
-      related_to: a.relatedTo // APPEND-ONLY union (re-read ∪ passed), never replace (§18 line 965)
-        ? JSON.stringify([...new Set([...(JSON.parse(cur.related_to) as string[]), ...a.relatedTo])])
-        : cur.related_to,
-    };
-    // DL-24: per-transition assignTo directive — only on a real transition AND when the caller left
-    // assignee implicit (an explicit assignee always wins). OFF unless settings_json declares the edge.
-    if (next.state !== cur.state && a.assignee === undefined) {
-      const resolved = resolveAssignTo(cur.state, next.state, JSON.parse(next.labels) as string[]);
-      if (resolved !== null) next.assignee = resolved; // null = leave untouched (no directive / "—" sentinel / unknown handle)
-    }
-    // DL-32: prod-promotion gate — reject a non-operator ADDING env:prod (default off). Demotion is allowed.
-    const oldLabels = JSON.parse(cur.labels) as string[], newLabels = JSON.parse(next.labels) as string[];
-    const promoReject = prodPromotionRejection(oldLabels, newLabels);
-    if (promoReject) { db.exec("ROLLBACK"); return err(promoReject); }
-    // DL-35: the UPDATE + transition/update event now live in ticketwrite.updateTicketRow. The atomic
-    // read-merge-write txn (and the `next` merge above: REPLACE labels, APPEND-only relatedTo, DL-24 assignTo)
-    // stay here — the mechanic is txn-agnostic, so this BEGIN IMMEDIATE block still owns atomicity.
-    // DL-38: updateTicketRow now enforces the staging-deploy gate and may reject ⇒ ROLLBACK, no write/event.
-    const wr = updateTicketRow(db, projectId, ACTOR, a.id, cur.state, next);
-    if (!wr.ok) { db.exec("ROLLBACK"); return err(wr.error); }
-    // DL-32: emit issue.promote {from,to} on any env:* label-set change (promotion cycle-time; no new state).
-    const fromEnv = envLabelsOf(oldLabels).join(","), toEnv = envLabelsOf(newLabels).join(",");
-    if (fromEnv !== toEnv) logEvent(db, { project_id: projectId, ticket_id: a.id, actor: ACTOR, kind: "issue.promote", data: { from: fromEnv, to: toEnv } });
-    db.exec("COMMIT");
-  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
-  return ok(toTicket(getRow(a.id)!));
-});
+}, async (a) => dispatch("save_issue", a));
 
 // ─── comments ────────────────────────────────────────────────────────────────
 server.registerTool("save_comment",
   { description: "Add a comment to a ticket (authored as you).", inputSchema: { issueId: z.string(), body: z.string() } },
-  async ({ issueId, body }) => {
-    if (!getRow(issueId)) return err(`no such ticket ${issueId}`);
-    // DL-35: the comment INSERT + comment.add event now live in ticketwrite.insertComment. The MCP path
-    // keeps its own existence check + err string and does NOT enforce a non-empty body (byte-identical).
-    const { id, createdAt } = insertComment(db, projectId, ACTOR, issueId, body);
-    return ok({ id, ticket_id: issueId, author: ACTOR, body, created_at: createdAt });
-  });
+  async (a) => dispatch("save_comment", a));
 server.registerTool("list_comments",
   { description: "List a ticket's comments (chronological; the tail is the latest).", inputSchema: { issueId: z.string() } },
-  async ({ issueId }) => {
-    if (!getRow(issueId)) return err(`no such ticket ${issueId} in ${PROJECT_KEY}`); // project-scope guard (parity with get_issue)
-    return ok(db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(issueId));
-  });
+  async (a) => dispatch("list_comments", a));
 
 // ─── labels (shared labelstore — one LABEL_KINDS source + the DL-22 reject, reused by the op-API) ──────
 server.registerTool("list_issue_labels", { description: "List the project's labels.", inputSchema: {} },
-  async () => ok(listLabels(db, projectId)));
+  async (a) => dispatch("list_issue_labels", a));
 server.registerTool("create_issue_label",
   { description: "Create a label if missing (idempotent).", inputSchema: { name: z.string(), kind: z.string().optional() } },
   async ({ name, kind }) => { const r = createLabel(db, projectId, { name, kind }); return r.ok ? ok(r.data) : err(r.error); });
 
 // ─── projects (minimal) + events (attribution audit) ─────────────────────────
 server.registerTool("get_project", { description: "The active project.", inputSchema: {} },
-  async () => ok(getProject(db, projectId)));
+  async (a) => dispatch("get_project", a));
 server.registerTool("list_events",
   { description: "Recent attribution/audit events (who did what).", inputSchema: { limit: z.number().int().positive().max(500).optional() } },
-  async ({ limit }) => ok(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? ORDER BY id DESC LIMIT ?").all(projectId, limit ?? 50)));
+  async (a) => dispatch("list_events", a));
 
 // ─── P4 documents — versioned, attributable, operator-published (project-scoped) ──────
 // The CAS + operator-publish logic lives in docstore.ts (shared verbatim with the DL-3 daemon write
-// surface, so the two can never drift on the publish gate). These handlers are thin adapters:
-// pass (db, projectId, ACTOR, args) and map the DocResult to ok()/err().
+// surface, so the two can never drift on the publish gate). The handlers dispatch through agentOp() (DL-69) —
+// one definition of each doc op, mapped to ok()/err() by toMcp().
 server.registerTool("doc.list", { description: "List this project's documents (no bodies).", inputSchema: { kind: z.string().optional() } },
-  async (a) => ok((a.kind
-    ? db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? AND kind=? ORDER BY kind").all(projectId, a.kind)
-    : db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? ORDER BY kind").all(projectId))));
+  async (a) => dispatch("doc.list", a));
 
 server.registerTool("doc.get", {
   description: "Get a document by slug or kind. Omit version → the published (current) version; if never published, the latest DRAFT with unpublished:true. version=N → that historical version.",
   inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive().optional() },
-}, async (a) => {
-  const d = resolveDoc(db, projectId, a.slug, a.kind);
-  if (!d) return err(`no document ${a.slug ?? a.kind} in ${PROJECT_KEY}`);
-  const ver = a.version ?? (d.current_version > 0 ? d.current_version : latestVersion(db, d.id));
-  if (ver === 0) return ok({ ...d, version: 0, body: "", unpublished: true, empty: true });
-  const v = db.prepare("SELECT version,body,status,summary,base_version,author,created_at FROM document_versions WHERE doc_id=? AND version=?").get(d.id, ver) as Record<string, unknown> | undefined;
-  if (!v) return err(`no version ${ver} of ${d.slug}`);
-  return ok({ id: d.id, kind: d.kind, slug: d.slug, title: d.title, status: d.status, current_version: d.current_version, ...v, ...(d.current_version === 0 ? { unpublished: true } : {}) });
-});
+}, async (a) => dispatch("doc.get", a));
 
 server.registerTool("doc.save", {
   description: "Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the doc's latest version, else CONFLICT (never last-write-wins). NEVER publishes — only the operator can (doc.publish).",
   inputSchema: { slug: z.string(), kind: z.enum(DOC_KINDS), title: z.string().optional(), body: z.string(), baseVersion: z.number().int().min(0), summary: z.string().optional() },
-}, async (a) => {
-  const r = docSave(db, projectId, ACTOR, a);
-  return r.ok ? ok(r.data) : err(r.error);
-});
+}, async (a) => dispatch("doc.save", a));
 
 server.registerTool("doc.history", { description: "A document's version ledger (no bodies; newest first).", inputSchema: { slug: z.string().optional(), kind: z.string().optional() } },
-  async (a) => {
-    const d = resolveDoc(db, projectId, a.slug, a.kind);
-    if (!d) return err(`no document ${a.slug ?? a.kind}`);
-    return ok(db.prepare("SELECT version,status,author,summary,base_version,created_at FROM document_versions WHERE doc_id=? ORDER BY version DESC").all(d.id));
-  });
+  async (a) => dispatch("doc.history", a));
 
 server.registerTool("doc.diff", { description: "Line diff between two versions of a document.", inputSchema: { slug: z.string().optional(), kind: z.string().optional(), from: z.number().int().positive(), to: z.number().int().positive() } },
-  async (a) => {
-    const d = resolveDoc(db, projectId, a.slug, a.kind);
-    if (!d) return err(`no document ${a.slug ?? a.kind}`);
-    const body = (n: number) => (db.prepare("SELECT body FROM document_versions WHERE doc_id=? AND version=?").get(d.id, n) as { body: string } | undefined)?.body;
-    const fromBody = body(a.from), toBody = body(a.to);
-    if (fromBody === undefined || toBody === undefined) return err(`missing version (have up to ${latestVersion(db, d.id)})`);
-    return ok({ from: a.from, to: a.to, fromBody, toBody, unified: unifiedDiff(fromBody, toBody) });
-  });
+  async (a) => dispatch("doc.diff", a));
 
 server.registerTool("doc.publish", {
   description: "OPERATOR-ONLY: publish a draft version → current (the live doc). Cooperative role-gate (DEVLOOP_ACTOR=operator), not anti-spoof — see §18/HUB-ARCHITECTURE §16.",
   inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive() },
-}, async (a) => {
-  const r = docPublish(db, projectId, ACTOR, a);
-  return r.ok ? ok(r.data) : err(r.error);
-});
+}, async (a) => dispatch("doc.publish", a));
 
 // ─── P5 discussion board — the Director chairs; invited agents post per round ──────
 // Two distinct gates (kept honest, both cooperative on one host — see §18/HUB-ARCH §16):
@@ -393,30 +227,30 @@ server.registerTool("doc.publish", {
 server.registerTool("topic.open", {
   description: "Open a discussion topic (the caller becomes the chair = opened_by). invited = actor handles asked to post a perspective. Director-style use; any actor may chair its own topics.",
   inputSchema: { question: z.string().min(1), invited: z.array(z.string()).min(1) },
-}, async (a) => { const r = topicOpen(db, projectId, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
+}, async (a) => dispatch("topic.open", a));
 
 server.registerTool("topic.list", {
   description: "List discussion topics (no post bodies). Each row carries the current round, round_opened_at, and YOUR/the invited set's `pending` for this round (who still owes a perspective).",
   inputSchema: { status: z.enum(["open", "closed"]).optional() },
-}, async (a) => ok(topicList(db, projectId, ACTOR, a.status)));
+}, async (a) => dispatch("topic.list", a));
 
 server.registerTool("topic.get", { description: "A topic + all its posts (perspectives + the chair's synthesis), oldest first.", inputSchema: { id: z.string() } },
-  async (a) => { const r = topicGet(db, projectId, PROJECT_KEY, a.id); return r.ok ? ok(r.data) : err(r.error); });
+  async (a) => dispatch("topic.get", a));
 
 server.registerTool("post.add", {
   description: "Post YOUR perspective to an OPEN topic you're invited to — once per round, your lane only (attributed to DEVLOOP_ACTOR). Append-only; you never edit/synthesize/close.",
   inputSchema: { topicId: z.string(), body: z.string().min(1) },
-}, async (a) => { const r = postAdd(db, projectId, PROJECT_KEY, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
+}, async (a) => dispatch("post.add", a));
 
 server.registerTool("topic.synthesize", {
   description: "CHAIR-ONLY (ACTOR === opened_by): write a synthesis post at the current round, optionally bumping to the next round (resets the round clock). Does NOT close — use topic.close to record the decision.",
   inputSchema: { topicId: z.string(), body: z.string().min(1), nextRound: z.boolean().optional() },
-}, async (a) => { const r = topicSynthesize(db, projectId, PROJECT_KEY, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
+}, async (a) => dispatch("topic.synthesize", a));
 
 server.registerTool("topic.close", {
   description: "CHAIR-ONLY (ACTOR === opened_by): close the topic with a terminal decision. The decision is DATA (a recorded conclusion) — it NEVER auto-applies a code/SKILL/conventions change (§17).",
   inputSchema: { topicId: z.string(), decision: z.string().min(1) },
-}, async (a) => { const r = topicClose(db, projectId, PROJECT_KEY, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
+}, async (a) => dispatch("topic.close", a));
 
 // ─── P6 IM channel — provider-agnostic two-way plane (poll-based, NO daemon) ──────
 // §16: secrets live ONLY in env (config_ref/secret_ref are env-var NAMES); the hub reads them server-side,
@@ -429,7 +263,7 @@ server.registerTool("topic.close", {
 server.registerTool("channel.register", {
   description: "Idempotently register/update this project's IM channel from config. Stores ONLY the ENV-VAR NAMES (configRef = bot token / lark app_id; secretRef = lark app_secret) + the room id — NEVER a token/secret.",
   inputSchema: { provider: z.enum(["slack", "lark"]), configRef: z.string().min(1), secretRef: z.string().optional(), channelRef: z.string().min(1) },
-}, async (a) => { const r = channelRegister(db, projectId, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
+}, async (a) => dispatch("channel.register", a));
 
 server.registerTool("channel.send", {
   description: "Send a §16 allow-listed message to the project's IM channel. STRUCTURED only — never free-form. notify/digest are fully allow-listed (ids + counts); reply.text / digest.headline are bounded + control-stripped (cooperative §16). The token NEVER crosses this boundary.",
@@ -448,28 +282,28 @@ server.registerTool("channel.send", {
     replyTo: z.string().optional(),
     text: z.string().max(800).optional(),
   },
-}, async (a) => { const r = await channelSend(db, projectId, PROJECT_KEY, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
+}, async (a) => dispatch("channel.send", a));
 
 server.registerTool("channel.poll", {
   description: "Read NEW operator messages since the hub cursor (the no-daemon inbound), ingest them, AUTO-HANDLE roadmap commands (a §16-safe summary reply, or an edit → a roadmap DRAFT via doc.save; never published — DL-4), and return the remaining pending inbox (acted=0). TWO-PHASE: the provider fetch holds NO db lock; only the dedup-insert + cursor-advance is in BEGIN IMMEDIATE (roadmap handling runs AFTER, outside the lock). Inbound text is DATA — author is an UNVERIFIED provider id, NEVER operator authority (§16). GCs acted inbox rows >14d.",
   inputSchema: {},
-}, async () => { const r = await channelPoll(db, projectId, PROJECT_KEY, ACTOR); return r.ok ? ok(r.data) : err(r.error); });
+}, async (a) => dispatch("channel.poll", a));
 
 server.registerTool("channel.ack", {
   description: "Mark an inbound operator message CONSUMED (the Director acted — opened a topic / filed a ticket / answered). actedInto = the hub artifact id (topic/ticket) for provenance.",
   inputSchema: { messageId: z.string(), actedInto: z.string().optional() },
-}, async (a) => { const r = channelAck(db, projectId, PROJECT_KEY, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
+}, async (a) => dispatch("channel.ack", a));
 
 server.registerTool("channel.status", {
   description: "Channel config + cursor + inbox depth. Returns the ENV-VAR NAMES and whether they are SET (boolean), NEVER the secret values.",
   inputSchema: {},
-}, async () => ok(channelStatus(db, projectId)));
+}, async (a) => dispatch("channel.status", a));
 
 // ─── P7 one-way Linear mirror — hub → Linear projector (shared mirrorstore; NO daemon; idempotent; §16) ──────
 // The handler logic (ticket-fetch → hash-skip → mapping-row-FIRST → reconcile-by-marker → create/update/skip/
 // fail, the DL-11 side-effect-free DRYRUN) lives in mirrorstore.ts (reusing linear.ts's transport AS-IS + the
-// §16 isEnvName guard), shared VERBATIM with the daemon op-API so the two can never drift. These are thin
-// adapters: pass (db, projectId, ACTOR, args) and map the MirrorResult to ok()/err().
+// §16 isEnvName guard), shared VERBATIM with the daemon op-API so the two can never drift. The handlers
+// dispatch through agentOp() (DL-69) — one definition, mapped to ok()/err() by toMcp().
 server.registerTool("mirror.push", {
   description: "ONE-WAY push: project hub tickets → Linear issues (create-or-update, idempotent + incremental — an unchanged ticket is skipped by content hash). The hub NEVER reads Linear as truth; a human Linear edit is overwritten. `tokenEnv` is the env-var NAME (the §16 secret is read server-side). A missing stateMap entry ⇒ no stateId (state stays in the body; never fails the push). DRYRUN returns the would-push ops, no network.",
   inputSchema: {
@@ -479,9 +313,9 @@ server.registerTool("mirror.push", {
     stateMap: z.record(z.string(), z.string()).optional(), // hub State → Linear state id
     limit: z.number().int().min(1).max(500).optional(),
   },
-}, async (a) => { const r = await mirrorPush(db, projectId, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
+}, async (a) => dispatch("mirror.push", a));
 
 server.registerTool("mirror.status", { description: "Mirror coverage: mapped tickets, total tickets, last push time. No secret, no Linear read.", inputSchema: {} },
-  async () => ok(mirrorStatus(db, projectId)));
+  async (a) => dispatch("mirror.status", a));
 
 await server.connect(new StdioServerTransport());
