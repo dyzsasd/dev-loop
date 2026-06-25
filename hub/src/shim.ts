@@ -10,10 +10,11 @@
 // (HUB-ARCHITECTURE §6) never touches identity.
 //
 // SCOPE: the 5 core ticket tools (list_issues/get_issue/save_issue/save_comment/list_comments) + a LOCAL
-// whoami (DL-55), PLUS (DL-62) the doc/event family — list_events + doc.list/get/history/diff/save/publish.
-// topic.*/post.add + channel.* + mirror.* + the label ops are the sequenced (4/n) increment, NOT here — so
-// the shim is not YET a 100% server.ts drop-in. The shim holds NO SoR / NO ticket-or-doc logic (Decision #3):
-// a pure thin client over the op-API (which mirrors server.ts 1:1 via agentops.ts + the shared docstore).
+// whoami (DL-55), PLUS (DL-62) the doc/event family — list_events + doc.list/get/history/diff/save/publish,
+// PLUS (DL-64) the discussion-board family — topic.list/get/open + post.add + topic.synthesize/close.
+// channel.* + mirror.* + the label ops are the sequenced (5/n)/(6/n) increments, NOT here — so the shim is
+// not YET a 100% server.ts drop-in. The shim holds NO SoR / NO ticket/doc/topic logic (Decision #3): a pure
+// thin client over the op-API (which mirrors server.ts 1:1 via agentops.ts + the shared docstore/topicstore).
 //
 // PARITY TRIPWIRE: the tool names + zod inputSchemas below MUST stay byte-identical to server.ts's tools
 // (the shim is a drop-in transport for them). A change to a proxied tool's name/schema in server.ts must
@@ -201,6 +202,30 @@ server.registerTool("doc.publish", {
   description: "OPERATOR-ONLY: publish a draft version → current (the live doc). Cooperative role-gate (DEVLOOP_ACTOR=operator), not anti-spoof — see §18/HUB-ARCHITECTURE §16.",
   inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive() },
 }, async (a) => proxy("doc.publish", a));
+
+// ─── P5/§25 discussion board — proxied to the op-API (names/schemas ≡ server.ts; the Director chairs) ──
+server.registerTool("topic.open", {
+  description: "Open a discussion topic (the caller becomes the chair = opened_by). invited = actor handles asked to post a perspective. Director-style use; any actor may chair its own topics.",
+  inputSchema: { question: z.string().min(1), invited: z.array(z.string()).min(1) },
+}, async (a) => proxy("topic.open", a));
+server.registerTool("topic.list", {
+  description: "List discussion topics (no post bodies). Each row carries the current round, round_opened_at, and YOUR/the invited set's `pending` for this round (who still owes a perspective).",
+  inputSchema: { status: z.enum(["open", "closed"]).optional() },
+}, async (a) => proxy("topic.list", a));
+server.registerTool("topic.get", { description: "A topic + all its posts (perspectives + the chair's synthesis), oldest first.", inputSchema: { id: z.string() } },
+  async (a) => proxy("topic.get", a));
+server.registerTool("post.add", {
+  description: "Post YOUR perspective to an OPEN topic you're invited to — once per round, your lane only (attributed to DEVLOOP_ACTOR). Append-only; you never edit/synthesize/close.",
+  inputSchema: { topicId: z.string(), body: z.string().min(1) },
+}, async (a) => proxy("post.add", a));
+server.registerTool("topic.synthesize", {
+  description: "CHAIR-ONLY (ACTOR === opened_by): write a synthesis post at the current round, optionally bumping to the next round (resets the round clock). Does NOT close — use topic.close to record the decision.",
+  inputSchema: { topicId: z.string(), body: z.string().min(1), nextRound: z.boolean().optional() },
+}, async (a) => proxy("topic.synthesize", a));
+server.registerTool("topic.close", {
+  description: "CHAIR-ONLY (ACTOR === opened_by): close the topic with a terminal decision. The decision is DATA (a recorded conclusion) — it NEVER auto-applies a code/SKILL/conventions change (§17).",
+  inputSchema: { topicId: z.string(), decision: z.string().min(1) },
+}, async (a) => proxy("topic.close", a));
 
 await server.connect(new StdioServerTransport());
 console.error(`[shim] dev-loop-hub daemon-transport shim ready: actor=${ACTOR} project=${PROJECT_KEY} runfile=${RUNFILE}`);

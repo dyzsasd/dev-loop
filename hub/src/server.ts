@@ -11,6 +11,7 @@ import { ensureActors, ensureProject, findProject } from "./seed.ts";
 import { sendVia, pollVia, getEnabledChannel, resolveCreds, scrubErr, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type OutboundMsg, type InboundMsg, type Creds, type ChannelRow } from "./channel.ts";
 import { findByMarker, createIssue, updateIssue, type MirrorIssue } from "./linear.ts";
 import { DOC_KINDS, resolveDoc, latestVersion, docSave, docPublish } from "./docstore.ts";
+import { topicList, topicGet, topicOpen, postAdd, topicSynthesize, topicClose } from "./topicstore.ts"; // DL-64: the shared discussion-board read+write logic + role gates (the docstore.ts precedent), so the op-API and this server can't drift
 import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
 import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts"; // DL-35: the single ticket/comment write home
 
@@ -396,126 +397,37 @@ server.registerTool("doc.publish", {
 //   • invited-gate = ACTOR ∈ topic.invited      (your-lane: you post only AS yourself, once per round)
 // Termination is STATE-FREE: topics carry round_opened_at (a wall-clock the Director reads to decide
 // "this round is ripe") — the hub stores the data; the Director SKILL owns the maxRounds/budget policy.
-interface TopicRow {
-  id: string; project_id: string; question: string; invited: string; status: string;
-  round: number; round_opened_at: string; opened_by: string; opened_at: string;
-  closed_at: string | null; decision: string | null;
-}
-const getTopic = (id: string): TopicRow | undefined =>
-  db.prepare("SELECT * FROM topics WHERE id=? AND project_id=?").get(id, projectId) as TopicRow | undefined;
-const pendingFor = (t: TopicRow): string[] => {
-  const invited = JSON.parse(t.invited) as string[];
-  const answered = new Set(
-    (db.prepare("SELECT author FROM posts WHERE topic_id=? AND round=? AND kind='perspective'").all(t.id, t.round) as { author: string }[])
-      .map((r) => r.author));
-  return invited.filter((h) => !answered.has(h));
-};
-
+// The topic/post read+write logic + the §25 role gates live in the shared topicstore (DL-64) — imported by
+// BOTH this server and the daemon op-API (agentops.ts), the docstore.ts precedent, so they can't drift. These
+// handlers are thin: zod validates the input shapes, topicstore owns the policy, and a TopicResult maps to
+// ok()/err() (the op-API maps the same result to an HTTP status via statusForTopicErr). Behavior is byte-identical.
 server.registerTool("topic.open", {
   description: "Open a discussion topic (the caller becomes the chair = opened_by). invited = actor handles asked to post a perspective. Director-style use; any actor may chair its own topics.",
   inputSchema: { question: z.string().min(1), invited: z.array(z.string()).min(1) },
-}, async (a) => {
-  const bad = a.invited.filter((h) => !actorExists(db, h));
-  if (bad.length) return err(`unknown invited actor(s): ${bad.join(", ")} — valid: ${listActorHandles(db).join(", ")}`);
-  const id = randomUUID();
-  const t = nowIso();
-  db.prepare("INSERT INTO topics(id,project_id,question,invited,status,round,round_opened_at,opened_by,opened_at) VALUES (?,?,?,?,'open',1,?,?,?)")
-    .run(id, projectId, a.question, JSON.stringify([...new Set(a.invited)]), t, ACTOR, t);
-  logEvent(db, { project_id: projectId, actor: ACTOR, kind: "topic.open", data: { id, invited: a.invited } });
-  return ok({ id, question: a.question, invited: [...new Set(a.invited)], status: "open", round: 1, opened_by: ACTOR });
-});
+}, async (a) => { const r = topicOpen(db, projectId, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
 
 server.registerTool("topic.list", {
   description: "List discussion topics (no post bodies). Each row carries the current round, round_opened_at, and YOUR/the invited set's `pending` for this round (who still owes a perspective).",
   inputSchema: { status: z.enum(["open", "closed"]).optional() },
-}, async (a) => {
-  const rows = (a.status
-    ? db.prepare("SELECT * FROM topics WHERE project_id=? AND status=? ORDER BY opened_at DESC").all(projectId, a.status)
-    : db.prepare("SELECT * FROM topics WHERE project_id=? ORDER BY opened_at DESC").all(projectId)) as TopicRow[];
-  return ok(rows.map((t) => {
-    const pending = t.status === "open" ? pendingFor(t) : [];
-    return {
-      id: t.id, question: t.question, status: t.status, round: t.round, round_opened_at: t.round_opened_at,
-      opened_by: t.opened_by, opened_at: t.opened_at, closed_at: t.closed_at, decision: t.decision,
-      invited: JSON.parse(t.invited) as string[], pending, youArePending: pending.includes(ACTOR),
-    };
-  }));
-});
+}, async (a) => ok(topicList(db, projectId, ACTOR, a.status)));
 
 server.registerTool("topic.get", { description: "A topic + all its posts (perspectives + the chair's synthesis), oldest first.", inputSchema: { id: z.string() } },
-  async (a) => {
-    const t = getTopic(a.id);
-    if (!t) return err(`no topic ${a.id} in ${PROJECT_KEY}`);
-    const posts = db.prepare("SELECT round,author,kind,body,created_at FROM posts WHERE topic_id=? ORDER BY round, created_at").all(a.id);
-    return ok({
-      id: t.id, question: t.question, status: t.status, round: t.round, round_opened_at: t.round_opened_at,
-      opened_by: t.opened_by, opened_at: t.opened_at, closed_at: t.closed_at, decision: t.decision,
-      invited: JSON.parse(t.invited) as string[], pending: t.status === "open" ? pendingFor(t) : [], posts,
-    });
-  });
+  async (a) => { const r = topicGet(db, projectId, PROJECT_KEY, a.id); return r.ok ? ok(r.data) : err(r.error); });
 
 server.registerTool("post.add", {
   description: "Post YOUR perspective to an OPEN topic you're invited to — once per round, your lane only (attributed to DEVLOOP_ACTOR). Append-only; you never edit/synthesize/close.",
   inputSchema: { topicId: z.string(), body: z.string().min(1) },
-}, async (a) => {
-  const ts = nowIso();
-  db.exec("BEGIN IMMEDIATE"); // read round+status then insert atomically vs a concurrent synthesize round-bump (§7)
-  try {
-    const t = db.prepare("SELECT * FROM topics WHERE id=? AND project_id=?").get(a.topicId, projectId) as TopicRow | undefined;
-    if (!t) { db.exec("ROLLBACK"); return err(`no topic ${a.topicId} in ${PROJECT_KEY}`); }
-    if (t.status !== "open") { db.exec("ROLLBACK"); return err(`CONFLICT: topic ${a.topicId} is closed`); }
-    if (!(JSON.parse(t.invited) as string[]).includes(ACTOR)) { db.exec("ROLLBACK"); return err(`FORBIDDEN: '${ACTOR}' is not invited to topic ${a.topicId}`); }
-    const dup = db.prepare("SELECT 1 FROM posts WHERE topic_id=? AND round=? AND author=? AND kind='perspective'").get(a.topicId, t.round, ACTOR);
-    if (dup) { db.exec("ROLLBACK"); return err(`already posted in round ${t.round} — append-only, one perspective per round`); }
-    db.prepare("INSERT INTO posts(id,topic_id,round,author,kind,body,created_at) VALUES (?,?,?,?,'perspective',?,?)")
-      .run(randomUUID(), a.topicId, t.round, ACTOR, a.body, ts);
-    logEvent(db, { project_id: projectId, actor: ACTOR, kind: "post.add", data: { topicId: a.topicId, round: t.round } });
-    db.exec("COMMIT");
-    return ok({ topicId: a.topicId, round: t.round, author: ACTOR, kind: "perspective", created_at: ts });
-  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
-});
+}, async (a) => { const r = postAdd(db, projectId, PROJECT_KEY, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
 
 server.registerTool("topic.synthesize", {
   description: "CHAIR-ONLY (ACTOR === opened_by): write a synthesis post at the current round, optionally bumping to the next round (resets the round clock). Does NOT close — use topic.close to record the decision.",
   inputSchema: { topicId: z.string(), body: z.string().min(1), nextRound: z.boolean().optional() },
-}, async (a) => {
-  const ts = nowIso();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const t = db.prepare("SELECT * FROM topics WHERE id=? AND project_id=?").get(a.topicId, projectId) as TopicRow | undefined;
-    if (!t) { db.exec("ROLLBACK"); return err(`no topic ${a.topicId} in ${PROJECT_KEY}`); }
-    if (t.status !== "open") { db.exec("ROLLBACK"); return err(`CONFLICT: topic ${a.topicId} is closed`); }
-    if (t.opened_by !== ACTOR) { db.exec("ROLLBACK"); return err(`FORBIDDEN: only the chair '${t.opened_by}' may synthesize topic ${a.topicId}`); }
-    // pre-check the once-per-round synthesis (Codex review): a clean CONFLICT, not a raw UNIQUE error
-    const dupSyn = db.prepare("SELECT 1 FROM posts WHERE topic_id=? AND round=? AND author=? AND kind='synthesis'").get(a.topicId, t.round, ACTOR);
-    if (dupSyn) { db.exec("ROLLBACK"); return err(`CONFLICT: already synthesized round ${t.round} — bump with nextRound:true or close`); }
-    db.prepare("INSERT INTO posts(id,topic_id,round,author,kind,body,created_at) VALUES (?,?,?,?,'synthesis',?,?)")
-      .run(randomUUID(), a.topicId, t.round, ACTOR, a.body, ts);
-    let round = t.round;
-    if (a.nextRound) { round = t.round + 1; db.prepare("UPDATE topics SET round=?, round_opened_at=? WHERE id=?").run(round, ts, t.id); }
-    logEvent(db, { project_id: projectId, actor: ACTOR, kind: "topic.synthesize", data: { topicId: a.topicId, round: t.round, nextRound: !!a.nextRound } });
-    db.exec("COMMIT");
-    return ok({ topicId: a.topicId, synthesizedRound: t.round, round, status: "open" });
-  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
-});
+}, async (a) => { const r = topicSynthesize(db, projectId, PROJECT_KEY, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
 
 server.registerTool("topic.close", {
   description: "CHAIR-ONLY (ACTOR === opened_by): close the topic with a terminal decision. The decision is DATA (a recorded conclusion) — it NEVER auto-applies a code/SKILL/conventions change (§17).",
   inputSchema: { topicId: z.string(), decision: z.string().min(1) },
-}, async (a) => {
-  const ts = nowIso();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const t = db.prepare("SELECT * FROM topics WHERE id=? AND project_id=?").get(a.topicId, projectId) as TopicRow | undefined;
-    if (!t) { db.exec("ROLLBACK"); return err(`no topic ${a.topicId} in ${PROJECT_KEY}`); }
-    if (t.status !== "open") { db.exec("ROLLBACK"); return err(`CONFLICT: topic ${a.topicId} is already closed`); }
-    if (t.opened_by !== ACTOR) { db.exec("ROLLBACK"); return err(`FORBIDDEN: only the chair '${t.opened_by}' may close topic ${a.topicId}`); }
-    db.prepare("UPDATE topics SET status='closed', decision=?, closed_at=? WHERE id=?").run(a.decision, ts, t.id);
-    logEvent(db, { project_id: projectId, actor: ACTOR, kind: "topic.close", data: { topicId: a.topicId, round: t.round } });
-    db.exec("COMMIT");
-    return ok({ topicId: a.topicId, status: "closed", decision: a.decision, closed_at: ts });
-  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
-});
+}, async (a) => { const r = topicClose(db, projectId, PROJECT_KEY, ACTOR, a); return r.ok ? ok(r.data) : err(r.error); });
 
 // ─── P6 IM channel — provider-agnostic two-way plane (poll-based, NO daemon) ──────
 // §16: secrets live ONLY in env (config_ref/secret_ref are env-var NAMES); the hub reads them

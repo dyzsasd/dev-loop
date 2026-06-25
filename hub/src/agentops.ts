@@ -26,6 +26,13 @@ import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./tic
 // on the publish gate or the CAS. The doc READS (doc.list/get/history/diff) + list_events are plain SELECTs
 // duplicated 1:1 from server.ts below (server.ts can't be edited this increment — the drift tripwire header).
 import { resolveDoc, latestVersion, docSave, docPublish, statusForDocErr, DOC_KINDS, type DocSaveArgs, type DocPublishArgs } from "./docstore.ts";
+// DL-64 discussion-board family — the topic/post reads + writes (incl. the §25 chair/invited role gates +
+// the round/append rules) + the error→HTTP-status map are reused VERBATIM from the shared, side-effect-free
+// topicstore (exactly as the doc family reuses docstore.ts), so the op-API and the stdio server.ts can never
+// drift on a gate or a response shape. The op-API parses raw JSON, so each handler hand-validates the input
+// shapes server.ts gets from zod (the DL-63 read-handler lesson — a non-string id/body must 400, never a 500).
+import { topicList, topicGet, topicOpen, postAdd, topicSynthesize, topicClose, statusForTopicErr,
+  type TopicOpenArgs, type PostAddArgs, type TopicSynthesizeArgs, type TopicCloseArgs } from "./topicstore.ts";
 
 export interface OpResult { status: number; body: unknown }
 const okR = (body: unknown): OpResult => ({ status: 200, body });
@@ -37,12 +44,14 @@ const errR = (status: number, error: string): OpResult => ({ status, body: { err
 export const AGENT_OPS = [
   "list_issues", "get_issue", "save_issue", "save_comment", "list_comments",
   "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish",
+  "topic.list", "topic.get", "topic.open", "post.add", "topic.synthesize", "topic.close", // DL-64 discussion board
 ] as const;
 export type AgentOp = (typeof AGENT_OPS)[number];
 // The MUTATING subset — the daemon applies writeOriginOk + the dry-run mode gate to exactly these (reads
 // never mutate, so they bypass both). Kept here next to AGENT_OPS so the two lists can't drift. doc.save /
 // doc.publish join the ticket writes; the doc/event reads stay read-only (parity with the read ticket ops).
-export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish"]);
+export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish",
+  "topic.open", "post.add", "topic.synthesize", "topic.close"]); // DL-64: the 4 board writes join the write set; topic.list/get stay reads
 export const isAgentOp = (s: string): s is AgentOp => (AGENT_OPS as readonly string[]).includes(s);
 
 // ─── row → API shape + readers (verbatim mirror of server.ts toTicket/getRow) ──
@@ -303,6 +312,52 @@ function opDocPublish(db: DatabaseSync, projectId: string, actor: string, a: Par
   return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error);
 }
 
+// ─── DL-64: the discussion-board family (topic.*/post.add) — thin op-API wrappers over the shared topicstore ──
+// Mirror the doc-family pattern: hand-validate the raw-JSON inputs to a clean 400 (server.ts gets these from
+// zod), then delegate to topicstore (which owns the §25 role gates + round/append rules); a TopicResult error
+// maps to its HTTP status via statusForTopicErr. The reads (topic.list/topic.get) take the query_only db; the
+// writes (topic.open/post.add/topic.synthesize/topic.close ∈ AGENT_WRITE_OPS) take writeDb — the daemon routes.
+
+function opTopicList(db: DatabaseSync, projectId: string, actor: string, a: { status?: unknown }): OpResult {
+  if (a.status !== undefined && a.status !== "open" && a.status !== "closed") return errR(400, `status must be "open" or "closed"`);
+  return okR(topicList(db, projectId, actor, a.status as string | undefined));
+}
+
+function opTopicGet(db: DatabaseSync, projectId: string, projectKey: string, a: { id?: unknown }): OpResult {
+  if (typeof a.id !== "string") return errR(400, "id must be a string");
+  const r = topicGet(db, projectId, projectKey, a.id);
+  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
+}
+
+function opTopicOpen(db: DatabaseSync, projectId: string, actor: string, a: { question?: unknown; invited?: unknown }): OpResult {
+  if (typeof a.question !== "string" || !a.question) return errR(400, "question required (a non-empty string)");
+  if (!isStrArr(a.invited) || a.invited.length === 0) return errR(400, "invited required (a non-empty array of strings)");
+  const r = topicOpen(db, projectId, actor, a as TopicOpenArgs);
+  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
+}
+
+function opPostAdd(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { topicId?: unknown; body?: unknown }): OpResult {
+  if (typeof a.topicId !== "string") return errR(400, "topicId must be a string");
+  if (typeof a.body !== "string" || !a.body) return errR(400, "body required (a non-empty string)");
+  const r = postAdd(db, projectId, projectKey, actor, a as PostAddArgs);
+  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
+}
+
+function opTopicSynthesize(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { topicId?: unknown; body?: unknown; nextRound?: unknown }): OpResult {
+  if (typeof a.topicId !== "string") return errR(400, "topicId must be a string");
+  if (typeof a.body !== "string" || !a.body) return errR(400, "body required (a non-empty string)");
+  if (a.nextRound !== undefined && typeof a.nextRound !== "boolean") return errR(400, "nextRound must be a boolean");
+  const r = topicSynthesize(db, projectId, projectKey, actor, a as TopicSynthesizeArgs);
+  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
+}
+
+function opTopicClose(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { topicId?: unknown; decision?: unknown }): OpResult {
+  if (typeof a.topicId !== "string") return errR(400, "topicId must be a string");
+  if (typeof a.decision !== "string" || !a.decision) return errR(400, "decision required (a non-empty string)");
+  const r = topicClose(db, projectId, projectKey, actor, a as TopicCloseArgs);
+  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
+}
+
 // Dispatch one op. `db` is the WRITABLE connection for the write ops (save_issue/save_comment) and may be
 // the daemon's query_only read connection for the read ops — the daemon passes the right one per op. `actor`
 // is already resolved+validated by the daemon (the G1 guard). `args` is the parsed JSON body (a non-object
@@ -321,5 +376,11 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "doc.diff": return opDocDiff(db, projectId, args as { slug?: string; kind?: string; from?: number; to?: number });
     case "doc.save": return opDocSave(db, projectId, actor, args as Partial<DocSaveArgs>);
     case "doc.publish": return opDocPublish(db, projectId, actor, args as Partial<DocPublishArgs>);
+    case "topic.list": return opTopicList(db, projectId, actor, args as { status?: unknown });
+    case "topic.get": return opTopicGet(db, projectId, projectKey, args as { id?: unknown });
+    case "topic.open": return opTopicOpen(db, projectId, actor, args as { question?: unknown; invited?: unknown });
+    case "post.add": return opPostAdd(db, projectId, projectKey, actor, args as { topicId?: unknown; body?: unknown });
+    case "topic.synthesize": return opTopicSynthesize(db, projectId, projectKey, actor, args as { topicId?: unknown; body?: unknown; nextRound?: unknown });
+    case "topic.close": return opTopicClose(db, projectId, projectKey, actor, args as { topicId?: unknown; decision?: unknown });
   }
 }

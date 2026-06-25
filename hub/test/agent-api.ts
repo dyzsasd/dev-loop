@@ -76,6 +76,9 @@ ok((await op("list_issues", {}, DEV)).status === 404, "flag-off: POST /api/op/li
 ok((await op("doc.list", {}, DEV)).status === 404, "flag-off: POST /api/op/doc.list → 404 (doc reads dormant too)");
 ok((await op("doc.save", { slug: "x", kind: "strategy", body: "y", baseVersion: 0 }, { "x-devloop-actor": "pm" })).status === 404, "flag-off: POST /api/op/doc.save → 404 (doc writes dormant too)");
 ok((await op("list_events", {}, DEV)).status === 404, "flag-off: POST /api/op/list_events → 404 (events dormant too)");
+// DL-64: the discussion-board family is dormant too while the flag is off (default-off, zero new surface)
+ok((await op("topic.list", {}, DEV)).status === 404, "flag-off: POST /api/op/topic.list → 404 (board reads dormant too)");
+ok((await op("topic.open", { question: "q", invited: ["dev"] }, { "x-devloop-actor": "pm" })).status === 404, "flag-off: POST /api/op/topic.open → 404 (board writes dormant too)");
 // the existing read + roadmap surfaces are byte-for-byte unchanged while the op-API is dormant
 const tBefore = await getJson("/api/tickets");
 ok(tBefore.status === 200 && tBefore.body.length === 1 && tBefore.body[0].id === feat.id, "flag-off: GET /api/tickets unchanged (the read surface still serves)");
@@ -183,6 +186,47 @@ ok(dgBadSlug.status === 400 && !/cannot be bound/i.test(JSON.stringify(dgBadSlug
 ok((await op("doc.save", { slug: "strat", kind: "strategy", body: "csrf", baseVersion: 2 }, { "x-devloop-actor": "pm", origin: "http://evil.example" })).status === 403, "guard: cross-origin doc.save → 403 (CSRF wall covers the doc write)");
 ok((await op("doc.publish", { slug: "strat", version: 1 }, { "x-devloop-actor": "operator", host: "evil.example" })).status === 403, "guard: foreign Host doc.publish → 403 (DNS-rebinding wall)");
 
+// ═══ DL-64: the discussion-board family via the op-API (mirrors server.ts topic.*/post.add) ════════════
+// topic.open: the caller (pm) becomes the chair; invited handles validated (an unknown invited → 400)
+ok((await op("topic.open", { question: "Q?", invited: ["ghost"] }, { "x-devloop-actor": "pm" })).status === 400, "op topic.open with an unknown invited actor → 400");
+const topOpen = await op("topic.open", { question: "Ship the widget now?", invited: ["dev"] }, { "x-devloop-actor": "pm" });
+ok(topOpen.status === 200 && topOpen.body.opened_by === "pm" && topOpen.body.status === "open" && topOpen.body.round === 1, `op topic.open (X-Devloop-Actor: pm) → chair pm, open, round 1 (got ${JSON.stringify(topOpen.body)})`);
+const topId = topOpen.body.id;
+ok((await call(verifier, "list_events", { limit: 50 })).some((e: any) => e.actor === "pm" && e.kind === "topic.open"), "list_events confirms topic.open attributed to pm (the X-Devloop-Actor actor)");
+// an invited actor (dev) posts → attributed; visible on the stdio topic.get (cross-path consistency)
+const post1 = await op("post.add", { topicId: topId, body: "dev perspective" }, DEV);
+ok(post1.status === 200 && post1.body.author === "dev" && post1.body.kind === "perspective" && post1.body.round === 1, `op post.add (invited dev) → attributed to dev, round 1 (got ${JSON.stringify(post1.body)})`);
+const tgStdio = await call(verifier, "topic.get", { id: topId });
+ok(tgStdio.posts.some((p: any) => p.author === "dev" && p.body === "dev perspective"), "the op-API post is visible on the stdio topic.get, attributed to dev");
+ok((await call(verifier, "list_events", { limit: 50 })).some((e: any) => e.actor === "dev" && e.kind === "post.add"), "list_events confirms post.add attributed to dev");
+// differential parity: topic.get/topic.list via the op-API ≡ the stdio server (byte-identical)
+const tgOp = await op("topic.get", { id: topId }, DEV);
+ok(tgOp.status === 200 && JSON.stringify(tgOp.body) === JSON.stringify(await call(verifier, "topic.get", { id: topId })), "parity: op topic.get ≡ stdio topic.get (topic + posts byte-identical)");
+ok(JSON.stringify((await op("topic.list", {}, DEV)).body) === JSON.stringify(await call(verifier, "topic.list", {})), "parity: op topic.list ≡ stdio topic.list");
+ok((await op("topic.list", { status: "open" }, DEV)).status === 200, "op topic.list?status=open → 200 (filtered)");
+// the §25 cooperative role gates: a non-invited actor can't post; a non-chair can't synthesize/close
+ok((await op("post.add", { topicId: topId, body: "qa intrudes" }, QA)).status === 403, "op post.add by a non-invited actor (qa) → 403 (FORBIDDEN)");
+ok((await op("topic.synthesize", { topicId: topId, body: "qa synth" }, QA)).status === 403, "op topic.synthesize by a non-chair (qa) → 403 (chair gate)");
+ok((await op("topic.close", { topicId: topId, decision: "qa decides" }, QA)).status === 403, "op topic.close by a non-chair (qa) → 403 (chair gate)");
+// the chair synthesizes (round bump), a 2nd post lands in round 2, then the chair closes
+const syn = await op("topic.synthesize", { topicId: topId, body: "round 1 synthesis", nextRound: true }, { "x-devloop-actor": "pm" });
+ok(syn.status === 200 && syn.body.synthesizedRound === 1 && syn.body.round === 2, `op topic.synthesize (chair pm, nextRound) → synthesized round 1, bumped to 2 (got ${JSON.stringify(syn.body)})`);
+ok((await op("post.add", { topicId: topId, body: "dev round 2" }, DEV)).body.round === 2, "op post.add after the round bump → lands in round 2 (a fresh perspective, no dup)");
+const close = await op("topic.close", { topicId: topId, decision: "Ship it." }, { "x-devloop-actor": "pm" });
+ok(close.status === 200 && close.body.status === "closed" && close.body.decision === "Ship it.", `op topic.close (chair pm) → closed with the decision (got ${JSON.stringify(close.body)})`);
+// a post / synthesize into a CLOSED topic → 409 (state gate)
+ok((await op("post.add", { topicId: topId, body: "too late" }, DEV)).status === 409, "op post.add into a closed topic → 409 (CONFLICT)");
+ok((await op("topic.synthesize", { topicId: topId, body: "late" }, { "x-devloop-actor": "pm" })).status === 409, "op topic.synthesize on a closed topic → 409");
+// input-shape guards (raw JSON, no zod) — a non-string id/topicId/etc. must be a clean 400, never a node:sqlite bind-throw 500 (DL-63 lesson)
+ok((await op("topic.get", { id: {} }, DEV)).status === 400, "op topic.get non-string id → 400 (not a bind-throw 500)");
+ok((await op("topic.open", { question: {}, invited: ["dev"] }, { "x-devloop-actor": "pm" })).status === 400, "op topic.open non-string question → 400");
+ok((await op("topic.open", { question: "q", invited: "dev" }, { "x-devloop-actor": "pm" })).status === 400, "op topic.open non-array invited → 400");
+ok((await op("post.add", { topicId: 5, body: "x" }, DEV)).status === 400, "op post.add non-string topicId → 400");
+ok((await op("topic.close", { topicId: topId, decision: {} }, { "x-devloop-actor": "pm" })).status === 400, "op topic.close non-string decision → 400");
+// a ghost topic → 404; a cross-origin write → 403 (the CSRF/rebind wall covers the board writes too)
+ok((await op("topic.get", { id: "AGP-nope" }, DEV)).status === 404, "op topic.get of a ghost topic → 404");
+ok((await op("topic.open", { question: "q", invited: ["dev"] }, { "x-devloop-actor": "pm", origin: "http://evil.example" })).status === 403, "op topic.open cross-origin → 403 (CSRF wall covers the board write)");
+
 // ═══ endpoint pipeline guards ═════════════════════════════════════════════════════════════════════════
 ok((await op("save_comment", { issueId: feat.id, body: "no actor" }, {})).status === 400, "guard: missing X-Devloop-Actor → 400");
 ok((await op("save_comment", { issueId: feat.id, body: "ghost" }, { "x-devloop-actor": "ghost" })).status === 400, "guard: unknown actor 'ghost' → 400 (G1 phantom-actor guard)");
@@ -244,6 +288,7 @@ setTransport(false);
 ok((await op("list_issues", {}, DEV)).status === 404, "flag-off (live toggle): op list_issues → 404 again (dormant)");
 ok((await op("save_comment", { issueId: feat.id, body: "nope" }, DEV)).status === 404, "flag-off (live toggle): op save_comment → 404 again");
 ok((await op("doc.list", {}, DEV)).status === 404, "flag-off (live toggle): op doc.list → 404 again (the doc family goes dormant with the flag)");
+ok((await op("topic.list", {}, DEV)).status === 404, "flag-off (live toggle): op topic.list → 404 again (the board family goes dormant with the flag)");
 ok((await getJson("/api/tickets")).status === 200, "flag-off (live toggle): GET /api/tickets still serves (read surface unchanged)");
 
 await pm.close();
