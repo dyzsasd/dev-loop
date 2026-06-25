@@ -64,14 +64,14 @@ throughout, every current path (stdio MCP, read-only daemon, `linear`/`local`/`s
 the Claude plugin) unbroken byte-for-byte. **Full design + critique-folded decisions:
 `docs/design/daemon-multicli-repositioning.md`.** PM drives the backlog from these phases:
 
-- **P1 — Turnkey on-ramp.** `dev-loop daemon ensure` (pidfile + `hub.port` + a real `/api/health`
+- **P1 — Turnkey on-ramp.** ✅ **COMPLETE** (DL-41 lifecycle + DL-42 SessionStart hook + DL-43 op-API — all verified Done). `dev-loop daemon ensure` (pidfile + `hub.port` + a real `/api/health`
   liveness check, no double-start, one-per-project on a cwd-resolved port, DL-13) + auto-start the
   web UI on install/session (a Claude `SessionStart` hook — the hook half is a §17 `[pm-proposal]`
   for operator git-commit; the lifecycle/CLI half is Dev-buildable). Mount the agent op API
   (`POST /api/op/*`) DORMANT, gated on an explicit `hub.transport:"daemon"` setting (**default-off**
   → a current read-only-daemon project gets ZERO new surface). E2E: install → web UI up → an MCP
   ticket change shows in the UI, zero manual `npm run daemon`.
-- **P2 — The thin stdio MCP shim.** `shim.ts` proxies tool calls to the loopback daemon op API;
+- **P2 — The thin stdio MCP shim.** ✅ **SHIPPED** (DL-55, verified Done 2026-06-25; the sequenced **(3/n)** op-API+shim widening is now filed as DL-62). `shim.ts` proxies tool calls to the loopback daemon op API;
   identity rides env→`X-Devloop-Actor` (dodges the `claude -p` header-drop). Relies on the existing
   WAL + `busy_timeout` serialization (single-writer is a P3 optimization, not a P2 prerequisite).
 - **P3 — Daemon as canonical single writer** (+ periodic `wal_checkpoint(TRUNCATE)`); the direct-db
@@ -406,6 +406,7 @@ Append-only thereafter — PM keeps it current._
   - Parent **DL-56 back-linked (`relatedTo:[DL-59,DL-60,DL-61,DL-53]`) + closed Done** (§9a order — children filed/back-linked first; each child carries child→parent `relatedTo:[DL-56]`). **Cross-store migration DEFERRED** (operator decision — seam named in DL-53's §18 prose, not a ticket). **U4** (optional init "backend-doctor" reconcile, design §6) → Candidate ideas (file when DL-60/61 land).
   - **Also filed (consistency/conversion-retention lens, the one product-doc-drift gap at HEAD): DL-58** (Improvement/pm/Low) — the DL-43 agent op-API (`hub.transport:"daemon"` + `POST /api/op/*` + `X-Devloop-Actor`) is documented only in the design doc + STRATEGY.md and is **absent from every reference doc** (`config-schema.md`/`DAEMON.md`/`HUB-ARCHITECTURE.md` — grep-verified 0 mentions each); load-bearing for the in-flight P2 shim **DL-55**. Deduped vs DL-48/DL-49/DL-57.
   - Reviewed SHA → **`6078e89`** (docs-only operator commit → product-surface lenses carry forward from `133e459`; **strategy-gaps + consistency swept** this fire). Live daemon (DL-42 auto-start) **healthy** — board (swimlanes) + `/activity` + `/api/health` all `200` on the per-project port `25617`. **Loop status: healthy, Dev/QA-bottlenecked** — Todo = DL-58/DL-59 + DL-45/47/48/49; In Progress = DL-55 (P2 shim, Dev); Backlog = DL-60/DL-61; **DL-53 Human-Blocked** (operator). **PM is not the constraint** (filed the operator-intake grooming + 1 concrete doc gap; did not pad).
+- **2026-06-25 — 🏁 SHIPPED + VERIFIED: DL-55 (P2 thin stdio shim) + DL-59 (notification L1+L2) → Done; filed DL-62 (the (3/n) op-API+shim widening).** Two concurrent Dev ships this fire, **both PM-verified against the running product** (not the diff). **DL-55** (`59a564d`, LOCAL — `autoPush:false`) = **P2**: `hub/src/shim.ts` proxies the 5 core ticket tools + a local `whoami` to the loopback `POST /api/op/*`, identity env→`X-Devloop-Actor`, port via the DL-41 runfile (no `8787` hardcode), opt-in/default-off (`server.ts` byte-for-byte untouched). Verified via `node hub/test/shim.ts` = **SHIM_OK** (24 assertions): 5-tool round-trip, write attribution via `list_events`, **differential parity** vs the direct-db path, both failure modes (dormant / daemon-down clear errors), back-compat. **DL-59** (`416378a`, LOCAL) = the U0 code half: the daemon Human-Blocked notifier now also fires the §9 `notify` webhook — DB channel takes **precedence** (→ no double-send), unset-env **fail-closed**, dry-run write-free, **no schema change** — closing **L1+L2** of the 3-layer notification leak; `cd hub && npm test` green through `MCP_CONFIG_OK` incl. `BLOCKED_OK` (9 DL-59 assertions). **The DL-52 notification workstream is now code-complete** (DL-52 + DL-59 Done) → **DL-53** (the §17 prose half) is **ready for the operator to apply by one git commit** (both code deps Done; applying it flips DL-60/DL-61 Backlog→Todo); re-confirmed **unapplied** (no `references/`+`skills/` commit since filing), stays Human-Blocked. (Caveat surfaced to the operator: dev-loop's own config has **no `notify` block**, so the DL-26/DL-59 daemon reminder for DL-53 no-ops here until a channel/notify is configured.) **Filed DL-62** (Feature/pm/**P2**) = **MCP↔daemon unification (3/n)**: widen the op-API (`agentops.ts`) + the shim to the **documents+events family** (`list_events` + `doc.list/get/history/diff/save/publish`) — env→`X-Devloop-Actor` attribution, `writeOriginOk`-first on the mutating endpoints, optimistic-CAS preserved, **`doc.publish` kept cooperatively operator-gated** (design folded-critique #85: client-declared actor, accepted single-host posture, revisit under Phase B); `topic.*`/`channel.*`/`mirror.*`/label ops = the sequenced **(4/n)**. Reviewed SHA → **`416378a`** (real product code moved twice this fire → lenses reset, **strategy-gaps swept**). **Loop status: healthy, Dev-bottlenecked** — Todo = DL-62 (P2) + DL-58/57/49/48/47/45 (P4 docs/hygiene); Backlog = DL-60/61 (dep DL-53); DL-53 Human-Blocked (operator). **PM is not the constraint** (verified 2 ships + filed the 1 next-increment gap; did not pad).
 
 ## Candidate ideas
 
@@ -423,6 +424,11 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   service" real (the Vision's "daemon owns coordination"). **(3/n)** widen the loopback surface beyond
   ticket tools to `doc.*` / `topic.*` / `channel.*`. Each additive + default-off + localhost-only;
   file the next increment as the prior verifies (never one unscoped mega-ticket — Dev would block it).
+  **UPDATE 2026-06-25: (2/n=P2) SHIPPED as DL-55 (verified Done — the 5 core ticket tools + `whoami` proxy
+  through the op-API). (3/n) is being filed incrementally: the docs+events slice (`list_events` + `doc.*`,
+  with `doc.publish` kept cooperatively operator-gated per design folded-critique #85) is now **DL-62**; the
+  remaining `topic.*`/`post.add` + `channel.*` + `mirror.*` + the label ops are the sequenced **(4/n)** — file
+  as DL-62 lands + verifies. The full drop-in (all (3/n)+(4/n)) is the precondition for P3 (single-writer).**
 - **Inter-agent discussion daemon (deferred).** The Vision also names the daemon "owning
   inter-agent communication and discussion." Today that plane is the **poll-based, no-daemon**
   §25 board + P6 channel. Moving it into a persistent process is a larger architectural step
