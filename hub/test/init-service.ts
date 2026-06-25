@@ -8,7 +8,9 @@
 //   • a re-run is a clean idempotent no-op (daemon "already running", same pid, no seed error);
 //   • a duplicate PREFIX → exit 1 with a clear "pick a unique prefix" error (the throw is surfaced);
 //   • an absent DL-42 hook → a WARNING (not an install, not a failure — the bootstrap still succeeds);
-//   • the `npm run init-service` convenience script resolves to the same standalone entry.
+//   • the `npm run init-service` convenience script resolves to the same standalone entry;
+//   • with a configured repoPath, the bootstrap merges dev-loop-hub into the product .mcp.json (DL-61),
+//     preserving an existing server; dry-run previews the merge and writes nothing.
 import { spawnSync, execFileSync } from "node:child_process";
 import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -106,9 +108,31 @@ try {
     env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: CFG, DEVLOOP_PLUGIN_ROOT: PLUGIN_PRESENT, DEVLOOP_ACTOR: "operator" },
   });
   ok(via.status === 0 && /already running/.test(via.stdout), "`npm run init-service` resolves to the same standalone entry (idempotent no-op)");
+
+  // ── 9. with a configured repoPath, the bootstrap MERGES dev-loop-hub into the product .mcp.json (DL-61), ──
+  //       preserving an existing other server (merge-not-clobber, env-name-only)
+  const PRODUCT = join(ROOT, "product");
+  mkdirSync(PRODUCT, { recursive: true });
+  writeFileSync(join(PRODUCT, ".mcp.json"), JSON.stringify({ mcpServers: { "other-srv": { type: "stdio", command: "x", args: ["y"] } } }, null, 2));
+  cfg({ mergeproj: { backend: "service", mode: "live", repoPath: PRODUCT } });
+  const merged = is(["mergeproj", "Merge Project", "MRG"]);
+  ok(merged.status === 0, `perform with repoPath → exit 0 (got ${merged.status})${merged.stderr ? "\n   " + merged.stderr : ""}`);
+  ok(/\.mcp\.json (merged|created|updated): dev-loop-hub registered/.test(merged.stdout), "the bootstrap registered dev-loop-hub in the product .mcp.json");
+  const pm = JSON.parse(readFileSync(join(PRODUCT, ".mcp.json"), "utf8"));
+  ok(!!pm.mcpServers["other-srv"] && !!pm.mcpServers["dev-loop-hub"], "merge PRESERVED the existing other server AND added dev-loop-hub");
+  ok(pm.mcpServers["dev-loop-hub"].args.some((a: string) => a.endsWith("hub/src/server.ts")), "dev-loop-hub args point at the absolute hub server.ts");
+  ok(pm.mcpServers["dev-loop-hub"].env.DEVLOOP_PROJECT === "${DEVLOOP_PROJECT:-mergeproj}", "DEVLOOP_PROJECT default pinned to the project key (env-name-only)");
+
+  // ── 10. dry-run WITH a repoPath → previews the merge, writes NO .mcp.json ──
+  const PRODUCT2 = join(ROOT, "product-dry");
+  mkdirSync(PRODUCT2, { recursive: true });
+  cfg({ dryproj: { backend: "service", mode: "dry-run", repoPath: PRODUCT2 } });
+  const dryMerge = is(["dryproj", "Dry Project", "DRY"]);
+  ok(dryMerge.status === 0 && /\[dry-run\] would: merge the dev-loop-hub MCP server/.test(dryMerge.stdout), "dry-run previews the .mcp.json merge");
+  ok(!existsSync(join(PRODUCT2, ".mcp.json")), "dry-run wrote NO .mcp.json");
 } finally {
   // never leak a detached daemon: kill any we started, then drop the temp tree
-  for (const key of ["iscv", "hookless", "clashy"]) {
+  for (const key of ["iscv", "hookless", "clashy", "mergeproj"]) {
     try { if (existsSync(runfile(key))) { const p = readRun(key).pid; if (isAlive(p)) process.kill(p, "SIGKILL"); } } catch { /* best-effort */ }
   }
   try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* ignore */ }

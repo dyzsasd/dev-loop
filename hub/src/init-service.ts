@@ -7,8 +7,8 @@
 //   (b) seed the project row + the agent/operator actors + the §4 labels (ensureSeed — idempotent on
 //       key; a duplicate PREFIX hard-throws, surfaced as a clear "pick a unique prefix" error, never
 //       swallowed — seed.ts:42-47)
-//   (c) [DL-61 / U2 seam] merge the dev-loop-hub server into the product repo's .mcp.json, env-name-only
-//       — OUT OF SCOPE here; DL-61 plugs its merge utility into this seam.
+//   (c) merge (never clobber) the dev-loop-hub server into the PRODUCT repo's .mcp.json, env-name-only
+//       (DL-61's mergeMcpServer; skipped cleanly when the project config carries no repoPath)
 //   (d) `runDoctor(dbPath)` → assert DOCTOR_OK (doctor.ts — read-only, never auto-creates a db)
 //   (e) one-shot `daemon up` (the shipped DL-41 lifecycle) → confirm `/api/health {ok:true}` → report
 //       the board URL
@@ -31,6 +31,7 @@ import { openDb } from "./db.ts";
 import { ensureSeed } from "./seed.ts";
 import { runDoctor } from "./doctor.ts";
 import { loadProjectsConfig } from "./resolve-project.ts";
+import { mergeMcpServer } from "./mcp-merge.ts";
 
 export interface InitServiceOpts {
   key: string;
@@ -49,11 +50,11 @@ const log = (m: string) => console.log(m);
 // via the shared §11 locator in resolve-project.ts). §18: a missing `backend` ⇒ "linear". A key ABSENT
 // from config ⇒ the explicit `init-service` invocation is taken as service intent (init invokes this only
 // when setting up a service project); a key PRESENT with a non-"service" backend is honored as a no-op.
-function resolveBackendMode(key: string): { backend: string; mode: string } {
+function resolveProjectCfg(key: string): { backend: string; mode: string; repoPath?: string } {
   const cfg = loadProjectsConfig();
-  const proj = cfg?.projects?.[key] as { backend?: string; mode?: string } | undefined;
+  const proj = cfg?.projects?.[key] as { backend?: string; mode?: string; repoPath?: string } | undefined;
   if (!proj) return { backend: "service", mode: "live" };
-  return { backend: proj.backend ?? "linear", mode: proj.mode ?? "live" };
+  return { backend: proj.backend ?? "linear", mode: proj.mode ?? "live", repoPath: proj.repoPath };
 }
 
 // DL-42 (C1-mustFix-2): the SessionStart hook is the STEADY-STATE lifecycle owner; init only VERIFIES it
@@ -76,7 +77,7 @@ export async function runInitService(opts: InitServiceOpts): Promise<number> {
   const pluginRoot = opts.pluginRoot ?? process.env.DEVLOOP_PLUGIN_ROOT ?? join(here, "..", "..");
   const serverEntry = opts.serverEntry ?? join(here, "server.ts");
 
-  const { backend, mode } = resolveBackendMode(key);
+  const { backend, mode, repoPath } = resolveProjectCfg(key);
   const dryRun = !!opts.dryRun || mode === "dry-run";
   log(`dev-loop-hub init-service — project '${key}' (prefix ${prefix}), backend '${backend}'${dryRun ? " [dry-run]" : ""}`);
 
@@ -113,8 +114,18 @@ export async function runInitService(opts: InitServiceOpts): Promise<number> {
     }
   }
 
-  // ── (c) [DL-61 / U2] merge the dev-loop-hub server into the product repo's .mcp.json, env-name-only.
-  //        OUT OF SCOPE in DL-60: DL-61 plugs its merge utility into this seam (it composes here). ──
+  // ── (c) [DL-61] merge the dev-loop-hub server into the PRODUCT repo's .mcp.json, env-name-only (never
+  //        clobbering other servers). Needs the product repoPath (from config); absent ⇒ skip cleanly.
+  //        A malformed product .mcp.json is reported (left untouched) but does NOT abort the bootstrap. ──
+  if (!repoPath) {
+    log("•  no repoPath in config — skipping .mcp.json registration (register dev-loop-hub by hand from config/mcp.example.json)");
+  } else if (dryRun) {
+    log(`[dry-run] would: merge the dev-loop-hub MCP server into ${join(repoPath, ".mcp.json")} (env-name-only, preserving any other servers)`);
+  } else {
+    const m = mergeMcpServer({ mcpJsonPath: join(repoPath, ".mcp.json"), hubServerPath: serverEntry, projectKey: key });
+    if (m.ok) log(`✅ .mcp.json ${m.action}: dev-loop-hub registered in ${join(repoPath, ".mcp.json")} (servers: ${m.servers.join(", ")})`);
+    else log(`⚠️  .mcp.json registration skipped: ${m.error}\n   register dev-loop-hub by hand from config/mcp.example.json, then re-run.`);
+  }
 
   // ── (d) doctor → assert DOCTOR_OK ──
   if (dryRun) {
