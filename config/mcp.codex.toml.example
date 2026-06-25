@@ -1,18 +1,16 @@
 # TEMPLATE for backend:"service" on the CODEX CLI (dev-loop P8 portability; see docs/PORTABILITY.md).
 # Merge this into ~/.codex/config.toml. Replace <ABS-PATH-TO-dev-loop> with your dev-loop checkout.
 #
-# ⚠️ VERIFY against your installed Codex version (formats drift):
-#   (1) the exact [mcp_servers.<name>] schema (command / args / env keys);
-#   (2) whether Codex PROPAGATES THE LAUNCHING PROCESS ENV to the spawned MCP subprocess.
-# Per-pane identity is load-bearing: DEVLOOP_ACTOR differs per agent pane (pm/qa/dev/...), so it
-# CANNOT live in this GLOBAL, shared-across-panes file — it must ride the PROCESS ENV that each
-# pane's launcher exports before invoking `codex`. This template therefore puts only the STATIC,
-# shared vars here and leaves DEVLOOP_ACTOR to the process env.
-#
-# CONFIRM IT WORKS with the identity gate (the P8 §5 test, docs/PORTABILITY.md):
-#   DEVLOOP_ACTOR=dev codex exec "call the dev-loop-hub whoami tool and print only the actor field"
-#   → must print "dev". If it prints "operator" (the default) or anything else, Codex is NOT
-#   propagating per-pane identity → do NOT onboard it until fixed (e.g. a per-pane --config override).
+# CERTIFIED 2026-06-25 on codex-cli 0.142.0 (docs/PORTABILITY.md §4a). KEY FINDING: Codex spawns the MCP
+# subprocess with ONLY this file's `env` block — it does NOT inherit the launching shell's process env.
+# So DEVLOOP_ACTOR canNOT ride the process env on Codex (the gate returns "operator"). Per-pane identity
+# rides a `-c` OVERRIDE instead, which MERGES a dotted key into the env table below:
+#   # one pane = one agent identity:
+#   codex exec -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="dev"' \
+#     --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "$PROMPT"
+#   → whoami returns {"actor":"dev","project":"dev-loop",…}  (project/db preserved from the static env).
+# Leave DEVLOOP_ACTOR ABSENT below (the -c override supplies it per pane). VERIFY the [mcp_servers.<name>]
+# schema against your Codex version (formats drift). Confirm with the §4 gate before trusting writes.
 
 # OPT-IN daemon transport (DL-55, P2): to route the core ticket tools through the ONE running daemon
 # instead of opening hub.db directly, change args to `.../hub/src/shim.ts` (from `.../hub/src/server.ts`).

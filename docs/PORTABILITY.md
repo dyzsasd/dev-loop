@@ -5,11 +5,11 @@ The whole reason the loop's system-of-record is a **local hub** (a plain **stdio
 is that it is **CLI-portable**. The same agents, the same hub, the same per-agent identity can run on
 Claude Code **and** another coding CLI (Codex, opencode, …) against the *same* `hub.db`.
 
-> **Status (v0.19.0).** The hub + the identity contract + the identity-check helper are CLI-agnostic
-> and shipped. Claude Code is the validated CLI. Codex/opencode are **enabled by this contract but
-> not yet live-validated** — the config snippets below are best-effort and marked ⚠️ VERIFY; the
-> **identity gate** is how you confirm a given CLI before onboarding it. Claude Code is **100%
-> unchanged** by any of this (P8 is purely additive).
+> **Status.** The hub + the identity contract + the identity-check helper are CLI-agnostic and shipped.
+> **Claude Code** — validated (the default). **Codex — CERTIFIED 2026-06-25** (see §4a: the MCP transport
+> + real data tools round-trip; per-pane identity works **via a `-c` override**, NOT via process-env
+> propagation). **opencode** — enabled by the contract, not yet live-validated (config marked ⚠️ VERIFY;
+> run the identity gate before onboarding). Claude Code is **100% unchanged** by any of this (additive).
 
 ---
 
@@ -122,6 +122,42 @@ DEVLOOP_ACTOR=dev <cli-headless-run> "call the dev-loop-hub whoami tool and prin
 `whoami` is the probe because it simply **echoes the resolved `actor`/`project`** the hub will stamp
 on every write. (`identity-check` reflects the *launcher's* process env; `whoami` proves the *CLI's
 spawn* delivered it — both matter, run both.)
+
+---
+
+## 4a. Codex — CERTIFIED (2026-06-25)
+
+Run end-to-end against the live hub on `codex-cli 0.142.0`. **Result: certified for per-agent identity
+— with one caveat that changes the launch recipe.**
+
+| Check | Result |
+|---|---|
+| MCP transport (codex connects to the hub, lists/calls tools) | ✅ works |
+| Real data tool round-trip (`list_issues` → the actual board) | ✅ works |
+| Per-pane identity via **process-env propagation** (`DEVLOOP_ACTOR=dev codex exec …`) | ❌ **fails** → `whoami` returns `operator` |
+| Per-pane identity via a **`-c` config override** | ✅ works → `whoami` returns `dev`, project preserved |
+
+**The finding:** Codex spawns the MCP subprocess with **only the `env` block from `config.toml`** — it
+does **not** inherit the launching shell's process env. So the §1 contract's "ride the per-pane process
+env" does **not** reach the hub on Codex, and every write would mis-attribute to `operator` (the gate
+**fails** as written). But Codex's `-c key=value` override **merges** a dotted key into the config env
+table, so identity rides there instead.
+
+**Certified recipe** — register the server once (`[mcp_servers.dev-loop-hub]`, the
+[`config/mcp.codex.toml.example`](../config/mcp.codex.toml.example) shape, `DEVLOOP_ACTOR` **absent**),
+then make each pane inject its actor with `-c`:
+
+```bash
+# one pane = one agent identity (this is what replaces Claude Code's per-pane ${DEVLOOP_ACTOR} .mcp.json)
+codex exec -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="dev"' \
+  --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "$PROMPT"
+# whoami → {"actor":"dev","project":"dev-loop",…}  (project/db from the static config env, merged)
+```
+
+Once `dev-loop` is published to npm, the registration `command`/`args` become `command="dev-loop",
+args=["serve"]` (a PATH bin) instead of `node <abs>/hub/src/server.ts`. The `-c` actor override is
+unchanged. **opencode** has the same per-pane question — run §4 against it and expect a similar
+config-override answer; not yet certified.
 
 ---
 
