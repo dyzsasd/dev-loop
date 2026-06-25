@@ -109,6 +109,20 @@ try {
   const r9 = mergeMcpServer({ mcpJsonPath: p9, hubServerPath: HUB_SERVER, projectKey: "acme${INJECT}", templatePath: TEMPLATE });
   ok(!r9.ok && /DL-44|interpolation|plain identifier/.test((r9 as { error?: string }).error ?? ""), `a project key with \${...} → rejected by the DL-44 guard (got ${JSON.stringify(r9)})`);
   ok(!existsSync(p9), "a DL-44-unsafe project key wrote NO .mcp.json");
+
+  // 10. DL-66: a hub server path carrying ${...} lands verbatim in the entry's `args` (an interpolated
+  //     .mcp.json position) → Claude Code would mis-expand it at parse time → rejected symmetrically with the
+  //     case-9 projectKey guard, NO write. (Double-quoted strings here, so ${INJECT} is a LITERAL path char.)
+  const p10 = freshPath();
+  const r10 = mergeMcpServer({ mcpJsonPath: p10, hubServerPath: "/Users/me/dev${INJECT}loop/hub/src/server.ts", projectKey: "prodx", templatePath: TEMPLATE });
+  ok(!r10.ok && /DL-66|interpolation|those characters/.test((r10 as { error?: string }).error ?? ""), `a hub server path with \${...} → rejected by the DL-66 guard (got ${JSON.stringify(r10)})`);
+  ok(!existsSync(p10), "a DL-66-unsafe hub server path wrote NO .mcp.json");
+
+  // 11. DL-66: the exact DL-44 nesting shape ${HOME:-/tmp} in the path is rejected the same way, NO write.
+  const p11 = freshPath();
+  const r11 = mergeMcpServer({ mcpJsonPath: p11, hubServerPath: "/opt/${HOME:-/tmp}/hub/src/server.ts", projectKey: "prodx", templatePath: TEMPLATE });
+  ok(!r11.ok && /DL-66|interpolation|those characters/.test((r11 as { error?: string }).error ?? ""), `a hub server path with the \${HOME:-/tmp} nesting shape → rejected (got ${JSON.stringify(r11)})`);
+  ok(!existsSync(p11), "a DL-66-unsafe (nested-default) hub server path wrote NO .mcp.json");
 } finally {
   try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* ignore */ }
 }
