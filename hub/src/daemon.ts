@@ -971,6 +971,27 @@ export function startBlockedNotifier(opts: {
   return timer;
 }
 
+// ─── P3b (design daemon-multicli §P3): bound the single-writer connection's WAL ───────────────────
+// The daemon is the canonical single writer for an opted-in (`hub.transport:"daemon"`) project — every
+// agent op-API write + human web-write flows through the ONE persistent `writeDb`. A long-lived writable
+// handle is never auto-checkpointed by a closing connection, so the `-wal` file grows unbounded; a periodic
+// `PRAGMA wal_checkpoint(TRUNCATE)` checkpoints the log into the main DB and truncates it back to zero.
+// Best-effort: a BUSY checkpoint (a reader/writer mid-txn holds the WAL) is a clean no-op this tick,
+// retried next interval — it NEVER throws into the daemon. The direct-db stdio `server.ts` fallback is
+// unaffected (its short-lived per-fire connections checkpoint on close, the SQLite default).
+export function walCheckpointTick(writeDb: DatabaseSync): void {
+  try { writeDb.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* BUSY / locked ⇒ retry next interval */ }
+}
+
+export function startWalCheckpoint(
+  writeDb: DatabaseSync,
+  intervalMs = Number(process.env.DEVLOOP_WAL_CHECKPOINT_MS) || 300_000, // 5 min default; env-overridable for tests
+): ReturnType<typeof setInterval> {
+  const timer = setInterval(() => walCheckpointTick(writeDb), intervalMs);
+  timer.unref?.(); // never keep the process alive solely for the checkpoint
+  return timer;
+}
+
 // ─── DL-41: idempotent per-project daemon lifecycle (up | down | status) ──────────────────────────
 // A thin, additive wrapper around the SAME foreground boot below. `up` resolves the project (cwd or
 // DEVLOOP_PROJECT), picks a stable per-project port, and spawns THIS file detached so the web UI
@@ -1291,5 +1312,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
     const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, cadenceHours, notify });
     if (notifier) console.log(`[daemon] Human-Blocked notifier active (every ${cadenceHours}h via the configured channel / §9 notify webhook)`);
+    // P3b: bound the single-writer connection's WAL (the daemon holds the one long-lived writable handle).
+    startWalCheckpoint(writeDb);
+    console.log(`[daemon] WAL checkpoint active (periodic TRUNCATE on the single-writer connection)`);
   });
 }
