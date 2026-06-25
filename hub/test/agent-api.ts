@@ -198,6 +198,22 @@ ok((await op("save_issue", {}, DEV)).status === 400, "guard: create with no titl
 ok((await op("save_issue", { id: feat.id, labels: "Bug" }, DEV)).status === 400, "guard: non-array labels → 400 (poison-pill prevented)");
 ok((await op("save_issue", { id: feat.id, relatedTo: "AGP-1" }, DEV)).status === 400, "guard: non-array relatedTo → 400");
 ok((await op("save_issue", { title: "p", priority: 9 }, DEV)).status === 400, "guard: out-of-range priority → 400 (mirrors zod int 0..4)");
+// DL-65: the last unguarded READ op — list_issues re-checks query/labels/assignee as the right types (server.ts
+// zod: query/assignee z.string().optional(), labels z.array(z.string()).optional()). A non-string query
+// (.toLowerCase()), a non-array labels (the [...] spread), or a non-string assignee (resolveAssignee→.trim())
+// would otherwise throw a TypeError → the daemon's catch → an HTTP 500 echoing the raw JS error; each must 400.
+ok((await op("list_issues", { query: {} }, DEV)).status === 400, "guard: list_issues non-string query → 400 (not a 500 from .toLowerCase on a non-string)");
+ok((await op("list_issues", { query: 5 }, DEV)).status === 400, "guard: list_issues numeric query → 400");
+ok((await op("list_issues", { labels: 5 }, DEV)).status === 400, "guard: list_issues non-array labels → 400 (not a 500 from the [...] spread)");
+ok((await op("list_issues", { labels: {} }, DEV)).status === 400, "guard: list_issues non-iterable labels → 400");
+ok((await op("list_issues", { assignee: {} }, DEV)).status === 400, "guard: list_issues non-string assignee → 400 (not a 500 from resolveAssignee.trim())");
+// AC #2: the 400 body is a clean message, never the raw JS TypeError string
+const liBadQuery = await op("list_issues", { query: {} }, DEV);
+ok(liBadQuery.status === 400 && !/toLowerCase is not a function/i.test(JSON.stringify(liBadQuery.body)), "list_issues non-string query: a clean 400 body, not the raw 'toLowerCase is not a function' TypeError");
+// AC #3: well-formed + absent inputs unchanged — a valid string query / array labels / string assignee still 200
+ok((await op("list_issues", { query: "seed" }, DEV)).status === 200, "list_issues valid string query → 200 (unchanged)");
+ok((await op("list_issues", { labels: ["dev-loop"] }, DEV)).status === 200, "list_issues valid array labels → 200 (unchanged)");
+ok((await op("list_issues", { assignee: "dev" }, DEV)).status === 200, "list_issues valid string assignee → 200 (unchanged)");
 // reads still serve after the rejected poison-pill writes (no corrupt labels landed → no 500)
 ok((await op("list_issues", { label: "pm" }, DEV)).status === 200, "post-guard: list_issues?label=pm still 200 (no corrupt labels row poisoned the filter)");
 ok((await op("bogus_op", {}, DEV)).status === 404, "guard: unknown op name → 404");
