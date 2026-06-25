@@ -62,12 +62,14 @@ function op(name: string, args: Record<string, unknown>, headers: Record<string,
     r.on("error", reject); r.end(body);
   });
 }
-const DEV = { "x-devloop-actor": "dev" }, QA = { "x-devloop-actor": "qa" };
+const DEV = { "x-devloop-actor": "dev" }, QA = { "x-devloop-actor": "qa" }, OPER = { "x-devloop-actor": "operator" };
 async function getJson(path: string): Promise<{ status: number; body: any }> {
   const r = await fetch(base + path); let b: any; try { b = await r.json(); } catch { b = null; } return { status: r.status, body: b };
 }
 const eventsBy = async (actor: string, kind: string, ticketId: string): Promise<boolean> =>
   (await call(verifier, "list_events", { limit: 200 })).some((e: any) => e.actor === actor && e.kind === kind && e.ticket_id === ticketId);
+const eventsByKind = async (actor: string, kind: string): Promise<boolean> => // channel/doc events carry no ticket_id
+  (await call(verifier, "list_events", { limit: 200 })).some((e: any) => e.actor === actor && e.kind === kind);
 
 // ═══ DORMANT by default — settings_json.hub.transport unset ⇒ every /api/op/* path 404s ═══════════════
 ok((await op("save_issue", { title: "x" }, DEV)).status === 404, "flag-off: POST /api/op/save_issue → 404 (mount dormant, no hub.transport)");
@@ -79,6 +81,9 @@ ok((await op("list_events", {}, DEV)).status === 404, "flag-off: POST /api/op/li
 // DL-64: the discussion-board family is dormant too while the flag is off (default-off, zero new surface)
 ok((await op("topic.list", {}, DEV)).status === 404, "flag-off: POST /api/op/topic.list → 404 (board reads dormant too)");
 ok((await op("topic.open", { question: "q", invited: ["dev"] }, { "x-devloop-actor": "pm" })).status === 404, "flag-off: POST /api/op/topic.open → 404 (board writes dormant too)");
+// DL-67: the channel family is dormant too while the flag is off (default-off, zero new surface)
+ok((await op("channel.status", {}, DEV)).status === 404, "flag-off: POST /api/op/channel.status → 404 (channel reads dormant too)");
+ok((await op("channel.register", { provider: "slack", configRef: "X", channelRef: "C" }, { "x-devloop-actor": "pm" })).status === 404, "flag-off: POST /api/op/channel.register → 404 (channel writes dormant too)");
 // the existing read + roadmap surfaces are byte-for-byte unchanged while the op-API is dormant
 const tBefore = await getJson("/api/tickets");
 ok(tBefore.status === 200 && tBefore.body.length === 1 && tBefore.body[0].id === feat.id, "flag-off: GET /api/tickets unchanged (the read surface still serves)");
@@ -227,6 +232,53 @@ ok((await op("topic.close", { topicId: topId, decision: {} }, { "x-devloop-actor
 ok((await op("topic.get", { id: "AGP-nope" }, DEV)).status === 404, "op topic.get of a ghost topic → 404");
 ok((await op("topic.open", { question: "q", invited: ["dev"] }, { "x-devloop-actor": "pm", origin: "http://evil.example" })).status === 403, "op topic.open cross-origin → 403 (CSRF wall covers the board write)");
 
+// ═══ DL-67: the IM channel family via the op-API (mirrors server.ts channel.*; DRYRUN = build-no-network) ══
+// no channel yet → channel.send/poll return the clear "register first" error as a clean 400 (never a 500)
+const chPre = await op("channel.send", { kind: "reply", text: "x" }, DEV);
+ok(chPre.status === 400 && /channel\.register first/.test(chPre.body.error), `op channel.send with no channel → clean 400 "register first" (got ${chPre.status} ${JSON.stringify(chPre.body)})`);
+ok((await op("channel.poll", {}, DEV)).status === 400, "op channel.poll with no channel → 400 (register first, not a 500)");
+ok((await op("channel.status", {}, DEV)).body.configured === false, "op channel.status before register → configured:false");
+// channel.register (write) attributed to the X-Devloop-Actor (dev); §16 rejects a literal token where an env-NAME belongs
+const chReg = await op("channel.register", { provider: "slack", configRef: "DEVLOOP_CHANNEL_TOKEN", channelRef: "C-OP" }, DEV);
+ok(chReg.status === 200 && chReg.body.provider === "slack" && chReg.body.channelRef === "C-OP", `op channel.register (X-Devloop-Actor: dev) → stored (got ${JSON.stringify(chReg.body)})`);
+ok(await eventsByKind("dev", "channel.register"), "list_events confirms channel.register attributed to dev (the identity win, channel family)");
+ok((await op("channel.register", { provider: "slack", configRef: "xoxb-LITERAL-SECRET", channelRef: "C9" }, DEV)).status === 400, "op channel.register rejects a literal token in configRef → 400 (env NAMES only; no secret reaches the DB)");
+// channel.status (read; query_only) → NAMES + set-flags, never the token; differential parity vs the stdio server
+const chSt = await op("channel.status", {}, DEV);
+ok(chSt.status === 200 && chSt.body.configured === true && chSt.body.configRefSet === true && !JSON.stringify(chSt.body).includes("xoxb-"), "op channel.status → configured + configRefSet boolean, never the token value (§16)");
+ok(JSON.stringify(chSt.body) === JSON.stringify(await call(verifier, "channel.status", {})), "parity: op channel.status ≡ stdio channel.status (byte-identical)");
+// channel.send notify (DRYRUN: built §16 allow-listed lines, no network) attributed to dev
+const chSend = await op("channel.send", { kind: "notify", ticketId: feat.id, bailShape: "decision-needed" }, DEV);
+ok(chSend.status === 200 && chSend.body.dryrun === true && chSend.body.lines.join(" ").includes(feat.id) && chSend.body.lines.join(" ").includes("decision-needed"), `op channel.send notify (dryrun) → built line carries ticket id + bail-shape (got ${JSON.stringify(chSend.body.lines)})`);
+ok(await eventsByKind("dev", "channel.send"), "list_events confirms channel.send attributed to dev");
+// the DL-4 roadmap-over-chat bridge over the op-API: publish a roadmap, poll a fixture (a `roadmap` summary + an edit→DRAFT + a normal msg), NEVER auto-publish
+await op("doc.save", { slug: "roadmap", kind: "roadmap", title: "Roadmap", body: "# Roadmap\n- ship the op-API channel\n", baseVersion: 0 }, OPER);
+await op("doc.publish", { kind: "roadmap", version: 1 }, OPER);
+process.env.DEVLOOP_CHANNEL_FIXTURE = JSON.stringify([
+  { providerMsgId: "900.1", authorRef: "U1", text: "roadmap", providerTs: "900.1" },
+  { providerMsgId: "900.2", authorRef: "U1", text: "roadmap edit # Roadmap v2\n- then mirror\nleak xoxb-LEAKED ping me@evil.com", providerTs: "900.2" },
+  { providerMsgId: "900.3", authorRef: "U1", text: "what about mobile?", providerTs: "900.3" },
+]);
+const chPoll = await op("channel.poll", {}, DEV);
+delete process.env.DEVLOOP_CHANNEL_FIXTURE;
+ok(chPoll.status === 200 && chPoll.body.new === 3 && chPoll.body.roadmapHandled.length === 2, `op channel.poll → ingests 3, auto-handles 2 roadmap cmds (got new=${chPoll.body.new}, handled=${chPoll.body.roadmapHandled?.length})`);
+const chSumm = chPoll.body.roadmapHandled.find((h: any) => h.type === "summary");
+ok(!!chSumm && chSumm.lines.join(" ").includes("published v1"), "op channel.poll DL-4 bridge → a `roadmap` request → a summary reply showing the published version");
+const chEdit = chPoll.body.roadmapHandled.find((h: any) => h.type === "edit");
+ok(!!chEdit && /draft v2/.test(chEdit.result), "op channel.poll DL-4 bridge → a `roadmap edit` → a DRAFT v2 (doc.save)");
+ok((await op("doc.get", { kind: "roadmap" }, DEV)).body.current_version === 1, "op channel.poll DL-4 bridge → the chat edit did NOT publish (current stays v1; the operator-publish firewall holds on the op-API path)");
+const rmV2 = await op("doc.get", { kind: "roadmap", version: 2 }, DEV);
+ok(rmV2.body.body.includes("then mirror") && !rmV2.body.body.includes("xoxb-LEAKED") && !rmV2.body.body.includes("me@evil.com") && rmV2.body.body.includes("***"), "op channel.poll DL-4 bridge → the draft is persisted but secrets + PII scrubbed (§16)");
+ok(chPoll.body.pending.some((p: any) => p.text.includes("mobile")), "op channel.poll → a non-command msg stays pending for the Director");
+// channel.ack (write) attributed to dev; non-string args → clean 400 (DL-63); the CSRF wall covers a channel write
+const chAckId = chPoll.body.pending[0].messageId;
+ok((await op("channel.ack", { messageId: chAckId, actedInto: "AGP-x" }, DEV)).body.acted === true, "op channel.ack → marks the message consumed");
+ok(await eventsByKind("dev", "channel.ack"), "list_events confirms channel.ack attributed to dev");
+ok((await op("channel.send", { kind: "notify", ticketId: {} }, DEV)).status === 400, "op channel.send non-string ticketId → 400 (not a node:sqlite bind 500; DL-63 lesson)");
+ok((await op("channel.ack", { messageId: 5 }, DEV)).status === 400, "op channel.ack non-string messageId → 400");
+ok((await op("channel.register", { provider: "bogus", configRef: "X", channelRef: "C" }, DEV)).status === 400, "op channel.register invalid provider → 400");
+ok((await op("channel.register", { provider: "slack", configRef: "DEVLOOP_CHANNEL_TOKEN", channelRef: "C2" }, { ...DEV, origin: "http://evil.example" })).status === 403, "op channel.register cross-origin → 403 (CSRF/DNS-rebind wall covers the channel write)");
+
 // ═══ endpoint pipeline guards ═════════════════════════════════════════════════════════════════════════
 ok((await op("save_comment", { issueId: feat.id, body: "no actor" }, {})).status === 400, "guard: missing X-Devloop-Actor → 400");
 ok((await op("save_comment", { issueId: feat.id, body: "ghost" }, { "x-devloop-actor": "ghost" })).status === 400, "guard: unknown actor 'ghost' → 400 (G1 phantom-actor guard)");
@@ -289,6 +341,7 @@ ok((await op("list_issues", {}, DEV)).status === 404, "flag-off (live toggle): o
 ok((await op("save_comment", { issueId: feat.id, body: "nope" }, DEV)).status === 404, "flag-off (live toggle): op save_comment → 404 again");
 ok((await op("doc.list", {}, DEV)).status === 404, "flag-off (live toggle): op doc.list → 404 again (the doc family goes dormant with the flag)");
 ok((await op("topic.list", {}, DEV)).status === 404, "flag-off (live toggle): op topic.list → 404 again (the board family goes dormant with the flag)");
+ok((await op("channel.status", {}, DEV)).status === 404, "flag-off (live toggle): op channel.status → 404 again (the channel family goes dormant with the flag)");
 ok((await getJson("/api/tickets")).status === 200, "flag-off (live toggle): GET /api/tickets still serves (read surface unchanged)");
 
 await pm.close();
