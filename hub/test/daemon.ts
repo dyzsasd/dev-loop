@@ -427,6 +427,33 @@ ok(swimFiltered.text.includes('class="lbl clearall" href="/?group=assignee"'), "
 ok((await getHtml("/?type=Bug")).text.includes('class="lbl clearall" href="/"'), "DL-31: 'clear all' on the default (non-grouped) board still clears to / (unchanged from DL-20)");
 ok(swimFiltered.text.includes(bCard) && !swimFiltered.text.includes(fCard), "DL-31: filters still narrow within swimlanes (?type=Bug → only the Bug card, feat excluded)");
 
+// ═══ DL-45: the board composition summary band (by type / owner / priority; non-terminal; filter-aware) ═══
+// Seed a KNOWN mix under a unique label so ?label= isolates EXACTLY these for a deterministic assertion. Done
+// LAST (after every count-based assertion above) so the extra tickets can't perturb earlier checks.
+const bandPm = await as("pm"), bandQa = await as("qa");
+const BL = "band45"; // unique label → ?label=band45 filters the board to exactly this mix
+await call(bandPm, "save_issue", { title: "band feat urgent", type: "Feature", labels: ["dev-loop", "Feature", "pm", BL], priority: 1 });    // Feature / pm / Urgent / Todo (open)
+await call(bandQa, "save_issue", { title: "band bug high", type: "Bug", labels: ["dev-loop", "Bug", "qa", BL], priority: 2 });                // Bug / qa / High / Todo (open)
+await call(bandPm, "save_issue", { title: "band imp low", type: "Improvement", labels: ["dev-loop", "Improvement", "pm", BL], priority: 4 });  // Improvement / pm / Low / Todo (open)
+const bandDone = await call(bandQa, "save_issue", { title: "band bug done", type: "Bug", labels: ["dev-loop", "Bug", "qa", BL], priority: 1 }); // Bug / qa / Urgent
+await call(bandQa, "save_issue", { id: bandDone.id, state: "Done" });                                                                          // → Done (TERMINAL → excluded from the band)
+for (const c of [bandPm, bandQa]) await c.close();
+
+// the band over the filtered set excludes the Done bug → 3 OPEN tickets:
+//   type: Feature 1 · Bug 1 (Done one excluded) · Improvement 1 — owner: pm 2 · qa 1 — priority: Urgent 1 · High 1 · Low 1
+const bandView = await getHtml(`/?label=${BL}`);
+ok(bandView.text.includes('class="summary"'), "DL-45 AC1: the board renders a composition summary band");
+ok(bandView.text.includes("Feature <b>1</b>") && bandView.text.includes("Bug <b>1</b>") && bandView.text.includes("Improvement <b>1</b>"), "DL-45 AC1: band type composition (Feature 1 · Bug 1 · Improvement 1) — the Done bug excluded (non-terminal)");
+ok(bandView.text.includes("pm <b>2</b>") && bandView.text.includes("qa <b>1</b>"), "DL-45 AC1: band owner composition (pm 2 · qa 1)");
+ok(bandView.text.includes("Urgent <b>1</b>") && bandView.text.includes("High <b>1</b>") && bandView.text.includes("Low <b>1</b>"), "DL-45 AC1: band priority composition (Urgent 1 · High 1 · Low 1)");
+ok(bandView.text.includes(`/ticket/${bandDone.id}`), "DL-45 AC1: the terminal (Done) ticket still renders as a card, but is excluded from the band aggregate (non-terminal only)");
+// AC3 — the band tracks an applied filter: narrow to ?type=Feature → it recomputes to just the 1 Feature
+const bandFeat = await getHtml(`/?label=${BL}&type=Feature`);
+ok(bandFeat.text.includes("Feature <b>1</b>") && bandFeat.text.includes("Bug <b>0</b>") && bandFeat.text.includes("Improvement <b>0</b>"), "DL-45 AC3: the band recomputes to the filtered set (?type=Feature → Feature 1 · Bug 0 · Improvement 0)");
+// AC4 — under ?group=assignee swimlanes the band summarizes the same filtered set
+const bandSwim = await getHtml(`/?label=${BL}&group=assignee`);
+ok(bandSwim.text.includes('class="summary"') && bandSwim.text.includes("pm <b>2</b>") && bandSwim.text.includes("qa <b>1</b>"), "DL-45 AC4: the band renders + is correct under ?group=assignee swimlanes");
+
 await verifier.close();
 opd.close();
 devd.close();
