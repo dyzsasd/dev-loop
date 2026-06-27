@@ -87,6 +87,17 @@ Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent o
 > with `claude agents --model <m>`). For *different* models per agent, use the launcher
 > below (or open separate views). Agent View applies one model per view.
 
+> **Two-tier Dev (opt-in, off by default):** replace the `/dev-loop:dev-agent` line with
+> two rows to split Dev into a design-lead + implementer pair:
+> ```
+> /loop 5m  /dev-loop:senior-dev-agent   # opus/max — designs modules, delegates to junior-dev, escalation direct-code
+> /loop 5m  /dev-loop:junior-dev-agent   # sonnet/high — implements pre-designed tickets against the linked design
+> ```
+> Models come from `models.senior-dev` / `models.junior-dev` in `projects.json`; defaults are
+> opus / sonnet. See [conventions §21a](../references/conventions.md#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project)
+> and [config-schema.md `models{}`](../references/config-schema.md) for routing rules, the design
+> gate, and the per-backend tier encoding. The legacy `dev` pane is unchanged when this is off.
+
 ### B. Local tmux launcher — mixed models, one command
 
 A small launcher (kept in your data dir, **not** part of the plugin) opens a `dev-loop`
@@ -102,6 +113,7 @@ PROJECT=foo ~/.claude/plugins/data/dev-loop/run-loop.sh   # pick a project key
 OPS=1       ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Ops (prod-watch) pane (~10m; off by default)
 ARCHITECT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Architect (tech-debt) pane (daily; off by default)
 DIRECTOR=1  ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Director (direction/roadmap) pane (daily/on-demand; off by default)
+DEV_SPLIT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # two-tier Dev (opt-in): senior-dev (opus/max) + junior-dev (sonnet/high) replace the single dev pane; see conventions §21a
 ```
 
 It prints a blast-radius banner (project, mode, autonomy, ship flags, models) before
