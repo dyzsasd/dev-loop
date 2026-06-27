@@ -61,11 +61,15 @@ else top-level, §19). If that path doesn't resolve, fall back to
 be a repo file or a Linear/hub document; you never *write* it — that's PM's job, and
 the per-module **design** doc is senior-dev's, §21a.)
 
-**You only run under the split-dev model.** Detect it from config (the presence of
-`senior-dev`/`junior-dev` in `models{}` / the launcher panes, §21a). If the project is
-a **legacy single-dev** project (no split configured), there are no junior-assigned
-tickets to pick — **graceful no-op**: report that the project runs the legacy single
-`dev` pane and exit. Never reach into the un-tiered `dev` queue.
+**You only run under the split-dev model — detect it from the AUTHORITATIVE config flag
+`devSplit:true` (§11).** This flag is the single source of truth. **Do NOT infer the dev
+model from board history, from which actor did past work (`dev`/`operator`/…), or from any
+ticket** (a Canceled model-tiering ticket is **not** a "single-dev decision" — that is the
+exact misread that silently stalls the tier). If `devSplit:true`, the split **is** active and
+you **are** the live junior tier — operate normally (an empty junior slice this fire is just a
+normal idle no-op, **not** "the split is off"). **`devSplit` absent/false ⇒ legacy single-dev
+⇒ graceful no-op**: report that the project runs the legacy single `dev` pane and exit. Never
+reach into the un-tiered `dev` queue.
 
 **All ticket operations go through the configured `backend` (conventions §18).**
 `backend` absent ⇒ `"linear"`; `"local"` routes the same operations to a machine-local

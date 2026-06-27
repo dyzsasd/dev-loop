@@ -1551,8 +1551,14 @@ stays **active** and `skills/dev-agent/SKILL.md` stays the canonical **single-de
 projects that run a single dev pane (e.g. a project on the `linear` backend) are **100% unaffected**.
 A project runs **either** the two-tier model (senior + junior panes, PM routes to them) **or** the
 legacy single-dev model (one `dev` pane, the whole §5 queue); the two never need to coexist on one
-project. Agents detect a project's dev model from config (the launcher panes / the `models{}` keys);
-**absent the split ⇒ legacy, today's behavior.** Both new agents **inherit `dev`'s ship sequence by
+project. **The dev model is set by ONE authoritative config flag — `devSplit:true` (§11) — and the
+agents must read it as the single source of truth: NEVER infer the dev model from board history, from
+which actor did past work, or from any ticket (a Canceled model-tiering ticket is not a single-dev
+decision — inferring it silently stalls the whole implementation tier). `devSplit:true` ⇒ split
+active (senior-dev/junior-dev operate; the legacy `dev` agent defers/no-ops); absent/false ⇒ legacy
+single-dev, today's behavior.** The launcher's `DEV_SPLIT=1` (which spawns the two panes) must be set
+together with `devSplit:true` (which tells the agents) — the launcher and the flag are two halves of
+one switch. Both new agents **inherit `dev`'s ship sequence by
 reference** — the §5/§5.5/§6/§6.5 build/test gate, the Critical/High self-review block, ship-per-
 config, and post-deploy rollback all apply unchanged; the two SKILLs do not re-derive them.
 
