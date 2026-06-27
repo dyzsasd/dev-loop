@@ -259,14 +259,14 @@ async function daemonDown(): Promise<number> {
 
 async function daemonStatus(): Promise<number> {
   const key = lcResolveKey();
-  if (!key) { console.log("[daemon] status: no project resolved (DEVLOOP_PROJECT unset, cwd outside every repo)."); return 0; }
+  if (!key) { console.log("[daemon] status: no project resolved (DEVLOOP_PROJECT unset, cwd outside every repo). Set DEVLOOP_PROJECT=<key>, or run from inside a configured repo."); return 0; }
   const info = lcReadRun(key);
   if (info && lcIsAlive(info.pid) && (await lcProbe(info.url, key))) {
     console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid})`);
     return 0;
   }
   if (info && !lcIsAlive(info.pid)) lcRemoveRun(key); // a dead pid must never read as "running" — clear it
-  console.log(`[daemon] status: '${key}' stopped.`);
+  console.log(`[daemon] status: '${key}' stopped. Start it with \`dev-loop daemon up\`.`);
   return 0;
 }
 

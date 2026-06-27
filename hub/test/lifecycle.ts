@@ -76,7 +76,8 @@ try {
   process.kill(r3.pid, "SIGKILL");
   await untilDead(r3.pid);
   const st2 = lc("status");
-  ok(st2.status === 0 && /stopped/.test(st2.stdout), "status on a dead-pid runfile → 'stopped'");
+  ok(st2.status === 0 && /stopped/.test(st2.stdout) && /dev-loop daemon up/.test(st2.stdout),
+    "status on a dead-pid runfile → 'stopped' + the `dev-loop daemon up` recovery hint (DL-87)");
   ok(!existsSync(runfile()), "status cleared the stale (dead-pid) runfile");
 
   // ── `down` stops the process + clears the runfile; a second `down` is a clean no-op ──
@@ -117,6 +118,14 @@ try {
     env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: emptyCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator" },
   });
   ok(unresolved.status === 0 && /no project resolved/.test(unresolved.stdout), "up with no DEVLOOP_PROJECT and an unresolvable cwd → no-op exit 0");
+
+  // ── DL-87: `status` with no resolvable project → exit 0 + the no-project line carries a fix hint ──
+  const statusUnresolved = spawnSync("node", ["src/daemon.ts", "status"], {
+    encoding: "utf8", timeout: 25000,
+    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: emptyCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator" },
+  });
+  ok(statusUnresolved.status === 0 && /no project resolved/.test(statusUnresolved.stdout) && /DEVLOOP_PROJECT|inside a configured repo/.test(statusUnresolved.stdout),
+    "status with no resolvable project → exit 0 + a fix hint (set DEVLOOP_PROJECT / run from a repo) (DL-87)");
 } finally {
   // never leak a detached daemon: kill anything still recorded, then drop the temp tree
   for (const key of [PROJ, "ghostproj"]) { try { if (existsSync(runfile(key))) { const p = readRun(key).pid; if (isAlive(p)) process.kill(p, "SIGKILL"); } } catch { /* best-effort */ } }
