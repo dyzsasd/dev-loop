@@ -408,6 +408,18 @@ function humanDur(ms: number): string {
 }
 // DL-84 — the pipeline stages whose residence time the /activity "Time in stage" diagnostic reports.
 const STAGES = ["Todo", "In Progress", "In Review"] as const;
+// DL-89 — Open-WIP aging thresholds: how long a ticket may sit in an active state before /activity flags it
+// stale. In Review past this = the owner agent (PM/QA) isn't verifying finished work (verify-lag); In Progress
+// past this = a claim that outlived its Dev fire (possible-orphan, beyond Sweep's no-artifact reclaim).
+const WIP_VERIFY_LAG_MS = 2 * DAY_MS;   // In Review (AC3: "> 2 days")
+const WIP_ORPHAN_MS = 1 * DAY_MS;       // In Progress (a Dev fire should ship within its own run)
+// DL-89 — the active states /activity ages, one source for both the query and the render list (so they can't
+// drift). Core states always render (— none if empty); park states render only when populated — the
+// parking-state rule, mirroring boardPage's STATE_ORDER/CORE_STATES handling.
+const WIP_CORE_STATES = ["In Progress", "In Review"];   // always shown
+const WIP_PARK_STATES = ["Human-Blocked"];              // shown only when populated
+// DL-84/DL-89 — one ticket's create+transition history, ASC by id; shared by the cycle-time + open-WIP loops.
+const HIST_SQL = "SELECT kind,data,created_at FROM events WHERE project_id=? AND ticket_id=? AND (kind='issue.create' OR kind='issue.transition') ORDER BY id";
 // Median of a numeric list (ms); empty → undefined (caller renders "—"). Avg of the two middles for even n.
 function median(nums: number[]): number | undefined {
   if (!nums.length) return undefined;
@@ -494,7 +506,7 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
   // its Done transition. When that start anchor is missing (incomplete history), render a graceful fallback.
   const stageLists: Record<string, number[]> = Object.fromEntries(STAGES.map((s) => [s, []]));  // DL-84: per-stage residence, keyed by STAGES (single source) across the same recently-Done set
   const cycle = [...doneAt.entries()].sort((a, b) => (a[1] < b[1] ? 1 : -1)).map(([tid, done]) => {
-    const hist = db.prepare("SELECT kind,data,created_at FROM events WHERE project_id=? AND ticket_id=? AND (kind='issue.create' OR kind='issue.transition') ORDER BY id").all(projectId, tid) as Record<string, any>[];
+    const hist = db.prepare(HIST_SQL).all(projectId, tid) as Record<string, any>[];
     let start: string | undefined;
     for (const e of hist) if (e.kind === "issue.create") { start = e.created_at; break; }
     if (!start) for (const e of hist) if (eventData(e.data).to === "Todo") { start = e.created_at; break; }
@@ -539,9 +551,40 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
       : `<b>${esc(humanDur(med))}</b> <span class="sub">n ${esc(list.length)}</span>`);
   };
   const stageSection = `<h3>Time in stage — recently Done (median)</h3>` + STAGES.map(stageRow).join("");
+  // DL-89 — Open WIP aging: per active state, the currently-open tickets ordered oldest-first by how long they
+  // have sat in that state RIGHT NOW — a forward-looking "now" snapshot complementing the backward-looking stage
+  // medians above. Age = now − the latest transition INTO the current state, falling back to issue.create when the
+  // ticket never transitioned in (AC2). Read-only over the same tickets/events the page already uses (no new table,
+  // no write route); the open-WIP set is small (that's the point), so the per-ticket hist query mirrors cycle-time.
+  const wipAll = [...WIP_CORE_STATES, ...WIP_PARK_STATES];
+  const openRows = db.prepare(`SELECT id,state FROM tickets WHERE project_id=? AND state IN (${wipAll.map(() => "?").join(",")})`).all(projectId, ...wipAll) as { id: string; state: string }[];
+  const openByState = new Map<string, { id: string; sinceMs: number }[]>();
+  for (const r of openRows) {
+    const hist = db.prepare(HIST_SQL).all(projectId, r.id) as Record<string, any>[];
+    let into: string | undefined, created: string | undefined;
+    for (const e of hist) {
+      if (e.kind === "issue.create") { if (created === undefined) created = e.created_at; }
+      else if (eventData(e.data).to === r.state) into = e.created_at;        // ASC by id → the LAST match is the latest into-state transition (AC2)
+    }
+    const since = into ?? created;                                           // fallback to create when never transitioned into this state (AC2)
+    if (!openByState.has(r.state)) openByState.set(r.state, []);
+    openByState.get(r.state)!.push({ id: r.id, sinceMs: since ? Date.parse(since) : NaN });
+  }
+  const wipFlag = (state: string, ageMs: number): string =>
+    state === "In Review" && ageMs > WIP_VERIFY_LAG_MS ? ` <span class="warn">⚠ verify-lag</span>`        // owner (PM/QA) not verifying finished work
+    : state === "In Progress" && ageMs > WIP_ORPHAN_MS ? ` <span class="warn">⚠ possible-orphan</span>`   // a claim outliving its Dev fire (beyond Sweep's reclaim)
+    : "";                                                                    // Human-Blocked is a deliberate park — shown, never flagged
+  const wipBlock = (state: string): string => {
+    const list = (openByState.get(state) ?? []).sort((a, b) => a.sinceMs - b.sinceMs);  // oldest-first = earliest into-state timestamp first (AC1)
+    const head = metricRow(state, `<span class="sub">${list.length ? `${esc(list.length)} open` : "— none"}</span>`);  // AC4: no open tickets → a neutral "— none", never a fake 0
+    return head + list.map((t) => { const ageMs = nowMs - t.sinceMs; return metricRow(t.id, `<b>${esc(humanDur(ageMs))}</b>${wipFlag(state, ageMs)}`); }).join("");
+  };
+  // core states always render (— none when empty); a park state only when populated (see the WIP_*_STATES consts).
+  const wipStates = [...WIP_CORE_STATES, ...WIP_PARK_STATES.filter((s) => openByState.get(s)?.length)];
+  const openWipSection = `<h3>Open WIP — aging</h3>` + wipStates.map(wipBlock).join("");
   const feedSection = `<h3>Recent activity<span class="count" style="margin-left:.4rem">${feed.length}</span></h3>`
     + (feed.length ? feed.map(eventLine).join("") : `<p class="empty">No activity recorded yet.</p>`);
 
   return `<a class="back" href="/">← board</a><article class="detail"><h1>Activity</h1>`
-    + throughput + acceptance + actorSection + cycleSection + stageSection + feedSection + `</article>`;
+    + throughput + acceptance + actorSection + cycleSection + stageSection + openWipSection + feedSection + `</article>`;
 }
