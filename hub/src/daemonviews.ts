@@ -120,7 +120,9 @@ const FILTER_KEYS = ["state", "type", "label", "assignee", "q"] as const;
 // Board: tickets grouped into state columns. Core workflow columns always render (even empty);
 // Backlog/Canceled/Duplicate and any other state show only when populated, terminals last. DL-20 adds
 // optional server-side filter/search (from the GET / query string) + a clearable, deep-linkable control row.
-export function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filters: BoardFilters = {}, canWrite = false, group?: string): string {
+// DL-86: `opts` lets a failed create (POST /ticket) RE-RENDER the board with an inline error notice (instead
+// of a raw-JSON dead-end) and preserve the operator's typed title in the create form (DL-14-style).
+export function boardPage(db: DatabaseSync, projectId: string, projectKey: string, filters: BoardFilters = {}, canWrite = false, group?: string, opts: { notice?: { kind: "error" | "ok"; msg: string }; submittedTitle?: string } = {}): string {
   let tickets = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
   const f = filters;
   // mirror /api/tickets: each present (non-empty) filter narrows the set; q matches id/title, case-insensitive
@@ -203,7 +205,7 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
   // create route, then PRG to the new ticket. esc() the option values (our own constants, but uniform).
   const newForm = canWrite
     ? `<form class="newticket" method="post" action="/ticket">`
-      + `<input type="text" name="title" placeholder="New ticket title" required spellcheck="false">`
+      + `<input type="text" name="title" value="${esc(opts.submittedTitle ?? "")}" placeholder="New ticket title" required spellcheck="false">` // DL-86: preserve typed title on a rejected create
       + `<select name="type"><option>Feature</option><option>Bug</option><option>Improvement</option></select>`
       + `<button type="submit">+ New ticket</button></form>`
     : "";
@@ -222,11 +224,15 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
       + sumGrp([1, 2, 3, 4, 0].map((p) => sumChip(prioOf(p), open.filter((t) => t.priority === p).length)).join(""))
       + `</div>`
     : "";
-  return controls + newForm + summary + boardHtml + empty;
+  // DL-86: an inline error notice on a failed create, rendered above the create form (mirrors roadmapPage's notice).
+  const notice = opts.notice ? `<p class="notice ${opts.notice.kind === "error" ? "n-err" : "n-ok"}">${esc(opts.notice.msg)}</p>` : "";
+  return notice + controls + newForm + summary + boardHtml + empty;
 }
 
 // Ticket detail: full description + comments. Returns null when the ticket is absent (→ 404).
-export function ticketPage(db: DatabaseSync, projectId: string, id: string, canWrite = false): string | null {
+// DL-86: `opts` lets a failed human-write (move/assign/comment) RE-RENDER this page with an inline error
+// notice (instead of a raw-JSON dead-end) and preserve the operator's typed comment in the textarea (DL-14-style).
+export function ticketPage(db: DatabaseSync, projectId: string, id: string, canWrite = false, opts: { notice?: { kind: "error" | "ok"; msg: string }; submittedComment?: string } = {}): string | null {
   const r = db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as Record<string, any> | undefined;
   if (!r) return null;
   const t = toTicket(r);
@@ -242,6 +248,7 @@ export function ticketPage(db: DatabaseSync, projectId: string, id: string, canW
   return `<a class="back" href="/">← board</a><article class="detail">`
     + `<div class="card-top"><span class="id">${esc(t.id)}</span><span class="badge t-${esc(t.type)}">${esc(t.type)}</span><span class="badge">${esc(t.state)}</span></div>`
     + `<h1>${esc(t.title)}</h1>`
+    + (opts.notice ? `<p class="notice ${opts.notice.kind === "error" ? "n-err" : "n-ok"}">${esc(opts.notice.msg)}</p>` : "") // DL-86: inline error on a failed write
     + `<dl class="meta"><dt>Owner</dt><dd>${esc(ownerOf(t.labels))}</dd>`
     + `<dt>Priority</dt><dd>${esc(prioOf(t.priority))}</dd>`
     + `<dt>Assignee</dt><dd>${esc(t.assignee ?? "—")}</dd>`
@@ -254,7 +261,7 @@ export function ticketPage(db: DatabaseSync, projectId: string, id: string, canW
     // are operator DATA (stored verbatim, never parsed). Move offers the STATES set, current pre-selected.
     + (canWrite
       ? `<h3>Actions</h3>`
-        + `<form class="act" method="post" action="/ticket/${encodeURIComponent(id)}/comment"><textarea name="body" rows="3" placeholder="Add a comment" required spellcheck="false"></textarea><button type="submit">Comment</button></form>`
+        + `<form class="act" method="post" action="/ticket/${encodeURIComponent(id)}/comment"><textarea name="body" rows="3" placeholder="Add a comment" required spellcheck="false">${esc(opts.submittedComment ?? "")}</textarea><button type="submit">Comment</button></form>` // DL-86: preserve typed text on a rejected comment (DL-14-style)
         + `<form class="act" method="post" action="/ticket/${encodeURIComponent(id)}/move"><select name="state">${STATES.map((s) => `<option${s === t.state ? " selected" : ""}>${esc(s)}</option>`).join("")}</select><button type="submit">Move</button></form>`
         + `<form class="act" method="post" action="/ticket/${encodeURIComponent(id)}/assign"><input type="text" name="assignee" value="${esc(t.assignee ?? "")}" placeholder="assignee handle (blank = unassign)" spellcheck="false"><button type="submit">Assign</button></form>`
       : "")

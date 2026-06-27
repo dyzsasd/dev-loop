@@ -11,6 +11,7 @@ import { request as httpRequest } from "node:http";
 import { openDb } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
 import { createDaemon, roadmapDivergenceDoc } from "../src/daemon.ts";
+import { ticketPage, boardPage } from "../src/daemonviews.ts"; // DL-86: unit-check the failed-write re-render input preservation
 
 const DB = "/tmp/hub-daemon/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -429,6 +430,33 @@ ok((await postForm(opd.base, `/ticket/${nid}/assign`, { assignee: "" })).status 
 const tHtml = (await gettext(opd.base, `/ticket/${nid}`)).text;
 ok(tHtml.includes(`action="/ticket/${nid}/comment"`) && tHtml.includes(`action="/ticket/${nid}/move"`) && tHtml.includes(`action="/ticket/${nid}/assign"`), "DL-29: the ticket page renders the comment/move/assign forms when enabled");
 ok((await gettext(opd.base, "/")).text.includes('action="/ticket"'), "DL-29: the board renders the create form when enabled");
+
+// ─── DL-86: a FAILED human write RE-RENDERS the page as HTML with the error inline (+ preserved input), NOT raw JSON ───
+// (before: any non-ok write dead-ended on a bare {error} JSON page — the operator lost their place and typed input).
+// (a) a rejected MOVE (invalid state) → the ticket page re-renders: status preserved (400), an HTML body carrying the
+//     error notice + the back-to-board nav — never a raw JSON body.
+const mvFail = await postForm(opd.base, `/ticket/${nid}/move`, { state: "Nonsense" });
+ok(mvFail.status === 400 && mvFail.text.includes('class="notice') && mvFail.text.includes("invalid state") && mvFail.text.includes("← board") && !mvFail.text.trimStart().startsWith("{"), `DL-86: a rejected move re-renders the ticket page as HTML (notice + back nav), not raw JSON (got ${mvFail.status}, json=${mvFail.text.trimStart().startsWith("{")})`);
+// (b) a rejected ASSIGN (unknown actor) likewise re-renders the ticket page as HTML, not JSON.
+const asFail = await postForm(opd.base, `/ticket/${nid}/assign`, { assignee: "ghost" });
+ok(asFail.status === 400 && asFail.text.includes('class="notice') && asFail.text.includes("unknown assignee") && !asFail.text.trimStart().startsWith("{"), "DL-86: a rejected assign re-renders the ticket page as HTML with the error, not raw JSON");
+// (c) a rejected CREATE (empty title) → the BOARD re-renders as HTML with the error + the create form intact, not JSON.
+const crFail = await postForm(opd.base, "/ticket", { title: "   " });
+ok(crFail.status === 400 && crFail.text.includes('class="notice') && crFail.text.includes("title required") && crFail.text.includes('action="/ticket"') && !crFail.text.trimStart().startsWith("{"), "DL-86: a rejected create re-renders the board as HTML (error + create form), not raw JSON");
+// (d) the rejected writes changed NOTHING — the re-render is side-effect-free (state/assignee unchanged from the DL-29 block).
+const after86 = (await get(`/api/tickets/${nid}`)).body;
+ok(after86.state === "In Review" && after86.assignee === null, "DL-86: the rejected move/assign left the ticket unchanged (re-render is side-effect-free)");
+// (e) AC2/AC3 input-preservation (unit): the only NON-empty write failures are unreachable over HTTP (createTicket/
+//     addComment reject empties; a missing ticket 404s with no page), so exercise the preservation slot directly —
+//     ticketPage keeps a typed comment + boardPage keeps a typed title, both HTML-escaped (DL-14-style).
+const tpKeep = ticketPage(ddb, projectId, nid, true, { notice: { kind: "error", msg: "boom" }, submittedComment: "draft <b>keep</b>" });
+ok(!!tpKeep && tpKeep.includes("draft &lt;b&gt;keep&lt;/b&gt;") && tpKeep.includes('class="notice'), "DL-86 AC2: ticketPage preserves the typed comment in the textarea (HTML-escaped) + shows the notice");
+const bpKeep = boardPage(ddb, projectId, "dmn", {}, true, undefined, { notice: { kind: "error", msg: "title required" }, submittedTitle: "kept <i>title</i>" });
+ok(bpKeep.includes('value="kept &lt;i&gt;title&lt;/i&gt;"') && bpKeep.includes("title required"), "DL-86 AC3: boardPage preserves the typed title (escaped) + shows the notice");
+// (f) AC4 the SUCCESS path is unchanged — a valid move still 303-redirects (PRG), no HTML re-render. (A no-op
+//     same-state move stays valid → 303, and leaves nid's state untouched for any later assertions.)
+ok((await postForm(opd.base, `/ticket/${nid}/move`, { state: "In Review" })).status === 303, "DL-86 AC4: the success path is unchanged — a valid move still 303-redirects (PRG)");
+
 // AC1 — the localhost CSRF / DNS-rebinding guard covers these routes too (reuse the Origin/Host forger).
 const op29Port = Number(new URL(opd.base).port);
 const cbody = new URLSearchParams({ title: "csrf attempt" }).toString();

@@ -21,7 +21,7 @@ import { openDb, actorExists, logEvent } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig } from "./resolve-project.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr } from "./docstore.ts";
-import { createTicket, addComment, moveTicket, assignTicket, type WriteResult } from "./ticketwrite.ts";
+import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
 import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Transport, type FetchImpl } from "./channel.ts";
 // DL-74: the HTML view layer (every page renderer + esc/toTicket/eventData) lives in daemonviews.ts; the
@@ -213,24 +213,31 @@ function isTicketWriteRoute(seg: string[]): boolean {
   return (seg.length === 1 && seg[0] === "ticket")
     || (seg.length === 3 && seg[0] === "ticket" && (seg[2] === "comment" || seg[2] === "move" || seg[2] === "assign"));
 }
-async function handleTicketWrite(seg: string[], req: IncomingMessage, res: ServerResponse, writeDb: DatabaseSync, projectId: string, actor: string): Promise<void> {
+async function handleTicketWrite(seg: string[], req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string): Promise<void> {
   let form: URLSearchParams;
   try { form = await parseFormBody(req); }
   catch (e) { if (!res.headersSent && !res.destroyed) json(res, 400, { error: (e as Error).message }); return; }
-  const send = (r: WriteResult, location: string) =>
-    r.ok ? redirect(res, location) : json(res, r.status, { error: r.error });
 
   if (seg.length === 1) { // POST /ticket — create, then PRG to the new ticket
     const r = createTicket(writeDb, projectId, actor, { title: form.get("title") ?? "", description: form.get("description") ?? undefined, type: form.get("type") ?? undefined });
-    return send(r, r.ok ? `/ticket/${encodeURIComponent(r.id)}` : "");
+    if (r.ok) return redirect(res, `/ticket/${encodeURIComponent(r.id)}`);
+    // DL-86: a rejected create re-renders the BOARD as HTML with the error inline + the typed title preserved
+    // (mirrors the /roadmap/save rerender), instead of dead-ending the operator on a raw-JSON {error} page.
+    return htmlOut(res, r.status, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, {}, true, undefined, { notice: { kind: "error", msg: r.error }, submittedTitle: form.get("title") ?? "" })));
   }
   const id = decodeSeg(seg[1]);
   if (id === null) return json(res, 400, { error: "malformed percent-escape in path" });
-  const back = `/ticket/${encodeURIComponent(id)}`;
   const verb = seg[2];
-  if (verb === "comment") return send(addComment(writeDb, projectId, actor, id, form.get("body") ?? ""), back);
-  if (verb === "move") return send(moveTicket(writeDb, projectId, actor, id, form.get("state") ?? ""), back);
-  return send(assignTicket(writeDb, projectId, actor, id, form.get("assignee") ?? ""), back);
+  const r = verb === "comment" ? addComment(writeDb, projectId, actor, id, form.get("body") ?? "")
+    : verb === "move" ? moveTicket(writeDb, projectId, actor, id, form.get("state") ?? "")
+    : assignTicket(writeDb, projectId, actor, id, form.get("assignee") ?? "");
+  if (r.ok) return redirect(res, `/ticket/${encodeURIComponent(id)}`);
+  // DL-86: a rejected move/assign/comment re-renders the TICKET PAGE as HTML with the error inline (+ the typed
+  // comment preserved on a rejected comment), instead of a raw-JSON dead-end. If the ticket is gone (ticketPage
+  // null) fall back to the JSON error — there is no page to re-render.
+  const inner = ticketPage(db, projectId, id, true, { notice: { kind: "error", msg: r.error }, submittedComment: verb === "comment" ? (form.get("body") ?? "") : undefined });
+  if (!inner) return json(res, r.status, { error: r.error });
+  return htmlOut(res, r.status, page(`${id} · ${projectKey}`, projectKey, inner));
 }
 
 // ─── DL-43: opt-in daemon agent op-API (/api/op/*) — the MCP↔daemon unification foundation (P1) ───────────
@@ -329,7 +336,7 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadma
       // read-only). Origin/Host guard runs BEFORE any write, exactly like /roadmap/*.
       if (method === "POST" && canWrite && humanWriteEnabled(db, projectId) && isTicketWriteRoute(seg)) {
         if (!writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
-        await handleTicketWrite(seg, req, res, writeDb!, projectId, actor!);
+        await handleTicketWrite(seg, req, res, db, writeDb!, projectId, projectKey, actor!);
         return;
       }
       // DL-43: opt-in agent op-API — POST /api/op/<op>, active ONLY when canWrite AND the project opted in
