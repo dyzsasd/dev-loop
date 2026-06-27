@@ -1,12 +1,20 @@
 // `dev-loop-hub doctor` — operator health check. READ-ONLY: it never auto-creates a db
 // (a typo'd path reports MISSING, it does not spin an empty one). Backs the §17/§18 promises:
 // data home is machine-local + never committed, the SoR is intact.
-import { existsSync } from "node:fs";
-import { dirname } from "node:path";
+// DL-81: the `doctor` COMMAND additionally runs a service runtime-wiring reconcile (reads the product
+// .mcp.json / daemon runfile / hooks.json + a localhost /api/health GET) — still READ-ONLY (no writes,
+// no auto-create) and NON-FATAL; see serviceReconcile. Library callers (init-service) skip it.
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 
-export function runDoctor(dbPath: string): boolean {
+// DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
+// the service runtime wiring (below). Library callers that only want the DB-integrity verdict (init-service
+// step (d)) call runDoctor(dbPath) with no opts → no reconcile, behavior byte-for-byte unchanged.
+export async function runDoctor(dbPath: string, opts: { reconcile?: boolean } = {}): Promise<boolean> {
   let ok = true;
   const pass = (m: string) => console.log("✅ " + m);
   const fail = (m: string) => { console.log("❌ " + m); ok = false; };
@@ -84,12 +92,96 @@ export function runDoctor(dbPath: string): boolean {
   }
 
   db.close();
+
+  // DL-81: optional, additive service runtime-wiring reconcile (only for the `doctor` COMMAND, not library
+  // callers like init-service). READ-ONLY + NON-FATAL — it never touches `ok`, so the verdict below is still
+  // decided SOLELY by the DB-integrity checks above (§18 SoR contract preserved).
+  if (opts.reconcile) await serviceReconcile(projects.map((p) => p.key), dbPath);
+
   console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
   return ok;
+}
+
+// ── DL-81: service runtime-wiring reconcile ──────────────────────────────────────────────────────────────
+// ADDITIVE, READ-ONLY, NON-FATAL. After the DB-integrity checks (the ONLY hard-fail gate), if this doctor run
+// is for a service-backend project that LIVES IN THE DB WE JUST INSPECTED, ALSO report whether the runtime an
+// operator wired at init (init-service.ts steps (c)/(e) + the DL-42 hook) is still in place — the idempotent
+// "is my service backend wired and up?" reconcile. init already runs doctor (DL-60), so its Step-8 readiness
+// checklist inherits these lines with no SKILL change. Every line is PASS/WARN, NEVER a fail: a stopped daemon
+// / absent .mcp.json / missing hook is operator-actionable info, not a broken SoR. With NO service context
+// this prints NOTHING — the DB-only verdict stays byte-for-byte today's.
+async function serviceReconcile(dbProjectKeys: string[], dbPath: string): Promise<void> {
+  const pass = (m: string) => console.log("✅ " + m);
+  const warn = (m: string) => console.log("⚠️  " + m);
+
+  // Resolve the project context exactly as the MCP server / DL-13 launcher do: an explicit DEVLOOP_PROJECT
+  // wins, else match cwd against the configured repo paths. null ⇒ no context.
+  const cfg = loadProjectsConfig();
+  const key = process.env.DEVLOOP_PROJECT?.trim() || (cfg ? resolveProjectFromCwd(process.cwd(), cfg) : null);
+  // The reconcile is about the wiring of a project that lives in the db doctor just checked. A key resolved
+  // from cwd/env but ABSENT from this db (doctor pointed at a temp/other db, or cwd resolved a SIBLING project)
+  // is not this db's context — skip silently, keeping the DB-only verdict byte-for-byte unchanged.
+  if (!key || !dbProjectKeys.includes(key)) return;
+
+  console.log(`\nservice runtime wiring — '${key}' (best-effort; informational, not a hard-fail gate):`);
+
+  // (1) the product repo .mcp.json registers dev-loop-hub with a real server path + DEVLOOP_ACTOR wiring.
+  const repoPath = (cfg?.projects?.[key] as { repoPath?: string } | undefined)?.repoPath;
+  if (!repoPath) warn(`.mcp.json — no repoPath for '${key}' in projects.json; cannot verify the dev-loop-hub registration (set repoPath, or register by hand from config/mcp.example.json)`);
+  else reconcileMcpJson(join(repoPath, ".mcp.json"), pass, warn);
+
+  // (2) the per-project daemon /api/health is reachable (url from the lifecycle runfile beside the db).
+  await reconcileDaemonHealth(key, dbPath, pass, warn);
+
+  // (3) the DL-42 SessionStart hook (the steady-state daemon owner) is installed.
+  reconcileSessionStartHook(pass, warn);
+}
+
+function reconcileMcpJson(mcpJsonPath: string, pass: (m: string) => void, warn: (m: string) => void): void {
+  if (!existsSync(mcpJsonPath)) { warn(`.mcp.json — ${mcpJsonPath} not found; dev-loop-hub is not registered (re-run init, or merge from config/mcp.example.json)`); return; }
+  let cfg: { mcpServers?: Record<string, { args?: unknown[]; env?: Record<string, unknown> }> };
+  try { cfg = JSON.parse(readFileSync(mcpJsonPath, "utf8")); }
+  catch (e) { warn(`.mcp.json — ${mcpJsonPath} is malformed JSON, cannot verify the registration (${(e as Error).message})`); return; }
+  const entry = cfg?.mcpServers?.["dev-loop-hub"];
+  if (!entry || typeof entry !== "object") { warn(`.mcp.json — no mcpServers["dev-loop-hub"] entry in ${mcpJsonPath} (re-run init to register it)`); return; }
+  const serverArg = (Array.isArray(entry.args) ? entry.args : []).find((a): a is string => typeof a === "string" && /server\.(ts|js)$/.test(a));
+  const actorWired = !!entry.env && typeof entry.env === "object" && "DEVLOOP_ACTOR" in entry.env;
+  if (!serverArg) { warn(`.mcp.json — the dev-loop-hub entry has no server.ts/.js arg in ${mcpJsonPath} (re-run init to repair)`); return; }
+  if (!existsSync(serverArg)) { warn(`.mcp.json — the dev-loop-hub server path is missing on disk: ${serverArg} (the dev-loop checkout moved? re-run init)`); return; }
+  if (!actorWired) { warn(`.mcp.json — the dev-loop-hub entry has no DEVLOOP_ACTOR env wiring in ${mcpJsonPath} (re-run init to repair)`); return; }
+  pass(`.mcp.json registers dev-loop-hub → ${serverArg} (DEVLOOP_ACTOR wired)`);
+}
+
+async function reconcileDaemonHealth(key: string, dbPath: string, pass: (m: string) => void, warn: (m: string) => void): Promise<void> {
+  const runDir = process.env.DEVLOOP_RUN_DIR ?? dirname(dbPath); // mirrors the lifecycle's lcRunDir (DL-41)
+  const runfile = join(runDir, `daemon-${key}.json`);
+  let url: string | undefined;
+  try { url = (JSON.parse(readFileSync(runfile, "utf8")) as { url?: string }).url; } catch { /* no runfile ⇒ not running */ }
+  if (!url) { warn(`daemon — not running (no lifecycle runfile ${runfile}); start it with \`dev-loop-hub daemon up\` from the repo`); return; }
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 1500); // short bound — doctor is a one-shot liveness probe, never a wait
+    const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
+    const b = r.status === 200 ? ((await r.json().catch(() => null)) as { ok?: boolean; project?: string } | null) : null;
+    if (b && b.ok === true && b.project === key) pass(`daemon /api/health reachable → ${url} (project '${key}')`);
+    else warn(`daemon — ${url}/api/health did not return {ok:true} for '${key}' (wedged/restarting? \`dev-loop-hub daemon up\`)`);
+  } catch { warn(`daemon — ${url}/api/health unreachable (not running?); start it with \`dev-loop-hub daemon up\``); }
+}
+
+function reconcileSessionStartHook(pass: (m: string) => void, warn: (m: string) => void): void {
+  const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (published)
+  const pluginRoot = process.env.DEVLOOP_PLUGIN_ROOT ?? join(here, "..", ".."); // the repo/plugin root holds hooks/
+  const hookFile = join(pluginRoot, "hooks", "hooks.json");
+  try {
+    const j = JSON.parse(readFileSync(hookFile, "utf8")) as { hooks?: { SessionStart?: Array<{ hooks?: Array<{ command?: string }> }> } };
+    const cmds = (j.hooks?.SessionStart ?? []).flatMap((e) => (e.hooks ?? []).map((h) => h.command ?? ""));
+    if (cmds.some((c) => /daemon\s+up/.test(c))) pass(`DL-42 SessionStart hook installed → ${hookFile} (daemon auto-starts each session)`);
+    else warn(`DL-42 SessionStart hook — ${hookFile} has no \`daemon up\` SessionStart command; re-sync/reinstall the dev-loop plugin`);
+  } catch { warn(`DL-42 SessionStart hook — ${hookFile} not found/readable; re-sync/reinstall the dev-loop plugin so the daemon auto-starts`); }
 }
 
 // CLI: node src/doctor.ts  (or `dev-loop-hub doctor` via server.ts dispatch / `npm run doctor`)
 if (import.meta.url === `file://${process.argv[1]}`) {
   const dbPath = process.env.DEVLOOP_HUB_DB ?? `${process.env.HOME}/.dev-loop/hub.db`;
-  process.exit(runDoctor(dbPath) ? 0 : 1);
+  process.exit((await runDoctor(dbPath, { reconcile: true })) ? 0 : 1);
 }

@@ -133,7 +133,7 @@ export async function runInitService(opts: InitServiceOpts): Promise<number> {
   // ── (d) doctor → assert DOCTOR_OK ──
   if (dryRun) {
     log(`[dry-run] would: run doctor on ${dbPath} and assert DOCTOR_OK`);
-  } else if (!runDoctor(dbPath)) {
+  } else if (!(await runDoctor(dbPath))) {
     log("❌ doctor did not report DOCTOR_OK — the SoR is not healthy; not starting the daemon");
     return 1;
   } else {
