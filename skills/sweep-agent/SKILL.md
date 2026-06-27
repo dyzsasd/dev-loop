@@ -99,6 +99,15 @@ its owner label is picked up by **nobody**. Find and fix them:
     a comment and report it. **Never guess a repo** (same discipline as never guessing a
     type) — a wrong target ships to the wrong tree. Single-repo projects have no
     `repo:*` labels; skip this check.
+  - **No dev-tier marker** (split-dev project only, §21a): a `Todo` dev ticket
+    (`Feature`/`Bug`/`Improvement`, not `blocked`, not a design parent awaiting its gate)
+    that carries **neither** `senior-dev` nor `junior-dev` (the `assignee` actor on
+    `service` / the dev-tier label on `linear`/`local`) is invisible to **both** dev
+    pick-queries — picked by nobody. **Route it: default `junior-dev`** (a scoped
+    bug-fix/improvement), `senior-dev` only if the title/body clearly describe a new
+    module/feature needing design ("when borderline, junior", §21a). Re-pass the full set
+    + re-fetch (§10), comment why. This is the §21a-named safety net for a filer that
+    forgot the tier. Legacy single-dev projects (no split) have no dev-tier labels — skip.
 A ticket stuck `In Review` is *usually* this bug — fixing the owner label is what
 lets PM/QA finally verify it.
 
