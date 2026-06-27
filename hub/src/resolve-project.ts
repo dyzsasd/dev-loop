@@ -9,7 +9,9 @@ import { relative, isAbsolute, join } from "node:path";
 
 export interface ProjectsConfig {
   defaultProject?: string;
-  projects?: Record<string, { repoPath?: string; repos?: { path?: string }[] }>;
+  // The shape resolveProjectFromCwd matches on (repoPath/repos), plus the few fields the daemon reads to
+  // resolve per-project behavior — DL-83: hub.docs/director/strategyDoc drive the /roadmap divergence banner.
+  projects?: Record<string, { repoPath?: string; repos?: { path?: string }[]; hub?: { docs?: boolean }; director?: unknown; strategyDoc?: unknown }>;
 }
 
 // The candidate repo paths for a project (§19): repos[].path if present, else [repoPath].

@@ -77,7 +77,7 @@ input[type=text]{padding:.3rem .45rem;border:1px solid var(--line);border-radius
 button{font:inherit;padding:.4rem .85rem;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);cursor:pointer}button:hover{border-color:var(--mut)}
 .pub{margin-top:.5rem}
 .notice{padding:.5rem .7rem;border-radius:8px;margin:.6rem 0;font-size:.85rem}
-.n-err{background:#dc26261f;border:1px solid #dc262655;color:#dc2626}.n-ok{background:#16a34a1f;border:1px solid #16a34a55;color:#16a34a}
+.n-err{background:#dc26261f;border:1px solid #dc262655;color:#dc2626}.n-ok{background:#16a34a1f;border:1px solid #16a34a55;color:#16a34a}.n-info{background:#64748b1f;border:1px solid #64748b55;color:#475569}
 .doc h1,.doc h2,.doc h3{margin:.7rem 0 .3rem;font-size:1rem}.doc ul,.doc ol{margin:.3rem 0;padding-left:1.3rem}.doc p{margin:.4rem 0}.doc hr{border:0;border-top:1px solid var(--line);margin:.7rem 0}
 code{font:.92em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);padding:0 .25rem;border-radius:4px}
 .ragent{margin:.9rem 0}.ragent h3{margin:.2rem 0 .4rem}
@@ -287,7 +287,7 @@ function renderMarkdown(md: string): string {
 // GET /roadmap — render the kind:"roadmap" document (rendered markdown) + version/status, plus the edit
 // form and (operator-only) publish control. Reads through the query_only `db`. slug/kind are NEVER form
 // fields: the write routes hard-target the roadmap doc, so caller input can't redirect the write (§17).
-export function roadmapPage(db: DatabaseSync, projectId: string, opts: { writable: boolean; canPublish: boolean; notice?: { kind: "error" | "ok"; msg: string }; submittedBody?: string }): string {
+export function roadmapPage(db: DatabaseSync, projectId: string, opts: { writable: boolean; canPublish: boolean; notice?: { kind: "error" | "ok"; msg: string }; submittedBody?: string; roadmapRepoFileStrategy?: string }): string {
   const d = db.prepare("SELECT * FROM documents WHERE project_id=? AND kind='roadmap'").get(projectId) as Record<string, any> | undefined;
   const latest = d ? ((db.prepare("SELECT max(version) v FROM document_versions WHERE doc_id=?").get(d.id) as { v: number | null }).v ?? 0) : 0;
   const published = d ? d.current_version : 0;
@@ -296,6 +296,13 @@ export function roadmapPage(db: DatabaseSync, projectId: string, opts: { writabl
   const body = cur?.body ?? "";
 
   const notice = opts.notice ? `<p class="notice ${opts.notice.kind === "error" ? "n-err" : "n-ok"}">${esc(opts.notice.msg)}</p>` : "";
+  // DL-83: when the hub roadmap doc is NOT this project's north-star (a repo-file strategyDoc is, because no
+  // agent reads the hub roadmap under hub.docs:false/absent + no director), a NEUTRAL informational banner
+  // sets expectations — editing here won't steer the loop. Purely informational: it never hides the
+  // view/edit/publish controls (AC2). The path comes from the daemon's resolved config (§17) and is esc'd.
+  const divergence = opts.roadmapRepoFileStrategy
+    ? `<p class="notice n-info">This project's north-star is the repo file <code>${esc(opts.roadmapRepoFileStrategy)}</code> — this hub roadmap is <b>not read by the agents</b> under the current config (no <code>hub.docs</code>, no <code>director</code>), so edits here won't steer the loop.</p>`
+    : "";
   const meta = d
     ? `<dl class="meta"><dt>Status</dt><dd>${esc(d.status)}</dd>`
       + `<dt>Latest version</dt><dd>v${latest}${latest > 0 ? ` (${esc(cur?.status ?? "draft")})` : ""}</dd>`
@@ -324,7 +331,7 @@ export function roadmapPage(db: DatabaseSync, projectId: string, opts: { writabl
 
   return `<a class="back" href="/">← board</a><article class="detail">`
     + `<div class="card-top"><span class="id">roadmap</span><span class="badge">${esc(d?.status ?? "—")}</span></div>`
-    + `<h1>${esc(d?.title ?? "Roadmap")}</h1>` + notice + meta + view + controls + `</article>`;
+    + `<h1>${esc(d?.title ?? "Roadmap")}</h1>` + divergence + notice + meta + view + controls + `</article>`;
 }
 
 // ── DL-10: agent reports view (read-only, FILESYSTEM source — separate from the hub DB) ──────────
