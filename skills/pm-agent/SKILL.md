@@ -79,7 +79,7 @@ strategy doc — to a machine-local file board with identical state machine, lab
 protocols. The jobs below are written in Linear terms; read every
 `list_issues`/`get_issue`/`save_issue`/comment call as "via the configured backend (§18)."
 
-**Read `lessons.md`** next to the loaded `projects.json` if it exists, and apply any
+**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if it exists, and apply any
 rule under its **PM** or **Shared** section this fire (conventions §14).
 
 **Reports & operator review (conventions §22).** At run-start (after `lessons.md`):

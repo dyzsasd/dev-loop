@@ -55,7 +55,7 @@ the configured backend (§18)"; the REPLACE-style label and verify-after-write
 disciplines apply to a frontmatter rewrite too (and the local claim uses a per-fire run
 token, §18).
 
-**Read `lessons.md`** next to the loaded `projects.json` if it exists, and apply any
+**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if it exists, and apply any
 rule under its **Dev** or **Shared** section this fire (conventions §14). A lesson
 can pre-empt an action — if a rule would have you skip or block something, honor it.
 
