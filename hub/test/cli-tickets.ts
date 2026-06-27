@@ -27,7 +27,7 @@ const insT = db.prepare(
 const t = (id: string, title: string, desc: string, type: string, state: string, assignee: string | null, prio: number, labels: string[], updated: string) =>
   insT.run(id, projectId, title, desc, type, state, assignee, prio, JSON.stringify(labels), "pm", "2026-01-01T00:00:00Z", updated);
 // priority ASC, then updated_at DESC ⇒ default (non-terminal) order is [CT-2, CT-1, CT-3, CT-4]; CT-5 is Done (hidden).
-t("CT-1", "Fix urgent login bug", "## Summary\nLogin throws 500 on submit.\n", "Bug", "Todo", "dev", 1, ["dev-loop", "Bug", "qa"], "2026-01-01T00:00:03Z");
+t("CT-1", "Fix urgent login bug", "## Summary\nLogin throws 500 on submit.\n", "Bug", "Todo", "dev", 1, ["dev-loop", "Bug", "qa", "edge-case"], "2026-01-01T00:00:03Z"); // DL-93: carries `edge-case` so --label edge-case has a clean target
 t("CT-2", "Add urgent export feature", "Export the board.", "Feature", "Todo", null, 1, ["dev-loop", "Feature", "pm"], "2026-01-01T00:00:05Z");
 t("CT-3", "Medium polish improvement", "Tidy the header.", "Improvement", "In Progress", "dev", 3, ["dev-loop", "Improvement", "pm"], "2026-01-01T00:00:01Z");
 t("CT-4", "Low priority nit", "Rename a field.", "Improvement", "In Review", null, 4, ["dev-loop", "Improvement", "qa"], "2026-01-01T00:00:02Z");
@@ -88,6 +88,35 @@ const qpos = cli(["tickets", "CT-3"]);
 ok(qpos.out.includes("CT-3") && !qpos.out.includes("CT-1"), "tickets <positional> → matches the id");
 const dangling = cli(["tickets", "--state"]);
 ok(dangling.status === 2 && /needs a value/i.test(dangling.out), `tickets --state (no value) → usage error exit 2, not a silent unfiltered list (status ${dangling.status})`);
+
+// ── 4b. DL-93: --type / --owner / --label filters, AND-composition, and flag validation (dangling + unknown) ──
+const byType = cli(["tickets", "--type", "Improvement"]);
+ok(byType.out.includes("CT-3") && byType.out.includes("CT-4") && !byType.out.includes("CT-1") && !byType.out.includes("CT-2"),
+  "tickets --type Improvement → only the (non-terminal) Improvements CT-3, CT-4");
+ok(!byType.out.includes("CT-5"), "tickets --type Improvement → orthogonal to state: the non-terminal default still hides the Done CT-5 (a Feature) — and would hide a Done Improvement too");
+const byOwner = cli(["tickets", "--owner", "qa"]);
+ok(byOwner.out.includes("CT-1") && byOwner.out.includes("CT-4") && !byOwner.out.includes("CT-2") && !byOwner.out.includes("CT-3") && !byOwner.out.includes("CT-6"),
+  "tickets --owner qa → only the non-terminal qa-owned (CT-1, CT-4); not pm-owned CT-2/CT-3, not the terminal qa Duplicate CT-6");
+const byLabel = cli(["tickets", "--label", "edge-case"]);
+ok(byLabel.out.includes("CT-1") && !byLabel.out.includes("CT-2") && !byLabel.out.includes("CT-3") && !byLabel.out.includes("CT-4"),
+  "tickets --label edge-case → only the ticket carrying that arbitrary label (CT-1), not by type/owner");
+// AND-composition: type+owner intersect (CT-6 is also Bug/qa but Duplicate → hidden by the non-terminal default)
+const compose = cli(["tickets", "--type", "Bug", "--owner", "qa"]);
+ok(compose.out.includes("CT-1") && !compose.out.includes("CT-6") && !compose.out.includes("CT-2"),
+  "tickets --type Bug --owner qa → AND-composed to the non-terminal Bug owned by qa (CT-1), not the Duplicate CT-6 nor pm's CT-2");
+// composition with an explicit terminal --state lets that slice through (DL-91): Bug + Duplicate = CT-6 only
+const composeTerminal = cli(["tickets", "--type", "Bug", "--state", "Duplicate"]);
+ok(composeTerminal.out.includes("CT-6") && !composeTerminal.out.includes("CT-1"),
+  "tickets --type Bug --state Duplicate → composes with an explicit terminal --state (CT-6 only, not the Todo CT-1)");
+// each new flag obeys the DL-91 dangling-value rule (exit 2), like --state/--q
+for (const f of ["--type", "--owner", "--label"]) {
+  const d = cli(["tickets", f]);
+  ok(d.status === 2 && /needs a value/i.test(d.out), `tickets ${f} (no value) → usage error exit 2 (status ${d.status})`);
+}
+// the footgun fix (DL-93): an UNKNOWN flag is rejected (exit 2) and never swallows its following arg as positional --q
+const unknown = cli(["tickets", "--bogus", "CT-2"]);
+ok(unknown.status === 2 && /unknown flag/i.test(unknown.out),
+  `tickets --bogus CT-2 → unknown flag rejected (exit 2), its value NOT swallowed as free-text --q (status ${unknown.status})`);
 
 // ── 5. `ticket <id>` detail + comment ──
 const det = cli(["ticket", "CT-1"]);

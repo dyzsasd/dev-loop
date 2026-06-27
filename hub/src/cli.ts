@@ -51,7 +51,7 @@ Usage: dev-loop <command> [args]
   seed <key> <name> [PREFIX]  seed a project + actors + labels into the hub db
   doctor                      health-check the hub system-of-record (DOCTOR_OK)
   identity-check [--expect <actor>[/<project>]]   verify this shell resolves the intended identity
-  tickets [--all] [--state S] [--q TEXT]   read-only: list the resolved project's board (no daemon)
+  tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT]   read-only: list the resolved project's board (no daemon)
   ticket <id>                 read-only: show one ticket — detail + comments
   version | help
 
