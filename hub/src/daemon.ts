@@ -971,6 +971,106 @@ export function startBlockedNotifier(opts: {
   return timer;
 }
 
+// ─── DL-76: loop circuit-breaker — daemon no-progress / runaway detector ──────────────────────────
+// The Ralph-Wiggum guard at the LOOP level: a stuck loop that keeps firing (and billing) but produces no
+// ACCEPTED change should page the operator ONCE — not bill silently. "Accepted change" = a ticket reaching
+// Done (the §3 owner-verify gate passed), the exact throughput signal the DL-17 activityPage already counts.
+// A sibling of blockedNotifyTick: SAME channel/notify resolution (DL-26/DL-59), SAME dry-run-is-write-free
+// invariant (DL-34), SAME id-only failure log (§16) — only the DUE condition differs.
+//
+// THRESHOLD = a ROLLING WINDOW of H hours (settings_json.noProgressWindowHours), NOT "N consecutive fires":
+// the daemon observes TIME + the events ledger, never agent fires directly, and a window is STATELESS, so a
+// daemon restart never mis-counts (the events table is the durable SoR — no in-memory counter to lose). DUE =
+// a STALL: zero issue.transition→Done events in the trailing window. De-duped like the Human-Blocked reminder
+// via a project-wide `no_progress.notified` marker — at most ONE alert per stall EPISODE: a fresh alert fires
+// only after accepted change RESUMED (a Done logged AFTER the last marker) and then stalled again. A cold start
+// (a loop younger than the window, no prior history) is NOT a stall — guarded so the detector never cries wolf
+// on boot. Absent a channel AND a §9 notify ⇒ true no-op (DL-59). Returns 1 if it alerted this tick, else 0.
+export async function noProgressNotifyTick(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  windowMs: number; nowMs: number; fetchImpl?: FetchImpl; notify?: unknown;
+}): Promise<number> {
+  const { writeDb, projectId, projectKey, baseUrl, windowMs, nowMs } = opts;
+  // Resolve ONE send target FIRST (cheap) — identical precedence to blockedNotifyTick (DL-59): a DB `channels`
+  // row wins; else the §9 `notify` webhook; else true no-op (so a no-channel project does zero ledger work).
+  const dbCh = getEnabledChannel(writeDb, projectId);
+  const nt = dbCh ? null : resolveNotifyWebhook(opts.notify);
+  if (!dbCh && !nt) return 0;
+  const target = dbCh
+    ? { provider: dbCh.provider as Provider, creds: resolveCreds(dbCh), channelRef: dbCh.channel_ref, transport: (dbCh.transport as Transport) ?? "bot", label: `${dbCh.provider}/${dbCh.transport ?? "bot"}` }
+    : { provider: nt!.provider, creds: nt!.creds, channelRef: "", transport: "webhook" as Transport, label: `${nt!.provider}/webhook (§9 notify)` };
+
+  // "net accepted change" over the rolling window = COUNT of issue.transition events whose `to` is Done within
+  // [now − windowMs, now]. SAME done-count logic as activityPage (the `to` lives in JSON `data`, so the filter
+  // is in-process; a malformed row is skipped, never throws — activityPage AC5).
+  const sinceIso = new Date(nowMs - windowMs).toISOString();
+  const windowTrans = writeDb.prepare(
+    "SELECT data FROM events WHERE project_id=? AND kind='issue.transition' AND created_at>=? ORDER BY id",
+  ).all(projectId, sinceIso) as { data: string }[];
+  const accepted = windowTrans.reduce((n, e) => n + (eventData(e.data).to === "Done" ? 1 : 0), 0);
+  if (accepted > 0) return 0; // progress within the window ⇒ healthy, nothing to do
+
+  // Cold-start guard: a loop YOUNGER than the window has no history to judge — "0 Done" is just "not warmed up
+  // yet", not a stall. Require ≥1 event BEFORE the window before we ever alert (cheap; LIMIT 1 short-circuits).
+  const hasHistory = !!writeDb.prepare(
+    "SELECT 1 FROM events WHERE project_id=? AND created_at<? LIMIT 1",
+  ).get(projectId, sinceIso);
+  if (!hasHistory) return 0;
+
+  // STALLED. De-dup like the Human-Blocked reminder: one alert per stall EPISODE. Re-alert only if accepted
+  // change RESUMED since the last alert — a Done transition logged strictly AFTER the last marker (which, since
+  // we are stalled NOW, must itself predate the window ⇒ it resumed-then-stalled-again). Stateless from the
+  // ledger ⇒ a daemon restart never double-sends and needs no counter.
+  const lastNotified = (writeDb.prepare(
+    "SELECT MAX(created_at) m FROM events WHERE project_id=? AND kind='no_progress.notified'",
+  ).get(projectId) as { m: string | null }).m;
+  if (lastNotified) {
+    const sinceAlert = writeDb.prepare(
+      "SELECT data FROM events WHERE project_id=? AND kind='issue.transition' AND created_at>? ORDER BY id",
+    ).all(projectId, lastNotified) as { data: string }[];
+    const resumed = sinceAlert.some((e) => eventData(e.data).to === "Done");
+    if (!resumed) return 0; // still the same stall episode (no Done since the alert) ⇒ stay silent
+  }
+
+  // §16 closed-allow-list one-liner: projectKey + the window + the metric + the localhost /activity link ONLY.
+  // No ticket text / PII / secret; cleanLine bounds length + strips control chars (defense in depth).
+  const windowH = +(windowMs / 3_600_000).toFixed(2);
+  const line = cleanLine(`[${projectKey}] no-progress: 0 accepted change (Done) in the last ${windowH}h — loop may be stuck · ${baseUrl}/activity`, 200);
+  try {
+    if (CHANNEL_DRYRUN) {
+      // DL-34: dry-run is WRITE-FREE (the DL-11 invariant) — preview only, NO marker / NO send — so a later
+      // LIVE tick still fires the first real ping and the ledger never gains a phantom "notified".
+      console.error(`[daemon] [dry-run] would notify no-progress via ${target.label}: ${line}`);
+    } else {
+      await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+      logEvent(writeDb, { project_id: projectId, ticket_id: null, actor: "daemon", kind: "no_progress.notified", data: { windowMs } }); // marker ONLY on a real send
+    }
+    return 1;
+  } catch (e) {
+    // id-less log, NO marker ⇒ retried next tick (never echo the secret/body)
+    console.error(`[daemon] no-progress notify failed: ${scrubErr((e as Error).message)}`);
+    return 0;
+  }
+}
+
+export function startNoProgressNotifier(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  windowHours: number; tickMs?: number; notify?: unknown;
+}): ReturnType<typeof setInterval> | null {
+  if (!(opts.windowHours > 0)) return null;                            // disabled (absent / ≤0 ⇒ true no-op)
+  // Start only if a send target exists (DL-59): a registered DB channel OR the §9 notify webhook — else no-op.
+  if (!getEnabledChannel(opts.writeDb, opts.projectId) && !resolveNotifyWebhook(opts.notify)) return null;
+  const windowMs = opts.windowHours * 3_600_000;
+  // Re-check ≈ hourly by default (the stall window is measured in hours; a tighter poll just re-scans the
+  // ledger for nothing, and the marker de-dup makes any extra tick harmless). Env-overridable for tests.
+  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_NOPROGRESS_TICK_MS) || 3_600_000);
+  const run = () => { void noProgressNotifyTick({ ...opts, windowMs, nowMs: Date.now() }); };
+  const timer = setInterval(run, tickMs);
+  timer.unref?.();  // never keep the process alive solely for this detector
+  run();            // immediate first tick — a stall already in progress at boot is caught without waiting
+  return timer;
+}
+
 // ─── P3b (design daemon-multicli §P3): bound the single-writer connection's WAL ───────────────────
 // The daemon is the canonical single writer for an opted-in (`hub.transport:"daemon"`) project — every
 // agent op-API write + human web-write flows through the ONE persistent `writeDb`. A long-lived writable
@@ -1301,11 +1401,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR });
   // DL-26: read the per-project Human-Blocked reminder cadence (settings_json.humanBlockedReminderHours).
-  let cadenceHours = 0;
+  // DL-76: read the loop no-progress circuit-breaker window (settings_json.noProgressWindowHours) from the
+  // SAME parse — both are operator-set, hours, 0/absent ⇒ off (true no-op, no timer).
+  let cadenceHours = 0, noProgressWindowHours = 0;
   try {
     const row = writeDb.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
-    cadenceHours = Number(JSON.parse(row?.settings_json ?? "{}")?.humanBlockedReminderHours) || 0;
-  } catch { cadenceHours = 0; }
+    const settings = JSON.parse(row?.settings_json ?? "{}");
+    cadenceHours = Number(settings?.humanBlockedReminderHours) || 0;
+    noProgressWindowHours = Number(settings?.noProgressWindowHours) || 0;
+  } catch { cadenceHours = 0; noProgressWindowHours = 0; }
   // DL-59: also resolve the §9 `notify` webhook (projects.json) so a project with ONLY a notify webhook (no
   // registered bot/webhook channel) still receives Human-Blocked reminders — the daemon is the single emitter
   // on `service`. §16: the block stays in config/env; the daemon reads it but never writes it to the DB.
@@ -1318,6 +1422,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
     const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, cadenceHours, notify });
     if (notifier) console.log(`[daemon] Human-Blocked notifier active (every ${cadenceHours}h via the configured channel / §9 notify webhook)`);
+    // DL-76: loop no-progress / runaway circuit-breaker — alert ONCE when 0 accepted change (Done) lands in the
+    // rolling window. No channel/notify OR noProgressWindowHours≤0 ⇒ no-op (mirrors the Human-Blocked notifier).
+    const noProgress = startNoProgressNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, windowHours: noProgressWindowHours, notify });
+    if (noProgress) console.log(`[daemon] no-progress detector active (alert on 0 accepted change in ${noProgressWindowHours}h via the configured channel / §9 notify webhook)`);
     // P3b: bound the single-writer connection's WAL via a DEDICATED busy_timeout=0 maintenance connection
     // (never blocks the synchronous event loop under a concurrent reader — Codex review 2026-06-27).
     startWalCheckpoint(DB_PATH);

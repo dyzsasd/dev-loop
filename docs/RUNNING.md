@@ -247,6 +247,22 @@ surface, not the loop's control plane. For the full endpoint + env reference (po
 `/api/*` JSON routes, the opt-in write routes) see [`DAEMON.md`](DAEMON.md). (Hub backend only —
 the daemon reads `hub.db`.)
 
+**Loop circuit-breaker — the no-progress detector (DL-76).** A long-running unattended loop can get
+*stuck* — keep firing (and billing tokens) while producing **no accepted change** (the Ralph-Wiggum /
+runaway failure mode). The daemon can page you once when that happens. Set the project's
+`settings_json.noProgressWindowHours` to a number of hours (e.g. `6`); each periodic tick counts
+*accepted change* = tickets reaching **Done** (`issue.transition → Done`, the same throughput signal
+`/activity` shows) in the trailing window. **Zero Done in the window ⇒ one operator alert** over the
+same channel as the Human-Blocked notifier (a registered `channels` row, else the §9 `notify`
+webhook). It is **de-duped like the Human-Blocked reminder** — at most **one** alert per stall
+*episode*; a fresh alert only after accepted change resumes (a later Done) and then stalls again — and
+**off by default**: `noProgressWindowHours` absent/`≤0`, **or** no channel/notify configured, ⇒ a true
+no-op (no timer). A cold start (a loop younger than the window) never trips it. The alert is a §16
+closed-allow-list one-liner (project · window · the `/activity` link — never a secret/URL). Override the
+re-check cadence for tests with `DEVLOOP_NOPROGRESS_TICK_MS` (default hourly). *(This is the
+no-progress half of the loop-cost guard; a literal token/$ budget ceiling awaits a per-fire cost signal
+the hub doesn't have yet — see `STRATEGY.md`.)*
+
 ---
 
 ## 5. Resume / restart
