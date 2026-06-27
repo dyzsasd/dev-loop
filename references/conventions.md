@@ -1556,10 +1556,12 @@ project. Agents detect a project's dev model from config (the launcher panes / t
 reference** — the §5/§5.5/§6/§6.5 build/test gate, the Critical/High self-review block, ship-per-
 config, and post-deploy rollback all apply unchanged; the two SKILLs do not re-derive them.
 
-### PM routing — assign the dev tier at ticket creation
-PM picks the tier **when it files the ticket** (the §6 filing step), by one rule:
+### Routing — the filer assigns the dev tier at ticket creation
+**Whichever agent files a dev ticket sets its tier** — PM at its §6 filing step, **and QA when it
+files a `Bug`/`Improvement`** (QA is a primary filer, not just PM). Same one rule:
 - **new module / new feature** (needs a design) ⇒ assign **senior-dev** (design-and-delegate).
-- **improvement / bug-fix** (a scoped change) ⇒ assign **junior-dev**.
+- **improvement / bug-fix** (a scoped change) ⇒ assign **junior-dev**. (QA's findings are bug-fixes /
+  drift-improvements by nature, so QA-filed tickets default to **junior-dev**.)
 - **BORDERLINE** ⇒ default to **junior-dev** — escalation (below) is the cheap safety net, so
   over-routing to the expensive tier is the costlier mistake. "When borderline, junior."
 
