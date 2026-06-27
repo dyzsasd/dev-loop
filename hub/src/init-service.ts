@@ -143,7 +143,7 @@ export async function runInitService(opts: InitServiceOpts): Promise<number> {
   // ── (e) one-shot `daemon up` (DL-41) → confirm `/api/health {ok:true}` → report the board URL ──
   let boardUrl: string | null = null;
   if (dryRun) {
-    log(`[dry-run] would: start the daemon once (server.ts daemon up) and confirm /api/health {ok:true}, then report the board URL`);
+    log(`[dry-run] would: start the daemon once (${serverEntry} daemon up) and confirm /api/health {ok:true}, then report the board URL`);
   } else {
     const r = spawnSync(process.execPath, [serverEntry, "daemon", "up"], {
       encoding: "utf8",
