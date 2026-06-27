@@ -71,6 +71,11 @@ ok(all.out.includes("CT-5") && before(all.out, "CT-5", "CT-2") && before(all.out
 const todo = cli(["tickets", "--state", "Todo"]);
 ok(todo.out.includes("CT-1") && todo.out.includes("CT-2") && !todo.out.includes("CT-3") && !todo.out.includes("CT-4"),
   "tickets --state Todo → only the two Todo tickets");
+// DL-91 regression: an explicit TERMINAL --state must list its tickets WITHOUT --all — the non-terminal default
+// filter must not pre-strip them (the state-agnostic `!all && !state` gate, identical branch for Canceled/Duplicate).
+const doneOnly = cli(["tickets", "--state", "Done"]);
+ok(doneOnly.out.includes("CT-5") && !doneOnly.out.includes("CT-1") && !doneOnly.out.includes("CT-3"),
+  "tickets --state Done → lists the Done CT-5 alone, no --all needed (DL-91: explicit --state overrides the non-terminal default)");
 
 // ── 4. free-text `--q` (title) and positional (id) ──
 const ql = cli(["tickets", "--q", "login"]);

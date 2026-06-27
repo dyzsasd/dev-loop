@@ -40,7 +40,7 @@ function listTickets(db: DatabaseSync, projectId: string, args: string[]): numbe
   let rows = db.prepare(
     "SELECT id,title,type,state,assignee,priority,labels,updated_at FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC",
   ).all(projectId) as ListRow[];
-  if (!all) rows = rows.filter((r) => !TERMINAL.has(r.state)); // default: non-terminal only
+  if (!all && !state) rows = rows.filter((r) => !TERMINAL.has(r.state)); // default (only when no explicit --state): non-terminal only — an explicit --state always wins, incl. a terminal one (DL-91)
   if (state) rows = rows.filter((r) => r.state === state);
   if (q) { const needle = q.toLowerCase(); rows = rows.filter((r) => r.id.toLowerCase().includes(needle) || (r.title ?? "").toLowerCase().includes(needle)); }
   if (rows.length === 0) { console.log("No tickets."); return 0; }
