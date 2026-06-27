@@ -61,8 +61,14 @@ export function ensureSeed(db: DatabaseSync, key: string, name: string, prefix =
 
 // CLI: node src/seed.ts <key> <name> [prefix] [dbpath]
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const [key = "demo", name = "Demo Project", prefix = "DL", dbPath = process.env.DEVLOOP_HUB_DB ?? "./hub.db"] =
-    process.argv.slice(2);
+  const args = process.argv.slice(2);
+  // --help/-h is the near-universal convention; guard it BEFORE binding argv[0] to `key`, or it
+  // silently seeds a junk project literally keyed `--help` + its actors + labels (DL-88).
+  if (args[0] === "--help" || args[0] === "-h") {
+    console.log("Usage: seed <key> <name> [PREFIX] [DBPATH]  — seed a project + actors + labels into the hub db");
+    process.exit(0);
+  }
+  const [key = "demo", name = "Demo Project", prefix = "DL", dbPath = process.env.DEVLOOP_HUB_DB ?? "./hub.db"] = args;
   const db = openDb(dbPath);
   const id = ensureSeed(db, key, name, prefix);
   console.log(`seeded project ${key} (${id}) + actors + labels in ${dbPath}`);
