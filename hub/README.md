@@ -1,12 +1,12 @@
 # dev-loop
 
 The standalone local **coordination hub** for the [dev-loop](https://github.com/dyzsasd/dev-loop)
-agents — a **zero-build, zero-native-dependency** MCP system-of-record over `node:sqlite` with
-**per-agent identity**, a localhost **web-UI daemon**, an opt-in agent **op-API + thin stdio shim**,
-and a **CLI-portable** transport (Claude Code · Codex · opencode).
+agents. It is a **zero-build, zero-native-dependency** MCP system of record over `node:sqlite`,
+with **per-agent identity**, a localhost **web UI daemon**, an opt-in agent **op-API + thin stdio
+shim**, and a transport that works across CLIs (Claude Code · Codex · opencode).
 
-> One trusted host, localhost-only. Identity is **cooperative attribution** (not anti-spoof). Secrets
-> live in env by **name** only. See the security envelope in
+> One trusted host, localhost-only. Identity is **cooperative attribution**, not anti-spoofing.
+> Secrets live in env by **name** only. See the security envelope in
 > [`docs/HUB-ARCHITECTURE.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/HUB-ARCHITECTURE.md).
 
 ## Install
@@ -15,7 +15,8 @@ and a **CLI-portable** transport (Claude Code · Codex · opencode).
 npm install -g @dyzsasd/dev-loop   # requires Node >= 23.6 (built-in node:sqlite + .ts type-stripping; zero build); installs the `dev-loop` + `dev-loop-hub` bins
 ```
 
-This puts two bins on `PATH`: **`dev-loop`** (the CLI) and **`dev-loop-hub`** (the MCP server entry).
+This installs two binaries on `PATH`: **`dev-loop`** for the CLI and **`dev-loop-hub`** for the
+MCP server entrypoint.
 
 ## CLI
 
@@ -33,16 +34,16 @@ dev-loop version | help
 
 ## Identity & project (the env contract)
 
-Every launcher sets, **per pane**, the identity the write is attributed to:
+Every launcher sets the write identity **per pane**:
 
 | Env var | Meaning |
 |---|---|
-| `DEVLOOP_ACTOR` | the per-agent identity (`pm`/`qa`/`dev`/…) — the attribution |
+| `DEVLOOP_ACTOR` | the per-agent identity (`pm`/`qa`/`dev`/...) — the attribution |
 | `DEVLOOP_PROJECT` | the pinned project key (or resolved from the cwd) |
 | `DEVLOOP_HUB_DB` | the SQLite system-of-record (default `~/.dev-loop/hub.db`) |
 
-Register it as an MCP server for your CLI — `{ "command": "dev-loop", "args": ["serve"] }` (or
-`["shim"]` for the daemon transport). Per-CLI recipes + the identity gate:
+Register it as an MCP server for your CLI with `{ "command": "dev-loop", "args": ["serve"] }`,
+or use `["shim"]` for the daemon transport. Per-CLI recipes and the identity gate live in:
 [`docs/PORTABILITY.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/PORTABILITY.md).
 
 ## Docs

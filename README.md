@@ -2,14 +2,15 @@
 
 **English** · [中文](README.zh-CN.md) · [Français](README.fr.md)
 
-**Ten autonomous agents that build and improve software on their own, coordinated entirely
-through ticket state.** You write the intent (a strategy doc) and review the output; the
-agents propose, implement, verify, ship, and learn — in a loop. This is *loop engineering*:
-you stop hand-prompting a coding agent and instead run a system that prompts itself.
+**Ten autonomous agents that build and improve software by moving tickets through a shared
+state machine.** You write the intent in a strategy doc and review the result. The agents
+propose work, implement it, verify it, ship it, and fold what they learned into the next run.
+That is *loop engineering*: less hand-prompting, more running a system that can keep itself
+moving.
 
-The agents never call each other. The **board is the only channel** — every agent reads and
-writes ticket state (plus git), so any agent can run at any time, in any order, even
-concurrently. A ticket's labels carry everything: eligibility, owner, routing, dev-tier.
+The agents do not call each other. The **board is the only channel**: every agent reads and
+writes ticket state, plus git, so runs can happen in any order and even overlap. Ticket labels
+carry the operational facts: eligibility, owner, routing, and dev tier.
 
 ```
         PM ──proposes feature──┐                 ┌──QA proposes bug──┐
@@ -42,38 +43,38 @@ concurrently. A ticket's labels carry everything: eligibility, owner, routing, d
 
 ## What it is
 
-dev-loop is a **Claude Code plugin**: a set of role-specialized agents (Product Manager,
-QA, Developer(s), and several coordinators) plus a small set of conventions that let them
-run a complete software-development lifecycle **without a human in the inner loop**. You
-supply a product, a strategy doc, and the autonomy dials; the loop turns intent into shipped,
-verified increments and writes back what it learned.
+dev-loop is a **Claude Code plugin** made of role-specialized agents: Product Manager, QA,
+Developer(s), and a few coordinators. Together with a small set of conventions, they can run a
+complete software-development lifecycle **without a human in the inner loop**. You provide the
+product, the strategy doc, and the autonomy settings; the loop turns that into shipped,
+verified increments and records what it learned.
 
-It is deliberately **substrate-agnostic**: coordination runs through **Linear** (default), a
-**machine-local file board**, or a **local hub** (an MCP system-of-record over `node:sqlite`
-with real per-agent identity + a localhost web UI). Same agents, same protocols.
+It is deliberately **substrate-agnostic**. Coordination can run through **Linear** by default,
+a **machine-local file board**, or a **local hub**: an MCP system of record over `node:sqlite`
+with per-agent identity and a localhost web UI. The agents and protocols stay the same.
 
-Three things stay true everywhere:
-- **The board is the channel** — no agent calls another; they hand off through ticket state.
-- **Each fire is fresh** — agents are stateless per run; they re-read ground truth (board +
-  git + disk) every time, so a crash, a reboot, or context-compaction mid-task is a non-event.
-- **Autonomy is gates, not prompts** — under `autonomy:"full"` the agents decide and act; a
-  red build never ships, a failed deploy auto-reverts, and a genuinely human-only decision is
-  *parked on the ticket as a fact*, never an interactive prompt.
+Three rules stay true everywhere:
+- **The board is the channel** — agents hand work off through ticket state, not direct calls.
+- **Each run starts fresh** — agents are stateless; they re-read the board, git, and disk every
+  time, so a crash, reboot, or context compaction does not corrupt the loop.
+- **Autonomy means gates, not prompts** — under `autonomy:"full"` the agents decide and act, but
+  a red build never ships, a failed deploy rolls back, and a genuinely human-only decision is
+  parked on the ticket as a fact instead of becoming an interactive prompt.
 
 ## How it works
 
-- **Owner labels route the work.** `pm` owns Features, `qa` owns Bugs; the **owner files
-  and verifies**, Dev implements everyone's tickets. That's how a finished build finds its
-  way back to whoever signs it off.
+- **Owner labels route the work.** `pm` owns Features and `qa` owns Bugs. The **owner files
+  and verifies**; Dev implements tickets for both. That is how a finished build gets back to
+  the person responsible for signing it off.
 - **One label is the firewall.** Agents touch **only** tickets carrying the `dev-loop` label,
   scoped to the configured project — never your human backlog.
-- **The loop improves itself.** `reflect-agent` studies the loop's own behavior and curates a
-  per-operator `lessons.md` every agent obeys next run. Its hard limit: it may edit
-  `lessons.md` autonomously but **never** rewrites the agents' own instructions — structural
-  changes are *proposed* for a human, never auto-applied.
-- **You steer by reviewing, not editing code.** Every agent writes daily / weekly / monthly
-  reports; drop a **点评** (critique) next to one and the agent distills it into a `lessons.md`
-  rule it obeys thereafter.
+- **The loop improves itself carefully.** `reflect-agent` studies the loop's behavior and
+  curates a per-operator `lessons.md` that every agent reads on the next run. It may edit that
+  file autonomously, but it **never** rewrites the agents' own instructions; structural changes
+  are proposed for a human to apply.
+- **You steer by reviewing.** Agents write daily, weekly, and monthly reports. Add a **点评**
+  (critique) next to one, and the agent distills it into a `lessons.md` rule it follows from
+  then on.
 
 ---
 
@@ -123,8 +124,8 @@ launcher; the legacy single `dev` stays the default, so non-split projects are u
 
 ## The workflows
 
-The agents are simple; the **workflows** are where the value is. Each is just agents reacting
-to ticket state — no orchestrator.
+The agents are intentionally simple. The value comes from the **workflows**: agents reacting
+to ticket state without a central orchestrator.
 
 ### 1. The core build loop
 PM (from the strategy doc) and QA (from testing) file `Todo` tickets → Dev claims in priority
@@ -188,8 +189,8 @@ touching it. The agents stay daemon-free (they coordinate through MCP, not the w
 
 ## Use cases
 
-**Reach for dev-loop when** work is repeatable, its "done" is machine-verifiable, and the
-output is worth the tokens — the three filters of loop engineering. Concretely:
+**Use dev-loop when** the work repeats, "done" can be checked by a machine, and the output is
+worth the tokens. In practice, that means:
 
 - **A continuously-maintained product.** Point PM at a strategy doc and let the loop ship
   features, fix the bugs QA finds, and keep prod healthy — you review, you don't hand-code.
@@ -205,31 +206,32 @@ output is worth the tokens — the three filters of loop engineering. Concretely
 - **Multi-repo products.** One product, many repos: tickets target a repo via a label, with
   per-repo build/branch/deploy.
 
-**Don't** reach for it when "done" is subjective (pure design/taste calls), the task is a
-one-off (a good single prompt is cheaper than a loop), or the output can't be auto-rejected —
-a loop with no real verification just produces more of what you shouldn't ship, faster.
+**Do not use it** when "done" is mostly subjective, the task is a one-off, or the output cannot
+be rejected automatically. Without real verification, a loop just produces more questionable
+work at a higher rate.
 
-> **Cost is real.** Tokens are the running cost and *frequency* is what dominates it — a tight
-> cadence × many agents × the strongest model adds up. Tune per-agent **models** down for the
-> mechanical roles, pick a sane cadence, and watch the **acceptance rate** (verified ÷ filed):
-> below ~50% the loop is doing your review work, not saving it.
+> **Cost is real.** Tokens are the running cost, and *frequency* usually dominates it. A tight
+> cadence across many agents on the strongest model adds up quickly. Use cheaper **models** for
+> mechanical roles, choose a sane cadence, and watch the **acceptance rate** (verified ÷ filed):
+> below roughly 50%, the loop is creating review work instead of saving it.
 
 ---
 
 ## Quick start
 
 ```bash
-# 1. install the plugin (see Install for the persistent route)
+# 1. Install the plugin. See Install below for the persistent route.
 claude --plugin-dir /path/to/dev-loop
 
-# 2. onboard a product (operator-present, idempotent)
+# 2. Onboard a product. This is operator-present and idempotent.
 /dev-loop:init
 
-# 3. dry-run first — see what it WOULD do, no writes
-#    (set mode:"dry-run" in projects.json), then launch one pass:
+# 3. Dry-run first: see what it would do, with no writes.
+#    Set mode:"dry-run" in projects.json, then launch one pass:
 /dev-loop:pm-agent      /dev-loop:qa-agent      /dev-loop:dev-agent
 
-# 4. flip mode:"live" and run them on a loop (Agent View or the tmux launcher)
+# 4. Switch to mode:"live" and run the agents on a loop.
+#    Use Agent View or a tmux launcher.
 ```
 
 ## Requirements
@@ -263,8 +265,8 @@ then `/plugin install dev-loop@local`. The skills appear as `/dev-loop:pm-agent`
 `/dev-loop:director-agent`, the opt-in `/dev-loop:senior-dev-agent` +
 `/dev-loop:junior-dev-agent`, and `/dev-loop:init`.
 
-Standalone hub (Claude-independent, for non-Claude CLIs): `npm i -g @dyzsasd/dev-loop` gives the
-`dev-loop` CLI (`serve`, `shim`, `daemon up|down|status`, `doctor`, …).
+For non-Claude CLIs, install the standalone hub with `npm i -g @dyzsasd/dev-loop`. It provides
+the `dev-loop` CLI (`serve`, `shim`, `daemon up|down|status`, `doctor`, ...).
 
 ## Configure
 
@@ -274,7 +276,7 @@ Per-project settings live in `${CLAUDE_PLUGIN_DATA}/projects.json`
 ```bash
 mkdir -p ~/.claude/plugins/data/dev-loop
 cp config/projects.example.json ~/.claude/plugins/data/dev-loop/projects.json
-# then map each project → repo, strategy doc, test env, git/deploy flags
+# Then map each project to its repo, strategy doc, test env, and git/deploy flags.
 ```
 
 The dials (all per-project):
@@ -299,7 +301,7 @@ backstop, the loop agents also re-apply the label/project checks on the first `l
 
 ## Run the loop
 
-The plugin **ships no harness** — pick how to fire the agents:
+The plugin **does not ship a runner**. Pick the launch style that fits your setup:
 
 - **Agent View** (native) — `claude agents`, then dispatch each as a self-looping session:
   `/loop 5m /dev-loop:pm-agent`, `/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent`,
@@ -307,16 +309,16 @@ The plugin **ships no harness** — pick how to fire the agents:
   outward agents (`ops`, `architect`, `director`).
 - **A local tmux launcher** — one pane per agent, per-agent models in one command. Set
   `DEV_SPLIT=1` to run the two-tier Dev (senior-dev + junior-dev panes) instead of one `dev`.
-- **Manually**, one turn at a time, for a single pass.
+- **Manually** — one turn at a time, for a single pass.
 
 **Cadence** (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
 ~30 min, Reflect daily; Ops ~10 min, Architect/Director daily/on-demand.
 
-**Resume is a non-event** — agents are stateless per fire. After a stop, crash, or reboot,
-just launch them again; each re-reads ground truth and continues.
+**Resume is ordinary** because agents are stateless per run. After a stop, crash, or reboot,
+launch them again; each agent re-reads ground truth and continues.
 
 > ⚠️ **`mode:"live"` + `autonomy:"full"` + `autoPush`/`autoDeploy` = unattended commits,
-> pushes, and prod deploys with no human gate.** That's the intended power — but try
+> pushes, and prod deploys with no human gate.** That is the intended power, but try
 > `mode:"dry-run"` (or a single `MODE=once` pass) first to see what it would do.
 
 📖 Full guide — onboarding, launch methods, models, resume, stop: [`docs/RUNNING.md`](docs/RUNNING.md).
@@ -331,16 +333,17 @@ Coordination is pluggable; the agents and protocols are identical across all thr
 | **`local`** | A machine-local markdown file board in the data dir | Zero-cloud, minimal, no Linear required |
 | **`service`** | A local **hub** — an MCP system-of-record over `node:sqlite` | **Real per-agent identity**, a localhost **web UI**, versioned operator-published docs, the discussion board + Director, the two-way channel, the one-way Linear mirror, CLI-portability |
 
-The **work plane** (states, transitions, who-does-what, the agent loop) is identical across
-backends; the **surface plane** (per-agent identity, web UI, board/Director) is a deliberate
-per-backend superset. See [conventions §18](references/conventions.md) +
+The **work plane** (states, transitions, responsibilities, and the agent loop) is identical
+across backends. The **surface plane** (per-agent identity, web UI, board/Director) expands by
+backend. See [conventions §18](references/conventions.md) +
 [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md).
 
 ## Safety boundary
 
 The agents operate **only** on tickets carrying the **`dev-loop`** label, scoped to the
 configured project. They never read, transition, or comment on any other ticket. This single
-label is the firewall between the loop and your human backlog — treat it as load-bearing.
+label is the firewall between the loop and your human backlog; treat it as part of the safety
+model.
 
 ## Self-evolution
 
@@ -356,7 +359,7 @@ label is the firewall between the loop and your human backlog — treat it as lo
 
 ## Reports & operator review (点评)
 
-You steer the loop by reviewing its trail — no code edits.
+You steer the loop by reviewing its trail, not by editing code inside the loop.
 - **Reports.** Each agent writes a daily log rolled up weekly/monthly under
   `${CLAUDE_PLUGIN_DATA}/<project-key>/reports/<agent>/` — machine-local, never committed,
   secret/PII-safe. A no-op fire writes nothing.
@@ -371,7 +374,7 @@ You steer the loop by reviewing its trail — no code edits.
 
 The loop can use **OpenAI Codex** as a power tool via the
 [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) companion + the `codex` CLI.
-**Opt-in; absent ⇒ 100% unchanged.** It adds (each independently gated): an **independent
+**Opt-in; absent means unchanged.** It adds, each independently gated, an **independent
 second-model review** (Dev Step 5.5 + Architect; advisory, never touches the board),
 **image generation** (PM mockups + Dev production assets — the one thing the loop can't do
 itself), and a one-shot **rescue** before a `fix-exhausted` block. See
