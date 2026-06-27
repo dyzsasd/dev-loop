@@ -11,7 +11,12 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { nowIso, logEvent } from "./db.ts";
 
-export const DOC_KINDS = ["strategy", "roadmap", "decisions", "notes"] as const;
+// DL split: `design` is the senior-dev's living per-module design tier (one doc per module slug).
+// Two departures from the singleton kinds (handled in db.ts v3 + the read path): (1) MULTI-INSTANCE —
+// the UNIQUE(project_id, kind) constraint is relaxed for `design` so many design rows coexist by slug;
+// (2) NOT operator-publish-gated — a design draft IS the live design, so design-reads return the LATEST
+// version (no `current` publish). docPublish's operator gate for strategy/roadmap is unchanged.
+export const DOC_KINDS = ["strategy", "roadmap", "decisions", "notes", "design"] as const;
 export type DocKind = (typeof DOC_KINDS)[number];
 export interface DocRow {
   id: string; project_id: string; kind: string; slug: string; title: string;

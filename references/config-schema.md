@@ -45,7 +45,9 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "transport":   "stdio"        // DL-43/P2: "stdio" (default) ⇒ each pane's MCP server opens hub.db DIRECTLY (today's behavior, zero new surface). "daemon" ⇒ OPT-IN: the agent op-API on the loopback daemon (`POST /api/op/<op>`, read fresh per request) is live, and the thin stdio shim (hub/src/shim.ts) proxies tool calls to it instead of opening the DB — identity rides env→the `X-Devloop-Actor` header (dodges the `claude -p` Authorization-drop). Every mutating endpoint passes the writeOriginOk CSRF/DNS-rebind guard first (§16, 127.0.0.1-only). See docs/HUB-ARCHITECTURE.md + docs/design/daemon-multicli-repositioning.md.
       },
       "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). DEFAULT is opus for EVERY agent; tune an agent DOWN to economize.
-        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus"
+        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus",
+        "senior-dev": "claude-opus-4-8",   // two-tier Dev (launcher DEV_SPLIT=1): the design-and-delegate + escalation direct-code agent. Launcher effort = max. Absent ⇒ opus.
+        "junior-dev": "claude-sonnet-4-6"  // two-tier Dev (DEV_SPLIT=1): implements pre-designed tickets against the linked design. Launcher effort = high. Absent ⇒ sonnet. `dev` stays the LEGACY single-dev default (kept active).
       },
 
       "testEnv": {                    // where QA + verification run
@@ -180,6 +182,31 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   ones (`sweep`, `qa`, `ops`) tolerate `sonnet` well; the reasoning-heavy ones
   (`dev`, `pm`, `architect`, `reflect`, `director`) are where `opus` earns its keep. Omitting an
   agent ⇒ it falls back to the launcher's opus default.
+  **Per-agent EFFORT tiers** (the launcher's `--effort` per pane, distinct from the model):
+  `pm=max` and `dev=max` (legacy single dev) reason deepest; `reflect`/`architect`=`xhigh`;
+  `qa`/`sweep`=`high`.
+- **Two-tier Dev** (`senior-dev` / `junior-dev`; conventions §21a): an opt-in split of the single
+  Dev role, enabled at LAUNCH by the launcher knob (`DEV_SPLIT=1` in `run-loop.sh`) — it replaces
+  the single `dev` pane with two panes: a **`senior-dev`** pane (`claude-opus-4-8`, effort **max**)
+  that designs-and-delegates new modules/features and direct-codes escalations, and a
+  **`junior-dev`** pane (`claude-sonnet-4-6`, effort **high**) that implements pre-designed tickets
+  against the linked design. Their models come from `models{}` (`senior-dev`/`junior-dev`),
+  defaulting to opus / sonnet respectively. The split is **per-project and opt-in**: with
+  `DEV_SPLIT` off (default) the launcher keeps the **legacy single `dev` pane** and non-split
+  projects are 100% unaffected — `dev` stays an active actor and `dev-agent` stays the canonical
+  single-dev SKILL. PM routes each ticket to its tier at filing (new module / new feature ⇒
+  `senior-dev`; improvement / bug-fix, or borderline ⇒ `junior-dev`), encoded per backend
+  (the ticket `assignee` on `service`; a `senior-dev`/`junior-dev` LABEL on `linear`/`local`).
+- **Design docs** (the two-tier Dev's `design` doc tier, conventions §21a): senior-dev authors a
+  LIVING per-MODULE technical-design doc — autonomously, like PM commits the `strategyDoc` (it is
+  NOT a §17 governing file and is NOT operator-publish-gated; the gate is the design parent ticket
+  reaching `In Review`). Its **home depends on the backend**: on `backend:"service"` it is the hub
+  **`design`** doc-kind (versioned, multi-instance by module slug, read at its latest version —
+  `doc.save`/`doc.get`, not publish-gated); on `backend:"linear"`/`"local"` it is a committed repo
+  file **`docs/design/<slug>.md`** under the doc-home repo. Small features get NO separate doc — the
+  design lives in the parent + child ticket specs. Every child dev-ticket carries a `Design:`
+  pointer line (`hubDoc:design/<slug>` | `docs/design/<slug>.md` | `parent <id>`) that junior-dev
+  reads before coding.
 - **`backend`** (optional; default `"linear"`): the coordination substrate
   (conventions §18). `"linear"` is the Linear MCP, exactly as today — absent ⇒
   `"linear"`, so existing projects are unchanged. `"local"` uses a machine-local file
@@ -313,10 +340,13 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   ticket/comment/report/log. **Absent ⇒ NO-OP** (no ping, no extra work — full back-compat).
   Out-of-band by design: a Linear @mention would be a self-mention (shared identity) and
   suppressed.
-- **`models`** now covers eight agents and **defaults to `opus` for all of them** (the
-  launcher applies `--model opus` per pane unless overridden); tune an agent down to
-  economize. The three outward agents are **opt-in to launch** (off by default in the
-  launcher) and don't change any inward agent's behavior.
+- **`models`** covers the eight base agents plus the two opt-in two-tier-Dev agents
+  (`senior-dev`/`junior-dev`) and **defaults to `opus` for all of them** (the launcher applies
+  `--model opus` per pane unless overridden; `senior-dev`→opus, `junior-dev`→sonnet defaults under
+  `DEV_SPLIT=1`); tune an agent down to economize. The three outward agents are **opt-in to launch**
+  (off by default in the launcher), and the two-tier Dev split is also opt-in (`DEV_SPLIT=1`); none
+  of these change any other agent's behavior, and a legacy single-dev project is byte-for-byte
+  unchanged.
 - **Agent state files** (`pm-state.json`, `qa-state.json`, and the outward observe-and-file
   agents' `ops-state.json` / `architect-state.json`, §21) live next to `projects.json` and
   hold per-project loop state: last-reviewed/swept SHA, swept

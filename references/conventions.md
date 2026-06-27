@@ -31,6 +31,7 @@ five inward agents form the build loop; the three outward agents — Ops/Archite
 19. [Multiple repos](#19-multiple-repos)
 20. [PM knowledge base](#20-pm-knowledge-base-the-doc-base)
 21. [Outward-facing agents — Ops / Architect / Director](#21-outward-facing-agents--ops--architect--director)
+21a. [The two-tier Dev — senior-dev / junior-dev](#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project)
 22. [Reports & operator review — daily / weekly / monthly](#22-reports--operator-review--daily--weekly--monthly)
 23. [Reports in Linear — the `reports.sink` option](#23-reports-in-linear--the-reportssink-option)
 24. [Codex — optional power tools](#24-codex--optional-power-tools)
@@ -73,6 +74,7 @@ numbered sections below.
 | **PM** | `Feature`, `Improvement`(`pm`) | In Review `pm` items; `blocked`+`needs-pm`; review lenses (Job C preflight) | Linear state + labels |
 | **QA** | `Bug`, `Improvement`(`qa`), `coverage` | In Review `qa` items; info-blocks; new-bug sweep | Linear state + labels |
 | **Dev** | (ships everyone's tickets) | `Todo` in pick order (§5), excluding `blocked` | In Review, for the owner |
+| **senior-dev / junior-dev** *(optional split of Dev, §21a)* | senior: authors module **design** docs + verifies-gates-then-delegates to junior; junior: ships pre-designed tickets | senior: its design + escalation tickets; junior: its `Todo` slice (design children + improvements/bugs) | In Review, for the owner (escalation routes a junior fail UP to senior) |
 | **Sweep** | (nothing — hygiene only) | Tickets that fall through the cracks: missing/wrong owner label, orphaned `In Progress`, stale signals (cross-owner) | re-label/re-route → the right owner |
 | **Reflect** | (nothing — observes the loop) | The loop's own behavior over a window: tickets/git/logs/throughput/QA outcomes (read-only) | `lessons.md` (autonomous) + a drafted proposal in the report (never auto-applies SKILL/conventions) |
 | **Ops** *(outward · observe-and-file §21)* | (nothing — watches running prod) | RUNNING prod over time: health checks / baseUrl / critical routes / logs (read-only); CONFIRMED+REPEATED degradation only (anti-flap) | files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod down) — never rolls back (Dev's Step 6.5) |
@@ -214,7 +216,7 @@ rewrite, not a folder move), using these exact names.
 
 | State | Meaning | Who moves it here |
 |---|---|---|
-| `Backlog` | Idea captured but not yet ready for dev (optional parking) | PM/QA |
+| `Backlog` | Idea captured but not yet ready for dev (optional parking) — **also the staging state for a design's child tickets** until the design gate promotes them to `Todo` (§21a) | PM/QA (incl. design-child staging by senior-dev, §21a) |
 | `Todo` | Groomed, ready to be picked up | PM/QA (on create, incl. a verify-fail follow-up), Dev (on un-block) |
 | `In Progress` | A Dev has claimed it and is actively working | Dev (claim) |
 | `In Review` | Dev finished; awaiting verification by the owner | Dev (done coding) |
@@ -232,6 +234,15 @@ original). Each ticket is thus exactly **one verified increment**, and a failed 
 **superseded, never silently reopened** — so the history shows what shipped-but-failed vs
 what's now queued. If the follow-up needs a human decision, park it (`Human-Blocked` on
 `service`, §9). Never leave the original in `In Review`.
+
+**Split-dev escalation rides this same rule, routed to senior-dev (§21a).** In a two-tier
+project (§21a), when a **junior-dev**-built ticket fails verification on a **real** acceptance-
+criteria failure (NOT a transient/flaky/infra error — junior simply retries those), the follow-up
+is routed **up** to senior-dev: PM/QA `Canceled`s the junior ticket as above and PM creates the
+follow-up as a **senior-dev direct-code** ticket (assigned to `senior-dev`, `relatedTo` the failed
+one). If the senior **direct-code** follow-up *also* fails verify, the loop has exhausted its
+automated tiers ⇒ `Bail-shape: fix-exhausted` ⇒ **`Human-Blocked`** (operator). The design-gate
+form of this rule (verifying a design *parent*, promoting its staged children) is in §21a.
 
 **`Human-Blocked` (service backend)** is the real-state form of the §9 human-park.
 When PM cannot resolve a block (it needs a genuine human decision / credential / legal
@@ -286,6 +297,23 @@ Every ticket **must** have an owner label, or it strands at `In Review` with
 nobody to verify it. PM verifies In Review tickets tagged `pm` (Features +
 Improvements); QA verifies those tagged `qa` (Bugs + Improvements).
 
+**Dev-tier routing (optional; a *split-dev* project only — §21a):**
+- `senior-dev` — the **senior-dev** agent (opus/max) implements it: a design / new-module /
+  new-feature ticket (design-and-delegate mode), or an escalation follow-up (direct-code mode).
+- `junior-dev` — the **junior-dev** agent (sonnet/high) implements it: an improvement / bug-fix,
+  or a child ticket promoted from a verified design.
+
+These are **dev-routing** labels, **NOT** verification-owner labels: the verifier is still PM
+(`pm`) or QA (`qa`); the dev-tier label only names *which dev writes the code* (§21a). They are
+**orthogonal** to the `pm`/`qa` owner label — a split-dev ticket carries **both** (the verifier
+label AND the dev-tier label). They exist **only** in a project that runs the two-tier dev model
+(§21a / launcher panes); a **legacy single-dev project carries neither** — the sole `dev` agent
+picks the whole §5 queue, exactly as today. On the `service` backend the dev tier may instead ride
+the ticket's `assignee` field (the actor `senior-dev`/`junior-dev`); the label is the carrier on
+`linear`/`local`, where the shared identity / a per-fire claim token can't distinguish the tier
+(§18, per-backend encoding). The labels are provisioned on **all** backends so one code path serves
+both (harmless extra labels on `service`).
+
 **Workflow signalling:**
 - `blocked` — Dev couldn't proceed; needs owner attention (§9).
 - `needs-pm` / `needs-qa` — routes a blocked ticket to the right owner.
@@ -294,7 +322,8 @@ Improvements); QA verifies those tagged `qa` (Bugs + Improvements).
   is unparked. Only meaningful when a `notify` block is configured (§11); harmless otherwise.
 
 `Bug`, `Feature`, `Improvement` already exist in the workspace. The rest are
-created once at setup (§13; including `incident`/`tech-debt`/`signal`, §21).
+created once at setup (§13; including `incident`/`tech-debt`/`signal`, §21, and
+`senior-dev`/`junior-dev` for a split-dev project, §21a).
 Priority/urgency is **not** a label — it is Linear's native `priority` field (§5).
 
 ---
@@ -318,6 +347,16 @@ Within a rank, oldest `createdAt` first (FIFO — don't let tickets starve).
 A `Bug` without `edge-case` and without `priority=1` sorts just above general
 features (it's still a defect); place it at rank 3.5 in practice: ahead of
 features, behind explicit edge-case bugs. When in doubt, defects beat features.
+
+**Split-dev projects (§21a) apply this same order, but each dev picks only its OWN slice.**
+The single `dev` agent picks the whole `Todo` queue above. In a two-tier project the queue is
+partitioned by dev tier: **junior-dev** picks only its own tickets (`junior-dev` assignee/label),
+**senior-dev** picks only its own (`senior-dev` assignee/label) — each ranks *its slice* by this
+exact order (junior: urgent bug → … → improvement, among junior-assigned tickets; senior: its
+design + escalation tickets). The per-backend filter (assignee on `service`, label on
+`linear`/`local`) is defined in §18. The §9 `blocked`-exclusion still applies to both. A staged
+design **child** sits in `Backlog` (not `Todo`) until the design gate promotes it, so it is outside
+every pick set until then (§21a).
 
 ---
 
@@ -758,7 +797,9 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
 1. Ensure the workflow labels exist (create only the missing ones via
    `create_issue_label` on the configured team): `dev-loop`, `pm`, `qa`,
    `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`, `incident`, `tech-debt`,
-   `signal`. (`Bug`/`Feature`/`Improvement` already exist — reuse, don't duplicate.)
+   `signal`, `senior-dev`, `junior-dev`. (`senior-dev`/`junior-dev` are the §21a dev-tier
+   routing labels — required for the two-tier Dev on `linear`/`local`; harmless extras on
+   `service`. `Bug`/`Feature`/`Improvement` already exist — reuse, don't duplicate.)
 2. Ensure the `linearProject` exists; if not, ask the user before creating it.
 3. Confirm `strategyDoc` is readable and `testEnv`/`build`/`deploy` commands are
    correct with the user (these gate real deploys).
@@ -1153,7 +1194,39 @@ per-agent attribution**, structural per-project scoping, and a native event feed
   `DEVLOOP_ACTOR` env var (set per-pane by the launcher, resolved by the hub on every call).
   `assignee:"me"` (the §7 claim) resolves to that actor, and every move / comment / event is
   stamped with it — the board is **attributable**, not Linear's single shared identity. The
-  operator is its own actor.
+  operator is its own actor. **A split-dev project (§21a) adds two more actors —** `senior-dev`
+  and `junior-dev` — alongside the existing `dev` (which stays active for legacy single-dev
+  projects); each is a distinct `DEVLOOP_ACTOR` the hub stamps and the G1 phantom-actor guard
+  accepts.
+
+**Per-backend dev-tier encoding (split-dev projects only, §21a).** A two-tier project must encode
+*which dev* owns a ticket's implementation so each dev's pick-query selects only its own slice (§5).
+The carrier differs by backend because Linear is one shared identity:
+- **`service`** — the ticket's **`assignee`** field is the actor `senior-dev` / `junior-dev` (real
+  per-agent identity). PM files the ticket with `assignee` pre-set to the tier; when that dev claims
+  it (`assignee:"me"`, §7) it claims its own pre-assignment — no conflict. The §4 `pm`/`qa` owner
+  label still names the **verifier** (orthogonal). Each dev's pick filter is `assignee = <its actor>`.
+- **`linear`** — a **`senior-dev` / `junior-dev` label** in the ticket's label set (the shared Linear
+  identity means `assignee` can't distinguish the tier; the label does). Each dev scopes its pick
+  query by its own label + `project` (REPLACE-style full-set discipline on every write, §10 #1).
+- **`local`** — the same `senior-dev` / `junior-dev` string in the ticket file's `labels:[]`
+  frontmatter (label-as-routing parity with `repo:<name>`, §19); the local glob filters `labels[]`.
+
+The §4 `senior-dev`/`junior-dev` labels are provisioned on **all** backends for one code path
+(harmless extras on `service`, the routing carrier on `linear`/`local`). A **legacy single-dev
+project carries no dev-tier encoding** — the sole `dev` agent picks the whole queue, unchanged.
+
+**The hub `design` doc-kind (split-dev, §21a).** Under `backend:"service"` a senior-dev module
+**design doc** is a first-class hub document of kind **`design`** (versioned, attributable, CAS —
+`doc.save({kind:"design", slug:"<module>"})` / `doc.get({kind:"design", slug})`). Two departures
+from the `strategy`/`roadmap` kinds: it is **multi-instance** (one doc per module **slug**, so the
+per-kind uniqueness is relaxed for `design`), and it is **NOT operator-publish-gated** — senior-dev's
+`doc.save` draft IS the live design (autonomous product-doc authorship, §21a/§20), so design
+consumers read the **latest** version rather than a published `current`. The §17 firewall still
+holds structurally: `design` is a DB-only product-doc `kind` (no filesystem path, never a
+SKILL/conventions/code file). On `linear`/`local` the design doc is instead a committed repo file
+`docs/design/<slug>.md` (§21a). (Schema: `design` is added to `documents.kind` via an additive
+`user_version` migration — DL-25/DL-52 precedent — see `docs/design/senior-junior-dev-split.md`.)
 - **Project.** One hub process serves one project, pinned by `DEVLOOP_PROJECT` **when set
   (non-empty)**; otherwise the hub derives its project from `process.cwd()`→`repoPath` (the §11
   ladder), so `DEVLOOP_PROJECT` is **optional** (a launcher spawning the server with cwd inside a
@@ -1458,6 +1531,148 @@ verifies and so the board is filterable:
   `Feature` → `pm`).
 
 They are provisioned once at setup alongside the other workflow labels (§13).
+
+---
+
+## 21a. The two-tier Dev — senior-dev / junior-dev (optional, per-project)
+
+The single **Dev** agent (`dev`, §1) can be split into two specialised agents for a project that
+wants the expensive reasoning model to concentrate on *design + escalation* while a cheaper model
+does the bulk implementation against a written spec:
+
+| Agent | Model / effort | Charter |
+|---|---|---|
+| **senior-dev** | `claude-opus-4-8` / `max` | TWO modes. **design-and-delegate** (the normal complex path): author a living per-module **design doc**, decompose it into staged child dev-tickets assigned to junior-dev, and move the design parent to `In Review` for PM to verify (the **design gate**). **direct-code** (escalation): when a junior-built ticket fails verification on a real defect, code the remaining work *directly* (no delegation). |
+| **junior-dev** | `claude-sonnet-4-6` / `high` | Pick its own `Todo` tickets (improvements / bug-fixes + promoted design children), **read the linked design before coding**, implement (sonnet), run the same ship gates as `dev`, hand off at `In Review` for PM/QA. |
+
+**Back-compat is the headline constraint.** This split is the NEW *recommended* model **adopted
+per-project** (launcher panes + PM routing) — **not** a global replacement. The legacy **`dev`** actor
+stays **active** and `skills/dev-agent/SKILL.md` stays the canonical **single-dev fallback** —
+projects that run a single dev pane (e.g. a project on the `linear` backend) are **100% unaffected**.
+A project runs **either** the two-tier model (senior + junior panes, PM routes to them) **or** the
+legacy single-dev model (one `dev` pane, the whole §5 queue); the two never need to coexist on one
+project. Agents detect a project's dev model from config (the launcher panes / the `models{}` keys);
+**absent the split ⇒ legacy, today's behavior.** Both new agents **inherit `dev`'s ship sequence by
+reference** — the §5/§5.5/§6/§6.5 build/test gate, the Critical/High self-review block, ship-per-
+config, and post-deploy rollback all apply unchanged; the two SKILLs do not re-derive them.
+
+### PM routing — assign the dev tier at ticket creation
+PM picks the tier **when it files the ticket** (the §6 filing step), by one rule:
+- **new module / new feature** (needs a design) ⇒ assign **senior-dev** (design-and-delegate).
+- **improvement / bug-fix** (a scoped change) ⇒ assign **junior-dev**.
+- **BORDERLINE** ⇒ default to **junior-dev** — escalation (below) is the cheap safety net, so
+  over-routing to the expensive tier is the costlier mistake. "When borderline, junior."
+
+The TODO must **explicitly name the dev tier** (the per-backend encoding, §18: the `assignee` actor on
+`service`, the `senior-dev`/`junior-dev` label on `linear`/`local`). A split-dev ticket with **no**
+dev-tier assignment is invisible to both dev pick-queries — a Sweep-flagged gap, like a missing
+`pm`/`qa` owner label. (In a **legacy** project PM adds no dev-tier marker — today's filing.)
+
+### The design doc tier (a PRODUCT doc, authored autonomously)
+A **design doc** is a per-MODULE technical-design document senior-dev writes and keeps current. It
+sits below the strategy/roadmap (PM/Director-owned direction, §20/§25) and above the ticket specs,
+and **cites the strategy/roadmap item it serves** (traceability: strategy → roadmap → design → ticket
+→ code).
+- **Granularity = LIVING per-module doc** — one per module, **updated as the module evolves** (not
+  one-per-feature, not write-once). History lives in the hub doc versioning (`service`) or git
+  (`linear`/`local`), so the doc stays current rather than accreting changelog noise.
+- **Small features get NO separate doc** — the design lives in the parent + child ticket specs.
+- **senior-dev writes/commits it AUTONOMOUSLY** — like PM commits the `strategyDoc` (§20). It is
+  **NOT** a §17 governing file (SKILL/conventions/code) and is **NOT** operator-publish-gated; the
+  gate is the design **parent ticket** reaching `In Review` (PM verifies). Home per backend (§18):
+  `service` = the hub **`design`** doc-kind (`doc.save`/`doc.get`, read latest version — not publish-
+  gated); `linear`/`local` = a committed repo file `docs/design/<slug>.md` in the doc-home repo (§19).
+
+### senior-dev design-and-delegate flow (the normal complex path)
+1. **Pick** a senior-assigned **design** ticket (its mode is design — §"two modes" below).
+2. **Claim** it (§7).
+3. **Author the design**: write/update the living per-module design doc (hub `design` kind on
+   `service`; `docs/design/<slug>.md` on repo backends) for substantial work — **OR** write the design
+   directly into the ticket spec for a small feature (no separate doc).
+4. **Spawn the concrete child dev-tickets**, each: **assigned to junior-dev** (§18 encoding); created
+   in state **`Backlog`** (staged — UNPICKABLE until the gate, §3/§5); carrying a **`Design:` pointer
+   line** in its description; `relatedTo:[<design-parent-id>]` (child→parent link **mandatory** — it
+   survives the parent closing, exactly as §9a W3 intake); with crisp, testable ACs (each child = one
+   verified increment). The `Design:` pointer is one of:
+   - `Design: hubDoc:design/<slug>` — `service` (the hub `design` doc for module `<slug>`)
+   - `Design: docs/design/<slug>.md` — `linear` / `local` (the committed repo design file)
+   - `Design: parent <parent-id>` — a small / ticket-spec design (the parent ticket *is* the design)
+5. **Back-link the parent** in one write — `relatedTo:[<child1>,<child2>,…]` + a comment listing the
+   child IDs (`Designed into: <id>, <id>` — mirroring §9a's `Groomed into:`).
+6. **Move the design PARENT to `In Review`** (verify-after-write, §10). senior-dev does **not** mark it
+   Done — PM verifies (the gate).
+
+### The design gate (PM verifies the parent → children promote)
+- **PM verifies** the design parent at `In Review`: the design is coherent, cites its strategy/roadmap
+  parent, and the children faithfully decompose it. For a **big-module / docs-design-level** design the
+  **operator** signs off (PM surfaces it, same posture as a significant product decision); ordinary
+  designs PM verifies directly.
+- **Pass → PM moves the parent `Done` and PROMOTES every staged child `Backlog → Todo`** (re-passing
+  the full label set, §10) — now junior-dev can pick them. This reuses the existing Backlog-staging +
+  promotion shape (a staged child sits in `Backlog` like any parked idea; the `Backlog → Todo` move is
+  the same kind PM already makes) rather than inventing a new state. (The only structural difference
+  from §9a is that the design *parent* goes to `In Review` first — because **the design is itself the
+  verified increment** that gates the children.)
+- **Fail → close + follow-up** (the universal §3 rule): PM `Canceled`s the design parent
+  (`review failed: <what>; superseded by <new-id>`) and files a fresh design ticket. The staged
+  children of a failed design are `Canceled` with it (they reference a superseded design) — never left
+  stranded in `Backlog`.
+
+### junior-dev flow
+1. **Pick** a junior-assigned `Todo` ticket (its own filter, §18), in the §5 pick order among its own
+   tickets. 2. **Claim** (§7). 3. **READ the linked design FIRST** — follow the `Design:` pointer
+   (fetch the hub `design` doc / open `docs/design/<slug>.md` / read the parent ticket spec) and
+   implement to the design + the ticket's ACs. A missing/broken pointer in a split project is a
+   **block** (`Bail-shape: info-needed`, routed to PM — like a missing repo target, §19). 4. **Gate /
+   self-review / ship / smoke** — the full `dev-agent` Step-5/5.5/6/6.5 sequence (inherited, not
+   re-derived), incl. the coverage rule (§15) and the split rule. 5. **Hand off to `In Review`** for
+   the verification owner (PM for Feature/Improvement, QA for Bug — the `pm`/`qa` label, unchanged).
+
+### Verification + escalation (the FIRST real fail goes UP to senior-dev)
+QA/PM verify junior In-Review code against ACs in the test env (Job A), as today. A **transient /
+flaky / infra** error is **not** a fail (junior retries). On the **FIRST real acceptance-criteria
+failure**, escalate (the §3 close+follow-up, routed to senior):
+1. PM/QA **`Canceled`s the junior ticket** — `review failed: <what failed / observed behaviour>;
+   superseded by <new-id>`.
+2. PM **files a NEW senior-dev DIRECT-CODE ticket** carrying the remaining work (assigned to
+   `senior-dev`, marked direct-code mode, `Todo`, `relatedTo` the failed one).
+3. **senior-dev codes it DIRECTLY** (direct-code mode — pick → claim → implement → gate → ship →
+   In Review, the `dev-agent` build flow; opus + max on the work the cheaper tier couldn't get right).
+4. **If the senior direct-code ALSO fails verify** → `Bail-shape: fix-exhausted` → **`Human-Blocked`**
+   (operator): the loop has exhausted its automated tiers (junior, then senior), so PM parks it
+   (`Human-Blocked` on `service`, the `blocked`+`needs-pm`+`external-prereq` park on `linear`/`local`,
+   §9). A QA-owned Bug escalates identically, but **the verifier files the senior follow-up**: PM
+   files it for a Feature/Improvement it verified (Job A), and **QA files it for a Bug it verified**
+   (when QA Cancels the failed junior Bug it immediately files the `senior-dev` direct-code follow-up
+   itself) — so the escalation always has a mechanical ticket-state carrier, never a report hand-off
+   (§1). QA still owns Bug *verification* (it re-verifies the returning senior fix).
+
+### senior-dev's two modes — how it tells which
+Both kinds of senior-assigned ticket are `senior-dev`-routed; the ticket's **mode marker** selects the
+behavior: a **design / new-module / new-feature** ticket ⇒ **design-and-delegate**; an **escalation
+follow-up** ticket ⇒ **direct-code**. The marker is explicit on the ticket (a `Mode: design` /
+`Mode: direct-code` description line) plus the natural signal that an escalation ticket is `relatedTo`
+a `Canceled` `review failed:` ticket.
+
+### Hub / config / launcher
+- **Hub actors** (`seed.ts` `AGENT_HANDLES`, **active**): add `senior-dev`, `junior-dev` — `dev` stays
+  active (NOT retired into `RETIRED_HANDLES`, unlike the `signal`→`director` precedent). Idempotent
+  `INSERT OR IGNORE`; no migration.
+- **Labels** (§4 / `seed.ts` `LABELS`, `kind:"owner"`, all backends): `senior-dev`, `junior-dev`.
+- **Doc-kind** (`docstore.ts` `DOC_KINDS` + a `db.ts` `user_version` migration): add `design`
+  (`service` design doc home). Additive + lossless (DL-25/DL-52 precedent); details in
+  `docs/design/senior-junior-dev-split.md`.
+- **Models** (`config-schema.md`, launcher-applied): `senior-dev: claude-opus-4-8`,
+  `junior-dev: claude-sonnet-4-6`. `dev` keeps the launcher's opus default.
+- **Launcher** (`run-loop.sh`): an opt-in split knob replaces the single `dev` pane with a `senior-dev`
+  pane (opus, effort `max`) + a `junior-dev` pane (sonnet, effort `high`); the legacy `dev` pane stays
+  available when the knob is off. Other effort tiers unchanged (`pm=max`, `reflect/architect=xhigh`,
+  `qa/sweep=high`).
+- **§17 boundary unchanged.** This whole split is OPERATOR-APPLIED (the build IS the operator applying
+  it); the agents themselves still **never** self-edit a SKILL/conventions/code file. The design doc is
+  a product artifact (autonomously authored), not a §17 governing file.
+
+Full design + the file-by-file change map: `docs/design/senior-junior-dev-split.md`.
 
 ---
 

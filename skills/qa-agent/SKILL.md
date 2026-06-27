@@ -158,6 +158,27 @@ For each (oldest first):
    comment the reason (one line), and re-verify next fire. A verdict without
    evidence (an observed repro result / screenshot) is an opinion, not a pass: never
    mark a bug Done you couldn't actually re-run.
+   **Split-dev escalation (conventions §21a) — distinguish a real fail from a flake.**
+   When the In-Review Bug was built by **junior-dev** (it carries the `junior-dev` dev-tier
+   marker — the `assignee` actor on `service`, the `junior-dev` label on `linear`/`local`),
+   first decide **why** it isn't passing:
+   - A **transient / flaky / infra** error (env down, harness crash, a network blip, a
+     non-deterministic timeout) is **NOT** an acceptance-criteria failure — it's the
+     *inconclusive* case above. Don't escalate; leave it In Review and re-verify next fire
+     (junior simply retries / the fix re-runs cleanly).
+   - A **REAL acceptance-criteria failure** (the fix genuinely doesn't satisfy the ACs —
+     the repro still reproduces, or a criterion is unmet against the running product) →
+     **escalate it YOURSELF via ticket state** (a report is NOT a coordination channel, §1):
+     `Canceled` the junior ticket as above (`re-test failed: <what failed>; superseded by
+     <new-id>`), **then immediately file the senior-dev DIRECT-CODE follow-up** — a new `Bug`
+     carrying the remaining work, with the **`senior-dev`** dev-tier marker (the `assignee`
+     actor on `service`, the `senior-dev` label on `linear`/`local`), a `Mode: direct-code`
+     line in the description, `state:"Todo"`, and `relatedTo` the Canceled ticket. You still
+     own Bug *verification* (re-verify the senior fix when it returns to In Review) — you file
+     this one follow-up because the qa→senior arm has **no other mechanical carrier** (a
+     QA-Canceled Bug is terminal + not pm-owned, so PM Job A never sees it). If the senior
+     direct-code **also** fails ⇒ `Bail-shape: fix-exhausted` → `Human-Blocked` (service) /
+     the `blocked`+`needs-pm` park (linear/local).
 
 ### Job B — Unblock work Dev is waiting on for information
 First query your own: `project` + `label:"dev-loop"` + `label:"qa"` + `label:"blocked"`. Then

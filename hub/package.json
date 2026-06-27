@@ -1,6 +1,6 @@
 {
   "name": "dev-loop",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "type": "module",
   "description": "Standalone local coordination hub for the dev-loop agents — a zero-build, zero-native-dep MCP system-of-record over node:sqlite with per-agent identity, a localhost web-UI daemon, an opt-in agent op-API + thin stdio shim, and a CLI-portable transport (Claude Code / Codex / opencode). See https://github.com/dyzsasd/dev-loop (docs/HUB-ARCHITECTURE.md, docs/PORTABILITY.md).",
   "keywords": ["dev-loop", "agents", "mcp", "sqlite", "daemon", "sdlc", "automation", "coordination", "tickets", "claude-code", "codex"],

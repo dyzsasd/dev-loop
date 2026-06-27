@@ -64,6 +64,13 @@ const TICKETS_BEFORE = 4, COMMENTS_BEFORE = 2;
   // backfills the existing row to 'bot' (existing channels byte-for-byte unchanged). Pre-DL-52 column shape.
   v0.exec("CREATE TABLE channels (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), provider TEXT NOT NULL CHECK(provider IN ('slack','lark')), config_ref TEXT NOT NULL, secret_ref TEXT, channel_ref TEXT NOT NULL, inbound_cursor TEXT, last_poll_at TEXT, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(project_id, provider, channel_ref));");
   v0.prepare("INSERT INTO channels(id,project_id,provider,config_ref,channel_ref,created_at,updated_at) VALUES('ch','p','slack','TOK','C1','t','t')").run();
+  // DL split: a pre-v3 documents table (kind CHECK WITHOUT 'design', table-level UNIQUE(project_id,kind)) +
+  // a doc + version child — proves the v3 rebuild widens kind to admit 'design', relaxes per-kind uniqueness
+  // to a partial index, and is lossless (the existing doc + its FK version child survive the DROP+RENAME).
+  v0.exec("CREATE TABLE documents (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL CHECK(kind IN ('strategy','roadmap','decisions','notes')), slug TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','current')), current_version INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(project_id, slug), UNIQUE(project_id, kind));");
+  v0.exec("CREATE TABLE document_versions (id TEXT PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES documents(id), version INTEGER NOT NULL, body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','current')), summary TEXT NOT NULL DEFAULT '', base_version INTEGER NOT NULL DEFAULT 0, author TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(doc_id, version));");
+  v0.prepare("INSERT INTO documents(id,project_id,kind,slug,title,created_by,created_at,updated_at) VALUES('d0','p','strategy','strat','Strat','pm','t','t')").run();
+  v0.prepare("INSERT INTO document_versions(id,doc_id,version,body,author,created_at) VALUES('dv0','d0',1,'goal one','pm','t')").run();
   v0.exec("PRAGMA user_version=0");
   // sanity — this really IS a v0 DB: version 0 AND the old CHECK rejects 'Human-Blocked'.
   ok(uv(v0) === 0 && rejects(v0, "X", "Human-Blocked"), "DL-27: fixture is a genuine v0 DB (user_version=0; old CHECK rejects 'Human-Blocked')");
@@ -72,7 +79,7 @@ const TICKETS_BEFORE = 4, COMMENTS_BEFORE = 2;
 
 // ── run the REAL migration via openDb() ──────────────────────────────────────
 const db = openDb(PATH);
-ok(uv(db) === 2, "DL-27/DL-52: openDb migrated the v0 DB → user_version=2 (v1 state-widen + v2 channels.transport)");
+ok(uv(db) === 3, "DL-27/DL-52/DL-split: openDb migrated the v0 DB → user_version=3 (v1 state-widen + v2 channels.transport + v3 documents.kind+='design')");
 ok(count(db, "tickets") === TICKETS_BEFORE && count(db, "comments") === COMMENTS_BEFORE, "DL-27: migration is lossless (ticket + comment row counts preserved)");
 // FK children kept: the DROP+RENAME (with foreign_keys OFF) left no dangling comment→ticket references.
 ok((db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length === 0, "DL-27: FK children kept — foreign_key_check finds no violations after the rebuild");
@@ -87,11 +94,25 @@ ok((db.prepare("SELECT transport FROM channels WHERE id='ch'").get() as { transp
 let badTransport = false;
 try { db.prepare("INSERT INTO channels(id,project_id,provider,config_ref,channel_ref,transport,created_at,updated_at) VALUES('ch2','p','slack','TOK','C2','bogus','t','t')").run(); } catch { badTransport = true; }
 ok(badTransport, "DL-52: the transport CHECK rejects a value outside {bot,webhook}");
+// DL split v3: the documents rebuild is lossless (the pre-v3 strategy doc + its FK version child survive).
+ok(count(db, "documents") === 1 && count(db, "document_versions") === 1, "DL-split: v3 documents rebuild is lossless (doc + version row counts preserved)");
+ok((db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length === 0, "DL-split: FK children kept — foreign_key_check finds no violations after the documents rebuild");
+ok((db.prepare("SELECT d.id FROM document_versions v JOIN documents d ON d.id=v.doc_id WHERE v.id='dv0'").get() as { id: string } | undefined)?.id === "d0", "DL-split: a child version still joins to its parent doc (d0)");
+// the widened kind CHECK now ACCEPTS 'design' (it didn't pre-v3) and 'design' is MULTI-INSTANCE.
+const insDoc = (id: string, kind: string, slug: string): boolean => {
+  try { db.prepare("INSERT INTO documents(id,project_id,kind,slug,title,created_by,created_at,updated_at) VALUES(?,?,?,?,'x','pm','t','t')").run(id, "p", kind, slug); return true; } catch { return false; }
+};
+ok(insDoc("dA", "design", "module-a"), "DL-split: post-migration kind CHECK accepts 'design'");
+ok(insDoc("dB", "design", "module-b"), "DL-split: 'design' is MULTI-INSTANCE — a second design doc (different slug) is allowed (UNIQUE(project_id,kind) relaxed for design)");
+ok(!insDoc("dC", "design", "module-a"), "DL-split: UNIQUE(project_id,slug) still holds — a duplicate slug is rejected even for design");
+ok(insDoc("dD", "notes", "n1"), "DL-split: a first 'notes' doc inserts");
+ok(!insDoc("dE", "notes", "n2"), "DL-split: singleton kinds stay one-per-kind — a 2nd 'notes' doc is rejected by the partial unique index uq_documents_singleton_kind");
+ok(!insDoc("dBad", "bogus", "z"), "DL-split: the widened kind CHECK still rejects an unknown kind ('bogus')");
 db.close();
 
-// ── idempotent re-open: a second openDb on the now-v2 DB is the fast-path no-op (no re-migrate, data intact) ──
+// ── idempotent re-open: a second openDb on the now-v3 DB is the fast-path no-op (no re-migrate, data intact) ──
 const db2 = openDb(PATH);
-ok(uv(db2) === 2 && count(db2, "tickets") === TICKETS_BEFORE + 1, "DL-27/DL-52: re-opening a v2 DB is idempotent (still v2; the prior HB row persists, no double-migrate)");
+ok(uv(db2) === 3 && count(db2, "tickets") === TICKETS_BEFORE + 1, "DL-27/DL-52/DL-split: re-opening a v3 DB is idempotent (still v3; the prior HB row persists, no double-migrate)");
 db2.close();
 
 clean(PATH);

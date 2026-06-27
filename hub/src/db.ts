@@ -35,6 +35,11 @@ const STATE_CHECK = STATES.map((s) => `'${s}'`).join(", ");
 // ALTER is built from this one source, so adding a transport later can't desync the create vs the migrate.
 const TRANSPORTS = ["bot", "webhook"] as const;
 const TRANSPORT_CHECK = TRANSPORTS.map((t) => `'${t}'`).join(", ");
+// DL split (v3): same no-drift discipline for documents.kind — the CHECK in BOTH the fresh SCHEMA and the
+// v3 rebuild is built from this one source, so adding a doc-kind can't desync create vs migrate. Must match
+// DOC_KINDS in docstore.ts (kept in lock-step by hand; docstore.ts is the LEAF that the zod enum imports).
+const DOC_KINDS = ["strategy", "roadmap", "decisions", "notes", "design"] as const;
+const DOC_KIND_CHECK = DOC_KINDS.map((k) => `'${k}'`).join(", ");
 
 // ─── Schema ────────────────────────────────────────────────────────────────
 const SCHEMA = `
@@ -106,7 +111,7 @@ CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, id);
 CREATE TABLE IF NOT EXISTS documents (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
-  kind TEXT NOT NULL CHECK(kind IN ('strategy','roadmap','decisions','notes')), -- PRODUCT docs only; no code-ish kind exists
+  kind TEXT NOT NULL CHECK(kind IN (${DOC_KIND_CHECK})), -- PRODUCT docs only; no code-ish kind exists (v3: + 'design')
   slug TEXT NOT NULL,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','current')),
@@ -114,10 +119,14 @@ CREATE TABLE IF NOT EXISTS documents (
   created_by TEXT NOT NULL,                     -- actor HANDLE (like tickets.created_by), not a FK to actors(id)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE(project_id, slug),
-  UNIQUE(project_id, kind)
+  UNIQUE(project_id, slug)
+  -- per-kind singleton uniqueness is a PARTIAL index (below), NOT a table constraint: 'design' is
+  -- multi-instance (one doc per module slug) so UNIQUE(project_id,kind) must exclude it. The other
+  -- four kinds stay single-instance. UNIQUE(project_id,slug) above keeps every slug globally unique.
 );
 CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id, kind);
+-- v3: enforce one doc per kind for the SINGLETON kinds only (excludes 'design', which is per-slug).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_singleton_kind ON documents(project_id, kind) WHERE kind != 'design';
 CREATE TABLE IF NOT EXISTS document_versions (
   id TEXT PRIMARY KEY,
   doc_id TEXT NOT NULL REFERENCES documents(id),
@@ -226,10 +235,18 @@ const tableExists = (db: DatabaseSync, name: string): boolean =>
   !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
 const columnExists = (db: DatabaseSync, table: string, col: string): boolean =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col);
+// pre-v3 marker: the stored documents CREATE SQL carries a table-level `UNIQUE(project_id, kind)`
+// (the v3 rebuild replaces it with the partial index uq_documents_singleton_kind). The regex tolerates
+// arbitrary inner whitespace. Used as the v3 rebuild guard (a SCHEMA-re-exec'd partial index would
+// otherwise mask whether the table itself was migrated).
+const documentsHasTableLevelKindUnique = (db: DatabaseSync): boolean => {
+  const r = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='documents'").get() as { sql: string } | undefined;
+  return !!r && /UNIQUE\s*\(\s*project_id\s*,\s*kind\s*\)/i.test(r.sql);
+};
 const userVersion = (db: DatabaseSync): number =>
   (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
 
-const SCHEMA_VERSION = 2; // bump when adding a migration below (DL-25 → v1; DL-52 channels.transport → v2)
+const SCHEMA_VERSION = 3; // bump when adding a migration below (DL-25 → v1; DL-52 channels.transport → v2; DL split documents.kind+='design' → v3)
 function migrate(db: DatabaseSync): void {
   if (userVersion(db) >= SCHEMA_VERSION) return; // fast path: already current, no txn
   db.exec("PRAGMA foreign_keys=OFF");
@@ -274,6 +291,44 @@ function migrate(db: DatabaseSync): void {
       if (tableExists(db, "channels") && !columnExists(db, "channels", "transport"))
         db.exec(`ALTER TABLE channels ADD COLUMN transport TEXT NOT NULL DEFAULT 'bot' CHECK(transport IN (${TRANSPORT_CHECK}))`);
       db.exec("PRAGMA user_version=2");
+    }
+    if (userVersion(db) < 3) {
+      // v3 (DL split): widen documents.kind CHECK to admit 'design' AND relax per-kind uniqueness so
+      // 'design' is multi-instance (one doc per module slug). SQLite cannot ALTER a CHECK nor drop a
+      // table-level UNIQUE, so this is the DL-25 lossless rebuild shape: explicit column copy (never
+      // SELECT *), FK off so document_versions(doc_id) children survive the DROP+RENAME, index recreated.
+      // CHECK comes from DOC_KIND_CHECK (no drift). The new table keeps UNIQUE(project_id,slug) but DROPS
+      // the table-level UNIQUE(project_id,kind), replacing it with a PARTIAL unique index that excludes
+      // 'design' — so strategy/roadmap/decisions/notes stay singletons while design rows coexist by slug.
+      // Guard on the OLD TABLE SHAPE, NOT the partial index: openDb's SCHEMA re-exec runs BEFORE migrate()
+      // and its standalone `CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_singleton_kind` already added that
+      // index onto the pre-v3 documents table — so an index-presence guard would wrongly skip the rebuild.
+      // The reliable pre-v3 marker is the table-level `UNIQUE(project_id, kind)` in the stored CREATE SQL
+      // (replaced by the partial index post-rebuild). Absent it (fresh DB or already-rebuilt) ⇒ skip.
+      if (tableExists(db, "documents") && documentsHasTableLevelKindUnique(db)) {
+        db.exec(`
+          CREATE TABLE documents_new (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id),
+            kind TEXT NOT NULL CHECK(kind IN (${DOC_KIND_CHECK})),
+            slug TEXT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','current')),
+            current_version INTEGER NOT NULL DEFAULT 0,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(project_id, slug)
+          );
+          INSERT INTO documents_new (id,project_id,kind,slug,title,status,current_version,created_by,created_at,updated_at)
+            SELECT id,project_id,kind,slug,title,status,current_version,created_by,created_at,updated_at FROM documents;
+          DROP TABLE documents;
+          ALTER TABLE documents_new RENAME TO documents;
+          CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id, kind);
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_singleton_kind ON documents(project_id, kind) WHERE kind != 'design';
+        `);
+      }
+      db.exec("PRAGMA user_version=3");
     }
     db.exec("COMMIT");
   } catch (e) {

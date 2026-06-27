@@ -9,6 +9,12 @@ and the **Director** coordinates: it chairs a cross-agent discussion board and d
 operator-published roadmap (the optional hub `service` backend, §25). Trigger each one
 manually, or run them on a schedule, and the product builds and improves itself.
 
+> **Two-tier Dev (opt-in).** The single **Dev** role can be split into a **senior-dev**
+> (opus — designs new modules/features and direct-codes escalations) and a **junior-dev**
+> (sonnet — implements pre-designed tickets), enabled per-project via the launcher
+> (`DEV_SPLIT=1`) + PM routing. The legacy single `dev` agent stays active as the default,
+> so non-split projects are unaffected. See [conventions §21a](references/conventions.md#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project).
+
 ```
         PM ──proposes feature──┐                 ┌──QA proposes bug──┐
                                ▼                 ▼                   │
@@ -54,7 +60,9 @@ manually, or run them on a schedule, and the product builds and improves itself.
 |---|---|
 | **`pm-agent`** | Reads the strategy doc, exercises the real product, files **Feature** tickets, proactively reviews for improvements, **verifies** features that reach `In Review`, unblocks its own blocked tickets, and keeps the strategy doc current. |
 | **`qa-agent`** | Runs happy-path + edge-case tests in the configured test env, files **Bug** tickets (and `drift` → Improvement), **re-tests** bugs that reach `In Review`, and clears info-blocks for Dev. |
-| **`dev-agent`** | Pulls `Todo` tickets in priority order, grooms (enough info? duplicate? already done?), implements, gates on build/test, **self-reviews the diff**, ships per config, **smoke-checks prod (auto-revert on a break)**, and hands off to `In Review`. Blocks rather than guesses. |
+| **`dev-agent`** | Pulls `Todo` tickets in priority order, grooms (enough info? duplicate? already done?), implements, gates on build/test, **self-reviews the diff**, ships per config, **smoke-checks prod (auto-revert on a break)**, and hands off to `In Review`. Blocks rather than guesses. **Kept active** as the legacy single-dev fallback; the opt-in two-tier split (below) supersedes it per-project. |
+| **`senior-dev-agent`** *(opt-in, two-tier Dev)* | The **senior** tier (opus, effort max). Picks senior-routed tickets and runs in one of two modes: **design-and-delegate** (author a living per-module design doc, spawn staged `Backlog` child tickets assigned to junior-dev, move the design parent → `In Review`) for new modules/features, and **direct-code** (implement → gate → ship) when escalated a junior verify-fail. |
+| **`junior-dev-agent`** *(opt-in, two-tier Dev)* | The **junior** tier (sonnet, effort high). Picks junior-routed `Todo` tickets, **reads the linked `Design:` pointer before coding**, implements against the design, runs the same dev-agent gates/ship flow, and hands off to `In Review` for PM/QA. A real verify-fail escalates the remaining work up to senior-dev (direct-code). |
 | **`sweep-agent`** | Lifecycle janitor (slower cadence). Owns the cracks between the owner-scoped agents: fixes missing/wrong owner labels (invisible to every other query), resets orphaned `In Progress` from crashed runs, nudges stale signals, reports board health. Hygiene only. On the hub `service` backend it also runs the optional **one-way Linear mirror** push (Job 5 — hub → Linear for human visibility; idempotent, incremental, split-brain enforced). |
 | **`reflect-agent`** | Retrospective + self-evolution (slowest cadence, daily). Studies the loop's **own** behavior and **curates `lessons.md`** from recurring, evidence-cited patterns. Observe + curate only; may autonomously edit only `lessons.md` — structural changes are **drafted as proposals, never auto-applied**. |
 | **`ops-agent`** | **Outward** (§21): Ops/SRE watcher of RUNNING prod (tight ~10–15 min cadence). Polls per-repo `deploy.healthCheck` + `baseUrl` + optional critical routes/logs and, on a **confirmed, repeated** degradation (anti-flap: re-checks first), files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod is down). Observe-and-file only — never rolls back (Dev's Step 6.5). |
@@ -96,7 +104,8 @@ claude --plugin-dir /path/to/dev-loop
 then `/plugin install dev-loop@local`. Verify with `/plugin list`; the skills appear as
 `/dev-loop:pm-agent`, `/dev-loop:qa-agent`, `/dev-loop:dev-agent`,
 `/dev-loop:sweep-agent`, `/dev-loop:reflect-agent`, `/dev-loop:ops-agent`,
-`/dev-loop:architect-agent`, `/dev-loop:director-agent`, and `/dev-loop:init`.
+`/dev-loop:architect-agent`, `/dev-loop:director-agent`, the opt-in two-tier-Dev pair
+`/dev-loop:senior-dev-agent` + `/dev-loop:junior-dev-agent`, and `/dev-loop:init`.
 
 ## Configure
 
@@ -174,6 +183,14 @@ plugin **ships no harness** — choose how to fire them:
 Per-agent **models** (`models` in config): the model is chosen at launch and **defaults
 to `opus` for every agent**; tune an agent **down** (`sonnet`/`haiku`) only to
 economize the mechanical/high-frequency ones (`sweep`/`qa`/`ops`).
+
+**Two-tier Dev (opt-in).** By default the loop runs one `dev` pane. Set `DEV_SPLIT=1` on
+the tmux launcher to instead run a **`senior-dev`** pane (opus, effort max — designs new
+modules/features into staged child tickets, and direct-codes escalations) and a
+**`junior-dev`** pane (sonnet, effort high — implements the pre-designed tickets). PM
+routes each ticket to its tier at filing. The legacy single `dev` pane (and `dev-agent`)
+stays the default, so non-split projects are byte-for-byte unchanged. See
+[conventions §21a](references/conventions.md#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project).
 
 Cadence (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
 ~30 min, Reflect daily. Outward (opt-in): Ops ~10 min, Architect daily, Director daily/on-demand.
