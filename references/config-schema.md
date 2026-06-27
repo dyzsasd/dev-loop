@@ -37,6 +37,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       "mode":          "live",        // "live" | "dry-run"  (see conventions §12)
       "autonomy":      "ask",         // "ask" (default) | "full" — who decides vs escalates (see conventions §12a)
       "backend":       "linear",      // "linear" (default when absent) | "local" | "service" — coordination substrate (see conventions §18)
+      "devSplit":      false,         // two-tier Dev (§21a): the AUTHORITATIVE flag the agents read. true ⇒ senior-dev/junior-dev own the queue + the legacy `dev` agent defers (no-op); absent/false ⇒ legacy single-dev. MUST be set together with the launcher's DEV_SPLIT=1 (which spawns the two panes) — the two halves of one switch. Agents NEVER infer the dev model from history/tickets, only from this flag.
       "localBoard":    null,          // local backend only: override board dir; null → ${CLAUDE_PLUGIN_DATA}/<key>/board/
       "ticketPrefix":  "DL",          // local/service backend: ID prefix for tickets (e.g. "DL-1"); ignored for linear
       "hub": {                        // service backend only (conventions §18; see docs/HUB-ARCHITECTURE.md). The local MCP system-of-record.

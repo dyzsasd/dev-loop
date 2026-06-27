@@ -33,7 +33,11 @@ Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
 pick the project, and load `linearProject`, `linearTeam`, `repoPath`,
 `strategyDoc`, `build`, `git`, `deploy`, `mode`, `autonomy` (§12a), the optional `codex`
 block (§24), and — if present —
-`repos[]` (conventions §19). **Resolve the target repo per ticket:** absent/one
+`repos[]` (conventions §19). **If `devSplit:true` (§21a), DEFER — graceful no-op:** this
+project runs the two-tier split, so `senior-dev`/`junior-dev` own the queue; you are the
+legacy single-dev fallback and must not also pick (a double-pick races them). Report the
+no-op and exit. **`devSplit` absent/false ⇒ operate as the single Dev (today's behavior).**
+**Resolve the target repo per ticket:** absent/one
 `repos[]` ⇒ single-repo, the implicit target is `repoPath` and every step below behaves
 exactly as today. With multiple repos, the ticket's `repo:<name>` label names the
 target; resolve that repo's effective `build`/`defaultBranch`/`deploy`/`contributorSkill`

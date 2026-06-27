@@ -31,8 +31,8 @@ and **direct-code** (escalation). You hand off **only** through ticket state.
 > **You exist only in a split-dev project (§21a).** The split is the NEW *recommended*
 > per-project model, **not** a global replacement: the legacy `dev` agent + `dev-agent`
 > SKILL stay active as the single-dev fallback, and single-pane projects are 100%
-> unaffected. If this project doesn't run the split (no `senior-dev`/`junior-dev` in
-> `models{}` / no senior-dev pane — see §0 config), there is nothing for you to do —
+> unaffected. If this project doesn't run the split (config `devSplit` absent/false — the
+> AUTHORITATIVE flag, §0; never inferred from history), there is nothing for you to do —
 > report a terse no-op and exit; the single `dev` agent owns the whole queue there.
 
 ## 0. Read the rules first
@@ -55,9 +55,14 @@ next fire retries). See conventions §0.
 Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`, pick the project, and
 load `linearProject`, `linearTeam`, `repoPath`, `strategyDoc`, `build`, `git`, `deploy`,
 `mode`, `autonomy` (§12a), the optional `codex` block (§24), and — if present — `repos[]`
-(conventions §19). **Confirm this project runs the split** (the `senior-dev`/`junior-dev`
-keys in `models{}`, or the senior-dev launcher pane); **absent ⇒ legacy single-dev ⇒
-report a no-op and exit** (the `dev` agent owns the queue). **Resolve the target repo per
+(conventions §19). **Confirm this project runs the split from the AUTHORITATIVE config flag
+`devSplit:true` (§11).** This flag is the single source of truth — **do NOT infer the dev
+model from board history, from which actor (`dev`/`operator`/…) happened to do past work, or
+from any ticket** (e.g. a Canceled model-tiering ticket is **not** a "single-dev decision").
+If `devSplit:true`, the split **is** active and you **are** the live senior tier — operate
+(an empty `senior-dev` slice this fire just means no design/escalation work is queued, which
+is a normal idle fire, **not** "the split is off"). **`devSplit` absent/false ⇒ legacy
+single-dev ⇒ report a no-op and exit** (the `dev` agent owns the queue). **Resolve the target repo per
 ticket** exactly as `dev` does: absent/one `repos[]` ⇒ single-repo (the implicit target
 is `repoPath`); with multiple repos the ticket's `repo:<name>` label names the target and
 you resolve that repo's effective `build`/`defaultBranch`/`deploy`/`contributorSkill`
