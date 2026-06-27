@@ -32,6 +32,10 @@ t("CT-2", "Add urgent export feature", "Export the board.", "Feature", "Todo", n
 t("CT-3", "Medium polish improvement", "Tidy the header.", "Improvement", "In Progress", "dev", 3, ["dev-loop", "Improvement", "pm"], "2026-01-01T00:00:01Z");
 t("CT-4", "Low priority nit", "Rename a field.", "Improvement", "In Review", null, 4, ["dev-loop", "Improvement", "qa"], "2026-01-01T00:00:02Z");
 t("CT-5", "A finished thing", "Already done.", "Feature", "Done", null, 1, ["dev-loop", "Feature", "pm"], "2026-01-01T00:00:09Z");
+// DL-92: a ticket carrying relations (related_to JSON array + duplicate_of scalar) — the t() helper hardcodes
+// related_to='[]' and no duplicate_of, so insert CT-6 directly. Duplicate state keeps it out of the non-terminal lists.
+db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,duplicate_of,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  .run("CT-6", projectId, "A ticket with relations", "Has links.", "Bug", "Duplicate", null, 3, JSON.stringify(["dev-loop", "Bug", "qa"]), JSON.stringify(["CT-1", "CT-3"]), "CT-2", "qa", "2026-01-01T00:00:00Z", "2026-01-01T00:00:06Z");
 db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES (?,?,?,?,?)")
   .run("c1", "CT-1", "qa", "Confirmed the 500 in the test env.", "2026-01-01T01:00:00Z");
 db.close();
@@ -91,6 +95,12 @@ ok(det.status === 0, `ticket CT-1 → exit 0 (got ${det.status})`);
 ok(["CT-1", "Fix urgent login bug", "Todo", "Bug", "qa", "Urgent", "dev", "dev-loop", "Login throws 500"].every((s) => det.out.includes(s)),
   "ticket CT-1 → renders title/state/type/owner/priority/assignee/labels + description body");
 ok(det.out.includes("Confirmed the 500") && det.out.includes("Comments (1)"), "ticket CT-1 → renders its comment (chronological)");
+// ── 5b. DL-92: detail shows relations (relatedTo + duplicateOf); a relation-less ticket omits them ──
+const rel = cli(["ticket", "CT-6"]);
+ok(rel.status === 0 && /related: CT-1, CT-3/.test(rel.out) && /duplicate of: CT-2/.test(rel.out),
+  "ticket CT-6 → renders 'related: CT-1, CT-3' + 'duplicate of: CT-2' (DL-92: follow-the-chain parity with the web detail / DL-8)");
+ok(!/related:/.test(det.out) && !/duplicate of:/.test(det.out),
+  "ticket CT-1 (no relations) → omits the related/duplicate lines entirely (neutral form, never an empty label)");
 
 // ── 6. unknown id → non-zero exit + a clear message ──
 const miss = cli(["ticket", "CT-999"]);
@@ -105,7 +115,7 @@ const after = openDb(DB);
 const tcount = (after.prepare("SELECT count(*) AS c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c;
 const ecount = (after.prepare("SELECT count(*) AS c FROM events WHERE project_id=?").get(projectId) as { c: number }).c;
 after.close();
-ok(tcount === 5 && ecount === 0, `read-only: tickets unchanged (5) + zero events emitted (got ${tcount} tickets, ${ecount} events)`);
+ok(tcount === 6 && ecount === 0, `read-only: tickets unchanged (6) + zero events emitted (got ${tcount} tickets, ${ecount} events)`);
 
 console.log(fails === 0 ? "\nCLI_TICKETS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

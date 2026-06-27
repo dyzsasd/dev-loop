@@ -22,7 +22,7 @@ const ownerOf = (labels: string[]): string => (labels.includes("pm") ? "pm" : la
 const parseArr = (j: string): string[] => { try { const a = JSON.parse(j); return Array.isArray(a) ? a : []; } catch { return []; } };
 
 interface ListRow { id: string; title: string; type: string; state: string; assignee: string | null; priority: number; labels: string; updated_at: string }
-interface DetailRow extends ListRow { description: string; created_at: string }
+interface DetailRow extends ListRow { description: string; created_at: string; related_to: string; duplicate_of: string | null }
 
 // `dev-loop tickets [--all] [--state <name>] [--q <text>|<text>]` — board list, one line per ticket.
 function listTickets(db: DatabaseSync, projectId: string, args: string[]): number {
@@ -61,13 +61,15 @@ function showTicket(db: DatabaseSync, projectId: string, args: string[]): number
   const t = db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as DetailRow | undefined;
   if (!t) { console.error(`dev-loop: ticket '${id}' not found in this project.`); return 1; }
   const labels = parseArr(t.labels);
+  const related = parseArr(t.related_to);                                  // DL-92: SELECT * already carries related_to (JSON array) + duplicate_of (scalar) — no new query
   const out = [
     `${t.id} · ${t.title}`,
     `state: ${t.state}   type: ${t.type}   owner: ${ownerOf(labels)}   priority: ${prioOf(t.priority)}   assignee: ${t.assignee ?? "—"}`,
     `labels: ${labels.join(", ") || "—"}`,
-    "",
-    t.description?.trim() || "(no description)",
   ];
+  if (related.length) out.push(`related: ${related.join(", ")}`);          // DL-92: ids render plainly so the operator can `dev-loop ticket <id>` to follow the chain (web detail / DL-8 parity)
+  if (t.duplicate_of) out.push(`duplicate of: ${t.duplicate_of}`);         // DL-92: shown only when set — a relation-less ticket omits these lines (no awkward empty label)
+  out.push("", t.description?.trim() || "(no description)");
   const comments = db.prepare("SELECT author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(id) as { author: string; body: string; created_at: string }[];
   out.push("", comments.length ? `── Comments (${comments.length}) ──` : "── No comments ──");
   for (const c of comments) out.push("", `${c.created_at} — ${c.author}`, c.body);
