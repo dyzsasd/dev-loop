@@ -173,7 +173,7 @@ plugin **ships no harness** — choose how to fire them:
 
 Per-agent **models** (`models` in config): the model is chosen at launch and **defaults
 to `opus` for every agent**; tune an agent **down** (`sonnet`/`haiku`) only to
-economize the mechanical/high-frequency ones (`sweep`/`qa`/`ops`/`signal`).
+economize the mechanical/high-frequency ones (`sweep`/`qa`/`ops`).
 
 Cadence (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
 ~30 min, Reflect daily. Outward (opt-in): Ops ~10 min, Architect daily, Director daily/on-demand.
@@ -239,7 +239,7 @@ trail** — no code or skill edits.
   点评 as a **comment** on the doc — so you read and critique from a browser / phone. Same
   firewall by a channel split (the agent writes only the doc *body*, never a comment, so
   every comment is operator-authored), plus mandatory §16 guardrails (a fail-closed scrub,
-  and `signal`/`ops`/`dev` pinned local-only by default). See
+  and `director`/`ops`/`dev` pinned local-only by default). See
   [conventions §22](references/conventions.md#22-reports--operator-review--daily--weekly--monthly)
   + [§23](references/conventions.md#23-reports-in-linear--the-reportssink-option).
 

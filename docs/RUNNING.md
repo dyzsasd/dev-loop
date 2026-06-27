@@ -101,7 +101,7 @@ SWEEP=0     ~/.claude/plugins/data/dev-loop/run-loop.sh   # omit the janitor pan
 PROJECT=foo ~/.claude/plugins/data/dev-loop/run-loop.sh   # pick a project key
 OPS=1       ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Ops (prod-watch) pane (~10m; off by default)
 ARCHITECT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Architect (tech-debt) pane (daily; off by default)
-SIGNAL=1    ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Signal (user-intake) pane (hourly; off; no-op if no sources)
+DIRECTOR=1  ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Director (direction/roadmap) pane (daily/on-demand; off by default)
 ```
 
 It prints a blast-radius banner (project, mode, autonomy, ship flags, models) before
@@ -116,7 +116,7 @@ The model is chosen **at launch** (a SKILL can't set its own model), via a per-p
 `models` map in `projects.json`:
 
 ```jsonc
-"models": { "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "signal": "opus" }
+"models": { "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus" }
 ```
 
 **Every agent defaults to `opus`** — maximize correctness across the whole loop. Tune an
@@ -131,7 +131,7 @@ cheaper model is tolerable:
 | **reflect** | `opus` | `sonnet` | careful curation, but runs only daily |
 | **qa** | `opus` | `sonnet` | capable; runs often |
 | **ops** | `opus` | `sonnet` | mechanical polling + anti-flap judgement; runs often |
-| **signal** | `opus` | `sonnet` | triage + PII-safe summarization; periodic |
+| **director** | `opus` | `sonnet` | human-facing direction + PII-safe synthesis; daily/on-demand |
 | **sweep** | `opus` | `haiku` | mechanical hygiene |
 
 The tmux launcher applies this map automatically and **defaults each pane to `--model
@@ -152,7 +152,7 @@ Agents self-throttle (idle fires are cheap no-ops), so tighter intervals are saf
 | Reflect | daily | reflects *after* a day of churn |
 | Ops *(opt-in)* | ~10–15 min | watches running prod; tight polls are the point, but self-throttles |
 | Architect *(opt-in)* | daily | whole-codebase audit; SHA-gate makes most fires no-ops |
-| Signal *(opt-in)* | hourly / daily | real-user intake; no-op when no sources or no new signal |
+| Director *(opt-in)* | daily / on-demand | chairs the discussion board + drafts the roadmap; folds optional real-user signal |
 
 ---
 

@@ -1,6 +1,6 @@
 # dev-loop — Config schema
 
-The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect / Signal) read
+The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect / Director) read
 `${CLAUDE_PLUGIN_DATA}/projects.json`. It maps each product to its Linear project, its
 repo, its test environment, and its ship/deploy settings. One file, many products.
 `/dev-loop:init` gathers and writes this file with you (operator-present setup).
@@ -156,8 +156,11 @@ repo, its test environment, and its ship/deploy settings. One file, many product
 - Secrets (passwords, tokens) are **not** stored here — reference how to obtain
   them (`.env.local`, a vault, "ask user") in `testEnv.notes`. See the security
   doctrine (conventions §16).
-- **`lessons.md`** (optional) lives next to `projects.json` and holds per-operator
-  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Signal`).
+- **`lessons.md`** (optional) lives **per-project** at
+  `${CLAUDE_PLUGIN_DATA}/<project-key>/lessons.md` (the same per-project home as `reports/`,
+  conventions §14; the legacy root file next to `projects.json` remains only as a back-compat
+  **fallback** for un-migrated single-project installs). It holds per-operator
+  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Director`).
   Each skill reads it at run-start and applies its section that fire
   (conventions §14). Local machine state — never committed. The **Reflect** agent (the
   daily retrospective role) is the one agent that *writes* this file — it curates it
@@ -318,13 +321,12 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   agents' `ops-state.json` / `architect-state.json`, §21) live next to `projects.json` and
   hold per-project loop state: last-reviewed/swept SHA, swept
   review lenses (PM), swept surfaces (QA); Ops's open incidents + last-check;
-  Architect's per-repo SHA map + swept audit dimensions; Signal's per-source last-seen
-  cursors + source→ticket map. **Multi-repo (conventions §19):** the
+  Architect's per-repo SHA map + swept audit dimensions. **Multi-repo (conventions §19):** the
   last-reviewed/swept SHA becomes a **per-repo map** `{ "<repo-name>": "<sha>" }` (one
   entry per `repos[]`); a new SHA in *any* watched repo re-opens the sweep. Single-repo
   keeps the single-SHA form, unchanged. Local per-operator runtime state — never
   committed, never shared. Created lazily on first run, or up-front by `/dev-loop:init`
-  (which also seeds the `lessons.md` skeleton next to this file and gathers/writes back
+  (which also seeds the per-project `lessons.md` skeleton (under `<project-key>/`, conventions §14) and gathers/writes back
   the per-project fields above WITH the operator — operator-present setup, so asking
   for unknowable values like `repoPath`/`linearProject`/`deploy.command` is expected
   there, unlike the unattended loop agents). Creates only what's missing. The default
