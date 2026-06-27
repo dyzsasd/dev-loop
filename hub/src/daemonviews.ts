@@ -399,6 +399,44 @@ function humanDur(ms: number): string {
   if (m > 0) return `${m}m`;
   return "<1m";
 }
+// DL-84 — the pipeline stages whose residence time the /activity "Time in stage" diagnostic reports.
+const STAGES = ["Todo", "In Progress", "In Review"] as const;
+// Median of a numeric list (ms); empty → undefined (caller renders "—"). Avg of the two middles for even n.
+function median(nums: number[]): number | undefined {
+  if (!nums.length) return undefined;
+  const s = [...nums].sort((a, b) => a - b), mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+// DL-84 — per-stage residence time (ms) for ONE ticket, summed across ALL intervals it spent in each stage
+// (a state may be re-entered — a verify-fail reopen). An interval is [transition INTO a state, the next
+// transition OUT]; issue.create anchors the initial state (whose value is the first transition's `from`), and
+// the trailing open interval (the final state, e.g. Done) is NOT counted. Graceful on incomplete history (no
+// create anchor → the initial interval is dropped) and on malformed rows (eventData → {} → an undefined state
+// bounds the prior interval by its timestamp, then attributes nothing). hist is the ticket's create+transition
+// events ordered ASC by id.
+function stageDurations(hist: Record<string, any>[]): Record<string, number> {
+  const acc: Record<string, number> = {};
+  let createT: number | undefined, firstFrom: unknown;
+  const trans: { to: unknown; t: number }[] = [];
+  for (const e of hist) {
+    if (e.kind === "issue.create") { if (createT === undefined) { const t = Date.parse(e.created_at); if (Number.isFinite(t)) createT = t; } }
+    else if (e.kind === "issue.transition") {
+      const d = eventData(e.data), t = Date.parse(e.created_at);
+      if (!Number.isFinite(t)) continue;                       // a row with no usable timestamp bounds nothing — skip
+      if (!trans.length) firstFrom = d.from;                   // the initial state = what the first transition leaves
+      trans.push({ to: d.to, t });
+    }
+  }
+  let prevT = createT, prevState: unknown = firstFrom;
+  for (const tr of trans) {
+    if (prevT !== undefined && typeof prevState === "string" && (STAGES as readonly string[]).includes(prevState)) {
+      const dur = tr.t - prevT;
+      if (dur > 0) acc[prevState] = (acc[prevState] ?? 0) + dur;
+    }
+    prevState = tr.to; prevT = tr.t;                           // the next interval opens at this transition
+  }
+  return acc;                                                  // prevState's trailing open interval (e.g. Done) is uncounted
+}
 // One feed line per event, formatted by kind; every interpolation passes through esc() (AC6). A null
 // ticket_id renders no link (AC5); unknown kinds (issue.update / topic.*) fall through to a plain line.
 function eventLine(e: Record<string, any>): string {
@@ -447,11 +485,14 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
 
   // Cycle time per recently-Done ticket: elapsed from the ticket's create (else first Todo transition) to
   // its Done transition. When that start anchor is missing (incomplete history), render a graceful fallback.
+  const stageLists: Record<string, number[]> = Object.fromEntries(STAGES.map((s) => [s, []]));  // DL-84: per-stage residence, keyed by STAGES (single source) across the same recently-Done set
   const cycle = [...doneAt.entries()].sort((a, b) => (a[1] < b[1] ? 1 : -1)).map(([tid, done]) => {
     const hist = db.prepare("SELECT kind,data,created_at FROM events WHERE project_id=? AND ticket_id=? AND (kind='issue.create' OR kind='issue.transition') ORDER BY id").all(projectId, tid) as Record<string, any>[];
     let start: string | undefined;
     for (const e of hist) if (e.kind === "issue.create") { start = e.created_at; break; }
     if (!start) for (const e of hist) if (eventData(e.data).to === "Todo") { start = e.created_at; break; }
+    const sd = stageDurations(hist);                                                    // DL-84: folded off the same hist — no extra query per ticket
+    for (const st of STAGES) if (sd[st] !== undefined) stageLists[st].push(sd[st]);      // a ticket contributes only the stages it actually had (AC4)
     return { tid, done, label: start ? humanDur(Date.parse(done) - Date.parse(start)) : "— (incomplete history)" };
   });
 
@@ -474,9 +515,26 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
     + (actors.length ? actors.map((a) => metricRow(a.actor, `<b>${esc(a.n)}</b> event${Number(a.n) === 1 ? "" : "s"}`)).join("") : `<p class="empty">No activity in the last 30 days.</p>`);
   const cycleSection = `<h3>Cycle time — recently Done</h3>`
     + (cycle.length ? cycle.map((c) => `<div class="rlevel"><span class="rkey">${esc(c.tid)}</span><span>cycle <b>${esc(c.label)}</b> · Done ${esc(c.done)}</span></div>`).join("") : `<p class="empty">No tickets reached Done in the last 30 days.</p>`);
+  // DL-84 — per-stage breakdown of that cycle time: median residence in each stage over the SAME recently-Done
+  // set, so the operator can see WHICH stage is the bottleneck. A high Todo (queue-wait) points at Dev throughput;
+  // a high In Review (verify-lag) points at the OWNER agents (PM/QA) not verifying finished work — distinct from
+  // DL-79's acceptance-rate (verify-*fails*, not verify-*waits*). A stage with no qualifying ticket renders "—"
+  // (never a fake 0 / divide-by-zero); each median shows its n (DL-79 raw-count parity).
+  const STAGE_LABELS: Record<string, string> = {
+    "Todo": "Todo — queue-wait (awaiting Dev pickup)",
+    "In Progress": "In Progress — build (Dev)",
+    "In Review": "In Review — verify-lag (awaiting owner PM/QA verify)",
+  };
+  const stageRow = (st: string): string => {
+    const list = stageLists[st], med = median(list);
+    return metricRow(STAGE_LABELS[st], med === undefined
+      ? `<span class="sub">— no data</span>`
+      : `<b>${esc(humanDur(med))}</b> <span class="sub">n ${esc(list.length)}</span>`);
+  };
+  const stageSection = `<h3>Time in stage — recently Done (median)</h3>` + STAGES.map(stageRow).join("");
   const feedSection = `<h3>Recent activity<span class="count" style="margin-left:.4rem">${feed.length}</span></h3>`
     + (feed.length ? feed.map(eventLine).join("") : `<p class="empty">No activity recorded yet.</p>`);
 
   return `<a class="back" href="/">← board</a><article class="detail"><h1>Activity</h1>`
-    + throughput + acceptance + actorSection + cycleSection + feedSection + `</article>`;
+    + throughput + acceptance + actorSection + cycleSection + stageSection + feedSection + `</article>`;
 }
