@@ -45,7 +45,7 @@ if (process.argv[2] === "resolve-project") {
 // `dev-loop-hub doctor` — read-only health check (no server, no auto-create).
 if (process.argv[2] === "doctor") {
   const { runDoctor } = await import("./doctor.ts");
-  process.exit(runDoctor(DB_PATH) ? 0 : 1);
+  process.exit((await runDoctor(DB_PATH, { reconcile: true })) ? 0 : 1);
 }
 
 // `dev-loop-hub identity-check [--expect <actor>[/<project>]]` — P8 portability helper: print what THIS
