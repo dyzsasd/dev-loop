@@ -255,6 +255,18 @@ Low/Medium; `inconclusive` (couldn't run / unparseable) → treat as `drift` and
 the reason, never as a clean pass. Severity is expressed by **label + priority**,
 not by whether a ticket exists — drift still gets a ticket so it isn't lost.
 
+**Route every filed `Bug`/`Improvement` to a dev tier (split-dev §21a — same rule PM
+files under).** When the project runs the two-tier Dev, a ticket with **no** dev-tier
+marker is picked by **NEITHER** dev (senior and junior each filter to their own slice),
+so it strands — **never file an un-tiered dev ticket.** Default to **`junior-dev`** (a
+bug-fix / drift-improvement is junior's lane); choose **`senior-dev`** only when the fix
+genuinely needs design / architecture (a new subsystem, a cross-cutting redesign — your
+judgment, mirroring PM's routing; borderline → junior, escalation is the safety net). Set
+the marker **per backend**: the `assignee` actor (`junior-dev`/`senior-dev`) on `service`;
+the `junior-dev`/`senior-dev` **label** on `linear`/`local` (alongside the `qa` verifier
+label, which is unchanged). On a **legacy single-dev project** (no split) file as today —
+no dev-tier marker (the single `dev` pane claims it).
+
 ## 2. Guardrails
 
 - A bug without a reproducible repro is not a bug — confirm it reproduces before
