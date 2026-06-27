@@ -26,6 +26,8 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
   "identity-check": ["server", "identity-check"],  // the portability gate (PORTABILITY.md §4)
   "resolve-project":["server", "resolve-project"],
+  tickets:          ["cli-tickets", "tickets"],    // read-only terminal board list (DL-90)
+  ticket:           ["cli-tickets", "ticket"],     // read-only single-ticket detail + comments (DL-90)
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
   // via `node hub/src/release-version.ts <semver>` (Codex review 2026-06-27).
@@ -49,6 +51,8 @@ Usage: dev-loop <command> [args]
   seed <key> <name> [PREFIX]  seed a project + actors + labels into the hub db
   doctor                      health-check the hub system-of-record (DOCTOR_OK)
   identity-check [--expect <actor>[/<project>]]   verify this shell resolves the intended identity
+  tickets [--all] [--state S] [--q TEXT]   read-only: list the resolved project's board (no daemon)
+  ticket <id>                 read-only: show one ticket — detail + comments
   version | help
 
 Identity rides DEVLOOP_ACTOR (per pane); project DEVLOOP_PROJECT (or the cwd); db DEVLOOP_HUB_DB.
