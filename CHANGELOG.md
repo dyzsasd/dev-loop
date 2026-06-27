@@ -3,6 +3,28 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.22.0 — two-tier Dev: senior-dev (design lead) + junior-dev (implementer)
+Splits the single `dev` agent into an optional two-tier model (conventions §21a; `DEV_SPLIT=1` in the
+launcher) — **additive + back-compat: `dev` + `skills/dev-agent` stay active**, so single-dev projects
+(e.g. monpick on Linear) are byte-for-byte unchanged. Designed collaboratively with the operator, built
+via a workflow (keystone → parallel implement → 2 adversarial critics), critic findings folded.
+- **senior-dev** (`claude-opus-4-8`, effort max) — the design lead. Two modes: *design-and-delegate*
+  (author a living per-module **design** doc, spawn `junior-dev` child tickets staged in `Backlog` with
+  a `Design:` pointer, move the design parent to In-Review for PM to gate) and *direct-code* (escalation
+  tickets it codes itself).
+- **junior-dev** (`claude-sonnet-4-6`, effort high) — the implementer. Picks its own `Todo` slice, reads
+  the linked design first, ships to In-Review. Cheaper bulk coding on sonnet; opus reserved for design +
+  escalation (also eases the spend rate).
+- **PM routing**: new module/feature → senior-dev; improvement/bug-fix → junior-dev; borderline → junior
+  (escalation is the safety net). **Design gate**: PM verifies the design parent → Done → child tickets
+  promote `Backlog`→`Todo`. **Escalation**: a junior **real** acceptance-criteria fail (not a flake) →
+  the verifier (PM for its Feature, QA for its Bug) Cancels + files a `senior-dev` direct-code follow-up;
+  senior re-fail → `fix-exhausted` → `Human-Blocked`.
+- **New doc tier `design`** owned by senior-dev: a hub `design` doc-kind (service; additive `user_version`
+  v3 migration — lossless `documents` rebuild, multi-instance per module, not publish-gated) / a
+  `docs/design/<slug>.md` file (repo). A PRODUCT doc senior authors autonomously (not a §17 governing
+  file). Per-backend routing: assignee actor (service) / `senior-dev`/`junior-dev` label (linear/local).
+
 ## 0.21.0 — standalone daemon + multi-CLI: turnkey on-ramp, npm package, Codex certified
 The **standalone-daemon + single-host multi-CLI repositioning** (design `docs/design/daemon-multicli-repositioning.md`),
 shipped as an additive P1–P5 arc — the loop ran throughout, every prior path (stdio MCP, read-only daemon,

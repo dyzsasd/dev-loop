@@ -181,7 +181,9 @@ the same ground every fire, rotate the **review lens** and track progress:
 ### Job A — Verify In Review items you own (clear the finish line first)
 Dev's finished work is the most valuable thing to move. Query:
 `project` + `label:"dev-loop"` + `label:"pm"` + `state:"In Review"` — this covers
-both `Feature`s and any `Improvement`s you own.
+both `Feature`s and any `Improvement`s you own. **In a split-dev project (conventions
+§21a)** this query ALSO surfaces a senior-dev **design parent** (the design tier's
+verified increment) — handle those via the design gate below.
 For each (oldest first):
 1. Comment that you're verifying (claim it, conventions §7).
 2. Run its **How to verify** steps against the test env — actually exercise the
@@ -198,6 +200,35 @@ For each (oldest first):
    original) so Dev re-implements against a fresh single-increment ticket. If the
    follow-up needs a human decision, park it (`Human-Blocked` on `service`, §9). Never
    leave the original in `In Review` (a failed increment is superseded, not reopened).
+   **Split-dev escalation (§21a):** when the failed ticket was built by **junior-dev**
+   AND the failure is a **REAL acceptance-criteria failure** (not a transient/flaky/infra
+   error — those junior just retries, so leave them for the retry), route the follow-up
+   **UP to senior-dev**: file the follow-up as a **senior-dev DIRECT-CODE** ticket — assign
+   it to `senior-dev` (the §18 per-backend encoding: the `assignee` actor on `service`, the
+   `senior-dev` label on `linear`/`local`), add a `Mode: direct-code` line to its
+   description, `state:"Todo"`, `relatedTo` the failed one. senior-dev then codes it
+   directly (no design-delegate). **If a senior DIRECT-CODE follow-up ALSO fails verify**
+   → the loop has exhausted its automated tiers ⇒ `Bail-shape: fix-exhausted` ⇒
+   **`Human-Blocked`** (operator) on `service` / the `blocked`+`needs-pm`+`external-prereq`
+   park on `linear`/`local` (§9) — do NOT file a third auto follow-up.
+
+**Design gate — verify a senior-dev design parent → promote its children (split-dev, §21a).**
+When an In-Review ticket you own is a **design parent** (a senior-dev design-and-delegate
+ticket, `Mode: design`): its **How to verify** is that the design is coherent, **cites the
+strategy/roadmap item it serves**, and the staged child tickets faithfully decompose it
+(read the linked design doc — the hub `design` doc-kind on `service`, or `docs/design/<slug>.md`
+on `linear`/`local`). For a **big-module / docs-design-level** design, surface it for the
+**operator** to sign off (same posture as a significant product decision); ordinary designs
+you verify directly.
+- **Pass** → move the design parent `state:"Done"` AND **PROMOTE every staged child
+  `Backlog → Todo`** (re-pass the full label set — `save_issue` labels are REPLACE-style,
+  §10 — so the child keeps `dev-loop` + its `junior-dev` dev-tier + its `pm`/`qa` verifier
+  label) so junior-dev can now pick them. This reuses the existing Backlog-staging +
+  promotion shape (a staged child sits in `Backlog` like any parked idea).
+- **Fail** → **close + follow-up** (§3): `Canceled` the design parent (`review failed:
+  <what>; superseded by <new-id>`) and file a fresh design ticket; `Canceled` its staged
+  children with it (they reference a superseded design) — never leave them stranded in
+  `Backlog`.
 
 ### Job B — Unblock your blocked features
 Query `project` + `label:"dev-loop"` + `label:"pm"` + `label:"blocked"` (always
@@ -297,6 +328,20 @@ capabilities that make the product better, even when they aren't written in the 
    refinement of something that already exists → **Improvement**. Use the template
    (conventions §6), labels `dev-loop` + `Feature`/`Improvement` + `pm`, a
    `priority` (1=Urgent…4=Low) reflecting impact, `state:"Todo"`, set `project`.
+   **Dev-tier routing (split-dev projects only, conventions §21a):** if the project runs
+   the two-tier model (detect from config — `senior-dev`/`junior-dev` present in `models{}`
+   / the launcher panes), **assign the dev tier at filing** by one rule: **new module / new
+   feature** (needs a design) ⇒ **senior-dev** (design-and-delegate); **improvement /
+   bug-fix** (a scoped change) ⇒ **junior-dev**; **BORDERLINE ⇒ default to junior-dev**
+   (escalation is the cheap safety net, so over-routing to the expensive tier is the
+   costlier mistake — "when borderline, junior"). The TODO must **explicitly name the dev
+   tier** via the §18 per-backend encoding: set the ticket's `assignee` to the actor
+   `senior-dev`/`junior-dev` on `service`; add the `senior-dev`/`junior-dev` **label** on
+   `linear`/`local` (the shared identity means assignee can't distinguish — the label does).
+   A split-dev ticket with **no** dev-tier assignment is invisible to both dev pick-queries
+   (a Sweep-flagged gap). A senior-dev design ticket carries `Mode: design`. **In a legacy
+   single-dev project, add NO dev-tier marker** — file exactly as today (the sole `dev` pane
+   picks the whole queue).
    **Multi-repo (§19):** set the ticket's `repo:<name>` target (re-pass the full label
    set). **Split cross-repo work at filing into per-repo children** — one single-repo
    ticket per repo, `relatedTo` each other — so Dev rarely has to split across repos;

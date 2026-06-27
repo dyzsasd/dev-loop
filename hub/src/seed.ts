@@ -5,7 +5,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { openDb, nowIso } from "./db.ts";
 
 // The live dev-loop agents + the human operator. P5 repurposed `signal` → `director`.
-const AGENT_HANDLES = ["pm", "qa", "dev", "sweep", "reflect", "ops", "architect", "director"];
+// DL split (senior/junior dev): `senior-dev` + `junior-dev` join as ACTIVE actors; the legacy single
+// `dev` STAYS ACTIVE (NOT retired) — it remains the canonical single-pane fallback for non-split
+// projects (e.g. monpick on Linear), so adding the two-tier model breaks no existing project.
+const AGENT_HANDLES = ["pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "director"];
 // `signal` retired into `director` (P5): kept as an INACTIVE actor so its historical comment/event
 // attribution stays readable, but refused for NEW writes (actorExists/G1 filter active=1).
 const RETIRED_HANDLES = ["signal"];
@@ -15,6 +18,10 @@ const LABELS: Array<{ name: string; kind: string }> = [
   { name: "dev-loop", kind: "marker" },
   { name: "Feature", kind: "type" }, { name: "Bug", kind: "type" }, { name: "Improvement", kind: "type" },
   { name: "pm", kind: "owner" }, { name: "qa", kind: "owner" },
+  // DL split: dev-tier ROUTING labels (per-backend §18 encoding — the label distinguishes the dev tier
+  // on shared-identity backends where `assignee` cannot). Distinct from the pm/qa VERIFIER owner labels;
+  // ride this INSERT-OR-IGNORE backfill, no migration (plain strings, like the §4 labels).
+  { name: "senior-dev", kind: "owner" }, { name: "junior-dev", kind: "owner" },
   { name: "edge-case", kind: "subtype" }, { name: "incident", kind: "subtype" },
   { name: "tech-debt", kind: "subtype" }, { name: "signal", kind: "subtype" }, { name: "coverage", kind: "subtype" },
   { name: "blocked", kind: "workflow" }, { name: "needs-pm", kind: "workflow" },
