@@ -130,6 +130,8 @@ ok(act.text.includes("moved") && act.text.includes("→") && act.text.includes("
 ok(act.text.includes("commented on"), "DL-17 AC1: feed shows the comment.add event");
 // AC2 — throughput: count of transitions into Done in a recent window (the bug reached Done during seeding)
 ok(act.text.includes("Throughput") && act.text.includes("into Done"), "DL-17 AC2: a throughput section counts transitions into Done");
+// DL-79 — the acceptance-rate section renders on the live page (precise rate/flag/empty-state cases: test/accept-rate.ts)
+ok(act.text.includes("Acceptance rate"), "DL-79: an acceptance-rate section renders on the live /activity page");
 // AC3 — per-actor activity counts over the window (pm did every seed write)
 ok(act.text.includes("Per-actor activity") && act.text.includes(">pm<"), "DL-17 AC3: per-actor activity lists the actor (pm)");
 // AC4 — cycle time per recently-Done ticket (the bug: create → Done)

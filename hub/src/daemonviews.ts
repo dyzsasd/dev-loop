@@ -83,6 +83,7 @@ code{font:.92em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg)
 .ragent{margin:.9rem 0}.ragent h3{margin:.2rem 0 .4rem}
 .rlevel{display:flex;gap:.4rem;align-items:baseline;flex-wrap:wrap;margin:.25rem 0}
 .rkey{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut);min-width:3.5rem}
+.warn{color:#dc2626;font-weight:600}.sub{color:var(--mut)}
 .lbl{cursor:pointer}a.lbl:hover{border-color:var(--mut);color:var(--ink)}
 .filterbar{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:0 0 .8rem}
 .filterbar .chips{display:flex;gap:.3rem;flex-wrap:wrap;margin-left:.2rem}
@@ -408,9 +409,10 @@ function eventLine(e: Record<string, any>): string {
   return `<div class="rlevel"><span class="rkey">${esc(e.created_at)}</span><span>${who} ${what}</span></div>`;
 }
 
-// GET /activity — recent events + throughput (Done transitions), per-actor counts, and cycle time, all
-// read through the query_only `db`. `nowMs` is injected (the daemon passes Date.now()) so the helper is
-// pure/testable. Windows: 7d + 30d for throughput; 30d for per-actor + cycle-time recency.
+// GET /activity — recent events + throughput (Done transitions), acceptance rate, per-actor counts, and
+// cycle time, all read through the query_only `db`. `nowMs` is injected (the daemon passes Date.now()) so
+// the helper is pure/testable. Windows: 7d + 30d for throughput + acceptance rate; 30d for per-actor +
+// cycle-time recency.
 export function activityPage(db: DatabaseSync, projectId: string, projectKey: string, nowMs: number): string {
   const since30 = new Date(nowMs - 30 * DAY_MS).toISOString();
   const since7 = new Date(nowMs - 7 * DAY_MS).toISOString();
@@ -420,12 +422,17 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
 
   // Transitions in the last 30d → Done throughput + the set of recently-Done tickets for cycle time.
   const trans = db.prepare("SELECT ticket_id,data,created_at FROM events WHERE project_id=? AND kind='issue.transition' AND created_at>=? ORDER BY id").all(projectId, since30) as Record<string, any>[];
-  let done7 = 0, done30 = 0;
+  let done7 = 0, done30 = 0, fail7 = 0, fail30 = 0;                           // fail* = verify-fail Cancels (the accept-rate denominator, DL-79)
   const doneAt = new Map<string, string>();                                   // ticket_id → latest Done-transition time (in window)
   for (const e of trans) {
-    if (eventData(e.data).to !== "Done") continue;                            // malformed data → skipped, never breaks (AC5)
-    done30++; if (e.created_at >= since7) done7++;
-    if (e.ticket_id) { const prev = doneAt.get(e.ticket_id); if (!prev || e.created_at > prev) doneAt.set(e.ticket_id, e.created_at); }  // null ticket_id → counted in throughput, no cycle row (AC5)
+    const d = eventData(e.data);                                              // parsed once; empty/malformed → {} → matches neither branch, skipped (AC5)
+    const in7 = e.created_at >= since7;
+    if (d.to === "Done") {
+      done30++; if (in7) done7++;
+      if (e.ticket_id) { const prev = doneAt.get(e.ticket_id); if (!prev || e.created_at > prev) doneAt.set(e.ticket_id, e.created_at); }  // null ticket_id → counted in throughput, no cycle row (AC5)
+    } else if (d.from === "In Review" && d.to === "Canceled") {               // §3 verify-fail close+follow-up always leaves THIS exact edge — an ordinary Cancel (Todo/Backlog→Canceled) is NOT counted (DL-79)
+      fail30++; if (in7) fail7++;
+    }
   }
 
   // Per-actor activity over the same 30d window.
@@ -444,6 +451,18 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
   const metricRow = (k: string, v: string) => `<div class="rlevel"><span class="rkey">${esc(k)}</span><span>${v}</span></div>`;
   const throughput = `<h3>Throughput — transitions into Done</h3>`
     + metricRow("last 7d", `<b>${esc(done7)}</b>`) + metricRow("last 30d", `<b>${esc(done30)}</b>`);
+  // Acceptance rate = Done ÷ (Done + verify-fail Cancels): is the loop's output being accepted, or churning?
+  // Raw counts shown for audit; flagged below 50% (the loop is likely losing money). A zero-denominator window
+  // renders a neutral "no data" — never a fake 0% or a divide-by-zero (DL-79 ACs).
+  const acceptVal = (done: number, fail: number): string => {
+    const total = done + fail;
+    if (total === 0) return `<span class="sub">— no data</span>`;
+    const rate = Math.round((done / total) * 100);
+    const head = rate < 50 ? `<span class="warn">${esc(rate)}% ⚠ low</span>` : `<b>${esc(rate)}%</b>`;
+    return `${head} <span class="sub">Done ${esc(done)} · verify-fail ${esc(fail)}</span>`;
+  };
+  const acceptance = `<h3>Acceptance rate — Done ÷ (Done + verify-fail)</h3>`
+    + metricRow("last 7d", acceptVal(done7, fail7)) + metricRow("last 30d", acceptVal(done30, fail30));
   const actorSection = `<h3>Per-actor activity — last 30 days</h3>`
     + (actors.length ? actors.map((a) => metricRow(a.actor, `<b>${esc(a.n)}</b> event${Number(a.n) === 1 ? "" : "s"}`)).join("") : `<p class="empty">No activity in the last 30 days.</p>`);
   const cycleSection = `<h3>Cycle time — recently Done</h3>`
@@ -452,5 +471,5 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
     + (feed.length ? feed.map(eventLine).join("") : `<p class="empty">No activity recorded yet.</p>`);
 
   return `<a class="back" href="/">← board</a><article class="detail"><h1>Activity</h1>`
-    + throughput + actorSection + cycleSection + feedSection + `</article>`;
+    + throughput + acceptance + actorSection + cycleSection + feedSection + `</article>`;
 }
