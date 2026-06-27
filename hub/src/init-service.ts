@@ -72,10 +72,13 @@ function sessionStartHookPresent(pluginRoot: string): boolean {
 
 export async function runInitService(opts: InitServiceOpts): Promise<number> {
   const { key, name, prefix, dbPath } = opts;
-  const here = dirname(fileURLToPath(import.meta.url)); // hub/src
+  const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (published)
+  // Resolve the server entry by THIS file's own extension — .ts in-repo (zero-build dev), .js when run
+  // from the compiled npm package (node won't type-strip under node_modules; the published build is dist/*.js).
+  const selfExt = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts";
   const hubDir = opts.hubDir ?? join(here, "..");
   const pluginRoot = opts.pluginRoot ?? process.env.DEVLOOP_PLUGIN_ROOT ?? join(here, "..", "..");
-  const serverEntry = opts.serverEntry ?? join(here, "server.ts");
+  const serverEntry = opts.serverEntry ?? join(here, `server${selfExt}`);
 
   const { backend, mode, repoPath } = resolveProjectCfg(key);
   const dryRun = !!opts.dryRun || mode === "dry-run";

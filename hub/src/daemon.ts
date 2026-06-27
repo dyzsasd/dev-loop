@@ -976,18 +976,24 @@ export function startBlockedNotifier(opts: {
 // agent op-API write + human web-write flows through the ONE persistent `writeDb`. A long-lived writable
 // handle is never auto-checkpointed by a closing connection, so the `-wal` file grows unbounded; a periodic
 // `PRAGMA wal_checkpoint(TRUNCATE)` checkpoints the log into the main DB and truncates it back to zero.
-// Best-effort: a BUSY checkpoint (a reader/writer mid-txn holds the WAL) is a clean no-op this tick,
-// retried next interval — it NEVER throws into the daemon. The direct-db stdio `server.ts` fallback is
-// unaffected (its short-lived per-fire connections checkpoint on close, the SQLite default).
-export function walCheckpointTick(writeDb: DatabaseSync): void {
-  try { writeDb.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* BUSY / locked ⇒ retry next interval */ }
+//
+// CRITICAL (Codex review 2026-06-27): node:sqlite is SYNCHRONOUS and the daemon is single-threaded, so a
+// checkpoint runs ON the event loop. On the normal `writeDb` (busy_timeout=5000, db.ts) a TRUNCATE blocked
+// by a concurrent reader would STALL the whole daemon up to 5s, then leave the WAL non-truncated. So the
+// checkpoint runs on a DEDICATED maintenance connection with `busy_timeout=0`: under contention it returns
+// BUSY *immediately* (a clean no-op retried next interval) and never blocks request handling; when the WAL
+// is free it truncates to zero as intended. The direct-db stdio `server.ts` fallback is unaffected.
+export function walCheckpointTick(ckDb: DatabaseSync): void {
+  try { ckDb.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* BUSY / locked ⇒ immediate no-op, retried next interval */ }
 }
 
 export function startWalCheckpoint(
-  writeDb: DatabaseSync,
+  dbPath: string,
   intervalMs = Number(process.env.DEVLOOP_WAL_CHECKPOINT_MS) || 300_000, // 5 min default; env-overridable for tests
 ): ReturnType<typeof setInterval> {
-  const timer = setInterval(() => walCheckpointTick(writeDb), intervalMs);
+  const ckDb = openDb(dbPath);
+  try { ckDb.exec("PRAGMA busy_timeout=0"); } catch { /* if it can't be lowered, a BUSY still just throws → caught no-op */ }
+  const timer = setInterval(() => walCheckpointTick(ckDb), intervalMs);
   timer.unref?.(); // never keep the process alive solely for the checkpoint
   return timer;
 }
@@ -1312,8 +1318,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
     const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, cadenceHours, notify });
     if (notifier) console.log(`[daemon] Human-Blocked notifier active (every ${cadenceHours}h via the configured channel / §9 notify webhook)`);
-    // P3b: bound the single-writer connection's WAL (the daemon holds the one long-lived writable handle).
-    startWalCheckpoint(writeDb);
-    console.log(`[daemon] WAL checkpoint active (periodic TRUNCATE on the single-writer connection)`);
+    // P3b: bound the single-writer connection's WAL via a DEDICATED busy_timeout=0 maintenance connection
+    // (never blocks the synchronous event loop under a concurrent reader — Codex review 2026-06-27).
+    startWalCheckpoint(DB_PATH);
+    console.log(`[daemon] WAL checkpoint active (periodic TRUNCATE on a dedicated non-blocking connection)`);
   });
 }

@@ -26,7 +26,9 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
   "identity-check": ["server", "identity-check"],  // the portability gate (PORTABILITY.md §4)
   "resolve-project":["server", "resolve-project"],
-  "release-version":["release-version"],           // single-version stamp (P4)
+  // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
+  // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
+  // via `node hub/src/release-version.ts <semver>` (Codex review 2026-06-27).
 };
 
 const version = (): string => {
