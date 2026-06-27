@@ -19,6 +19,7 @@
 // the op logs an op-API-only label.create attribution event server.ts deliberately does not — DL-69 kept it
 // native so the stdio path stays byte-identical.)
 import { DatabaseSync } from "node:sqlite";
+import { TOOL_NAMES, type ToolName } from "./tooldefs.ts"; // DL-85: the ONE tool/op name source; AGENT_OPS derives from it
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
@@ -53,17 +54,13 @@ const okR = (body: unknown): OpResult => ({ status: 200, body });
 const errR = (status: number, error: string): OpResult => ({ status, body: { error } });
 
 // The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-64) the discussion
-// board + (DL-67) the IM channel + (DL-68) mirror.* + the label/project ops — the FINAL slice, so the op-API now
-// mirrors ALL 29 server.ts tools 1:1 (the shim becomes a 100% drop-in). The op names are the `/api/op/<op>` path
-// segments and the MCP tool names (dotted for the doc/topic/channel/mirror families) — byte-identical to server.ts.
-export const AGENT_OPS = [
-  "list_issues", "get_issue", "save_issue", "save_comment", "list_comments",
-  "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish",
-  "topic.list", "topic.get", "topic.open", "post.add", "topic.synthesize", "topic.close", // DL-64 discussion board
-  "channel.register", "channel.send", "channel.poll", "channel.ack", "channel.status", // DL-67 IM channel (channel.status is the only read)
-  "mirror.push", "mirror.status", "list_issue_labels", "create_issue_label", "get_project", // DL-68 P7 mirror + label/project (mirror.status/list_issue_labels/get_project are reads)
-] as const;
-export type AgentOp = (typeof AGENT_OPS)[number];
+// board + (DL-67) the IM channel + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 29 server.ts
+// tools 1:1 (the shim is a 100% drop-in). The op names are the `/api/op/<op>` path segments and the MCP tool
+// names (dotted for the doc/topic/channel/mirror families). DL-85: they are EXACTLY TOOL_NAMES minus "whoami"
+// (the only tool answered locally per-transport, never an op) — DERIVED from the one source so there is no
+// second name copy here (the tool {name,description,inputSchema} triples live once in tooldefs.ts).
+export type AgentOp = Exclude<ToolName, "whoami">;
+export const AGENT_OPS: readonly AgentOp[] = TOOL_NAMES.filter((n): n is AgentOp => n !== "whoami");
 // The MUTATING subset — the daemon applies writeOriginOk + the dry-run mode gate to exactly these (reads
 // never mutate, so they bypass both). Kept here next to AGENT_OPS so the two lists can't drift. doc.save /
 // doc.publish join the ticket writes; the doc/event reads stay read-only (parity with the read ticket ops).

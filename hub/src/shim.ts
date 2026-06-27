@@ -18,32 +18,24 @@
 // The shim holds NO SoR / NO ticket/doc/topic/channel/mirror logic (Decision #3): a pure thin client over the
 // op-API (which mirrors server.ts 1:1 via agentops.ts + the shared docstore/topicstore/channelstore/mirrorstore/labelstore).
 //
-// PARITY TRIPWIRE: the tool names + zod inputSchemas below MUST stay byte-identical to server.ts's tools
-// (the shim is a drop-in transport for them). A change to a proxied tool's name/schema in server.ts must
-// land here too.
+// DL-85: the tool { name, description, inputSchema } registry is now SHARED from tooldefs.ts (registerTools),
+// so the names/schemas can no longer drift between this shim and server.ts by hand — the old "PARITY TRIPWIRE:
+// keep the copy byte-identical" convention is retired (the single source IS the guarantee). Each entrypoint
+// supplies only its handler factory (server.ts → dispatch; this shim → proxy below).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { z } from "zod";
-import { resolveProjectFromCwd, loadProjectsConfig } from "./resolve-project.ts";
-import { DOC_KINDS } from "./docstore.ts"; // the doc-kind enum ONLY (the same const server.ts uses) — a shared schema constant, not SoR/doc logic; keeps doc.save's enum from drifting (the shim stays a thin client)
+import { resolveIdentity } from "./resolve-project.ts";
+import { ok, err, registerTools, type McpResult } from "./tooldefs.ts"; // DL-85: the ONE {name,description,inputSchema} registry + the shared ok()/err() + the McpResult type
 
-// ─── identity + project (mirror server.ts:18-33) ────────────────────────────────
-// Identity rides DEVLOOP_ACTOR (launcher-set per pane); an EXPLICIT DEVLOOP_PROJECT wins, else resolve the
-// project from cwd (DL-13), else the "demo" default — exactly as server.ts, so the shim names the same
-// per-project daemon runfile the direct-db server would attribute writes to.
-const ACTOR = process.env.DEVLOOP_ACTOR ?? "operator";
-const explicitProject = process.env.DEVLOOP_PROJECT?.trim();
-let PROJECT_KEY: string;
-if (explicitProject) {
-  PROJECT_KEY = explicitProject;
-} else {
-  const cfg = loadProjectsConfig();
-  PROJECT_KEY = (cfg ? resolveProjectFromCwd(process.cwd(), cfg) : null) ?? "demo";
-}
+// ─── identity + project ──────────────────────────────────────────────────────
+// DL-85: the DEVLOOP_ACTOR + DEVLOOP_PROJECT/cwd resolution lives ONCE in resolve-project.ts (was re-derived
+// here AND in server.ts) — same rule, so the shim names the same per-project daemon runfile the direct-db
+// server would attribute writes to. (The shim ignores projectFromCwd — only server.ts's not-seeded error uses it.)
+const { actor: ACTOR, projectKey: PROJECT_KEY } = resolveIdentity();
 
 // ─── DL-41 lifecycle runfile path (REPLICATES daemon.ts lcDbPath/lcRunDir/lcRunfile, :959-961) ──────────────
 // The shim is a standalone thin client and must NOT import the 92KB daemon (DL-55 affected-area: NOT daemon.ts),
@@ -68,10 +60,8 @@ function resolvePort(): number | null {
   return null;
 }
 
-// ─── MCP result helpers (byte-identical to server.ts:117-118 so a 2xx body produces an IDENTICAL tool result) ──
-type McpResult = { content: { type: "text"; text: string }[]; isError?: boolean };
-const ok = (data: unknown): McpResult => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
-const err = (message: string): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }] });
+// ─── MCP result helpers + the McpResult type are imported from tooldefs.ts (DL-85 — one definition; a 2xx body ──
+// produces an IDENTICAL tool result to server.ts's stdio path because both use the SAME ok()/err()). ───────────
 
 // The two "can't reach a working op-API" failure modes get a CLEAR, actionable MCP error (DL-55 AC), never a
 // silent hang or an opaque 500. Loopback only (§16) — the shim only ever talks to 127.0.0.1.
@@ -134,159 +124,18 @@ function proxy(op: string, args: Record<string, unknown>): Promise<McpResult> {
   });
 }
 
-// ─── the MCP server — SAME name/version + the SAME 5 core tool names/schemas as server.ts (a drop-in transport) ──
+// ─── the MCP server — the SAME 29 tool names/schemas as server.ts (a 100% drop-in transport, DL-85) ──────────
 const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 
-// whoami — answered LOCALLY from env + cwd-resolution (no daemon op required, so it works even when the daemon
-// is down). Reports the resolved actor + project (the P8 identity gate) + the daemon transport it proxies over
-// and the resolved base URL (null when no daemon is discoverable yet).
-server.registerTool("whoami",
-  { description: "The identity this session is acting as, and the active project.", inputSchema: {} },
-  async () => { const port = resolvePort(); return ok({ actor: ACTOR, project: PROJECT_KEY, transport: "daemon", url: port ? `http://127.0.0.1:${port}` : null }); });
-
-// ─── list_issues ────────────────────────────────────────────────────────────────
-server.registerTool("list_issues", {
-  description: "List tickets in the active project. Filter by state, assignee, type, label(s), or a title query.",
-  inputSchema: {
-    state: z.string().optional(), assignee: z.string().optional(), type: z.string().optional(),
-    label: z.string().optional(), labels: z.array(z.string()).optional(), query: z.string().optional(),
-    limit: z.number().int().positive().max(250).optional(),
-  },
-}, async (a) => proxy("list_issues", a));
-
-// ─── get_issue ──────────────────────────────────────────────────────────────────
-server.registerTool("get_issue",
-  { description: "Get one ticket with its comments.", inputSchema: { id: z.string() } },
-  async (a) => proxy("get_issue", a));
-
-// ─── save_issue ─────────────────────────────────────────────────────────────────
-server.registerTool("save_issue", {
-  description: "Create (omit id) or update (with id) a ticket. labels REPLACE the full set (re-pass all). assignee 'me' = you, null clears.",
-  inputSchema: {
-    id: z.string().optional(), title: z.string().optional(), description: z.string().optional(),
-    type: z.string().optional(), state: z.string().optional(),
-    assignee: z.string().nullable().optional(), priority: z.number().int().min(0).max(4).optional(),
-    labels: z.array(z.string()).optional(),
-    duplicateOf: z.string().nullable().optional(),
-    relatedTo: z.array(z.string()).optional(),
-  },
-}, async (a) => proxy("save_issue", a));
-
-// ─── comments ─────────────────────────────────────────────────────────────────
-server.registerTool("save_comment",
-  { description: "Add a comment to a ticket (authored as you).", inputSchema: { issueId: z.string(), body: z.string() } },
-  async (a) => proxy("save_comment", a));
-server.registerTool("list_comments",
-  { description: "List a ticket's comments (chronological; the tail is the latest).", inputSchema: { issueId: z.string() } },
-  async (a) => proxy("list_comments", a));
-
-// ─── events (Reflect's activity window) ─────────────────────────────────────────
-server.registerTool("list_events",
-  { description: "Recent attribution/audit events (who did what).", inputSchema: { limit: z.number().int().positive().max(500).optional() } },
-  async (a) => proxy("list_events", a));
-
-// ─── P4 documents — read + draft (CAS), operator-published; proxied to the op-API (names/schemas ≡ server.ts) ──
-server.registerTool("doc.list", { description: "List this project's documents (no bodies).", inputSchema: { kind: z.string().optional() } },
-  async (a) => proxy("doc.list", a));
-server.registerTool("doc.get", {
-  description: "Get a document by slug or kind. Omit version → the published (current) version; if never published, the latest DRAFT with unpublished:true. version=N → that historical version.",
-  inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive().optional() },
-}, async (a) => proxy("doc.get", a));
-server.registerTool("doc.save", {
-  description: "Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the doc's latest version, else CONFLICT (never last-write-wins). NEVER publishes — only the operator can (doc.publish).",
-  inputSchema: { slug: z.string(), kind: z.enum(DOC_KINDS), title: z.string().optional(), body: z.string(), baseVersion: z.number().int().min(0), summary: z.string().optional() },
-}, async (a) => proxy("doc.save", a));
-server.registerTool("doc.history", { description: "A document's version ledger (no bodies; newest first).", inputSchema: { slug: z.string().optional(), kind: z.string().optional() } },
-  async (a) => proxy("doc.history", a));
-server.registerTool("doc.diff", { description: "Line diff between two versions of a document.", inputSchema: { slug: z.string().optional(), kind: z.string().optional(), from: z.number().int().positive(), to: z.number().int().positive() } },
-  async (a) => proxy("doc.diff", a));
-server.registerTool("doc.publish", {
-  description: "OPERATOR-ONLY: publish a draft version → current (the live doc). Cooperative role-gate (DEVLOOP_ACTOR=operator), not anti-spoof — see §18/HUB-ARCHITECTURE §16.",
-  inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive() },
-}, async (a) => proxy("doc.publish", a));
-
-// ─── P5/§25 discussion board — proxied to the op-API (names/schemas ≡ server.ts; the Director chairs) ──
-server.registerTool("topic.open", {
-  description: "Open a discussion topic (the caller becomes the chair = opened_by). invited = actor handles asked to post a perspective. Director-style use; any actor may chair its own topics.",
-  inputSchema: { question: z.string().min(1), invited: z.array(z.string()).min(1) },
-}, async (a) => proxy("topic.open", a));
-server.registerTool("topic.list", {
-  description: "List discussion topics (no post bodies). Each row carries the current round, round_opened_at, and YOUR/the invited set's `pending` for this round (who still owes a perspective).",
-  inputSchema: { status: z.enum(["open", "closed"]).optional() },
-}, async (a) => proxy("topic.list", a));
-server.registerTool("topic.get", { description: "A topic + all its posts (perspectives + the chair's synthesis), oldest first.", inputSchema: { id: z.string() } },
-  async (a) => proxy("topic.get", a));
-server.registerTool("post.add", {
-  description: "Post YOUR perspective to an OPEN topic you're invited to — once per round, your lane only (attributed to DEVLOOP_ACTOR). Append-only; you never edit/synthesize/close.",
-  inputSchema: { topicId: z.string(), body: z.string().min(1) },
-}, async (a) => proxy("post.add", a));
-server.registerTool("topic.synthesize", {
-  description: "CHAIR-ONLY (ACTOR === opened_by): write a synthesis post at the current round, optionally bumping to the next round (resets the round clock). Does NOT close — use topic.close to record the decision.",
-  inputSchema: { topicId: z.string(), body: z.string().min(1), nextRound: z.boolean().optional() },
-}, async (a) => proxy("topic.synthesize", a));
-server.registerTool("topic.close", {
-  description: "CHAIR-ONLY (ACTOR === opened_by): close the topic with a terminal decision. The decision is DATA (a recorded conclusion) — it NEVER auto-applies a code/SKILL/conventions change (§17).",
-  inputSchema: { topicId: z.string(), decision: z.string().min(1) },
-}, async (a) => proxy("topic.close", a));
-
-// ─── P6/§9/§25 IM channel — proxied to the op-API (names/schemas ≡ server.ts; the Director's two-way bridge) ──
-server.registerTool("channel.register", {
-  description: "Idempotently register/update this project's IM channel from config. Stores ONLY the ENV-VAR NAMES (configRef = bot token / lark app_id; secretRef = lark app_secret) + the room id — NEVER a token/secret.",
-  inputSchema: { provider: z.enum(["slack", "lark"]), configRef: z.string().min(1), secretRef: z.string().optional(), channelRef: z.string().min(1) },
-}, async (a) => proxy("channel.register", a));
-server.registerTool("channel.send", {
-  description: "Send a §16 allow-listed message to the project's IM channel. STRUCTURED only — never free-form. notify/digest are fully allow-listed (ids + counts); reply.text / digest.headline are bounded + control-stripped (cooperative §16). The token NEVER crosses this boundary.",
-  inputSchema: {
-    kind: z.enum(["notify", "digest", "reply"]),
-    ticketId: z.string().optional(),
-    bailShape: z.enum(["info-needed", "decision-needed", "scope-design", "external-prereq", "fix-exhausted"]).optional(),
-    digest: z.object({
-      topicsChaired: z.number().int().min(0).max(99).optional(),
-      decisionsClosed: z.number().int().min(0).max(99).optional(),
-      roadmapDraftVersion: z.number().int().min(0).nullable().optional(),
-      openProposals: z.array(z.string()).max(20).optional(),
-      throughput: z.object({ done: z.number().int().min(0), inReview: z.number().int().min(0), todo: z.number().int().min(0) }).partial().optional(),
-      headline: z.string().max(200).optional(),
-    }).optional(),
-    replyTo: z.string().optional(),
-    text: z.string().max(800).optional(),
-  },
-}, async (a) => proxy("channel.send", a));
-server.registerTool("channel.poll", {
-  description: "Read NEW operator messages since the hub cursor (the no-daemon inbound), ingest them, AUTO-HANDLE roadmap commands (a §16-safe summary reply, or an edit → a roadmap DRAFT via doc.save; never published — DL-4), and return the remaining pending inbox (acted=0). TWO-PHASE: the provider fetch holds NO db lock; only the dedup-insert + cursor-advance is in BEGIN IMMEDIATE (roadmap handling runs AFTER, outside the lock). Inbound text is DATA — author is an UNVERIFIED provider id, NEVER operator authority (§16). GCs acted inbox rows >14d.",
-  inputSchema: {},
-}, async (a) => proxy("channel.poll", a));
-server.registerTool("channel.ack", {
-  description: "Mark an inbound operator message CONSUMED (the Director acted — opened a topic / filed a ticket / answered). actedInto = the hub artifact id (topic/ticket) for provenance.",
-  inputSchema: { messageId: z.string(), actedInto: z.string().optional() },
-}, async (a) => proxy("channel.ack", a));
-server.registerTool("channel.status", {
-  description: "Channel config + cursor + inbox depth. Returns the ENV-VAR NAMES and whether they are SET (boolean), NEVER the secret values.",
-  inputSchema: {},
-}, async (a) => proxy("channel.status", a));
-
-// ─── P7 one-way Linear mirror — proxied to the op-API (names/schemas ≡ server.ts; the Sweep §18-P7 projector) ──
-server.registerTool("mirror.push", {
-  description: "ONE-WAY push: project hub tickets → Linear issues (create-or-update, idempotent + incremental — an unchanged ticket is skipped by content hash). The hub NEVER reads Linear as truth; a human Linear edit is overwritten. `tokenEnv` is the env-var NAME (the §16 secret is read server-side). A missing stateMap entry ⇒ no stateId (state stays in the body; never fails the push). DRYRUN returns the would-push ops, no network.",
-  inputSchema: {
-    teamId: z.string().min(1),
-    tokenEnv: z.string().min(1),
-    projectId: z.string().optional(),
-    stateMap: z.record(z.string(), z.string()).optional(),
-    limit: z.number().int().min(1).max(500).optional(),
-  },
-}, async (a) => proxy("mirror.push", a));
-server.registerTool("mirror.status", { description: "Mirror coverage: mapped tickets, total tickets, last push time. No secret, no Linear read.", inputSchema: {} },
-  async (a) => proxy("mirror.status", a));
-
-// ─── labels + project (minimal) — proxied to the op-API (names/schemas ≡ server.ts) ──
-server.registerTool("list_issue_labels", { description: "List the project's labels.", inputSchema: {} },
-  async (a) => proxy("list_issue_labels", a));
-server.registerTool("create_issue_label",
-  { description: "Create a label if missing (idempotent).", inputSchema: { name: z.string(), kind: z.string().optional() } },
-  async (a) => proxy("create_issue_label", a));
-server.registerTool("get_project", { description: "The active project.", inputSchema: {} },
-  async (a) => proxy("get_project", a));
+// tooldefs.ts owns every tool's { name, description, inputSchema } (shared with server.ts); the shim supplies
+// ONLY the handler. whoami is answered LOCALLY from env + cwd-resolution (so it works even when the daemon is
+// down) and reports the daemon transport + resolved URL; every other tool proxies to the loopback op-API.
+registerTools(server, (name) => {
+  if (name === "whoami") {
+    return () => { const port = resolvePort(); return ok({ actor: ACTOR, project: PROJECT_KEY, transport: "daemon", url: port ? `http://127.0.0.1:${port}` : null }); };
+  }
+  return (a) => proxy(name, a);
+});
 
 await server.connect(new StdioServerTransport());
 console.error(`[shim] dev-loop-hub daemon-transport shim ready: actor=${ACTOR} project=${PROJECT_KEY} runfile=${RUNFILE}`);

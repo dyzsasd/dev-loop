@@ -47,6 +47,18 @@ export function resolveProjectFromCwd(cwd: string, config: ProjectsConfig): stri
   return best && !tie ? best.key : null;
 }
 
+// DL-85: the ONE DEVLOOP_ACTOR + DEVLOOP_PROJECT/cwd identity resolution (was re-derived in server.ts:21-32
+// AND shim.ts:38-46). An EXPLICIT DEVLOOP_PROJECT wins; else resolve from cwd (DL-13); else the "demo" default.
+// `projectFromCwd` is true only on the cwd-resolved branch (server.ts uses it for a clearer not-seeded error).
+export function resolveIdentity(): { actor: string; projectKey: string; projectFromCwd: boolean } {
+  const actor = process.env.DEVLOOP_ACTOR ?? "operator"; // who this MCP client IS (the attribution win)
+  const explicit = process.env.DEVLOOP_PROJECT?.trim(); // a present-but-empty "" must NOT become the literal key
+  if (explicit) return { actor, projectKey: explicit, projectFromCwd: false };
+  const cfg = loadProjectsConfig();
+  const resolved = cfg ? resolveProjectFromCwd(process.cwd(), cfg) : null;
+  return resolved ? { actor, projectKey: resolved, projectFromCwd: true } : { actor, projectKey: "demo", projectFromCwd: false };
+}
+
 // Locate + parse projects.json the way the skills do (§11): DEVLOOP_PROJECTS_JSON, then CLAUDE_PLUGIN_DATA,
 // then the canonical dev-loop data dir. Returns null when not found/parseable (caller keeps its default).
 export function loadProjectsConfig(): ProjectsConfig | null {
