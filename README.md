@@ -263,7 +263,7 @@ then `/plugin install dev-loop@local`. The skills appear as `/dev-loop:pm-agent`
 `/dev-loop:director-agent`, the opt-in `/dev-loop:senior-dev-agent` +
 `/dev-loop:junior-dev-agent`, and `/dev-loop:init`.
 
-Standalone hub (Claude-independent, for non-Claude CLIs): `npm i -g dev-loop` gives the
+Standalone hub (Claude-independent, for non-Claude CLIs): `npm i -g @dyzsasd/dev-loop` gives the
 `dev-loop` CLI (`serve`, `shim`, `daemon up|down|status`, `doctor`, …).
 
 ## Configure
@@ -397,7 +397,7 @@ Coordination is backend-pluggable: **Linear** (default), a **local file board**,
 **local hub** (`node:sqlite` SoR with per-agent identity + a localhost web UI + versioned
 docs + the discussion board/Director + a two-way Lark/Slack channel + a one-way Linear
 mirror + CLI-portability). Recent: the **two-tier Dev** (senior designs / junior implements,
-opt-in, back-compat); **standalone npm packaging** (`npm i -g dev-loop`) with a Codex-certified
+opt-in, back-compat); **standalone npm packaging** (`npm i -g @dyzsasd/dev-loop`) with a Codex-certified
 multi-CLI path; and **loop-cost governance** (a runaway/no-progress circuit-breaker, an
 acceptance-rate metric). Validated end-to-end and battle-tested across long live runs;
 autonomy (push/deploy) is opt-in per project and gated on a green build. Full history in

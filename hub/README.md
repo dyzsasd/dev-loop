@@ -12,7 +12,7 @@ and a **CLI-portable** transport (Claude Code · Codex · opencode).
 ## Install
 
 ```bash
-npm install -g dev-loop      # requires Node >= 23.6 (built-in node:sqlite + .ts type-stripping; zero build)
+npm install -g @dyzsasd/dev-loop   # requires Node >= 23.6 (built-in node:sqlite + .ts type-stripping; zero build); installs the `dev-loop` + `dev-loop-hub` bins
 ```
 
 This puts two bins on `PATH`: **`dev-loop`** (the CLI) and **`dev-loop-hub`** (the MCP server entry).

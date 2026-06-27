@@ -1,14 +1,34 @@
 {
-  "name": "dev-loop",
+  "name": "@dyzsasd/dev-loop",
   "version": "0.22.0",
   "type": "module",
   "description": "Standalone local coordination hub for the dev-loop agents — a zero-build, zero-native-dep MCP system-of-record over node:sqlite with per-agent identity, a localhost web-UI daemon, an opt-in agent op-API + thin stdio shim, and a CLI-portable transport (Claude Code / Codex / opencode). See https://github.com/dyzsasd/dev-loop (docs/HUB-ARCHITECTURE.md, docs/PORTABILITY.md).",
-  "keywords": ["dev-loop", "agents", "mcp", "sqlite", "daemon", "sdlc", "automation", "coordination", "tickets", "claude-code", "codex"],
+  "keywords": [
+    "dev-loop",
+    "agents",
+    "mcp",
+    "sqlite",
+    "daemon",
+    "sdlc",
+    "automation",
+    "coordination",
+    "tickets",
+    "claude-code",
+    "codex"
+  ],
   "homepage": "https://github.com/dyzsasd/dev-loop#readme",
-  "repository": { "type": "git", "url": "git+https://github.com/dyzsasd/dev-loop.git", "directory": "hub" },
-  "bugs": { "url": "https://github.com/dyzsasd/dev-loop/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dyzsasd/dev-loop.git",
+    "directory": "hub"
+  },
+  "bugs": {
+    "url": "https://github.com/dyzsasd/dev-loop/issues"
+  },
   "license": "MIT",
-  "author": { "name": "Shuai" },
+  "author": {
+    "name": "Shuai"
+  },
   "bin": {
     "dev-loop": "dist/cli.js",
     "dev-loop-hub": "dist/server.js"

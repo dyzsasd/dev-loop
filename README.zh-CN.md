@@ -193,7 +193,7 @@ claude --plugin-dir /path/to/dev-loop
 `/dev-loop:director-agent`、可选启用的 `/dev-loop:senior-dev-agent` +
 `/dev-loop:junior-dev-agent`，以及 `/dev-loop:init`。
 
-独立 hub（不依赖 Claude，面向非 Claude 的 CLI）：`npm i -g dev-loop` 会提供
+独立 hub（不依赖 Claude，面向非 Claude 的 CLI）：`npm i -g @dyzsasd/dev-loop` 会提供
 `dev-loop` CLI（`serve`、`shim`、`daemon up|down|status`、`doctor`、……）。
 
 ## 配置
@@ -292,4 +292,4 @@ cp config/projects.example.json ~/.claude/plugins/data/dev-loop/projects.json
 
 ## 状态
 
-**v0.22.0。** 十个智能体——五个对内（**PM / QA / Dev**，外加可选启用的双层 **senior-dev / junior-dev**）和三个对外（**Ops / Architect / Director**）——再加上 **Sweep** 清道夫、**Reflect** 自我进化智能体，以及 `init` 接入命令。协调可按后端插拔：**Linear**（默认）、一个**本地文件看板**，或**本地 hub**（`node:sqlite` 记录系统，具备每智能体独立身份 + 本地 web UI + 带版本的文档 + 讨论板/Director + 双向 Lark/Slack 频道 + 单向 Linear 镜像 + CLI 可移植性）。近期：**双层 Dev**（senior 设计 / junior 实现，可选启用，向后兼容）；**独立 npm 打包**（`npm i -g dev-loop`），配有经 Codex 认证的多 CLI 路径；以及**循环成本治理**（失控/无进展的熔断器、一个验收率指标）。已端到端验证，并在长时间的实时运行中经受实战检验；自治（推送/部署）按项目选择性启用，且以构建通过为门禁。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+**v0.22.0。** 十个智能体——五个对内（**PM / QA / Dev**，外加可选启用的双层 **senior-dev / junior-dev**）和三个对外（**Ops / Architect / Director**）——再加上 **Sweep** 清道夫、**Reflect** 自我进化智能体，以及 `init` 接入命令。协调可按后端插拔：**Linear**（默认）、一个**本地文件看板**，或**本地 hub**（`node:sqlite` 记录系统，具备每智能体独立身份 + 本地 web UI + 带版本的文档 + 讨论板/Director + 双向 Lark/Slack 频道 + 单向 Linear 镜像 + CLI 可移植性）。近期：**双层 Dev**（senior 设计 / junior 实现，可选启用，向后兼容）；**独立 npm 打包**（`npm i -g @dyzsasd/dev-loop`），配有经 Codex 认证的多 CLI 路径；以及**循环成本治理**（失控/无进展的熔断器、一个验收率指标）。已端到端验证，并在长时间的实时运行中经受实战检验；自治（推送/部署）按项目选择性启用，且以构建通过为门禁。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。

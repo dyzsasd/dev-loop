@@ -19,8 +19,8 @@ const market = read(".claude-plugin/marketplace.json").plugins[0].version;
 ok(typeof pkg === "string" && /^\d+\.\d+\.\d+/.test(pkg), `hub/package.json version is a semver (${pkg})`);
 ok(pkg === plugin, `hub/package.json (${pkg}) === plugin.json (${plugin})`);
 ok(plugin === market, `plugin.json (${plugin}) === marketplace.json plugins[0] (${market})`);
-ok(read("hub/package.json").name === "dev-loop", "hub/package.json name is dev-loop (the published npm package)");
-ok(read(".claude-plugin/marketplace.json").plugins[0].name === "dev-loop", "marketplace plugins[0].name is dev-loop");
+ok(read("hub/package.json").name === "@dyzsasd/dev-loop", "hub/package.json name is @dyzsasd/dev-loop (the published npm package — scoped; bare 'dev-loop' was blocked by npm as too similar to 'devloop'. The `dev-loop` BIN is unchanged)");
+ok(read(".claude-plugin/marketplace.json").plugins[0].name === "dev-loop", "marketplace plugins[0].name is dev-loop (the Claude plugin name — distinct from the npm package)");
 
 console.log(fails === 0 ? "\nVERSION_SYNC_OK" : `\n${fails} FAILED — run: node hub/src/release-version.ts <version>`);
 process.exit(fails === 0 ? 0 : 1);
