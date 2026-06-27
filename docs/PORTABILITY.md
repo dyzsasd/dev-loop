@@ -54,7 +54,8 @@ panes**, so `DEVLOOP_ACTOR` (which differs per agent) **cannot** live there — 
 **launching process env** each pane exports before starting the CLI, and the CLI must **propagate
 that process env to the spawned MCP subprocess**. Claude Code's `.mcp.json` solves this with
 per-pane `${VAR}` expansion; for the others it depends on env inheritance — **which is exactly what
-the identity gate (§4) checks.**
+the identity gate (§4) checks. (Certified result: Codex does NOT inherit the process env — supply identity
+per-pane via the `-c` override instead; see §4a.)**
 
 ---
 

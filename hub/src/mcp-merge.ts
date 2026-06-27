@@ -20,13 +20,35 @@ export type McpMergeResult =
   | { ok: true; action: "created" | "merged" | "updated" | "unchanged"; servers: string[] }
   | { ok: false; error: string };
 
-// Build the dev-loop-hub entry FROM the committed template (the single source of truth for its shape — so a
-// future template change propagates), filling the absolute hub server.ts path into `args` and pinning the
+// The published npm package packs only hub/dist + README — config/ lives OUTSIDE the packed dir, so the repo
+// template is absent when installed (Codex review 2026-06-27). This embedded default is the fallback: the
+// canonical dev-loop-hub entry shape (env NAME-only; an args slot ending in server.ts that buildEntry rewrites
+// to the real absolute path). Keep it in sync with config/mcp.example.json's dev-loop-hub entry.
+const DEFAULT_TEMPLATE: { mcpServers: Record<string, unknown> } = {
+  mcpServers: {
+    [SERVER_NAME]: {
+      command: "node",
+      args: ["server.ts"],
+      env: { DEVLOOP_ACTOR: "${DEVLOOP_ACTOR:-operator}" },
+    },
+  },
+};
+
+// Resolve the template object: an EXPLICIT path (tests) must read it (throw if unreadable — preserves the §15
+// suite's behavior); otherwise prefer the repo template file and fall back to the embedded default when it's
+// absent (the installed-package path, where config/ wasn't packed).
+function resolveTemplate(explicitPath: string | undefined, repoPath: string): { mcpServers?: Record<string, unknown> } {
+  if (explicitPath) return JSON.parse(readFileSync(explicitPath, "utf8")) as { mcpServers?: Record<string, unknown> };
+  if (existsSync(repoPath)) { try { return JSON.parse(readFileSync(repoPath, "utf8")) as { mcpServers?: Record<string, unknown> }; } catch { /* corrupt repo template → embedded default */ } }
+  return DEFAULT_TEMPLATE;
+}
+
+// Build the dev-loop-hub entry FROM the resolved template (the single source of truth for its shape — so a
+// future template change propagates), filling the absolute hub server path into `args` and pinning the
 // DEVLOOP_PROJECT default to the project key (matches the dogfood `.mcp.json` `${DEVLOOP_PROJECT:-<key>}`).
-function buildEntry(templatePath: string, hubServerPath: string, projectKey: string): Record<string, unknown> {
-  const tmpl = JSON.parse(readFileSync(templatePath, "utf8")) as { mcpServers?: Record<string, unknown> };
+function buildEntry(tmpl: { mcpServers?: Record<string, unknown> }, hubServerPath: string, projectKey: string): Record<string, unknown> {
   const src = tmpl.mcpServers?.[SERVER_NAME];
-  if (!src || typeof src !== "object") throw new Error(`template ${templatePath} has no mcpServers["${SERVER_NAME}"] entry`);
+  if (!src || typeof src !== "object") throw new Error(`template has no mcpServers["${SERVER_NAME}"] entry`);
   // §16/DL-44: the key becomes the `${DEVLOOP_PROJECT:-<key>}` default; a key carrying `$`/`{`/`}` would
   // produce a NESTED ${...} (the DL-44 SoR-fork footgun) in the product .mcp.json — reject it loudly rather
   // than write a malformed config. Real project keys are plain identifiers, so this never bites in practice.
@@ -61,11 +83,13 @@ function writeAtomic(path: string, obj: unknown): void {
 
 export function mergeMcpServer(opts: McpMergeOpts): McpMergeResult {
   const { mcpJsonPath, hubServerPath, projectKey } = opts;
-  const here = dirname(fileURLToPath(import.meta.url)); // hub/src
-  const templatePath = opts.templatePath ?? join(here, "..", "..", "config", "mcp.example.json");
+  const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (published)
 
   let entry: Record<string, unknown>;
-  try { entry = buildEntry(templatePath, hubServerPath, projectKey); }
+  try {
+    const tmpl = resolveTemplate(opts.templatePath, join(here, "..", "..", "config", "mcp.example.json"));
+    entry = buildEntry(tmpl, hubServerPath, projectKey);
+  }
   catch (e) { return { ok: false, error: `could not build the ${SERVER_NAME} entry: ${(e as Error).message}` }; }
 
   // No existing file → create a fresh `.mcp.json` carrying just our server.
