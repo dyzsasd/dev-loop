@@ -329,8 +329,9 @@ capabilities that make the product better, even when they aren't written in the 
    (conventions §6), labels `dev-loop` + `Feature`/`Improvement` + `pm`, a
    `priority` (1=Urgent…4=Low) reflecting impact, `state:"Todo"`, set `project`.
    **Dev-tier routing (split-dev projects only, conventions §21a):** if the project runs
-   the two-tier model (detect from config — `senior-dev`/`junior-dev` present in `models{}`
-   / the launcher panes), **assign the dev tier at filing** by one rule: **new module / new
+   the two-tier model — detect it from the **authoritative config flag `devSplit:true`**
+   (§11; never inferred from `models{}` presence, launcher panes, board history, or any
+   ticket) — **assign the dev tier at filing** by one rule: **new module / new
    feature** (needs a design) ⇒ **senior-dev** (design-and-delegate); **improvement /
    bug-fix** (a scoped change) ⇒ **junior-dev**; **BORDERLINE ⇒ default to junior-dev**
    (escalation is the cheap safety net, so over-routing to the expensive tier is the

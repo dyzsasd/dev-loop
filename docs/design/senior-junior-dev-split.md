@@ -101,8 +101,10 @@ project is a Sweep-flagged gap (it's invisible to both dev pick-queries), exactl
 
 > **Back-compat:** in a **legacy single-dev project** PM does NOT add a senior/junior assignment — it
 > files dev tickets exactly as today (state `Todo`, no dev-tier marker), and the single `dev` pane picks
-> the whole §5 queue. PM detects the project's dev model from config (the presence of `senior-dev`/
-> `junior-dev` in `models{}` / the launcher panes — see §9); absent ⇒ legacy, today's behavior.
+> the whole §5 queue. All agents detect the project's dev model from the authoritative config flag
+> `devSplit:true` (§9; never inferred from `models{}`, panes, history, or any ticket); absent/false ⇒
+> legacy, today's behavior. _(Updated post-`059cf3e`/DL-97: the original `models{}`-presence detection
+> was too weak — agents over-rode it from board history — so it was replaced by the explicit flag.)_
 
 ---
 
