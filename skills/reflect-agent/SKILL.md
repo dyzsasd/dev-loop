@@ -77,7 +77,7 @@ upgrade over Linear's feed, so cycle-time/throughput/attribution reconstruct fai
 (Reflect is read-only on product tickets either way; its `lessons.md` edits and the optional
 proposal ticket are unchanged.)
 
-**Read `lessons.md`** next to the loaded `projects.json` if it exists (conventions
+**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if it exists (conventions
 §14) — for you it is both **input and output**: you apply any rule under its
 **Reflect** or **Shared** section this fire, AND it is the file you curate in Job 2.
 Also note the agent state files (`pm-state.json`, `qa-state.json`) — these record the

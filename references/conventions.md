@@ -663,8 +663,10 @@ it never guesses repo paths, URLs, or deploy commands.
 
 **Runtime files in the data dir.** Alongside `projects.json`, each agent keeps
 local per-operator state next to it: `pm-state.json` / `qa-state.json` (the
-last-reviewed/swept SHA and swept review-lenses (PM) / swept surfaces (QA)), and an
-optional `lessons.md` (per-operator behavioral corrections, §14). These are
+last-reviewed/swept SHA and swept review-lenses (PM) / swept surfaces (QA)) live next to
+`projects.json` (internally project-keyed), while the optional `lessons.md` (per-operator
+behavioral corrections, §14) lives **per-project** under `<project-key>/` (DL-80, matching
+`reports/`; the legacy root file is the fallback). These are
 machine-local — never committed, never shared; created lazily on first run. **In
 `local` backend mode (§18) the ticket board also lives here** —
 `${CLAUDE_PLUGIN_DATA}/<project-key>/board/` (`tickets/`, `counter.json`), or wherever
@@ -760,9 +762,9 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
 2. Ensure the `linearProject` exists; if not, ask the user before creating it.
 3. Confirm `strategyDoc` is readable and `testEnv`/`build`/`deploy` commands are
    correct with the user (these gate real deploys).
-4. Create the runtime files next to `projects.json` if absent: `pm-state.json`,
-   `qa-state.json`, and a `lessons.md` skeleton (§11, §14). (`/dev-loop:init` does
-   this for you.)
+4. Create the runtime files if absent: `pm-state.json`, `qa-state.json` (next to
+   `projects.json`), and a `lessons.md` skeleton **under `<project-key>/`** (§14, matching
+   `reports/`). (`/dev-loop:init` does this for you.)
 5. **If `backend:"local"`** (§18): skip steps 1–2 (no Linear labels/project to
    provision — labels are just strings, and the board dir is the project container)
    and instead scaffold the board — `${CLAUDE_PLUGIN_DATA}/<project-key>/board/` with
@@ -774,10 +776,13 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
 
 ## 14. Lessons file — per-operator corrections
 
-A `lessons.md` next to the loaded `projects.json` (§11) lets the operator correct
-agent behavior per-product **without forking this plugin's skills**. Each skill
-reads it at the very top of every fire (right after conventions + config) and
-applies any rule under its section that fire.
+A `lessons.md` under the project's own data dir — **`<data>/<project-key>/lessons.md`**, the same
+per-project home `reports/` already uses (§22) — lets the operator correct agent behavior per-product
+**without forking this plugin's skills**. (DL-80: per-project so a multi-project data dir never
+cross-contaminates one product's rules into another's fires; **back-compat fallback** — if no
+per-project file exists, agents read the legacy root `lessons.md` next to `projects.json`, so an existing
+single-project install keeps working until migrated.) Each skill reads it at the very top of every fire
+(right after conventions + config) and applies any rule under its section that fire.
 
 **Reflect is the curator of this file.** Every other agent only *reads* its own
 section; the Reflect agent (§17) also *writes* it — adding/superseding/pruning

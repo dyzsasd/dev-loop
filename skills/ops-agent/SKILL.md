@@ -64,7 +64,7 @@ same list/get/update/comment operations to a machine-local file board with ident
 state machine, labels, and protocols. Read every
 `list_issues`/`get_issue`/`save_issue`/comment call below as "via the configured backend (§18)."
 
-**Read `lessons.md`** next to the loaded `projects.json` if it exists, and apply any
+**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if it exists, and apply any
 rule under its **Ops** or **Shared** section this fire (conventions §14).
 
 **Reports & operator review (conventions §22).** At run-start (after `lessons.md`):

@@ -57,7 +57,7 @@ recurring loop, so the only "freshness" that matters is: **re-read ground truth 
 Linear/disk every time, never trust conversation memory for what already exists.**
 On a hard failure, log one line, report what you completed, and exit cleanly.
 
-**Read `lessons.md`** next to the loaded `projects.json` if it exists, and apply any
+**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if it exists, and apply any
 rule under its **Shared** section this run (conventions §14). (init has no dedicated
 lessons section — it's not a loop agent — but a `Shared` rule still applies.)
 
@@ -338,7 +338,9 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   points at a non-empty, non-board directory, **refuse and flag it** (don't risk
   globbing another project's files, §18 firewall). If the board already exists, leave
   it untouched and just note it. Skip entirely for `backend:"linear"`.
-- `lessons.md` — a skeleton with one section header per agent (all eight) plus the
+- `lessons.md` (at `${CLAUDE_PLUGIN_DATA}/<key>/lessons.md` — the project's
+  `<project-key>/` data dir, the same per-project home as `reports/` below, **not** the
+  flat data-dir root) — a skeleton with one section header per agent (all eight) plus the
   shared section, in this exact order (conventions §14):
 
   ```markdown
@@ -369,7 +371,7 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   ```
 
   Leave the sections empty — the operator adds rules later (conventions §14). If
-  `lessons.md` already exists, **don't touch it** (don't reorder or inject headers
+  `lessons.md` already exists at that per-project path, **don't touch it** (don't reorder or inject headers
   into a file the operator owns); just note its presence. In `dry-run`, print the
   files you'd create.
 - **Reports tree** (conventions §22) — `${CLAUDE_PLUGIN_DATA}/<key>/reports/<agent>/{daily,

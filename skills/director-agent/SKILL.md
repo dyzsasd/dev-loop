@@ -75,7 +75,7 @@ tools (`topic.*`, `post.add`, `doc.*`, `list_issues`/`save_issue`/…). Your ide
 `DEVLOOP_ACTOR=director` (the per-agent attribution win, §18); your authority on the
 board is **chair = `opened_by`** (you may synthesize/close only topics you opened).
 
-**Read `lessons.md`** next to the loaded `projects.json` if it exists, and apply any
+**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if it exists, and apply any
 rule under its **Director** or **Shared** section this fire (conventions §14).
 
 **Reports & operator review (conventions §22).** At run-start (after `lessons.md`):
