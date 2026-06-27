@@ -390,9 +390,9 @@ itself), and a one-shot **rescue** before a `fix-exhausted` block. See
 
 ## Status
 
-**v0.22.0.** Ten agents — five inward (**PM / QA / Dev**, plus the opt-in two-tier
-**senior-dev / junior-dev**) and three outward (**Ops / Architect / Director**) — plus the
-**Sweep** janitor, the **Reflect** self-evolution agent, and the `init` onboarding command.
+**v0.22.0.** Ten agents — five inward (**PM / QA / Dev / Sweep / Reflect**) and three
+outward (**Ops / Architect / Director**), with an opt-in two-tier **senior-dev / junior-dev**
+Dev split — plus the `init` onboarding command.
 Coordination is backend-pluggable: **Linear** (default), a **local file board**, or the
 **local hub** (`node:sqlite` SoR with per-agent identity + a localhost web UI + versioned
 docs + the discussion board/Director + a two-way Lark/Slack channel + a one-way Linear
