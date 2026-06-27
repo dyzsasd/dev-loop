@@ -37,6 +37,21 @@ export interface DaemonOpts {
   // DL-3 roadmap write surface (optional — absent ⇒ the daemon stays GET-only, exactly as DL-1/DL-2):
   writeDb?: DatabaseSync;    // a SEPARATE writable connection used ONLY by the /roadmap/* write routes
   actor?: string;            // the daemon's identity — attributes writes + gates publish (operator-only)
+  // DL-83: the repo-file strategyDoc PATH when the hub roadmap is NOT this project's north-star (no agent
+  // reads it). Set ⇒ /roadmap shows a divergence banner; absent ⇒ no banner (hub-doc/director, or unknown).
+  roadmapRepoFileStrategy?: string;
+}
+
+// DL-83: does THIS project's resolved config make the hub roadmap doc its north-star, or is a repo-file
+// strategyDoc the north-star? Returns the strategyDoc PATH when NO agent reads the hub roadmap doc
+// (hub.docs:false/absent AND no director config AND a string strategyDoc) → the /roadmap divergence banner;
+// else undefined (the hub roadmap IS the north-star — hub.docs:true or a director chairs it — or the config
+// is unknown) → no banner. Pure + derived from config ONLY (never request input, §17), so it is unit-testable.
+export function roadmapDivergenceDoc(proj: { hub?: { docs?: boolean }; director?: unknown; strategyDoc?: unknown } | undefined | null): string | undefined {
+  if (!proj) return undefined;
+  if (proj.hub?.docs === true) return undefined;   // a first-class hub doc IS the north-star
+  if (proj.director != null) return undefined;      // a Director drafts/chairs the hub roadmap → north-star
+  return typeof proj.strategyDoc === "string" ? proj.strategyDoc : undefined;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -156,7 +171,7 @@ function writeOriginOk(req: IncomingMessage): boolean {
   return true;                                                  // no Origin/Referer → non-browser client (allowed)
 }
 
-async function handleRoadmapWrite(action: "save" | "publish", req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string): Promise<void> {
+async function handleRoadmapWrite(action: "save" | "publish", req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string, roadmapRepoFileStrategy?: string): Promise<void> {
   let form: URLSearchParams;
   // If the body was rejected (too large / aborted), the socket may already be destroyed — only respond
   // when the response is still writable, so we never throw write-after-destroy into the outer catch.
@@ -168,7 +183,7 @@ async function handleRoadmapWrite(action: "save" | "publish", req: IncomingMessa
   // conflict / validation error doesn't discard a substantial edit). roadmapPage recomputes the hidden
   // `baseVersion` from the current latest, so an immediate re-submit targets the right base.
   const rerender = (msg: string, submittedBody?: string) =>
-    htmlOut(res, statusForDocErr(msg), page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: true, canPublish: actor === "operator", notice: { kind: "error", msg }, submittedBody })));
+    htmlOut(res, statusForDocErr(msg), page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: true, canPublish: actor === "operator", notice: { kind: "error", msg }, submittedBody, roadmapRepoFileStrategy })));
 
   if (action === "save") {
     const baseVersion = Number(form.get("baseVersion"));
@@ -289,7 +304,7 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
 // Build the HTTP server over an already-opened, project-resolved db. Exported so tests (and a later
 // in-process embed) can start it without the CLI bootstrap below. GET routes issue ONLY SELECTs; the
 // optional DL-3 /roadmap/* POST routes write the roadmap doc through the separate `writeDb` connection.
-export function createDaemon({ db, projectId, projectKey, writeDb, actor }: DaemonOpts): Server {
+export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadmapRepoFileStrategy }: DaemonOpts): Server {
   const canWrite = !!writeDb && !!actor;
   return createServer(async (req, res) => {
     const method = req.method ?? "GET";
@@ -306,7 +321,7 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
         // DL-19: refuse a cross-origin (CSRF) or foreign-Host (DNS-rebinding) write BEFORE any docSave/
         // docPublish — the guard runs ahead of handleRoadmapWrite, so a refused request never mutates.
         if (!writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
-        await handleRoadmapWrite(path === "/roadmap/save" ? "save" : "publish", req, res, db, writeDb!, projectId, projectKey, actor!);
+        await handleRoadmapWrite(path === "/roadmap/save" ? "save" : "publish", req, res, db, writeDb!, projectId, projectKey, actor!, roadmapRepoFileStrategy);
         return;
       }
       // DL-29: opt-in human ticket-write routes — present ONLY when canWrite AND humanWrite.enabled. When
@@ -345,7 +360,7 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor }: Daem
 
       // GET /roadmap — the roadmap doc view + edit form (+ operator-only publish) (DL-3).
       if (path === "/roadmap") {
-        return htmlOut(res, 200, page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: canWrite, canPublish: canWrite && actor === "operator" })));
+        return htmlOut(res, 200, page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: canWrite, canPublish: canWrite && actor === "operator", roadmapRepoFileStrategy })));
       }
 
       // GET /activity — read-only activity & throughput over the events ledger (DL-17). Pure SELECTs
@@ -686,7 +701,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error(`[daemon] DEVLOOP_ACTOR='${ACTOR}' is not a known actor — refusing to start the roadmap write surface with an unattributable identity. Seed actors via the hub first.`);
     process.exit(1);
   }
-  const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR });
+  // DL-83: detect whether a repo-file strategyDoc (not the hub roadmap doc) is THIS project's north-star,
+  // from the daemon's OWN resolved config (projects.json) — never request input (§17). When it is, /roadmap
+  // shows a divergence banner naming that file. Same config-read precedent as the §9 `notify` resolve below.
+  let roadmapRepoFileStrategy: string | undefined;
+  try { roadmapRepoFileStrategy = roadmapDivergenceDoc(loadProjectsConfig()?.projects?.[PROJECT_KEY]); }
+  catch { roadmapRepoFileStrategy = undefined; }
+  const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR, roadmapRepoFileStrategy });
   // DL-26: read the per-project Human-Blocked reminder cadence (settings_json.humanBlockedReminderHours).
   // DL-76: read the loop no-progress circuit-breaker window (settings_json.noProgressWindowHours) from the
   // SAME parse — both are operator-set, hours, 0/absent ⇒ off (true no-op, no timer).

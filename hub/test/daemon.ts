@@ -10,7 +10,7 @@ import { once } from "node:events";
 import { request as httpRequest } from "node:http";
 import { openDb } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
-import { createDaemon } from "../src/daemon.ts";
+import { createDaemon, roadmapDivergenceDoc } from "../src/daemon.ts";
 
 const DB = "/tmp/hub-daemon/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -219,10 +219,10 @@ ok(del.status === 405, "DELETE /api/tickets/:id → 405 (read-only)");
 // ─── DL-3: roadmap view/edit write surface — markdown render, CAS, operator-publish gate, §17 firewall ───
 // Writable daemons take a SEPARATE writable connection + an actor; the read connection stays query_only.
 // One runs as the OPERATOR (may publish), one as a NON-operator (drafts only).
-async function startWritable(actor: string): Promise<{ base: string; close: () => void }> {
+async function startWritable(actor: string, roadmapRepoFileStrategy?: string): Promise<{ base: string; close: () => void }> {
   const wdb = openDb(DB);                                   // writable — backs ONLY the /roadmap/* routes
   const rdb = openDb(DB); rdb.exec("PRAGMA query_only=ON");
-  const srv = createDaemon({ db: rdb, projectId, projectKey: "dmn", writeDb: wdb, actor });
+  const srv = createDaemon({ db: rdb, projectId, projectKey: "dmn", writeDb: wdb, actor, roadmapRepoFileStrategy });
   srv.listen(0, "127.0.0.1"); await once(srv, "listening");
   const p = (srv.address() as { port: number }).port;
   return { base: `http://127.0.0.1:${p}`, close: () => { srv.close(); rdb.close(); wdb.close(); } };
@@ -292,6 +292,39 @@ await Promise.race([
   new Promise((r) => setTimeout(r, 3000)),
 ]);
 ok(settled, "an over-limit (>1MB) POST body settles fast (no hang) — the handler never dangles");
+
+// ── DL-83: north-star divergence banner on /roadmap (a repo-file strategyDoc ⇒ NO agent reads the hub roadmap) ──
+// Detection half (AC1/AC3) — the pure config→flag rule. Banner shows ONLY for a repo-file strategyDoc with no
+// agent reading the hub roadmap (hub.docs:false/absent AND no director); a hub-doc / director project ⇒ none.
+ok(roadmapDivergenceDoc({ hub: { docs: false }, strategyDoc: "docs/STRATEGY.md" }) === "docs/STRATEGY.md",
+   "DL-83 detect: repo-file strategy (hub.docs:false, no director) → the strategyDoc path (banner)");
+ok(roadmapDivergenceDoc({ strategyDoc: "docs/STRATEGY.md" }) === "docs/STRATEGY.md",
+   "DL-83 detect: hub.docs ABSENT (+ no director) → still a repo-file strategy → the path");
+ok(roadmapDivergenceDoc({ hub: { docs: true }, strategyDoc: "docs/STRATEGY.md" }) === undefined,
+   "DL-83 detect: hub.docs:true → the hub doc IS the north-star → no banner");
+ok(roadmapDivergenceDoc({ director: { channel: {} }, strategyDoc: "docs/STRATEGY.md" }) === undefined,
+   "DL-83 detect: a director config present → the hub roadmap is the north-star → no banner");
+ok(roadmapDivergenceDoc({ strategyDoc: { linearDocument: "x" } }) === undefined && roadmapDivergenceDoc(undefined) === undefined,
+   "DL-83 detect: a non-repo-file (linear/hub-doc object) strategyDoc, or unknown config → no banner");
+
+// Rendering half (AC5 + AC2 + AC4) — a daemon told the strategy is a repo file renders the neutral banner
+// (naming the esc'd path) WITHOUT hiding the edit control; a daemon with no flag (hub-doc/director) omits it.
+const BANNER = "not read by the agents";
+const rfs = await startWritable("operator", "docs/STRATEGY.md");
+const rfsView = await gettext(rfs.base, "/roadmap");
+ok(rfsView.text.includes(BANNER) && rfsView.text.includes("docs/STRATEGY.md") && rfsView.text.includes('class="notice n-info"'),
+   "DL-83: repo-file-strategy daemon → /roadmap shows the neutral divergence banner (n-info, not n-err) naming the strategyDoc");
+ok(rfsView.text.includes('action="/roadmap/save"'),
+   "DL-83: the banner is informational — it does NOT hide the existing edit control (AC2)");
+const xss = await startWritable("operator", "docs/<script>.md");
+ok((await gettext(xss.base, "/roadmap")).text.includes("docs/&lt;script&gt;.md"),
+   "DL-83: the strategyDoc path is esc'd in the banner (AC4 — XSS parity)");
+const noBanner = await gettext(opd.base, "/roadmap");   // opd was created WITHOUT roadmapRepoFileStrategy
+// Discriminate on the rendered banner ELEMENT (`class="notice n-info"`), NOT the bare "n-info" substring —
+// the `.n-info` CSS rule is in every page's <style>, so a substring check would false-positive here.
+ok(!noBanner.text.includes(BANNER) && !noBanner.text.includes('class="notice n-info"'),
+   "DL-83: hub-roadmap-is-north-star daemon (no flag) → NO divergence banner (AC3 byte-for-byte unchanged)");
+rfs.close(); xss.close();
 
 // ── DL-19: CSRF (cross-origin) + DNS-rebinding (foreign Host) guard on the write routes ───────────
 // fetch() forbids setting Origin/Host (browser-forbidden header names), so use a raw node:http request
