@@ -72,6 +72,19 @@ function stagingDeployRejection(db: DatabaseSync, projectId: string, fromState: 
   return `staging-deploy gate: In Progress → In Review requires env:dev (this repo deploys and requireDeployBeforeReview is on)`;
 }
 
+// DL-77 verify gate (the Ralph-Wiggum guard). Enforced in updateTicketRow below — the SAME single-choke-point
+// placement as stagingDeployRejection — so it covers BOTH the MCP save_issue transition AND the daemon board-move
+// automatically. The maker-self-accept edge In Progress → Done is REJECTED: Done is the OWNER's verdict and must
+// be reached via In Review (owner verification). Every OTHER path to Done stays legal — In Review → Done (the
+// verified close), Todo → Done / Backlog → Done (the §9a intake parent-close, which MUST stay legal or it breaks
+// PM's grooming), and In Progress → Canceled/Duplicate (terminal, NOT Done). Unlike the DL-38 gate this is
+// UNCONDITIONAL (no opt-in config): "Done means verified" is a §3 loop invariant, not an operator preference.
+function verifyGateRejection(fromState: string, next: TicketUpdateFields): string | null {
+  if (fromState === "In Progress" && next.state === "Done")
+    return `verify gate: In Progress → Done is not allowed — Done must be reached via In Review (owner verification); move to In Review first`;
+  return null; // every other transition is the caller's concern
+}
+
 // ─── the raw mechanics: the ONLY tickets/comments writers in the hub ──────────
 
 // THE ticket INSERT. Allocates the id, writes all 14 columns, logs issue.create. `createEventData` is passed
@@ -89,15 +102,15 @@ export function insertTicket(
   return id;
 }
 
-// THE ticket UPDATE — the post-DL-35 converged "applyTicketWrite" path. Enforces the DL-38 staging-deploy
-// gate FIRST (so both the MCP save_issue transition and the daemon board-move are covered automatically),
-// then writes the caller-merged `next` row and logs issue.transition (with the resolved assignee) on a real
+// THE ticket UPDATE — the post-DL-35 converged "applyTicketWrite" path. Enforces the transition gates FIRST
+// (the DL-38 staging-deploy gate + the DL-77 verify gate — so both the MCP save_issue transition and the daemon
+// board-move are covered automatically), then writes the caller-merged `next` row and logs issue.transition (with the resolved assignee) on a real
 // state change else issue.update. TXN-AGNOSTIC: it never BEGINs/COMMITs — the MCP's atomic read-merge-write
 // txn (and the daemon's single-op writes) stay the caller's concern; a gate rejection writes NOTHING.
 export function updateTicketRow(
   db: DatabaseSync, projectId: string, actor: string, id: string, fromState: string, next: TicketUpdateFields,
 ): WriteResult {
-  const gate = stagingDeployRejection(db, projectId, fromState, next);
+  const gate = stagingDeployRejection(db, projectId, fromState, next) ?? verifyGateRejection(fromState, next);
   if (gate) return { ok: false, status: 400, error: gate };
   const t = nowIso();
   db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)

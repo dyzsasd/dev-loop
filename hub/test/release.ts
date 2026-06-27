@@ -151,6 +151,40 @@ const mRej = moveTicket(wdb, projectId, "operator", s6, "In Review");
 ok(!mRej.ok && /staging-deploy/.test((mRej as { error?: string }).error ?? ""), "DL-38: the daemon move primitive enforces the SAME gate (shared write path)");
 await call(dev, "save_issue", { id: s6, labels: [...FULL, "env:dev"] });
 ok(moveTicket(wdb, projectId, "operator", s6, "In Review").ok, "DL-38: daemon move with env:dev present ⇒ allowed");
+
+// ════ DL-77: the verify gate (Ralph-Wiggum guard) — In Progress → Done is REJECTED; Done must go via In Review ════
+// The maker can't self-accept its own work. Enforced in the SAME shared write path (updateTicketRow) as the DL-38
+// gate, so it covers BOTH the MCP save_issue transition AND the daemon moveTicket primitive. UNCONDITIONAL — "Done
+// means verified" is a §3 loop invariant — so release config is OFF here and this gate is the only one live.
+setRelease(null);
+
+// (a) MCP path: a worked (In Progress) ticket → Done is rejected, the message names the In Review path, and the
+//     rejected write rolls back (the ticket stays In Progress).
+const v1 = await inProgress("verify-gate subject");
+const vRej = await callRaw(dev, "save_issue", { id: v1, state: "Done" });
+ok(vRej.isError && /In Review/.test(vRej.data.error ?? ""), "DL-77: In Progress → Done REJECTED (MCP); message names the In Review path");
+ok((await call(dev, "get_issue", { id: v1 })).state === "In Progress", "DL-77: the rejected self-accept did NOT move the ticket (rollback)");
+
+// (b) the legal route still works: In Progress → In Review (Dev hands off) → Done (the owner verifies).
+await call(dev, "save_issue", { id: v1, state: "In Review" });
+ok((await call(pm, "save_issue", { id: v1, state: "Done" })).state === "Done", "DL-77: In Review → Done still passes (owner verification)");
+
+// (c) no over-blocking — every OTHER path to Done stays legal, and only → Done is gated:
+const v2 = await call(pm, "save_issue", { title: "intake parent close", type: "Feature", labels: FULL });
+ok((await call(pm, "save_issue", { id: v2.id, state: "Done" })).state === "Done", "DL-77: Todo → Done stays legal (§9a intake parent-close — must not break PM grooming)");
+const v3 = await call(pm, "save_issue", { title: "backlog to done", type: "Feature", state: "Backlog", labels: FULL });
+ok((await call(pm, "save_issue", { id: v3.id, state: "Done" })).state === "Done", "DL-77: Backlog → Done stays legal");
+const v4 = await inProgress("in progress to canceled");
+ok((await call(dev, "save_issue", { id: v4, state: "Canceled" })).state === "Canceled", "DL-77: In Progress → Canceled is NOT gated (only → Done is)");
+const v4b = await inProgress("in progress to duplicate");
+ok((await call(dev, "save_issue", { id: v4b, state: "Duplicate", duplicateOf: v1 })).state === "Duplicate", "DL-77: In Progress → Duplicate is NOT gated either (only → Done is)");
+
+// (d) the daemon move primitive enforces the SAME gate (shared write path), exactly like DL-38.
+const v5 = await inProgress("daemon move to done");
+const vmRej = moveTicket(wdb, projectId, "operator", v5, "Done");
+ok(!vmRej.ok && /In Review/.test((vmRej as { error?: string }).error ?? ""), "DL-77: the daemon move primitive also rejects In Progress → Done (shared path)");
+ok((await call(dev, "get_issue", { id: v5 })).state === "In Progress", "DL-77: the rejected daemon move did NOT move the ticket");
+
 wdb.close();
 
 for (const c of [dev, op, pm]) await c.close();
