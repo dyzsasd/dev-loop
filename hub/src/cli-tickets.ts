@@ -24,17 +24,18 @@ const parseArr = (j: string): string[] => { try { const a = JSON.parse(j); retur
 interface ListRow { id: string; title: string; type: string; state: string; assignee: string | null; priority: number; labels: string; updated_at: string }
 interface DetailRow extends ListRow { description: string; created_at: string; related_to: string; duplicate_of: string | null }
 
-// `dev-loop tickets [--all] [--state <name>] [--q <text>|<text>]` — board list, one line per ticket.
+// `dev-loop tickets [--all] [--state <name>] [--type <T>] [--owner <pm|qa>] [--label <name>] [--q <text>|<text>]` — board list, one line per ticket.
 function listTickets(db: DatabaseSync, projectId: string, args: string[]): number {
-  let all = false, state: string | undefined, q: string | undefined;
+  let all = false, state: string | undefined, q: string | undefined, type: string | undefined, owner: string | undefined, label: string | undefined;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--all") all = true;
-    else if (a === "--state" || a === "--q") {
+    else if (a === "--state" || a === "--q" || a === "--type" || a === "--owner" || a === "--label") {
       const v = args[++i];
-      if (v === undefined) { console.error(`dev-loop: ${a} needs a value`); return 2; } // a dangling flag is a usage error, not a silent no-filter
-      if (a === "--state") state = v; else q = v;
-    } else if (!a.startsWith("-") && q === undefined) q = a; // positional free-text (parity with the web board's `q`)
+      if (v === undefined) { console.error(`dev-loop: ${a} needs a value`); return 2; } // a dangling flag is a usage error, not a silent no-filter (DL-91)
+      if (a === "--state") state = v; else if (a === "--q") q = v; else if (a === "--type") type = v; else if (a === "--owner") owner = v; else label = v;
+    } else if (a.startsWith("-")) { console.error(`dev-loop: unknown flag '${a}'`); return 2; } // DL-93: reject unknown flags — never swallow the following arg as positional --q (the `--type Bug` footgun)
+    else if (q === undefined) q = a; // positional free-text (parity with the web board's `q`)
   }
   // board order (priority ASC, updated_at DESC) — verbatim from daemonviews.boardPage so the terminal view matches the web view.
   let rows = db.prepare(
@@ -42,6 +43,9 @@ function listTickets(db: DatabaseSync, projectId: string, args: string[]): numbe
   ).all(projectId) as ListRow[];
   if (!all && !state) rows = rows.filter((r) => !TERMINAL.has(r.state)); // default (only when no explicit --state): non-terminal only — an explicit --state always wins, incl. a terminal one (DL-91)
   if (state) rows = rows.filter((r) => r.state === state);
+  if (type) rows = rows.filter((r) => r.type === type);                        // DL-93: exact type match (r.type already selected at the query); composes (AND) with the others & is orthogonal to the non-terminal default
+  if (owner) rows = rows.filter((r) => ownerOf(parseArr(r.labels)) === owner);  // DL-93: owner via the §4 routing-label helper (same helper the render uses below)
+  if (label) rows = rows.filter((r) => parseArr(r.labels).includes(label));     // DL-93: arbitrary label membership (e.g. --label blocked / edge-case / tech-debt)
   if (q) { const needle = q.toLowerCase(); rows = rows.filter((r) => r.id.toLowerCase().includes(needle) || (r.title ?? "").toLowerCase().includes(needle)); }
   if (rows.length === 0) { console.log("No tickets."); return 0; }
   for (const r of rows) {
