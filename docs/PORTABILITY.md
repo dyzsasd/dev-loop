@@ -124,35 +124,12 @@ wrapper / the CLI's own loop facility) — the agents are **stateless per fire**
 "run the wrapper again". No agent hard-requires a Claude-Code-only tool; Bash/Read/Edit are
 near-universal — confirm your CLI exposes them.
 
-## 3b. Install optional Codex slash prompts
-
-Codex CLI custom prompts turn Markdown files in `~/.codex/prompts` into `/prompts:<name>` slash
-commands. OpenAI's Codex docs mark custom prompts as deprecated in favor of skills, so this is an
-attended compatibility layer, not the primary unattended loop runner.
-
-Install the generated prompts from the npm package:
-
-```bash
-npm i -g @dyzsasd/dev-loop
-dev-loop install-codex-prompts
-# optional: dev-loop install-codex-prompts --dest ~/.codex/prompts --data ~/.claude/plugins/data/dev-loop
-```
-
-Restart Codex. Then start a Codex session with the actor injected through `-c` and run a prompt:
-
-```bash
-codex -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="pm"' \
-  -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT="<project-key>"'
-
-# Inside Codex:
-/prompts:dev-loop-pm-agent
-```
-
-The installed commands are `/prompts:dev-loop-pm-agent`, `qa`, `dev`, `senior-dev`, `junior-dev`,
-`sweep`, `reflect`, `ops`, `architect`, `communication`, and `/prompts:dev-loop-init`.
-Each prompt is generated from the same SKILL body used by Claude and by `dev-loop run`, with
-`${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}` already expanded to the npm package assets and data
-dir. The prompt also instructs Codex to call `whoami` before hub writes and stop if the actor is wrong.
+> The old `install-codex-prompts` / `~/.codex/prompts/*.md` compatibility layer was **removed in
+> 0.23.0** (Codex deprecated custom prompts in favor of skills). For Codex, `dev-loop run --cli codex`
+> is the single path — it injects each SKILL as the prompt and self-defines the hub MCP via `-c`
+> (above). For an **unattended** loop it must run in the default (non-`--codex-safe`) mode: Codex
+> auto-cancels MCP tool calls that need approval, so `--codex-safe` makes the agent unable to reach
+> the hub. See [`RUNNING.md`](RUNNING.md) → "`--codex-safe`".
 
 ---
 

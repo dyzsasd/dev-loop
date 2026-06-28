@@ -118,8 +118,13 @@ Useful options:
 - `--root`, `--data`, `--hub-db`, `--project`, and `--cwd` make the run explicit for cron/systemd.
 - `--cli-arg <arg>` passes model or safety flags to the selected CLI before the prompt, e.g.
   `--cli-arg --model --cli-arg opus`.
-- `--codex-safe` omits Codex's unsafe bypass flags; by default the runner uses the same
-  Codex recipe as `PORTABILITY.md` so agent tools can operate.
+- `--codex-safe` omits Codex's `--dangerously-bypass-approvals-and-sandbox` flag. **Do not use it
+  for unattended Codex loops.** Without that flag Codex asks for approval on every MCP tool call, and
+  in non-interactive `codex exec` the call is auto-cancelled (`dev-loop-hub/whoami (failed)` →
+  `user cancelled MCP tool call`) — the agent never reaches the hub and the loop spins doing nothing.
+  The **default** mode adds the flag (the same recipe as `PORTABILITY.md`) so the hub tools operate
+  unattended; pass `--codex-safe` only for an *attended* run where you approve each tool call yourself.
+  (Claude Code has no equivalent gate — its inline `--mcp-config` tools run without approval.)
 
 The runner writes one log per agent under
 `${CLAUDE_PLUGIN_DATA}/<project-key>/runner-logs/`. Stop it with `Ctrl-C`; it forwards
@@ -129,10 +134,11 @@ cron, launchd, systemd, or any host process manager.
 ### B. Agent View — native Claude UI (`claude agents`)
 
 Use Agent View when you want Claude's background-session UI instead of the `dev-loop run`
-process. If `/plugin list` does not show `dev-loop`, run `dev-loop install-claude-plugin` and
-restart Claude Code, or run `/reload-plugins` in an existing session. This installs the plugin
-under `~/.claude/skills/dev-loop`; no source checkout is required unless you are developing the
-plugin.
+process. If `/plugin list` does not show `dev-loop`, run `dev-loop install-claude-plugin` — it
+registers a local **npm-source** marketplace and prints the `/plugin marketplace add …` +
+`/plugin install dev-loop@dev-loop-npm` commands to run (the plugin is pulled from the
+`@dyzsasd/dev-loop` npm package — no GitHub, no source checkout). Restart Claude Code or run
+`/reload-plugins` afterward.
 
 [Agent View](https://code.claude.com/docs/agent-view) (Claude Code >= 2.1.139) is one
 screen for all your background sessions — *Needs input / Running / Done* — that keep
@@ -174,36 +180,11 @@ Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent o
 > and [config-schema.md `models{}`](../references/config-schema.md) for routing rules, the design
 > gate, and the per-backend tier encoding. The legacy `dev` pane is unchanged when this is off.
 
-#### Optional: Codex CLI slash prompts
-
-Codex CLI supports user-defined slash prompts from `~/.codex/prompts/*.md`; they appear as
-`/prompts:<name>`. This is useful for an attended one-shot run, not for cadence. Codex marks custom
-prompts as deprecated in favor of skills, so treat this as a compatibility layer while
-`dev-loop run --cli codex` remains the durable launch path.
-
-Install them from the npm package:
-
-```bash
-dev-loop install-codex-prompts
-# writes ~/.codex/prompts/dev-loop-pm-agent.md, dev-loop-qa-agent.md, ...
-```
-
-Restart Codex after installing. Because Codex does not inherit `DEVLOOP_ACTOR` into MCP subprocesses,
-start one Codex session per agent identity when you use these prompts:
-
-```bash
-codex -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"' \
-  -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT="monpick"'
-
-# Inside the Codex TUI:
-/prompts:dev-loop-communication-agent
-```
-
-Available prompt names include `/prompts:dev-loop-pm-agent`, `/prompts:dev-loop-qa-agent`,
-`/prompts:dev-loop-dev-agent`, `/prompts:dev-loop-sweep-agent`,
-`/prompts:dev-loop-reflect-agent`, the outward agents, the two-tier Dev prompts, and
-`/prompts:dev-loop-init`. The generated prompt asks Codex to call `dev-loop-hub whoami` before hub
-writes and stop if the actor does not match.
+> For an attended one-shot Codex run, `dev-loop run --cli codex --once` is the path —
+> it injects the hub MCP via `-c` exactly as the cadence runner does. (The old
+> `install-codex-prompts` / `~/.codex/prompts/*.md` compatibility layer was removed in 0.23.0;
+> Codex deprecated custom prompts in favor of skills, and `dev-loop run --cli codex` is the
+> durable launch path.)
 
 ### C. Local tmux launcher — mixed models, one command
 
