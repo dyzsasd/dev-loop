@@ -175,8 +175,8 @@ async function call(c: Client, name: string, args: Record<string, unknown> = {})
   return { isError: !!r.isError, data: JSON.parse(r.content?.[0]?.text ?? "{}") };
 }
 
-const director = await as("director", "chanp", "CH");
-const beta = await as("director", "betap", "CB"); // second project for isolation
+const director = await as("ops", "chanp", "CH");
+const beta = await as("ops", "betap", "CB"); // second project for isolation
 
 // status before register
 ok((await call(director, "channel.status")).data.configured === false, "channel.status before register → configured:false");
@@ -210,7 +210,7 @@ const FIX = JSON.stringify([
 async function asFixture(c: Client, fixture: string): Promise<Client> { return c; } // (fixture rides env per-process)
 // re-connect director with the fixture env so poll sees it
 const directorF = await (async () => {
-  const env: Record<string, string> = { ...process.env, DEVLOOP_ACTOR: "director", DEVLOOP_PROJECT: "chanp", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1", DEVLOOP_CHANNEL_DRYRUN: "1", DEVLOOP_CHANNEL_TOKEN: "xoxb-DRYRUNSECRET", DEVLOOP_CHANNEL_FIXTURE: FIX };
+  const env: Record<string, string> = { ...process.env, DEVLOOP_ACTOR: "ops", DEVLOOP_PROJECT: "chanp", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1", DEVLOOP_CHANNEL_DRYRUN: "1", DEVLOOP_CHANNEL_TOKEN: "xoxb-DRYRUNSECRET", DEVLOOP_CHANNEL_FIXTURE: FIX };
   const c = new Client({ name: "chan-director-fix", version: "0" });
   await c.connect(new StdioClientTransport({ command: "node", args: ["src/server.ts"], env }));
   return c;
@@ -247,7 +247,7 @@ const RM_FIX = JSON.stringify([
   { providerMsgId: "300.4", authorRef: "U7", text: "roadmap: maybe we discuss mobile next quarter", providerTs: "300.4" },
 ]);
 const rmDir = await (async () => {
-  const env: Record<string, string> = { ...process.env, DEVLOOP_ACTOR: "director", DEVLOOP_PROJECT: "rmp", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1", DEVLOOP_CHANNEL_DRYRUN: "1", DEVLOOP_CHANNEL_TOKEN: "xoxb-DRYRUNSECRET", DEVLOOP_CHANNEL_FIXTURE: RM_FIX };
+  const env: Record<string, string> = { ...process.env, DEVLOOP_ACTOR: "ops", DEVLOOP_PROJECT: "rmp", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1", DEVLOOP_CHANNEL_DRYRUN: "1", DEVLOOP_CHANNEL_TOKEN: "xoxb-DRYRUNSECRET", DEVLOOP_CHANNEL_FIXTURE: RM_FIX };
   const c = new Client({ name: "chan-rm-dir", version: "0" });
   await c.connect(new StdioClientTransport({ command: "node", args: ["src/server.ts"], env }));
   return c;

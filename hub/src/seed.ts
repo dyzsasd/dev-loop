@@ -4,13 +4,13 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { openDb, nowIso } from "./db.ts";
 
-// The live dev-loop agents + the human operator. P5 repurposed `signal` → `director`.
+// The live dev-loop agents + the human operator.
 // DL split (senior/junior dev): `senior-dev` + `junior-dev` join as ACTIVE actors; the legacy single
 // `dev` STAYS ACTIVE (NOT retired) — it remains the canonical single-pane fallback for non-split
 // projects (e.g. monpick on Linear), so adding the two-tier model breaks no existing project.
 // Communication is an active outward actor for public article drafts; it writes drafts, not tickets.
-const AGENT_HANDLES = ["pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "director", "communication"];
-// `signal` retired into `director` (P5): kept as an INACTIVE actor so its historical comment/event
+const AGENT_HANDLES = ["pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "communication"];
+// `signal` is a RETIRED actor: kept as an INACTIVE actor so its historical comment/event
 // attribution stays readable, but refused for NEW writes (actorExists/G1 filter active=1).
 const RETIRED_HANDLES = ["signal"];
 

@@ -130,7 +130,7 @@ the choice is informed:
   alert is the §9 webhook on the **label** park.
 - **`service` (local daemon — recommended for "no-cloud AND I want a UI/identity").** A local
   `node:sqlite` hub (`docs/HUB-ARCHITECTURE.md`): **real per-agent identity**, a **web-UI board**,
-  the §25 discussion board / Director, versioned operator-published docs, and the canonical
+  versioned operator-published docs, and the canonical
   **`Human-Blocked` state** with a **daemon-reminded** operator alert. Optional one-way `mirror`
   pushes tickets to Linear for human visibility **without** migrating.
 - **`local` (file board — zero-cloud, minimal).** A machine-local markdown board; the same work
@@ -147,7 +147,7 @@ Slack.** The simple/default path is a **webhook** — paste an incoming-webhook 
 **env-var NAME** (never the literal). On `service`, register the `channels` row (`transport:
 "webhook"`) + set `settings_json.humanBlockedReminderHours`; on `linear`/`local`, record it as the
 §9 `notify` block. A **bot** app (history-read scope) is the **advanced opt-in** — only when the
-operator also wants the two-way §25 Director chat. **"none" ⇒ today's behavior (alerts off).**
+operator also wants two-way chat over the channel. **"none" ⇒ today's behavior (alerts off).**
 
 **`service` auto-wiring (the turnkey bootstrap).** For `backend:"service"`, `init` performs a
 **one-time bootstrap**: install hub deps → seed the project (idempotent: actors + the §4 labels +
@@ -369,8 +369,6 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
 
   ## Architect
 
-  ## Director
-
   ## Communication
   ```
 
@@ -394,7 +392,7 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   dictionary word — it must never collide with agent/ingested text); (4) get the operator's
   **attestation** that the reports container has no outbound integration sync and no
   non-operator subscribers (the MCP can't enumerate integrations, so this can't be
-  runtime-checked); (5) keep `director-agent` + `ops-agent` + `dev-agent` in
+  runtime-checked); (5) keep `ops-agent` + `dev-agent` in
   `reports.localOnlyAgents` (the **default** — highest-PII × highest-cadence; only remove one
   if the operator accepts the risk). `reports-state.json` is created lazily by the agents. In
   `dry-run`, print these steps; provision nothing.

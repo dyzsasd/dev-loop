@@ -3,11 +3,11 @@
 // since DL-69 (the dispatch-sharing refactor) — the stdio MCP server (server.ts), whose 27 op-backed tool
 // handlers are now thin call-throughs to agentOp() (server.ts's toMcp() maps {status,body}→MCP ok()/err()).
 // So each policy — the read SELECTs, the save_issue/save_comment orchestration (the DL-24 per-transition
-// assignTo + the DL-32 prod-promotion gate + the REPLACE-labels/APPEND-relatedTo merge), and the doc/topic/
-// channel/mirror/label families (which also reuse the shared ticketwrite/docstore/topicstore/channelstore/
+// assignTo + the DL-32 prod-promotion gate + the REPLACE-labels/APPEND-relatedTo merge), and the doc/
+// channel/mirror/label families (which also reuse the shared ticketwrite/docstore/channelstore/
 // mirrorstore/labelstore) — has EXACTLY ONE definition. The old "edit both files" drift tripwire is RETIRED:
 // a change to any policy now lands in ONE place, and the differential-parity suite (test/shim.ts +
-// test/agent-api.ts, shim ≡ stdio for all 29 tools) is the structural guard against a future re-divergence.
+// test/agent-api.ts, shim ≡ stdio for all 23 tools) is the structural guard against a future re-divergence.
 //
 // Each function takes a hub connection + the caller's already-resolved+validated actor (server.ts resolves it
 // from DEVLOOP_ACTOR + the G1 phantom-actor guard; the daemon from the X-Devloop-Actor header) and returns an
@@ -28,16 +28,9 @@ import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./tic
 // The doc READS (doc.list/get/history/diff) + list_events are the SINGLE definition of those SELECTs — since
 // DL-69 server.ts's handlers dispatch through them (no longer a 1:1 duplicate of a server.ts copy).
 import { resolveDoc, latestVersion, docSave, docPublish, statusForDocErr, DOC_KINDS, type DocSaveArgs, type DocPublishArgs } from "./docstore.ts";
-// DL-64 discussion-board family — the topic/post reads + writes (incl. the §25 chair/invited role gates +
-// the round/append rules) + the error→HTTP-status map are reused VERBATIM from the shared, side-effect-free
-// topicstore (exactly as the doc family reuses docstore.ts), so the op-API and the stdio server.ts can never
-// drift on a gate or a response shape. The op-API parses raw JSON, so each handler hand-validates the input
-// shapes server.ts gets from zod (the DL-63 read-handler lesson — a non-string id/body must 400, never a 500).
-import { topicList, topicGet, topicOpen, postAdd, topicSynthesize, topicClose, statusForTopicErr,
-  type TopicOpenArgs, type PostAddArgs, type TopicSynthesizeArgs, type TopicCloseArgs } from "./topicstore.ts";
 // DL-67 channel family — the channel register/send/poll/ack/status HANDLER logic + the DL-4 roadmap bridge are
-// reused VERBATIM from the shared, side-effect-free channelstore (exactly as the doc/topic families reuse
-// docstore/topicstore), so the op-API and the stdio server.ts can never drift. channel.send/poll are ASYNC
+// reused VERBATIM from the shared, side-effect-free channelstore (exactly as the doc family reuses
+// docstore), so the op-API and the stdio server.ts can never drift. channel.send/poll are ASYNC
 // (network/dryrun), so agentOp returns OpResult|Promise<OpResult> and the daemon awaits it. The op-API parses
 // raw JSON → each handler hand-validates the shapes server.ts gets from zod (DL-63: a non-string arg → 400, never a 500).
 import { channelRegister, channelSend, channelPoll, channelAck, channelStatus, statusForChannelErr,
@@ -53,10 +46,10 @@ export interface OpResult { status: number; body: unknown }
 const okR = (body: unknown): OpResult => ({ status: 200, body });
 const errR = (status: number, error: string): OpResult => ({ status, body: { error } });
 
-// The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-64) the discussion
-// board + (DL-67) the IM channel + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 29 server.ts
-// tools 1:1 (the shim is a 100% drop-in). The op names are the `/api/op/<op>` path segments and the MCP tool
-// names (dotted for the doc/topic/channel/mirror families). DL-85: they are EXACTLY TOOL_NAMES minus "whoami"
+// The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-67) the IM channel
+// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 23 server.ts tools 1:1 (the shim is a
+// 100% drop-in). The op names are the `/api/op/<op>` path segments and the MCP tool names (dotted for the
+// doc/channel/mirror families). DL-85: they are EXACTLY TOOL_NAMES minus "whoami"
 // (the only tool answered locally per-transport, never an op) — DERIVED from the one source so there is no
 // second name copy here (the tool {name,description,inputSchema} triples live once in tooldefs.ts).
 export type AgentOp = Exclude<ToolName, "whoami">;
@@ -65,7 +58,6 @@ export const AGENT_OPS: readonly AgentOp[] = TOOL_NAMES.filter((n): n is AgentOp
 // never mutate, so they bypass both). Kept here next to AGENT_OPS so the two lists can't drift. doc.save /
 // doc.publish join the ticket writes; the doc/event reads stay read-only (parity with the read ticket ops).
 export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish",
-  "topic.open", "post.add", "topic.synthesize", "topic.close", // DL-64: the 4 board writes
   "channel.register", "channel.send", "channel.poll", "channel.ack", // DL-67: the 4 channel writes (register/send/poll/ack mutate the channels/channel_messages tables); channel.status stays a read (query_only)
   "mirror.push", "create_issue_label"]); // DL-68: the 2 writes (mirror.push → mirror_map + the one-way Linear network write; create_issue_label → labels). mirror.status/list_issue_labels/get_project stay reads (query_only)
 export const isAgentOp = (s: string): s is AgentOp => (AGENT_OPS as readonly string[]).includes(s);
@@ -328,52 +320,6 @@ function opDocPublish(db: DatabaseSync, projectId: string, actor: string, a: Par
   return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error);
 }
 
-// ─── DL-64: the discussion-board family (topic.*/post.add) — thin op-API wrappers over the shared topicstore ──
-// Mirror the doc-family pattern: hand-validate the raw-JSON inputs to a clean 400 (server.ts gets these from
-// zod), then delegate to topicstore (which owns the §25 role gates + round/append rules); a TopicResult error
-// maps to its HTTP status via statusForTopicErr. The reads (topic.list/topic.get) take the query_only db; the
-// writes (topic.open/post.add/topic.synthesize/topic.close ∈ AGENT_WRITE_OPS) take writeDb — the daemon routes.
-
-function opTopicList(db: DatabaseSync, projectId: string, actor: string, a: { status?: unknown }): OpResult {
-  if (a.status !== undefined && a.status !== "open" && a.status !== "closed") return errR(400, `status must be "open" or "closed"`);
-  return okR(topicList(db, projectId, actor, a.status as string | undefined));
-}
-
-function opTopicGet(db: DatabaseSync, projectId: string, projectKey: string, a: { id?: unknown }): OpResult {
-  if (typeof a.id !== "string") return errR(400, "id must be a string");
-  const r = topicGet(db, projectId, projectKey, a.id);
-  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
-}
-
-function opTopicOpen(db: DatabaseSync, projectId: string, actor: string, a: { question?: unknown; invited?: unknown }): OpResult {
-  if (typeof a.question !== "string" || !a.question) return errR(400, "question required (a non-empty string)");
-  if (!isStrArr(a.invited) || a.invited.length === 0) return errR(400, "invited required (a non-empty array of strings)");
-  const r = topicOpen(db, projectId, actor, a as TopicOpenArgs);
-  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
-}
-
-function opPostAdd(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { topicId?: unknown; body?: unknown }): OpResult {
-  if (typeof a.topicId !== "string") return errR(400, "topicId must be a string");
-  if (typeof a.body !== "string" || !a.body) return errR(400, "body required (a non-empty string)");
-  const r = postAdd(db, projectId, projectKey, actor, a as PostAddArgs);
-  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
-}
-
-function opTopicSynthesize(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { topicId?: unknown; body?: unknown; nextRound?: unknown }): OpResult {
-  if (typeof a.topicId !== "string") return errR(400, "topicId must be a string");
-  if (typeof a.body !== "string" || !a.body) return errR(400, "body required (a non-empty string)");
-  if (a.nextRound !== undefined && typeof a.nextRound !== "boolean") return errR(400, "nextRound must be a boolean");
-  const r = topicSynthesize(db, projectId, projectKey, actor, a as TopicSynthesizeArgs);
-  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
-}
-
-function opTopicClose(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { topicId?: unknown; decision?: unknown }): OpResult {
-  if (typeof a.topicId !== "string") return errR(400, "topicId must be a string");
-  if (typeof a.decision !== "string" || !a.decision) return errR(400, "decision required (a non-empty string)");
-  const r = topicClose(db, projectId, projectKey, actor, a as TopicCloseArgs);
-  return r.ok ? okR(r.data) : errR(statusForTopicErr(r.error), r.error);
-}
-
 // ─── DL-67: the IM channel family (channel.*) — thin op-API wrappers over the shared channelstore ──
 // Mirror the doc/topic pattern: hand-validate the raw-JSON inputs to a clean 400 (server.ts gets these from
 // zod — the DL-63 lesson), then delegate to channelstore (which owns the §16 line-build, the DL-4 roadmap
@@ -492,12 +438,6 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "doc.diff": return opDocDiff(db, projectId, args as { slug?: string; kind?: string; from?: number; to?: number });
     case "doc.save": return opDocSave(db, projectId, actor, args as Partial<DocSaveArgs>);
     case "doc.publish": return opDocPublish(db, projectId, actor, args as Partial<DocPublishArgs>);
-    case "topic.list": return opTopicList(db, projectId, actor, args as { status?: unknown });
-    case "topic.get": return opTopicGet(db, projectId, projectKey, args as { id?: unknown });
-    case "topic.open": return opTopicOpen(db, projectId, actor, args as { question?: unknown; invited?: unknown });
-    case "post.add": return opPostAdd(db, projectId, projectKey, actor, args as { topicId?: unknown; body?: unknown });
-    case "topic.synthesize": return opTopicSynthesize(db, projectId, projectKey, actor, args as { topicId?: unknown; body?: unknown; nextRound?: unknown });
-    case "topic.close": return opTopicClose(db, projectId, projectKey, actor, args as { topicId?: unknown; decision?: unknown });
     case "channel.register": return opChannelRegister(db, projectId, actor, args as { provider?: unknown; configRef?: unknown; secretRef?: unknown; channelRef?: unknown });
     case "channel.send": return opChannelSend(db, projectId, projectKey, actor, args as { kind?: unknown; ticketId?: unknown; bailShape?: unknown; digest?: unknown; replyTo?: unknown; text?: unknown });
     case "channel.poll": return opChannelPoll(db, projectId, projectKey, actor);

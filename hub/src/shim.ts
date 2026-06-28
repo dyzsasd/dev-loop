@@ -11,12 +11,11 @@
 //
 // SCOPE: the 5 core ticket tools (list_issues/get_issue/save_issue/save_comment/list_comments) + a LOCAL
 // whoami (DL-55), PLUS (DL-62) the doc/event family — list_events + doc.list/get/history/diff/save/publish,
-// PLUS (DL-64) the discussion-board family — topic.list/get/open + post.add + topic.synthesize/close,
 // PLUS (DL-67) the IM channel family — channel.register/send/poll/ack/status, PLUS (DL-68) P7 mirror +
 // label/project — mirror.push/mirror.status + list_issue_labels/create_issue_label/get_project. That is the
-// FINAL slice: the shim now proxies ALL 29 server.ts tools — a 100% server.ts drop-in.
-// The shim holds NO SoR / NO ticket/doc/topic/channel/mirror logic (Decision #3): a pure thin client over the
-// op-API (which mirrors server.ts 1:1 via agentops.ts + the shared docstore/topicstore/channelstore/mirrorstore/labelstore).
+// FINAL slice: the shim now proxies ALL 23 server.ts tools — a 100% server.ts drop-in.
+// The shim holds NO SoR / NO ticket/doc/channel/mirror logic (Decision #3): a pure thin client over the
+// op-API (which mirrors server.ts 1:1 via agentops.ts + the shared docstore/channelstore/mirrorstore/labelstore).
 //
 // DL-85: the tool { name, description, inputSchema } registry is now SHARED from tooldefs.ts (registerTools),
 // so the names/schemas can no longer drift between this shim and server.ts by hand — the old "PARITY TRIPWIRE:

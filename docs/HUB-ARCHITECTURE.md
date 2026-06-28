@@ -443,9 +443,9 @@ monpick today: `backend` absent (⇒ linear), `linearProject:MonPick`, a Linear-
 
 **Migration is non-destructive, idempotent (keyed on `external_id`), and resumable. Linear is never deleted; rollback = flip `backend` back.**
 
-1. (P2+) Start the hub; create the isolated `monpick` project; register actors pm/qa/dev/sweep/reflect/ops/architect/director + operator; the launcher exports per-pane `DEVLOOP_ACTOR`.
+1. (P2+) Start the hub; create the isolated `monpick` project; register actors pm/qa/dev/sweep/reflect/ops/architect + operator; the launcher exports per-pane `DEVLOOP_ACTOR`.
 2. `dev-loop-hub import linear --project monpick --team Citronetic --linear-project MonPick` (read-only on Linear, resumable): tickets + comments + relations → hub, preserving state/labels/priority/title/body/timestamps. **History attribution is honestly lossy:** pre-hub Linear comments were one shared identity → most import under a `linear-import` pseudo-actor; only comments carrying a `— <agent> (run …)` prefix recover an author. Go-forward history is fully attributable; imported history is not — do not oversell "no history lost" as "full provenance recovered."
-3. Apply the config diff (`backend:"service"` + the `hub` block; `linearProject` retained only as a future mirror target; `notify` COEXISTS with the P6 `director.channel` two-way superset; `strategyDoc`→a P4 hub roadmap doc the Director drafts and the operator publishes).
+3. Apply the config diff (`backend:"service"` + the `hub` block; `linearProject` retained only as a future mirror target; `notify` is the one-way operator ping; `strategyDoc`→a P4 hub roadmap doc the operator publishes).
 4. **Cutover is atomic per project, and ENFORCED (§15):** the launcher refuses to arm both a `linear`-backed and a `service`-backed fire for monpick; `doctor` flags a dual-backend config. Never run two backends for one project concurrently.
 5. Verify: one PM fire + one Dev fire on the hub — confirm `whoami` attribution, the §3 state machine, the atomic claim, and that Reflect/reports actually consume the author field. Resume the loop. Linear remains a read-only archive; nothing deleted.
 
@@ -510,6 +510,5 @@ If any fails, the honest outcome is to **stop at P1** (the hardened file board) 
 
 1. **Durability RPO:** what off-machine backup cadence is acceptable, and do you want at-rest encryption (SQLCipher) given the concentrated blast radius (§17, §18)?
 2. **The P1 off-ramp:** if the hardened file board (P1) satisfies the need, are you willing to stop there rather than build the SQLite service (§2, §22)?
-3. **Director justification:** do you want a Director coordination plane at all, or do operator + PM + the §9 notify webhook already cover it (§14)?
-4. **Mirror:** human-visibility mirror at all, given it re-collapses attribution on the Linear side and invites edit-and-lose confusion (§15)?
-5. **Token model:** is per-agent attribution-via-env sufficient forever (single trusted host), or is a real multi-actor/remote need foreseeable that would justify tokens (§8)?
+3. **Mirror:** human-visibility mirror at all, given it re-collapses attribution on the Linear side and invites edit-and-lose confusion (§15)?
+4. **Token model:** is per-agent attribution-via-env sufficient forever (single trusted host), or is a real multi-actor/remote need foreseeable that would justify tokens (§8)?
