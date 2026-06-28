@@ -23,7 +23,7 @@
 
 ## 目录
 
-- [这是什么](#这是什么) · [工作原理](#工作原理)
+- [这是什么](#这是什么) · [架构](#架构--三层) · [工作原理](#工作原理)
 - [智能体](#智能体) — 完整阵容
 - [工作流](#工作流) — 智能体如何真正组合协作
 - [使用场景](#使用场景) — 何时（以及何时不）使用它
@@ -45,6 +45,14 @@ dev-loop 是一个 **Claude Code 插件**，由一组角色专精的智能体组
 - **看板即通道**——智能体通过工单状态交接，而不是直接互相调用。
 - **每次运行都从真实状态开始**——智能体无状态；每次都会重新读取看板、git 和磁盘，所以崩溃、重启或上下文压缩不会污染循环。
 - **自治靠门禁，不靠提示**——在 `autonomy:"full"` 下智能体可以自行决策并行动，但红色构建绝不交付，部署失败会回滚，真正只能由人处理的决策会作为事实停在工单上，而不是变成交互式提示。
+
+## 架构 — 三层
+
+dev-loop 由三层构成；`npm i -g @dyzsasd/dev-loop` 这个包会一次性提供全部三层：
+
+1. **接口层——`dev-loop` CLI + MCP。** 操作面。`dev-loop` 命令（`serve` · `run` · `daemon` · `doctor` · `init-service` · `mcp-merge` · `seed` · …）是*你*用来驱动配置与调度的方式；`dev-loop-hub` **MCP** 服务器则是*智能体*读写的方式。两者都是 hub 之上的瘦客户端。
+2. **Hub 层——后端 service。** 一个基于 `node:sqlite` 的本地记录系统（`service` 后端），它驱动**工单系统**和**文档系统**（策略/路线图/设计，带版本），并维护**按项目隔离的命名空间**——每个项目的看板、参与者和文档彼此隔离。它以 localhost 守护进程的形式运行，并带一个只读 web UI。*（Linear 或机器本地的文件看板是可替代的工单后端；而 hub 是那个额外提供每智能体身份、文档系统和命名空间的选项。）*
+3. **智能体层——skills + plugin + scheduler。** 角色专精的智能体是一组 **SKILL**（打包为 Claude **plugin**）外加 **scheduler**（`dev-loop run`）。启动循环有两种方式：`dev-loop run` scheduler（**Mode B**），或用 Claude/Codex 自带的循环命令对接已安装的 plugin（**Mode A**，例如 `/loop 5m /dev-loop:pm-agent`）。参见[安装](#安装)。
 
 ## 工作原理
 
@@ -180,62 +188,51 @@ dev-loop run --cli codex --agents core,communication
 
 ## 安装
 
-dev-loop 现在有两个安装面：
-
-1. **运行时 CLI / hub（推荐所有环境都装）。** 它安装 `dev-loop` 和 `dev-loop-hub`，
-   供 `service` 后端、MCP 配置、daemon、doctor 和内置 scheduler 使用：
+dev-loop 有**两种模式**——按你想怎么驱动智能体来选。两者都从 npm 包开始（无需 clone
+GitHub）：
 
 ```bash
-npm i -g @dyzsasd/dev-loop
+npm i -g @dyzsasd/dev-loop          # 安装 `dev-loop` + `dev-loop-hub` CLI（Node ≥ 23.6）
 ```
 
-安装后，MCP 配置可以直接使用 `command:"dev-loop", args:["serve"]`，不再需要写
-`node /path/to/dev-loop/hub/src/server.ts` 这种绝对源码路径。
+| | **Mode A — Plugin**（交互式） | **Mode B — Scheduler**（无人值守，默认） |
+|---|---|---|
+| 谁运行 CLI | 你（交互式 Claude Code） | `dev-loop run`（无人值守） |
+| CLI | Claude Code | Claude **或** Codex |
+| 额外安装 | `dev-loop install-claude-plugin` → `/plugin install` | 无——npm 包就够了 |
+| 需要插件吗？ | 需要 | **不需要** |
+| Skills + hub MCP | 来自已安装的插件 | 由 scheduler 自行注入 |
 
-2. **Claude Code 插件（只在需要 Claude slash command 时安装）。** 当你想使用
-   `/dev-loop:pm-agent`、`/dev-loop:init`、Agent View 等 Claude 原生插件体验时，安装这一层。
-   npm 包已经带上插件内容，因此不需要 clone GitHub repo：
+### Mode A — Plugin（交互式，Claude Code）
+你自己启动 Claude Code，用 slash command + `/loop` 驱动智能体。**从 npm 注册插件**（无需
+GitHub）：
 
 ```bash
-dev-loop install-claude-plugin
+dev-loop install-claude-plugin       # 写入一个本地 npm 源 marketplace，并打印下面这两条命令
+/plugin marketplace add ~/.claude/plugins/marketplaces/dev-loop-npm
+/plugin install dev-loop@dev-loop-npm
 ```
 
-它会写入 `~/.claude/skills/dev-loop`，包含插件 manifest、skills、references、hooks 和 config
-模板。安装后重启 Claude Code，或在已有会话中运行 `/reload-plugins`。命令会显示为
-`/dev-loop:pm-agent`、`/dev-loop:qa-agent`、`/dev-loop:dev-agent`、
-`/dev-loop:communication-agent` 和 `/dev-loop:init`（以及其他随包发布的智能体）。
+Skills 会显示为 `/dev-loop:pm-agent` … `/dev-loop:director-agent`、
+`/dev-loop:communication-agent`、可选启用的 `/dev-loop:senior-dev-agent` +
+`/dev-loop:junior-dev-agent`，以及 `/dev-loop:init`。用 `/loop` 驱动它们（见
+[运行循环](#运行循环)）。
+*（从源码 checkout 的开发安装：`claude --plugin-dir /path/to/dev-loop`，或在
+`~/.claude/settings.json` 里配一个 `source:"local"` 的 marketplace →
+`/plugin install dev-loop@local`。）*
 
-**从源码 checkout 的开发安装（仅限本次会话）：**
-```bash
-claude --plugin-dir /path/to/dev-loop
-```
-
-**持久使用源码 checkout 的开发安装** — 在 `~/.claude/settings.json` 中添加一个本地 marketplace：
-```json
-{
-  "extraKnownMarketplaces": {
-    "local": { "source": { "source": "local", "path": "/path/to/parent-of-dev-loop" } }
-  }
-}
-```
-然后执行 `/plugin install dev-loop@local`。这些 skill 会显示为 `/dev-loop:pm-agent`、
-`/dev-loop:qa-agent`、`/dev-loop:dev-agent`、`/dev-loop:sweep-agent`、
-`/dev-loop:reflect-agent`、`/dev-loop:ops-agent`、`/dev-loop:architect-agent`、
-`/dev-loop:director-agent`、`/dev-loop:communication-agent`、可选启用的 `/dev-loop:senior-dev-agent` +
-`/dev-loop:junior-dev-agent`，以及 `/dev-loop:init`。
-
-对于 Codex/opencode，npm 包已经包含 `dev-loop run` 所需的 agent skills 和共享规范；仅为了定时运行
-agent，不需要额外安装 Claude 插件 checkout。
-
-如果你想在 Codex CLI 里用交互式 slash prompt，可以安装可选的 custom prompts：
+### Mode B — Scheduler（无人值守，默认——Claude **或** Codex）
+`dev-loop run` scheduler 控制节奏，每次到点 shell 调用一次 `claude -p` / `codex exec`。
+**无需插件**：它把每个智能体的 SKILL 作为 prompt 注入（取自随包内容），并**自行注册
+`dev-loop-hub` MCP**——claude 通过内联 `--mcp-config`，codex 通过 `-c` 覆盖——因此不需要
+配置任何 `.mcp.json` 或 `~/.codex/config.toml`。
 
 ```bash
-dev-loop install-codex-prompts
+dev-loop run --cli claude --agents core          # 或：--cli codex --agents core,communication
 ```
 
-安装后重启 Codex。命令会显示为 `/prompts:dev-loop-pm-agent`、
-`/prompts:dev-loop-qa-agent`、`/prompts:dev-loop-communication-agent` 等。Codex custom
-prompts 只是兼容路径；无人值守的循环节奏仍建议用 `dev-loop run --cli codex`。
+只需 npm 包 + 你选定的 CLI（`claude` 或 `codex`）在 `PATH` 上即可。关于 `--agents`、节奏
+和 `--max-fires` 成本上限，见[运行循环](#运行循环)。
 
 ## 配置
 
@@ -282,7 +279,15 @@ dev-loop run --cli codex --agents core,communication --once --dry-run
 
 # 双层 Dev：senior-dev 设计，junior-dev 实现。
 dev-loop run --cli claude --agents core --dev-split
+
+# 成本护栏：累计触发 N 次后停止（默认无上限）。
+dev-loop run --cli claude --agents core --max-fires 50
 ```
+
+scheduler 会为执行器**自行注册 `dev-loop-hub` MCP**（claude：内联 `--mcp-config`；codex：
+`-c` 覆盖），因此 Mode B 无需任何插件、也无需配置 `.mcp.json` / `~/.codex/config.toml`。
+token 就是运行成本——`--max-fires` 为长驻进程封顶，按智能体设置的 `models` 让机械性智能体
+保持廉价。
 
 `--agents core` 表示 `pm,qa,dev,sweep`。可以再加 `reflect`、`outward` 或单个智能体：
 `--agents core,reflect,ops,communication`。当命令从已配置的 `repoPath` 或 `repos[].path`
@@ -338,11 +343,10 @@ Claude Agent View 仍然可用，但它是 Claude 原生的可选界面：安装
 循环可以通过 [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) 配套 + `codex` CLI，把 **OpenAI Codex** 当作增强工具来用。**需手动启用；不启用则行为不变。** 它增加了几项彼此独立的能力：一次**独立的第二模型评审**（Dev 第 5.5 步 + Architect；仅供参考，绝不触碰看板）、**图像生成**（PM 原型图 + Dev 生产素材——这是循环自身唯一做不到的事），以及在 `fix-exhausted` 阻塞之前的一次性**救援**。参见
 [conventions §24](references/conventions.md) + [`references/codex-integration.md`](references/codex-integration.md)。
 
-另一条路径是由 `service` hub 让各个智能体直接在 Codex 中启动；见
-[`docs/PORTABILITY.md`](docs/PORTABILITY.md)。Communication 窗口使用
-`dev-loop run --cli codex --agents communication`，也可以在带有
-`-c mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"` 覆盖的 Codex 会话里运行
-`/prompts:dev-loop-communication-agent`。
+另一条路径是由 `service` hub 让各个智能体直接在 Codex 中启动（Mode B）；见
+[`docs/PORTABILITY.md`](docs/PORTABILITY.md)。在那里运行任意智能体，例如
+`dev-loop run --cli codex --agents communication`——scheduler 会自行注入每个智能体的
+`dev-loop-hub` actor/MCP 覆盖，因此无需手动配置 Codex。
 
 ## 深入文档
 
