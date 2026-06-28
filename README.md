@@ -225,19 +225,18 @@ work at a higher rate.
 # 1. Install the runtime CLI/hub used by MCP, Codex/opencode, and the scheduler.
 npm i -g @dyzsasd/dev-loop
 
-# 2. If you want Claude slash commands, install the plugin from a checkout.
-claude --plugin-dir /path/to/dev-loop
+# 2. If you want Claude slash commands, install the plugin payload.
+dev-loop install-claude-plugin
 
 # 3. Onboard a product. This is operator-present and idempotent.
 /dev-loop:init
 
-# 4. Dry-run first: see what it would do, with no writes.
-#    Set mode:"dry-run" in projects.json, then launch one pass:
-/dev-loop:pm-agent      /dev-loop:qa-agent      /dev-loop:dev-agent
+# 4. Dry-run first with dev-loop's own loop command.
+cd /path/to/product-repo
+dev-loop run --cli codex --agents core --once --dry-run
 
-# 5. Switch to mode:"live" and run the agents on a loop.
-#    Use Agent View, or let dev-loop own cadence and call Claude/Codex:
-cd /path/to/product-repo && dev-loop run --cli codex --agents core,communication
+# 5. Switch to mode:"live" and let dev-loop own the cadence.
+dev-loop run --cli codex --agents core,communication
 ```
 
 ## Requirements
@@ -268,13 +267,23 @@ After this, MCP configs can use `command:"dev-loop", args:["serve"]`; no absolut
 
 2. **Claude Code plugin (only for Claude slash commands).** Install this when you want
    `/dev-loop:pm-agent`, `/dev-loop:init`, Agent View, or other Claude-native plugin UX.
+   The npm package carries the plugin payload, so a GitHub checkout is not required:
 
-**Quick / dev from a source checkout (this session only):**
+```bash
+dev-loop install-claude-plugin
+```
+
+This writes `~/.claude/skills/dev-loop` with the plugin manifest, skills, references, hooks, and
+config templates. Restart Claude Code, or run `/reload-plugins` in an existing session. The skills
+appear as `/dev-loop:pm-agent`, `/dev-loop:qa-agent`, `/dev-loop:dev-agent`,
+`/dev-loop:communication-agent`, and `/dev-loop:init` (plus the other bundled agents).
+
+**Developer fallback from a source checkout (this session only):**
 ```bash
 claude --plugin-dir /path/to/dev-loop
 ```
 
-**Personal, persistent** — add a local marketplace in `~/.claude/settings.json`:
+**Developer persistent checkout** — add a local marketplace in `~/.claude/settings.json`:
 ```json
 {
   "extraKnownMarketplaces": {
@@ -335,19 +344,32 @@ backstop, the loop agents also re-apply the label/project checks on the first `l
 
 ## Run the loop
 
-Pick the launch style that fits your setup:
+The main loop command is `dev-loop run`. It is a normal long-running process: dev-loop owns the
+cadence, loads the bundled agent skills, and calls the selected executor CLI once per agent fire.
+Use Claude or Codex as the executor:
 
-- **Agent View** (native) — `claude agents`, then dispatch each as a self-looping session:
-  `/loop 5m /dev-loop:pm-agent`, `/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent`,
-  `/loop 30m /dev-loop:sweep-agent`, `/loop 24h /dev-loop:reflect-agent`, plus the opt-in
-  outward agents (`ops`, `architect`, `director`, `communication`).
-- **Built-in scheduler** — from inside a configured repo, run `dev-loop run --cli claude`
-  or `dev-loop run --cli codex --agents core,communication`. dev-loop owns the cadence;
-  Claude/Codex only execute one agent fire at a time. Use `--project <key>` only when
-  launching from outside the repo or overriding cwd detection.
-- **A local tmux launcher** — one pane per agent, per-agent models in one command. Set
-  `DEV_SPLIT=1` to run the two-tier Dev (senior-dev + junior-dev panes) instead of one `dev`.
-- **Manually** — one turn at a time, for a single pass.
+```bash
+# From inside a configured product repo; project is inferred from cwd.
+cd /path/to/product-repo
+dev-loop run --cli claude
+dev-loop run --cli codex --agents core,communication
+
+# One dry-run pass before leaving it unattended.
+dev-loop run --cli codex --agents core,communication --once --dry-run
+
+# Two-tier Dev: senior-dev designs, junior-dev implements.
+dev-loop run --cli claude --agents core --dev-split
+```
+
+`--agents core` means `pm,qa,dev,sweep`. Add `reflect`, `outward`, or individual agents:
+`--agents core,reflect,ops,communication`. Project detection is automatic when the command starts
+inside a configured `repoPath` or `repos[].path`; use `--project <key>` only from outside the repo,
+from cron/systemd with a fixed cwd, or when you want to override detection. Multiple products on one
+machine are just multiple entries in `projects.json` and one `dev-loop run` process per product.
+
+Claude Agent View is still available when you want Claude-native background rows: install the
+Claude plugin, open `claude agents`, then dispatch `/loop 5m /dev-loop:pm-agent`,
+`/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent`, and the optional outward agents.
 
 **Cadence** (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
 ~30 min, Reflect daily; Ops ~10 min, Architect/Director/Communication daily/on-demand.

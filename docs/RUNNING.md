@@ -1,11 +1,12 @@
 # Running dev-loop
 
-How to onboard a project, launch the agents, pick a model per agent, and resume. For Claude slash
-commands, assume the plugin is installed (`/plugin list` shows `dev-loop`). For the service backend,
-MCP configs, daemon, doctor, and scheduler, assume the npm package is installed:
+How to onboard a project, launch the agents, pick a model per agent, and resume. The npm package is
+the normal install path for the service backend, MCP configs, daemon, doctor, scheduler, and Claude
+slash command payload:
 
 ```bash
 npm i -g @dyzsasd/dev-loop
+dev-loop install-claude-plugin   # only needed for /dev-loop:* slash commands in Claude Code
 ```
 
 The remaining [Requirements](../README.md#requirements) still apply (Claude Code when using slash
@@ -62,54 +63,12 @@ opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`,
 > [`PORTABILITY.md`](PORTABILITY.md) (conventions §26) for the env contract, per-CLI MCP
 > registration, the headless wrapper, and the **identity gate** you run before onboarding a CLI.
 
-### A. Agent View — native, recommended (`claude agents`)
+### A. dev-loop run — own cadence, Claude/Codex as executors
 
-[Agent View](https://code.claude.com/docs/agent-view) (Claude Code ≥ 2.1.139) is one
-screen for all your background sessions — *Needs input / Running / Done* — that keep
-running with no terminal attached.
-
-```
-claude agents            # open the view (scoped: claude agents --cwd ~/path)
-```
-
-Then dispatch each agent as its own self-looping row (a slash command typed in the view
-becomes a new background session; `/loop` makes it recurring):
-
-```
-/loop 5m  /dev-loop:pm-agent
-/loop 5m  /dev-loop:qa-agent
-/loop 5m  /dev-loop:dev-agent
-/loop 30m /dev-loop:sweep-agent
-/loop 24h /dev-loop:reflect-agent
-/loop 10m /dev-loop:ops-agent        # OUTWARD (§21), opt-in — watches running prod (anti-flap)
-/loop 24h /dev-loop:architect-agent  # OUTWARD (§21), opt-in — whole-codebase tech-debt audit
-/loop 24h /dev-loop:director-agent   # OUTWARD (§21/§25), opt-in — chairs the discussion board + drafts the roadmap (service backend; no-op without a director config)
-/loop 24h /dev-loop:communication-agent # OUTWARD (§21), opt-in — drafts a daily public product article (no external publish)
-```
-
-Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent output),
-`claude stop <id>` (stop). `Space` peeks a row, `Enter` attaches.
-
-> **Model note:** a dispatched Agent View session uses the **view's** model (set the view
-> with `claude agents --model <m>`). For *different* models per agent, use the scheduler's
-> `--cli-arg` flags, the tmux launcher below, or separate views. Agent View applies one model per view.
-
-> **Two-tier Dev (opt-in, off by default):** replace the `/dev-loop:dev-agent` line with
-> two rows to split Dev into a design-lead + implementer pair:
-> ```
-> /loop 5m  /dev-loop:senior-dev-agent   # opus/max — designs modules, delegates to junior-dev, escalation direct-code
-> /loop 5m  /dev-loop:junior-dev-agent   # sonnet/high — implements pre-designed tickets against the linked design
-> ```
-> Models come from `models.senior-dev` / `models.junior-dev` in `projects.json`; defaults are
-> opus / sonnet. See [conventions §21a](../references/conventions.md#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project)
-> and [config-schema.md `models{}`](../references/config-schema.md) for routing rules, the design
-> gate, and the per-backend tier encoding. The legacy `dev` pane is unchanged when this is off.
-
-### B. Built-in scheduler — own cadence, Claude/Codex as executors
-
-Use this when you do **not** want Claude/Codex `/loop` to own recurrence. `dev-loop run`
-is a normal long-running script: it keeps the cadence table, and whenever an agent is due
-it shells out once to the selected CLI with that agent's SKILL body as the prompt.
+`dev-loop run` is the primary loop command. It is a normal long-running script: it keeps the
+cadence table, loads the bundled agent skills, and whenever an agent is due it shells out once to
+the selected CLI with that agent's SKILL body as the prompt. Claude/Codex execute one agent fire at
+a time; they do not own recurrence.
 
 ```bash
 # From inside a configured product repo, the project is inferred from cwd.
@@ -166,6 +125,55 @@ The runner writes one log per agent under
 `${CLAUDE_PLUGIN_DATA}/<project-key>/runner-logs/`. Stop it with `Ctrl-C`; it forwards
 SIGINT to active agent subprocesses. This mode is the most portable: run it from tmux,
 cron, launchd, systemd, or any host process manager.
+
+### B. Agent View — native Claude UI (`claude agents`)
+
+Use Agent View when you want Claude's background-session UI instead of the `dev-loop run`
+process. If `/plugin list` does not show `dev-loop`, run `dev-loop install-claude-plugin` and
+restart Claude Code, or run `/reload-plugins` in an existing session. This installs the plugin
+under `~/.claude/skills/dev-loop`; no source checkout is required unless you are developing the
+plugin.
+
+[Agent View](https://code.claude.com/docs/agent-view) (Claude Code >= 2.1.139) is one
+screen for all your background sessions — *Needs input / Running / Done* — that keep
+running with no terminal attached.
+
+```
+claude agents            # open the view (scoped: claude agents --cwd ~/path)
+```
+
+Then dispatch each agent as its own self-looping row (a slash command typed in the view
+becomes a new background session; `/loop` makes it recurring):
+
+```
+/loop 5m  /dev-loop:pm-agent
+/loop 5m  /dev-loop:qa-agent
+/loop 5m  /dev-loop:dev-agent
+/loop 30m /dev-loop:sweep-agent
+/loop 24h /dev-loop:reflect-agent
+/loop 10m /dev-loop:ops-agent        # OUTWARD (§21), opt-in — watches running prod (anti-flap)
+/loop 24h /dev-loop:architect-agent  # OUTWARD (§21), opt-in — whole-codebase tech-debt audit
+/loop 24h /dev-loop:director-agent   # OUTWARD (§21/§25), opt-in — chairs the discussion board + drafts the roadmap (service backend; no-op without a director config)
+/loop 24h /dev-loop:communication-agent # OUTWARD (§21), opt-in — drafts a daily public product article (no external publish)
+```
+
+Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent output),
+`claude stop <id>` (stop). `Space` peeks a row, `Enter` attaches.
+
+> **Model note:** a dispatched Agent View session uses the **view's** model (set the view
+> with `claude agents --model <m>`). For *different* models per agent, use the scheduler's
+> `--cli-arg` flags, the tmux launcher below, or separate views. Agent View applies one model per view.
+
+> **Two-tier Dev (opt-in, off by default):** replace the `/dev-loop:dev-agent` line with
+> two rows to split Dev into a design-lead + implementer pair:
+> ```
+> /loop 5m  /dev-loop:senior-dev-agent   # opus/max — designs modules, delegates to junior-dev, escalation direct-code
+> /loop 5m  /dev-loop:junior-dev-agent   # sonnet/high — implements pre-designed tickets against the linked design
+> ```
+> Models come from `models.senior-dev` / `models.junior-dev` in `projects.json`; defaults are
+> opus / sonnet. See [conventions §21a](../references/conventions.md#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project)
+> and [config-schema.md `models{}`](../references/config-schema.md) for routing rules, the design
+> gate, and the per-backend tier encoding. The legacy `dev` pane is unchanged when this is off.
 
 #### Optional: Codex CLI slash prompts
 

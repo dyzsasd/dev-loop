@@ -36,6 +36,8 @@ try {
   ok(existsSync(distRunner), "dist/run-agents.js emitted (the built-in scheduler entry)");
   ok(existsSync(join(distDir, "plugin", "skills", "communication-agent", "SKILL.md")) && existsSync(join(distDir, "plugin", "references", "conventions.md")),
     "dist/plugin includes skills + references for npm-installed scheduler runs");
+  ok(existsSync(join(distDir, "plugin", ".claude-plugin", "plugin.json")) && existsSync(join(distDir, "plugin", "hooks", "hooks.json")),
+    "dist/plugin includes Claude plugin manifest + hooks for npm-installed slash commands");
 
   // ── AC2/AC3: the compiled bins LOAD + RUN — proves the rewritten sibling .ts→.js imports resolve in the JS
   //    output, and the suite goes RED if the build breaks or a bin can't load. ──
@@ -62,6 +64,18 @@ try {
   const instPrompts = run(process.execPath, [instCli, "install-codex-prompts", "--dest", promptsDir, "--data", tmp]);
   ok(instPrompts.code === 0 && existsSync(join(promptsDir, "dev-loop-communication-agent.md")) && existsSync(join(promptsDir, "dev-loop-init.md")),
     "installed cli.js install-codex-prompts → writes Codex /prompts files from bundled skills");
+  const claudePluginDir = join(tmp, "claude-plugin");
+  const instClaudePlugin = run(process.execPath, [instCli, "install-claude-plugin", "--dest", claudePluginDir]);
+  const copiedHook = existsSync(join(claudePluginDir, "hooks", "hooks.json"))
+    ? readFileSync(join(claudePluginDir, "hooks", "hooks.json"), "utf8")
+    : "";
+  ok(instClaudePlugin.code === 0
+    && existsSync(join(claudePluginDir, ".claude-plugin", "plugin.json"))
+    && existsSync(join(claudePluginDir, "skills", "pm-agent", "SKILL.md"))
+    && existsSync(join(claudePluginDir, "references", "conventions.md"))
+    && /dev-loop daemon up/.test(copiedHook)
+    && !/hub\/src\/server\.ts/.test(copiedHook),
+    "installed cli.js install-claude-plugin → writes a skills-dir Claude plugin with npm-safe hooks");
 
   // ── (groom AC) mcp-merge with NO template arg → succeeds via the embedded DEFAULT_TEMPLATE, NOT an ENOENT on the
   //    `../../config/mcp.example.json` that doesn't ship. Args are plain identifiers/paths (DL-44/DL-66 guards). ──
