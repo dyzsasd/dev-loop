@@ -1,5 +1,5 @@
 # TEMPLATE for backend:"service" on the CODEX CLI (dev-loop P8 portability; see docs/PORTABILITY.md).
-# Merge this into ~/.codex/config.toml. Replace <ABS-PATH-TO-dev-loop> with your dev-loop checkout.
+# Recommended install: `npm i -g @dyzsasd/dev-loop`, then merge this into ~/.codex/config.toml.
 #
 # CERTIFIED 2026-06-25 on codex-cli 0.142.0 (docs/PORTABILITY.md §4a). KEY FINDING: Codex spawns the MCP
 # subprocess with ONLY this file's `env` block — it does NOT inherit the launching shell's process env.
@@ -16,14 +16,14 @@
 # schema against your Codex version (formats drift). Confirm with the §4 gate before trusting writes.
 
 # OPT-IN daemon transport (DL-55, P2): to route the core ticket tools through the ONE running daemon
-# instead of opening hub.db directly, change args to `.../hub/src/shim.ts` (from `.../hub/src/server.ts`).
-# REQUIRES the per-project daemon up (DL-42 auto-start or `npm run daemon`) + settings_json.hub.transport=
+# instead of opening hub.db directly, change args to ["shim"] (from ["serve"]).
+# REQUIRES the per-project daemon up (DL-42 auto-start or `dev-loop daemon up`) + settings_json.hub.transport=
 # "daemon" (DL-43). The shim discovers the loopback port from the DL-41 runfile `~/.dev-loop/daemon-<key>.json`
 # (override with DEVLOOP_HUB_PORT) — never hardcodes 8787. Scope this increment: the 5 core ticket tools +
-# whoami; doc.*/topic.*/channel.* still need the default server.ts entry below.
+# whoami; doc.*/topic.*/channel.* still need the default `serve` entry below.
 [mcp_servers.dev-loop-hub]
-command = "node"
-args = ["<ABS-PATH-TO-dev-loop>/hub/src/server.ts"]
+command = "dev-loop"
+args = ["serve"]
 # STATIC, shared-across-panes vars ONLY. DEVLOOP_ACTOR is intentionally ABSENT — on Codex it does NOT ride
 # the process env (CERTIFIED above: Codex doesn't inherit it); supply it per-pane via the `-c` override.
 # Use an ABSOLUTE db path (TOML env is not shell-expanded).

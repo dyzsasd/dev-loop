@@ -52,10 +52,11 @@ shipped as an additive P1–P5 arc — the loop ran throughout, every prior path
 - **P3 — Dispatch convergence + single writer.** `server.ts`'s MCP handlers converge onto the shared
   `agentops` ops (DL-69, one definition per policy, differential-parity proven); the daemon's one long-lived
   writable connection gets a periodic `wal_checkpoint(TRUNCATE)` (DL-70).
-- **P4 — Standalone npm package.** `npm i -g dev-loop` (free name): a `dev-loop` CLI (serve/shim/daemon/
-  init-service/mcp-merge/seed/doctor/identity-check) + bins, a publish build (node won't type-strip under
-  `node_modules` → ships compiled `dist/`, in-repo dev stays zero-build), and a **single-version stamp**
-  across `package.json`+`plugin.json`+`marketplace.json` with a guard test (DL-71).
+- **P4 — Standalone npm package.** `npm i -g @dyzsasd/dev-loop`: a `dev-loop` CLI (serve/shim/daemon/
+  init-service/mcp-merge/seed/doctor/identity-check/run) + bins, a publish build (node won't type-strip
+  under `node_modules` → ships compiled `dist/`, in-repo dev stays zero-build), bundled skills/references
+  for scheduler runs without a source checkout, and a **single-version stamp** across
+  `package.json`+`plugin.json`+`marketplace.json` with a guard test (DL-71).
 - **P5 — Codex certified.** End-to-end on `codex-cli 0.142.0`: MCP transport + data tools round-trip; per-pane
   identity rides a **`-c` override** (Codex doesn't propagate the launching process env) — `docs/PORTABILITY.md` §4a (DL-72).
 - **Operator-alert + backend choice.** One operator-alert channel `{transport: webhook|bot}` — the simple
