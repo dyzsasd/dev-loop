@@ -11,7 +11,7 @@ import { resolveProjectFromCwd } from "./resolve-project.ts";
 
 const VALID_AGENTS = [
   "pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect",
-  "ops", "architect", "director", "communication",
+  "ops", "architect", "communication",
 ] as const;
 type Agent = (typeof VALID_AGENTS)[number];
 type RunnerCli = "claude" | "codex";
@@ -20,7 +20,7 @@ const AGENT_SET = new Set<string>(VALID_AGENTS);
 const GROUPS: Record<string, Agent[]> = {
   core: ["pm", "qa", "dev", "sweep"],
   split: ["pm", "qa", "senior-dev", "junior-dev", "sweep"],
-  outward: ["ops", "architect", "director", "communication"],
+  outward: ["ops", "architect", "communication"],
   all: [...VALID_AGENTS],
 };
 const DEFAULT_AGENTS: Agent[] = GROUPS.core;
@@ -34,7 +34,6 @@ const DEFAULT_INTERVALS: Record<Agent, number> = {
   reflect: 24 * 60 * 60_000,
   ops: 10 * 60_000,
   architect: 24 * 60 * 60_000,
-  director: 24 * 60 * 60_000,
   communication: 24 * 60 * 60_000,
 };
 

@@ -39,7 +39,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean } = 
   // 2b. A 0-byte file IS a valid (empty) SQLite db, so the read-only open above SUCCEEDS on a
   //     truncated / zeroed / placeholder file — it just carries no schema; a non-SQLite file throws
   //     on the first read. Either way it is not a system-of-record: report INVALID and write nothing.
-  const HUB_TABLES = ["projects", "tickets", "documents", "topics", "actors", "events"]; // every table step 4 below counts — so a partial/foreign db fails HERE, cleanly, not mid-check
+  const HUB_TABLES = ["projects", "tickets", "documents", "actors", "events"]; // every table step 4 below counts — so a partial/foreign db fails HERE, cleanly, not mid-check
   let missing: string[];
   try {
     const present = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((r) => r.name));
@@ -62,7 +62,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean } = 
 
   // 4. Counts + per-project, and the unique-prefix integrity check (the real multi-project guard)
   const c = (sql: string) => (db!.prepare(sql).get() as { c: number }).c;
-  info(`projects=${c("SELECT count(*) c FROM projects")} tickets=${c("SELECT count(*) c FROM tickets")} docs=${c("SELECT count(*) c FROM documents")} topics=${c("SELECT count(*) c FROM topics")} actors=${c("SELECT count(*) c FROM actors")} events=${c("SELECT count(*) c FROM events")}`);
+  info(`projects=${c("SELECT count(*) c FROM projects")} tickets=${c("SELECT count(*) c FROM tickets")} docs=${c("SELECT count(*) c FROM documents")} actors=${c("SELECT count(*) c FROM actors")} events=${c("SELECT count(*) c FROM events")}`);
   const projects = db.prepare("SELECT id, key, ticket_prefix FROM projects ORDER BY key").all() as { id: string; key: string; ticket_prefix: string }[];
   const countByProject = db.prepare("SELECT count(*) c FROM tickets WHERE project_id = ?");
   for (const p of projects) {

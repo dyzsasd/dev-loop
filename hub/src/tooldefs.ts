@@ -1,6 +1,6 @@
 // dev-loop hub — the SINGLE source of the MCP tool surface (DL-85). Before this, server.ts (direct-db) and
-// shim.ts (daemon-transport) each copy-pasted all 29 `registerTool(name, {description, inputSchema}, handler)`
-// triples byte-identically; the only per-file difference is the handler (dispatch vs proxy). Here the 29
+// shim.ts (daemon-transport) each copy-pasted all 23 `registerTool(name, {description, inputSchema}, handler)`
+// triples byte-identically; the only per-file difference is the handler (dispatch vs proxy). Here the 23
 // {name, description, inputSchema} triples live ONCE; each entrypoint calls registerTools() and supplies only
 // its per-name handler factory. The ok()/err() MCP-result helpers are shared from here too.
 //
@@ -17,7 +17,7 @@ export type McpResult = { content: { type: "text"; text: string }[]; isError?: b
 export const ok = (data: unknown): McpResult => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 export const err = (message: string): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }] });
 
-// ─── the canonical tool-name list — whoami (answered locally per transport) + the 28 op-backed tools ────────
+// ─── the canonical tool-name list — whoami (answered locally per transport) + the 22 op-backed tools ────────
 // agentops.ts derives AGENT_OPS = TOOL_NAMES minus "whoami" (the only tool that is NOT an op-API op), so this
 // is the ONE source of the tool/op names. Order matches the historical AGENT_OPS order (registration order is
 // irrelevant to MCP — tools resolve by name — but keeping it stable keeps diffs/feeds readable).
@@ -25,7 +25,6 @@ export const TOOL_NAMES = [
   "whoami",
   "list_issues", "get_issue", "save_issue", "save_comment", "list_comments",
   "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish",
-  "topic.list", "topic.get", "topic.open", "post.add", "topic.synthesize", "topic.close",
   "channel.register", "channel.send", "channel.poll", "channel.ack", "channel.status",
   "mirror.push", "mirror.status", "list_issue_labels", "create_issue_label", "get_project",
 ] as const;
@@ -80,28 +79,6 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
     inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive() },
   },
 
-  "topic.open": {
-    description: "Open a discussion topic (the caller becomes the chair = opened_by). invited = actor handles asked to post a perspective. Director-style use; any actor may chair its own topics.",
-    inputSchema: { question: z.string().min(1), invited: z.array(z.string()).min(1) },
-  },
-  "topic.list": {
-    description: "List discussion topics (no post bodies). Each row carries the current round, round_opened_at, and YOUR/the invited set's `pending` for this round (who still owes a perspective).",
-    inputSchema: { status: z.enum(["open", "closed"]).optional() },
-  },
-  "topic.get": { description: "A topic + all its posts (perspectives + the chair's synthesis), oldest first.", inputSchema: { id: z.string() } },
-  "post.add": {
-    description: "Post YOUR perspective to an OPEN topic you're invited to — once per round, your lane only (attributed to DEVLOOP_ACTOR). Append-only; you never edit/synthesize/close.",
-    inputSchema: { topicId: z.string(), body: z.string().min(1) },
-  },
-  "topic.synthesize": {
-    description: "CHAIR-ONLY (ACTOR === opened_by): write a synthesis post at the current round, optionally bumping to the next round (resets the round clock). Does NOT close — use topic.close to record the decision.",
-    inputSchema: { topicId: z.string(), body: z.string().min(1), nextRound: z.boolean().optional() },
-  },
-  "topic.close": {
-    description: "CHAIR-ONLY (ACTOR === opened_by): close the topic with a terminal decision. The decision is DATA (a recorded conclusion) — it NEVER auto-applies a code/SKILL/conventions change (§17).",
-    inputSchema: { topicId: z.string(), decision: z.string().min(1) },
-  },
-
   "channel.register": {
     description: "Idempotently register/update this project's IM channel from config. Stores ONLY the ENV-VAR NAMES (configRef = bot token / lark app_id; secretRef = lark app_secret) + the room id — NEVER a token/secret.",
     inputSchema: { provider: z.enum(["slack", "lark"]), configRef: z.string().min(1), secretRef: z.string().optional(), channelRef: z.string().min(1) },
@@ -153,7 +130,7 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
 // ─── the iterator: register every tool on `server`, sourcing the triple from DEFS and the handler from the ──
 // caller's per-name factory (server.ts → dispatch through agentOp; shim.ts → proxy to the daemon op-API; both
 // override whoami, and server.ts also overrides create_issue_label as a native call). One generic bridge cast
-// (ToolHandler → the SDK's ToolCallback) lives HERE, once, instead of at 29 call sites in two files.
+// (ToolHandler → the SDK's ToolCallback) lives HERE, once, instead of at 23 call sites in two files.
 export type ToolHandler = (args: Record<string, unknown>) => McpResult | Promise<McpResult>;
 export function registerTools(server: McpServer, makeHandler: (name: ToolName) => ToolHandler): void {
   for (const name of TOOL_NAMES) {

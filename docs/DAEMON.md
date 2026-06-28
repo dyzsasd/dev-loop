@@ -134,8 +134,8 @@ opt-in it returns `404`, byte-identical to a pure read surface.
   then point the MCP `args` at `hub/src/shim.ts` instead of `hub/src/server.ts` (same per-pane
   `DEVLOOP_ACTOR`). See `references/config-schema.md` (`hub.transport`).
 - **Shape:** `POST /api/op/<op>` with a JSON body; `<op>` mirrors the MCP tools 1:1 — the shim is a
-  **100% `server.ts` drop-in** (all 29 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
-  `list_comments`/`whoami` · `doc.*`/`list_events` · `topic.*`/`post.add` · `channel.*` · `mirror.*` ·
+  **100% `server.ts` drop-in** (all 23 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
+  `list_comments`/`whoami` · `doc.*`/`list_events` · `channel.*` · `mirror.*` ·
   labels/`get_project`).
 - **Identity:** the actor rides the **`X-Devloop-Actor`** header (the shim forwards its per-pane
   `DEVLOOP_ACTOR`), dodging the `claude -p` Authorization-header-drop; the daemon validates it against

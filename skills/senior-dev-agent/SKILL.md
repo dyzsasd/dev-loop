@@ -100,14 +100,6 @@ it; a locked read-modify-write) and mark it acted with a machine-owned
 self-edit. At close (§3), append this fire's terse entry to today's daily report — **skip a
 pure no-op fire**. Respect `mode` (§12): in `dry-run`, write nothing.
 
-**Discussion board (conventions §25).** If `backend:"service"` AND a `director` config is
-present and you are INVITED to an OPEN topic, post your perspective once via
-`post.add({topicId, body})` — your lane only, append-only, never edit/synthesize/close (only
-the chairing Director does). Check cheaply: `topic.list` returns each open topic's round +
-your `youArePending` flag in one call; **only if** you're pending, `topic.get` it for the
-question + prior posts, then `post.add`. **Never block on the board.** If the board tools
-aren't present, or there's no `director` config ⇒ **skip entirely**.
-
 **Codex — optional power tools (conventions §24).** Only when `codex.enabled` **and** the
 `codex` CLI is on `PATH` (else exactly as today — a missing Codex is a graceful fallback,
 never an error). When on, Codex may assist your **direct-code** mode exactly as it assists
@@ -226,7 +218,6 @@ Author the design, decompose it into staged child tickets, hand the design paren
      `In Review`, below — not an operator publish.)
    - **Cite the parent.** The design MUST name the **strategy/roadmap item it serves** — the
      traceability chain strategy → roadmap → design → ticket → code. (On `service`, read the
-     roadmap via `doc.get({ kind:"roadmap" })` if a `director` config is present, else the
      `strategy` doc; on repo backends read `strategyDoc` per §0.) A design that cites no
      parent is incomplete — the PM gate (§5/§7) will bounce it.
    - **Make it implementable by a cheaper model.** junior-dev (sonnet) builds against this

@@ -20,7 +20,7 @@ CLI sets these per agent pane — that is the entire portability contract:
 
 | Var | Meaning | Who sets it |
 |---|---|---|
-| `DEVLOOP_ACTOR` | the per-agent identity (`pm`/`qa`/`dev`/`sweep`/`reflect`/`ops`/`architect`/`director`/`communication`) — the attribution win | the launcher, **per pane** |
+| `DEVLOOP_ACTOR` | the per-agent identity (`pm`/`qa`/`dev`/`sweep`/`reflect`/`ops`/`architect`/`communication`) — the attribution win | the launcher, **per pane** |
 | `DEVLOOP_PROJECT` | the project key (pins this hub process to one project) | the launcher — **optional (DL-13):** when unset/empty the hub auto-resolves the project from the spawned process's **cwd** (the repo it was launched in), so a launcher that spawns the MCP server with `cwd` inside a repo need not set it. **Portability caveat:** this works only if the CLI spawns the MCP subprocess with that cwd; some CLIs spawn from a fixed dir, so the launcher exporting `DEVLOOP_PROJECT` (via `dev-loop-hub resolve-project`) stays the robust primary mechanism |
 | `DEVLOOP_HUB_DB` | absolute path to the shared `hub.db` | the launcher |
 | `CLAUDE_PLUGIN_ROOT` | the dev-loop root used for skills/references; `dev-loop run` uses the npm-bundled copy unless `--root` overrides it, while manual source wrappers should export a checkout path | the launcher or scheduler |
@@ -121,9 +121,8 @@ For the PR/media article writer, call the same wrapper with `communication`:
 
 Loop cadence (re-fire every N minutes) is the operator's launcher concern (cron / a `while sleep`
 wrapper / the CLI's own loop facility) — the agents are **stateless per fire**, so a loop is just
-"run the wrapper again". The Director's sync-panel already documents an **internal multi-lens
-fallback** for any CLI that lacks a sub-agent/Task tool (conventions §25), so no agent hard-requires
-a Claude-Code-only tool. Bash/Read/Edit are near-universal; confirm your CLI exposes them.
+"run the wrapper again". No agent hard-requires a Claude-Code-only tool; Bash/Read/Edit are
+near-universal — confirm your CLI exposes them.
 
 ## 3b. Install optional Codex slash prompts
 
@@ -150,7 +149,7 @@ codex -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="pm"' \
 ```
 
 The installed commands are `/prompts:dev-loop-pm-agent`, `qa`, `dev`, `senior-dev`, `junior-dev`,
-`sweep`, `reflect`, `ops`, `architect`, `director`, `communication`, and `/prompts:dev-loop-init`.
+`sweep`, `reflect`, `ops`, `architect`, `communication`, and `/prompts:dev-loop-init`.
 Each prompt is generated from the same SKILL body used by Claude and by `dev-loop run`, with
 `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}` already expanded to the npm package assets and data
 dir. The prompt also instructs Codex to call `whoami` before hub writes and stop if the actor is wrong.

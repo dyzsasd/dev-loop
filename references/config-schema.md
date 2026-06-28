@@ -1,6 +1,6 @@
 # dev-loop — Config schema
 
-The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect / Director /
+The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect /
 Communication) read
 `${CLAUDE_PLUGIN_DATA}/projects.json`. It maps each product to its Linear project, its
 repo, its test environment, and its ship/deploy settings. One file, many products.
@@ -47,7 +47,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "transport":   "stdio"        // DL-43/P2: "stdio" (default) ⇒ each pane's MCP server opens hub.db DIRECTLY (today's behavior, zero new surface). "daemon" ⇒ OPT-IN: the agent op-API on the loopback daemon (`POST /api/op/<op>`, read fresh per request) is live, and the thin stdio shim (hub/src/shim.ts) proxies tool calls to it instead of opening the DB — identity rides env→the `X-Devloop-Actor` header (dodges the `claude -p` Authorization-drop). Every mutating endpoint passes the writeOriginOk CSRF/DNS-rebind guard first (§16, 127.0.0.1-only). See docs/HUB-ARCHITECTURE.md + docs/design/daemon-multicli-repositioning.md.
       },
       "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). DEFAULT is opus for EVERY agent; tune an agent DOWN to economize.
-        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus", "communication": "opus",
+        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "communication": "opus",
         "senior-dev": "claude-opus-4-8",   // two-tier Dev (launcher DEV_SPLIT=1): the design-and-delegate + escalation direct-code agent. Launcher effort = max. Absent ⇒ opus.
         "junior-dev": "claude-sonnet-4-6"  // two-tier Dev (DEV_SPLIT=1): implements pre-designed tickets against the linked design. Launcher effort = high. Absent ⇒ sonnet. `dev` stays the LEGACY single-dev default (kept active).
       },
@@ -82,25 +82,6 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "checks":         [],         // optional: extra synthetic probes — each a URL (must return 2xx) or a command (must exit 0)
         "criticalRoutes": [],         // optional: core user-flow paths/URLs that must be up — string path/URL or { "url": "...", "expectStatus": 200 }
         "logsCommand":    null        // optional: a READ-ONLY logs/metrics command for an error-rate/5xx signal (never mutating)
-      },
-      "director": {                   // OPTIONAL — director-agent only (conventions §25). Absent ⇒ Director NO-OPs; PM owns strategy (today's behavior). REQUIRES backend:"service".
-        "roadmapCadence":  "weekly",  // how often the full sync-panel roadmap sprint runs; routine fires just chair the open board
-        "maxRounds":       3,         // hard cap on discussion rounds per topic (termination guarantee)
-        "roundFireBudget": 3,         // Director fires a round may stay open before forced synthesis (a STATE-FREE clock vs topic.round_opened_at)
-        "directionNote":   null,      // optional: a path or { "hubDoc": "<kind>" } the operator drops direction into between /director-agent asks
-        "signalSources": [            // optional: the OLD signal.sources shape, folded in as ONE coarse real-user input (read-only, PII-strict §16). Empty ⇒ skip.
-          { "name": "support", "type": "inbox",  "read": "<mcp-tool-or-command>" },
-          { "name": "sentry",  "type": "errors", "read": "<mcp-tool-or-command>" }
-        ],
-        "channel": {                  // OPTIONAL — the P6 two-way IM plane (conventions §9/§25). Absent ⇒ the Director chairs the board but does NO chat I/O. REQUIRES backend:"service".
-          "provider":      "lark",    // "slack" | "lark" — picks the adapter
-          "tokenEnv":      "DEVLOOP_CHANNEL_TOKEN",   // ENV-VAR NAME of the BOT TOKEN (slack xoxb-) / lark APP_ID. §16 secret — two-way needs a token WITH history-read scope (see Notes). NEVER the literal.
-          "secretEnv":     null,      // lark internal-app: ENV-VAR NAME of the APP_SECRET (exchanged server-side for a tenant_access_token). §16-class; NEVER the literal. slack: leave null.
-          "channelRef":    "oc_xxx",  // the room/chat id (slack 'C…' / lark chat_id) — an addressing handle, not a secret
-          "digestCadence": "daily",   // how often Job 5 pushes the digest; null ⇒ no digest (inbound poll still runs)
-          "transport":     "bot",     // DL-52: "bot" (default; absent ⇒ "bot") = the provider bot API above (needs the token). "webhook" = a ONE-WAY incoming-webhook (no bot app): tokenEnv then names the WEBHOOK-URL env var + secretEnv the optional Lark sign-secret env var (still NAMES, §16). One-way ⇒ notify/digest can POST but there is NO inbound poll.
-          "enabled":       true
-        }
       },
       "communication": {              // OPTIONAL — communication-agent only (conventions §21). Absent ⇒ no scheduled article drafts unless directly invoked by the operator.
         "cadence":          "daily",  // daily is the intended loop cadence; the agent dedupes by YYYY-MM-DD output path
@@ -176,7 +157,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `${CLAUDE_PLUGIN_DATA}/<project-key>/lessons.md` (the same per-project home as `reports/`,
   conventions §14; the legacy root file next to `projects.json` remains only as a back-compat
   **fallback** for un-migrated single-project installs). It holds per-operator
-  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Director`/`Communication`).
+  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Communication`).
   Each skill reads it at run-start and applies its section that fire
   (conventions §14). Local machine state — never committed. The **Reflect** agent (the
   daily retrospective role) is the one agent that *writes* this file — it curates it
@@ -194,7 +175,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   per pane unless you override) — maximize correctness across the whole loop. Tune an
   agent **down** (`sonnet`/`haiku`) only to economize — e.g. the mechanical/high-frequency
   ones (`sweep`, `qa`, `ops`, `communication`) tolerate `sonnet` well; the reasoning-heavy ones
-  (`dev`, `pm`, `architect`, `reflect`, `director`) are where `opus` earns its keep. Omitting an
+  (`dev`, `pm`, `architect`, `reflect`) are where `opus` earns its keep. Omitting an
   agent ⇒ it falls back to the launcher's opus default.
   **Per-agent EFFORT tiers** (the launcher's `--effort` per pane, distinct from the model):
   `pm=max` and `dev=max` (legacy single dev) reason deepest; `reflect`/`architect`=`xhigh`;
@@ -273,43 +254,6 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   polls only the resolved per-repo `deploy.healthCheck` + `testEnv.baseUrl` root. Ops
   re-checks before filing (anti-flap), files/refreshes ONE `Bug`+`qa`+`incident` (Urgent
   when prod is down), dedupes via `ops-state.json`, and never rolls back. Opt-in to launch.
-- **`director`** (optional; `director-agent` only, conventions §25; **requires
-  `backend:"service"`**): turns on the discussion board + the Director. `roadmapCadence`
-  paces the sync-panel roadmap sprint; `maxRounds` + `roundFireBudget` are the **topic
-  termination** guarantee (a topic ALWAYS closes — a stalled round goes ripe off the hub's
-  `round_opened_at` clock, state-free); `directionNote` is where the operator drops
-  direction between asks; `signalSources[]` is the **old `signal.sources` shape** folded in
-  as one coarse, read-only, **PII-strict** (§16) real-user input. **Absent ⇒ the Director
-  NO-OPs and PM owns strategy** (today's behavior); a `director` block under a
-  non-`service` backend is a config error → the Director no-ops with a warning. The Director
-  DRAFTS the kind:"roadmap" doc; the **operator publishes** it (P4 gate); a discussion
-  decision is data, never an auto-applied change (§17). **Architect needs no new config** — it reuses
-  `repos[]`/`build`.
-- **`director.channel`** (optional; conventions §9/§25; requires `backend:"service"`): the
-  P6 **two-way IM plane**. The Director **polls** the provider for new operator messages
-  each fire (the no-daemon inbound — the cursor lives in the hub, not a file) and **pushes**
-  a digest / replies / blocked-ticket notifies. `provider` is `slack`|`lark`; `tokenEnv`/
-  `secretEnv` are **ENV-VAR NAMES** (the §16 secret is read server-side, never stored/logged/
-  returned); `channelRef` is the room id; `digestCadence` paces the digest (null ⇒ none).
-  **Credential escalation vs §9 `notify`:** `notify` needs only a **write webhook URL**;
-  two-way `channel` needs a **bot token with history-READ scope** (Slack `channels:history`/
-  `groups:history` + the bot in the room; Lark an internal app's `app_id`+`app_secret` →
-  `tenant_access_token`, with `im:message` read) — a real, operator-present credential step.
-  **Coexists with `notify`** (it does NOT replace it): `notify` stays the minimal one-way
-  PM ping that works on **any** backend; `channel` is the Director's two-way superset on
-  `service`. Both opt-in; absent ⇒ today's behavior. **Inbound chat is operator DATA, not a
-  gate-bypass command** (§16 instruction-source boundary): the Director acts on direction but
-  refuses+surfaces a chat instruction to bypass the publish gate / §17 firewall / a prohibited
-  action. Outbound is a **server-side allow-list** (structured fields; `reply.text`/headline
-  bounded + control-stripped) — an agent can't post free-form PII/secrets.
-  **`transport` (DL-52):** a `channel` defaults to `"bot"` (the provider API — every existing
-  channel unchanged). Set `transport:"webhook"` for a **one-way incoming-webhook** alert channel
-  (a pasted Slack/Lark hook URL — no bot app, no history scope): `tokenEnv` then names the env var
-  holding the **webhook URL** and `secretEnv` the optional **Lark sign-secret** (still env-var
-  NAMES — the URL/secret never touch the DB, a return, or a log, §16). The DL-26 Human-Blocked
-  notifier posts the §16-safe one-line payload (`{project, id, title≤80, url}`) over it. A
-  webhook is **one-way ⇒ notify/digest only, no inbound poll**, so it fits an alert-only setup;
-  the two-way Director chat needs `transport:"bot"`.
 - **`communication`** (optional; `communication-agent` only, conventions §21): enables the
   PR/media drafting agent. Its default job is one **draft** article per day, sourced from the
   strategy/roadmap, recent verified Done tickets, changelog/git facts, and the public product
@@ -364,7 +308,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   ticket/comment/report/log. **Absent ⇒ NO-OP** (no ping, no extra work — full back-compat).
   Out-of-band by design: a Linear @mention would be a self-mention (shared identity) and
   suppressed.
-- **`models`** covers the nine base agents plus the two opt-in two-tier-Dev agents
+- **`models`** covers the eight base agents plus the two opt-in two-tier-Dev agents
   (`senior-dev`/`junior-dev`) and **defaults to `opus` for all of them** (the launcher applies
   `--model opus` per pane unless overridden; `senior-dev`→opus, `junior-dev`→sonnet defaults under
   `DEV_SPLIT=1`); tune an agent down to economize. The outward agents are **opt-in to launch**
@@ -409,7 +353,6 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   default**, and carries the §23 guardrails. Linear-sink-only keys:
   `reports.linearProject` / `reports.linearInitiative` (the **dedicated** reports container,
   never the §20 doc-base), `reports.localOnlyAgents` (agents pinned to files regardless —
-  **defaults to `director-agent` + `ops-agent` + `dev-agent`**, the highest-PII authors
-  — the Director inherits Signal's `signalSources` PII exposure), and
+  **defaults to `ops-agent` + `dev-agent`**, the highest-PII authors), and
   `reports.reviewToken` (the operator's **opaque** high-entropy 点评 sentinel — not a
   dictionary word). `lessons.md` stays machine-local in both sinks.

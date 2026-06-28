@@ -111,7 +111,7 @@ project is a Sweep-flagged gap (it's invisible to both dev pick-queries), exactl
 ## 4. The design doc tier (conventions §20-adjacent, a NEW doc kind)
 
 A **design doc** is a per-MODULE technical-design document that senior-dev authors and maintains.
-It sits *below* the strategy/roadmap (PM/Director-owned product direction) and *above* the ticket specs.
+It sits *below* the strategy/roadmap (PM-owned product direction) and *above* the ticket specs.
 
 - **Granularity = LIVING per-module doc.** One design doc per module, **updated as the module
   evolves** — not one-per-feature and not a write-once artifact. History lives in the hub doc
@@ -303,7 +303,7 @@ the agents — §11 / the models doc):
 "models": {
   "pm": "opus", "qa": "opus", "dev": "opus",
   "senior-dev": "claude-opus-4-8", "junior-dev": "claude-sonnet-4-6",
-  "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus"
+  "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus"
 }
 ```
 `dev` keeps its default (legacy). `senior-dev` defaults to opus-class, `junior-dev` to sonnet-class.

@@ -59,12 +59,10 @@ updating (Job C step 5):
   version you just read>, summary })` — this writes a **DRAFT** only; **you cannot publish**
   (only the operator can, via `doc.publish`). On a save, note "strategy draft v\<n\> saved —
   awaiting operator publish"; on a CONFLICT re-read via `doc.get` and re-apply.
-  - **Under a `director` config (§25), the `roadmap` doc is DIRECTOR-OWNED and READ-ONLY to
-    you**: read it (`doc.get({ kind:"roadmap" })`) as your **north-star** and *execute* it, but
-    **never** `doc.save` the roadmap — only the Director drafts it (the operator publishes).
-    You no longer unilaterally set direction; **propose up** to the Director (post into a
-    Director-opened topic you're invited to, or file a `needs-director` note) instead of
-    rewriting the north-star. With **no** `director` config, you own `strategy` as before.
+  - **You own direction** (there is no Director agent): the `strategy` doc above is the
+    default north-star; if you also keep a `kind:"roadmap"` doc you draft it the same way
+    (`doc.save` DRAFT; the operator publishes via `doc.publish`). Record every material
+    direction call in the `Decisions (running log)` (§20) so the next run inherits it.
   - The §17 firewall holds: hub docs are PRODUCT docs only — never a SKILL/conventions/code file.
 - **Repo file** — any other string: a path relative to `repoPath`. Read/edit and (in `live`)
   commit. **Remains the default under `service`** unless `hub.docs`/`{hubDoc}` is set.
@@ -93,16 +91,6 @@ under `reports.sink:"linear"`, §23); a structural ask is a §17
 `[<agent>-proposal]`, never a self-edit. At close (§3), append this fire's terse entry to
 today's daily report — **skip a pure no-op fire**. Respect `mode` (§12): in `dry-run`,
 write nothing.
-
-**Discussion board (conventions §25).** If `backend:"service"` AND a `director` config is
-present and you are INVITED to an OPEN topic, post your perspective once via
-`post.add({topicId, body})` — your lane only, append-only, never edit/synthesize/close
-(only the chairing Director does). Check cheaply: `topic.list` returns each open topic's
-round + your `youArePending` flag in one call; **only if** you're pending, `topic.get` it
-for the question + prior posts, then `post.add`. **Never block on the board** — a missed
-round is fine (the Director's round budget guarantees progress); skip it and continue your
-real jobs. If the board tools aren't present, or there's no `director` config ⇒ **skip
-entirely** (today's behavior; fail-closed).
 
 **Codex — optional power tools (conventions §24).** Only when `codex.imageGen` is on
 **and** the `codex` CLI is on `PATH` (else exactly as today), you may generate a **mockup /
@@ -348,7 +336,10 @@ capabilities that make the product better, even when they aren't written in the 
    ticket per repo, `relatedTo` each other — so Dev rarely has to split across repos;
    don't file one ticket that secretly spans repos. Single-repo: no `repo:*` label.
    **W3 intake (conventions §9a):** a human may file a `dev-loop`-labelled `Todo`
-   assigned to PM. When you find one, **groom it into Dev children** — file each child
+   assigned to PM — including a **research/direction** ask (then **think on the ticket and
+   update the docs**: record the call in the `strategyDoc`/roadmap + the Decisions log §20
+   and close the parent; park a genuinely operator-only call `Human-Blocked`, §9). For
+   **build** intake, **groom it into Dev children** — file each child
    with `relatedTo:[<parent>]` (child→parent back-link is **mandatory**; it survives the
    parent closing), back-link the parent + comment the child IDs in one write, **then**
    move the parent to `Done`. Never close the parent before its children exist and link

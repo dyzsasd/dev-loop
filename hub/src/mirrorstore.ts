@@ -37,7 +37,7 @@ export type MirrorResult<T> = { ok: true; data: T } | { ok: false; error: string
 // mirror.push side-effect-free: it previews the would-push `ops`, hits NO network, and persists NO mirror_map
 // row (DL-11). Set it in the spawned process env (the MIRROR_OK suite + the agent-api/shim npm scripts do).
 const MIRROR_DRYRUN = process.env.DEVLOOP_MIRROR_DRYRUN === "1";
-const MIRROR_BANNER = "> 🤖 Mirrored from the dev-loop hub — edits here are IGNORED and overwritten on the next push. Give direction via the Director (conventions §25).";
+const MIRROR_BANNER = "> 🤖 Mirrored from the dev-loop hub — edits here are IGNORED and overwritten on the next push. Give direction by filing a Todo to PM (conventions §9a).";
 
 // row → Ticket (verbatim from server.ts/agentops.ts's local copy — the per-module idiom until the P3 dispatch
 // convergence collapses the three into one). mirror.push needs the full ticket for mirrorTitle/mirrorBody.

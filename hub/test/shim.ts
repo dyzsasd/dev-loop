@@ -183,28 +183,6 @@ try {
   ok(docPub.status === "current" && docPub.current_version === 2, `shim doc.publish as operator → v2 current (got ${JSON.stringify(docPub)})`);
   ok((await call(pmShim, "doc.get", { slug: "strat" })).version === 2 && (await call(pm, "doc.get", { slug: "strat" })).status === "current", "after publish, shim doc.get resolves to the published current v2");
 
-  // ═══ (DL-64) the discussion-board family through the shim — proxied to the widened op-API ═════════════════
-  // topic.open as the chair (pm), attributed; an invited actor (dev) posts; differential parity + the §25 gates.
-  const topOpen = await call(pmShim, "topic.open", { question: "Ship X now?", invited: ["dev"] });
-  ok(topOpen.opened_by === "pm" && topOpen.status === "open" && topOpen.round === 1 && (topOpen.invited as string[]).includes("dev"), `shim topic.open (DEVLOOP_ACTOR=pm) → chair pm, open, round 1 (got ${JSON.stringify(topOpen)})`);
-  const topId = topOpen.id;
-  ok((await call(pm, "list_events", { limit: 50 })).some((e: any) => e.actor === "pm" && e.kind === "topic.open"), "list_events (stdio) confirms the shim's topic.open attributed to pm");
-  const post = await call(devShim, "post.add", { topicId: topId, body: "dev's take" });
-  ok(post.author === "dev" && post.kind === "perspective" && post.round === 1, `shim post.add (DEVLOOP_ACTOR=dev, invited) → attributed to dev, round 1 (got ${JSON.stringify(post)})`);
-  ok((await call(pm, "list_events", { limit: 50 })).some((e: any) => e.actor === "dev" && e.kind === "post.add"), "list_events (stdio) confirms the shim's post.add attributed to dev (Director board now works on the shim)");
-  // differential parity: topic.get/topic.list via the shim ≡ the direct-db server (byte-identical)
-  ok(JSON.stringify(await call(devShim, "topic.get", { id: topId })) === JSON.stringify(await call(pm, "topic.get", { id: topId })), "differential parity: shim topic.get ≡ stdio topic.get (the topic + its posts)");
-  ok(JSON.stringify(await call(pmShim, "topic.list", {})) === JSON.stringify(await call(pm, "topic.list", {})), "differential parity: shim topic.list ≡ stdio topic.list");
-  // the §25 cooperative gates over the shim: a non-invited actor can't post; a non-chair can't close; the chair can
-  const postQa = await callRaw(qaShim, "post.add", { topicId: topId, body: "qa intrudes" });
-  ok(postQa.isError && /not invited/.test(postQa.text), `shim post.add by a non-invited actor (qa) → rejected (got ${postQa.text})`);
-  const closeQa = await callRaw(qaShim, "topic.close", { topicId: topId, decision: "qa decides" });
-  ok(closeQa.isError && /only the chair/.test(closeQa.text), `shim topic.close by a non-chair (qa) → rejected (cooperative chair gate; got ${closeQa.text})`);
-  const closed = await call(pmShim, "topic.close", { topicId: topId, decision: "Ship it." });
-  ok(closed.status === "closed" && closed.decision === "Ship it.", `shim topic.close by the chair (pm) → closed with the decision (got ${JSON.stringify(closed)})`);
-  const postClosed = await callRaw(devShim, "post.add", { topicId: topId, body: "too late" });
-  ok(postClosed.isError && /closed/.test(postClosed.text), "shim post.add into a closed topic → rejected (CONFLICT)");
-
   // ═══ (DL-67) the IM channel family through the shim — proxied to the widened op-API (DRYRUN build-no-network) ══
   const chReg = await call(devShim, "channel.register", { provider: "slack", configRef: "DEVLOOP_CHANNEL_TOKEN", channelRef: "C-SH" });
   ok(chReg.provider === "slack" && chReg.channelRef === "C-SH", `shim channel.register (DEVLOOP_ACTOR=dev) → stored, proxied to the op-API (got ${JSON.stringify(chReg)})`);
@@ -246,7 +224,7 @@ try {
   // THE 100% DROP-IN TRIPWIRE: the shim proxies EVERY server.ts tool (a future server.ts tool not proxied trips this)
   const stdioTools = (await pm.listTools()).tools.map((t: any) => t.name).sort();
   const shimTools = (await devShim.listTools()).tools.map((t: any) => t.name).sort();
-  ok(JSON.stringify(stdioTools) === JSON.stringify(shimTools) && shimTools.length === 29, `the shim proxies ALL ${stdioTools.length} server.ts tools — a 100% drop-in (got shim=${shimTools.length}, stdio=${stdioTools.length})`);
+  ok(JSON.stringify(stdioTools) === JSON.stringify(shimTools) && shimTools.length === 23, `the shim proxies ALL ${stdioTools.length} server.ts tools — a 100% drop-in (got shim=${shimTools.length}, stdio=${stdioTools.length})`);
 
   // ═══ port discovery via a DEVLOOP_HUB_PORT OVERRIDE (no runfile present) — proves 8787 is not hardcoded ════
   const overrideShim = await shim({ DEVLOOP_ACTOR: "dev", DEVLOOP_RUN_DIR: EMPTY_RUN, DEVLOOP_HUB_PORT: String(port) });
@@ -260,8 +238,6 @@ try {
   ok(!/not found:/.test(dormant.text), "dormant error is the actionable hint, not a raw 'not found' passthrough");
   const dormantDoc = await callRaw(pmShim, "doc.list", {}); // DL-62: the widened doc ops get the SAME clear dormant hint
   ok(dormantDoc.isError && /dormant/i.test(dormantDoc.text) && /hub\.transport/.test(dormantDoc.text), "dormant op-API → the new doc family gets the same clear hint (doc.list), not a hang/opaque error");
-  const dormantTopic = await callRaw(pmShim, "topic.list", {}); // DL-64: the board family gets the SAME clear dormant hint
-  ok(dormantTopic.isError && /dormant/i.test(dormantTopic.text) && /hub\.transport/.test(dormantTopic.text), "dormant op-API → the board family gets the same clear hint (topic.list)");
   const dormantChan = await callRaw(devShim, "channel.status", {}); // DL-67: the channel family gets the SAME clear dormant hint
   ok(dormantChan.isError && /dormant/i.test(dormantChan.text) && /hub\.transport/.test(dormantChan.text), "dormant op-API → the channel family gets the same clear hint (channel.status)");
   const dormantMir = await callRaw(devShim, "mirror.status", {}); // DL-68: the mirror/label family gets the SAME clear dormant hint
@@ -281,8 +257,6 @@ try {
   ok(refused.isError && /not reachable/i.test(refused.text), `a stale runfile / dead daemon (ECONNREFUSED) → clear error, no opaque 500 (got ${JSON.stringify(refused.text)})`);
   const docDown = await callRaw(downShim, "doc.get", { slug: "strat" }); // DL-62: the daemon-down clear error applies to the new ops too (shared proxy())
   ok(docDown.isError && /not reachable/i.test(docDown.text), "daemon-down → the new doc ops get the same clear 'not reachable' error (shared proxy(), no hang/opaque 500)");
-  const topicDown = await callRaw(downShim, "topic.get", { id: "nope" }); // DL-64: the board ops share proxy() → the same clear error
-  ok(topicDown.isError && /not reachable/i.test(topicDown.text), "daemon-down → the board ops get the same clear 'not reachable' error (shared proxy())");
   const chanDown = await callRaw(downShim, "channel.status", {}); // DL-67: the channel ops share proxy() → the same clear error
   ok(chanDown.isError && /not reachable/i.test(chanDown.text), "daemon-down → the channel ops get the same clear 'not reachable' error (shared proxy())");
   const mirDown = await callRaw(downShim, "mirror.status", {}); // DL-68: the mirror/label ops share proxy() → the same clear error

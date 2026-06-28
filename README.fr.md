@@ -2,7 +2,7 @@
 
 [English](README.md) · [中文](README.zh-CN.md) · **Français**
 
-**Onze agents activables qui construisent, surveillent, coordonnent et racontent un logiciel en faisant avancer les tickets dans une machine à états partagée.** Vous écrivez l'intention dans un document de stratégie, puis vous relisez le résultat. Les agents proposent le travail, l'implémentent, le vérifient, le livrent, et réinjectent ce qu'ils ont appris dans le tour suivant. C'est le *loop engineering* : moins de prompts à la main, davantage d'un système qui sait continuer à avancer.
+**Dix agents activables qui construisent, améliorent, surveillent et racontent un logiciel en faisant avancer les tickets dans une machine à états partagée.** Vous écrivez l'intention dans un document de stratégie, puis vous relisez le résultat. Les agents proposent le travail, l'implémentent, le vérifient, le livrent, et réinjectent ce qu'ils ont appris dans le tour suivant. C'est le *loop engineering* : moins de prompts à la main, davantage d'un système qui sait continuer à avancer.
 
 Les agents ne s'appellent pas entre eux. **Le tableau est l'unique canal** : chaque agent lit et écrit l'état des tickets, ainsi que git, ce qui permet aux exécutions de se faire dans n'importe quel ordre, voire en parallèle. Les labels portent les faits opérationnels : éligibilité, propriétaire, routage et niveau de dev.
 
@@ -65,7 +65,7 @@ dev-loop, c'est trois couches ; le paquet `npm i -g @dyzsasd/dev-loop` les livre
 
 ## Les agents
 
-Cinq agents **internes** (tournés vers la construction), un **Dev à deux niveaux** optionnel, quatre agents **externes**, et une commande de **setup** ponctuelle. Chaque agent lit d'abord [`references/conventions.md`](references/conventions.md) — la machine à états complète, la taxonomie des labels, les modèles de tickets et les protocoles.
+Cinq agents **internes** (tournés vers la construction), un **Dev à deux niveaux** optionnel, trois agents **externes**, et une commande de **setup** ponctuelle. Chaque agent lit d'abord [`references/conventions.md`](references/conventions.md) — la machine à états complète, la taxonomie des labels, les modèles de tickets et les protocoles.
 
 ### Interne — la boucle de construction
 
@@ -86,13 +86,12 @@ Scindez le Dev unique en un responsable de conception et un implémenteur, afin 
 | **`senior-dev-agent`** | **Niveau senior (opus, effort max).** Deux modes : **design-and-delegate** — pour un nouveau module/une nouvelle fonctionnalité, rédige un **design doc** vivant, propre au module, engendre des tickets enfants placés en attente dans `Backlog` et assignés à junior-dev (chacun portant un pointeur `Design:`), et fait passer le ticket parent de conception → `In Review` pour validation par PM ; et **direct-code** — lorsqu'on lui remonte un véritable échec de vérification côté junior, implémente → garde-fou → livre lui-même. |
 | **`junior-dev-agent`** | **Niveau junior (sonnet, effort high).** Prend les tickets `Todo` routés vers le junior, **lit le pointeur `Design:` associé avant de coder**, implémente conformément au design, exécute les mêmes garde-fous / flux de livraison que dev-agent, passe le relais en `In Review`. Abandonne (info-needed) face à une spec ambiguë plutôt que de deviner. |
 
-### Externe — observer, coordonner, orienter
+### Externe — observer et raconter
 
 | Agent | Rôle |
 |---|---|
 | **`ops-agent`** | Surveille la **prod en fonctionnement** (cadence serrée, ~10–15 min). Interroge les health checks + l'URL de base + d'éventuels routes/logs critiques et, sur une dégradation **confirmée et répétée** (re-vérification anti-rebond d'abord), dépose/rafraîchit un Bug `incident` (Urgent quand la prod est tombée). Observe-et-dépose — ne fait jamais de rollback. |
 | **`architect-agent`** | **Auditeur de santé technique** sur l'ensemble de la base de code (lent, quasi quotidien). Audite une dimension **tournante** (dérive / duplication / code mort / obsolescence des dépendances + CVE / cohérence / abstractions manquantes), avec garde-fou par SHA, et dépose des Improvement `tech-debt`. Lecture seule sur le code — n'implémente jamais. |
-| **`director-agent`** | Le **coordinateur de la DIRECTION** tourné vers l'humain (backend hub ; quotidien/à la demande). Préside un **tableau de discussion** inter-agents (ouvre des sujets → chaque agent y apporte le prisme de son rôle à chaque tour → synthétise → une **décision**) et **rédige** la feuille de route que l'**opérateur publie** ; via un **canal Lark/Slack bidirectionnel** optionnel, l'opérateur discute avec lui. Coordonne + rédige — n'implémente/livre/vérifie jamais. Pas de config `director` ⇒ no-op silencieux (la stratégie revient à PM). |
 | **`communication-agent`** | Responsable communication / médias. Lit la stratégie, la feuille de route, le travail livré et les faits produit publiables, puis rédige un article public par cadence (quotidien par défaut). Brouillon uniquement : ne publie pas, ne commit/push/déploie pas, ne vérifie pas. Peut tourner dans Codex avec `DEVLOOP_ACTOR=communication`. |
 
 ### Setup — pas un agent de boucle
@@ -122,19 +121,16 @@ Branchez un produit dans la boucle une bonne fois : détectez sa forme, cartogra
 ### 5. Auto-évolution — rapport → 点评 → leçon → comportement
 Chaque agent écrit des rapports ; Reflect distille les motifs récurrents dans `lessons.md` ; vous déposez un **点评** à côté de n'importe quel rapport et l'agent transforme votre critique en une règle `lessons.md` qu'il respecte ensuite. La boucle s'améliore sans que personne n'édite de fichiers skill — et ne réécrit **jamais** ses propres instructions fondamentales de façon autonome (celles-ci sont proposées à un humain).
 
-### 6. Direction — le tableau de discussion et la feuille de route *(backend hub)*
-Le **Director** ouvre un **sujet**, les agents apportent, chacun selon le prisme de son rôle, une perspective à chaque tour, le Director **synthétise une décision** et **rédige** la feuille de route ; l'**opérateur la publie**. En option, l'opérateur discute avec le Director via un **canal Lark/Slack bidirectionnel**. La stratégie devient un artefact délibéré et validé par l'opérateur, plutôt que la conjecture d'un seul agent.
-
-### 7. Surveillance externe — santé, code et communication produit
+### 6. Surveillance externe — santé, code et communication produit
 **Ops** surveille la prod en fonctionnement et dépose un Bug `incident` sur une dégradation confirmée (qui réintègre la boucle centrale en tant que Bug). **Architect** audite une tranche tournante de la base de code et dépose des Improvement `tech-debt`. **Communication** rédige l'article produit quotidien à partir de faits vérifiés et publiables. Aucun n'implémente ni ne publie à l'extérieur.
 
-### 8. Mise en attente humaine et notification
+### 7. Mise en attente humaine et notification
 Un blocage réellement réservé à l'humain (un identifiant, une validation juridique, un prérequis externe) met le ticket en attente — `Human-Blocked` sur le hub, ou `blocked`+`needs-pm` sur Linear/local — et un **webhook Slack/Lark** optionnel vous alerte hors-bande afin qu'il ne reste jamais inaperçu.
 
-### 9. Miroir — hub → Linear *(backend hub)*
+### 8. Miroir — hub → Linear *(backend hub)*
 Le hub peut pousser ses tickets de façon unidirectionnelle vers Linear pour une visibilité humaine (idempotent, incrémental, anti-split-brain garanti — Linear n'est jamais relu comme source de vérité). Faites tourner la boucle sur le hub local rapide, observez-la dans Linear.
 
-### 10. Observer — la web UI en localhost *(backend hub)*
+### 9. Observer — la web UI en localhost *(backend hub)*
 Un démon localhost persistant sert un tableau en lecture seule, le détail des tickets, l'éditeur de feuille de route, les rapports, et une vue activité/débit au-dessus du même système de référence — pour que vous *observiez* la boucle sans y toucher. Les agents restent sans démon (ils se coordonnent via MCP, pas via la web UI).
 
 ---
@@ -213,8 +209,8 @@ dev-loop install-claude-plugin       # écrit un marketplace local à source npm
 /plugin install dev-loop@dev-loop-npm
 ```
 
-Les skills apparaissent sous `/dev-loop:pm-agent` … `/dev-loop:director-agent`,
-`/dev-loop:communication-agent`, les `/dev-loop:senior-dev-agent` + `/dev-loop:junior-dev-agent`
+Les skills apparaissent sous `/dev-loop:pm-agent` … `/dev-loop:communication-agent`,
+les `/dev-loop:senior-dev-agent` + `/dev-loop:junior-dev-agent`
 à activer, et `/dev-loop:init`. Pilotez-les avec `/loop` (voir [Lancer la boucle](#lancer-la-boucle)).
 *(Installation de développement depuis un checkout source : `claude --plugin-dir /path/to/dev-loop`,
 ou un marketplace `source:"local"` dans `~/.claude/settings.json` →
@@ -253,7 +249,6 @@ Les réglages (tous par projet) :
 - **`repos[]`** *(optionnel)* — un produit, plusieurs repos (sinon mono-repo, 100 % inchangé).
 - **`reports.sink`** *(optionnel)* — `"files"` (par défaut) vs `"linear"` (héberge les rapports + 点评 dans Linear pour un runtime cloud/distant).
 - **`notify`** *(optionnel)* — webhook Slack/Lark pour vous alerter quand un ticket est mis en attente humaine.
-- **`director`** *(optionnel, hub)* — active le tableau de discussion + la feuille de route + le canal bidirectionnel.
 - **`communication`** *(optionnel)* — active les brouillons d'articles publics, sans publication externe.
 
 Référence complète : [`references/config-schema.md`](references/config-schema.md).
@@ -301,7 +296,7 @@ plugin Claude, ouvrez `claude agents`, puis lancez `/loop 5m /dev-loop:pm-agent`
 `/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent` et les agents externes optionnels.
 
 **Cadence** (ils s'auto-régulent, donc les déclenchements à vide sont des no-op bon marché) : PM/QA/Dev ~5 min, Sweep
-~30 min, Reflect quotidien ; Ops ~10 min, Architect/Director/Communication quotidien/à la demande.
+~30 min, Reflect quotidien ; Ops ~10 min, Architect/Communication quotidien/à la demande.
 
 **La reprise est une opération normale** : les agents sont sans état à chaque exécution. Après un arrêt, un crash ou un redémarrage, relancez-les ; chacun relit la réalité de terrain et continue.
 
@@ -319,9 +314,9 @@ La coordination est enfichable ; les agents et les protocoles sont identiques po
 |---|---|---|
 | **`linear`** *(par défaut)* | Coordination via le Linear MCP | Cloud, visible par l'équipe, l'application Linear comme UI |
 | **`local`** | Un tableau sur fichiers markdown, local à la machine, dans le répertoire de données | Zéro cloud, minimal, sans Linear |
-| **`service`** | Un **hub** local — un système de référence MCP au-dessus de `node:sqlite` | **Véritable identité propre à chaque agent**, une **web UI** en localhost, des documents versionnés publiés par l'opérateur, le tableau de discussion + Director, le canal bidirectionnel, le miroir Linear unidirectionnel, la portabilité entre CLI |
+| **`service`** | Un **hub** local — un système de référence MCP au-dessus de `node:sqlite` | **Véritable identité propre à chaque agent**, une **web UI** en localhost, des documents versionnés publiés par l'opérateur, le miroir Linear unidirectionnel, la portabilité entre CLI |
 
-Le **plan de travail** (états, transitions, responsabilités et boucle d'agents) est identique d'un backend à l'autre ; le **plan de surface** (identité par agent, web UI, tableau/Director) s'étend selon le backend. Voir [conventions §18](references/conventions.md) +
+Le **plan de travail** (états, transitions, responsabilités et boucle d'agents) est identique d'un backend à l'autre ; le **plan de surface** (identité par agent, web UI) s'étend selon le backend. Voir [conventions §18](references/conventions.md) +
 [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md).
 
 ## Périmètre de sécurité
@@ -366,4 +361,4 @@ acteur/MCP `dev-loop-hub` par agent, aucune config Codex manuelle n'est donc né
 
 ## Statut
 
-**v0.22.1.** Onze agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et quatre externes (**Ops / Architect / Director / Communication**), avec un **senior-dev / junior-dev** à deux niveaux optionnel — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + le tableau de discussion/Director + un canal Lark/Slack bidirectionnel + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : le **Dev à deux niveaux** (senior conçoit / junior implémente, à activer, rétrocompatible) ; le **packaging npm autonome** (`npm i -g @dyzsasd/dev-loop`), avec les skills d'agents intégrées pour le scheduler et un parcours multi-CLI certifié Codex ; la **gouvernance du coût de boucle** (un coupe-circuit en cas d'emballement/d'absence de progrès, une métrique de taux d'acceptation) ; et le nouvel agent **Communication**, qui rédige des brouillons d'articles produit sans publier à l'extérieur. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).
+**v0.22.1.** Dix agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et trois externes (**Ops / Architect / Communication**), avec un **senior-dev / junior-dev** à deux niveaux optionnel — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : le **Dev à deux niveaux** (senior conçoit / junior implémente, à activer, rétrocompatible) ; le **packaging npm autonome** (`npm i -g @dyzsasd/dev-loop`), avec les skills d'agents intégrées pour le scheduler et un parcours multi-CLI certifié Codex ; la **gouvernance du coût de boucle** (un coupe-circuit en cas d'emballement/d'absence de progrès, une métrique de taux d'acceptation) ; et le nouvel agent **Communication**, qui rédige des brouillons d'articles produit sans publier à l'extérieur. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).

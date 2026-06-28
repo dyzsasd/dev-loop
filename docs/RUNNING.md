@@ -55,8 +55,8 @@ projects in `dry-run` for first contact) and launch the agents (next section).
 
 Pick the launch mode that matches how much control you want over cadence. All modes run the same skills:
 `/dev-loop:pm-agent`, `qa-agent`, `dev-agent`, `sweep-agent`, `reflect-agent`, and the
-opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`,
-`director-agent`, and `communication-agent`.
+opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`, and
+`communication-agent`.
 
 > **Another CLI?** On the `backend:"service"` hub the loop is **CLI-portable** — the same agents
 > + hub run on Codex / opencode against the same `hub.db`. See
@@ -153,7 +153,6 @@ becomes a new background session; `/loop` makes it recurring):
 /loop 24h /dev-loop:reflect-agent
 /loop 10m /dev-loop:ops-agent        # OUTWARD (§21), opt-in — watches running prod (anti-flap)
 /loop 24h /dev-loop:architect-agent  # OUTWARD (§21), opt-in — whole-codebase tech-debt audit
-/loop 24h /dev-loop:director-agent   # OUTWARD (§21/§25), opt-in — chairs the discussion board + drafts the roadmap (service backend; no-op without a director config)
 /loop 24h /dev-loop:communication-agent # OUTWARD (§21), opt-in — drafts a daily public product article (no external publish)
 ```
 
@@ -220,7 +219,6 @@ SWEEP=0     ~/.claude/plugins/data/dev-loop/run-loop.sh   # omit the janitor pan
 PROJECT=foo ~/.claude/plugins/data/dev-loop/run-loop.sh   # pick a project key
 OPS=1       ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Ops (prod-watch) pane (~10m; off by default)
 ARCHITECT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Architect (tech-debt) pane (daily; off by default)
-DIRECTOR=1  ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Director (direction/roadmap) pane (daily/on-demand; off by default)
 COMMUNICATION=1 ~/.claude/plugins/data/dev-loop/run-loop.sh # also run Communication (daily article drafts; off by default)
 DEV_SPLIT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # two-tier Dev (opt-in): senior-dev (opus/max) + junior-dev (sonnet/high) replace the single dev pane; see conventions §21a
 ```
@@ -237,7 +235,7 @@ The model is chosen **at launch** (a SKILL can't set its own model), via a per-p
 `models` map in `projects.json`:
 
 ```jsonc
-"models": { "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus", "communication": "opus" }
+"models": { "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "communication": "opus" }
 ```
 
 **Every agent defaults to `opus`** — maximize correctness across the whole loop. Tune an
@@ -252,7 +250,6 @@ cheaper model is tolerable:
 | **reflect** | `opus` | `sonnet` | careful curation, but runs only daily |
 | **qa** | `opus` | `sonnet` | capable; runs often |
 | **ops** | `opus` | `sonnet` | mechanical polling + anti-flap judgement; runs often |
-| **director** | `opus` | `sonnet` | human-facing direction + PII-safe synthesis; daily/on-demand |
 | **communication** | `opus` | `sonnet` | public article drafting from verified facts; daily |
 | **sweep** | `opus` | `haiku` | mechanical hygiene |
 
@@ -274,7 +271,6 @@ Agents self-throttle (idle fires are cheap no-ops), so tighter intervals are saf
 | Reflect | daily | reflects *after* a day of churn |
 | Ops *(opt-in)* | ~10–15 min | watches running prod; tight polls are the point, but self-throttles |
 | Architect *(opt-in)* | daily | whole-codebase audit; SHA-gate makes most fires no-ops |
-| Director *(opt-in)* | daily / on-demand | chairs the discussion board + drafts the roadmap; folds optional real-user signal |
 | Communication *(opt-in)* | daily | drafts one public-facing product article; dedupes by date |
 
 ---
@@ -326,7 +322,7 @@ DEVLOOP_ACTOR=pm   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:pm-agent
 DEVLOOP_ACTOR=qa   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:qa-agent
 DEVLOOP_ACTOR=dev  DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:dev-agent
 DEVLOOP_ACTOR=communication DEVLOOP_PROJECT=monpick /loop 24h /dev-loop:communication-agent
-# …sweep/reflect/ops/architect/director likewise, each with its own DEVLOOP_ACTOR
+# …sweep/reflect/ops/architect likewise, each with its own DEVLOOP_ACTOR
 ```
 
 The built-in scheduler (§2B) and tmux launcher (§2C) set these per pane for you. Verify a pane is wired with
