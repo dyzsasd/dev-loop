@@ -38,7 +38,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/plugin && cp -R ../skills ../references ../config dist/plugin/",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/plugin && cp -R ../.claude-plugin ../skills ../references ../hooks ../config dist/plugin/",
     "prepack": "npm run build",
     "start": "DEVLOOP_CREATE_PROJECT=1 node src/server.ts",
     "daemon": "node src/daemon.ts",

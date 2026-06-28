@@ -18,6 +18,11 @@ npm install -g @dyzsasd/dev-loop   # requires Node >= 23.6 (built-in node:sqlite
 This installs two binaries on `PATH`: **`dev-loop`** for the CLI and **`dev-loop-hub`** for the
 MCP server entrypoint. The package also ships the agent skills and shared references used by
 `dev-loop run`, so Codex/opencode scheduler runs do not need a separate Claude plugin checkout.
+For Claude Code slash commands, install the bundled plugin payload without cloning the repo:
+
+```bash
+dev-loop install-claude-plugin
+```
 
 ## CLI
 
@@ -27,6 +32,7 @@ dev-loop shim                        the thin stdio MCP shim → the loopback da
 dev-loop daemon up|down|status       per-project daemon lifecycle — idempotent, auto web UI
 dev-loop init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project
 dev-loop run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents with your own runner
+dev-loop install-claude-plugin     install Claude Code plugin to ~/.claude/skills/dev-loop
 dev-loop install-codex-prompts      install optional Codex CLI /prompts:dev-loop-* custom prompts
 dev-loop mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers)
 dev-loop seed <key> <name> [PREFIX]  seed a project + actors + labels

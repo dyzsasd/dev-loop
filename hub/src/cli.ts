@@ -23,6 +23,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
+  "install-claude-plugin": ["install-claude-plugin"], // install Claude Code skills-directory plugin from npm payload
   "install-codex-prompts": ["install-codex-prompts"], // optional Codex CLI /prompts:dev-loop-* compatibility layer
   "init-service":   ["init-service"],              // turnkey bootstrap (DL-60)
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
@@ -50,6 +51,7 @@ Usage: dev-loop <command> [args]
   daemon up|down|status       per-project daemon lifecycle — idempotent, auto-starts the localhost web UI
   init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project (seed → doctor → daemon up)
   run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents by calling the selected CLI
+  install-claude-plugin      install Claude Code plugin to ~/.claude/skills/dev-loop
   install-codex-prompts      install optional Codex CLI /prompts:dev-loop-* custom prompts
   mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers other servers)
   seed <key> <name> [PREFIX]  seed a project + actors + labels into the hub db

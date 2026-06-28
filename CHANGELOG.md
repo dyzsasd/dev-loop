@@ -4,6 +4,14 @@ All notable changes to the dev-loop plugin. Most of these landed from **live-loo
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
 ## Unreleased
+- Adds `dev-loop install-claude-plugin`, which installs the bundled Claude Code plugin payload into
+  `~/.claude/skills/dev-loop` so slash commands such as `/dev-loop:pm-agent` and
+  `/dev-loop:communication-agent` no longer require cloning the GitHub repo.
+- The npm build now ships the Claude plugin manifest and hooks alongside skills, references, and
+  config templates; installed hooks are patched to call `dev-loop daemon up` instead of a source
+  checkout path.
+- README and running docs now present `dev-loop run` as the primary loop command, including cwd-based
+  project detection, multi-project operation, dry-run, and two-tier Dev examples.
 - Adds `dev-loop install-codex-prompts`, which generates optional Codex CLI custom prompts
   (`/prompts:dev-loop-pm-agent`, `/prompts:dev-loop-communication-agent`, etc.) from the bundled
   dev-loop SKILLs, plus docs for Codex actor/project `-c` setup.
