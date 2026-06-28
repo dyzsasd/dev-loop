@@ -9,6 +9,9 @@
 #   codex exec -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="dev"' \
 #     --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "$PROMPT"
 #   → whoami returns {"actor":"dev","project":"dev-loop",…}  (project/db preserved from the static env).
+#   # communication-agent pane:
+#   codex exec -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"' \
+#     --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "$PROMPT"
 # Leave DEVLOOP_ACTOR ABSENT below (the -c override supplies it per pane). VERIFY the [mcp_servers.<name>]
 # schema against your Codex version (formats drift). Confirm with the §4 gate before trusting writes.
 

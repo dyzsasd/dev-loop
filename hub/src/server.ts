@@ -75,7 +75,7 @@ if (process.argv[2] === "daemon") {
 }
 
 const db = openDb(DB_PATH);
-ensureActors(db); // the 8 agents + operator are always present (needed for attribution + the guard below)
+ensureActors(db); // the configured agents + operator are always present (needed for attribution + the guard below)
 
 // P3/G1 — phantom-actor guard: a typo'd DEVLOOP_ACTOR would silently write an unattributable
 // author into created_by / events.actor / comments.author. Refuse to start instead (exit non-zero

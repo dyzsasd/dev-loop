@@ -1,6 +1,7 @@
 # dev-loop — Config schema
 
-The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect / Director) read
+The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect / Director /
+Communication) read
 `${CLAUDE_PLUGIN_DATA}/projects.json`. It maps each product to its Linear project, its
 repo, its test environment, and its ship/deploy settings. One file, many products.
 `/dev-loop:init` gathers and writes this file with you (operator-present setup).
@@ -46,7 +47,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "transport":   "stdio"        // DL-43/P2: "stdio" (default) ⇒ each pane's MCP server opens hub.db DIRECTLY (today's behavior, zero new surface). "daemon" ⇒ OPT-IN: the agent op-API on the loopback daemon (`POST /api/op/<op>`, read fresh per request) is live, and the thin stdio shim (hub/src/shim.ts) proxies tool calls to it instead of opening the DB — identity rides env→the `X-Devloop-Actor` header (dodges the `claude -p` Authorization-drop). Every mutating endpoint passes the writeOriginOk CSRF/DNS-rebind guard first (§16, 127.0.0.1-only). See docs/HUB-ARCHITECTURE.md + docs/design/daemon-multicli-repositioning.md.
       },
       "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). DEFAULT is opus for EVERY agent; tune an agent DOWN to economize.
-        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus",
+        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus", "communication": "opus",
         "senior-dev": "claude-opus-4-8",   // two-tier Dev (launcher DEV_SPLIT=1): the design-and-delegate + escalation direct-code agent. Launcher effort = max. Absent ⇒ opus.
         "junior-dev": "claude-sonnet-4-6"  // two-tier Dev (DEV_SPLIT=1): implements pre-designed tickets against the linked design. Launcher effort = high. Absent ⇒ sonnet. `dev` stays the LEGACY single-dev default (kept active).
       },
@@ -100,6 +101,18 @@ repo, its test environment, and its ship/deploy settings. One file, many product
           "transport":     "bot",     // DL-52: "bot" (default; absent ⇒ "bot") = the provider bot API above (needs the token). "webhook" = a ONE-WAY incoming-webhook (no bot app): tokenEnv then names the WEBHOOK-URL env var + secretEnv the optional Lark sign-secret env var (still NAMES, §16). One-way ⇒ notify/digest can POST but there is NO inbound poll.
           "enabled":       true
         }
+      },
+      "communication": {              // OPTIONAL — communication-agent only (conventions §21). Absent ⇒ no scheduled article drafts unless directly invoked by the operator.
+        "cadence":          "daily",  // daily is the intended loop cadence; the agent dedupes by YYYY-MM-DD output path
+        "language":         "en",     // article language, e.g. "en", "zh-CN", "fr"
+        "audience":         "current and prospective users",
+        "tone":             "clear, concrete, human, and restrained",
+        "maxWords":         900,
+        "sourceWindowDays": 7,        // how far back to look for Done tickets/events/changelog facts
+        "output":           "data",   // "data" (default, machine-local drafts) | "repo" (write draft markdown under the doc-home repo)
+        "outputDir":        "communications",       // data output: ${CLAUDE_PLUGIN_DATA}/<key>/<outputDir>/YYYY-MM-DD.md
+        "repoOutputDir":    "docs/communications",  // repo output: <doc-home repo>/<repoOutputDir>/YYYY-MM-DD.md
+        "includeUnreleased": false    // false ⇒ only published/verified/shipped facts; true ⇒ may mention roadmap items as upcoming, clearly labelled
       },
       "mirror": {                     // OPTIONAL — the P7 ONE-WAY Linear mirror (conventions §18/§23). Absent ⇒ no mirror (today's behavior). REQUIRES backend:"service" (the hub is the SoR being mirrored). Sweep Job 5 pushes it.
         "teamId":   "<linear-team-id>",     // the Linear team the mirrored issues live in
@@ -163,7 +176,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `${CLAUDE_PLUGIN_DATA}/<project-key>/lessons.md` (the same per-project home as `reports/`,
   conventions §14; the legacy root file next to `projects.json` remains only as a back-compat
   **fallback** for un-migrated single-project installs). It holds per-operator
-  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Director`).
+  behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Director`/`Communication`).
   Each skill reads it at run-start and applies its section that fire
   (conventions §14). Local machine state — never committed. The **Reflect** agent (the
   daily retrospective role) is the one agent that *writes* this file — it curates it
@@ -180,7 +193,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   agents. **The default is `opus` for EVERY agent** (the launcher applies `--model opus`
   per pane unless you override) — maximize correctness across the whole loop. Tune an
   agent **down** (`sonnet`/`haiku`) only to economize — e.g. the mechanical/high-frequency
-  ones (`sweep`, `qa`, `ops`) tolerate `sonnet` well; the reasoning-heavy ones
+  ones (`sweep`, `qa`, `ops`, `communication`) tolerate `sonnet` well; the reasoning-heavy ones
   (`dev`, `pm`, `architect`, `reflect`, `director`) are where `opus` earns its keep. Omitting an
   agent ⇒ it falls back to the launcher's opus default.
   **Per-agent EFFORT tiers** (the launcher's `--effort` per pane, distinct from the model):
@@ -297,6 +310,16 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   notifier posts the §16-safe one-line payload (`{project, id, title≤80, url}`) over it. A
   webhook is **one-way ⇒ notify/digest only, no inbound poll**, so it fits an alert-only setup;
   the two-way Director chat needs `transport:"bot"`.
+- **`communication`** (optional; `communication-agent` only, conventions §21): enables the
+  PR/media drafting agent. Its default job is one **draft** article per day, sourced from the
+  strategy/roadmap, recent verified Done tickets, changelog/git facts, and the public product
+  surface. It never publishes externally, never commits/pushes/deploys, and never edits product
+  code. `output:"data"` writes machine-local drafts under
+  `${CLAUDE_PLUGIN_DATA}/<project-key>/<outputDir>/YYYY-MM-DD.md`; `output:"repo"` writes the
+  draft markdown under the doc-home repo at `repoOutputDir` for operator review. `language`,
+  `audience`, `tone`, `maxWords`, and `sourceWindowDays` shape the article; `includeUnreleased`
+  must stay false unless the operator is comfortable with clearly-labelled roadmap/upcoming
+  language. Absent ⇒ scheduled Communication fires no-op, so existing projects are unchanged.
 - **`mirror`** (optional; conventions §18/§23; requires `backend:"service"`): the P7 **one-way
   Linear mirror** — projects the hub's tickets to Linear so humans who live in Linear can SEE
   the loop without the hub ceasing to be the source of truth. **Strictly one-way** (hub →
@@ -341,13 +364,13 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   ticket/comment/report/log. **Absent ⇒ NO-OP** (no ping, no extra work — full back-compat).
   Out-of-band by design: a Linear @mention would be a self-mention (shared identity) and
   suppressed.
-- **`models`** covers the eight base agents plus the two opt-in two-tier-Dev agents
+- **`models`** covers the nine base agents plus the two opt-in two-tier-Dev agents
   (`senior-dev`/`junior-dev`) and **defaults to `opus` for all of them** (the launcher applies
   `--model opus` per pane unless overridden; `senior-dev`→opus, `junior-dev`→sonnet defaults under
-  `DEV_SPLIT=1`); tune an agent down to economize. The three outward agents are **opt-in to launch**
-  (off by default in the launcher), and the two-tier Dev split is also opt-in (`DEV_SPLIT=1`); none
-  of these change any other agent's behavior, and a legacy single-dev project is byte-for-byte
-  unchanged.
+  `DEV_SPLIT=1`); tune an agent down to economize. The outward agents are **opt-in to launch**
+  (off by default in the launcher), and the two-tier Dev split is also opt-in (`DEV_SPLIT=1`);
+  none of these change any other agent's behavior, and a legacy single-dev project is
+  byte-for-byte unchanged.
 - **Agent state files** (`pm-state.json`, `qa-state.json`, and the outward observe-and-file
   agents' `ops-state.json` / `architect-state.json`, §21) live next to `projects.json` and
   hold per-project loop state: last-reviewed/swept SHA, swept

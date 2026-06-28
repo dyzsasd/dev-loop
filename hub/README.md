@@ -25,6 +25,7 @@ dev-loop serve                       run the stdio MCP server (the agent transpo
 dev-loop shim                        the thin stdio MCP shim → the loopback daemon op-API
 dev-loop daemon up|down|status       per-project daemon lifecycle — idempotent, auto web UI
 dev-loop init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project
+dev-loop run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents with your own runner
 dev-loop mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers)
 dev-loop seed <key> <name> [PREFIX]  seed a project + actors + labels
 dev-loop doctor                      health-check the system-of-record (DOCTOR_OK)
@@ -45,6 +46,17 @@ Every launcher sets the write identity **per pane**:
 Register it as an MCP server for your CLI with `{ "command": "dev-loop", "args": ["serve"] }`,
 or use `["shim"]` for the daemon transport. Per-CLI recipes and the identity gate live in:
 [`docs/PORTABILITY.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/PORTABILITY.md).
+
+For an unattended loop without Claude/Codex `/loop`, run the built-in scheduler:
+
+```bash
+cd /path/to/product-repo   # project is inferred from repoPath / repos[].path
+dev-loop run --cli claude --agents core,communication
+dev-loop run --cli codex  --agents core,outward
+```
+
+It owns cadence itself and shells out to the selected CLI once per agent fire. Use
+`--project <key>` only when launching from outside the repo or overriding cwd detection.
 
 ## Docs
 

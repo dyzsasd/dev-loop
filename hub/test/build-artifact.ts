@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), ".."); // hub/
+const repoRoot = join(hubRoot, "..");
 const pkgVersion = (JSON.parse(readFileSync(join(hubRoot, "package.json"), "utf8")) as { version: string }).version;
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -30,8 +31,9 @@ try {
   // ── AC1: the publish/prepack build succeeds and emits BOTH compiled bin entry points ──
   const build = run("npm", ["run", "build"]);
   ok(build.code === 0, "npm run build → exit 0 (the publish/prepack build compiles dist/)");
-  const distDir = join(hubRoot, "dist"), distCli = join(distDir, "cli.js"), distServer = join(distDir, "server.js");
+  const distDir = join(hubRoot, "dist"), distCli = join(distDir, "cli.js"), distServer = join(distDir, "server.js"), distRunner = join(distDir, "run-agents.js");
   ok(existsSync(distCli) && existsSync(distServer), "dist/cli.js + dist/server.js emitted (the package's two bins)");
+  ok(existsSync(distRunner), "dist/run-agents.js emitted (the built-in scheduler entry)");
 
   // ── AC2/AC3: the compiled bins LOAD + RUN — proves the rewritten sibling .ts→.js imports resolve in the JS
   //    output, and the suite goes RED if the build breaks or a bin can't load. ──
@@ -42,6 +44,8 @@ try {
   ok(seed.code === 0, "compiled cli.js seed → exit 0 (compiled seed.js + db.js siblings load)");
   const doc = run(process.execPath, [distCli, "doctor"], { DEVLOOP_HUB_DB: db });
   ok(doc.code === 0 && /DOCTOR_OK/.test(doc.out), "compiled cli.js doctor → exit 0 + DOCTOR_OK (spawns compiled server.js; siblings resolve)");
+  const runner = run(process.execPath, [distCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--root", repoRoot, "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
+  ok(runner.code === 0 && /communication: claude -p '?<prompt:\d+ chars>'?/.test(runner.out), "compiled cli.js run → dry-run renders a scheduled claude fire");
 
   // ── installed-like layout: a COPY of dist/ OUTSIDE the repo, with NO config/ sibling (the package ships only
   //    `files:["dist/","README.md"]`). This is the exact `npm i -g dev-loop` shape; the two ENOENT-on-install bugs

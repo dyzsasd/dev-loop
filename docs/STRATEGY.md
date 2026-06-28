@@ -109,7 +109,7 @@ Supporting goals (all in scope this milestone):
 - **Harden the hub / `service` backend** — robustness, tests, `doctor` coverage, and edge
   cases for the `node:sqlite` hub and the §18 backend (the daemon will build on this SoR).
 - **Agent skill robustness** — tighter protocols, fewer strand/dead-loop failure modes,
-  better dedupe/blocked handling across the 8 SKILLs. (Edits to SKILL/conventions files
+  better dedupe/blocked handling across the agent SKILLs. (Edits to SKILL/conventions files
   hit the §17 self-edit boundary and stay human-gated — drafted as proposals.)
 - **Operator-facing polish & docs** — onboarding (`init`), `RUNNING.md`, README accuracy
   (currently reads v0.15.0 while git is 0.19.2), examples, and error messages.
@@ -132,13 +132,14 @@ Supporting goals (all in scope this milestone):
 _Seeded once from a read-only code map of the repo at git `596c62b` (2026-06-23).
 Append-only thereafter — PM keeps it current._
 
-- **What it is:** a Claude Code plugin (`github.com/dyzsasd/dev-loop`) implementing eight
-  autonomous agents that coordinate **entirely through ticket state** (no agent calls
-  another). Five inward/build agents (**PM, QA, Dev, Sweep, Reflect**) + three outward
-  (**Ops, Architect, Director**). Repo version in `hub/package.json` is `0.6.2`; latest
+- **What it is:** a Claude Code plugin (`github.com/dyzsasd/dev-loop`) implementing eleven
+  launchable autonomous agents that coordinate **entirely through ticket state** (no agent calls
+  another). Five inward/build agents (**PM, QA, Dev, Sweep, Reflect**) + four outward
+  (**Ops, Architect, Director, Communication**) + an optional two-tier Dev split
+  (**senior-dev, junior-dev**). Repo version in `hub/package.json` is `0.6.2`; latest
   git tag/commit is `0.19.2` (README still says v0.15.0 — stale).
 - **Main surfaces / modules:**
-  - `skills/` — 9 SKILLs (the 8 agents + `init`), authored as markdown instruction sets.
+  - `skills/` — 12 SKILLs (the agents + `init`), authored as markdown instruction sets.
   - `references/` — `conventions.md` (the authoritative shared spec: state machine, label
     taxonomy, safety boundary §2, blocked protocol §9, self-evolution boundary §17,
     backends §18, multi-repo §19, reports §22/§23, discussion board §25), plus
@@ -248,7 +249,7 @@ Append-only thereafter — PM keeps it current._
 - **2026-06-23 — RESOLVED (PM, was OPEN): daemon = additive human-facing surface over the
   hub SoR, NOT a new agent coordinator.** Reconciliation of the daemon pivot vs. the
   daemon-free design:
-  - **The loop core stays daemon-free.** All 8 agents stay **stateless-per-fire** and keep
+  - **The loop core stays daemon-free.** All loop agents stay **stateless-per-fire** and keep
     coordinating through the hub SoR exactly as today. The daemon does **not** run, schedule,
     or replace agents, and the loop must keep functioning without it. (Agent launching/
     scheduling stays the launcher's job — out of scope for this milestone.)

@@ -20,7 +20,7 @@ CLI sets these per agent pane — that is the entire portability contract:
 
 | Var | Meaning | Who sets it |
 |---|---|---|
-| `DEVLOOP_ACTOR` | the per-agent identity (`pm`/`qa`/`dev`/`sweep`/`reflect`/`ops`/`architect`/`director`) — the attribution win | the launcher, **per pane** |
+| `DEVLOOP_ACTOR` | the per-agent identity (`pm`/`qa`/`dev`/`sweep`/`reflect`/`ops`/`architect`/`director`/`communication`) — the attribution win | the launcher, **per pane** |
 | `DEVLOOP_PROJECT` | the project key (pins this hub process to one project) | the launcher — **optional (DL-13):** when unset/empty the hub auto-resolves the project from the spawned process's **cwd** (the repo it was launched in), so a launcher that spawns the MCP server with `cwd` inside a repo need not set it. **Portability caveat:** this works only if the CLI spawns the MCP subprocess with that cwd; some CLIs spawn from a fixed dir, so the launcher exporting `DEVLOOP_PROJECT` (via `dev-loop-hub resolve-project`) stays the robust primary mechanism |
 | `DEVLOOP_HUB_DB` | absolute path to the shared `hub.db` | the launcher |
 | `CLAUDE_PLUGIN_ROOT` | the dev-loop checkout root — the SKILLs read `${CLAUDE_PLUGIN_ROOT}/references/conventions.md` | the launcher (despite the name, it's just the SKILLs' config-resolution var — **any** CLI's launcher can export it) |
@@ -59,7 +59,30 @@ per-pane via the `-c` override instead; see §4a.)**
 
 ---
 
-## 3. Run an agent headless
+## 3. Run agents with the built-in scheduler
+
+For unattended operation, prefer the built-in scheduler over a CLI's `/loop` feature:
+
+```bash
+# dev-loop owns cadence; Claude/Codex only executes one fire at a time.
+cd /path/to/product-repo
+dev-loop run --cli claude --agents core,communication
+dev-loop run --cli codex  --agents core,outward
+
+# One-shot preview, useful before leaving it unattended.
+dev-loop run --cli codex --agents communication --once --dry-run
+```
+
+The scheduler expands each SKILL body, substitutes `${CLAUDE_PLUGIN_ROOT}` /
+`${CLAUDE_PLUGIN_DATA}`, sets the env contract, and shells out once per due agent fire.
+For Codex it also injects the actor/project/db into the MCP config with `-c`, because
+Codex does not inherit the process env into MCP subprocesses (§4a). Cadence stays in the
+script: defaults match `RUNNING.md` §4 and can be overridden with
+`--interval pm=2m` / `--interval communication=12h`. The project is inferred from cwd
+by matching `repoPath` / `repos[].path` in `projects.json`; pass `--project <key>` or
+`--cwd <repo>` when running from cron/systemd or another fixed directory.
+
+## 3a. Run one agent headless by hand
 
 On a second CLI there is no `/pm-agent` slash command — you feed the **SKILL body** as the prompt. A
 minimal per-pane wrapper:
@@ -79,6 +102,12 @@ PROMPT="$(sed '1{/^---$/!q};1,/^---$/d' "$CLAUDE_PLUGIN_ROOT/skills/$AGENT-agent
 #   Claude Code: claude -p "$PROMPT"           (or /loop for a cadence)
 #   Codex:       codex exec "$PROMPT"
 #   opencode:    opencode run "$PROMPT"
+```
+
+For the PR/media article writer, call the same wrapper with `communication`:
+
+```bash
+./launch-agent.sh communication <project>
 ```
 
 Loop cadence (re-fire every N minutes) is the operator's launcher concern (cron / a `while sleep`
@@ -155,6 +184,17 @@ codex exec -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="dev"' \
 # whoami → {"actor":"dev","project":"dev-loop",…}  (project/db from the static config env, merged)
 ```
 
+For the Communication agent, the actor override is the only part that changes:
+
+```bash
+codex exec -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"' \
+  --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "$PROMPT"
+```
+
+`dev-loop run --cli codex ...` applies these `-c` overrides automatically for every
+scheduled fire, including `DEVLOOP_PROJECT` and `DEVLOOP_HUB_DB`; use the explicit form
+above only when you are launching one prompt by hand.
+
 Once `dev-loop` is published to npm, the registration `command`/`args` become `command="dev-loop",
 args=["serve"]` (a PATH bin) instead of `node <abs>/hub/src/server.ts`. The `-c` actor override is
 unchanged. **opencode** has the same per-pane question — run §4 against it and expect a similar
@@ -180,6 +220,7 @@ config-override answer; not yet certified.
 - The exact Codex `config.toml` `[mcp_servers]` schema and its env-propagation behavior on your
   installed version (the template is best-effort).
 - The exact opencode `mcp` schema and its env-propagation behavior on your installed version.
-- Each CLI's headless run flag(s) and loop facility (the wrapper above is a sketch).
+- Each CLI's headless run flag(s). Loop cadence can be owned by `dev-loop run`, so a CLI-native
+  loop facility is optional.
 - Whether a CLI needs a per-pane config override when it does **not** inherit the launching process
   env (the per-pane catch in §2).

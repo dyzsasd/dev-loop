@@ -22,6 +22,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   daemon:           ["server", "daemon"],          // up | down | status | ensure (DL-41)
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
+  run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
   "init-service":   ["init-service"],              // turnkey bootstrap (DL-60)
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
   "identity-check": ["server", "identity-check"],  // the portability gate (PORTABILITY.md §4)
@@ -47,6 +48,7 @@ Usage: dev-loop <command> [args]
   shim                        run the thin stdio MCP shim → the loopback daemon op-API (hub.transport:"daemon")
   daemon up|down|status       per-project daemon lifecycle — idempotent, auto-starts the localhost web UI
   init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project (seed → doctor → daemon up)
+  run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents by calling the selected CLI
   mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers other servers)
   seed <key> <name> [PREFIX]  seed a project + actors + labels into the hub db
   doctor                      health-check the hub system-of-record (DOCTOR_OK)

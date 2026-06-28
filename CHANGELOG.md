@@ -3,6 +3,19 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased — Communication agent + Codex-startable agent pane
+Adds `communication-agent`, an outward PR/media role that drafts one public-facing product
+article per cadence (daily by default) from strategy, roadmap, shipped work, and public-safe
+product facts. It is draft-only: no external publishing, no commits/pushes/deploys, and no ticket
+verification.
+- Hub identity now seeds the active `communication` actor, so a Codex pane can launch the agent with
+  `DEVLOOP_ACTOR=communication` under the same service-hub portability contract as the other agents.
+- Adds `dev-loop run`, a built-in scheduler that owns cadence itself and shells out to `claude -p`
+  or `codex exec` once per due agent fire. This gives the loop an unattended mode that does not
+  depend on Claude/Codex `/loop`; Codex actor/project/db identity is injected with `-c` overrides.
+- `projects.example.json`, `config-schema.md`, `RUNNING.md`, `PORTABILITY.md`, all README languages,
+  conventions, and plugin marketplace copy now document Communication and its Codex launch path.
+
 ## 0.22.0 — two-tier Dev: senior-dev (design lead) + junior-dev (implementer)
 Splits the single `dev` agent into an optional two-tier model (conventions §21a; `DEV_SPLIT=1` in the
 launcher) — **additive + back-compat: `dev` + `skills/dev-agent` stay active**, so single-dev projects
