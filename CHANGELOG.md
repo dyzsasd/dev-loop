@@ -3,18 +3,28 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
-- Adds `dev-loop install-claude-plugin`, which installs the bundled Claude Code plugin payload into
-  `~/.claude/skills/dev-loop` so slash commands such as `/dev-loop:pm-agent` and
-  `/dev-loop:communication-agent` no longer require cloning the GitHub repo.
-- The npm build now ships the Claude plugin manifest and hooks alongside skills, references, and
-  config templates; installed hooks are patched to call `dev-loop daemon up` instead of a source
-  checkout path.
-- README and running docs now present `dev-loop run` as the primary loop command, including cwd-based
-  project detection, multi-project operation, dry-run, and two-tier Dev examples.
-- Adds `dev-loop install-codex-prompts`, which generates optional Codex CLI custom prompts
-  (`/prompts:dev-loop-pm-agent`, `/prompts:dev-loop-communication-agent`, etc.) from the bundled
-  dev-loop SKILLs, plus docs for Codex actor/project `-c` setup.
+## 0.23.0 — Turnkey scheduler MCP for both CLIs + Director removal
+- **Scheduler self-injects the hub MCP for both CLIs**, so `dev-loop run` (Mode B) needs **no plugin
+  and no `.mcp.json`**: `--cli claude` passes an inline `--mcp-config '{…}' --strict-mcp-config`, and
+  `--cli codex` *defines* the `dev-loop-hub` server from scratch via `-c mcp_servers.dev-loop-hub.*`
+  overrides (command/args/env). Verified end-to-end on a fresh npm install — `whoami` returns the
+  injected `DEVLOOP_ACTOR` for both.
+- **Codex `--codex-safe` caveat documented:** unattended Codex loops must run in the **default** mode.
+  `--codex-safe` drops `--dangerously-bypass-approvals-and-sandbox`, and `codex exec` then auto-cancels
+  every MCP tool call (`dev-loop-hub/whoami (failed)` → `user cancelled`), starving the agent of the
+  hub. Use `--codex-safe` only for attended runs.
+- **`install-claude-plugin` now registers a local npm-source marketplace** (writes a
+  `marketplace.json` pointing at the `@dyzsasd/dev-loop` npm package and prints the `/plugin
+  marketplace add` + `/plugin install dev-loop@dev-loop-npm` commands) instead of copying the plugin
+  tree into `~/.claude/skills` — no GitHub, no file-copy drift.
+- **Adds `--max-fires N`** to `dev-loop run` (default: unlimited) to bound a continuous run.
+- **Removed `install-codex-prompts`** (the `~/.codex/prompts/*.md` compatibility layer): Codex
+  deprecated custom prompts in favor of skills, and `dev-loop run --cli codex` is the durable path.
+- **Removed the Director agent + discussion board**; direction is routed through PM. The strategy/
+  roadmap north-star drives tickets directly.
+- The npm build ships the Claude plugin manifest, hooks, skills, references, and config templates so
+  the scheduler runs from the published package; docs now present the two run modes (plugin / `dev-loop
+  run`) and the three-layer architecture (interface · hub · agents).
 
 ## 0.22.1 — Communication agent + Codex-startable scheduler
 Adds `communication-agent`, an outward PR/media role that drafts one public-facing product
