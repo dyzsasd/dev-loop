@@ -58,6 +58,10 @@ try {
   const instRun = run(process.execPath, [instCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
   ok(instRun.code === 0 && /communication: claude -p '?<prompt:\d+ chars>'?/.test(instRun.out),
     "installed cli.js run → finds bundled skills without --root");
+  const promptsDir = join(tmp, "codex-prompts");
+  const instPrompts = run(process.execPath, [instCli, "install-codex-prompts", "--dest", promptsDir, "--data", tmp]);
+  ok(instPrompts.code === 0 && existsSync(join(promptsDir, "dev-loop-communication-agent.md")) && existsSync(join(promptsDir, "dev-loop-init.md")),
+    "installed cli.js install-codex-prompts → writes Codex /prompts files from bundled skills");
 
   // ── (groom AC) mcp-merge with NO template arg → succeeds via the embedded DEFAULT_TEMPLATE, NOT an ENOENT on the
   //    `../../config/mcp.example.json` that doesn't ship. Args are plain identifiers/paths (DL-44/DL-66 guards). ──

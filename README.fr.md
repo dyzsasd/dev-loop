@@ -221,6 +221,17 @@ Pour Codex/opencode, le paquet npm contient déjà les skills d'agents et les r�
 nécessaires à `dev-loop run`; il n'est pas nécessaire d'installer le plugin Claude juste pour
 exécuter des agents planifiés.
 
+Pour des slash prompts interactifs dans la CLI Codex, installez les custom prompts optionnels :
+
+```bash
+dev-loop install-codex-prompts
+```
+
+Redémarrez Codex après l'installation. Les commandes apparaissent comme
+`/prompts:dev-loop-pm-agent`, `/prompts:dev-loop-qa-agent`,
+`/prompts:dev-loop-communication-agent`, etc. Les custom prompts Codex sont un chemin de
+compatibilité ; pour une cadence sans surveillance, préférez `dev-loop run --cli codex`.
+
 ## Configuration
 
 Les réglages par projet résident dans `${CLAUDE_PLUGIN_DATA}/projects.json`
@@ -315,7 +326,9 @@ La boucle peut utiliser **OpenAI Codex** comme outil de renfort via le compagnon
 
 Séparément, le hub `service` permet de lancer les agents eux-mêmes depuis Codex ; voir
 [`docs/PORTABILITY.md`](docs/PORTABILITY.md). Le volet Communication utilise
-`DEVLOOP_ACTOR=communication` avec `/dev-loop:communication-agent`.
+`dev-loop run --cli codex --agents communication`, ou le custom prompt Codex optionnel
+`/prompts:dev-loop-communication-agent` dans une session Codex lancée avec l'override
+`-c mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"`.
 
 ## Documentation approfondie
 

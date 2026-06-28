@@ -167,6 +167,37 @@ The runner writes one log per agent under
 SIGINT to active agent subprocesses. This mode is the most portable: run it from tmux,
 cron, launchd, systemd, or any host process manager.
 
+#### Optional: Codex CLI slash prompts
+
+Codex CLI supports user-defined slash prompts from `~/.codex/prompts/*.md`; they appear as
+`/prompts:<name>`. This is useful for an attended one-shot run, not for cadence. Codex marks custom
+prompts as deprecated in favor of skills, so treat this as a compatibility layer while
+`dev-loop run --cli codex` remains the durable launch path.
+
+Install them from the npm package:
+
+```bash
+dev-loop install-codex-prompts
+# writes ~/.codex/prompts/dev-loop-pm-agent.md, dev-loop-qa-agent.md, ...
+```
+
+Restart Codex after installing. Because Codex does not inherit `DEVLOOP_ACTOR` into MCP subprocesses,
+start one Codex session per agent identity when you use these prompts:
+
+```bash
+codex -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"' \
+  -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT="monpick"'
+
+# Inside the Codex TUI:
+/prompts:dev-loop-communication-agent
+```
+
+Available prompt names include `/prompts:dev-loop-pm-agent`, `/prompts:dev-loop-qa-agent`,
+`/prompts:dev-loop-dev-agent`, `/prompts:dev-loop-sweep-agent`,
+`/prompts:dev-loop-reflect-agent`, the outward agents, the two-tier Dev prompts, and
+`/prompts:dev-loop-init`. The generated prompt asks Codex to call `dev-loop-hub whoami` before hub
+writes and stop if the actor does not match.
+
 ### C. Local tmux launcher — mixed models, one command
 
 A small launcher (kept in your data dir, **not** part of the plugin) opens a `dev-loop`
