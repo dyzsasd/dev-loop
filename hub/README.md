@@ -16,7 +16,8 @@ npm install -g @dyzsasd/dev-loop   # requires Node >= 23.6 (built-in node:sqlite
 ```
 
 This installs two binaries on `PATH`: **`dev-loop`** for the CLI and **`dev-loop-hub`** for the
-MCP server entrypoint.
+MCP server entrypoint. The package also ships the agent skills and shared references used by
+`dev-loop run`, so Codex/opencode scheduler runs do not need a separate Claude plugin checkout.
 
 ## CLI
 

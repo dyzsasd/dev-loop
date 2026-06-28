@@ -2,7 +2,8 @@
 // (config/mcp.example.json) + temp target files, asserting: create-new, merge-PRESERVING another server,
 // idempotent no-duplicate re-run, update-in-place of a stale entry, a malformed/partial/non-object file is
 // an ERROR with the original left BYTE-FOR-BYTE untouched, and the merged entry is §16 env-NAME-only (the
-// abs hub server.ts path filled, DEVLOOP_PROJECT pinned to the key, no literal secret, no nested ${...}).
+// installed `dev-loop serve` command, DEVLOOP_PROJECT pinned to the key, no literal secret,
+// no nested ${...}). Legacy templates with a server.ts arg are still path-filled.
 import { mergeMcpServer } from "../src/mcp-merge.ts";
 import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -25,8 +26,9 @@ const freshPath = () => join(ROOT, `mcp-${++n}.json`);
 
 // §16 env-NAME-only + DL-44: the built dev-loop-hub entry is well-formed and carries only ${VAR:-default} refs.
 function assertEntry(entry: any, label: string, key: string): void {
-  ok(Array.isArray(entry.args) && entry.args.includes(HUB_SERVER), `${label}: args carries the absolute hub server.ts path`);
-  ok(!entry.args.some((a: string) => String(a).includes("<ABS-PATH")), `${label}: the <ABS-PATH-…> placeholder was filled`);
+  ok(entry.command === "dev-loop", `${label}: command uses the npm-installed dev-loop bin`);
+  ok(Array.isArray(entry.args) && entry.args.length === 1 && entry.args[0] === "serve", `${label}: args use the installed serve subcommand`);
+  ok(!entry.args.some((a: string) => String(a).includes("<ABS-PATH") || String(a).endsWith("server.ts")), `${label}: no source-checkout server.ts path is required`);
   const env = entry.env ?? {};
   ok(env.DEVLOOP_PROJECT === `\${DEVLOOP_PROJECT:-${key}}`, `${label}: DEVLOOP_PROJECT default pinned to '${key}'`);
   ok(env.DEVLOOP_ACTOR === "${DEVLOOP_ACTOR:-operator}", `${label}: DEVLOOP_ACTOR wiring preserved`);
@@ -63,13 +65,13 @@ try {
   ok(readFileSync(p2, "utf8") === before3, "idempotent re-run left the file byte-identical (no duplicate, no churn)");
   ok(Object.keys(c2.mcpServers).filter((k) => k === "dev-loop-hub").length === 1, "exactly one dev-loop-hub key (never duplicated)");
 
-  // 4. update-in-place: an existing dev-loop-hub with a STALE path → updated, not duplicated
+  // 4. update-in-place: an existing dev-loop-hub with a STALE source path → updated to the npm shape, not duplicated
   const p4 = freshPath();
   writeFileSync(p4, JSON.stringify({ mcpServers: { "dev-loop-hub": { type: "stdio", command: "node", args: ["/old/path/server.ts"], env: {} } } }, null, 2));
   const r4 = mergeMcpServer({ mcpJsonPath: p4, hubServerPath: HUB_SERVER, projectKey: "prodx", templatePath: TEMPLATE });
   ok(r4.ok && r4.action === "updated", `update existing dev-loop-hub → action 'updated' (got ${JSON.stringify(r4)})`);
   const c4 = read(p4);
-  ok(c4.mcpServers["dev-loop-hub"].args.includes(HUB_SERVER) && !c4.mcpServers["dev-loop-hub"].args.includes("/old/path/server.ts"), "the stale path was replaced with the real hub server.ts path");
+  ok(c4.mcpServers["dev-loop-hub"].command === "dev-loop" && c4.mcpServers["dev-loop-hub"].args[0] === "serve" && !c4.mcpServers["dev-loop-hub"].args.includes("/old/path/server.ts"), "the stale source path was replaced with dev-loop serve");
   ok(Object.keys(c4.mcpServers).length === 1, "still exactly one dev-loop-hub (updated in place, never duplicated)");
 
   // 5. malformed JSON → error, ORIGINAL UNTOUCHED
@@ -110,19 +112,20 @@ try {
   ok(!r9.ok && /DL-44|interpolation|plain identifier/.test((r9 as { error?: string }).error ?? ""), `a project key with \${...} → rejected by the DL-44 guard (got ${JSON.stringify(r9)})`);
   ok(!existsSync(p9), "a DL-44-unsafe project key wrote NO .mcp.json");
 
-  // 10. DL-66: a hub server path carrying ${...} lands verbatim in the entry's `args` (an interpolated
-  //     .mcp.json position) → Claude Code would mis-expand it at parse time → rejected symmetrically with the
-  //     case-9 projectKey guard, NO write. (Double-quoted strings here, so ${INJECT} is a LITERAL path char.)
+  // 10. A hubServerPath with interpolation characters is harmless for the current npm-bin template because
+  //     the path is not written. This is the point of simplifying the install path.
   const p10 = freshPath();
   const r10 = mergeMcpServer({ mcpJsonPath: p10, hubServerPath: "/Users/me/dev${INJECT}loop/hub/src/server.ts", projectKey: "prodx", templatePath: TEMPLATE });
-  ok(!r10.ok && /DL-66|interpolation|those characters/.test((r10 as { error?: string }).error ?? ""), `a hub server path with \${...} → rejected by the DL-66 guard (got ${JSON.stringify(r10)})`);
-  ok(!existsSync(p10), "a DL-66-unsafe hub server path wrote NO .mcp.json");
+  ok(r10.ok && existsSync(p10), `current template ignores the source path and still writes dev-loop serve (got ${JSON.stringify(r10)})`);
+  assertEntry(read(p10).mcpServers["dev-loop-hub"], "path-ignored", "prodx");
 
-  // 11. DL-66: the exact DL-44 nesting shape ${HOME:-/tmp} in the path is rejected the same way, NO write.
+  // 11. Legacy templates with a server.ts arg still get the old DL-66 protection.
   const p11 = freshPath();
-  const r11 = mergeMcpServer({ mcpJsonPath: p11, hubServerPath: "/opt/${HOME:-/tmp}/hub/src/server.ts", projectKey: "prodx", templatePath: TEMPLATE });
-  ok(!r11.ok && /DL-66|interpolation|those characters/.test((r11 as { error?: string }).error ?? ""), `a hub server path with the \${HOME:-/tmp} nesting shape → rejected (got ${JSON.stringify(r11)})`);
-  ok(!existsSync(p11), "a DL-66-unsafe (nested-default) hub server path wrote NO .mcp.json");
+  const oldTemplate = join(ROOT, "legacy-template.json");
+  writeFileSync(oldTemplate, JSON.stringify({ mcpServers: { "dev-loop-hub": { type: "stdio", command: "node", args: ["server.ts"], env: { DEVLOOP_ACTOR: "${DEVLOOP_ACTOR:-operator}" } } } }, null, 2));
+  const r11 = mergeMcpServer({ mcpJsonPath: p11, hubServerPath: "/opt/${HOME:-/tmp}/hub/src/server.ts", projectKey: "prodx", templatePath: oldTemplate });
+  ok(!r11.ok && /DL-66|interpolation|those characters/.test((r11 as { error?: string }).error ?? ""), `legacy template + unsafe server path → rejected (got ${JSON.stringify(r11)})`);
+  ok(!existsSync(p11), "a DL-66-unsafe legacy source path wrote NO .mcp.json");
 } finally {
   try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* ignore */ }
 }

@@ -2,7 +2,9 @@
 // so init's `service` auto-wiring registers the hub server WITHOUT destroying any other MCP servers the
 // product already declares. Composes onto DL-60's init-service seam (c). §16: env-NAME-only — the entry
 // carries only `${VAR:-default}` env references (copied from the committed template), never a literal secret;
-// the hub DB path is intentionally omitted (the server defaults to ~/.dev-loop/hub.db). §17: this is a
+// the hub DB path is intentionally omitted (the server defaults to ~/.dev-loop/hub.db). The normal installed
+// shape is `command:"dev-loop", args:["serve"]`; old source templates with a `server.ts` arg are still patched
+// in place. §17: this is a
 // data-file utility — it can only ever write the product `.mcp.json`, never a SKILL/conventions/code file.
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -12,7 +14,7 @@ const SERVER_NAME = "dev-loop-hub";
 
 export interface McpMergeOpts {
   mcpJsonPath: string;     // the PRODUCT repo's .mcp.json (the merge target)
-  hubServerPath: string;   // absolute path to the dev-loop checkout's hub/src/server.ts (fills the entry's args)
+  hubServerPath: string;   // legacy source-template support: fills a server.ts arg when the template has one
   projectKey: string;      // pins the entry's DEVLOOP_PROJECT default
   templatePath?: string;   // default: the committed config/mcp.example.json shipped beside this hub code
 }
@@ -20,15 +22,14 @@ export type McpMergeResult =
   | { ok: true; action: "created" | "merged" | "updated" | "unchanged"; servers: string[] }
   | { ok: false; error: string };
 
-// The published npm package packs only hub/dist + README — config/ lives OUTSIDE the packed dir, so the repo
-// template is absent when installed (Codex review 2026-06-27). This embedded default is the fallback: the
-// canonical dev-loop-hub entry shape (env NAME-only; an args slot ending in server.ts that buildEntry rewrites
-// to the real absolute path). Keep it in sync with config/mcp.example.json's dev-loop-hub entry.
+// The published npm package may not have the repo's config/ beside dist, so this embedded default is the
+// fallback. Keep it in sync with config/mcp.example.json's dev-loop-hub entry.
 const DEFAULT_TEMPLATE: { mcpServers: Record<string, unknown> } = {
   mcpServers: {
     [SERVER_NAME]: {
-      command: "node",
-      args: ["server.ts"],
+      type: "stdio",
+      command: "dev-loop",
+      args: ["serve"],
       env: { DEVLOOP_ACTOR: "${DEVLOOP_ACTOR:-operator}" },
     },
   },
@@ -44,8 +45,9 @@ function resolveTemplate(explicitPath: string | undefined, repoPath: string): { 
 }
 
 // Build the dev-loop-hub entry FROM the resolved template (the single source of truth for its shape — so a
-// future template change propagates), filling the absolute hub server path into `args` and pinning the
-// DEVLOOP_PROJECT default to the project key (matches the dogfood `.mcp.json` `${DEVLOOP_PROJECT:-<key>}`).
+// future template change propagates), pinning the DEVLOOP_PROJECT default to the project key (matches the
+// dogfood `.mcp.json` `${DEVLOOP_PROJECT:-<key>}`). Old templates with a `server.ts` arg are rewritten to the
+// supplied source path for back-compat; current templates already use the PATH bin (`dev-loop serve`).
 function buildEntry(tmpl: { mcpServers?: Record<string, unknown> }, hubServerPath: string, projectKey: string): Record<string, unknown> {
   const src = tmpl.mcpServers?.[SERVER_NAME];
   if (!src || typeof src !== "object") throw new Error(`template has no mcpServers["${SERVER_NAME}"] entry`);
@@ -53,17 +55,15 @@ function buildEntry(tmpl: { mcpServers?: Record<string, unknown> }, hubServerPat
   // produce a NESTED ${...} (the DL-44 SoR-fork footgun) in the product .mcp.json — reject it loudly rather
   // than write a malformed config. Real project keys are plain identifiers, so this never bites in practice.
   if (/[${}]/.test(projectKey)) throw new Error(`project key ${JSON.stringify(projectKey)} contains '$', '{', or '}', which would break the .mcp.json \${VAR:-default} interpolation (DL-44) — use a plain identifier key`);
-  // DL-66: the hub server path lands verbatim in the entry's `args` (line below) — another interpolated
-  // .mcp.json string position — so a path carrying `$`/`{`/`}` would nest a `${...}` that Claude Code
-  // mis-expands at parse-time interpolation, corrupting the resolved hub path and breaking the launch in that
-  // pane. Guard it symmetrically with projectKey above; a real absolute checkout path never contains these
-  // (same defense-in-depth bar the team set for the projectKey side in DL-44).
-  if (/[${}]/.test(hubServerPath)) throw new Error(`hub server path ${JSON.stringify(hubServerPath)} contains '$', '{', or '}', which would nest a \${...} in the .mcp.json args that Claude Code mis-expands at parse-time interpolation, corrupting the resolved hub path (DL-66) — use a path without those characters`);
   const e = structuredClone(src) as { args?: unknown[]; env?: Record<string, string> };
   const args = (e.args ?? []) as unknown[];
   const idx = args.findIndex((a) => typeof a === "string" && a.endsWith("server.ts"));
-  if (idx < 0) throw new Error(`template ${SERVER_NAME} entry has no server.ts arg to fill`);
-  args[idx] = hubServerPath; // the real absolute path, replacing the <ABS-PATH-TO-dev-loop>/... placeholder
+  if (idx >= 0) {
+    // DL-66: a legacy server path lands verbatim in an interpolated .mcp.json string position, so keep the
+    // old guard for old templates. Current `dev-loop serve` templates do not write this path at all.
+    if (/[${}]/.test(hubServerPath)) throw new Error(`hub server path ${JSON.stringify(hubServerPath)} contains '$', '{', or '}', which would nest a \${...} in the .mcp.json args that Claude Code mis-expands at parse-time interpolation, corrupting the resolved hub path (DL-66) — use a path without those characters`);
+    args[idx] = hubServerPath; // legacy placeholder replacement
+  }
   e.args = args;
   // env stays NAME-only; pin the project key as the DEVLOOP_PROJECT default (single-level, no nested ${...} — DL-44)
   e.env = { ...(e.env ?? {}), DEVLOOP_PROJECT: `\${DEVLOOP_PROJECT:-${projectKey}}` };

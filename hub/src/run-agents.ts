@@ -66,7 +66,12 @@ type Options = {
 };
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (build)
-const defaultRoot = () => resolve(here, "..", "..");
+const isPluginRoot = (p: string) => existsSync(join(p, "skills")) && existsSync(join(p, "references"));
+const defaultRoot = () => {
+  // Source checkout: hub/src -> repo root. Published package: dist/plugin -> bundled skills/references.
+  const candidates = [join(here, "plugin"), resolve(here, "..", "..")];
+  return candidates.find(isPluginRoot) ?? resolve(here, "..", "..");
+};
 const defaultDataDir = () => process.env.CLAUDE_PLUGIN_DATA || join(homedir(), ".claude", "plugins", "data", "dev-loop");
 const defaultHubDb = () => process.env.DEVLOOP_HUB_DB || join(homedir(), ".dev-loop", "hub.db");
 

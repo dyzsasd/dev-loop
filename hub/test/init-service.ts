@@ -120,7 +120,7 @@ try {
   ok(/\.mcp\.json (merged|created|updated): dev-loop-hub registered/.test(merged.stdout), "the bootstrap registered dev-loop-hub in the product .mcp.json");
   const pm = JSON.parse(readFileSync(join(PRODUCT, ".mcp.json"), "utf8"));
   ok(!!pm.mcpServers["other-srv"] && !!pm.mcpServers["dev-loop-hub"], "merge PRESERVED the existing other server AND added dev-loop-hub");
-  ok(pm.mcpServers["dev-loop-hub"].args.some((a: string) => a.endsWith("hub/src/server.ts")), "dev-loop-hub args point at the absolute hub server.ts");
+  ok(pm.mcpServers["dev-loop-hub"].command === "dev-loop" && pm.mcpServers["dev-loop-hub"].args[0] === "serve", "dev-loop-hub uses the npm-installed dev-loop serve command");
   ok(pm.mcpServers["dev-loop-hub"].env.DEVLOOP_PROJECT === "${DEVLOOP_PROJECT:-mergeproj}", "DEVLOOP_PROJECT default pinned to the project key (env-name-only)");
 
   // ── 10. dry-run WITH a repoPath → previews the merge, writes NO .mcp.json ──

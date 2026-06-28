@@ -34,6 +34,8 @@ try {
   const distDir = join(hubRoot, "dist"), distCli = join(distDir, "cli.js"), distServer = join(distDir, "server.js"), distRunner = join(distDir, "run-agents.js");
   ok(existsSync(distCli) && existsSync(distServer), "dist/cli.js + dist/server.js emitted (the package's two bins)");
   ok(existsSync(distRunner), "dist/run-agents.js emitted (the built-in scheduler entry)");
+  ok(existsSync(join(distDir, "plugin", "skills", "communication-agent", "SKILL.md")) && existsSync(join(distDir, "plugin", "references", "conventions.md")),
+    "dist/plugin includes skills + references for npm-installed scheduler runs");
 
   // ── AC2/AC3: the compiled bins LOAD + RUN — proves the rewritten sibling .ts→.js imports resolve in the JS
   //    output, and the suite goes RED if the build breaks or a bin can't load. ──
@@ -53,6 +55,9 @@ try {
   const inst = join(tmp, "pkg"); // inst/dist/cli.js → here=inst/dist, hubDir=inst (no config/ sibling)
   cpSync(distDir, join(inst, "dist"), { recursive: true });
   const instCli = join(inst, "dist", "cli.js");
+  const instRun = run(process.execPath, [instCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
+  ok(instRun.code === 0 && /communication: claude -p '?<prompt:\d+ chars>'?/.test(instRun.out),
+    "installed cli.js run → finds bundled skills without --root");
 
   // ── (groom AC) mcp-merge with NO template arg → succeeds via the embedded DEFAULT_TEMPLATE, NOT an ENOENT on the
   //    `../../config/mcp.example.json` that doesn't ship. Args are plain identifiers/paths (DL-44/DL-66 guards). ──

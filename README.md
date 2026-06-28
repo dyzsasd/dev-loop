@@ -222,23 +222,28 @@ work at a higher rate.
 ## Quick start
 
 ```bash
-# 1. Install the plugin. See Install below for the persistent route.
+# 1. Install the runtime CLI/hub used by MCP, Codex/opencode, and the scheduler.
+npm i -g @dyzsasd/dev-loop
+
+# 2. If you want Claude slash commands, install the plugin from a checkout.
 claude --plugin-dir /path/to/dev-loop
 
-# 2. Onboard a product. This is operator-present and idempotent.
+# 3. Onboard a product. This is operator-present and idempotent.
 /dev-loop:init
 
-# 3. Dry-run first: see what it would do, with no writes.
+# 4. Dry-run first: see what it would do, with no writes.
 #    Set mode:"dry-run" in projects.json, then launch one pass:
 /dev-loop:pm-agent      /dev-loop:qa-agent      /dev-loop:dev-agent
 
-# 4. Switch to mode:"live" and run the agents on a loop.
-#    Use Agent View or a tmux launcher.
+# 5. Switch to mode:"live" and run the agents on a loop.
+#    Use Agent View, or let dev-loop own cadence and call Claude/Codex:
+cd /path/to/product-repo && dev-loop run --cli codex --agents core,communication
 ```
 
 ## Requirements
 
-- **Claude Code** with this plugin installed.
+- **Claude Code** with this plugin installed when using slash commands / Agent View; for scheduler
+  runs, the selected executor CLI (`claude`, `codex`, or opencode once verified) must be on `PATH`.
 - A **coordination backend**: the **Linear MCP** (`mcp__linear-server__*`) for the default,
   or nothing extra for the local file board / hub.
 - **`gh` CLI** authenticated — Dev uses it for git/deploy.
@@ -248,7 +253,23 @@ claude --plugin-dir /path/to/dev-loop
 
 ## Install
 
-**Quick / dev (this session only):**
+dev-loop now has two install surfaces:
+
+1. **Runtime CLI / hub (recommended for every setup).** This installs `dev-loop` and
+   `dev-loop-hub`, used by the service backend, MCP configs, daemon, doctor, and the
+   built-in scheduler:
+
+```bash
+npm i -g @dyzsasd/dev-loop
+```
+
+After this, MCP configs can use `command:"dev-loop", args:["serve"]`; no absolute
+`node /path/to/dev-loop/hub/src/server.ts` path is needed.
+
+2. **Claude Code plugin (only for Claude slash commands).** Install this when you want
+   `/dev-loop:pm-agent`, `/dev-loop:init`, Agent View, or other Claude-native plugin UX.
+
+**Quick / dev from a source checkout (this session only):**
 ```bash
 claude --plugin-dir /path/to/dev-loop
 ```
@@ -267,8 +288,8 @@ then `/plugin install dev-loop@local`. The skills appear as `/dev-loop:pm-agent`
 `/dev-loop:director-agent`, `/dev-loop:communication-agent`, the opt-in `/dev-loop:senior-dev-agent` +
 `/dev-loop:junior-dev-agent`, and `/dev-loop:init`.
 
-For non-Claude CLIs, install the standalone hub with `npm i -g @dyzsasd/dev-loop`. It provides
-the `dev-loop` CLI (`serve`, `shim`, `daemon up|down|status`, `doctor`, ...).
+The npm package includes the agent skills and shared references needed by `dev-loop run`, so
+Codex/opencode do not need a separate plugin checkout just to run scheduled agents.
 
 ## Configure
 

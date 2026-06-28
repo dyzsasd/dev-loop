@@ -1,9 +1,15 @@
 # Running dev-loop
 
-How to onboard a project, launch the agents, pick a model per agent, and
-resume. Assumes the plugin is installed (`/plugin list` shows `dev-loop`) and the
-[Requirements](../README.md#requirements) are met (Claude Code, Linear MCP — for the
-`linear` backend — `gh`, a repo, a Linear team/project).
+How to onboard a project, launch the agents, pick a model per agent, and resume. For Claude slash
+commands, assume the plugin is installed (`/plugin list` shows `dev-loop`). For the service backend,
+MCP configs, daemon, doctor, and scheduler, assume the npm package is installed:
+
+```bash
+npm i -g @dyzsasd/dev-loop
+```
+
+The remaining [Requirements](../README.md#requirements) still apply (Claude Code when using slash
+commands, Linear MCP for the `linear` backend, `gh`, a repo, and a Linear team/project).
 
 ---
 
@@ -243,23 +249,24 @@ Linear: **real per-agent identity** — every ticket move / comment is attributa
 agent that did it, not the single shared Linear user.
 
 **One-time setup:**
-1. Install the hub deps once: `cd <dev-loop>/hub && npm install` (pure JS — no native build;
-   needs Node ≥ 23.6 for built-in `node:sqlite` + `.ts` type-stripping).
+1. Install the runtime once: `npm i -g @dyzsasd/dev-loop` (Node ≥ 23.6 for built-in
+   `node:sqlite`; no native build).
 2. Register the hub as an MCP server. Copy [`config/mcp.example.json`](../config/mcp.example.json)
-   to your **product repo root** as `.mcp.json`, and set the absolute `args` path to
-   `<dev-loop>/hub/src/server.ts`. Its `env` block expands `${DEVLOOP_ACTOR}` etc. from each
-   pane's launching shell at parse time — so one registered server attributes each pane to
-   the right agent. (Approve the server once on first use; no Claude restart needed.)
+   to your **product repo root** as `.mcp.json`. It uses `command:"dev-loop", args:["serve"]`.
+   Its `env` block expands `${DEVLOOP_ACTOR}` etc. from each pane's launching shell at parse time,
+   so one registered server attributes each pane to the right agent. (Approve the server once on
+   first use; no Claude restart needed.) Plugin developers can still point a source checkout at
+   `node <dev-loop>/hub/src/server.ts`.
 3. Set `backend:"service"` in `projects.json`; keep `strategyDoc` a **repo file**.
 4. **Create the project in the hub once** (the hub refuses to auto-create a board from a typo'd
    `DEVLOOP_PROJECT`, and each project needs a **unique ticket prefix** since ticket ids are a
    global key):
    ```bash
-   node <dev-loop>/hub/src/seed.ts <project-key> "<Project Name>" <UNIQUE-PREFIX>
-   # e.g.  node ~/dev-loop/hub/src/seed.ts monpick "MonPick" MP
+   dev-loop seed <project-key> "<Project Name>" <UNIQUE-PREFIX>
+   # e.g.  dev-loop seed monpick "MonPick" MP
    ```
    (Or set `DEVLOOP_CREATE_PROJECT=1` on the first launch.) Then health-check it:
-   `cd <dev-loop>/hub && DEVLOOP_HUB_DB=~/.dev-loop/hub.db npm run doctor` → `DOCTOR_OK`. Keep
+   `DEVLOOP_HUB_DB=~/.dev-loop/hub.db dev-loop doctor` → `DOCTOR_OK`. Keep
    `hub.db` **outside** any product repo (the template defaults to `~/.dev-loop/hub.db`); if it
    must live in a repo, gitignore `hub.db*` (doctor will tell you if it's exposed).
 
@@ -301,7 +308,7 @@ e.g. `25617` for dev-loop), one daemon per project, never double-started. Find t
 
 ```bash
 # the lifecycle prints + records the URL (the DL-41 runfile ~/.dev-loop/daemon-<key>.json):
-node <dev-loop>/hub/src/server.ts daemon status   # → 'service' RUNNING → http://127.0.0.1:<port>
+dev-loop daemon status   # → 'service' RUNNING → http://127.0.0.1:<port>
 ```
 
 To start it by hand (e.g. a non-Claude launcher, or before the first session), use the **idempotent
@@ -309,7 +316,7 @@ lifecycle** — `daemon up` (a clean no-op if already running), **not** the old 
 foreground server:
 
 ```bash
-cd <dev-loop>/hub && DEVLOOP_PROJECT=<project-key> node src/server.ts daemon up
+DEVLOOP_PROJECT=<project-key> dev-loop daemon up
 # → started '<key>' → http://127.0.0.1:<deterministic-port>   (idempotent; one per project)
 ```
 

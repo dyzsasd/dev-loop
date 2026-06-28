@@ -23,14 +23,14 @@ CLI sets these per agent pane — that is the entire portability contract:
 | `DEVLOOP_ACTOR` | the per-agent identity (`pm`/`qa`/`dev`/`sweep`/`reflect`/`ops`/`architect`/`director`/`communication`) — the attribution win | the launcher, **per pane** |
 | `DEVLOOP_PROJECT` | the project key (pins this hub process to one project) | the launcher — **optional (DL-13):** when unset/empty the hub auto-resolves the project from the spawned process's **cwd** (the repo it was launched in), so a launcher that spawns the MCP server with `cwd` inside a repo need not set it. **Portability caveat:** this works only if the CLI spawns the MCP subprocess with that cwd; some CLIs spawn from a fixed dir, so the launcher exporting `DEVLOOP_PROJECT` (via `dev-loop-hub resolve-project`) stays the robust primary mechanism |
 | `DEVLOOP_HUB_DB` | absolute path to the shared `hub.db` | the launcher |
-| `CLAUDE_PLUGIN_ROOT` | the dev-loop checkout root — the SKILLs read `${CLAUDE_PLUGIN_ROOT}/references/conventions.md` | the launcher (despite the name, it's just the SKILLs' config-resolution var — **any** CLI's launcher can export it) |
+| `CLAUDE_PLUGIN_ROOT` | the dev-loop root used for skills/references; `dev-loop run` uses the npm-bundled copy unless `--root` overrides it, while manual source wrappers should export a checkout path | the launcher or scheduler |
 | `CLAUDE_PLUGIN_DATA` | the data dir — the SKILLs read `${CLAUDE_PLUGIN_DATA}/projects.json` | the launcher (or rely on the SKILLs' `~/.claude/plugins/data/dev-loop/` fallback) |
 
 **Why this gives zero SKILL edits:** the SKILL bodies already reference `${CLAUDE_PLUGIN_ROOT}` /
-`${CLAUDE_PLUGIN_DATA}`. On Claude Code the plugin loader sets + substitutes them. On a second CLI a
-small wrapper does the same two things: (a) **export** the env contract, and (b) **substitute** the
-`${...}` placeholders into the SKILL body before feeding it as the prompt (the second CLI has no
-plugin loader to do the substitution). No SKILL body changes.
+`${CLAUDE_PLUGIN_DATA}`. On Claude Code the plugin loader sets + substitutes them. On a second CLI,
+`dev-loop run` does the same two things before feeding the SKILL body as a prompt. The npm package
+ships the skills and shared references, so a source checkout is only needed for plugin development or
+a hand-written wrapper.
 
 Secrets are unchanged on every CLI: the channel (P6) / mirror (P7) tokens stay in env, referenced by
 **name** only, read server-side (§16). Per-agent identity is **cooperative attribution** (any local
@@ -40,7 +40,15 @@ process can set its own env) — the same honest framing on every CLI, not stron
 
 ## 2. Register the hub MCP server
 
-Pick the file for your CLI; each registers `node <dev-loop>/hub/src/server.ts` as a stdio MCP server.
+Install the runtime once, then pick the file for your CLI:
+
+```bash
+npm i -g @dyzsasd/dev-loop
+```
+
+The templates register `dev-loop serve` as a stdio MCP server. A source checkout can still point at
+`node <dev-loop>/hub/src/server.ts`, but that is now the developer fallback rather than the normal
+install path.
 
 - **Claude Code** — [`config/mcp.example.json`](../config/mcp.example.json) → `.mcp.json` (the
   `${DEVLOOP_ACTOR:-…}` values are expanded per pane from the launching shell — this is the proven path).
@@ -73,8 +81,9 @@ dev-loop run --cli codex  --agents core,outward
 dev-loop run --cli codex --agents communication --once --dry-run
 ```
 
-The scheduler expands each SKILL body, substitutes `${CLAUDE_PLUGIN_ROOT}` /
-`${CLAUDE_PLUGIN_DATA}`, sets the env contract, and shells out once per due agent fire.
+The scheduler expands each SKILL body from the bundled package assets (or `--root`), substitutes
+`${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`, sets the env contract, and shells out once per due
+agent fire.
 For Codex it also injects the actor/project/db into the MCP config with `-c`, because
 Codex does not inherit the process env into MCP subprocesses (§4a). Cadence stays in the
 script: defaults match `RUNNING.md` §4 and can be overridden with
@@ -128,7 +137,7 @@ onboarded only after it passes this gate.
 
 ```bash
 DEVLOOP_ACTOR=dev DEVLOOP_PROJECT=<key> DEVLOOP_HUB_DB=<path> \
-  node <dev-loop>/hub/src/server.ts identity-check --expect dev
+  dev-loop identity-check --expect dev
 # → {"actor":"dev",...,"wouldStart":true,"matchesExpectation":true,"pass":true}
 # exit 0 = the env resolves to a known actor AND matches the expected one; exit 1 = REFUSED or MISMATCH.
 # Pass `--expect <actor>[/<project>]` (or DEVLOOP_EXPECT_ACTOR / DEVLOOP_EXPECT_PROJECT) so the gate
@@ -195,9 +204,8 @@ codex exec -c 'mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"' \
 scheduled fire, including `DEVLOOP_PROJECT` and `DEVLOOP_HUB_DB`; use the explicit form
 above only when you are launching one prompt by hand.
 
-Once `dev-loop` is published to npm, the registration `command`/`args` become `command="dev-loop",
-args=["serve"]` (a PATH bin) instead of `node <abs>/hub/src/server.ts`. The `-c` actor override is
-unchanged. **opencode** has the same per-pane question — run §4 against it and expect a similar
+The npm registration uses `command="dev-loop", args=["serve"]` (a PATH bin). The `-c` actor override
+is unchanged. **opencode** has the same per-pane question — run §4 against it and expect a similar
 config-override answer; not yet certified.
 
 ---
