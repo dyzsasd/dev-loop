@@ -1,6 +1,6 @@
 # Running dev-loop
 
-How to onboard a project, launch the eight agents, pick a model per agent, and
+How to onboard a project, launch the agents, pick a model per agent, and
 resume. Assumes the plugin is installed (`/plugin list` shows `dev-loop`) and the
 [Requirements](../README.md#requirements) are met (Claude Code, Linear MCP — for the
 `linear` backend — `gh`, a repo, a Linear team/project).
@@ -46,10 +46,10 @@ projects in `dry-run` for first contact) and launch the agents (next section).
 
 ## 2. Launch the agents
 
-The plugin **ships no harness** — pick whichever fits. Both run the same eight skills:
+Pick the launch mode that matches how much control you want over cadence. All modes run the same skills:
 `/dev-loop:pm-agent`, `qa-agent`, `dev-agent`, `sweep-agent`, `reflect-agent`, and the
-three opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`,
-`director-agent`.
+opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`,
+`director-agent`, and `communication-agent`.
 
 > **Another CLI?** On the `backend:"service"` hub the loop is **CLI-portable** — the same agents
 > + hub run on Codex / opencode against the same `hub.db`. See
@@ -78,14 +78,15 @@ becomes a new background session; `/loop` makes it recurring):
 /loop 10m /dev-loop:ops-agent        # OUTWARD (§21), opt-in — watches running prod (anti-flap)
 /loop 24h /dev-loop:architect-agent  # OUTWARD (§21), opt-in — whole-codebase tech-debt audit
 /loop 24h /dev-loop:director-agent   # OUTWARD (§21/§25), opt-in — chairs the discussion board + drafts the roadmap (service backend; no-op without a director config)
+/loop 24h /dev-loop:communication-agent # OUTWARD (§21), opt-in — drafts a daily public product article (no external publish)
 ```
 
 Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent output),
 `claude stop <id>` (stop). `Space` peeks a row, `Enter` attaches.
 
 > **Model note:** a dispatched Agent View session uses the **view's** model (set the view
-> with `claude agents --model <m>`). For *different* models per agent, use the launcher
-> below (or open separate views). Agent View applies one model per view.
+> with `claude agents --model <m>`). For *different* models per agent, use the scheduler's
+> `--cli-arg` flags, the tmux launcher below, or separate views. Agent View applies one model per view.
 
 > **Two-tier Dev (opt-in, off by default):** replace the `/dev-loop:dev-agent` line with
 > two rows to split Dev into a design-lead + implementer pair:
@@ -98,7 +99,69 @@ Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent o
 > and [config-schema.md `models{}`](../references/config-schema.md) for routing rules, the design
 > gate, and the per-backend tier encoding. The legacy `dev` pane is unchanged when this is off.
 
-### B. Local tmux launcher — mixed models, one command
+### B. Built-in scheduler — own cadence, Claude/Codex as executors
+
+Use this when you do **not** want Claude/Codex `/loop` to own recurrence. `dev-loop run`
+is a normal long-running script: it keeps the cadence table, and whenever an agent is due
+it shells out once to the selected CLI with that agent's SKILL body as the prompt.
+
+```bash
+# From inside a configured product repo, the project is inferred from cwd.
+cd /path/to/product-repo
+dev-loop run --cli claude
+
+# Codex as executor; identity is injected with Codex -c overrides for every fire.
+dev-loop run --cli codex --agents core,communication
+
+# Preview the exact commands without launching the model.
+dev-loop run --cli codex --agents communication --once --dry-run
+
+# Two-tier Dev without changing cadence ownership.
+dev-loop run --cli claude --agents core --dev-split
+```
+
+Default agents are `core` (`pm,qa,dev,sweep`). Add `reflect`, `outward`, or individual
+agents with `--agents`, for example `--agents core,reflect,ops,communication`. Default
+cadences match §4: PM/QA/Dev every ~5 minutes, Sweep ~30 minutes, Ops ~10 minutes, and
+daily roles every 24 hours. Override one with `--interval communication=12h` or
+`--interval pm=2m`.
+
+Project selection is automatic when the scheduler starts inside a configured repo: it
+matches the current directory against `repoPath` / `repos[].path` in `projects.json`.
+Use `--project <key>` only when you launch from outside the repo, when a process manager
+uses a fixed cwd, or when you want to override the cwd match. Use `--cwd <path>` to make
+repo matching explicit without changing the shell's current directory.
+
+Multiple projects on one machine are normal. Put them all under the same
+`${CLAUDE_PLUGIN_DATA}/projects.json`, each with a distinct project key and repo path(s), then run
+one scheduler process per product:
+
+```bash
+cd /work/products/alpha && dev-loop run --cli claude --agents core
+cd /work/products/beta  && dev-loop run --cli codex  --agents core,communication
+```
+
+For a multi-repo product, configure `repos[]` instead of a single `repoPath`; any path inside one
+of those repos resolves to that product. The scheduler uses `repoPath`, then the `repos[]` entry with
+`role:"primary"`, then `role:"docs"`, as the subprocess cwd. `/dev-loop:init` writes the initial
+project config during onboarding; after that, adding another repo or another project is just editing
+`projects.json` (or re-running init for that project).
+
+Useful options:
+- `--once` runs each selected agent once and exits.
+- `--dry-run` prints commands and validates skill paths without calling Claude/Codex.
+- `--root`, `--data`, `--hub-db`, `--project`, and `--cwd` make the run explicit for cron/systemd.
+- `--cli-arg <arg>` passes model or safety flags to the selected CLI before the prompt, e.g.
+  `--cli-arg --model --cli-arg opus`.
+- `--codex-safe` omits Codex's unsafe bypass flags; by default the runner uses the same
+  Codex recipe as `PORTABILITY.md` so agent tools can operate.
+
+The runner writes one log per agent under
+`${CLAUDE_PLUGIN_DATA}/<project-key>/runner-logs/`. Stop it with `Ctrl-C`; it forwards
+SIGINT to active agent subprocesses. This mode is the most portable: run it from tmux,
+cron, launchd, systemd, or any host process manager.
+
+### C. Local tmux launcher — mixed models, one command
 
 A small launcher (kept in your data dir, **not** part of the plugin) opens a `dev-loop`
 tmux session with one pane per agent, each a headless `claude` loop, and reads your
@@ -113,6 +176,7 @@ PROJECT=foo ~/.claude/plugins/data/dev-loop/run-loop.sh   # pick a project key
 OPS=1       ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Ops (prod-watch) pane (~10m; off by default)
 ARCHITECT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Architect (tech-debt) pane (daily; off by default)
 DIRECTOR=1  ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Director (direction/roadmap) pane (daily/on-demand; off by default)
+COMMUNICATION=1 ~/.claude/plugins/data/dev-loop/run-loop.sh # also run Communication (daily article drafts; off by default)
 DEV_SPLIT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # two-tier Dev (opt-in): senior-dev (opus/max) + junior-dev (sonnet/high) replace the single dev pane; see conventions §21a
 ```
 
@@ -128,7 +192,7 @@ The model is chosen **at launch** (a SKILL can't set its own model), via a per-p
 `models` map in `projects.json`:
 
 ```jsonc
-"models": { "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus" }
+"models": { "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "director": "opus", "communication": "opus" }
 ```
 
 **Every agent defaults to `opus`** — maximize correctness across the whole loop. Tune an
@@ -144,12 +208,13 @@ cheaper model is tolerable:
 | **qa** | `opus` | `sonnet` | capable; runs often |
 | **ops** | `opus` | `sonnet` | mechanical polling + anti-flap judgement; runs often |
 | **director** | `opus` | `sonnet` | human-facing direction + PII-safe synthesis; daily/on-demand |
+| **communication** | `opus` | `sonnet` | public article drafting from verified facts; daily |
 | **sweep** | `opus` | `haiku` | mechanical hygiene |
 
 The tmux launcher applies this map automatically and **defaults each pane to `--model
 opus`** when the map omits an agent. In Agent View, set the view's model (e.g.
-`claude agents --model opus`); it's one model per view, so run mixed models through the
-launcher if you economize some agents.
+`claude agents --model opus`); it's one model per view. In the built-in scheduler, pass
+CLI model flags with `--cli-arg` or set the model in the CLI's own config.
 
 ---
 
@@ -165,6 +230,7 @@ Agents self-throttle (idle fires are cheap no-ops), so tighter intervals are saf
 | Ops *(opt-in)* | ~10–15 min | watches running prod; tight polls are the point, but self-throttles |
 | Architect *(opt-in)* | daily | whole-codebase audit; SHA-gate makes most fires no-ops |
 | Director *(opt-in)* | daily / on-demand | chairs the discussion board + drafts the roadmap; folds optional real-user signal |
+| Communication *(opt-in)* | daily | drafts one public-facing product article; dedupes by date |
 
 ---
 
@@ -213,10 +279,11 @@ to override the cwd, or to be unambiguous in a launcher that spawns the MCP serv
 DEVLOOP_ACTOR=pm   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:pm-agent
 DEVLOOP_ACTOR=qa   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:qa-agent
 DEVLOOP_ACTOR=dev  DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:dev-agent
-# …sweep/reflect/ops/architect likewise, each with its own DEVLOOP_ACTOR
+DEVLOOP_ACTOR=communication DEVLOOP_PROJECT=monpick /loop 24h /dev-loop:communication-agent
+# …sweep/reflect/ops/architect/director likewise, each with its own DEVLOOP_ACTOR
 ```
 
-The tmux launcher (§2B) sets these per pane for you. Verify a pane is wired with
+The built-in scheduler (§2B) and tmux launcher (§2C) set these per pane for you. Verify a pane is wired with
 `DEVLOOP_ACTOR=pm claude mcp list` → `dev-loop-hub … ✓ Connected`, and `whoami` inside a
 session returns `pm`. The hub DB is machine-local runtime state — never committed.
 
@@ -293,6 +360,8 @@ instead — opt-in, default-off, with §16 guardrails.)*
 - **Agent View:** background sessions persist across sleep and reappear in `claude
   agents`; they stop only if the machine powers off. After a reboot, re-dispatch the
   `/loop …` lines from §2A. To rejoin a specific session: `claude attach <id>`.
+- **Built-in scheduler:** restart the same `dev-loop run ...` command. It recomputes due
+  work from the board and local state; there is no scheduler database to restore.
 - **tmux launcher:** if the `dev-loop` session is gone, re-run `run-loop.sh`. If it
   still exists, `tmux attach -t dev-loop`.
 - A single in-flight fire that died mid-ticket is **self-healing**: Dev's Step 0
@@ -304,6 +373,8 @@ instead — opt-in, default-off, with §16 guardrails.)*
 ## 6. Stop
 
 - **Agent View:** `claude stop <id>` per session (or stop them all from the view).
+- **Built-in scheduler:** `Ctrl-C` the `dev-loop run` process, or stop it via your process
+  manager; it forwards SIGINT to active agent subprocesses.
 - **tmux:** `tmux kill-session -t dev-loop`.
 
 ---
@@ -312,6 +383,6 @@ instead — opt-in, default-off, with §16 guardrails.)*
 
 `mode:"live"` + `autonomy:"full"` + `autoPush`/`autoDeploy` = **unattended commits,
 pushes, and prod deploys with no human gate** — the intended power of the loop. Try
-`mode:"dry-run"` or a single `MODE=once` pass first. The `dev-loop` label (or, in local
+`mode:"dry-run"`, `dev-loop run --once --dry-run`, or a single `MODE=once` pass first. The `dev-loop` label (or, in local
 mode, the board directory) is the firewall that keeps the loop off your human backlog
 (conventions §2).

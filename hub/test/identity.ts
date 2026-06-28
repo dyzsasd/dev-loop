@@ -54,6 +54,9 @@ ok(mism.code === 1 && mism.data.matchesExpectation === false, "identity-check --
 const matchExp = checkExpect("dev", "dev");
 ok(matchExp.code === 0 && matchExp.data.pass === true, "identity-check --expect dev with DEVLOOP_ACTOR=dev → pass");
 
+const comm = checkExpect("communication", "communication");
+ok(comm.code === 0 && comm.data.actor === "communication" && comm.data.pass === true, "DEVLOOP_ACTOR=communication → known actor and passes identity gate (Codex-launchable)");
+
 // ─── DL-6: an empty-string assignee must never be stored verbatim ─────────────
 // save_issue keyed its actor-existence guard on truthiness, so assignee:"" slipped
 // past it (whitespace + unknown handles are correctly rejected) and was stored as

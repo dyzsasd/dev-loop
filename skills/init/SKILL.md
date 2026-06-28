@@ -342,7 +342,7 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   it untouched and just note it. Skip entirely for `backend:"linear"`.
 - `lessons.md` (at `${CLAUDE_PLUGIN_DATA}/<key>/lessons.md` — the project's
   `<project-key>/` data dir, the same per-project home as `reports/` below, **not** the
-  flat data-dir root) — a skeleton with one section header per agent (all eight) plus the
+  flat data-dir root) — a skeleton with one section header per agent plus the
   shared section, in this exact order (conventions §14):
 
   ```markdown
@@ -370,6 +370,8 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   ## Architect
 
   ## Director
+
+  ## Communication
   ```
 
   Leave the sections empty — the operator adds rules later (conventions §14). If
@@ -377,7 +379,7 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   into a file the operator owns); just note its presence. In `dry-run`, print the
   files you'd create.
 - **Reports tree** (conventions §22) — `${CLAUDE_PLUGIN_DATA}/<key>/reports/<agent>/{daily,
-  weekly,monthly}/` for each of the 8 agents. You MAY scaffold the empty tree now, or leave
+  weekly,monthly}/` for each agent. You MAY scaffold the empty tree now, or leave
   it to **lazy creation** on each agent's first write (either is fine — note which you
   did). Machine-local, never committed, **§16-bound (no secrets/PII in a report)**. In
   `dry-run`, just print that reports will appear here.
@@ -436,7 +438,7 @@ what's still needed. One line per check, grouped:
   seeded from mapping (brownfield) / interview filled (greenfield) / `—` if mapping
   degraded.
 - **Adoption** (if any): which named tickets were adopted + reconciled this run.
-- **Linear** (linear backend only): each of the 8 workflow labels (existed vs.
+- **Linear** (linear backend only): each workflow label (existed vs.
   created); the project. *(— for `local`: skipped, the board dir is the container.)*
 - **Strategy doc**: readable / scaffolded / still-needed.
 - **Test env**: `setup` ran; reachability smoke.
@@ -454,7 +456,8 @@ what's still needed. One line per check, grouped:
 
 End with a **plain-English verdict**: either *"Ready — you can flip `mode:"live"`
 and launch the agents (`/dev-loop:pm-agent`, `/qa-agent`, `/dev-agent`,
-`/sweep-agent`, `/reflect-agent`)"* — **or** an exact list of what's still needed and
+`/sweep-agent`, `/reflect-agent`, plus any opt-in outward agents such as
+`/communication-agent`)"* — **or** an exact list of what's still needed and
 who it blocks (e.g. "✗ `repoPath` unset → Dev can't run; ✗ Linear project not
 created → all live runs blocked"). Be specific: the operator should know the precise
 next action, not a vague "almost there."

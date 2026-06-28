@@ -44,7 +44,7 @@ and junior-dev inherit by reference rather than restating.
 ## 2. The agent-roster change (conventions §21 + seed.ts + §4 labels)
 
 ### 2a. Hub actors (`hub/src/seed.ts` `AGENT_HANDLES`)
-Add **`senior-dev`** and **`junior-dev`** as **active** agent actors, alongside the existing eight
+At the time of this design, add **`senior-dev`** and **`junior-dev`** as **active** agent actors, alongside the then-existing eight
 (`pm`, `qa`, `dev`, `sweep`, `reflect`, `ops`, `architect`, `director`). **`dev` is NOT moved to
 `RETIRED_HANDLES`** — it stays active (unlike the `signal`→`director` retirement precedent). The
 roster becomes ten active agent actors + the operator.
@@ -75,7 +75,7 @@ The labels table already permits `kind:"owner"` (db.ts CHECK), so this rides the
 they are created once at setup (§13) alongside the other workflow labels.
 
 > **Naming discipline.** The actor handle, the label name, the config `models` key, and the launcher
-> pane name are all the **same string** — `senior-dev` / `junior-dev` — exactly as the existing eight
+> pane name are all the **same string** — `senior-dev` / `junior-dev` — exactly as the then-existing eight
 > agents (§26 one-env-contract). No agent invents a variant.
 
 ---

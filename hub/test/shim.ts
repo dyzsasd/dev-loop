@@ -36,7 +36,7 @@ mkdirSync(EMPTY_RUN, { recursive: true });
 let fails = 0;
 const ok = (cond: boolean, m: string) => { console.log((cond ? "✅ " : "❌ ") + m); if (!cond) fails++; };
 
-// seed the project + the 8 agents + operator (ensureActors in seed.ts → dev/qa/pm/operator all exist)
+// seed the project + the configured agents + operator (ensureActors in seed.ts → dev/qa/pm/operator all exist)
 execFileSync("node", ["src/seed.ts", "shm", "Shim Project", "SHM", DB], { encoding: "utf8" });
 
 // ─── MCP client helpers — every spawned client registers in `clients` so finally can tear them ALL down ──────

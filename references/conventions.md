@@ -1,11 +1,12 @@
 # dev-loop — Shared Conventions
 
 The single source of truth for the **PM / QA / Dev / Sweep / Reflect / Ops / Architect /
-Director** agents that run an autonomous software-development loop coordinated through
-**Linear**. All eight skills load this file. If a rule here conflicts with a skill's
-body, this file wins — keeping the eight agents interoperable is the whole point. (The
-five inward agents form the build loop; the three outward agents — Ops/Architect/Director
-— are defined in §21; the Director also owns the §25 discussion board + roadmap.)
+Director / Communication** agents that run an autonomous software-development loop coordinated
+through ticket state on the configured backend (**Linear**, local file board, or `service` hub).
+All agent skills load this file. If a rule here conflicts with a skill's
+body, this file wins — keeping the agents interoperable is the whole point. (The five inward
+agents form the build loop; the outward agents — Ops/Architect/Director/Communication — are
+defined in §21; the Director also owns the §25 discussion board + roadmap.)
 
 ## Table of contents
 0. [Prime directive — every fire is fresh](#0-prime-directive--every-fire-is-fresh)
@@ -30,7 +31,7 @@ five inward agents form the build loop; the three outward agents — Ops/Archite
 18. [Backend — Linear vs local](#18-backend--linear-vs-local)
 19. [Multiple repos](#19-multiple-repos)
 20. [PM knowledge base](#20-pm-knowledge-base-the-doc-base)
-21. [Outward-facing agents — Ops / Architect / Director](#21-outward-facing-agents--ops--architect--director)
+21. [Outward-facing agents — Ops / Architect / Director / Communication](#21-outward-facing-agents--ops--architect--director--communication)
 21a. [The two-tier Dev — senior-dev / junior-dev](#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project)
 22. [Reports & operator review — daily / weekly / monthly](#22-reports--operator-review--daily--weekly--monthly)
 23. [Reports in Linear — the `reports.sink` option](#23-reports-in-linear--the-reportssink-option)
@@ -80,6 +81,7 @@ numbered sections below.
 | **Ops** *(outward · observe-and-file §21)* | (nothing — watches running prod) | RUNNING prod over time: health checks / baseUrl / critical routes / logs (read-only); CONFIRMED+REPEATED degradation only (anti-flap) | files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod down) — never rolls back (Dev's Step 6.5) |
 | **Architect** *(outward · observe-and-file §21)* | (nothing — audits whole-codebase tech health) | the codebase as a whole on a rotating dimension (drift/dup/dead-code/dep-CVE/consistency/missing-abstractions), SHA-gated (§19), read-only | files `Improvement`+`qa`+`tech-debt` — never implements (Dev does) |
 | **Director** *(outward · coordinator §21/§25)* | owns DIRECTION — the §25 board + the kind:"roadmap" doc (drafts; operator publishes) | operator intent + cross-agent deliberation (+ optional real-user `signalSources`, read-only, PII-safe §16); service-only, no config ⇒ no-op | opens/chairs topics → a `decision`; drafts the roadmap (operator publishes); files `[director-proposal]` for structural asks (§17) — never implements/ships/verifies |
+| **Communication** *(outward · media drafting §21)* | owns public-facing product communication drafts | strategy/roadmap + verified shipped work + public-safe product facts | writes one article **draft** per cadence to the data dir or doc-home repo; never publishes externally, never commits/pushes/deploys |
 
 State machine: `Todo → In Progress → In Review → Done` (verify-fail returns to
 `Todo`; `Canceled`/`Duplicate` are terminal; `blocked` is a **label**, not a
@@ -95,10 +97,11 @@ state, §9). Eligibility = the `dev-loop` label (§2); owner = the `pm`/`qa` lab
   by exercising the product (PM/QA Job A); Dev self-reviews against its own diff
   (Dev Step 5.5). Never trust a hand-off comment's claim of what was done.
 - **Inward ≠ outward.** The five inward agents build the product
-  (PM/QA/Dev/Sweep/Reflect); the three outward agents (Ops/Architect/Director, §21)
+  (PM/QA/Dev/Sweep/Reflect); the outward agents (Ops/Architect/Director/Communication, §21)
   connect it to outside reality. Ops/Architect **observe and file**; the Director
-  **coordinates** (chairs the §25 board, drafts the roadmap). None of the three implements,
-  ships, verifies, rolls back, or auto-applies a structural change (§17).
+  **coordinates** (chairs the §25 board, drafts the roadmap); Communication drafts public-facing
+  product articles. None of them implements, ships, verifies, rolls back, publishes externally,
+  or auto-applies a structural change (§17).
 - **Running prod ≠ the diff.** Ops watches running production over time (incidents); QA
   tests the diff/board. Different surfaces.
 - **Inconclusive ≠ pass.** A check that couldn't actually run is not a green
@@ -108,11 +111,11 @@ state, §9). Eligibility = the `dev-loop` label (§2); owner = the `pm`/`qa` lab
 
 ## 1. What the loop is
 
-Eight agents, each triggered manually by the user (`/pm-agent`, `/qa-agent`,
+Agents are triggered manually by the user (`/pm-agent`, `/qa-agent`,
 `/dev-agent`, `/sweep-agent`, `/reflect-agent`, `/ops-agent`, `/architect-agent`,
-`/director-agent`). They never call each other directly —
-they hand off **entirely through Linear ticket state**, so any of them can run at any
-time, in any order, even concurrently. Linear is the shared blackboard. (PM/QA/Dev are
+`/director-agent`, `/communication-agent`). They never call each other directly —
+they hand off **entirely through ticket state**, so any of them can run at any
+time, in any order, even concurrently. The configured backend is the shared blackboard. (PM/QA/Dev are
 the core producing loop; Sweep is a slower-cadence janitor layered on top; Reflect is
 the slowest — a daily retrospective that observes the loop and curates `lessons.md`.)
 
@@ -147,14 +150,15 @@ the slowest — a daily retrospective that observes the loop and curates `lesson
   Features/Bugs, ships, or verifies); may autonomously edit only `lessons.md` —
   structural changes to the SKILLs/this file are **drafted as proposals, never
   auto-applied** (§17).
-- **Ops / Architect / Director** are the three **outward** agents (§21): Ops watches
+- **Ops / Architect / Director / Communication** are the **outward** agents (§21): Ops watches
   running prod and files `incident` Bugs (anti-flap: confirmed+repeated only); Architect
   audits whole-codebase tech health on a rotating, SHA-gated dimension and files
   `tech-debt` Improvements; the **Director** owns DIRECTION — it chairs the §25 discussion
   board and drafts the operator-published roadmap (folding optional real-user
-  `signalSources`, PII-safe). Ops/Architect **observe + file only**; the Director
-  **coordinates + drafts**. None implements, ships, verifies, rolls back, or auto-applies a
-  structural change (§17) — they route work to the inward agents.
+  `signalSources`, PII-safe); **Communication** drafts public-facing product articles from
+  verified, public-safe facts. Ops/Architect **observe + file only**; the Director
+  **coordinates + drafts**; Communication **drafts only**. None implements, ships, verifies,
+  rolls back, publishes externally, or auto-applies a structural change (§17).
 
 The verifier of a ticket is always **its owner** (the agent that filed it),
 identified by the owner label (§4). This is how PM picks up its features and QA
@@ -836,7 +840,7 @@ One narrow, operator-initiated exception (§22): **any** agent MAY add a rule **
 own section** when it is distilling an explicit operator **review (点评)** of its own report.
 The written review is the human authorization §17 requires. It is still bounded by the
 budget below, still its own section only (`## Shared` stays Reflect-only), and a structural
-ask is still a §17 proposal — not a self-edit. Because up to eight agents may now write this
+ask is still a §17 proposal — not a self-edit. Because multiple agents may now write this
 file, every `lessons.md` edit is a **locked read-modify-write** (§22). Reflect remains the
 autonomous curator and the only agent that may touch other agents' sections or `## Shared`.
 
@@ -852,6 +856,7 @@ Layout — one section per agent plus a shared section:
 ## Ops
 ## Architect
 ## Director
+## Communication
 ```
 
 Each entry is a short rule with a one-line **Why** and **How to apply**. A rule may
@@ -1419,7 +1424,7 @@ The doc-base has these EXACT sections (verbatim headings):
 - **Current state** — what's actually built/shipped right now (the living "as-is";
   seeded once by init from brownfield mapping, then owned by PM).
 - **Personas** — the user types the product serves (also QA's persona list).
-- **Glossary** — domain terms with definitions, so all eight agents share vocabulary.
+- **Glossary** — domain terms with definitions, so all agents share vocabulary.
 - **Decisions (running log)** — a dated, append-only log of product-direction /
   scoping calls and their rationale.
 - **Candidate ideas** — the overflow parking lot (PM guardrails): strong ideas not yet
@@ -1448,24 +1453,28 @@ document → `get_document`/`save_document`), per pm-agent §0.
 
 ---
 
-## 21. Outward-facing agents — Ops / Architect / Director
+## 21. Outward-facing agents — Ops / Architect / Director / Communication
 
 The first five agents (PM/QA/Dev/Sweep/Reflect) are **inward / build-facing** — a
 closed build factory that proposes, tests, builds, cleans up, and reflects on itself.
-Three **outward** agents connect that factory to realities it otherwise can't see:
+Outward agents connect that factory to realities it otherwise can't see:
 
 | Agent | Reality it watches | Cadence |
 |---|---|---|
 | **Ops** | RUNNING production over time (deploy-independent) | tight (~10–15 min) |
 | **Architect** | the whole codebase's technical health over time | slow (daily-ish) |
 | **Director** | operator intent + cross-agent deliberation (+ optional real-user signal) | daily-ish + on-demand |
+| **Communication** | public-facing product narrative, sourced from verified product facts | daily by default |
 
-**Two contracts, not one.** Ops and Architect are pure **observe-and-file** (below). The
+**Multiple contracts, not one.** Ops and Architect are pure **observe-and-file** (below). The
 **Director** is outward too — it faces the human and owns DIRECTION — but it is a
 **coordinator, not a pure observer**: it WRITES the discussion board and DRAFTS the
 roadmap (full contract in **§25**). It still never implements/ships/verifies product and
 never auto-applies a structural change (§17). It **replaced** the old **Signal** agent,
-which folded into the Director as one optional `signalSources` input (§25).
+which folded into the Director as one optional `signalSources` input (§25). The
+**Communication** agent is outward as well, but its output is content: it drafts public-facing
+articles from strategy/roadmap and verified shipped facts. It never publishes externally and
+never commits/pushes/deploys.
 
 ### The shared observe-and-file contract (Ops + Architect)
 Ops and Architect obey ONE contract — defined here once; their SKILLs reference it rather
@@ -1494,7 +1503,9 @@ They **own distinct axes** (don't confuse them with the inward agents): Ops = ru
 prod (vs QA's diff/board tests); Architect = product CODE health over time (vs PM's
 product gaps, Dev's local diff, QA's runtime defects, Sweep's board, Reflect's loop
 process); Director = direction/coordination — it owns the roadmap and chairs deliberation
-(vs PM's **execution** of that roadmap; §25).
+(vs PM's **execution** of that roadmap; §25); Communication = product narrative — it explains
+what is true and useful about the product, but it does not create roadmap authority or product
+work.
 
 ### Ops anti-flap + incident-dedup rule
 Prod has transient blips, so Ops acts **only on a CONFIRMED, REPEATED degradation**:
@@ -1519,6 +1530,23 @@ real-user fold — lives in **§25**. In one line: the Director DRAFTS direction
 user data, reference the source (link/id), never paste PII/credentials. Absent a `director`
 config (or under a non-`service` backend) the Director gracefully no-ops and PM owns
 strategy (today's behavior — total back-compat).
+
+### Communication — public article drafts
+The Communication agent is the team's PR/media drafting role. It reads the strategy doc,
+the published roadmap when available, recent verified Done work, changelog/git facts, and
+the public product surface, then writes at most one article **draft** per cadence
+(`communication.cadence`, daily by default). Its output is either machine-local under
+`${CLAUDE_PLUGIN_DATA}/<project-key>/communications/YYYY-MM-DD.md` or, when
+`communication.output:"repo"` is explicitly set, a Markdown draft under the doc-home repo's
+`communication.repoOutputDir` (default `docs/communications/`). It never publishes to a CMS,
+social channel, email list, or webhook; never commits/pushes/deploys; and never transitions or
+verifies tickets.
+
+Absent a `communication` config, scheduled Communication fires no-op unless the operator
+explicitly invoked it to draft an article. `mode:"dry-run"` previews the angle, outline,
+sources, and target path without writing. `includeUnreleased:false` is the default: articles
+use only public-safe, shipped/verified facts. If the operator opts into upcoming roadmap
+language, it must be clearly labelled as upcoming and sourced to a roadmap item.
 
 ### The new sub-type labels
 These additive sub-type labels (§4) tag the outward agents' tickets so the right owner
@@ -1715,7 +1743,8 @@ ${CLAUDE_PLUGIN_DATA}/<project-key>/reports/<agent>/
 ```
 
 `<agent>` is the full skill name (`pm-agent` / `qa-agent` / `dev-agent` / `sweep-agent` /
-`reflect-agent` / `ops-agent` / `architect-agent` / `director-agent`). The tree is created
+`reflect-agent` / `ops-agent` / `architect-agent` / `director-agent` /
+`communication-agent`). The tree is created
 **lazily on first write** (init may scaffold it, §13). The operator reads these on disk
 exactly like `lessons.md` / the state files.
 
@@ -1738,7 +1767,7 @@ dated report grammar** — `^\d{4}-\d{2}-\d{2}\.md$` (daily), `^\d{4}-W\d{2}\.md
 excluded from the newest-marker scan AND from every "prior / newest report" selection below
 (otherwise a review of the latest report would sort newest and a finalize could target the
 operator's prose). The dated grammar is zero-padded and total-ordered, so the newest match
-is unambiguous. This is one source of truth, automatically per-project, uniform across all 8
+is unambiguous. This is one source of truth, automatically per-project, uniform across all
 agents — no dual-write, no reconciliation, no multi-project flat-state collision.
 
 Compute "now"'s markers **deterministically via a shell call, never by reasoning about the
@@ -1797,7 +1826,8 @@ I'll change."** Headline metric by agent: PM features/improvements filed + In-Re
 verified; QA bugs found + re-tested (pass/fail/drift); Dev tickets shipped +
 build/deploy/rollback; Sweep tickets re-routed + board-health; Reflect lessons curated +
 proposals; Ops incidents + probes; Architect tech-debt + dimension audited; Director topics
-chaired + decisions + roadmap draft (+ any `signalSources` folded).
+chaired + decisions + roadmap draft (+ any `signalSources` folded); Communication article
+drafts written/skipped + sources used + next angle.
 
 ### Operator review (点评) — one canonical, spoof-proof channel
 The operator critiques a report by dropping a **sibling file** next to it:
@@ -1846,8 +1876,8 @@ The `lessons.md` rule is what changes the agent's behavior on **every subsequent
 (read at §0) — the whole loop: **report → operator critique → lesson → changed method**.
 
 ### `lessons.md` is now multi-writer — lock it
-Before §22, `lessons.md` had exactly one writer (Reflect). The carve-out makes up to
-**eight** concurrent writers (each its own section). Atomic-rename alone prevents corrupt
+Before §22, `lessons.md` had exactly one writer (Reflect). The carve-out makes multiple
+concurrent writers possible (each its own section). Atomic-rename alone prevents corrupt
 JSON but **not lost updates** (two agents read v1, both write, last rename wins, one rule —
 possibly a Reflect-curated one — is silently dropped). So a `lessons.md` edit is a **locked
 read-modify-write**: acquire an atomic exclusive-create lock as in §18 (an `O_EXCL`

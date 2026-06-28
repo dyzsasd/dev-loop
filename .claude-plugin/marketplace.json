@@ -1,13 +1,13 @@
 {
   "name": "dev-loop",
   "owner": { "name": "Shuai" },
-  "description": "Autonomous multi-agent SDLC loop — eight agents (PM/QA/Dev/Sweep/Reflect/Ops/Architect/Director) coordinated entirely through ticket state.",
+  "description": "Autonomous multi-agent SDLC loop with PM/QA/Dev, outward Ops/Architect/Director/Communication roles, optional two-tier Dev, a Codex-portable service hub, and a built-in scheduler.",
   "plugins": [
     {
       "name": "dev-loop",
       "source": "./",
       "version": "0.22.0",
-      "description": "Eight autonomous agents that run a software-development loop coordinated through ticket state — Linear (default), a machine-local file board, or a local node:sqlite hub (per-agent identity, web UI/daemon, discussion board, Lark/Slack channel, one-way Linear mirror; CLI-portable). See README + docs/HUB-ARCHITECTURE.md."
+      "description": "Runs a software-development loop coordinated through ticket state. Supports Linear, a local file board, or a node:sqlite service hub with per-agent identity, localhost UI, discussion board, Lark/Slack channel, one-way Linear mirror, Codex/opencode portability, and a scheduler that calls Claude/Codex CLI without using /loop. Includes Communication for daily public product article drafts."
     }
   ]
 }

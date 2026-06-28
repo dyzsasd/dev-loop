@@ -14,7 +14,7 @@
 > The hub uses built-in `node:sqlite` (not better-sqlite3 — P0 found zero native deps possible).
 >
 > Status (original): **proposal for operator sign-off (LK8). No code is written against this until the operator approves it AND the P0 spike (below) passes.**
-> Audience: the operator, and the eight loop agents that will eventually coordinate through it.
+> Audience: the operator, and the loop agents that coordinate through it.
 > Companion: `references/conventions.md` (the shared brain — every section here references it by `§`).
 
 The hub is a **local system-of-record** for the dev-loop. It replaces Linear-as-source-of-truth with a machine-local store the agents reach through an **MCP server** (LK1), exposing everything Linear gives the loop today plus **per-agent attribution, real per-project isolation, and versioned docs/discussion**. Linear is demoted to an optional, one-way, off-by-default **mirror** for human visibility (LK2).
@@ -28,7 +28,7 @@ This doc is deliberately conservative. It folds in three independent critiques (
 1. **The `local` file board (§18) already delivers ~80% of this.** We steelman and keep it (§2). The "per-agent identity" win is a small additive field, not a 16-table daemon.
 2. **Identity is attribution + accident-prevention, NOT an anti-spoof boundary.** On one machine, one OS user, one operator, any agent can read another pane's env or open the DB file directly. Every "cannot impersonate" claim from the facets is **deleted**. The threat model is honest-but-buggy agents + prompt-injection, not a hostile co-tenant (§4).
 3. **Transport = stdio shim + shared SQLite-WAL, NO daemon, for the MVP.** Claude Code speaks stdio to our shim; identity rides a launcher-set env var, never an HTTP header — this dodges the confirmed Claude Code headless header-drop regressions (§6). The daemon arrives only when background work needs it (P5).
-4. **The hub MIMICS the §18 op-contract verbatim** (REPLACE-style labels, verify-after-write). The 8 SKILL bodies run unchanged via the existing §18 indirection. "Footguns designed out" is **not** an MVP win — it is a later, operator-driven, §17-gated SKILL rewrite with its own effort line (§12, §21).
+4. **The hub MIMICS the §18 op-contract verbatim** (REPLACE-style labels, verify-after-write). Agent SKILL bodies run unchanged via the existing §18 indirection. "Footguns designed out" is **not** an MVP win — it is a later, operator-driven, §17-gated SKILL rewrite with its own effort line (§12, §21).
 5. **§17 is preserved verbatim, not "strengthened."** No hub tool ever writes a SKILL / conventions / plugin file. Direction docs are operator-published; agents draft, the operator flips draft→current out-of-band (§16).
 6. **The MVP CUTS:** the always-on daemon, bearer tokens, server-enforced isolation, versioned docs, the discussion board, the Director, the channel, the Linear mirror, and multi-CLI. Each returns as its own gated phase (§22 roadmap).
 7. **Durability regresses** from Linear's backed-up cloud to one local SQLite file. This is an explicit operator-signed RPO decision, with a backup/restore runbook (§18). The mirror is **never** sold as disaster recovery.
@@ -72,7 +72,7 @@ Before proposing a database service, we owe the operator the cheaper option, ste
 - A1 — **Attribution**: every ticket move, doc edit, comment, post, and decision is stamped with which agent did it, sourced from the launcher (not self-asserted), readable by Reflect/reports.
 - A2 — **Isolation**: a project's tickets/docs/discussion are a structural boundary, not a label convention — cross-project access is impossible by construction (§10).
 - A3 — **Versioned docs**: the §20 doc-base and the roadmap live as documents with history/diff and operator-gated publication (§14).
-- A4 — **Drop-in for the loop**: the 8 SKILLs run with only the existing one-line §18 indirection — no body rewrite for the MVP (§21).
+- A4 — **Drop-in for the loop**: the agent SKILLs run with only the existing one-line §18 indirection — no body rewrite for the MVP (§21).
 
 **Non-goals (MVP).** A daemon; bearer-token auth; the Director; the discussion board; the IM channel; the Linear mirror; multi-CLI; the footgun-removal SKILL rewrite; any Linear feature beyond the §12 op-set.
 
@@ -331,7 +331,7 @@ Note the MVP **does not** ship `agent_tokens`, `project_members`, a `labels` reg
 }
 ```
 
-`backend` absent ⇒ `"linear"`, so **every existing project is byte-for-byte unchanged**; `"local"` still works. §18 gains a third operation-mapping column (the table in §12) so each agent's single §0 line — "all ticket operations go through the configured backend (§18)" — is the **only** thing that resolves differently. The 8 SKILL bodies are untouched (§21).
+`backend` absent ⇒ `"linear"`, so **every existing project is byte-for-byte unchanged**; `"local"` still works. §18 gains a third operation-mapping column (the table in §12) so each agent's single §0 line — "all ticket operations go through the configured backend (§18)" — is the **only** thing that resolves differently. The agent SKILL bodies are untouched (§21).
 
 ---
 
@@ -461,7 +461,7 @@ monpick today: `backend` absent (⇒ linear), `linearProject:MonPick`, a Linear-
 - **conventions.md: one additive edit.** §18 gains the `service` value and the third operation-mapping column (§12/§13). §11 config gains the optional `hub` block. No existing rule changes meaning. (Applied by the operator under §17 — a human git commit, like any conventions change.)
 - **The launcher: a small, real change.** `run-loop.sh` exports `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT` per pane and runs `dev-loop-hub ensure` (P5+) before each fire. This is operator-owned launcher code in the data dir, not the plugin.
 
-**The footgun-removal SKILL rewrite is a SEPARATE, explicit, operator-driven, §17-gated phase with its own effort line — never an MVP byproduct.** Realizing the atomic-claim / add-remove-labels / enum-state benefits requires editing the BODIES of all 8 SKILLs (e.g. dev-agent's "re-fetch; if it's not yours, another Dev won" and "re-pass the full label set"). §17 forbids agents from rewriting their own SKILLs; only the operator may, in a coordinated, human-reviewed pass. Until that pass lands, the hardened primitives ship but sit unused, and the loop runs on the mimicked Linear-shaped contract. Presenting "footguns designed out" as a free win is the contradiction this section resolves.
+**The footgun-removal SKILL rewrite is a SEPARATE, explicit, operator-driven, §17-gated phase with its own effort line — never an MVP byproduct.** Realizing the atomic-claim / add-remove-labels / enum-state benefits requires editing the bodies of the agent SKILLs (e.g. dev-agent's "re-fetch; if it's not yours, another Dev won" and "re-pass the full label set"). §17 forbids agents from rewriting their own SKILLs; only the operator may, in a coordinated, human-reviewed pass. Until that pass lands, the hardened primitives ship but sit unused, and the loop runs on the mimicked Linear-shaped contract. Presenting "footguns designed out" as a free win is the contradiction this section resolves.
 
 ---
 
@@ -471,7 +471,7 @@ monpick today: `backend` absent (⇒ linear), `linearProject:MonPick`, a Linear-
 
 | Phase | Effort | Riskiest assumption it tests |
 |---|---|---|
-| P0 spike | 2–3 d | The 8 Linear-shaped SKILLs run on a non-Linear backend with ~zero rewrite; better-sqlite3 builds; the claim race is correct |
+| P0 spike | 2–3 d | The Linear-shaped agent SKILLs run on a non-Linear backend with ~zero rewrite; better-sqlite3 builds; the claim race is correct |
 | P1 file-board author field | 2–5 d | A structured author field is enough of the "identity" win to matter |
 | P2 SQLite hub MVP | 2–3 w | The hub mimics the op-contract closely enough; native-dep build is stable |
 | P3 isolation | 3–5 d | Project scope binds to the connection/shim, not an agent-passed arg |
@@ -480,7 +480,7 @@ monpick today: `backend` absent (⇒ linear), `linearProject:MonPick`, a Linear-
 | P6 channel (two-way, POLL-based, NO daemon) | ~1 w | Poll latency = fire cadence (a direction plane, not real-time chat); a push webhook would need a tunnel — deferred |
 | P7 Linear mirror (one-way, Sweep push, NO daemon) | ~1 w | A lossy one-way mirror is useful, not confusing; split-brain stays enforced |
 | P8 2nd CLI | 3–5 d / CLI | Per-CLI identity-on-tool-call parity (the headless test) |
-| (parallel) footgun SKILL rewrite | 3–5 d | Coordinated, human-reviewed §17 pass over 8 SKILLs |
+| (parallel) footgun SKILL rewrite | 3–5 d | Coordinated, human-reviewed §17 pass over agent SKILLs |
 
 Full P0–P8 ≈ **3–4 months part-time**.
 

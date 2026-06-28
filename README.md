@@ -2,7 +2,7 @@
 
 **English** · [中文](README.zh-CN.md) · [Français](README.fr.md)
 
-**Ten autonomous agents that build and improve software by moving tickets through a shared
+**Eleven launchable agents that build, improve, watch, and explain software through a shared
 state machine.** You write the intent in a strategy doc and review the result. The agents
 propose work, implement it, verify it, ship it, and fold what they learned into the next run.
 That is *loop engineering*: less hand-prompting, more running a system that can keep itself
@@ -80,7 +80,7 @@ Three rules stay true everywhere:
 
 ## The agents
 
-Five **inward** (build-facing) agents, an optional **two-tier Dev**, three **outward**
+Five **inward** (build-facing) agents, an optional **two-tier Dev**, four **outward**
 agents, and a one-time **setup** command. Every agent reads
 [`references/conventions.md`](references/conventions.md) first — the full state machine,
 label taxonomy, ticket templates, and protocols.
@@ -113,6 +113,7 @@ launcher; the legacy single `dev` stays the default, so non-split projects are u
 | **`ops-agent`** | Watches **running prod** (tight ~10–15 min cadence). Polls health checks + base URL + optional critical routes/logs and, on a **confirmed, repeated** degradation (anti-flap re-check first), files/refreshes an `incident` Bug (Urgent when prod is down). Observe-and-file — never rolls back. |
 | **`architect-agent`** | Whole-codebase **tech-health auditor** (slow, daily-ish). Audits a **rotating** dimension (drift / duplication / dead code / dep-staleness + CVEs / consistency / missing abstractions), SHA-gated, and files `tech-debt` Improvements. Read-only on code — never implements. |
 | **`director-agent`** | The human-facing **coordinator of DIRECTION** (hub backend; daily/on-demand). Chairs a cross-agent **discussion board** (opens topics → role-lens agents post per round → synthesizes → a **decision**) and **drafts** the roadmap the **operator publishes**; over an optional **two-way Lark/Slack channel** the operator chats with it. Coordinates + drafts — never implements/ships/verifies. No `director` config ⇒ graceful no-op (PM owns strategy). |
+| **`communication-agent`** | The PR/media lead. Reads strategy, roadmap, shipped work, and public-safe product facts, then drafts one public-facing product article per cadence (daily by default). Draft-only: never publishes externally, never commits/pushes/deploys, never verifies. Can run from Codex with `DEVLOOP_ACTOR=communication`. |
 
 ### Setup — not a loop agent
 
@@ -168,7 +169,8 @@ becomes a deliberated, operator-gated artifact rather than one agent's guess.
 ### 7. Outward monitoring — prod & codebase health
 **Ops** watches running prod and files an `incident` Bug on a confirmed degradation (which
 re-enters the core loop as a Bug). **Architect** audits a rotating slice of the codebase and
-files `tech-debt` Improvements. Both observe-and-file; neither implements.
+files `tech-debt` Improvements. **Communication** drafts the daily public product article
+from verified, public-safe facts. None of them implements or publishes externally.
 
 ### 8. Human-park & notify
 A genuinely human-only block (a credential, a legal sign-off, an external prerequisite) parks
@@ -262,7 +264,7 @@ claude --plugin-dir /path/to/dev-loop
 then `/plugin install dev-loop@local`. The skills appear as `/dev-loop:pm-agent`,
 `/dev-loop:qa-agent`, `/dev-loop:dev-agent`, `/dev-loop:sweep-agent`,
 `/dev-loop:reflect-agent`, `/dev-loop:ops-agent`, `/dev-loop:architect-agent`,
-`/dev-loop:director-agent`, the opt-in `/dev-loop:senior-dev-agent` +
+`/dev-loop:director-agent`, `/dev-loop:communication-agent`, the opt-in `/dev-loop:senior-dev-agent` +
 `/dev-loop:junior-dev-agent`, and `/dev-loop:init`.
 
 For non-Claude CLIs, install the standalone hub with `npm i -g @dyzsasd/dev-loop`. It provides
@@ -290,6 +292,7 @@ The dials (all per-project):
 - **`reports.sink`** *(optional)* — `"files"` (default) vs `"linear"` (host reports + 点评 in Linear for a cloud/remote runtime).
 - **`notify`** *(optional)* — Slack/Lark webhook to ping you when a ticket is human-parked.
 - **`director`** *(optional, hub)* — enables the discussion board + roadmap + two-way channel.
+- **`communication`** *(optional)* — enables daily article drafts; output is draft-only, either in the data dir or a repo docs directory.
 
 Full reference: [`references/config-schema.md`](references/config-schema.md).
 
@@ -301,25 +304,29 @@ backstop, the loop agents also re-apply the label/project checks on the first `l
 
 ## Run the loop
 
-The plugin **does not ship a runner**. Pick the launch style that fits your setup:
+Pick the launch style that fits your setup:
 
 - **Agent View** (native) — `claude agents`, then dispatch each as a self-looping session:
   `/loop 5m /dev-loop:pm-agent`, `/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent`,
   `/loop 30m /dev-loop:sweep-agent`, `/loop 24h /dev-loop:reflect-agent`, plus the opt-in
-  outward agents (`ops`, `architect`, `director`).
+  outward agents (`ops`, `architect`, `director`, `communication`).
+- **Built-in scheduler** — from inside a configured repo, run `dev-loop run --cli claude`
+  or `dev-loop run --cli codex --agents core,communication`. dev-loop owns the cadence;
+  Claude/Codex only execute one agent fire at a time. Use `--project <key>` only when
+  launching from outside the repo or overriding cwd detection.
 - **A local tmux launcher** — one pane per agent, per-agent models in one command. Set
   `DEV_SPLIT=1` to run the two-tier Dev (senior-dev + junior-dev panes) instead of one `dev`.
 - **Manually** — one turn at a time, for a single pass.
 
 **Cadence** (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
-~30 min, Reflect daily; Ops ~10 min, Architect/Director daily/on-demand.
+~30 min, Reflect daily; Ops ~10 min, Architect/Director/Communication daily/on-demand.
 
 **Resume is ordinary** because agents are stateless per run. After a stop, crash, or reboot,
 launch them again; each agent re-reads ground truth and continues.
 
 > ⚠️ **`mode:"live"` + `autonomy:"full"` + `autoPush`/`autoDeploy` = unattended commits,
 > pushes, and prod deploys with no human gate.** That is the intended power, but try
-> `mode:"dry-run"` (or a single `MODE=once` pass) first to see what it would do.
+> `mode:"dry-run"` (or `dev-loop run --once --dry-run`) first to see what it would do.
 
 📖 Full guide — onboarding, launch methods, models, resume, stop: [`docs/RUNNING.md`](docs/RUNNING.md).
 
@@ -380,6 +387,10 @@ second-model review** (Dev Step 5.5 + Architect; advisory, never touches the boa
 itself), and a one-shot **rescue** before a `fix-exhausted` block. See
 [conventions §24](references/conventions.md) + [`references/codex-integration.md`](references/codex-integration.md).
 
+Separately, the `service` hub can run the agents themselves from Codex; see
+[`docs/PORTABILITY.md`](docs/PORTABILITY.md). The Communication pane uses
+`DEVLOOP_ACTOR=communication` with `/dev-loop:communication-agent`.
+
 ## Deep docs
 
 - [`references/conventions.md`](references/conventions.md) — the authoritative spec (state machine, labels, every protocol). Every agent reads it first.
@@ -393,9 +404,9 @@ itself), and a one-shot **rescue** before a `fix-exhausted` block. See
 
 ## Status
 
-**v0.22.0.** Ten agents — five inward (**PM / QA / Dev / Sweep / Reflect**) and three
-outward (**Ops / Architect / Director**), with an opt-in two-tier **senior-dev / junior-dev**
-Dev split — plus the `init` onboarding command.
+**v0.22.0.** Eleven launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
+four outward (**Ops / Architect / Director / Communication**), and an opt-in two-tier
+**senior-dev / junior-dev** Dev split — plus the `init` onboarding command.
 Coordination is backend-pluggable: **Linear** (default), a **local file board**, or the
 **local hub** (`node:sqlite` SoR with per-agent identity + a localhost web UI + versioned
 docs + the discussion board/Director + a two-way Lark/Slack channel + a one-way Linear
