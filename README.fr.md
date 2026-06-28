@@ -23,7 +23,7 @@ Les agents ne s'appellent pas entre eux. **Le tableau est l'unique canal** : cha
 
 ## Table des matières
 
-- [Qu'est-ce que c'est](#quest-ce-que-cest) · [Comment ça fonctionne](#comment-ça-fonctionne)
+- [Qu'est-ce que c'est](#quest-ce-que-cest) · [Architecture](#architecture--trois-couches) · [Comment ça fonctionne](#comment-ça-fonctionne)
 - [Les agents](#les-agents) — l'effectif au complet
 - [Les workflows](#les-workflows) — comment les agents se combinent réellement
 - [Cas d'usage](#cas-dusage) — quand (et quand ne pas) y recourir
@@ -45,6 +45,14 @@ Trois règles restent vraies partout :
 - **Le tableau est le canal** — les agents se passent le relais par l'état des tickets, pas par des appels directs.
 - **Chaque exécution repart du réel** — les agents sont sans état ; ils relisent le tableau, git et le disque à chaque fois, donc un crash, un redémarrage ou une compaction du contexte ne corrompt pas la boucle.
 - **L'autonomie repose sur des garde-fous, pas sur des prompts** — sous `autonomy:"full"`, les agents décident et agissent, mais un build rouge n'est jamais livré, un déploiement raté déclenche un rollback, et une décision réellement réservée à l'humain reste consignée sur le ticket au lieu de devenir un prompt interactif.
+
+## Architecture — trois couches
+
+dev-loop, c'est trois couches ; le paquet `npm i -g @dyzsasd/dev-loop` les livre toutes les trois :
+
+1. **Interface — la CLI `dev-loop` + le MCP.** La surface d'opération. La commande `dev-loop` (`serve` · `run` · `daemon` · `doctor` · `init-service` · `mcp-merge` · `seed` · …) est la façon dont *vous* pilotez la configuration et la planification ; le serveur **MCP** `dev-loop-hub` est la façon dont les *agents* lisent et écrivent. Les deux sont de simples clients légers au-dessus du hub.
+2. **Hub — le service backend.** Un système de référence local au-dessus de `node:sqlite` (le backend `service`) qui alimente le **système de tickets** et le **système de documents** (stratégie/feuille de route/design, versionnés), et maintient l'**espace de noms par projet** — le tableau, les acteurs et les documents de chaque projet sont isolés. Il tourne comme un démon localhost avec une web UI en lecture seule. *(Linear ou un tableau sur fichiers local à la machine sont des backends de tickets alternatifs ; le hub est celui qui ajoute l'identité par agent, le système de documents et l'espace de noms.)*
+3. **Agents — skills + plugin + scheduler.** Les agents spécialisés par rôle sont un ensemble de **SKILLs** (empaquetés en tant que **plugin** Claude) plus le **scheduler** (`dev-loop run`). Vous démarrez la boucle de deux façons : le scheduler `dev-loop run` (**Mode B**), ou la propre commande de boucle de Claude/Codex contre le plugin installé (**Mode A**, par ex. `/loop 5m /dev-loop:pm-agent`). Voir [Installation](#installation).
 
 ## Comment ça fonctionne
 
@@ -180,67 +188,51 @@ dev-loop run --cli codex --agents core,communication
 
 ## Installation
 
-dev-loop a maintenant deux surfaces d'installation :
-
-1. **Runtime CLI / hub (recommandé pour tous les environnements).** Installe `dev-loop`
-   et `dev-loop-hub`, utilisés par le backend `service`, les configs MCP, le daemon,
-   `doctor` et le scheduler intégré :
+dev-loop fonctionne selon **deux modes** — choisissez selon la façon dont vous voulez piloter les
+agents. Les deux partent du paquet npm (aucun clone GitHub requis) :
 
 ```bash
-npm i -g @dyzsasd/dev-loop
+npm i -g @dyzsasd/dev-loop          # installe les CLI `dev-loop` + `dev-loop-hub` (Node ≥ 23.6)
 ```
 
-Les configs MCP peuvent ensuite utiliser `command:"dev-loop", args:["serve"]` ; plus besoin
-d'un chemin absolu du type `node /path/to/dev-loop/hub/src/server.ts`.
+| | **Mode A — Plugin** (interactif) | **Mode B — Scheduler** (sans surveillance, par défaut) |
+|---|---|---|
+| Qui lance la CLI | vous (Claude Code interactif) | `dev-loop run` (sans surveillance) |
+| CLI | Claude Code | Claude **ou** Codex |
+| Installation supplémentaire | `dev-loop install-claude-plugin` → `/plugin install` | rien — le paquet npm suffit |
+| Besoin du plugin ? | oui | **non** |
+| Skills + hub MCP | depuis le plugin installé | le scheduler les injecte lui-même |
 
-2. **Plugin Claude Code (seulement pour les slash commands Claude).** Installez cette couche
-   si vous voulez `/dev-loop:pm-agent`, `/dev-loop:init`, Agent View, ou l'UX plugin native
-   de Claude. Le paquet npm embarque le payload plugin ; aucun clone GitHub n'est nécessaire :
+### Mode A — Plugin (interactif, Claude Code)
+Vous lancez Claude Code vous-même et pilotez les agents avec les slash commands + `/loop`.
+Enregistrez le plugin **depuis npm** (sans GitHub) :
 
 ```bash
-dev-loop install-claude-plugin
+dev-loop install-claude-plugin       # écrit un marketplace local à source npm + affiche les 2 commandes ci-dessous
+/plugin marketplace add ~/.claude/plugins/marketplaces/dev-loop-npm
+/plugin install dev-loop@dev-loop-npm
 ```
 
-La commande écrit `~/.claude/skills/dev-loop` avec le manifeste plugin, les skills, les références,
-les hooks et les modèles de config. Redémarrez Claude Code, ou lancez `/reload-plugins` dans une
-session existante. Les skills apparaissent sous `/dev-loop:pm-agent`, `/dev-loop:qa-agent`,
-`/dev-loop:dev-agent`, `/dev-loop:communication-agent` et `/dev-loop:init` (plus les autres agents
-embarqués).
+Les skills apparaissent sous `/dev-loop:pm-agent` … `/dev-loop:director-agent`,
+`/dev-loop:communication-agent`, les `/dev-loop:senior-dev-agent` + `/dev-loop:junior-dev-agent`
+à activer, et `/dev-loop:init`. Pilotez-les avec `/loop` (voir [Lancer la boucle](#lancer-la-boucle)).
+*(Installation de développement depuis un checkout source : `claude --plugin-dir /path/to/dev-loop`,
+ou un marketplace `source:"local"` dans `~/.claude/settings.json` →
+`/plugin install dev-loop@local`.)*
 
-**Installation de développement depuis un checkout source (cette session uniquement) :**
-```bash
-claude --plugin-dir /path/to/dev-loop
-```
-
-**Installation de développement persistante depuis un checkout** — ajoutez un marketplace local dans
-`~/.claude/settings.json` :
-```json
-{
-  "extraKnownMarketplaces": {
-    "local": { "source": { "source": "local", "path": "/path/to/parent-of-dev-loop" } }
-  }
-}
-```
-puis `/plugin install dev-loop@local`. Les skills apparaissent sous les noms `/dev-loop:pm-agent`,
-`/dev-loop:qa-agent`, `/dev-loop:dev-agent`, `/dev-loop:sweep-agent`,
-`/dev-loop:reflect-agent`, `/dev-loop:ops-agent`, `/dev-loop:architect-agent`,
-`/dev-loop:director-agent`, `/dev-loop:communication-agent`, les `/dev-loop:senior-dev-agent` +
-`/dev-loop:junior-dev-agent` à activer, et `/dev-loop:init`.
-
-Pour Codex/opencode, le paquet npm contient déjà les skills d'agents et les références partagées
-nécessaires à `dev-loop run`; il n'est pas nécessaire d'installer le plugin Claude juste pour
-exécuter des agents planifiés.
-
-Pour des slash prompts interactifs dans la CLI Codex, installez les custom prompts optionnels :
+### Mode B — Scheduler (sans surveillance, par défaut — Claude **ou** Codex)
+Le scheduler `dev-loop run` garde la cadence et invoque `claude -p` / `codex exec` une fois par
+déclenchement. **Aucun plugin requis** : il injecte le SKILL de chaque agent comme prompt (depuis le
+paquet embarqué) et **enregistre lui-même le MCP `dev-loop-hub`** — claude via un `--mcp-config`
+inline, codex via des overrides `-c` — de sorte qu'aucune config `.mcp.json` ni
+`~/.codex/config.toml` n'est nécessaire.
 
 ```bash
-dev-loop install-codex-prompts
+dev-loop run --cli claude --agents core          # ou : --cli codex --agents core,communication
 ```
 
-Redémarrez Codex après l'installation. Les commandes apparaissent comme
-`/prompts:dev-loop-pm-agent`, `/prompts:dev-loop-qa-agent`,
-`/prompts:dev-loop-communication-agent`, etc. Les custom prompts Codex sont un chemin de
-compatibilité ; pour une cadence sans surveillance, préférez `dev-loop run --cli codex`.
+Ne nécessite que le paquet npm + la CLI de votre choix (`claude` ou `codex`) dans le `PATH`. Pour
+`--agents`, la cadence et le plafond de coût `--max-fires`, voir [Lancer la boucle](#lancer-la-boucle).
 
 ## Configuration
 
@@ -287,7 +279,15 @@ dev-loop run --cli codex --agents core,communication --once --dry-run
 
 # Dev à deux niveaux : senior-dev conçoit, junior-dev implémente.
 dev-loop run --cli claude --agents core --dev-split
+
+# Garde-fou de coût : arrêt après N déclenchements au total (illimité par défaut).
+dev-loop run --cli claude --agents core --max-fires 50
 ```
+
+Le scheduler **enregistre lui-même le MCP `dev-loop-hub`** pour l'exécuteur (claude : `--mcp-config`
+inline ; codex : overrides `-c`), de sorte que le Mode B ne requiert ni plugin ni config
+`.mcp.json` / `~/.codex/config.toml`. Les tokens sont le coût de fonctionnement — `--max-fires`
+plafonne un processus long vivant, et les `models` par agent gardent les agents mécaniques bon marché.
 
 `--agents core` signifie `pm,qa,dev,sweep`. Ajoutez `reflect`, `outward`, ou des agents
 individuels : `--agents core,reflect,ops,communication`. La détection du projet est automatique
@@ -348,11 +348,10 @@ La boucle peut utiliser **OpenAI Codex** comme outil de renfort via le compagnon
 **À activer explicitement ; sans lui, le comportement ne change pas.** Elle ajoute, avec des garde-fous indépendants, une **revue indépendante par un second modèle** (Dev étape 5.5 + Architect ; consultative, ne touche jamais au tableau), la **génération d'images** (maquettes PM + assets de production Dev — la seule chose que la boucle ne peut pas faire elle-même), et un **sauvetage** ponctuel avant un blocage `fix-exhausted`. Voir
 [conventions §24](references/conventions.md) + [`references/codex-integration.md`](references/codex-integration.md).
 
-Séparément, le hub `service` permet de lancer les agents eux-mêmes depuis Codex ; voir
-[`docs/PORTABILITY.md`](docs/PORTABILITY.md). Le volet Communication utilise
-`dev-loop run --cli codex --agents communication`, ou le custom prompt Codex optionnel
-`/prompts:dev-loop-communication-agent` dans une session Codex lancée avec l'override
-`-c mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"`.
+Séparément, le hub `service` permet de lancer les agents eux-mêmes depuis Codex (Mode B) ; voir
+[`docs/PORTABILITY.md`](docs/PORTABILITY.md). Lancez n'importe quel agent ainsi, par ex.
+`dev-loop run --cli codex --agents communication` — le scheduler injecte lui-même l'override
+acteur/MCP `dev-loop-hub` par agent, aucune config Codex manuelle n'est donc nécessaire.
 
 ## Documentation approfondie
 
