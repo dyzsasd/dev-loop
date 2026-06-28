@@ -31,12 +31,14 @@ try {
   const claude = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm,communication", "--interval", "pm=2m", "--cli-arg", "--model", "--cli-arg", "opus", ...common]);
   ok(claude.code === 0, "claude dry-run scheduler exits 0");
   ok(/agents=pm@2m, communication@1d/.test(claude.out), "claude dry-run shows resolved agents + interval override");
-  ok(/pm: claude --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "claude dry-run renders the headless claude command without dumping the prompt");
-  ok(/communication: claude --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "communication-agent is schedulable through the same claude runner");
+  ok(/pm: claude --mcp-config .* --strict-mcp-config --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "claude dry-run injects the hub via inline --mcp-config + renders the command without dumping the prompt");
+  ok(/dev-loop-hub/.test(claude.out), "the inline --mcp-config defines the dev-loop-hub server (no plugin / .mcp.json needed)");
+  ok(/communication: claude --mcp-config .* --strict-mcp-config --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "communication-agent is schedulable through the same claude runner");
 
   const codex = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", ...common]);
   ok(codex.code === 0, "codex dry-run scheduler exits 0");
   ok(/codex exec/.test(codex.out), "codex dry-run uses codex exec");
+  ok(/mcp_servers\.dev-loop-hub\.command="node"/.test(codex.out), "codex dry-run DEFINES the hub server via -c (no pre-existing config.toml block needed)");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_ACTOR="communication"/.test(codex.out), "codex dry-run injects per-agent actor with -c");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_PROJECT="demo"/.test(codex.out), "codex dry-run injects project with -c");
   ok(!/dangerously-bypass/.test(codex.out), "--codex-safe omits unsafe bypass flags");

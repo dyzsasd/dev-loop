@@ -49,7 +49,7 @@ try {
   const doc = run(process.execPath, [distCli, "doctor"], { DEVLOOP_HUB_DB: db });
   ok(doc.code === 0 && /DOCTOR_OK/.test(doc.out), "compiled cli.js doctor → exit 0 + DOCTOR_OK (spawns compiled server.js; siblings resolve)");
   const runner = run(process.execPath, [distCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--root", repoRoot, "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
-  ok(runner.code === 0 && /communication: claude -p '?<prompt:\d+ chars>'?/.test(runner.out), "compiled cli.js run → dry-run renders a scheduled claude fire");
+  ok(runner.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config -p '?<prompt:\d+ chars>'?/.test(runner.out), "compiled cli.js run → dry-run renders a scheduled claude fire (inline --mcp-config hub)");
 
   // ── installed-like layout: a COPY of dist/ OUTSIDE the repo, with NO config/ sibling (the package ships only
   //    `files:["dist/","README.md"]`). This is the exact `npm i -g dev-loop` shape; the two ENOENT-on-install bugs
@@ -58,24 +58,16 @@ try {
   cpSync(distDir, join(inst, "dist"), { recursive: true });
   const instCli = join(inst, "dist", "cli.js");
   const instRun = run(process.execPath, [instCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
-  ok(instRun.code === 0 && /communication: claude -p '?<prompt:\d+ chars>'?/.test(instRun.out),
-    "installed cli.js run → finds bundled skills without --root");
-  const promptsDir = join(tmp, "codex-prompts");
-  const instPrompts = run(process.execPath, [instCli, "install-codex-prompts", "--dest", promptsDir, "--data", tmp]);
-  ok(instPrompts.code === 0 && existsSync(join(promptsDir, "dev-loop-communication-agent.md")) && existsSync(join(promptsDir, "dev-loop-init.md")),
-    "installed cli.js install-codex-prompts → writes Codex /prompts files from bundled skills");
-  const claudePluginDir = join(tmp, "claude-plugin");
-  const instClaudePlugin = run(process.execPath, [instCli, "install-claude-plugin", "--dest", claudePluginDir]);
-  const copiedHook = existsSync(join(claudePluginDir, "hooks", "hooks.json"))
-    ? readFileSync(join(claudePluginDir, "hooks", "hooks.json"), "utf8")
-    : "";
+  ok(instRun.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config -p '?<prompt:\d+ chars>'?/.test(instRun.out),
+    "installed cli.js run → finds bundled skills + injects the hub without --root");
+  const mktDir = join(tmp, "claude-marketplace");
+  const instClaudePlugin = run(process.execPath, [instCli, "install-claude-plugin", "--dest", mktDir]);
+  const mktFile = join(mktDir, ".claude-plugin", "marketplace.json");
+  const mkt = existsSync(mktFile) ? JSON.parse(readFileSync(mktFile, "utf8")) as { plugins?: Array<{ source?: { source?: string; package?: string } }> } : null;
   ok(instClaudePlugin.code === 0
-    && existsSync(join(claudePluginDir, ".claude-plugin", "plugin.json"))
-    && existsSync(join(claudePluginDir, "skills", "pm-agent", "SKILL.md"))
-    && existsSync(join(claudePluginDir, "references", "conventions.md"))
-    && /dev-loop daemon up/.test(copiedHook)
-    && !/hub\/src\/server\.ts/.test(copiedHook),
-    "installed cli.js install-claude-plugin → writes a skills-dir Claude plugin with npm-safe hooks");
+    && mkt?.plugins?.[0]?.source?.source === "npm"
+    && mkt?.plugins?.[0]?.source?.package === "@dyzsasd/dev-loop",
+    "installed cli.js install-claude-plugin → writes an npm-source marketplace.json (no GitHub, no file-copy drift)");
 
   // ── (groom AC) mcp-merge with NO template arg → succeeds via the embedded DEFAULT_TEMPLATE, NOT an ENOENT on the
   //    `../../config/mcp.example.json` that doesn't ship. Args are plain identifiers/paths (DL-44/DL-66 guards). ──

@@ -62,10 +62,13 @@ type Options = {
   claudeBin: string;
   codexBin: string;
   codexSafe: boolean;
+  maxFires: number;     // 0 = unlimited; else stop after N total fires (cost guard)
+  mcpConfig?: string;   // claude: explicit MCP config; defaults to <cwd>/.mcp.json if present
   extraArgs: string[];
 };
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (build)
+const EXT = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts"; // server sibling: .ts source / .js published
 const isPluginRoot = (p: string) => existsSync(join(p, "skills")) && existsSync(join(p, "references"));
 const defaultRoot = () => {
   // Source checkout: hub/src -> repo root. Published package: dist/plugin -> bundled skills/references.
@@ -99,11 +102,11 @@ Options:
   --data <path>               plugin data dir (default: CLAUDE_PLUGIN_DATA or ~/.claude/plugins/data/dev-loop)
   --hub-db <path>             hub db path (default: DEVLOOP_HUB_DB or ~/.dev-loop/hub.db)
   --cwd <path>                working directory for CLI subprocesses (default: project repoPath)
-  --log-dir <path>            log directory (default: <data>/<project>/runner-logs)
-  --claude-bin <path>         Claude CLI binary (default: DEVLOOP_CLAUDE_BIN or claude)
-  --codex-bin <path>          Codex CLI binary (default: DEVLOOP_CODEX_BIN or codex)
+  --mcp-config <path>         claude: MCP config to load + --strict-mcp-config (default: <cwd>/.mcp.json if present)
+  --max-fires <n>             stop after N total agent fires, then drain + exit (cost guard; default 0 = unlimited)
   --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
   --cli-arg <arg>             pass an extra arg to the selected CLI before the prompt; may repeat
+                              (CLI binaries: set DEVLOOP_CLAUDE_BIN / DEVLOOP_CODEX_BIN to override)
 
 Durations accept ms/s/m/h/d. Default agents: core = pm,qa,dev,sweep.`);
 }
@@ -161,6 +164,7 @@ function parseArgs(argv: string[]): Options {
     claudeBin: process.env.DEVLOOP_CLAUDE_BIN || "claude",
     codexBin: process.env.DEVLOOP_CODEX_BIN || "codex",
     codexSafe: false,
+    maxFires: 0,
     extraArgs,
   };
 
@@ -189,9 +193,11 @@ function parseArgs(argv: string[]): Options {
     else if (a === "--data") opts.dataDir = resolve(next());
     else if (a === "--hub-db") opts.hubDb = resolve(next());
     else if (a === "--cwd") opts.cwd = resolve(next());
-    else if (a === "--log-dir") opts.logDir = resolve(next());
-    else if (a === "--claude-bin") opts.claudeBin = next();
-    else if (a === "--codex-bin") opts.codexBin = next();
+    else if (a === "--mcp-config") opts.mcpConfig = resolve(next());
+    else if (a === "--max-fires") {
+      opts.maxFires = Number(next());
+      if (!Number.isInteger(opts.maxFires) || opts.maxFires < 0) die("--max-fires must be a non-negative integer (0 = unlimited)");
+    }
     else if (a === "--codex-safe") opts.codexSafe = true;
     else if (a === "--cli-arg") extraArgs.push(next());
     else die(`unknown option '${a}'`);
@@ -248,13 +254,25 @@ function shellQuote(s: string): string {
   return /^[A-Za-z0-9_/:=.,@%+-]+$/.test(s) ? s : `'${s.replaceAll("'", "'\\''")}'`;
 }
 
+// The dev-loop-hub MCP server the scheduler injects itself, so NEITHER CLI needs the plugin or a
+// pre-existing config. Points at this package's own server entry (.ts source / .js published) + the
+// resolved hub db, with the per-fire actor/project. claude takes it as inline --mcp-config JSON;
+// codex takes the same shape as `-c` overrides (which define the server, not just patch env).
+const serverEntry = join(here, `server${EXT}`);
+
 function commandFor(opts: Options, agent: Agent, project: string, prompt: string): { command: string; args: string[] } {
   if (opts.cli === "claude") {
-    return { command: opts.claudeBin, args: [...opts.extraArgs, "-p", prompt] };
+    // explicit --mcp-config file wins; otherwise inject the hub inline so a fresh project needs no .mcp.json.
+    const mcpArg = opts.mcpConfig ?? JSON.stringify({
+      mcpServers: { "dev-loop-hub": { command: "node", args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb } } },
+    });
+    return { command: opts.claudeBin, args: ["--mcp-config", mcpArg, "--strict-mcp-config", ...opts.extraArgs, "-p", prompt] };
   }
   const args = [
     "exec",
     ...opts.extraArgs,
+    "-c", `mcp_servers.dev-loop-hub.command="node"`,
+    "-c", `mcp_servers.dev-loop-hub.args=["${serverEntry}"]`,
     "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="${agent}"`,
     "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT="${project}"`,
     "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_HUB_DB="${opts.hubDb}"`,
@@ -330,6 +348,7 @@ async function main(): Promise<void> {
 
   const slots: Slot[] = opts.agents.map((agent) => ({ agent, nextAt: Date.now(), running: false }));
   let stopping = false;
+  let fired = 0; // total fires started; --max-fires caps it (0 = unlimited)
   const stop = () => {
     if (stopping) return;
     stopping = true;
@@ -346,6 +365,7 @@ async function main(): Promise<void> {
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
       slot.running = true;
+      fired++;
       runAgent(opts, slot.agent, project, cwd)
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); return 1; })
         .finally(() => {
@@ -353,6 +373,11 @@ async function main(): Promise<void> {
           slot.nextAt = Date.now() + opts.intervals[slot.agent];
           if (stopping && activeChildren.size === 0) process.exit(0);
         });
+      if (opts.maxFires && fired >= opts.maxFires) {
+        console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining active fires then exiting`);
+        stop();
+        break;
+      }
     }
   };
   const timer = setInterval(tick, 1_000);
