@@ -27,6 +27,7 @@ dev-loop shim                        the thin stdio MCP shim → the loopback da
 dev-loop daemon up|down|status       per-project daemon lifecycle — idempotent, auto web UI
 dev-loop init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project
 dev-loop run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents with your own runner
+dev-loop install-codex-prompts      install optional Codex CLI /prompts:dev-loop-* custom prompts
 dev-loop mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers)
 dev-loop seed <key> <name> [PREFIX]  seed a project + actors + labels
 dev-loop doctor                      health-check the system-of-record (DOCTOR_OK)

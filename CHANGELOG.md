@@ -3,6 +3,11 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+- Adds `dev-loop install-codex-prompts`, which generates optional Codex CLI custom prompts
+  (`/prompts:dev-loop-pm-agent`, `/prompts:dev-loop-communication-agent`, etc.) from the bundled
+  dev-loop SKILLs, plus docs for Codex actor/project `-c` setup.
+
 ## 0.22.1 — Communication agent + Codex-startable scheduler
 Adds `communication-agent`, an outward PR/media role that drafts one public-facing product
 article per cadence (daily by default) from strategy, roadmap, shipped work, and public-safe

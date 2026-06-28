@@ -218,6 +218,16 @@ claude --plugin-dir /path/to/dev-loop
 对于 Codex/opencode，npm 包已经包含 `dev-loop run` 所需的 agent skills 和共享规范；仅为了定时运行
 agent，不需要额外安装 Claude 插件 checkout。
 
+如果你想在 Codex CLI 里用交互式 slash prompt，可以安装可选的 custom prompts：
+
+```bash
+dev-loop install-codex-prompts
+```
+
+安装后重启 Codex。命令会显示为 `/prompts:dev-loop-pm-agent`、
+`/prompts:dev-loop-qa-agent`、`/prompts:dev-loop-communication-agent` 等。Codex custom
+prompts 只是兼容路径；无人值守的循环节奏仍建议用 `dev-loop run --cli codex`。
+
 ## 配置
 
 每个项目的设置存放在 `${CLAUDE_PLUGIN_DATA}/projects.json`
@@ -308,7 +318,9 @@ cp config/projects.example.json ~/.claude/plugins/data/dev-loop/projects.json
 
 另一条路径是由 `service` hub 让各个智能体直接在 Codex 中启动；见
 [`docs/PORTABILITY.md`](docs/PORTABILITY.md)。Communication 窗口使用
-`DEVLOOP_ACTOR=communication` 搭配 `/dev-loop:communication-agent`。
+`dev-loop run --cli codex --agents communication`，也可以在带有
+`-c mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"` 覆盖的 Codex 会话里运行
+`/prompts:dev-loop-communication-agent`。
 
 ## 深入文档
 

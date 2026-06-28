@@ -291,6 +291,16 @@ then `/plugin install dev-loop@local`. The skills appear as `/dev-loop:pm-agent`
 The npm package includes the agent skills and shared references needed by `dev-loop run`, so
 Codex/opencode do not need a separate plugin checkout just to run scheduled agents.
 
+For interactive Codex CLI slash prompts, install the optional custom prompt files:
+
+```bash
+dev-loop install-codex-prompts
+```
+
+Restart Codex after installing. The commands appear as `/prompts:dev-loop-pm-agent`,
+`/prompts:dev-loop-qa-agent`, `/prompts:dev-loop-communication-agent`, etc. Codex custom
+prompts are a compatibility path; for unattended cadence, prefer `dev-loop run --cli codex`.
+
 ## Configure
 
 Per-project settings live in `${CLAUDE_PLUGIN_DATA}/projects.json`
@@ -410,7 +420,9 @@ itself), and a one-shot **rescue** before a `fix-exhausted` block. See
 
 Separately, the `service` hub can run the agents themselves from Codex; see
 [`docs/PORTABILITY.md`](docs/PORTABILITY.md). The Communication pane uses
-`DEVLOOP_ACTOR=communication` with `/dev-loop:communication-agent`.
+`dev-loop run --cli codex --agents communication`, or the optional Codex custom prompt
+`/prompts:dev-loop-communication-agent` in a Codex session started with the matching
+`-c mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="communication"` override.
 
 ## Deep docs
 
