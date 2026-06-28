@@ -425,15 +425,15 @@ Separately, the `service` hub can run the agents themselves from Codex; see
 
 ## Status
 
-**v0.22.0.** Eleven launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
+**v0.22.1.** Eleven launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
 four outward (**Ops / Architect / Director / Communication**), and an opt-in two-tier
 **senior-dev / junior-dev** Dev split — plus the `init` onboarding command.
 Coordination is backend-pluggable: **Linear** (default), a **local file board**, or the
 **local hub** (`node:sqlite` SoR with per-agent identity + a localhost web UI + versioned
 docs + the discussion board/Director + a two-way Lark/Slack channel + a one-way Linear
 mirror + CLI-portability). Recent: the **two-tier Dev** (senior designs / junior implements,
-opt-in, back-compat); **standalone npm packaging** (`npm i -g @dyzsasd/dev-loop`) with a Codex-certified
-multi-CLI path; and **loop-cost governance** (a runaway/no-progress circuit-breaker, an
+opt-in, back-compat); **standalone npm packaging** (`npm i -g @dyzsasd/dev-loop`) with bundled
+agent skills for scheduler runs and a Codex-certified multi-CLI path; and **loop-cost governance** (a runaway/no-progress circuit-breaker, an
 acceptance-rate metric). Validated end-to-end and battle-tested across long live runs;
 autonomy (push/deploy) is opt-in per project and gated on a green build. Full history in
 [`CHANGELOG.md`](CHANGELOG.md).

@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased — Communication agent + Codex-startable agent pane
+## 0.22.1 — Communication agent + Codex-startable scheduler
 Adds `communication-agent`, an outward PR/media role that drafts one public-facing product
 article per cadence (daily by default) from strategy, roadmap, shipped work, and public-safe
 product facts. It is draft-only: no external publishing, no commits/pushes/deploys, and no ticket
@@ -13,6 +13,9 @@ verification.
 - Adds `dev-loop run`, a built-in scheduler that owns cadence itself and shells out to `claude -p`
   or `codex exec` once per due agent fire. This gives the loop an unattended mode that does not
   depend on Claude/Codex `/loop`; Codex actor/project/db identity is injected with `-c` overrides.
+- Simplifies npm/MCP installation: the published package now bundles the agent skills, shared
+  references, and config templates used by `dev-loop run`; MCP templates and `init-service` now
+  default to `dev-loop serve` instead of an absolute `hub/src/server.ts` checkout path.
 - `projects.example.json`, `config-schema.md`, `RUNNING.md`, `PORTABILITY.md`, all README languages,
   conventions, and plugin marketplace copy now document Communication and its Codex launch path.
 
