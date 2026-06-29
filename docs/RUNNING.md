@@ -7,7 +7,7 @@ the normal install path for the service backend, MCP configs, daemon, doctor, an
 npm i -g @dyzsasd/dev-loop
 ```
 
-Install the Claude plugin only if you want `/dev-loop:*` slash commands or Agent View onboarding:
+Install the Claude plugin only if you want `/dev-loop:*` plugin skills or Agent View onboarding:
 
 ```bash
 dev-loop install-claude-plugin
@@ -22,7 +22,7 @@ commands, Linear MCP for the `linear` backend, `gh`, a repo, and a Linear team/p
 ## 1. Onboard a project (new project)
 
 There are two onboarding paths. The scheduler path does **not** require the Claude plugin; the
-slash-command path does.
+plugin-skill path does.
 
 ### A. Scheduler/no-plugin onboarding
 
@@ -182,7 +182,7 @@ running with no terminal attached.
 claude agents            # open the view (scoped: claude agents --cwd ~/path)
 ```
 
-Then dispatch each agent as its own self-looping row (a slash command typed in the view
+Then dispatch each agent as its own self-looping row (a plugin skill invocation typed in the view
 becomes a new background session; `/loop` makes it recurring):
 
 ```

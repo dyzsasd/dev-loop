@@ -22,3 +22,10 @@ projects.json
 .mcp.json
 # P4: the published npm build artifact (built on prepack, never committed)
 hub/dist/
+# P4/P23: root-level Claude plugin payload copied into hub/ during npm prepack so
+# Claude Code's npm plugin source can find .claude-plugin/plugin.json at package root.
+hub/.claude-plugin/
+hub/skills/
+hub/references/
+hub/hooks/
+hub/config/

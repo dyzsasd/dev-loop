@@ -18,7 +18,7 @@ npm install -g @dyzsasd/dev-loop   # requires Node >= 23.6 (built-in node:sqlite
 This installs two binaries on `PATH`: **`dev-loop`** for the CLI and **`dev-loop-hub`** for the
 MCP server entrypoint. The package also ships the agent skills + shared references used by
 `dev-loop run`, so the **scheduler mode needs no plugin** (it injects the skills + the hub MCP
-itself). For Claude Code **interactive** slash commands, register the plugin from npm (no GitHub):
+itself). For Claude Code **interactive** `/dev-loop:*` plugin skills, register the plugin from npm (no GitHub):
 
 ```bash
 dev-loop install-claude-plugin   # writes a local npm-source marketplace, then prints the /plugin commands to run
