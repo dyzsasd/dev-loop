@@ -31,7 +31,7 @@ Les agents ne s'appellent pas entre eux. **Le tableau est l'unique canal** : cha
 - [Configurer un projet](#configurer-un-projet) · [Lancer la boucle](#lancer-la-boucle)
 - [Backends](#backends) · [Périmètre de sécurité](#périmètre-de-sécurité) · [Auto-évolution](#auto-évolution)
 - [Rapports et revue de l'opérateur (点评)](#rapports-et-revue-de-lopérateur-点评) · [Codex (optionnel)](#intégration-codex-optionnelle)
-- [Documentation approfondie](#documentation-approfondie) · [Statut](#statut)
+- [Publication](#publication) · [Documentation approfondie](#documentation-approfondie) · [Statut](#statut)
 
 ---
 
@@ -375,6 +375,12 @@ Séparément, le hub `service` permet de lancer les agents eux-mêmes depuis Cod
 `dev-loop run --cli codex --agents communication` — le scheduler injecte lui-même l'override
 acteur/MCP `dev-loop-hub` par agent, aucune config Codex manuelle n'est donc nécessaire.
 
+## Publication
+
+Les releases du paquet passent par le workflow GitHub Actions manuel **Release npm package**. Il
+synchronise la version partagée, lance la suite de tests du hub, publie `hub/` sur npm avec
+`NPM_TOKEN`, puis pousse le tag `v<version>`. Voir [`docs/RELEASING.md`](docs/RELEASING.md).
+
 ## Documentation approfondie
 
 - [`references/conventions.md`](references/conventions.md) — la spécification de référence (machine à états, labels, chaque protocole). Chaque agent la lit en premier.
@@ -383,9 +389,10 @@ acteur/MCP `dev-loop-hub` par agent, aucune config Codex manuelle n'est donc né
 - [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md) — le hub local / le backend `service`.
 - [`docs/DAEMON.md`](docs/DAEMON.md) — la web UI en localhost + le démon.
 - [`docs/PORTABILITY.md`](docs/PORTABILITY.md) — faire tourner la boucle sur un second CLI (Codex / opencode).
+- [`docs/RELEASING.md`](docs/RELEASING.md) — le chemin GitHub Actions pour publier npm + tags.
 - [`docs/design/`](docs/design/) — les dossiers de conception (choix du backend, repositionnement du démon, le découpage du Dev à deux niveaux).
 - [`CHANGELOG.md`](CHANGELOG.md) — l'historique complet des versions.
 
 ## Statut
 
-**v0.22.1.** Dix agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et trois externes (**Ops / Architect / Communication**), avec un **senior-dev / junior-dev** à deux niveaux optionnel — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : le **Dev à deux niveaux** (senior conçoit / junior implémente, à activer, rétrocompatible) ; le **packaging npm autonome** (`npm i -g @dyzsasd/dev-loop`), avec les skills d'agents intégrées pour le scheduler et un parcours multi-CLI certifié Codex ; la **gouvernance du coût de boucle** (un coupe-circuit en cas d'emballement/d'absence de progrès, une métrique de taux d'acceptation) ; et le nouvel agent **Communication**, qui rédige des brouillons d'articles produit sans publier à l'extérieur. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).
+**v0.23.1.** Dix agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et trois externes (**Ops / Architect / Communication**), avec un **senior-dev / junior-dev** à deux niveaux optionnel — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : `dev-loop run` injecte lui-même la config MCP pour Claude/Codex ; les installations npm-source du plugin Claude chargent désormais le payload complet depuis la racine du paquet npm ; et la release CI crée le tag `v<version>` puis publie sur npm. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).

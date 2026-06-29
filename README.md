@@ -37,7 +37,7 @@ carry the operational facts: eligibility, owner, routing, and dev tier.
 - [Set up a project](#set-up-a-project) · [Run the loop](#run-the-loop)
 - [Backends](#backends) · [Safety boundary](#safety-boundary) · [Self-evolution](#self-evolution)
 - [Reports & operator review (点评)](#reports--operator-review-点评) · [Codex (optional)](#codex-integration-optional)
-- [Deep docs](#deep-docs) · [Status](#status)
+- [Release](#release) · [Deep docs](#deep-docs) · [Status](#status)
 
 ---
 
@@ -474,6 +474,12 @@ Separately, the `service` hub can run the agents themselves from Codex (Mode B);
 `dev-loop run --cli codex --agents communication` — the scheduler injects the per-agent
 `dev-loop-hub` actor/MCP override itself, so no manual Codex config is needed.
 
+## Release
+
+Package releases are cut through the manual **Release npm package** GitHub Actions workflow. It
+stamps the shared version, runs the hub test suite, publishes `hub/` to npm with `NPM_TOKEN`, and
+pushes `v<version>`. See [`docs/RELEASING.md`](docs/RELEASING.md).
+
 ## Deep docs
 
 - [`references/conventions.md`](references/conventions.md) — the authoritative spec (state machine, labels, every protocol). Every agent reads it first.
@@ -482,19 +488,19 @@ Separately, the `service` hub can run the agents themselves from Codex (Mode B);
 - [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md) — the local hub / `service` backend.
 - [`docs/DAEMON.md`](docs/DAEMON.md) — the localhost web UI + daemon.
 - [`docs/PORTABILITY.md`](docs/PORTABILITY.md) — running the loop on a second CLI (Codex / opencode).
+- [`docs/RELEASING.md`](docs/RELEASING.md) — the GitHub Actions release path for npm + tags.
 - [`docs/design/`](docs/design/) — the design records (backend choice, daemon repositioning, the two-tier Dev split).
 - [`CHANGELOG.md`](CHANGELOG.md) — full version history.
 
 ## Status
 
-**v0.22.1.** Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
+**v0.23.1.** Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
 three outward (**Ops / Architect / Communication**), and an opt-in two-tier
 **senior-dev / junior-dev** Dev split — plus the `init` onboarding command.
 Coordination is backend-pluggable: **Linear** (default), a **local file board**, or the
 **local hub** (`node:sqlite` SoR with per-agent identity + a localhost web UI + versioned
-docs + a one-way Linear mirror + CLI-portability). Recent: the **two-tier Dev** (senior designs / junior implements,
-opt-in, back-compat); **standalone npm packaging** (`npm i -g @dyzsasd/dev-loop`) with bundled
-agent skills for scheduler runs and a Codex-certified multi-CLI path; and **loop-cost governance** (a runaway/no-progress circuit-breaker, an
-acceptance-rate metric). Validated end-to-end and battle-tested across long live runs;
+docs + a one-way Linear mirror + CLI-portability). Recent: turnkey `dev-loop run` scheduling for
+Claude/Codex with self-injected MCP config; npm-source Claude plugin installs from the published
+package root; and CI releases that create `v<version>` tags and publish to npm. Validated end-to-end and battle-tested across long live runs;
 autonomy (push/deploy) is opt-in per project and gated on a green build. Full history in
 [`CHANGELOG.md`](CHANGELOG.md).

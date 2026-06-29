@@ -3,6 +3,15 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.23.1 — npm plugin root payload + CI release
+- Fixed npm-source Claude plugin packaging: the npm tarball now includes `.claude-plugin/`,
+  `skills/`, `references/`, `hooks/`, and `config/` at package root, because Claude Code's npm
+  plugin source resolves manifests only from the package root. The existing `dist/plugin/` payload
+  remains for scheduler/runtime lookups.
+- Added a manual **Release npm package** GitHub Actions workflow. It validates the target version,
+  stamps the package/plugin manifests, runs the hub tests, creates `v<version>`, publishes
+  `@dyzsasd/dev-loop` to npm with provenance, and pushes the release commit plus tag.
+
 ## 0.23.0 — Turnkey scheduler MCP for both CLIs + Director removal
 - **Scheduler self-injects the hub MCP for both CLIs**, so `dev-loop run` (Mode B) needs **no plugin
   and no `.mcp.json`**: `--cli claude` passes an inline `--mcp-config '{…}' --strict-mcp-config`, and
@@ -28,10 +37,6 @@ experience** — a real failure observed while the agents ran, then hardened int
 - Clarified onboarding docs: `/dev-loop:init` belongs to the Claude plugin path, while the no-plugin
   scheduler path starts from `dev-loop init-config` plus a `dev-loop run --once --dry-run`
   validation.
-- Fixed npm-source Claude plugin packaging: the npm tarball now includes `.claude-plugin/`,
-  `skills/`, `references/`, `hooks/`, and `config/` at package root, because Claude Code's npm
-  plugin source resolves manifests only from the package root. The existing `dist/plugin/` payload
-  remains for scheduler/runtime lookups.
 
 ## 0.22.1 — Communication agent + Codex-startable scheduler
 Adds `communication-agent`, an outward PR/media role that drafts one public-facing product

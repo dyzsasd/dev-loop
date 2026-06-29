@@ -2,7 +2,7 @@
   "name": "dev-loop",
   "displayName": "dev-loop — autonomous SDLC agents",
   "description": "A multi-agent software delivery loop coordinated through ticket state. PM, QA, Dev, Sweep, Reflect, Ops, Architect, and Communication cover product discovery, testing, implementation, hygiene, retrospectives, production watch, technical-health audits, and public article drafts. The optional senior/junior Dev split lets a stronger model design while a cheaper model implements. Coordination can run on Linear, a local file board, or the service hub with per-agent identity, a localhost web UI, documents, Lark/Slack channel, one-way Linear mirror, Codex/opencode portability, and a built-in scheduler that shells out to Claude or Codex without relying on /loop.",
-  "version": "0.23.0",
+  "version": "0.23.1",
   "author": {
     "name": "Shuai"
   },
