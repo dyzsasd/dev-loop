@@ -31,7 +31,7 @@
 - [接入一个项目](#接入一个项目) · [运行循环](#运行循环)
 - [后端](#后端) · [安全边界](#安全边界) · [自我进化](#自我进化)
 - [报告与操作者评审（点评）](#报告与操作者评审点评) · [Codex（可选）](#codex-集成可选)
-- [深入文档](#深入文档) · [状态](#状态)
+- [发布](#发布) · [深入文档](#深入文档) · [状态](#状态)
 
 ---
 
@@ -368,6 +368,12 @@ Claude Agent View 仍然可用，但它是 Claude 原生的可选界面：安装
 `dev-loop run --cli codex --agents communication`——scheduler 会自行注入每个智能体的
 `dev-loop-hub` actor/MCP 覆盖，因此无需手动配置 Codex。
 
+## 发布
+
+包发布通过手动触发的 **Release npm package** GitHub Actions workflow 完成。它会同步共享版本号、
+运行 hub 测试套件、使用 `NPM_TOKEN` 把 `hub/` 发布到 npm，并推送 `v<version>` 标签。详见
+[`docs/RELEASING.md`](docs/RELEASING.md)。
+
 ## 深入文档
 
 - [`references/conventions.md`](references/conventions.md) — 权威规范（状态机、标签、每一项协议）。每个智能体都会先读它。
@@ -376,9 +382,10 @@ Claude Agent View 仍然可用，但它是 Claude 原生的可选界面：安装
 - [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md) — 本地 hub / `service` 后端。
 - [`docs/DAEMON.md`](docs/DAEMON.md) — 本地 web UI + 守护进程。
 - [`docs/PORTABILITY.md`](docs/PORTABILITY.md) — 在第二个 CLI 上运行循环（Codex / opencode）。
+- [`docs/RELEASING.md`](docs/RELEASING.md) — 通过 GitHub Actions 发布 npm 包并打 tag 的流程。
 - [`docs/design/`](docs/design/) — 设计记录（后端选型、守护进程重新定位、双层 Dev 拆分）。
 - [`CHANGELOG.md`](CHANGELOG.md) — 完整版本历史。
 
 ## 状态
 
-**v0.22.1。** 十个可启动智能体——五个对内（**PM / QA / Dev / Sweep / Reflect**）、三个对外（**Ops / Architect / Communication**），以及可选启用的双层 **senior-dev / junior-dev** Dev 分层——再加上 `init` 接入命令。协调可按后端插拔：**Linear**（默认）、一个**本地文件看板**，或**本地 hub**（`node:sqlite` 记录系统，具备每智能体独立身份 + 本地 web UI + 带版本的文档 + 单向 Linear 镜像 + CLI 可移植性）。近期：**双层 Dev**（senior 设计 / junior 实现，可选启用，向后兼容）；**独立 npm 打包**（`npm i -g @dyzsasd/dev-loop`），已内置 scheduler 运行所需的 agent skills，并配有经 Codex 认证的多 CLI 路径；以及**循环成本治理**（失控/无进展的熔断器、一个验收率指标）。已端到端验证，并在长时间的实时运行中经受实战检验；自治（推送/部署）按项目选择性启用，且以构建通过为门禁。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+**v0.23.1。** 十个可启动智能体——五个对内（**PM / QA / Dev / Sweep / Reflect**）、三个对外（**Ops / Architect / Communication**），以及可选启用的双层 **senior-dev / junior-dev** Dev 分层——再加上 `init` 接入命令。协调可按后端插拔：**Linear**（默认）、一个**本地文件看板**，或**本地 hub**（`node:sqlite` 记录系统，具备每智能体独立身份 + 本地 web UI + 带版本的文档 + 单向 Linear 镜像 + CLI 可移植性）。近期：`dev-loop run` 可以为 Claude/Codex 自行注入 MCP 配置；Claude 的 npm-source plugin 安装会从 npm 包根目录加载完整 payload；发布流程改为 CI 创建 `v<version>` tag 并发布 npm。已端到端验证，并在长时间的实时运行中经受实战检验；自治（推送/部署）按项目选择性启用，且以构建通过为门禁。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。

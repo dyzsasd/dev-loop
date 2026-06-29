@@ -1,0 +1,112 @@
+name: Release npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the leading v"
+        required: true
+        type: string
+      npm_tag:
+        description: "npm dist-tag"
+        required: true
+        default: latest
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-npm
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag and publish
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_NAME: "@dyzsasd/dev-loop"
+      VERSION: ${{ inputs.version }}
+      NPM_TAG: ${{ inputs.npm_tag }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Validate release target
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_REF_TYPE}" != "branch" ]; then
+            echo "Run this workflow from a branch, not ${GITHUB_REF_TYPE}."
+            exit 1
+          fi
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must be bare semver, for example 0.23.1. Got: $VERSION"
+            exit 1
+          fi
+
+          git fetch --tags origin
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "Tag v$VERSION already exists."
+            exit 1
+          fi
+
+          if npm view "$PACKAGE_NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$PACKAGE_NAME@$VERSION is already published."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        working-directory: hub
+        run: npm ci
+
+      - name: Stamp version files
+        working-directory: hub
+        run: |
+          node src/release-version.ts "$VERSION"
+          npm install --package-lock-only --ignore-scripts
+
+      - name: Test package
+        working-directory: hub
+        run: npm test
+
+      - name: Commit and tag release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json hub/package.json hub/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Version files already match $VERSION; no release commit needed."
+          else
+            git commit -m "chore(release): v$VERSION"
+          fi
+
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+
+      - name: Publish to npm
+        working-directory: hub
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag "$NPM_TAG" --provenance
+
+      - name: Push release commit and tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "v$VERSION"
