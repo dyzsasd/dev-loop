@@ -32,6 +32,7 @@ dev-loop shim                        the thin stdio MCP shim → the loopback da
 dev-loop daemon up|down|status       per-project daemon lifecycle — idempotent, auto web UI
 dev-loop init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project
 dev-loop run --cli claude|codex [--project <key>] [--agents core,outward] [--max-fires N]   schedule agents (self-injects the hub MCP; no plugin)
+dev-loop init-config                 write a starter projects.json from the bundled template
 dev-loop install-claude-plugin     register a local npm-source marketplace so /plugin install loads it
 dev-loop mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers)
 dev-loop seed <key> <name> [PREFIX]  seed a project + actors + labels

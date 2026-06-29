@@ -155,21 +155,37 @@ Un démon localhost persistant sert un tableau en lecture seule, le détail des 
 ## Démarrage rapide
 
 ```bash
-# 1. Installez le runtime CLI/hub utilisé par MCP, Codex/opencode et le scheduler.
+# Installez le runtime CLI/hub. Cela suffit pour le chemin scheduler.
 npm i -g @dyzsasd/dev-loop
+```
 
-# 2. Si vous voulez les slash commands Claude, installez le payload plugin.
-dev-loop install-claude-plugin
+Choisissez ensuite le chemin d'onboarding adapté à votre usage.
 
-# 3. Branchez un produit. Cette étape requiert l'opérateur et reste idempotente.
-/dev-loop:init
+**Chemin A — sans plugin Claude, avec `dev-loop run` :**
 
-# 4. Commencez par une passe dry-run avec la commande de boucle de dev-loop.
+```bash
+# Créez et renseignez la config par projet.
+dev-loop init-config
+$EDITOR ~/.claude/plugins/data/dev-loop/projects.json
+
+# Lancez une passe dry-run depuis le repo produit configuré.
 cd /path/to/product-repo
 dev-loop run --cli codex --agents core --once --dry-run
 
-# 5. Passez à mode:"live" et laissez dev-loop gérer la cadence.
+# Passez ensuite à mode:"live" dans projects.json et laissez la boucle tourner.
 dev-loop run --cli codex --agents core,communication
+```
+
+**Chemin B — onboarding par slash command Claude :**
+
+```bash
+dev-loop install-claude-plugin
+# Dans Claude Code, exécutez les deux commandes /plugin imprimées par l'installeur, puis :
+/dev-loop:init
+
+# Une fois projects.json écrit par init, la boucle quotidienne reste dev-loop run.
+cd /path/to/product-repo
+dev-loop run --cli codex --agents core --once --dry-run
 ```
 
 ## Prérequis
@@ -255,7 +271,18 @@ Référence complète : [`references/config-schema.md`](references/config-schema
 
 ## Configurer un projet
 
-**Lancez `/dev-loop:init` une fois** (ci-dessus) — il échafaude tout et affiche une checklist de mise en route avant votre passage en live. Il ne crée que ce qui manque et n'écrase rien. Par sécurité, les agents de la boucle réappliquent aussi les vérifications de labels/projet lors de la première exécution `live`.
+Deux chemins sont pris en charge :
+
+- **Avec le plugin Claude :** lancez `/dev-loop:init` une fois. Il échafaude tout et affiche une
+  checklist de mise en route avant le passage en live ; il ne crée que ce qui manque et n'écrase rien.
+- **Sans plugin :** créez `~/.claude/plugins/data/dev-loop/projects.json` depuis le modèle embarqué
+  avec `dev-loop init-config`, puis renseignez la clé projet, `repoPath` ou `repos[]`,
+  `strategyDoc`, `testEnv`, le backend, et gardez `mode:"dry-run"`. Pour un backend `service`, lancez
+  `dev-loop init-service <key> "<name>" <PREFIX> --dry-run` pour prévisualiser le bootstrap du hub,
+  puis sans `--dry-run` lorsque la config est correcte.
+
+Par sécurité, les agents de la boucle réappliquent aussi les vérifications de labels/projet lors de
+la première exécution `live`.
 
 ## Lancer la boucle
 

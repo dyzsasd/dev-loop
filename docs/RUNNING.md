@@ -1,12 +1,17 @@
 # Running dev-loop
 
 How to onboard a project, launch the agents, pick a model per agent, and resume. The npm package is
-the normal install path for the service backend, MCP configs, daemon, doctor, scheduler, and Claude
-slash command payload:
+the normal install path for the service backend, MCP configs, daemon, doctor, and scheduler:
 
 ```bash
 npm i -g @dyzsasd/dev-loop
-dev-loop install-claude-plugin   # only needed for /dev-loop:* slash commands in Claude Code
+```
+
+Install the Claude plugin only if you want `/dev-loop:*` slash commands or Agent View onboarding:
+
+```bash
+dev-loop install-claude-plugin
+# Then run the printed /plugin marketplace add + /plugin install commands inside Claude Code.
 ```
 
 The remaining [Requirements](../README.md#requirements) still apply (Claude Code when using slash
@@ -16,7 +21,36 @@ commands, Linear MCP for the `linear` backend, `gh`, a repo, and a Linear team/p
 
 ## 1. Onboard a project (new project)
 
-Run the setup command **once** — it is idempotent and operator-present:
+There are two onboarding paths. The scheduler path does **not** require the Claude plugin; the
+slash-command path does.
+
+### A. Scheduler/no-plugin onboarding
+
+Create the project config yourself, then validate it with a dry run:
+
+```bash
+dev-loop init-config
+$EDITOR ~/.claude/plugins/data/dev-loop/projects.json
+
+cd /path/to/product-repo
+dev-loop run --cli codex --agents core --once --dry-run
+```
+
+At minimum, fill in the project key, `repoPath` or `repos[]`, `strategyDoc`, `testEnv`, backend, and
+keep `mode:"dry-run"` until the dry run is boring. For a `service` backend, you can preview and then
+perform the hub bootstrap once the project entry exists:
+
+```bash
+dev-loop init-service <key> "<name>" <PREFIX> --dry-run
+dev-loop init-service <key> "<name>" <PREFIX>
+```
+
+After the dry run is clean, set `"mode": "live"` in `projects.json` and launch the loop.
+
+### B. Claude plugin onboarding
+
+If you installed the Claude plugin and ran `/plugin install dev-loop@dev-loop-npm`, run the setup
+command **once** — it is idempotent and operator-present:
 
 ```
 /dev-loop:init
@@ -108,9 +142,9 @@ cd /work/products/beta  && dev-loop run --cli codex  --agents core,communication
 
 For a multi-repo product, configure `repos[]` instead of a single `repoPath`; any path inside one
 of those repos resolves to that product. The scheduler uses `repoPath`, then the `repos[]` entry with
-`role:"primary"`, then `role:"docs"`, as the subprocess cwd. `/dev-loop:init` writes the initial
-project config during onboarding; after that, adding another repo or another project is just editing
-`projects.json` (or re-running init for that project).
+`role:"primary"`, then `role:"docs"`, as the subprocess cwd. The initial config can come from manual
+`projects.json` editing or from `/dev-loop:init`; after that, adding another repo or another project
+is just editing `projects.json` (or re-running init for that project if you use the plugin path).
 
 Useful options:
 - `--once` runs each selected agent once and exits.

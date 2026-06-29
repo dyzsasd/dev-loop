@@ -234,21 +234,37 @@ work at a higher rate.
 ## Quick start
 
 ```bash
-# 1. Install the runtime CLI/hub used by MCP, Codex/opencode, and the scheduler.
+# Install the runtime CLI/hub. This is enough for the scheduler path.
 npm i -g @dyzsasd/dev-loop
+```
 
-# 2. If you want Claude slash commands, install the plugin payload.
-dev-loop install-claude-plugin
+Then pick the onboarding path that matches how you want to operate.
 
-# 3. Onboard a product. This is operator-present and idempotent.
-/dev-loop:init
+**Path A — no Claude plugin, run with `dev-loop run`:**
 
-# 4. Dry-run first with dev-loop's own loop command.
+```bash
+# Create the per-project config yourself.
+dev-loop init-config
+$EDITOR ~/.claude/plugins/data/dev-loop/projects.json
+
+# Dry-run once from inside the configured product repo.
 cd /path/to/product-repo
 dev-loop run --cli codex --agents core --once --dry-run
 
-# 5. Switch to mode:"live" and let dev-loop own the cadence.
+# Switch mode:"live" in projects.json, then leave the loop running.
 dev-loop run --cli codex --agents core,communication
+```
+
+**Path B — Claude slash-command onboarding:**
+
+```bash
+dev-loop install-claude-plugin
+# In Claude Code, run the two /plugin commands printed by the installer, then:
+/dev-loop:init
+
+# After init writes projects.json, the normal loop is still dev-loop run.
+cd /path/to/product-repo
+dev-loop run --cli codex --agents core --once --dry-run
 ```
 
 ## Requirements
@@ -335,9 +351,17 @@ Full reference: [`references/config-schema.md`](references/config-schema.md).
 
 ## Set up a project
 
-**Run `/dev-loop:init` once** (above) — it scaffolds everything and prints a readiness
-checklist before you go live. It creates only what's missing and overwrites nothing. As a
-backstop, the loop agents also re-apply the label/project checks on the first `live` run.
+There are two supported setup paths:
+
+- **With the Claude plugin:** run `/dev-loop:init` once. It scaffolds everything and prints a
+  readiness checklist before you go live. It creates only what's missing and overwrites nothing.
+- **Without the plugin:** create `~/.claude/plugins/data/dev-loop/projects.json` from
+  the bundled template with `dev-loop init-config`, then fill in the project key, `repoPath` or
+  `repos[]`, `strategyDoc`, `testEnv`, backend, and `mode:"dry-run"`. For a `service` backend, run
+  `dev-loop init-service <key> "<name>" <PREFIX> --dry-run` to preview hub bootstrap, then without
+  `--dry-run` when the config is correct.
+
+As a backstop, the loop agents also re-apply the label/project checks on the first `live` run.
 
 ## Run the loop
 
