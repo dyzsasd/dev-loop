@@ -25,6 +25,9 @@ experience** — a real failure observed while the agents ran, then hardened int
 - The npm build ships the Claude plugin manifest, hooks, skills, references, and config templates so
   the scheduler runs from the published package; docs now present the two run modes (plugin / `dev-loop
   run`) and the three-layer architecture (interface · hub · agents).
+- Clarified onboarding docs: `/dev-loop:init` belongs to the Claude plugin path, while the no-plugin
+  scheduler path starts from `dev-loop init-config` plus a `dev-loop run --once --dry-run`
+  validation.
 
 ## 0.22.1 — Communication agent + Codex-startable scheduler
 Adds `communication-agent`, an outward PR/media role that drafts one public-facing product

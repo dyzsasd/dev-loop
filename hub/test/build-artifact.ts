@@ -60,6 +60,10 @@ try {
   const instRun = run(process.execPath, [instCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
   ok(instRun.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config -p '?<prompt:\d+ chars>'?/.test(instRun.out),
     "installed cli.js run → finds bundled skills + injects the hub without --root");
+  const cfgOut = join(tmp, "projects.json");
+  const instConfig = run(process.execPath, [instCli, "init-config", "--dest", cfgOut]);
+  ok(instConfig.code === 0 && existsSync(cfgOut) && /"projects"/.test(readFileSync(cfgOut, "utf8")),
+    "installed cli.js init-config → writes projects.json from bundled config without a source checkout");
   const mktDir = join(tmp, "claude-marketplace");
   const instClaudePlugin = run(process.execPath, [instCli, "install-claude-plugin", "--dest", mktDir]);
   const mktFile = join(mktDir, ".claude-plugin", "marketplace.json");
