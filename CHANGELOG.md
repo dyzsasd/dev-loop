@@ -3,6 +3,16 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 0.23.2 — npm-installed service backend hardening
+- Fixed packaged daemon startup: `dev-loop daemon up` now spawns `daemon.js` from npm builds instead
+  of the source-only `daemon.ts`, so Node no longer tries to type-strip TypeScript under `node_modules`.
+- Reworked the Claude SessionStart hook to call the packaged hook helper under `dist/`, and added
+  compatible-Node discovery (`DEVLOOP_NODE`, current process, `node24`/`node23`, common Homebrew paths)
+  so a PATH-shadowed Node 20 does not silently break the service daemon.
+- Updated `dev-loop run` MCP injection to use the discovered compatible Node path instead of hardcoding
+  `node`, and updated init/RUNNING/DAEMON docs to use the npm package layout (`dev-loop init-service`,
+  `dev-loop daemon up`) rather than source checkout paths.
+
 ## 0.23.1 — npm plugin root payload + CI release
 - Fixed npm-source Claude plugin packaging: the npm tarball now includes `.claude-plugin/`,
   `skills/`, `references/`, `hooks/`, and `config/` at package root, because Claude Code's npm

@@ -300,25 +300,27 @@ agent that did it, not the single shared Linear user.
 
 **One-time setup:**
 1. Install the runtime once: `npm i -g @dyzsasd/dev-loop` (Node ≥ 23.6 for built-in
-   `node:sqlite`; no native build).
-2. Register the hub as an MCP server. Copy [`config/mcp.example.json`](../config/mcp.example.json)
-   to your **product repo root** as `.mcp.json`. It uses `command:"dev-loop", args:["serve"]`.
-   Its `env` block expands `${DEVLOOP_ACTOR}` etc. from each pane's launching shell at parse time,
-   so one registered server attributes each pane to the right agent. (Approve the server once on
-   first use; no Claude restart needed.) Plugin developers can still point a source checkout at
-   `node <dev-loop>/hub/src/server.ts`.
-3. Set `backend:"service"` in `projects.json`; keep `strategyDoc` a **repo file**.
-4. **Create the project in the hub once** (the hub refuses to auto-create a board from a typo'd
-   `DEVLOOP_PROJECT`, and each project needs a **unique ticket prefix** since ticket ids are a
-   global key):
+   `node:sqlite`; no native build). If your default `node` is older but a newer one exists, set
+   `DEVLOOP_NODE=/absolute/path/to/node`; the packaged CLI and hook will use it.
+2. Set `backend:"service"` in `projects.json`; keep `strategyDoc` a **repo file**.
+3. Let the packaged CLI wire the service runtime:
+   ```bash
+   dev-loop init-service <project-key> "<Project Name>" <UNIQUE-PREFIX> --dry-run
+   dev-loop init-service <project-key> "<Project Name>" <UNIQUE-PREFIX>
+   ```
+   This seeds the project, merges `dev-loop-hub` into the product repo `.mcp.json`, runs `doctor`,
+   starts the daemon once, checks `/api/health`, and verifies the SessionStart hook.
+
+Manual fallback: **create the project in the hub once** (the hub refuses to auto-create a board from
+a typo'd `DEVLOOP_PROJECT`, and each project needs a **unique ticket prefix** since ticket ids are a
+global key):
    ```bash
    dev-loop seed <project-key> "<Project Name>" <UNIQUE-PREFIX>
    # e.g.  dev-loop seed monpick "MonPick" MP
    ```
-   (Or set `DEVLOOP_CREATE_PROJECT=1` on the first launch.) Then health-check it:
-   `DEVLOOP_HUB_DB=~/.dev-loop/hub.db dev-loop doctor` → `DOCTOR_OK`. Keep
-   `hub.db` **outside** any product repo (the template defaults to `~/.dev-loop/hub.db`); if it
-   must live in a repo, gitignore `hub.db*` (doctor will tell you if it's exposed).
+Then health-check it: `DEVLOOP_HUB_DB=~/.dev-loop/hub.db dev-loop doctor` → `DOCTOR_OK`. Keep
+`hub.db` **outside** any product repo (the template defaults to `~/.dev-loop/hub.db`); if it
+must live in a repo, gitignore `hub.db*` (doctor will tell you if it's exposed).
 
 **Launch — set the identity per pane.** Each pane exports its agent + project before the
 `/loop` (the hub reads them); the `.mcp.json` `${…}` expansion carries them into the hub

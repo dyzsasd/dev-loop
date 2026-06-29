@@ -196,7 +196,8 @@ dev-loop run --cli codex --agents core --once --dry-run
 - 已认证的 **`gh` CLI**——Dev 用它做 git/部署。
 - 产品的一个 **git 仓库**，以及（对 Linear 而言）一个可供循环管辖的**团队 + 项目**。
 - 各角色所需：`repoPath`（Dev）、`strategyDoc`（PM）、`testEnv`（QA）。
-- hub 后端需要：**Node ≥ 23.6**（内置 `node:sqlite`，零原生依赖）。
+- hub 后端需要：**Node ≥ 23.6**（内置 `node:sqlite`，零原生依赖）。如果默认 `node` 太旧，
+  设置 `DEVLOOP_NODE=/absolute/path/to/node`；npm 包内的 CLI 和 hook 会使用它。
 
 ## 安装
 
@@ -388,4 +389,4 @@ Claude Agent View 仍然可用，但它是 Claude 原生的可选界面：安装
 
 ## 状态
 
-**v0.23.1。** 十个可启动智能体——五个对内（**PM / QA / Dev / Sweep / Reflect**）、三个对外（**Ops / Architect / Communication**），以及可选启用的双层 **senior-dev / junior-dev** Dev 分层——再加上 `init` 接入命令。协调可按后端插拔：**Linear**（默认）、一个**本地文件看板**，或**本地 hub**（`node:sqlite` 记录系统，具备每智能体独立身份 + 本地 web UI + 带版本的文档 + 单向 Linear 镜像 + CLI 可移植性）。近期：`dev-loop run` 可以为 Claude/Codex 自行注入 MCP 配置；Claude 的 npm-source plugin 安装会从 npm 包根目录加载完整 payload；发布流程改为 CI 创建 `v<version>` tag 并发布 npm。已端到端验证，并在长时间的实时运行中经受实战检验；自治（推送/部署）按项目选择性启用，且以构建通过为门禁。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+**v0.23.2。** 十个可启动智能体——五个对内（**PM / QA / Dev / Sweep / Reflect**）、三个对外（**Ops / Architect / Communication**），以及可选启用的双层 **senior-dev / junior-dev** Dev 分层——再加上 `init` 接入命令。协调可按后端插拔：**Linear**（默认）、一个**本地文件看板**，或**本地 hub**（`node:sqlite` 记录系统，具备每智能体独立身份 + 本地 web UI + 带版本的文档 + 单向 Linear 镜像 + CLI 可移植性）。近期：npm 安装路径下的 service backend 更稳了，包括 daemon 启动、SessionStart hook 和 Node runtime 自动发现；Claude 的 npm-source plugin 安装会从 npm 包根目录加载完整 payload；发布流程改为 CI 创建 `v<version>` tag 并发布 npm。已端到端验证，并在长时间的实时运行中经受实战检验；自治（推送/部署）按项目选择性启用，且以构建通过为门禁。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。

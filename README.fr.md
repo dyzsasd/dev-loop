@@ -196,7 +196,9 @@ dev-loop run --cli codex --agents core --once --dry-run
 - La **CLI `gh`** authentifiée — Dev l'utilise pour git/déploiement.
 - Un **repo git** pour le produit et (pour Linear) une **équipe + un projet** que la boucle peut administrer.
 - Par rôle : `repoPath` (Dev), `strategyDoc` (PM), `testEnv` (QA).
-- Pour le backend hub : **Node ≥ 23.6** (`node:sqlite` intégré, zéro dépendance native).
+- Pour le backend hub : **Node ≥ 23.6** (`node:sqlite` intégré, zéro dépendance native). Si le
+  `node` par défaut est trop ancien, définissez `DEVLOOP_NODE=/absolute/path/to/node` ; la CLI et
+  le hook empaquetés l'utiliseront.
 
 ## Installation
 
@@ -395,4 +397,4 @@ synchronise la version partagée, lance la suite de tests du hub, publie `hub/` 
 
 ## Statut
 
-**v0.23.1.** Dix agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et trois externes (**Ops / Architect / Communication**), avec un **senior-dev / junior-dev** à deux niveaux optionnel — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : `dev-loop run` injecte lui-même la config MCP pour Claude/Codex ; les installations npm-source du plugin Claude chargent désormais le payload complet depuis la racine du paquet npm ; et la release CI crée le tag `v<version>` puis publie sur npm. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).
+**v0.23.2.** Dix agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et trois externes (**Ops / Architect / Communication**), avec un **senior-dev / junior-dev** à deux niveaux optionnel — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : le backend `service` installé depuis npm est durci pour le démarrage du daemon, les hooks SessionStart et la découverte du runtime Node ; les installations npm-source du plugin Claude chargent désormais le payload complet depuis la racine du paquet npm ; et la release CI crée le tag `v<version>` puis publie sur npm. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hub/src/server.ts\" daemon up >/dev/null 2>&1 || true",
+            "command": "if [ -f \"${CLAUDE_PLUGIN_ROOT}/dist/hook-session-start.js\" ]; then node \"${CLAUDE_PLUGIN_ROOT}/dist/hook-session-start.js\"; else node \"${CLAUDE_PLUGIN_ROOT}/hub/src/hook-session-start.ts\"; fi >/dev/null 2>&1 || true",
             "timeout": 15
           }
         ]

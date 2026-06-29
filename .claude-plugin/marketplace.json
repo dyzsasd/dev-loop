@@ -6,7 +6,7 @@
     {
       "name": "dev-loop",
       "source": "./",
-      "version": "0.23.1",
+      "version": "0.23.2",
       "description": "Runs a software-development loop coordinated through ticket state. Supports Linear, a local file board, or a node:sqlite service hub with per-agent identity, localhost UI, Lark/Slack channel, one-way Linear mirror, Codex/opencode portability, and a scheduler that calls Claude/Codex CLI without using /loop. Includes Communication for daily public product article drafts."
     }
   ]

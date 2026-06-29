@@ -46,9 +46,10 @@ Install the runtime once, then pick the file for your CLI:
 npm i -g @dyzsasd/dev-loop
 ```
 
-The templates register `dev-loop serve` as a stdio MCP server. A source checkout can still point at
-`node <dev-loop>/hub/src/server.ts`, but that is now the developer fallback rather than the normal
-install path.
+The templates register `dev-loop serve` as a stdio MCP server. If PATH's `node` is too old for the
+hub, set `DEVLOOP_NODE=/absolute/path/to/node`; the packaged CLI will re-exec through it. A source
+checkout can still point at `node <dev-loop>/hub/src/server.ts`, but that is now the developer
+fallback rather than the normal install path.
 
 - **Claude Code** — [`config/mcp.example.json`](../config/mcp.example.json) → `.mcp.json` (the
   `${DEVLOOP_ACTOR:-…}` values are expanded per pane from the launching shell — this is the proven path).

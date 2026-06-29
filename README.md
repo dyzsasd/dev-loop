@@ -276,7 +276,9 @@ dev-loop run --cli codex --agents core --once --dry-run
 - **`gh` CLI** authenticated — Dev uses it for git/deploy.
 - A **git repo** for the product, and (for Linear) a **team + project** the loop may own.
 - Per role: `repoPath` (Dev), `strategyDoc` (PM), `testEnv` (QA).
-- For the hub backend: **Node ≥ 23.6** (built-in `node:sqlite`, zero native deps).
+- For the hub backend: **Node ≥ 23.6** (built-in `node:sqlite`, zero native deps). If your
+  default `node` is older, set `DEVLOOP_NODE=/absolute/path/to/node`; the packaged CLI and hook
+  will use it.
 
 ## Install
 
@@ -494,13 +496,13 @@ pushes `v<version>`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Status
 
-**v0.23.1.** Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
+**v0.23.2.** Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
 three outward (**Ops / Architect / Communication**), and an opt-in two-tier
 **senior-dev / junior-dev** Dev split — plus the `init` onboarding command.
 Coordination is backend-pluggable: **Linear** (default), a **local file board**, or the
 **local hub** (`node:sqlite` SoR with per-agent identity + a localhost web UI + versioned
-docs + a one-way Linear mirror + CLI-portability). Recent: turnkey `dev-loop run` scheduling for
-Claude/Codex with self-injected MCP config; npm-source Claude plugin installs from the published
-package root; and CI releases that create `v<version>` tags and publish to npm. Validated end-to-end and battle-tested across long live runs;
+docs + a one-way Linear mirror + CLI-portability). Recent: npm-installed service backend hardening
+for daemon startup, SessionStart hooks, and Node runtime discovery; npm-source Claude plugin installs
+from the published package root; and CI releases that create `v<version>` tags and publish to npm. Validated end-to-end and battle-tested across long live runs;
 autonomy (push/deploy) is opt-in per project and gated on a green build. Full history in
 [`CHANGELOG.md`](CHANGELOG.md).

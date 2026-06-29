@@ -9,7 +9,7 @@
 // suite (a) builds dist/, (b) smoke-runs the compiled bins, and (c) exercises those two entry points from a dist/
 // COPY in an installed-like layout (no repo config/ sibling — the exact `npm i -g dev-loop` shape).
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -38,9 +38,10 @@ try {
   // ── AC1: the publish/prepack build succeeds and emits BOTH compiled bin entry points ──
   const build = run("npm", ["run", "build"]);
   ok(build.code === 0, "npm run build → exit 0 (the publish/prepack build compiles dist/)");
-  const distDir = join(hubRoot, "dist"), distCli = join(distDir, "cli.js"), distServer = join(distDir, "server.js"), distRunner = join(distDir, "run-agents.js");
+  const distDir = join(hubRoot, "dist"), distCli = join(distDir, "cli.js"), distServer = join(distDir, "server.js"), distRunner = join(distDir, "run-agents.js"), distHook = join(distDir, "hook-session-start.js");
   ok(existsSync(distCli) && existsSync(distServer), "dist/cli.js + dist/server.js emitted (the package's two bins)");
   ok(existsSync(distRunner), "dist/run-agents.js emitted (the built-in scheduler entry)");
+  ok(existsSync(distHook), "dist/hook-session-start.js emitted (SessionStart hook can run from the npm package)");
   ok(existsSync(join(distDir, "plugin", "skills", "communication-agent", "SKILL.md")) && existsSync(join(distDir, "plugin", "references", "conventions.md")),
     "dist/plugin includes skills + references for npm-installed scheduler runs");
   ok(existsSync(join(distDir, "plugin", ".claude-plugin", "plugin.json")) && existsSync(join(distDir, "plugin", "hooks", "hooks.json")),
@@ -53,8 +54,12 @@ try {
     && packedFiles.has(".claude-plugin/plugin.json")
     && packedFiles.has("skills/init/SKILL.md")
     && packedFiles.has("hooks/hooks.json")
+    && packedFiles.has("dist/hook-session-start.js")
     && packedFiles.has("dist/plugin/.claude-plugin/plugin.json"),
     "npm pack includes root-level Claude plugin payload plus dist/plugin scheduler payload");
+  const hookJson = readFileSync(join(repoRoot, "hooks", "hooks.json"), "utf8");
+  ok(/dist\/hook-session-start\.js/.test(hookJson) && !/hub\/src\/server\.ts/.test(hookJson),
+    "SessionStart hook targets the packaged hook helper, not hub/src/server.ts");
 
   // ── AC2/AC3: the compiled bins LOAD + RUN — proves the rewritten sibling .ts→.js imports resolve in the JS
   //    output, and the suite goes RED if the build breaks or a bin can't load. ──
@@ -68,12 +73,14 @@ try {
   const runner = run(process.execPath, [distCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--root", repoRoot, "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
   ok(runner.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config -p '?<prompt:\d+ chars>'?/.test(runner.out), "compiled cli.js run → dry-run renders a scheduled claude fire (inline --mcp-config hub)");
 
-  // ── installed-like layout: a COPY of dist/ OUTSIDE the repo, with NO config/ sibling (the package ships only
-  //    `files:["dist/","README.md"]`). This is the exact `npm i -g dev-loop` shape; the two ENOENT-on-install bugs
-  //    ONLY reproduce here (in-repo, `../../config` still resolves to the repo's real config/). ──
+  // ── installed-like layout: a COPY of dist/ OUTSIDE the repo, with NO config/ sibling. The package root
+  //    does have node_modules after npm install, so symlink the repo's installed deps while keeping config/
+  //    absent — the ENOENT-on-install bugs ONLY reproduce there (in-repo, ../../config still resolves). ──
   const inst = join(tmp, "pkg"); // inst/dist/cli.js → here=inst/dist, hubDir=inst (no config/ sibling)
   cpSync(distDir, join(inst, "dist"), { recursive: true });
+  symlinkSync(join(hubRoot, "node_modules"), join(inst, "node_modules"), "dir");
   const instCli = join(inst, "dist", "cli.js");
+  const instHook = join(inst, "dist", "hook-session-start.js");
   const instRun = run(process.execPath, [instCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
   ok(instRun.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config -p '?<prompt:\d+ chars>'?/.test(instRun.out),
     "installed cli.js run → finds bundled skills + injects the hub without --root");
@@ -107,6 +114,28 @@ try {
   ok(dryInit.code === 0, "installed init-service --dry-run → exit 0 (no daemon spun; hermetic temp config)");
   ok(/\bserver\.js\b/.test(dryInit.out) && !/\bserver\.ts\b/.test(dryInit.out),
      "init-service from the compiled build resolves server.js, never server.ts (the DOA-on-install regression guard)");
+
+  // ── installed daemon lifecycle: daemon up must spawn daemon.JS, never daemon.TS. Then the packaged
+  //    SessionStart helper must also start it, while being safe to invoke through bare `node`.
+  const daemonEnv = { DEVLOOP_HUB_DB: db, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECT: "demo", DEVLOOP_ACTOR: "operator" };
+  const healthOk = (url: string): boolean => {
+    const h = spawnSync(process.execPath, ["-e", `(async()=>{const r=await fetch(${JSON.stringify(`${url}/api/health`)}); const j=await r.json(); process.exit(j.ok===true&&j.project==="demo"?0:1);})().catch(()=>process.exit(1));`], { encoding: "utf8" });
+    return h.status === 0;
+  };
+  const runInfo = (): { url?: string } | null => {
+    try { return JSON.parse(readFileSync(join(tmp, "daemon-demo.json"), "utf8")) as { url?: string }; } catch { return null; }
+  };
+  const daemonUp = run(process.execPath, [instCli, "daemon", "up"], daemonEnv);
+  const info = runInfo();
+  ok(daemonUp.code === 0 && !!info?.url && healthOk(info.url), "installed cli.js daemon up → starts daemon.js and serves /api/health");
+  const daemonDown = run(process.execPath, [instCli, "daemon", "down"], daemonEnv);
+  ok(daemonDown.code === 0, "installed cli.js daemon down → stops the daemon");
+
+  const hookUp = run(process.execPath, [instHook], daemonEnv);
+  const hookInfo = runInfo();
+  ok(hookUp.code === 0 && !!hookInfo?.url && healthOk(hookInfo.url), "installed hook-session-start.js → starts the service daemon");
+  const hookDown = run(process.execPath, [instCli, "daemon", "down"], daemonEnv);
+  ok(hookDown.code === 0, "installed daemon down after hook start → stops the daemon");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
+import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 
 const VALID_AGENTS = [
   "pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect",
@@ -258,23 +259,27 @@ function shellQuote(s: string): string {
 // resolved hub db, with the per-fire actor/project. claude takes it as inline --mcp-config JSON;
 // codex takes the same shape as `-c` overrides (which define the server, not just patch env).
 const serverEntry = join(here, `server${EXT}`);
+const hubNode = findCompatibleNode();
+if (!hubNode) die(`dev-loop-hub MCP needs Node >= ${MIN_NODE_VERSION} for node:sqlite. Set DEVLOOP_NODE=/absolute/path/to/node.`);
+const tomlString = (s: string): string => JSON.stringify(s);
+const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
 
 function commandFor(opts: Options, agent: Agent, project: string, prompt: string): { command: string; args: string[] } {
   if (opts.cli === "claude") {
     // explicit --mcp-config file wins; otherwise inject the hub inline so a fresh project needs no .mcp.json.
     const mcpArg = opts.mcpConfig ?? JSON.stringify({
-      mcpServers: { "dev-loop-hub": { command: "node", args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb } } },
+      mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb } } },
     });
     return { command: opts.claudeBin, args: ["--mcp-config", mcpArg, "--strict-mcp-config", ...opts.extraArgs, "-p", prompt] };
   }
   const args = [
     "exec",
     ...opts.extraArgs,
-    "-c", `mcp_servers.dev-loop-hub.command="node"`,
-    "-c", `mcp_servers.dev-loop-hub.args=["${serverEntry}"]`,
-    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR="${agent}"`,
-    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT="${project}"`,
-    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_HUB_DB="${opts.hubDb}"`,
+    "-c", `mcp_servers.dev-loop-hub.command=${tomlString(hubNode)}`,
+    "-c", `mcp_servers.dev-loop-hub.args=${tomlStringArray([serverEntry])}`,
+    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR=${tomlString(agent)}`,
+    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT=${tomlString(project)}`,
+    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_HUB_DB=${tomlString(opts.hubDb)}`,
   ];
   if (!opts.codexSafe) args.push("--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check");
   args.push(prompt);

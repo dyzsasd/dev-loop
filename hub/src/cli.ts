@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
+import { findCompatibleNode, MIN_NODE_VERSION, nodeVersionOk } from "./node-runtime.ts";
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (published)
 // Resolve siblings by THIS file's own extension: `.ts` when run from source (zero-build dev), `.js` when
@@ -19,7 +20,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 const ROUTES: Record<string, [string, ...string[]]> = {
   serve:            ["server"],                    // the stdio MCP server (the agent transport; = the dev-loop-hub bin)
   shim:             ["shim"],                      // thin stdio MCP → loopback daemon op-API (DL-55)
-  daemon:           ["server", "daemon"],          // up | down | status | ensure (DL-41)
+  daemon:           ["daemon"],                    // up | down | status | ensure (DL-41)
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
@@ -70,6 +71,18 @@ if (cmd === "version" || cmd === "--version" || cmd === "-v") { console.log(vers
 
 const route = ROUTES[cmd];
 if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); process.exit(2); }
+
+const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init-service", "identity-check", "tickets", "ticket"]);
+if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {
+  const compatible = findCompatibleNode();
+  if (compatible && compatible !== process.execPath) {
+    const r = spawnSync(compatible, [fileURLToPath(import.meta.url), cmd, ...rest], { stdio: "inherit", env: { ...process.env, DEVLOOP_NODE: compatible } });
+    process.exit(r.status ?? 1);
+  }
+  console.error(`dev-loop: '${cmd}' needs Node >= ${MIN_NODE_VERSION} for node:sqlite. Current Node is ${process.versions.node} (${process.execPath}).`);
+  console.error("Install a newer Node or set DEVLOOP_NODE=/absolute/path/to/node before running this command.");
+  process.exit(1);
+}
 
 const [entryBase, ...prefix] = route;
 const r = spawnSync(process.execPath, [join(here, entryBase + EXT), ...prefix, ...rest], { stdio: "inherit" });

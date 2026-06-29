@@ -38,7 +38,7 @@ try {
   const codex = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", ...common]);
   ok(codex.code === 0, "codex dry-run scheduler exits 0");
   ok(/codex exec/.test(codex.out), "codex dry-run uses codex exec");
-  ok(/mcp_servers\.dev-loop-hub\.command="node"/.test(codex.out), "codex dry-run DEFINES the hub server via -c (no pre-existing config.toml block needed)");
+  ok(/mcp_servers\.dev-loop-hub\.command="[^"]*node[^"]*"/.test(codex.out), "codex dry-run DEFINES the hub server via -c (no pre-existing config.toml block needed)");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_ACTOR="communication"/.test(codex.out), "codex dry-run injects per-agent actor with -c");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_PROJECT="demo"/.test(codex.out), "codex dry-run injects project with -c");
   ok(!/dangerously-bypass/.test(codex.out), "--codex-safe omits unsafe bypass flags");

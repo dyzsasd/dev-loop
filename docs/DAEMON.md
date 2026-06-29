@@ -42,9 +42,8 @@ read connection.
 ## Running it
 
 ```sh
-cd hub
-DEVLOOP_PROJECT=<project-key> DEVLOOP_HUB_DB="$HOME/.dev-loop/hub.db" npm run daemon
-# → [daemon] dev-loop-hub for '<project-key>' (actor=operator, can publish) → http://127.0.0.1:8787/  (reads read-only; /roadmap editable, localhost-only)
+DEVLOOP_PROJECT=<project-key> DEVLOOP_HUB_DB="$HOME/.dev-loop/hub.db" dev-loop daemon up
+# → [daemon] up: started '<project-key>' → http://127.0.0.1:<port>
 ```
 
 Environment (same contract as the MCP server, `docs/RUNNING.md`):
@@ -57,8 +56,8 @@ Environment (same contract as the MCP server, `docs/RUNNING.md`):
 | `DEVLOOP_ACTOR` | identity that **attributes** daemon writes and gates roadmap **publish** (only `operator` may publish; any other known actor gets drafts only). Must be a known actor or the daemon refuses to start the write surface. | `operator` |
 | `DEVLOOP_RUN_DIR` | dir for the `daemon up` runfile + log (DL-41) | the hub DB's dir (`~/.dev-loop`) |
 
-The daemon refuses to serve a project that hasn't been seeded (start the hub once, or
-`node src/seed.ts <key> "<name>" <PREFIX>`) — it never auto-creates a board.
+The daemon refuses to serve a project that hasn't been seeded (`dev-loop init-service <key> "<name>"
+<PREFIX>` or `dev-loop seed <key> "<name>" <PREFIX>`) — it never auto-creates a board.
 
 ### Managed lifecycle — `daemon up | down | status` (DL-41)
 
@@ -66,11 +65,10 @@ For a hands-off / auto-started web UI, the daemon has an **idempotent per-projec
 (additive — `npm run daemon`, the foreground boot above, is unchanged):
 
 ```sh
-cd hub
-DEVLOOP_PROJECT=<project-key> node src/daemon.ts up      # or: node src/server.ts daemon up  (`ensure` is an alias for `up`)
+DEVLOOP_PROJECT=<project-key> dev-loop daemon up         # `ensure` is an alias for `up`
 # → [daemon] up: started '<project-key>' → http://127.0.0.1:<port>  (pid …)
-node src/daemon.ts status                                # → RUNNING → <url> (pid …)  | stopped
-node src/daemon.ts down                                  # → stops this project's daemon, clears the runfile
+dev-loop daemon status                                   # → RUNNING → <url> (pid …)  | stopped
+dev-loop daemon down                                     # → stops this project's daemon, clears the runfile
 ```
 
 - **Project resolution.** `DEVLOOP_PROJECT` wins (trimmed; an empty/whitespace value is treated as
@@ -89,8 +87,8 @@ node src/daemon.ts down                                  # → stops this projec
   that prints the existing URL. A **stale** runfile (its pid is dead) never reads as running — `up`
   cleanly restarts, `status`/`down` report stopped.
 - **Detached + localhost-only.** `up` spawns the daemon **detached** so it survives the launching
-  shell, bound to **127.0.0.1 only** (§16). Both `node src/daemon.ts up` and the bin form
-  `dev-loop-hub daemon up` (via `src/server.ts`) drive the same lifecycle.
+  shell, bound to **127.0.0.1 only** (§16). The packaged `dev-loop daemon up` command and the
+  source-checkout fallback drive the same lifecycle.
 
 ## Read endpoints
 

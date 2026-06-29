@@ -1275,8 +1275,8 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
   carrying the actor + timestamp (a strict upgrade: true per-agent attribution). No manual
   state-move comment is required — the hub logs the transition event automatically (like
   Linear's feed).
-- **Setup.** The hub is registered as an MCP server in the CLI (a `.mcp.json` naming
-  `dev-loop-hub` → `node <hub>/src/server.ts`, with `env` expanding the per-pane
+- **Setup.** The hub is registered as an MCP server in the CLI (normally a `.mcp.json` naming
+  `dev-loop-hub` → `dev-loop serve`, with `env` expanding the per-pane
   `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`); the launcher sets those per agent pane
   (see `docs/RUNNING.md`). The hub DB (`hub.db`, WAL) is machine-local runtime state, never
   committed (like the local board). `mode`/`autonomy` stay authoritative in `projects.json`

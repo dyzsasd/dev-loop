@@ -215,9 +215,12 @@ async function daemonUp(): Promise<number> {
     const port = envPort > 0 ? envPort : await lcFreePort(existing?.port || lcPortFor(key), host);
     const url = `http://${host}:${port}`;
 
-    // Spawn the daemon ENTRY POINT — the foreground boot lives in daemon.ts (this module's sibling), so
-    // resolve it relative to here (NOT import.meta.url, which is this lifecycle module and has no server).
-    const self = fileURLToPath(new URL("./daemon.ts", import.meta.url));
+    // Spawn the daemon ENTRY POINT — the foreground boot lives in daemon.ts/daemon.js (this module's
+    // sibling), so resolve it relative to here. TypeScript's import rewriter does not touch string
+    // literals inside new URL(...), so choose the extension at runtime: .ts in a source checkout, .js in
+    // the published npm package. This is the npm-installed daemon-start regression guard.
+    const ext = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts";
+    const self = fileURLToPath(new URL(`./daemon${ext}`, import.meta.url));
     mkdirSync(lcRunDir(), { recursive: true });
     const logFd = openSync(join(lcRunDir(), `daemon-${key}.log`), "a");
     const child = spawn(process.execPath, [self], {
