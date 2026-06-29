@@ -29,8 +29,10 @@ blocked protocols, safety, config) — they override this file on conflict:
 trust conversation memory for state, and on a hard failure log one line and exit
 (the next fire retries). See conventions §0.
 
-Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
-pick the project, and load `linearProject`, `linearTeam`, `repoPath`,
+Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
+`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
+as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`,
 `strategyDoc`, `build`, `git`, `deploy`, `mode`, `autonomy` (§12a), the optional `codex`
 block (§24), and — if present —
 `repos[]` (conventions §19). **If `devSplit:true` (§21a), DEFER — graceful no-op:** this
@@ -42,9 +44,7 @@ no-op and exit. **`devSplit` absent/false ⇒ operate as the single Dev (today's
 exactly as today. With multiple repos, the ticket's `repo:<name>` label names the
 target; resolve that repo's effective `build`/`defaultBranch`/`deploy`/`contributorSkill`
 (repo value else top-level, §19) and use them in Steps 0/4/5/6/6.5. If that path doesn't resolve
-(e.g. `${CLAUDE_PLUGIN_DATA}` expands to an empty or `-local` dir), fall back to
-`~/.claude/plugins/data/dev-loop/projects.json` or search
-`~/.claude/plugins/data/**/projects.json` before asking the user.
+from any configured path, ask the user before proceeding.
 (`strategyDoc` may be a repo file relative to `repoPath` **or** a Linear document —
 `{ "linearDocument": "<id|slug|url>" }` / a `linear.app/.../document/` URL. When you
 need it under `autonomy:"full"` to resolve scoping, read a Linear doc with

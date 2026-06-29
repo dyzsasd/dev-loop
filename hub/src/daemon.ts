@@ -14,12 +14,12 @@
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
-import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, logEvent } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig } from "./resolve-project.ts";
+import { hubDbPath } from "./paths.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
@@ -685,10 +685,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 // ─── CLI entry: `npm run daemon` — open db, resolve project (same guard as the MCP server), listen ──
 // Only runs when executed directly (not on import — the test imports createDaemon and starts it itself).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const DB_PATH = process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`;
-  const PROJECT_KEY = process.env.DEVLOOP_PROJECT ?? "demo";
+  const DB_PATH = hubDbPath();
+  const PROJECT_KEY = process.env.DEVLOOP_PROJECT?.trim();
   const HOST = "127.0.0.1"; // §16 localhost-only; NEVER 0.0.0.0
   const PORT = Number(process.env.DEVLOOP_DAEMON_PORT ?? 8787);
+  if (!PROJECT_KEY) {
+    console.error("[daemon] no project resolved. Set DEVLOOP_PROJECT=<key> for foreground daemon mode, or use `dev-loop daemon up` from inside a configured repo.");
+    process.exit(1);
+  }
 
   const db = openDb(DB_PATH);
   db.exec("PRAGMA query_only=ON"); // structural read-only: this connection can never write the SoR

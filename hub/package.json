@@ -1,6 +1,6 @@
 {
   "name": "@dyzsasd/dev-loop",
-  "version": "0.23.2",
+  "version": "0.23.3",
   "type": "module",
   "description": "Standalone local coordination hub for the dev-loop agents — a zero-build, zero-native-dep MCP system-of-record over node:sqlite with per-agent identity, a localhost web-UI daemon, an opt-in agent op-API + thin stdio shim, a CLI-portable transport (Claude Code / Codex / opencode), and a scheduler that shells out to Claude/Codex without relying on /loop. See https://github.com/dyzsasd/dev-loop (docs/HUB-ARCHITECTURE.md, docs/PORTABILITY.md).",
   "keywords": [
@@ -40,11 +40,13 @@
     "references/",
     "hooks/",
     "config/",
+    "postinstall.cjs",
     "README.md"
   ],
   "scripts": {
     "build": "rm -rf dist .claude-plugin skills references hooks config && tsc -p tsconfig.build.json && mkdir -p dist/plugin && cp -R ../.claude-plugin ../skills ../references ../hooks ../config dist/plugin/ && cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./",
     "prepack": "npm run build",
+    "postinstall": "node postinstall.cjs",
     "start": "DEVLOOP_CREATE_PROJECT=1 node src/server.ts",
     "daemon": "node src/daemon.ts",
     "seed": "node src/seed.ts",

@@ -4,11 +4,11 @@
 // shells out to `claude -p` or `codex exec` once per agent fire.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
+import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 
 const VALID_AGENTS = [
   "pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect",
@@ -75,8 +75,8 @@ const defaultRoot = () => {
   const candidates = [join(here, "plugin"), resolve(here, "..", "..")];
   return candidates.find(isPluginRoot) ?? resolve(here, "..", "..");
 };
-const defaultDataDir = () => process.env.CLAUDE_PLUGIN_DATA || join(homedir(), ".claude", "plugins", "data", "dev-loop");
-const defaultHubDb = () => process.env.DEVLOOP_HUB_DB || join(homedir(), ".dev-loop", "hub.db");
+const defaultDataDir = () => devloopDataDir();
+const defaultHubDb = () => hubDbPath();
 
 function usage(): void {
   console.log(`dev-loop run — schedule dev-loop agents with a headless CLI
@@ -91,15 +91,15 @@ Cadence is owned by this process, not by Claude/Codex /loop. Each fire shells ou
 
 Options:
   --cli claude|codex          CLI to invoke (default: claude)
-  --project <key>             project key; optional. Defaults to DEVLOOP_PROJECT, then cwd→repo match, then defaultProject
+  --project <key>             project key; optional. Defaults to DEVLOOP_PROJECT, then cwd→repo match; fails if unresolved
   --agents <list>             comma list of agents or groups: core, split, outward, all
   --agent <name>              add one agent; may repeat
   --dev-split                 replace dev with senior-dev + junior-dev in the selected set
   --interval <agent=dur>      override cadence, e.g. pm=2m, communication=24h; may repeat
   --once                      run each selected agent once, then exit
   --dry-run                   print resolved commands; do not launch Claude/Codex
-  --root <path>               dev-loop checkout root (default: inferred, or CLAUDE_PLUGIN_ROOT)
-  --data <path>               plugin data dir (default: CLAUDE_PLUGIN_DATA or ~/.claude/plugins/data/dev-loop)
+  --root <path>               dev-loop checkout root (default: inferred, or DEVLOOP_PLUGIN_ROOT/CLAUDE_PLUGIN_ROOT)
+  --data <path>               dev-loop data dir (default: DEVLOOP_DATA_DIR or ~/.dev-loop)
   --hub-db <path>             hub db path (default: DEVLOOP_HUB_DB or ~/.dev-loop/hub.db)
   --cwd <path>                working directory for CLI subprocesses (default: project repoPath)
   --mcp-config <path>         claude: MCP config to load + --strict-mcp-config (default: <cwd>/.mcp.json if present)
@@ -158,7 +158,7 @@ function parseArgs(argv: string[]): Options {
     once: false,
     dryRun: false,
     devSplit: false,
-    root: process.env.CLAUDE_PLUGIN_ROOT || process.env.DEVLOOP_PLUGIN_ROOT || defaultRoot(),
+    root: process.env.DEVLOOP_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT || defaultRoot(),
     dataDir: defaultDataDir(),
     hubDb: defaultHubDb(),
     claudeBin: process.env.DEVLOOP_CLAUDE_BIN || "claude",
@@ -213,17 +213,27 @@ function parseArgs(argv: string[]): Options {
 }
 
 function readProjects(dataDir: string): ProjectsConfig | null {
-  const p = process.env.DEVLOOP_PROJECTS_JSON || join(dataDir, "projects.json");
-  if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, "utf8")) as ProjectsConfig; }
-  catch (e) { die(`could not parse ${p}: ${(e as Error).message}`, 1); }
+  for (const p of projectConfigCandidates(dataDir)) {
+    if (!existsSync(p)) continue;
+    try { return JSON.parse(readFileSync(p, "utf8")) as ProjectsConfig; }
+    catch (e) { die(`could not parse ${p}: ${(e as Error).message}`, 1); }
+  }
+  return null;
+}
+
+function projectsPath(dataDir: string): string {
+  return devloopProjectsPath(dataDir);
 }
 
 function resolveProject(opts: Options, cfg: ProjectsConfig | null): string {
   const explicit = opts.project || process.env.DEVLOOP_PROJECT?.trim();
   if (explicit) return explicit;
   const fromCwd = cfg ? resolveProjectFromCwd(opts.cwd || process.cwd(), cfg) : null;
-  return fromCwd || cfg?.defaultProject || Object.keys(cfg?.projects ?? {})[0] || "demo";
+  if (fromCwd) return fromCwd;
+  const cwd = opts.cwd || process.cwd();
+  const keys = Object.keys(cfg?.projects ?? {});
+  const configured = keys.length ? keys.join(", ") : "none";
+  die(`no project resolved from cwd ${cwd}. Add this repo to ${projectsPath(opts.dataDir)} as repoPath/repos[].path, pass --project <key>, or set DEVLOOP_PROJECT. Configured projects: ${configured}.`, 2);
 }
 
 function resolveCwd(opts: Options, cfg: ProjectsConfig | null, project: string): string {
@@ -246,7 +256,10 @@ function readPrompt(opts: Options, agent: Agent): string {
   if (!existsSync(skill)) die(`skill file not found for '${agent}': ${skill}. Pass --root <dev-loop checkout>.`, 1);
   const body = stripFrontmatter(readFileSync(skill, "utf8"))
     .replaceAll("${CLAUDE_PLUGIN_ROOT}", opts.root)
-    .replaceAll("${CLAUDE_PLUGIN_DATA}", opts.dataDir);
+    .replaceAll("${CLAUDE_PLUGIN_DATA}", opts.dataDir)
+    .replaceAll("${DEVLOOP_DATA_DIR:-~/.dev-loop}", opts.dataDir)
+    .replaceAll("${DEVLOOP_DATA_DIR}", opts.dataDir)
+    .replaceAll("${DEVLOOP_PROJECTS_JSON}", projectsPath(opts.dataDir));
   return `You are launched by dev-loop's own scheduler. Run exactly one fresh fire for this agent, then stop.\n\n${body}`;
 }
 
@@ -298,6 +311,9 @@ async function runAgent(opts: Options, agent: Agent, project: string, cwd: strin
     DEVLOOP_ACTOR: agent,
     DEVLOOP_PROJECT: project,
     DEVLOOP_HUB_DB: opts.hubDb,
+    DEVLOOP_DATA_DIR: opts.dataDir,
+    DEVLOOP_PROJECTS_JSON: projectsPath(opts.dataDir),
+    DEVLOOP_PLUGIN_ROOT: opts.root,
     CLAUDE_PLUGIN_ROOT: opts.root,
     CLAUDE_PLUGIN_DATA: opts.dataDir,
   };

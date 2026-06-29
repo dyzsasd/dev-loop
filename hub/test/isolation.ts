@@ -111,8 +111,8 @@ ok(warnRun.code === 0 && warnRun.out.includes("DOCTOR_OK") && !warnRun.out.inclu
    "doctor: service context, nothing wired → still DOCTOR_OK exit 0 (reconcile is non-fatal, DL-81 AC2)");
 ok(warnRun.out.includes("service runtime wiring — 'alpha'"),
    "doctor: service context → the reconcile section appears (DL-81 AC4b)");
-ok(warnRun.out.includes("is not registered") && warnRun.out.includes("daemon — not running") && warnRun.out.includes("SessionStart hook — "),
-   "doctor: a missing .mcp.json / daemon / hook each yields a WARN, not a FAIL (DL-81 AC4c)");
+ok(warnRun.out.includes("is not registered") && warnRun.out.includes("daemon — not running") && warnRun.out.includes("daemon autostart"),
+   "doctor: a missing .mcp.json / daemon / autostart each yields a WARN, not a FAIL (DL-81 AC4c)");
 
 // (AC4b) service context FULLY wired — every reconcile check PASSes (✅), DOCTOR_OK. A stub /api/health
 // server stands in for the live daemon so the health probe has a real 2xx {ok,project} to confirm.
@@ -134,8 +134,8 @@ writeFileSync(cfgOk, JSON.stringify({ projects: { alpha: { backend: "service", r
 const okR = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: cfgOk, DEVLOOP_RUN_DIR: okRun, DEVLOOP_PLUGIN_ROOT: okRoot });
 stub.close();
 ok(okR.code === 0 && okR.out.includes("DOCTOR_OK")
-   && okR.out.includes("registers dev-loop-hub") && okR.out.includes("daemon /api/health reachable") && okR.out.includes("SessionStart hook installed"),
-   "doctor: service context fully wired → .mcp.json + daemon health + DL-42 hook all PASS, DOCTOR_OK (DL-81 AC4b)");
+   && okR.out.includes("registers dev-loop-hub") && okR.out.includes("daemon /api/health reachable") && okR.out.includes("Claude SessionStart hook compatibility present"),
+   "doctor: service context wired → .mcp.json + daemon health + optional Claude hook PASS, DOCTOR_OK (autostart may still be operator-installed)");
 try { for (const d of [recRoot, bareRepo, emptyRun, emptyRoot, okRepo, okRoot, okRun]) rmSync(d, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
 
 console.log(fails === 0 ? "\nHUB_ISOLATION_OK" : `\n${fails} CHECK(S) FAILED`);

@@ -20,6 +20,7 @@ const ROOT = "/tmp/hub-lifecycle-race";
 const DB = join(ROOT, "hub.db");
 const RUN = join(ROOT, "run");
 const PROJ = "lcrace";
+const NODE = process.env.DEVLOOP_NODE || process.execPath;
 const lockfile = join(RUN, `daemon-${PROJ}.lock`);
 rmSync(ROOT, { recursive: true, force: true });
 mkdirSync(RUN, { recursive: true });
@@ -31,17 +32,15 @@ const isAlive = (pid: number) => { try { process.kill(pid, 0); return true; } ca
 const runfile = join(RUN, `daemon-${PROJ}.json`);
 const readRun = () => JSON.parse(readFileSync(runfile, "utf8")) as { project: string; pid: number; port: number; host: string; url: string };
 const health = (url: string) => fetch(`${url}/api/health`).then((x) => x.ok).catch(() => false);
-// replicate lcPortFor(key) (daemon.ts) so cleanup can target the deterministic port even if no trial succeeded
-const portFor = (key: string) => { let h = 2166136261 >>> 0; for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return 20000 + (h % 20000); };
-const STABLE_PORT = portFor(PROJ);
+const touchedPorts = new Set<number>();
 
 // seed the isolated service project (ensureActors seeds the `operator` actor the daemon needs)
-execFileSync("node", ["src/seed.ts", PROJ, "Race Project", "RC", DB], { encoding: "utf8" });
+execFileSync(NODE, ["src/seed.ts", PROJ, "Race Project", "RC", DB], { encoding: "utf8" });
 
-// run `node src/daemon.ts <sub>` ASYNC so two `up`s can overlap (the existing lifecycle.ts uses blocking spawnSync)
+// run `src/daemon.ts <sub>` ASYNC so two `up`s can overlap (the existing lifecycle.ts uses blocking spawnSync)
 function lcAsync(sub: string): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((res) => {
-    const c = spawn("node", ["src/daemon.ts", sub], { env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator" } });
+    const c = spawn(NODE, ["src/daemon.ts", sub], { env: { ...process.env, DEVLOOP_NODE: NODE, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator" } });
     let stdout = "", stderr = "";
     c.stdout.on("data", (d) => (stdout += d));
     c.stderr.on("data", (d) => (stderr += d));
@@ -67,6 +66,7 @@ try {
     ok(a.status === 0 && b.status === 0, `${tag}: both \`up\` exit 0 (got ${a.status},${b.status})`);
     ok(existsSync(runfile), `${tag}: a runfile exists`);
     const r = readRun();
+    touchedPorts.add(r.port);
     // the recorded pid must be a LIVE daemon that actually answers health — not an orphaned-loser dead pid
     const trackedHealthy = await health(r.url);
     ok(isAlive(r.pid) && trackedHealthy, `${tag}: runfile pid ${r.pid} is alive AND serving ${r.url}/api/health (no orphan)`);
@@ -79,10 +79,10 @@ try {
   }
   ok(fails === 0, `all ${TRIALS} concurrent-up trials race-free (single tracked live daemon, down-stoppable, 0 untracked)`);
 } finally {
-  // best-effort cleanup: stop the tracked daemon, then sweep any untracked listener left near the stable port
+  // best-effort cleanup: stop the tracked daemon, then sweep any untracked listener on ports this test recorded
   // (a PRE-fix run leaks orphaned winners `down` can't reach — keep the test a good citizen even on failure).
   await lcAsync("down").catch(() => {});
-  for (let p = STABLE_PORT; p <= STABLE_PORT + 8; p++) {
+  for (const p of touchedPorts) {
     try { for (const pid of execFileSync("lsof", ["-ti", `tcp:${p}`, "-sTCP:LISTEN"], { encoding: "utf8" }).split("\n").filter(Boolean)) { try { process.kill(Number(pid), "SIGKILL"); } catch { /* gone */ } } } catch { /* lsof absent / nothing listening */ }
   }
   rmSync(ROOT, { recursive: true, force: true });

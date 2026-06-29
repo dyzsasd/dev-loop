@@ -238,6 +238,10 @@ work at a higher rate.
 npm i -g @dyzsasd/dev-loop
 ```
 
+On macOS, the global npm install also attempts to install a LaunchAgent that runs
+`dev-loop daemon up-all` at login. Set `DEVLOOP_SKIP_AUTOSTART=1` before install to opt out, or
+repair/reinstall it later with `dev-loop daemon install-autostart`.
+
 Then pick the onboarding path that matches how you want to operate.
 
 **Path A — no Claude plugin, run with `dev-loop run`:**
@@ -245,7 +249,7 @@ Then pick the onboarding path that matches how you want to operate.
 ```bash
 # Create the per-project config yourself.
 dev-loop init-config
-$EDITOR ~/.claude/plugins/data/dev-loop/projects.json
+$EDITOR ~/.dev-loop/projects.json
 
 # Dry-run once from inside the configured product repo.
 cd /path/to/product-repo
@@ -262,7 +266,7 @@ dev-loop install-claude-plugin
 # In Claude Code, run the two /plugin commands printed by the installer, then:
 /dev-loop:init
 
-# After init writes projects.json, the normal loop is still dev-loop run.
+# After init writes ~/.dev-loop/projects.json, the normal loop is still dev-loop run.
 cd /path/to/product-repo
 dev-loop run --cli codex --agents core --once --dry-run
 ```
@@ -328,12 +332,13 @@ Needs only the npm package + your chosen CLI (`claude` or `codex`) on `PATH`. Se
 
 ## Configure
 
-Per-project settings live in `${CLAUDE_PLUGIN_DATA}/projects.json`
-(`~/.claude/plugins/data/dev-loop/projects.json`). Seed from the example:
+Per-project settings live in dev-loop's own config directory:
+`${DEVLOOP_PROJECTS_JSON}` when set, otherwise `~/.dev-loop/projects.json`
+(`DEVLOOP_DATA_DIR` changes that base directory). Create an empty starter, then add your
+own project entry:
 
 ```bash
-mkdir -p ~/.claude/plugins/data/dev-loop
-cp config/projects.example.json ~/.claude/plugins/data/dev-loop/projects.json
+dev-loop init-config
 # Then map each project to its repo, strategy doc, test env, and git/deploy flags.
 ```
 
@@ -357,11 +362,19 @@ There are two supported setup paths:
 
 - **With the Claude plugin:** run `/dev-loop:init` once. It scaffolds everything and prints a
   readiness checklist before you go live. It creates only what's missing and overwrites nothing.
-- **Without the plugin:** create `~/.claude/plugins/data/dev-loop/projects.json` from
-  the bundled template with `dev-loop init-config`, then fill in the project key, `repoPath` or
+- **Without the plugin:** create `~/.dev-loop/projects.json` from an empty starter with
+  `dev-loop init-config`, then fill in the project key, `repoPath` or
   `repos[]`, `strategyDoc`, `testEnv`, backend, and `mode:"dry-run"`. For a `service` backend, run
   `dev-loop init-service <key> "<name>" <PREFIX> --dry-run` to preview hub bootstrap, then without
   `--dry-run` when the config is correct.
+
+Existing installs that still have `~/.claude/plugins/data/dev-loop/projects.json` are read as a
+legacy fallback, but new projects should be registered in `~/.dev-loop/projects.json`.
+
+For `backend:"service"`, `init-service` starts the localhost daemon once. On macOS, the global npm
+install also installs the login item when scripts are allowed; if you skipped scripts or need to
+repair it, run `dev-loop daemon install-autostart`. The default web UI port is `8787` and probes
+upward if occupied.
 
 As a backstop, the loop agents also re-apply the label/project checks on the first `live` run.
 
@@ -395,8 +408,10 @@ process, and per-agent `models` keep the mechanical agents cheap.
 `--agents core` means `pm,qa,dev,sweep`. Add `reflect`, `outward`, or individual agents:
 `--agents core,reflect,ops,communication`. Project detection is automatic when the command starts
 inside a configured `repoPath` or `repos[].path`; use `--project <key>` only from outside the repo,
-from cron/systemd with a fixed cwd, or when you want to override detection. Multiple products on one
-machine are just multiple entries in `projects.json` and one `dev-loop run` process per product.
+from cron/systemd with a fixed cwd, or when you want to override detection. If neither an explicit
+project nor the cwd resolves, the scheduler stops instead of falling back to `demo` or another
+configured project. Multiple products on one machine are just multiple entries in `projects.json`
+and one `dev-loop run` process per product.
 
 Claude Agent View is still available when you want Claude-native background rows: install the
 Claude plugin, open `claude agents`, then dispatch `/loop 5m /dev-loop:pm-agent`,
@@ -452,7 +467,7 @@ model.
 
 You steer the loop by reviewing its trail, not by editing code inside the loop.
 - **Reports.** Each agent writes a daily log rolled up weekly/monthly under
-  `${CLAUDE_PLUGIN_DATA}/<project-key>/reports/<agent>/` — machine-local, never committed,
+  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/` — machine-local, never committed,
   secret/PII-safe. A no-op fire writes nothing.
 - **点评.** Drop a sibling `<report>.review.md` with free-form prose; at its next run the
   agent distills your critique into one `lessons.md` rule under its own section and obeys it
@@ -496,13 +511,14 @@ pushes `v<version>`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Status
 
-**v0.23.2.** Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
+**v0.23.3.** Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
 three outward (**Ops / Architect / Communication**), and an opt-in two-tier
 **senior-dev / junior-dev** Dev split — plus the `init` onboarding command.
 Coordination is backend-pluggable: **Linear** (default), a **local file board**, or the
 **local hub** (`node:sqlite` SoR with per-agent identity + a localhost web UI + versioned
-docs + a one-way Linear mirror + CLI-portability). Recent: npm-installed service backend hardening
-for daemon startup, SessionStart hooks, and Node runtime discovery; npm-source Claude plugin installs
-from the published package root; and CI releases that create `v<version>` tags and publish to npm. Validated end-to-end and battle-tested across long live runs;
+docs + a one-way Linear mirror + CLI-portability). Recent: dev-loop now uses its own
+`~/.dev-loop` config/data home by default instead of Claude plugin data, refuses to guess a project
+when neither `--project` nor the current repo identifies one, and can install a macOS LaunchAgent so
+the service hub daemon starts on login with a stable localhost port. Validated end-to-end and battle-tested across long live runs;
 autonomy (push/deploy) is opt-in per project and gated on a green build. Full history in
 [`CHANGELOG.md`](CHANGELOG.md).

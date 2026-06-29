@@ -152,7 +152,7 @@ loopback lacks) — which P6 deliberately does not build. When/if it does, the s
 agent-facing transport stays stdio, identity stays via env**, so the broken HTTP-header path is
 never used by Claude Code.
 
-**Liveness (when the daemon exists, P5+):** liveness lives in the **launcher**, not in launchd alone. The cron/launch wrapper runs `dev-loop-hub ensure` as a **blocking pre-step** before `claude -p`/`codex exec`/`opencode run`: start-if-down AND `GET /healthz` must return the expected version + a **DB-writable** check (not just a port bind), else restart; a stale-pidfile reaper runs first. A "hub unreachable mid-fire" is a **degraded-mode exit**: log one line, exit per §0, next fire retries — never a half-applied write. (In the no-daemon MVP this is moot: SQLite is ACID, and a killed fire leaves a `claimed-but-not-shipped` ticket that Dev Step 0 / Sweep reclaim exactly as they do today, §7.)
+**Liveness (when the daemon is used):** liveness lives in the **launcher/lifecycle**, not in launchd alone. A process manager runs `dev-loop daemon up` or `dev-loop daemon up-all` as a **blocking pre-step** before `claude -p`/`codex exec`/`opencode run`: start-if-down AND `GET /api/health` must return the expected project + a **DB-writable** check (not just a port bind), else restart; stale runfiles are reclaimed by the lifecycle. A "hub unreachable mid-fire" is a **degraded-mode exit**: log one line, exit per §0, next fire retries — never a half-applied write.
 
 ---
 
@@ -181,7 +181,7 @@ This is atomic in **both** runtime models — multi-process WAL serializes the w
 
 ## 8. Identity & attribution — the mechanism (honest about its limits)
 
-**The launcher is the identity source.** The dev-loop launcher (`run-loop.sh` in the data dir, or Agent View) already opens one pane per agent and applies `--model` per pane (`docs/RUNNING.md §2`). It is the natural place to assert identity:
+**The launcher is the identity source.** `dev-loop run` (or an external process manager / Agent View setup) starts one agent fire with an explicit actor identity (`docs/RUNNING.md §2`). It is the natural place to assert identity:
 
 - **MVP:** the launcher exports `DEVLOOP_ACTOR=<agent>` and `DEVLOOP_PROJECT=<key>` into each pane's environment. The stdio shim reads them once at spawn and stamps `actor` as the author of every write + every `events` row. The SKILL body never sees or sets the actor — it just calls `save_issue` as today.
 - **Bootstrap contract (the missing piece the critique flagged):** one **shared** `.mcp.json` (committed or in the data dir) registers the hub shim with a header/env *reference*, e.g. `"env": {"DEVLOOP_ACTOR": "${DEVLOOP_ACTOR}"}` — the value is **interpolated per pane from the launcher's exported env**, never hardcoded. So one config file yields **different identities per pane** purely from the launcher's per-pane env. (Agent View applies one model per view and cannot inject per-row env as cleanly; the tmux launcher is the supported path for distinct identities — noted as a constraint, not a blocker.)
@@ -459,7 +459,7 @@ monpick today: `backend` absent (⇒ linear), `linearProject:MonPick`, a Linear-
 
 - **SKILL bodies: unchanged.** Each agent's single §0 line — "all ticket operations go through the configured backend (§18)" — now resolves to the hub. The bodies still say `save_issue`, still re-pass the full REPLACE-style label set, still verify-after-write; the hub honors all of that.
 - **conventions.md: one additive edit.** §18 gains the `service` value and the third operation-mapping column (§12/§13). §11 config gains the optional `hub` block. No existing rule changes meaning. (Applied by the operator under §17 — a human git commit, like any conventions change.)
-- **The launcher: a small, real change.** `run-loop.sh` exports `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT` per pane and runs `dev-loop-hub ensure` (P5+) before each fire. This is operator-owned launcher code in the data dir, not the plugin.
+- **The launcher: a small, real change.** `dev-loop run` exports `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT` per fire and injects the hub MCP; an external launcher must do the same before each fire. This is operator-owned runtime wiring, not Claude plugin state.
 
 **The footgun-removal SKILL rewrite is a SEPARATE, explicit, operator-driven, §17-gated phase with its own effort line — never an MVP byproduct.** Realizing the atomic-claim / add-remove-labels / enum-state benefits requires editing the bodies of the agent SKILLs (e.g. dev-agent's "re-fetch; if it's not yours, another Dev won" and "re-pass the full label set"). §17 forbids agents from rewriting their own SKILLs; only the operator may, in a coordinated, human-reviewed pass. Until that pass lands, the hardened primitives ship but sit unused, and the loop runs on the mimicked Linear-shaped contract. Presenting "footguns designed out" as a free win is the contradiction this section resolves.
 

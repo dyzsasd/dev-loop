@@ -24,7 +24,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
-  "init-config":    ["init-config"],               // copy bundled projects.example.json for clone-free scheduler setup
+  "init-config":    ["init-config"],               // write an empty projects.json for clone-free scheduler setup
   "install-claude-plugin": ["install-claude-plugin"], // register a local npm-source marketplace so Claude Code loads the published plugin
   "init-service":   ["init-service"],              // turnkey bootstrap (DL-60)
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
@@ -49,10 +49,11 @@ Usage: dev-loop <command> [args]
 
   serve                       run the stdio MCP server (the agent transport; same as the dev-loop-hub bin)
   shim                        run the thin stdio MCP shim → the loopback daemon op-API (hub.transport:"daemon")
-  daemon up|down|status       per-project daemon lifecycle — idempotent, auto-starts the localhost web UI
+  daemon up|up-all|down|status|install-autostart|uninstall-autostart
+                              daemon lifecycle — idempotent localhost web UI + optional login autostart
   init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project (seed → doctor → daemon up)
   run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents by calling the selected CLI
-  init-config                 write ~/.claude/plugins/data/dev-loop/projects.json from the bundled template
+  init-config                 write an empty ~/.dev-loop/projects.json starter
   install-claude-plugin      register a local npm-source marketplace so /plugin install can load it
   mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers other servers)
   seed <key> <name> [PREFIX]  seed a project + actors + labels into the hub db

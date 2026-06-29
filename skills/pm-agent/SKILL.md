@@ -37,8 +37,10 @@ labels, templates, safety boundary, and config. They override this file on confl
 trust conversation memory for state; on a hard failure log one line and exit (the
 next fire retries). See conventions §0.
 
-Then load config (`§11`): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
-pick the project (named by the user, the **cwd-matched project (§11)**, the sole one, the `defaultProject`, or ask),
+Then load config (`§11`): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
+`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
+as a legacy fallback. Pick the project (named by the user, the **cwd-matched project (§11)**; in interactive plugin use only, the sole one / `defaultProject` / ask fallbacks may apply),
 and load its `linearProject`, `linearTeam`, `strategyDoc`, `testEnv`, `mode`, the optional
 `codex` block (§24), and — if
 present — `repos[]` (conventions §19). Multi-repo: the **doc-home repo**
@@ -66,9 +68,7 @@ updating (Job C step 5):
   - The §17 firewall holds: hub docs are PRODUCT docs only — never a SKILL/conventions/code file.
 - **Repo file** — any other string: a path relative to `repoPath`. Read/edit and (in `live`)
   commit. **Remains the default under `service`** unless `hub.docs`/`{hubDoc}` is set.
-If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to an empty or
-`-local` dir), fall back to `~/.claude/plugins/data/dev-loop/projects.json` or search
-`~/.claude/plugins/data/**/projects.json` before asking the user.
+If no config path resolves, ask the user before proceeding.
 
 **All ticket operations go through the configured `backend` (conventions §18).**
 `backend` absent ⇒ `"linear"` (the Linear MCP, as described throughout this file);

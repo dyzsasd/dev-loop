@@ -4,8 +4,8 @@
 // `dev-loop-hub resolve-project` subcommand (one rule, no prose/code drift). Backward-compatible: an
 // explicit DEVLOOP_PROJECT always wins (the caller checks that first); this runs only when it is unset.
 import { realpathSync, readFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { relative, isAbsolute, join } from "node:path";
+import { relative, isAbsolute } from "node:path";
+import { projectConfigCandidates } from "./paths.ts";
 
 export interface ProjectsConfig {
   defaultProject?: string;
@@ -48,26 +48,23 @@ export function resolveProjectFromCwd(cwd: string, config: ProjectsConfig): stri
 }
 
 // DL-85: the ONE DEVLOOP_ACTOR + DEVLOOP_PROJECT/cwd identity resolution (was re-derived in server.ts:21-32
-// AND shim.ts:38-46). An EXPLICIT DEVLOOP_PROJECT wins; else resolve from cwd (DL-13); else the "demo" default.
+// AND shim.ts:38-46). An EXPLICIT DEVLOOP_PROJECT wins; else resolve from cwd (DL-13); else unresolved.
 // `projectFromCwd` is true only on the cwd-resolved branch (server.ts uses it for a clearer not-seeded error).
-export function resolveIdentity(): { actor: string; projectKey: string; projectFromCwd: boolean } {
+export function resolveIdentity(): { actor: string; projectKey: string; projectFromCwd: boolean; projectResolved: boolean } {
   const actor = process.env.DEVLOOP_ACTOR ?? "operator"; // who this MCP client IS (the attribution win)
   const explicit = process.env.DEVLOOP_PROJECT?.trim(); // a present-but-empty "" must NOT become the literal key
-  if (explicit) return { actor, projectKey: explicit, projectFromCwd: false };
+  if (explicit) return { actor, projectKey: explicit, projectFromCwd: false, projectResolved: true };
   const cfg = loadProjectsConfig();
   const resolved = cfg ? resolveProjectFromCwd(process.cwd(), cfg) : null;
-  return resolved ? { actor, projectKey: resolved, projectFromCwd: true } : { actor, projectKey: "demo", projectFromCwd: false };
+  return resolved
+    ? { actor, projectKey: resolved, projectFromCwd: true, projectResolved: true }
+    : { actor, projectKey: "", projectFromCwd: false, projectResolved: false };
 }
 
-// Locate + parse projects.json the way the skills do (§11): DEVLOOP_PROJECTS_JSON, then CLAUDE_PLUGIN_DATA,
-// then the canonical dev-loop data dir. Returns null when not found/parseable (caller keeps its default).
+// Locate + parse projects.json from the standalone dev-loop home first, with the historical Claude plugin
+// data dir as a read-only compatibility fallback. Returns null when not found/parseable.
 export function loadProjectsConfig(): ProjectsConfig | null {
-  const candidates = [
-    process.env.DEVLOOP_PROJECTS_JSON,
-    process.env.CLAUDE_PLUGIN_DATA ? join(process.env.CLAUDE_PLUGIN_DATA, "projects.json") : undefined,
-    join(homedir(), ".claude", "plugins", "data", "dev-loop", "projects.json"),
-  ].filter((x): x is string => !!x);
-  for (const p of candidates) {
+  for (const p of projectConfigCandidates()) {
     try { if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8")) as ProjectsConfig; } catch { /* try next */ }
   }
   return null;

@@ -159,6 +159,10 @@ Un démon localhost persistant sert un tableau en lecture seule, le détail des 
 npm i -g @dyzsasd/dev-loop
 ```
 
+Sur macOS, l'installation npm globale tente aussi d'installer un LaunchAgent qui lance
+`dev-loop daemon up-all` à la connexion. Définissez `DEVLOOP_SKIP_AUTOSTART=1` avant l'installation
+pour refuser cette étape, ou réparez-la plus tard avec `dev-loop daemon install-autostart`.
+
 Choisissez ensuite le chemin d'onboarding adapté à votre usage.
 
 **Chemin A — sans plugin Claude, avec `dev-loop run` :**
@@ -166,7 +170,7 @@ Choisissez ensuite le chemin d'onboarding adapté à votre usage.
 ```bash
 # Créez et renseignez la config par projet.
 dev-loop init-config
-$EDITOR ~/.claude/plugins/data/dev-loop/projects.json
+$EDITOR ~/.dev-loop/projects.json
 
 # Lancez une passe dry-run depuis le repo produit configuré.
 cd /path/to/product-repo
@@ -183,7 +187,7 @@ dev-loop install-claude-plugin
 # Dans Claude Code, exécutez les deux commandes /plugin imprimées par l'installeur, puis :
 /dev-loop:init
 
-# Une fois projects.json écrit par init, la boucle quotidienne reste dev-loop run.
+# Une fois ~/.dev-loop/projects.json écrit par init, la boucle quotidienne reste dev-loop run.
 cd /path/to/product-repo
 dev-loop run --cli codex --agents core --once --dry-run
 ```
@@ -250,12 +254,13 @@ Ne nécessite que le paquet npm + la CLI de votre choix (`claude` ou `codex`) da
 
 ## Configuration
 
-Les réglages par projet résident dans `${CLAUDE_PLUGIN_DATA}/projects.json`
-(`~/.claude/plugins/data/dev-loop/projects.json`). Initialisez depuis l'exemple :
+Les réglages par projet résident dans le répertoire de config propre à dev-loop :
+`${DEVLOOP_PROJECTS_JSON}` s'il est défini, sinon `~/.dev-loop/projects.json`
+(`DEVLOOP_DATA_DIR` change ce répertoire de base). Créez un starter vide, puis ajoutez votre
+propre projet :
 
 ```bash
-mkdir -p ~/.claude/plugins/data/dev-loop
-cp config/projects.example.json ~/.claude/plugins/data/dev-loop/projects.json
+dev-loop init-config
 # Associez ensuite chaque projet à son repo, document de stratégie, environnement de test et flags git/deploy.
 ```
 
@@ -277,11 +282,20 @@ Deux chemins sont pris en charge :
 
 - **Avec le plugin Claude :** lancez `/dev-loop:init` une fois. Il échafaude tout et affiche une
   checklist de mise en route avant le passage en live ; il ne crée que ce qui manque et n'écrase rien.
-- **Sans plugin :** créez `~/.claude/plugins/data/dev-loop/projects.json` depuis le modèle embarqué
-  avec `dev-loop init-config`, puis renseignez la clé projet, `repoPath` ou `repos[]`,
+- **Sans plugin :** créez un `~/.dev-loop/projects.json` vide avec `dev-loop init-config`,
+  puis renseignez la clé projet, `repoPath` ou `repos[]`,
   `strategyDoc`, `testEnv`, le backend, et gardez `mode:"dry-run"`. Pour un backend `service`, lancez
   `dev-loop init-service <key> "<name>" <PREFIX> --dry-run` pour prévisualiser le bootstrap du hub,
   puis sans `--dry-run` lorsque la config est correcte.
+
+Les installations existantes qui ont encore `~/.claude/plugins/data/dev-loop/projects.json`
+sont lues comme fallback de compatibilité ; les nouveaux projets doivent être déclarés dans
+`~/.dev-loop/projects.json`.
+
+Pour `backend:"service"`, `init-service` démarre le daemon localhost une fois. Sur macOS,
+l'installation npm globale installe aussi l'élément de connexion lorsque les scripts sont autorisés ;
+si vous avez ignoré les scripts ou devez le réparer, lancez `dev-loop daemon install-autostart`.
+Le port par défaut de la web UI est `8787` et le daemon cherche le port libre suivant s'il est occupé.
 
 Par sécurité, les agents de la boucle réappliquent aussi les vérifications de labels/projet lors de
 la première exécution `live`.
@@ -317,8 +331,10 @@ plafonne un processus long vivant, et les `models` par agent gardent les agents 
 individuels : `--agents core,reflect,ops,communication`. La détection du projet est automatique
 quand la commande démarre dans un `repoPath` ou `repos[].path` configuré ; utilisez
 `--project <key>` seulement depuis l'extérieur du repo, depuis cron/systemd avec un cwd fixe, ou pour
-remplacer cette détection. Plusieurs produits sur la même machine sont un cas normal : ajoutez-les
-dans `projects.json`, puis lancez un processus `dev-loop run` par produit.
+remplacer cette détection. Si aucun projet explicite n'est défini et que le cwd ne correspond à aucun
+repo configuré, le scheduler s'arrête au lieu de retomber sur `demo` ou un autre projet. Plusieurs
+produits sur la même machine sont un cas normal : ajoutez-les dans `projects.json`, puis lancez un
+processus `dev-loop run` par produit.
 
 Claude Agent View reste disponible quand vous voulez l'interface native de Claude : installez le
 plugin Claude, ouvrez `claude agents`, puis lancez `/loop 5m /dev-loop:pm-agent`,
@@ -361,7 +377,7 @@ Les agents n'opèrent **que** sur les tickets portant le label **`dev-loop`**, c
 ## Rapports et revue de l'opérateur (点评)
 
 Vous pilotez la boucle en relisant sa trace, pas en modifiant le code à l'intérieur de la boucle.
-- **Rapports.** Chaque agent écrit un journal quotidien, agrégé par semaine/mois sous `${CLAUDE_PLUGIN_DATA}/<project-key>/reports/<agent>/` — local à la machine, jamais commité, sans secret/PII. Un déclenchement no-op n'écrit rien.
+- **Rapports.** Chaque agent écrit un journal quotidien, agrégé par semaine/mois sous `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/` — local à la machine, jamais commité, sans secret/PII. Un déclenchement no-op n'écrit rien.
 - **点评.** Déposez un `<report>.review.md` voisin avec du texte libre ; à son exécution suivante, l'agent distille votre critique en une règle `lessons.md` placée dans sa propre section, et la respecte ensuite. La boucle complète : **rapport → votre 点评 → leçon → comportement modifié.**
 - **Cloud/distant ?** Mettez `reports.sink:"linear"` et les rapports deviennent des documents Linear par agent avec le 点评 en commentaire — à lire et critiquer depuis un navigateur/téléphone (même pare-feu, garde-fous §16).
 
@@ -397,4 +413,4 @@ synchronise la version partagée, lance la suite de tests du hub, publie `hub/` 
 
 ## Statut
 
-**v0.23.2.** Dix agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et trois externes (**Ops / Architect / Communication**), avec un **senior-dev / junior-dev** à deux niveaux optionnel — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : le backend `service` installé depuis npm est durci pour le démarrage du daemon, les hooks SessionStart et la découverte du runtime Node ; les installations npm-source du plugin Claude chargent désormais le payload complet depuis la racine du paquet npm ; et la release CI crée le tag `v<version>` puis publie sur npm. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).
+**v0.23.3.** Dix agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et trois externes (**Ops / Architect / Communication**), avec un **senior-dev / junior-dev** à deux niveaux optionnel — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : dev-loop utilise par défaut son propre répertoire `~/.dev-loop` pour la configuration et les données au lieu du dossier de plugin Claude ; le runner refuse désormais de deviner un projet si `--project` et le repo courant ne l'identifient pas ; et le daemon du hub peut être installé comme LaunchAgent macOS avec un port localhost stable. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).

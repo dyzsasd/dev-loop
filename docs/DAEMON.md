@@ -50,16 +50,16 @@ Environment (same contract as the MCP server, `docs/RUNNING.md`):
 
 | Var | Meaning | Default |
 |---|---|---|
-| `DEVLOOP_PROJECT` | the project to serve (must already exist) | `demo` |
+| `DEVLOOP_PROJECT` | the project to serve (must already exist). Optional only when the command's cwd is inside a configured `repoPath` / `repos[].path`; otherwise unresolved/no-op. | unset |
 | `DEVLOOP_HUB_DB` | path to the hub SQLite db | `~/.dev-loop/hub.db` |
-| `DEVLOOP_DAEMON_PORT` | listen port (the foreground boot; also forces `daemon up`'s port when set) | `8787` foreground / a stable per-project port for `daemon up` |
+| `DEVLOOP_DAEMON_PORT` | listen port; also forces `daemon up`'s port when set | `8787` |
 | `DEVLOOP_ACTOR` | identity that **attributes** daemon writes and gates roadmap **publish** (only `operator` may publish; any other known actor gets drafts only). Must be a known actor or the daemon refuses to start the write surface. | `operator` |
 | `DEVLOOP_RUN_DIR` | dir for the `daemon up` runfile + log (DL-41) | the hub DB's dir (`~/.dev-loop`) |
 
 The daemon refuses to serve a project that hasn't been seeded (`dev-loop init-service <key> "<name>"
 <PREFIX>` or `dev-loop seed <key> "<name>" <PREFIX>`) — it never auto-creates a board.
 
-### Managed lifecycle — `daemon up | down | status` (DL-41)
+### Managed lifecycle — `daemon up | up-all | down | status`
 
 For a hands-off / auto-started web UI, the daemon has an **idempotent per-project lifecycle**
 (additive — `npm run daemon`, the foreground boot above, is unchanged):
@@ -67,6 +67,7 @@ For a hands-off / auto-started web UI, the daemon has an **idempotent per-projec
 ```sh
 DEVLOOP_PROJECT=<project-key> dev-loop daemon up         # `ensure` is an alias for `up`
 # → [daemon] up: started '<project-key>' → http://127.0.0.1:<port>  (pid …)
+dev-loop daemon up-all                                   # starts every configured backend:"service" project
 dev-loop daemon status                                   # → RUNNING → <url> (pid …)  | stopped
 dev-loop daemon down                                     # → stops this project's daemon, clears the runfile
 ```
@@ -81,14 +82,32 @@ dev-loop daemon down                                     # → stops this projec
   and is treated as NOT running: `up` reclaims it instead of no-op'ing onto a dead process.
 - **One daemon per project, stable port.** `up` records `{pid, port, url}` in a machine-local
   runfile `<DEVLOOP_RUN_DIR>/daemon-<project>.json` (default `~/.dev-loop/`, never committed) and
-  serves on a **deterministic per-project port** (20000–39999, derived from the key, probed free),
-  so distinct projects never collide and the URL is **stable across restarts**.
+  starts at the fixed default port **8787**. If that port is occupied it probes upward and records the
+  actual port; later restarts reuse the recorded port, so the URL is stable for that project.
 - **Never double-starts.** A second `up` while a healthy daemon is already listening is a no-op
   that prints the existing URL. A **stale** runfile (its pid is dead) never reads as running — `up`
   cleanly restarts, `status`/`down` report stopped.
 - **Detached + localhost-only.** `up` spawns the daemon **detached** so it survives the launching
   shell, bound to **127.0.0.1 only** (§16). The packaged `dev-loop daemon up` command and the
   source-checkout fallback drive the same lifecycle.
+
+### Login autostart
+
+On macOS, a global `npm i -g @dyzsasd/dev-loop` attempts to install a LaunchAgent automatically
+during `postinstall` (unless `DEVLOOP_SKIP_AUTOSTART=1` is set or npm scripts are skipped). To repair
+or install it manually after the npm package and service projects are configured:
+
+```sh
+dev-loop daemon install-autostart
+```
+
+The LaunchAgent runs the packaged daemon entry with `up-all` at login, using the compatible Node that
+`dev-loop` resolved (`DEVLOOP_NODE` when set, otherwise a probed Node ≥23.6). It starts configured
+`backend:"service"` projects only; projects that are unseeded in the hub DB are skipped cleanly. Remove it with:
+
+```sh
+dev-loop daemon uninstall-autostart
+```
 
 ## Read endpoints
 

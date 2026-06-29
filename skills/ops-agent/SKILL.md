@@ -49,15 +49,15 @@ never trust conversation memory for state; on a hard failure log one line and ex
 thing that carries across fires is `ops-state.json` (open incidents + last-check), and
 you re-read it from disk, never from memory.
 
-Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`, pick the
-project, and load `linearProject`, `linearTeam`, `repoPath`, `testEnv`, `deploy`,
+Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
+`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
+as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `testEnv`, `deploy`,
 `git`, `mode`, `autonomy` (§12a), and — if present — `repos[]` (conventions §19;
 absent/one ⇒ single-repo = just `repoPath`, unchanged) and the optional **`ops`**
 block (`ops.checks` / `ops.criticalRoutes` / `ops.logsCommand` — all optional;
 absent ⇒ poll only the resolved `deploy.healthCheck` + `testEnv.baseUrl` root). If
-that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to an empty/`-local`
-dir), fall back to `~/.claude/plugins/data/dev-loop/projects.json` or search
-`~/.claude/plugins/data/**/projects.json` before asking the user.
+no config path resolves, ask the user before proceeding.
 
 **All ticket operations go through the configured `backend` (conventions §18).**
 `backend` absent ⇒ `"linear"` (the Linear MCP, as written below); `"local"` routes the

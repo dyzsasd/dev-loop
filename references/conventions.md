@@ -683,24 +683,30 @@ Four footguns that silently corrupt the loop — every skill must handle them:
 
 ## 11. Per-project config
 
-The agents are product-agnostic; everything product-specific lives in
-`${CLAUDE_PLUGIN_DATA}/projects.json` (schema + example:
-`${CLAUDE_PLUGIN_ROOT}/references/config-schema.md`, `${CLAUDE_PLUGIN_ROOT}/config/projects.example.json`).
+The agents are product-agnostic; everything product-specific lives in dev-loop's own config:
+`DEVLOOP_PROJECTS_JSON` when set, otherwise `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`
+(schema + example:
+`${DEVLOOP_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/references/config-schema.md`,
+`${DEVLOOP_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/config/projects.example.json`).
 
 On startup each skill:
-1. Reads `projects.json`. If `${CLAUDE_PLUGIN_DATA}` resolves to an empty or
-   `-local` data dir (the install name and the data dir can differ), fall back to
-   `~/.claude/plugins/data/dev-loop/projects.json`, or search
-   `~/.claude/plugins/data/**/projects.json`, before asking the user.
-2. **Project selection ladder** (in order): (a) if the user **named** a project, use
+1. Reads `projects.json` in this order: explicit `DEVLOOP_PROJECTS_JSON`,
+   `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`, then legacy
+   `${CLAUDE_PLUGIN_DATA}/projects.json` / `~/.claude/plugins/data/dev-loop/projects.json`
+   only for un-migrated installs. New installs do not search arbitrary Claude plugin data
+   directories; if no config resolves, ask the user or run `dev-loop init-config`.
+2. **Interactive skill project selection ladder** (in order): (a) if the user **named** a project, use
    it; (b) else if the cwd is at or under **exactly one** project's `repoPath` (or any
    `repos[].path`, §19), **auto-select it** — canonical `realpath` + segment-boundary
    containment, nearest-ancestor wins on overlap, two distinct projects tying at equal
    depth ⇒ ambiguous ⇒ fall through (never guess); (c) else if exactly **one** project is
    configured, use it; (d) else use **`defaultProject`** if set; (e) else ask. Precedence:
    **explicit choice > cwd-match > configured default > prompt** — cwd is the default
-   DRIVER, never an override. Strictly additive: a cwd outside every repo ⇒ today's
-   behavior. (For the hub backend the same ladder applies to `DEVLOOP_PROJECT`: §18.)
+   DRIVER, never an override. For **unattended launchers** (`dev-loop run`, daemon lifecycle,
+   and any process manager), use the stricter machine rule: **explicit `DEVLOOP_PROJECT` /
+   `--project` > cwd-match > unresolved**. They do not guess `defaultProject`, the first
+   configured project, or `demo`; a cwd outside every configured repo must stop/no-op with a
+   setup hint. (For the hub backend this is the `DEVLOOP_PROJECT` contract: §18.)
 3. Loads that project's `linearProject`, `linearTeam`, `repoPath`,
    `strategyDoc`, `testEnv`, `build`, `deploy`, `git`, `mode`, and `autonomy`
    (optional — see §12; absent ⇒ the conservative `"ask"` default). It also loads
@@ -722,7 +728,7 @@ behavioral corrections, §14) lives **per-project** under `<project-key>/` (DL-8
 `reports/`; the legacy root file is the fallback). These are
 machine-local — never committed, never shared; created lazily on first run. **In
 `local` backend mode (§18) the ticket board also lives here** —
-`${CLAUDE_PLUGIN_DATA}/<project-key>/board/` (`tickets/`, `counter.json`), or wherever
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/board/` (`tickets/`, `counter.json`), or wherever
 `localBoard` points — under the same machine-local, never-committed rule.
 
 **Bounded retention + atomic writes (state files are a working set, not an archive).**
@@ -822,7 +828,7 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
    `reports/`). (`/dev-loop:init` does this for you.)
 5. **If `backend:"local"`** (§18): skip steps 1–2 (no Linear labels/project to
    provision — labels are just strings, and the board dir is the project container)
-   and instead scaffold the board — `${CLAUDE_PLUGIN_DATA}/<project-key>/board/` with
+   and instead scaffold the board — `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/board/` with
    `tickets/` and a `counter.json` (`{ "prefix": "<ticketPrefix|DL>", "next": 1 }`) —
    and ensure `strategyDoc` is a **repo file** (a Linear document can't back a local
    board). `/dev-loop:init` does this.
@@ -1068,7 +1074,7 @@ data dir next to `projects.json` (§11), **never** in the product repo (a board 
 ticket-state would otherwise churn the repo with coordination commits). Default:
 
 ```
-${CLAUDE_PLUGIN_DATA}/<project-key>/board/
+${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/board/
   counter.json          # ID hint: { "prefix": "DL", "next": 42 }  (a hint, not the source of truth — see ID allocation)
   tickets/
     DL-1.md             # one markdown file per ticket
@@ -1522,7 +1528,7 @@ The Communication agent is the team's PR/media drafting role. It reads the strat
 the published roadmap when available, recent verified Done work, changelog/git facts, and
 the public product surface, then writes at most one article **draft** per cadence
 (`communication.cadence`, daily by default). Its output is either machine-local under
-`${CLAUDE_PLUGIN_DATA}/<project-key>/communications/YYYY-MM-DD.md` or, when
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/communications/YYYY-MM-DD.md` or, when
 `communication.output:"repo"` is explicitly set, a Markdown draft under the doc-home repo's
 `communication.repoOutputDir` (default `docs/communications/`). It never publishes to a CMS,
 social channel, email list, or webhook; never commits/pushes/deploys; and never transitions or
@@ -1685,7 +1691,7 @@ a `Canceled` `review failed:` ticket.
   `docs/design/senior-junior-dev-split.md`.
 - **Models** (`config-schema.md`, launcher-applied): `senior-dev: claude-opus-4-8`,
   `junior-dev: claude-sonnet-4-6`. `dev` keeps the launcher's opus default.
-- **Launcher** (`run-loop.sh`): an opt-in split knob replaces the single `dev` pane with a `senior-dev`
+- **Launcher** (`dev-loop run --dev-split`, or an equivalent external launcher): an opt-in split knob replaces the single `dev` pane with a `senior-dev`
   pane (opus, effort `max`) + a `junior-dev` pane (sonnet, effort `high`); the legacy `dev` pane stays
   available when the knob is off. Other effort tiers unchanged (`pm=max`, `reflect/architect=xhigh`,
   `qa/sweep=high`).
@@ -1721,7 +1727,7 @@ Reports are **machine-local per-operator runtime state**, never committed (like
 home, §18):
 
 ```
-${CLAUDE_PLUGIN_DATA}/<project-key>/reports/<agent>/
+${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/
   daily/    2026-06-19.md        # one file per calendar day (ISO date, %F)
   weekly/   2026-W25.md          # one file per ISO week (%G-W%V)
   monthly/  2026-06.md           # one file per month (%Y-%m)
@@ -2134,18 +2140,17 @@ the §9 human-park notify.
 
 ## 26. Second-CLI portability
 
-The loop is not Claude-Code-only. Because the hub is a plain **stdio MCP server** with **env-based
-identity** and **no daemon** (§18), the same agents + hub + per-agent identity run on a second coding
+The loop is not Claude-Code-only. Because the hub exposes a plain **stdio MCP server** with
+**env-based identity** (§18), the same agents + hub + per-agent identity run on a second coding
 CLI (Codex, opencode, …) against the *same* `hub.db`. Full setup in
 [`docs/PORTABILITY.md`](../docs/PORTABILITY.md); the load-bearing rules:
 
 - **One env contract, set by any launcher per pane:** `DEVLOOP_ACTOR` (the per-agent identity),
   `DEVLOOP_PROJECT` (**optional** — when unset/empty the hub derives the project from the spawned
-  process's cwd→`repoPath`, §11/§18; set it to pin one explicitly), `DEVLOOP_HUB_DB`, and the SKILLs'
-  config-resolution vars `CLAUDE_PLUGIN_ROOT` /
-  `CLAUDE_PLUGIN_DATA` (just env-var names — despite "CLAUDE", *any* CLI's launcher exports them, so
-  the SKILL bodies need **zero edits**; a thin wrapper also substitutes the `${...}` placeholders into
-  the SKILL body before feeding it as the prompt, since a second CLI has no plugin loader to do it).
+  process's cwd→`repoPath`, §11/§18; set it to pin one explicitly), `DEVLOOP_HUB_DB`,
+  `DEVLOOP_DATA_DIR` / `DEVLOOP_PROJECTS_JSON`, and `DEVLOOP_PLUGIN_ROOT`. Launchers may still set
+  `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` as compatibility placeholders for old skill text, but
+  new config belongs in dev-loop's own data dir, not a Claude plugin directory.
 - **The identity gate (onboard a CLI only after it PASSES).** Per-agent identity is the headline win
   AND a safety control: a CLI that fails to propagate `DEVLOOP_ACTOR` to the spawned MCP subprocess
   would **mis-attribute** every write. Verify with `whoami` THROUGH the CLI (set `DEVLOOP_ACTOR=dev`,
@@ -2155,5 +2160,6 @@ CLI (Codex, opencode, …) against the *same* `hub.db`. Full setup in
   delivered the env. The G1 phantom-actor guard already refuses an unknown actor.
 - **Everything else is CLI-independent.** §17 (no self-edits; structural changes = operator git
   commit) is prompt-gated + git-backed; §16 secrets stay in env; identity stays **cooperative
-  attribution** (not anti-spoof) on every CLI; no daemon anywhere. **Claude Code is 100% unchanged**
+  attribution** (not anti-spoof) on every CLI. The localhost daemon is a service/web UI lifecycle
+  helper, not a Claude-only dependency. **Claude Code is 100% unchanged**
   — second-CLI support is purely additive and opt-in.

@@ -54,9 +54,10 @@ try {
     && packedFiles.has(".claude-plugin/plugin.json")
     && packedFiles.has("skills/init/SKILL.md")
     && packedFiles.has("hooks/hooks.json")
+    && packedFiles.has("postinstall.cjs")
     && packedFiles.has("dist/hook-session-start.js")
     && packedFiles.has("dist/plugin/.claude-plugin/plugin.json"),
-    "npm pack includes root-level Claude plugin payload plus dist/plugin scheduler payload");
+    "npm pack includes root-level Claude plugin payload, postinstall, plus dist/plugin scheduler payload");
   const hookJson = readFileSync(join(repoRoot, "hooks", "hooks.json"), "utf8");
   ok(/dist\/hook-session-start\.js/.test(hookJson) && !/hub\/src\/server\.ts/.test(hookJson),
     "SessionStart hook targets the packaged hook helper, not hub/src/server.ts");
@@ -81,13 +82,16 @@ try {
   symlinkSync(join(hubRoot, "node_modules"), join(inst, "node_modules"), "dir");
   const instCli = join(inst, "dist", "cli.js");
   const instHook = join(inst, "dist", "hook-session-start.js");
+  cpSync(join(hubRoot, "postinstall.cjs"), join(inst, "postinstall.cjs"));
   const instRun = run(process.execPath, [instCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
   ok(instRun.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config -p '?<prompt:\d+ chars>'?/.test(instRun.out),
     "installed cli.js run → finds bundled skills + injects the hub without --root");
   const cfgOut = join(tmp, "projects.json");
   const instConfig = run(process.execPath, [instCli, "init-config", "--dest", cfgOut]);
-  ok(instConfig.code === 0 && existsSync(cfgOut) && /"projects"/.test(readFileSync(cfgOut, "utf8")),
-    "installed cli.js init-config → writes projects.json from bundled config without a source checkout");
+  const initConfigText = existsSync(cfgOut) ? readFileSync(cfgOut, "utf8") : "";
+  const initConfigJson = initConfigText ? JSON.parse(initConfigText) as { projects?: Record<string, unknown>; defaultProject?: string } : null;
+  ok(instConfig.code === 0 && !!initConfigJson && Object.keys(initConfigJson.projects ?? {}).length === 0 && !initConfigJson.defaultProject && !/monpick|acme-suite/.test(initConfigText),
+    "installed cli.js init-config → writes an empty projects.json starter with no predefined projects");
   const mktDir = join(tmp, "claude-marketplace");
   const instClaudePlugin = run(process.execPath, [instCli, "install-claude-plugin", "--dest", mktDir]);
   const mktFile = join(mktDir, ".claude-plugin", "marketplace.json");
@@ -96,6 +100,19 @@ try {
     && mkt?.plugins?.[0]?.source?.source === "npm"
     && mkt?.plugins?.[0]?.source?.package === "@dyzsasd/dev-loop",
     "installed cli.js install-claude-plugin → writes an npm-source marketplace.json (no GitHub, no file-copy drift)");
+
+  const localPostinstall = run(process.execPath, [join(inst, "postinstall.cjs")], { HOME: tmp, npm_config_global: "false", npm_config_location: "project" });
+  ok(localPostinstall.code === 0 && !/install-autostart/.test(localPostinstall.out),
+    "postinstall during local/project npm install → quiet no-op (does not install autostart in dev/CI)");
+  const globalPostinstall = run(process.execPath, [join(inst, "postinstall.cjs")], {
+    HOME: tmp,
+    DEVLOOP_POSTINSTALL_FORCE: "1",
+    DEVLOOP_POSTINSTALL_TEST_DARWIN: "1",
+    DEVLOOP_POSTINSTALL_DRY_RUN: "1",
+    DEVLOOP_NODE: process.execPath,
+  });
+  ok(globalPostinstall.code === 0 && globalPostinstall.out.includes("dist/daemon.js install-autostart"),
+    "postinstall for a global macOS install delegates to packaged daemon.js install-autostart");
 
   // ── (groom AC) mcp-merge with NO template arg → succeeds via the embedded DEFAULT_TEMPLATE, NOT an ENOENT on the
   //    `../../config/mcp.example.json` that doesn't ship. Args are plain identifiers/paths (DL-44/DL-66 guards). ──

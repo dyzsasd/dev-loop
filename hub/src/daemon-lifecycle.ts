@@ -2,7 +2,7 @@
 //
 // DL-41: idempotent per-project daemon lifecycle (up | ensure | down | status). A thin, additive wrapper
 // around the foreground boot that lives in `daemon.ts` (this module's sibling): `up` resolves the project
-// (cwd or DEVLOOP_PROJECT), picks a stable per-project port, and spawns `daemon.ts` detached so the web UI
+// (cwd or DEVLOOP_PROJECT), picks a fixed-default localhost port, and spawns `daemon.ts` detached so the web UI
 // survives the launching shell; `down`/`status` operate on a machine-local runfile. Designed so the DL-42
 // SessionStart hook can call `up` unconditionally: a non-service / unresolved project is a clean no-op +
 // exit 0, and a second `up` never double-starts. The foreground boot path (`npm run daemon`) is NOT touched
@@ -10,22 +10,32 @@
 // foreground `if` is reached. This module has NO top-level side effects (pure declarations), so importing
 // it is always safe (server.ts delegates `dev-loop-hub daemon <sub>` to it; daemon.ts imports the dispatch).
 import { spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createServer as netCreateServer } from "node:net";
-import { homedir } from "node:os";
+import { platform } from "node:os";
 import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync, openSync, closeSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { openDb } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
+import { findCompatibleNode } from "./node-runtime.ts";
+import { devloopProjectsPath, hubDbPath } from "./paths.ts";
 
 interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; }
+const DEFAULT_DAEMON_PORT = 8787;
+const AUTOSTART_LABEL = "com.dyzsasd.dev-loop.daemon";
 
 // The runfile lives next to the hub DB (machine-local, never committed — ~/.dev-loop by default), one
 // file per project so distinct projects never clobber each other. DEVLOOP_RUN_DIR overrides for tests.
-function lcDbPath(): string { return process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`; }
+function lcDbPath(): string { return hubDbPath(); }
 function lcRunDir(): string { return process.env.DEVLOOP_RUN_DIR ?? dirname(lcDbPath()); }
 function lcRunfile(key: string): string { return join(lcRunDir(), `daemon-${key}.json`); }
+function lcNode(): string { return findCompatibleNode([process.execPath]) ?? process.execPath; }
+function lcDaemonEntry(): string {
+  const ext = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts";
+  return fileURLToPath(new URL(`./daemon${ext}`, import.meta.url));
+}
 function lcReadRun(key: string): RunInfo | null {
   try { return JSON.parse(readFileSync(lcRunfile(key), "utf8")) as RunInfo; } catch { return null; }
 }
@@ -116,14 +126,6 @@ async function lcAcquireLock(key: string, totalMs = 60000, staleMs = 30000): Pro
   }
 }
 
-// A stable, deterministic per-project port (FNV-1a of the key → a fixed high port) so the URL is the
-// same across restarts even before a runfile exists; probed for freeness at `up` time so a hash
-// collision between two projects just shifts the loser to the next free port (then records it).
-function lcPortFor(key: string): number {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
-  return 20000 + (h % 20000); // 20000–39999: clear of the registered-port crush and the 8787 default
-}
 function lcIsAlive(pid: number): boolean {
   if (!pid || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; }
@@ -179,9 +181,7 @@ function lcResolveKey(): string | null {
   return cfg ? resolveProjectFromCwd(process.cwd(), cfg) : null;
 }
 
-async function daemonUp(): Promise<number> {
-  const key = lcResolveKey();
-  if (!key) { console.log("[daemon] up: no project resolved from cwd and DEVLOOP_PROJECT is unset — nothing to start."); return 0; }
+async function daemonUpForKey(key: string): Promise<number> {
   // Serveable ⇔ seeded in the hub DB. A non-service / unknown project is never in the hub ⇒ clean no-op.
   const dbPath = lcDbPath();
   let serveable = false;
@@ -210,23 +210,23 @@ async function daemonUp(): Promise<number> {
       // fully stop it (SIGTERM→SIGKILL) so we cleanly restart on its port rather than no-op onto a dead one.
       await lcStop(existing.pid);
     }
-    // port: explicit env override > recorded (stable across restarts) > deterministic; probe for free.
+    // port: explicit env override > recorded (stable across restarts) > fixed default 8787; probe for free.
     const envPort = process.env.DEVLOOP_DAEMON_PORT ? Number(process.env.DEVLOOP_DAEMON_PORT) : 0;
-    const port = envPort > 0 ? envPort : await lcFreePort(existing?.port || lcPortFor(key), host);
+    const port = envPort > 0 ? envPort : await lcFreePort(existing?.port || DEFAULT_DAEMON_PORT, host);
     const url = `http://${host}:${port}`;
 
     // Spawn the daemon ENTRY POINT — the foreground boot lives in daemon.ts/daemon.js (this module's
     // sibling), so resolve it relative to here. TypeScript's import rewriter does not touch string
     // literals inside new URL(...), so choose the extension at runtime: .ts in a source checkout, .js in
     // the published npm package. This is the npm-installed daemon-start regression guard.
-    const ext = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts";
-    const self = fileURLToPath(new URL(`./daemon${ext}`, import.meta.url));
+    const node = lcNode();
+    const self = lcDaemonEntry();
     mkdirSync(lcRunDir(), { recursive: true });
     const logFd = openSync(join(lcRunDir(), `daemon-${key}.log`), "a");
-    const child = spawn(process.execPath, [self], {
+    const child = spawn(node, [self], {
       detached: true,                                   // survive the launching session (DL-42 hook)
       stdio: ["ignore", logFd, logFd],
-      env: { ...process.env, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
+      env: { ...process.env, DEVLOOP_NODE: node, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
     });
     child.unref();
     closeSync(logFd);
@@ -243,6 +243,28 @@ async function daemonUp(): Promise<number> {
   } finally {
     release();
   }
+}
+
+async function daemonUp(): Promise<number> {
+  const key = lcResolveKey();
+  if (!key) { console.log("[daemon] up: no project resolved from cwd and DEVLOOP_PROJECT is unset — nothing to start."); return 0; }
+  return daemonUpForKey(key);
+}
+
+async function daemonUpAll(): Promise<number> {
+  const cfg = loadProjectsConfig();
+  const entries = Object.entries(cfg?.projects ?? {}) as Array<[string, { backend?: string }]>;
+  const serviceKeys = entries.filter(([, p]) => p.backend === "service").map(([key]) => key);
+  if (!serviceKeys.length) {
+    console.log(`[daemon] up-all: no backend:"service" projects configured in ${devloopProjectsPath()}.`);
+    return 0;
+  }
+  let code = 0;
+  for (const key of serviceKeys) {
+    const c = await daemonUpForKey(key);
+    if (c !== 0) code = c;
+  }
+  return code;
 }
 
 async function daemonDown(): Promise<number> {
@@ -273,14 +295,79 @@ async function daemonStatus(): Promise<number> {
   return 0;
 }
 
+function launchAgentPath(): string {
+  return join(process.env.HOME || "", "Library", "LaunchAgents", `${AUTOSTART_LABEL}.plist`);
+}
+
+function plistEscape(s: string): string {
+  return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function installAutostart(): number {
+  if (platform() !== "darwin") {
+    console.error("[daemon] install-autostart currently supports macOS LaunchAgent only.");
+    return 1;
+  }
+  const plist = launchAgentPath();
+  mkdirSync(dirname(plist), { recursive: true });
+  const node = lcNode();
+  const self = lcDaemonEntry();
+  const env: Record<string, string> = {};
+  for (const k of ["DEVLOOP_HOME", "DEVLOOP_PROJECTS_JSON", "DEVLOOP_HUB_DB", "DEVLOOP_RUN_DIR", "DEVLOOP_NODE"]) {
+    if (process.env[k]) env[k] = process.env[k]!;
+  }
+  const envXml = Object.entries(env).map(([k, v]) => `      <key>${plistEscape(k)}</key><string>${plistEscape(v)}</string>`).join("\n");
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${AUTOSTART_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${plistEscape(node)}</string>
+    <string>${plistEscape(self)}</string>
+    <string>up-all</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>${plistEscape(join(lcRunDir(), "daemon-autostart.out.log"))}</string>
+  <key>StandardErrorPath</key><string>${plistEscape(join(lcRunDir(), "daemon-autostart.err.log"))}</string>
+${envXml ? `  <key>EnvironmentVariables</key>\n  <dict>\n${envXml}\n  </dict>\n` : ""}</dict>
+</plist>
+`;
+  writeFileSync(plist, xml);
+  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
+  execFileSync("launchctl", ["bootstrap", `gui/${process.getuid()}`, plist], { stdio: "inherit" });
+  execFileSync("launchctl", ["enable", `gui/${process.getuid()}/${AUTOSTART_LABEL}`], { stdio: "inherit" });
+  console.log(`[daemon] autostart installed → ${plist}`);
+  console.log(`[daemon] LaunchAgent runs \`${node} ${self} up-all\` at login for configured service projects.`);
+  return 0;
+}
+
+function uninstallAutostart(): number {
+  if (platform() !== "darwin") {
+    console.error("[daemon] uninstall-autostart currently supports macOS LaunchAgent only.");
+    return 1;
+  }
+  const plist = launchAgentPath();
+  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
+  try { unlinkSync(plist); } catch { /* already gone */ }
+  console.log(`[daemon] autostart removed → ${plist}`);
+  return 0;
+}
+
 // Exported so server.ts (the `dev-loop-hub` bin) can delegate `dev-loop-hub daemon <sub>` to this SAME
 // lifecycle (the named command the DL-42 hook invokes), and daemon.ts's top-level CLI dispatch can route
 // `node src/daemon.ts <sub>` here. Both importers are side-effect-free: this module has no top-level boot,
 // and daemon.ts's dispatch/foreground guards key on argv[1]===daemon.ts (false when server.ts is the entry).
 // `ensure` is an accepted alias for `up` (the design's `daemon ensure` — idempotent one-per-project start).
-export type LifecycleSub = "up" | "ensure" | "down" | "status";
-export const LIFECYCLE_SUBS: readonly LifecycleSub[] = ["up", "ensure", "down", "status"];
+export type LifecycleSub = "up" | "ensure" | "up-all" | "down" | "status" | "install-autostart" | "uninstall-autostart";
+export const LIFECYCLE_SUBS: readonly LifecycleSub[] = ["up", "ensure", "up-all", "down", "status", "install-autostart", "uninstall-autostart"];
 export async function daemonLifecycle(sub: LifecycleSub): Promise<void> {
-  const code = sub === "up" || sub === "ensure" ? await daemonUp() : sub === "down" ? await daemonDown() : await daemonStatus();
+  const code = sub === "up" || sub === "ensure" ? await daemonUp()
+    : sub === "up-all" ? await daemonUpAll()
+    : sub === "down" ? await daemonDown()
+    : sub === "status" ? await daemonStatus()
+    : sub === "install-autostart" ? installAutostart()
+    : uninstallAutostart();
   process.exit(code);
 }

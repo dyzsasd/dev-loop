@@ -48,16 +48,16 @@ other SKILL/conventions/code file (§17 — see the close of this file).
 never trust conversation memory for state, and on a hard failure log one line and
 exit (the next fire retries). See conventions §0.
 
-Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`, pick the project,
-and load `linearProject`, `linearTeam`, `repoPath`, `strategyDoc`, `build`, `git`,
+Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
+`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
+as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `strategyDoc`, `build`, `git`,
 `deploy`, `mode`, `autonomy` (§12a), the optional `codex` block (§24), and — if
 present — `repos[]` (conventions §19). **Resolve the target repo per ticket** exactly
 as `dev` does: absent/one `repos[]` ⇒ single-repo (the implicit target is `repoPath`);
 with multiple repos, the ticket's `repo:<name>` label names the target and you resolve
 that repo's effective `build`/`defaultBranch`/`deploy`/`contributorSkill` (repo value
-else top-level, §19). If that path doesn't resolve, fall back to
-`~/.claude/plugins/data/dev-loop/projects.json` or search
-`~/.claude/plugins/data/**/projects.json` before asking the user. (`strategyDoc` may
+else top-level, §19). If no config path resolves, ask the user before proceeding. (`strategyDoc` may
 be a repo file or a Linear/hub document; you never *write* it — that's PM's job, and
 the per-module **design** doc is senior-dev's, §21a.)
 

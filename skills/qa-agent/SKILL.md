@@ -29,12 +29,12 @@ they override this file on conflict:
 trust conversation memory for state; on a hard failure log one line and exit (the
 next fire retries). See conventions §0.
 
-Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`,
-pick the project, and load `linearProject`, `linearTeam`, `repoPath`, `testEnv`,
+Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
+`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
+as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `testEnv`,
 `mode`, `autonomy` (§12a), and — if present — `repos[]` (conventions §19; absent/one ⇒
-single-repo = just `repoPath`, unchanged). If that path doesn't resolve (e.g. `${CLAUDE_PLUGIN_DATA}` expands to
-an empty/`-local` dir), fall back to `~/.claude/plugins/data/dev-loop/projects.json`
-or search `~/.claude/plugins/data/**/projects.json` before asking the user.
+single-repo = just `repoPath`, unchanged). If no config path resolves, ask the user before proceeding.
 **If `testEnv` is missing or unclear, ask the user where to test before touching
 anything** — never run tests against an environment you're unsure of, and never
 against real prod unless config says so.
