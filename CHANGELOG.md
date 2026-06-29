@@ -28,6 +28,10 @@ experience** — a real failure observed while the agents ran, then hardened int
 - Clarified onboarding docs: `/dev-loop:init` belongs to the Claude plugin path, while the no-plugin
   scheduler path starts from `dev-loop init-config` plus a `dev-loop run --once --dry-run`
   validation.
+- Fixed npm-source Claude plugin packaging: the npm tarball now includes `.claude-plugin/`,
+  `skills/`, `references/`, `hooks/`, and `config/` at package root, because Claude Code's npm
+  plugin source resolves manifests only from the package root. The existing `dist/plugin/` payload
+  remains for scheduler/runtime lookups.
 
 ## 0.22.1 — Communication agent + Codex-startable scheduler
 Adds `communication-agent`, an outward PR/media role that drafts one public-facing product

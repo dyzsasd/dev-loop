@@ -26,6 +26,13 @@ const run = (cmd: string, args: string[], env: Record<string, string> = {}): { c
   return { code: r.status ?? 1, out: (r.stdout ?? "") + (r.stderr ?? ""), stdout: r.stdout ?? "" };
 };
 
+function parsePackJson(stdout: string): Array<{ files?: Array<{ path: string }> }> {
+  const start = stdout.indexOf("[");
+  if (start < 0) return [];
+  try { return JSON.parse(stdout.slice(start)) as Array<{ files?: Array<{ path: string }> }>; }
+  catch { return []; }
+}
+
 const tmp = mkdtempSync(join(tmpdir(), "dl-build-artifact-"));
 try {
   // ── AC1: the publish/prepack build succeeds and emits BOTH compiled bin entry points ──
@@ -38,6 +45,16 @@ try {
     "dist/plugin includes skills + references for npm-installed scheduler runs");
   ok(existsSync(join(distDir, "plugin", ".claude-plugin", "plugin.json")) && existsSync(join(distDir, "plugin", "hooks", "hooks.json")),
     "dist/plugin includes Claude plugin manifest + hooks for npm-installed slash commands");
+  ok(existsSync(join(hubRoot, ".claude-plugin", "plugin.json")) && existsSync(join(hubRoot, "skills", "init", "SKILL.md")),
+    "npm package root includes Claude plugin manifest + skills for npm-source plugin installs");
+  const pack = run("npm", ["--silent", "pack", "--dry-run", "--json"]);
+  const packedFiles = new Set(parsePackJson(pack.stdout)[0]?.files?.map((f) => f.path) ?? []);
+  ok(pack.code === 0
+    && packedFiles.has(".claude-plugin/plugin.json")
+    && packedFiles.has("skills/init/SKILL.md")
+    && packedFiles.has("hooks/hooks.json")
+    && packedFiles.has("dist/plugin/.claude-plugin/plugin.json"),
+    "npm pack includes root-level Claude plugin payload plus dist/plugin scheduler payload");
 
   // ── AC2/AC3: the compiled bins LOAD + RUN — proves the rewritten sibling .ts→.js imports resolve in the JS
   //    output, and the suite goes RED if the build breaks or a bin can't load. ──

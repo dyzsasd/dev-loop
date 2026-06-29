@@ -176,7 +176,7 @@ dev-loop run --cli codex --agents core --once --dry-run
 dev-loop run --cli codex --agents core,communication
 ```
 
-**路径 B — 用 Claude slash command 接入：**
+**路径 B — 用 Claude plugin skill 接入：**
 
 ```bash
 dev-loop install-claude-plugin
@@ -190,7 +190,7 @@ dev-loop run --cli codex --agents core --once --dry-run
 
 ## 环境要求
 
-- 使用 slash command / Agent View 时，需要 **Claude Code** 并安装本插件；使用 scheduler 时，
+- 使用 `/dev-loop:*` plugin skill / Agent View 时，需要 **Claude Code** 并安装本插件；使用 scheduler 时，
   被调用的执行器 CLI（`claude`、`codex`，或验证后的 opencode）需要在 `PATH` 上。
 - 一个**协调后端**：默认使用 **Linear MCP**（`mcp__linear-server__*`），本地文件看板 / hub 则无需额外组件。
 - 已认证的 **`gh` CLI**——Dev 用它做 git/部署。
@@ -216,7 +216,7 @@ npm i -g @dyzsasd/dev-loop          # 安装 `dev-loop` + `dev-loop-hub` CLI（N
 | Skills + hub MCP | 来自已安装的插件 | 由 scheduler 自行注入 |
 
 ### Mode A — Plugin（交互式，Claude Code）
-你自己启动 Claude Code，用 slash command + `/loop` 驱动智能体。**从 npm 注册插件**（无需
+你自己启动 Claude Code，用 `/dev-loop:*` plugin skill + `/loop` 驱动智能体。**从 npm 注册插件**（无需
 GitHub）：
 
 ```bash

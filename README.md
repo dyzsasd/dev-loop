@@ -255,7 +255,7 @@ dev-loop run --cli codex --agents core --once --dry-run
 dev-loop run --cli codex --agents core,communication
 ```
 
-**Path B — Claude slash-command onboarding:**
+**Path B — Claude plugin-skill onboarding:**
 
 ```bash
 dev-loop install-claude-plugin
@@ -269,7 +269,7 @@ dev-loop run --cli codex --agents core --once --dry-run
 
 ## Requirements
 
-- **Claude Code** with this plugin installed when using slash commands / Agent View; for scheduler
+- **Claude Code** with this plugin installed when using `/dev-loop:*` plugin skills / Agent View; for scheduler
   runs, the selected executor CLI (`claude`, `codex`, or opencode once verified) must be on `PATH`.
 - A **coordination backend**: the **Linear MCP** (`mcp__linear-server__*`) for the default,
   or nothing extra for the local file board / hub.
@@ -296,7 +296,7 @@ npm i -g @dyzsasd/dev-loop          # installs the `dev-loop` + `dev-loop-hub` C
 | Skills + hub MCP | from the installed plugin | the scheduler injects both itself |
 
 ### Mode A — Plugin (interactive, Claude Code)
-Launch Claude Code yourself and drive agents with slash commands + `/loop`. Register the plugin
+Launch Claude Code yourself and drive agents with `/dev-loop:*` plugin skills + `/loop`. Register the plugin
 **from npm** (no GitHub):
 
 ```bash
