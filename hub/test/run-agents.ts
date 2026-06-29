@@ -18,9 +18,11 @@ try {
   const data = join(tmp, "data");
   const repo = join(tmp, "repo");
   const otherRepo = join(tmp, "other-repo");
+  const outside = join(tmp, "outside");
   mkdirSync(data, { recursive: true });
   mkdirSync(repo, { recursive: true });
   mkdirSync(otherRepo, { recursive: true });
+  mkdirSync(outside, { recursive: true });
   writeFileSync(join(data, "projects.json"), JSON.stringify({
     defaultProject: "fallback",
     projects: { demo: { repoPath: repo }, fallback: { repoPath: otherRepo } },
@@ -45,8 +47,12 @@ try {
 
   const inferred = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", ...noProjectCommon]);
   ok(inferred.code === 0, "runner can omit --project when cwd is inside a configured repo");
-  ok(/project=demo cwd=/.test(inferred.out), "cwd→repoPath inference resolves the project before defaultProject");
+  ok(/project=demo cwd=/.test(inferred.out), "cwd→repoPath inference resolves the project");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_PROJECT="demo"/.test(inferred.out), "inferred project is injected into Codex with -c");
+
+  const unresolved = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--cwd", outside]);
+  ok(unresolved.code === 2 && /no project resolved from cwd/.test(unresolved.out) && /Configured projects: demo, fallback/.test(unresolved.out),
+    "runner refuses to guess defaultProject/demo when cwd is outside every configured repo");
 
   const split = run(["--cli", "claude", "--once", "--dry-run", "--agents", "core", "--dev-split", ...common]);
   ok(split.code === 0, "--dev-split dry-run exits 0");

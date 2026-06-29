@@ -50,16 +50,15 @@ fire retries). See conventions §0. You are **stateless per fire**: the only thi
 carries across fires is `architect-state.json` (the per-repo SHA map + which
 dimensions you've swept at those SHAs), re-read from disk every fire.
 
-Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`, pick the project,
-and load `linearProject`, `linearTeam`, `repoPath`, `build`, `git`, `mode`,
+Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
+`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
+as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `build`, `git`, `mode`,
 `autonomy` (§12a), the optional `codex` block (§24), and — if present — `repos[]`
 (conventions §19; absent/one ⇒
 single-repo = just `repoPath`, unchanged). **Architect needs no architect-specific
 config** — it reuses `repos[]` / `repoPath` / `build` (the shared `codex` block, §24, is
-the only optional add). If that path doesn't resolve (e.g.
-`${CLAUDE_PLUGIN_DATA}` expands to an empty/`-local` dir), fall back to
-`~/.claude/plugins/data/dev-loop/projects.json` or search
-`~/.claude/plugins/data/**/projects.json` before asking the user.
+the only optional add). If no config path resolves, ask the user instead of guessing.
 
 **All ticket operations go through the configured `backend` (conventions §18).**
 `backend` absent ⇒ `"linear"` (the Linear MCP, as written below); `"local"` routes the

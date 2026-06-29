@@ -12,10 +12,9 @@
 //   (d) `runDoctor(dbPath)` → assert DOCTOR_OK (doctor.ts — read-only, never auto-creates a db)
 //   (e) one-shot `daemon up` (the shipped DL-41 lifecycle) → confirm `/api/health {ok:true}` → report
 //       the board URL
-// then VERIFY the DL-42 `hooks/hooks.json` SessionStart hook is present — the STEADY-STATE lifecycle
-// owner (C1-mustFix-2). init's `daemon up` above is a one-time CURRENT-SESSION bootstrap convenience
-// only; if the hook is absent we WARN (tell the operator to re-sync/reinstall the plugin) and NEVER
-// install a competing lifecycle path.
+// then report lifecycle options. The standalone dev-loop lifecycle is `dev-loop daemon up` plus the
+// optional OS login item (`dev-loop daemon install-autostart`). The Claude SessionStart hook is kept as
+// a compatibility convenience for plugin sessions, not the canonical lifecycle owner.
 //
 // Idempotent: a re-run is a clean no-op (seed idempotent-on-key, daemon already-up detected). Honors
 // config: a NON-"service" backend → exit-0 no-op (back-compat — the DL-41/42 safety contract); a
@@ -24,7 +23,6 @@
 // (DL-53) and can never name/write a SKILL/conventions/code file.
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { openDb } from "./db.ts";
@@ -32,6 +30,7 @@ import { ensureSeed } from "./seed.ts";
 import { runDoctor } from "./doctor.ts";
 import { loadProjectsConfig } from "./resolve-project.ts";
 import { mergeMcpServer } from "./mcp-merge.ts";
+import { hubDbPath } from "./paths.ts";
 
 export interface InitServiceOpts {
   key: string;
@@ -40,7 +39,7 @@ export interface InitServiceOpts {
   dbPath: string;          // the hub SoR (REQUIRED — tests pass an isolated path so they never touch the live ~/.dev-loop)
   dryRun?: boolean;        // a `--dry-run` override (OR config mode:"dry-run")
   hubDir?: string;         // default <hub/src>/.. — for the node_modules check + `npm install` cwd
-  pluginRoot?: string;     // default DEVLOOP_PLUGIN_ROOT ?? <hub/src>/../.. — for the DL-42 hooks/hooks.json check
+  pluginRoot?: string;     // default DEVLOOP_PLUGIN_ROOT ?? <hub/src>/../.. — optional Claude hook compatibility check
   serverEntry?: string;    // default <hub/src>/server.ts — the `daemon up` is spawned via it
 }
 
@@ -57,9 +56,9 @@ function resolveProjectCfg(key: string): { backend: string; mode: string; repoPa
   return { backend: proj.backend ?? "linear", mode: proj.mode ?? "live", repoPath: proj.repoPath };
 }
 
-// DL-42 (C1-mustFix-2): the SessionStart hook is the STEADY-STATE lifecycle owner; init only VERIFIES it
-// ships (a `daemon up` SessionStart command in hooks/hooks.json) and WARNS if absent — it must never
-// install a competing lifecycle path.
+// Claude plugin compatibility: if the plugin hook is present, report it. Missing hooks are fine for
+// scheduler/Codex/standalone installs; `dev-loop daemon install-autostart` is the durable machine-level
+// lifecycle path.
 function sessionStartHookPresent(pluginRoot: string): boolean {
   try {
     const j = JSON.parse(readFileSync(join(pluginRoot, "hooks", "hooks.json"), "utf8")) as {
@@ -166,11 +165,12 @@ export async function runInitService(opts: InitServiceOpts): Promise<number> {
     }
   }
 
-  // ── DL-42 hook presence: VERIFY (don't install — C1-mustFix-2) ──
+  // ── lifecycle report: standalone autostart first; Claude hook only as compatibility ──
+  log("ℹ️  For login-time daemon startup, run `dev-loop daemon install-autostart` once (macOS LaunchAgent; use your OS process manager elsewhere).");
   if (sessionStartHookPresent(pluginRoot)) {
-    log("✅ DL-42 SessionStart hook present — the per-project daemon auto-starts each session (steady-state owner)");
+    log("✅ Claude SessionStart hook present — plugin sessions can also nudge `dev-loop daemon up`");
   } else {
-    log("⚠️  DL-42 SessionStart hook NOT found in hooks/hooks.json — re-sync / reinstall the dev-loop plugin so the daemon auto-starts on session start. (The `daemon up` above was a one-time current-session bootstrap; init never installs a competing lifecycle path.)");
+    log("ℹ️  Claude SessionStart hook not found — fine for scheduler/Codex/standalone installs.");
   }
 
   // ── report ──
@@ -193,7 +193,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   const code = await runInitService({
     key, name, prefix, dryRun,
-    dbPath: process.env.DEVLOOP_HUB_DB ?? join(homedir(), ".dev-loop", "hub.db"),
+    dbPath: hubDbPath(),
   });
   process.exit(code);
 }

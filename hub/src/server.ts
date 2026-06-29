@@ -4,20 +4,20 @@
 // Tools mirror the Linear MCP op-shapes 1:1 so the agent SKILLs port unchanged (conventions §18).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { homedir } from "node:os";
 import { openDb, actorExists, listActorHandles } from "./db.ts";
 import { ensureActors, ensureProject, findProject } from "./seed.ts";
 import { createLabel } from "./labelstore.ts"; // DL-69: create_issue_label stays a native handler (see agentops.ts opCreateLabel — the only op server.ts does NOT dispatch through, to keep the stdio path byte-identical)
 import { resolveProjectFromCwd, loadProjectsConfig, resolveIdentity } from "./resolve-project.ts";
 import { agentOp, type OpResult, type AgentOp } from "./agentops.ts"; // DL-69: the SINGLE definition of every ticket/read policy — every op-backed handler below dispatches through agentOp()
 import { ok, err, registerTools } from "./tooldefs.ts"; // DL-85: the ONE {name,description,inputSchema} registry + the shared ok()/err()
+import { hubDbPath } from "./paths.ts";
 
 // ─── Environment / identity ──────────────────────────────────────────────────
-const DB_PATH = process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`;
+const DB_PATH = hubDbPath();
 // DL-85: the DEVLOOP_ACTOR + DEVLOOP_PROJECT/cwd resolution lives ONCE in resolve-project.ts (was re-derived
 // here AND in shim.ts). An EXPLICIT DEVLOOP_PROJECT wins; else cwd-resolve (DL-13: an agent launched inside a
-// project folder auto-pins it); else the "demo" default. projectFromCwd drives the clearer not-seeded error below.
-const { actor: ACTOR, projectKey: PROJECT_KEY, projectFromCwd } = resolveIdentity();
+// project folder auto-pins it); else unresolved. projectFromCwd drives the clearer not-seeded error below.
+const { actor: ACTOR, projectKey: PROJECT_KEY, projectFromCwd, projectResolved } = resolveIdentity();
 
 // `dev-loop-hub resolve-project [--cwd <path>]` (DL-13) — print the project KEY whose repo CONTAINS the
 // cwd (default: process.cwd()), or exit non-zero with no output. The launcher reuses THIS matcher so the
@@ -53,10 +53,10 @@ if (process.argv[2] === "identity-check") {
   if (dbPresent) {
     try { const d = openDb(DB_PATH); actorKnown = actorExists(d, ACTOR); d.close(); } catch { actorKnown = null; }
   }
-  const matchesExpectation = (!expectActor || expectActor === ACTOR) && (!expectProject || expectProject === PROJECT_KEY);
-  const wouldStart = !dbPresent || actorKnown === true; // db absent ⇒ would be seeded; else the actor must be known
+  const matchesExpectation = (!expectActor || expectActor === ACTOR) && (!expectProject || (projectResolved && expectProject === PROJECT_KEY));
+  const wouldStart = projectResolved && (!dbPresent || actorKnown === true); // db absent ⇒ would be seeded; else the actor must be known
   const pass = wouldStart && matchesExpectation;
-  console.log(JSON.stringify({ actor: ACTOR, project: PROJECT_KEY, db: DB_PATH, dbPresent, actorKnown, wouldStart, expectActor: expectActor ?? null, expectProject: expectProject ?? null, matchesExpectation, pass }));
+  console.log(JSON.stringify({ actor: ACTOR, project: projectResolved ? PROJECT_KEY : null, projectResolved, db: DB_PATH, dbPresent, actorKnown, wouldStart, expectActor: expectActor ?? null, expectProject: expectProject ?? null, matchesExpectation, pass }));
   process.exit(pass ? 0 : 1);
 }
 
@@ -88,6 +88,10 @@ if (!actorExists(db, ACTOR)) {
 // P3/G2 — phantom-project guard: a typo'd DEVLOOP_PROJECT must NOT silently auto-create an empty
 // board the agent then works in by mistake. The project must already exist; create it deliberately
 // once (`node src/seed.ts <key> <name> <UNIQUE_PREFIX>`) or opt in with DEVLOOP_CREATE_PROJECT=1.
+if (!projectResolved) {
+  console.error("[hub] no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in ~/.dev-loop/projects.json.");
+  process.exit(1);
+}
 const projectId =
   process.env.DEVLOOP_CREATE_PROJECT === "1"
     ? ensureProject(db, PROJECT_KEY, process.env.DEVLOOP_PROJECT_NAME ?? PROJECT_KEY, process.env.DEVLOOP_TICKET_PREFIX ?? "DL")

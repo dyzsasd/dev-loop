@@ -1,45 +1,32 @@
 {
-  "defaultProject": "monpick",
-  "projects": {
-    "monpick": {
-      "linearTeam": "Citronetic",
-      "linearProject": "MonPick",
-      "repoPath": "/Users/shuai/workspace/citronetic/monpick",
-      "strategyDoc": "shopmy-analysis/15-parity-report.md",
+  "_comment": "Example-only file. Real configs should keep projects empty until the operator adds one. Copy an entry from _examples into projects and edit every path/name before running.",
+  "projects": {},
+  "_examples": {
+    "single-repo-service": {
+      "backend": "service",
       "mode": "dry-run",
       "autonomy": "ask",
+      "repoPath": "/abs/path/to/product-repo",
+      "strategyDoc": "docs/strategy.md",
+      "ticketPrefix": "PRJ",
       "testEnv": {
-        "baseUrl": "https://monpick.vercel.app",
-        "setup": "python3 -m venv .venv && .venv/bin/pip install -q playwright && .venv/bin/playwright install chromium",
-        "testCommand": ".venv/bin/python3 tests/{suite}",
-        "notes": "Playwright Python suites in tests/. Run testEnv.setup once if the .venv/playwright harness is missing. Personas: demo-creator@monpick.dev / password123 (creator), demo-brand@monpick.dev / password123 (brand), demo-shopper@monpick.dev / password123 (shopper)."
+        "baseUrl": "http://127.0.0.1:3000",
+        "setup": "npm install",
+        "testCommand": "npm test",
+        "notes": "Replace with the product's real test entry points and test users."
       },
       "build": {
-        "typecheck": "npx tsc --noEmit",
-        "build": "pnpm build",
-        "test": "pnpm exec tsx tests/*.test.ts"
+        "typecheck": "npm run typecheck",
+        "build": "npm run build",
+        "test": "npm test"
       },
       "git": {
         "defaultBranch": "main",
         "autoCommit": true,
-        "autoPush": true,
-        "autoDeploy": true
-      },
-      "deploy": {
-        "command": "vercel --prod --yes"
-      },
-      "codex": {
-        "_comment": "OPTIONAL Codex companion (conventions §24). Absent OR enabled:false OR codex CLI not on PATH ⇒ never invoked (100% unchanged). Needs the `codex` CLI (npm i -g @openai/codex; codex login) + the codex-plugin-cc plugin.",
-        "enabled": true,
-        "review": true,
-        "rescue": false,
-        "imageGen": true,
-        "assetsDir": "public/generated",
-        "model": null,
-        "effort": null
+        "autoPush": false,
+        "autoDeploy": false
       },
       "communication": {
-        "_comment": "OPTIONAL communication-agent: drafts one public-facing product article per cadence. Draft-only: never publishes externally, never commits/pushes/deploys. Codex launch uses DEVLOOP_ACTOR=communication via the PORTABILITY.md identity recipe.",
         "cadence": "daily",
         "language": "en",
         "audience": "current and prospective users",
@@ -48,35 +35,59 @@
         "sourceWindowDays": 7,
         "output": "data",
         "outputDir": "communications",
-        "repoOutputDir": "docs/communications",
         "includeUnreleased": false
-      },
-      "notify": {
-        "_comment": "OPTIONAL (conventions §9): ping the operator on a human-park (blocked+needs-pm+Bail-shape: external-prereq) via a Slack/Lark webhook. webhookEnv names an env var holding the webhook URL (a §16 secret — NEVER inline a real URL in a committed file). Absent => no-op. type: slack | lark.",
-        "type": "lark",
-        "webhookEnv": "DEVLOOP_NOTIFY_WEBHOOK",
-        "events": ["human-parked"]
-      },
-      "blockedStateName": null
+      }
     },
-    "acme-suite": {
-      "_comment": "MULTI-REPO EXAMPLE (conventions §19). monpick above stays single-repo via top-level repoPath/build/git — back-compat. Here repos[] replaces a single repoPath; each ticket targets a repo via a repo:<name> label. role docs/primary picks the doc-home repo for strategyDoc; lang is informational; build/defaultBranch/deploy/contributorSkill resolve per-repo else top-level; autoCommit/autoPush/autoDeploy stay product-level in git.",
-      "linearTeam": "Acme",
-      "linearProject": "Acme Suite",
-      "repos": [
-        { "name": "web", "path": "/abs/path/to/acme-web", "role": "primary", "lang": "ts", "defaultBranch": "main", "deploy": { "command": "vercel --prod --yes", "healthCheck": "https://acme.example.com" } },
-        { "name": "api", "path": "/abs/path/to/acme-api", "role": "docs", "lang": "go", "defaultBranch": "main", "build": { "typecheck": "go build ./...", "test": "go test ./..." }, "deploy": { "command": "flyctl deploy", "healthCheck": "https://api.acme.example.com/healthz" } }
-      ],
-      "strategyDoc": "docs/strategy.md",
+    "multi-repo-linear": {
+      "backend": "linear",
       "mode": "dry-run",
       "autonomy": "ask",
+      "linearTeam": "Your Team",
+      "linearProject": "Your Product",
+      "repos": [
+        {
+          "name": "web",
+          "path": "/abs/path/to/product-web",
+          "role": "primary",
+          "lang": "ts",
+          "defaultBranch": "main",
+          "deploy": {
+            "command": "npm run deploy:web",
+            "healthCheck": "https://app.example.com/health"
+          }
+        },
+        {
+          "name": "api",
+          "path": "/abs/path/to/product-api",
+          "role": "docs",
+          "lang": "go",
+          "defaultBranch": "main",
+          "build": {
+            "typecheck": "go build ./...",
+            "test": "go test ./..."
+          },
+          "deploy": {
+            "command": "npm run deploy:api",
+            "healthCheck": "https://api.example.com/health"
+          }
+        }
+      ],
+      "strategyDoc": "docs/strategy.md",
       "testEnv": {
-        "baseUrl": "https://acme.example.com",
-        "notes": "One product baseUrl (conventions §19 limit: the api repo has no URL of its own). Personas in a vault — ask user."
+        "baseUrl": "https://app.example.com",
+        "notes": "Keep real credentials in a vault or env file; never inline secrets here."
       },
-      "build": { "typecheck": "pnpm -r typecheck", "build": "pnpm -r build" },
-      "git": { "defaultBranch": "main", "autoCommit": true, "autoPush": true, "autoDeploy": false },
-      "blockedStateName": null
+      "build": {
+        "typecheck": "npm run typecheck",
+        "build": "npm run build",
+        "test": "npm test"
+      },
+      "git": {
+        "defaultBranch": "main",
+        "autoCommit": true,
+        "autoPush": true,
+        "autoDeploy": false
+      }
     }
   }
 }

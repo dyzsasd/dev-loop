@@ -7,6 +7,10 @@ the normal install path for the service backend, MCP configs, daemon, doctor, an
 npm i -g @dyzsasd/dev-loop
 ```
 
+On macOS, a global npm install also attempts to install a LaunchAgent that runs
+`dev-loop daemon up-all` at login. Set `DEVLOOP_SKIP_AUTOSTART=1` before install to opt out; if npm
+scripts were skipped, run `dev-loop daemon install-autostart` later.
+
 Install the Claude plugin only if you want `/dev-loop:*` plugin skills or Agent View onboarding:
 
 ```bash
@@ -30,7 +34,7 @@ Create the project config yourself, then validate it with a dry run:
 
 ```bash
 dev-loop init-config
-$EDITOR ~/.claude/plugins/data/dev-loop/projects.json
+$EDITOR ~/.dev-loop/projects.json
 
 cd /path/to/product-repo
 dev-loop run --cli codex --agents core --once --dry-run
@@ -62,10 +66,11 @@ It will, with you in the loop:
    multi-repo. It echoes back each `repoPath` / `repos[].path` (the loop *commits from
    them*, so this is a gate). Greenfield runs a short strategy interview; brownfield is
    read-only-mapped into the doc-base `Current state`.
-2. **Ask the backend** — `linear` (coordinate through Linear) or `local` (a machine-local
-   file board in the data dir; no Linear needed). See [conventions §18](../references/conventions.md#18-backend--linear-vs-local).
+2. **Ask the backend** — `linear` (coordinate through Linear), `local` (a machine-local
+   file board in the data dir), or `service` (the local hub; no Linear needed unless you opt into mirror/report sinks).
+   See [conventions §18](../references/conventions.md#18-backend--linear-vs-local).
 3. Gather/validate the per-project config and write it to
-   `~/.claude/plugins/data/dev-loop/projects.json` (creating only what's missing).
+   `~/.dev-loop/projects.json` (or `DEVLOOP_PROJECTS_JSON`, creating only what's missing).
 4. **linear**: ensure the workflow labels + the Linear project exist (asking before
    creating the project), plus one `repo:<name>` label per `repos[]` entry when
    multi-repo. **local**: scaffold `board/` (`tickets/`, `counter.json`) and require a
@@ -129,10 +134,12 @@ Project selection is automatic when the scheduler starts inside a configured rep
 matches the current directory against `repoPath` / `repos[].path` in `projects.json`.
 Use `--project <key>` only when you launch from outside the repo, when a process manager
 uses a fixed cwd, or when you want to override the cwd match. Use `--cwd <path>` to make
-repo matching explicit without changing the shell's current directory.
+repo matching explicit without changing the shell's current directory. If neither
+`--project` / `DEVLOOP_PROJECT` nor the cwd resolves to a configured repo, the scheduler
+stops with a setup hint instead of guessing another project.
 
 Multiple projects on one machine are normal. Put them all under the same
-`${CLAUDE_PLUGIN_DATA}/projects.json`, each with a distinct project key and repo path(s), then run
+`~/.dev-loop/projects.json`, each with a distinct project key and repo path(s), then run
 one scheduler process per product:
 
 ```bash
@@ -161,7 +168,7 @@ Useful options:
   (Claude Code has no equivalent gate — its inline `--mcp-config` tools run without approval.)
 
 The runner writes one log per agent under
-`${CLAUDE_PLUGIN_DATA}/<project-key>/runner-logs/`. Stop it with `Ctrl-C`; it forwards
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/runner-logs/`. Stop it with `Ctrl-C`; it forwards
 SIGINT to active agent subprocesses. This mode is the most portable: run it from tmux,
 cron, launchd, systemd, or any host process manager.
 
@@ -220,27 +227,23 @@ Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent o
 > Codex deprecated custom prompts in favor of skills, and `dev-loop run --cli codex` is the
 > durable launch path.)
 
-### C. Local tmux launcher — mixed models, one command
+### C. External process managers
 
-A small launcher (kept in your data dir, **not** part of the plugin) opens a `dev-loop`
-tmux session with one pane per agent, each a headless `claude` loop, and reads your
-per-agent `models` from config so every pane gets its own `--model`:
+For unattended operation under tmux, launchd, systemd, cron, or a container supervisor, run the same
+`dev-loop run` command under that manager. The scheduler owns agent cadence, resolves the project from
+cwd or `--project`, injects the hub MCP for Claude/Codex, and writes logs under the dev-loop data dir.
 
-```
-~/.claude/plugins/data/dev-loop/run-loop.sh            # PM/QA/Dev + Sweep; Reflect off
-MODE=once   ~/.claude/plugins/data/dev-loop/run-loop.sh   # one pass each, then stop (good first test)
-REFLECT=1   ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the daily Reflect pane
-SWEEP=0     ~/.claude/plugins/data/dev-loop/run-loop.sh   # omit the janitor pane
-PROJECT=foo ~/.claude/plugins/data/dev-loop/run-loop.sh   # pick a project key
-OPS=1       ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Ops (prod-watch) pane (~10m; off by default)
-ARCHITECT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # also run the Architect (tech-debt) pane (daily; off by default)
-COMMUNICATION=1 ~/.claude/plugins/data/dev-loop/run-loop.sh # also run Communication (daily article drafts; off by default)
-DEV_SPLIT=1 ~/.claude/plugins/data/dev-loop/run-loop.sh   # two-tier Dev (opt-in): senior-dev (opus/max) + junior-dev (sonnet/high) replace the single dev pane; see conventions §21a
+```bash
+cd /path/to/product-repo
+dev-loop run --cli codex --agents core,communication
+
+# More explicit for a process manager with a fixed cwd:
+dev-loop run --cli codex --project <key> --cwd /path/to/product-repo --agents core,communication
 ```
 
-It prints a blast-radius banner (project, mode, autonomy, ship flags, models) before
-starting. Detach `Ctrl-b d` · reattach `tmux attach -t dev-loop` · stop all
-`tmux kill-session -t dev-loop`. Logs tee to `~/.claude/plugins/data/dev-loop/logs/`.
+Use CLI-native model/config flags through `--cli-arg`, or set per-agent model defaults in the executor
+CLI's own config. The old data-dir `run-loop.sh` launcher is legacy; new installs should not create
+runtime scripts under a Claude plugin data directory.
 
 ---
 
@@ -301,7 +304,7 @@ agent that did it, not the single shared Linear user.
 **One-time setup:**
 1. Install the runtime once: `npm i -g @dyzsasd/dev-loop` (Node ≥ 23.6 for built-in
    `node:sqlite`; no native build). If your default `node` is older but a newer one exists, set
-   `DEVLOOP_NODE=/absolute/path/to/node`; the packaged CLI and hook will use it.
+   `DEVLOOP_NODE=/absolute/path/to/node`; the packaged CLI, daemon autostart, and compatibility hook will use it.
 2. Set `backend:"service"` in `projects.json`; keep `strategyDoc` a **repo file**.
 3. Let the packaged CLI wire the service runtime:
    ```bash
@@ -309,7 +312,7 @@ agent that did it, not the single shared Linear user.
    dev-loop init-service <project-key> "<Project Name>" <UNIQUE-PREFIX>
    ```
    This seeds the project, merges `dev-loop-hub` into the product repo `.mcp.json`, runs `doctor`,
-   starts the daemon once, checks `/api/health`, and verifies the SessionStart hook.
+   starts the daemon once, checks `/api/health`, and reports how to install login autostart.
 
 Manual fallback: **create the project in the hub once** (the hub refuses to auto-create a board from
 a typo'd `DEVLOOP_PROJECT`, and each project needs a **unique ticket prefix** since ticket ids are a
@@ -327,11 +330,11 @@ must live in a repo, gitignore `hub.db*` (doctor will tell you if it's exposed).
 process.
 
 **Project precedence (DL-13):** explicit `DEVLOOP_PROJECT` (non-empty) **>** the process **cwd**
-(the repo it was launched in — matched against the configured `repoPath`/`repos[]`) **>** the
-`demo` default. So `DEVLOOP_PROJECT` is **optional** when you launch from inside a project's repo:
-unset/empty falls back to the cwd match (`dev-loop-hub resolve-project [--cwd <path>]` is the shared
-matcher). A cwd that matches a configured-but-unseeded project **errors loudly** (it does not
-silently fall through to `demo`); a cwd outside every repo → `demo`. Set `DEVLOOP_PROJECT` explicitly
+(the repo it was launched in — matched against the configured `repoPath`/`repos[]`) **>** unresolved.
+So `DEVLOOP_PROJECT` is **optional** when you launch from inside a project's repo: unset/empty falls
+back to the cwd match (`dev-loop-hub resolve-project [--cwd <path>]` is the shared matcher). A cwd
+that matches a configured-but-unseeded project **errors loudly** (it does not silently fall through to
+`demo`); a cwd outside every configured repo does not guess either. Set `DEVLOOP_PROJECT` explicitly
 to override the cwd, or to be unambiguous in a launcher that spawns the MCP server from a fixed dir.
 
 ```bash
@@ -352,29 +355,33 @@ The hub ships a localhost HTTP surface over the same `hub.db` — a server-rende
 (filters + assignee swimlanes) plus ticket / roadmap / reports / activity viewers and a JSON
 API — so you can *watch* the loop without touching the system of record.
 
-**It now auto-starts — you usually run nothing.** The plugin's `SessionStart` hook (DL-42,
-`hooks/hooks.json`) runs DL-41's idempotent `daemon up` on every session start, so opening a
-`service`-backend project in Claude Code brings its web UI up automatically — no manual step. The
-daemon binds a **deterministic per-project port** (the 20000–39999 range, cwd-resolved via DL-13 —
-e.g. `25617` for dev-loop), one daemon per project, never double-started. Find the live URL any time:
+**Auto-start is owned by dev-loop, not by Claude.** For a one-time foreground bootstrap,
+`dev-loop init-service` runs `dev-loop daemon up` after seeding. On macOS, global npm install attempts
+to install the LaunchAgent automatically; if scripts were skipped, autostart was disabled, or you need
+to repair it, run:
+
+```bash
+dev-loop daemon install-autostart
+# remove it later with:
+dev-loop daemon uninstall-autostart
+```
+
+The LaunchAgent runs `dev-loop daemon up-all`, which starts every configured
+`backend:"service"` project. The daemon uses a fixed default port, **8787**, and if that port is
+occupied it probes upward and records the actual URL in the runfile. One daemon is kept per project
+and never double-started. Find the live URL any time:
 
 ```bash
 # the lifecycle prints + records the URL (the DL-41 runfile ~/.dev-loop/daemon-<key>.json):
-dev-loop daemon status   # → 'service' RUNNING → http://127.0.0.1:<port>
+dev-loop daemon status   # → '<project-key>' RUNNING → http://127.0.0.1:<port>
 ```
 
-To start it by hand (e.g. a non-Claude launcher, or before the first session), use the **idempotent
-lifecycle** — `daemon up` (a clean no-op if already running), **not** the old fixed-`8787`
-foreground server:
+To start it by hand, use the **idempotent lifecycle** — `daemon up` is a clean no-op if already running:
 
 ```bash
 DEVLOOP_PROJECT=<project-key> dev-loop daemon up
-# → started '<key>' → http://127.0.0.1:<deterministic-port>   (idempotent; one per project)
+# → started '<key>' → http://127.0.0.1:8787   # or the next free port, recorded in the runfile
 ```
-
-> Legacy: `npm run daemon` still runs a foreground daemon on the fixed `8787`; prefer `daemon up`
-> (per-project port, idempotent, what the hook uses) so you don't start a *second* daemon beside the
-> auto-started one.
 
 It is **localhost-only** (binds `127.0.0.1` only, never `0.0.0.0`) and **read by default** —
 every `GET` is served by a `PRAGMA query_only=ON` connection. Opt-in, operator-configured
@@ -421,8 +428,8 @@ instead — opt-in, default-off, with §16 guardrails.)*
   `/loop …` lines from §2A. To rejoin a specific session: `claude attach <id>`.
 - **Built-in scheduler:** restart the same `dev-loop run ...` command. It recomputes due
   work from the board and local state; there is no scheduler database to restore.
-- **tmux launcher:** if the `dev-loop` session is gone, re-run `run-loop.sh`. If it
-  still exists, `tmux attach -t dev-loop`.
+- **External process manager:** restart the same `dev-loop run ...` command, or reattach to the
+  manager/session that owns it.
 - A single in-flight fire that died mid-ticket is **self-healing**: Dev's Step 0
   reclaims a ticket it left stranded `In Progress` on the next fire (orphan-recovery),
   and Sweep catches the rest.

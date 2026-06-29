@@ -1,7 +1,8 @@
 # Running dev-loop on a second CLI (Codex / opencode) — P8
 
 The whole reason the loop's system-of-record is a **local hub** (a plain **stdio MCP server** over
-`node:sqlite`, identity via **env vars**, no daemon — see [`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md))
+`node:sqlite`, identity via **env vars**, plus an optional localhost daemon for the web UI/autostart —
+see [`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md))
 is that it is **CLI-portable**. The same agents, the same hub, the same per-agent identity can run on
 Claude Code **and** another coding CLI (Codex, opencode, …) against the *same* `hub.db`.
 
@@ -23,14 +24,18 @@ CLI sets these per agent pane — that is the entire portability contract:
 | `DEVLOOP_ACTOR` | the per-agent identity (`pm`/`qa`/`dev`/`sweep`/`reflect`/`ops`/`architect`/`communication`) — the attribution win | the launcher, **per pane** |
 | `DEVLOOP_PROJECT` | the project key (pins this hub process to one project) | the launcher — **optional (DL-13):** when unset/empty the hub auto-resolves the project from the spawned process's **cwd** (the repo it was launched in), so a launcher that spawns the MCP server with `cwd` inside a repo need not set it. **Portability caveat:** this works only if the CLI spawns the MCP subprocess with that cwd; some CLIs spawn from a fixed dir, so the launcher exporting `DEVLOOP_PROJECT` (via `dev-loop-hub resolve-project`) stays the robust primary mechanism |
 | `DEVLOOP_HUB_DB` | absolute path to the shared `hub.db` | the launcher |
-| `CLAUDE_PLUGIN_ROOT` | the dev-loop root used for skills/references; `dev-loop run` uses the npm-bundled copy unless `--root` overrides it, while manual source wrappers should export a checkout path | the launcher or scheduler |
-| `CLAUDE_PLUGIN_DATA` | the data dir — the SKILLs read `${CLAUDE_PLUGIN_DATA}/projects.json` | the launcher (or rely on the SKILLs' `~/.claude/plugins/data/dev-loop/` fallback) |
+| `DEVLOOP_HOME` | dev-loop's unified home for machine-local state | optional; defaults to `~/.dev-loop` |
+| `DEVLOOP_DATA_DIR` | dev-loop data dir for `projects.json`, reports, lessons, and runner logs | optional; defaults to `DEVLOOP_HOME` / `~/.dev-loop` |
+| `DEVLOOP_PROJECTS_JSON` | explicit config file path; overrides `DEVLOOP_DATA_DIR/projects.json` | optional |
+| `DEVLOOP_PLUGIN_ROOT` | bundled or checkout root used for skills/references | the launcher or scheduler |
+| `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` | compatibility placeholders for older skill text and Claude plugin loading | `dev-loop run` sets them to the same root/data values; new config should not live under Claude data |
 
-**Why this gives zero SKILL edits:** the SKILL bodies already reference `${CLAUDE_PLUGIN_ROOT}` /
-`${CLAUDE_PLUGIN_DATA}`. On Claude Code the plugin loader sets + substitutes them. On a second CLI,
-`dev-loop run` does the same two things before feeding the SKILL body as a prompt. The npm package
-ships the skills and shared references, so a source checkout is only needed for plugin development or
-a hand-written wrapper.
+**Why this stays portable:** the SKILL bodies now resolve config through dev-loop's own paths
+(`DEVLOOP_PROJECTS_JSON`, then `DEVLOOP_DATA_DIR` / `~/.dev-loop`). On Claude Code the plugin can still
+provide the historical placeholders; on a second CLI, `dev-loop run` sets both the new `DEVLOOP_*`
+variables and the compatibility `CLAUDE_PLUGIN_*` variables before feeding the SKILL body as a prompt.
+The npm package ships the skills and shared references, so a source checkout is only needed for plugin
+development or a hand-written wrapper.
 
 Secrets are unchanged on every CLI: the channel (P6) / mirror (P7) tokens stay in env, referenced by
 **name** only, read server-side (§16). Per-agent identity is **cooperative attribution** (any local
@@ -82,15 +87,17 @@ dev-loop run --cli codex  --agents core,outward
 dev-loop run --cli codex --agents communication --once --dry-run
 ```
 
-The scheduler expands each SKILL body from the bundled package assets (or `--root`), substitutes
-`${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`, sets the env contract, and shells out once per due
+The scheduler expands each SKILL body from the bundled package assets (or `--root`), sets the
+`DEVLOOP_*` env contract plus legacy `CLAUDE_PLUGIN_*` placeholders, and shells out once per due
 agent fire.
 For Codex it also injects the actor/project/db into the MCP config with `-c`, because
 Codex does not inherit the process env into MCP subprocesses (§4a). Cadence stays in the
 script: defaults match `RUNNING.md` §4 and can be overridden with
 `--interval pm=2m` / `--interval communication=12h`. The project is inferred from cwd
 by matching `repoPath` / `repos[].path` in `projects.json`; pass `--project <key>` or
-`--cwd <repo>` when running from cron/systemd or another fixed directory.
+`--cwd <repo>` when running from cron/systemd or another fixed directory. If no explicit
+project is set and the cwd is outside every configured repo, the scheduler exits instead
+of falling back to another project.
 
 ## 3a. Run one agent headless by hand
 
@@ -102,11 +109,14 @@ minimal per-pane wrapper:
 AGENT="$1"; PROJECT="$2"
 export DEVLOOP_ACTOR="$AGENT" DEVLOOP_PROJECT="$PROJECT"
 export DEVLOOP_HUB_DB="$HOME/.dev-loop/hub.db"
-export CLAUDE_PLUGIN_ROOT="/ABS/PATH/dev-loop"
-export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/dev-loop"
-# strip the frontmatter, substitute the plugin-path placeholders, feed as the prompt:
-PROMPT="$(sed '1{/^---$/!q};1,/^---$/d' "$CLAUDE_PLUGIN_ROOT/skills/$AGENT-agent/SKILL.md" \
-  | sed "s|\${CLAUDE_PLUGIN_ROOT}|$CLAUDE_PLUGIN_ROOT|g; s|\${CLAUDE_PLUGIN_DATA}|$CLAUDE_PLUGIN_DATA|g")"
+export DEVLOOP_DATA_DIR="$HOME/.dev-loop"
+export DEVLOOP_PROJECTS_JSON="$DEVLOOP_DATA_DIR/projects.json"
+export DEVLOOP_PLUGIN_ROOT="/ABS/PATH/dev-loop"
+export CLAUDE_PLUGIN_ROOT="$DEVLOOP_PLUGIN_ROOT"  # compatibility with old placeholders
+export CLAUDE_PLUGIN_DATA="$DEVLOOP_DATA_DIR"     # compatibility with old placeholders
+# strip the frontmatter, substitute path placeholders, feed as the prompt:
+PROMPT="$(sed '1{/^---$/!q};1,/^---$/d' "$DEVLOOP_PLUGIN_ROOT/skills/$AGENT-agent/SKILL.md" \
+  | sed "s|\${CLAUDE_PLUGIN_ROOT}|$CLAUDE_PLUGIN_ROOT|g; s|\${CLAUDE_PLUGIN_DATA}|$CLAUDE_PLUGIN_DATA|g; s|\${DEVLOOP_DATA_DIR:-~/.dev-loop}|$DEVLOOP_DATA_DIR|g")"
 
 # then, per CLI (⚠️ VERIFY the exact run flags):
 #   Claude Code: claude -p "$PROMPT"           (or /loop for a cadence)

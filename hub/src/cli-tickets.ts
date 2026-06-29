@@ -7,11 +7,11 @@
 // resolves the project via the SAME DEVLOOP_PROJECT/cwd ladder (resolveIdentity, §11). STRICTLY read-only:
 // `PRAGMA query_only` after open makes any write/event throw; needs NO daemon and NO DEVLOOP_ACTOR (identity is
 // irrelevant to a read). Routed from cli.ts (`tickets`/`ticket` → this file with the subcommand as argv[0]).
-import { homedir } from "node:os";
 import type { DatabaseSync } from "node:sqlite";
 import { openDb } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { findProject } from "./seed.ts";
+import { hubDbPath } from "./paths.ts";
 
 const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]); // §3 terminal states — hidden unless --all
 const PRIORITY: Record<number, string> = { 1: "Urgent", 2: "High", 3: "Medium", 4: "Low", 0: "None" }; // §5 (mirrors daemonviews)
@@ -83,8 +83,12 @@ function showTicket(db: DatabaseSync, projectId: string, args: string[]): number
 
 function main(): number {
   const [sub, ...rest] = process.argv.slice(2); // sub = "tickets" | "ticket" (cli.ts passes it as argv[0])
-  const { projectKey, projectFromCwd } = resolveIdentity(); // a read needs no DEVLOOP_ACTOR
-  const db = openDb(process.env.DEVLOOP_HUB_DB ?? `${homedir()}/.dev-loop/hub.db`);
+  const { projectKey, projectFromCwd, projectResolved } = resolveIdentity(); // a read needs no DEVLOOP_ACTOR
+  if (!projectResolved) {
+    console.error("dev-loop: no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in ~/.dev-loop/projects.json.");
+    return 1;
+  }
+  const db = openDb(hubDbPath());
   db.exec("PRAGMA query_only=1"); // AC5: structurally read-only — any write/event from here on throws
   const projectId = findProject(db, projectKey);
   if (!projectId) {

@@ -25,22 +25,22 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveIdentity } from "./resolve-project.ts";
 import { ok, err, registerTools, type McpResult } from "./tooldefs.ts"; // DL-85: the ONE {name,description,inputSchema} registry + the shared ok()/err() + the McpResult type
+import { hubDbPath } from "./paths.ts";
 
 // ─── identity + project ──────────────────────────────────────────────────────
 // DL-85: the DEVLOOP_ACTOR + DEVLOOP_PROJECT/cwd resolution lives ONCE in resolve-project.ts (was re-derived
 // here AND in server.ts) — same rule, so the shim names the same per-project daemon runfile the direct-db
 // server would attribute writes to. (The shim ignores projectFromCwd — only server.ts's not-seeded error uses it.)
-const { actor: ACTOR, projectKey: PROJECT_KEY } = resolveIdentity();
+const { actor: ACTOR, projectKey: PROJECT_KEY, projectResolved } = resolveIdentity();
 
 // ─── DL-41 lifecycle runfile path (REPLICATES daemon.ts lcDbPath/lcRunDir/lcRunfile, :959-961) ──────────────
 // The shim is a standalone thin client and must NOT import the 92KB daemon (DL-55 affected-area: NOT daemon.ts),
 // so it re-derives the stable runfile path convention here — this comment is the drift tripwire against
-// daemon.ts. runDir = DEVLOOP_RUN_DIR ?? dirname(DEVLOOP_HUB_DB ?? ~/.dev-loop/hub.db); file = daemon-<key>.json.
-const DB_PATH = process.env.DEVLOOP_HUB_DB ?? join(homedir(), ".dev-loop", "hub.db");
+// daemon.ts. runDir = DEVLOOP_RUN_DIR ?? dirname(hubDbPath()); file = daemon-<key>.json.
+const DB_PATH = hubDbPath();
 const RUN_DIR = process.env.DEVLOOP_RUN_DIR ?? dirname(DB_PATH);
 const RUNFILE = join(RUN_DIR, `daemon-${PROJECT_KEY}.json`);
 
@@ -66,12 +66,14 @@ function resolvePort(): number | null {
 // silent hang or an opaque 500. Loopback only (§16) — the shim only ever talks to 127.0.0.1.
 const daemonDown = (detail: string): McpResult => err(
   `dev-loop daemon for project '${PROJECT_KEY}' is not reachable on 127.0.0.1${detail}. Start it ` +
-  `(\`cd hub && DEVLOOP_PROJECT=${PROJECT_KEY} npm run daemon\`, or the DL-42 SessionStart hook runs ` +
-  `\`dev-loop-hub daemon up\`), or set DEVLOOP_HUB_PORT. This daemon-transport shim proxies to the loopback ` +
+  `(\`DEVLOOP_PROJECT=${PROJECT_KEY} dev-loop daemon up\`, or \`dev-loop daemon up-all\` from an autostart/process manager), ` +
+  `or set DEVLOOP_HUB_PORT. This daemon-transport shim proxies to the loopback ` +
   `op-API and needs the daemon running; the default \`node hub/src/server.ts\` entry needs no daemon.`);
 const opApiDormant = (): McpResult => err(
   `dev-loop daemon is running but its agent op-API is dormant for project '${PROJECT_KEY}'. Opt in by setting ` +
   `settings_json.hub.transport="daemon" (DL-43), or use the default direct-db entry \`node hub/src/server.ts\`.`);
+const noProject = (): McpResult => err(
+  "no project resolved. Set DEVLOOP_PROJECT=<key>, or launch from inside a repo configured in ~/.dev-loop/projects.json.");
 
 // ─── proxy one core op → POST http://127.0.0.1:<port>/api/op/<op> (X-Devloop-Actor: ACTOR), as the MCP shape ──
 // daemon {status,body}: a 2xx → ok(body) (identical to server.ts's ok()); a DORMANT-mount 404 (body
@@ -79,6 +81,7 @@ const opApiDormant = (): McpResult => err(
 // 400/403/404-not-found/500 forwarded verbatim, parity with the stdio path); a dead/absent daemon (no
 // runfile / ECONNREFUSED / timeout) → the daemon-down hint.
 function proxy(op: string, args: Record<string, unknown>): Promise<McpResult> {
+  if (!projectResolved) return Promise.resolve(noProject());
   const port = resolvePort();
   if (port === null) {
     return Promise.resolve(daemonDown(` (no lifecycle runfile at ${RUNFILE}, and DEVLOOP_HUB_PORT is unset)`));
@@ -131,10 +134,13 @@ const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 // down) and reports the daemon transport + resolved URL; every other tool proxies to the loopback op-API.
 registerTools(server, (name) => {
   if (name === "whoami") {
-    return () => { const port = resolvePort(); return ok({ actor: ACTOR, project: PROJECT_KEY, transport: "daemon", url: port ? `http://127.0.0.1:${port}` : null }); };
+    return () => {
+      const port = projectResolved ? resolvePort() : null;
+      return ok({ actor: ACTOR, project: projectResolved ? PROJECT_KEY : null, transport: "daemon", url: port ? `http://127.0.0.1:${port}` : null });
+    };
   }
   return (a) => proxy(name, a);
 });
 
 await server.connect(new StdioServerTransport());
-console.error(`[shim] dev-loop-hub daemon-transport shim ready: actor=${ACTOR} project=${PROJECT_KEY} runfile=${RUNFILE}`);
+console.error(`[shim] dev-loop-hub daemon-transport shim ready: actor=${ACTOR} project=${PROJECT_KEY || "(unresolved)"} runfile=${RUNFILE}`);

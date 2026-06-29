@@ -2,14 +2,16 @@
 // (a typo'd path reports MISSING, it does not spin an empty one). Backs the §17/§18 promises:
 // data home is machine-local + never committed, the SoR is intact.
 // DL-81: the `doctor` COMMAND additionally runs a service runtime-wiring reconcile (reads the product
-// .mcp.json / daemon runfile / hooks.json + a localhost /api/health GET) — still READ-ONLY (no writes,
+// .mcp.json / daemon runfile / autostart/hook presence + a localhost /api/health GET) — still READ-ONLY (no writes,
 // no auto-create) and NON-FATAL; see serviceReconcile. Library callers (init-service) skip it.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
+import { hubDbPath } from "./paths.ts";
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
 // the service runtime wiring (below). Library callers that only want the DB-integrity verdict (init-service
@@ -133,8 +135,9 @@ async function serviceReconcile(dbProjectKeys: string[], dbPath: string): Promis
   // (2) the per-project daemon /api/health is reachable (url from the lifecycle runfile beside the db).
   await reconcileDaemonHealth(key, dbPath, pass, warn);
 
-  // (3) the DL-42 SessionStart hook (the steady-state daemon owner) is installed.
-  reconcileSessionStartHook(pass, warn);
+  // (3) standalone autostart and optional Claude hook compatibility.
+  reconcileAutostart(pass, warn);
+  reconcileSessionStartHook(pass);
 }
 
 function reconcileMcpJson(mcpJsonPath: string, pass: (m: string) => void, warn: (m: string) => void): void {
@@ -157,31 +160,39 @@ async function reconcileDaemonHealth(key: string, dbPath: string, pass: (m: stri
   const runfile = join(runDir, `daemon-${key}.json`);
   let url: string | undefined;
   try { url = (JSON.parse(readFileSync(runfile, "utf8")) as { url?: string }).url; } catch { /* no runfile ⇒ not running */ }
-  if (!url) { warn(`daemon — not running (no lifecycle runfile ${runfile}); start it with \`dev-loop-hub daemon up\` from the repo`); return; }
+  if (!url) { warn(`daemon — not running (no lifecycle runfile ${runfile}); start it with \`dev-loop daemon up\` from the repo`); return; }
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 1500); // short bound — doctor is a one-shot liveness probe, never a wait
     const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
     const b = r.status === 200 ? ((await r.json().catch(() => null)) as { ok?: boolean; project?: string } | null) : null;
     if (b && b.ok === true && b.project === key) pass(`daemon /api/health reachable → ${url} (project '${key}')`);
-    else warn(`daemon — ${url}/api/health did not return {ok:true} for '${key}' (wedged/restarting? \`dev-loop-hub daemon up\`)`);
-  } catch { warn(`daemon — ${url}/api/health unreachable (not running?); start it with \`dev-loop-hub daemon up\``); }
+    else warn(`daemon — ${url}/api/health did not return {ok:true} for '${key}' (wedged/restarting? \`dev-loop daemon up\`)`);
+  } catch { warn(`daemon — ${url}/api/health unreachable (not running?); start it with \`dev-loop daemon up\``); }
 }
 
-function reconcileSessionStartHook(pass: (m: string) => void, warn: (m: string) => void): void {
+function reconcileSessionStartHook(pass: (m: string) => void): void {
   const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (published)
   const pluginRoot = process.env.DEVLOOP_PLUGIN_ROOT ?? join(here, "..", ".."); // the repo/plugin root holds hooks/
   const hookFile = join(pluginRoot, "hooks", "hooks.json");
   try {
     const j = JSON.parse(readFileSync(hookFile, "utf8")) as { hooks?: { SessionStart?: Array<{ hooks?: Array<{ command?: string }> }> } };
     const cmds = (j.hooks?.SessionStart ?? []).flatMap((e) => (e.hooks ?? []).map((h) => h.command ?? ""));
-    if (cmds.some((c) => /daemon\s+up/.test(c))) pass(`DL-42 SessionStart hook installed → ${hookFile} (daemon auto-starts each session)`);
-    else warn(`DL-42 SessionStart hook — ${hookFile} has no \`daemon up\` SessionStart command; re-sync/reinstall the dev-loop plugin`);
-  } catch { warn(`DL-42 SessionStart hook — ${hookFile} not found/readable; re-sync/reinstall the dev-loop plugin so the daemon auto-starts`); }
+    if (cmds.some((c) => /daemon\s+up/.test(c))) pass(`Claude SessionStart hook compatibility present → ${hookFile}`);
+  } catch { /* Claude plugin hook is optional for standalone scheduler/Codex installs. */ }
+}
+
+function reconcileAutostart(pass: (m: string) => void, warn: (m: string) => void): void {
+  if (platform() !== "darwin") {
+    warn("daemon autostart — not installed by dev-loop on this OS; use systemd/cron/your process manager to run `dev-loop daemon up-all` at login");
+    return;
+  }
+  const plist = join(homedir(), "Library", "LaunchAgents", "com.dyzsasd.dev-loop.daemon.plist");
+  if (existsSync(plist)) pass(`daemon autostart installed → ${plist}`);
+  else warn("daemon autostart — not installed; run `dev-loop daemon install-autostart` to start service projects at login");
 }
 
 // CLI: node src/doctor.ts  (or `dev-loop-hub doctor` via server.ts dispatch / `npm run doctor`)
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const dbPath = process.env.DEVLOOP_HUB_DB ?? `${process.env.HOME}/.dev-loop/hub.db`;
-  process.exit((await runDoctor(dbPath, { reconcile: true })) ? 0 : 1);
+  process.exit((await runDoctor(hubDbPath(), { reconcile: true })) ? 0 : 1);
 }

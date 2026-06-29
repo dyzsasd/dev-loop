@@ -160,8 +160,8 @@ done
 ```
 
 If a compatible Node exists, pin it with `DEVLOOP_NODE=<abs-node>` for service bootstrap commands.
-The packaged `dev-loop` CLI and SessionStart hook also use that variable and auto-discover common
-Node 23/24 installs. If no compatible Node exists, mark service backend **✗ runtime missing** and
+The packaged `dev-loop` CLI, daemon autostart, and Claude compatibility hook also use that variable
+and auto-discover common Node 23/24 installs. If no compatible Node exists, mark service backend **✗ runtime missing** and
 offer `linear` or `local` instead.
 
 **Operator-alert channel-linking (do it here, all backends).** `init` historically never set up
@@ -188,20 +188,25 @@ DEVLOOP_NODE=/opt/homebrew/opt/node@23/bin/node dev-loop init-service <key> "<na
 ```
 
 `init-service` seeds the project (idempotent: actors + the §4 labels + a unique ticket prefix), runs
-`doctor`, starts the daemon once and checks `/api/health`, verifies the packaged `SessionStart` hook,
-and merges the product repo `.mcp.json` without clobbering other servers. The hook is the
-**steady-state lifecycle owner**; init's `daemon up` is only a same-session convenience.
+`doctor`, starts the daemon once and checks `/api/health`, reports the optional Claude `SessionStart`
+compatibility hook, and merges the product repo `.mcp.json` without clobbering other servers. For
+steady-state login startup, note that macOS global npm install normally installs the LaunchAgent; if
+scripts were skipped or the item is missing, offer `dev-loop daemon install-autostart`, or the
+operator's OS process manager running `dev-loop daemon up-all`.
 
 ### Step 1 — Config: the project block in `projects.json`
-The agents are product-agnostic; everything product-specific lives in
-`${CLAUDE_PLUGIN_DATA}/projects.json` (conventions §11; schema in config-schema.md).
+The agents are product-agnostic; everything product-specific lives in dev-loop's own config,
+normally `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (or the explicit
+`DEVLOOP_PROJECTS_JSON`; conventions §11; schema in config-schema.md).
 
-1. Resolve and read `projects.json`. If `${CLAUDE_PLUGIN_DATA}` resolves to an empty
-   or `-local` dir, fall back to `~/.claude/plugins/data/dev-loop/projects.json`, or
-   search `~/.claude/plugins/data/**/projects.json`, before concluding it's absent.
-   If the file is genuinely absent, you'll create it from
-   `${CLAUDE_PLUGIN_ROOT}/config/projects.example.json` as a starting shape (don't
-   copy the example's `monpick` block as real config — it's an example).
+1. Resolve and read `projects.json`: `DEVLOOP_PROJECTS_JSON` first, then
+   `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`, then
+   `${CLAUDE_PLUGIN_DATA}/projects.json` / `~/.claude/plugins/data/dev-loop/projects.json`
+   only as legacy fallback. Do not search arbitrary Claude plugin data directories for a new install.
+   If the file is genuinely absent, create the dev-loop config path with an empty `"projects": {}` object.
+   If the file is genuinely absent, create it with an empty `"projects": {}` object.
+   Use `${CLAUDE_PLUGIN_ROOT}/config/projects.example.json` only as a field-shape
+   reference; never copy an example project as real config.
 2. Determine the project **key** to initialize (the user named it, or ask). If that
    key already exists in `projects.json`, you are **re-checking** — read its fields
    and only fill **missing** ones; **never overwrite** values the operator already
@@ -236,20 +241,21 @@ The agents are product-agnostic; everything product-specific lives in
      real Blocked column).
    - `backend` (`"linear"` default / `"local"` / `"service"`, §18) — **ask which substrate**
      this project uses. For `"local"`, also gather the optional `localBoard` (board dir
-     override; default `${CLAUDE_PLUGIN_DATA}/<key>/board/`) and `ticketPrefix` (ID
+     override; default `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/board/`) and `ticketPrefix` (ID
      prefix, default `"DL"`), and note that `strategyDoc` **must be a repo file** (a
      Linear document can't back a local board — reject one if configured). For `"service"`
      (the local hub, §18; see `docs/HUB-ARCHITECTURE.md`): gather the optional `hub.db` path
      + `ticketPrefix`; `strategyDoc` is likewise a **repo file** (reject `{linearDocument}`);
      then run the packaged `dev-loop init-service` flow from Step 0.5. It seeds the hub project,
      registers `dev-loop-hub` in the product `.mcp.json`, runs `doctor`, starts the daemon once,
-     and verifies the SessionStart hook. For a NEW (greenfield)
+     and verifies/repairs login startup with `dev-loop daemon install-autostart` when npm scripts did not install it. For a NEW (greenfield)
      service project, OFFER hub-native docs (`hub.docs:true`, §18 P4 — versioned + operator-published
      strategyDoc/roadmap); never auto-migrate an existing repo-file strategyDoc. `"linear"` keeps the
      unchanged flow.
 4. **Write the gathered values back** to `projects.json` (in `live`), preserving all
    other projects untouched and pretty-printing valid JSON. Set `defaultProject` if
-   this is the only/first project. In `dry-run`, print the exact JSON block you'd
+   this is the only/first project as an interactive convenience; unattended launchers still
+   require an explicit project or a cwd match. In `dry-run`, print the exact JSON block you'd
    add. Tell the operator which fields you defaulted vs. which they supplied, and
    **flag any role whose required field is still missing** (e.g. "no `repoPath` →
    Dev can't run yet") — that's a ✗ in the readiness report, not a hard stop.
@@ -366,14 +372,14 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   last-reviewed SHA + swept review lenses).
 - `qa-state.json` — empty JSON object `{}` (QA lazily fills last-swept SHA + swept
   surfaces).
-- **If `backend:"local"` (§18): the board** — create `${CLAUDE_PLUGIN_DATA}/<key>/board/`
+- **If `backend:"local"` (§18): the board** — create `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/board/`
   (or `localBoard`) with an empty `tickets/` dir and a `counter.json` =
   `{ "prefix": "<ticketPrefix|DL>", "next": 1 }`. Machine-local, never committed. The
   board dir **must be dedicated** — empty, or an existing dev-loop board; if `localBoard`
   points at a non-empty, non-board directory, **refuse and flag it** (don't risk
   globbing another project's files, §18 firewall). If the board already exists, leave
   it untouched and just note it. Skip entirely for `backend:"linear"`.
-- `lessons.md` (at `${CLAUDE_PLUGIN_DATA}/<key>/lessons.md` — the project's
+- `lessons.md` (at `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/lessons.md` — the project's
   `<project-key>/` data dir, the same per-project home as `reports/` below, **not** the
   flat data-dir root) — a skeleton with one section header per agent plus the
   shared section, in this exact order (conventions §14):
@@ -409,7 +415,7 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   `lessons.md` already exists at that per-project path, **don't touch it** (don't reorder or inject headers
   into a file the operator owns); just note its presence. In `dry-run`, print the
   files you'd create.
-- **Reports tree** (conventions §22) — `${CLAUDE_PLUGIN_DATA}/<key>/reports/<agent>/{daily,
+- **Reports tree** (conventions §22) — `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/reports/<agent>/{daily,
   weekly,monthly}/` for each agent. You MAY scaffold the empty tree now, or leave
   it to **lazy creation** on each agent's first write (either is fine — note which you
   did). Machine-local, never committed, **§16-bound (no secrets/PII in a report)**. In
@@ -454,7 +460,7 @@ what's still needed. One line per check, grouped:
   `strategyDoc` for PM, `testEnv` for QA); `mode`; `autonomy`; git/deploy flags.
 - **Backend**: which substrate (`linear`/`local`/`service`, §18); for `local`, the board dir +
   `counter.json` present; for `service`, the hub project seeded (unique prefix) + `doctor` green +
-  the daemon up with its **web-UI board URL** + the `SessionStart` hook present (DL-42) + the
+  the daemon up with its **web-UI board URL** + autostart status/instruction + optional Claude hook status + the
   `.mcp.json` actor wiring + `mirror` status (on/off). **Operator-alert** (all backends): the
   chosen channel — `webhook`/`bot`/`none` — and, for `service`, `humanBlockedReminderHours`
   (✗/— if alerts are off so a silent-park risk is visible, not hidden).

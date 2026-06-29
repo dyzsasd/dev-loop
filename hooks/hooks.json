@@ -1,5 +1,5 @@
 {
-  "description": "dev-loop turnkey auto-start (DL-42, §17 operator-applied [pm-proposal]). On session start, ensure the per-project hub daemon + web UI is up via DL-41's idempotent `daemon up`. Safe-by-construction: `up` is cwd-resolved and a clean no-op for a non-service / Linear / local project (prints 'no project resolved … nothing to start', exit 0), so a project not using the hub is byte-for-byte unaffected. localhost-only (§16); output is swallowed and the exit forced 0 so a SessionStart never pollutes context or aborts startup.",
+  "description": "Claude-session compatibility hook for dev-loop. On session start, nudge the per-project hub daemon + web UI via the idempotent `dev-loop daemon up` path. The standalone lifecycle is owned by the dev-loop CLI (`dev-loop daemon up`, `up-all`, and `install-autostart`); this hook is only a Claude plugin convenience. Safe-by-construction: `up` is cwd-resolved and a clean no-op for non-service / unresolved projects. localhost-only (§16); output is swallowed and the exit forced 0 so SessionStart never pollutes context or aborts startup.",
   "hooks": {
     "SessionStart": [
       {

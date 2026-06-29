@@ -2,7 +2,8 @@
 
 The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect /
 Communication) read
-`${CLAUDE_PLUGIN_DATA}/projects.json`. It maps each product to its Linear project, its
+`DEVLOOP_PROJECTS_JSON` when set, otherwise `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`.
+Legacy Claude plugin data is only a compatibility fallback. The config maps each product to its Linear project, its
 repo, its test environment, and its ship/deploy settings. One file, many products.
 `/dev-loop:init` gathers and writes this file with you (operator-present setup).
 
@@ -10,9 +11,10 @@ repo, its test environment, and its ship/deploy settings. One file, many product
 
 ```jsonc
 {
-  "defaultProject": "monpick",        // used when the user doesn't name one and >1 exist
+  "defaultProject": "your-product",   // optional legacy hint for interactive/operator flows;
+                                      // scheduler launch does not use it as an implicit fallback
   "projects": {
-    "<key>": {                        // short slug you'll refer to (e.g. "monpick", "geo")
+    "<key>": {                        // short slug you'll refer to (e.g. "your-product", "api")
       "linearTeam":    "Citronetic",  // Linear team name (required)
       "linearProject": "MonPick",     // Linear project name — must exist (required)
       "repoPath":      "/abs/path/to/repo",   // where Dev works (required for dev-agent). SINGLE-repo (default). For multi-repo, add repos[] below.
@@ -39,7 +41,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       "autonomy":      "ask",         // "ask" (default) | "full" — who decides vs escalates (see conventions §12a)
       "backend":       "linear",      // "linear" (default when absent) | "local" | "service" — coordination substrate (see conventions §18)
       "devSplit":      false,         // two-tier Dev (§21a): the AUTHORITATIVE flag the agents read. true ⇒ senior-dev/junior-dev own the queue + the legacy `dev` agent defers (no-op); absent/false ⇒ legacy single-dev. MUST be set together with the launcher's DEV_SPLIT=1 (which spawns the two panes) — the two halves of one switch. Agents NEVER infer the dev model from history/tickets, only from this flag.
-      "localBoard":    null,          // local backend only: override board dir; null → ${CLAUDE_PLUGIN_DATA}/<key>/board/
+      "localBoard":    null,          // local backend only: override board dir; null → ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/board/
       "ticketPrefix":  "DL",          // local/service backend: ID prefix for tickets (e.g. "DL-1"); ignored for linear
       "hub": {                        // service backend only (conventions §18; see docs/HUB-ARCHITECTURE.md). The local MCP system-of-record.
         "db":          null,          // path to the hub SQLite file; null → ${DEVLOOP_HUB_DB:-~/.dev-loop/hub.db}. Registered as an MCP server (`dev-loop-hub`) via .mcp.json; identity per-pane via DEVLOOP_ACTOR (see docs/RUNNING.md). Machine-local, never committed.
@@ -91,7 +93,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "maxWords":         900,
         "sourceWindowDays": 7,        // how far back to look for Done tickets/events/changelog facts
         "output":           "data",   // "data" (default, machine-local drafts) | "repo" (write draft markdown under the doc-home repo)
-        "outputDir":        "communications",       // data output: ${CLAUDE_PLUGIN_DATA}/<key>/<outputDir>/YYYY-MM-DD.md
+        "outputDir":        "communications",       // data output: ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/<outputDir>/YYYY-MM-DD.md
         "repoOutputDir":    "docs/communications",  // repo output: <doc-home repo>/<repoOutputDir>/YYYY-MM-DD.md
         "includeUnreleased": false    // false ⇒ only published/verified/shipped facts; true ⇒ may mention roadmap items as upcoming, clearly labelled
       },
@@ -154,7 +156,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   them (`.env.local`, a vault, "ask user") in `testEnv.notes`. See the security
   doctrine (conventions §16).
 - **`lessons.md`** (optional) lives **per-project** at
-  `${CLAUDE_PLUGIN_DATA}/<project-key>/lessons.md` (the same per-project home as `reports/`,
+  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/lessons.md` (the same per-project home as `reports/`,
   conventions §14; the legacy root file next to `projects.json` remains only as a back-compat
   **fallback** for un-migrated single-project installs). It holds per-operator
   behavioral corrections, sectioned per agent (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`/`Communication`).
@@ -170,7 +172,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   when absent. It writes no new config keys.
 - **`models`** (optional): a per-agent model map the **launcher** applies at session
   start (`claude --model <m> …`) — the model is a *launch-time* choice, not something a
-  SKILL sets, so this is consumed by `run-loop.sh` / your launch command, not by the
+  SKILL sets, so this is consumed by `dev-loop run` / your launch command, not by the
   agents. **The default is `opus` for EVERY agent** (the launcher applies `--model opus`
   per pane unless you override) — maximize correctness across the whole loop. Tune an
   agent **down** (`sonnet`/`haiku`) only to economize — e.g. the mechanical/high-frequency
@@ -181,7 +183,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `pm=max` and `dev=max` (legacy single dev) reason deepest; `reflect`/`architect`=`xhigh`;
   `qa`/`sweep`=`high`.
 - **Two-tier Dev** (`senior-dev` / `junior-dev`; conventions §21a): an opt-in split of the single
-  Dev role, enabled at LAUNCH by the launcher knob (`DEV_SPLIT=1` in `run-loop.sh`) — it replaces
+  Dev role, enabled at LAUNCH by the scheduler/launcher knob (`--dev-split` or equivalent) — it replaces
   the single `dev` pane with two panes: a **`senior-dev`** pane (`claude-opus-4-8`, effort **max**)
   that designs-and-delegates new modules/features and direct-codes escalations, and a
   **`junior-dev`** pane (`claude-sonnet-4-6`, effort **high**) that implements pre-designed tickets
@@ -205,7 +207,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
 - **`backend`** (optional; default `"linear"`): the coordination substrate
   (conventions §18). `"linear"` is the Linear MCP, exactly as today — absent ⇒
   `"linear"`, so existing projects are unchanged. `"local"` uses a machine-local file
-  board under `${CLAUDE_PLUGIN_DATA}/<key>/board/` (one markdown file per ticket; state
+  board under `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/board/` (one markdown file per ticket; state
   in the frontmatter; same state machine, labels, and protocols). `localBoard`
   overrides the board path; `ticketPrefix` sets the ID prefix (default `"DL"`). Both
   are ignored under `"linear"`. In `"local"` mode `strategyDoc` must be a **repo file**
@@ -224,9 +226,11 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   unset, and `"demo"`/`"default"` are NOT sentinels: an operator may legitimately pin a project
   keyed `demo`/`default`) **>** the spawned process's **cwd** matched against each project's
   `repoPath`/`repos[].path` (§19; realpath-canonical, segment-boundary safe so `/work/repo` ≠
-  `/work/repo-2`, nearest-ancestor wins, an ambiguous tie or a cwd outside every repo → no match)
-  **>** the `demo` default. A cwd that resolves to a **configured-but-unseeded** project **errors
-  loudly** (it never silently falls through to `demo`). The shared matcher is exposed as
+  `/work/repo-2`, nearest-ancestor wins, an ambiguous tie or a cwd outside every repo → no match).
+  A cwd that resolves to a **configured-but-unseeded** project **errors loudly** (it never silently
+  falls through to `demo`), and scheduler launches with no explicit project + no cwd match stop with
+  a setup hint rather than guessing `defaultProject` or another configured project. The shared
+  matcher is exposed as
   `dev-loop-hub resolve-project [--cwd <path>]` so a launcher reuses exactly one rule. So
   `DEVLOOP_PROJECT` is **optional** when an agent is launched from inside a project's repo; the
   `.mcp.json`/launcher templates default it to empty for that reason (see `config/mcp.*.example`,
@@ -259,7 +263,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   strategy/roadmap, recent verified Done tickets, changelog/git facts, and the public product
   surface. It never publishes externally, never commits/pushes/deploys, and never edits product
   code. `output:"data"` writes machine-local drafts under
-  `${CLAUDE_PLUGIN_DATA}/<project-key>/<outputDir>/YYYY-MM-DD.md`; `output:"repo"` writes the
+  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/<outputDir>/YYYY-MM-DD.md`; `output:"repo"` writes the
   draft markdown under the doc-home repo at `repoOutputDir` for operator review. `language`,
   `audience`, `tone`, `maxWords`, and `sourceWindowDays` shape the article; `includeUnreleased`
   must stay false unless the operator is comfortable with clearly-labelled roadmap/upcoming
@@ -336,7 +340,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   never committed.
 - **Reports** (optional output, conventions §22; **on by default, no config needed**):
   every agent writes daily / weekly / monthly reports to
-  `${CLAUDE_PLUGIN_DATA}/<project-key>/reports/<agent>/{daily,weekly,monthly}/`
+  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/{daily,weekly,monthly}/`
   (machine-local, never committed, located by `reports.sink` — independent of the §18
   backend, **§16-bound — no secrets/PII**), created lazily on first write (or scaffolded by
   `/dev-loop:init`). The operator may critique any report by dropping a sibling

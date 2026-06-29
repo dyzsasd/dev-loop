@@ -1,5 +1,5 @@
 // DL-13 — cwd→project resolver (hub/src/resolve-project.ts), the `resolve-project` subcommand, and the
-// hub startup fallback (explicit DEVLOOP_PROJECT wins; else cwd; else demo). Uses REAL dirs because the
+// hub startup resolution (explicit DEVLOOP_PROJECT wins; else cwd; else unresolved). Uses REAL dirs because the
 // resolver realpath-canonicalizes, and a seeded temp DB for the startup integration.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";

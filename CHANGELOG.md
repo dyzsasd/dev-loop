@@ -3,6 +3,24 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+## 0.23.3 — Standalone config + daemon autostart
+- Hardened `dev-loop run` project resolution: when neither `--project` / `DEVLOOP_PROJECT` nor the
+  current working directory resolves to a configured `repoPath` / `repos[].path`, the scheduler now
+  exits with a setup hint instead of silently falling back to `defaultProject`, the first configured
+  project, or `demo`.
+- Changed `dev-loop init-config` to write an empty starter (`projects:{}`) by default, and made
+  `config/projects.example.json` example-only (`_examples`) so fresh installs never get predefined
+  active projects such as dogfood/demo repos.
+- Moved the default project/data config to dev-loop's own home (`~/.dev-loop/projects.json`,
+  `~/.dev-loop/hub.db`). The historical Claude plugin data directory remains a legacy fallback only.
+- Added standalone daemon lifecycle support for service projects: fixed default web UI port `8787`
+  (with upward probing when occupied), `dev-loop daemon up-all`, and macOS login autostart via
+  `dev-loop daemon install-autostart` / `uninstall-autostart`.
+- Added a global-install `postinstall` hook that, on macOS, attempts to install the same LaunchAgent
+  automatically after `npm i -g @dyzsasd/dev-loop`; set `DEVLOOP_SKIP_AUTOSTART=1` to opt out.
+
 ## 0.23.2 — npm-installed service backend hardening
 - Fixed packaged daemon startup: `dev-loop daemon up` now spawns `daemon.js` from npm builds instead
   of the source-only `daemon.ts`, so Node no longer tries to type-strip TypeScript under `node_modules`.

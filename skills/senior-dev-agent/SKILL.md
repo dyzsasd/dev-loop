@@ -52,8 +52,10 @@ modes are all specified there. This file is the operational walk-through; conven
 trust conversation memory for state, and on a hard failure log one line and exit (the
 next fire retries). See conventions §0.
 
-Then load config (§11): read `${CLAUDE_PLUGIN_DATA}/projects.json`, pick the project, and
-load `linearProject`, `linearTeam`, `repoPath`, `strategyDoc`, `build`, `git`, `deploy`,
+Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
+`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
+as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `strategyDoc`, `build`, `git`, `deploy`,
 `mode`, `autonomy` (§12a), the optional `codex` block (§24), and — if present — `repos[]`
 (conventions §19). **Confirm this project runs the split from the AUTHORITATIVE config flag
 `devSplit:true` (§11).** This flag is the single source of truth — **do NOT infer the dev
@@ -67,10 +69,7 @@ ticket** exactly as `dev` does: absent/one `repos[]` ⇒ single-repo (the implic
 is `repoPath`); with multiple repos the ticket's `repo:<name>` label names the target and
 you resolve that repo's effective `build`/`defaultBranch`/`deploy`/`contributorSkill`
 (repo value else top-level, §19). The **doc-home repo** (`role:"docs"` else `"primary"`
-else `repos[0]`) roots a repo-file design doc. If that path doesn't resolve (e.g.
-`${CLAUDE_PLUGIN_DATA}` expands to an empty or `-local` dir), fall back to
-`~/.claude/plugins/data/dev-loop/projects.json` or search
-`~/.claude/plugins/data/**/projects.json` before asking the user.
+else `repos[0]`) roots a repo-file design doc. If no config path resolves, ask the user before proceeding.
 
 **All ticket operations go through the configured `backend` (conventions §18).** `backend`
 absent ⇒ `"linear"` (the Linear MCP); `"local"` routes the same operations — the §5 pick

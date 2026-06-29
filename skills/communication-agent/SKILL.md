@@ -41,9 +41,10 @@ lessons, backend portability, and the Codex/second-CLI contract:
 directory every run. Never trust conversation memory for whether today's article
 already exists.
 
-Then load config from `${CLAUDE_PLUGIN_DATA}/projects.json`, falling back to
-`~/.claude/plugins/data/dev-loop/projects.json` if needed. Pick the project by the
-normal rules. Load at least:
+Then load config from `DEVLOOP_PROJECTS_JSON` if set, otherwise
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; use
+`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
+only as a legacy fallback. Pick the project by the normal rules. Load at least:
 - `repoPath` / `repos[]`
 - `strategyDoc`
 - `backend`
@@ -88,7 +89,7 @@ Defaults when fields are absent:
 
 **Output locations:**
 - `output:"data"` writes to
-  `${CLAUDE_PLUGIN_DATA}/<project-key>/communications/YYYY-MM-DD.md`.
+  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/communications/YYYY-MM-DD.md`.
 - `output:"repo"` writes to the doc-home repo at
   `<repo>/docs/communications/YYYY-MM-DD.md` unless `repoOutputDir` overrides it.
   Leave the file for operator review. Do not commit, push, or publish it.

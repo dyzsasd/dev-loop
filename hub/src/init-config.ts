@@ -1,30 +1,26 @@
 #!/usr/bin/env node
-// Write the starter projects.json from the bundled npm payload/source checkout.
+// Write an empty starter projects.json.
 // This keeps the scheduler-only path clone-free: install npm package -> init-config -> edit -> run.
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { devloopProjectsPath, legacyClaudeDataDir } from "./paths.ts";
 
-const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (build)
-const defaultDest = () => join(homedir(), ".claude", "plugins", "data", "dev-loop", "projects.json");
-const defaultTemplate = () => {
-  const candidates = [
-    join(here, "plugin", "config", "projects.example.json"),
-    resolve(here, "..", "..", "config", "projects.example.json"),
-  ];
-  return candidates.find(existsSync) ?? candidates[0];
+const defaultDest = () => devloopProjectsPath();
+const STARTER_CONFIG = {
+  _comment: "Add your projects under projects. dev-loop does not enable any sample project by default.",
+  projects: {},
 };
 
 function usage(): void {
-  console.log(`dev-loop init-config - write a starter projects.json for scheduler runs
+  console.log(`dev-loop init-config - write an empty starter projects.json for scheduler runs
 
 Usage:
-  dev-loop init-config [--dest ~/.claude/plugins/data/dev-loop/projects.json] [--template <path>] [--force]
+  dev-loop init-config [--dest ~/.dev-loop/projects.json] [--template <path>] [--force]
 
 Options:
-  --dest <path>       output file (default: ~/.claude/plugins/data/dev-loop/projects.json)
-  --template <path>   template file (default: bundled npm config/projects.example.json)
+  --dest <path>       output file (default: ~/.dev-loop/projects.json)
+  --template <path>   copy this explicit template instead of writing the empty starter
   --force             overwrite an existing projects.json`);
 }
 
@@ -34,7 +30,7 @@ function die(msg: string, code = 2): never {
 }
 
 export function initConfig(argv = process.argv.slice(2)): number {
-  const opts = { dest: defaultDest(), template: defaultTemplate(), force: false };
+  const opts: { dest: string; template?: string; force: boolean } = { dest: defaultDest(), force: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i] ?? die(`${a} requires a value`);
@@ -45,16 +41,21 @@ export function initConfig(argv = process.argv.slice(2)): number {
     else die(`unknown option '${a}'`);
   }
 
-  if (!existsSync(opts.template)) die(`template not found: ${opts.template}`, 1);
+  if (opts.template && !existsSync(opts.template)) die(`template not found: ${opts.template}`, 1);
   if (existsSync(opts.dest) && !opts.force) {
     console.log(`projects.json already exists: ${opts.dest}`);
-    console.log("Edit that file, or rerun with --force to replace it from the bundled template.");
+    console.log("Edit that file, or rerun with --force to replace it.");
     return 0;
   }
   mkdirSync(dirname(opts.dest), { recursive: true });
-  copyFileSync(opts.template, opts.dest);
+  if (opts.template) copyFileSync(opts.template, opts.dest);
+  else writeFileSync(opts.dest, `${JSON.stringify(STARTER_CONFIG, null, 2)}\n`);
   console.log(`wrote ${opts.dest}`);
-  console.log("Edit repoPath/repos[], strategyDoc, testEnv, backend, and keep mode:\"dry-run\" for first contact.");
+  console.log("No project is predefined. Add one project key, repoPath/repos[], strategyDoc, testEnv, backend, and keep mode:\"dry-run\" for first contact.");
+  const legacy = `${legacyClaudeDataDir()}/projects.json`;
+  if (legacy !== opts.dest && existsSync(legacy)) {
+    console.log(`legacy Claude-plugin config still exists at ${legacy}; dev-loop now defaults to ${opts.dest}. Copy only the projects you still want.`);
+  }
   return 0;
 }
 
