@@ -28,7 +28,7 @@ import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanL
 // per-project process-lifecycle subsystem lives in daemon-lifecycle.ts. This file keeps HTTP routing
 // (createDaemon), the write-route handlers, the background timers, and the CLI dispatch + foreground boot.
 import { page, esc, toTicket, boardPage, ticketPage, roadmapPage, activityPage, reportsIndexPage, reportsRoot, reportPage, eventData } from "./daemonviews.ts";
-import { daemonLifecycle, LIFECYCLE_SUBS, type LifecycleSub } from "./daemon-lifecycle.ts";
+import { daemonLifecycle, LIFECYCLE_SUBS, type LifecycleSub, writeDaemonRunfile } from "./daemon-lifecycle.ts";
 
 export interface DaemonOpts {
   db: DatabaseSync;          // read connection (PRAGMA query_only=ON) — every GET route reads through this
@@ -737,6 +737,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   server.listen(PORT, HOST, () => {
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : PORT;
+    // DEVLOOP_DAEMON_SERVICE=1: this foreground daemon is supervised by an OS unit (launchd/systemd), NOT by
+    // `daemon up` (which detaches + writes the runfile itself). Write the runfile here so `dev-loop daemon
+    // status/down` and the per-project port stay coherent on a headless host. (Stop a service daemon via the
+    // OS — `launchctl bootout` / `systemctl --user stop` — not `dev-loop daemon down`, which the unit restarts.)
+    if (process.env.DEVLOOP_DAEMON_SERVICE === "1") {
+      try { writeDaemonRunfile({ project: PROJECT_KEY, pid: process.pid, port, host: HOST, url: `http://${HOST}:${port}`, startedAt: new Date().toISOString() }); }
+      catch { /* best-effort; status falls back to "stopped" if the runfile can't be written */ }
+    }
     console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${HOST}:${port}/  (reads read-only; /roadmap editable, localhost-only)`);
     // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
     const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, cadenceHours, notify });

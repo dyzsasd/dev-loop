@@ -3,29 +3,29 @@
 // It deliberately does NOT depend on Claude/Codex `/loop`; it owns cadence here and
 // shells out to `claude -p` or `codex exec` once per agent fire.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 
-const VALID_AGENTS = [
+export const VALID_AGENTS = [
   "pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect",
   "ops", "architect", "communication",
 ] as const;
-type Agent = (typeof VALID_AGENTS)[number];
-type RunnerCli = "claude" | "codex";
+export type Agent = (typeof VALID_AGENTS)[number];
+export type RunnerCli = "claude" | "codex";
 
 const AGENT_SET = new Set<string>(VALID_AGENTS);
-const GROUPS: Record<string, Agent[]> = {
+export const GROUPS: Record<string, Agent[]> = {
   core: ["pm", "qa", "dev", "sweep"],
   split: ["pm", "qa", "senior-dev", "junior-dev", "sweep"],
   outward: ["ops", "architect", "communication"],
   all: [...VALID_AGENTS],
 };
 const DEFAULT_AGENTS: Agent[] = GROUPS.core;
-const DEFAULT_INTERVALS: Record<Agent, number> = {
+export const DEFAULT_INTERVALS: Record<Agent, number> = {
   pm: 5 * 60_000,
   qa: 5 * 60_000,
   dev: 5 * 60_000,
@@ -62,7 +62,8 @@ type Options = {
   claudeBin: string;
   codexBin: string;
   codexSafe: boolean;
-  maxFires: number;     // 0 = unlimited; else stop after N total fires (cost guard)
+  maxFires: number;        // SUPERVISOR-SCOPED: 0 = unlimited; else stop the persistent loop after N total fires
+  maxFiresPerDay: number;  // ONE-SHOT cost cap (works under OS scheduling): 0 = off; else skip once N fires/agent landed today (UTC)
   mcpConfig?: string;   // claude: explicit MCP config; defaults to <cwd>/.mcp.json if present
   extraArgs: string[];
 };
@@ -103,7 +104,10 @@ Options:
   --hub-db <path>             hub db path (default: DEVLOOP_HUB_DB or ~/.dev-loop/hub.db)
   --cwd <path>                working directory for CLI subprocesses (default: project repoPath)
   --mcp-config <path>         claude: MCP config to load + --strict-mcp-config (default: <cwd>/.mcp.json if present)
-  --max-fires <n>             stop after N total agent fires, then drain + exit (cost guard; default 0 = unlimited)
+  --max-fires <n>             SUPERVISOR cost guard: stop the persistent loop after N total fires (default 0 = unlimited)
+  --max-fires-per-day <n>     ONE-SHOT cost cap (survives OS scheduling): skip a fire once N fires for that agent
+                              already landed today, UTC (default 0 = off). Use this instead of --max-fires under
+                              an OS scheduler, where each fire is an independent process and --max-fires can't count.
   --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
   --cli-arg <arg>             pass an extra arg to the selected CLI before the prompt; may repeat
                               (CLI binaries: set DEVLOOP_CLAUDE_BIN / DEVLOOP_CODEX_BIN to override)
@@ -116,7 +120,7 @@ function die(msg: string, code = 2): never {
   process.exit(code);
 }
 
-function parseDuration(input: string): number {
+export function parseDuration(input: string): number {
   const m = input.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/);
   if (!m) die(`invalid duration '${input}'`);
   const n = Number(m[1]);
@@ -127,7 +131,7 @@ function parseDuration(input: string): number {
   return ms;
 }
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms % (24 * 60 * 60_000) === 0) return `${ms / (24 * 60 * 60_000)}d`;
   if (ms % (60 * 60_000) === 0) return `${ms / (60 * 60_000)}h`;
   if (ms % 60_000 === 0) return `${ms / 60_000}m`;
@@ -135,7 +139,7 @@ function formatDuration(ms: number): string {
   return `${ms}ms`;
 }
 
-function expandAgentSpec(parts: string[]): Agent[] {
+export function expandAgentSpec(parts: string[]): Agent[] {
   const out: Agent[] = [];
   for (const raw of parts.flatMap((p) => p.split(","))) {
     const name = raw.trim();
@@ -165,6 +169,7 @@ function parseArgs(argv: string[]): Options {
     codexBin: process.env.DEVLOOP_CODEX_BIN || "codex",
     codexSafe: false,
     maxFires: 0,
+    maxFiresPerDay: 0,
     extraArgs,
   };
 
@@ -197,6 +202,10 @@ function parseArgs(argv: string[]): Options {
     else if (a === "--max-fires") {
       opts.maxFires = Number(next());
       if (!Number.isInteger(opts.maxFires) || opts.maxFires < 0) die("--max-fires must be a non-negative integer (0 = unlimited)");
+    }
+    else if (a === "--max-fires-per-day") {
+      opts.maxFiresPerDay = Number(next());
+      if (!Number.isInteger(opts.maxFiresPerDay) || opts.maxFiresPerDay < 0) die("--max-fires-per-day must be a non-negative integer (0 = off)");
     }
     else if (a === "--codex-safe") opts.codexSafe = true;
     else if (a === "--cli-arg") extraArgs.push(next());
@@ -281,6 +290,9 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
   if (opts.cli === "claude") {
     // explicit --mcp-config file wins; otherwise inject the hub inline so a fresh project needs no .mcp.json.
     const mcpArg = opts.mcpConfig ?? JSON.stringify({
+      // hubNode = findCompatibleNode() — an absolute, version-checked Node path, never a bare "node", so the
+      // hub MCP child is PATH-independent under launchd/systemd (where /opt/homebrew/bin is absent) AND meets
+      // the node:sqlite >= 23.6 floor.
       mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb } } },
     });
     return { command: opts.claudeBin, args: ["--mcp-config", mcpArg, "--strict-mcp-config", ...opts.extraArgs, "-p", prompt] };
@@ -288,6 +300,7 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
   const args = [
     "exec",
     ...opts.extraArgs,
+    // hubNode (absolute, version-checked) — PATH-independent under launchd/systemd (see above).
     "-c", `mcp_servers.dev-loop-hub.command=${tomlString(hubNode)}`,
     "-c", `mcp_servers.dev-loop-hub.args=${tomlStringArray([serverEntry])}`,
     "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR=${tomlString(agent)}`,
@@ -301,6 +314,71 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
 
 function displayCommand(command: string, args: string[], prompt: string): string {
   return [command, ...args.map((a) => a === prompt ? `<prompt:${prompt.length} chars>` : a).map(shellQuote)].join(" ");
+}
+
+// ── One-shot overlap guard + per-day cost cap (machine-local, ~/.dev-loop by default) ──
+// BOTH launch paths — this persistent supervisor AND an OS scheduler firing `dev-loop run --once` — call
+// runAgent, so the guard lives here and protects every path. State is on disk, keyed per (project,agent), so
+// independent OS processes coordinate through the filesystem with no shared memory. The runfile dir mirrors
+// daemon-lifecycle's (DEVLOOP_RUN_DIR override, else next to the hub DB).
+function runStateDir(opts: Options): string {
+  return process.env.DEVLOOP_RUN_DIR ?? dirname(opts.hubDb);
+}
+function pidAlive(pid: number): boolean {
+  if (!pid || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; }
+}
+function lockCeilingMs(opts: Options, agent: Agent): number {
+  const override = Number(process.env.DEVLOOP_RUN_LOCK_CEILING_MS);
+  if (Number.isFinite(override) && override > 0) return override;
+  return Math.max(opts.intervals[agent], 30 * 60_000); // long enough that a legitimately-slow fire is never broken
+}
+// Acquire a per-(project,agent) lock; returns release() on success, or null if a LIVE, fresh fire still holds
+// it (caller skips with exit 0 — a skipped fire is success, not an error a scheduler should see). Reuses
+// daemon-lifecycle's O_EXCL `wx` + stale-recovery idiom: a dead holder, or one older than ceilingMs (a crashed
+// fire), is broken and re-taken. cron/launchd do NOT serialize overlapping runs, so this is what stops a slow
+// fire from being double-fired.
+function acquireRunLock(opts: Options, project: string, agent: Agent): (() => void) | null {
+  const dir = runStateDir(opts);
+  mkdirSync(dir, { recursive: true });
+  const lf = join(dir, `run-${project}-${agent}.lock`);
+  const ceiling = lockCeilingMs(opts, agent);
+  const stamp = () => JSON.stringify({ pid: process.pid, at: new Date().toISOString() });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(lf, stamp(), { flag: "wx" }); // O_CREAT|O_EXCL — exactly one creator wins, race-free
+      let released = false;
+      return () => {
+        if (released) return; released = true;
+        try { const h = JSON.parse(readFileSync(lf, "utf8")) as { pid?: number }; if (h.pid === process.pid) unlinkSync(lf); } catch { /* already gone */ }
+      };
+    } catch (e) {
+      if ((e as { code?: string }).code !== "EEXIST") throw e;
+      let holder: { pid?: number; at?: string } | null = null;
+      try { holder = JSON.parse(readFileSync(lf, "utf8")) as { pid?: number; at?: string }; } catch { holder = null; }
+      const age = holder?.at ? Date.now() - Date.parse(holder.at) : Infinity;
+      const stale = !holder || !pidAlive(holder.pid ?? 0) || !(age <= ceiling);
+      if (stale) { try { unlinkSync(lf); } catch { /* already gone */ } continue; } // break a stale lock + retry once
+      return null; // a live, fresh fire is still running → skip
+    }
+  }
+  return null;
+}
+// Per-day fire counter (UTC-date-keyed → self-pruning: yesterday's file is simply never read again). Returns
+// true if the fire is allowed (and records it), false once the agent's daily cap is reached. Called INSIDE the
+// lock, so the read-increment-write is race-free across concurrent fires of the same agent.
+function withinDailyCap(opts: Options, project: string, agent: Agent): boolean {
+  if (opts.maxFiresPerDay <= 0) return true;
+  const dir = runStateDir(opts);
+  const day = new Date().toISOString().slice(0, 10);
+  const f = join(dir, `fires-${project}-${agent}-${day}.json`);
+  let count = 0;
+  try { count = (JSON.parse(readFileSync(f, "utf8")) as { count?: number }).count ?? 0; } catch { count = 0; }
+  if (count >= opts.maxFiresPerDay) return false;
+  const tmp = `${f}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ count: count + 1, at: new Date().toISOString() }));
+  renameSync(tmp, f); // atomic (§11)
+  return true;
 }
 
 async function runAgent(opts: Options, agent: Agent, project: string, cwd: string): Promise<number> {
@@ -324,28 +402,43 @@ async function runAgent(opts: Options, agent: Agent, project: string, cwd: strin
     return 0;
   }
 
-  const logDir = opts.logDir || join(opts.dataDir, project, "runner-logs");
-  mkdirSync(logDir, { recursive: true });
-  const logPath = join(logDir, `${agent}.log`);
-  const log = createWriteStream(logPath, { flags: "a" });
-  log.write(`\n\n===== ${new Date().toISOString()} ${rendered} cwd=${cwd} =====\n`);
-  console.log(`[${new Date().toISOString()}] ${agent}: start (${opts.cli}); log ${logPath}`);
+  // Overlap guard: a slow fire must not be double-fired by the next scheduled tick (cron/launchd don't serialize).
+  const release = acquireRunLock(opts, project, agent);
+  if (!release) {
+    console.log(`[${new Date().toISOString()}] ${agent}: previous fire still running — skipping this fire`);
+    return 0; // skipped fire is success, not a scheduler error
+  }
+  try {
+    if (!withinDailyCap(opts, project, agent)) {
+      console.log(`[${new Date().toISOString()}] ${agent}: --max-fires-per-day ${opts.maxFiresPerDay} reached for today (UTC) — skipping this fire`);
+      return 0;
+    }
 
-  const child: ChildProcessWithoutNullStreams = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-  activeChildren.add(child);
-  child.stdout.on("data", (d) => { process.stdout.write(`[${agent}] ${d}`); log.write(d); });
-  child.stderr.on("data", (d) => { process.stderr.write(`[${agent}] ${d}`); log.write(d); });
+    const logDir = opts.logDir || join(opts.dataDir, project, "runner-logs");
+    mkdirSync(logDir, { recursive: true });
+    const logPath = join(logDir, `${agent}.log`);
+    const log = createWriteStream(logPath, { flags: "a" });
+    log.write(`\n\n===== ${new Date().toISOString()} ${rendered} cwd=${cwd} =====\n`);
+    console.log(`[${new Date().toISOString()}] ${agent}: start (${opts.cli}); log ${logPath}`);
 
-  return await new Promise((resolveExit) => {
-    child.on("error", (e) => { log.write(`\nERROR: ${e.message}\n`); console.error(`[${agent}] failed to start: ${e.message}`); resolveExit(1); });
-    child.on("close", (code, signal) => {
-      activeChildren.delete(child);
-      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"} =====\n`);
-      log.end();
-      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}`);
-      resolveExit(code ?? 1);
+    const child: ChildProcessWithoutNullStreams = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    activeChildren.add(child);
+    child.stdout.on("data", (d) => { process.stdout.write(`[${agent}] ${d}`); log.write(d); });
+    child.stderr.on("data", (d) => { process.stderr.write(`[${agent}] ${d}`); log.write(d); });
+
+    return await new Promise((resolveExit) => {
+      child.on("error", (e) => { log.write(`\nERROR: ${e.message}\n`); console.error(`[${agent}] failed to start: ${e.message}`); resolveExit(1); });
+      child.on("close", (code, signal) => {
+        activeChildren.delete(child);
+        log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"} =====\n`);
+        log.end();
+        console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}`);
+        resolveExit(code ?? 1);
+      });
     });
-  });
+  } finally {
+    release(); // free the lock for the next scheduled fire as soon as this one exits
+  }
 }
 
 type Slot = { agent: Agent; nextAt: number; running: boolean };
@@ -404,4 +497,8 @@ async function main(): Promise<void> {
   tick();
 }
 
-main().catch((e) => die(e instanceof Error ? e.message : String(e), 1));
+// Only run the scheduler when invoked directly — importing this module (e.g. service-install.ts reusing the
+// exported helpers above) must be side-effect-free.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => die(e instanceof Error ? e.message : String(e), 1));
+}

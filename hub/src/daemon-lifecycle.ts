@@ -22,7 +22,7 @@ import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts"
 import { findCompatibleNode } from "./node-runtime.ts";
 import { devloopProjectsPath, hubDbPath } from "./paths.ts";
 
-interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; }
+export interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; }
 const DEFAULT_DAEMON_PORT = 8787;
 const AUTOSTART_LABEL = "com.dyzsasd.dev-loop.daemon";
 
@@ -126,6 +126,22 @@ async function lcAcquireLock(key: string, totalMs = 60000, staleMs = 30000): Pro
   }
 }
 
+// A stable, deterministic per-project port (FNV-1a of the key → a fixed high port). The interactive
+// `daemon up` path defaults to DEFAULT_DAEMON_PORT (8787) with upward probing; the OS-service layer
+// instead bakes THIS per-project port into each daemon unit's DEVLOOP_DAEMON_PORT, which daemonUp
+// honors via its envPort branch — so two projects' service daemons never collide on 8787.
+function lcPortFor(key: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return 20000 + (h % 20000); // 20000–39999: clear of the registered-port crush and the 8787 default
+}
+
+// Public reuse surface for the OS-service layer (service-install.ts) and the service-owned daemon boot:
+// the SAME deterministic per-project port + runfile dir + runfile writer the lifecycle uses, so a
+// launchd/systemd-supervised foreground daemon stays coherent with `dev-loop daemon status/down`.
+export function portForProject(key: string): number { return lcPortFor(key); }
+export function daemonRunDir(): string { return lcRunDir(); }
+export function writeDaemonRunfile(info: RunInfo): void { lcWriteRun(info); }
 function lcIsAlive(pid: number): boolean {
   if (!pid || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; }
