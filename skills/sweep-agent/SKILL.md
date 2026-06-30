@@ -98,7 +98,8 @@ its owner label is picked up by **nobody**. Find and fix them:
     a comment and report it. **Never guess a repo** (same discipline as never guessing a
     type) — a wrong target ships to the wrong tree. Single-repo projects have no
     `repo:*` labels; skip this check.
-  - **No dev-tier marker** (split-dev project only, §21a): a `Todo` dev ticket
+  - **No dev-tier marker** (split-dev project only, §21a; config `devSplit:true` or scheduler
+    context `DEVLOOP_DEV_SPLIT:true`): a `Todo` dev ticket
     (`Feature`/`Bug`/`Improvement`, not `blocked`, not a design parent awaiting its gate)
     that carries **neither** `senior-dev` nor `junior-dev` (the `assignee` actor on
     `service` / the dev-tier label on `linear`/`local`) is invisible to **both** dev

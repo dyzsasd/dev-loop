@@ -204,7 +204,6 @@ normally `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (or the explicit
    `${CLAUDE_PLUGIN_DATA}/projects.json` / `~/.claude/plugins/data/dev-loop/projects.json`
    only as legacy fallback. Do not search arbitrary Claude plugin data directories for a new install.
    If the file is genuinely absent, create the dev-loop config path with an empty `"projects": {}` object.
-   If the file is genuinely absent, create it with an empty `"projects": {}` object.
    Use `${CLAUDE_PLUGIN_ROOT}/config/projects.example.json` only as a field-shape
    reference; never copy an example project as real config.
 2. Determine the project **key** to initialize (the user named it, or ask). If that
@@ -235,7 +234,7 @@ normally `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (or the explicit
      non-web product) — **required for QA**.
    - Plus the autonomy-bearing blocks the operator should set deliberately:
      `mode` (default `dry-run` for first contact, §12), `autonomy` (`ask` default /
-     `full`, §12a), `build` (`typecheck`/`build`/`test`), `git`
+	   `full`, §12a), `build` (`typecheck`/`build`/`test`), `git`
      (`defaultBranch`/`autoCommit`/`autoPush`/`autoDeploy`), `deploy`
      (`command`/`healthCheck`), and `blockedStateName` (null unless they added a
      real Blocked column).
@@ -255,7 +254,9 @@ normally `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (or the explicit
 4. **Write the gathered values back** to `projects.json` (in `live`), preserving all
    other projects untouched and pretty-printing valid JSON. Set `defaultProject` if
    this is the only/first project as an interactive convenience; unattended launchers still
-   require an explicit project or a cwd match. In `dry-run`, print the exact JSON block you'd
+   require an explicit project or a cwd match. For a new project, write `devSplit:true` by default
+   so the default `dev-loop run --agents core` launches `senior-dev` + `junior-dev`; write
+   `devSplit:false` only when the operator explicitly chooses the legacy single-dev loop. In `dry-run`, print the exact JSON block you'd
    add. Tell the operator which fields you defaulted vs. which they supplied, and
    **flag any role whose required field is still missing** (e.g. "no `repoPath` →
    Dev can't run yet") — that's a ✗ in the readiness report, not a hard stop.
@@ -492,8 +493,8 @@ what's still needed. One line per check, grouped:
   confirm the §23 guardrails were provisioned above.)*
 
 End with a **plain-English verdict**: either *"Ready — you can flip `mode:"live"`
-and launch the agents (`/dev-loop:pm-agent`, `/qa-agent`, `/dev-agent`,
-`/sweep-agent`, `/reflect-agent`, plus any opt-in outward agents such as
+and launch the agents (`/dev-loop:pm-agent`, `/qa-agent`, `/senior-dev-agent`,
+`/junior-dev-agent`, `/sweep-agent`, `/reflect-agent`, plus any opt-in outward agents such as
 `/communication-agent`)"* — **or** an exact list of what's still needed and
 who it blocks (e.g. "✗ `repoPath` unset → Dev can't run; ✗ Linear project not
 created → all live runs blocked"). Be specific: the operator should know the precise

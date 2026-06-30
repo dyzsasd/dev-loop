@@ -93,7 +93,7 @@ projects in `dry-run` for first contact) and launch the agents (next section).
 ## 2. Launch the agents
 
 Pick the launch mode that matches how much control you want over cadence. All modes run the same skills:
-`/dev-loop:pm-agent`, `qa-agent`, `dev-agent`, `sweep-agent`, `reflect-agent`, and the
+`/dev-loop:pm-agent`, `qa-agent`, `senior-dev-agent`, `junior-dev-agent`, `sweep-agent`, `reflect-agent`, and the
 opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`, and
 `communication-agent`.
 
@@ -120,13 +120,13 @@ dev-loop run --cli codex --agents core,communication
 # Preview the exact commands without launching the model.
 dev-loop run --cli codex --agents communication --once --dry-run
 
-# Two-tier Dev without changing cadence ownership.
-dev-loop run --cli claude --agents core --dev-split
+# Legacy single-dev loop, if you explicitly want the old one-pane Dev.
+dev-loop run --cli claude --agents legacy
 ```
 
-Default agents are `core` (`pm,qa,dev,sweep`). Add `reflect`, `outward`, or individual
+Default agents are `core` (`pm,qa,senior-dev,junior-dev,sweep`). Add `reflect`, `outward`, or individual
 agents with `--agents`, for example `--agents core,reflect,ops,communication`. Default
-cadences match §4: PM/QA/Dev every ~5 minutes, Sweep ~30 minutes, Ops ~10 minutes, and
+cadences match §4: PM/QA/Senior-Dev/Junior-Dev every ~5 minutes, Sweep ~30 minutes, Ops ~10 minutes, and
 daily roles every 24 hours. Override one with `--interval communication=12h` or
 `--interval pm=2m`.
 
@@ -157,8 +157,9 @@ Useful options:
 - `--once` runs each selected agent once and exits.
 - `--dry-run` prints commands and validates skill paths without calling Claude/Codex.
 - `--root`, `--data`, `--hub-db`, `--project`, and `--cwd` make the run explicit for cron/systemd.
-- `--cli-arg <arg>` passes model or safety flags to the selected CLI before the prompt, e.g.
-  `--cli-arg --model --cli-arg opus`.
+- `--cli-arg <arg>` passes extra executor flags after the scheduler's default model/effort
+  flags. Use `projects.json` `models` / `efforts` for durable per-agent profiles; use
+  `--cli-arg` for a one-off override.
 - `--codex-safe` omits Codex's `--dangerously-bypass-approvals-and-sandbox` flag. **Do not use it
   for unattended Codex loops.** Without that flag Codex asks for approval on every MCP tool call, and
   in non-interactive `codex exec` the call is auto-cancelled (`dev-loop-hub/whoami (failed)` →
@@ -206,20 +207,20 @@ becomes a new background session; `/loop` makes it recurring):
 Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent output),
 `claude stop <id>` (stop). `Space` peeks a row, `Enter` attaches.
 
-> **Model note:** a dispatched Agent View session uses the **view's** model (set the view
-> with `claude agents --model <m>`). For *different* models per agent, use the scheduler's
-> `--cli-arg` flags, the tmux launcher below, or separate views. Agent View applies one model per view.
+> **Model note:** a dispatched Agent View session uses the **view's** model/effort. Agent View
+> applies one profile per view, so different per-agent profiles require separate views or the
+> `dev-loop run` scheduler.
 
-> **Two-tier Dev (opt-in, off by default):** replace the `/dev-loop:dev-agent` line with
-> two rows to split Dev into a design-lead + implementer pair:
+> **Two-tier Dev (default):** use these two rows for Dev, a design-lead + implementer pair:
 > ```
 > /loop 5m  /dev-loop:senior-dev-agent   # opus/max — designs modules, delegates to junior-dev, escalation direct-code
 > /loop 5m  /dev-loop:junior-dev-agent   # sonnet/high — implements pre-designed tickets against the linked design
 > ```
-> Models come from `models.senior-dev` / `models.junior-dev` in `projects.json`; defaults are
-> opus / sonnet. See [conventions §21a](../references/conventions.md#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project)
-> and [config-schema.md `models{}`](../references/config-schema.md) for routing rules, the design
-> gate, and the per-backend tier encoding. The legacy `dev` pane is unchanged when this is off.
+> In Agent View you set those model/effort choices on the views themselves. In `dev-loop run`,
+> the scheduler applies them automatically from its built-in defaults or from `projects.json`
+> `models` / `efforts`. See [conventions §21a](../references/conventions.md#21a-the-two-tier-dev--senior-dev--junior-dev-default-per-project)
+> and [config-schema.md](../references/config-schema.md) for routing rules, the design gate, and
+> the per-backend tier encoding. Use `/dev-loop:dev-agent` only for an explicit legacy single-dev project.
 
 > For an attended one-shot Codex run, `dev-loop run --cli codex --once` is the path —
 > it injects the hub MCP via `-c` exactly as the cadence runner does. (The old
@@ -241,40 +242,56 @@ dev-loop run --cli codex --agents core,communication
 dev-loop run --cli codex --project <key> --cwd /path/to/product-repo --agents core,communication
 ```
 
-Use CLI-native model/config flags through `--cli-arg`, or set per-agent model defaults in the executor
-CLI's own config. The old data-dir `run-loop.sh` launcher is legacy; new installs should not create
-runtime scripts under a Claude plugin data directory.
+`dev-loop run` applies per-agent model/effort defaults itself and lets `projects.json`
+override them. `--cli-arg` is still available for one-off executor flags. The old data-dir
+`run-loop.sh` launcher is legacy; new installs should not create runtime scripts under a
+Claude plugin data directory.
 
 ---
 
-## 3. Per-agent models
+## 3. Per-agent models and effort
 
-The model is chosen **at launch** (a SKILL can't set its own model), via a per-project
-`models` map in `projects.json`:
+The model is chosen **at launch**. A SKILL cannot switch its own model after the
+executor starts, so `dev-loop run` pins model and effort/reasoning strength before each
+agent fire. Dry-runs print the resolved profile:
 
-```jsonc
-"models": { "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "communication": "opus" }
+```text
+dev-loop run: launch=pm:opus/max, qa:sonnet/high, senior-dev:claude-opus-4-8/max, junior-dev:claude-sonnet-4-6/high, sweep:sonnet/high
 ```
 
-**Every agent defaults to `opus`** — maximize correctness across the whole loop. Tune an
-agent **down** only to economize; the table shows where `opus` matters most vs. where a
-cheaper model is tolerable:
+Defaults are role-based, not one-size-fits-all:
 
-| Agent | Default | Could economize to | Why |
-|---|---|---|---|
-| **dev** | `opus` | — | hardest — implements, self-reviews the diff, fixes |
-| **pm** | `opus` | — | product/scoping judgment + review |
-| **architect** | `opus` | — | whole-codebase reasoning about debt/abstractions |
-| **reflect** | `opus` | `sonnet` | careful curation, but runs only daily |
-| **qa** | `opus` | `sonnet` | capable; runs often |
-| **ops** | `opus` | `sonnet` | mechanical polling + anti-flap judgement; runs often |
-| **communication** | `opus` | `sonnet` | public article drafting from verified facts; daily |
-| **sweep** | `opus` | `haiku` | mechanical hygiene |
+| Agent | Claude default | Codex default | Effort | Why |
+|---|---|---|---|---|
+| **pm** | `opus` | `gpt-5.5` | Claude `max`, Codex `xhigh` | product/scoping judgment + review |
+| **senior-dev** | `claude-opus-4-8` | `gpt-5.5` | Claude `max`, Codex `xhigh` | design, decomposition, escalations |
+| **junior-dev** | `claude-sonnet-4-6` | `gpt-5.5` | `high` | implements pre-designed tickets |
+| **dev** *(legacy)* | `opus` | `gpt-5.5` | Claude `max`, Codex `xhigh` | single-pane implementation loop |
+| **qa** | `sonnet` | `gpt-5.5` | `high` | frequent verification work |
+| **sweep** | `sonnet` | `gpt-5.5` | `high` | board hygiene and reclaim |
+| **reflect** | `opus` | `gpt-5.5` | `xhigh` | daily retrospective judgment |
+| **ops** | `sonnet` | `gpt-5.5` | `high` | polling + incident filing |
+| **architect** | `opus` | `gpt-5.5` | `xhigh` | whole-codebase architecture review |
+| **communication** | `sonnet` | `gpt-5.5` | `high` | factual public-facing drafts |
 
-The tmux launcher applies this map automatically and **defaults each pane to `--model
-opus`** when the map omits an agent. In Agent View, set the view's model (e.g.
-`claude agents --model opus`); it's one model per view. In the built-in scheduler, pass
-CLI model flags with `--cli-arg` or set the model in the CLI's own config.
+Override only what your account or budget needs in `projects.json`:
+
+```jsonc
+"models": {
+  "senior-dev": { "claude": "claude-opus-4-8", "codex": "gpt-5.5" },
+  "junior-dev": { "claude": "claude-sonnet-4-6", "codex": "gpt-5.5" },
+  "communication": "sonnet"
+},
+"efforts": {
+  "pm": { "claude": "max", "codex": "xhigh" },
+  "junior-dev": "high",
+  "reflect": "xhigh"
+}
+```
+
+`extrahigh` / `extra-high` are accepted as aliases for `xhigh`. Claude supports `max`;
+Codex uses `xhigh` as the strongest scheduler-applied tier. `--cli-arg` is still appended
+after the defaults for a temporary override.
 
 ---
 
@@ -284,7 +301,7 @@ Agents self-throttle (idle fires are cheap no-ops), so tighter intervals are saf
 
 | Agent(s) | Cadence | Why |
 |---|---|---|
-| PM / QA / Dev | ~5 min | the producing loop |
+| PM / QA / Senior-Dev / Junior-Dev | ~5 min | the producing loop |
 | Sweep | ~30 min | janitorial; re-walking an unchanged board is waste |
 | Reflect | daily | reflects *after* a day of churn |
 | Ops *(opt-in)* | ~10–15 min | watches running prod; tight polls are the point, but self-throttles |
@@ -338,14 +355,16 @@ that matches a configured-but-unseeded project **errors loudly** (it does not si
 to override the cwd, or to be unambiguous in a launcher that spawns the MCP server from a fixed dir.
 
 ```bash
-DEVLOOP_ACTOR=pm   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:pm-agent
-DEVLOOP_ACTOR=qa   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:qa-agent
-DEVLOOP_ACTOR=dev  DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:dev-agent
-DEVLOOP_ACTOR=communication DEVLOOP_PROJECT=monpick /loop 24h /dev-loop:communication-agent
+DEVLOOP_ACTOR=pm         DEVLOOP_PROJECT=<project-key> /loop 5m  /dev-loop:pm-agent
+DEVLOOP_ACTOR=qa         DEVLOOP_PROJECT=<project-key> /loop 5m  /dev-loop:qa-agent
+DEVLOOP_ACTOR=senior-dev DEVLOOP_PROJECT=<project-key> /loop 5m  /dev-loop:senior-dev-agent
+DEVLOOP_ACTOR=junior-dev DEVLOOP_PROJECT=<project-key> /loop 5m  /dev-loop:junior-dev-agent
+DEVLOOP_ACTOR=communication DEVLOOP_PROJECT=<project-key> /loop 24h /dev-loop:communication-agent
 # …sweep/reflect/ops/architect likewise, each with its own DEVLOOP_ACTOR
 ```
 
-The built-in scheduler (§2B) and tmux launcher (§2C) set these per pane for you. Verify a pane is wired with
+The built-in scheduler (§2A) sets these per fire for you. External launchers should set them per
+pane. Verify a pane is wired with
 `DEVLOOP_ACTOR=pm claude mcp list` → `dev-loop-hub … ✓ Connected`, and `whoami` inside a
 session returns `pm`. The hub DB is machine-local runtime state — never committed.
 

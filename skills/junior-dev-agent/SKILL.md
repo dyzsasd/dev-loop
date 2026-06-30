@@ -61,15 +61,17 @@ else top-level, §19). If no config path resolves, ask the user before proceedin
 be a repo file or a Linear/hub document; you never *write* it — that's PM's job, and
 the per-module **design** doc is senior-dev's, §21a.)
 
-**You only run under the split-dev model — detect it from the AUTHORITATIVE config flag
-`devSplit:true` (§11).** This flag is the single source of truth. **Do NOT infer the dev
-model from board history, from which actor did past work (`dev`/`operator`/…), or from any
-ticket** (a Canceled model-tiering ticket is **not** a "single-dev decision" — that is the
-exact misread that silently stalls the tier). If `devSplit:true`, the split **is** active and
-you **are** the live junior tier — operate normally (an empty junior slice this fire is just a
-normal idle no-op, **not** "the split is off"). **`devSplit` absent/false ⇒ legacy single-dev
-⇒ graceful no-op**: report that the project runs the legacy single `dev` pane and exit. Never
-reach into the un-tiered `dev` queue.
+**You only run under the split-dev model — detect it from the AUTHORITATIVE project config
+flag `devSplit:true` (§11) or the explicit scheduler context `DEVLOOP_DEV_SPLIT:true`.** The
+scheduler flag is set by `dev-loop run` when the operator uses the default `core` group,
+`--dev-split`, or explicitly selects `senior-dev` / `junior-dev`; treat it as a runtime source of
+truth for this fire. **Do NOT infer the dev model from board history, from which actor did past work
+(`dev`/`operator`/…), or from any ticket** (a Canceled model-tiering ticket is **not** a
+"single-dev decision" — that is the exact misread that silently stalls the tier). If either source
+says split is active, you **are** the live junior tier — operate normally (an empty junior slice this
+fire is just a normal idle no-op, **not** "the split is off"). **If both config and scheduler context
+leave split off ⇒ legacy single-dev ⇒ graceful no-op**: report that the project runs the legacy
+single `dev` pane and exit. Never reach into the un-tiered `dev` queue.
 
 **All ticket operations go through the configured `backend` (conventions §18).**
 `backend` absent ⇒ `"linear"`; `"local"` routes the same operations to a machine-local

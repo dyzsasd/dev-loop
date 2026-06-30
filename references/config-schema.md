@@ -40,7 +40,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       "mode":          "live",        // "live" | "dry-run"  (see conventions §12)
       "autonomy":      "ask",         // "ask" (default) | "full" — who decides vs escalates (see conventions §12a)
       "backend":       "linear",      // "linear" (default when absent) | "local" | "service" — coordination substrate (see conventions §18)
-      "devSplit":      false,         // two-tier Dev (§21a): the AUTHORITATIVE flag the agents read. true ⇒ senior-dev/junior-dev own the queue + the legacy `dev` agent defers (no-op); absent/false ⇒ legacy single-dev. MUST be set together with the launcher's DEV_SPLIT=1 (which spawns the two panes) — the two halves of one switch. Agents NEVER infer the dev model from history/tickets, only from this flag.
+      "devSplit":      true,          // two-tier Dev (§21a): default for new projects and for `dev-loop run --agents core`. true ⇒ senior-dev/junior-dev own the queue + the legacy `dev` agent defers (no-op); false ⇒ legacy single-dev. `dev-loop run` also injects DEVLOOP_DEV_SPLIT=true when split agents are selected, so scheduler launches stay coherent before this persistent flag is written. Agents NEVER infer the dev model from history/tickets.
       "localBoard":    null,          // local backend only: override board dir; null → ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/board/
       "ticketPrefix":  "DL",          // local/service backend: ID prefix for tickets (e.g. "DL-1"); ignored for linear
       "hub": {                        // service backend only (conventions §18; see docs/HUB-ARCHITECTURE.md). The local MCP system-of-record.
@@ -48,10 +48,27 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "docs":        false,         // P4: false (default) ⇒ strategyDoc is a repo file (as P2/P3). true ⇒ the strategy + roadmap live as hub documents (versioned, attributable, optimistic-CAS, OPERATOR-PUBLISHED via doc.publish). Or pin one doc: strategyDoc: { "hubDoc": "strategy" }. §17: hub docs are PRODUCT docs only — never a SKILL/conventions/code file.
         "transport":   "stdio"        // DL-43/P2: "stdio" (default) ⇒ each pane's MCP server opens hub.db DIRECTLY (today's behavior, zero new surface). "daemon" ⇒ OPT-IN: the agent op-API on the loopback daemon (`POST /api/op/<op>`, read fresh per request) is live, and the thin stdio shim (hub/src/shim.ts) proxies tool calls to it instead of opening the DB — identity rides env→the `X-Devloop-Actor` header (dodges the `claude -p` Authorization-drop). Every mutating endpoint passes the writeOriginOk CSRF/DNS-rebind guard first (§16, 127.0.0.1-only). See docs/HUB-ARCHITECTURE.md + docs/design/daemon-multicli-repositioning.md.
       },
-      "models": {                     // optional: per-agent model, applied by the LAUNCHER at session start (--model). DEFAULT is opus for EVERY agent; tune an agent DOWN to economize.
-        "pm": "opus", "qa": "opus", "dev": "opus", "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus", "communication": "opus",
-        "senior-dev": "claude-opus-4-8",   // two-tier Dev (launcher DEV_SPLIT=1): the design-and-delegate + escalation direct-code agent. Launcher effort = max. Absent ⇒ opus.
-        "junior-dev": "claude-sonnet-4-6"  // two-tier Dev (DEV_SPLIT=1): implements pre-designed tickets against the linked design. Launcher effort = high. Absent ⇒ sonnet. `dev` stays the LEGACY single-dev default (kept active).
+      "models": {                     // optional: per-agent model, applied by `dev-loop run` at launch. String ⇒ both CLIs; object ⇒ per CLI. Absent ⇒ built-in role defaults below.
+        "pm": { "claude": "opus", "codex": "gpt-5.5" },
+        "qa": { "claude": "sonnet", "codex": "gpt-5.5" },
+        "senior-dev": { "claude": "claude-opus-4-8", "codex": "gpt-5.5" },
+        "junior-dev": { "claude": "claude-sonnet-4-6", "codex": "gpt-5.5" },
+        "sweep": { "claude": "sonnet", "codex": "gpt-5.5" },
+        "reflect": { "claude": "opus", "codex": "gpt-5.5" },
+        "ops": { "claude": "sonnet", "codex": "gpt-5.5" },
+        "architect": { "claude": "opus", "codex": "gpt-5.5" },
+        "communication": { "claude": "sonnet", "codex": "gpt-5.5" }
+      },
+      "efforts": {                    // optional: per-agent thinking/reasoning strength. String ⇒ both CLIs; object ⇒ per CLI. Claude supports max; Codex max is normalized to xhigh.
+        "pm": { "claude": "max", "codex": "xhigh" },
+        "qa": "high",
+        "senior-dev": { "claude": "max", "codex": "xhigh" },
+        "junior-dev": "high",
+        "sweep": "high",
+        "reflect": "xhigh",
+        "ops": "high",
+        "architect": "xhigh",
+        "communication": "high"
       },
 
       "testEnv": {                    // where QA + verification run
@@ -170,28 +187,29 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `*-state.json` files; if a launcher happens to tee agent output to
   `logs/<agent>-<date>.log` in the data dir, it reads that too, but degrades silently
   when absent. It writes no new config keys.
-- **`models`** (optional): a per-agent model map the **launcher** applies at session
-  start (`claude --model <m> …`) — the model is a *launch-time* choice, not something a
-  SKILL sets, so this is consumed by `dev-loop run` / your launch command, not by the
-  agents. **The default is `opus` for EVERY agent** (the launcher applies `--model opus`
-  per pane unless you override) — maximize correctness across the whole loop. Tune an
-  agent **down** (`sonnet`/`haiku`) only to economize — e.g. the mechanical/high-frequency
-  ones (`sweep`, `qa`, `ops`, `communication`) tolerate `sonnet` well; the reasoning-heavy ones
-  (`dev`, `pm`, `architect`, `reflect`) are where `opus` earns its keep. Omitting an
-  agent ⇒ it falls back to the launcher's opus default.
-  **Per-agent EFFORT tiers** (the launcher's `--effort` per pane, distinct from the model):
-  `pm=max` and `dev=max` (legacy single dev) reason deepest; `reflect`/`architect`=`xhigh`;
-  `qa`/`sweep`=`high`.
-- **Two-tier Dev** (`senior-dev` / `junior-dev`; conventions §21a): an opt-in split of the single
-  Dev role, enabled at LAUNCH by the scheduler/launcher knob (`--dev-split` or equivalent) — it replaces
-  the single `dev` pane with two panes: a **`senior-dev`** pane (`claude-opus-4-8`, effort **max**)
+- **`models`** (optional): a per-agent model map consumed by **`dev-loop run`** at
+  process launch. The model is a launch-time choice (`claude --model <m>` or
+  `codex exec --model <m>`), not something a SKILL can change mid-fire. Values may be a
+  string (same model for both CLIs) or an object with `claude` / `codex` fields.
+  Omit the map unless you need to override the built-in role defaults: PM, legacy Dev,
+  Senior-Dev, Reflect, and Architect favor Opus-class / strongest reasoning; Junior-Dev,
+  QA, Sweep, Ops, and Communication favor Sonnet-class / cheaper repeated work. Codex
+  defaults to `gpt-5.5` for every role unless overridden.
+- **`efforts`** (optional): a per-agent thinking/reasoning map consumed by
+  **`dev-loop run`** at launch. Values may be a string or a `{ "claude": "...",
+  "codex": "..." }` object. Defaults: `pm=max`, `dev=max`, `senior-dev=max`,
+  `junior-dev=high`, `qa=high`, `sweep=high`, `reflect=xhigh`, `architect=xhigh`,
+  `ops=high`, `communication=high`. Claude accepts `max`; Codex uses `xhigh` for that
+  tier, and the scheduler normalizes `extrahigh` / `extra-high` to `xhigh`.
+- **Two-tier Dev** (`senior-dev` / `junior-dev`; conventions §21a): the default Dev model for new
+  projects and for `dev-loop run --agents core`. It replaces the single `dev` pane with two panes:
+  a **`senior-dev`** pane (`claude-opus-4-8`, effort **max**)
   that designs-and-delegates new modules/features and direct-codes escalations, and a
   **`junior-dev`** pane (`claude-sonnet-4-6`, effort **high**) that implements pre-designed tickets
-  against the linked design. Their models come from `models{}` (`senior-dev`/`junior-dev`),
-  defaulting to opus / sonnet respectively. The split is **per-project and opt-in**: with
-  `DEV_SPLIT` off (default) the launcher keeps the **legacy single `dev` pane** and non-split
-  projects are 100% unaffected — `dev` stays an active actor and `dev-agent` stays the canonical
-  single-dev SKILL. PM routes each ticket to its tier at filing (new module / new feature ⇒
+  against the linked design. These are built-in scheduler defaults; `models` / `efforts` override
+  them only when needed. The split is still **per-project configurable**: use
+  `devSplit:false` plus `dev-loop run --agents legacy` (or explicitly `pm,qa,dev,sweep`) for the
+  legacy single `dev` pane. PM routes each ticket to its tier at filing (new module / new feature ⇒
   `senior-dev`; improvement / bug-fix, or borderline ⇒ `junior-dev`), encoded per backend
   (the ticket `assignee` on `service`; a `senior-dev`/`junior-dev` LABEL on `linear`/`local`).
 - **Design docs** (the two-tier Dev's `design` doc tier, conventions §21a): senior-dev authors a
@@ -312,13 +330,12 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   ticket/comment/report/log. **Absent ⇒ NO-OP** (no ping, no extra work — full back-compat).
   Out-of-band by design: a Linear @mention would be a self-mention (shared identity) and
   suppressed.
-- **`models`** covers the eight base agents plus the two opt-in two-tier-Dev agents
-  (`senior-dev`/`junior-dev`) and **defaults to `opus` for all of them** (the launcher applies
-  `--model opus` per pane unless overridden; `senior-dev`→opus, `junior-dev`→sonnet defaults under
-  `DEV_SPLIT=1`); tune an agent down to economize. The outward agents are **opt-in to launch**
-  (off by default in the launcher), and the two-tier Dev split is also opt-in (`DEV_SPLIT=1`);
-  none of these change any other agent's behavior, and a legacy single-dev project is
-  byte-for-byte unchanged.
+- **`models` / `efforts`** cover the eight base agents plus the default two-tier Dev
+  agents (`senior-dev` / `junior-dev`). They are overrides, not required boilerplate:
+  `dev-loop run` already launches each role with a built-in CLI-specific profile and prints the
+  resolved `launch=<agent>:<model>/<effort>` summary in dry-runs. The outward agents are
+  **opt-in to launch** (off by default unless selected). The legacy single-dev loop remains
+  available with `devSplit:false` and `--agents legacy`; otherwise split-dev is the default.
 - **Agent state files** (`pm-state.json`, `qa-state.json`, and the outward observe-and-file
   agents' `ops-state.json` / `architect-state.json`, §21) live next to `projects.json` and
   hold per-project loop state: last-reviewed/swept SHA, swept

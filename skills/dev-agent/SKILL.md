@@ -35,10 +35,11 @@ Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
 as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`,
 `strategyDoc`, `build`, `git`, `deploy`, `mode`, `autonomy` (§12a), the optional `codex`
 block (§24), and — if present —
-`repos[]` (conventions §19). **If `devSplit:true` (§21a), DEFER — graceful no-op:** this
-project runs the two-tier split, so `senior-dev`/`junior-dev` own the queue; you are the
-legacy single-dev fallback and must not also pick (a double-pick races them). Report the
-no-op and exit. **`devSplit` absent/false ⇒ operate as the single Dev (today's behavior).**
+`repos[]` (conventions §19). **If `devSplit:true` (§21a) or the scheduler context says
+`DEVLOOP_DEV_SPLIT:true`, DEFER — graceful no-op:** this project runs the two-tier split, so
+`senior-dev`/`junior-dev` own the queue; you are the legacy single-dev fallback and must not also
+pick (a double-pick races them). Report the no-op and exit. **If both config and scheduler context
+leave split off ⇒ operate as the single Dev (legacy behavior).**
 **Resolve the target repo per ticket:** absent/one
 `repos[]` ⇒ single-repo, the implicit target is `repoPath` and every step below behaves
 exactly as today. With multiple repos, the ticket's `repo:<name>` label names the

@@ -75,7 +75,7 @@ numbered sections below.
 | **PM** | `Feature`, `Improvement`(`pm`) | In Review `pm` items; `blocked`+`needs-pm`; review lenses (Job C preflight) | Linear state + labels |
 | **QA** | `Bug`, `Improvement`(`qa`), `coverage` | In Review `qa` items; info-blocks; new-bug sweep | Linear state + labels |
 | **Dev** | (ships everyone's tickets) | `Todo` in pick order (§5), excluding `blocked` | In Review, for the owner |
-| **senior-dev / junior-dev** *(optional split of Dev, §21a)* | senior: authors module **design** docs + verifies-gates-then-delegates to junior; junior: ships pre-designed tickets | senior: its design + escalation tickets; junior: its `Todo` slice (design children + improvements/bugs) | In Review, for the owner (escalation routes a junior fail UP to senior) |
+| **senior-dev / junior-dev** *(default split of Dev, §21a)* | senior: authors module **design** docs + verifies-gates-then-delegates to junior; junior: ships pre-designed tickets | senior: its design + escalation tickets; junior: its `Todo` slice (design children + improvements/bugs) | In Review, for the owner (escalation routes a junior fail UP to senior) |
 | **Sweep** | (nothing — hygiene only) | Tickets that fall through the cracks: missing/wrong owner label, orphaned `In Progress`, stale signals (cross-owner) | re-label/re-route → the right owner |
 | **Reflect** | (nothing — observes the loop) | The loop's own behavior over a window: tickets/git/logs/throughput/QA outcomes (read-only) | `lessons.md` (autonomous) + a drafted proposal in the report (never auto-applies SKILL/conventions) |
 | **Ops** *(outward · observe-and-file §21)* | (nothing — watches running prod) | RUNNING prod over time: health checks / baseUrl / critical routes / logs (read-only); CONFIRMED+REPEATED degradation only (anti-flap) | files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod down) — never rolls back (Dev's Step 6.5) |
@@ -712,8 +712,9 @@ On startup each skill:
    (optional — see §12; absent ⇒ the conservative `"ask"` default). It also loads
    `backend` (`"linear"` | `"local"`; **absent ⇒ `"linear"`**, so existing projects
    are unchanged) and, for `local`, the optional `localBoard` path and `ticketPrefix`
-   (§18). (A per-agent `models` map may also be set, but it is applied by the
-   **launcher** at session start — `claude --model …` — not loaded or chosen by the
+   (§18). (Per-agent `models` / `efforts` may also be set, but they are applied by
+   **`dev-loop run`** at process launch — `claude --model … --effort …` or
+   `codex exec --model … -c model_reasoning_effort=…` — not loaded or chosen by the
    agents; see config-schema.md and `docs/RUNNING.md`.)
 
 If `projects.json` is missing or the chosen project lacks a required field, the
@@ -1552,31 +1553,28 @@ They are provisioned once at setup alongside the other workflow labels (§13).
 
 ---
 
-## 21a. The two-tier Dev — senior-dev / junior-dev (optional, per-project)
+## 21a. The two-tier Dev — senior-dev / junior-dev (default, per-project)
 
 The single **Dev** agent (`dev`, §1) can be split into two specialised agents for a project that
 wants the expensive reasoning model to concentrate on *design + escalation* while a cheaper model
 does the bulk implementation against a written spec:
 
-| Agent | Model / effort | Charter |
+| Agent | Default launch profile | Charter |
 |---|---|---|
-| **senior-dev** | `claude-opus-4-8` / `max` | TWO modes. **design-and-delegate** (the normal complex path): author a living per-module **design doc**, decompose it into staged child dev-tickets assigned to junior-dev, and move the design parent to `In Review` for PM to verify (the **design gate**). **direct-code** (escalation): when a junior-built ticket fails verification on a real defect, code the remaining work *directly* (no delegation). |
-| **junior-dev** | `claude-sonnet-4-6` / `high` | Pick its own `Todo` tickets (improvements / bug-fixes + promoted design children), **read the linked design before coding**, implement (sonnet), run the same ship gates as `dev`, hand off at `In Review` for PM/QA. |
+| **senior-dev** | Claude `claude-opus-4-8` / `max`; Codex `gpt-5.5` / `xhigh` | TWO modes. **design-and-delegate** (the normal complex path): author a living per-module **design doc**, decompose it into staged child dev-tickets assigned to junior-dev, and move the design parent to `In Review` for PM to verify (the **design gate**). **direct-code** (escalation): when a junior-built ticket fails verification on a real defect, code the remaining work *directly* (no delegation). |
+| **junior-dev** | Claude `claude-sonnet-4-6` / `high`; Codex `gpt-5.5` / `high` | Pick its own `Todo` tickets (improvements / bug-fixes + promoted design children), **read the linked design before coding**, implement (sonnet), run the same ship gates as `dev`, hand off at `In Review` for PM/QA. |
 
-**Back-compat is the headline constraint.** This split is the NEW *recommended* model **adopted
-per-project** (launcher panes + PM routing) — **not** a global replacement. The legacy **`dev`** actor
-stays **active** and `skills/dev-agent/SKILL.md` stays the canonical **single-dev fallback** —
-projects that run a single dev pane (e.g. a project on the `linear` backend) are **100% unaffected**.
+**Back-compat is still supported, but split-dev is now the default launcher model.** The legacy
+**`dev`** actor stays **active** and `skills/dev-agent/SKILL.md` stays the canonical
+**single-dev fallback** for projects that explicitly run `devSplit:false` / `--agents legacy`.
 A project runs **either** the two-tier model (senior + junior panes, PM routes to them) **or** the
 legacy single-dev model (one `dev` pane, the whole §5 queue); the two never need to coexist on one
-project. **The dev model is set by ONE authoritative config flag — `devSplit:true` (§11) — and the
-agents must read it as the single source of truth: NEVER infer the dev model from board history, from
-which actor did past work, or from any ticket (a Canceled model-tiering ticket is not a single-dev
-decision — inferring it silently stalls the whole implementation tier). `devSplit:true` ⇒ split
-active (senior-dev/junior-dev operate; the legacy `dev` agent defers/no-ops); absent/false ⇒ legacy
-single-dev, today's behavior.** The launcher's `DEV_SPLIT=1` (which spawns the two panes) must be set
-together with `devSplit:true` (which tells the agents) — the launcher and the flag are two halves of
-one switch. Both new agents **inherit `dev`'s ship sequence by
+project. **The dev model is set by explicit operator configuration, not inference:** persistent
+`devSplit:true` (§11), or the scheduler's `DEVLOOP_DEV_SPLIT:true` runtime context when `dev-loop run`
+launches the default `core` group / split agents. Agents must NEVER infer the dev model from board
+history, from which actor did past work, or from any ticket. Split active ⇒ senior-dev/junior-dev
+operate and the legacy `dev` agent defers/no-ops; `devSplit:false` plus a legacy launcher ⇒ single-dev.
+Both new agents **inherit `dev`'s ship sequence by
 reference** — the §5/§5.5/§6/§6.5 build/test gate, the Critical/High self-review block, ship-per-
 config, and post-deploy rollback all apply unchanged; the two SKILLs do not re-derive them.
 
@@ -1689,12 +1687,16 @@ a `Canceled` `review failed:` ticket.
 - **Doc-kind** (`docstore.ts` `DOC_KINDS` + a `db.ts` `user_version` migration): add `design`
   (`service` design doc home). Additive + lossless (DL-25/DL-52 precedent); details in
   `docs/design/senior-junior-dev-split.md`.
-- **Models** (`config-schema.md`, launcher-applied): `senior-dev: claude-opus-4-8`,
-  `junior-dev: claude-sonnet-4-6`. `dev` keeps the launcher's opus default.
-- **Launcher** (`dev-loop run --dev-split`, or an equivalent external launcher): an opt-in split knob replaces the single `dev` pane with a `senior-dev`
-  pane (opus, effort `max`) + a `junior-dev` pane (sonnet, effort `high`); the legacy `dev` pane stays
-  available when the knob is off. Other effort tiers unchanged (`pm=max`, `reflect/architect=xhigh`,
-  `qa/sweep=high`).
+- **Models / efforts** (`config-schema.md`, scheduler-applied): `dev-loop run` has built-in
+  role defaults and reads project `models` / `efforts` as overrides. For Claude, senior-dev
+  launches as `claude-opus-4-8` / `max` and junior-dev as `claude-sonnet-4-6` / `high`; for
+  Codex both default to `gpt-5.5`, with senior at `xhigh` and junior at `high`.
+- **Launcher** (`dev-loop run --agents core`, default): starts a `senior-dev` pane + a
+  `junior-dev` pane instead of the single `dev` pane, and injects `DEVLOOP_DEV_SPLIT=true` for
+  every fire. The legacy `dev` pane stays available via `dev-loop run --agents legacy` or an
+  explicit `pm,qa,dev,sweep` agent list. Other default effort tiers: `pm=max`,
+  `reflect/architect=xhigh`, `qa/sweep/ops/communication=high` (Codex normalizes `max` to
+  `xhigh`).
 - **§17 boundary unchanged.** This whole split is OPERATOR-APPLIED (the build IS the operator applying
   it); the agents themselves still **never** self-edit a SKILL/conventions/code file. The design doc is
   a product artifact (autonomously authored), not a §17 governing file.
