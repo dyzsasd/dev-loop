@@ -57,7 +57,37 @@ cd hub && npm install && npm run build       # 重建 dist + 重新物化 skills
 ```
 
 - 用 `--root $DL` 跑时，**SKILL 改动 `git pull` 即生效**（调度器读源码 skills），只有 hub CLI/代码变了才必须 `npm run build`。
-- 如果你**也**用交互式 Mode A 插件（Claude Code 里的 `/dev-loop:*`）：在 Claude Code 内 `/plugin update`，或重跑 `dev-loop install-claude-plugin` 重新登记本地 marketplace。
+
+---
+
+## 2.5 选你的 AI：要不要装 plugin？（关键澄清）
+
+**真正跑 loop 用的是调度器 `dev-loop run`——Codex 和 Claude 都一样、都不需要装 plugin**（调度器自己把 SKILL 当 prompt 注入、hub MCP 用内联配置注入）。插件**只**是 Claude Code 的交互式额外选项。
+
+| | **Codex** | **Claude Code** |
+|---|---|---|
+| 装 plugin？ | **不需要**（Codex 没有 dev-loop 插件；它被调度器驱动） | **可选**——只为交互式 `/dev-loop:*`；跑调度器同样不需要 |
+| 装什么 | `npm i -g @openai/codex && codex login` | Claude Code 本体；插件按需（见下，**必须源码版**） |
+| init 一部剧 | `node $DL/tools/init-screenplay.mjs …`（终端，与 AI 无关） | 同左（终端）；通用软件 init 才用 `/dev-loop:init` |
+| 跑 loop | `dev-loop run --cli codex …` | `dev-loop run --cli claude …`（同一套），或交互 `/dev-loop:*` + `/loop` |
+| `agentFamily` | 调度器需要（actor→编剧 SKILL 重映射） | 调度器需要；交互直接点名 `/dev-loop:story-architect-agent` 则不经 family |
+
+### Codex —— 不装 plugin
+```bash
+npm i -g @openai/codex && codex login && codex --version
+# 完事。跑 loop 见 §5（dev-loop run --cli codex）。
+```
+
+### Claude Code —— 装**源码版**插件（仅交互式需要）
+released 的 npm 插件**没有**短剧三个 agent（它们在本分支、未合并），所以要从**源码 checkout** 装：
+```bash
+# 最简：直接用源码目录起 Claude Code（插件即时生效）
+claude --plugin-dir $DL
+#   装好后 /dev-loop: 下出现 story-architect-agent / screenwriter-agent / screenplay-editor-agent + 通用 /dev-loop:init
+#   （持久化：在 ~/.claude/settings.json 配一个 source:"local" 指向 $DL 的 marketplace → /plugin install dev-loop@local）
+```
+> 不要用 `dev-loop install-claude-plugin`——它登记的是 **npm released** 版（无短剧 agent）。源码版必须走 `--plugin-dir $DL` 或 `source:"local"`。
+> `git pull` 更新源码后，`--plugin-dir` 方式重启 Claude Code 即生效；marketplace 方式用 `/plugin update`。
 
 ---
 
