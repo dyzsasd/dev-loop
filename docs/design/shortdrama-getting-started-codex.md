@@ -29,20 +29,25 @@ codex --version           # 确认在 PATH 上
 
 ```bash
 git clone git@github.com:dyzsasd/dev-loop.git
-cd dev-loop
+cd dev-loop && export DL=$(pwd)
 git checkout feat/shortdrama-devloop      # 短剧变体所在分支（合并到 main 后用 main）
+
+# 若装过旧的全局版，先卸掉，免得它盖住源码版（你之前的报错就有它的影子）：
+npm rm -g @dyzsasd/dev-loop 2>/dev/null
 
 cd hub
 npm install
-npm run build                 # 编译 dist + 把 skills/references/config 物化进 hub（scheduler 用）
-npm link                      # 把 `dev-loop` / `dev-loop-hub` 两个命令全局指向这份源码
+npm run build                 # 编译 dist（现在会 chmod +x bin —— 修过了，不会再 permission denied）
+npm link                      # 把全局 `dev-loop` / `dev-loop-hub` 指向这份源码
 
-# 验证：
+# 验证用的就是这份源码（不是旧全局）：
+which dev-loop                # → 你的 npm 全局 bin，符号链接进 $DL/hub/dist/cli.js
 dev-loop --version
 dev-loop doctor               # 健康检查，应打印 DOCTOR_OK
 ```
 
-> 记下 checkout 的绝对路径，下面叫 `$DL`（例如 `export DL=~/dev-loop`）。
+> `$DL` = checkout 的绝对路径（上面已 `export`）。下面所有命令直接用全局 `dev-loop`。
+> 之前 `permission denied`：你的 checkout 在我修 build 之前 clone 的——`git pull` 拉到 chmod 修复后，`npm run build && npm link` 即正常。
 > 短剧的三个 agent SKILL 在 `$DL/skills/{story-architect,screenwriter,screenplay-editor}-agent/`。
 > 跑调度器时加 `--root $DL`，它就直接读这份**活的源码** skills（改了 SKILL 不必重 build）。
 
@@ -178,6 +183,8 @@ dev-loop run --cli codex --agents senior-dev,junior-dev,qa --dev-split \
 
 | 症状 | 处理 |
 |---|---|
+| `permission denied: dev-loop` | 旧 build 没给 bin 加可执行位。`cd $DL && git pull && cd hub && npm run build && npm link`（build 已修为 chmod +x）；急用先 `chmod +x $DL/hub/dist/*.js` |
+| `dev-loop` 跑的是旧全局版（没有 `agentFamily`） | `npm rm -g @dyzsasd/dev-loop` 卸旧版 → 在 `$DL/hub` 重 `npm link`；`which dev-loop` 确认指向源码 |
 | `dev-loop` 命令找不到 / 报 node 版本 | `nvm use 23`；或 `DEVLOOP_NODE=$(which node) dev-loop …` 指定 node |
 | 调度器找不到短剧 SKILL | 确认带了 `--root $DL`（指向 checkout，其 `skills/` 有三个 agent）；或 `cd $DL/hub && npm run build` 刷新镜像 |
 | `codex exec` 卡住 / 要 stdin | 调度器已用 `< /dev/null` 形式；确认 `codex login` 过、`codex --version` 正常 |
@@ -211,11 +218,11 @@ dev-loop run --cli codex --once --dry-run --codex-safe --agents senior-dev,junio
 
 ## 卸载 / 清理
 
-三个层级，按需选（`dl` = `node $DL/hub/dist/cli.js`）。
+三个层级，按需选。
 
 ### A. 只删一部剧（保留 dev-loop）
 ```bash
-dl daemon down                                  # 停该项目的看板 daemon（从 series 目录跑，或带 --project myshow）
+dev-loop daemon down                            # 停该项目的看板 daemon（从 series 目录跑，或带 --project myshow）
 #  从 ~/.dev-loop/projects.json 删掉 "myshow": {...} 这个条目
 rm -rf ~/.dev-loop/myshow                        # 删该项目的运行时数据（lessons / 本地 board / reports）
 rm -rf ~/series-myshow                           # 删剧本文件（你的 bible/episodes——确认后再删）
@@ -225,12 +232,11 @@ rm -rf ~/series-myshow                           # 删剧本文件（你的 bibl
 
 ### B. 卸载 dev-loop 本体（保留剧本文件）
 ```bash
-dl daemon down                                   # 停 daemon
-dl daemon uninstall-autostart                    # 移除开机自启（macOS LaunchAgent com.dev-loop.daemon）
+dev-loop daemon down                             # 停 daemon
+dev-loop daemon uninstall-autostart              # 移除开机自启（macOS LaunchAgent com.dev-loop.daemon）
 npm rm -g @dyzsasd/dev-loop                       # 解除全局命令（源码 npm link 或旧的全局安装都用这个）
 which -a dev-loop                                 # 确认没有残留（你可能装过两份）
-#  从 ~/.zshrc 删掉 `alias dl=...` 那行
-rm -rf $DL                                         # 删源码 checkout
+rm -rf $DL                                         # 删源码 checkout（若 export 过 DL，也从 ~/.zshrc 删掉那行）
 ```
 
 ### C. 彻底清掉所有 dev-loop 数据（⚠️ 含别的项目）
