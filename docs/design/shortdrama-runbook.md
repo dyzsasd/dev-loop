@@ -29,11 +29,9 @@
 
 ## 一次性：立一部剧
 
-1. **一条命令 init**（机械配置全包：series 骨架 + `projects.json` 条目 + `lessons.md` seed，幂等非破坏）：
-   ```
-   node tools/init-screenplay.mjs <key> "<剧名>" <PREFIX> /abs/path/to/series-<slug> [--backend local|service]
-   ```
-   它生成 `bible.md` / `characters.csv` / `grid.csv` / `episodes/`，写好 `projects.json`（`agentFamily:"screenwriting"`、绝对 `repoPath`、`mode:"dry-run"`、省略 models→Codex 用默认），seed `lessons.md`，并打印就绪清单。
+1. **init**（两层）：
+   - **交互式（推荐）`/dev-loop:init-screenplay`** —— 操作者在场的访谈技能：问清需求（题材/平台/集数/卡点/主角人设/爽点/禁区）→ 把答案写进 `bible.md` + seed `characters.csv` → 底层调脚本搭骨架/配置 → 打印就绪清单 + 启动命令，**不替你启动**。纯 Codex 用户在 Claude Code 做这步，或让对话助手按 `skills/init-screenplay/SKILL.md` 访谈代填。
+   - **机械脚本（底层）**：`node tools/init-screenplay.mjs <key> "<剧名>" <PREFIX> /abs/series-<slug> [--backend local|service]` —— 只搭骨架（bible/characters/grid/episodes + `projects.json` + `lessons.md` seed），bible 内容自己手填。幂等非破坏。
 2. **填 `bible.md`**：把每个 `<…>` 占位填实（立项书 / Vision / 爽点配方 / 钩子模板 / `gate-config` 阈值）。这是人的活（主创的北极星）。
 3. **种子人物**：在 `characters.csv` 填主角行（含 `voice_signature` 声纹金句、`secret_setup` 契诃夫枪）。`git init && git add -A && git commit`。
 4. **建看板**（仅 `service` 后端）：`dev-loop init-service <key> "<剧名>" <PREFIX>` + `dev-loop daemon up`（Web 看板=监制工作台）。`local` 后端 board 自动建，跳过此步。

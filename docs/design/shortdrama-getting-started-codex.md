@@ -91,32 +91,34 @@ claude --plugin-dir $DL
 
 ---
 
-## 3. 一条命令 init 一部剧
+## 3. init 一部剧
 
-像 coding 工具集的 `init` 一样，一条命令把**所有机械配置**搭好（series 目录骨架 + `projects.json` 条目 + `lessons.md` seed），只把「填 bible」这件创意活留给你。**幂等、非破坏性**（已存在的文件/项目绝不覆盖）：
+像 coding loop 的 `/dev-loop:init` 一样，init **不只是搭目录**——它先**跟你聊一轮**，把你对这部剧的要求问清楚（题材/平台/受众/集数/付费卡点/主角人设/爽点偏好/基调/禁区），把答案写进 **bible（北极星）**，再搭好工程骨架 + 配置 + 看板，最后**停下来等你启动 loop**。两层：
 
+### 3a. 交互式 init（推荐）—— `/dev-loop:init-screenplay`
+
+一个**操作者在场的访谈技能**。它会：① 引导式问你 11 项立项需求（带样例剧的智能建议）；② 把答案填进 `bible.md`（立项书 / Vision / 爽点配方 / `gate-config` 阈值）+ seed `characters.csv` 主角行（声纹 / 契诃夫枪）；③ 在底层跑 §3b 的脚本搭骨架 + 写 `projects.json` + seed `lessons.md`；④ （service）起看板；⑤ 打印就绪清单 + **启动命令**——但**不替你启动**。绝不设计 arc/grid、不写 episode、不开 loop。幂等：已填的 bible 不覆盖。
+
+> **在哪跑这个交互 init？** 它是一次性、人在场的步骤。
+> - **Claude Code**（装了源码插件，§2.5）：直接 `/dev-loop:init-screenplay`。
+> - **纯 Codex 用户**：Codex 不加载插件，所以这一步在 Claude Code 里做，**或**直接让任意对话助手按 `skills/init-screenplay/SKILL.md` 的访谈问你、帮你填好 bible。产出（填好的 bible + 配好的项目）才是关键;之后 Codex 调度器跑 loop。
+
+### 3b. 机械脚本（交互 init 在底层调用它；也可单独用）
+
+不想聊、想直接搭骨架自己手填 bible？直接跑脚本：
 ```bash
 node $DL/tools/init-screenplay.mjs myshow "My Show" SD ~/series-myshow --backend service
 #                                   key   显示名      前缀 series目录             local(默认)|service
 ```
+它生成 `~/series-myshow/`（bible/characters/grid/episodes 骨架）、写 `~/.dev-loop/projects.json`（`agentFamily:"screenwriting"`、绝对 `repoPath`、`mode:"dry-run"`、**不写 models→Codex 用 gpt-5.5**）、seed `lessons.md`，并打印下一步。**只搭不填**——bible 的创意内容由你（或交互 init）填。
 
-它会：① 从模板生成 `~/series-myshow/`（`bible.md` / `characters.csv` / `grid.csv` / `episodes/`）；② 在 `~/.dev-loop/projects.json` 写好 `myshow` 条目（`backend` / `devSplit:true` / `agentFamily:"screenwriting"` / 绝对 `repoPath` / `strategyDoc` / dramalint 测试命令 / `mode:"dry-run"`，**不写 `models`——让 Codex 用默认 gpt-5.5**）；③ seed `~/.dev-loop/myshow/lessons.md`（含 reflect 重定向规则）；④ 打印就绪清单 + 下一步命令。
-
-然后照它打印的下一步走：
-
+### 收尾（两种方式都一样）
 ```bash
-# 1) 填创意（人的活——主创的北极星）：编辑 bible.md 的每个 <…> + gate-config 阈值；
-#    characters.csv 填主角行（voice_signature 声纹 / secret_setup 契诃夫枪）。对照 $DL/examples/series-hidden-heir/。
 cd ~/series-myshow && git init && git add -A && git commit -m "init series"
-
-# 2) service 后端才需要：建看板 + 起 Web UI（人类在这里拍板）
-dev-loop init-service myshow "My Show" SD      # 建 hub 项目+标签+actors
-dev-loop daemon up                              # 打印看板 URL = 监制工作台
-#   （local 后端跳过这步——board 自动建在 ~/.dev-loop/myshow/board/，但拍板要改 ticket 文件、无 Web UI）
+# service 后端才需要起看板（监制拍板的 Web 工作台）：
+dev-loop init-service myshow "My Show" SD && dev-loop daemon up
 ```
-
-> 标签（`note:*`、`must-fix`、`opening:protected` 等）免播种，agent 首次用即生效。
-> 想重置某项配置？删掉对应文件/`projects.json` 条目再跑一次 init 即可（它只补缺失的）。
+> 标签（`note:*`、`opening:protected` 等）免播种，agent 首次用即生效。想重置某项？删掉对应文件/条目再跑一次 init（只补缺失）。
 
 ---
 
