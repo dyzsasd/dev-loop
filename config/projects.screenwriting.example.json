@@ -5,6 +5,7 @@
     "hidden-heir": {
       "backend": "local",
       "devSplit": true,
+      "agentFamily": "screenwriting",
       "ticketPrefix": "SD",
       "repoPath": "/abs/path/to/series-hidden-heir",
       "strategyDoc": "bible.md",

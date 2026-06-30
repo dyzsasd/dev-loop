@@ -102,6 +102,7 @@ type ProjectsConfig = {
   defaultProject?: string;
   projects?: Record<string, {
     devSplit?: boolean;
+    agentFamily?: string;
     models?: Partial<Record<Agent, ModelConfigValue>>;
     efforts?: Partial<Record<Agent, EffortConfigValue>>;
     repoPath?: string;
@@ -368,8 +369,24 @@ function stripFrontmatter(raw: string): string {
   return end > 0 ? lines.slice(end + 1).join("\n").trimStart() : raw;
 }
 
-function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile): string {
-  const skill = join(opts.root, "skills", `${agent}-agent`, "SKILL.md");
+// Agent families remap which SKILL *body* a tier's actor runs, WITHOUT changing the actor
+// identity (senior-dev/junior-dev/qa stay — so §21a split detection + assignee routing are
+// untouched). Only the prompt body is swapped. Default (no family) = `${agent}-agent`.
+const FAMILY_SKILLS: Record<string, Partial<Record<Agent, string>>> = {
+  screenwriting: {
+    "senior-dev": "story-architect-agent",
+    "junior-dev": "screenwriter-agent",
+    qa: "screenplay-editor-agent",
+  },
+};
+
+function skillDirFor(cfg: ProjectsConfig | null, project: string, agent: Agent): string {
+  const family = cfg?.projects?.[project]?.agentFamily ?? "";
+  return FAMILY_SKILLS[family]?.[agent] ?? `${agent}-agent`;
+}
+
+function readPrompt(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, profile: LaunchProfile): string {
+  const skill = join(opts.root, "skills", skillDirFor(cfg, project, agent), "SKILL.md");
   if (!existsSync(skill)) die(`skill file not found for '${agent}': ${skill}. Pass --root <dev-loop checkout>.`, 1);
   const split = runtimeDevSplit(opts);
   const body = stripFrontmatter(readFileSync(skill, "utf8"))
@@ -450,7 +467,7 @@ function displayCommand(command: string, args: string[], prompt: string): string
 
 async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string): Promise<number> {
   const profile = resolveLaunchProfile(opts, cfg, project, agent);
-  const prompt = readPrompt(opts, agent, project, profile);
+  const prompt = readPrompt(opts, cfg, agent, project, profile);
   const { command, args } = commandFor(opts, agent, project, prompt, profile);
   const env = {
     ...process.env,
@@ -466,7 +483,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   };
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
-    console.log(`[dry-run] ${agent}: cwd=${cwd} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}`);
+    console.log(`[dry-run] ${agent}: cwd=${cwd} skill=${skillDirFor(cfg, project, agent)} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
     return 0;
   }
