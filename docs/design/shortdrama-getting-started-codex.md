@@ -206,3 +206,43 @@ dev-loop init-service myshow "My Show" SD && dev-loop daemon up    # 打开 Web 
 dev-loop run --cli codex --once --dry-run --codex-safe --agents senior-dev,junior-dev,qa --dev-split --project myshow --root $DL   # 预览
 #  → mode 改 live，然后 --once 逐步：senior-dev → 设计门 → junior-dev → 品味门 → qa → …
 ```
+
+---
+
+## 卸载 / 清理
+
+三个层级，按需选（`dl` = `node $DL/hub/dist/cli.js`）。
+
+### A. 只删一部剧（保留 dev-loop）
+```bash
+dl daemon down                                  # 停该项目的看板 daemon（从 series 目录跑，或带 --project myshow）
+#  从 ~/.dev-loop/projects.json 删掉 "myshow": {...} 这个条目
+rm -rf ~/.dev-loop/myshow                        # 删该项目的运行时数据（lessons / 本地 board / reports）
+rm -rf ~/series-myshow                           # 删剧本文件（你的 bible/episodes——确认后再删）
+#  service 后端：init-service 把 dev-loop-hub 合并进了 series repo 的 .mcp.json——删掉那个 block 或删整个 repo。
+```
+> ⚠️ service 后端：hub.db 里该项目的工单**不会**被上面删除——**没有** delete-project CLI。要么留着（已 scoped，和别的项目无害共存），要么走 C 删整个 hub.db。
+
+### B. 卸载 dev-loop 本体（保留剧本文件）
+```bash
+dl daemon down                                   # 停 daemon
+dl daemon uninstall-autostart                    # 移除开机自启（macOS LaunchAgent com.dev-loop.daemon）
+npm rm -g @dyzsasd/dev-loop                       # 解除全局命令（源码 npm link 或旧的全局安装都用这个）
+which -a dev-loop                                 # 确认没有残留（你可能装过两份）
+#  从 ~/.zshrc 删掉 `alias dl=...` 那行
+rm -rf $DL                                         # 删源码 checkout
+```
+
+### C. 彻底清掉所有 dev-loop 数据（⚠️ 含别的项目）
+```bash
+rm -rf ~/.dev-loop      # ⚠️ 不可逆：删掉 hub.db（所有项目+工单，含你那个 98 票的 dogfood）、所有 lessons/reports/board
+```
+
+### Claude 插件（若装过）
+- marketplace 装的：Claude Code 里 `/plugin uninstall dev-loop@...` + 移除 marketplace。
+- `claude --plugin-dir $DL` 起的：不持久，关掉 Claude Code 即无。
+
+### Codex（你自己的工具，通常保留）
+```bash
+codex logout && npm rm -g @openai/codex          # 真要卸载才跑
+```
