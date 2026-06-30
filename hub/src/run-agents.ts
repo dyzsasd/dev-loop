@@ -16,13 +16,31 @@ const VALID_AGENTS = [
 ] as const;
 type Agent = (typeof VALID_AGENTS)[number];
 type RunnerCli = "claude" | "codex";
+type LaunchProfile = { model?: string; effort?: string };
+type ModelConfigValue = string | {
+  model?: string;
+  claude?: string;
+  codex?: string;
+  effort?: string;
+  claudeEffort?: string;
+  codexEffort?: string;
+};
+type EffortConfigValue = string | {
+  effort?: string;
+  claude?: string;
+  codex?: string;
+  claudeEffort?: string;
+  codexEffort?: string;
+};
 
 const AGENT_SET = new Set<string>(VALID_AGENTS);
 const GROUPS: Record<string, Agent[]> = {
-  core: ["pm", "qa", "dev", "sweep"],
+  core: ["pm", "qa", "senior-dev", "junior-dev", "sweep"],
   split: ["pm", "qa", "senior-dev", "junior-dev", "sweep"],
+  legacy: ["pm", "qa", "dev", "sweep"],
+  "single-dev": ["pm", "qa", "dev", "sweep"],
   outward: ["ops", "architect", "communication"],
-  all: [...VALID_AGENTS],
+  all: ["pm", "qa", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "communication"],
 };
 const DEFAULT_AGENTS: Agent[] = GROUPS.core;
 const DEFAULT_INTERVALS: Record<Agent, number> = {
@@ -37,10 +55,55 @@ const DEFAULT_INTERVALS: Record<Agent, number> = {
   architect: 24 * 60 * 60_000,
   communication: 24 * 60 * 60_000,
 };
+const DEFAULT_LAUNCH_PROFILES: Record<Agent, Record<RunnerCli, LaunchProfile>> = {
+  pm: {
+    claude: { model: "opus", effort: "max" },
+    codex: { model: "gpt-5.5", effort: "xhigh" },
+  },
+  qa: {
+    claude: { model: "sonnet", effort: "high" },
+    codex: { model: "gpt-5.5", effort: "high" },
+  },
+  dev: {
+    claude: { model: "opus", effort: "max" },
+    codex: { model: "gpt-5.5", effort: "xhigh" },
+  },
+  "senior-dev": {
+    claude: { model: "claude-opus-4-8", effort: "max" },
+    codex: { model: "gpt-5.5", effort: "xhigh" },
+  },
+  "junior-dev": {
+    claude: { model: "claude-sonnet-4-6", effort: "high" },
+    codex: { model: "gpt-5.5", effort: "high" },
+  },
+  sweep: {
+    claude: { model: "sonnet", effort: "high" },
+    codex: { model: "gpt-5.5", effort: "high" },
+  },
+  reflect: {
+    claude: { model: "opus", effort: "xhigh" },
+    codex: { model: "gpt-5.5", effort: "xhigh" },
+  },
+  ops: {
+    claude: { model: "sonnet", effort: "high" },
+    codex: { model: "gpt-5.5", effort: "high" },
+  },
+  architect: {
+    claude: { model: "opus", effort: "xhigh" },
+    codex: { model: "gpt-5.5", effort: "xhigh" },
+  },
+  communication: {
+    claude: { model: "sonnet", effort: "high" },
+    codex: { model: "gpt-5.5", effort: "high" },
+  },
+};
 
 type ProjectsConfig = {
   defaultProject?: string;
   projects?: Record<string, {
+    devSplit?: boolean;
+    models?: Partial<Record<Agent, ModelConfigValue>>;
+    efforts?: Partial<Record<Agent, EffortConfigValue>>;
     repoPath?: string;
     repos?: Array<{ path?: string; role?: string }>;
   }>;
@@ -92,9 +155,9 @@ Cadence is owned by this process, not by Claude/Codex /loop. Each fire shells ou
 Options:
   --cli claude|codex          CLI to invoke (default: claude)
   --project <key>             project key; optional. Defaults to DEVLOOP_PROJECT, then cwd→repo match; fails if unresolved
-  --agents <list>             comma list of agents or groups: core, split, outward, all
+  --agents <list>             comma list of agents or groups: core, split, legacy, single-dev, outward, all
   --agent <name>              add one agent; may repeat
-  --dev-split                 replace dev with senior-dev + junior-dev in the selected set
+  --dev-split                 compatibility alias: replace dev with senior-dev + junior-dev when dev is selected
   --interval <agent=dur>      override cadence, e.g. pm=2m, communication=24h; may repeat
   --once                      run each selected agent once, then exit
   --dry-run                   print resolved commands; do not launch Claude/Codex
@@ -108,7 +171,9 @@ Options:
   --cli-arg <arg>             pass an extra arg to the selected CLI before the prompt; may repeat
                               (CLI binaries: set DEVLOOP_CLAUDE_BIN / DEVLOOP_CODEX_BIN to override)
 
-Durations accept ms/s/m/h/d. Default agents: core = pm,qa,dev,sweep.`);
+Durations accept ms/s/m/h/d. Default agents: core = pm,qa,senior-dev,junior-dev,sweep.
+The scheduler also applies per-agent model/effort defaults; override with projects.json models/efforts.
+Use --agents legacy (or --agents pm,qa,dev,sweep) for the old single-dev loop.`);
 }
 
 function die(msg: string, code = 2): never {
@@ -145,6 +210,10 @@ function expandAgentSpec(parts: string[]): Agent[] {
     else die(`unknown agent/group '${name}'`);
   }
   return [...new Set(out)];
+}
+
+function runtimeDevSplit(opts: Pick<Options, "devSplit" | "agents">): boolean {
+  return opts.devSplit || opts.agents.includes("senior-dev") || opts.agents.includes("junior-dev");
 }
 
 function parseArgs(argv: string[]): Options {
@@ -244,6 +313,54 @@ function resolveCwd(opts: Options, cfg: ProjectsConfig | null, project: string):
   return p?.repoPath || primaryRepo || docRepo || p?.repos?.find((r) => r.path)?.path || process.cwd();
 }
 
+function stringValue(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+function modelOverride(v: ModelConfigValue | undefined, cli: RunnerCli): string | undefined {
+  if (!v) return undefined;
+  if (typeof v === "string") return stringValue(v);
+  return stringValue(v[cli]) ?? stringValue(v.model);
+}
+
+function effortFromModelOverride(v: ModelConfigValue | undefined, cli: RunnerCli): string | undefined {
+  if (!v || typeof v === "string") return undefined;
+  return stringValue(cli === "claude" ? v.claudeEffort : v.codexEffort) ?? stringValue(v.effort);
+}
+
+function effortOverride(v: EffortConfigValue | undefined, cli: RunnerCli): string | undefined {
+  if (!v) return undefined;
+  if (typeof v === "string") return stringValue(v);
+  return stringValue(cli === "claude" ? v.claudeEffort : v.codexEffort)
+    ?? stringValue(v[cli])
+    ?? stringValue(v.effort);
+}
+
+function normalizeEffort(cli: RunnerCli, effort: string | undefined): string | undefined {
+  if (!effort) return undefined;
+  const v = effort.trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    "extra-high": "xhigh",
+    "extra_high": "xhigh",
+    extrahigh: "xhigh",
+    maximum: "max",
+  };
+  const normalized = aliases[v] ?? v;
+  // Codex exposes xhigh but not Claude's max tier, so keep the strongest portable setting.
+  return cli === "codex" && normalized === "max" ? "xhigh" : normalized;
+}
+
+function resolveLaunchProfile(opts: Options, cfg: ProjectsConfig | null, project: string, agent: Agent): LaunchProfile {
+  const defaults = DEFAULT_LAUNCH_PROFILES[agent][opts.cli];
+  const projectCfg = cfg?.projects?.[project];
+  const modelCfg = projectCfg?.models?.[agent];
+  const effortCfg = projectCfg?.efforts?.[agent];
+  return {
+    model: modelOverride(modelCfg, opts.cli) ?? defaults.model,
+    effort: normalizeEffort(opts.cli, effortFromModelOverride(modelCfg, opts.cli) ?? effortOverride(effortCfg, opts.cli) ?? defaults.effort),
+  };
+}
+
 function stripFrontmatter(raw: string): string {
   const lines = raw.split(/\r?\n/);
   if (lines[0]?.trim() !== "---") return raw;
@@ -251,16 +368,30 @@ function stripFrontmatter(raw: string): string {
   return end > 0 ? lines.slice(end + 1).join("\n").trimStart() : raw;
 }
 
-function readPrompt(opts: Options, agent: Agent): string {
+function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile): string {
   const skill = join(opts.root, "skills", `${agent}-agent`, "SKILL.md");
   if (!existsSync(skill)) die(`skill file not found for '${agent}': ${skill}. Pass --root <dev-loop checkout>.`, 1);
+  const split = runtimeDevSplit(opts);
   const body = stripFrontmatter(readFileSync(skill, "utf8"))
     .replaceAll("${CLAUDE_PLUGIN_ROOT}", opts.root)
     .replaceAll("${CLAUDE_PLUGIN_DATA}", opts.dataDir)
     .replaceAll("${DEVLOOP_DATA_DIR:-~/.dev-loop}", opts.dataDir)
     .replaceAll("${DEVLOOP_DATA_DIR}", opts.dataDir)
     .replaceAll("${DEVLOOP_PROJECTS_JSON}", projectsPath(opts.dataDir));
-  return `You are launched by dev-loop's own scheduler. Run exactly one fresh fire for this agent, then stop.\n\n${body}`;
+  return `You are launched by dev-loop's own scheduler. Run exactly one fresh fire for this agent, then stop.
+
+Scheduler context:
+- project: ${project}
+- agent: ${agent}
+- selected agents: ${opts.agents.join(",")}
+- runner CLI: ${opts.cli}
+- launch model: ${profile.model ?? "(cli default)"}
+- launch effort: ${profile.effort ?? "(cli default)"}
+- DEVLOOP_DEV_SPLIT: ${split ? "true" : "false"}
+
+Treat DEVLOOP_DEV_SPLIT:true as an explicit scheduler/runtime split-dev switch for this fire, equivalent to project config devSplit:true. It is not inferred from tickets, history, or logs.
+
+${body}`;
 }
 
 function shellQuote(s: string): string {
@@ -277,22 +408,36 @@ if (!hubNode) die(`dev-loop-hub MCP needs Node >= ${MIN_NODE_VERSION} for node:s
 const tomlString = (s: string): string => JSON.stringify(s);
 const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
 
-function commandFor(opts: Options, agent: Agent, project: string, prompt: string): { command: string; args: string[] } {
+function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile): { command: string; args: string[] } {
+  const devSplit = runtimeDevSplit(opts) ? "true" : "false";
   if (opts.cli === "claude") {
     // explicit --mcp-config file wins; otherwise inject the hub inline so a fresh project needs no .mcp.json.
     const mcpArg = opts.mcpConfig ?? JSON.stringify({
-      mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb } } },
+      mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb, DEVLOOP_DEV_SPLIT: devSplit } } },
     });
-    return { command: opts.claudeBin, args: ["--mcp-config", mcpArg, "--strict-mcp-config", ...opts.extraArgs, "-p", prompt] };
+    return {
+      command: opts.claudeBin,
+      args: [
+        "--mcp-config", mcpArg,
+        "--strict-mcp-config",
+        ...(profile.model ? ["--model", profile.model] : []),
+        ...(profile.effort ? ["--effort", profile.effort] : []),
+        ...opts.extraArgs,
+        "-p", prompt,
+      ],
+    };
   }
   const args = [
     "exec",
+    ...(profile.model ? ["--model", profile.model] : []),
+    ...(profile.effort ? ["-c", `model_reasoning_effort=${tomlString(profile.effort)}`] : []),
     ...opts.extraArgs,
     "-c", `mcp_servers.dev-loop-hub.command=${tomlString(hubNode)}`,
     "-c", `mcp_servers.dev-loop-hub.args=${tomlStringArray([serverEntry])}`,
     "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR=${tomlString(agent)}`,
     "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT=${tomlString(project)}`,
     "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_HUB_DB=${tomlString(opts.hubDb)}`,
+    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_DEV_SPLIT=${tomlString(devSplit)}`,
   ];
   if (!opts.codexSafe) args.push("--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check");
   args.push(prompt);
@@ -303,14 +448,16 @@ function displayCommand(command: string, args: string[], prompt: string): string
   return [command, ...args.map((a) => a === prompt ? `<prompt:${prompt.length} chars>` : a).map(shellQuote)].join(" ");
 }
 
-async function runAgent(opts: Options, agent: Agent, project: string, cwd: string): Promise<number> {
-  const prompt = readPrompt(opts, agent);
-  const { command, args } = commandFor(opts, agent, project, prompt);
+async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string): Promise<number> {
+  const profile = resolveLaunchProfile(opts, cfg, project, agent);
+  const prompt = readPrompt(opts, agent, project, profile);
+  const { command, args } = commandFor(opts, agent, project, prompt, profile);
   const env = {
     ...process.env,
     DEVLOOP_ACTOR: agent,
     DEVLOOP_PROJECT: project,
     DEVLOOP_HUB_DB: opts.hubDb,
+    DEVLOOP_DEV_SPLIT: runtimeDevSplit(opts) ? "true" : "false",
     DEVLOOP_DATA_DIR: opts.dataDir,
     DEVLOOP_PROJECTS_JSON: projectsPath(opts.dataDir),
     DEVLOOP_PLUGIN_ROOT: opts.root,
@@ -319,7 +466,7 @@ async function runAgent(opts: Options, agent: Agent, project: string, cwd: strin
   };
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
-    console.log(`[dry-run] ${agent}: cwd=${cwd}`);
+    console.log(`[dry-run] ${agent}: cwd=${cwd} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
     return 0;
   }
@@ -359,10 +506,17 @@ async function main(): Promise<void> {
   if (!existsSync(cwd)) die(`cwd does not exist: ${cwd}`, 1);
   console.log(`dev-loop run: cli=${opts.cli} project=${project} cwd=${cwd}`);
   console.log(`dev-loop run: root=${opts.root} data=${opts.dataDir} hubDb=${opts.hubDb}`);
+  const cfgDevSplit = cfg?.projects?.[project]?.devSplit === true;
+  const runtimeSplit = runtimeDevSplit(opts);
+  if (runtimeSplit || cfgDevSplit) console.log(`dev-loop run: devSplit=${runtimeSplit ? "runtime" : "config"}${cfgDevSplit ? " (config:true)" : ""}`);
   console.log(`dev-loop run: agents=${opts.agents.map((a) => `${a}@${formatDuration(opts.intervals[a])}`).join(", ")}`);
+  console.log(`dev-loop run: launch=${opts.agents.map((a) => {
+    const p = resolveLaunchProfile(opts, cfg, project, a);
+    return `${a}:${p.model ?? "cli-default"}/${p.effort ?? "cli-default"}`;
+  }).join(", ")}`);
 
   if (opts.once) {
-    const results = await Promise.all(opts.agents.map((a) => runAgent(opts, a, project, cwd)));
+    const results = await Promise.all(opts.agents.map((a) => runAgent(opts, cfg, a, project, cwd)));
     process.exit(results.every((c) => c === 0) ? 0 : 1);
   }
 
@@ -386,7 +540,7 @@ async function main(): Promise<void> {
       if (stopping || slot.running || slot.nextAt > now) continue;
       slot.running = true;
       fired++;
-      runAgent(opts, slot.agent, project, cwd)
+      runAgent(opts, cfg, slot.agent, project, cwd)
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); return 1; })
         .finally(() => {
           slot.running = false;
