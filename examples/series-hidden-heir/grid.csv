@@ -1,0 +1,4 @@
+ep,arc,act_fn,logline,sock_type,sock_density,hook_type,hook_payload,hook_strength_advisory,setup_ref,payoff_ref,paywall_flag,length_target_sec,characters_present,draft_status,draft
+1,1,冷开场,晚宴窃稿+当众羞辱+强制离婚封杀,打脸,1,新灾难砸反派,加密短信:身份印解封,4,G-IDENTITY,,N,110,Lila|Rowan|Winnie,drafted,episodes/ep0001.md
+2,1,卷入,身份对观众解封,身份反转,1,男主秘密被来电打断,Gray董事会来电,3,,,N,105,Lila,drafted,episodes/ep0002.md
+3,1,卷入,五车队全员鞠躬翻身+项目冻结砸反派,逆袭,2,新灾难砸反派,顶级资本冻结全部项目,5,,G-IDENTITY,Y,115,Lila|Winnie|Assistant,drafted,episodes/ep0003.md
