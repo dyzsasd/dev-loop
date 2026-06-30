@@ -17,4 +17,12 @@
   - added: <date> · last-seen: <date> · 证据: <note ids>
 -->
 
+## screenplay-editor
+
 ## Reflect
+<!-- reflect 重定向规则（必留）：reflect-agent 的 lessons 落点是写死的代码角色枚举，不认识本项目。
+     这条规则 reflect 每 fire 都会读并应用，把它的结晶导向正确的小节。若被 §14 expire 阀裁掉（note 静默 >2 周），按 runbook 重新 seed。 -->
+- 规则：本项目是剧本创作 loop，真正运行的写作 agent 是 screenwriter / story-architect；showrunner 的反馈 = 已关闭的 `note:*` Improvement 工单（owner=`pm`）。某 `note:*` 主题在窗口内复发 ≥2 次时，按 §14 形态（原则 + Why + How to apply）结晶到 `## screenwriter` 或 `## story-architect`（取决纠正哪一档），**不要**写进 `## PM`。
+  - Why：写作 agent 只读各自同名小节，落到 `## PM` 它们永远读不到，结晶流会断。
+  - How to apply：Job1 把已关闭 `note:*` 按主题聚类当复发信号；Job2 ADD 落点改用这两个小节。
+  - added: 2026-06-30 · last-seen: 2026-06-30
