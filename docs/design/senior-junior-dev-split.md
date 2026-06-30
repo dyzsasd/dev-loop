@@ -22,16 +22,16 @@ Today **Dev** (one actor, one SKILL, one launcher pane) does everything: pick a 
 §5 order, groom it, implement it, gate it, ship it, hand it to its owner at `In Review`. We split the
 *implementation* role in two and add a *design* tier on top:
 
-| Role | Model / effort | Picks up | Produces |
+| Role | Default launch profile | Picks up | Produces |
 |---|---|---|---|
-| **senior-dev** | `claude-opus-4-8` / `max` | senior-assigned tickets: **design/new-module/new-feature** (design mode) **and** **escalation follow-ups** (direct-code mode) | a living per-module **design doc** + staged child tickets (design mode); shipped code (direct-code mode) |
-| **junior-dev** | `claude-sonnet-4-6` / `high` | junior-assigned `Todo` tickets (the design's children + improvements/bug-fixes) | shipped code against the linked design |
-| **dev** *(legacy, kept active)* | launcher default (opus) | `Todo` in the §5 order — the whole queue | shipped code (the single-dev model, unchanged) |
+| **senior-dev** | Claude `claude-opus-4-8` / `max`; Codex `gpt-5.5` / `xhigh` | senior-assigned tickets: **design/new-module/new-feature** (design mode) **and** **escalation follow-ups** (direct-code mode) | a living per-module **design doc** + staged child tickets (design mode); shipped code (direct-code mode) |
+| **junior-dev** | Claude `claude-sonnet-4-6` / `high`; Codex `gpt-5.5` / `high` | junior-assigned `Todo` tickets (the design's children + improvements/bug-fixes) | shipped code against the linked design |
+| **dev** *(legacy, kept active)* | Claude `opus` / `max`; Codex `gpt-5.5` / `xhigh` | `Todo` in the §5 order — the whole queue | shipped code (the single-dev model, unchanged) |
 
-The split is **per-project and opt-in**: a project either runs the two-tier model (senior + junior
-panes, PM routes to them) **or** the legacy single-dev model (one `dev` pane, PM leaves dev tickets
-unassigned/`dev`-routed). The two never need to coexist on one project; both must keep working across
-the fleet.
+The split is now the **default** for `dev-loop run --agents core`: a project either runs the two-tier
+model (senior + junior panes, PM routes to them) **or** explicitly opts into the legacy single-dev
+model (`devSplit:false` plus `--agents legacy`). The two never need to coexist on one project; both
+must keep working across the fleet.
 
 **Why keep `dev`/`dev-agent`.** Other projects still run a single dev pane. Retiring `dev` or deleting
 `dev-agent/SKILL.md` would break them and would discard the proven fallback. So `dev` stays an **active**
@@ -294,36 +294,40 @@ that an escalation ticket is `relatedTo` a `Canceled` `review failed:` ticket). 
 
 ---
 
-## 9. Models + launcher (config-schema.md + run-loop.sh)
+## 9. Models + scheduler
 
-### 9a. `config-schema.md` models block
-Add the two tiers to the per-agent `models` map (consumed by the **launcher** at session start, not by
-the agents — §11 / the models doc):
+### 9a. `config-schema.md` model/effort overrides
+`dev-loop run` has built-in role defaults. Use `models` / `efforts` only when a project or account
+needs a different launch profile:
 ```jsonc
 "models": {
-  "pm": "opus", "qa": "opus", "dev": "opus",
-  "senior-dev": "claude-opus-4-8", "junior-dev": "claude-sonnet-4-6",
-  "sweep": "opus", "reflect": "opus", "ops": "opus", "architect": "opus"
+  "senior-dev": { "claude": "claude-opus-4-8", "codex": "gpt-5.5" },
+  "junior-dev": { "claude": "claude-sonnet-4-6", "codex": "gpt-5.5" }
+},
+"efforts": {
+  "senior-dev": { "claude": "max", "codex": "xhigh" },
+  "junior-dev": "high"
 }
 ```
-`dev` keeps its default (legacy). `senior-dev` defaults to opus-class, `junior-dev` to sonnet-class.
-Omitting either ⇒ launcher's opus default (so a half-configured split still runs, just without the cost
-saving).
+`dev` remains the explicit legacy single-pane agent. `senior-dev` defaults to opus-class/max and
+`junior-dev` defaults to sonnet-class/high for Claude; Codex defaults both to `gpt-5.5` with
+senior at `xhigh` and junior at `high`.
 
-### 9b. `run-loop.sh` launcher
-The launcher gains an opt-in **split mode**: an env knob (e.g. `DEV_SPLIT=1`, default `0`) that
-**replaces the single `dev` pane** with **two panes**:
-- a **senior-dev** pane — `--model $MODEL_senior_dev` (opus), **effort `max`**,
-- a **junior-dev** pane — `--model $MODEL_junior_dev` (sonnet), **effort `high`**.
+### 9b. Scheduler
+The scheduler uses split mode by default for `dev-loop run --agents core`: it starts two Dev panes
+and injects `DEVLOOP_DEV_SPLIT=true` into every fire:
+- a **senior-dev** fire — Claude `--model claude-opus-4-8 --effort max`; Codex
+  `--model gpt-5.5 -c model_reasoning_effort="xhigh"`,
+- a **junior-dev** fire — Claude `--model claude-sonnet-4-6 --effort high`; Codex
+  `--model gpt-5.5 -c model_reasoning_effort="high"`.
 
-With `DEV_SPLIT=0` (default), the launcher keeps the **legacy single `dev` pane** exactly as today
-(opus, effort max) — so non-split projects are byte-for-byte unchanged. The existing effort tiers are
-untouched: `pm=max`, `reflect/architect=xhigh`, `qa/sweep=high`, plus the new `senior-dev=max` /
-`junior-dev=high`. (The `agent_cmd` helper already takes `model` + `effort` args — the split panes call
-`agent_cmd senior-dev-agent … "$MODEL_senior_dev" max` and `agent_cmd junior-dev-agent … "$MODEL_junior_dev" high`.)
-
-> The launcher (`~/.claude/plugins/data/dev-loop/run-loop.sh`) is owned by a parallel implementer; this
-> section is the **contract** it implements, not an edit made here.
+The legacy single `dev` pane remains available only when explicitly requested with
+`dev-loop run --agents legacy` or an explicit `pm,qa,dev,sweep` list (Claude opus/max;
+Codex `gpt-5.5`/`xhigh` unless overridden).
+Older external launchers may still carry a knob such as `DEV_SPLIT=1`; split launchers should either
+set `DEVLOOP_DEV_SPLIT=true` for every pane or persist `devSplit:true` in `projects.json`. The
+existing effort tiers are unchanged: `pm=max`, `reflect/architect=xhigh`, `qa/sweep=high`, plus
+`senior-dev=max` / `junior-dev=high`.
 
 ---
 
@@ -391,10 +395,10 @@ destructive rebuild of live data.
 | `skills/senior-dev-agent/SKILL.md` | **NEW** — design-and-delegate (normal) + direct-code (escalation) modes; §5 flow; §8 mode marker; inherits dev-agent gates by reference | senior SKILL impl |
 | `skills/junior-dev-agent/SKILL.md` | **NEW** — pick own tickets; READ the `Design:` pointer before coding; dev-agent gate/ship flow; In-Review for PM/QA | junior SKILL impl |
 | `skills/dev-agent/SKILL.md` | **UNCHANGED** — kept active as the legacy single-dev fallback | (none) |
-| `skills/pm-agent/SKILL.md` | routing-at-filing (new-module→senior, improvement/bug→junior, borderline→junior); the design gate (verify design parent → promote `Backlog`→`Todo` children; operator sign-off for big designs); escalation (Cancel junior fail → file senior direct-code; 2nd fail → Human-Blocked); detect legacy-vs-split from config | PM SKILL impl |
+| `skills/pm-agent/SKILL.md` | routing-at-filing (new-module→senior, improvement/bug→junior, borderline→junior); the design gate (verify design parent → promote `Backlog`→`Todo` children; operator sign-off for big designs); escalation (Cancel junior fail → file senior direct-code; 2nd fail → Human-Blocked); detect legacy-vs-split from config or scheduler context | PM SKILL impl |
 | `skills/qa-agent/SKILL.md` | escalation on a junior Bug verify-fail: QA Cancels + **files the senior-dev direct-code follow-up itself** (the verifier files it — the qa→senior arm has no other carrier); transient ≠ real fail | QA SKILL impl |
-| `references/config-schema.md` | `models{}` adds `senior-dev: claude-opus-4-8`, `junior-dev: claude-sonnet-4-6`; note the legacy `dev` default + the launcher split knob | config impl |
-| `run-loop.sh` (`~/.claude/plugins/data/…`) | opt-in `DEV_SPLIT` knob: replace the single `dev` pane with senior-dev (opus/max) + junior-dev (sonnet/high) panes; keep the legacy `dev` pane when off | launcher impl |
+| `references/config-schema.md` | `models` / `efforts` document role defaults plus project overrides; note split-dev as the default + explicit legacy single-dev | config impl |
+| `dev-loop run` / launchers | default `core` uses senior-dev (Claude opus/max, Codex gpt-5.5/xhigh) + junior-dev (Claude sonnet/high, Codex gpt-5.5/high) and injects `DEVLOOP_DEV_SPLIT=true`; keep the legacy `dev` pane only for explicit `--agents legacy` / single-dev launchers | launcher impl |
 | `skills/init/SKILL.md` *(if it provisions labels)* | provision `senior-dev`/`junior-dev` labels at setup (§13) | init impl (minor) |
 | `skills/sweep-agent/SKILL.md` *(optional)* | flag a split-project dev ticket with NO dev-tier assignment (invisible to both dev queries), like a missing owner label | sweep impl (optional) |
 

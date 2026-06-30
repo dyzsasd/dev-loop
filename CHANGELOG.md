@@ -4,6 +4,16 @@ All notable changes to the dev-loop plugin. Most of these landed from **live-loo
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
 ## Unreleased
+- Made split-dev the scheduler default: `core` now launches `pm`, `qa`, `senior-dev`,
+  `junior-dev`, and `sweep`; legacy single-dev remains available through `--agents legacy` or an
+  explicit `pm,qa,dev,sweep` list. The runner injects `DEVLOOP_DEV_SPLIT=true` for split launches so
+  PM/QA/Sweep and the senior/junior agents agree on the active dev model even before `devSplit:true`
+  is persisted in `projects.json`.
+- Added per-agent launch profiles to `dev-loop run`: the scheduler now passes `--model` and the
+  appropriate effort/reasoning flag for each Claude/Codex fire, prints the resolved
+  `launch=<agent>:<model>/<effort>` summary, and lets `projects.json` `models` / `efforts` override
+  the defaults. This pins junior-dev to Sonnet/high under Claude instead of inheriting the account's
+  default model.
 
 ## 0.23.3 — Standalone config + daemon autostart
 - Hardened `dev-loop run` project resolution: when neither `--project` / `DEVLOOP_PROJECT` nor the

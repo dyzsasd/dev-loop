@@ -58,13 +58,15 @@ Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
 as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `strategyDoc`, `build`, `git`, `deploy`,
 `mode`, `autonomy` (§12a), the optional `codex` block (§24), and — if present — `repos[]`
 (conventions §19). **Confirm this project runs the split from the AUTHORITATIVE config flag
-`devSplit:true` (§11).** This flag is the single source of truth — **do NOT infer the dev
-model from board history, from which actor (`dev`/`operator`/…) happened to do past work, or
-from any ticket** (e.g. a Canceled model-tiering ticket is **not** a "single-dev decision").
-If `devSplit:true`, the split **is** active and you **are** the live senior tier — operate
-(an empty `senior-dev` slice this fire just means no design/escalation work is queued, which
-is a normal idle fire, **not** "the split is off"). **`devSplit` absent/false ⇒ legacy
-single-dev ⇒ report a no-op and exit** (the `dev` agent owns the queue). **Resolve the target repo per
+`devSplit:true` (§11) or the explicit scheduler context `DEVLOOP_DEV_SPLIT:true`.** The scheduler
+flag is set by `dev-loop run` when the operator uses the default `core` group, `--dev-split`, or
+explicitly selects `senior-dev` / `junior-dev`; treat it as a runtime source of truth for this fire.
+**Do NOT infer the dev model from board history, from which actor (`dev`/`operator`/…) happened to
+do past work, or from any ticket** (e.g. a Canceled model-tiering ticket is **not** a "single-dev
+decision"). If either source says split is active, you **are** the live senior tier — operate (an
+empty `senior-dev` slice this fire just means no design/escalation work is queued, which is a normal
+idle fire, **not** "the split is off"). **If both config and scheduler context leave split off ⇒
+legacy single-dev ⇒ report a no-op and exit** (the `dev` agent owns the queue). **Resolve the target repo per
 ticket** exactly as `dev` does: absent/one `repos[]` ⇒ single-repo (the implicit target
 is `repoPath`); with multiple repos the ticket's `repo:<name>` label names the target and
 you resolve that repo's effective `build`/`defaultBranch`/`deploy`/`contributorSkill`

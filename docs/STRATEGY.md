@@ -208,14 +208,19 @@ Append-only thereafter — PM keeps it current._
   single-dev / all-opus** (the operator's DL-78 "keep all agents on opus — max capability over cost" decision
   still holds) → PM files with no dev-tier markers here.)_
   _(2026-06-27 PM **correction** — post-`059cf3e`, **supersedes the "stays single-dev" note directly above**: the
-  operator **flipped `dev-loop` to the two-tier split** — set **`devSplit:true`** (+ launcher `DEV_SPLIT=1`),
-  reversing the DL-78 single-dev stance for this project. `059cf3e` made `devSplit:true` the **authoritative**
-  detector — agents obey the flag and **never infer** the model from `models{}`/panes/board-history (that
+  operator **flipped `dev-loop` to the two-tier split** — persistent **`devSplit:true`** and, in the
+  current scheduler, default `core` launches with **`DEVLOOP_DEV_SPLIT=true`** — reversing the DL-78
+  single-dev stance for this project. `059cf3e` made the explicit split signal the **authoritative**
+  detector — agents obey config/runtime context and **never infer** the model from `models{}`/panes/board-history (that
   inference had silently no-op'd the split: ~100 min of zero split-events, the implementation tier stalled).
   **Now live:** junior-dev is actively implementing **DL-96** — the first real split pick-side execution. **PM now
   files dev-tier markers here** (improvement/bug-fix → junior-dev; new module/feature → senior-dev; encoded as the
   `assignee` actor on the `service` backend). The `pm-agent` SKILL's own stale `models{}`-detection prose was
   caught as **DL-97** (`[qa-proposal]`) and **resolved Done by the operator** the same day.)_
+  _(2026-06-30 PM correction: `dev-loop run` now applies the split profiles itself instead of relying on
+  account defaults or launcher folklore: Claude senior-dev=`claude-opus-4-8`/max, Claude
+  junior-dev=`claude-sonnet-4-6`/high; Codex defaults to `gpt-5.5` with senior at xhigh and junior at
+  high. `projects.json` `models` / `efforts` remain overrides, not the source of split detection.)_
 
 ## Personas
 

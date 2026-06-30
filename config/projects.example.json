@@ -6,6 +6,32 @@
       "backend": "service",
       "mode": "dry-run",
       "autonomy": "ask",
+      "devSplit": true,
+      "models": {
+        "senior-dev": {
+          "claude": "claude-opus-4-8",
+          "codex": "gpt-5.5"
+        },
+        "junior-dev": {
+          "claude": "claude-sonnet-4-6",
+          "codex": "gpt-5.5"
+        },
+        "communication": {
+          "claude": "sonnet",
+          "codex": "gpt-5.5"
+        }
+      },
+      "efforts": {
+        "pm": "max",
+        "senior-dev": {
+          "claude": "max",
+          "codex": "xhigh"
+        },
+        "junior-dev": "high",
+        "qa": "high",
+        "sweep": "high",
+        "communication": "high"
+      },
       "repoPath": "/abs/path/to/product-repo",
       "strategyDoc": "docs/strategy.md",
       "ticketPrefix": "PRJ",
@@ -42,6 +68,27 @@
       "backend": "linear",
       "mode": "dry-run",
       "autonomy": "ask",
+      "devSplit": true,
+      "models": {
+        "senior-dev": {
+          "claude": "claude-opus-4-8",
+          "codex": "gpt-5.5"
+        },
+        "junior-dev": {
+          "claude": "claude-sonnet-4-6",
+          "codex": "gpt-5.5"
+        }
+      },
+      "efforts": {
+        "pm": "max",
+        "senior-dev": {
+          "claude": "max",
+          "codex": "xhigh"
+        },
+        "junior-dev": "high",
+        "qa": "high",
+        "sweep": "high"
+      },
       "linearTeam": "Your Team",
       "linearProject": "Your Product",
       "repos": [

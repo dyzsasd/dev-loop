@@ -65,7 +65,7 @@ dev-loop, c'est trois couches ; le paquet `npm i -g @dyzsasd/dev-loop` les livre
 
 ## Les agents
 
-Cinq agents **internes** (tournés vers la construction), un **Dev à deux niveaux** optionnel, trois agents **externes**, et une commande de **setup** ponctuelle. Chaque agent lit d'abord [`references/conventions.md`](references/conventions.md) — la machine à états complète, la taxonomie des labels, les modèles de tickets et les protocoles.
+Cinq agents **internes** (tournés vers la construction), un **Dev à deux niveaux** activé par défaut, trois agents **externes**, et une commande de **setup** ponctuelle. Chaque agent lit d'abord [`references/conventions.md`](references/conventions.md) — la machine à états complète, la taxonomie des labels, les modèles de tickets et les protocoles.
 
 ### Interne — la boucle de construction
 
@@ -73,13 +73,13 @@ Cinq agents **internes** (tournés vers la construction), un **Dev à deux nivea
 |---|---|
 | **`pm-agent`** | Lit le document de stratégie, met à l'épreuve le produit réel, dépose des tickets **Feature**, propose des améliorations de façon proactive, **vérifie** les fonctionnalités qui atteignent `In Review`, débloque ses propres tickets bloqués, et maintient le document de stratégie à jour. Route chaque ticket vers un niveau de dev lorsque le Dev à deux niveaux est activé. |
 | **`qa-agent`** | Exécute des tests de chemin nominal + cas limites dans l'environnement de test configuré, dépose des tickets **Bug** (et `drift` → Improvement), **re-teste** les bugs en `In Review`, route chaque ticket déposé vers un niveau de dev, et lève les blocages pour manque d'information au profit de Dev. |
-| **`dev-agent`** | Tire les tickets `Todo` par ordre de priorité, les prépare (assez d'infos ? doublon ? déjà fait ?), implémente, conditionne au build/test, **relit son propre diff**, livre selon la config, **fait un smoke-test de la prod (rollback auto en cas de casse)**, passe le relais en `In Review`. Bloque plutôt que de deviner. C'est le Dev unique par défaut ; il reste actif comme solution de repli quand le découpage à deux niveaux est désactivé. |
+| **`dev-agent`** | Repli historique en Dev unique. Tire les tickets `Todo`, implémente, conditionne au build/test, relit son diff, livre selon la config et passe le relais en `In Review`. À utiliser seulement avec `devSplit:false` / `--agents legacy`; la boucle `core` par défaut utilise senior-dev + junior-dev. |
 | **`sweep-agent`** | Agent d'entretien du cycle de vie (cadence plus lente). Répare les fissures : labels de propriétaire ou de **dev-tier** manquants/erronés (invisibles à toute requête → à l'abandon), `In Progress` orphelins issus d'exécutions plantées, signaux périmés, rapports de santé du tableau. Sur le backend hub, il exécute aussi le push optionnel du **miroir Linear unidirectionnel**. Hygiène uniquement. |
 | **`reflect-agent`** | Rétrospective + auto-évolution (quotidien). Étudie le comportement **propre** de la boucle et entretient `lessons.md` à partir de motifs récurrents, étayés par des preuves. Observe + entretient uniquement ; ne peut éditer de façon autonome que `lessons.md` — les changements structurels sont rédigés sous forme de propositions, jamais appliqués automatiquement. |
 
-### Dev à deux niveaux — optionnel (à activer par projet)
+### Dev à deux niveaux — par défaut
 
-Scindez le Dev unique en un responsable de conception et un implémenteur, afin que le modèle coûteux se concentre sur l'architecture et que le moins cher fasse le gros du code. Activez-le avec `DEV_SPLIT=1` sur le lanceur ; le `dev` unique historique reste la valeur par défaut, de sorte que les projets non scindés ne sont pas affectés.
+Le Dev unique est scindé en un responsable de conception et un implémenteur, afin que le modèle coûteux se concentre sur l'architecture et que le moins cher fasse le gros du code. `dev-loop run --agents core` lance cette paire par défaut ; utilisez `--agents legacy` seulement pour l'ancienne boucle à Dev unique.
 
 | Agent | Rôle |
 |---|---|
@@ -148,7 +148,7 @@ Un démon localhost persistant sert un tableau en lecture seule, le détail des 
 
 **Ne l'utilisez pas** quand le « terminé » est surtout subjectif, quand la tâche est ponctuelle, ou quand le résultat ne peut pas être rejeté automatiquement. Sans vraie vérification, une boucle produit surtout plus de travail douteux, plus vite.
 
-> **Le coût est réel.** Les tokens sont le coût de fonctionnement, et la *fréquence* le domine souvent. Une cadence serrée, beaucoup d'agents et le modèle le plus puissant font vite monter l'addition. Utilisez des **models** moins chers pour les rôles mécaniques, choisissez une cadence raisonnable, et surveillez le **taux d'acceptation** (vérifiés ÷ déposés) : sous ~50 %, la boucle crée du travail de revue au lieu de vous en épargner.
+> **Le coût est réel.** Les tokens sont le coût de fonctionnement, et la *fréquence* le domine souvent. Une cadence serrée, beaucoup d'agents et le modèle le plus puissant font vite monter l'addition. Utilisez des **models/efforts** adaptés aux rôles mécaniques, choisissez une cadence raisonnable, et surveillez le **taux d'acceptation** (vérifiés ÷ déposés) : sous ~50 %, la boucle crée du travail de revue au lieu de vous en épargner.
 
 ---
 
@@ -268,7 +268,7 @@ Les réglages (tous par projet) :
 - **`mode`** — `"dry-run"` (analyse + affichage, aucune écriture) vs `"live"` (crée/fait transiter les tickets et, pour Dev, commit/push/déploie selon `git`/`deploy`).
 - **`autonomy`** — `"ask"` (escalade les décisions réservées à l'humain) vs `"full"` (décide et agit).
 - **`backend`** — `"linear"` (par défaut) / `"local"` (tableau sur fichiers) / `"service"` (le hub). Voir [Backends](#backends).
-- **`models`** — modèle par agent au lancement ; **`opus` par défaut**. Réglez à la baisse les agents mécaniques/à haute fréquence (`sonnet`/`haiku`). Le Dev à deux niveaux a pour défauts senior=opus, junior=sonnet.
+- **`models` / `efforts`** — overrides optionnels par agent au lancement. `dev-loop run` a déjà des profils par rôle : senior/PM/architect/reflect utilisent un raisonnement plus fort ; junior/QA/sweep/ops/communication utilisent des profils moins coûteux pour le travail répété.
 - **`repos[]`** *(optionnel)* — un produit, plusieurs repos (sinon mono-repo, 100 % inchangé).
 - **`reports.sink`** *(optionnel)* — `"files"` (par défaut) vs `"linear"` (héberge les rapports + 点评 dans Linear pour un runtime cloud/distant).
 - **`notify`** *(optionnel)* — webhook Slack/Lark pour vous alerter quand un ticket est mis en attente humaine.
@@ -315,8 +315,8 @@ dev-loop run --cli codex --agents core,communication
 # Une passe dry-run avant de le laisser tourner sans surveillance.
 dev-loop run --cli codex --agents core,communication --once --dry-run
 
-# Dev à deux niveaux : senior-dev conçoit, junior-dev implémente.
-dev-loop run --cli claude --agents core --dev-split
+# Ancienne boucle à Dev unique, seulement si vous la voulez explicitement.
+dev-loop run --cli claude --agents legacy
 
 # Garde-fou de coût : arrêt après N déclenchements au total (illimité par défaut).
 dev-loop run --cli claude --agents core --max-fires 50
@@ -325,9 +325,9 @@ dev-loop run --cli claude --agents core --max-fires 50
 Le scheduler **enregistre lui-même le MCP `dev-loop-hub`** pour l'exécuteur (claude : `--mcp-config`
 inline ; codex : overrides `-c`), de sorte que le Mode B ne requiert ni plugin ni config
 `.mcp.json` / `~/.codex/config.toml`. Les tokens sont le coût de fonctionnement — `--max-fires`
-plafonne un processus long vivant, et les `models` par agent gardent les agents mécaniques bon marché.
+plafonne un processus long vivant, et les `models` / `efforts` par agent gardent les agents mécaniques bon marché.
 
-`--agents core` signifie `pm,qa,dev,sweep`. Ajoutez `reflect`, `outward`, ou des agents
+`--agents core` signifie `pm,qa,senior-dev,junior-dev,sweep`. Ajoutez `reflect`, `outward`, ou des agents
 individuels : `--agents core,reflect,ops,communication`. La détection du projet est automatique
 quand la commande démarre dans un `repoPath` ou `repos[].path` configuré ; utilisez
 `--project <key>` seulement depuis l'extérieur du repo, depuis cron/systemd avec un cwd fixe, ou pour
@@ -338,9 +338,10 @@ processus `dev-loop run` par produit.
 
 Claude Agent View reste disponible quand vous voulez l'interface native de Claude : installez le
 plugin Claude, ouvrez `claude agents`, puis lancez `/loop 5m /dev-loop:pm-agent`,
-`/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent` et les agents externes optionnels.
+`/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:senior-dev-agent`,
+`/loop 5m /dev-loop:junior-dev-agent` et les agents externes optionnels.
 
-**Cadence** (ils s'auto-régulent, donc les déclenchements à vide sont des no-op bon marché) : PM/QA/Dev ~5 min, Sweep
+**Cadence** (ils s'auto-régulent, donc les déclenchements à vide sont des no-op bon marché) : PM/QA/Senior-Dev/Junior-Dev ~5 min, Sweep
 ~30 min, Reflect quotidien ; Ops ~10 min, Architect/Communication quotidien/à la demande.
 
 **La reprise est une opération normale** : les agents sont sans état à chaque exécution. Après un arrêt, un crash ou un redémarrage, relancez-les ; chacun relit la réalité de terrain et continue.
@@ -413,4 +414,4 @@ synchronise la version partagée, lance la suite de tests du hub, publie `hub/` 
 
 ## Statut
 
-**v0.23.3.** Dix agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et trois externes (**Ops / Architect / Communication**), avec un **senior-dev / junior-dev** à deux niveaux optionnel — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : dev-loop utilise par défaut son propre répertoire `~/.dev-loop` pour la configuration et les données au lieu du dossier de plugin Claude ; le runner refuse désormais de deviner un projet si `--project` et le repo courant ne l'identifient pas ; et le daemon du hub peut être installé comme LaunchAgent macOS avec un port localhost stable. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).
+**v0.23.3.** Dix agents activables — cinq internes (**PM / QA / Dev / Sweep / Reflect**) et trois externes (**Ops / Architect / Communication**), avec un **senior-dev / junior-dev** à deux niveaux par défaut — plus la commande d'onboarding `init`. La coordination est enfichable par backend : **Linear** (par défaut), un **tableau sur fichiers local**, ou le **hub local** (système de référence `node:sqlite` avec identité par agent + une web UI en localhost + des documents versionnés + un miroir Linear unidirectionnel + la portabilité entre CLI). Récemment : dev-loop utilise par défaut son propre répertoire `~/.dev-loop` pour la configuration et les données au lieu du dossier de plugin Claude ; le runner refuse désormais de deviner un projet si `--project` et le repo courant ne l'identifient pas ; et le daemon du hub peut être installé comme LaunchAgent macOS avec un port localhost stable. Validé de bout en bout et éprouvé au combat sur de longues exécutions en live ; l'autonomie (push/déploiement) est à activer par projet et conditionnée à un build vert. Historique complet dans [`CHANGELOG.md`](CHANGELOG.md).

@@ -247,7 +247,8 @@ not by whether a ticket exists — drift still gets a ticket so it isn't lost.
 
 **Route every filed `Bug`/`Improvement` to a dev tier (split-dev §21a — same rule PM
 files under).** When the project runs the two-tier Dev — detect it from the **authoritative
-`devSplit:true` config flag** (§11; never inferred) — a ticket with **no** dev-tier
+`devSplit:true` config flag** (§11) or the explicit scheduler context `DEVLOOP_DEV_SPLIT:true`;
+never infer it from history/logs/tickets — a ticket with **no** dev-tier
 marker is picked by **NEITHER** dev (senior and junior each filter to their own slice),
 so it strands — **never file an un-tiered dev ticket.** Default to **`junior-dev`** (a
 bug-fix / drift-improvement is junior's lane); choose **`senior-dev`** only when the fix

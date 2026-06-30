@@ -99,7 +99,7 @@ dev-loop is three layers; the `npm i -g @dyzsasd/dev-loop` package ships all thr
 
 ## The agents
 
-Five **inward** (build-facing) agents, an optional **two-tier Dev**, three **outward**
+Five **inward** (build-facing) agents, a default **two-tier Dev**, three **outward**
 agents, and a one-time **setup** command. Every agent reads
 [`references/conventions.md`](references/conventions.md) first — the full state machine,
 label taxonomy, ticket templates, and protocols.
@@ -110,15 +110,15 @@ label taxonomy, ticket templates, and protocols.
 |---|---|
 | **`pm-agent`** | Reads the strategy doc, exercises the real product, files **Feature** tickets, proactively proposes improvements, **verifies** features that reach `In Review`, unblocks its own blocked tickets, and keeps the strategy doc current. Routes each ticket to a dev tier when the two-tier Dev is on. |
 | **`qa-agent`** | Runs happy-path + edge-case tests in the configured test env, files **Bug** tickets (and `drift` → Improvement), **re-tests** bugs at `In Review`, routes each filed ticket to a dev tier, and clears info-blocks for Dev. |
-| **`dev-agent`** | Pulls `Todo` tickets in priority order, grooms (enough info? duplicate? done?), implements, gates on build/test, **self-reviews the diff**, ships per config, **smoke-checks prod (auto-revert on a break)**, hands off to `In Review`. Blocks rather than guesses. The default single Dev; stays active as the fallback when the two-tier split is off. |
+| **`dev-agent`** | Legacy single-Dev fallback. Pulls `Todo` tickets in priority order, grooms, implements, gates on build/test, self-reviews, ships per config, smoke-checks prod, and hands off to `In Review`. Use it only with `devSplit:false` / `--agents legacy`; the default `core` loop uses senior-dev + junior-dev. |
 | **`sweep-agent`** | Lifecycle janitor (slower cadence). Fixes the cracks: missing/wrong owner or **dev-tier** labels (invisible to every query → stranded), orphaned `In Progress` from crashed runs, stale signals, board-health reports. On the hub backend it also runs the optional **one-way Linear mirror** push. Hygiene only. |
 | **`reflect-agent`** | Retrospective + self-evolution (daily). Studies the loop's **own** behavior and curates `lessons.md` from recurring, evidence-cited patterns. Observe + curate only; may autonomously edit only `lessons.md` — structural changes are drafted as proposals, never auto-applied. |
 
-### Two-tier Dev — optional (opt-in per project)
+### Two-tier Dev — default
 
 Split the single Dev into a design lead and an implementer so the expensive model concentrates
-on architecture and the cheaper one does the bulk coding. Enable with `DEV_SPLIT=1` on the
-launcher; the legacy single `dev` stays the default, so non-split projects are unaffected.
+on architecture and the cheaper one does the bulk coding. `dev-loop run --agents core` starts this
+pair by default. Use `--agents legacy` only for the old single-Dev loop.
 
 | Agent | What it does |
 |---|---|
@@ -225,8 +225,9 @@ be rejected automatically. Without real verification, a loop just produces more 
 work at a higher rate.
 
 > **Cost is real.** Tokens are the running cost, and *frequency* usually dominates it. A tight
-> cadence across many agents on the strongest model adds up quickly. Use cheaper **models** for
-> mechanical roles, choose a sane cadence, and watch the **acceptance rate** (verified ÷ filed):
+> cadence across many agents on the strongest model adds up quickly. Use role-appropriate
+> **models/efforts** for mechanical roles, choose a sane cadence, and watch the
+> **acceptance rate** (verified ÷ filed):
 > below roughly 50%, the loop is creating review work instead of saving it.
 
 ---
@@ -347,8 +348,8 @@ The dials (all per-project):
   tickets and, for Dev, commit/push/deploy per `git`/`deploy`).
 - **`autonomy`** — `"ask"` (escalate human-only calls) vs `"full"` (decide and act).
 - **`backend`** — `"linear"` (default) / `"local"` (file board) / `"service"` (the hub). See [Backends](#backends).
-- **`models`** — per-agent model at launch; **defaults to `opus`**. Tune mechanical/high-frequency
-  agents down (`sonnet`/`haiku`). The two-tier Dev defaults senior=opus, junior=sonnet.
+- **`models` / `efforts`** — optional per-agent launch overrides. `dev-loop run` already
+  defaults by role: senior/PM/architect/reflect use stronger reasoning, while junior/QA/sweep/ops/communication use cheaper repeated-work profiles.
 - **`repos[]`** *(optional)* — one product, many repos (else single-repo, 100% unchanged).
 - **`reports.sink`** *(optional)* — `"files"` (default) vs `"linear"` (host reports + 点评 in Linear for a cloud/remote runtime).
 - **`notify`** *(optional)* — Slack/Lark webhook to ping you when a ticket is human-parked.
@@ -393,8 +394,8 @@ dev-loop run --cli codex --agents core,communication
 # One dry-run pass before leaving it unattended.
 dev-loop run --cli codex --agents core,communication --once --dry-run
 
-# Two-tier Dev: senior-dev designs, junior-dev implements.
-dev-loop run --cli claude --agents core --dev-split
+# Legacy single-dev loop, if you explicitly want the old one-pane Dev.
+dev-loop run --cli claude --agents legacy
 
 # Cost guard: stop after N total fires (default is unlimited).
 dev-loop run --cli claude --agents core --max-fires 50
@@ -403,9 +404,9 @@ dev-loop run --cli claude --agents core --max-fires 50
 The scheduler **self-registers the `dev-loop-hub` MCP** for the executor (claude: inline
 `--mcp-config`; codex: `-c` overrides), so Mode B needs no plugin and no `.mcp.json` /
 `~/.codex/config.toml` setup. Tokens are the running cost — `--max-fires` caps a long-running
-process, and per-agent `models` keep the mechanical agents cheap.
+process, and per-agent `models` / `efforts` keep the repeated-work agents cheap.
 
-`--agents core` means `pm,qa,dev,sweep`. Add `reflect`, `outward`, or individual agents:
+`--agents core` means `pm,qa,senior-dev,junior-dev,sweep`. Add `reflect`, `outward`, or individual agents:
 `--agents core,reflect,ops,communication`. Project detection is automatic when the command starts
 inside a configured `repoPath` or `repos[].path`; use `--project <key>` only from outside the repo,
 from cron/systemd with a fixed cwd, or when you want to override detection. If neither an explicit
@@ -415,9 +416,10 @@ and one `dev-loop run` process per product.
 
 Claude Agent View is still available when you want Claude-native background rows: install the
 Claude plugin, open `claude agents`, then dispatch `/loop 5m /dev-loop:pm-agent`,
-`/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent`, and the optional outward agents.
+`/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:senior-dev-agent`,
+`/loop 5m /dev-loop:junior-dev-agent`, and the optional outward agents.
 
-**Cadence** (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
+**Cadence** (they self-throttle, so idle fires are cheap no-ops): PM/QA/Senior-Dev/Junior-Dev ~5 min, Sweep
 ~30 min, Reflect daily; Ops ~10 min, Architect/Communication daily/on-demand.
 
 **Resume is ordinary** because agents are stateless per run. After a stop, crash, or reboot,
@@ -512,7 +514,7 @@ pushes `v<version>`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 ## Status
 
 **v0.23.3.** Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
-three outward (**Ops / Architect / Communication**), and an opt-in two-tier
+three outward (**Ops / Architect / Communication**), and a default two-tier
 **senior-dev / junior-dev** Dev split — plus the `init` onboarding command.
 Coordination is backend-pluggable: **Linear** (default), a **local file board**, or the
 **local hub** (`node:sqlite` SoR with per-agent identity + a localhost web UI + versioned
