@@ -10,12 +10,22 @@
 | 编剧 / 写集 | `screenwriter-agent`（= `junior-dev` 层） | 新 SKILL |
 | 剧本医生 | story-architect 的 `Mode: direct-code` | 同一 SKILL 的升级模式 |
 | 监制 / 主创（品味裁判） | **人** = `pm` owner 队列 + `operator`（发布 bible） | 人 |
-| 编辑（机检+抽取，可选） | `qa-agent` 改皮 | Tier-1 |
+| 编辑（机检+抽取，可选） | `screenplay-editor-agent`（= `qa` 层改皮） | 新 SKILL（Tier-1） |
 | 机械门 | `tools/dramalint.mjs` | 脚本，非 agent |
 | 复盘 / 课程 | `reflect-agent` 原样 | 复用（Tier-1 起用） |
 | 卫生 | `sweep-agent` 原样 | 复用 |
 
-> **零新 actor**：两个新 SKILL 复用现成的 `senior-dev`/`junior-dev` 层标签做路由。
+> **零新 actor**：三个新 SKILL 复用现成的 `senior-dev`/`junior-dev`/`qa` 层身份做路由（craft 体不同，身份不变）。
+
+## 怎么跑：手动 vs 调度器
+
+- **手动（Tier-0，零配置）**：直接调 `/story-architect-agent`、`/screenwriter-agent`、`/screenplay-editor-agent`，或用 `/loop` 定时手动跑。
+- **调度器（`dev-loop run`）**：在 project 配置加一行 `"agentFamily": "screenwriting"`（见 example）。它把 `senior-dev/junior-dev/qa` 三个**身份**的 SKILL 体重映射到 `story-architect/screenwriter/screenplay-editor`——**actor 身份不变**（`DEVLOOP_ACTOR`、`assignee:senior-dev` 派单、§21a split 检测全不动）。然后 `dev-loop run --agents senior-dev,junior-dev,qa --dev-split`。首次需 `cd hub && npm run build` 把新 SKILL 物化进 scheduler 的 skills 根（`hub/skills` 是 gitignored 构建产物，不进仓）。
+
+## 标签与 reflect 的 seed（一次性）
+
+- **标签免播种**：`note:structure/voice/pacing`、`must-fix`、`preference`、`opening:protected`、`needs-showrunner` 都是自由字符串，local/service 两端**首次写入 ticket 即生效**，不要加进 `hub/src/seed.ts` 全局 LABELS（会污染所有项目）。
+- **reflect seed**：在 `~/.dev-loop/<key>/lessons.md` 预建空标题 `## screenwriter` / `## story-architect` / `## screenplay-editor`，并在 `## Reflect` 下放一条「把 `note:*` 复发结晶导向这两个写作小节、别写进 `## PM`」的重定向规则（模板 `templates/screenwriting/lessons.md` 已含）。原因：reflect 的 lessons 落点是写死的代码角色枚举，不认识编剧小节；这条规则是不改 governing SKILL 的唯一合法纠偏通道。若该规则因 note 静默 >2 周被 §14 expire 阀裁掉，重新 seed 即可（空标题不受影响）。
 
 ## 一次性：立一部剧
 
@@ -60,7 +70,7 @@ flag-only：爽点密度 / 双供给两轴 / 伏笔-爽点 orphan / 钩子未落
 ## Tier-0 → Tier-1
 
 - **Tier-0（先证一弧成环）**：`devSplit:true`，跑 story-architect + screenwriter + dramalint + 人。第一弧 ≤17 集。reflect/sweep/editor 先不启。
-- **Tier-1**：攒够已关闭 `note:*` 工单后**启 reflect**（自动结晶 `## screenwriter` 课程，无人 ack）；票搁浅启 `sweep`；责编逐集抽 note 太累时把 `qa-agent` 改皮成 editor。
+- **Tier-1**：攒够已关闭 `note:*` 工单后**启 reflect**（自动结晶 `## screenwriter` 课程，无人 ack；需先 seed，见上）；票搁浅启 `sweep`；责编逐集抽 note 太累时**起用 `screenplay-editor-agent`**（已建——机检重跑 + advisory 抽取，绝不下裁决）。
 
 ## 诚实边界
 

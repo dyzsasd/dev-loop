@@ -2,9 +2,10 @@
 
 > 把 dev-loop 的多智能体闭环改皮成一套**工程化的竖屏短剧创作系统**。基于两部样本剧本（*The Hidden Heir Takes Over* / *Alpha's Fated Bride*）读出的结构 DNA，复用 dev-loop 全部原语，唯一新代码是一个 lint 脚本。
 
-> **实现状态（branch `feat/shortdrama-devloop`）**：Tier-0 已建并通过静态验证 —
-> `tools/dramalint.mjs`（机械门，self-check + 正负样本均过）· `skills/story-architect-agent` + `skills/screenwriter-agent`（两个 L2 craft SKILL，复用 senior-dev/junior-dev 层）· `templates/screenwriting/`（init 骨架）· `examples/series-hidden-heir/`（lint 通过的样例切片）· `config/projects.screenwriting.example.json` · 运行手册 [`shortdrama-runbook.md`](./shortdrama-runbook.md)。
-> 待操作者：配一个真实 project 跑一次活的闭环（设计→设计门→写集→品味门）；Tier-1 起用 reflect/editor、`cd hub && npm run build` 同步 scheduler 镜像。
+> **实现状态（branch `feat/shortdrama-devloop`，PR #8）**：已建并通过验证 —
+> `tools/dramalint.mjs`（机械门，self-check + 正负样本均过，已挂进 `hub` test）· **三个 L2 craft SKILL** `skills/story-architect-agent` + `skills/screenwriter-agent` + `skills/screenplay-editor-agent`（复用 senior-dev/junior-dev/qa 层身份）· **调度器集成** `hub/src/run-agents.ts` 的 `agentFamily:"screenwriting"` 开关（带路由 + 非回归测试，`RUN_AGENTS_OK`）· `templates/screenwriting/`（init 骨架 + reflect seed）· `examples/series-hidden-heir/`（lint 通过的样例）· `config/projects.screenwriting.example.json` · 运行手册 [`shortdrama-runbook.md`](./shortdrama-runbook.md)。
+> reflect 复用（靠 lessons.md 的 `## Reflect` 重定向规则 seed，不改 governing SKILL）；标签免播种（自由字符串首次使用即生效）。
+> 待操作者：配一个真实 project，跑一次活的闭环（设计→设计门→写集→品味门）。
 
 ---
 
