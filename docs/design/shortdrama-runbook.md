@@ -29,18 +29,15 @@
 
 ## 一次性：立一部剧
 
-1. **建剧目目录**（series dir），从模板拷贝骨架：
+1. **一条命令 init**（机械配置全包：series 骨架 + `projects.json` 条目 + `lessons.md` seed，幂等非破坏）：
    ```
-   cp -r templates/screenwriting /abs/path/to/series-<slug>
-   cd /abs/path/to/series-<slug> && mv episode-TEMPLATE.md episodes/ 2>/dev/null; mkdir -p episodes
-   git init   # episodes/ 走 git = "代码轴"
+   node tools/init-screenplay.mjs <key> "<剧名>" <PREFIX> /abs/path/to/series-<slug> [--backend local|service]
    ```
+   它生成 `bible.md` / `characters.csv` / `grid.csv` / `episodes/`，写好 `projects.json`（`agentFamily:"screenwriting"`、绝对 `repoPath`、`mode:"dry-run"`、省略 models→Codex 用默认），seed `lessons.md`，并打印就绪清单。
 2. **填 `bible.md`**：把每个 `<…>` 占位填实（立项书 / Vision / 爽点配方 / 钩子模板 / `gate-config` 阈值）。这是人的活（主创的北极星）。
-3. **种子人物**：在 `characters.csv` 填主角行（含 `voice_signature` 声纹金句、`secret_setup` 契诃夫枪）。
-4. **建看板**（board）：
-   - `local` 后端（Tier-0 推荐）：在 `projects.json` 配 `backend:"local"` + `ticketPrefix` 即可，board 自动建在 `~/.dev-loop/<key>/board/`。
-   - `service` 后端：`dev-loop init-service <key> "<剧名>" SD`（建 project + 标签 + actors + hub）。
-5. **配 `projects.json`**：照抄 [`config/projects.screenwriting.example.json`](../../config/projects.screenwriting.example.json)，改 `repoPath`（=series dir）、`strategyDoc:"bible.md"`、`testCommand`（dramalint 的绝对路径）。先留 `mode:"dry-run"` 验证，再翻 `"live"`。
+3. **种子人物**：在 `characters.csv` 填主角行（含 `voice_signature` 声纹金句、`secret_setup` 契诃夫枪）。`git init && git add -A && git commit`。
+4. **建看板**（仅 `service` 后端）：`dev-loop init-service <key> "<剧名>" <PREFIX>` + `dev-loop daemon up`（Web 看板=监制工作台）。`local` 后端 board 自动建，跳过此步。
+5. **验证**：`mode:"dry-run"` 先跑预览，确认 `skill=story-architect-agent` 正确后翻 `"live"`。手动配置可对照 [`config/projects.screenwriting.example.json`](../../config/projects.screenwriting.example.json)。
 
 ## 每日循环
 
