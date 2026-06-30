@@ -14,6 +14,16 @@ experience** — a real failure observed while the agents ran, then hardened int
   `launch=<agent>:<model>/<effort>` summary, and lets `projects.json` `models` / `efforts` override
   the defaults. This pins junior-dev to Sonnet/high under Claude instead of inheriting the account's
   default model.
+- Added a **short-drama (竖屏短剧) screenwriting variant** (`docs/design/shortdrama-devloop.md`
+  + `docs/design/shortdrama-runbook.md`): a deterministic `tools/dramalint.mjs` structural gate
+  (hard gates hook-present / length-bounds / name∈table / paywall-hooked; flag-only
+  爽点-density / double-supply / setup-payoff-orphan warns) plus three craft SKILLs —
+  `story-architect-agent`, `screenwriter-agent`, `screenplay-editor-agent` — that reuse the
+  `senior-dev`/`junior-dev`/`qa` tiers. A `projects.json` `agentFamily` remaps which SKILL body
+  each tier runs **without** changing the actor identity (split detection + assignee routing stay
+  intact). No LLM ever issues a quality verdict — the human showrunner is the in-loop taste oracle;
+  `reflect` crystallizes recurring `note:*` feedback into `lessons.md`. Ships a lint-clean worked
+  example (`examples/series-hidden-heir/`) and init templates.
 
 ## 0.23.3 — Standalone config + daemon autostart
 - Hardened `dev-loop run` project resolution: when neither `--project` / `DEVLOOP_PROJECT` nor the
