@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -8,8 +8,8 @@ const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const run = (args: string[]) => {
-  const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8" });
+const run = (args: string[], env: Record<string, string> = {}) => {
+  const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8", env: { ...process.env, ...env } });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 };
 
@@ -40,7 +40,7 @@ try {
   const codex = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", ...common]);
   ok(codex.code === 0, "codex dry-run scheduler exits 0");
   ok(/codex exec/.test(codex.out), "codex dry-run uses codex exec");
-  ok(/mcp_servers\.dev-loop-hub\.command="[^"]*node[^"]*"/.test(codex.out), "codex dry-run DEFINES the hub server via -c (no pre-existing config.toml block needed)");
+  ok(/mcp_servers\.dev-loop-hub\.command="[^"]*node[^"]*"/.test(codex.out), "codex dry-run DEFINES the hub server via -c with an absolute, version-checked node bin (PATH-independent under launchd/systemd)");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_ACTOR="communication"/.test(codex.out), "codex dry-run injects per-agent actor with -c");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_PROJECT="demo"/.test(codex.out), "codex dry-run injects project with -c");
   ok(!/dangerously-bypass/.test(codex.out), "--codex-safe omits unsafe bypass flags");
@@ -60,6 +60,33 @@ try {
 
   const bad = run(["--cli", "claude", "--once", "--dry-run", "--agents", "nope", ...common]);
   ok(bad.code === 2 && /unknown agent\/group 'nope'/.test(bad.out), "unknown agent fails with a usage error");
+
+  // ── overlap lock + per-day cap (one-shot hardening; runStateDir = dirname(--hub-db) = tmp) ──
+  const lockFile = join(tmp, "run-demo-pm.lock");
+  const today = new Date().toISOString().slice(0, 10);
+  const firesFile = join(tmp, `fires-demo-pm-${today}.json`);
+  const stub = "/usr/bin/true"; // a harmless "claude" so a real fire never costs tokens in the test
+
+  // (1) a LIVE, fresh lock → the fire is skipped with exit 0 (never spawns the CLI)
+  writeFileSync(lockFile, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+  const held = run(["--cli", "claude", "--once", "--agents", "pm", ...common]);
+  ok(held.code === 0, "a held live lock → fire exits 0 (a skip is success, not an error)");
+  ok(/previous fire still running — skipping/.test(held.out), "a held live lock logs the skip and never spawns the CLI");
+  try { unlinkSync(lockFile); } catch { /* ignore */ }
+
+  // (2) a STALE lock (alive pid but older than the ceiling) is broken; the fire proceeds (stub CLI exits 0)
+  writeFileSync(lockFile, JSON.stringify({ pid: process.pid, at: new Date(Date.now() - 2 * 60 * 60_000).toISOString() }));
+  const stale = run(["--cli", "claude", "--once", "--agents", "pm", ...common], { DEVLOOP_CLAUDE_BIN: stub });
+  ok(stale.code === 0, "a stale lock is broken and the fire proceeds (exit 0)");
+  ok(!/previous fire still running/.test(stale.out), "a stale lock is NOT treated as a live fire");
+  ok(!existsSync(lockFile), "the run lock is released after the fire exits");
+
+  // (3) --max-fires-per-day: once today's count is at the cap, the fire is skipped (no CLI spawn)
+  writeFileSync(firesFile, JSON.stringify({ count: 5 }));
+  const capped = run(["--cli", "claude", "--once", "--agents", "pm", "--max-fires-per-day", "1", ...common], { DEVLOOP_CLAUDE_BIN: stub });
+  ok(capped.code === 0, "--max-fires-per-day over the cap → fire exits 0 (skip)");
+  ok(/--max-fires-per-day 1 reached for today/.test(capped.out), "--max-fires-per-day skips once the agent's daily cap is reached");
+  try { unlinkSync(firesFile); } catch { /* ignore */ }
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

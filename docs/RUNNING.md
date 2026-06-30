@@ -92,22 +92,60 @@ projects in `dry-run` for first contact) and launch the agents (next section).
 
 ## 2. Launch the agents
 
-Pick the launch mode that matches how much control you want over cadence. All modes run the same skills:
-`/dev-loop:pm-agent`, `qa-agent`, `dev-agent`, `sweep-agent`, `reflect-agent`, and the
-opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`, and
-`communication-agent`.
+**The loop always runs as external, headless, one-shot fires.** Every fire is a fresh stateless
+`claude -p` / `codex exec` that reads ground truth and exits; the in-session `/loop` cadence
+(which would accumulate conversation context and burn tokens) is **retired as a run mode**. All
+options below run the same skills: `/dev-loop:pm-agent`, `qa-agent`, `dev-agent`, `sweep-agent`,
+`reflect-agent`, and the opt-in **outward** agents (conventions §21) `ops-agent`, `architect-agent`,
+and `communication-agent`. Pick one of three:
+
+- **A. OS scheduler** (recommended default) — `dev-loop service install` writes launchd/systemd/cron
+  units that fire each agent on its cadence; best for a host you leave running.
+- **B. Persistent supervisor** (`dev-loop run`) — a long-running process that owns the cadence; for
+  hosts **without** an OS scheduler (bare containers, etc.).
+- **C. Interactive one-shot** (debugging only) — a single manual fire; not a cadence.
 
 > **Another CLI?** On the `backend:"service"` hub the loop is **CLI-portable** — the same agents
 > + hub run on Codex / opencode against the same `hub.db`. See
 > [`PORTABILITY.md`](PORTABILITY.md) (conventions §26) for the env contract, per-CLI MCP
 > registration, the headless wrapper, and the **identity gate** you run before onboarding a CLI.
 
-### A. dev-loop run — own cadence, Claude/Codex as executors
+### A. OS scheduler — `dev-loop service` (recommended default)
 
-`dev-loop run` is the primary loop command. It is a normal long-running script: it keeps the
-cadence table, loads the bundled agent skills, and whenever an agent is due it shells out once to
-the selected CLI with that agent's SKILL body as the prompt. Claude/Codex execute one agent fire at
-a time; they do not own recurrence.
+`dev-loop service install` generates and installs per-platform scheduler units — **launchd** on
+macOS, **systemd** (user) on Linux, **cron** as a fallback — that each fire one agent as a stateless
+one-shot on its cadence:
+
+```bash
+dev-loop service install --project <key> --cli claude --agents core
+dev-loop service status      # what's installed for this project
+dev-loop service list        # all dev-loop units on this machine
+dev-loop service uninstall   # removes exactly what it installed (idempotent, per-project)
+```
+
+Each unit runs `dev-loop run --once --agents <agent> --project <key> --cli <claude|codex>`. The
+installer also lays down a **KeepAlive daemon unit** that holds the hub web-UI daemon (and the
+loop circuit-breakers, §4a) up headlessly — equivalent to `dev-loop daemon up`.
+
+Flags: `--cli claude|codex`, `--agents core,…`, `--project <key>`, `--launchd|--systemd|--cron`
+(the default is chosen by platform), `--dry-run` (print the unit files without installing), and
+`--no-daemon` (skip the KeepAlive unit). Cadence matches §4 — PM/QA/Dev every 5 min, Ops every
+10 min, Sweep every 30 min, and Reflect/Architect/Communication daily. Install is **per-project**:
+run it once per project key, and `uninstall` removes exactly the units that install wrote (idempotent
+— re-running either is safe).
+
+**Headless notes:**
+- **PATH:** OS schedulers do **not** inherit your shell PATH (homebrew bins are not on the launchd
+  PATH), so the installer bakes **absolute paths** to `dev-loop` and the CLI into every unit.
+- **systemd linger:** for a user service to keep firing while you're logged out, enable linger once:
+  `loginctl enable-linger $USER`.
+
+### B. Persistent supervisor — `dev-loop run`
+
+Use `dev-loop run` on hosts **without** an OS scheduler. It is a normal long-running process: it
+keeps the cadence table, loads the bundled agent skills, and whenever an agent is due it shells out
+once to the selected CLI with that agent's SKILL body as the prompt. Claude/Codex execute one agent
+fire at a time; they do not own recurrence.
 
 ```bash
 # From inside a configured product repo, the project is inferred from cwd.
@@ -172,78 +210,40 @@ The runner writes one log per agent under
 SIGINT to active agent subprocesses. This mode is the most portable: run it from tmux,
 cron, launchd, systemd, or any host process manager.
 
-### B. Agent View — native Claude UI (`claude agents`)
-
-Use Agent View when you want Claude's background-session UI instead of the `dev-loop run`
-process. If `/plugin list` does not show `dev-loop`, run `dev-loop install-claude-plugin` — it
-registers a local **npm-source** marketplace and prints the `/plugin marketplace add …` +
-`/plugin install dev-loop@dev-loop-npm` commands to run (the plugin is pulled from the
-`@dyzsasd/dev-loop` npm package — no GitHub, no source checkout). Restart Claude Code or run
-`/reload-plugins` afterward.
-
-[Agent View](https://code.claude.com/docs/agent-view) (Claude Code >= 2.1.139) is one
-screen for all your background sessions — *Needs input / Running / Done* — that keep
-running with no terminal attached.
-
-```
-claude agents            # open the view (scoped: claude agents --cwd ~/path)
-```
-
-Then dispatch each agent as its own self-looping row (a plugin skill invocation typed in the view
-becomes a new background session; `/loop` makes it recurring):
-
-```
-/loop 5m  /dev-loop:pm-agent
-/loop 5m  /dev-loop:qa-agent
-/loop 5m  /dev-loop:dev-agent
-/loop 30m /dev-loop:sweep-agent
-/loop 24h /dev-loop:reflect-agent
-/loop 10m /dev-loop:ops-agent        # OUTWARD (§21), opt-in — watches running prod (anti-flap)
-/loop 24h /dev-loop:architect-agent  # OUTWARD (§21), opt-in — whole-codebase tech-debt audit
-/loop 24h /dev-loop:communication-agent # OUTWARD (§21), opt-in — drafts a daily public product article (no external publish)
-```
-
-Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent output),
-`claude stop <id>` (stop). `Space` peeks a row, `Enter` attaches.
-
-> **Model note:** a dispatched Agent View session uses the **view's** model (set the view
-> with `claude agents --model <m>`). For *different* models per agent, use the scheduler's
-> `--cli-arg` flags, the tmux launcher below, or separate views. Agent View applies one model per view.
-
-> **Two-tier Dev (opt-in, off by default):** replace the `/dev-loop:dev-agent` line with
-> two rows to split Dev into a design-lead + implementer pair:
-> ```
-> /loop 5m  /dev-loop:senior-dev-agent   # opus/max — designs modules, delegates to junior-dev, escalation direct-code
-> /loop 5m  /dev-loop:junior-dev-agent   # sonnet/high — implements pre-designed tickets against the linked design
-> ```
-> Models come from `models.senior-dev` / `models.junior-dev` in `projects.json`; defaults are
-> opus / sonnet. See [conventions §21a](../references/conventions.md#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project)
+> **Two-tier Dev (opt-in, off by default):** `--dev-split` splits Dev into a design-lead +
+> implementer pair — `senior-dev-agent` (opus/max — designs modules, delegates, escalation
+> direct-code) + `junior-dev-agent` (sonnet/high — implements pre-designed tickets against the
+> linked design). Models come from `models.senior-dev` / `models.junior-dev` in `projects.json`
+> (defaults opus / sonnet). The OS scheduler picks it up the same way: `dev-loop service install …
+> --dev-split`. See [conventions §21a](../references/conventions.md#21a-the-two-tier-dev--senior-dev--junior-dev-optional-per-project)
 > and [config-schema.md `models{}`](../references/config-schema.md) for routing rules, the design
 > gate, and the per-backend tier encoding. The legacy `dev` pane is unchanged when this is off.
 
-> For an attended one-shot Codex run, `dev-loop run --cli codex --once` is the path —
-> it injects the hub MCP via `-c` exactly as the cadence runner does. (The old
-> `install-codex-prompts` / `~/.codex/prompts/*.md` compatibility layer was removed in 0.23.0;
-> Codex deprecated custom prompts in favor of skills, and `dev-loop run --cli codex` is the
-> durable launch path.)
+### C. Interactive one-shot (debugging only)
 
-### C. External process managers
-
-For unattended operation under tmux, launchd, systemd, cron, or a container supervisor, run the same
-`dev-loop run` command under that manager. The scheduler owns agent cadence, resolves the project from
-cwd or `--project`, injects the hub MCP for Claude/Codex, and writes logs under the dev-loop data dir.
+To fire a **single** agent by hand — to debug it or preview a run — use a one-shot. This is **not**
+a cadence:
 
 ```bash
-cd /path/to/product-repo
-dev-loop run --cli codex --agents core,communication
+# Preview the exact commands without calling the model.
+dev-loop run --once --agents pm --dry-run
 
-# More explicit for a process manager with a fixed cwd:
-dev-loop run --cli codex --project <key> --cwd /path/to/product-repo --agents core,communication
+# Fire one agent once for real, then exit.
+dev-loop run --cli claude --once --agents pm
 ```
 
-Use CLI-native model/config flags through `--cli-arg`, or set per-agent model defaults in the executor
-CLI's own config. The old data-dir `run-loop.sh` launcher is legacy; new installs should not create
-runtime scripts under a Claude plugin data directory.
+Or, from inside Claude Code with the plugin installed, run the slash command once: `/dev-loop:pm-agent`.
+If `/plugin list` does not show `dev-loop`, run `dev-loop install-claude-plugin` — it registers a
+local **npm-source** marketplace and prints the `/plugin marketplace add …` +
+`/plugin install dev-loop@dev-loop-npm` commands (the plugin is pulled from the `@dyzsasd/dev-loop`
+npm package — no GitHub, no source checkout); restart Claude Code or run `/reload-plugins` afterward.
+The plugin is needed only for `/dev-loop:init` and these manual one-shot fires — not for a running
+loop, which Options A and B drive headlessly.
+
+> For an attended one-shot Codex run, `dev-loop run --cli codex --once` is the path — it injects the
+> hub MCP via `-c` exactly as the cadence runner does. (The old `install-codex-prompts` /
+> `~/.codex/prompts/*.md` compatibility layer was removed in 0.23.0; Codex deprecated custom prompts
+> in favor of skills, and `dev-loop run --cli codex` is the durable launch path.)
 
 ---
 
@@ -271,10 +271,9 @@ cheaper model is tolerable:
 | **communication** | `opus` | `sonnet` | public article drafting from verified facts; daily |
 | **sweep** | `opus` | `haiku` | mechanical hygiene |
 
-The tmux launcher applies this map automatically and **defaults each pane to `--model
-opus`** when the map omits an agent. In Agent View, set the view's model (e.g.
-`claude agents --model opus`); it's one model per view. In the built-in scheduler, pass
-CLI model flags with `--cli-arg` or set the model in the CLI's own config.
+`dev-loop run` and `dev-loop service` apply this map automatically, **defaulting each fire to
+`--model opus`** when the map omits an agent. To override per fire, pass CLI model flags with
+`--cli-arg` (e.g. `--cli-arg --model --cli-arg opus`) or set the model in the CLI's own config.
 
 ---
 
@@ -325,9 +324,11 @@ Then health-check it: `DEVLOOP_HUB_DB=~/.dev-loop/hub.db dev-loop doctor` → `D
 `hub.db` **outside** any product repo (the template defaults to `~/.dev-loop/hub.db`); if it
 must live in a repo, gitignore `hub.db*` (doctor will tell you if it's exposed).
 
-**Launch — set the identity per pane.** Each pane exports its agent + project before the
-`/loop` (the hub reads them); the `.mcp.json` `${…}` expansion carries them into the hub
-process.
+**Launch — identity is set per fire.** Each fire carries its agent + project as env (the hub reads
+them); the `.mcp.json` `${…}` expansion carries them into the hub process. With Options A and B you
+do not set these by hand — `dev-loop run`/`dev-loop service` inject `DEVLOOP_ACTOR` and
+`DEVLOOP_PROJECT` for every fire. The explicit form (useful for a manual one-shot or a custom
+launcher) is just env in front of the command:
 
 **Project precedence (DL-13):** explicit `DEVLOOP_PROJECT` (non-empty) **>** the process **cwd**
 (the repo it was launched in — matched against the configured `repoPath`/`repos[]`) **>** unresolved.
@@ -338,14 +339,14 @@ that matches a configured-but-unseeded project **errors loudly** (it does not si
 to override the cwd, or to be unambiguous in a launcher that spawns the MCP server from a fixed dir.
 
 ```bash
-DEVLOOP_ACTOR=pm   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:pm-agent
-DEVLOOP_ACTOR=qa   DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:qa-agent
-DEVLOOP_ACTOR=dev  DEVLOOP_PROJECT=monpick /loop 5m  /dev-loop:dev-agent
-DEVLOOP_ACTOR=communication DEVLOOP_PROJECT=monpick /loop 24h /dev-loop:communication-agent
-# …sweep/reflect/ops/architect likewise, each with its own DEVLOOP_ACTOR
+DEVLOOP_ACTOR=pm   DEVLOOP_PROJECT=monpick dev-loop run --once --agents pm
+DEVLOOP_ACTOR=qa   DEVLOOP_PROJECT=monpick dev-loop run --once --agents qa
+DEVLOOP_ACTOR=dev  DEVLOOP_PROJECT=monpick dev-loop run --once --agents dev
+# the OS scheduler bakes the same env into each unit:
+#   dev-loop service install --project monpick --cli claude --agents core,communication
 ```
 
-The built-in scheduler (§2B) and tmux launcher (§2C) set these per pane for you. Verify a pane is wired with
+The OS scheduler (§2A) and the `dev-loop run` supervisor (§2B) set these per fire for you. Verify a fire is wired with
 `DEVLOOP_ACTOR=pm claude mcp list` → `dev-loop-hub … ✓ Connected`, and `whoami` inside a
 session returns `pm`. The hub DB is machine-local runtime state — never committed.
 
@@ -376,7 +377,13 @@ and never double-started. Find the live URL any time:
 dev-loop daemon status   # → '<project-key>' RUNNING → http://127.0.0.1:<port>
 ```
 
-To start it by hand, use the **idempotent lifecycle** — `daemon up` is a clean no-op if already running:
+On a **headless host** (no Claude session to fire the `SessionStart` hook), the OS scheduler's
+**KeepAlive daemon unit** (§2A) owns the daemon instead — it runs `daemon up` and keeps the web UI
++ circuit-breakers alive. Pass `--no-daemon` to `dev-loop service install` to opt out.
+
+To start it by hand (e.g. a non-Claude launcher, or before the first session), use the **idempotent
+lifecycle** — `daemon up` (a clean no-op if already running), **not** the old fixed-`8787`
+foreground server:
 
 ```bash
 DEVLOOP_PROJECT=<project-key> dev-loop daemon up
@@ -423,13 +430,11 @@ into a `lessons.md` rule. *(Running in the cloud with no disk access? Set
 `reports.sink:"linear"` (conventions §23) to read reports + write the 点评 in Linear
 instead — opt-in, default-off, with §16 guardrails.)*
 
-- **Agent View:** background sessions persist across sleep and reappear in `claude
-  agents`; they stop only if the machine powers off. After a reboot, re-dispatch the
-  `/loop …` lines from §2A. To rejoin a specific session: `claude attach <id>`.
-- **Built-in scheduler:** restart the same `dev-loop run ...` command. It recomputes due
+- **OS scheduler (§2A):** the units keep firing across sleep/reboot on their own (with systemd
+  linger enabled). After a fresh machine setup, `dev-loop service install` once and you're done; the
+  KeepAlive unit brings the daemon back up. Nothing to re-dispatch.
+- **Persistent supervisor (§2B):** restart the same `dev-loop run ...` command. It recomputes due
   work from the board and local state; there is no scheduler database to restore.
-- **External process manager:** restart the same `dev-loop run ...` command, or reattach to the
-  manager/session that owns it.
 - A single in-flight fire that died mid-ticket is **self-healing**: Dev's Step 0
   reclaims a ticket it left stranded `In Progress` on the next fire (orphan-recovery),
   and Sweep catches the rest.
@@ -438,10 +443,12 @@ instead — opt-in, default-off, with §16 guardrails.)*
 
 ## 6. Stop
 
-- **Agent View:** `claude stop <id>` per session (or stop them all from the view).
-- **Built-in scheduler:** `Ctrl-C` the `dev-loop run` process, or stop it via your process
+- **OS scheduler (§2A):** `dev-loop service uninstall --project <key>` removes its units exactly
+  (idempotent). To stop without uninstalling, bout/disable the unit directly —
+  `launchctl bootout gui/$(id -u)/<label>` (launchd), `systemctl --user stop <unit>` (systemd), or
+  remove the dev-loop block from your crontab.
+- **Persistent supervisor (§2B):** `Ctrl-C` the `dev-loop run` process, or stop it via your process
   manager; it forwards SIGINT to active agent subprocesses.
-- **tmux:** `tmux kill-session -t dev-loop`.
 
 ---
 

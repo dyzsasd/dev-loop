@@ -294,7 +294,7 @@ that an escalation ticket is `relatedTo` a `Canceled` `review failed:` ticket). 
 
 ---
 
-## 9. Models + launcher (config-schema.md + run-loop.sh)
+## 9. Models + launcher (config-schema.md + `dev-loop run --dev-split`)
 
 ### 9a. `config-schema.md` models block
 Add the two tiers to the per-agent `models` map (consumed by the **launcher** at session start, not by
@@ -310,20 +310,19 @@ the agents — §11 / the models doc):
 Omitting either ⇒ launcher's opus default (so a half-configured split still runs, just without the cost
 saving).
 
-### 9b. `run-loop.sh` launcher
-The launcher gains an opt-in **split mode**: an env knob (e.g. `DEV_SPLIT=1`, default `0`) that
-**replaces the single `dev` pane** with **two panes**:
-- a **senior-dev** pane — `--model $MODEL_senior_dev` (opus), **effort `max`**,
-- a **junior-dev** pane — `--model $MODEL_junior_dev` (sonnet), **effort `high`**.
+### 9b. `dev-loop run --dev-split` launcher
+The launcher gains an opt-in **split mode**: the `--dev-split` flag (`devSplit:true` in config; default
+off) that **replaces the single `dev` fire** with **two fires**:
+- a **senior-dev** fire — `--model $MODEL_senior_dev` (opus), **effort `max`**,
+- a **junior-dev** fire — `--model $MODEL_junior_dev` (sonnet), **effort `high`**.
 
-With `DEV_SPLIT=0` (default), the launcher keeps the **legacy single `dev` pane** exactly as today
+With the flag off (default), the launcher keeps the **legacy single `dev` fire** exactly as today
 (opus, effort max) — so non-split projects are byte-for-byte unchanged. The existing effort tiers are
 untouched: `pm=max`, `reflect/architect=xhigh`, `qa/sweep=high`, plus the new `senior-dev=max` /
-`junior-dev=high`. (The `agent_cmd` helper already takes `model` + `effort` args — the split panes call
-`agent_cmd senior-dev-agent … "$MODEL_senior_dev" max` and `agent_cmd junior-dev-agent … "$MODEL_junior_dev" high`.)
+`junior-dev=high`. The OS scheduler carries the same flag through `dev-loop service install … --dev-split`.
 
-> The launcher (`~/.claude/plugins/data/dev-loop/run-loop.sh`) is owned by a parallel implementer; this
-> section is the **contract** it implements, not an edit made here.
+> An operator-local `run-loop.sh` in the data dir is an optional convenience wrapper, not the canonical
+> launch path — `dev-loop run --dev-split` / `dev-loop service` are.
 
 ---
 
@@ -394,7 +393,7 @@ destructive rebuild of live data.
 | `skills/pm-agent/SKILL.md` | routing-at-filing (new-module→senior, improvement/bug→junior, borderline→junior); the design gate (verify design parent → promote `Backlog`→`Todo` children; operator sign-off for big designs); escalation (Cancel junior fail → file senior direct-code; 2nd fail → Human-Blocked); detect legacy-vs-split from config | PM SKILL impl |
 | `skills/qa-agent/SKILL.md` | escalation on a junior Bug verify-fail: QA Cancels + **files the senior-dev direct-code follow-up itself** (the verifier files it — the qa→senior arm has no other carrier); transient ≠ real fail | QA SKILL impl |
 | `references/config-schema.md` | `models{}` adds `senior-dev: claude-opus-4-8`, `junior-dev: claude-sonnet-4-6`; note the legacy `dev` default + the launcher split knob | config impl |
-| `run-loop.sh` (`~/.claude/plugins/data/…`) | opt-in `DEV_SPLIT` knob: replace the single `dev` pane with senior-dev (opus/max) + junior-dev (sonnet/high) panes; keep the legacy `dev` pane when off | launcher impl |
+| `dev-loop run --dev-split` (launcher) | opt-in split knob: replace the single `dev` fire with senior-dev (opus/max) + junior-dev (sonnet/high) fires; keep the legacy `dev` fire when off | launcher impl |
 | `skills/init/SKILL.md` *(if it provisions labels)* | provision `senior-dev`/`junior-dev` labels at setup (§13) | init impl (minor) |
 | `skills/sweep-agent/SKILL.md` *(optional)* | flag a split-project dev ticket with NO dev-tier assignment (invisible to both dev queries), like a missing owner label | sweep impl (optional) |
 

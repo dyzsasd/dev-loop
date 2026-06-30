@@ -155,7 +155,7 @@ Append-only thereafter — PM keeps it current._
 - **Coordination backends (§18):** `linear` (default; Linear MCP), `local` (machine-local
   file board), `service` (the hub — real per-agent identity, the SoR being dogfooded here).
 - **How it runs today:** **daemon-free** by design. Agents are stateless per fire; the
-  launcher fires them (Agent View `/loop`, a tmux launcher, or manual). State lives in the
+  loop runs as external headless one-shot fires (OS scheduler / `dev-loop run`). State lives in the
   backend (Linear/board/hub) + git + the `*-state.json` files. Recent phases added P4
   hub-native docs, P5 discussion board + Director, P6 two-way Lark/Slack channel, P7
   one-way Linear mirror, P8 second-CLI portability — **all daemon-free**.

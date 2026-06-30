@@ -3,7 +3,38 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+
+## 0.24.0 — External headless scheduler is the one canonical way to run the loop
+- **One canonical model, three deployment options.** The loop runs as **external, headless, one-shot
+  fires** — never an in-session `/loop` cadence (which accumulates conversation context and burns
+  tokens). Choose: **(1) an OS scheduler** (recommended), **(2) the `dev-loop run` persistent
+  supervisor** (for hosts without an OS scheduler), or **(3) a manual interactive one-shot** for
+  debugging. Each fire is a fresh stateless `claude -p` / `codex exec`. **Measured:** a live
+  `claude -p` benchmark (`hub/bench/loop-vs-oneshot-tokens.sh`, see
+  `docs/benchmarks/scheduler-vs-loop-tokens.md`) shows per-fire context held flat at ~73k tokens
+  under the one-shot scheduler vs. monotonic unbounded growth (~1.2k+ tokens/fire, a floor) under an
+  in-session `/loop`.
+- **NEW `dev-loop service` OS-scheduler layer.** `dev-loop service install|uninstall|status|list`
+  generates and installs per-platform scheduler units — **launchd** (macOS), **systemd** (Linux),
+  **cron** (fallback) — that each fire `dev-loop run --once --agents <agent> --project <key> --cli
+  <claude|codex>` on its cadence (PM/QA/Dev 5m, Ops 10m, Sweep 30m, Reflect/Architect/Communication
+  daily), plus a **KeepAlive daemon unit** that holds the hub web-UI daemon + circuit-breakers up
+  headlessly. Flags: `--cli`, `--agents`, `--project`, `--launchd|--systemd|--cron`, `--dry-run`,
+  `--no-daemon`. Idempotent and per-project; `uninstall` removes exactly what it installed. The
+  installer bakes **absolute paths** into each unit (OS schedulers don't inherit your shell PATH);
+  systemd headless needs `loginctl enable-linger`.
+- **One-shot hardening.** A per-`(project,agent)` **overlap lock** so a slow fire can't double-run
+  when the next cadence tick arrives; an MCP-child PATH fix using `process.execPath` so spawned hub
+  subprocesses resolve the right Node/binary under a bare scheduler env; and an opt-in
+  `--max-fires-per-day` daily cap alongside the existing `--max-fires`.
+- **Retired from the docs:** the in-session `/loop` cadence as a recommended run mode, the Claude
+  Agent View `/loop` rows, and the `run-loop.sh` tmux launcher. The READMEs, `docs/RUNNING.md`, and
+  the design/reference docs now present the single canonical model.
+- **BACK-COMPAT — explicitly unchanged:** the Claude **plugin**, every `/dev-loop:*` slash command,
+  `/dev-loop:init`, the `SessionStart` web-UI hook, the `/loop` mechanics themselves (still work
+  mechanically for a manual one-shot), the **stateless agent core**, the **hub** + its state machine,
+  and **second-CLI portability** (Codex / opencode). Nothing in the runtime contract changed — this
+  release reframes *how you deploy the loop*, not what an agent does per fire.
 
 ## 0.23.3 — Standalone config + daemon autostart
 - Hardened `dev-loop run` project resolution: when neither `--project` / `DEVLOOP_PROJECT` nor the

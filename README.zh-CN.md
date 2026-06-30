@@ -52,7 +52,7 @@ dev-loop 由三层构成；`npm i -g @dyzsasd/dev-loop` 这个包会一次性提
 
 1. **接口层——`dev-loop` CLI + MCP。** 操作面。`dev-loop` 命令（`serve` · `run` · `daemon` · `doctor` · `init-service` · `mcp-merge` · `seed` · …）是*你*用来驱动配置与调度的方式；`dev-loop-hub` **MCP** 服务器则是*智能体*读写的方式。两者都是 hub 之上的瘦客户端。
 2. **Hub 层——后端 service。** 一个基于 `node:sqlite` 的本地记录系统（`service` 后端），它驱动**工单系统**和**文档系统**（策略/路线图/设计，带版本），并维护**按项目隔离的命名空间**——每个项目的看板、参与者和文档彼此隔离。它以 localhost 守护进程的形式运行，并带一个只读 web UI。*（Linear 或机器本地的文件看板是可替代的工单后端；而 hub 是那个额外提供每智能体身份、文档系统和命名空间的选项。）*
-3. **智能体层——skills + plugin + scheduler。** 角色专精的智能体是一组 **SKILL**（打包为 Claude **plugin**）外加 **scheduler**（`dev-loop run`）。启动循环有两种方式：`dev-loop run` scheduler（**Mode B**），或用 Claude/Codex 自带的循环命令对接已安装的 plugin（**Mode A**，例如 `/loop 5m /dev-loop:pm-agent`）。参见[安装](#安装)。
+3. **智能体层——skills + plugin + scheduler。** 角色专精的智能体是一组 **SKILL**（打包为 Claude **plugin**）外加 **scheduler**（`dev-loop run`）。循环以**外部、无头、单次触发**的方式运行——绝非会话内的循环节奏——由 **OS 调度器**（推荐）、`dev-loop run` 监督进程，或一次手动单发来驱动。参见[安装](#安装)。
 
 ## 工作原理
 
@@ -194,8 +194,8 @@ dev-loop run --cli codex --agents core --once --dry-run
 
 ## 环境要求
 
-- 使用 `/dev-loop:*` plugin skill / Agent View 时，需要 **Claude Code** 并安装本插件；使用 scheduler 时，
-  被调用的执行器 CLI（`claude`、`codex`，或验证后的 opencode）需要在 `PATH` 上。
+- 使用 `/dev-loop:*` slash command（`/dev-loop:init` + 手动单次触发）时，需要 **Claude Code** 并安装本插件；
+  循环本身则需要被调用的执行器 CLI（`claude`、`codex`，或验证后的 opencode）在 `PATH` 上。
 - 一个**协调后端**：默认使用 **Linear MCP**（`mcp__linear-server__*`），本地文件看板 / hub 则无需额外组件。
 - 已认证的 **`gh` CLI**——Dev 用它做 git/部署。
 - 产品的一个 **git 仓库**，以及（对 Linear 而言）一个可供循环管辖的**团队 + 项目**。
@@ -205,41 +205,42 @@ dev-loop run --cli codex --agents core --once --dry-run
 
 ## 安装
 
-dev-loop 有**两种模式**——按你想怎么驱动智能体来选。两者都从 npm 包开始（无需 clone
-GitHub）：
+只有**一个标准模型**：循环以**外部、无头、单次触发**的方式运行——每一次触发都是一个全新的
+无状态 `claude -p` / `codex exec`，读取真实状态后退出。（会话内的 `/loop` 循环节奏会累积对话
+上下文并烧 token——它不是一种运行方式。）一切都从 npm 包开始（无需 clone GitHub）：
 
 ```bash
 npm i -g @dyzsasd/dev-loop          # 安装 `dev-loop` + `dev-loop-hub` CLI（Node ≥ 23.6）
 ```
 
-| | **Mode A — Plugin**（交互式） | **Mode B — Scheduler**（无人值守，默认） |
-|---|---|---|
-| 谁运行 CLI | 你（交互式 Claude Code） | `dev-loop run`（无人值守） |
-| CLI | Claude Code | Claude **或** Codex |
-| 额外安装 | `dev-loop install-claude-plugin` → `/plugin install` | 无——npm 包就够了 |
-| 需要插件吗？ | 需要 | **不需要** |
-| Skills + hub MCP | 来自已安装的插件 | 由 scheduler 自行注入 |
+### 循环如何运行
 
-### Mode A — Plugin（交互式，Claude Code）
-你自己启动 Claude Code，用 `/dev-loop:*` plugin skill + `/loop` 驱动智能体。**从 npm 注册插件**（无需
-GitHub）：
+从三个部署选项里**任选其一**：
+
+| | **选项 1 — OS 调度器**（推荐） | **选项 2 — 长驻监督进程** | **选项 3 — 交互式单发** |
+|---|---|---|---|
+| 谁触发智能体 | OS 单元（launchd/systemd/cron） | `dev-loop run`（长驻） | 你手动 |
+| 适用场景 | 你常开的普通主机 | 没有 OS 调度器的裸容器 | 调试单个智能体 |
+| CLI | Claude **或** Codex | Claude **或** Codex | Claude（插件）**或** `dev-loop run --once` |
+| 节奏 | 按单元（5m/10m/30m/每日） | 由监督进程掌控 | 无——单次触发 |
+
+**选项 1 — OS 调度器（推荐默认）。** `dev-loop service install` 生成并安装按平台的调度器单元
+（macOS 上是 **launchd**，Linux 上是 **systemd**，**cron** 作为兜底），每个单元按自身节奏触发
+`dev-loop run --once --agents <agent> --project <key> --cli <claude|codex>`，外加一个把 hub
+web-UI 守护进程无头托起的 **KeepAlive 守护单元**。
 
 ```bash
-dev-loop install-claude-plugin       # 写入一个本地 npm 源 marketplace，并打印下面这两条命令
-/plugin marketplace add ~/.claude/plugins/marketplaces/dev-loop-npm
-/plugin install dev-loop@dev-loop-npm
+dev-loop service install --project <key> --cli claude --agents core
+dev-loop service status      # 列出已安装项
+dev-loop service uninstall   # 精确移除它安装过的内容（幂等、按项目）
 ```
 
-Skills 会显示为 `/dev-loop:pm-agent` … `/dev-loop:communication-agent`、
-可选启用的 `/dev-loop:senior-dev-agent` +
-`/dev-loop:junior-dev-agent`，以及 `/dev-loop:init`。用 `/loop` 驱动它们（见
-[运行循环](#运行循环)）。
-*（从源码 checkout 的开发安装：`claude --plugin-dir /path/to/dev-loop`，或在
-`~/.claude/settings.json` 里配一个 `source:"local"` 的 marketplace →
-`/plugin install dev-loop@local`。）*
+标志：`--cli claude|codex`、`--agents core,…`、`--project <key>`、`--launchd|--systemd|--cron`
+（默认按平台选择）、`--dry-run`、`--no-daemon`。节奏映射与无头 PATH/linger 说明见
+[`docs/RUNNING.md`](docs/RUNNING.md)。
 
-### Mode B — Scheduler（无人值守，默认——Claude **或** Codex）
-`dev-loop run` scheduler 控制节奏，每次到点 shell 调用一次 `claude -p` / `codex exec`。
+**选项 2 — 长驻监督进程（`dev-loop run`）。** 一个长驻进程，自己掌控节奏，每次触发 shell 调用
+一次无状态的 `claude -p` / `codex exec`。用于**没有** OS 调度器的主机（裸容器等）。
 **无需插件**：它把每个智能体的 SKILL 作为 prompt 注入（取自随包内容），并**自行注册
 `dev-loop-hub` MCP**——claude 通过内联 `--mcp-config`，codex 通过 `-c` 覆盖——因此不需要
 配置任何 `.mcp.json` 或 `~/.codex/config.toml`。
@@ -250,6 +251,22 @@ dev-loop run --cli claude --agents core          # 或：--cli codex --agents co
 
 只需 npm 包 + 你选定的 CLI（`claude` 或 `codex`）在 `PATH` 上即可。关于 `--agents`、节奏
 和 `--max-fires` 成本上限，见[运行循环](#运行循环)。
+
+**选项 3 — 交互式单发（仅供调试）。** 手动触发单个智能体——可用 `dev-loop run --once`，或从
+已安装的 Claude 插件用 `/dev-loop:<agent>` slash command。这**不是**一种节奏。注册插件（仅用于
+`/dev-loop:init` + 手动单次触发）：
+
+```bash
+dev-loop install-claude-plugin       # 写入一个本地 npm 源 marketplace，并打印下面这两条命令
+/plugin marketplace add ~/.claude/plugins/marketplaces/dev-loop-npm
+/plugin install dev-loop@dev-loop-npm
+```
+
+Skills 会显示为 `/dev-loop:pm-agent` … `/dev-loop:communication-agent`、可选启用的
+`/dev-loop:senior-dev-agent` + `/dev-loop:junior-dev-agent`，以及 `/dev-loop:init`。
+*（从源码 checkout 的开发安装：`claude --plugin-dir /path/to/dev-loop`，或在
+`~/.claude/settings.json` 里配一个 `source:"local"` 的 marketplace →
+`/plugin install dev-loop@local`。）*
 
 ## 配置
 
@@ -317,7 +334,7 @@ dev-loop run --cli claude --agents core --max-fires 50
 ```
 
 scheduler 会为执行器**自行注册 `dev-loop-hub` MCP**（claude：内联 `--mcp-config`；codex：
-`-c` 覆盖），因此 Mode B 无需任何插件、也无需配置 `.mcp.json` / `~/.codex/config.toml`。
+`-c` 覆盖），因此它无需任何插件、也无需配置 `.mcp.json` / `~/.codex/config.toml`。
 token 就是运行成本——`--max-fires` 为长驻进程封顶，按智能体设置的 `models` 让机械性智能体
 保持廉价。
 
@@ -328,9 +345,9 @@ token 就是运行成本——`--max-fires` 为长驻进程封顶，按智能体
 会直接停下并提示配置，而不会退回到 `demo` 或另一个项目。同一台机器上并行跑多个产品是正常用法：把多个项目写进
 `projects.json`，每个产品启动一个 `dev-loop run` 进程即可。
 
-Claude Agent View 仍然可用，但它是 Claude 原生的可选界面：安装 Claude 插件后打开
-`claude agents`，再派发 `/loop 5m /dev-loop:pm-agent`、`/loop 5m /dev-loop:qa-agent`、
-`/loop 5m /dev-loop:dev-agent` 和可选对外智能体。
+对于常开的主机，与其留一个进程挂在前台，不如安装 OS 调度器：
+`dev-loop service install --project <key> --cli claude --agents core` 会按节奏触发每个智能体，
+并把 web-UI 守护进程无头托起。见 [docs/RUNNING.md](docs/RUNNING.md)。
 
 **节奏**（它们会自我节流，因此空转触发是廉价的空操作）：PM/QA/Dev 约 5 分钟，Sweep
 约 30 分钟，Reflect 每日；Ops 约 10 分钟，Architect/Communication 每日/按需。
@@ -376,7 +393,7 @@ Claude Agent View 仍然可用，但它是 Claude 原生的可选界面：安装
 循环可以通过 [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) 配套 + `codex` CLI，把 **OpenAI Codex** 当作增强工具来用。**需手动启用；不启用则行为不变。** 它增加了几项彼此独立的能力：一次**独立的第二模型评审**（Dev 第 5.5 步 + Architect；仅供参考，绝不触碰看板）、**图像生成**（PM 原型图 + Dev 生产素材——这是循环自身唯一做不到的事），以及在 `fix-exhausted` 阻塞之前的一次性**救援**。参见
 [conventions §24](references/conventions.md) + [`references/codex-integration.md`](references/codex-integration.md)。
 
-另一条路径是由 `service` hub 让各个智能体直接在 Codex 中启动（Mode B）；见
+另一条路径是由 `service` hub 让各个智能体直接在 Codex 中启动；见
 [`docs/PORTABILITY.md`](docs/PORTABILITY.md)。在那里运行任意智能体，例如
 `dev-loop run --cli codex --agents communication`——scheduler 会自行注入每个智能体的
 `dev-loop-hub` actor/MCP 覆盖，因此无需手动配置 Codex。
@@ -401,4 +418,6 @@ Claude Agent View 仍然可用，但它是 Claude 原生的可选界面：安装
 
 ## 状态
 
-**v0.23.3。** 十个可启动智能体——五个对内（**PM / QA / Dev / Sweep / Reflect**）、三个对外（**Ops / Architect / Communication**），以及可选启用的双层 **senior-dev / junior-dev** Dev 分层——再加上 `init` 接入命令。协调可按后端插拔：**Linear**（默认）、一个**本地文件看板**，或**本地 hub**（`node:sqlite` 记录系统，具备每智能体独立身份 + 本地 web UI + 带版本的文档 + 单向 Linear 镜像 + CLI 可移植性）。近期：dev-loop 默认使用自己的 `~/.dev-loop` 配置和数据目录，不再把 Claude plugin data 当主路径；当 `--project` 和当前 repo 都无法识别项目时，runner 会直接给出配置提示，不再猜 `demo` 或默认项目；service hub daemon 可以安装为 macOS LaunchAgent，并使用稳定的 localhost 端口。已端到端验证，并在长时间的实时运行中经受实战检验；自治（推送/部署）按项目选择性启用，且以构建通过为门禁。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+**v0.24.0。** 循环现在只有**一种标准运行方式**——外部、无头、单次触发，由 OS 调度器（新的
+`dev-loop service` 层）、`dev-loop run` 监督进程，或一次手动单发驱动；会话内的 `/loop` 循环节奏
+已作为运行方式退役（所有插件机制保持不变）。十个可启动智能体——五个对内（**PM / QA / Dev / Sweep / Reflect**）、三个对外（**Ops / Architect / Communication**），以及可选启用的双层 **senior-dev / junior-dev** Dev 分层——再加上 `init` 接入命令。协调可按后端插拔：**Linear**（默认）、一个**本地文件看板**，或**本地 hub**（`node:sqlite` 记录系统，具备每智能体独立身份 + 本地 web UI + 带版本的文档 + 单向 Linear 镜像 + CLI 可移植性）。近期：**双层 Dev**（senior 设计 / junior 实现，可选启用，向后兼容）；**独立 npm 打包**（`npm i -g @dyzsasd/dev-loop`），已内置 scheduler 运行所需的 agent skills，并配有经 Codex 认证的多 CLI 路径；以及**循环成本治理**（失控/无进展的熔断器、一个验收率指标）。已端到端验证，并在长时间的实时运行中经受实战检验；自治（推送/部署）按项目选择性启用，且以构建通过为门禁。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。

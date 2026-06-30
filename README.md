@@ -76,9 +76,10 @@ dev-loop is three layers; the `npm i -g @dyzsasd/dev-loop` package ships all thr
    file board are alternative ticket backends; the hub is the one that adds per-agent identity, the
    doc system, and the namespace.)*
 3. **Agents — skills + plugin + scheduler.** The role-specialized agents are a set of **SKILLs**
-   (packaged as the Claude **plugin**) plus the **scheduler** (`dev-loop run`). You start the loop
-   two ways: the `dev-loop run` scheduler (**Mode B**), or Claude/Codex's own loop command against
-   the installed plugin (**Mode A**, e.g. `/loop 5m /dev-loop:pm-agent`). See [Install](#install).
+   (packaged as the Claude **plugin**) plus the **scheduler** (`dev-loop run`). The loop runs as
+   **external, headless, one-shot fires** — never an in-session cadence — driven by an **OS
+   scheduler** (recommended), the `dev-loop run` supervisor, or a manual one-shot. See
+   [Install](#install).
 
 ## How it works
 
@@ -273,8 +274,9 @@ dev-loop run --cli codex --agents core --once --dry-run
 
 ## Requirements
 
-- **Claude Code** with this plugin installed when using `/dev-loop:*` plugin skills / Agent View; for scheduler
-  runs, the selected executor CLI (`claude`, `codex`, or opencode once verified) must be on `PATH`.
+- **Claude Code** with this plugin installed for the `/dev-loop:*` slash commands (`/dev-loop:init`
+  + manual one-shot fires); for the loop itself, the selected executor CLI (`claude`, `codex`, or
+  opencode once verified) must be on `PATH`.
 - A **coordination backend**: the **Linear MCP** (`mcp__linear-server__*`) for the default,
   or nothing extra for the local file board / hub.
 - **`gh` CLI** authenticated — Dev uses it for git/deploy.
@@ -286,42 +288,47 @@ dev-loop run --cli codex --agents core --once --dry-run
 
 ## Install
 
-dev-loop runs in **two modes** — pick by how you want to drive the agents. Both start from the
-npm package (no GitHub checkout required):
+There is **one canonical model**: the loop runs as **external, headless, one-shot fires** — each
+fire is a fresh stateless `claude -p` / `codex exec` that reads ground truth and exits. (An
+in-session `/loop` cadence would accumulate conversation context and burn tokens — it is not a run
+mode.) Everything starts from the npm package (no GitHub checkout required):
 
 ```bash
 npm i -g @dyzsasd/dev-loop          # installs the `dev-loop` + `dev-loop-hub` CLIs (Node ≥ 23.6)
 ```
 
-| | **Mode A — Plugin** (interactive) | **Mode B — Scheduler** (headless, default) |
-|---|---|---|
-| Who runs the CLI | you (interactive Claude Code) | `dev-loop run` (unattended) |
-| CLIs | Claude Code | Claude **or** Codex |
-| Extra install | `dev-loop install-claude-plugin` → `/plugin install` | nothing — the npm package is enough |
-| Needs the plugin? | yes | **no** |
-| Skills + hub MCP | from the installed plugin | the scheduler injects both itself |
+### How the loop runs
 
-### Mode A — Plugin (interactive, Claude Code)
-Launch Claude Code yourself and drive agents with `/dev-loop:*` plugin skills + `/loop`. Register the plugin
-**from npm** (no GitHub):
+Pick **one** of three deployment options:
+
+| | **Option 1 — OS scheduler** (recommended) | **Option 2 — Persistent supervisor** | **Option 3 — Interactive one-shot** |
+|---|---|---|---|
+| What fires the agents | OS units (launchd/systemd/cron) | `dev-loop run` (long-running) | you, by hand |
+| Best for | a normal host you leave running | bare containers with no OS scheduler | debugging a single agent |
+| CLIs | Claude **or** Codex | Claude **or** Codex | Claude (plugin) **or** `dev-loop run --once` |
+| Cadence | per-unit (5m/10m/30m/daily) | owned by the supervisor | none — single fire |
+
+**Option 1 — OS scheduler (recommended default).** `dev-loop service install` generates and
+installs per-platform scheduler units (**launchd** on macOS, **systemd** on Linux, **cron** as a
+fallback) that each fire `dev-loop run --once --agents <agent> --project <key> --cli <claude|codex>`
+on its cadence, plus a **KeepAlive daemon unit** that holds the hub web-UI daemon up headlessly.
 
 ```bash
-dev-loop install-claude-plugin       # writes a local npm-source marketplace + prints the 2 commands below
-/plugin marketplace add ~/.claude/plugins/marketplaces/dev-loop-npm
-/plugin install dev-loop@dev-loop-npm
+dev-loop service install --project <key> --cli claude --agents core
+dev-loop service status      # list what's installed
+dev-loop service uninstall   # removes exactly what it installed (idempotent, per-project)
 ```
 
-Skills appear as `/dev-loop:pm-agent` … `/dev-loop:communication-agent`,
-the opt-in `/dev-loop:senior-dev-agent` + `/dev-loop:junior-dev-agent`, and `/dev-loop:init`. Drive
-them with `/loop` (see [Run the loop](#run-the-loop)).
-*(Dev from a source checkout: `claude --plugin-dir /path/to/dev-loop`, or a `source:"local"`
-marketplace in `~/.claude/settings.json` → `/plugin install dev-loop@local`.)*
+Flags: `--cli claude|codex`, `--agents core,…`, `--project <key>`, `--launchd|--systemd|--cron`
+(default chosen by platform), `--dry-run`, `--no-daemon`. See
+[`docs/RUNNING.md`](docs/RUNNING.md) for cadence mapping and the headless PATH/linger notes.
 
-### Mode B — Scheduler (headless, the default — Claude **or** Codex)
-The `dev-loop run` scheduler owns the cadence and shells out to `claude -p` / `codex exec` once per
-fire. **No plugin needed**: it injects each agent's SKILL as the prompt (from the bundled package)
-and **self-registers the `dev-loop-hub` MCP** — claude via an inline `--mcp-config`, codex via `-c`
-overrides — so no `.mcp.json` or `~/.codex/config.toml` setup is required.
+**Option 2 — Persistent supervisor (`dev-loop run`).** A long-running process that owns the cadence
+itself and shells out one stateless `claude -p` / `codex exec` per fire. Use it on hosts **without**
+an OS scheduler (bare containers, etc.). **No plugin needed**: it injects each agent's SKILL as the
+prompt (from the bundled package) and **self-registers the `dev-loop-hub` MCP** — claude via an
+inline `--mcp-config`, codex via `-c` overrides — so no `.mcp.json` or `~/.codex/config.toml` setup
+is required.
 
 ```bash
 dev-loop run --cli claude --agents core          # or: --cli codex --agents core,communication
@@ -329,6 +336,21 @@ dev-loop run --cli claude --agents core          # or: --cli codex --agents core
 
 Needs only the npm package + your chosen CLI (`claude` or `codex`) on `PATH`. See
 [Run the loop](#run-the-loop) for `--agents`, cadence, and the `--max-fires` cost cap.
+
+**Option 3 — Interactive one-shot (debugging only).** Fire a single agent by hand — either
+`dev-loop run --once`, or a `/dev-loop:<agent>` slash command from the installed Claude plugin. This
+is **not** a cadence. To register the plugin (only for `/dev-loop:init` + manual one-shot fires):
+
+```bash
+dev-loop install-claude-plugin       # writes a local npm-source marketplace + prints the 2 commands below
+/plugin marketplace add ~/.claude/plugins/marketplaces/dev-loop-npm
+/plugin install dev-loop@dev-loop-npm
+```
+
+Skills appear as `/dev-loop:pm-agent` … `/dev-loop:communication-agent`, the opt-in
+`/dev-loop:senior-dev-agent` + `/dev-loop:junior-dev-agent`, and `/dev-loop:init`.
+*(Dev from a source checkout: `claude --plugin-dir /path/to/dev-loop`, or a `source:"local"`
+marketplace in `~/.claude/settings.json` → `/plugin install dev-loop@local`.)*
 
 ## Configure
 
@@ -401,7 +423,7 @@ dev-loop run --cli claude --agents core --max-fires 50
 ```
 
 The scheduler **self-registers the `dev-loop-hub` MCP** for the executor (claude: inline
-`--mcp-config`; codex: `-c` overrides), so Mode B needs no plugin and no `.mcp.json` /
+`--mcp-config`; codex: `-c` overrides), so it needs no plugin and no `.mcp.json` /
 `~/.codex/config.toml` setup. Tokens are the running cost — `--max-fires` caps a long-running
 process, and per-agent `models` keep the mechanical agents cheap.
 
@@ -413,9 +435,9 @@ project nor the cwd resolves, the scheduler stops instead of falling back to `de
 configured project. Multiple products on one machine are just multiple entries in `projects.json`
 and one `dev-loop run` process per product.
 
-Claude Agent View is still available when you want Claude-native background rows: install the
-Claude plugin, open `claude agents`, then dispatch `/loop 5m /dev-loop:pm-agent`,
-`/loop 5m /dev-loop:qa-agent`, `/loop 5m /dev-loop:dev-agent`, and the optional outward agents.
+For a host you leave running, install the OS scheduler instead of leaving a process attached:
+`dev-loop service install --project <key> --cli claude --agents core` fires each agent on its
+cadence and keeps the web-UI daemon up headlessly. See [docs/RUNNING.md](docs/RUNNING.md).
 
 **Cadence** (they self-throttle, so idle fires are cheap no-ops): PM/QA/Dev ~5 min, Sweep
 ~30 min, Reflect daily; Ops ~10 min, Architect/Communication daily/on-demand.
@@ -486,7 +508,7 @@ second-model review** (Dev Step 5.5 + Architect; advisory, never touches the boa
 itself), and a one-shot **rescue** before a `fix-exhausted` block. See
 [conventions §24](references/conventions.md) + [`references/codex-integration.md`](references/codex-integration.md).
 
-Separately, the `service` hub can run the agents themselves from Codex (Mode B); see
+Separately, the `service` hub can run the agents themselves from Codex; see
 [`docs/PORTABILITY.md`](docs/PORTABILITY.md). Run any agent there with, e.g.,
 `dev-loop run --cli codex --agents communication` — the scheduler injects the per-agent
 `dev-loop-hub` actor/MCP override itself, so no manual Codex config is needed.
@@ -511,7 +533,10 @@ pushes `v<version>`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Status
 
-**v0.23.3.** Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
+**v0.24.0.** The loop now runs **one canonical way** — external, headless, one-shot fires via an
+OS scheduler (the new `dev-loop service` layer), the `dev-loop run` supervisor, or a manual
+one-shot; the in-session `/loop` cadence is retired as a run mode (all plugin mechanics unchanged).
+Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
 three outward (**Ops / Architect / Communication**), and an opt-in two-tier
 **senior-dev / junior-dev** Dev split — plus the `init` onboarding command.
 Coordination is backend-pluggable: **Linear** (default), a **local file board**, or the
