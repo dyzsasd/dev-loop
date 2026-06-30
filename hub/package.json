@@ -44,7 +44,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist .claude-plugin skills references hooks config && tsc -p tsconfig.build.json && mkdir -p dist/plugin && cp -R ../.claude-plugin ../skills ../references ../hooks ../config dist/plugin/ && cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./",
+    "build": "rm -rf dist .claude-plugin skills references hooks config && tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/server.js && mkdir -p dist/plugin && cp -R ../.claude-plugin ../skills ../references ../hooks ../config dist/plugin/ && cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./",
     "prepack": "npm run build",
     "postinstall": "node postinstall.cjs",
     "start": "DEVLOOP_CREATE_PROJECT=1 node src/server.ts",
