@@ -23,7 +23,10 @@ experience** — a real failure observed while the agents ran, then hardened int
   each tier runs **without** changing the actor identity (split detection + assignee routing stay
   intact). No LLM ever issues a quality verdict — the human showrunner is the in-loop taste oracle;
   `reflect` crystallizes recurring `note:*` feedback into `lessons.md`. Ships a lint-clean worked
-  example (`examples/series-hidden-heir/`) and init templates.
+  example (`examples/series-hidden-heir/`), init templates, and a one-shot
+  `tools/init-screenplay.mjs` bootstrap (scaffolds the series dir + writes the `projects.json`
+  entry + seeds `lessons.md`, idempotent and non-destructive), plus a source-install + Codex
+  getting-started guide.
 
 ## 0.23.3 — Standalone config + daemon autostart
 - Hardened `dev-loop run` project resolution: when neither `--project` / `DEVLOOP_PROJECT` nor the

@@ -61,72 +61,32 @@ cd hub && npm install && npm run build       # 重建 dist + 重新物化 skills
 
 ---
 
-## 3. 立一部剧（series 目录 = 工程化产物集）
+## 3. 一条命令 init 一部剧
+
+像 coding 工具集的 `init` 一样，一条命令把**所有机械配置**搭好（series 目录骨架 + `projects.json` 条目 + `lessons.md` seed），只把「填 bible」这件创意活留给你。**幂等、非破坏性**（已存在的文件/项目绝不覆盖）：
 
 ```bash
-export SERIES=~/series-myshow
-cp -r $DL/templates/screenwriting $SERIES
-cd $SERIES
-mkdir -p episodes
-git init && git add -A && git commit -m "init series skeleton"
+node $DL/tools/init-screenplay.mjs myshow "My Show" SD ~/series-myshow --backend service
+#                                   key   显示名      前缀 series目录             local(默认)|service
 ```
 
-然后**填两份东西**（这是人的活——主创的北极星）：
+它会：① 从模板生成 `~/series-myshow/`（`bible.md` / `characters.csv` / `grid.csv` / `episodes/`）；② 在 `~/.dev-loop/projects.json` 写好 `myshow` 条目（`backend` / `devSplit:true` / `agentFamily:"screenwriting"` / 绝对 `repoPath` / `strategyDoc` / dramalint 测试命令 / `mode:"dry-run"`，**不写 `models`——让 Codex 用默认 gpt-5.5**）；③ seed `~/.dev-loop/myshow/lessons.md`（含 reflect 重定向规则）；④ 打印就绪清单 + 下一步命令。
 
-1. **`bible.md`**：把每个 `<…>` 占位填实——立项书（题材/平台/受众/卡点集/禁区）、Vision（logline + 双供给配比）、爽点配方、`gate-config` 围栏块的阈值（集长上下限、付费卡点集号、密度目标）。
-2. **`characters.csv`**：填主角行，重点是 `voice_signature`（声纹金句）和 `secret_setup`（携带的契诃夫枪）。
-
-> 可对照 `$DL/examples/series-hidden-heir/`（一个 lint 通过的样例切片）照着填。
-> `grid.csv` 和 `episodes/` 先留空——主笔 agent 会填 grid、编剧 agent 会写 episodes。
-> `lessons.md`（含 reflect 重定向规则）保持原样，下面会拷到运行时目录。
-
----
-
-## 4. 配 project + 起 board（service 后端，给人类一个 Web UI 来拍板）
-
-短剧的「人在门上拍板」用 hub 的 **Web 看板**最顺手，所以推荐 `backend:"service"`。剧本文件仍在磁盘（`repoPath`），看板在 hub。
+然后照它打印的下一步走：
 
 ```bash
-# 4a. 在 hub 建项目 + 标签 + actors（含 senior-dev/junior-dev/qa）：
-dev-loop init-service myshow "My Show" SD          # key=myshow, 显示名, ticket 前缀=SD
-# 它会建项目、起一次 daemon、打印看板 Web URL。
+# 1) 填创意（人的活——主创的北极星）：编辑 bible.md 的每个 <…> + gate-config 阈值；
+#    characters.csv 填主角行（voice_signature 声纹 / secret_setup 契诃夫枪）。对照 $DL/examples/series-hidden-heir/。
+cd ~/series-myshow && git init && git add -A && git commit -m "init series"
 
-# 4b. 写 projects.json（默认位置 ~/.dev-loop/projects.json）：
-mkdir -p ~/.dev-loop
-cat > ~/.dev-loop/projects.json <<JSON
-{ "projects": {
-  "myshow": {
-    "backend": "service",
-    "devSplit": true,
-    "agentFamily": "screenwriting",
-    "ticketPrefix": "SD",
-    "repoPath": "$SERIES",
-    "strategyDoc": "bible.md",
-    "hub": { "db": null, "docs": false, "transport": "daemon" },
-    "mode": "dry-run",
-    "autonomy": "ask",
-    "testEnv": {
-      "testCommand": "node $DL/tools/dramalint.mjs $SERIES",
-      "notes": "无 web surface；测一集 = dramalint 结构门。品味归人类监制。"
-    }
-  }
-} }
-JSON
-
-# 4c. seed reflect 的 lessons.md（让复发反馈结晶到编剧小节，不是 ## PM）：
-mkdir -p ~/.dev-loop/myshow
-cp $DL/templates/screenwriting/lessons.md ~/.dev-loop/myshow/lessons.md
-
-# 4d. 起看板 Web UI（人类在这里 review/拍板）：
-dev-loop daemon up
-# 打开它打印的 URL（形如 http://127.0.0.1:<port>），这就是监制的工作台。
+# 2) service 后端才需要：建看板 + 起 Web UI（人类在这里拍板）
+dev-loop init-service myshow "My Show" SD      # 建 hub 项目+标签+actors
+dev-loop daemon up                              # 打印看板 URL = 监制工作台
+#   （local 后端跳过这步——board 自动建在 ~/.dev-loop/myshow/board/，但拍板要改 ticket 文件、无 Web UI）
 ```
 
-> 关键点：
-> - **不要在 `projects.json` 里写 `models`/`efforts`**——省略它们，调度器自动用 Codex 默认（senior-dev=gpt-5.5/xhigh，junior-dev/qa=gpt-5.5/high）。写 Claude 的 model id 反而会喂错 Codex。
-> - 标签（`note:*`、`must-fix`、`opening:protected` 等）**免播种**，agent 首次用即生效。
-> - 先 `mode:"dry-run"` 验证，确认无误再改成 `"live"`。
-> - 想零云、纯本地？把 `backend` 换成 `"local"`、删掉 `hub` 块即可——但那样人类拍板要改 ticket 文件（没 Web UI），不如 service 顺手。
+> 标签（`note:*`、`must-fix`、`opening:protected` 等）免播种，agent 首次用即生效。
+> 想重置某项配置？删掉对应文件/`projects.json` 条目再跑一次 init 即可（它只补缺失的）。
 
 ---
 
@@ -203,15 +163,12 @@ nvm use 23 && npm i -g @openai/codex && codex login
 git clone …/dev-loop && cd dev-loop/hub && npm install && npm run build && npm link
 export DL=$(cd .. && pwd)
 
-# 立剧
-cp -r $DL/templates/screenwriting ~/series-myshow && cd ~/series-myshow && mkdir -p episodes && git init && git add -A && git commit -m init
-#  → 填 bible.md + characters.csv
+# init 一部剧（一条命令：series 骨架 + projects.json + lessons seed）
+node $DL/tools/init-screenplay.mjs myshow "My Show" SD ~/series-myshow --backend service
+#  → 填 bible.md + characters.csv，然后 cd ~/series-myshow && git init && git add -A && git commit -m init
 
-# 配 + 起看板
-dev-loop init-service myshow "My Show" SD
-#  → 写 ~/.dev-loop/projects.json（backend:service, agentFamily:screenwriting, repoPath, 省略 models）
-cp $DL/templates/screenwriting/lessons.md ~/.dev-loop/myshow/lessons.md
-dev-loop daemon up                      # 打开 Web 看板
+# service 后端才需要：起看板
+dev-loop init-service myshow "My Show" SD && dev-loop daemon up    # 打开 Web 看板
 
 # 跑（Codex）+ 人在门上拍板
 dev-loop run --cli codex --once --dry-run --codex-safe --agents senior-dev,junior-dev,qa --dev-split --project myshow --root $DL   # 预览
