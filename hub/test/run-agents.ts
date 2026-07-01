@@ -19,13 +19,19 @@ try {
   const repo = join(tmp, "repo");
   const otherRepo = join(tmp, "other-repo");
   const outside = join(tmp, "outside");
+  const screenRepo = join(tmp, "screen-repo");
   mkdirSync(data, { recursive: true });
   mkdirSync(repo, { recursive: true });
   mkdirSync(otherRepo, { recursive: true });
   mkdirSync(outside, { recursive: true });
+  mkdirSync(screenRepo, { recursive: true });
   writeFileSync(join(data, "projects.json"), JSON.stringify({
     defaultProject: "fallback",
-    projects: { demo: { repoPath: repo }, fallback: { repoPath: otherRepo } },
+    projects: {
+      demo: { repoPath: repo },
+      fallback: { repoPath: otherRepo },
+      screen: { repoPath: screenRepo, devSplit: true, agentFamily: "screenwriting" },
+    },
   }));
   const common = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "demo"];
   const noProjectCommon = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--cwd", repo];
@@ -39,6 +45,17 @@ try {
   ok(/DEVLOOP_DEV_SPLIT":"true"/.test(defaultCore.out), "default core injects DEVLOOP_DEV_SPLIT=true");
   ok(/junior-dev: claude .* --model claude-sonnet-4-6 --effort high /.test(defaultCore.out),
     "junior-dev is pinned to the Sonnet/high default");
+  ok(/senior-dev: cwd=.* skill=senior-dev-agent /.test(defaultCore.out) && /qa: cwd=.* skill=qa-agent /.test(defaultCore.out),
+    "no agentFamily -> each agent runs its own SKILL (no regression for code projects)");
+
+  // agentFamily remaps which SKILL *body* runs per tier, WITHOUT changing the actor identity.
+  const screenCommon = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "screen"];
+  const family = run(["--cli", "claude", "--once", "--dry-run", "--agents", "senior-dev,junior-dev,qa", ...screenCommon]);
+  ok(family.code === 0, "screenwriting-family scheduler exits 0");
+  ok(/senior-dev: cwd=.* skill=story-architect-agent /.test(family.out), "agentFamily:screenwriting routes senior-dev -> story-architect-agent SKILL");
+  ok(/junior-dev: cwd=.* skill=screenwriter-agent /.test(family.out), "agentFamily:screenwriting routes junior-dev -> screenwriter-agent SKILL");
+  ok(/qa: cwd=.* skill=screenplay-editor-agent /.test(family.out), "agentFamily:screenwriting routes qa -> screenplay-editor-agent SKILL");
+  ok(/DEVLOOP_ACTOR":"senior-dev"/.test(family.out), "actor identity stays senior-dev under the family remap (§21a split + assignee routing intact)");
 
   const claude = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm,communication", "--interval", "pm=2m", "--cli-arg", "--model", "--cli-arg", "opus", ...common]);
   ok(claude.code === 0, "claude dry-run scheduler exits 0");

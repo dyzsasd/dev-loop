@@ -1,0 +1,25 @@
+{
+  "_comment": "Example projects.json for a short-drama (竖屏短剧) screenwriting product. Copy a block into your real projects.json. Screenwriting is a non-code project: build/deploy/ops/repos are omitted; the 'repo' is the series dir holding bible.md/characters.csv/grid.csv/episodes/. Agents: story-architect (=senior-dev tier) + screenwriter (=junior-dev tier) + reflect + sweep; the human showrunner is the pm pane (taste verifier).",
+  "defaultProject": "hidden-heir",
+  "projects": {
+    "hidden-heir": {
+      "backend": "local",
+      "devSplit": true,
+      "agentFamily": "screenwriting",
+      "ticketPrefix": "SD",
+      "repoPath": "/abs/path/to/series-hidden-heir",
+      "strategyDoc": "bible.md",
+      "mode": "dry-run",
+      "autonomy": "ask",
+      "git": { "defaultBranch": "main", "autoCommit": true, "autoPush": false, "autoDeploy": false },
+      "testEnv": {
+        "testCommand": "node /abs/path/to/dev-loop/tools/dramalint.mjs /abs/path/to/series-hidden-heir",
+        "notes": "There is no web surface. 'Testing' an episode = the dramalint structural gate (hook/length/name/paywall hard gates + 爽点/双供给/伏笔 flag-only warns). Taste is the human showrunner's call at In Review, never an agent's."
+      },
+      "models": { "senior-dev": "claude-opus-4-8", "junior-dev": "claude-sonnet-4-6", "reflect": "claude-opus-4-8" },
+      "efforts": { "senior-dev": "max", "junior-dev": "high", "reflect": "xhigh" },
+      "reports": { "sink": "files" }
+    },
+    "_service_variant_note": "On backend:'service' instead of 'local': set hub:{db:null,docs:true,transport:'daemon'}, strategyDoc:{hubDoc:'strategy'} (bible as a hub strategy doc, operator-publishes), and beat-sheets as design docs (Design: hubDoc:design/beats-<arc>). The dev-tier is then the ticket assignee (senior-dev/junior-dev actors) rather than a label. Run `dev-loop init-service hidden-heir \"Hidden Heir\" SD` first."
+  }
+}
