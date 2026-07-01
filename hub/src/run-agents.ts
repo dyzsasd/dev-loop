@@ -15,22 +15,49 @@ const VALID_AGENTS = [
   "ops", "architect", "communication",
 ] as const;
 type Agent = (typeof VALID_AGENTS)[number];
-type RunnerCli = "claude" | "codex";
-type LaunchProfile = { model?: string; effort?: string };
+
+// A coding-agent CLI the scheduler can drive. `claude` + `codex` are fully wired (the scheduler
+// self-injects the hub MCP for them); `opencode` is recognized everywhere in config (per-agent
+// selection + per-coding-agent defaults) and launched best-effort via `opencode run` — its MCP is
+// registered through the operator's merged opencode config, not inline (see docs/PORTABILITY.md).
+// Adding a CLI = extend this union + DEFAULT_LAUNCH_PROFILES + commandFor().
+type CodingAgent = "claude" | "codex" | "opencode";
+type RunnerCli = CodingAgent; // the --cli flag / DEVLOOP_RUNNER_CLI sets the run-wide DEFAULT coding agent
+const CODING_AGENTS: readonly CodingAgent[] = ["claude", "codex", "opencode"];
+const CODING_AGENT_SET = new Set<string>(CODING_AGENTS);
+const isCodingAgent = (v: unknown): v is CodingAgent => typeof v === "string" && CODING_AGENT_SET.has(v);
+
+// Level 1 (codingAgent) + level 2 (model + thinking/reasoning effort, in that coding agent's own
+// value space). This is what every agent fire resolves to and what commandFor() renders.
+type LaunchProfile = { codingAgent: CodingAgent; model?: string; effort?: string };
+
+// Per-coding-agent default model + effort — projects.json `codingAgentDefaults.<codingAgent>`.
+type CodingAgentDefault = { model?: string; effort?: string };
+
+// The two-level per-agent config — projects.json `agents.<agent>`: level 1 = codingAgent,
+// level 2 = model + effort. Strings are validated/normalized at resolve time.
+type AgentLaunchConfig = { codingAgent?: string; model?: string; effort?: string };
+
+// Back-compat per-agent maps (pre-two-level). String ⇒ same value for every coding agent;
+// object ⇒ per-coding-agent. Still honored as a fallback BELOW agents{} and ABOVE codingAgentDefaults.
 type ModelConfigValue = string | {
   model?: string;
   claude?: string;
   codex?: string;
+  opencode?: string;
   effort?: string;
   claudeEffort?: string;
   codexEffort?: string;
+  opencodeEffort?: string;
 };
 type EffortConfigValue = string | {
   effort?: string;
   claude?: string;
   codex?: string;
+  opencode?: string;
   claudeEffort?: string;
   codexEffort?: string;
+  opencodeEffort?: string;
 };
 
 const AGENT_SET = new Set<string>(VALID_AGENTS);
@@ -55,46 +82,60 @@ const DEFAULT_INTERVALS: Record<Agent, number> = {
   architect: 24 * 60 * 60_000,
   communication: 24 * 60 * 60_000,
 };
-const DEFAULT_LAUNCH_PROFILES: Record<Agent, Record<RunnerCli, LaunchProfile>> = {
+// Built-in role defaults, per coding agent — the floor beneath codingAgentDefaults{}, the back-compat
+// models{}/efforts{} maps, and agents{}. opencode model names are provider-specific and unknown to the
+// scheduler, so its built-in is empty ({} ⇒ opencode's own default) — pin one via codingAgentDefaults
+// or agents{}.
+const DEFAULT_LAUNCH_PROFILES: Record<Agent, Record<CodingAgent, CodingAgentDefault>> = {
   pm: {
     claude: { model: "opus", effort: "max" },
     codex: { model: "gpt-5.5", effort: "xhigh" },
+    opencode: {},
   },
   qa: {
     claude: { model: "sonnet", effort: "high" },
     codex: { model: "gpt-5.5", effort: "high" },
+    opencode: {},
   },
   dev: {
     claude: { model: "opus", effort: "max" },
     codex: { model: "gpt-5.5", effort: "xhigh" },
+    opencode: {},
   },
   "senior-dev": {
     claude: { model: "claude-opus-4-8", effort: "max" },
     codex: { model: "gpt-5.5", effort: "xhigh" },
+    opencode: {},
   },
   "junior-dev": {
     claude: { model: "claude-sonnet-4-6", effort: "high" },
     codex: { model: "gpt-5.5", effort: "high" },
+    opencode: {},
   },
   sweep: {
     claude: { model: "sonnet", effort: "high" },
     codex: { model: "gpt-5.5", effort: "high" },
+    opencode: {},
   },
   reflect: {
     claude: { model: "opus", effort: "xhigh" },
     codex: { model: "gpt-5.5", effort: "xhigh" },
+    opencode: {},
   },
   ops: {
     claude: { model: "sonnet", effort: "high" },
     codex: { model: "gpt-5.5", effort: "high" },
+    opencode: {},
   },
   architect: {
     claude: { model: "opus", effort: "xhigh" },
     codex: { model: "gpt-5.5", effort: "xhigh" },
+    opencode: {},
   },
   communication: {
     claude: { model: "sonnet", effort: "high" },
     codex: { model: "gpt-5.5", effort: "high" },
+    opencode: {},
   },
 };
 
@@ -102,6 +143,11 @@ type ProjectsConfig = {
   defaultProject?: string;
   projects?: Record<string, {
     devSplit?: boolean;
+    // Two-level launch config (conventions §11 / config-schema):
+    defaultCodingAgent?: string;                                       // project-wide level-1 default coding agent
+    codingAgentDefaults?: Partial<Record<CodingAgent, CodingAgentDefault>>; // per-coding-agent default model + effort
+    agents?: Partial<Record<Agent, AgentLaunchConfig>>;               // per-agent: codingAgent + model + effort
+    // Back-compat per-agent maps (still honored, below agents{} / above codingAgentDefaults):
     models?: Partial<Record<Agent, ModelConfigValue>>;
     efforts?: Partial<Record<Agent, EffortConfigValue>>;
     repoPath?: string;
@@ -110,7 +156,8 @@ type ProjectsConfig = {
 };
 
 type Options = {
-  cli: RunnerCli;
+  cli: RunnerCli;        // run-wide DEFAULT coding agent (from --cli / DEVLOOP_RUNNER_CLI); per-agent config can override it
+  cliExplicit: boolean;  // true when --cli was passed on the command line (beats config defaultCodingAgent)
   agents: Agent[];
   intervals: Record<Agent, number>;
   once: boolean;
@@ -124,6 +171,7 @@ type Options = {
   logDir?: string;
   claudeBin: string;
   codexBin: string;
+  opencodeBin: string;
   codexSafe: boolean;
   maxFires: number;     // 0 = unlimited; else stop after N total fires (cost guard)
   mcpConfig?: string;   // claude: explicit MCP config; defaults to <cwd>/.mcp.json if present
@@ -153,7 +201,8 @@ Cadence is owned by this process, not by Claude/Codex /loop. Each fire shells ou
   codex exec ... <agent skill prompt>
 
 Options:
-  --cli claude|codex          CLI to invoke (default: claude)
+  --cli claude|codex|opencode run-wide DEFAULT coding agent (default: claude). Per-agent
+                              agents{}.codingAgent / project defaultCodingAgent override it, so one run can mix CLIs.
   --project <key>             project key; optional. Defaults to DEVLOOP_PROJECT, then cwd→repo match; fails if unresolved
   --agents <list>             comma list of agents or groups: core, split, legacy, single-dev, outward, all
   --agent <name>              add one agent; may repeat
@@ -169,10 +218,12 @@ Options:
   --max-fires <n>             stop after N total agent fires, then drain + exit (cost guard; default 0 = unlimited)
   --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
   --cli-arg <arg>             pass an extra arg to the selected CLI before the prompt; may repeat
-                              (CLI binaries: set DEVLOOP_CLAUDE_BIN / DEVLOOP_CODEX_BIN to override)
+                              (CLI binaries: set DEVLOOP_CLAUDE_BIN / DEVLOOP_CODEX_BIN / DEVLOOP_OPENCODE_BIN to override)
 
 Durations accept ms/s/m/h/d. Default agents: core = pm,qa,senior-dev,junior-dev,sweep.
-The scheduler also applies per-agent model/effort defaults; override with projects.json models/efforts.
+Per-agent launch is two-level (projects.json): agents{}.<agent> picks { codingAgent, model, effort };
+codingAgentDefaults{}.<codingAgent> sets per-coding-agent default { model, effort }. The legacy
+models{}/efforts{} maps still apply. Resolution: agents{} > models/efforts > codingAgentDefaults > built-in.
 Use --agents legacy (or --agents pm,qa,dev,sweep) for the old single-dev loop.`);
 }
 
@@ -230,8 +281,10 @@ function parseArgs(argv: string[]): Options {
     root: process.env.DEVLOOP_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT || defaultRoot(),
     dataDir: defaultDataDir(),
     hubDb: defaultHubDb(),
+    cliExplicit: false,
     claudeBin: process.env.DEVLOOP_CLAUDE_BIN || "claude",
     codexBin: process.env.DEVLOOP_CODEX_BIN || "codex",
+    opencodeBin: process.env.DEVLOOP_OPENCODE_BIN || "opencode",
     codexSafe: false,
     maxFires: 0,
     extraArgs,
@@ -243,8 +296,9 @@ function parseArgs(argv: string[]): Options {
     if (a === "--help" || a === "-h") { usage(); process.exit(0); }
     else if (a === "--cli") {
       const v = next();
-      if (v !== "claude" && v !== "codex") die("--cli must be claude or codex");
+      if (!isCodingAgent(v)) die("--cli must be claude, codex, or opencode");
       opts.cli = v;
+      opts.cliExplicit = true;
     } else if (a === "--project") opts.project = next();
     else if (a === "--agents") agentSpecs.push(next());
     else if (a === "--agent") agentSpecs.push(next());
@@ -323,15 +377,19 @@ function modelOverride(v: ModelConfigValue | undefined, cli: RunnerCli): string 
   return stringValue(v[cli]) ?? stringValue(v.model);
 }
 
-function effortFromModelOverride(v: ModelConfigValue | undefined, cli: RunnerCli): string | undefined {
-  if (!v || typeof v === "string") return undefined;
-  return stringValue(cli === "claude" ? v.claudeEffort : v.codexEffort) ?? stringValue(v.effort);
+function perCliEffort(v: { claudeEffort?: string; codexEffort?: string; opencodeEffort?: string }, cli: CodingAgent): string | undefined {
+  return cli === "claude" ? v.claudeEffort : cli === "codex" ? v.codexEffort : v.opencodeEffort;
 }
 
-function effortOverride(v: EffortConfigValue | undefined, cli: RunnerCli): string | undefined {
+function effortFromModelOverride(v: ModelConfigValue | undefined, cli: CodingAgent): string | undefined {
+  if (!v || typeof v === "string") return undefined;
+  return stringValue(perCliEffort(v, cli)) ?? stringValue(v.effort);
+}
+
+function effortOverride(v: EffortConfigValue | undefined, cli: CodingAgent): string | undefined {
   if (!v) return undefined;
   if (typeof v === "string") return stringValue(v);
-  return stringValue(cli === "claude" ? v.claudeEffort : v.codexEffort)
+  return stringValue(perCliEffort(v, cli))
     ?? stringValue(v[cli])
     ?? stringValue(v.effort);
 }
@@ -350,15 +408,41 @@ function normalizeEffort(cli: RunnerCli, effort: string | undefined): string | u
   return cli === "codex" && normalized === "max" ? "xhigh" : normalized;
 }
 
+type ProjectCfg = NonNullable<ProjectsConfig["projects"]>[string];
+
+// Level 1: which coding agent runs THIS agent. Precedence: per-agent agents{}.codingAgent >
+// an explicit --cli flag > project defaultCodingAgent > the run default (DEVLOOP_RUNNER_CLI / claude).
+function resolveCodingAgent(opts: Options, projectCfg: ProjectCfg | undefined, agent: Agent): CodingAgent {
+  const perAgent = projectCfg?.agents?.[agent]?.codingAgent;
+  if (isCodingAgent(perAgent)) return perAgent;
+  if (opts.cliExplicit) return opts.cli;
+  const projDefault = projectCfg?.defaultCodingAgent;
+  if (isCodingAgent(projDefault)) return projDefault;
+  return opts.cli;
+}
+
+// Level 1 (codingAgent) + level 2 (model + effort). Model/effort precedence, most specific first:
+// agents{} (two-level) > models{}/efforts{} (back-compat) > codingAgentDefaults{} > built-in role default.
 function resolveLaunchProfile(opts: Options, cfg: ProjectsConfig | null, project: string, agent: Agent): LaunchProfile {
-  const defaults = DEFAULT_LAUNCH_PROFILES[agent][opts.cli];
   const projectCfg = cfg?.projects?.[project];
+  const codingAgent = resolveCodingAgent(opts, projectCfg, agent);
+  const builtin = DEFAULT_LAUNCH_PROFILES[agent][codingAgent];
+  const agentCfg = projectCfg?.agents?.[agent];
+  const caDefault = projectCfg?.codingAgentDefaults?.[codingAgent];
   const modelCfg = projectCfg?.models?.[agent];
   const effortCfg = projectCfg?.efforts?.[agent];
-  return {
-    model: modelOverride(modelCfg, opts.cli) ?? defaults.model,
-    effort: normalizeEffort(opts.cli, effortFromModelOverride(modelCfg, opts.cli) ?? effortOverride(effortCfg, opts.cli) ?? defaults.effort),
-  };
+  const model =
+    stringValue(agentCfg?.model)
+    ?? modelOverride(modelCfg, codingAgent)
+    ?? stringValue(caDefault?.model)
+    ?? builtin.model;
+  const effort =
+    stringValue(agentCfg?.effort)
+    ?? effortFromModelOverride(modelCfg, codingAgent)
+    ?? effortOverride(effortCfg, codingAgent)
+    ?? stringValue(caDefault?.effort)
+    ?? builtin.effort;
+  return { codingAgent, model, effort: normalizeEffort(codingAgent, effort) };
 }
 
 function stripFrontmatter(raw: string): string {
@@ -384,7 +468,7 @@ Scheduler context:
 - project: ${project}
 - agent: ${agent}
 - selected agents: ${opts.agents.join(",")}
-- runner CLI: ${opts.cli}
+- coding agent: ${profile.codingAgent}
 - launch model: ${profile.model ?? "(cli default)"}
 - launch effort: ${profile.effort ?? "(cli default)"}
 - DEVLOOP_DEV_SPLIT: ${split ? "true" : "false"}
@@ -410,7 +494,9 @@ const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",
 
 function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile): { command: string; args: string[] } {
   const devSplit = runtimeDevSplit(opts) ? "true" : "false";
-  if (opts.cli === "claude") {
+  // The CLI is the per-AGENT resolved coding agent (level 1), NOT the run-wide --cli — so one run can
+  // mix claude/codex/opencode panes. Model + effort (level 2) are rendered in this coding agent's format.
+  if (profile.codingAgent === "claude") {
     // explicit --mcp-config file wins; otherwise inject the hub inline so a fresh project needs no .mcp.json.
     const mcpArg = opts.mcpConfig ?? JSON.stringify({
       mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb, DEVLOOP_DEV_SPLIT: devSplit } } },
@@ -427,21 +513,35 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
       ],
     };
   }
+  if (profile.codingAgent === "codex") {
+    const args = [
+      "exec",
+      ...(profile.model ? ["--model", profile.model] : []),
+      ...(profile.effort ? ["-c", `model_reasoning_effort=${tomlString(profile.effort)}`] : []),
+      ...opts.extraArgs,
+      "-c", `mcp_servers.dev-loop-hub.command=${tomlString(hubNode)}`,
+      "-c", `mcp_servers.dev-loop-hub.args=${tomlStringArray([serverEntry])}`,
+      "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR=${tomlString(agent)}`,
+      "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT=${tomlString(project)}`,
+      "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_HUB_DB=${tomlString(opts.hubDb)}`,
+      "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_DEV_SPLIT=${tomlString(devSplit)}`,
+    ];
+    if (!opts.codexSafe) args.push("--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check");
+    args.push(prompt);
+    return { command: opts.codexBin, args };
+  }
+  // opencode (best-effort; docs/PORTABILITY.md). opencode registers MCP via the operator's MERGED
+  // config (config/mcp.opencode.json.example), not inline like claude/codex — so the scheduler only
+  // passes the model and relies on the spawn env (set in runAgent) for per-pane identity. opencode's
+  // reasoning/effort flag is version-specific, so effort is NOT auto-passed; use --cli-arg if needed.
+  // The runtime split switch still rides the env (DEVLOOP_DEV_SPLIT), same as the env identity.
   const args = [
-    "exec",
+    "run",
     ...(profile.model ? ["--model", profile.model] : []),
-    ...(profile.effort ? ["-c", `model_reasoning_effort=${tomlString(profile.effort)}`] : []),
     ...opts.extraArgs,
-    "-c", `mcp_servers.dev-loop-hub.command=${tomlString(hubNode)}`,
-    "-c", `mcp_servers.dev-loop-hub.args=${tomlStringArray([serverEntry])}`,
-    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR=${tomlString(agent)}`,
-    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT=${tomlString(project)}`,
-    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_HUB_DB=${tomlString(opts.hubDb)}`,
-    "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_DEV_SPLIT=${tomlString(devSplit)}`,
+    prompt,
   ];
-  if (!opts.codexSafe) args.push("--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check");
-  args.push(prompt);
-  return { command: opts.codexBin, args };
+  return { command: opts.opencodeBin, args };
 }
 
 function displayCommand(command: string, args: string[], prompt: string): string {
@@ -466,7 +566,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   };
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
-    console.log(`[dry-run] ${agent}: cwd=${cwd} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}`);
+    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
     return 0;
   }
@@ -512,7 +612,7 @@ async function main(): Promise<void> {
   console.log(`dev-loop run: agents=${opts.agents.map((a) => `${a}@${formatDuration(opts.intervals[a])}`).join(", ")}`);
   console.log(`dev-loop run: launch=${opts.agents.map((a) => {
     const p = resolveLaunchProfile(opts, cfg, project, a);
-    return `${a}:${p.model ?? "cli-default"}/${p.effort ?? "cli-default"}`;
+    return `${a}:${p.codingAgent}:${p.model ?? "cli-default"}/${p.effort ?? "cli-default"}`;
   }).join(", ")}`);
 
   if (opts.once) {

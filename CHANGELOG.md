@@ -4,6 +4,8 @@ All notable changes to the dev-loop plugin. Most of these landed from **live-loo
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
 ## Unreleased
+
+## 0.23.4 - 2026-07-01
 - Made split-dev the scheduler default: `core` now launches `pm`, `qa`, `senior-dev`,
   `junior-dev`, and `sweep`; legacy single-dev remains available through `--agents legacy` or an
   explicit `pm,qa,dev,sweep` list. The runner injects `DEVLOOP_DEV_SPLIT=true` for split launches so
@@ -14,6 +16,14 @@ experience** — a real failure observed while the agents ran, then hardened int
   `launch=<agent>:<model>/<effort>` summary, and lets `projects.json` `models` / `efforts` override
   the defaults. This pins junior-dev to Sonnet/high under Claude instead of inheriting the account's
   default model.
+- Extended per-agent launch into a **two-level config** in `projects.json`: `agents.<agent>` picks the
+  coding agent (`codingAgent`, level 1) plus its `model`/`effort` (level 2), so a single `dev-loop run`
+  can mix Claude / Codex / opencode panes. `codingAgentDefaults.<codingAgent>` sets a default
+  `{ model, effort }` per coding agent, and `defaultCodingAgent` a project-wide default. `--cli` now
+  also accepts `opencode` (launched via `opencode run`; MCP registered through the operator's merged
+  opencode config). The legacy `models` / `efforts` maps keep working unchanged — resolution is
+  `agents{}` > `models`/`efforts` > `codingAgentDefaults` > built-in role default — and the launch
+  summary now prints `<agent>:<codingAgent>:<model>/<effort>`.
 
 ## 0.23.3 — Standalone config + daemon autostart
 - Hardened `dev-loop run` project resolution: when neither `--project` / `DEVLOOP_PROJECT` nor the

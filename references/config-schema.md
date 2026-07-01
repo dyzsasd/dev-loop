@@ -70,6 +70,17 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "architect": "xhigh",
         "communication": "high"
       },
+      "defaultCodingAgent": "claude", // optional: project-wide DEFAULT coding agent ("claude"|"codex"|"opencode") used when an agent sets no codingAgent and no --cli is passed. An explicit `dev-loop run --cli ...` beats it.
+      "codingAgentDefaults": {        // optional: per-coding-agent DEFAULT { model, effort }. Fills any agent resolved to that coding agent that doesn't set its own model/effort. Keyed by coding agent.
+        "claude":   { "model": "opus",    "effort": "high" },
+        "codex":    { "model": "gpt-5.5", "effort": "high" },
+        "opencode": { "model": "anthropic/claude-opus-4-8" }
+      },
+      "agents": {                     // optional: TWO-LEVEL per-agent launch config. Level 1 = codingAgent (which CLI runs THIS agent); level 2 = model + effort, in that coding agent's own value space. One run can mix CLIs (e.g. pm on claude, junior-dev on codex).
+        "pm":         { "codingAgent": "claude", "model": "opus",              "effort": "max"  },
+        "senior-dev": { "codingAgent": "claude", "model": "claude-opus-4-8",   "effort": "max"  },
+        "junior-dev": { "codingAgent": "claude", "model": "claude-sonnet-4-6", "effort": "high" }
+      },
 
       "testEnv": {                    // where QA + verification run
         "baseUrl":     "https://monpick.vercel.app",
@@ -201,6 +212,29 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `junior-dev=high`, `qa=high`, `sweep=high`, `reflect=xhigh`, `architect=xhigh`,
   `ops=high`, `communication=high`. Claude accepts `max`; Codex uses `xhigh` for that
   tier, and the scheduler normalizes `extrahigh` / `extra-high` to `xhigh`.
+- **Two-level launch config — `agents` / `codingAgentDefaults` / `defaultCodingAgent`**
+  (all optional; consumed by **`dev-loop run`** at launch). The model/effort flag *format*
+  differs per coding agent (Claude: `--model <m> --effort <e>`; Codex:
+  `--model <m> -c model_reasoning_effort=<e>`; opencode: `opencode run --model <m>`), so the
+  config is **two-level**: pick the coding agent first, then its model + effort.
+  - **`agents.<agent>`** = `{ codingAgent?, model?, effort? }`. **Level 1** `codingAgent`
+    (`"claude"|"codex"|"opencode"`) chooses *which CLI runs that agent* — so a single
+    `dev-loop run` can mix CLIs (e.g. `pm` on Claude, `junior-dev` on Codex). **Level 2**
+    `model`/`effort` are expressed in that coding agent's own value space.
+  - **`codingAgentDefaults.<codingAgent>`** = `{ model?, effort? }` — the **default model +
+    effort per supported coding agent**, applied to any agent resolved to that coding agent
+    that doesn't set its own. This is where you set, once, "every Claude pane is Opus/high,
+    every Codex pane is gpt-5.5/high."
+  - **`defaultCodingAgent`** (`"claude"|"codex"|"opencode"`) — the project-wide level-1
+    default when an agent sets no `codingAgent` **and** no `--cli` is passed. An explicit
+    `dev-loop run --cli <x>` beats it; a per-agent `agents.<a>.codingAgent` beats both.
+  - **Resolution (most specific wins):** coding agent = `agents.<a>.codingAgent` → explicit
+    `--cli` → `defaultCodingAgent` → `DEVLOOP_RUNNER_CLI`/`claude`. model & effort =
+    `agents.<a>` → the back-compat `models`/`efforts` maps → `codingAgentDefaults.<ca>` →
+    built-in role default. The older `models`/`efforts` maps keep working unchanged (they sit
+    between `agents{}` and `codingAgentDefaults{}`), so existing configs need no migration.
+    opencode is launched best-effort (`opencode run`; its MCP is registered via the
+    operator's merged opencode config, not inline — see `docs/PORTABILITY.md`).
 - **Two-tier Dev** (`senior-dev` / `junior-dev`; conventions §21a): the default Dev model for new
   projects and for `dev-loop run --agents core`. It replaces the single `dev` pane with two panes:
   a **`senior-dev`** pane (`claude-opus-4-8`, effort **max**)
