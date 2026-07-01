@@ -293,6 +293,43 @@ Override only what your account or budget needs in `projects.json`:
 Codex uses `xhigh` as the strongest scheduler-applied tier. `--cli-arg` is still appended
 after the defaults for a temporary override.
 
+### Two-level config: pick the coding agent per agent, then its model + effort
+
+`--cli` sets one coding agent for the whole run. To run **different agents on different
+coding agents** (e.g. PM on Claude, Junior-Dev on Codex) — and because each CLI's
+model/effort flags differ — use the two-level `agents` / `codingAgentDefaults` config:
+
+```jsonc
+// projects.json → projects.<key>
+"defaultCodingAgent": "claude",   // project-wide default CLI (an explicit --cli beats it)
+"codingAgentDefaults": {          // default { model, effort } PER coding agent
+  "claude": { "model": "opus",    "effort": "high" },
+  "codex":  { "model": "gpt-5.5", "effort": "high" }
+},
+"agents": {                       // per-agent: level 1 = codingAgent, level 2 = model + effort
+  "pm":         { "codingAgent": "claude", "model": "opus",              "effort": "max"  },
+  "senior-dev": { "codingAgent": "claude", "model": "claude-opus-4-8",   "effort": "max"  },
+  "junior-dev": { "codingAgent": "codex",  "model": "gpt-5.5",           "effort": "high" }
+}
+```
+
+A dry-run prints the resolved coding agent per pane:
+
+```text
+dev-loop run: launch=pm:claude:opus/max, junior-dev:codex:gpt-5.5/high, sweep:claude:opus/high
+```
+
+**Resolution (most specific wins):**
+
+- **coding agent:** `agents.<a>.codingAgent` → explicit `--cli` → `defaultCodingAgent` → `DEVLOOP_RUNNER_CLI` / `claude`
+- **model & effort:** `agents.<a>` → the back-compat `models` / `efforts` maps → `codingAgentDefaults.<ca>` → built-in role default
+
+The older `models` / `efforts` maps still work unchanged — they slot between `agents{}` and
+`codingAgentDefaults{}`, so existing configs need no migration. `opencode` is accepted as a
+coding agent and launched via `opencode run` (best-effort: its MCP is registered through your
+merged opencode config, not injected inline — see [`PORTABILITY.md`](PORTABILITY.md)). Override
+binaries with `DEVLOOP_CLAUDE_BIN` / `DEVLOOP_CODEX_BIN` / `DEVLOOP_OPENCODE_BIN`.
+
 ---
 
 ## 4. Cadence

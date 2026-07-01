@@ -7,30 +7,19 @@
       "mode": "dry-run",
       "autonomy": "ask",
       "devSplit": true,
-      "models": {
-        "senior-dev": {
-          "claude": "claude-opus-4-8",
-          "codex": "gpt-5.5"
-        },
-        "junior-dev": {
-          "claude": "claude-sonnet-4-6",
-          "codex": "gpt-5.5"
-        },
-        "communication": {
-          "claude": "sonnet",
-          "codex": "gpt-5.5"
-        }
+      "_launch_note": "Two-level launch config (config-schema.md): defaultCodingAgent + codingAgentDefaults set per-coding-agent defaults; agents{} picks { codingAgent, model, effort } per agent (one run can mix CLIs). The legacy models{}/efforts{} maps still work — see the multi-repo-linear example below.",
+      "defaultCodingAgent": "claude",
+      "codingAgentDefaults": {
+        "claude": { "model": "opus", "effort": "high" },
+        "codex": { "model": "gpt-5.5", "effort": "high" }
       },
-      "efforts": {
-        "pm": "max",
-        "senior-dev": {
-          "claude": "max",
-          "codex": "xhigh"
-        },
-        "junior-dev": "high",
-        "qa": "high",
-        "sweep": "high",
-        "communication": "high"
+      "agents": {
+        "pm": { "codingAgent": "claude", "model": "opus", "effort": "max" },
+        "senior-dev": { "codingAgent": "claude", "model": "claude-opus-4-8", "effort": "max" },
+        "junior-dev": { "codingAgent": "claude", "model": "claude-sonnet-4-6", "effort": "high" },
+        "qa": { "codingAgent": "claude", "model": "sonnet", "effort": "high" },
+        "sweep": { "codingAgent": "claude", "model": "sonnet", "effort": "high" },
+        "communication": { "codingAgent": "claude", "model": "sonnet", "effort": "high" }
       },
       "repoPath": "/abs/path/to/product-repo",
       "strategyDoc": "docs/strategy.md",

@@ -33,8 +33,8 @@ try {
   const defaultCore = run(["--cli", "claude", "--once", "--dry-run", ...common]);
   ok(defaultCore.code === 0, "default scheduler exits 0");
   ok(/agents=pm@5m, qa@5m, senior-dev@5m, junior-dev@5m, sweep@30m/.test(defaultCore.out), "default core uses split-dev agents");
-  ok(/launch=pm:opus\/max, qa:sonnet\/high, senior-dev:claude-opus-4-8\/max, junior-dev:claude-sonnet-4-6\/high, sweep:sonnet\/high/.test(defaultCore.out),
-    "default core applies per-agent Claude model/effort profiles");
+  ok(/launch=pm:claude:opus\/max, qa:claude:sonnet\/high, senior-dev:claude:claude-opus-4-8\/max, junior-dev:claude:claude-sonnet-4-6\/high, sweep:claude:sonnet\/high/.test(defaultCore.out),
+    "default core applies per-agent Claude coding-agent/model/effort profiles");
   ok(/devSplit=runtime/.test(defaultCore.out), "default core marks split-dev runtime mode");
   ok(/DEVLOOP_DEV_SPLIT":"true"/.test(defaultCore.out), "default core injects DEVLOOP_DEV_SPLIT=true");
   ok(/junior-dev: claude .* --model claude-sonnet-4-6 --effort high /.test(defaultCore.out),
@@ -96,13 +96,59 @@ try {
   }));
   const overrideClaude = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
   ok(overrideClaude.code === 0, "claude model/effort override exits 0");
-  ok(/launch=pm:claude-sonnet-4-6\/xhigh/.test(overrideClaude.out), "claude model/effort override is reflected in launch summary");
+  ok(/launch=pm:claude:claude-sonnet-4-6\/xhigh/.test(overrideClaude.out), "claude model/effort override is reflected in launch summary");
   ok(/pm: claude .* --model claude-sonnet-4-6 --effort xhigh /.test(overrideClaude.out), "claude command applies project model/effort override");
 
   const overrideCodex = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "pm", ...common]);
   ok(overrideCodex.code === 0, "codex model/effort override exits 0");
-  ok(/launch=pm:gpt-5\.5-mini\/xhigh/.test(overrideCodex.out), "codex model/effort override is reflected in launch summary");
+  ok(/launch=pm:codex:gpt-5\.5-mini\/xhigh/.test(overrideCodex.out), "codex model/effort override is reflected in launch summary");
   ok(/pm: codex exec --model gpt-5\.5-mini -c 'model_reasoning_effort="xhigh"'/.test(overrideCodex.out), "codex command applies project model/effort override");
+
+  // --- Two-level launch config: agents{}.codingAgent (L1) + model/effort (L2),
+  //     codingAgentDefaults{} per-coding-agent defaults, defaultCodingAgent, mixed-CLI runs. ---
+  writeFileSync(join(data, "projects.json"), JSON.stringify({
+    defaultProject: "fallback",
+    projects: {
+      demo: {
+        repoPath: repo,
+        codingAgentDefaults: {
+          claude: { model: "haiku", effort: "low" },
+          codex: { model: "gpt-5.5-codex", effort: "medium" },
+        },
+        agents: {
+          "junior-dev": { codingAgent: "codex", model: "gpt-5.5", effort: "high" }, // different CLI than --cli
+          "senior-dev": { model: "claude-opus-4-8", effort: "max" },                 // inherits run CLI (claude)
+          "pm": { codingAgent: "opencode", model: "anthropic/claude-opus-4-8" },     // opencode pane
+        },
+        models: { qa: { claude: "sonnet" } }, // back-compat map still applies where agents{} doesn't
+      },
+      fallback: { repoPath: otherRepo },
+    },
+  }));
+  const twoLevel = run(["--cli", "claude", "--once", "--dry-run", "--codex-safe", "--agents", "pm,qa,senior-dev,junior-dev,sweep", ...common]);
+  ok(twoLevel.code === 0, "two-level config dry-run exits 0");
+  ok(/junior-dev:codex:gpt-5\.5\/high/.test(twoLevel.out), "junior-dev resolves to its own codingAgent=codex, overriding --cli claude");
+  ok(/junior-dev: codex exec --model gpt-5\.5 -c 'model_reasoning_effort="high"'/.test(twoLevel.out), "junior-dev renders a codex command inside a claude run (mixed-CLI)");
+  ok(/senior-dev:claude:claude-opus-4-8\/max/.test(twoLevel.out), "senior-dev inherits the run CLI (claude) with its agents{} model/effort");
+  ok(/senior-dev: claude .* --model claude-opus-4-8 --effort max /.test(twoLevel.out), "senior-dev renders a claude command with its pinned model/effort");
+  ok(/pm:opencode:anthropic\/claude-opus-4-8\//.test(twoLevel.out), "pm resolves to codingAgent=opencode with its model");
+  ok(/pm: opencode run --model anthropic\/claude-opus-4-8 /.test(twoLevel.out), "pm renders an opencode run command");
+  ok(/sweep:claude:haiku\/low/.test(twoLevel.out), "sweep takes the per-coding-agent default (claude haiku/low) from codingAgentDefaults");
+  ok(/qa:claude:sonnet\/low/.test(twoLevel.out), "qa uses back-compat models{} for model + codingAgentDefaults for effort");
+
+  writeFileSync(join(data, "projects.json"), JSON.stringify({
+    defaultProject: "fallback",
+    projects: {
+      demo: { repoPath: repo, defaultCodingAgent: "codex" },
+      fallback: { repoPath: otherRepo },
+    },
+  }));
+  const defCoding = run(["--once", "--dry-run", "--codex-safe", "--agents", "sweep", ...common]);
+  ok(defCoding.code === 0 && /sweep:codex:/.test(defCoding.out), "project defaultCodingAgent=codex applies when --cli is not passed");
+  const explicitBeatsDefault = run(["--cli", "claude", "--once", "--dry-run", "--agents", "sweep", ...common]);
+  ok(/sweep:claude:/.test(explicitBeatsDefault.out), "an explicit --cli claude beats project defaultCodingAgent=codex");
+  const cliOpencode = run(["--cli", "opencode", "--once", "--dry-run", "--agents", "sweep", ...common]);
+  ok(cliOpencode.code === 0 && /sweep:opencode:/.test(cliOpencode.out), "--cli opencode is accepted as a run-wide coding agent");
 
   const bad = run(["--cli", "claude", "--once", "--dry-run", "--agents", "nope", ...common]);
   ok(bad.code === 2 && /unknown agent\/group 'nope'/.test(bad.out), "unknown agent fails with a usage error");
