@@ -77,11 +77,23 @@ cd hub && npm install && npm run build       # 重建 dist + 重新物化 skills
 | 跑 loop | `dev-loop run --cli codex …` | `dev-loop run --cli claude …`（同一套），或交互 `/dev-loop:*` + `/loop` |
 | `agentFamily` | 调度器需要（actor→编剧 SKILL 重映射） | 调度器需要；交互直接点名 `/dev-loop:story-architect-agent` 则不经 family |
 
-### Codex —— 不装 plugin
+### Codex —— 不需要 dev-loop 插件（但支持 Agent Skills）
 ```bash
 npm i -g @openai/codex && codex login && codex --version
-# 完事。跑 loop 见 §5（dev-loop run --cli codex）。
+# 跑 loop 用调度器（§5，dev-loop run --cli codex），不需要任何插件/skill。
 ```
+
+**可选：把短剧 skill 装进 Codex（交互式调用，尤其 `$init-screenplay`）。** Codex 0.142+ 支持 Agent Skills（`~/.codex/skills/<name>/SKILL.md`，用 `$name` 调用，`/skills` 浏览）。我们的 SKILL 格式与之一致，一条命令装好（把 `${CLAUDE_PLUGIN_ROOT}` 路径 token 换成你的 checkout，skill 才能解析到脚本）：
+```bash
+export DL=/Users/shuai/workspace/dev-loop
+for s in init-screenplay story-architect-agent screenwriter-agent screenplay-editor-agent; do
+  mkdir -p ~/.codex/skills/"$s"
+  sed "s#\${CLAUDE_PLUGIN_ROOT}#$DL#g" "$DL/skills/$s/SKILL.md" > ~/.codex/skills/"$s"/SKILL.md
+done
+# 重启 codex → 会话里 $init-screenplay（访谈式 init），或 /skills 浏览。
+```
+> 这是**拷贝**（路径已 bake 进去）——`git pull` 更新 skill 后重跑这段刷新。写文件时交互式 Codex 会问你批准，approve 即可。
+> 跑 loop 仍建议用调度器（actor 身份更干净）；这些 skill 主要是给交互式 init/临时调用用的。
 
 ### Claude Code —— 装**源码版**插件（仅交互式需要）
 released 的 npm 插件**没有**短剧三个 agent（它们在本分支、未合并），所以要从**源码 checkout** 装：
