@@ -136,7 +136,19 @@ stub.close();
 ok(okR.code === 0 && okR.out.includes("DOCTOR_OK")
    && okR.out.includes("registers dev-loop-hub") && okR.out.includes("daemon /api/health reachable") && okR.out.includes("Claude SessionStart hook compatibility present"),
    "doctor: service context wired → .mcp.json + daemon health + optional Claude hook PASS, DOCTOR_OK (autostart may still be operator-installed)");
-try { for (const d of [recRoot, bareRepo, emptyRun, emptyRoot, okRepo, okRoot, okRun]) rmSync(d, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
+// DX regression: the canonical INSTALLED shape mcp-merge/init-service write — {command:"dev-loop",
+// args:["serve"]} (a PATH bin, no on-disk server path) — used to permanently WARN "no server.ts/.js arg …
+// re-run init to repair", and re-running init reproduces the identical entry: an unfixable false alarm.
+const binRepo = mkdtempSync(join(tmpdir(), "dl81-binrepo-"));
+writeFileSync(join(binRepo, ".mcp.json"), JSON.stringify({ mcpServers: { "dev-loop-hub": { command: "dev-loop", args: ["serve"], env: { DEVLOOP_ACTOR: "${DEVLOOP_ACTOR:-operator}", DEVLOOP_PROJECT: "${DEVLOOP_PROJECT:-alpha}" } } } }));
+const cfgBin = join(recRoot, "bin.projects.json");
+writeFileSync(cfgBin, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: binRepo } } }));
+const binR = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: cfgBin, DEVLOOP_RUN_DIR: emptyRun, DEVLOOP_PLUGIN_ROOT: emptyRoot });
+ok(binR.code === 0 && binR.out.includes("registers dev-loop-hub → dev-loop serve (DEVLOOP_ACTOR wired)"),
+   "doctor: the installed `dev-loop serve` bin shape PASSes the .mcp.json reconcile");
+ok(!/\.mcp\.json — the dev-loop-hub entry/.test(binR.out),
+   "doctor: the installed bin shape no longer trips the 're-run init to repair' false alarm");
+try { for (const d of [recRoot, bareRepo, emptyRun, emptyRoot, okRepo, okRoot, okRun, binRepo]) rmSync(d, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
 
 console.log(fails === 0 ? "\nHUB_ISOLATION_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

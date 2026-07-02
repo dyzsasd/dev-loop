@@ -1,0 +1,40 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 23.6 is the documented engines floor (hub/package.json); 24 is what releases use.
+        node: ["23.6.0", "24"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        working-directory: hub
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: hub
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: hub
+        run: npm test

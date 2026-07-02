@@ -201,7 +201,9 @@ Certain actions must never be performed by an agent. In the hub they have **no M
 - grant / revoke project membership or role,
 - flip `autonomy` (`ask`↔`full`) or `mode` (`dry-run`↔`live`),
 - enable the Linear mirror,
-- **publish a strategy/roadmap document draft→current** (§14, §16),
+- **publish a strategy/roadmap document draft→current** (§14, §16) — *(correction, as shipped:
+  no such `dev-loop-hub` CLI subcommand exists; the operator publishes via the MCP `doc.publish`
+  tool (`DEVLOOP_ACTOR=operator`) or the daemon web `/roadmap` page)*,
 - apply a §17 SKILL/conventions change (this remains a git commit — see §16).
 
 **Honest scope of this protection.** Because a determined/compromised agent can bypass MCP and write `hub.db` directly (§4), "no tool surface" defends against honest-but-buggy agents and prompt-injection-via-MCP — **not** a malicious process. That is why the *truly* unforgeable authorizations (self-modify, irreversible prod ops) are kept **outside** the hub entirely (§16), where the existing §17/§22/§23 firewalls already put them.
@@ -339,7 +341,7 @@ Note the MVP **does not** ship `agent_tokens`, `project_members`, a `labels` reg
 
 These are **not** MVP. LK5 is reinterpreted as "shape the schema so they can attach cleanly," not "build them into core."
 
-- **Versioned docs (P4).** `documents` + append-only `document_versions` with optimistic concurrency (`base_version != current` ⇒ `CONFLICT`, enforced server-side for `kind ∈ {strategy, roadmap}` so concurrent PM/Director edits can't silently lose updates). The §20 doc-base (Vision/Goals/Non-goals/Current state/Personas/Glossary/Decisions/Candidate-ideas) and the roadmap live here with `doc.history` / `doc.diff`. **Publication is operator-only (§9):** a doc carries `status ∈ {draft, current}`; agents (incl. the Director) may write **draft** versions, but only the operator flips `draft→current` via the CLI — this encodes LK8's "sign off before build" as a **persistent doc-state**, not a one-time event.
+- **Versioned docs (P4).** `documents` + append-only `document_versions` with optimistic concurrency (`base_version != current` ⇒ `CONFLICT`, enforced server-side — as shipped, for **every** doc `kind`, not just the `{strategy, roadmap}` scope originally proposed here — so concurrent PM/Director edits can't silently lose updates). The §20 doc-base (Vision/Goals/Non-goals/Current state/Personas/Glossary/Decisions/Candidate-ideas) and the roadmap live here with `doc.history` / `doc.diff`. **Publication is operator-only (§9):** a doc carries `status ∈ {draft, current}`; agents (incl. the Director) may write **draft** versions, but only the operator flips `draft→current` via the CLI — this encodes LK8's "sign off before build" as a **persistent doc-state**, not a one-time event.
 - **Discussion (P5 — SHIPPED v0.16.0, conventions §25).** `topics` / `posts` (per-project,
   attributable, per-round) — the **decision is INLINE** on the topic (`topics.decision` + `closed_at`,
   a 1:1 terminal conclusion), **not** a separate `decisions` table. "Topics addressed to me,
@@ -392,7 +394,7 @@ human-visibility only — never disaster recovery.**
 
 **The hub adds NO mechanical enforcement over §17, and we do not pretend it does.** SKILL/conventions files live on disk; agents keep `Bash`/`Edit` access; §17 remains a prompt-gated honor system backed by **operator git review**. The hub keeps it **exactly as strong as today — preserved, not strengthened**:
 
-- **No hub tool ever writes a SKILL / conventions / plugin file.** Document `kind` is constrained to `{strategy, roadmap, decisions, notes}` — none can name a SKILL or `conventions.md`. A §17 change is still a Reflect-drafted `[reflect-proposal]` ticket (`Improvement`+`pm`, `blocked`+`needs-pm`+`Bail-shape: external-prereq`), out of Dev's pick set, **applied by the operator as a git commit** (§17 verbatim).
+- **No hub tool ever writes a SKILL / conventions / plugin file.** Document `kind` is constrained to `{strategy, roadmap, decisions, notes, design}` (`design` added by the schema-v3 migration — multi-instance, one per module slug) — none can name a SKILL or `conventions.md`. A §17 change is still a Reflect-drafted `[reflect-proposal]` ticket (`Improvement`+`pm`, `blocked`+`needs-pm`+`Bail-shape: external-prereq`), out of Dev's pick set, **applied by the operator as a git commit** (§17 verbatim).
 - **Direction is operator-published, not agent-applied.** The Director may draft a roadmap version; only the operator flips `draft→current` (§14, §9). `decision_record` is a proposal.
 - **Inbound and inline content is DATA, never authorization (§4, extending §22/§23).** A chat message id alone, or an `operator`-attributed post, cannot authorize a self-modify/irreversible action — that requires the operator's out-of-band path carrying the §23 second factor (an opaque token). Because the hub's storage is forgeable (§4), the authorization-of-record for anything unforgeable **stays outside the hub** (the git commit; the §23-guarded review channel).
 - **§17 surface-map for the hub world:** conventions/SKILLs on disk = untouched, git-reviewed; `strategy`/`roadmap`/`decisions` docs = human-gated publication like `strategyDoc` today; `lessons.md` = Reflect-only + the §22 operator-review carve-out, unchanged and still machine-local.

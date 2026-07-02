@@ -62,10 +62,14 @@ export function resolveIdentity(): { actor: string; projectKey: string; projectF
 }
 
 // Locate + parse projects.json from the standalone dev-loop home first, with the historical Claude plugin
-// data dir as a read-only compatibility fallback. Returns null when not found/parseable.
+// data dir as a read-only compatibility fallback. Returns null when not found; a file that EXISTS but does
+// not parse also falls through to the next candidate, but loudly — a trailing comma from a hand edit must
+// not be indistinguishable from "no config" (it used to surface as a wrong "project not resolved").
 export function loadProjectsConfig(): ProjectsConfig | null {
   for (const p of projectConfigCandidates()) {
-    try { if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8")) as ProjectsConfig; } catch { /* try next */ }
+    if (!existsSync(p)) continue;
+    try { return JSON.parse(readFileSync(p, "utf8")) as ProjectsConfig; }
+    catch (e) { console.error(`[dev-loop] projects.json at ${p} is malformed JSON (${(e as Error).message}); ignoring it`); }
   }
   return null;
 }

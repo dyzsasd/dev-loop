@@ -11,7 +11,7 @@
 //   • the `npm run init-service` convenience script resolves to the same standalone entry;
 //   • with a configured repoPath, the bootstrap merges dev-loop-hub into the product .mcp.json (DL-61),
 //     preserving an existing server; dry-run previews the merge and writes nothing.
-import { spawnSync, execFileSync } from "node:child_process";
+import { spawnSync, execFileSync, type SpawnSyncReturns } from "node:child_process";
 import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -37,11 +37,11 @@ const runfile = (key: string): string => join(RUN, `daemon-${key}.json`);
 const readRun = (key: string): { pid: number; url: string } => JSON.parse(readFileSync(runfile(key), "utf8"));
 
 // write the isolated projects.json for a case (controls backend + mode resolution)
-function cfg(projects: Record<string, { backend?: string; mode?: string }>): void {
+function cfg(projects: Record<string, { backend?: string; mode?: string; repoPath?: string }>): void {
   writeFileSync(CFG, JSON.stringify({ projects }));
 }
 // run `node src/init-service.ts <args>` with the isolated env; pluginRoot defaults to PLUGIN_PRESENT
-function is(args: string[], pluginRoot = PLUGIN_PRESENT): ReturnType<typeof spawnSync> {
+function is(args: string[], pluginRoot = PLUGIN_PRESENT): SpawnSyncReturns<string> {
   return spawnSync("node", ["src/init-service.ts", ...args], {
     encoding: "utf8", timeout: 30000,
     env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: CFG, DEVLOOP_PLUGIN_ROOT: pluginRoot, DEVLOOP_ACTOR: "operator" },

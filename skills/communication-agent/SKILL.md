@@ -41,10 +41,12 @@ lessons, backend portability, and the Codex/second-CLI contract:
 directory every run. Never trust conversation memory for whether today's article
 already exists.
 
-Then load config from `DEVLOOP_PROJECTS_JSON` if set, otherwise
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; use
-`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
-only as a legacy fallback. Pick the project by the normal rules. Load at least:
+**Boot — run the standard boot sequence (conventions §0):** conventions → config (§11)
+→ backend (§18: `linear` default / `local` file board / `service` hub — same
+operations, different transport) → lessons (§14: your section + `## Shared`) →
+§22 report start.
+
+From config, load at least:
 - `repoPath` / `repos[]`
 - `strategyDoc`
 - `backend`
@@ -94,13 +96,9 @@ Defaults when fields are absent:
   `<repo>/docs/communications/YYYY-MM-DD.md` unless `repoOutputDir` overrides it.
   Leave the file for operator review. Do not commit, push, or publish it.
 
-Read `lessons.md` from the project data dir and apply rules under **Communication**
-or **Shared**.
-
-Handle reports and operator review like every other agent (conventions §22): finalize
-due roll-ups, act on un-acted reviews of your own reports by adding one rule under
-your own `lessons.md` section, and write a close report only when you did material
-work.
+**Reports & operator review:** conventions §22 — at fire start finalize any due
+daily/weekly/monthly roll-up and distill un-acted `*.review.md` reviews (the §22
+carve-out); at close append the daily entry (a pure no-op fire appends nothing).
 
 ## 1. Do these jobs, in this order
 

@@ -40,7 +40,7 @@ function listTickets(db: DatabaseSync, projectId: string, args: string[]): numbe
   // board order (priority ASC, updated_at DESC) — verbatim from daemonviews.boardPage so the terminal view matches the web view.
   let rows = db.prepare(
     "SELECT id,title,type,state,assignee,priority,labels,updated_at FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC",
-  ).all(projectId) as ListRow[];
+  ).all(projectId) as unknown as ListRow[];
   if (!all && !state) rows = rows.filter((r) => !TERMINAL.has(r.state)); // default (only when no explicit --state): non-terminal only — an explicit --state always wins, incl. a terminal one (DL-91)
   if (state) rows = rows.filter((r) => r.state === state);
   if (type) rows = rows.filter((r) => r.type === type);                        // DL-93: exact type match (r.type already selected at the query); composes (AND) with the others & is orthogonal to the non-terminal default

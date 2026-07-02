@@ -34,9 +34,24 @@ export function esc(s: unknown): string { return String(s ?? "").replace(/[&<>"'
 function ownerOf(labels: string[]): string { return labels.includes("pm") ? "pm" : labels.includes("qa") ? "qa" : "—"; }
 function prioOf(p: number): string { return PRIORITY[p] ?? String(p); }
 
+// Design tokens (DL: the daemon-UI design system). ONE :root sheet owns every color, the type scale, the
+// mono stack, and the radius; views reference tokens via var() and NEVER hardcode a hex (the daemon test
+// asserts no raw hex outside :root, so a token can't silently regress). Accent tokens carry a per-scheme
+// value: the light values are the source hexes; the dark values are lighter shades that clear WCAG AA (4.5:1)
+// on the dark card — the previous single-value accents failed AA in dark mode (e.g. #2563eb on #1e2126 = 3.1:1).
 const STYLE = `
-:root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--line:#e2e5ea;--ink:#1c1e21;--mut:#6b7280}
-@media(prefers-color-scheme:dark){:root{--bg:#15171a;--card:#1e2126;--line:#2c3036;--ink:#e6e8eb;--mut:#9aa3af}}
+:root{
+  color-scheme:light dark;
+  --bg:#f6f7f9;--card:#fff;--line:#e2e5ea;--ink:#1c1e21;--mut:#6b7280;
+  --c-feature:#2563eb;--c-bug:#dc2626;--c-improve:#16a34a;--c-ok:#16a34a;--c-info:#475569;--c-warn:#b45309;--c-urgent:#dc2626;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --fs-xs:.72rem;--fs-sm:.82rem;--fs-base:1rem;
+  --radius:8px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#15171a;--card:#1e2126;--line:#2c3036;--ink:#e6e8eb;--mut:#9aa3af;
+  --c-feature:#60a5fa;--c-bug:#f87171;--c-improve:#4ade80;--c-ok:#4ade80;--c-info:#94a3b8;--c-warn:#fbbf24;--c-urgent:#f87171;
+}}
 *{box-sizing:border-box}body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
 header{display:flex;align-items:baseline;gap:.6rem;padding:.7rem 1rem;border-bottom:1px solid var(--line)}
 header .home{font-weight:700;text-decoration:none;color:var(--ink)}header .proj{color:var(--mut)}
@@ -54,12 +69,12 @@ main{padding:1rem}
 .card{display:block;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.55rem .6rem;margin-bottom:.5rem;text-decoration:none;color:inherit}
 .card:hover{border-color:var(--mut)}
 .card-top{display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem}
-.id{font:600 .72rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mut)}
+.id{font:600 var(--fs-xs) var(--font-mono);color:var(--mut)}
 .title{font-weight:500;margin:.1rem 0}
 .card-meta{display:flex;gap:.5rem;align-items:center;margin-top:.35rem;font-size:.74rem;color:var(--mut)}
-.badge{font-size:.68rem;border:1px solid var(--line);border-radius:4px;padding:0 .35rem;color:var(--mut)}
-.badge.t-Feature{color:#2563eb;border-color:#2563eb55}.badge.t-Bug{color:#dc2626;border-color:#dc262655}.badge.t-Improvement{color:#16a34a;border-color:#16a34a55}
-.prio.p1{color:#dc2626;font-weight:600}.prio.p2{color:#d97706}
+.badge{font-size:var(--fs-xs);border:1px solid var(--line);border-radius:4px;padding:0 .35rem;color:var(--mut)}
+.badge.t-Feature{color:var(--c-feature);border-color:color-mix(in srgb,var(--c-feature) 45%,var(--line))}.badge.t-Bug{color:var(--c-bug);border-color:color-mix(in srgb,var(--c-bug) 45%,var(--line))}.badge.t-Improvement{color:var(--c-improve);border-color:color-mix(in srgb,var(--c-improve) 45%,var(--line))}
+.prio.p1{color:var(--c-urgent);font-weight:600}.prio.p2{color:var(--c-warn)}
 .empty{color:var(--mut);font-size:.8rem;padding:.3rem .2rem}
 .back{display:inline-block;margin-bottom:.8rem;color:var(--mut);text-decoration:none}.back:hover{color:var(--ink)}
 .detail{max-width:760px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.1rem 1.3rem}
@@ -67,23 +82,24 @@ main{padding:1rem}
 .meta{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .8rem;margin:.6rem 0 1rem}
 .meta dt{color:var(--mut)}.meta dd{margin:0}
 .lbl{font-size:.7rem;border:1px solid var(--line);border-radius:4px;padding:0 .35rem;color:var(--mut);margin-right:.25rem}
-pre{white-space:pre-wrap;word-wrap:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-x:auto}
+pre{white-space:pre-wrap;word-wrap:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;font:12.5px/1.5 var(--font-mono);overflow-x:auto}
 h3{margin:1.2rem 0 .4rem;font-size:.95rem}
 .comment{margin:.5rem 0}.c-head{font-size:.78rem;color:var(--mut);margin-bottom:.2rem}.c-head time{margin-left:.4rem}
 nav{margin-left:auto}nav a{color:var(--mut);text-decoration:none}nav a:hover{color:var(--ink)}
 form{margin:.7rem 0}form label{display:block;margin:.45rem 0;color:var(--mut);font-size:.82rem}
-textarea{display:block;width:100%;margin:.3rem 0;padding:.6rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+textarea{display:block;width:100%;margin:.3rem 0;padding:.6rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:12.5px/1.5 var(--font-mono)}
 input[type=text]{padding:.3rem .45rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
 button{font:inherit;padding:.4rem .85rem;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);cursor:pointer}button:hover{border-color:var(--mut)}
 .pub{margin-top:.5rem}
 .notice{padding:.5rem .7rem;border-radius:8px;margin:.6rem 0;font-size:.85rem}
-.n-err{background:#dc26261f;border:1px solid #dc262655;color:#dc2626}.n-ok{background:#16a34a1f;border:1px solid #16a34a55;color:#16a34a}.n-info{background:#64748b1f;border:1px solid #64748b55;color:#475569}
+.n-err{background:color-mix(in srgb,var(--c-bug) 12%,transparent);border:1px solid color-mix(in srgb,var(--c-bug) 45%,var(--line));color:var(--c-bug)}.n-ok{background:color-mix(in srgb,var(--c-ok) 12%,transparent);border:1px solid color-mix(in srgb,var(--c-ok) 45%,var(--line));color:var(--c-ok)}.n-info{background:color-mix(in srgb,var(--c-info) 12%,transparent);border:1px solid color-mix(in srgb,var(--c-info) 45%,var(--line));color:var(--c-info)}
 .doc h1,.doc h2,.doc h3{margin:.7rem 0 .3rem;font-size:1rem}.doc ul,.doc ol{margin:.3rem 0;padding-left:1.3rem}.doc p{margin:.4rem 0}.doc hr{border:0;border-top:1px solid var(--line);margin:.7rem 0}
-code{font:.92em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);padding:0 .25rem;border-radius:4px}
+.doc blockquote{margin:.5rem 0;padding:.1rem .8rem;border-left:3px solid var(--line);color:var(--mut)}.doc a{color:var(--c-feature)}.doc pre code{background:none;padding:0}
+code{font:.92em var(--font-mono);background:var(--bg);padding:0 .25rem;border-radius:4px}
 .ragent{margin:.9rem 0}.ragent h3{margin:.2rem 0 .4rem}
 .rlevel{display:flex;gap:.4rem;align-items:baseline;flex-wrap:wrap;margin:.25rem 0}
-.rkey{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut);min-width:3.5rem}
-.warn{color:#dc2626;font-weight:600}.sub{color:var(--mut)}
+.rkey{font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.03em;color:var(--mut);min-width:3.5rem}
+.warn{color:var(--c-bug);font-weight:600}.sub{color:var(--mut)}
 .lbl{cursor:pointer}a.lbl:hover{border-color:var(--mut);color:var(--ink)}
 .filterbar{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:0 0 .8rem}
 .filterbar .chips{display:flex;gap:.3rem;flex-wrap:wrap;margin-left:.2rem}
@@ -91,15 +107,52 @@ code{font:.92em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg)
 .summary{display:flex;gap:1rem;flex-wrap:wrap;align-items:center;margin:0 0 .8rem;padding:.4rem .55rem;background:var(--card);border:1px solid var(--line);border-radius:8px}
 .summary .sum-grp{display:flex;gap:.3rem;flex-wrap:wrap}
 .summary .lbl{cursor:default}.summary .lbl b{color:var(--ink);font-weight:600}
+.count-gap{margin-left:.4rem}
+.vh{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+h3 .live-dot{display:inline-block;width:.5rem;height:.5rem;border-radius:999px;background:var(--c-ok);margin-left:.5rem;vertical-align:middle;opacity:.5;transition:opacity .3s}
+h3 .live-dot.on{opacity:1}
+@media(max-width:640px){
+  main{padding:.6rem}
+  .board{scroll-snap-type:x mandatory}
+  .col{flex-basis:85vw;scroll-snap-align:start}
+  .filterbar input,.filterbar button{min-height:2.2rem}
+  .detail{padding:.9rem 1rem}
+  .meta{grid-template-columns:1fr}
+}
 `;
 
 export function page(title: string, project: string, inner: string): string {
+  // Inline SVG favicon (a small "dl" mark) — data-URI, so no static-asset route and no /favicon.ico 404 noise.
+  const favicon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#2563eb"/><text x="8" y="12" font-family="monospace" font-size="9" font-weight="700" fill="#fff" text-anchor="middle">dl</text></svg>')}`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">`
     + `<meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>`
+    + `<link rel="icon" href="${favicon}">`
     + `<style>${STYLE}</style></head><body>`
-    + `<header><a class="home" href="/">dev-loop</a><span class="proj">${esc(project)}</span><nav><a href="/roadmap">roadmap</a> · <a href="/activity">activity</a> · <a href="/reports">reports</a></nav></header>`
-    + `<main>${inner}</main></body></html>`;
+    + `<header><a class="home" href="/">dev-loop</a><span class="proj">${esc(project)}</span>`
+    + `<span class="live-dot" id="live" title="live — updates when agents change the board"></span>`
+    + `<nav><a href="/roadmap">roadmap</a> · <a href="/activity">activity</a> · <a href="/reports">reports</a></nav></header>`
+    + `<main>${inner}</main>`
+    + LIVE_SCRIPT
+    + `</body></html>`;
 }
+
+// Progressive-enhancement live updates (degrades to a static page with no JS). Subscribes to the SSE
+// /api/stream channel; the dot goes solid on new activity and the page auto-reloads — but NEVER while a
+// form field is focused (so it can't interrupt an operator typing a roadmap edit / new ticket).
+const LIVE_SCRIPT = `<script>
+(function(){
+  try{
+    var dot=document.getElementById('live'), base=null, pending=false;
+    var es=new EventSource('/api/stream');
+    function typing(){var a=document.activeElement;return a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT');}
+    es.onmessage=function(e){
+      var id=e.data; if(base===null){base=id;return;}
+      if(id!==base){ if(dot)dot.classList.add('on'); pending=true; if(!typing())location.reload(); }
+    };
+    document.addEventListener('focusout',function(){ if(pending&&!typing())location.reload(); });
+  }catch(_){/* no EventSource ⇒ static page, fine */}
+})();
+</script>`;
 
 function cardHtml(t: ReturnType<typeof toTicket>): string {
   return `<a class="card" href="/ticket/${encodeURIComponent(t.id)}">`
@@ -148,14 +201,14 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
   // toggle; all reflected in the URL. A chip's link drops just that key but keeps the group view;
   // "clear all" drops every filter but keeps the view. esc() everything (AC4).
   const active = FILTER_KEYS.filter((k) => f[k]);
-  const chips = active.map((k) => `<a class="lbl" href="${esc(qstr({ omit: k }))}">${esc(k)}: ${esc(f[k])} ✕</a>`).join(" ");
+  const chips = active.map((k) => `<a class="lbl" href="${esc(qstr({ omit: k }))}" aria-label="remove filter ${esc(k)} ${esc(f[k])}">${esc(k)}: ${esc(f[k])} <span aria-hidden="true">✕</span></a>`).join(" ");
   const hidden = (["state", "type", "label", "assignee"] as const).map((k) => f[k] ? `<input type="hidden" name="${k}" value="${esc(f[k])}">` : "").join("")
     + (group ? `<input type="hidden" name="group" value="${esc(group)}">` : "");
   const groupToggle = `<span class="group-tg">group:`
     + `<a class="lbl${swim ? "" : " on"}" href="${esc(qstr({ group: null }))}">state</a>`
     + `<a class="lbl${swim ? " on" : ""}" href="${esc(qstr({ group: "assignee" }))}">assignee</a></span>`;
   const controls = `<form class="filterbar" method="get" action="/">${hidden}`
-    + `<input type="text" name="q" value="${esc(f.q ?? "")}" placeholder="search id / title" spellcheck="false">`
+    + `<input type="text" name="q" value="${esc(f.q ?? "")}" placeholder="search id / title" aria-label="search tickets by id or title" spellcheck="false">`
     + `<button type="submit">search</button>`
     + (active.length ? `<a class="lbl clearall" href="${esc(swim ? "/?group=assignee" : "/")}">clear all</a>` : "")
     + groupToggle
@@ -226,7 +279,7 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
     : "";
   // DL-86: an inline error notice on a failed create, rendered above the create form (mirrors roadmapPage's notice).
   const notice = opts.notice ? `<p class="notice ${opts.notice.kind === "error" ? "n-err" : "n-ok"}">${esc(opts.notice.msg)}</p>` : "";
-  return notice + controls + newForm + summary + boardHtml + empty;
+  return `<h1 class="vh">${esc(projectKey)} board</h1>` + notice + controls + newForm + summary + boardHtml + empty;
 }
 
 // Ticket detail: full description + comments. Returns null when the ticket is absent (→ 404).
@@ -238,13 +291,17 @@ export function ticketPage(db: DatabaseSync, projectId: string, id: string, canW
   const t = toTicket(r);
   const comments = db.prepare("SELECT author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(id) as Record<string, any>[];
   const commentsHtml = comments.length
-    ? comments.map((c) => `<div class="comment"><div class="c-head"><b>${esc(c.author)}</b><time>${esc(c.created_at)}</time></div><div class="doc">${renderMarkdown(c.body)}</div></div>`).join("")
+    ? comments.map((c) => `<div class="comment"><div class="c-head"><b>${esc(c.author)}</b><time datetime="${esc(c.created_at)}">${esc(c.created_at)}</time></div><div class="doc">${renderMarkdown(c.body)}</div></div>`).join("")
     : `<p class="empty">No comments yet.</p>`;
   // DL-8: surface the hub relationships (relatedTo / duplicateOf) as click-through links — but ONLY
   // when present, so an unrelated ticket renders no dangling row (AC). Read-only GET navigation.
   const relLink = (rid: string) => `<a class="lbl" href="/ticket/${encodeURIComponent(rid)}">${esc(rid)}</a>`;
   const relatedRow = t.relatedTo?.length ? `<dt>Related</dt><dd>${t.relatedTo.map(relLink).join(" ")}</dd>` : "";
   const dupRow = t.duplicateOf ? `<dt>Duplicate of</dt><dd>${relLink(t.duplicateOf)}</dd>` : "";
+  // L1: the reverse of Related — tickets that point AT this one (a design parent shows its staged children).
+  const referencedBy = (db.prepare("SELECT id,related_to FROM tickets WHERE project_id=? AND related_to LIKE ?").all(projectId, `%${JSON.stringify(id)}%`) as { id: string; related_to: string }[])
+    .filter((row) => { try { return (JSON.parse(row.related_to) as string[]).includes(id); } catch { return false; } }).map((row) => row.id);
+  const refByRow = referencedBy.length ? `<dt>Referenced by</dt><dd>${referencedBy.map(relLink).join(" ")}</dd>` : "";
   return `<a class="back" href="/">← board</a><article class="detail">`
     + `<div class="card-top"><span class="id">${esc(t.id)}</span><span class="badge t-${esc(t.type)}">${esc(t.type)}</span><span class="badge">${esc(t.state)}</span></div>`
     + `<h1>${esc(t.title)}</h1>`
@@ -253,9 +310,9 @@ export function ticketPage(db: DatabaseSync, projectId: string, id: string, canW
     + `<dt>Priority</dt><dd>${esc(prioOf(t.priority))}</dd>`
     + `<dt>Assignee</dt><dd>${esc(t.assignee ?? "—")}</dd>`
     + `<dt>Created</dt><dd>${esc(t.created_at)}</dd><dt>Updated</dt><dd>${esc(t.updated_at)}</dd>`  // DL-16
-    + `<dt>Labels</dt><dd>${t.labels.map((l: string) => `<span class="lbl">${esc(l)}</span>`).join("")}</dd>${relatedRow}${dupRow}</dl>`
+    + `<dt>Labels</dt><dd>${t.labels.map((l: string) => `<span class="lbl">${esc(l)}</span>`).join("")}</dd>${relatedRow}${refByRow}${dupRow}</dl>`
     + `<h3>Description</h3><div class="doc">${renderMarkdown(t.description)}</div>`  // DL-16: rendered markdown (XSS-safe via renderMarkdown), not raw <pre>
-    + `<h3>Comments<span class="count" style="margin-left:.4rem">${comments.length}</span></h3>${commentsHtml}`
+    + `<h3>Comments<span class="count count-gap">${comments.length}</span></h3>${commentsHtml}`
     // DL-29: opt-in human actions (only when humanWrite is enabled — gated upstream). Each POSTs to a
     // daemon write route then PRG-redirects back here. All interpolated values esc()'d; comment/assignee
     // are operator DATA (stored verbatim, never parsed). Move offers the STATES set, current pre-selected.
@@ -272,21 +329,42 @@ export function ticketPage(db: DatabaseSync, projectId: string, id: string, canW
 // A tiny, dependency-free, XSS-safe markdown renderer for the roadmap view. The body is arbitrary
 // agent-authored text, so we esc() FIRST (no user content can then inject a tag), and only THEN apply a
 // closed set of block/inline transforms that emit ONLY our own <h*>/<ul>/<ol>/<li>/<strong>/<code>/<hr>/<p>.
-function renderMarkdown(md: string): string {
-  const inline = (s: string) => s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
+export function renderMarkdown(md: string): string {
+  // esc FIRST (input is arbitrary agent-authored text) — every rule below emits only its own tags around
+  // already-escaped content, so the sole injection surface is a link href, which is allowlisted to
+  // http(s):// or a same-site /path (never javascript:, data:, etc. — those render as inert text).
+  const link = (url: string, text: string) =>
+    /^(https?:\/\/|\/)/i.test(url) ? `<a href="${url}" rel="noopener noreferrer" target="_blank">${text}</a>` : null;
+  const inline = (s: string) => {
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, text, url) => link(url, text) ?? whole); // [text](url)
+    s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_w, pre, url) => `${pre}${link(url, url)}`);   // bare-URL autolink
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    return s;
+  };
   const out: string[] = [];
   let listTag: "ul" | "ol" | null = null;
   const closeList = () => { if (listTag) { out.push(`</${listTag}>`); listTag = null; } };
+  let fence: string[] | null = null; // non-null ⇔ inside a ``` block, accumulating raw (esc'd) lines
   for (const raw of esc(md).split("\n")) {
+    if (/^\s*```/.test(raw)) { // fence open/close — inline transforms are suspended inside
+      if (fence) { out.push(`<pre><code>${fence.join("\n")}</code></pre>`); fence = null; }
+      else { closeList(); fence = []; }
+      continue;
+    }
+    if (fence) { fence.push(raw); continue; }
     const line = raw.trimEnd();
     let m: RegExpMatchArray | null;
     if (/^\s*$/.test(line)) { closeList(); continue; }
     if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { closeList(); const l = m[1].length; out.push(`<h${l}>${inline(m[2])}</h${l}>`); continue; }
     if (/^(---|\*\*\*|___)\s*$/.test(line)) { closeList(); out.push("<hr>"); continue; }
+    if ((m = line.match(/^\s*&gt;\s?(.*)$/))) { closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; } // > blockquote (> is esc'd to &gt;)
     if ((m = line.match(/^\s*[-*]\s+(.*)$/))) { if (listTag !== "ul") { closeList(); out.push("<ul>"); listTag = "ul"; } const cb = m[1].match(/^\[([ xX])\]\s+([\s\S]*)$/); out.push(cb ? `<li><input type="checkbox" disabled${cb[1] === " " ? "" : " checked"}> ${inline(cb[2])}</li>` : `<li>${inline(m[1])}</li>`); continue; } // DL-16: a `- [ ]`/`- [x]` item → a disabled checkbox (the text is already esc'd → XSS-safe)
     if ((m = line.match(/^\s*\d+\.\s+(.*)$/))) { if (listTag !== "ol") { closeList(); out.push("<ol>"); listTag = "ol"; } out.push(`<li>${inline(m[1])}</li>`); continue; }
     closeList(); out.push(`<p>${inline(line)}</p>`);
   }
+  if (fence) out.push(`<pre><code>${fence.join("\n")}</code></pre>`); // unterminated fence
   closeList();
   return out.join("\n");
 }
@@ -582,9 +660,9 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
   // core states always render (— none when empty); a park state only when populated (see the WIP_*_STATES consts).
   const wipStates = [...WIP_CORE_STATES, ...WIP_PARK_STATES.filter((s) => openByState.get(s)?.length)];
   const openWipSection = `<h3>Open WIP — aging</h3>` + wipStates.map(wipBlock).join("");
-  const feedSection = `<h3>Recent activity<span class="count" style="margin-left:.4rem">${feed.length}</span></h3>`
+  const feedSection = `<h3>Recent activity<span class="count count-gap">${feed.length}</span></h3>`
     + (feed.length ? feed.map(eventLine).join("") : `<p class="empty">No activity recorded yet.</p>`);
 
-  return `<a class="back" href="/">← board</a><article class="detail"><h1>Activity</h1>`
+  return `<a class="back" href="/">← board</a><article class="detail"><h1>Activity — ${esc(projectKey)}</h1>`
     + throughput + acceptance + actorSection + cycleSection + stageSection + openWipSection + feedSection + `</article>`;
 }

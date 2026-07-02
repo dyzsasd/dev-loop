@@ -142,14 +142,25 @@ async function serviceReconcile(dbProjectKeys: string[], dbPath: string): Promis
 
 function reconcileMcpJson(mcpJsonPath: string, pass: (m: string) => void, warn: (m: string) => void): void {
   if (!existsSync(mcpJsonPath)) { warn(`.mcp.json — ${mcpJsonPath} not found; dev-loop-hub is not registered (re-run init, or merge from config/mcp.example.json)`); return; }
-  let cfg: { mcpServers?: Record<string, { args?: unknown[]; env?: Record<string, unknown> }> };
+  let cfg: { mcpServers?: Record<string, { command?: unknown; args?: unknown[]; env?: Record<string, unknown> }> };
   try { cfg = JSON.parse(readFileSync(mcpJsonPath, "utf8")); }
   catch (e) { warn(`.mcp.json — ${mcpJsonPath} is malformed JSON, cannot verify the registration (${(e as Error).message})`); return; }
   const entry = cfg?.mcpServers?.["dev-loop-hub"];
   if (!entry || typeof entry !== "object") { warn(`.mcp.json — no mcpServers["dev-loop-hub"] entry in ${mcpJsonPath} (re-run init to register it)`); return; }
-  const serverArg = (Array.isArray(entry.args) ? entry.args : []).find((a): a is string => typeof a === "string" && /server\.(ts|js)$/.test(a));
   const actorWired = !!entry.env && typeof entry.env === "object" && "DEVLOOP_ACTOR" in entry.env;
-  if (!serverArg) { warn(`.mcp.json — the dev-loop-hub entry has no server.ts/.js arg in ${mcpJsonPath} (re-run init to repair)`); return; }
+  // The canonical installed shape mcp-merge/init-service write is the PATH bin: command "dev-loop" (or
+  // dev-loop-hub) + a serve/shim subcommand — no on-disk server path exists to verify, the bin resolves on
+  // PATH at MCP start. Doctor used to WARN on exactly this shape and suggest "re-run init", which rewrites
+  // the identical entry — a repair loop that could never converge.
+  const cmd = typeof entry.command === "string" ? entry.command : "";
+  const strArgs = (Array.isArray(entry.args) ? entry.args : []).filter((a): a is string => typeof a === "string");
+  if (/(^|\/)dev-loop(-hub)?$/.test(cmd) && (strArgs.includes("serve") || strArgs.includes("shim"))) {
+    if (!actorWired) { warn(`.mcp.json — the dev-loop-hub entry has no DEVLOOP_ACTOR env wiring in ${mcpJsonPath} (re-run init to repair)`); return; }
+    pass(`.mcp.json registers dev-loop-hub → ${cmd} ${strArgs.join(" ")} (DEVLOOP_ACTOR wired)`);
+    return;
+  }
+  const serverArg = strArgs.find((a) => /server\.(ts|js)$/.test(a));
+  if (!serverArg) { warn(`.mcp.json — the dev-loop-hub entry is neither the \`dev-loop serve\`/\`shim\` bin form nor a server.ts/.js path in ${mcpJsonPath} (re-run init to repair)`); return; }
   if (!existsSync(serverArg)) { warn(`.mcp.json — the dev-loop-hub server path is missing on disk: ${serverArg} (the dev-loop checkout moved? re-run init)`); return; }
   if (!actorWired) { warn(`.mcp.json — the dev-loop-hub entry has no DEVLOOP_ACTOR env wiring in ${mcpJsonPath} (re-run init to repair)`); return; }
   pass(`.mcp.json registers dev-loop-hub → ${serverArg} (DEVLOOP_ACTOR wired)`);

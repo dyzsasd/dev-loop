@@ -6,7 +6,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDb, actorExists, listActorHandles } from "./db.ts";
 import { ensureActors, ensureProject, findProject } from "./seed.ts";
-import { createLabel } from "./labelstore.ts"; // DL-69: create_issue_label stays a native handler (see agentops.ts opCreateLabel — the only op server.ts does NOT dispatch through, to keep the stdio path byte-identical)
+// (create_issue_label now dispatches through agentOp() like every other op — its former native override,
+//  which skipped the label.create attribution event, was removed so stdio ≡ op-API on the events ledger too.)
 import { resolveProjectFromCwd, loadProjectsConfig, resolveIdentity } from "./resolve-project.ts";
 import { agentOp, type OpResult, type AgentOp } from "./agentops.ts"; // DL-69: the SINGLE definition of every ticket/read policy — every op-backed handler below dispatches through agentOp()
 import { ok, err, registerTools } from "./tooldefs.ts"; // DL-85: the ONE {name,description,inputSchema} registry + the shared ok()/err()
@@ -112,30 +113,23 @@ if (!projectId) {
 // and maps the returned { status, body } to the MCP ok()/err() shape via toMcp() — the SAME mapping the DL-55
 // stdio shim applies to the op-API HTTP response (200 → ok(body); non-200 → err(body.error)), so a dispatched
 // handler is BYTE-IDENTICAL to the pre-refactor native one (the differential-parity suite, shim ≡ stdio for all
-// 29 tools, is the structural guard). agentOp reads NO env/mode/transport (the agentops.ts contract): server.ts
+// TOOL_NAMES tools, is the structural guard). agentOp reads NO env/mode/transport (the agentops.ts contract): server.ts
 // owns the DEVLOOP_ACTOR identity + the G1 guard (above) and passes ACTOR in; the daemon op-API owns its own
-// pipeline around the SAME ops. whoami + create_issue_label stay native below (see the makeHandler overrides).
+// pipeline around the SAME ops. Only whoami stays native below (transport-specific identity, not an op).
 const toMcp = (r: OpResult) => (r.status === 200 ? ok(r.body) : err((r.body as { error: string }).error));
 const dispatch = async (op: AgentOp, a: unknown) =>
   toMcp(await agentOp(op, db, projectId, PROJECT_KEY, ACTOR, (a ?? {}) as Record<string, unknown>));
 
 const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 
-// ─── register the 29 tools from the ONE shared registry (DL-85) ────────────────────────────────────────────
+// ─── register every tooldefs.ts tool from the ONE shared registry (DL-85) ──────────────────────────────
 // tooldefs.ts owns every tool's { name, description, inputSchema }; this server supplies only the per-name
-// handler. The DEFAULT handler dispatches the op through agentOp() (above). Two tools are NATIVE (not ops):
+// handler. The DEFAULT handler dispatches the op through agentOp() (above). Only ONE tool is NATIVE (not an op):
 //   • whoami — answered locally from THIS process's resolved identity ({actor, project, db}).
-//   • create_issue_label — DL-69 kept native (a direct createLabel call) so the stdio path stays byte-identical
-//     and does NOT emit the op-API-only label.create event; every other tool dispatches through agentOp().
+// (create_issue_label now dispatches like every other op — see the import note above; the label.create event
+//  fires on both transports, closing DL-69's last stdio-vs-op-API divergence.)
 registerTools(server, (name) => {
   if (name === "whoami") return () => ok({ actor: ACTOR, project: PROJECT_KEY, db: DB_PATH });
-  if (name === "create_issue_label") {
-    return (a) => {
-      const { name: labelName, kind } = a as { name: string; kind?: string };
-      const r = createLabel(db, projectId, { name: labelName, kind });
-      return r.ok ? ok(r.data) : err(r.error);
-    };
-  }
   return (a) => dispatch(name as AgentOp, a);
 });
 
