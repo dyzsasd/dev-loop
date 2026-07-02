@@ -69,6 +69,10 @@ function htmlOut(res: ServerResponse, status: number, body: string): void {
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(body),
     "cache-control": "no-store",
+    // Defense-in-depth (the pages interpolate escaped agent-authored DB text; CSP is the belt to esc()'s
+    // braces). Inline style + the tiny inline live-updates script are allowed; connect-src 'self' lets the
+    // EventSource reach /api/stream; nothing else (no remote script/img/frame). Matches the writeOriginOk posture.
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'; form-action 'self'; base-uri 'none'",
   });
   res.end(body);
 }
@@ -320,6 +324,7 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
 // optional DL-3 /roadmap/* POST routes write the roadmap doc through the separate `writeDb` connection.
 export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadmapRepoFileStrategy }: DaemonOpts): Server {
   const canWrite = !!writeDb && !!actor;
+  let streamCount = 0; const MAX_STREAMS = 16; // bound concurrent SSE connections (one operator, a few tabs)
   return createServer(async (req, res) => {
     const method = req.method ?? "GET";
     let url: URL;
@@ -412,6 +417,28 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadma
           name: "dev-loop-hub daemon", project: projectKey, readOnly: true,
           ui: "/", endpoints: ["/api/health", "/api/tickets", "/api/tickets/:id", "/api/docs", "/api/docs/:kind"],
         });
+      }
+
+      // GET /api/stream — SSE live-update channel (the DL-2 no-JS doctrine was amended by the operator to
+      // allow a tiny inline progressive-enhancement script, 2026-07-02). Poll-push, never blocking: a timer
+      // checks max(events.id) — an O(1) read on the AUTOINCREMENT PK — and emits only when it ADVANCES, so
+      // the board/activity pages refresh themselves as agents mutate the ledger. node:sqlite is synchronous,
+      // so we poll on a setInterval (a few ms of work) rather than hold any long DB operation.
+      if (path === "/api/stream") {
+        if (streamCount >= MAX_STREAMS) return json(res, 503, { error: "too many live connections" });
+        streamCount++;
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", "connection": "keep-alive", "x-accel-buffering": "no" });
+        const maxId = (): number => Number((db.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events WHERE project_id=?").get(projectId) as { m: number }).m);
+        let last = maxId();
+        res.write(`retry: 3000\ndata: ${last}\n\n`); // initial baseline + client reconnect hint
+        const iv = setInterval(() => {
+          try { const now = maxId(); if (now !== last) { last = now; res.write(`data: ${now}\n\n`); } else { res.write(": ping\n\n"); } }
+          catch { /* transient read error — the next tick retries; never crash the daemon */ }
+        }, 2000);
+        iv.unref?.();
+        const done = () => { clearInterval(iv); streamCount--; };
+        req.on("close", done); res.on("close", done);
+        return;
       }
 
       // GET /api/health — a REAL DB-writable liveness check (DL-41), not a static 200: a bound-but-wedged

@@ -124,7 +124,7 @@ ok(view.text.includes("&lt;script&gt;alert(1)") && !view.text.includes("<script>
 // ─── DL-17: read-only activity & throughput view over the events ledger ───
 const act = await getHtml("/activity");
 ok(act.status === 200 && act.type.includes("text/html"), "DL-17: GET /activity → 200 text/html (activity view)");
-ok(act.text.includes("<!doctype html") && act.text.includes("<h1>Activity</h1>"), "DL-17: /activity is an HTML page titled Activity");
+ok(act.text.includes("<!doctype html") && /<h1>Activity\b/.test(act.text), "DL-17: /activity is an HTML page titled Activity");
 // AC1 — the recent-events feed shows the seeded create / transition(from→to) / comment events, newest-first
 ok(act.text.includes(feat.id) && act.text.includes("created"), "DL-17 AC1: feed shows an issue.create event (ticket id + 'created')");
 ok(act.text.includes("moved") && act.text.includes("→") && act.text.includes(">Done<"), "DL-17 AC1: feed shows an issue.transition with from→to (the In Review→Done move)");
