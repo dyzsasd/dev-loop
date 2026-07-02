@@ -2,7 +2,7 @@
 // run-agents test passes --dry-run, so the spawn/env/log/timeout/drain/lock machinery that spends
 // real API tokens in production never executed under test. A stub `claude` on DEVLOOP_CLAUDE_BIN
 // stands in for the CLI: it records its env + argv, optionally sleeps, and marks completion.
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -79,6 +79,22 @@ exit 0
   ok(stale.code === 0 && /taking over stale run lock/.test(stale.out),
     "a stale lock (dead pid) is taken over and the run proceeds");
   ok(!existsSync(join(tmp, "run-demo.lock")), "the lock is released on exit");
+
+  // ── 5. P1 telemetry: a real fire against a HUB-SEEDED project writes a fire.completed event ──
+  const hubDb = join(tmp, "hub2.db");
+  writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { tel: { repoPath: repo, backend: "service" } } }));
+  execFileSync("node", ["src/seed.ts", "tel", "Tel Project", "TELX", hubDb], { cwd: hubRoot, encoding: "utf8" });
+  const telCommon = ["--root", repoRoot, "--data", data, "--hub-db", hubDb, "--project", "tel", "--cwd", repo, "--cli", "claude", "--agents", "sweep", "--once"];
+  const tel = runLive(telCommon);
+  ok(tel.code === 0, `telemetry fire exits 0 (got ${tel.code})`);
+  const rows = execFileSync("node", ["--input-type=module", "-e",
+    `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${hubDb}'); const pid=findProject(db,'tel'); const r=db.prepare("SELECT actor,data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
+    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+  const events = JSON.parse(rows) as { actor: string; data: string }[];
+  ok(events.length === 1 && events[0].actor === "sweep", "P1: one fire.completed event, attributed to the fired agent");
+  const d = events.length ? JSON.parse(events[0].data) as Record<string, unknown> : {};
+  ok(d.codingAgent === "claude" && typeof d.durationMs === "number" && d.exitCode === 0 && d.timedOut === false,
+    "P1: fire.completed carries codingAgent + durationMs + exitCode + timedOut");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

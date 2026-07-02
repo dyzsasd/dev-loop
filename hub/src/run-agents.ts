@@ -10,8 +10,9 @@ import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
-import { openDb } from "./db.ts";
+import { openDb, logEvent } from "./db.ts";
 import { findProject } from "./seed.ts";
+import type { DatabaseSync } from "node:sqlite";
 
 const VALID_AGENTS = [
   "pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect",
@@ -560,6 +561,22 @@ function displayCommand(command: string, args: string[], prompt: string): string
   return [command, ...args.map((a) => a === prompt ? `<prompt:${prompt.length} chars>` : a).map(shellQuote)].join(" ");
 }
 
+// P1 per-fire telemetry: write a `fire.completed` event to the hub so the operator gets a queryable cost/
+// outcome ledger (durationMs, exitCode, model/effort) — the precursor the STRATEGY.md budget-ceiling work
+// was banked on. Best-effort + lazy: opened once, skipped silently on a non-hub (linear/local) project, and
+// never allowed to crash a fire. One writable connection reused across fires (the scheduler is single-writer).
+let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
+function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean): void {
+  try {
+    if (fireDb === undefined) { try { fireDb = openDb(hubDb); } catch { fireDb = null; } }
+    if (!fireDb) return;
+    const projectId = findProject(fireDb, project);
+    if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
+    logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
+      data: { codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut } });
+  } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
+}
+
 async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string): Promise<number> {
   const profile = resolveLaunchProfile(opts, cfg, project, agent);
   const prompt = readPrompt(opts, agent, project, profile);
@@ -595,6 +612,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   log.write(`\n\n===== ${new Date().toISOString()} ${rendered} cwd=${cwd} =====\n`);
   console.log(`[${new Date().toISOString()}] ${agent}: start (${profile.codingAgent}); log ${logPath}`);
 
+  const startedAt = Date.now();
   const child: RunnerChild = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   activeChildren.add(child);
   child.stdout.on("data", (d) => { process.stdout.write(`[${agent}] ${d}`); log.write(d); });
@@ -625,7 +643,9 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       activeChildren.delete(child);
       log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""} =====\n`);
       console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}`);
-      resolveExit(timedOut ? 124 : (code ?? 1));
+      const exitCode = timedOut ? 124 : (code ?? 1);
+      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut);
+      resolveExit(exitCode);
     });
     child.on("close", () => log.end());
   });
