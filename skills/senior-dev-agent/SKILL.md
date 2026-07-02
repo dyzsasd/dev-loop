@@ -52,65 +52,37 @@ modes are all specified there. This file is the operational walk-through; conven
 trust conversation memory for state, and on a hard failure log one line and exit (the
 next fire retries). See conventions §0.
 
-Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
-`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
-as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `strategyDoc`, `build`, `git`, `deploy`,
-`mode`, `autonomy` (§12a), the optional `codex` block (§24), and — if present — `repos[]`
-(conventions §19). **Confirm this project runs the split from the AUTHORITATIVE config flag
-`devSplit:true` (§11) or the explicit scheduler context `DEVLOOP_DEV_SPLIT:true`.** The scheduler
-flag is set by `dev-loop run` when the operator uses the default `core` group, `--dev-split`, or
-explicitly selects `senior-dev` / `junior-dev`; treat it as a runtime source of truth for this fire.
-**Do NOT infer the dev model from board history, from which actor (`dev`/`operator`/…) happened to
-do past work, or from any ticket** (e.g. a Canceled model-tiering ticket is **not** a "single-dev
-decision"). If either source says split is active, you **are** the live senior tier — operate (an
-empty `senior-dev` slice this fire just means no design/escalation work is queued, which is a normal
-idle fire, **not** "the split is off"). **If both config and scheduler context leave split off ⇒
-legacy single-dev ⇒ report a no-op and exit** (the `dev` agent owns the queue). **Resolve the target repo per
-ticket** exactly as `dev` does: absent/one `repos[]` ⇒ single-repo (the implicit target
-is `repoPath`); with multiple repos the ticket's `repo:<name>` label names the target and
-you resolve that repo's effective `build`/`defaultBranch`/`deploy`/`contributorSkill`
-(repo value else top-level, §19). The **doc-home repo** (`role:"docs"` else `"primary"`
-else `repos[0]`) roots a repo-file design doc. If no config path resolves, ask the user before proceeding.
+**Boot — run the standard boot sequence (conventions §0):** conventions → config (§11) →
+backend (§18: `linear` default / `local` file board / `service` hub — same operations,
+different transport) → lessons (§14: your `senior-dev` section + `## Dev` + `## Shared`) →
+§22 report start. Senior-specific boot steps, after it:
 
-**All ticket operations go through the configured `backend` (conventions §18).** `backend`
-absent ⇒ `"linear"` (the Linear MCP); `"local"` routes the same operations — the §5 pick
-query, the §7 claim, grooming, comments, the In-Review hand-off, the design-child staging —
-to a machine-local file board with identical state machine, labels, and protocols. Read
-every `list_issues`/`get_issue`/`save_issue`/comment call below as "via the configured
-backend (§18)"; the REPLACE-style label and verify-after-write disciplines apply to a
-frontmatter rewrite too (and the local claim uses a per-fire run token, §18). **Your
-dev-tier pick filter is per-backend (§18):** on `service` you pick tickets whose
-`assignee` is the actor `senior-dev`; on `linear`/`local` you pick tickets carrying the
-`senior-dev` label. **You never pick a junior-dev ticket** (that's junior-dev's slice).
+- **Dev model & tier routing:** conventions §21a — split-dev is detected ONLY from the
+  explicit signals (`devSplit:true` config / `DEVLOOP_DEV_SPLIT` runtime), never inferred
+  from history/models{}/tickets; every filed dev ticket gets its tier per the §21a Routing
+  rule, encoded per backend (§18). If both signals leave split off ⇒ legacy single-dev ⇒
+  report a no-op and exit (the `dev` agent owns the queue). If either says split is active,
+  you **are** the live senior tier — an empty `senior-dev` slice is a normal idle fire,
+  **not** "the split is off".
+- **Your dev-tier pick filter is per-backend (§18):** on `service` you pick tickets whose
+  `assignee` is the actor `senior-dev`; on `linear`/`local` you pick tickets carrying the
+  `senior-dev` label. **You never pick a junior-dev ticket** (that's junior-dev's slice).
+- **Resolve the target repo per ticket** exactly as `dev` does: absent/one `repos[]` ⇒
+  single-repo (the implicit target is `repoPath`); with multiple repos the ticket's
+  `repo:<name>` label names the target and you resolve that repo's effective
+  `build`/`defaultBranch`/`deploy`/`contributorSkill` (repo value else top-level, §19). The
+  **doc-home repo** (`role:"docs"` else `"primary"` else `repos[0]`) roots a repo-file
+  design doc. If no config path resolves, ask the user before proceeding.
 
-**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project
-home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if
-it exists, and apply any rule under its **senior-dev**, **Dev**, or **Shared** section this
-fire (conventions §14). A lesson can pre-empt an action — if a rule would have you skip or
-block something, honor it.
+**Reports & operator review:** conventions §22 — at fire start finalize any due
+daily/weekly/monthly roll-up and distill un-acted `*.review.md` reviews (the §22
+carve-out); at close append the daily entry (a pure no-op fire appends nothing).
 
-**Reports & operator review (conventions §22).** At run-start (after `lessons.md`):
-finalize any due daily / weekly / monthly roll-up (cadence derived from your reports tree —
-newest file per level, or your report doc under `reports.sink:"linear"` (§23), with
-`date +%F` / `+%G-W%V` / `+%Y-%m`) and act on any **un-acted** operator review (点评) of
-your reports — distill it into one rule under your **own** `lessons.md` section (§14, citing
-it; a locked read-modify-write) and mark it acted with a machine-owned
-`<report>.review.acted` sidecar (or the `reports-state.json` ledger under
-`reports.sink:"linear"`, §23); a structural ask is a §17 `[senior-dev-proposal]`, never a
-self-edit. At close (§3), append this fire's terse entry to today's daily report — **skip a
-pure no-op fire**. Respect `mode` (§12): in `dry-run`, write nothing.
-
-**Codex — optional power tools (conventions §24).** Only when `codex.enabled` **and** the
-`codex` CLI is on `PATH` (else exactly as today — a missing Codex is a graceful fallback,
-never an error). When on, Codex may assist your **direct-code** mode exactly as it assists
-`dev` (an independent review of your diff, an image asset an AC requires, a one-shot rescue
-before you block `fix-exhausted`), each gated by its sub-flag; in **design mode** you may use
-Codex's `image_generation` to sharpen a design with a diagram/mockup (a spec aid, never a
-production asset). Codex is **advisory** — it never touches the backend, never bypasses your
-gates, `mode`, `autonomy`, or §16, and you own the ship. Use the non-interactive `codex exec`
-forms (`< /dev/null`, `-C <target repo>`); see
-`${CLAUDE_PLUGIN_ROOT}/references/codex-integration.md`.
+**Codex (optional, §24 + references/codex-integration.md):** direct-code mode uses the same
+sub-flags as `dev` (`codex.review` of your diff, `codex.imageGen` for an AC-required asset,
+`codex.rescue` once before a `fix-exhausted` block); design mode may use `image_generation`
+only as a spec aid (a diagram/mockup, never a production asset) — sub-flag-gated, advisory,
+non-interactive.
 
 **Open every run** with a one-line summary: project, backend, Linear project/team,
 `repoPath`, `mode`, `autonomy` (§12a), and — for any direct-code ticket — the ship policy
@@ -184,11 +156,12 @@ labels are REPLACE-style — or you'll drop `dev-loop`/owner/dev-tier labels.)
   | Marker on the ticket | Mode | Go to |
   |---|---|---|
   | `Mode: design` (a design / new-module / new-feature ticket) | **design-and-delegate** | Step 4 |
-  | `Mode: direct-code` (an escalation follow-up — naturally `relatedTo` a `Canceled` `review failed:` ticket) | **direct-code** | Step 5 |
+  | `Mode: direct-code` (an escalation follow-up — naturally `relatedTo` a `Canceled` `review failed:` / `re-test failed:` ticket) | **direct-code** | Step 5 |
 
   If a senior-assigned ticket carries **no** explicit `Mode:` marker, infer from its nature:
   a new-module/new-feature ask ⇒ design; an escalation `relatedTo` a `Canceled`
-  `review failed:` ticket ⇒ direct-code. If genuinely ambiguous, **block it**
+  `review failed:` or `re-test failed:` ticket (both cancel grammars are canonical, §21a) ⇒
+  direct-code. If genuinely ambiguous, **block it**
   (`Bail-shape: decision-needed`, routed to PM) — don't guess the mode.
 
 ### Step 4 — DESIGN-AND-DELEGATE mode (the normal complex path)
@@ -269,45 +242,30 @@ Author the design, decompose it into staged child tickets, hand the design paren
 
 ### Step 5 — DIRECT-CODE mode (escalation: code it yourself)
 This is an escalation follow-up: a junior-built ticket failed verification on a **real**
-defect, PM `Canceled`d it and filed **this** ticket carrying the remaining work, routed to
-you. **You code it directly — NO design, NO delegation.** opus + max on the work the cheaper
-tier couldn't get right. Run the **full `dev-agent` build/ship sequence by reference** —
-inherit it; do **not** re-derive the gates:
+defect, so the **verifier** (PM for a Feature/Improvement, QA for a Bug — §21a) `Canceled`d
+it and filed **this** ticket carrying the remaining work, routed to you. **You code it
+directly — NO design, NO delegation.** opus + max on the work the cheaper tier couldn't get
+right.
 
-- **Implement (dev-agent Step 4).** Work in the target repo's path. Read the repo's
-  contributor skill (else its CLAUDE.md) first and match its conventions. Read the **failed
-  ticket's `review failed:` comment** (and any linked design, if the escalation traces to a
-  module design) to understand exactly what the junior build got wrong, then make the smallest
-  change that satisfies **all** ACs. **Cover the change (§15):** add a regression test that
-  fails before / passes after (run it in the gate), or file a deduped `[coverage]` follow-up
-  before hand-off; docs-only/pure-refactor/no-testable-surface are exempt (say so). The split
-  rule (ship the testable slice + file follow-ups) and the dormant-behind-a-flag rule apply
-  unchanged.
-- **Gate before shipping (dev-agent Step 5).** Run the target repo's resolved `build`
-  (`typecheck`/`build`/`test`) in order. A red build never ships — fix it, or revert and
-  **block** with the failure output. Heed the two gate traps (a glob test command that runs
-  only the first file; prod-mutating tests that must not run as a gate).
-- **Self-review the diff (dev-agent Step 5.5).** Spec-compliance against the ACs
-  (MISSING/EXTRA/MISUNDERSTANDING — verify the diff, not your memory) **then** a code-review
-  pass (invoke a `code-review` skill at effort `medium` if present, plus the independent Codex
-  review when `codex.review` is on, §24). Treat **Critical/High** findings as **blocking** —
-  fix this run, or revert + block `Bail-shape: fix-exhausted`. (Codex rescue: one pass before
-  blocking, when `codex.rescue` is on; ship its patch only if it then passes these same gates.)
-- **Ship (dev-agent Step 6) + post-deploy smoke + rollback (Step 6.5).** Ship per config
-  (`autoCommit`/`autoPush`/`autoDeploy` + the target repo's resolved `deploy.command`),
-  commit referencing the ticket id. If you deployed to prod, smoke-check
-  (`deploy.healthCheck` else `testEnv.baseUrl` non-5xx), retry once, and on a confirmed break
-  **revert + redeploy + reopen `Bail-shape: fix-exhausted`** — never leave prod red. Honor
-  `mode`/`autonomy` exactly (under `autonomy:"full"` the prod-deploy authorization is standing;
-  otherwise confirm the first irreversible prod deploy).
-- **Hand off to `In Review`** for the **verification owner** — PM for Feature/Improvement, QA
-  for Bug (the `pm`/`qa` label is unchanged; the dev-tier marker is orthogonal). Comment what
-  you changed, where (files/routes), how you verified the gates, the commit/deploy ref, the
-  coverage outcome (§15), and the ACs to verify. Then loop to Step 1.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/dev-agent/SKILL.md` Steps 4–6.5 and Step 7 and execute
+them verbatim** — implement (Step 4), gate (Step 5), self-review (Step 5.5), ship (Step 6),
+post-deploy smoke + rollback (Step 6.5), hand off to `In Review` (Step 7) — with every
+qualifier, cap, and gate trap exactly as written **there**; this file deliberately carries
+no summary of them, so never work from memory of the sequence. The only senior-specific
+deltas:
+
+- **Before coding:** read the failed ticket's `review failed:` / `re-test failed:` comment
+  (and any linked design doc, if the escalation traces to a module design) so you know
+  exactly what the junior build got wrong before making the smallest change that satisfies
+  **all** ACs.
+- **Ship under your own `senior-dev` identity** — the claim, commits, comments, and the
+  In-Review hand-off are yours, not `dev`'s.
+
+Then loop to Step 1.
 
 > **If your direct-code fix ALSO fails verify** → it's `Bail-shape: fix-exhausted` →
 > **`Human-Blocked`** (operator). The loop has exhausted both automated tiers (junior, then
-> senior); PM parks it for the operator (`Human-Blocked` on `service`; the
+> senior); the **verifier** parks it for the operator (`Human-Blocked` on `service`; the
 > `blocked`+`needs-pm`+`external-prereq` park on `linear`/`local`, §9). This is the existing
 > fix-exhausted terminal — you don't route code-fixing anywhere else (PM/QA don't write code),
 > and you never wait for a human inline.

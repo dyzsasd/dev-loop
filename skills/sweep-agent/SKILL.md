@@ -40,33 +40,21 @@ override this file on conflict:
 trust conversation memory for state; on a hard failure log one line and exit (the
 next fire retries). See conventions §0.
 
-Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
-`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
-as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `git`, `mode`,
-`autonomy` (§12a), and — if present — `repos[]` (conventions §19; absent/one ⇒
-single-repo = just `repoPath`, unchanged). If no config path resolves, ask the user before proceeding.
+**Boot — run the standard boot sequence (conventions §0):** conventions → config (§11)
+→ backend (§18: `linear` default / `local` file board / `service` hub — same
+operations, different transport) → lessons (§14: your **Sweep** section + `## Shared`)
+→ §22 report start. Sweep-specific boot notes:
 
-**All ticket operations go through the configured `backend` (conventions §18).**
-`backend` absent ⇒ `"linear"` (the Linear MCP, as written below); `"local"` routes the
-same list/get/update/comment operations to a machine-local file board with identical
-state machine, labels, and protocols. Read every
-`list_issues`/`get_issue`/`save_issue`/comment call below as "via the configured backend (§18)."
+- From config, load `linearProject`, `linearTeam`, `repoPath`, `git`, `mode`,
+  `autonomy` (§12a), and — if present — `repos[]` (conventions §19; absent/one ⇒
+  single-repo = just `repoPath`, unchanged). If no config path resolves, ask the user
+  before proceeding.
+- Read every `list_issues`/`get_issue`/`save_issue`/comment call below as "via the
+  configured backend (§18)."
 
-**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if it exists, and apply any
-rule under its **Sweep** or **Shared** section this fire (conventions §14).
-
-**Reports & operator review (conventions §22).** At run-start (after `lessons.md`):
-finalize any due daily / weekly / monthly roll-up (cadence derived from your reports tree
-— newest file per level, or your Linear report doc under `reports.sink:"linear"` (§23),
-with `date +%F` / `+%G-W%V` / `+%Y-%m`) and act on any
-**un-acted** operator review (点评) of your reports — distill it into one rule under your
-**own** `lessons.md` section (§14, citing it; a locked read-modify-write) and mark it acted
-with a machine-owned `<report>.review.acted` sidecar (or the `reports-state.json` ledger
-under `reports.sink:"linear"`, §23); a structural ask is a §17
-`[<agent>-proposal]`, never a self-edit. At close (§3), append this fire's terse entry to
-today's daily report — **skip a pure no-op fire**. Respect `mode` (§12): in `dry-run`,
-write nothing.
+**Reports & operator review:** conventions §22 — at fire start finalize any due
+daily/weekly/monthly roll-up and distill un-acted `*.review.md` reviews (the §22
+carve-out); at close append the daily entry (a pure no-op fire appends nothing).
 
 **Open every run** with a one-line summary: project, Linear project/team, and
 `mode`. In `dry-run`, make **no** Linear mutations — print the fixes you *would*
@@ -86,9 +74,10 @@ its owner label is picked up by **nobody**. Find and fix them:
 - Query `project` + `label:"dev-loop"` in non-terminal states (`Todo`, `In Progress`,
   `In Review`) and inspect each ticket's labels against the §4 taxonomy:
   - **No owner label** (`pm`/`qa` both absent) → assign the owner per type (§4):
-    `Feature` → `pm`; `Bug` → `qa`; `Improvement` → `pm` by default, `qa` if it
-    carries `coverage` or was clearly QA-driven. Re-pass the **full** label set, then
-    re-fetch to confirm (§10), and comment why.
+    `Feature` → `pm`; `Bug` → `qa` (an `incident` Bug is `qa` too, §4); `Improvement` →
+    `pm` by default, `qa` if it carries `coverage` or `tech-debt` (an Architect-filed
+    refactor is QA-verifiable, §4) or was clearly QA-driven. Re-pass the **full** label
+    set, then re-fetch to confirm (§10), and comment why.
   - **Owner/type contradiction** (e.g. a `Bug` tagged `pm` only, a `Feature` tagged
     `qa` only) → fix the owner label to match type so the correct agent verifies it.
   - **Missing type label** (no `Feature`/`Bug`/`Improvement`) → if the title/body
@@ -99,8 +88,11 @@ its owner label is picked up by **nobody**. Find and fix them:
     a comment and report it. **Never guess a repo** (same discipline as never guessing a
     type) — a wrong target ships to the wrong tree. Single-repo projects have no
     `repo:*` labels; skip this check.
-  - **No dev-tier marker** (split-dev project only, §21a; config `devSplit:true` or scheduler
-    context `DEVLOOP_DEV_SPLIT:true`): a `Todo` dev ticket
+  - **No dev-tier marker — or both** (split-dev project only). **Dev model & tier
+    routing:** conventions §21a — split-dev is detected ONLY from the explicit signals
+    (`devSplit:true` config / `DEVLOOP_DEV_SPLIT` runtime), never inferred from
+    history/models{}/tickets; every filed dev ticket gets its tier per the §21a Routing
+    rule, encoded per backend (§18). A `Todo` dev ticket
     (`Feature`/`Bug`/`Improvement`, not `blocked`, not a design parent awaiting its gate)
     that carries **neither** `senior-dev` nor `junior-dev` (the `assignee` actor on
     `service` / the dev-tier label on `linear`/`local`) is invisible to **both** dev
@@ -108,7 +100,12 @@ its owner label is picked up by **nobody**. Find and fix them:
     bug-fix/improvement), `senior-dev` only if the title/body clearly describe a new
     module/feature needing design ("when borderline, junior", §21a). Re-pass the full set
     + re-fetch (§10), comment why. This is the §21a-named safety net for a filer that
-    forgot the tier. Legacy single-dev projects (no split) have no dev-tier labels — skip.
+    forgot the tier. The opposite fault is as bad: a ticket carrying **both** tier labels
+    (possible on `linear`/`local`, where the shared Linear identity means both tiers'
+    pick-queries match it and both §7 re-checks pass) gets **concurrently
+    double-implemented** — keep the correct tier per the §21a Routing rule, drop the
+    other (full set + re-fetch, §10), and comment what was fixed. Legacy single-dev
+    projects (no split) have no dev-tier labels — skip.
 A ticket stuck `In Review` is *usually* this bug — fixing the owner label is what
 lets PM/QA finally verify it.
 

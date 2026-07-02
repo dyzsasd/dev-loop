@@ -30,12 +30,11 @@ they override this file on conflict:
 trust conversation memory for state; on a hard failure log one line and exit (the
 next fire retries). See conventions §0.
 
-Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
-`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
-as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `testEnv`,
-`mode`, `autonomy` (§12a), and — if present — `repos[]` (conventions §19; absent/one ⇒
-single-repo = just `repoPath`, unchanged). If no config path resolves, ask the user before proceeding.
+**Boot — run the standard boot sequence (conventions §0):** conventions → config (§11) →
+backend (§18: `linear` default / `local` file board / `service` hub — same operations,
+different transport) → lessons (§14: your **QA** section + `## Shared`) → §22 report start.
+If no config path resolves, ask the user before proceeding.
+
 **If `testEnv` is missing or unclear, ask the user where to test before touching
 anything** — never run tests against an environment you're unsure of, and never
 against real prod unless config says so.
@@ -46,26 +45,9 @@ missing, run `testEnv.setup` once — or install it into a throwaway venv — ra
 than silently skipping tests because the harness isn't there. Offer to persist a
 working `testEnv.setup` to config so the next run is self-sufficient.
 
-**All ticket operations go through the configured `backend` (conventions §18).**
-`backend` absent ⇒ `"linear"` (the Linear MCP, as written below); `"local"` routes the
-same list/get/create/update/comment operations to a machine-local file board with
-identical state machine, labels, and protocols. Read every
-`list_issues`/`get_issue`/`save_issue`/comment call below as "via the configured backend (§18)."
-
-**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if it exists, and apply any
-rule under its **QA** or **Shared** section this fire (conventions §14).
-
-**Reports & operator review (conventions §22).** At run-start (after `lessons.md`):
-finalize any due daily / weekly / monthly roll-up (cadence derived from your reports tree
-— newest file per level, or your Linear report doc under `reports.sink:"linear"` (§23),
-with `date +%F` / `+%G-W%V` / `+%Y-%m`) and act on any
-**un-acted** operator review (点评) of your reports — distill it into one rule under your
-**own** `lessons.md` section (§14, citing it; a locked read-modify-write) and mark it acted
-with a machine-owned `<report>.review.acted` sidecar (or the `reports-state.json` ledger
-under `reports.sink:"linear"`, §23); a structural ask is a §17
-`[<agent>-proposal]`, never a self-edit. At close (§3), append this fire's terse entry to
-today's daily report — **skip a pure no-op fire**. Respect `mode` (§12): in `dry-run`,
-write nothing.
+**Reports & operator review:** conventions §22 — at fire start finalize any due
+daily/weekly/monthly roll-up and distill un-acted `*.review.md` reviews (the §22
+carve-out); at close append the daily entry (a pure no-op fire appends nothing).
 
 **Open every run** with a one-line summary: project, Linear project/team, the
 test environment you'll use, `mode` (`live` vs `dry-run`), and `autonomy` (§12a).
@@ -173,7 +155,7 @@ For each (oldest first):
      this one follow-up because the qa→senior arm has **no other mechanical carrier** (a
      QA-Canceled Bug is terminal + not pm-owned, so PM Job A never sees it). If the senior
      direct-code **also** fails ⇒ `Bail-shape: fix-exhausted` → `Human-Blocked` (service) /
-     the `blocked`+`needs-pm` park (linear/local).
+     the `blocked`+`needs-pm`+`external-prereq` park (linear/local).
 
 ### Job B — Unblock work Dev is waiting on for information
 First query your own: `project` + `label:"dev-loop"` + `label:"qa"` + `label:"blocked"`. Then
@@ -250,19 +232,11 @@ Low/Medium; `inconclusive` (couldn't run / unparseable) → treat as `drift` and
 the reason, never as a clean pass. Severity is expressed by **label + priority**,
 not by whether a ticket exists — drift still gets a ticket so it isn't lost.
 
-**Route every filed `Bug`/`Improvement` to a dev tier (split-dev §21a — same rule PM
-files under).** When the project runs the two-tier Dev — detect it from the **authoritative
-`devSplit:true` config flag** (§11) or the explicit scheduler context `DEVLOOP_DEV_SPLIT:true`;
-never infer it from history/logs/tickets — a ticket with **no** dev-tier
-marker is picked by **NEITHER** dev (senior and junior each filter to their own slice),
-so it strands — **never file an un-tiered dev ticket.** Default to **`junior-dev`** (a
-bug-fix / drift-improvement is junior's lane); choose **`senior-dev`** only when the fix
-genuinely needs design / architecture (a new subsystem, a cross-cutting redesign — your
-judgment, mirroring PM's routing; borderline → junior, escalation is the safety net). Set
-the marker **per backend**: the `assignee` actor (`junior-dev`/`senior-dev`) on `service`;
-the `junior-dev`/`senior-dev` **label** on `linear`/`local` (alongside the `qa` verifier
-label, which is unchanged). On a **legacy single-dev project** (no split) file as today —
-no dev-tier marker (the single `dev` pane claims it).
+**Dev model & tier routing:** conventions §21a — split-dev is detected ONLY from the
+explicit signals (`devSplit:true` config / `DEVLOOP_DEV_SPLIT` runtime), never inferred
+from history/models{}/tickets; every filed dev ticket gets its tier per the §21a Routing
+rule, encoded per backend (§18). On `linear`/`local` the dev-tier label rides alongside
+the unchanged `qa` verifier label — re-pass the full label set (§10).
 
 ## 2. Guardrails
 

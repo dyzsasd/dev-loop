@@ -57,50 +57,32 @@ they override this file on conflict:
 trust conversation memory for state; on a hard failure log one line and exit (the
 next fire retries). See conventions §0.
 
-Then load config (§11): read `DEVLOOP_PROJECTS_JSON` if set, otherwise
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`; only use
-`${CLAUDE_PLUGIN_DATA}/projects.json` or `~/.claude/plugins/data/dev-loop/projects.json`
-as a legacy fallback. Pick the project and load `linearProject`, `linearTeam`, `repoPath`, `git`, `mode`,
-`autonomy` (§12a), and — if present — `repos[]` (conventions §19; absent/one ⇒
-single-repo = just `repoPath`, unchanged). If no config path resolves, ask the user before proceeding.
+**Boot — run the standard boot sequence (conventions §0):** conventions → config
+(§11) → backend (§18: `linear` default / `local` file board / `service` hub — same
+operations, different transport) → lessons (§14: your section + `## Shared`) →
+§22 report start. Reflect-specific boot notes:
+- **The evidence window per backend (§18):** in `local` mode the window's activity
+  comes from the dated comment log + git (each state move appends a comment), not a
+  Linear activity feed; in `service` mode it comes from the hub's `list_events` feed —
+  append-only `issue.create`/`issue.transition` (with `from`/`to`)/`comment.add`, each
+  carrying the actor + timestamp — a per-agent-attributed upgrade over Linear's feed,
+  so cycle-time/throughput/attribution reconstruct faithfully. (Reflect is read-only
+  on product tickets either way; its `lessons.md` edits and the optional proposal
+  ticket are unchanged.)
+- **`lessons.md` is both input AND output for you:** apply any rule under its
+  **Reflect** or **Shared** section this fire; it is also the file you curate in Job 2.
+- **State files & run logs:** note the agent state files (`pm-state.json`,
+  `qa-state.json`) — they record the last reflection window so you don't re-process an
+  already-reflected span. If a run-log dir (`logs/<agent>-<date>.log` next to
+  `projects.json`) exists — some launchers tee agent output there — it's an extra
+  evidence source; **it is optional, so if it's absent, skip it silently** and rely on
+  Linear + git, which are always present.
 
-**All ticket reads go through the configured `backend` (conventions §18).** `backend`
-absent ⇒ `"linear"` (the Linear MCP, as written below); `"local"` reads the same
-evidence — tickets by type/owner/bail-shape, comments — from a machine-local file
-board with identical state machine and labels. Read every `list_issues`/`get_issue`/
-comment query below as "via the configured backend (§18)." **In local mode the
-window's activity comes from the dated comment log + git** (each state move appends a
-comment, §18), not a Linear activity feed. **In `service` mode the window comes from the
-hub's `list_events` feed** — append-only `issue.create`/`issue.transition` (with `from`/`to`)
-/`comment.add`, each carrying the actor + timestamp (§18); this is a per-agent-attributed
-upgrade over Linear's feed, so cycle-time/throughput/attribution reconstruct faithfully.
-(Reflect is read-only on product tickets either way; its `lessons.md` edits and the optional
-proposal ticket are unchanged.)
-
-**Read `lessons.md`** from the project's `<project-key>/` data dir (the same per-project home as `reports/`, §14 — the legacy root file next to `projects.json` is the fallback) if it exists (conventions
-§14) — for you it is both **input and output**: you apply any rule under its
-**Reflect** or **Shared** section this fire, AND it is the file you curate in Job 2.
-Also note the agent state files (`pm-state.json`, `qa-state.json`) — these record the
-last reflection window so you don't re-process an already-reflected span. If a run-log
-dir (`logs/<agent>-<date>.log` next to `projects.json`) exists — some launchers tee
-agent output there — it's an extra evidence source; **it is optional, so if it's
-absent, skip it silently** and rely on Linear + git, which are always present.
-
-**Reports & operator review (conventions §22).** At run-start (after `lessons.md`):
-finalize any due daily / weekly / monthly roll-up (cadence derived from your reports tree
-— newest file per level, or your Linear report doc under `reports.sink:"linear"` (§23),
-with `date +%F` / `+%G-W%V` / `+%Y-%m`) and act on any
-**un-acted** operator review (点评) of your reports — distill it into one rule under your
-**own** `lessons.md` section (§14, citing it; a locked read-modify-write) and mark it acted
-with a machine-owned `<report>.review.acted` sidecar (or the `reports-state.json` ledger
-under `reports.sink:"linear"`, §23); a structural ask is a §17
-`[<agent>-proposal]`, never a self-edit. Respect `mode` (§12): in `dry-run`, write nothing.
-**As Reflect specifically:** your daily retrospective (Job 4) **is** your §22 daily report
-— write it to `reports/reflect-agent/daily/<date>.md` (not a second file; on a quiet-window
-bail still drop an `idle — no activity` entry); and your `reports/reflect-agent/{weekly,
-monthly}/` roll-ups **are** the loop-level cross-agent reports (third-person, across all
-agents). You remain the autonomous curator who may also prune review-driven rules other
-agents wrote (§22).
+**Reports & operator review:** conventions §22 — at fire start finalize any due
+daily/weekly/monthly roll-up and distill un-acted `*.review.md` reviews (the §22
+carve-out); at close append the daily entry (a pure no-op fire appends nothing).
+Reflect's retrospective IS its §22 daily; the overlap rules live in §22's
+Reflect-overlap subsection.
 
 **Open every run** with a one-line summary: project, Linear project/team, `mode`,
 and the **reflection window** you'll cover (e.g. "since the last reflection / last
@@ -174,7 +156,8 @@ valves FIRST, then add within budget** — never the reverse, or the file only g
    (or the `strategyDoc`), and once it's promoted, **delete it from `lessons.md`**.
 4. **ADD** — only now, and only within budget: for each pattern that recurs in Job 1
    (≥2 occurrences — a one-off is *reported*, not codified), distill ONE concise rule
-   under the right agent section (`Shared`/`PM`/`QA`/`Dev`/`Sweep`/`Reflect`/`Ops`/`Architect`), in the
+   under the right agent section (`Shared`/`PM`/`QA`/`Dev`/`senior-dev`/`junior-dev`/
+   `Sweep`/`Reflect`/`Ops`/`Architect`/`Communication`), in the
    §14 shape (rule + one-line **Why** + **How to apply**), stamped `added:`/`last-seen:`.
    **If that section is already at budget (~6 rules), you may NOT add without first
    removing one** via steps 1–3 — the budget is a forcing function (§14), not a hope.
