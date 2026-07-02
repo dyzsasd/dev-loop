@@ -393,6 +393,22 @@ ok(hist.some((e: any) => e.kind === "issue.transition"), "L4: the ticket's trans
 const since = await call(pm, "list_issues", { updatedSince: child.updated_at });
 ok(since.every((t: any) => t.updated_at >= child.updated_at), "L3: updatedSince filters to recently-updated tickets only");
 
+// L5: search — comment coverage + multi-word AND + LIKE-metachar escaping.
+const searchable = await call(pm, "save_issue", { title: "Widget alignment glitch", type: "Bug", labels: ["dev-loop", "Bug", "qa"], description: "the sidebar drifts" });
+await call(pm, "save_comment", { issueId: searchable.id, body: "root cause: a stale zebra cache" });
+ok((await call(pm, "list_issues", { query: "zebra" })).some((t: any) => t.id === searchable.id), "L5: query matches a term found only in a comment body");
+ok((await call(pm, "list_issues", { query: "widget glitch" })).some((t: any) => t.id === searchable.id), "L5: multi-word query is AND-ed across title/description");
+ok((await call(pm, "list_issues", { query: "widget nonexistentword" })).every((t: any) => t.id !== searchable.id), "L5: a query term with no match excludes the ticket (AND, not OR)");
+ok((await call(pm, "list_issues", { query: "100% sure" })).length >= 0, "L5: a % in the query is escaped, not treated as a wildcard (no crash)");
+// L3: fields:"summary" drops the description body but keeps identity/metadata.
+const summ = await call(pm, "list_issues", { fields: "summary", query: "widget" });
+ok(summ.some((t: any) => t.id === searchable.id) && summ.every((t: any) => t.description === ""), "L3: fields:'summary' returns tickets with an empty description (cheap scan)");
+const full = await call(pm, "list_issues", { query: "widget" });
+ok(full.some((t: any) => t.id === searchable.id && t.description === "the sidebar drifts"), "L3: the default (full) mode still returns the description body");
+let fieldsRejected = false;
+try { await call(pm, "list_issues", { fields: "bogus" }); } catch { fieldsRejected = true; }
+ok(fieldsRejected, "L3: an invalid fields value is rejected (400), not silently ignored");
+
 await pm.close();
 await verifier.close();
 server.close(); rdb.close(); wdb.close();

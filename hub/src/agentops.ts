@@ -128,7 +128,7 @@ function prodPromotionRejection(db: DatabaseSync, projectId: string, actor: stri
 // two ops share so they can't drift (DL-65 hoisted opSaveIssue's original local helper to module scope).
 const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
-export interface ListIssuesArgs { state?: string; assignee?: string; type?: string; label?: string; labels?: string[]; query?: string; relatedTo?: string; updatedSince?: string; limit?: number }
+export interface ListIssuesArgs { state?: string; assignee?: string; type?: string; label?: string; labels?: string[]; query?: string; relatedTo?: string; updatedSince?: string; fields?: string; limit?: number }
 function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: ListIssuesArgs): OpResult {
   // Re-validate the raw-JSON arg shapes the stdio path gets from zod (server.ts: query/assignee
   // z.string().optional(), labels z.array(z.string()).optional()). Without this a non-string `query`
@@ -142,6 +142,7 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   if (a.assignee !== undefined && typeof a.assignee !== "string") return errR(400, "assignee must be a string");
   if (a.relatedTo !== undefined && typeof a.relatedTo !== "string") return errR(400, "relatedTo must be a string");
   if (a.updatedSince !== undefined && typeof a.updatedSince !== "string") return errR(400, "updatedSince must be an ISO string");
+  if (a.fields !== undefined && a.fields !== "full" && a.fields !== "summary") return errR(400, "fields must be 'full' or 'summary'");
   // Push the equality filters (state/type/assignee) into SQL — byte-identical result set to the old
   // load-all-then-JS-filter, but fewer rows scanned + JSON.parsed per call. The (project_id, updated_at DESC)
   // index serves the ORDER BY without a temp B-tree. label/query stay in JS (need parsed JSON / substring);
@@ -151,12 +152,29 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   if (a.type) { where.push("type=?"); binds.push(a.type); }
   if (a.assignee) { const who = resolveAssignee(actor, a.assignee); where.push(who === null ? "assignee IS NULL" : "assignee=?"); if (who !== null) binds.push(who); }
   if (a.updatedSince) { where.push("updated_at>=?"); binds.push(a.updatedSince); } // incremental board reads
+  // L5: search is pushed to SQL — LIKE over title/description PLUS an EXISTS over comments(body), so the §8
+  // dedup query catches a reworded duplicate whose only match is in a comment (e.g. a "review failed:" note).
+  // Whitespace splits the query into AND-ed terms (a multi-noun query like "daemon health probe" matches only
+  // tickets hitting every term). SQLite LIKE is case-insensitive for ASCII; %/_/\ in a term are escaped so a
+  // literal % can't act as a wildcard.
+  if (a.query && a.query.trim()) {
+    for (const term of a.query.trim().split(/\s+/)) {
+      const like = `%${term.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
+      where.push("(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR EXISTS(SELECT 1 FROM comments c WHERE c.ticket_id=tickets.id AND c.body LIKE ? ESCAPE '\\'))");
+      binds.push(like, like, like);
+    }
+  }
   let out = (db.prepare(`SELECT * FROM tickets WHERE ${where.join(" AND ")} ORDER BY updated_at DESC`).all(...binds) as unknown as TicketRow[]).map(toTicket);
   const want = [...(a.labels ?? []), ...(a.label ? [a.label] : [])];
   if (want.length) out = out.filter((t) => want.every((l) => t.labels.includes(l)));
   if (a.relatedTo) out = out.filter((t) => t.relatedTo.includes(a.relatedTo!)); // L1: e.g. a design parent's staged children
-  if (a.query) { const q = a.query.toLowerCase(); out = out.filter((t) => t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)); }
-  return okR(a.limit ? out.slice(0, a.limit) : out);
+  // L3: a default cap of 250 (the schema max) bounds a pathological unbounded read without regressing any
+  // realistic board (which returned everything before); an explicit limit still wins. fields:"summary" drops
+  // the description body — the bulk of the bytes (a 26-ticket board was ~100KB of descriptions) — for a
+  // cheap board scan; the full body stays on get_issue.
+  out = out.slice(0, a.limit ?? 250);
+  if (a.fields === "summary") out = out.map((t) => ({ ...t, description: "" }));
+  return okR(out);
 }
 
 function opGetIssue(db: DatabaseSync, projectId: string, projectKey: string, a: { id?: string }): OpResult {

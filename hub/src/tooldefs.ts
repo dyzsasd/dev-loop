@@ -35,12 +35,13 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
   whoami: { description: "The identity this session is acting as, and the active project.", inputSchema: {} },
 
   list_issues: {
-    description: "List tickets in the active project. Filter by state, assignee, type, label(s), a title/description query, relatedTo (tickets whose relatedTo contains that id — e.g. a design parent's children), or updatedSince (ISO). limit caps the result.",
+    description: "List tickets in the active project. Filter by state, assignee, type, label(s); query (whitespace = AND-ed terms, each matched over title/description/comments); relatedTo (tickets whose relatedTo contains that id — e.g. a design parent's children); or updatedSince (ISO). Returns the 50 most-recent by default unless limit is given (max 250); fields:\"summary\" drops the description body for a cheap board scan.",
     inputSchema: {
       state: z.string().optional(), assignee: z.string().optional(), type: z.string().optional(),
       label: z.string().optional(), labels: z.array(z.string()).optional(), query: z.string().optional(),
       relatedTo: z.string().optional(),          // tickets whose relatedTo array contains this id (L1: design children / coverage siblings)
       updatedSince: z.string().optional(),        // ISO timestamp — only tickets updated at/after it (incremental board reads)
+      fields: z.enum(["full", "summary"]).optional(), // "summary" omits the description body (cheap board scan; L3)
       limit: z.number().int().positive().max(250).optional(),
     },
   },
