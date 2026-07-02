@@ -20,9 +20,9 @@ import { openDb } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode } from "./node-runtime.ts";
-import { devloopProjectsPath, hubDbPath } from "./paths.ts";
+import { devloopProjectsPath, hubDbPath, pkgVersion } from "./paths.ts";
 
-interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; }
+interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; version?: string; actor?: string; }
 const DEFAULT_DAEMON_PORT = 8787;
 const AUTOSTART_LABEL = "com.dyzsasd.dev-loop.daemon";
 
@@ -155,14 +155,21 @@ async function lcFreePort(start: number, host: string, tries = 64): Promise<numb
   return start; // give up probing — the spawned daemon will surface EADDRINUSE loudly rather than silently
 }
 async function lcProbe(url: string, key: string, timeoutMs = 1000): Promise<boolean> {
+  return !!(await lcHealthInfo(url, key, timeoutMs));
+}
+// Like lcProbe but returns the health body (version/actor) on success, null otherwise — so `up` can
+// detect a daemon still running PRE-UPGRADE code (version ≠ this CLI's) and restart it (D1). Without
+// this, an `npm i -g` upgrade never takes effect on a running detached daemon until reboot / manual down.
+async function lcHealthInfo(url: string, key: string, timeoutMs = 1000): Promise<{ version?: string; actor?: string } | null> {
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), timeoutMs);
     const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
-    if (r.status !== 200) return false;
-    const b = (await r.json().catch(() => null)) as { ok?: boolean; project?: string } | null;
-    return !!b && b.ok === true && b.project === key; // confirm it's OUR project on that port, not a stranger
-  } catch { return false; }
+    if (r.status !== 200) return null;
+    const b = (await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; actor?: string } | null;
+    if (!b || b.ok !== true || b.project !== key) return null; // confirm it's OUR project on that port, not a stranger
+    return { version: b.version, actor: b.actor };
+  } catch { return null; }
 }
 async function lcWaitHealthy(url: string, key: string, totalMs = 8000): Promise<boolean> {
   const deadline = Date.now() + totalMs;
@@ -193,9 +200,14 @@ async function daemonUpForKey(key: string): Promise<number> {
   // common case (the DL-42 hook fires `up` on every pane, but the daemon is usually already up), so routine
   // `up`s never serialize on the lock — only an actual cold start does.
   const pre = lcReadRun(key);
-  if (pre && lcIsAlive(pre.pid) && await lcProbe(pre.url, key)) {
-    console.log(`[daemon] up: already running for '${key}' → ${pre.url} (pid ${pre.pid})`);
-    return 0;
+  if (pre && lcIsAlive(pre.pid)) {
+    const info = await lcHealthInfo(pre.url, key);
+    if (info && (info.version ?? "") === pkgVersion()) {
+      console.log(`[daemon] up: already running for '${key}' → ${pre.url} (pid ${pre.pid})`);
+      return 0;
+    }
+    if (info) console.log(`[daemon] up: '${key}' is running old code (v${info.version || "?"} ≠ v${pkgVersion()}) — restarting to pick up the upgrade`);
+    // else: bound but unhealthy — fall through to the locked cold-start path, which stops + respawns it.
   }
   // DL-46: serialize cold start under the per-project lock — the second concurrent `up` waits here, then
   // re-reads the runfile below and no-ops on the winner (no second spawn, no last-writer-wins runfile race).
@@ -205,9 +217,10 @@ async function daemonUpForKey(key: string): Promise<number> {
   try {
     const existing = lcReadRun(key);
     if (existing && lcIsAlive(existing.pid)) {
-      if (await lcProbe(existing.url, key)) { console.log(`[daemon] up: already running for '${key}' → ${existing.url} (pid ${existing.pid})`); return 0; }
-      // alive but not answering /api/health (now a real DB-writable probe) — a bound-but-wedged daemon;
-      // fully stop it (SIGTERM→SIGKILL) so we cleanly restart on its port rather than no-op onto a dead one.
+      const info = await lcHealthInfo(existing.url, key);
+      if (info && (info.version ?? "") === pkgVersion()) { console.log(`[daemon] up: already running for '${key}' → ${existing.url} (pid ${existing.pid})`); return 0; }
+      // Either not answering /api/health (a bound-but-wedged daemon) OR running pre-upgrade code — stop it
+      // (SIGTERM→SIGKILL) so we cleanly restart on its port rather than no-op onto a dead / stale process.
       await lcStop(existing.pid);
     }
     // port: explicit env override > recorded (stable across restarts) > fixed default 8787; probe for free.
@@ -226,7 +239,11 @@ async function daemonUpForKey(key: string): Promise<number> {
     const child = spawn(node, [self], {
       detached: true,                                   // survive the launching session (DL-42 hook)
       stdio: ["ignore", logFd, logFd],
-      env: { ...process.env, DEVLOOP_NODE: node, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
+      // Pin DEVLOOP_ACTOR=operator (D5): `up` is often invoked from an agent fire's env (the SessionStart
+      // hook, an inherited scheduler fire) where DEVLOOP_ACTOR=<agent>. Without pinning, the daemon adopts
+      // that actor — silently mis-attributing human writes and mis-gating publish (operator-only). The
+      // daemon is operator-owned infrastructure regardless of who happened to trigger `up`.
+      env: { ...process.env, DEVLOOP_ACTOR: "operator", DEVLOOP_NODE: node, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
     });
     child.unref();
     closeSync(logFd);
@@ -237,7 +254,8 @@ async function daemonUpForKey(key: string): Promise<number> {
       await lcStop(child.pid); // never leak a slow/wedged child — escalate to SIGKILL if SIGTERM doesn't take
       return 1;
     }
-    lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString() });
+    const started = await lcHealthInfo(url, key); // record what actually came up (version/actor) for `status` + upgrade detection
+    lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString(), version: started?.version ?? pkgVersion(), actor: started?.actor ?? "operator" });
     console.log(`[daemon] up: started '${key}' → ${url} (pid ${child.pid})`);
     return 0;
   } finally {
@@ -286,9 +304,16 @@ async function daemonStatus(): Promise<number> {
   const key = lcResolveKey();
   if (!key) { console.log("[daemon] status: no project resolved (DEVLOOP_PROJECT unset, cwd outside every repo). Set DEVLOOP_PROJECT=<key>, or run from inside a configured repo."); return 0; }
   const info = lcReadRun(key);
-  if (info && lcIsAlive(info.pid) && (await lcProbe(info.url, key))) {
-    console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid})`);
-    return 0;
+  if (info && lcIsAlive(info.pid)) {
+    const live = await lcHealthInfo(info.url, key);
+    if (live) {
+      const ver = live.version || info.version || "?";
+      const stale = ver !== "?" && ver !== pkgVersion() ? ` — running OLD code v${ver}, CLI is v${pkgVersion()}; run \`dev-loop daemon up\` to restart` : "";
+      const actor = live.actor || info.actor;
+      const misId = actor && actor !== "operator" ? ` — WARNING actor='${actor}' (not operator; publish/attribution may be mis-gated)` : "";
+      console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid}, v${ver}, actor=${actor ?? "?"})${stale}${misId}`);
+      return 0;
+    }
   }
   if (info && !lcIsAlive(info.pid)) lcRemoveRun(key); // a dead pid must never read as "running" — clear it
   console.log(`[daemon] status: '${key}' stopped. Start it with \`dev-loop daemon up\`.`);
@@ -335,9 +360,9 @@ ${envXml ? `  <key>EnvironmentVariables</key>\n  <dict>\n${envXml}\n  </dict>\n`
 </plist>
 `;
   writeFileSync(plist, xml);
-  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
-  execFileSync("launchctl", ["bootstrap", `gui/${process.getuid()}`, plist], { stdio: "inherit" });
-  execFileSync("launchctl", ["enable", `gui/${process.getuid()}/${AUTOSTART_LABEL}`], { stdio: "inherit" });
+  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
+  execFileSync("launchctl", ["bootstrap", `gui/${process.getuid!()}`, plist], { stdio: "inherit" });
+  execFileSync("launchctl", ["enable", `gui/${process.getuid!()}/${AUTOSTART_LABEL}`], { stdio: "inherit" });
   console.log(`[daemon] autostart installed → ${plist}`);
   console.log(`[daemon] LaunchAgent runs \`${node} ${self} up-all\` at login for configured service projects.`);
   return 0;
@@ -349,7 +374,7 @@ function uninstallAutostart(): number {
     return 1;
   }
   const plist = launchAgentPath();
-  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
+  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
   try { unlinkSync(plist); } catch { /* already gone */ }
   console.log(`[daemon] autostart removed → ${plist}`);
   return 0;

@@ -124,7 +124,7 @@ ok(view.text.includes("&lt;script&gt;alert(1)") && !view.text.includes("<script>
 // ─── DL-17: read-only activity & throughput view over the events ledger ───
 const act = await getHtml("/activity");
 ok(act.status === 200 && act.type.includes("text/html"), "DL-17: GET /activity → 200 text/html (activity view)");
-ok(act.text.includes("<!doctype html") && act.text.includes("<h1>Activity</h1>"), "DL-17: /activity is an HTML page titled Activity");
+ok(act.text.includes("<!doctype html") && /<h1>Activity\b/.test(act.text), "DL-17: /activity is an HTML page titled Activity");
 // AC1 — the recent-events feed shows the seeded create / transition(from→to) / comment events, newest-first
 ok(act.text.includes(feat.id) && act.text.includes("created"), "DL-17 AC1: feed shows an issue.create event (ticket id + 'created')");
 ok(act.text.includes("moved") && act.text.includes("→") && act.text.includes(">Done<"), "DL-17 AC1: feed shows an issue.transition with from→to (the In Review→Done move)");
@@ -158,10 +158,12 @@ const hread = openDb(DB); hread.exec("PRAGMA query_only=ON");
 const hsrv = createDaemon({ db: hread, projectId, projectKey: "dmn", writeDb: hwrite, actor: "operator" });
 hsrv.listen(0, "127.0.0.1"); await once(hsrv, "listening");
 const hbase = `http://127.0.0.1:${(hsrv.address() as { port: number }).port}`;
-const hLive = await fetch(hbase + "/api/health"); const hLiveBody = await hLive.json();
+const hLive = await fetch(hbase + "/api/health"); const hLiveBody = await hLive.json() as { ok?: boolean; version?: string; actor?: string };
 ok(hLive.status === 200 && hLiveBody.ok === true, "DL-41: /api/health → 200 ok:true while the SoR is writable (a real read+write probe, not a static 200)");
+ok(typeof hLiveBody.version === "string" && hLiveBody.actor === "operator",
+  "health body carries version + actor (D1/D5: `daemon up` restarts stale-version code; `status` surfaces a mis-identified daemon)");
 hwrite.close();                       // simulate a bound-but-wedged daemon: its write connection is dead
-const hWedged = await fetch(hbase + "/api/health"); const hWedgedBody = await hWedged.json().catch(() => ({}));
+const hWedged = await fetch(hbase + "/api/health"); const hWedgedBody = await hWedged.json().catch(() => ({})) as { ok?: boolean };
 ok(hWedged.status === 503 && hWedgedBody.ok === false, "DL-41: a wedged (unwritable) SoR → /api/health 503 ok:false (lifecycle then reclaims it)");
 hsrv.close(); hread.close();
 

@@ -1,7 +1,8 @@
 // dev-loop hub — the agent op-API ops as plain functions: the SINGLE definition of every ticket/read policy
 // the hub exposes. BOTH transports dispatch through these: the DL-43 daemon agent op-API (/api/op/*) and —
-// since DL-69 (the dispatch-sharing refactor) — the stdio MCP server (server.ts), whose 27 op-backed tool
-// handlers are now thin call-throughs to agentOp() (server.ts's toMcp() maps {status,body}→MCP ok()/err()).
+// since DL-69 (the dispatch-sharing refactor) — the stdio MCP server (server.ts), whose op-backed tool
+// handlers (TOOL_NAMES minus whoami) are now thin call-throughs to agentOp() (server.ts's toMcp() maps
+// {status,body}→MCP ok()/err()).
 // So each policy — the read SELECTs, the save_issue/save_comment orchestration (the DL-24 per-transition
 // assignTo + the DL-32 prod-promotion gate + the REPLACE-labels/APPEND-relatedTo merge), and the doc/
 // channel/mirror/label families (which also reuse the shared ticketwrite/docstore/channelstore/
@@ -14,10 +15,9 @@
 // HTTP-shaped { status, body }: the daemon serializes it as JSON; server.ts's toMcp() maps it to ok()/err()
 // (a 200 → ok(body); a non-200 → err(body.error)). NO env read, NO mode gate, NO transport here — each
 // transport owns its own pipeline (server.ts the stdio identity; the daemon op-API writeOriginOk → actor →
-// mode-honoring) AROUND these pure-policy ops. (whoami + create_issue_label stay native in server.ts: whoami
-// is transport-specific identity, not an op; create_issue_label's policy already lives once in labelstore, and
-// the op logs an op-API-only label.create attribution event server.ts deliberately does not — DL-69 kept it
-// native so the stdio path stays byte-identical.)
+// mode-honoring) AROUND these pure-policy ops. (Only whoami stays native in server.ts — transport-specific
+// identity, not an op. create_issue_label was the last native override; it now dispatches through here too,
+// so its label.create attribution event fires identically on both transports.)
 import { DatabaseSync } from "node:sqlite";
 import { TOOL_NAMES, type ToolName } from "./tooldefs.ts"; // DL-85: the ONE tool/op name source; AGENT_OPS derives from it
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
@@ -128,7 +128,7 @@ function prodPromotionRejection(db: DatabaseSync, projectId: string, actor: stri
 // two ops share so they can't drift (DL-65 hoisted opSaveIssue's original local helper to module scope).
 const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
-export interface ListIssuesArgs { state?: string; assignee?: string; type?: string; label?: string; labels?: string[]; query?: string; limit?: number }
+export interface ListIssuesArgs { state?: string; assignee?: string; type?: string; label?: string; labels?: string[]; query?: string; relatedTo?: string; updatedSince?: string; limit?: number }
 function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: ListIssuesArgs): OpResult {
   // Re-validate the raw-JSON arg shapes the stdio path gets from zod (server.ts: query/assignee
   // z.string().optional(), labels z.array(z.string()).optional()). Without this a non-string `query`
@@ -140,12 +140,21 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   if (a.query !== undefined && typeof a.query !== "string") return errR(400, "query must be a string");
   if (a.labels !== undefined && !isStrArr(a.labels)) return errR(400, "labels must be an array of strings");
   if (a.assignee !== undefined && typeof a.assignee !== "string") return errR(400, "assignee must be a string");
-  let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as TicketRow[]).map(toTicket);
-  if (a.state) out = out.filter((t) => t.state === a.state);
-  if (a.assignee) out = out.filter((t) => t.assignee === resolveAssignee(actor, a.assignee));
-  if (a.type) out = out.filter((t) => t.type === a.type);
+  if (a.relatedTo !== undefined && typeof a.relatedTo !== "string") return errR(400, "relatedTo must be a string");
+  if (a.updatedSince !== undefined && typeof a.updatedSince !== "string") return errR(400, "updatedSince must be an ISO string");
+  // Push the equality filters (state/type/assignee) into SQL — byte-identical result set to the old
+  // load-all-then-JS-filter, but fewer rows scanned + JSON.parsed per call. The (project_id, updated_at DESC)
+  // index serves the ORDER BY without a temp B-tree. label/query stay in JS (need parsed JSON / substring);
+  // LIMIT stays in JS because a label/query filter can reduce the count after SQL.
+  const where = ["project_id=?"]; const binds: (string | null)[] = [projectId];
+  if (a.state) { where.push("state=?"); binds.push(a.state); }
+  if (a.type) { where.push("type=?"); binds.push(a.type); }
+  if (a.assignee) { const who = resolveAssignee(actor, a.assignee); where.push(who === null ? "assignee IS NULL" : "assignee=?"); if (who !== null) binds.push(who); }
+  if (a.updatedSince) { where.push("updated_at>=?"); binds.push(a.updatedSince); } // incremental board reads
+  let out = (db.prepare(`SELECT * FROM tickets WHERE ${where.join(" AND ")} ORDER BY updated_at DESC`).all(...binds) as unknown as TicketRow[]).map(toTicket);
   const want = [...(a.labels ?? []), ...(a.label ? [a.label] : [])];
   if (want.length) out = out.filter((t) => want.every((l) => t.labels.includes(l)));
+  if (a.relatedTo) out = out.filter((t) => t.relatedTo.includes(a.relatedTo!)); // L1: e.g. a design parent's staged children
   if (a.query) { const q = a.query.toLowerCase(); out = out.filter((t) => t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)); }
   return okR(a.limit ? out.slice(0, a.limit) : out);
 }
@@ -155,7 +164,13 @@ function opGetIssue(db: DatabaseSync, projectId: string, projectKey: string, a: 
   const r = getRow(db, projectId, a.id);
   if (!r) return errR(404, `no such ticket ${a.id} in ${projectKey}`);
   const comments = db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(a.id);
-  return okR({ ...toTicket(r), comments });
+  // L1: reverse of relatedTo — the tickets that point AT this one (a design parent sees its staged children;
+  // a bug sees its coverage follow-up). related_to is a JSON array, so match the quoted id as a substring
+  // (cheap at hub scale) then confirm membership after parse to avoid a false hit on a shared prefix.
+  const referencedBy = (db.prepare("SELECT id,related_to FROM tickets WHERE project_id=? AND related_to LIKE ?").all(projectId, `%${JSON.stringify(a.id)}%`) as { id: string; related_to: string }[])
+    .filter((row) => { try { return (JSON.parse(row.related_to) as string[]).includes(a.id!); } catch { return false; } })
+    .map((row) => row.id);
+  return okR({ ...toTicket(r), comments, referencedBy });
 }
 
 export interface SaveIssueArgs {
@@ -238,10 +253,13 @@ function opListComments(db: DatabaseSync, projectId: string, projectKey: string,
 // to the stdio ok() body — the differential-parity tripwire). The doc WRITES delegate to the shared
 // docstore (docSave/docPublish), so the CAS + the single operator-publish gate live in ONE place.
 
-function opListEvents(db: DatabaseSync, projectId: string, a: { limit?: number }): OpResult {
+function opListEvents(db: DatabaseSync, projectId: string, a: { ticketId?: string; limit?: number }): OpResult {
   // mirror server.ts's zod (limit: int 1..500) — the op-API parses raw JSON, so a bad limit must be a clean
   // 400 here, never bound into LIMIT (a non-int bind throws in node:sqlite → a 500; an uncapped limit drifts).
   if (a.limit !== undefined && (!Number.isInteger(a.limit) || (a.limit as number) <= 0 || (a.limit as number) > 500)) return errR(400, "limit must be an integer 1..500");
+  if (a.ticketId !== undefined && typeof a.ticketId !== "string") return errR(400, "ticketId must be a string");
+  // L4: a ticketId scopes to one ticket's history (rides idx_events_ticket); else the project-wide feed.
+  if (a.ticketId) return okR(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? AND ticket_id=? ORDER BY id DESC LIMIT ?").all(projectId, a.ticketId, a.limit ?? 50));
   return okR(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? ORDER BY id DESC LIMIT ?").all(projectId, a.limit ?? 50));
 }
 
@@ -403,10 +421,8 @@ function opListLabels(db: DatabaseSync, projectId: string): OpResult {
 
 // `db` MUST be a WRITABLE connection. Validation (DL-22 empty-name + LABEL_KINDS) lives in the shared createLabel
 // so server.ts + the op-API can't drift. The attributed `label.create` event is logged HERE (the identity win).
-// DL-69 note: this is the ONE op server.ts does NOT dispatch through — its create_issue_label stays a native
-// createLabel call that logs NO event, so the stdio path stays byte-identical (routing it here would ADD that
-// event to stdio = new behavior, out of scope for a behavior-preserving refactor). Unifying that attribution
-// onto the stdio path is a deliberate behavior change for a follow-up; both paths return {name,kind} identically.
+// Both transports now dispatch through this op (server.ts's former native override was removed) — so the
+// label.create attribution event fires on stdio AND the op-API, the last DL-69 transport divergence closed.
 function opCreateLabel(db: DatabaseSync, projectId: string, actor: string, a: { name?: unknown; kind?: unknown }): OpResult {
   if (typeof a.name !== "string") return errR(400, "name required (a string)"); // server.ts zod: name z.string() — a non-string would crash createLabel's .trim()
   if (a.kind !== undefined && typeof a.kind !== "string") return errR(400, "kind must be a string");

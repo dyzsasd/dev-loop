@@ -11,7 +11,7 @@ const timeoutMs = (): number => Number(process.env.DEVLOOP_MIRROR_TIMEOUT_MS) ||
 // and env is already the trust boundary for the token, so this adds no new exposure. Read at call time.
 const endpoint = (): string => process.env.DEVLOOP_LINEAR_API_URL || "https://api.linear.app/graphql";
 
-export interface MirrorIssue { title: string; description: string; stateId?: string; }
+export interface MirrorIssue { title: string; description: string; stateId?: string; priority?: number; }
 
 async function gql(
   fetchImpl: FetchImpl, token: string, query: string, variables: Record<string, unknown>,
@@ -53,6 +53,7 @@ export async function createIssue(
   const input: Record<string, unknown> = { teamId, title: issue.title, description: issue.description };
   if (projectId) input.projectId = projectId;
   if (issue.stateId) input.stateId = issue.stateId;
+  if (issue.priority !== undefined) input.priority = issue.priority; // L2: hub priority IS Linear's 0-4 convention (native, sortable) — not just body text
   const d = await gql(fetchImpl, token,
     "mutation($i:IssueCreateInput!){ issueCreate(input:$i){ success issue{ id } } }", { i: input });
   const r = d.issueCreate as { success?: boolean; issue?: { id: string } } | undefined;
@@ -65,6 +66,7 @@ export async function updateIssue(
 ): Promise<void> {
   const input: Record<string, unknown> = { title: issue.title, description: issue.description };
   if (issue.stateId) input.stateId = issue.stateId;
+  if (issue.priority !== undefined) input.priority = issue.priority; // L2: native Linear priority (0-4), so the mirror board sorts/filters
   const d = await gql(fetchImpl, token,
     "mutation($id:String!,$i:IssueUpdateInput!){ issueUpdate(id:$id, input:$i){ success } }", { id, i: input });
   const r = d.issueUpdate as { success?: boolean } | undefined;

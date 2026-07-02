@@ -35,10 +35,12 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
   whoami: { description: "The identity this session is acting as, and the active project.", inputSchema: {} },
 
   list_issues: {
-    description: "List tickets in the active project. Filter by state, assignee, type, label(s), or a title query.",
+    description: "List tickets in the active project. Filter by state, assignee, type, label(s), a title/description query, relatedTo (tickets whose relatedTo contains that id — e.g. a design parent's children), or updatedSince (ISO). limit caps the result.",
     inputSchema: {
       state: z.string().optional(), assignee: z.string().optional(), type: z.string().optional(),
       label: z.string().optional(), labels: z.array(z.string()).optional(), query: z.string().optional(),
+      relatedTo: z.string().optional(),          // tickets whose relatedTo array contains this id (L1: design children / coverage siblings)
+      updatedSince: z.string().optional(),        // ISO timestamp — only tickets updated at/after it (incremental board reads)
       limit: z.number().int().positive().max(250).optional(),
     },
   },
@@ -61,7 +63,7 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
   create_issue_label: { description: "Create a label if missing (idempotent).", inputSchema: { name: z.string(), kind: z.string().optional() } },
 
   get_project: { description: "The active project.", inputSchema: {} },
-  list_events: { description: "Recent attribution/audit events (who did what).", inputSchema: { limit: z.number().int().positive().max(500).optional() } },
+  list_events: { description: "Recent attribution/audit events (who did what). Pass ticketId to get one ticket's history (transitions, comments, label changes) newest-first.", inputSchema: { ticketId: z.string().optional(), limit: z.number().int().positive().max(500).optional() } },
 
   "doc.list": { description: "List this project's documents (no bodies).", inputSchema: { kind: z.string().optional() } },
   "doc.get": {

@@ -375,6 +375,24 @@ ok((await op("mirror.status", {}, DEV)).status === 404, "flag-off (live toggle):
 ok((await op("get_project", {}, DEV)).status === 404, "flag-off (live toggle): op get_project → 404 again (the label/project family goes dormant with the flag)");
 ok((await getJson("/api/tickets")).status === 200, "flag-off (live toggle): GET /api/tickets still serves (read surface unchanged)");
 
+// ─── L1/L4 Linear-parity reads (stdio path; the shim parity suite covers op-API ≡ stdio) ───
+// L1: relatedTo query + get_issue.referencedBy — a design parent and its staged child.
+const parent = await call(pm, "save_issue", { title: "Design parent", type: "Feature", labels: ["dev-loop", "Feature", "pm"] });
+const child = await call(pm, "save_issue", { title: "Staged child", type: "Feature", labels: ["dev-loop", "Feature", "pm"], relatedTo: [parent.id] });
+const kids = await call(pm, "list_issues", { relatedTo: parent.id });
+ok(Array.isArray(kids) && kids.length === 1 && kids[0].id === child.id, "L1: list_issues relatedTo:<parent> → the staged child (not a full-board scan)");
+const parentFull = await call(pm, "get_issue", { id: parent.id });
+ok(Array.isArray(parentFull.referencedBy) && parentFull.referencedBy.includes(child.id), "L1: get_issue.referencedBy is the reverse link (parent sees its child)");
+ok(!parentFull.referencedBy.includes(parent.id), "L1: referencedBy excludes self / non-referrers");
+// L4: list_events ticketId → one ticket's history (the child got a create + a transition if moved).
+await call(pm, "save_issue", { id: child.id, state: "In Progress", assignee: "me" });
+const hist = await call(pm, "list_events", { ticketId: child.id });
+ok(Array.isArray(hist) && hist.length >= 2 && hist.every((e: any) => e.ticket_id === child.id), "L4: list_events ticketId → only that ticket's events");
+ok(hist.some((e: any) => e.kind === "issue.transition"), "L4: the ticket's transition is in its scoped history");
+// updatedSince: the just-touched child is newer than the parent's created_at.
+const since = await call(pm, "list_issues", { updatedSince: child.updated_at });
+ok(since.every((t: any) => t.updated_at >= child.updated_at), "L3: updatedSince filters to recently-updated tickets only");
+
 await pm.close();
 await verifier.close();
 server.close(); rdb.close(); wdb.close();

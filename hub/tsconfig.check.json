@@ -1,0 +1,13 @@
+{
+  "//": "Typecheck-only config (npm run typecheck; CI + release gate). The build stays noCheck (tsconfig.build.json) — this is where types are actually verified. Covers src/ AND test/.",
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "noCheck": false,
+    "strict": true,
+    "noEmit": true,
+    "types": ["node"],
+    "outDir": null,
+    "rootDir": null
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, logEvent } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig } from "./resolve-project.ts";
-import { hubDbPath } from "./paths.ts";
+import { hubDbPath, pkgVersion } from "./paths.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
@@ -69,6 +69,10 @@ function htmlOut(res: ServerResponse, status: number, body: string): void {
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(body),
     "cache-control": "no-store",
+    // Defense-in-depth (the pages interpolate escaped agent-authored DB text; CSP is the belt to esc()'s
+    // braces). Inline style + the tiny inline live-updates script are allowed; connect-src 'self' lets the
+    // EventSource reach /api/stream; nothing else (no remote script/img/frame). Matches the writeOriginOk posture.
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'; form-action 'self'; base-uri 'none'",
   });
   res.end(body);
 }
@@ -86,11 +90,17 @@ function healthLiveness(db: DatabaseSync, writeDb?: DatabaseSync): { ok: boolean
       // BEGIN IMMEDIATE takes the reserved write lock; ROLLBACK releases it — nothing persists. A
       // SQLITE_BUSY means another writer holds it ⇒ the SoR IS writable (just momentarily contended) ⇒
       // healthy; only a non-busy error (readonly fs / corrupt / disk-full / closed handle) is a real wedge.
+      // Probe with busy_timeout=0 (restored after): on the normal busy_timeout=5000 connection a
+      // cross-process write lock (a migration rebuild, an operator txn) stalls this synchronous exec —
+      // and the whole single-threaded daemon — for up to 5s, so the lifecycle's 1s probe times out and
+      // SIGTERMs a HEALTHY daemon. With 0, BUSY returns immediately and is already treated as healthy.
+      try { writeDb.exec("PRAGMA busy_timeout=0"); } catch { /* probe still works, just blockingly */ }
       try { writeDb.exec("BEGIN IMMEDIATE; ROLLBACK;"); }
       catch (e) {
         try { writeDb.exec("ROLLBACK"); } catch { /* no open txn to undo */ }
         if (!/busy|locked/i.test(String((e as Error)?.message ?? e))) throw e;
       }
+      finally { try { writeDb.exec("PRAGMA busy_timeout=5000"); } catch { /* connection may be wedged */ } }
     }
     return { ok: true };
   } catch (e) {
@@ -241,14 +251,15 @@ async function handleTicketWrite(seg: string[], req: IncomingMessage, res: Serve
 }
 
 // ─── DL-43: opt-in daemon agent op-API (/api/op/*) — the MCP↔daemon unification foundation (P1) ───────────
-// A DORMANT, default-OFF loopback surface serving the 5 core ticket ops (agentops.ts, mirroring server.ts
-// 1:1) so a later increment's thin stdio MCP shim (P2) can proxy to the daemon instead of opening hub.db
-// directly. Gated on settings_json.hub.transport==="daemon" (read FRESH per request, the DL-29 humanWrite
-// pattern): unset/≠"daemon" ⇒ the /api/op/* mount is dormant → 404 and every read/roadmap surface is
-// byte-for-byte unchanged. server.ts (the stdio transport) is 100% untouched. handleAgentOp owns the full
-// endpoint pipeline: writeOriginOk (DL-19 CSRF/DNS-rebind wall) → the X-Devloop-Actor header → the G1
-// phantom-actor guard → (writes only) the dry-run mode gate → dispatch. Read ops use the query_only `db`;
-// write ops use the writable `writeDb` (the same connection the human-write routes write through).
+// A DORMANT, default-OFF loopback surface dispatching every AGENT_OPS op — the full tool set minus whoami
+// (agentops.ts, mirroring server.ts 1:1) — so a later increment's thin stdio MCP shim (P2) can proxy to the
+// daemon instead of opening hub.db directly. Gated on settings_json.hub.transport==="daemon" (read FRESH per
+// request, the DL-29 humanWrite pattern): unset/≠"daemon" ⇒ the /api/op/* mount is dormant → 404 and every
+// read/roadmap surface is byte-for-byte unchanged. server.ts (the stdio transport) is 100% untouched.
+// handleAgentOp owns the full endpoint pipeline: writeOriginOk (DL-19 CSRF/DNS-rebind wall) → the
+// X-Devloop-Actor header → the G1 phantom-actor guard → (writes only) the dry-run mode gate → dispatch.
+// Read ops use the query_only `db`; write ops use the writable `writeDb` (the same connection the
+// human-write routes write through).
 function agentApiEnabled(db: DatabaseSync, projectId: string): boolean {
   try {
     const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
@@ -313,6 +324,7 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
 // optional DL-3 /roadmap/* POST routes write the roadmap doc through the separate `writeDb` connection.
 export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadmapRepoFileStrategy }: DaemonOpts): Server {
   const canWrite = !!writeDb && !!actor;
+  let streamCount = 0; const MAX_STREAMS = 16; // bound concurrent SSE connections (one operator, a few tabs)
   return createServer(async (req, res) => {
     const method = req.method ?? "GET";
     let url: URL;
@@ -407,11 +419,37 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadma
         });
       }
 
+      // GET /api/stream — SSE live-update channel (the DL-2 no-JS doctrine was amended by the operator to
+      // allow a tiny inline progressive-enhancement script, 2026-07-02). Poll-push, never blocking: a timer
+      // checks max(events.id) — an O(1) read on the AUTOINCREMENT PK — and emits only when it ADVANCES, so
+      // the board/activity pages refresh themselves as agents mutate the ledger. node:sqlite is synchronous,
+      // so we poll on a setInterval (a few ms of work) rather than hold any long DB operation.
+      if (path === "/api/stream") {
+        if (streamCount >= MAX_STREAMS) return json(res, 503, { error: "too many live connections" });
+        streamCount++;
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", "connection": "keep-alive", "x-accel-buffering": "no" });
+        const maxId = (): number => Number((db.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events WHERE project_id=?").get(projectId) as { m: number }).m);
+        let last = maxId();
+        res.write(`retry: 3000\ndata: ${last}\n\n`); // initial baseline + client reconnect hint
+        const iv = setInterval(() => {
+          try { const now = maxId(); if (now !== last) { last = now; res.write(`data: ${now}\n\n`); } else { res.write(": ping\n\n"); } }
+          catch { /* transient read error — the next tick retries; never crash the daemon */ }
+        }, 2000);
+        iv.unref?.();
+        const done = () => { clearInterval(iv); streamCount--; };
+        req.on("close", done); res.on("close", done);
+        return;
+      }
+
       // GET /api/health — a REAL DB-writable liveness check (DL-41), not a static 200: a bound-but-wedged
       // daemon (SoR unreadable/unwritable) returns 503 ok:false so the lifecycle `up`/`status` recover it.
       if (path === "/api/health") {
         const h = healthLiveness(db, writeDb);
-        return json(res, h.ok ? 200 : 503, h.ok ? { ok: true, project: projectKey } : { ok: false, project: projectKey, error: h.error });
+        // version: lets `daemon up` detect a daemon still running pre-upgrade code and restart it;
+        // actor: surfaces a mis-identified daemon (e.g. one cold-started from an agent fire's env).
+        return json(res, h.ok ? 200 : 503, h.ok
+          ? { ok: true, project: projectKey, version: pkgVersion(), actor }
+          : { ok: false, project: projectKey, version: pkgVersion(), actor, error: h.error });
       }
 
       // GET /api/tickets — board, project-scoped (§2), filter by state/type/label/assignee (+ optional limit).
@@ -541,7 +579,9 @@ export function startBlockedNotifier(opts: {
   if (!getEnabledChannel(opts.writeDb, opts.projectId) && !resolveNotifyWebhook(opts.notify)) return null; // neither ⇒ true no-op
   const cadenceMs = opts.cadenceHours * 3_600_000;
   const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_BLOCKED_TICK_MS) || 60_000);
-  const run = () => { void blockedNotifyTick({ ...opts, cadenceMs, nowMs: Date.now() }); };
+  // .catch, not void: a throw from the tick's DB reads (transient SQLITE_BUSY, disk error) was an
+  // unhandled rejection that killed the WHOLE daemon; a failed tick must just retry next interval.
+  const run = () => { blockedNotifyTick({ ...opts, cadenceMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] blocked-notifier tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
   const timer = setInterval(run, tickMs);
   timer.unref?.();  // never keep the process alive solely for the notifier
   run();            // immediate first tick — a fresh park is announced without waiting a full interval
@@ -641,7 +681,7 @@ export function startNoProgressNotifier(opts: {
   // Re-check ≈ hourly by default (the stall window is measured in hours; a tighter poll just re-scans the
   // ledger for nothing, and the marker de-dup makes any extra tick harmless). Env-overridable for tests.
   const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_NOPROGRESS_TICK_MS) || 3_600_000);
-  const run = () => { void noProgressNotifyTick({ ...opts, windowMs, nowMs: Date.now() }); };
+  const run = () => { noProgressNotifyTick({ ...opts, windowMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] no-progress tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
   const timer = setInterval(run, tickMs);
   timer.unref?.();  // never keep the process alive solely for this detector
   run();            // immediate first tick — a stall already in progress at boot is caught without waiting
@@ -696,6 +736,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
   const db = openDb(DB_PATH);
   db.exec("PRAGMA query_only=ON"); // structural read-only: this connection can never write the SoR
+  // Defense-in-depth alongside the notifier .catch handlers: any OTHER stray rejection logs instead of
+  // killing a daemon that agents and the operator depend on (nothing here should reject, but the cost of
+  // a silent crash — a dead board UI + dead notifiers until the next `up` — is far higher than a log line).
+  process.on("unhandledRejection", (e) => console.error(`[daemon] unhandled rejection (daemon stays up): ${scrubErr(String((e as Error)?.message ?? e))}`));
   // No ensureActors/auto-create here: like the MCP server's G2 guard, refuse to serve a phantom board.
   const projectId = findProject(db, PROJECT_KEY);
   if (!projectId) {

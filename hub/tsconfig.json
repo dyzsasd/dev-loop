@@ -1,0 +1,4 @@
+{
+  "//": "Editor/default config — same strict view the typecheck gate uses. Build uses tsconfig.build.json explicitly; runtime execution is Node type-stripping and never reads a tsconfig.",
+  "extends": "./tsconfig.check.json"
+}

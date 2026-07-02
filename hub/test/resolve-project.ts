@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { resolveProjectFromCwd } from "../src/resolve-project.ts";
+import { resolveProjectFromCwd, loadProjectsConfig } from "../src/resolve-project.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -56,6 +56,23 @@ async function whoamiFrom(project: string, cwd: string): Promise<any> {
 }
 ok((await whoamiFrom("", R("work/repo/sub"))).project === "alpha", "empty DEVLOOP_PROJECT + cwd under a repo → hub auto-pins that project");
 ok((await whoamiFrom("beta", R("work/repo/sub"))).project === "beta", "an explicit DEVLOOP_PROJECT WINS over the cwd match");
+
+// ── DX regression: a malformed projects.json must be LOUD, not silently identical to "no config" ──
+// (a hand-edit trailing comma used to surface as a wrong "project not resolved" / doctor mis-diagnosis)
+{
+  const badPath = join(ROOT, "bad.projects.json");
+  writeFileSync(badPath, '{"projects": {"alpha": {"repoPath": "/x"},}}'); // trailing comma
+  const prevEnv = process.env.DEVLOOP_PROJECTS_JSON;
+  process.env.DEVLOOP_PROJECTS_JSON = badPath;
+  const errs: string[] = [];
+  const origErr = console.error;
+  console.error = (...a: unknown[]) => { errs.push(a.map(String).join(" ")); };
+  const cfgBad = loadProjectsConfig();
+  console.error = origErr;
+  if (prevEnv === undefined) delete process.env.DEVLOOP_PROJECTS_JSON; else process.env.DEVLOOP_PROJECTS_JSON = prevEnv;
+  ok(cfgBad === null, "malformed projects.json → null (falls through to next candidate)");
+  ok(errs.some((l) => /malformed JSON/.test(l) && l.includes(badPath)), "malformed projects.json → one loud stderr line naming the file");
+}
 
 console.log(fails === 0 ? "\nRESOLVE_PROJECT_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

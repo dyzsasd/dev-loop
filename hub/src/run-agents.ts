@@ -2,13 +2,17 @@
 // `dev-loop run` — a small scheduler that fires agent SKILLs through a headless CLI.
 // It deliberately does NOT depend on Claude/Codex `/loop`; it owns cadence here and
 // shells out to `claude -p` or `codex exec` once per agent fire.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
+import { openDb, logEvent } from "./db.ts";
+import { findProject } from "./seed.ts";
+import type { DatabaseSync } from "node:sqlite";
 
 const VALID_AGENTS = [
   "pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect",
@@ -174,6 +178,8 @@ type Options = {
   opencodeBin: string;
   codexSafe: boolean;
   maxFires: number;     // 0 = unlimited; else stop after N total fires (cost guard)
+  fireTimeoutMs: number; // 0 = none; else SIGTERM (then SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
+  staggerMs: number;    // boot stagger between the initial slot fires (0 = all at once)
   mcpConfig?: string;   // claude: explicit MCP config; defaults to <cwd>/.mcp.json if present
   extraArgs: string[];
 };
@@ -216,6 +222,8 @@ Options:
   --cwd <path>                working directory for CLI subprocesses (default: project repoPath)
   --mcp-config <path>         claude: MCP config to load + --strict-mcp-config (default: <cwd>/.mcp.json if present)
   --max-fires <n>             stop after N total agent fires, then drain + exit (cost guard; default 0 = unlimited)
+  --fire-timeout <dur>        kill a fire that outlives this (SIGTERM, then SIGKILL after 10s; default 1h; 0 = none)
+  --stagger <dur>             delay between the initial slot fires so a cold boot doesn't launch every agent at once (default 20s; 0 = simultaneous)
   --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
   --cli-arg <arg>             pass an extra arg to the selected CLI before the prompt; may repeat
                               (CLI binaries: set DEVLOOP_CLAUDE_BIN / DEVLOOP_CODEX_BIN / DEVLOOP_OPENCODE_BIN to override)
@@ -271,8 +279,10 @@ function parseArgs(argv: string[]): Options {
   const agentSpecs: string[] = [];
   const intervals = { ...DEFAULT_INTERVALS };
   const extraArgs: string[] = [];
+  const envCli = process.env.DEVLOOP_RUNNER_CLI;
+  if (envCli && !isCodingAgent(envCli)) die(`DEVLOOP_RUNNER_CLI must be claude, codex, or opencode (got '${envCli}')`);
   const opts: Options = {
-    cli: (process.env.DEVLOOP_RUNNER_CLI as RunnerCli) || "claude",
+    cli: (envCli as RunnerCli) || "claude",
     agents: [],
     intervals,
     once: false,
@@ -287,6 +297,8 @@ function parseArgs(argv: string[]): Options {
     opencodeBin: process.env.DEVLOOP_OPENCODE_BIN || "opencode",
     codexSafe: false,
     maxFires: 0,
+    fireTimeoutMs: 60 * 60_000,
+    staggerMs: 20_000,
     extraArgs,
   };
 
@@ -321,6 +333,8 @@ function parseArgs(argv: string[]): Options {
       opts.maxFires = Number(next());
       if (!Number.isInteger(opts.maxFires) || opts.maxFires < 0) die("--max-fires must be a non-negative integer (0 = unlimited)");
     }
+    else if (a === "--fire-timeout") { const v = next(); opts.fireTimeoutMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = disabled (parseDuration rejects non-positive)
+    else if (a === "--stagger") { const v = next(); opts.staggerMs = v.trim() === "0" ? 0 : parseDuration(v); }
     else if (a === "--codex-safe") opts.codexSafe = true;
     else if (a === "--cli-arg") extraArgs.push(next());
     else die(`unknown option '${a}'`);
@@ -487,8 +501,7 @@ function shellQuote(s: string): string {
 // resolved hub db, with the per-fire actor/project. claude takes it as inline --mcp-config JSON;
 // codex takes the same shape as `-c` overrides (which define the server, not just patch env).
 const serverEntry = join(here, `server${EXT}`);
-const hubNode = findCompatibleNode();
-if (!hubNode) die(`dev-loop-hub MCP needs Node >= ${MIN_NODE_VERSION} for node:sqlite. Set DEVLOOP_NODE=/absolute/path/to/node.`);
+const hubNode = findCompatibleNode() ?? die(`dev-loop-hub MCP needs Node >= ${MIN_NODE_VERSION} for node:sqlite. Set DEVLOOP_NODE=/absolute/path/to/node.`);
 const tomlString = (s: string): string => JSON.stringify(s);
 const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
 
@@ -548,6 +561,22 @@ function displayCommand(command: string, args: string[], prompt: string): string
   return [command, ...args.map((a) => a === prompt ? `<prompt:${prompt.length} chars>` : a).map(shellQuote)].join(" ");
 }
 
+// P1 per-fire telemetry: write a `fire.completed` event to the hub so the operator gets a queryable cost/
+// outcome ledger (durationMs, exitCode, model/effort) — the precursor the STRATEGY.md budget-ceiling work
+// was banked on. Best-effort + lazy: opened once, skipped silently on a non-hub (linear/local) project, and
+// never allowed to crash a fire. One writable connection reused across fires (the scheduler is single-writer).
+let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
+function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean): void {
+  try {
+    if (fireDb === undefined) { try { fireDb = openDb(hubDb); } catch { fireDb = null; } }
+    if (!fireDb) return;
+    const projectId = findProject(fireDb, project);
+    if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
+    logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
+      data: { codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut } });
+  } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
+}
+
 async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string): Promise<number> {
   const profile = resolveLaunchProfile(opts, cfg, project, agent);
   const prompt = readPrompt(opts, agent, project, profile);
@@ -574,29 +603,57 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const logDir = opts.logDir || join(opts.dataDir, project, "runner-logs");
   mkdirSync(logDir, { recursive: true });
   const logPath = join(logDir, `${agent}.log`);
+  // Unattended runs append forever — rotate at 50MB (single .1 generation) so a chatty agent can't fill the disk.
+  try { if (statSync(logPath).size > 50 * 1024 * 1024) renameSync(logPath, `${logPath}.1`); } catch { /* no log yet */ }
   const log = createWriteStream(logPath, { flags: "a" });
+  // A stream 'error' with no listener is an uncaught exception that kills the WHOLE scheduler —
+  // one ENOSPC/EACCES on a log file must degrade logging, not take down the loop.
+  log.on("error", (e) => console.error(`[${agent}] runner-log write failed (${e.message}); continuing without file log`));
   log.write(`\n\n===== ${new Date().toISOString()} ${rendered} cwd=${cwd} =====\n`);
-  console.log(`[${new Date().toISOString()}] ${agent}: start (${opts.cli}); log ${logPath}`);
+  console.log(`[${new Date().toISOString()}] ${agent}: start (${profile.codingAgent}); log ${logPath}`);
 
-  const child: ChildProcessWithoutNullStreams = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const startedAt = Date.now();
+  const child: RunnerChild = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   activeChildren.add(child);
   child.stdout.on("data", (d) => { process.stdout.write(`[${agent}] ${d}`); log.write(d); });
   child.stderr.on("data", (d) => { process.stderr.write(`[${agent}] ${d}`); log.write(d); });
 
   return await new Promise((resolveExit) => {
-    child.on("error", (e) => { log.write(`\nERROR: ${e.message}\n`); console.error(`[${agent}] failed to start: ${e.message}`); resolveExit(1); });
-    child.on("close", (code, signal) => {
+    // Fire timeout: without it a wedged CLI child holds its slot's non-reentrancy flag forever —
+    // the agent silently stops firing until the operator notices. SIGTERM first, SIGKILL after 10s
+    // (same escalation shape as the daemon lifecycle's lcStop).
+    let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    const fireTimer = opts.fireTimeoutMs > 0 ? setTimeout(() => {
+      timedOut = true;
+      console.error(`[${agent}] fire exceeded ${formatDuration(opts.fireTimeoutMs)} — SIGTERM (SIGKILL in 10s)`);
+      log.write(`\n===== fire timeout after ${formatDuration(opts.fireTimeoutMs)}: SIGTERM =====\n`);
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => { if (activeChildren.has(child)) child.kill("SIGKILL"); }, 10_000);
+      killTimer.unref?.();
+    }, opts.fireTimeoutMs) : undefined;
+    fireTimer?.unref?.();
+    child.on("error", (e) => { log.write(`\nERROR: ${e.message}\n`); console.error(`[${agent}] failed to start: ${e.message}`); clearTimeout(fireTimer); resolveExit(1); });
+    // Resolve on 'exit', not 'close': 'close' additionally waits for the stdio pipes, which a grandchild
+    // the CLI spawned can hold open long after the CLI itself died — exactly the wedged case the fire
+    // timeout exists for. The log stream stays open until 'close' so late pipe output is still captured.
+    child.on("exit", (code, signal) => {
+      clearTimeout(fireTimer);
+      clearTimeout(killTimer);
       activeChildren.delete(child);
-      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"} =====\n`);
-      log.end();
-      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}`);
-      resolveExit(code ?? 1);
+      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""} =====\n`);
+      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}`);
+      const exitCode = timedOut ? 124 : (code ?? 1);
+      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut);
+      resolveExit(exitCode);
     });
+    child.on("close", () => log.end());
   });
 }
 
 type Slot = { agent: Agent; nextAt: number; running: boolean };
-const activeChildren = new Set<ChildProcessWithoutNullStreams>();
+type RunnerChild = ChildProcessByStdio<null, Readable, Readable>; // stdio: ["ignore","pipe","pipe"]
+const activeChildren = new Set<RunnerChild>();
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
@@ -604,6 +661,24 @@ async function main(): Promise<void> {
   const project = resolveProject(opts, cfg);
   const cwd = resolveCwd(opts, cfg, project);
   if (!existsSync(cwd)) die(`cwd does not exist: ${cwd}`, 1);
+  // Service-backend preflight: an unseeded project means every fire boots the hub MCP straight into its
+  // G2 refusal — the agent runs a full LLM turn with zero board access. Catch it before any tokens burn.
+  const backend = (cfg?.projects?.[project] as { backend?: string } | undefined)?.backend;
+  if (backend === "service") {
+    let seeded = false;
+    try { const probe = openDb(opts.hubDb); try { seeded = !!findProject(probe, project); } finally { probe.close(); } } catch { seeded = false; }
+    if (!seeded) {
+      const hint = `seed it once: dev-loop seed ${project} "<Project Name>" <UNIQUE_PREFIX>`;
+      if (opts.dryRun) console.log(`[dry-run] WARNING: project '${project}' is backend:"service" but not seeded in ${opts.hubDb} — real fires would get no hub tools; ${hint}`);
+      else die(`project '${project}' is backend:"service" but not seeded in the hub DB (${opts.hubDb}) — every fire would burn tokens with no board access; ${hint}`);
+    }
+  } else {
+    // P5: the DL-77 verify gate, the DL-76 no-progress circuit breaker, Human-Blocked reminders, and the
+    // accept-rate/cycle-time metrics are all hub/service-only. An unattended loop on linear/local runs with
+    // NONE of those runaway rails — surface it once at startup so an adopter following the documented default
+    // knows what they're giving up (see the README backend safety matrix).
+    console.warn(`dev-loop run: WARNING backend:"${backend ?? "linear"}" has NO loop-governance rails — the verify gate, no-progress breaker, Human-Blocked reminders, and accept-rate metrics are service-only. For an unattended loop, backend:"service" is strongly recommended.`);
+  }
   console.log(`dev-loop run: cli=${opts.cli} project=${project} cwd=${cwd}`);
   console.log(`dev-loop run: root=${opts.root} data=${opts.dataDir} hubDb=${opts.hubDb}`);
   const cfgDevSplit = cfg?.projects?.[project]?.devSplit === true;
@@ -620,19 +695,47 @@ async function main(): Promise<void> {
     process.exit(results.every((c) => c === 0) ? 0 : 1);
   }
 
-  const slots: Slot[] = opts.agents.map((agent) => ({ agent, nextAt: Date.now(), running: false }));
+  // Cross-process mutual exclusion: two schedulers for one project double-fire every agent AND put two
+  // same-actor fires on one checkout (the §7 claim can't protect a shared working tree). O_EXCL lock with
+  // a liveness-checked stale takeover — the same shape as the daemon lifecycle's cold-start lock.
+  const lockPath = join(process.env.DEVLOOP_RUN_DIR ?? dirname(opts.hubDb), `run-${project}.lock`);
+  if (!opts.dryRun) {
+    const takeLock = () => writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), { flag: "wx" });
+    try { takeLock(); } catch {
+      let holder: { pid?: number } = {};
+      try { holder = JSON.parse(readFileSync(lockPath, "utf8")); } catch { /* unreadable = stale */ }
+      const alive = (() => { try { process.kill(holder.pid ?? -1, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } })();
+      if (alive) die(`another \`dev-loop run\` for '${project}' is already running (pid ${holder.pid}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
+      console.log(`dev-loop run: taking over stale run lock (pid ${holder.pid ?? "?"} is gone)`);
+      try { unlinkSync(lockPath); } catch { /* raced */ }
+      takeLock();
+    }
+    process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
+  }
+
+  // Boot stagger: every slot used to start at nextAt=now, so a cold `core` boot fired 5 CLI processes
+  // simultaneously against one checkout and one hub. Space the initial fires; steady-state cadence is
+  // then completion-relative per slot as before.
+  const slots: Slot[] = opts.agents.map((agent, i) => ({ agent, nextAt: Date.now() + i * opts.staggerMs, running: false }));
   let stopping = false;
   let fired = 0; // total fires started; --max-fires caps it (0 = unlimited)
-  const stop = () => {
+  // Two distinct stop shapes (they were one function, and --max-fires "drain" SIGINT'd the fire it had
+  // just launched): interrupt = operator signal, forward it to children; drain = stop scheduling NEW
+  // fires but let in-flight fires finish (--max-fires' documented contract).
+  const drain = () => {
     if (stopping) return;
     stopping = true;
     clearInterval(timer);
-    console.log("dev-loop run: stopping; forwarding SIGINT to active agent processes");
-    for (const child of activeChildren) child.kill("SIGINT");
     if (activeChildren.size === 0) process.exit(0);
   };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
+  const interrupt = () => {
+    const first = !stopping;
+    drain();
+    if (first) console.log("dev-loop run: stopping; forwarding SIGINT to active agent processes");
+    for (const child of activeChildren) child.kill("SIGINT");
+  };
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
 
   const tick = () => {
     const now = Date.now();
@@ -649,7 +752,7 @@ async function main(): Promise<void> {
         });
       if (opts.maxFires && fired >= opts.maxFires) {
         console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining active fires then exiting`);
-        stop();
+        drain();
         break;
       }
     }

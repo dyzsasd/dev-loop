@@ -252,6 +252,11 @@ Then pick the onboarding path that matches how you want to operate.
 dev-loop init-config
 $EDITOR ~/.dev-loop/projects.json
 
+# backend:"service" only — seed the project's board in the hub once (unique prefix per
+# project). Without this every fire boots the hub MCP into its "not seeded" refusal;
+# `dev-loop run` now preflights it and refuses to start, but seed first anyway.
+dev-loop seed <key> "<Project Name>" <PREFIX>
+
 # Dry-run once from inside the configured product repo.
 cd /path/to/product-repo
 dev-loop run --cli codex --agents core --once --dry-run
@@ -445,6 +450,21 @@ The **work plane** (states, transitions, responsibilities, and the agent loop) i
 across backends. The **surface plane** (per-agent identity, web UI) expands by
 backend. See [conventions §18](references/conventions.md) +
 [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md).
+
+### Loop-governance rails are `service`-only
+
+The runaway/quality rails are built on the hub, so they exist **only** on `backend:"service"`.
+For an **unattended** loop, run `service` — the scheduler prints a warning if you run `linear`/`local`.
+
+| Rail | `linear` | `local` | `service` |
+|---|:---:|:---:|:---:|
+| **Verify gate** (In Progress→Done blocked; Done only via In Review, DL-77) | — | — | ✅ |
+| **No-progress circuit breaker** (alert on 0 accepted change in a window, DL-76) | — | — | ✅ |
+| **Human-Blocked reminders** (DL-26) | — | — | ✅ |
+| **Accept-rate / cycle-time / WIP-aging metrics** (`/activity`) | — | — | ✅ |
+| **Per-fire cost/outcome telemetry** (`fire.completed`) | — | — | ✅ |
+| **Per-agent identity + attribution** | shared Linear id | run token | ✅ real |
+| Convention-only gates (green-build-to-ship, verify-by-owner, the `dev-loop` firewall) | ✅ | ✅ | ✅ |
 
 ## Safety boundary
 

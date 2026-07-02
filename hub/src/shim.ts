@@ -13,7 +13,7 @@
 // whoami (DL-55), PLUS (DL-62) the doc/event family — list_events + doc.list/get/history/diff/save/publish,
 // PLUS (DL-67) the IM channel family — channel.register/send/poll/ack/status, PLUS (DL-68) P7 mirror +
 // label/project — mirror.push/mirror.status + list_issue_labels/create_issue_label/get_project. That is the
-// FINAL slice: the shim now proxies ALL 23 server.ts tools — a 100% server.ts drop-in.
+// FINAL slice: the shim now proxies ALL server.ts tools — a 100% server.ts drop-in.
 // The shim holds NO SoR / NO ticket/doc/channel/mirror logic (Decision #3): a pure thin client over the
 // op-API (which mirrors server.ts 1:1 via agentops.ts + the shared docstore/channelstore/mirrorstore/labelstore).
 //
@@ -126,7 +126,7 @@ function proxy(op: string, args: Record<string, unknown>): Promise<McpResult> {
   });
 }
 
-// ─── the MCP server — the SAME 29 tool names/schemas as server.ts (a 100% drop-in transport, DL-85) ──────────
+// ─── the MCP server — the SAME TOOL_NAMES tools/schemas as server.ts (a 100% drop-in transport, DL-85) ───────
 const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 
 // tooldefs.ts owns every tool's { name, description, inputSchema } (shared with server.ts); the shim supplies

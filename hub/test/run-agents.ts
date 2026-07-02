@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -152,6 +152,34 @@ try {
 
   const bad = run(["--cli", "claude", "--once", "--dry-run", "--agents", "nope", ...common]);
   ok(bad.code === 2 && /unknown agent\/group 'nope'/.test(bad.out), "unknown agent fails with a usage error");
+
+  // DX regression: a garbage DEVLOOP_RUNNER_CLI used to crash with an opaque
+  // "Cannot read properties of undefined (reading 'model')" — now the same clean die() as --cli.
+  const runEnv = (args: string[], env: Record<string, string>) => {
+    const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8", env: { ...process.env, ...env } });
+    return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+  const badEnvCli = runEnv(["--once", "--dry-run", "--agents", "sweep", ...common], { DEVLOOP_RUNNER_CLI: "garbage" });
+  ok(badEnvCli.code === 2 && /DEVLOOP_RUNNER_CLI must be claude, codex, or opencode \(got 'garbage'\)/.test(badEnvCli.out),
+    "garbage DEVLOOP_RUNNER_CLI fails with the clean --cli-style error, not a TypeError");
+
+  // DX regression: service-backend preflight — an unseeded project used to burn a full LLM fire per agent
+  // with zero hub tools (the MCP server boots into its G2 refusal). Now: real run dies before any spawn;
+  // dry-run warns but previews on.
+  writeFileSync(join(data, "projects.json"), JSON.stringify({
+    projects: { demo: { repoPath: repo }, fallback: { repoPath: otherRepo }, svc: { repoPath: repo, backend: "service" } },
+  }));
+  const svcCommon = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "svc"];
+  const svcDry = run(["--cli", "claude", "--once", "--dry-run", "--agents", "sweep", ...svcCommon]);
+  ok(svcDry.code === 0 && /WARNING: project 'svc' is backend:"service" but not seeded/.test(svcDry.out),
+    "unseeded service project + --dry-run → warning, preview continues (exit 0)");
+  const svcReal = run(["--cli", "claude", "--once", "--agents", "sweep", ...svcCommon]);
+  ok(svcReal.code === 2 && /not seeded in the hub DB/.test(svcReal.out) && /dev-loop seed svc/.test(svcReal.out),
+    "unseeded service project + real run → dies with the seed command BEFORE spawning any agent");
+  execFileSync("node", ["src/seed.ts", "svc", "Svc Project", "SVX", join(tmp, "hub.db")], { cwd: hubRoot, encoding: "utf8" });
+  const svcSeeded = run(["--cli", "claude", "--once", "--dry-run", "--agents", "sweep", ...svcCommon]);
+  ok(svcSeeded.code === 0 && !/WARNING: project 'svc'/.test(svcSeeded.out),
+    "seeded service project → preflight passes silently");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
