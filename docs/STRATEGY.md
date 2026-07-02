@@ -129,98 +129,32 @@ Supporting goals (all in scope this milestone):
 
 ## Current state
 
-_Seeded once from a read-only code map of the repo at git `596c62b` (2026-06-23).
-Append-only thereafter — PM keeps it current._
+- **What it is:** a standalone `dev-loop` npm package + Claude Code plugin
+  (`github.com/dyzsasd/dev-loop`) implementing **ten launchable autonomous agents** that
+  coordinate entirely through ticket state (no agent calls another): five inward/build
+  (**PM, QA, legacy Dev, Sweep, Reflect**), three outward (**Ops, Architect,
+  Communication**), plus **senior-dev / junior-dev** — the default two-tier split-dev pair
+  (§21a; with `devSplit` on, the legacy single `dev` defers).
+- **Main surfaces / modules:** `skills/` — **11 SKILLs** (the ten agents + `init`);
+  `references/` — `conventions.md` (the authoritative shared spec), `config-schema.md`,
+  `codex-integration.md`; `hub/` — the `node:sqlite` MCP system-of-record, **v0.23.3**
+  (`hub/package.json`), with a **29-file `test/` suite** run via `npm test` plus
+  `npm run doctor`; `docs/` (architecture · running · portability · daemon · designs ·
+  reviews) and `config/` (example `projects.json` + per-CLI MCP templates).
+- **Coordination backends (§18):** `linear` (default) / `local` / `service` (the hub) —
+  **plus the shipped opt-in daemon transport**: `hub.transport:"daemon"` routes the thin
+  stdio shim to the loopback daemon op-API (the default stays direct-db stdio).
+- **How it runs:** the scheduler **`dev-loop run`** fires the stateless-per-fire agents,
+  with **two-level per-agent `codingAgent` (claude/codex) + `model` + `effort` config**
+  (built-in defaults + `projects.json` overrides, `a11f9e5`); the daemon adds the
+  localhost web UI (board · tickets · roadmap · reports · activity) and the Lark/Slack
+  channel bridge.
+- **Operator steering:** daily/weekly reports + `<report>.review.md` (点评) distilled into
+  per-project `lessons.md` rules; direction lands via `docs/STRATEGY.md` / hub docs behind
+  the operator-publish gate.
 
-- **What it is:** a Claude Code plugin (`github.com/dyzsasd/dev-loop`) implementing eleven
-  launchable autonomous agents that coordinate **entirely through ticket state** (no agent calls
-  another). Five inward/build agents (**PM, QA, Dev, Sweep, Reflect**) + four outward
-  (**Ops, Architect, Director, Communication**) + an optional two-tier Dev split
-  (**senior-dev, junior-dev**). Repo version in `hub/package.json` is `0.6.2`; latest
-  git tag/commit is `0.19.2` (README still says v0.15.0 — stale).
-- **Main surfaces / modules:**
-  - `skills/` — 12 SKILLs (the agents + `init`), authored as markdown instruction sets.
-  - `references/` — `conventions.md` (the authoritative shared spec: state machine, label
-    taxonomy, safety boundary §2, blocked protocol §9, self-evolution boundary §17,
-    backends §18, multi-repo §19, reports §22/§23, discussion board §25), plus
-    `config-schema.md` and `codex-integration.md`.
-  - `hub/` — a **local MCP system-of-record** over built-in `node:sqlite` (zero native
-    deps, zero build step; Node ≥23.6). `src/server.ts` (the MCP server, identity via
-    `DEVLOOP_ACTOR`), `src/seed.ts` (project/actors/labels bootstrap), `src/db.ts`, and a
-    `test/` suite of 8 (`smoke/loop/isolation/docs/board/channel/mirror/identity`) run via
-    `npm test`; `npm run doctor` health-checks the SoR.
-  - `docs/` — `HUB-ARCHITECTURE.md`, `RUNNING.md`, `PORTABILITY.md`, `reviews/`.
-  - `config/` — example `projects.json` + MCP templates (Claude `.mcp.json`, Codex,
-    opencode).
-- **Coordination backends (§18):** `linear` (default; Linear MCP), `local` (machine-local
-  file board), `service` (the hub — real per-agent identity, the SoR being dogfooded here).
-- **How it runs today:** **daemon-free** by design. Agents are stateless per fire; the
-  launcher fires them (Agent View `/loop`, a tmux launcher, or manual). State lives in the
-  backend (Linear/board/hub) + git + the `*-state.json` files. Recent phases added P4
-  hub-native docs, P5 discussion board + Director, P6 two-way Lark/Slack channel, P7
-  one-way Linear mirror, P8 second-CLI portability — **all daemon-free**.
-- **Operator steering:** every agent writes daily/weekly/monthly reports; a sibling
-  `<report>.review.md` (点评) is distilled into a `lessons.md` rule the agent then obeys.
-- **Obvious gaps vs. the Vision:** _(updated 2026-06-23 PM)_ **the headline Vision arc is SHIPPED
-  (all verified Done):** **daemon** (DL-1) → read-only **board/ticket web UI** (DL-2) → **roadmap
-  view/edit** write surface via the operator-publish gate (DL-3) → **steer the roadmap from
-  Lark/Slack** (DL-4 — a chat `roadmap`/`roadmap edit` bridge that lands DRAFTs, §16-scrubbed,
-  never auto-published). So the operator can now view+manage the loop from a browser AND propose
-  roadmap edits from chat, with the operator-publish gate intact throughout. **Remaining (smaller)
-  gaps:** ~~reports view in the web UI (DL-10)~~ **SHIPPED** (verified Done — the daemon now serves
-  a read-only `/reports` view over the §22 reports tree; the operator can read pm/qa/dev dailies
-  from the browser), **cwd-based project auto-selection** — the **hub resolver + auto-pin is SHIPPED**
-  (DL-13 verified Done; from a repo checkout with no `DEVLOOP_PROJECT` the hub now auto-selects that
-  project — the dogfood case `cwd=dev-loop repo → "dev-loop"` is fixed); the **config templates + docs**
-  (DL-15) are **SHIPPED** too — so cwd auto-pin works end-to-end for a CLI that spawns the hub with the
-  repo cwd. Remaining for fully hands-off: the **§11/SKILL agent-side wording** (DL-12, operator's git
-  commit) and an **optional machine-local `run-loop.sh` enable step** (export the resolved
-  `DEVLOOP_PROJECT` + the correct per-pane `DEVLOOP_ACTOR` — the latter also fixes a pre-existing drift
-  where panes attribute to `operator`; deferred to the operator since `run-loop.sh` is an untracked
-  machine-local launcher, not a repo deliverable). Then: web-UI polish: DL-8 relatedTo — **SHIPPED** (verified Done — ticket detail now shows clickable Related/Duplicate-of links), DL-14 conflict-draft-preservation — **SHIPPED** (verified Done); **README drift (DL-5) — SHIPPED** (Status headline now
-  v0.19.2 with the P5–P8 history; verified Done); and the deferred candidates (inter-agent discussion daemon; multi-stakeholder roadmap
-  auth; **accepting a 点评 *from* the web UI** — the remaining half of the reports-in-UI idea, a
-  write path). With DL-10, the operator's **observe** loop is browser-complete (board · tickets ·
-  reports · roadmap view/edit · steer-from-chat). The next theme, once this milestone's tail
-  drains, is the **supporting goals** (hub/`service` hardening + broader portability) — see Goals.
-  _(2026-06-25 PM: progress on that supporting-goals theme — the **backend-choice-at-init
-  turnkey** (the DL-56 intake) is now essentially shipped: DL-52/DL-59 notification +
-  DL-53 operator-applied prose + **DL-60 (init `service` bootstrap) and DL-61 (`.mcp.json`
-  merge) verified Done**, so `init` now *performs* (not prints) the `service` auto-wiring
-  (install → seed → `.mcp.json` merge → doctor → one-shot daemon-up + health). The optional
-  **U4** backend-doctor reconcile **shipped 2026-06-27 as DL-81 (verified Done)** — `doctor` now also
-  reconciles the service runtime wiring (`.mcp.json` actor / daemon `/api/health` / DL-42 hook) on a
-  re-run, so the **DL-56 turnkey milestone is COMPLETE end-to-end**.)_
-  _(2026-06-27 PM: 🏁 **the headline STANDALONE-DAEMON + MULTI-CLI milestone (P1–P5) is now COMPLETE +
-  verified Done end-to-end** — P3 DL-69/DL-70 + P4 DL-71 + P5 DL-72 all shipped at v0.21.0; hub suite
-  green at `c2220e7`. The next theme is the **supporting goals** (hub/`service` hardening · agent-skill
-  robustness · operator-facing polish & docs · broader portability), filed as concrete gaps surface;
-  **Phase B** (remote / multi-user) stays DEFERRED.)_
-  _(2026-06-27 PM: 🆕 **v0.22.0 — optional two-tier Dev shipped** (operator-authored, `2f7006b`): the single
-  `dev` role can split into **senior-dev** (design lead, opus/max — authors a per-module `design` doc + spawns
-  `junior-dev` children staged in `Backlog`, PM gates the design parent) + **junior-dev** (implementer,
-  sonnet/high — reads the linked design, ships pre-designed tickets), enabled by the launcher knob
-  `DEV_SPLIT=1`. **Additive + back-compat** — `dev` + `skills/dev-agent` stay active, so single-dev projects
-  (incl. **this `dev-loop` project** + monpick) are byte-for-byte unchanged. Adds a hub **`design` doc-kind**
-  (additive `user_version` v3 migration, multi-instance per module, not publish-gated), routed by assignee
-  actor (service) / `senior-dev`·`junior-dev` label (linear/local). Design + critique-folded:
-  `docs/design/senior-junior-dev-split.md`; spec in conventions §21a + config-schema.md. **This project stays
-  single-dev / all-opus** (the operator's DL-78 "keep all agents on opus — max capability over cost" decision
-  still holds) → PM files with no dev-tier markers here.)_
-  _(2026-06-27 PM **correction** — post-`059cf3e`, **supersedes the "stays single-dev" note directly above**: the
-  operator **flipped `dev-loop` to the two-tier split** — persistent **`devSplit:true`** and, in the
-  current scheduler, default `core` launches with **`DEVLOOP_DEV_SPLIT=true`** — reversing the DL-78
-  single-dev stance for this project. `059cf3e` made the explicit split signal the **authoritative**
-  detector — agents obey config/runtime context and **never infer** the model from `models{}`/panes/board-history (that
-  inference had silently no-op'd the split: ~100 min of zero split-events, the implementation tier stalled).
-  **Now live:** junior-dev is actively implementing **DL-96** — the first real split pick-side execution. **PM now
-  files dev-tier markers here** (improvement/bug-fix → junior-dev; new module/feature → senior-dev; encoded as the
-  `assignee` actor on the `service` backend). The `pm-agent` SKILL's own stale `models{}`-detection prose was
-  caught as **DL-97** (`[qa-proposal]`) and **resolved Done by the operator** the same day.)_
-  _(2026-06-30 PM correction: `dev-loop run` now applies the split profiles itself instead of relying on
-  account defaults or launcher folklore: Claude senior-dev=`claude-opus-4-8`/max, Claude
-  junior-dev=`claude-sonnet-4-6`/high; Codex defaults to `gpt-5.5` with senior at xhigh and junior at
-  high. `projects.json` `models` / `efforts` remain overrides, not the source of split detection.)_
+(operator, 2026-07-02: Current state re-synced to HEAD; for the always-current picture see
+README.md + CHANGELOG.md.)
 
 ## Personas
 
@@ -512,6 +446,8 @@ Append-only thereafter — PM keeps it current._
 - **2026-06-27 — ✅ VERIFIED DL-93 → Done (the `dev-loop tickets` richer filters); 📝 recorded the operator's v0.22.0 two-tier-Dev milestone (`2f7006b`); RUNNING.md `DEV_SPLIT` doc-drift → QA; filed 0.** **Job A:** Dev shipped **DL-93** (`c4ff415`, the `--type` / `--owner` / `--label` filters + the unknown-flag footgun fix, pm-owned Improvement) → In Review. **Verified against the running product** (not the diff): `cd hub && npm test` = exit 0, all suites green incl. **CLI_TICKETS_OK** (the *extended* `test/cli-tickets.ts` — same suite marker, no new file → AC9); plus the live CLI on the real hub board — `--type Improvement` (only DL-94/DL-93), `--owner qa --state Done` (only qa-owned Done, composition works), `--label edge-case` (*No tickets* — correctly hides the **Done** DL-91 under the non-terminal default, proving AC5 orthogonality), `--type` (usage error exit 2), `--bogus DL-90` (unknown-flag exit 2, value NOT swallowed as `--q`). All 9 AC boxes ticked, moved Done (hub CHECKed-enum write confirmed `state=Done`, labels intact). **Product HEAD also moved to `2f7006b` = v0.22.0 two-tier Dev** — a major *operator-authored* feature (it edits SKILL/conventions/design-doc files → §17 operator-territory, which is why it carries no DL ticket). Recorded it in **Current state** (additive/opt-in `DEV_SPLIT=1`; `dev` + `skills/dev-agent` stay active; new hub `design` doc-kind; design `docs/design/senior-junior-dev-split.md`). **This `dev-loop` project stays single-dev / all-opus** (operator's DL-78 decline holds) → PM files with **no dev-tier markers**. **Job B empty** (0 `blocked` / `needs-pm` / Human-Blocked / Backlog / needs-pm-without-blocked / W3 operator-intake). **Job C — strategy-gaps swept at `2f7006b`; filed 0.** The v0.22.0 feature is fresh, additive, designed-with-adversarial-critics; its one observable gap from here is **doc-drift — `RUNNING.md` doesn't document the new `DEV_SPLIT` launcher mode / the senior-junior panes** while `config-schema.md` does (lines 188-195) — a doc-consistency defect = **QA's lane** (the DL-5/DL-82 precedent), noted for QA (not PM-filed: loop not stalled; the `run-loop.sh` launcher itself is the operator's untracked machine-local file, not a repo deliverable). No verified §17-clean PM-lane **product** gap → **filed 0** ("filing zero is a valid run"; the queue is DL-94 qa/tech-debt with Dev idle — padding a just-shipped operator feature with speculative work would be a smell). **PM is not the constraint** — cleared the finish line (DL-93 → Done) + reconciled the stale north-star to record v0.22.0; did not pad.
 
 - **2026-06-28 — 📝 DECISION recorded: `dev-loop` flipped to the two-tier Dev split (`devSplit:true`, `059cf3e`) — supersedes the "stays single-dev / no dev-tier markers" conclusion in the entry directly above.** The operator reversed the DL-78 single-dev stance **for this project**: set **`devSplit:true`** (+ launcher `DEV_SPLIT=1`). Rationale (root-caused in `059cf3e`): monitoring caught **split-events = 0 over ~100 min** — the senior/junior-dev agents were *inferring* the dev model from board history + the Canceled DL-78 ticket and defensively no-op-ing, silently stalling the whole implementation tier; **that inference was the bug.** The fix made **`devSplit:true` the single authoritative source of truth** — agents read the flag, never infer from history / `models{}` / actor-attribution / launcher panes. **Now live:** junior-dev actively claims + ships (DL-96, DL-98 → Done; DL-97 corrected the last straggler SKILL so all live agents read the flag authoritatively). **PM routing here (effective now):** tier-tag every dev ticket via the §18 `service` encoding (the ticket **`assignee`** actor) — improvement / bug-fix → **junior-dev**, new module / feature → **senior-dev** (`Mode: design`), **borderline → junior-dev** (escalation is the cheap safety net). Already mirrored in **Current state** (the 2026-06-27 correction); this entry closes the running-log's stale tail so a future fire reading only the latest Decision isn't re-misled.
+
+- **(operator, 2026-07-02) DL-78 reconcile.** The 2026-06-27 decline of model-tiering (DL-78) was superseded by the operator-directed per-agent codingAgent/model/effort config shipped in a11f9e5 (2026-07-01). Recorded retroactively so the ledger and the shipped scheduler agree.
 
 ## Candidate ideas
 

@@ -235,8 +235,9 @@ config-override answer; not yet certified.
 - **§16 secrets / PII.** Tokens stay in env (referenced by name), read server-side. Mirrored/channel
   bodies must be §16-safe. Same on every CLI.
 - **Cooperative identity.** Honest framing everywhere: attribution, not anti-spoof, on one host.
-- **No daemon.** Each CLI spawns the hub as a per-pane stdio subprocess; the channel polls and the
-  mirror pushes per-fire (P5–P7), exactly as on Claude Code.
+- **Stdio by default; daemon opt-in.** Direct-db stdio is the default on every CLI; the daemon
+  transport is an opt-in per-project setting (`hub.transport:"daemon"`) every CLI can use via
+  `dev-loop shim` — see `docs/DAEMON.md`.
 
 ---
 

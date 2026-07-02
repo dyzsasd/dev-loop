@@ -135,8 +135,9 @@ you would do.
 A prior fire may have claimed a ticket (state `In Progress`, claimed by you; §7) and
 then crashed/compacted out mid-work, stranding it — no agent re-picks an `In Progress`
 ticket, so it stalls forever. First thing each fire: query `project` + `label:"dev-loop"`
-+ `state:"In Progress"` claimed by you (assignee `junior-dev` on `service`; your per-fire
-token / the prior claim on `linear`/`local`, §18). For each, check for a shipped artifact
++ `state:"In Progress"` claimed by you (assignee `junior-dev` on `service`; the shared
+`assignee:"me"` on `linear`; the prior fire's run token on `local`, §18). For each, check
+for a shipped artifact
 on **the target repo's resolved `defaultBranch`** (the repo named by the ticket's
 `repo:<name>` label, §19; single-repo ⇒ `repoPath` + `git.defaultBranch`): a commit
 referencing the ticket id; or, if `autoPush:false`, a local commit. **If the target repo
@@ -160,8 +161,9 @@ top one.
 
 ### Step 2 — Claim it (atomic, conventions §7)
 `save_issue`: `state:"In Progress"`, claimed by you (assignee `junior-dev` on `service` —
-you claim your own pre-assignment, no conflict; the per-fire token on `linear`/`local`,
-§18). Re-fetch; if it's not claimed by you / not In Progress, another fire won the race
+you claim your own pre-assignment, no conflict; the shared `assignee:"me"` on `linear` —
+the `junior-dev` label carries the tier; a per-fire run token on `local`, §18). Re-fetch;
+if it's not claimed by you / not In Progress, another fire won the race
 — pick the next. (This re-fetch is the verify-after-write guard from conventions §10 —
 apply it to **every** state move you make this run, e.g. the In Review hand-off (Step 7)
 and any block (Step 3). When adding/removing a label, re-pass the **full** label set —
@@ -279,6 +281,7 @@ smoke check passes (prod restored)**, then reopen the ticket to `Todo` with
 restored. **A reverted prod-breaker is a SUCCESS.** Never leave prod red waiting for a
 human.
 
+### Step 7 — Hand off to In Review
 Then hand off — `save_issue`: `state:"In Review"` (verify-after-write, §10), routed to
 the **verification owner** (PM for Feature/Improvement, QA for Bug — the `pm`/`qa` owner
 label, **unchanged**; your `junior-dev` dev-tier label is orthogonal routing, not the

@@ -270,8 +270,10 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   mirror the Linear op-shapes 1:1 so the SKILLs port unchanged. Its win over Linear:
   **real per-agent identity** — each pane sets `DEVLOOP_ACTOR` (launcher-set; see
   `docs/RUNNING.md`) so every write is attributable, not the single shared Linear user.
-  `hub.db` path via `hub.db` / `DEVLOOP_HUB_DB`; `strategyDoc` is a **repo file** (as in
-  `local`; first-class hub docs are a later phase); `ticketPrefix` applies. Like `local`,
+  `hub.db` path via `hub.db` / `DEVLOOP_HUB_DB`; `strategyDoc` is a **repo file** by default
+  (as in `local`); first-class hub docs are **shipped, opt-in** — set `hub.docs: true` (or pin
+  `strategyDoc: { "hubDoc": "strategy" }`) for versioned, operator-published hub documents via
+  the `doc.*` tools (see `hub.docs` above); `ticketPrefix` applies. Like `local`,
   the hub is machine-local runtime state, never committed.
 - **Project resolution (`backend:"service"`, DL-13).** The hub picks its project by this
   precedence: **explicit `DEVLOOP_PROJECT`** (a non-empty, trimmed value — `""` is treated as

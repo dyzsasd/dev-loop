@@ -112,7 +112,7 @@ if (!projectId) {
 // and maps the returned { status, body } to the MCP ok()/err() shape via toMcp() — the SAME mapping the DL-55
 // stdio shim applies to the op-API HTTP response (200 → ok(body); non-200 → err(body.error)), so a dispatched
 // handler is BYTE-IDENTICAL to the pre-refactor native one (the differential-parity suite, shim ≡ stdio for all
-// 29 tools, is the structural guard). agentOp reads NO env/mode/transport (the agentops.ts contract): server.ts
+// TOOL_NAMES tools, is the structural guard). agentOp reads NO env/mode/transport (the agentops.ts contract): server.ts
 // owns the DEVLOOP_ACTOR identity + the G1 guard (above) and passes ACTOR in; the daemon op-API owns its own
 // pipeline around the SAME ops. whoami + create_issue_label stay native below (see the makeHandler overrides).
 const toMcp = (r: OpResult) => (r.status === 200 ? ok(r.body) : err((r.body as { error: string }).error));
@@ -121,7 +121,7 @@ const dispatch = async (op: AgentOp, a: unknown) =>
 
 const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 
-// ─── register the 29 tools from the ONE shared registry (DL-85) ────────────────────────────────────────────
+// ─── register every tooldefs.ts tool from the ONE shared registry (DL-85) ──────────────────────────────
 // tooldefs.ts owns every tool's { name, description, inputSchema }; this server supplies only the per-name
 // handler. The DEFAULT handler dispatches the op through agentOp() (above). Two tools are NATIVE (not ops):
 //   • whoami — answered locally from THIS process's resolved identity ({actor, project, db}).

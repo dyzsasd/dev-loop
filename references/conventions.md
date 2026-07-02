@@ -82,8 +82,8 @@ numbered sections below.
 | **Architect** *(outward · observe-and-file §21)* | (nothing — audits whole-codebase tech health) | the codebase as a whole on a rotating dimension (drift/dup/dead-code/dep-CVE/consistency/missing-abstractions), SHA-gated (§19), read-only | files `Improvement`+`qa`+`tech-debt` — never implements (Dev does) |
 | **Communication** *(outward · media drafting §21)* | owns public-facing product communication drafts | strategy/roadmap + verified shipped work + public-safe product facts | writes one article **draft** per cadence to the data dir or doc-home repo; never publishes externally, never commits/pushes/deploys |
 
-State machine: `Todo → In Progress → In Review → Done` (verify-fail returns to
-`Todo`; `Canceled`/`Duplicate` are terminal; `blocked` is a **label**, not a
+State machine: `Todo → In Progress → In Review → Done` (verify-fail ⇒ close +
+follow-up, §3; `Canceled`/`Duplicate` are terminal; `blocked` is a **label**, not a
 state, §9). Eligibility = the `dev-loop` label (§2); owner = the `pm`/`qa` label
 (§4); routing = `needs-pm`/`needs-qa`/`coverage`/`edge-case`.
 
@@ -127,7 +127,7 @@ the slowest — a daily retrospective that observes the loop and curates `lesson
             (dup/blocked)                    owner verifies (PM↔feature, QA↔bug)
                        ▼                          │            │
                  [Canceled/Duplicate]          pass▼        fail▼
-                                               [Done]    back to [Todo]
+                                               [Done]    Canceled + follow-up (§3)
 ```
 
 - **PM** reads the product's strategy doc, exercises the real product, files
@@ -280,8 +280,10 @@ Labels do triple duty: typing, ownership/routing, and workflow signalling.
   dep-bump / CVE). On an `Improvement`; owned by **`qa`** (refactor safety = tests-green
   / behavior-unchanged is QA-verifiable, §21). Filed by Architect (§21).
 - `signal` — a ticket originating from external real-user signal. On a `Bug` (`qa`) for
-  a user-reported defect, or a `Feature` (`pm`) for a request. References the source and
-  never pastes PII (§16).
+  a user-reported defect, or a `Feature` (`pm`) for a request. Applied by whichever agent
+  files the ticket from an operator-relayed user report (typically PM for requests — its
+  strategy-doc/channel intake — and QA for defects); no agent watches external channels
+  for these directly. References the source and never pastes PII (§16).
 - `coverage` — a follow-up to add a regression test/flow for a shipped
   `Bug`/`Feature` that couldn't be covered in the fix itself (§15). Filed by Dev,
   owned by `qa` (QA verifies the test exists and passes); implemented like any

@@ -241,14 +241,15 @@ async function handleTicketWrite(seg: string[], req: IncomingMessage, res: Serve
 }
 
 // ─── DL-43: opt-in daemon agent op-API (/api/op/*) — the MCP↔daemon unification foundation (P1) ───────────
-// A DORMANT, default-OFF loopback surface serving the 5 core ticket ops (agentops.ts, mirroring server.ts
-// 1:1) so a later increment's thin stdio MCP shim (P2) can proxy to the daemon instead of opening hub.db
-// directly. Gated on settings_json.hub.transport==="daemon" (read FRESH per request, the DL-29 humanWrite
-// pattern): unset/≠"daemon" ⇒ the /api/op/* mount is dormant → 404 and every read/roadmap surface is
-// byte-for-byte unchanged. server.ts (the stdio transport) is 100% untouched. handleAgentOp owns the full
-// endpoint pipeline: writeOriginOk (DL-19 CSRF/DNS-rebind wall) → the X-Devloop-Actor header → the G1
-// phantom-actor guard → (writes only) the dry-run mode gate → dispatch. Read ops use the query_only `db`;
-// write ops use the writable `writeDb` (the same connection the human-write routes write through).
+// A DORMANT, default-OFF loopback surface dispatching every AGENT_OPS op — the full tool set minus whoami
+// (agentops.ts, mirroring server.ts 1:1) — so a later increment's thin stdio MCP shim (P2) can proxy to the
+// daemon instead of opening hub.db directly. Gated on settings_json.hub.transport==="daemon" (read FRESH per
+// request, the DL-29 humanWrite pattern): unset/≠"daemon" ⇒ the /api/op/* mount is dormant → 404 and every
+// read/roadmap surface is byte-for-byte unchanged. server.ts (the stdio transport) is 100% untouched.
+// handleAgentOp owns the full endpoint pipeline: writeOriginOk (DL-19 CSRF/DNS-rebind wall) → the
+// X-Devloop-Actor header → the G1 phantom-actor guard → (writes only) the dry-run mode gate → dispatch.
+// Read ops use the query_only `db`; write ops use the writable `writeDb` (the same connection the
+// human-write routes write through).
 function agentApiEnabled(db: DatabaseSync, projectId: string): boolean {
   try {
     const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;

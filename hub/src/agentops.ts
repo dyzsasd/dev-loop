@@ -1,7 +1,8 @@
 // dev-loop hub — the agent op-API ops as plain functions: the SINGLE definition of every ticket/read policy
 // the hub exposes. BOTH transports dispatch through these: the DL-43 daemon agent op-API (/api/op/*) and —
-// since DL-69 (the dispatch-sharing refactor) — the stdio MCP server (server.ts), whose 27 op-backed tool
-// handlers are now thin call-throughs to agentOp() (server.ts's toMcp() maps {status,body}→MCP ok()/err()).
+// since DL-69 (the dispatch-sharing refactor) — the stdio MCP server (server.ts), whose op-backed tool
+// handlers (TOOL_NAMES minus whoami) are now thin call-throughs to agentOp() (server.ts's toMcp() maps
+// {status,body}→MCP ok()/err()).
 // So each policy — the read SELECTs, the save_issue/save_comment orchestration (the DL-24 per-transition
 // assignTo + the DL-32 prod-promotion gate + the REPLACE-labels/APPEND-relatedTo merge), and the doc/
 // channel/mirror/label families (which also reuse the shared ticketwrite/docstore/channelstore/
