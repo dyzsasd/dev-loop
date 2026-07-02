@@ -147,6 +147,12 @@ try {
   const lsStdio = await call(pm, "list_issues", {});
   ok(JSON.stringify(lsShim) === JSON.stringify(lsStdio), "differential parity: shim list_issues ≡ stdio list_issues (byte-identical)");
 
+  // C4: create_issue_label now dispatches through agentOp() on BOTH transports — the STDIO path must now
+  // ALSO emit the attributed label.create event (its former native override skipped it, a transport split-brain).
+  await call(pm, "create_issue_label", { name: "stdio-made-label", kind: "marker" });
+  ok((await call(pm, "list_events", { limit: 200 })).some((e: any) => e.kind === "label.create" && String(e.data).includes("stdio-made-label")),
+    "C4: create_issue_label over stdio emits the label.create event (parity with the op-API path)");
+
   // ═══ (DL-62) the doc/event family through the shim — proxied to the widened op-API ═══════════════════════
   // list_events through the shim ≡ stdio (parity) and surfaces the attributed writes above (Reflect's window)
   const evShim = await call(devShim, "list_events", { limit: 200 });

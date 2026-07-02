@@ -15,10 +15,9 @@
 // HTTP-shaped { status, body }: the daemon serializes it as JSON; server.ts's toMcp() maps it to ok()/err()
 // (a 200 → ok(body); a non-200 → err(body.error)). NO env read, NO mode gate, NO transport here — each
 // transport owns its own pipeline (server.ts the stdio identity; the daemon op-API writeOriginOk → actor →
-// mode-honoring) AROUND these pure-policy ops. (whoami + create_issue_label stay native in server.ts: whoami
-// is transport-specific identity, not an op; create_issue_label's policy already lives once in labelstore, and
-// the op logs an op-API-only label.create attribution event server.ts deliberately does not — DL-69 kept it
-// native so the stdio path stays byte-identical.)
+// mode-honoring) AROUND these pure-policy ops. (Only whoami stays native in server.ts — transport-specific
+// identity, not an op. create_issue_label was the last native override; it now dispatches through here too,
+// so its label.create attribution event fires identically on both transports.)
 import { DatabaseSync } from "node:sqlite";
 import { TOOL_NAMES, type ToolName } from "./tooldefs.ts"; // DL-85: the ONE tool/op name source; AGENT_OPS derives from it
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
@@ -409,10 +408,8 @@ function opListLabels(db: DatabaseSync, projectId: string): OpResult {
 
 // `db` MUST be a WRITABLE connection. Validation (DL-22 empty-name + LABEL_KINDS) lives in the shared createLabel
 // so server.ts + the op-API can't drift. The attributed `label.create` event is logged HERE (the identity win).
-// DL-69 note: this is the ONE op server.ts does NOT dispatch through — its create_issue_label stays a native
-// createLabel call that logs NO event, so the stdio path stays byte-identical (routing it here would ADD that
-// event to stdio = new behavior, out of scope for a behavior-preserving refactor). Unifying that attribution
-// onto the stdio path is a deliberate behavior change for a follow-up; both paths return {name,kind} identically.
+// Both transports now dispatch through this op (server.ts's former native override was removed) — so the
+// label.create attribution event fires on stdio AND the op-API, the last DL-69 transport divergence closed.
 function opCreateLabel(db: DatabaseSync, projectId: string, actor: string, a: { name?: unknown; kind?: unknown }): OpResult {
   if (typeof a.name !== "string") return errR(400, "name required (a string)"); // server.ts zod: name z.string() — a non-string would crash createLabel's .trim()
   if (a.kind !== undefined && typeof a.kind !== "string") return errR(400, "kind must be a string");
