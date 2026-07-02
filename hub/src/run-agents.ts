@@ -2,7 +2,7 @@
 // `dev-loop run` — a small scheduler that fires agent SKILLs through a headless CLI.
 // It deliberately does NOT depend on Claude/Codex `/loop`; it owns cadence here and
 // shells out to `claude -p` or `codex exec` once per agent fire.
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { spawn, execFileSync, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -11,13 +11,12 @@ import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
-import { findProject } from "./seed.ts";
+import { findProject, AGENT_HANDLES } from "./seed.ts";
 import type { DatabaseSync } from "node:sqlite";
 
-const VALID_AGENTS = [
-  "pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect",
-  "ops", "architect", "communication",
-] as const;
+// A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
+// used to fire an agent the hub refuses (G1) — tokens burned, board unwritable. Now they cannot diverge.
+const VALID_AGENTS = AGENT_HANDLES;
 type Agent = (typeof VALID_AGENTS)[number];
 
 // A coding-agent CLI the scheduler can drive. `claude` + `codex` are fully wired (the scheduler
@@ -178,6 +177,7 @@ type Options = {
   opencodeBin: string;
   codexSafe: boolean;
   maxFires: number;     // 0 = unlimited; else stop after N total fires (cost guard)
+  changeGate: boolean;  // R1: skip spawning a gated inward agent when neither repo HEAD nor the board moved since its last fire (service backend only) — saves the full-turn cost of a fire that would just no-op
   fireTimeoutMs: number; // 0 = none; else SIGTERM (then SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
   staggerMs: number;    // boot stagger between the initial slot fires (0 = all at once)
   mcpConfig?: string;   // claude: explicit MCP config; defaults to <cwd>/.mcp.json if present
@@ -188,8 +188,10 @@ const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (b
 const EXT = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts"; // server sibling: .ts source / .js published
 const isPluginRoot = (p: string) => existsSync(join(p, "skills")) && existsSync(join(p, "references"));
 const defaultRoot = () => {
-  // Source checkout: hub/src -> repo root. Published package: dist/plugin -> bundled skills/references.
-  const candidates = [join(here, "plugin"), resolve(here, "..", "..")];
+  // A1: ONE packaged copy of the plugin payload (skills/references/…). Published package: dist/cli.js →
+  // here=dist → the payload sits at the package root (resolve(here,"..")), where the `files` array copies it
+  // (no more duplicate dist/plugin tree). Source checkout: hub/src → the repo root (resolve(here,"..","..")).
+  const candidates = [resolve(here, ".."), resolve(here, "..", "..")];
   return candidates.find(isPluginRoot) ?? resolve(here, "..", "..");
 };
 const defaultDataDir = () => devloopDataDir();
@@ -222,6 +224,10 @@ Options:
   --cwd <path>                working directory for CLI subprocesses (default: project repoPath)
   --mcp-config <path>         claude: MCP config to load + --strict-mcp-config (default: <cwd>/.mcp.json if present)
   --max-fires <n>             stop after N total agent fires, then drain + exit (cost guard; default 0 = unlimited)
+  --change-gate               skip spawning a gated inward agent (pm/qa/dev/senior-dev/junior-dev/architect) when
+                              neither any repo HEAD nor the hub board moved since its last fire — the biggest cost
+                              saver on a quiet loop (service backend only; the agents already no-op in that case,
+                              this just avoids paying for the full turn to discover it)
   --fire-timeout <dur>        kill a fire that outlives this (SIGTERM, then SIGKILL after 10s; default 1h; 0 = none)
   --stagger <dur>             delay between the initial slot fires so a cold boot doesn't launch every agent at once (default 20s; 0 = simultaneous)
   --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
@@ -297,6 +303,7 @@ function parseArgs(argv: string[]): Options {
     opencodeBin: process.env.DEVLOOP_OPENCODE_BIN || "opencode",
     codexSafe: false,
     maxFires: 0,
+    changeGate: false,
     fireTimeoutMs: 60 * 60_000,
     staggerMs: 20_000,
     extraArgs,
@@ -333,6 +340,7 @@ function parseArgs(argv: string[]): Options {
       opts.maxFires = Number(next());
       if (!Number.isInteger(opts.maxFires) || opts.maxFires < 0) die("--max-fires must be a non-negative integer (0 = unlimited)");
     }
+    else if (a === "--change-gate") opts.changeGate = true;
     else if (a === "--fire-timeout") { const v = next(); opts.fireTimeoutMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = disabled (parseDuration rejects non-positive)
     else if (a === "--stagger") { const v = next(); opts.staggerMs = v.trim() === "0" ? 0 : parseDuration(v); }
     else if (a === "--codex-safe") opts.codexSafe = true;
@@ -577,6 +585,46 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
+// ─── R1 change-gate: skip a would-be no-op fire without spawning ────────────────────────────────────────
+// The gated inward agents (below) already no-op cheaply inside the fire when neither the code (repo HEAD) nor
+// the board (any ticket/comment/doc write → an events row) has moved since they last ran — but paying a full
+// CLI turn to *discover* that is the loop's biggest waste on a quiet day. The scheduler can decide it for $0:
+// a change-key of (every repo HEAD + max(events.id)) captures ANY code push or board mutation, so an unchanged
+// key means the agent would see byte-identical inputs and no-op again. Conservative: gate only these inward
+// implementers (ops/communication/reflect are time-based and always fire), and only on the service backend
+// (max(events.id) is the board-change signal — linear/local have no hub cursor, so the gate stays off there).
+const GATED_AGENTS = new Set<Agent>(["pm", "qa", "dev", "senior-dev", "junior-dev", "architect"]);
+function repoPathsFor(cfg: ProjectsConfig | null, project: string): string[] {
+  const p = cfg?.projects?.[project] as { repoPath?: string; repos?: { path?: string }[] } | undefined;
+  if (p?.repos?.length) return p.repos.map((r) => r.path).filter((x): x is string => !!x);
+  return p?.repoPath ? [p.repoPath] : [];
+}
+function changeKey(opts: Options, cfg: ProjectsConfig | null, project: string): string | null {
+  // board cursor: max(events.id) on the hub (any write bumps it). No hub row ⇒ null ⇒ gate disabled for safety.
+  if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
+  if (!fireDb) return null;
+  const projectId = findProject(fireDb, project);
+  if (!projectId) return null;
+  let cursor = 0;
+  try { cursor = Number((fireDb.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events WHERE project_id=?").get(projectId) as { m: number }).m); } catch { return null; }
+  const heads = repoPathsFor(cfg, project).map((repo) => {
+    try { return execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+    catch { return "no-head"; } // no commits yet / not a repo — a stable sentinel (still gates on the board cursor)
+  });
+  return `${cursor}|${heads.join(",")}`;
+}
+type GateState = Record<string, string>;
+function gateStatePath(opts: Options, project: string): string { return join(opts.dataDir, project, "scheduler-gate.json"); }
+function loadGateState(opts: Options, project: string): GateState {
+  try { return JSON.parse(readFileSync(gateStatePath(opts, project), "utf8")) as GateState; } catch { return {}; }
+}
+function saveGateState(opts: Options, project: string, state: GateState): void {
+  try {
+    const f = gateStatePath(opts, project); mkdirSync(dirname(f), { recursive: true });
+    const tmp = `${f}.${process.pid}.tmp`; writeFileSync(tmp, JSON.stringify(state)); renameSync(tmp, f);
+  } catch { /* best-effort — a lost gate write just means the next fire runs (fails open) */ }
+}
+
 async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string): Promise<number> {
   const profile = resolveLaunchProfile(opts, cfg, project, agent);
   const prompt = readPrompt(opts, agent, project, profile);
@@ -679,6 +727,11 @@ async function main(): Promise<void> {
     // knows what they're giving up (see the README backend safety matrix).
     console.warn(`dev-loop run: WARNING backend:"${backend ?? "linear"}" has NO loop-governance rails — the verify gate, no-progress breaker, Human-Blocked reminders, and accept-rate metrics are service-only. For an unattended loop, backend:"service" is strongly recommended.`);
   }
+  // R1 change-gate: active only when opted in AND on the service backend (needs the hub board cursor).
+  const gateActive = opts.changeGate && backend === "service";
+  if (opts.changeGate && !gateActive) console.warn(`dev-loop run: --change-gate ignored on backend:"${backend ?? "linear"}" (needs the service hub board cursor)`);
+  const gateState = gateActive ? loadGateState(opts, project) : {};
+  if (gateActive) console.log(`dev-loop run: change-gate ON for ${[...GATED_AGENTS].filter((g) => opts.agents.includes(g)).join(", ") || "(no gated agents selected)"}`);
   console.log(`dev-loop run: cli=${opts.cli} project=${project} cwd=${cwd}`);
   console.log(`dev-loop run: root=${opts.root} data=${opts.dataDir} hubDb=${opts.hubDb}`);
   const cfgDevSplit = cfg?.projects?.[project]?.devSplit === true;
@@ -741,6 +794,15 @@ async function main(): Promise<void> {
     const now = Date.now();
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
+      // R1: for a gated agent, if neither the code nor the board moved since its last fire, skip the spawn
+      // entirely (the agent would just no-op). fails open: a null key (no hub / git error) never skips.
+      if (gateActive && GATED_AGENTS.has(slot.agent)) {
+        const key = changeKey(opts, cfg, project);
+        if (key !== null && gateState[slot.agent] === key) {
+          slot.nextAt = now + opts.intervals[slot.agent];
+          continue; // no change since last fire ⇒ don't pay for a no-op turn
+        }
+      }
       slot.running = true;
       fired++;
       runAgent(opts, cfg, slot.agent, project, cwd)
@@ -748,6 +810,12 @@ async function main(): Promise<void> {
         .finally(() => {
           slot.running = false;
           slot.nextAt = Date.now() + opts.intervals[slot.agent];
+          // Record the POST-fire change-key so the next tick compares against the state this fire left behind
+          // (an agent's own writes bump the key once, then it settles → skips until the NEXT external change).
+          if (gateActive && GATED_AGENTS.has(slot.agent)) {
+            const key = changeKey(opts, cfg, project);
+            if (key !== null) { gateState[slot.agent] = key; saveGateState(opts, project, gateState); }
+          }
           if (stopping && activeChildren.size === 0) process.exit(0);
         });
       if (opts.maxFires && fired >= opts.maxFires) {

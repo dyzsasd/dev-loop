@@ -7,6 +7,7 @@ import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOOL_NAMES } from "../src/tooldefs.ts";
+import { AGENT_HANDLES } from "../src/seed.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -14,25 +15,19 @@ let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 const read = (p: string) => readFileSync(p, "utf8");
-const extractArray = (src: string, name: string): string[] => {
-  const m = src.match(new RegExp(`${name}[^=]*=\\s*\\[([^\\]]+)\\]`));
-  if (!m) return [];
-  return [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
-};
 
-// ── 1. Agent roster parity: run-agents VALID_AGENTS ≡ seed AGENT_HANDLES ≡ skills/ dirs ──────────
-// An agent added to one copy but not the others fires with DEVLOOP_ACTOR unknown to the hub (G1 refusal:
+// ── 1. Agent roster parity: seed AGENT_HANDLES (the ONE source, A2) ≡ skills/ dirs ──────────────
+// An agent in one place but not the others fires with DEVLOOP_ACTOR unknown to the hub (G1 refusal:
 // burns tokens, can't write the board) or has no prompt to fire — the devSplit-shipped-no-op'ing class.
-const validAgents = extractArray(read(join(hubRoot, "src", "run-agents.ts")), "VALID_AGENTS");
-const seededHandles = extractArray(read(join(hubRoot, "src", "seed.ts")), "AGENT_HANDLES");
+const roster = [...AGENT_HANDLES];
 const skillDirs = readdirSync(join(repoRoot, "skills")).filter((d) => statSync(join(repoRoot, "skills", d)).isDirectory());
 const skillAgents = skillDirs.filter((d) => d.endsWith("-agent")).map((d) => d.replace(/-agent$/, ""));
 const sorted = (a: string[]) => [...a].sort().join(",");
-ok(validAgents.length === 10, `run-agents VALID_AGENTS parsed (${validAgents.length} agents)`);
-ok(sorted(validAgents) === sorted(seededHandles),
-  `scheduler roster ≡ seeded actor handles (run-agents VALID_AGENTS vs seed AGENT_HANDLES)`);
-ok(sorted(validAgents) === sorted(skillAgents),
-  `scheduler roster ≡ skills/<agent>-agent dirs (every launchable agent has a prompt, every prompt is launchable)`);
+ok(roster.length === 10, `seed AGENT_HANDLES is the roster (${roster.length} agents)`);
+ok(/VALID_AGENTS\s*=\s*AGENT_HANDLES/.test(read(join(hubRoot, "src", "run-agents.ts"))),
+  `A2: the scheduler derives VALID_AGENTS from seed AGENT_HANDLES (one source, cannot drift)`);
+ok(sorted(roster) === sorted(skillAgents),
+  `roster ≡ skills/<agent>-agent dirs (every launchable agent has a prompt, every prompt is launchable)`);
 ok(skillDirs.includes("init") && skillDirs.length === skillAgents.length + 1,
   `skills/ holds exactly the agent prompts + init (no orphan skill dirs)`);
 

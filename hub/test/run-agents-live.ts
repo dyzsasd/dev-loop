@@ -2,7 +2,7 @@
 // run-agents test passes --dry-run, so the spawn/env/log/timeout/drain/lock machinery that spends
 // real API tokens in production never executed under test. A stub `claude` on DEVLOOP_CLAUDE_BIN
 // stands in for the CLI: it records its env + argv, optionally sleeps, and marks completion.
-import { spawnSync, execFileSync } from "node:child_process";
+import { spawnSync, execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -95,6 +95,28 @@ exit 0
   const d = events.length ? JSON.parse(events[0].data) as Record<string, unknown> : {};
   ok(d.codingAgent === "claude" && typeof d.durationMs === "number" && d.exitCode === 0 && d.timedOut === false,
     "P1: fire.completed carries codingAgent + durationMs + exitCode + timedOut");
+
+  // ── 6. R1 change-gate: on a quiet board, a gated agent fires ONCE then skips (no re-spawn) ──
+  const gateDb = join(tmp, "hub3.db");
+  const gateData = join(tmp, "gate-data"); const gateOut = join(tmp, "gate-out");
+  mkdirSync(gateData, { recursive: true }); mkdirSync(gateOut, { recursive: true });
+  writeFileSync(join(gateData, "projects.json"), JSON.stringify({ projects: { gate: { repoPath: repo, backend: "service" } } }));
+  execFileSync("node", ["src/seed.ts", "gate", "Gate Project", "GATEX", gateDb], { cwd: hubRoot, encoding: "utf8" });
+  const runLoop = (extra: string[], outDir: string, sleepSec: string): number => {
+    const child = spawn("node", ["src/run-agents.ts", "--root", repoRoot, "--data", gateData, "--hub-db", gateDb, "--project", "gate", "--cwd", repo, "--cli", "claude", "--agents", "pm", "--interval", "pm=1s", "--stagger", "0", ...extra],
+      { cwd: hubRoot, stdio: "ignore", env: { ...process.env, DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: outDir, DEVLOOP_RUN_DIR: tmp } });
+    spawnSync("sleep", [sleepSec]);          // let it tick for the window
+    child.kill("SIGTERM");
+    spawnSync("sleep", ["1"]);               // let it drain/exit
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    return readdirSync(outDir).filter((f) => f.startsWith("rec-")).length;
+  };
+  const gatedFires = runLoop(["--change-gate"], gateOut, "4.2");
+  ok(gatedFires === 1, `change-gate: pm fires once then skips on a quiet board (fired ${gatedFires}× in ~4s @1s interval)`);
+  const openOut = join(tmp, "open-out"); mkdirSync(openOut, { recursive: true });
+  try { rmSync(join(gateData, "gate", "scheduler-gate.json")); } catch { /* fresh */ }
+  const ungatedFires = runLoop([], openOut, "4.2");
+  ok(ungatedFires >= 3, `no gate: pm fires every interval (fired ${ungatedFires}× in ~4s @1s interval)`);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

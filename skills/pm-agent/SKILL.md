@@ -346,6 +346,10 @@ capabilities that make the product better, even when they aren't written in the 
      product-direction/scoping call to the `Decisions (running log)` with its rationale,
      and keep `Personas`/`Glossary` current. Commit it in the **doc-home repo** (§19).
      A flat single-file doc without these headings is fine — maintain it as-is.
+     **Bound it (§20 ledger rollup):** you re-read this doc every fire, so when it grows past
+     ~20KB or a milestone reaches verified-Done, roll that period's completed decisions into
+     `docs/strategy-archive/YYYY-MM.md` and leave a one-line index entry pointing there — keep
+     the live log to the recent, actionable tail.
    - Edit **surgically** — append/annotate goals and status; don't rewrite the doc
      wholesale or delete the user's intent. Keep the user's original goals; your
      additions are clearly-marked extensions.

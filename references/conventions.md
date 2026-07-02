@@ -684,6 +684,13 @@ board — is how operator direction enters the loop.
 Never page through the whole workspace. If a result is still huge, your filter is
 too broad — narrow it before reading.
 
+**On the `service` backend, `list_issues` has extra levers (L3/L5):** it returns the 50
+most-recent by default (250 max); pass `fields:"summary"` to drop the description body for a
+cheap board scan (the full body stays on `get_issue`); `updatedSince:<ISO>` reads only what
+changed; `relatedTo:<id>` finds a design parent's children; and `query` now searches
+title + description **+ comment bodies** with whitespace-AND-ed terms — so a §8 dedup query
+catches a reworded duplicate whose only match is a comment (e.g. a `review failed:` note).
+
 **Local backend (§18): the same discipline, on files.** `list_issues` becomes a
 glob+parse+filter over the board's `tickets/*.md`; still filter to the narrow slice
 you need (by state/label/type) rather than parsing every file blindly, and `get_issue`
@@ -1489,6 +1496,15 @@ The doc-base has these EXACT sections (verbatim headings):
 init Step 4 scaffolds these exact headings; the greenfield interview fills them;
 brownfield mapping seeds **Current state**. PM maintains them thereafter. The names are
 identical across §20 / init / PM so no agent invents a variant.
+
+**Ledger rollup (R2 — keep the PM-ingested doc bounded).** PM re-reads this whole doc-base
+every fire, so an unbounded `Decisions (running log)` is a per-fire token tax. When the doc
+grows past ~20KB, or a milestone reaches verified-Done, PM **archives the completed/superseded
+decisions** for that period into `docs/strategy-archive/YYYY-MM.md` (repo-file backends) or a
+sibling archive doc (hub backend), leaving in the live log a **one-line index entry** per
+archived period that points at the archive. Vision / Goals / Non-goals / Personas stay in the
+live doc; only the historical decision *detail* rolls out. The archive is provenance, never
+re-ingested per fire. (This doc's own 2026-06 milestone was rolled to `docs/strategy-archive/2026-06.md`.)
 
 ### Where it lives
 In the **doc-home repo** (§19). A single flat file containing these headings IS the
