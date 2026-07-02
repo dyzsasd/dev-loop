@@ -42,12 +42,11 @@ try {
   ok(existsSync(distCli) && existsSync(distServer), "dist/cli.js + dist/server.js emitted (the package's two bins)");
   ok(existsSync(distRunner), "dist/run-agents.js emitted (the built-in scheduler entry)");
   ok(existsSync(distHook), "dist/hook-session-start.js emitted (SessionStart hook can run from the npm package)");
-  ok(existsSync(join(distDir, "plugin", "skills", "communication-agent", "SKILL.md")) && existsSync(join(distDir, "plugin", "references", "conventions.md")),
-    "dist/plugin includes skills + references for npm-installed scheduler runs");
-  ok(existsSync(join(distDir, "plugin", ".claude-plugin", "plugin.json")) && existsSync(join(distDir, "plugin", "hooks", "hooks.json")),
-    "dist/plugin includes Claude plugin manifest + hooks for npm-installed slash commands");
-  ok(existsSync(join(hubRoot, ".claude-plugin", "plugin.json")) && existsSync(join(hubRoot, "skills", "init", "SKILL.md")),
-    "npm package root includes Claude plugin manifest + skills for npm-source plugin installs");
+  // A1: the plugin payload is packaged ONCE, at the package root (the `files` array) — no duplicate
+  // dist/plugin tree. The scheduler resolves it via resolve(here,"..") = the package root.
+  ok(!existsSync(join(distDir, "plugin")), "no duplicate dist/plugin payload (A1: packaged once at the root)");
+  ok(existsSync(join(hubRoot, ".claude-plugin", "plugin.json")) && existsSync(join(hubRoot, "skills", "init", "SKILL.md")) && existsSync(join(hubRoot, "references", "conventions.md")),
+    "npm package root includes the Claude plugin manifest + skills + references (the single packaged copy)");
   const pack = run("npm", ["--silent", "pack", "--dry-run", "--json"]);
   const packedFiles = new Set(parsePackJson(pack.stdout)[0]?.files?.map((f) => f.path) ?? []);
   ok(pack.code === 0
@@ -56,8 +55,8 @@ try {
     && packedFiles.has("hooks/hooks.json")
     && packedFiles.has("postinstall.cjs")
     && packedFiles.has("dist/hook-session-start.js")
-    && packedFiles.has("dist/plugin/.claude-plugin/plugin.json"),
-    "npm pack includes root-level Claude plugin payload, postinstall, plus dist/plugin scheduler payload");
+    && !packedFiles.has("dist/plugin/.claude-plugin/plugin.json"),
+    "npm pack includes the root-level Claude plugin payload + postinstall, and NOT a duplicate dist/plugin tree");
   const hookJson = readFileSync(join(repoRoot, "hooks", "hooks.json"), "utf8");
   ok(/dist\/hook-session-start\.js/.test(hookJson) && !/hub\/src\/server\.ts/.test(hookJson),
     "SessionStart hook targets the packaged hook helper, not hub/src/server.ts");
@@ -77,8 +76,12 @@ try {
   // ── installed-like layout: a COPY of dist/ OUTSIDE the repo, with NO config/ sibling. The package root
   //    does have node_modules after npm install, so symlink the repo's installed deps while keeping config/
   //    absent — the ENOENT-on-install bugs ONLY reproduce there (in-repo, ../../config still resolves). ──
-  const inst = join(tmp, "pkg"); // inst/dist/cli.js → here=inst/dist, hubDir=inst (no config/ sibling)
+  const inst = join(tmp, "pkg"); // inst/dist/cli.js → here=inst/dist, package root = inst
   cpSync(distDir, join(inst, "dist"), { recursive: true });
+  // A real npm install ships the `files` payload at the package root — replicate the plugin payload so
+  // the scheduler resolves it via resolve(here,"..")=inst (the single copy), NOT a dist/plugin tree.
+  // config/ stays ABSENT (as before) so the ../../config ENOENT-on-install regression still reproduces.
+  for (const d of ["skills", "references", "hooks", ".claude-plugin"]) cpSync(join(hubRoot, d), join(inst, d), { recursive: true });
   symlinkSync(join(hubRoot, "node_modules"), join(inst, "node_modules"), "dir");
   const instCli = join(inst, "dist", "cli.js");
   const instHook = join(inst, "dist", "hook-session-start.js");
