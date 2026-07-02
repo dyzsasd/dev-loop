@@ -11,13 +11,12 @@ import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
-import { findProject } from "./seed.ts";
+import { findProject, AGENT_HANDLES } from "./seed.ts";
 import type { DatabaseSync } from "node:sqlite";
 
-const VALID_AGENTS = [
-  "pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect",
-  "ops", "architect", "communication",
-] as const;
+// A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
+// used to fire an agent the hub refuses (G1) — tokens burned, board unwritable. Now they cannot diverge.
+const VALID_AGENTS = AGENT_HANDLES;
 type Agent = (typeof VALID_AGENTS)[number];
 
 // A coding-agent CLI the scheduler can drive. `claude` + `codex` are fully wired (the scheduler
@@ -188,8 +187,10 @@ const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (b
 const EXT = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts"; // server sibling: .ts source / .js published
 const isPluginRoot = (p: string) => existsSync(join(p, "skills")) && existsSync(join(p, "references"));
 const defaultRoot = () => {
-  // Source checkout: hub/src -> repo root. Published package: dist/plugin -> bundled skills/references.
-  const candidates = [join(here, "plugin"), resolve(here, "..", "..")];
+  // A1: ONE packaged copy of the plugin payload (skills/references/…). Published package: dist/cli.js →
+  // here=dist → the payload sits at the package root (resolve(here,"..")), where the `files` array copies it
+  // (no more duplicate dist/plugin tree). Source checkout: hub/src → the repo root (resolve(here,"..","..")).
+  const candidates = [resolve(here, ".."), resolve(here, "..", "..")];
   return candidates.find(isPluginRoot) ?? resolve(here, "..", "..");
 };
 const defaultDataDir = () => devloopDataDir();
