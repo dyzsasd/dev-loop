@@ -63,6 +63,25 @@ need no external context to proceed.
   auditable. Genuine external-prerequisite blocks are recorded on the ticket
   (§9), not raised as an interactive prompt.
 
+### The standard boot sequence (every agent, every fire)
+
+Defined ONCE here — each SKILL's §0 carries a one-line pointer, not a copy:
+
+1. **Read this file** (conventions.md) — it overrides the SKILL on conflict.
+2. **Load config** (§11): read `DEVLOOP_PROJECTS_JSON` if set, else
+   `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (legacy plugin-data path as
+   read-only fallback); resolve your project (explicit `DEVLOOP_PROJECT` wins,
+   else cwd, §19).
+3. **Resolve the backend** (§18): `backend` absent ⇒ `"linear"` (the Linear MCP);
+   `"local"` ⇒ the machine-local file board; `"service"` ⇒ the hub
+   (`dev-loop-hub` MCP — per-agent identity, `list_events`, hub docs). All three
+   route the SAME ticket operations; only the transport differs.
+4. **Read lessons** (§14): `<data>/<project-key>/lessons.md` — your own section
+   (+ `## Dev` for the split tiers) plus `## Shared`.
+5. **§22 report start**: finalize any due daily/weekly/monthly roll-up, then
+   check for un-acted `<report>.review.md` files (点评) and distill per §22.
+6. Open with the one-line run summary your SKILL's §0 specifies, then proceed.
+
 ---
 
 ## Topology at a glance
@@ -238,9 +257,9 @@ what's now queued. If the follow-up needs a human decision, park it (`Human-Bloc
 **Split-dev escalation rides this same rule, routed to senior-dev (§21a).** In a two-tier
 project (§21a), when a **junior-dev**-built ticket fails verification on a **real** acceptance-
 criteria failure (NOT a transient/flaky/infra error — junior simply retries those), the follow-up
-is routed **up** to senior-dev: PM/QA `Canceled`s the junior ticket as above and PM creates the
+is routed **up** to senior-dev: the **verifier** `Canceled`s the junior ticket as above and files the
 follow-up as a **senior-dev direct-code** ticket (assigned to `senior-dev`, `relatedTo` the failed
-one). If the senior **direct-code** follow-up *also* fails verify, the loop has exhausted its
+one) — PM for the Features/Improvements it verifies, QA for the Bugs it verifies (§21a). If the senior **direct-code** follow-up *also* fails verify, the loop has exhausted its
 automated tiers ⇒ `Bail-shape: fix-exhausted` ⇒ **`Human-Blocked`** (operator). The design-gate
 form of this rule (verifying a design *parent*, promoting its staged children) is in §21a.
 
@@ -501,7 +520,12 @@ dependency, or a suspected-but-unconfirmed duplicate — it does **not** guess:
 PM/QA, on each run, check for **their** blocked tickets
 (`project` + `label:"dev-loop"` + `label:"blocked"` + their owner label — always
 include `project`; an unscoped label query returns blocked tickets from *every*
-dev-loop project and you must never touch another project's backlog, §2). For each:
+dev-loop project and you must never touch another project's backlog, §2).
+**PM additionally scans `blocked`+`needs-pm` ACROSS owner labels** (same `project` +
+`dev-loop` scope, no `pm` owner filter): a qa-owned Bug parked `decision-needed` routes
+to PM via the `needs-pm` ROUTING label, not the owner label — without the cross-owner
+scan it is invisible to every unblock query while QA is explicitly deferring it to PM.
+For each:
 read the comment, then either
 - **resolve** — add the missing info / fix the criteria, remove `blocked` +
   `needs-*`, leave it in `Todo`; or
@@ -820,7 +844,8 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
 1. Ensure the workflow labels exist (create only the missing ones via
    `create_issue_label` on the configured team): `dev-loop`, `pm`, `qa`,
    `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`, `incident`, `tech-debt`,
-   `signal`, `senior-dev`, `junior-dev`. (`senior-dev`/`junior-dev` are the §21a dev-tier
+   `signal`, `notified`, `senior-dev`, `junior-dev`. (`notified` marks a §9 human-park whose
+   operator notification has been sent — the daemon's reminder timer keys on it. `senior-dev`/`junior-dev` are the §21a dev-tier
    routing labels — required for the two-tier Dev on `linear`/`local`; harmless extras on
    `service`. `Bug`/`Feature`/`Improvement` already exist — reuse, don't duplicate.)
 2. Ensure the `linearProject` exists; if not, ask the user before creating it.
@@ -870,12 +895,17 @@ Layout — one section per agent plus a shared section:
 ## PM
 ## QA
 ## Dev
+## senior-dev
+## junior-dev
 ## Sweep
 ## Reflect
 ## Ops
 ## Architect
 ## Communication
 ```
+
+(`## senior-dev` / `## junior-dev` are the §21a tier sections — the split-dev agents read
+their own section *plus* `## Dev` *plus* `## Shared`; init scaffolds all eleven sections.)
 
 Each entry is a short rule with a one-line **Why** and **How to apply**. A rule may
 pre-empt an action: *if a rule would have skipped or changed work you were about to
@@ -1581,8 +1611,13 @@ reference** — the §5/§5.5/§6/§6.5 build/test gate, the Critical/High self-
 config, and post-deploy rollback all apply unchanged; the two SKILLs do not re-derive them.
 
 ### Routing — the filer assigns the dev tier at ticket creation
-**Whichever agent files a dev ticket sets its tier** — PM at its §6 filing step, **and QA when it
-files a `Bug`/`Improvement`** (QA is a primary filer, not just PM). Same one rule:
+**Whichever agent files a dev ticket sets its tier — EVERY filing agent, not just PM/QA:** PM at
+its §6 filing step; QA when it files a `Bug`/`Improvement` (QA is a primary filer, not just PM);
+**Ops when it files an `incident` Bug** (⇒ **senior-dev direct-code** by default — an Urgent
+prod-down fix is exactly not the place for the cheap tier); **Architect when it files a
+`tech-debt` Improvement** (⇒ **junior-dev** — scoped, behavior-preserving refactors). An un-tiered
+ticket is invisible to BOTH dev pick-queries and strands until Sweep's slow-cadence repair.
+Same one rule:
 - **new module / new feature** (needs a design) ⇒ assign **senior-dev** (design-and-delegate).
 - **improvement / bug-fix** (a scoped change) ⇒ assign **junior-dev**. (QA's findings are bug-fixes /
   drift-improvements by nature, so QA-filed tickets default to **junior-dev**.)
@@ -1659,15 +1694,17 @@ QA/PM verify junior In-Review code against ACs in the test env (Job A), as today
 flaky / infra** error is **not** a fail (junior retries). On the **FIRST real acceptance-criteria
 failure**, escalate (the §3 close+follow-up, routed to senior):
 1. PM/QA **`Canceled`s the junior ticket** — `review failed: <what failed / observed behaviour>;
-   superseded by <new-id>`.
-2. PM **files a NEW senior-dev DIRECT-CODE ticket** carrying the remaining work (assigned to
-   `senior-dev`, marked direct-code mode, `Todo`, `relatedTo` the failed one).
+   superseded by <new-id>` (QA's bug re-test uses `re-test failed: …; superseded by <new-id>` —
+   both grammars are recognized cancel-comment forms; senior's mode inference accepts either).
+2. The **verifier files the NEW senior-dev DIRECT-CODE ticket** carrying the remaining work
+   (assigned to `senior-dev`, marked direct-code mode, `Todo`, `relatedTo` the failed one).
 3. **senior-dev codes it DIRECTLY** (direct-code mode — pick → claim → implement → gate → ship →
    In Review, the `dev-agent` build flow; opus + max on the work the cheaper tier couldn't get right).
 4. **If the senior direct-code ALSO fails verify** → `Bail-shape: fix-exhausted` → **`Human-Blocked`**
-   (operator): the loop has exhausted its automated tiers (junior, then senior), so PM parks it
+   (operator): the loop has exhausted its automated tiers (junior, then senior), so the **verifier**
+   parks it
    (`Human-Blocked` on `service`, the `blocked`+`needs-pm`+`external-prereq` park on `linear`/`local`,
-   §9). A QA-owned Bug escalates identically, but **the verifier files the senior follow-up**: PM
+   §9). A QA-owned Bug escalates identically — **the verifier files the senior follow-up**: PM
    files it for a Feature/Improvement it verified (Job A), and **QA files it for a Bug it verified**
    (when QA Cancels the failed junior Bug it immediately files the `senior-dev` direct-code follow-up
    itself) — so the escalation always has a mechanical ticket-state carrier, never a report hand-off
@@ -1737,8 +1774,8 @@ ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/
   monthly/  2026-06.md           # one file per month (%Y-%m)
 ```
 
-`<agent>` is the full skill name (`pm-agent` / `qa-agent` / `dev-agent` / `sweep-agent` /
-`reflect-agent` / `ops-agent` / `architect-agent` /
+`<agent>` is the full skill name (`pm-agent` / `qa-agent` / `dev-agent` / `senior-dev-agent` /
+`junior-dev-agent` / `sweep-agent` / `reflect-agent` / `ops-agent` / `architect-agent` /
 `communication-agent`). The tree is created
 **lazily on first write** (init may scaffold it, §13). The operator reads these on disk
 exactly like `lessons.md` / the state files.
@@ -1945,8 +1982,9 @@ highest-PII × highest-cadence authors; the operator may opt any of them in, see
 sentinel, below). init provisions the container + resolves these only on explicit opt-in
 (§13).
 
-**Primitive — one rolling Document per agent.** Reports live as **8 rolling Linear
-Documents** (`pm-agent` … `communication-agent`), one per agent, in the dedicated reports project /
+**Primitive — one rolling Document per agent.** Reports live as **10 rolling Linear
+Documents** (`pm-agent` … `communication-agent`, incl. `senior-dev-agent`/`junior-dev-agent`
+— the split tiers report like every other agent), one per agent, in the dedicated reports project /
 initiative, titled `dl-report · <project-key> · <agent>`. Each body has three fixed sections
 `## Daily` / `## Weekly` / `## Monthly`; entries are dated `###` headings (`### 2026-06-19`,
 `### 2026-W25`, `### 2026-06`). Documents never appear in `list_issues`, so the §2 / §5 / §8
