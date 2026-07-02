@@ -451,6 +451,21 @@ across backends. The **surface plane** (per-agent identity, web UI) expands by
 backend. See [conventions §18](references/conventions.md) +
 [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md).
 
+### Loop-governance rails are `service`-only
+
+The runaway/quality rails are built on the hub, so they exist **only** on `backend:"service"`.
+For an **unattended** loop, run `service` — the scheduler prints a warning if you run `linear`/`local`.
+
+| Rail | `linear` | `local` | `service` |
+|---|:---:|:---:|:---:|
+| **Verify gate** (In Progress→Done blocked; Done only via In Review, DL-77) | — | — | ✅ |
+| **No-progress circuit breaker** (alert on 0 accepted change in a window, DL-76) | — | — | ✅ |
+| **Human-Blocked reminders** (DL-26) | — | — | ✅ |
+| **Accept-rate / cycle-time / WIP-aging metrics** (`/activity`) | — | — | ✅ |
+| **Per-fire cost/outcome telemetry** (`fire.completed`) | — | — | ✅ |
+| **Per-agent identity + attribution** | shared Linear id | run token | ✅ real |
+| Convention-only gates (green-build-to-ship, verify-by-owner, the `dev-loop` firewall) | ✅ | ✅ | ✅ |
+
 ## Safety boundary
 
 The agents operate **only** on tickets carrying the **`dev-loop`** label, scoped to the

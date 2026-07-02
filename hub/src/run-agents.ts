@@ -672,6 +672,12 @@ async function main(): Promise<void> {
       if (opts.dryRun) console.log(`[dry-run] WARNING: project '${project}' is backend:"service" but not seeded in ${opts.hubDb} — real fires would get no hub tools; ${hint}`);
       else die(`project '${project}' is backend:"service" but not seeded in the hub DB (${opts.hubDb}) — every fire would burn tokens with no board access; ${hint}`);
     }
+  } else {
+    // P5: the DL-77 verify gate, the DL-76 no-progress circuit breaker, Human-Blocked reminders, and the
+    // accept-rate/cycle-time metrics are all hub/service-only. An unattended loop on linear/local runs with
+    // NONE of those runaway rails — surface it once at startup so an adopter following the documented default
+    // knows what they're giving up (see the README backend safety matrix).
+    console.warn(`dev-loop run: WARNING backend:"${backend ?? "linear"}" has NO loop-governance rails — the verify gate, no-progress breaker, Human-Blocked reminders, and accept-rate metrics are service-only. For an unattended loop, backend:"service" is strongly recommended.`);
   }
   console.log(`dev-loop run: cli=${opts.cli} project=${project} cwd=${cwd}`);
   console.log(`dev-loop run: root=${opts.root} data=${opts.dataDir} hubDb=${opts.hubDb}`);
