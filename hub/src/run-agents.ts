@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
+import { openDb } from "./db.ts";
+import { findProject } from "./seed.ts";
 
 const VALID_AGENTS = [
   "pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect",
@@ -272,8 +274,10 @@ function parseArgs(argv: string[]): Options {
   const agentSpecs: string[] = [];
   const intervals = { ...DEFAULT_INTERVALS };
   const extraArgs: string[] = [];
+  const envCli = process.env.DEVLOOP_RUNNER_CLI;
+  if (envCli && !isCodingAgent(envCli)) die(`DEVLOOP_RUNNER_CLI must be claude, codex, or opencode (got '${envCli}')`);
   const opts: Options = {
-    cli: (process.env.DEVLOOP_RUNNER_CLI as RunnerCli) || "claude",
+    cli: (envCli as RunnerCli) || "claude",
     agents: [],
     intervals,
     once: false,
@@ -576,7 +580,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const logPath = join(logDir, `${agent}.log`);
   const log = createWriteStream(logPath, { flags: "a" });
   log.write(`\n\n===== ${new Date().toISOString()} ${rendered} cwd=${cwd} =====\n`);
-  console.log(`[${new Date().toISOString()}] ${agent}: start (${opts.cli}); log ${logPath}`);
+  console.log(`[${new Date().toISOString()}] ${agent}: start (${profile.codingAgent}); log ${logPath}`);
 
   const child: RunnerChild = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   activeChildren.add(child);
@@ -605,6 +609,18 @@ async function main(): Promise<void> {
   const project = resolveProject(opts, cfg);
   const cwd = resolveCwd(opts, cfg, project);
   if (!existsSync(cwd)) die(`cwd does not exist: ${cwd}`, 1);
+  // Service-backend preflight: an unseeded project means every fire boots the hub MCP straight into its
+  // G2 refusal — the agent runs a full LLM turn with zero board access. Catch it before any tokens burn.
+  const backend = (cfg?.projects?.[project] as { backend?: string } | undefined)?.backend;
+  if (backend === "service") {
+    let seeded = false;
+    try { const probe = openDb(opts.hubDb); try { seeded = !!findProject(probe, project); } finally { probe.close(); } } catch { seeded = false; }
+    if (!seeded) {
+      const hint = `seed it once: dev-loop seed ${project} "<Project Name>" <UNIQUE_PREFIX>`;
+      if (opts.dryRun) console.log(`[dry-run] WARNING: project '${project}' is backend:"service" but not seeded in ${opts.hubDb} — real fires would get no hub tools; ${hint}`);
+      else die(`project '${project}' is backend:"service" but not seeded in the hub DB (${opts.hubDb}) — every fire would burn tokens with no board access; ${hint}`);
+    }
+  }
   console.log(`dev-loop run: cli=${opts.cli} project=${project} cwd=${cwd}`);
   console.log(`dev-loop run: root=${opts.root} data=${opts.dataDir} hubDb=${opts.hubDb}`);
   const cfgDevSplit = cfg?.projects?.[project]?.devSplit === true;

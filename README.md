@@ -252,6 +252,11 @@ Then pick the onboarding path that matches how you want to operate.
 dev-loop init-config
 $EDITOR ~/.dev-loop/projects.json
 
+# backend:"service" only — seed the project's board in the hub once (unique prefix per
+# project). Without this every fire boots the hub MCP into its "not seeded" refusal;
+# `dev-loop run` now preflights it and refuses to start, but seed first anyway.
+dev-loop seed <key> "<Project Name>" <PREFIX>
+
 # Dry-run once from inside the configured product repo.
 cd /path/to/product-repo
 dev-loop run --cli codex --agents core --once --dry-run
