@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, logEvent } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig } from "./resolve-project.ts";
-import { hubDbPath } from "./paths.ts";
+import { hubDbPath, pkgVersion } from "./paths.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
@@ -86,11 +86,17 @@ function healthLiveness(db: DatabaseSync, writeDb?: DatabaseSync): { ok: boolean
       // BEGIN IMMEDIATE takes the reserved write lock; ROLLBACK releases it — nothing persists. A
       // SQLITE_BUSY means another writer holds it ⇒ the SoR IS writable (just momentarily contended) ⇒
       // healthy; only a non-busy error (readonly fs / corrupt / disk-full / closed handle) is a real wedge.
+      // Probe with busy_timeout=0 (restored after): on the normal busy_timeout=5000 connection a
+      // cross-process write lock (a migration rebuild, an operator txn) stalls this synchronous exec —
+      // and the whole single-threaded daemon — for up to 5s, so the lifecycle's 1s probe times out and
+      // SIGTERMs a HEALTHY daemon. With 0, BUSY returns immediately and is already treated as healthy.
+      try { writeDb.exec("PRAGMA busy_timeout=0"); } catch { /* probe still works, just blockingly */ }
       try { writeDb.exec("BEGIN IMMEDIATE; ROLLBACK;"); }
       catch (e) {
         try { writeDb.exec("ROLLBACK"); } catch { /* no open txn to undo */ }
         if (!/busy|locked/i.test(String((e as Error)?.message ?? e))) throw e;
       }
+      finally { try { writeDb.exec("PRAGMA busy_timeout=5000"); } catch { /* connection may be wedged */ } }
     }
     return { ok: true };
   } catch (e) {
@@ -412,7 +418,11 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadma
       // daemon (SoR unreadable/unwritable) returns 503 ok:false so the lifecycle `up`/`status` recover it.
       if (path === "/api/health") {
         const h = healthLiveness(db, writeDb);
-        return json(res, h.ok ? 200 : 503, h.ok ? { ok: true, project: projectKey } : { ok: false, project: projectKey, error: h.error });
+        // version: lets `daemon up` detect a daemon still running pre-upgrade code and restart it;
+        // actor: surfaces a mis-identified daemon (e.g. one cold-started from an agent fire's env).
+        return json(res, h.ok ? 200 : 503, h.ok
+          ? { ok: true, project: projectKey, version: pkgVersion(), actor }
+          : { ok: false, project: projectKey, version: pkgVersion(), actor, error: h.error });
       }
 
       // GET /api/tickets — board, project-scoped (§2), filter by state/type/label/assignee (+ optional limit).
@@ -542,7 +552,9 @@ export function startBlockedNotifier(opts: {
   if (!getEnabledChannel(opts.writeDb, opts.projectId) && !resolveNotifyWebhook(opts.notify)) return null; // neither ⇒ true no-op
   const cadenceMs = opts.cadenceHours * 3_600_000;
   const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_BLOCKED_TICK_MS) || 60_000);
-  const run = () => { void blockedNotifyTick({ ...opts, cadenceMs, nowMs: Date.now() }); };
+  // .catch, not void: a throw from the tick's DB reads (transient SQLITE_BUSY, disk error) was an
+  // unhandled rejection that killed the WHOLE daemon; a failed tick must just retry next interval.
+  const run = () => { blockedNotifyTick({ ...opts, cadenceMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] blocked-notifier tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
   const timer = setInterval(run, tickMs);
   timer.unref?.();  // never keep the process alive solely for the notifier
   run();            // immediate first tick — a fresh park is announced without waiting a full interval
@@ -642,7 +654,7 @@ export function startNoProgressNotifier(opts: {
   // Re-check ≈ hourly by default (the stall window is measured in hours; a tighter poll just re-scans the
   // ledger for nothing, and the marker de-dup makes any extra tick harmless). Env-overridable for tests.
   const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_NOPROGRESS_TICK_MS) || 3_600_000);
-  const run = () => { void noProgressNotifyTick({ ...opts, windowMs, nowMs: Date.now() }); };
+  const run = () => { noProgressNotifyTick({ ...opts, windowMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] no-progress tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
   const timer = setInterval(run, tickMs);
   timer.unref?.();  // never keep the process alive solely for this detector
   run();            // immediate first tick — a stall already in progress at boot is caught without waiting
@@ -697,6 +709,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
   const db = openDb(DB_PATH);
   db.exec("PRAGMA query_only=ON"); // structural read-only: this connection can never write the SoR
+  // Defense-in-depth alongside the notifier .catch handlers: any OTHER stray rejection logs instead of
+  // killing a daemon that agents and the operator depend on (nothing here should reject, but the cost of
+  // a silent crash — a dead board UI + dead notifiers until the next `up` — is far higher than a log line).
+  process.on("unhandledRejection", (e) => console.error(`[daemon] unhandled rejection (daemon stays up): ${scrubErr(String((e as Error)?.message ?? e))}`));
   // No ensureActors/auto-create here: like the MCP server's G2 guard, refuse to serve a phantom board.
   const projectId = findProject(db, PROJECT_KEY);
   if (!projectId) {

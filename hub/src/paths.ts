@@ -1,5 +1,19 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
+
+// The installed package version — src/paths.ts and dist/paths.js both sit one level under the
+// package root, so ../package.json resolves in a source checkout AND the published artifact.
+// Used by the daemon health body + lifecycle so `daemon up` can restart a stale-code daemon
+// after an npm upgrade (without it, an upgraded install keeps serving old code until reboot).
+let cachedVersion: string | undefined;
+export function pkgVersion(): string {
+  if (cachedVersion === undefined) {
+    try { cachedVersion = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string }).version ?? ""; }
+    catch { cachedVersion = ""; }
+  }
+  return cachedVersion;
+}
 
 export function devloopHome(): string {
   return process.env.DEVLOOP_HOME || join(homedir(), ".dev-loop");

@@ -141,10 +141,15 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   if (a.query !== undefined && typeof a.query !== "string") return errR(400, "query must be a string");
   if (a.labels !== undefined && !isStrArr(a.labels)) return errR(400, "labels must be an array of strings");
   if (a.assignee !== undefined && typeof a.assignee !== "string") return errR(400, "assignee must be a string");
-  let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as unknown as TicketRow[]).map(toTicket);
-  if (a.state) out = out.filter((t) => t.state === a.state);
-  if (a.assignee) out = out.filter((t) => t.assignee === resolveAssignee(actor, a.assignee));
-  if (a.type) out = out.filter((t) => t.type === a.type);
+  // Push the equality filters (state/type/assignee) into SQL — byte-identical result set to the old
+  // load-all-then-JS-filter, but fewer rows scanned + JSON.parsed per call. The (project_id, updated_at DESC)
+  // index serves the ORDER BY without a temp B-tree. label/query stay in JS (need parsed JSON / substring);
+  // LIMIT stays in JS because a label/query filter can reduce the count after SQL.
+  const where = ["project_id=?"]; const binds: (string | null)[] = [projectId];
+  if (a.state) { where.push("state=?"); binds.push(a.state); }
+  if (a.type) { where.push("type=?"); binds.push(a.type); }
+  if (a.assignee) { const who = resolveAssignee(actor, a.assignee); where.push(who === null ? "assignee IS NULL" : "assignee=?"); if (who !== null) binds.push(who); }
+  let out = (db.prepare(`SELECT * FROM tickets WHERE ${where.join(" AND ")} ORDER BY updated_at DESC`).all(...binds) as unknown as TicketRow[]).map(toTicket);
   const want = [...(a.labels ?? []), ...(a.label ? [a.label] : [])];
   if (want.length) out = out.filter((t) => want.every((l) => t.labels.includes(l)));
   if (a.query) { const q = a.query.toLowerCase(); out = out.filter((t) => t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)); }

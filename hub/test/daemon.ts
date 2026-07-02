@@ -158,8 +158,10 @@ const hread = openDb(DB); hread.exec("PRAGMA query_only=ON");
 const hsrv = createDaemon({ db: hread, projectId, projectKey: "dmn", writeDb: hwrite, actor: "operator" });
 hsrv.listen(0, "127.0.0.1"); await once(hsrv, "listening");
 const hbase = `http://127.0.0.1:${(hsrv.address() as { port: number }).port}`;
-const hLive = await fetch(hbase + "/api/health"); const hLiveBody = await hLive.json() as { ok?: boolean };
+const hLive = await fetch(hbase + "/api/health"); const hLiveBody = await hLive.json() as { ok?: boolean; version?: string; actor?: string };
 ok(hLive.status === 200 && hLiveBody.ok === true, "DL-41: /api/health → 200 ok:true while the SoR is writable (a real read+write probe, not a static 200)");
+ok(typeof hLiveBody.version === "string" && hLiveBody.actor === "operator",
+  "health body carries version + actor (D1/D5: `daemon up` restarts stale-version code; `status` surfaces a mis-identified daemon)");
 hwrite.close();                       // simulate a bound-but-wedged daemon: its write connection is dead
 const hWedged = await fetch(hbase + "/api/health"); const hWedgedBody = await hWedged.json().catch(() => ({})) as { ok?: boolean };
 ok(hWedged.status === 503 && hWedgedBody.ok === false, "DL-41: a wedged (unwritable) SoR → /api/health 503 ok:false (lifecycle then reclaims it)");

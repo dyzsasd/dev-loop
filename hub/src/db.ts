@@ -86,6 +86,10 @@ CREATE TABLE IF NOT EXISTS tickets (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tickets_project_state ON tickets(project_id, state);
+-- list_issues / /api/tickets / the board sort by (project_id, updated_at DESC); without this the query
+-- planner falls back to USE TEMP B-TREE FOR ORDER BY on every read (D4). CREATE INDEX IF NOT EXISTS runs
+-- on every openDb (below), so it retro-adds to existing DBs with no user_version migration.
+CREATE INDEX IF NOT EXISTS idx_tickets_project_updated ON tickets(project_id, updated_at DESC);
 CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY,
   ticket_id TEXT NOT NULL REFERENCES tickets(id),
@@ -105,6 +109,13 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, id);
+-- The append-only events ledger is never pruned; its hot queries are otherwise full-table scans (D3):
+--   • per-ticket MAX(created_at) WHERE ticket_id=? AND kind=? — the 60s blocked-notifier tick, once per
+--     Human-Blocked ticket, and /activity's per-ticket HIST_SQL → idx_events_ticket.
+--   • project-wide WHERE project_id=? AND kind=? (no-progress detector, per-actor GROUP BY on /activity)
+--     used only the project_id prefix of idx_events_project → idx_events_project_kind_created.
+CREATE INDEX IF NOT EXISTS idx_events_ticket ON events(ticket_id, kind, created_at);
+CREATE INDEX IF NOT EXISTS idx_events_project_kind_created ON events(project_id, kind, created_at);
 -- ── P4 documents: versioned, attributable, operator-published product docs ────
 -- §17 firewall is STRUCTURAL: docs live ONLY in these tables; NO doc tool touches the
 -- filesystem (no fs import, no path arg) — a doc can never represent a SKILL/conventions/code file.
