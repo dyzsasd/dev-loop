@@ -71,8 +71,12 @@ make.
 ### Job 1 — Stranded & mislabeled tickets (the core job)
 Every other agent queries **by owner label**, so a ticket missing or contradicting
 its owner label is picked up by **nobody**. Find and fix them:
-- Query `project` + `label:"dev-loop"` in non-terminal states (`Todo`, `In Progress`,
-  `In Review`) and inspect each ticket's labels against the §4 taxonomy:
+- Query `project` + `label:"dev-loop"` in non-terminal states (`Backlog`, `Todo`,
+  `In Progress`, `In Review`) and inspect each ticket's labels against the §4 taxonomy:
+  - **Stranded design child** (a `Backlog` ticket whose `relatedTo` design parent is already
+    `Done`) → **finish the crashed promotion**: move it `Backlog → Todo` (PM's design-gate pass
+    crashed mid-promote, §21a). If the parent is `Canceled` instead → `Cancel` the child too (it
+    references a superseded design). Backlog is otherwise invisible to every dev pick-query.
   - **No owner label** (`pm`/`qa` both absent) → assign the owner per type (§4):
     `Feature` → `pm`; `Bug` → `qa` (an `incident` Bug is `qa` too, §4); `Improvement` →
     `pm` by default, `qa` if it carries `coverage` or `tech-debt` (an Architect-filed

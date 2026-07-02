@@ -67,10 +67,14 @@ daily/weekly/monthly roll-up and distill un-acted `*.review.md` reviews (the §2
 carve-out); at close append the daily entry (a pure no-op fire appends nothing).
 
 **Read `architect-state.json`** next to `projects.json` (your own state file — create
-it lazily, `{ "repoShas": {}, "swept": {} }`, if absent): `repoShas` is the per-repo
-SHA map you last audited (mirrors `pm-state.json`'s shape, §19); `swept` records, per
-repo, which audit **dimensions** you've already covered at that SHA — so you rotate
-through dimensions and don't re-audit an unchanged tree on the same dimension twice.
+it lazily, `{ "repoShas": {}, "swept": {}, "cursor": 0 }`, if absent): `repoShas` is the
+per-repo SHA map you last audited (mirrors `pm-state.json`'s shape, §19); `swept` records,
+per repo, which audit **dimensions** you've already covered at that SHA — so you don't
+re-audit an unchanged tree on the same dimension twice; `cursor` is the round-robin
+position in the dimension list, advanced **every fire independently of the SHA reset**.
+The cursor is what makes the rotation actually rotate: without it, "next dimension not in
+`swept`" after a reset is always the FIRST list entry, so on a repo Dev ships to daily
+only architecture-drift ever runs and the CVE scan never fires.
 
 **Open every run** with a one-line summary: project, Linear project/team, `mode`, the
 repo(s) in scope, and the **dimension** you'll audit this fire. In `dry-run`, make
@@ -125,8 +129,14 @@ dimension set:
 - **missing-abstractions** — repeated ad-hoc patterns that want a shared helper /
   type / boundary.
 
-Pick the next dimension **not** in `swept` at the current SHAs (round-robin); once all
-are swept and no repo has moved, Job 0 makes the next fire a no-op until code changes.
+Pick this fire's dimension by the **`cursor`** (round-robin: `cursor % dimensions.length`),
+then advance and persist `cursor` — so the rotation progresses even when a repo move resets
+`swept` every fire. Skip a dimension already in `swept` at the current SHAs (no-op signal),
+but keep advancing the cursor so the NEXT dimension gets its turn. **Exception — run the
+`dependency-staleness + CVE` scan EVERY fire regardless of the cursor or `swept`:** it is a
+cheap read-only shell command (`npm audit` / `pip-audit` / …), not a whole-codebase grep, and
+it is the one dimension where a missed day has security consequences. Once all dimensions are
+swept and no repo has moved, Job 0 makes the next fire a no-op until code changes.
 For a **multi-repo** project, audit each repo on the chosen dimension **and** the
 **cross-repo coherence** of that dimension (e.g. duplicated logic that should be a
 shared package; an inconsistent pattern between `web` and `api`).

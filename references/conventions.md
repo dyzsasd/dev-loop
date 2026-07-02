@@ -517,6 +517,16 @@ dependency, or a suspected-but-unconfirmed duplicate — it does **not** guess:
      blindly re-attempt; it needs new info or a different approach. Cap blind
      retries at 2 — the 3rd is a block, not another attempt.
 
+**Block-cycle cap (mirrors the retry cap).** The info-needed↔resolve round-trip
+(Dev blocks `info-needed` → QA/PM resolves → Dev finds the spec still ambiguous →
+blocks again) is otherwise unbounded and burns a full fire each lap. Count the prior
+`Bail-shape:` comments on a ticket (their first line is machine-parseable); on the
+**3rd** `blocked` application to the SAME ticket, escalate instead of round-tripping —
+to **senior-dev direct-code** in a split project (the ambiguity needs a design call,
+not another Q&A lap), or a **`Human-Blocked`/`external-prereq`** park otherwise. Sweep's
+board-health digest reports any ticket with ≥2 block cycles so the thrash is visible
+before it is expensive.
+
 PM/QA, on each run, check for **their** blocked tickets
 (`project` + `label:"dev-loop"` + `label:"blocked"` + their owner label — always
 include `project`; an unscoped label query returns blocked tickets from *every*
@@ -1206,7 +1216,10 @@ re-read-after-write, which alone can't arbitrate two writers):
   by exclusively creating `tickets/<ID>.lock` (`O_EXCL`); if it exists, another writer
   holds it — back off and retry. Read → modify → write via **temp file in the same
   dir + atomic rename** → release the lock (remove it). The temp/lock files are not
-  `*.md`, so the list glob ignores them.
+  `*.md`, so the list glob ignores them. **Stale-lock rule (mandatory):** a fire can
+  crash between create and release; a lock whose mtime is older than **~60 min** is
+  stale — remove it, log one line, and proceed. Without this a single crashed fire
+  deadlocks that ticket forever (every later fire "backs off and retries" eternally).
 - **Claim uses a per-fire token (§7).** A bare `assignee:"dev"` can't tell two Dev
   fires apart. Each fire mints a unique run token (e.g. `dev (run <short-id>)`); the
   claim writes that token under the lock, re-reads, and proceeds only if the token is
@@ -1915,7 +1928,10 @@ read-modify-write**: acquire an atomic exclusive-create lock as in §18 (an `O_E
 `lessons.md.lock` in the same dir), **re-read**, edit **only your own section**,
 atomic-rename, remove the lock. **If the lock is held, skip the lessons write this fire**
 and leave the review un-acted (it retries next fire) — never block, never write without the
-lock.
+lock. **Apply the §18 stale-lock rule here too:** a lock whose mtime is older than ~60 min
+is a crashed curation fire — remove it and proceed. Without the staleness check a single
+crash while holding `lessons.md.lock` permanently disables the 点评→lesson→Reflect learning
+loop (every future fire of every agent skips, forever).
 
 ### The §17 carve-out — the operator review *is* the human authorization
 §17 makes **Reflect** the only **autonomous** curator of `lessons.md` (every other agent

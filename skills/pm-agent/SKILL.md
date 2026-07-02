@@ -191,11 +191,14 @@ strategy/roadmap item it serves**, and the staged child tickets faithfully decom
 on `linear`/`local`). For a **big-module / docs-design-level** design, surface it for the
 **operator** to sign off (same posture as a significant product decision); ordinary designs
 you verify directly.
-- **Pass** → move the design parent `state:"Done"` AND **PROMOTE every staged child
-  `Backlog → Todo`** (re-pass the full label set — `save_issue` labels are REPLACE-style,
+- **Pass** → **PROMOTE every staged child `Backlog → Todo` FIRST, THEN move the design
+  parent `state:"Done"`** (re-pass the full label set — `save_issue` labels are REPLACE-style,
   §10 — so the child keeps `dev-loop` + its `junior-dev` dev-tier + its `pm`/`qa` verifier
-  label) so junior-dev can now pick them. This reuses the existing Backlog-staging +
-  promotion shape (a staged child sits in `Backlog` like any parked idea).
+  label) so junior-dev can now pick them. **Order matters:** promotion is idempotent (re-verifying
+  an already-promoted design is safe), but a Done parent with children still stranded in `Backlog`
+  after a mid-promotion crash is NOT — no gate ever fires on them again, and Sweep's Job 1 backstop
+  (below) is the only rescue. Do the parent-Done last so a crash leaves a re-triggerable In-Review
+  parent, not orphaned children. This reuses the existing Backlog-staging + promotion shape.
 - **Fail** → **close + follow-up** (§3): `Canceled` the design parent (`review failed:
   <what>; superseded by <new-id>`) and file a fresh design ticket; `Canceled` its staged
   children with it (they reference a superseded design) — never leave them stranded in
