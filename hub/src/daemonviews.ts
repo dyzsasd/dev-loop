@@ -298,6 +298,10 @@ export function ticketPage(db: DatabaseSync, projectId: string, id: string, canW
   const relLink = (rid: string) => `<a class="lbl" href="/ticket/${encodeURIComponent(rid)}">${esc(rid)}</a>`;
   const relatedRow = t.relatedTo?.length ? `<dt>Related</dt><dd>${t.relatedTo.map(relLink).join(" ")}</dd>` : "";
   const dupRow = t.duplicateOf ? `<dt>Duplicate of</dt><dd>${relLink(t.duplicateOf)}</dd>` : "";
+  // L1: the reverse of Related — tickets that point AT this one (a design parent shows its staged children).
+  const referencedBy = (db.prepare("SELECT id,related_to FROM tickets WHERE project_id=? AND related_to LIKE ?").all(projectId, `%${JSON.stringify(id)}%`) as { id: string; related_to: string }[])
+    .filter((row) => { try { return (JSON.parse(row.related_to) as string[]).includes(id); } catch { return false; } }).map((row) => row.id);
+  const refByRow = referencedBy.length ? `<dt>Referenced by</dt><dd>${referencedBy.map(relLink).join(" ")}</dd>` : "";
   return `<a class="back" href="/">← board</a><article class="detail">`
     + `<div class="card-top"><span class="id">${esc(t.id)}</span><span class="badge t-${esc(t.type)}">${esc(t.type)}</span><span class="badge">${esc(t.state)}</span></div>`
     + `<h1>${esc(t.title)}</h1>`
@@ -306,7 +310,7 @@ export function ticketPage(db: DatabaseSync, projectId: string, id: string, canW
     + `<dt>Priority</dt><dd>${esc(prioOf(t.priority))}</dd>`
     + `<dt>Assignee</dt><dd>${esc(t.assignee ?? "—")}</dd>`
     + `<dt>Created</dt><dd>${esc(t.created_at)}</dd><dt>Updated</dt><dd>${esc(t.updated_at)}</dd>`  // DL-16
-    + `<dt>Labels</dt><dd>${t.labels.map((l: string) => `<span class="lbl">${esc(l)}</span>`).join("")}</dd>${relatedRow}${dupRow}</dl>`
+    + `<dt>Labels</dt><dd>${t.labels.map((l: string) => `<span class="lbl">${esc(l)}</span>`).join("")}</dd>${relatedRow}${refByRow}${dupRow}</dl>`
     + `<h3>Description</h3><div class="doc">${renderMarkdown(t.description)}</div>`  // DL-16: rendered markdown (XSS-safe via renderMarkdown), not raw <pre>
     + `<h3>Comments<span class="count count-gap">${comments.length}</span></h3>${commentsHtml}`
     // DL-29: opt-in human actions (only when humanWrite is enabled — gated upstream). Each POSTs to a

@@ -128,7 +128,7 @@ function prodPromotionRejection(db: DatabaseSync, projectId: string, actor: stri
 // two ops share so they can't drift (DL-65 hoisted opSaveIssue's original local helper to module scope).
 const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
-export interface ListIssuesArgs { state?: string; assignee?: string; type?: string; label?: string; labels?: string[]; query?: string; limit?: number }
+export interface ListIssuesArgs { state?: string; assignee?: string; type?: string; label?: string; labels?: string[]; query?: string; relatedTo?: string; updatedSince?: string; limit?: number }
 function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: ListIssuesArgs): OpResult {
   // Re-validate the raw-JSON arg shapes the stdio path gets from zod (server.ts: query/assignee
   // z.string().optional(), labels z.array(z.string()).optional()). Without this a non-string `query`
@@ -140,6 +140,8 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   if (a.query !== undefined && typeof a.query !== "string") return errR(400, "query must be a string");
   if (a.labels !== undefined && !isStrArr(a.labels)) return errR(400, "labels must be an array of strings");
   if (a.assignee !== undefined && typeof a.assignee !== "string") return errR(400, "assignee must be a string");
+  if (a.relatedTo !== undefined && typeof a.relatedTo !== "string") return errR(400, "relatedTo must be a string");
+  if (a.updatedSince !== undefined && typeof a.updatedSince !== "string") return errR(400, "updatedSince must be an ISO string");
   // Push the equality filters (state/type/assignee) into SQL — byte-identical result set to the old
   // load-all-then-JS-filter, but fewer rows scanned + JSON.parsed per call. The (project_id, updated_at DESC)
   // index serves the ORDER BY without a temp B-tree. label/query stay in JS (need parsed JSON / substring);
@@ -148,9 +150,11 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   if (a.state) { where.push("state=?"); binds.push(a.state); }
   if (a.type) { where.push("type=?"); binds.push(a.type); }
   if (a.assignee) { const who = resolveAssignee(actor, a.assignee); where.push(who === null ? "assignee IS NULL" : "assignee=?"); if (who !== null) binds.push(who); }
+  if (a.updatedSince) { where.push("updated_at>=?"); binds.push(a.updatedSince); } // incremental board reads
   let out = (db.prepare(`SELECT * FROM tickets WHERE ${where.join(" AND ")} ORDER BY updated_at DESC`).all(...binds) as unknown as TicketRow[]).map(toTicket);
   const want = [...(a.labels ?? []), ...(a.label ? [a.label] : [])];
   if (want.length) out = out.filter((t) => want.every((l) => t.labels.includes(l)));
+  if (a.relatedTo) out = out.filter((t) => t.relatedTo.includes(a.relatedTo!)); // L1: e.g. a design parent's staged children
   if (a.query) { const q = a.query.toLowerCase(); out = out.filter((t) => t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)); }
   return okR(a.limit ? out.slice(0, a.limit) : out);
 }
@@ -160,7 +164,13 @@ function opGetIssue(db: DatabaseSync, projectId: string, projectKey: string, a: 
   const r = getRow(db, projectId, a.id);
   if (!r) return errR(404, `no such ticket ${a.id} in ${projectKey}`);
   const comments = db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(a.id);
-  return okR({ ...toTicket(r), comments });
+  // L1: reverse of relatedTo — the tickets that point AT this one (a design parent sees its staged children;
+  // a bug sees its coverage follow-up). related_to is a JSON array, so match the quoted id as a substring
+  // (cheap at hub scale) then confirm membership after parse to avoid a false hit on a shared prefix.
+  const referencedBy = (db.prepare("SELECT id,related_to FROM tickets WHERE project_id=? AND related_to LIKE ?").all(projectId, `%${JSON.stringify(a.id)}%`) as { id: string; related_to: string }[])
+    .filter((row) => { try { return (JSON.parse(row.related_to) as string[]).includes(a.id!); } catch { return false; } })
+    .map((row) => row.id);
+  return okR({ ...toTicket(r), comments, referencedBy });
 }
 
 export interface SaveIssueArgs {
@@ -243,10 +253,13 @@ function opListComments(db: DatabaseSync, projectId: string, projectKey: string,
 // to the stdio ok() body — the differential-parity tripwire). The doc WRITES delegate to the shared
 // docstore (docSave/docPublish), so the CAS + the single operator-publish gate live in ONE place.
 
-function opListEvents(db: DatabaseSync, projectId: string, a: { limit?: number }): OpResult {
+function opListEvents(db: DatabaseSync, projectId: string, a: { ticketId?: string; limit?: number }): OpResult {
   // mirror server.ts's zod (limit: int 1..500) — the op-API parses raw JSON, so a bad limit must be a clean
   // 400 here, never bound into LIMIT (a non-int bind throws in node:sqlite → a 500; an uncapped limit drifts).
   if (a.limit !== undefined && (!Number.isInteger(a.limit) || (a.limit as number) <= 0 || (a.limit as number) > 500)) return errR(400, "limit must be an integer 1..500");
+  if (a.ticketId !== undefined && typeof a.ticketId !== "string") return errR(400, "ticketId must be a string");
+  // L4: a ticketId scopes to one ticket's history (rides idx_events_ticket); else the project-wide feed.
+  if (a.ticketId) return okR(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? AND ticket_id=? ORDER BY id DESC LIMIT ?").all(projectId, a.ticketId, a.limit ?? 50));
   return okR(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? ORDER BY id DESC LIMIT ?").all(projectId, a.limit ?? 50));
 }
 

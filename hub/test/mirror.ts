@@ -27,8 +27,16 @@ function mockFetch(handler: (url: string, init: { body?: string; headers?: Recor
 {
   let seen: { headers?: Record<string, string>; body?: string } = {};
   const f = mockFetch((_u, init) => { seen = init; return { status: 200, body: { data: { issueCreate: { success: true, issue: { id: "lin_1" } } } } }; });
-  const id = await createIssue(f, "lin_api_SECRET", "team_1", "proj_1", { title: "T [hub:CH-1]", description: "body" });
+  const id = await createIssue(f, "lin_api_SECRET", "team_1", "proj_1", { title: "T [hub:CH-1]", description: "body", priority: 1 });
   ok(id === "lin_1" && seen.headers!.Authorization === "lin_api_SECRET" && JSON.parse(seen.body!).variables.i.teamId === "team_1", "createIssue → id returned, token in Authorization, teamId in input");
+  ok(JSON.parse(seen.body!).variables.i.priority === 1, "L2: createIssue sends native Linear priority (0-4), not just body text");
+}
+// priority omitted ⇒ the field is not sent (no accidental priority:0/None on an unset ticket)
+{
+  let seen: { body?: string } = {};
+  const f = mockFetch((_u, init) => { seen = init; return { status: 200, body: { data: { issueCreate: { success: true, issue: { id: "lin_2" } } } } }; });
+  await createIssue(f, "tok", "team_1", null, { title: "no prio", description: "b" });
+  ok(!("priority" in JSON.parse(seen.body!).variables.i), "L2: createIssue omits priority when unset (no forced None)");
 }
 
 // gql error → throws the Linear message, never the token

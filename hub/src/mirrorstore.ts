@@ -64,8 +64,10 @@ const mirrorBody = (t: Ticket): string => [
   t.duplicateOf ? `**duplicate of:** ${t.duplicateOf}` : "",
   "", t.description || "_(no description)_",
 ].filter((l) => l !== "").join("\n");
+// priority is in the hash so an existing mirror re-pushes once when this L2 field is added (a priority-only
+// change would otherwise be a no-op skip, and Linear would keep showing priority only as body text).
 const mirrorHash = (t: Ticket, stateId: string | undefined): string =>
-  createHash("sha256").update(JSON.stringify({ title: mirrorTitle(t), body: mirrorBody(t), stateId: stateId ?? null })).digest("hex");
+  createHash("sha256").update(JSON.stringify({ title: mirrorTitle(t), body: mirrorBody(t), stateId: stateId ?? null, priority: t.priority })).digest("hex");
 
 export interface MirrorPushArgs {
   teamId: string;
@@ -93,7 +95,7 @@ export async function mirrorPush(
   const ops: { op: string; hubId: string; title: string; body: string; stateId: string | null }[] = [];
   for (const t of tickets) {
     const stateId = a.stateMap?.[t.state]; // missing ⇒ undefined ⇒ no stateId (fallback: state is in the body)
-    const issue: MirrorIssue = { title: mirrorTitle(t), description: mirrorBody(t), stateId };
+    const issue: MirrorIssue = { title: mirrorTitle(t), description: mirrorBody(t), stateId, priority: t.priority || undefined };
     const hash = mirrorHash(t, stateId);
     let row = db.prepare("SELECT id,hub_id,linear_id,last_pushed_hash FROM mirror_map WHERE project_id=? AND hub_kind='ticket' AND hub_id=?").get(projectId, t.id) as MirrorRow | undefined;
     if (row && row.linear_id && row.last_pushed_hash === hash) { skipped++; continue; } // incremental skip (unchanged)
