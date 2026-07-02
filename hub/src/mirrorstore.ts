@@ -87,7 +87,7 @@ export async function mirrorPush(
   if (!isEnvName(a.tokenEnv)) return { ok: false, error: `tokenEnv must be an ENV-VAR NAME (e.g. DEVLOOP_LINEAR_TOKEN), not the secret value itself` };
   const token = process.env[a.tokenEnv];
   if (!token && !MIRROR_DRYRUN) return { ok: false, error: `mirror token env '${a.tokenEnv}' is unset` };
-  const rows = db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC LIMIT ?").all(projectId, a.limit ?? 500) as TicketRow[];
+  const rows = db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC LIMIT ?").all(projectId, a.limit ?? 500) as unknown as TicketRow[];
   const tickets = rows.map(toTicket);
   let created = 0, updated = 0, skipped = 0, failed = 0;
   const ops: { op: string; hubId: string; title: string; body: string; stateId: string | null }[] = [];

@@ -140,7 +140,7 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   if (a.query !== undefined && typeof a.query !== "string") return errR(400, "query must be a string");
   if (a.labels !== undefined && !isStrArr(a.labels)) return errR(400, "labels must be an array of strings");
   if (a.assignee !== undefined && typeof a.assignee !== "string") return errR(400, "assignee must be a string");
-  let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as TicketRow[]).map(toTicket);
+  let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as unknown as TicketRow[]).map(toTicket);
   if (a.state) out = out.filter((t) => t.state === a.state);
   if (a.assignee) out = out.filter((t) => t.assignee === resolveAssignee(actor, a.assignee));
   if (a.type) out = out.filter((t) => t.type === a.type);

@@ -2,7 +2,8 @@
 // `dev-loop run` — a small scheduler that fires agent SKILLs through a headless CLI.
 // It deliberately does NOT depend on Claude/Codex `/loop`; it owns cadence here and
 // shells out to `claude -p` or `codex exec` once per agent fire.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
 import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -487,8 +488,7 @@ function shellQuote(s: string): string {
 // resolved hub db, with the per-fire actor/project. claude takes it as inline --mcp-config JSON;
 // codex takes the same shape as `-c` overrides (which define the server, not just patch env).
 const serverEntry = join(here, `server${EXT}`);
-const hubNode = findCompatibleNode();
-if (!hubNode) die(`dev-loop-hub MCP needs Node >= ${MIN_NODE_VERSION} for node:sqlite. Set DEVLOOP_NODE=/absolute/path/to/node.`);
+const hubNode = findCompatibleNode() ?? die(`dev-loop-hub MCP needs Node >= ${MIN_NODE_VERSION} for node:sqlite. Set DEVLOOP_NODE=/absolute/path/to/node.`);
 const tomlString = (s: string): string => JSON.stringify(s);
 const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
 
@@ -578,7 +578,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   log.write(`\n\n===== ${new Date().toISOString()} ${rendered} cwd=${cwd} =====\n`);
   console.log(`[${new Date().toISOString()}] ${agent}: start (${opts.cli}); log ${logPath}`);
 
-  const child: ChildProcessWithoutNullStreams = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const child: RunnerChild = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   activeChildren.add(child);
   child.stdout.on("data", (d) => { process.stdout.write(`[${agent}] ${d}`); log.write(d); });
   child.stderr.on("data", (d) => { process.stderr.write(`[${agent}] ${d}`); log.write(d); });
@@ -596,7 +596,8 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
 }
 
 type Slot = { agent: Agent; nextAt: number; running: boolean };
-const activeChildren = new Set<ChildProcessWithoutNullStreams>();
+type RunnerChild = ChildProcessByStdio<null, Readable, Readable>; // stdio: ["ignore","pipe","pipe"]
+const activeChildren = new Set<RunnerChild>();
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));

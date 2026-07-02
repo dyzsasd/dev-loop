@@ -47,6 +47,7 @@
     "build": "rm -rf dist .claude-plugin skills references hooks config && tsc -p tsconfig.build.json && mkdir -p dist/plugin && cp -R ../.claude-plugin ../skills ../references ../hooks ../config dist/plugin/ && cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./",
     "prepack": "npm run build",
     "postinstall": "node postinstall.cjs",
+    "typecheck": "tsc -p tsconfig.check.json",
     "start": "DEVLOOP_CREATE_PROJECT=1 node src/server.ts",
     "daemon": "node src/daemon.ts",
     "seed": "node src/seed.ts",
@@ -93,6 +94,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node": "^24.13.2",
     "typescript": "^6"
   }
 }

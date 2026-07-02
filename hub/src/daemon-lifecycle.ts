@@ -335,9 +335,9 @@ ${envXml ? `  <key>EnvironmentVariables</key>\n  <dict>\n${envXml}\n  </dict>\n`
 </plist>
 `;
   writeFileSync(plist, xml);
-  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
-  execFileSync("launchctl", ["bootstrap", `gui/${process.getuid()}`, plist], { stdio: "inherit" });
-  execFileSync("launchctl", ["enable", `gui/${process.getuid()}/${AUTOSTART_LABEL}`], { stdio: "inherit" });
+  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
+  execFileSync("launchctl", ["bootstrap", `gui/${process.getuid!()}`, plist], { stdio: "inherit" });
+  execFileSync("launchctl", ["enable", `gui/${process.getuid!()}/${AUTOSTART_LABEL}`], { stdio: "inherit" });
   console.log(`[daemon] autostart installed → ${plist}`);
   console.log(`[daemon] LaunchAgent runs \`${node} ${self} up-all\` at login for configured service projects.`);
   return 0;
@@ -349,7 +349,7 @@ function uninstallAutostart(): number {
     return 1;
   }
   const plist = launchAgentPath();
-  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
+  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
   try { unlinkSync(plist); } catch { /* already gone */ }
   console.log(`[daemon] autostart removed → ${plist}`);
   return 0;

@@ -27,10 +27,10 @@ function mockFetch(handler: (url: string, init: { body?: string; headers?: Recor
 
 // slack send success — Bearer + channel + chat.postMessage
 {
-  let seen: { url: string; init: { body?: string; headers?: Record<string, string> } } | null = null;
-  const f = mockFetch((url, init) => { seen = { url, init }; return { status: 200, body: { ok: true } }; });
+  const seen: { v: { url: string; init: { body?: string; headers?: Record<string, string> } } | null } = { v: null };
+  const f = mockFetch((url, init) => { seen.v = { url, init }; return { status: 200, body: { ok: true } }; });
   await sendVia("slack", { token: "xoxb-SECRET" }, "C123", { kind: "notify", lines: ["hi"] }, f);
-  ok(!!seen && seen!.url.includes("chat.postMessage") && JSON.parse(seen!.init.body!).channel === "C123" && seen!.init.headers!.Authorization === "Bearer xoxb-SECRET",
+  ok(!!seen.v && seen.v.url.includes("chat.postMessage") && JSON.parse(seen.v.init.body!).channel === "C123" && seen.v.init.headers!.Authorization === "Bearer xoxb-SECRET",
     "slack sendVia → chat.postMessage with Bearer token + channel");
 }
 
@@ -105,10 +105,10 @@ function mockFetch(handler: (url: string, init: { body?: string; headers?: Recor
 // ── DL-52: one-way incoming-webhook transport (the 6th sendVia arg) ──────────
 // slack webhook → POST {text} to the webhook URL; success on HTTP 2xx (the hook returns "ok" text, not JSON)
 {
-  let seen: { url: string; init: { body?: string } } | null = null;
-  const f = mockFetch((url, init) => { seen = { url, init }; return { status: 200, body: {} }; });
+  const seen: { v: { url: string; init: { body?: string } } | null } = { v: null };
+  const f = mockFetch((url, init) => { seen.v = { url, init }; return { status: 200, body: {} }; });
   await sendVia("slack", { webhookUrl: "https://hooks.example/SLACK" }, "ignored", { kind: "notify", lines: ["alert here"] }, f, "webhook");
-  ok(!!seen && seen!.url === "https://hooks.example/SLACK" && JSON.parse(seen!.init.body!).text === "alert here", "DL-52: slack webhook → POST {text} to the incoming-webhook URL");
+  ok(!!seen.v && seen.v.url === "https://hooks.example/SLACK" && JSON.parse(seen.v.init.body!).text === "alert here", "DL-52: slack webhook → POST {text} to the incoming-webhook URL");
 }
 // slack webhook non-2xx → throws the status, never the URL (§16)
 {
