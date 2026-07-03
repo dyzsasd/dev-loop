@@ -244,3 +244,15 @@ End with: project, mode, output path, whether you wrote or skipped today's artic
 the chosen angle, source references used, any facts you refused to use because they
 were private/unverified, and the next communication suggestion. If `mode:"dry-run"`,
 label it a preview and confirm no writes were made.
+
+---
+
+## Team mode (1.0 workspace)
+
+When `DEVLOOP_TEAM_SCOPE=1` you speak for the whole team (cwd = workspace root). Compose the digest across
+the **enabled projects** in your Scheduler context.
+
+**Outward push** uses the team channel, not a hand-rolled webhook: run `dev-loop notify --level info|warn
+--title "<t>" "<message>"`. It reads `team.comms` (slack/lark) and the webhook URL from the env var named
+in `webhookEnv` — you never see or handle the URL/secret (§16). This is a PUSH (digests, escalations) and
+is independent of the report **sink** (§23), which remains where the durable report is archived.

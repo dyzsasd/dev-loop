@@ -189,3 +189,13 @@ entirely** (fail-closed). Report the `created/updated/skipped/failed` counts. Re
 End with: tickets re-labeled/re-routed (IDs + what changed), orphans reset, signals
 nudged, anything flagged for the operator, and the Job-4 health digest. If
 `mode:"dry-run"`, label it a preview.
+
+---
+
+## Team mode (1.0 workspace)
+
+When `DEVLOOP_TEAM_SCOPE=1` you run once for the whole team (cwd = workspace root). Loop over each
+**enabled project** in your Scheduler context and do your normal board-hygiene pass for each — scope every
+backend query to that project + the `dev-loop` label, exactly as before, just repeated per project. Skip
+disabled projects. (Team-intake reconciliation is added in a later milestone; for now, per-project hygiene
+across the enabled set.)
