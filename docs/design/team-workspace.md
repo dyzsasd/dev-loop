@@ -1,79 +1,104 @@
 # Team / Workspace — dev-loop v-next 设计与改进方案
 
-> 状态:**proposal**(操作者已确认四个关键取向,见 §0.2)。2026-07-03。
-> 起点:0.29.0(landing:pr / autoMerge / release-pr / per-repo overrides / reports sink 均已落地)。
+> 状态:**proposal v2**(已并入操作者两轮反馈;第二轮十点见 §0.2 表 5–14 行)。2026-07-03。
+> 起点:0.29.0。目标版本:**1.x(clean break,运行时不再兼容 v1 配置)**。
 
 ---
 
 ## 0. 结论摘要
 
-引入 **team** 作为顶层配置单元,与一个 **workspace(具体目录)** 一一对应;workspace 内含多个
-**project**,每个 project 由多个 **repo** 组成。三层直接对应 Linear 的 team → project,以及
-GitHub 的 repo。操作流:选定 workspace → `init-team` 生成 team 配置(backend、部署策略、文档
-系统) → 用 skill 逐个 `add-project` / `add-repo` → loop 开跑。
+引入 **team** 作为顶层配置单元,与一个 **workspace(具体目录)** 一一对应,对应一个 Linear
+team、一个 backend。workspace 内的物理单元只有 **repo**(git clone 目录);**project 是纯虚拟
+概念** —— 只是配置中的一个条目,把若干 repo 的*引用*组合成一个交付面(= Linear project)。
+**一个 repo 可被多个 project 引用。**
 
-**一条不变式贯穿全设计:agent fire 仍以 project 为原子单位。** team 是配置、调度与 intake
-路由层,不是新的 agent 作用域——全部现有 SKILL 状态机(§3/§4/§12b/§12c/验收/报告)原样复用,
-这是本方案最主要的去风险手段。
+操作流:`dev-loop team init`(纯 CLI,无 LLM)→ 在 coding CLI(claude/codex)里逐个
+`/dev-loop:add-project`、`/dev-loop:add-repo`(**add 即与 backend 同步**)→ 在 workspace 层级
+启动**唯一一个 loop**,调度器在启用的 project 间轮换。workspace 目录**自足**:配置、状态、
+报告、lessons、hub 数据库全部在内 —— **复制目录 = 迁移机器**。
+
+**不变式重述:delivery agent(PM/QA/Dev)的 fire 仍以 project 为原子单位;stewardship
+agent(reflect/ops/communication/sweep)升为 team 作用域。** 全部现有 SKILL 状态机
+(§3/§4/§12b/§12c/验收/报告)在 project 作用域内原样复用。
 
 ### 0.1 一图流
 
 ```
 team (= workspace 目录, = Linear team, 一个 backend)
- ├─ dev-loop.json                ← team 配置(机器本地,不提交)
- ├─ docs/                        ← team 级文档(docSystem=local 时)
- ├─ <project-A>/                 ← project(= Linear project)
- │   ├─ <repo-1>/                ← git clone(= GitHub repo)
- │   └─ <repo-2>/
- └─ <project-B>/
-     └─ <repo-3>/
+ ├─ dev-loop.json            ← team 配置(唯一权威文件;project 只是其中的条目)
+ ├─ docs/                    ← team 级文档(docSystem=local 时)
+ ├─ .dev-loop/               ← 全部运行状态:state/ reports/ lessons.md wt/ hub.db
+ ├─ jinko-dev-platform/      ← repo = git clone(物理单元,= GitHub repo)
+ ├─ mcp-bff/
+ └─ shared-lib/
+
+project(虚拟,只存在于配置):
+  devplatform = { jinko-dev-platform(primary), shared-lib }
+  agent-api   = { mcp-bff(primary),            shared-lib }   ← shared-lib 被两个 project 引用
 ```
 
-### 0.2 操作者已确认的四个取向
+### 0.2 操作者已确认的取向(两轮反馈合并)
 
-| 问题 | 决定 |
-|---|---|
-| repo 物理位置 | **全部克隆在 workspace 内**,配置用 workspace 相对路径 |
-| 配置共享 | **机器本地**(workspace 不做 meta-repo;不排除未来升级,见 §12) |
-| backend 层级 | **严格 team 级**;现有 backoffice(service)与 devplatform(linear)拆为两个 team |
-| 跨 project 协作 | **要**:team 级 intake 拆分为各 project 子票(§8) |
+| # | 问题 | 决定 |
+|---|---|---|
+| 1 | repo 物理位置 | 全部克隆在 workspace 内(默认平铺根下),配置用 workspace 相对路径 |
+| 2 | backend 层级 | 严格 team 级;backoffice(service)与 devplatform(linear)是两个 team |
+| 3 | 跨 project 协作 | 要:team 级 intake 拆分为各 project 子票(§8) |
+| 4 | 配置共享 | 机器本地,workspace 不做 meta-repo(自足目录已覆盖迁移诉求,见 #11) |
+| 5 | project 的本体 | **虚拟概念**,不对应目录;repo 才是目录;一个 repo 可被多个 project 引用 |
+| 6 | backend 对齐 | team 的 project 必须与 backend project 对应,**add 时即同步**,另有 sync 命令对账 |
+| 7 | 工具入口 | add/sync project/repo 走 coding CLI(skill);**init team 不需要 coding CLI**(§9.1) |
+| 8 | 对外交流管道 | 与 backend 无关,**team 级配置 comms**,支持 slack / lark(§6.1) |
+| 9 | loop 启动层级 | **永远在 team workspace 层级**;调度器跨 project 轮换;team 配置可 enable/disable project |
+| 10 | lessons / reflect / ops | lessons 在 team 层积累;reflect 是 team 作用域;ops 按 repo registry 去重巡检、按 owner 路由(§6.2) |
+| 11 | 兼容性 | **不需要**:1.x clean break,运行时不读 v1;提供一次性 import 工具 |
+| 12 | 跨机器迁移 | 目标 = **只复制 workspace 文件夹**;全部状态入 workspace(§10.3) |
+| 13 | hub 数据库 | **入 workspace**:`.dev-loop/hub.db`,一库一 team,daemon 按 workspace 起(§7.2) |
+| 14 | 跨 team 协作 | **完全不考虑**(I3) |
 
 ---
 
 ## 1. 动机:现状痛点
 
 1. **配置是机器全局平面**。`~/.dev-loop/projects.json` 一个文件装所有 project,绝对路径绑定
-   机器;加一个 repo 要人肉编辑全局文件(0.28.0 的 per-repo overrides 已把字段准备好,但入口
-   仍是散的)。
-2. **Linear 映射靠约定**。`linearTeam` 逐 project 重复填写;label 逐 team 提供但由每次 init
-   重复对账;没有一个"这组 project 属于同一个团队"的一等概念。
-3. **多 project 无调度关系**。两个 project 就要起两套 Agent View / 两个 `dev-loop run`;
-   没有 team 级的开关、权重、公共策略(如 "prod 永远手动")。
-4. **跨 project 的需求没有入口**。一个横跨 devplatform + backoffice 的功能,今天只能操作者
-   手工拆成两个 intake。
-5. **文档系统位置逐 project 各自为政**(repo 文件 / Linear 文档 / hub 文档),没有 team 级
-   默认;也没有 team 级的"组合愿景"文档层。
+   机器;加一个 repo 要人肉编辑全局文件。
+2. **project 与目录耦合**。今天 repoPath 指哪都行但没有结构;一份共享代码库想同时服务两个
+   交付面,只能二选一或复制配置。
+3. **Linear 映射靠约定**。`linearTeam` 逐 project 重复填写;config 里的 project 与 Linear
+   project 没有机器可校验的对应(改名/归档后悄悄漂移)。
+4. **多 project 无调度关系**。两个 project 要起两套 loop;没有 team 级的开关、权重、公共
+   策略(如 "prod 永远手动")。
+5. **状态散落 `~/.dev-loop/`**。换电脑 = 手工搬配置 + 状态 + 重建 hub 库,极易丢报告与
+   lessons。
+6. **lessons / reflect / ops 各自为政**。每个 project 一份 lessons,跨项目的教训无法沉淀;
+   ops 对共享基础设施重复巡检。
+7. **对外通知(lark webhook)埋在 project 配置里**,与 backend 混在一起,换 backend 就要
+   重配。
 
 ---
 
 ## 2. 概念模型与不变式
 
-| 概念 | 对应 | 说明 |
+| 概念 | 对应 | 本体 |
 |---|---|---|
-| **team** | workspace 目录;Linear team;(service)hub 的 team 行 | 顶层配置单元;**一个 team 一个 backend** |
-| **project** | workspace 内的一个分组;Linear project;hub project | loop 的运行单元(fire 的原子作用域,不变) |
-| **repo** | `<workspace>/<project>/<repo>/` 的 git clone;GitHub repo | 代码单元;0.28.0 的 per-repo overrides 原样适用 |
+| **team** | workspace 目录;Linear team;(service)一个 hub 库 | 顶层配置单元;**一个 team 一个 backend** |
+| **repo** | `<workspace>/<相对路径>/` 的 git clone;GitHub repo | **物理单元**:构建/部署/CI 事实的挂载点(registry 注册一次) |
+| **project** | 配置条目;Linear project(或 hub project) | **虚拟单元**:repo 引用的组合 + 交付面语义(strategyDoc/testEnv/agents);delivery fire 的原子作用域 |
 
 **不变式(设计约束,实现必须保持):**
 
-- **I1 — fire 原子性**:每次 agent fire 恰好作用于一个 project。team 只出现在配置解析、调度
-  器与 intake 路由里,不出现在 PM/QA/Dev 的工作循环语义里。
-- **I2 — repo 归属唯一**:一个 repo 恰好属于一个 project(禁止共享;共享代码应自成 project)。
-- **I3 — 一个 team 一个 backend**:linear 或 service,不混。跨 backend 的协作不存在(两个
-  team 之间没有自动协作,见 §8 边界)。
-- **I4 — 配置只加不破**:legacy `projects.json`(schema v1)永远可读;v2 是叠加层
-  (read-side 兼容,§10)。
-- **I5 — 秘密不落盘**:team 配置沿用 §16(env-var 名,不存字面量)。
+- **I1 — fire 作用域分层**:delivery agent(PM/QA/senior-dev/junior-dev)每次 fire 恰好作用
+  于一个 project(现有 SKILL 语义不变);stewardship agent(sweep/ops/reflect/communication)
+  每次 fire 作用于整个 team,内部按 project/repo 迭代或路由。
+- **I2 — repo 注册唯一、引用多重**:一个 repo 在 team 的 registry 里恰好注册一次(物理事实
+  单点维护);可被任意多个 project 引用;被 >1 个 project 引用时必须显式声明 `owner`
+  (运维/告警路由归属,§6.2)。
+- **I3 — 一个 team 一个 backend;无跨 team 协作**:linear 或 service,不混;两个 team 之间
+  不存在任何自动协作,永不设计。
+- **I4 — workspace 自足**:配置、状态、报告、lessons、worktrees、hub 库全部位于 workspace
+  目录内,路径一律相对;**复制目录到新机器 = 完成迁移**(仅 env 变量与凭据随机器,§10.3)。
+- **I5 — 秘密不落盘**:沿用 §16 —— 配置只存 env-var *名字*(comms webhook、token 等),
+  字面量永不进 workspace;这也是 I4 成立的前提(目录可以随便拷,不带密钥)。
 
 ---
 
@@ -83,40 +108,45 @@ team (= workspace 目录, = Linear team, 一个 backend)
 
 ```
 <workspace>/
-  dev-loop.json          # team 配置(schema v2;机器本地,workspace 不是 git repo)
-  docs/                  # team 级文档(docSystem=local 时;可选)
-  <project-key>/<repo-name>/   # 推荐脚手架;不强制 —— 配置里的相对路径才是权威
+  dev-loop.json                # team 配置(schema v2;唯一权威)
+  docs/                        # team 级文档(docSystem=local 时;可选)
+  .dev-loop/                   # 全部运行状态(见 3.3)
+  <repo-dir>/                  # git clone;默认平铺在根下,registry 的相对路径是权威
 ```
 
-- 配置中的 `repos[].path` 一律 **workspace 相对路径**。`<project>/<repo>` 是 `add-repo` 的
-  默认脚手架,不是硬规则(迁移期一个已有 repo 直接躺在 workspace 根下也合法,见 §10)。
-- workspace 本身**不是** git repo(操作者选择);`dev-loop.json` 天然机器本地。子 repo 各自
-  是独立 git clone。
+- `repos.<name>.path` 一律 **workspace 相对路径**;`add-repo` 默认 clone 到
+  `<workspace>/<name>/`,已有目录也可直接登记。
+- workspace 本身**不是** git repo;子 repo 各自是独立 clone。
+- 不再有 `<project>/<repo>` 的嵌套脚手架 —— project 不是目录(#5)。
 
 ### 3.2 解析(precedence,自上而下)
 
 1. `DEVLOOP_TEAM` + `DEVLOOP_PROJECT` 显式指定(空串视为未设,同 DL-13);
-2. **cwd 向上爬找 `dev-loop.json`** → team;再用 cwd 匹配 `repos[].path`(realpath、段边界
-   安全、最近祖先优先,复用 DL-13 匹配器)→ project;
-3. 全局索引 `~/.dev-loop/workspaces.json`(`{"<team-key>": "<abs workspace path>"}`,由
-   `init-team` 写入)→ 供 workspace 之外的启动(cron/launchd)用 `--team <key>` 解析;
-4. legacy `projects.json`(v1)兜底 —— 老项目完全不感知新层。
+2. **cwd 向上爬找 `dev-loop.json`** → team;repo 定位:cwd realpath 匹配 registry path
+   (段边界安全、最近祖先优先,复用 DL-13 匹配器);**project 定位**:显式 `--project` 或
+   fire 上下文;缺省时若该 repo 仅被一个 project 引用则推断,被多引用则报错要求显式
+   (共享 repo 的必然代价,报错信息列出候选);
+3. `~/.dev-loop/workspaces.json` **便捷索引**(`{"<team-key>": "<abs path>"}`):供 workspace
+   之外的启动(cron/launchd)用 `--team <key>` 解析。**非权威、自愈**:任何一次在 workspace
+   内的 dev-loop 运行都会登记 cwd;丢失可重建;**不参与迁移**。
 
-### 3.3 机器本地状态布局
+v1 `projects.json` 运行时**不读**(#11);`dev-loop team import` 一次性转换(§9)。
+
+### 3.3 运行状态布局(全部入 workspace,I4)
 
 ```
-~/.dev-loop/
-  workspaces.json                       # team 索引(新)
-  <team>/<project>/pm-state.json        # 状态文件下沉一层
-  <team>/<project>/qa-state.json
-  <team>/<project>/lessons.md
-  <team>/<project>/reports/<agent>/…
-  <team>/<project>/wt/<ticket-id>/      # §12c per-ticket worktree
-  hub.db                                # service:单库,加 team 维度(§7.2)
+<workspace>/.dev-loop/
+  state/<project>/pm-state.json         # 状态文件(qa-state 等同级)
+  reports/<project>/<agent>/…           # delivery agent 报告
+  reports/team/<agent>/…                # stewardship agent 报告(ops/reflect/…)
+  lessons.md                            # team 级 lessons(#10,§6.3)
+  wt/<ticket>/<repo>/                   # §12c per-ticket worktree(键含 repo,支持共享)
+  locks/<repo>.lock                     # base clone 变更操作的 advisory lock(§6.4)
+  hub.db                                # service backend(#13;linear 时不存在)
+  daemon.json                           # service daemon 运行文件(pid/port,瞬态)
 ```
 
-读侧兼容:找不到 `<team>/<project>/X` 时回落 `<project>/X`(现状路径),再回落根级
-legacy 文件(§14 既有规则)。
+`~/.dev-loop/` 只剩 `workspaces.json` 便捷索引 —— 可整目录删除而不丢任何数据。
 
 ---
 
@@ -128,92 +158,141 @@ legacy 文件(§14 既有规则)。
 {
   "schemaVersion": 2,
   "team": {
-    "key":        "jinko-platform",       // team 短名(状态目录、索引键)
-    "backend":    "linear",               // "linear" | "service" —— 严格 team 级(I3)
-    "linearTeam": "Loop-1",               // linear:Linear team 名(labels 按 team 提供一次)
-    "hub":        { "db": null },          // service:hub 配置(linear 时忽略)
-    "deployPolicy": {                      // 部署策略【上限】(§4.3):project/repo 只能更保守
-      "dev":  "auto",                      // "auto"(允许 loop 自动部署 dev)| "manual"
-      "prod": "manual"                     // prod 永远 manual 是推荐默认
+    "key":          "jinko-devplatform",
+    "backend":      "linear",              // "linear" | "service" —— 严格 team 级(I3)
+    "linearTeam":   "Loop-1",              // linear:team 名;首次 add-project 对账后落 ID ↓
+    "linearTeamId": null,
+    "deployPolicy": { "dev": "auto", "prod": "manual" },   // 部署策略【上限】(§4.3)
+    "docSystem":    "backend",             // team 默认:"local" | "backend";project 可覆盖
+    "teamDoc":      null,                  // 可选:team 级组合文档(愿景/portfolio)
+    "autonomy":     "full",                // team 默认;project 可覆盖
+    "mode":         "live",                // team 默认;project 可覆盖
+    "comms": {                             // 对外交流管道(#8,§6.1)—— 与 backend 正交
+      "provider":   "lark",                // "slack" | "lark"
+      "webhookEnv": "DEVLOOP_COMMS_WEBHOOK"  // env-var 名(I5),不存字面量
     },
-    "docSystem":  "backend",              // team 级文档系统默认:"local"(workspace/docs 或 repo 文件)
-                                           //   | "backend"(Linear 文档 / hub doc)。project 可覆盖。
-    "teamDoc":    null,                    // 可选:team 级组合文档(愿景/portfolio)。local → 相对路径;
-                                           //   backend → Linear 文档 URL / {"hubDoc":"team-strategy"}
-    "autonomy":   "full",                  // team 默认;project 可覆盖(不受上限约束——上限只管部署)
-    "mode":       "live",                  // team 默认;project 可覆盖
-    "notify":     { "type": "lark", "webhookEnv": "DEVLOOP_NOTIFY_WEBHOOK" },  // team 级一份
-    "reports":    { "sink": "files" }      // team 默认;project 可覆盖(§23 护栏不变)
+    "reports":      { "sink": "linear" },  // team 默认;project 可覆盖(§23 护栏不变)
+    "agents": {                            // stewardship agent 的 team 级 launch 配置(I1)
+      "sweep":  { "cadence": "hourly" },
+      "ops":    { "cadence": "hourly" },
+      "reflect": { "cadence": "daily" },
+      "communication": { "cadence": "daily" }
+    }
   },
-  "projects": {
-    "<project-key>": {
-      "linearProject": "Jinko DevPlatform",   // = Linear project(service 时为 hub project 名)
-      "strategyDoc":   { "linearDocument": "…" },  // 不变(repo 文件 | Linear 文档 | hub doc)
-      "testEnv":       { "baseUrl": "…", "authConstraint": "…" },
-      "devSplit":      true,
-      "weight":        1,                   // 调度权重(§6);0 = 暂停该 project
-      "enabled":       true,
-      "agents":        { /* 现有两级 launch 配置,不变 */ },
-      "repos": [                            // 0.28.0 的 per-repo 字段原样;path 改为 workspace 相对
-        { "name": "portal", "path": "devplatform/jinko-dev-platform", "role": "primary",
-          "landing": "pr", "autoMerge": true,
-          "mergeChecks": ["Validate PR Title", "Verify Worker Route Contract", "Lint & Build", "Build Docker Image"],
-          "build": { "typecheck": "npx tsc --noEmit", "build": "npm run build" },
-          "deploy": { "style": "release-pr", "environments": {
-            "dev":  { "auto": true,  "deployPrPrefix": "deploy/dev/" },
-            "prod": { "auto": false, "deployPrPrefix": "deploy/prod/" } } } }
+
+  "repos": {                               // ★ 物理 registry:一个 repo 注册一次(I2)
+    "portal": {
+      "path":   "jinko-dev-platform",      // workspace 相对路径
+      "remote": "git@github.com:jinkoso/jinko-dev-platform.git",
+      "owner":  "devplatform",             // 运维/告警路由归属;单引用时可省(推断)
+      "landing": "pr", "autoMerge": true,
+      "mergeChecks": ["Validate PR Title", "Verify Worker Route Contract", "Lint & Build", "Build Docker Image"],
+      "build":  { "typecheck": "npx tsc --noEmit", "build": "npm run build" },
+      "deploy": { "style": "release-pr", "environments": {
+        "dev":  { "auto": true,  "deployPrPrefix": "deploy/dev/" },
+        "prod": { "auto": false, "deployPrPrefix": "deploy/prod/" } } },
+      "ops":    { "checks": ["https://dev.builders.gojinko.com/api/health"] }
+    }
+  },
+
+  "projects": {                            // ★ 虚拟单元:引用 repo,不拥有目录(#5)
+    "devplatform": {
+      "enabled":  true,                    // team 级开关(#9);false = delivery 全停
+      "weight":   1,                       // 调度权重(§6);影响轮换频率
+      "linearProject":   "Jinko DevPlatform",
+      "linearProjectId": "ce2951dd-…",     // add-project 同步时落盘(#6),sync-project 对账
+      "strategyDoc": { "linearDocument": "…" },
+      "testEnv":  { "baseUrl": "…", "authConstraint": "…" },
+      "devSplit": true,
+      "agents":   { /* delivery agent 的两级 launch 配置,不变 */ },
+      "repos": [                           // 引用 + 每-membership 角色
+        { "ref": "portal", "role": "primary" }
       ]
     }
   }
 }
 ```
 
-### 4.2 三级解析规则(§19 的直接扩展)
+### 4.2 解析规则
 
-任一可覆盖字段的生效值 = **repo 值 ∥ project 值 ∥ team 值**(就近优先)。字段归属:
-
-| 层 | 独占字段 | 可被下层覆盖的默认 |
-|---|---|---|
-| team | `backend`、`linearTeam`/`hub`、`deployPolicy`、`teamDoc`、`notify` | `mode`、`autonomy`、`docSystem`、`reports` |
-| project | `linearProject`、`strategyDoc`、`testEnv`、`devSplit`、`weight`、`agents` | `landing`/`autoMerge`/`mergeChecks`/`build`/`deploy`(作为 repo 的默认) |
-| repo | `path`、`name`、`role` | —(最末层) |
+- **行为字段**(`mode` / `autonomy` / `docSystem` / `reports`):project 值 ∥ team 值(就近
+  优先),同 §19。
+- **物理字段**(`landing` / `autoMerge` / `mergeChecks` / `build` / `deploy` / `ops.checks`):
+  **只在 repo registry 一处**。project 不得覆盖 —— 共享 repo 若允许每 project 一套部署
+  语义,同一 clone 会出现互相矛盾的事实(这是把 I2 从"禁止共享"翻转为"注册唯一"的代价
+  与收益:物理事实单点维护)。
+- **membership 字段**(`role`):属于 project→repo 的引用边,每条引用各自声明。
 
 ### 4.3 deployPolicy 是【上限】,不是默认
 
-语义:`deployPolicy.<env> = "manual"` ⇒ 该 team 内**任何** repo 的 `deploy.environments.<env>`
-解析后必须 `auto:false`;违反 = 配置错误(doctor/`init` 报错,agent 运行时二次校验并拒绝执行
-自动部署)。`"auto"` 只表示"允许",repo 仍可自行选择 manual。环境名按 key 匹配
-(`dev`/`prod`/自定义)。这把"这个团队 prod 永远人工"从逐 repo 约定升级为一条机器可校验的
-治理规则。
+语义不变:`deployPolicy.<env> = "manual"` ⇒ registry 中**任何** repo 的
+`deploy.environments.<env>` 解析后必须 `auto:false`;违反 = 配置错误(doctor / `add-repo`
+报错,agent 运行时二次校验并拒绝执行自动部署)。`"auto"` 只表示"允许"。
 
 ---
 
-## 5. 文档体系(三层)
+## 5. 文档体系(三层,基本不变)
 
 | 层 | 文档 | 维护者 | 位置(docSystem) |
 |---|---|---|---|
 | team | `teamDoc`:组合愿景 / 各 project 定位 / 跨项目原则 | 操作者为主,PM 只读引用 | local → `workspace/docs/…`;backend → Linear 文档 / hub doc |
-| project | `strategyDoc`(§20,不变) | PM(现状机制:docWatch、Decisions log、append-only) | 不变 |
+| project | `strategyDoc`(§20,不变) | PM(docWatch、Decisions log、append-only) | 不变 |
 | module | 设计文档(§21a,不变) | senior-dev | 不变 |
 
-变化只有一条:**PM boot 时若 `teamDoc` 存在则加载为上游北极星**——project 的 Goals 与 team
-方向冲突时,PM 在 Decisions log 里记录并以 team 文档为准(或 park 给操作者)。teamDoc 缺省
-为空,一切照旧。
+PM boot 时若 `teamDoc` 存在则加载为上游北极星;缺省为空,一切照旧。
 
 ---
 
-## 6. 调度与运行模型
+## 6. 调度与运行模型(loop 只在 team 层级启动,#9)
 
-- `dev-loop run --team <key>`(或 cwd 在 workspace 内):**一个调度进程跑整个 team** ——
-  对每个 `enabled` 的 project,按现有 per-agent cadence 生成 fire 计划,**交错(stagger)+
-  round-robin** 执行;`weight` 决定同一 agent 在多 project 间的相对频率(weight 2 = 两倍
-  fire)。`--project <key>` 仍可只跑一个。
-- **每次 fire 的命令与今天完全一致**(I1):解析到的仍是"一个 project 的一次 agent 调用",
-  MCP 按 team 的 backend 接线(0.28.0 的 backend-gated 注入,linear team 不注 hub)。
-- Agent View 路线不变:每行一个 `/loop`,`--cwd` 指到 workspace 内任一位置即可解析。
-- 状态文件、reports、worktrees 全部落 `~/.dev-loop/<team>/<project>/…`(§3.3)。
-- **token 成本控制**:R1 change-gate(service)与 PM/QA 的 SHA 门(两 backend 通用)照常
-  生效;一个静止的 project 的 fire 是廉价 no-op。`weight:0` 可整体暂停一个 project。
+`dev-loop run`(cwd 在 workspace 内)或 `dev-loop run --team <key>`:**一个调度进程跑整个
+team**。不再存在 per-project 的启动入口(调试用 `--project` 过滤保留,但那只是过滤,不是
+另一种部署形态)。
+
+| agent | fire 作用域(I1) | 跨 project 方式 |
+|---|---|---|
+| pm / qa / senior-dev / junior-dev | project | 调度器轮换:对每个 agent 种类,按 cadence 触发,在 `enabled` 的 project 间 **round-robin**,`weight` 决定相对频率(weight 2 = 两倍占比);fire 本身与今天完全一致 |
+| sweep | team | 一次 fire 内部逐 enabled project 做板面清理,外加 team intake 收口 job(§8) |
+| ops | team | 见 §6.2:按 repo registry **去重**巡检,按 `owner` 路由告警 |
+| reflect | team | 见 §6.3:汇总全 team 报告,维护 team 级 lessons.md |
+| communication | team | 经 comms 管道对外播报(§6.1) |
+
+- `enabled:false` 的 project:delivery 不 fire、sweep 跳过;其**独占** repo 的 ops 巡检
+  同停;**共享** repo 因另一启用 project 而继续。
+- Agent View 路线:每行一个 `/loop`,`--cwd` 指到 workspace 根 —— 行数 = agent 种类数,
+  不再随 project 数增长。
+- **token 成本**:change-gate(service)与 PM/QA 的 SHA 门(两 backend 通用)照常;静止
+  project 的 fire 是廉价 no-op;`enabled:false` 整体暂停。
+
+### 6.1 对外交流管道(comms,#8)
+
+- team 级一份,**与 backend 完全正交**(linear team 也可以用 lark 通知,service team 也可以
+  用 slack)。
+- `provider: "slack" | "lark"`,两者都走 incoming-webhook,差异仅在消息 payload 适配器
+  (slack blocks / lark interactive card)。`webhookEnv` 存 env-var 名(I5)。
+- 消费方:communication agent(日报/周报)、escalation(needs-human/park)、可选的 landing
+  通知。report sink(§22)照旧独立配置 —— comms 是"推送",sink 是"归档"。
+
+### 6.2 ops 的跨 project 语义(#10)
+
+一次 team fire:遍历 registry 中**至少被一个 enabled project 引用**的 repo(共享 repo 只查
+一次 —— registry 带来的去重收益),对每个 repo 跑 `ops.checks` + 环境健康;发现问题 →
+按该 repo 的 `owner` project 在 backend 建告警票(共享 repo 的告警只进 owner 的看板,不
+重复建票)。报告落 `reports/team/ops/`。
+
+### 6.3 lessons 与 reflect(#10)
+
+- **lessons 在 team 层积累**:单一 `.dev-loop/lessons.md`,条目打 `[project]` 或 `[team]`
+  标签;所有 agent boot 时装载(小文件,reflect 负责修剪与去重,容量上限沿用现规)。
+- **reflect 是 team 作用域**:读全 team 的 reports(delivery + stewardship)与近史,蒸馏进
+  team lessons;跨 project 的共性教训(如 "release-pr 轮询要先 fetch")第一次有了归宿。
+
+### 6.4 共享 repo 的并发安全
+
+- agent 的全部改动都在 per-ticket worktree(§12c)里,base clone 对 agent 只读;
+- base clone 的变更操作(fetch / worktree add / prune)持 `locks/<repo>.lock` advisory 锁;
+- 两个 project 同时改同一 repo → 天然收敛为普通 PR 竞争(autoMerge 轮询 checks,后到者
+  rebase),无需新机制。
 
 ---
 
@@ -221,107 +300,130 @@ legacy 文件(§14 既有规则)。
 
 ### 7.1 linear
 
-- `linearTeam` 上收到 team 级;**label 集按 team 提供一次**(labels 本就是 Linear team 作用
-  域,现状 init 逐 project 对账的重复劳动消失)。
-- project = Linear project(现状);reports sink、strategyDoc=Linear 文档等机制不变。
-- **team intake 的载体**:Linear 原生支持"无 project 的 team issue" —— 一张
-  `dev-loop`+`needs-pm` 且**不属于任何 project** 的 team issue 即 team 级 intake(§8)。
+- `linearTeam` 收在 team 级。**首次 `add-project` 做 team 对账**:验证 team 存在、确保
+  label 集(`dev-loop`、`needs-pm`、`repo:*`……)幂等存在、`linearTeamId` 落盘。init-team
+  本身不碰 Linear(§9.1)。
+- **project 与 Linear project 强对应(#6)**:`add-project` 当场 find-or-create Linear
+  project 并落 `linearProjectId`;`sync-project` 对账改名/归档/labels/strategyDoc 漂移。
+- team intake 载体:`dev-loop`+`needs-pm` 且不属于任何 project 的 team issue(§8)。
 
 ### 7.2 service(hub)
 
-- 单一 `hub.db` 增加 `teams` 表 + `projects.team_id`(迁移脚本;旧行归入自动生成的
-  single-project team)。
-- **daemon 按 team 起一个**(一个端口服务全 team):web UI 增加 team 总览(各 project 看板
-  + team intake 谱系视图);`daemon-<team>.json` 运行文件。旧 per-project daemon 兼容运行。
-- mirror(P7)按 project 配置不变;`_team` 保留 project 承载 team intake(§8)。
+- **一库一 team**:`<workspace>/.dev-loop/hub.db`(#13)。不做多 team 单库、不加 teams 表
+  —— workspace 即租户边界,schema 反而比 v1 草案更简单。
+- daemon 按 workspace 起:`dev-loop serve`(cwd 解析),运行文件 `.dev-loop/daemon.json`;
+  web UI 增加 team 总览(各 project 看板 + team intake 谱系视图)。
+- mirror(P7)按 project 配置不变;保留 `_team` project 承载 team intake(§8)。
+- sqlite 走 WAL:`doctor` 提供 checkpoint;迁移前停 daemon(§10.3)。
 
 ---
 
-## 8. 跨项目协作:team intake(本版纳入)
+## 8. 跨项目协作:team intake(同 team 内;跨 team 永不做,#14)
 
-复用并递归 §9a 的 W3 机制,**不新增状态机**:
+复用并递归 §9a 的 W3 机制,不新增状态机:
 
-1. **入口**:操作者在 team 层面提一张 intake ——
-   linear:team issue(无 project)+ `dev-loop`+`pm`+`needs-pm`;
-   service:保留 project `_team` 里的一张 `needs-pm` 票。
-2. **拆分(任意 project 的 PM fire 皆可认领)**:PM 的 Job B `needs-pm` 扫描扩展到 team 层。
-   发现 team intake → 按各 project 的职责把它拆成 **每 project 一张普通 W3 子 intake**
-   (child `relatedTo` parent,parent 反链 + 评论子票 ID —— §9a 原机制),然后 parent →
-   **`In Review`**(注意:不同于单 project W3 的立即 Done —— 跨项目需要端到端跟踪)。
-3. **各 project 正常消化**自己的子 intake(方向→改文档+发 Feature;构建→拆 Dev 子票),
-   完全是现有 §9a 行为。
-4. **收口(Sweep 新增 team job)**:Sweep 每轮检查 `In Review` 的 team intake —— 其全部子
-   intake `Done` ⇒ parent → `Done`(附各子票结果汇总评论);任一子票 park ⇒ parent 保持
-   In Review 并在评论里指出堵点。
-5. **边界**:同 team(=同 backend)内有效;跨 team 不自动协作(I3),操作者手工分发。
-
-风险控制:拆分是幂等的(parent 上有子票反链即视为已拆,重复 fire 直接跳过);PM 拆分只做
-"按 project 分工",不做深方案设计(那是各 project PM/senior-dev 的事)。
+1. **入口**:操作者提 team 级 intake —— linear:team issue(无 project)+
+   `dev-loop`+`pm`+`needs-pm`;service:`_team` project 里的 `needs-pm` 票。
+2. **拆分**(任意 project 的 PM fire 皆可认领):PM 的 Job B `needs-pm` 扫描扩展到 team 层。
+   发现 team intake → 按各 project 职责(依据 teamDoc 的定位描述)拆成**每 project 一张
+   普通 W3 子 intake**(child `relatedTo` parent,parent 反链 + 评论子票 ID),parent →
+   `In Review`。
+3. **各 project 正常消化**自己的子 intake(现有 §9a 行为)。
+4. **收口**(sweep 的 team job):全部子 intake `Done` ⇒ parent → `Done`(附汇总评论);
+   任一子票 park ⇒ parent 保持 In Review 并评论指出堵点。
+5. 拆分幂等(parent 有子票反链即视为已拆);PM 只做"按 project 分工",不做深方案设计。
 
 ---
 
-## 9. 操作者体验:skill 分解
+## 9. 操作者体验:工具入口(#7)
 
-现有单体 `init` 分解为四个操作者在场(operator-present)的 skill,全部幂等:
+### 9.1 为什么 `init team` 不需要 coding CLI
 
-| skill | 职责 |
-|---|---|
-| **`/dev-loop:init-team`** | 在当前目录(或指定目录)创建 workspace:生成 `dev-loop.json`(backend / deployPolicy / docSystem / notify / reports 面试),写 `workspaces.json` 索引;linear → 按 team 提供 label 集;service → hub team 播种 + daemon。**不建任何 project。** |
-| **`/dev-loop:add-project`** | 向 team 加一个 project:Linear project(或 hub project)创建/复用、strategyDoc 脚手架(§20 headings)、testEnv/devSplit/agents 面试、状态文件。 |
-| **`/dev-loop:add-repo`** | **一遍到位加 repo**:`git clone` 进 `<workspace>/<project>/`(或登记已有相对路径)→ 自动侦测 build 命令 + 从 PR workflow 派生 `mergeChecks`(0.28.0 P2-10)→ 部署面试(release-pr/command,受 deployPolicy 上限校验)→ 写入 `repos[]` → 提供 `repo:<name>` label(该 project 第二个 repo 起)→ mini-MAP + 对抗校验(P2-11)把 repo 现状追加进 strategyDoc Current state。 |
-| **`/dev-loop:init`(legacy)** | 保留:单 project 旧流程,产出 v1 配置(I4)。提示可用 `migrate-workspace` 升级。 |
-| `dev-loop migrate-workspace`(CLI) | v1 → v2 辅助:生成 `dev-loop.json` 草稿、移动状态目录、(可选)把 repo 移入 workspace,并打印 diff 供确认。 |
+`init-team` 的全部输入都是**操作者已知的事实**(team key、backend、Linear team 名、
+deployPolicy、comms provider + webhookEnv、reports sink),没有任何需要读代码或访问 backend
+的判断;它的产出是确定性脚手架(`dev-loop.json` + `.dev-loop/` 目录 + service 时初始化
+hub.db)。因此做成**纯 CLI 交互命令**:`dev-loop team init` —— 快、可脚本化、不烧 token、
+不依赖 MCP。backend 侧的写操作与对账(验证 Linear team、label 集、创建 project)全部推迟到
+第一次 `add-project` —— 它天然运行在带 MCP 的 coding CLI 里。这也保持 hub 对 backend 零
+依赖(hub 从不直连 Linear)。
 
-`dev-loop export-desktop-skill` 增加 `--team`(渲染 team 上下文);`dev-loop doctor` 增加
-schema v2 校验(deployPolicy 上限、路径存在性、索引一致性)。
+反之 add/sync 系列**必须**在 coding CLI 里跑:需要仓库理解(侦测构建命令、从 PR workflow
+派生 mergeChecks)、backend MCP 写操作(project/label/文档)、以及对抗校验式的判断 —— 正是
+LLM 面。
 
----
+### 9.2 命令与 skill 清单(全部幂等)
 
-## 10. 迁移与兼容(以现有两个项目为例)
+| 入口 | 形态 | 职责 |
+|---|---|---|
+| `dev-loop team init` | **纯 CLI** | 创建 workspace:面试 backend / linearTeam / deployPolicy / docSystem / comms / reports → 写 `dev-loop.json` + `.dev-loop/` 脚手架;service → 初始化 hub.db。**不建任何 project,不碰 backend。** |
+| `/dev-loop:add-project` | coding CLI skill | 加 project:**当场同步 backend**(find-or-create Linear/hub project,落 ID;首次顺带 team 对账 + label 集)、strategyDoc 脚手架(§20 headings)、testEnv/devSplit/agents 面试、状态目录。 |
+| `/dev-loop:add-repo` | coding CLI skill | 一遍到位加 repo:clone 进 `<workspace>/<name>/`(或登记已有)→ 侦测 build + 从 PR workflow 派生 mergeChecks → 部署面试(受 deployPolicy 上限校验)→ 写 registry + project 引用(`ref`/`role`,共享时要求 `owner`)→ `repo:<name>` label → mini-MAP + 对抗校验把 repo 现状追加进 strategyDoc。 |
+| `/dev-loop:sync-project` | coding CLI skill | 对账 config ↔ backend project:改名/归档/labels/strategyDoc 漂移 → 出 diff → 确认写回。 |
+| `/dev-loop:sync-repo` | coding CLI skill | 重侦测 build/mergeChecks/deploy 与 remote 漂移;clone-if-missing;`git worktree repair` + prune。 |
+| `dev-loop doctor` | 纯 CLI | schema 校验、deployPolicy 上限、路径存在性、worktree repair、索引自愈登记、hub.db WAL checkpoint。 |
+| `dev-loop team import` | 纯 CLI(一次性) | v1 `projects.json` + 旧状态目录 → 生成 workspace(打印 repo 迁移指引);**运行时不读 v1**(#11)。 |
 
-**原则(I4)**:v1 `projects.json` 永远可读;所有 agent 的配置装载走同一个解析器,v2 命中则
-用 v2,否则回落 v1。**不做自动改写**(§19 既有铁律的延伸)。
-
-**devplatform → team `jinko-devplatform`(linear)**
-1. `/dev-loop:init-team`(workspace = `/Users/shuai/workspace/loop/`,backend=linear,
-   linearTeam=Loop-1,deployPolicy `{dev:auto, prod:manual}`);
-2. `migrate-workspace`:把现 `projects.devplatform` 平移进 `dev-loop.json`
-   (repoPath → 相对路径 `jinko-dev-platform`;可留在 workspace 根,或移入
-   `devplatform/` 项目目录 —— 相对路径是权威,目录约定不强制);
-3. 状态目录 `~/.dev-loop/devplatform/` → `~/.dev-loop/jinko-devplatform/devplatform/`
-   (migrate 命令代劳;读侧本就有回落,不迁也能跑)。
-
-**jinko-backoffice → team `jinko-backoffice`(service)**:同样一次 `init-team`(backend=
-service)+ 平移;hub 迁移脚本把既有 project 行挂到新 team 行下。它成为独立 team,与
-devplatform 互不影响 —— 正是"两个 team、backend 严格 team 级"的选择。
-
-**加新 repo(如 mcp-bff)从此 = 一条命令**:`/dev-loop:add-repo mcp-bff --project devplatform
---from git@github.com:jinkoso/mcp-bff.git` —— clone、侦测、面试、写配置、label、文档,一遍
-完成(0.28.0 已把 per-repo 字段与派生逻辑备齐,本版补上入口与物理布局)。
+`dev-loop export-desktop-skill` 增加 `--team`(渲染 team 上下文)。
 
 ---
 
-## 11. 分阶段实施
+## 10. 迁移
 
-| 里程碑 | 内容 | 交付物 | 版本 |
+### 10.1 devplatform → team `jinko-devplatform`(linear)
+
+1. `dev-loop team init`(workspace = `/Users/shuai/workspace/loop/`,backend=linear,
+   linearTeam=Loop-1,deployPolicy `{dev:auto, prod:manual}`,comms=lark);
+2. `dev-loop team import`:平移现 `projects.devplatform` → registry(`portal`)+ project
+   条目;repo clone 已在 workspace 内,登记相对路径即可;
+3. 首次 `/dev-loop:sync-project` 补 `linearProjectId` / `linearTeamId` 对账;
+4. 状态/报告由 import 搬入 `.dev-loop/`。
+
+### 10.2 jinko-backoffice → team `jinko-backoffice`(service)
+
+同样 `team init`(backend=service,初始化 `.dev-loop/hub.db`)+ `team import`(hub 旧库表
+迁入 workspace 库);它成为独立 team,与 devplatform 互不影响。
+
+### 10.3 跨机器迁移(#12):复制文件夹即可
+
+1. (service)停 daemon;等 fires 空窗;
+2. **复制 workspace 目录**到新机器(配置/状态/报告/lessons/hub.db/repo clones 全在内,I4);
+3. 新机器一次性环境:装 dev-loop CLI + coding CLI、`gh auth`、设 env 变量(comms webhook、
+   token —— 名字在配置里,值随机器,I5);
+4. `cd <workspace> && dev-loop doctor`:worktree repair(git worktree 内嵌绝对路径,repair
+   修复)、索引自愈登记、WAL checkpoint 校验;
+5. 起 loop。没有第 6 步。
+
+---
+
+## 11. 分阶段实施(1.x,clean break)
+
+| 里程碑 | 版本 | 内容 | 验收 |
 |---|---|---|---|
-| **M1 配置与解析** | schema v2 + 三级解析 + deployPolicy 上限校验 + `workspaces.json` 索引 + cwd 爬升解析 + v1 回落;doctor 校验 | 解析器(hub/src 共享)+ conventions §25(team 层)+ config-schema v2 节;**对 v1 零行为变化** | 0.30.0 |
-| **M2 操作技能** | `init-team` / `add-project` / `add-repo` / `migrate-workspace`;export-desktop-skill `--team` | 四个 skill + CLI;devplatform 实际迁移作为验收 | 0.31.0 |
-| **M3 team 调度** | `dev-loop run --team`(多 project 交错 + weight)+ 状态目录下沉 `<team>/<project>/` | run-agents team 模式 + 读侧回落;Agent View 文档更新 | 0.32.0 |
-| **M4 service team 化** | hub `teams` 表 + 迁移脚本 + per-team daemon + web UI team 总览 | hub schema v(n+1) + daemon/webui;backoffice 迁移作为验收 | 0.33.0 |
-| **M5 team intake** | §8:linear team-issue / hub `_team` 入口 + PM 拆分 job + Sweep 收口 job + 谱系视图 | pm/sweep SKILL 扩展 + conventions §9b | 0.34.0 |
+| **M1 配置内核** | **1.0.0** | schema v2(registry + 虚拟 project)+ 解析器(含共享 repo 的 project 推断/报错)+ 状态入 workspace + `team init` / `team import` / doctor。**breaking:运行时不再读 v1** | 解析器/上限校验/推断歧义全测试面;两个 team 的 import 干跑 diff |
+| **M2 操作技能** | 1.1.0 | `add-project` / `add-repo` / `sync-project` / `sync-repo`(backend 同步即时化,#6) | devplatform 实迁 + 用 `add-repo` 真实加一个新 repo(如 mcp-bff)一遍过 |
+| **M3 team 调度** | 1.2.0 | team 级唯一 loop:轮换 + weight + enabled;Agent View 行数按 agent 种类;`--project` 降级为过滤器 | 双 project 轮换烟测;`enabled:false` 全停验证 |
+| **M4 stewardship + comms** | 1.3.0 | sweep/ops/reflect/communication 升 team 作用域;team lessons;comms(slack/lark)适配器 | ops 去重巡检 + owner 路由用例;lark 真实推送 |
+| **M5 service team 化 + intake** | 1.4.0 | hub-in-workspace daemon + web team 总览;team intake(§8) | backoffice 实迁;一张真实跨 project intake 端到端 |
 
-每个里程碑独立可发布、可回退;M1/M3 有完整测试面(解析器与调度器都是纯代码);M2/M5 以
-devplatform/backoffice 的真实迁移与一张真实跨项目 intake 做端到端验收。
+每个里程碑独立可发布;M1/M3 是纯代码 + 完整测试面;M2/M4/M5 以两个真实 team 的迁移与运行
+作端到端验收。
+
+---
 
 ## 12. 风险与开放问题
 
-1. **token 成本随 project 数线性增长**:靠 change-gate/SHA 门 + `weight:0` 暂停缓解;M3 可加
-   "team 静默窗口"(全 team 无变更时拉长所有 cadence)。
-2. **workspace 迁移/改名**:索引失效 → doctor 检测 + `migrate-workspace --relocate` 修复。
-3. **配置共享的后门**:本版机器本地;若未来要共享,v2 schema 已是相对路径,升级成 meta-repo
-   只是"把 dev-loop.json 纳入 git"一步(secrets 已按 §16 隔离),不需要 schema 变更。
-4. **hub 单库多 team 的隔离**:沿用 project 隔离测试面,新增 team 维度用例;不做多库。
-5. **跨 team 协作**:明确不做(I3);出现真实需求时再评估"联邦 intake"。
-6. **PM 拆分 team intake 的判界**("哪个 project 负责什么"):依赖 teamDoc 里的 project 定位
-   描述;teamDoc 缺失时 PM park 回操作者,不猜。
+1. **共享 repo 的并发**:worktree 隔离 + advisory 锁 + PR 竞争收敛(§6.4);监控点是
+   autoMerge 轮询在竞争下的重试上限。
+2. **可迁移性的边角**:git worktree 的绝对路径(doctor repair 兜底)、sqlite WAL(迁移前
+   checkpoint)、node_modules 跨平台不可靠 —— 无所谓,§12c 已确立 PR CI 是构建门,本地
+   产物皆可弃。
+3. **backend 漂移**:Linear 侧改名/归档不通知我们 → `sync-project` 对账 + doctor 提示
+   上次 sync 时间。
+4. **project 推断歧义**:共享 repo 下 cwd 无法唯一定位 project → 一律显式(§3.2),宁可
+   烦一点不可猜。
+5. **token 成本随 project 数增长**:SHA/change 门 + `enabled`/`weight`;必要时 M3 加
+   "team 静默窗口"(全 team 无变更拉长 cadence)。
+6. **PM 拆分 team intake 的判界**:依赖 teamDoc 的 project 定位描述;缺失时 park 回操作者,
+   不猜。
+7. **lessons 单文件的膨胀**:reflect 修剪 + 容量上限;超限时按 `[project]` 标签分片是预留
+   后手,不在 1.x 范围。
