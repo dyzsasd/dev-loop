@@ -21,6 +21,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   serve:            ["server"],                    // the stdio MCP server (the agent transport; = the dev-loop-hub bin)
   shim:             ["shim"],                      // thin stdio MCP → loopback daemon op-API (DL-55)
   daemon:           ["daemon"],                    // up | down | status | ensure (DL-41)
+  team:             ["team"],                      // init | import | repair — the workspace (schema v2) commands
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
@@ -52,6 +53,7 @@ Usage: dev-loop <command> [args]
   shim                        run the thin stdio MCP shim → the loopback daemon op-API (hub.transport:"daemon")
   daemon up|up-all|down|status|install-autostart|uninstall-autostart
                               daemon lifecycle — idempotent localhost web UI + optional login autostart
+  team init|import|repair     workspace (schema v2): create / migrate-from-v1 / repair-after-move
   init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project (seed → doctor → daemon up)
   run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents by calling the selected CLI
   init-config                 write an empty ~/.dev-loop/projects.json starter
@@ -75,7 +77,7 @@ if (cmd === "version" || cmd === "--version" || cmd === "-v") { console.log(vers
 const route = ROUTES[cmd];
 if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); process.exit(2); }
 
-const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init-service", "identity-check", "tickets", "ticket"]);
+const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init-service", "identity-check", "tickets", "ticket", "team"]);
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {
   const compatible = findCompatibleNode();
   if (compatible && compatible !== process.execPath) {
