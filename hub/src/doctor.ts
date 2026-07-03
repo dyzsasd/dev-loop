@@ -14,6 +14,7 @@ import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts"
 import { hubDbPath } from "./paths.ts";
 import { tryResolveWorkspace, wsHubDb } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, type Workspace } from "./team-config.ts";
+import { checkLessonsBudget } from "./lessons.ts";
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
 // the service runtime wiring (below). Library callers that only want the DB-integrity verdict (init-service
@@ -139,7 +140,7 @@ export function doctorWorkspace(ws: Workspace): boolean {
   const { errors, warnings } = validateTeamFile(ws.file);
   if (errors.length) for (const e of errors) fail(`[${e.code}] ${e.path}: ${e.message}`);
   else pass(`dev-loop.json valid (${Object.keys(ws.file.repos).length} repos, ${Object.keys(ws.file.projects).length} projects)`);
-  for (const w of warnings) warn(`[${w.code}] ${w.path}: ${w.message}`);
+  for (const w of [...warnings, ...checkLessonsBudget(ws)]) warn(`[${w.code}] ${w.path}: ${w.message}`);
 
   // Every registered repo exists on disk + is a git repo (path existence + realpath sanity).
   for (const ref of Object.keys(ws.file.repos)) {
