@@ -115,6 +115,13 @@ swept (a 5-minute loop will otherwise re-probe an unchanged product forever):
 
 ### Job A — Re-test In Review bugs (confirm fixes first)
 Query `project` + `label:"dev-loop"` + `label:"qa"` + `state:"In Review"`.
+
+**In `git.landing:"pr"` (conventions §12b)** an In Review ticket is a **PR awaiting the
+human's merge** — the fix is NOT on the test env until merged. Check the PR first: **still
+open/unmerged** → don't re-test-fail (leave `In Review`, comment `awaiting human merge (PR
+<url>)`, move on); **merged** → re-test on the env as below → `Done`; **closed-unmerged** →
+close + follow-up (§3). In `landing:"direct"` (default) ignore this — re-test as normal.
+
 For each (oldest first):
 1. Comment that you're re-testing (claim it, conventions §7).
 2. Run the ticket's **Repro steps** in the test env. Also try the neighbourhood

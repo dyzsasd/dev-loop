@@ -23,6 +23,7 @@ defined in §21.)
 10. [Querying Linear without drowning](#10-querying-linear-without-drowning)
 11. [Per-project config](#11-per-project-config)
 12. [Dry-run vs live](#12-dry-run-vs-live)
+12b. [Landing mode — direct-commit vs PR](#12b-landing-mode--direct-commit-vs-pr)
 13. [First-run setup](#13-first-run-setup)
 14. [Lessons file — per-operator corrections](#14-lessons-file--per-operator-corrections)
 15. [Test coverage — every Bug/Feature earns a regression test](#15-test-coverage--every-bugfeature-earns-a-regression-test)
@@ -844,6 +845,54 @@ Orthogonal to `mode`, each project has an optional `autonomy`:
 This setting tunes §9's escalation rule and the PM/QA "surface it to the user"
 guidance; under `"full"`, escalate only the genuine external-prerequisite cases
 above.
+
+---
+
+## 12b. Landing mode — direct-commit vs PR
+
+Orthogonal to `mode`/`autonomy`, each project's **`git.landing`** chooses HOW Dev lands a
+finished ticket. **Absent ⇒ `"direct"`** — today's behavior, so every existing project is
+100% unchanged.
+
+- **`"direct"` (default)** — Dev commits to the target repo's resolved `defaultBranch` and,
+  per `git.autoPush`/`autoDeploy`, pushes and (if a `deploy.command` resolves) deploys
+  (dev-agent Step 6/6.5). The human is not in the landing loop.
+- **`"pr"`** — Dev does **not** commit to `defaultBranch`. Per finished ticket it:
+  1. `git fetch`, then branches **`dev-loop/<ticket-id>`** off the up-to-date
+     `origin/<resolved defaultBranch>`.
+  2. Commits **only** that ticket's files (staging discipline §7) with the ticket-id, the
+     repo's commit convention, and the co-author trailer.
+  3. Pushes the branch and opens a PR to the resolved `defaultBranch` via **`gh pr create`**
+     (title per the repo's PR-title rules; body links the ticket + a one-line summary +
+     how-to-verify). `gh` must be installed and authenticated.
+  4. Comments the PR URL on the ticket, then moves it to **`In Review`** (Step 7).
+  It **never deploys** in `pr` mode — `autoDeploy` is ignored and dev-agent **Step 6.5
+  (post-deploy smoke + rollback) does not run**; the human's merge is what ships (their
+  CI/CD deploys on merge). `git.autoPush` must be effectively true to open a PR (the branch
+  has to reach origin); with `autoPush:false`, Dev commits the branch locally and reports
+  that a human must push + open the PR (no `gh` call).
+
+**Artifact / resume detection (every Dev fire's Step 0) in `pr` mode:** "already shipped
+this ticket" = an **open or merged PR referencing the ticket id**
+(`gh pr list --search "<id>" --state all`) or the `dev-loop/<id>` branch on origin — **not**
+a commit on `defaultBranch`. Use that so a ticket whose PR is open (awaiting the human's
+merge) is never re-implemented.
+
+**Verification (PM/QA Job A) in `pr` mode:** an `In Review` ticket is a **PR awaiting the
+human's merge**. The owner:
+- may pre-read the PR diff + the PR's own CI (build/lint) — but the change is **not** on the
+  running env until merged, so it CANNOT be browser/exercise-verified yet.
+- **PR still open/unmerged** → NOT a verify-fail: leave the ticket `In Review`, and move on
+  (the human is the gate). Comment `awaiting human merge (PR <url>)` **once** — if the ticket
+  already carries that note from a prior fire, skip it silently (don't re-comment every fire).
+- **PR merged** → verify against the running product as usual → `Done`.
+- **PR closed-unmerged** (human rejected) → treat as a failed review: `Canceled` + follow-up
+  (§3), noting the rejection.
+
+This keeps the loop autonomous **up to the PR**, puts the human gate at **merge** (→ the
+env the branch merges into) and again at **release** (→ prod, via the downstream pipeline's
+own PR), and never pushes to `defaultBranch`. `pr` is the fit when a repo wants human review
+before code lands; `direct` is the fit for fully-autonomous shipping.
 
 ---
 

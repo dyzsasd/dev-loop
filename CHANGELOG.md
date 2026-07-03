@@ -4,6 +4,15 @@ All notable changes to the dev-loop plugin. Most of these landed from **live-loo
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
 ## Unreleased
+- Added a per-project **PR landing mode**: `git.landing` (`"direct"` default | `"pr"`,
+  conventions §12b). Under `"pr"`, Dev (dev / senior-dev / junior-dev, which inherit the
+  dev-agent Step 6 ship path) branches `dev-loop/<ticket-id>` per ticket, pushes it, and opens
+  a `gh` PR to `defaultBranch` instead of committing to the branch directly — it never deploys
+  (the human's merge ships it; Step 6.5 is skipped), and PM/QA treat the In Review ticket as a
+  PR awaiting merge (verify only after merge; an open PR is not a verify-fail; a closed-unmerged
+  PR is a rejection → close + follow-up). Fire-start orphan detection recognizes an open/merged
+  PR referencing the ticket as the shipped artifact. `"direct"` (absent) is unchanged, so every
+  existing project keeps today's behavior.
 
 ## 0.23.4 - 2026-07-01
 - Made split-dev the scheduler default: `core` now launches `pm`, `qa`, `senior-dev`,

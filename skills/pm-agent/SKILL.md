@@ -155,6 +155,14 @@ Dev's finished work is the most valuable thing to move. Query:
 both `Feature`s and any `Improvement`s you own. **In a split-dev project (conventions
 §21a)** this query ALSO surfaces a senior-dev **design parent** (the design tier's
 verified increment) — handle those via the design gate below.
+
+**In `git.landing:"pr"` (conventions §12b)** an In Review ticket is a **PR awaiting the
+human's merge** — the change is NOT on the running env until merged. Check the ticket's PR
+first: **still open/unmerged** → do NOT verify-fail (leave it `In Review`, comment `awaiting
+human merge (PR <url>)`, skip to the next); **merged** → verify against the running product
+as below → `Done`; **closed-unmerged** (human rejected) → close + follow-up (§3). In
+`landing:"direct"` (default) ignore this — verify as normal.
+
 For each (oldest first):
 1. Comment that you're verifying (claim it, conventions §7).
 2. Run its **How to verify** steps against the test env — actually exercise the
