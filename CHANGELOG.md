@@ -5,6 +5,24 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
+## 0.25.0 - 2026-07-03
+- Added **auto-merge + release-PR deploy** (conventions §12c) — the *agent lands & deploys
+  non-prod, human gates prod* model, composing with `landing:"pr"`:
+  - **`git.autoMerge`** (default false): in pr mode, Dev merges its OWN feature PR at fire-start
+    once **`git.mergeChecks`** (the PR-check contexts / job names) are green + mergeable — Dev
+    **polls `gh pr checks`**, deliberately NOT GitHub `--auto`/branch protection (a required-check
+    rule would deadlock the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs, whose checks
+    never run). Dev mirrors the checks in its local Step-5 gates so the PR isn't red, and never
+    force-merges a red PR (a failed check leaves it for a fix).
+  - **`deploy.style:"release-pr"`** (default `"command"`, unchanged): the project's own release
+    pipeline deploys. Merging a feature PR opens a `deploy/<env>/<version>` PR; Dev merges the
+    `deploy.environments.<env>.auto:true` ones at a new fire-start **Step 0.5 (promote auto
+    deploys)** — per-release, idempotent, race-safe — and leaves `auto:false` (prod) as the
+    operator's manual gate. No `deploy.command` / Step 6.5 under `release-pr`.
+  - `init` gains a **deploy interview** to capture the shape per project; senior-dev / junior-dev
+    inherit the fire-start deploy promotion. `deploy.style` absent ⇒ `"command"`, so every
+    existing project is unchanged.
+
 ## 0.24.0 - 2026-07-03
 - Added a per-project **PR landing mode**: `git.landing` (`"direct"` default | `"pr"`,
   conventions §12b). Under `"pr"`, Dev (dev / senior-dev / junior-dev, which inherit the

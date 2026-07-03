@@ -97,17 +97,24 @@ repo, its test environment, and its ship/deploy settings. One file, many product
 
       "git": {                        // how Dev lands code (autonomy choices live here)
         "defaultBranch": "main",
-        "landing":       "direct",    // "direct" (default when absent) commit to defaultBranch | "pr" branch dev-loop/<id> + gh PR per ticket, human merges (conventions §12b)
+        "landing":       "direct",    // "direct" (default when absent) commit to defaultBranch | "pr" branch dev-loop/<id> + gh PR per ticket (conventions §12b)
+        "autoMerge":     false,       // pr mode only (conventions §12c): true ⇒ Dev merges its OWN feature PR at fire-start once mergeChecks are green + mergeable (polls `gh pr checks`; deliberately NOT GitHub --auto/branch protection). Else the human merges.
+        "mergeChecks":   [],          // pr+autoMerge: the PR-check CONTEXTS (job names, e.g. ["Lint & Build","Verify Worker Route Contract"]) that must be GREEN before Dev merges its feature PR. Dev also mirrors them in its local Step-5 gates so the PR isn't red.
         "autoCommit":    true,
         "autoPush":      true,        // false → leave commits local
-        "autoDeploy":    true         // false → skip deploy even if deploy.command set
+        "autoDeploy":    true         // false → skip deploy even if deploy.command set (ignored under deploy.style:"release-pr")
       },
 
       "deploy": {
-        "command":     "vercel --prod --yes",  // run after a successful push when autoDeploy
-        "healthCheck": null                     // optional: a URL that must return 2xx, OR a command
-                                                //   that must exit 0, run by Dev Step 6.5 after deploy.
-                                                //   null → Dev hits testEnv.baseUrl root (non-5xx).
+        "style":       "command",               // "command" (default when absent, below — Dev runs the command) | "release-pr" (the project's release pipeline deploys via a deploy PR Dev merges; conventions §12c)
+        "command":     "vercel --prod --yes",   // style:"command" — run after a successful push when autoDeploy
+        "healthCheck": null,                     // style:"command" — optional: a URL that must return 2xx, OR a command
+                                                 //   that must exit 0, run by Dev Step 6.5 after deploy.
+                                                 //   null → Dev hits testEnv.baseUrl root (non-5xx).
+        "environments": {                        // style:"release-pr" ONLY (conventions §12c): per-env deploy-by-PR-merge. Merging a feature PR triggers the repo's release pipeline, which opens a deploy/<env>/<version> PR; Dev merges the auto:true ones at fire-start (Step 0.5), leaves auto:false for the operator.
+          "dev":  { "auto": true,  "deployPrPrefix": "deploy/dev/",  "healthCheck": "https://dev.example.com" },
+          "prod": { "auto": false, "deployPrPrefix": "deploy/prod/" }   // auto:false → the operator's manual prod gate; Dev never merges it
+        }
       },
       "ops": {                        // OPTIONAL — ops-agent only (conventions §21). Absent ⇒ Ops polls only the resolved deploy.healthCheck + testEnv.baseUrl root.
         "checks":         [],         // optional: extra synthetic probes — each a URL (must return 2xx) or a command (must exit 0)
@@ -179,6 +186,18 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       only once the change is **observable on the running env**, not merely merged (a pipeline
       may need a separate deploy step; §12b). Use `"pr"` when a repo wants human code-review + manual merge/release before
       code lands; `"direct"` for fully-autonomous shipping.
+    - **`git.autoMerge` + `deploy.style:"release-pr"`** (conventions §12c) push `pr` one step
+      further — *agent lands & deploys non-prod, human gates prod*. `git.autoMerge:true`
+      (default false) makes Dev **merge its own feature PR** at fire-start once `git.mergeChecks`
+      (the PR-check contexts / job names) are green + the PR is mergeable — Dev **polls
+      `gh pr checks`**, deliberately NOT GitHub `--auto`/branch protection (a required-check rule
+      would deadlock the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs, whose checks
+      never run). A failed check ⇒ Dev leaves it for a fix (never force-merges).
+      `deploy.style:"release-pr"` (default `"command"`, unchanged)
+      says the project's **own release pipeline** deploys: merging a feature PR opens a
+      `deploy/<env>/<version>` PR, and Dev merges the `deploy.environments.<env>.auto:true`
+      ones at fire-start (Step 0.5), leaving `auto:false` (prod) as the operator's manual gate.
+      No `deploy.command`, no Step 6.5 under `release-pr`. `init` captures this per project.
   - *How much the agents decide vs escalate* — the top-level `autonomy` field.
     `"ask"` (default) keeps the conservative posture (escalate genuinely human-only
     calls to the user, surface open product-direction decisions). `"full"` grants
