@@ -201,7 +201,10 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       (the PR-check contexts / job names) are green + the PR is mergeable — Dev **polls
       `gh pr checks`**, deliberately NOT GitHub `--auto`/branch protection (a required-check rule
       would deadlock the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs, whose checks
-      never run). A failed check ⇒ Dev leaves it for a fix (never force-merges).
+      never run). **In pr mode the CI *is* the build gate** — Dev does NOT run the local
+      `build`/`test` gate and needs **no local `node_modules`/toolchain**; a failed check ⇒ Dev
+      reads the CI log, fixes, and re-pushes (cap ~2 → `fix-exhausted` block), never force-merges.
+      The ticket stays `In Progress` until Dev merges the green PR, then → `In Review`.
       `deploy.style:"release-pr"` (default `"command"`, unchanged)
       says the project's **own release pipeline** deploys: merging a feature PR opens a
       `deploy/<env>/<version>` PR, and Dev merges the `deploy.environments.<env>.auto:true`

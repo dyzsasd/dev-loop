@@ -5,6 +5,18 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
+## 0.27.0 - 2026-07-03
+- In `landing:"pr"` mode, **the PR's CI (`git.mergeChecks`) is now the authoritative build/test
+  gate** — Dev no longer runs the local `build`/`test` gate and needs **no local
+  `node_modules` / toolchain** in pr mode. It opens the PR, lets the repo's own PR-validation
+  build+test it, merges only when the checks are green (`git.autoMerge`), and on a red check reads
+  the CI log, fixes, and re-pushes (iterate; cap ~2 → `fix-exhausted` block). The local build gate
+  still applies to `landing:"direct"` / `deploy.style:"command"` (no PR CI to catch red before it
+  lands). Removes the "must `npm install` locally before launch" requirement for pr-mode projects.
+- With `git.autoMerge`, a feature ticket now **stays `In Progress` until Dev merges the green PR**
+  (Dev owns landing it), then → `In Review` for the owner to verify the deployed change; a red PR
+  is re-picked and fixed, not stranded in review.
+
 ## 0.26.0 - 2026-07-03
 - `init` now runs an explicit **reports interview** (conventions §22/§23) — the operator
   *chooses* where agent daily/weekly/monthly reports go: `reports.sink:"files"` (default,
