@@ -103,7 +103,8 @@ then crashed/compacted out mid-work, stranding it. First thing each fire: query 
 `service`; the `senior-dev` label on `linear`/`local`). For each, decide by its **mode**:
 - A **direct-code** ticket that crashed mid-build: check for a shipped artifact on the
   target repo's resolved `defaultBranch` (a commit referencing the ticket id; or a local
-  commit if `autoPush:false`). If an artifact exists, verify and finish/hand it off. If
+  commit if `autoPush:false`; **in `git.landing:"pr"` (§12b) instead an open/merged PR
+  referencing the ticket id — `gh pr list --search "<id>" --state all`**). If an artifact exists, verify and finish/hand it off. If
   none, it's an **orphan** — unassign / clear the dev-tier claim, reset to `Todo`
   (re-passing the **full** label set so you don't drop `dev-loop`/owner/dev-tier labels,
   §10), comment `Orphaned — state cleared from a prior aborted run; re-queued.`, then verify

@@ -88,7 +88,9 @@ then crashed/compacted out mid-work, stranding it — no agent re-picks an
 check for a shipped artifact on **the target repo's resolved `defaultBranch`** (the repo
 named by the ticket's `repo:<name>` label, §19; single-repo ⇒ `repoPath` +
 `git.defaultBranch`, unchanged): a commit referencing the ticket id; or, if
-`autoPush:false`, a local commit. **If the target repo is unresolvable** (no/contradictory
+`autoPush:false`, a local commit. **In `git.landing:"pr"` (§12b) the artifact is instead an
+open or merged PR referencing the ticket id** (`gh pr list --search "<id>" --state all`) or
+the `dev-loop/<id>` branch on origin — not a defaultBranch commit. **If the target repo is unresolvable** (no/contradictory
 `repo:<name>` label in a multi-repo project) **leave it** — don't grep a guessed tree;
 it'll be handled as a missing-target block in Step 3 (§19). If there's no
 artifact, it's an **orphan** from an aborted run: unassign, reset to `Todo` (re-pass
@@ -244,6 +246,18 @@ not a failure — it protected `defaultBranch` and real users.
 
 ### Step 6 — Ship (per config)
 Only after green gates:
+
+**If `git.landing:"pr"` (conventions §12b): land via a PR — do NOT commit to `defaultBranch`.**
+Instead of the direct-commit sequence below: `git fetch`; branch **`dev-loop/<ticket-id>`**
+off `origin/<resolved defaultBranch>`; commit **only** this ticket's files (staging
+discipline §7) with the ticket-id + the repo's commit convention + co-author trailer; push
+the branch; open a PR to the resolved `defaultBranch` via **`gh pr create`** (title per the
+repo's PR-title convention; body links the ticket + a one-line summary + how-to-verify);
+comment the PR URL on the ticket. **Do not deploy — skip Step 6.5** (the human's merge
+ships it). Then go to Step 7 (hand off to `In Review`). If `git.autoPush:false`, commit the
+branch locally and note that a human must push + open the PR (no `gh` call). The
+direct-commit sequence below runs **only** when `git.landing` is absent or `"direct"`.
+
 - If `git.autoCommit`: make sure you're on **the target repo's resolved `defaultBranch`**
   first (`repos[].defaultBranch` else `git.defaultBranch`, §19; single-repo unchanged);
   if that branch doesn't exist in the repo, commit on the repo's current branch and note
