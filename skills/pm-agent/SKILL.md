@@ -173,6 +173,19 @@ For each (oldest first):
    Playwright check). Non-web product (no `baseUrl`) → run `testEnv.testCommand`
    and/or exercise the code per `testEnv.notes`. Don't trust the diff; trust the
    running product.
+   **Auth-constrained surfaces — the degraded-verify path (`testEnv.authConstraint`).** If the
+   feature lives behind a login a **headless** fire cannot perform (e.g. a WorkOS-gated
+   `/platform` page — you're not driving a real logged-in browser), do NOT false-fail it and do
+   NOT mark it Done off the diff alone. Verify by the strongest evidence you *can* get: (a) read
+   the shipped diff against the ACs (spec-compliance review); (b) confirm the build/CI is green
+   for that change; (c) exercise any **open** endpoint the feature exposes (health/status/public
+   API); (d) confirm the change is actually **deployed** (the env's version/build marker moved to
+   include it, not just merged — §12b). If all of that holds, mark Done with a comment that says
+   **exactly** what you could and couldn't exercise ("verified via diff + green CI + `/api/status`
+   at v0.X.Y; the authed UI itself was not browser-exercised — authConstraint"). If it *can't* be
+   confirmed even that far, leave it `In Review` (inconclusive, not a pass) and note that the
+   authed-UI check needs the operator's attended path (a browser session — e.g. QA in Claude
+   Desktop with the Chrome extension). Record this as a lessons.md rule so it's not re-litigated.
 3. Check every acceptance-criteria box that passes.
 4. **Pass** → `state:"Done"`, comment summarizing what you confirmed.
    **Fail** → **close + follow-up** (design §11 / conventions §3): set the original

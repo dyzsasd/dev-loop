@@ -47,9 +47,10 @@ Dev-specific boot steps:
 - **Resolve the target repo per ticket:** absent/one `repos[]` ⇒ single-repo, the
   implicit target is `repoPath` and every step below behaves exactly as today. With
   multiple repos, the ticket's `repo:<name>` label names the target; resolve that
-  repo's effective `build`/`defaultBranch`/`deploy`/`contributorSkill` (repo value
-  else top-level, §19) and use them in Steps 0/4/5/6/6.5. If that path doesn't
-  resolve from any configured path, ask the user before proceeding.
+  repo's effective `build`/`defaultBranch`/`landing`/`autoMerge`/`mergeChecks`/`deploy`/
+  `contributorSkill` (repo value else top-level, §19) and use them in Steps 0/0.5/4/5/6/6.5 —
+  so a `pr`+`autoMerge` repo and a `direct` repo in the same project each land their own way.
+  If that path doesn't resolve from any configured path, ask the user before proceeding.
 - (`strategyDoc` may be a repo file relative to `repoPath` **or** a Linear document —
   `{ "linearDocument": "<id|slug|url>" }` / a `linear.app/.../document/` URL. When you
   need it under `autonomy:"full"` to resolve scoping, read a Linear doc with
@@ -103,22 +104,31 @@ finish/hand it off rather than redoing it.
 When `git.autoMerge` and/or `deploy.style:"release-pr"` are set, the feature-PR merge and the
 deploy-PR merge are async (checks/build take minutes) — drive them **here** at fire-start, not
 inline. One pass (absent this config it's a no-op — a legacy project is unchanged):
+First `git -C <repo> worktree prune` (drop worktrees whose PR already merged). Then:
 - **Feature PRs (`git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"`. For each
-  (the linked ticket is `In Progress`, dev-owned):
-  - **Every `git.mergeChecks` context green AND mergeable** (`gh pr checks <pr>` + `gh pr view
-    <pr> --json mergeable,mergeStateStatus`) → `gh pr merge <pr> --squash`, then move the ticket to
-    **`In Review`** (now it's landing/deploying for the owner to verify).
+  (the linked ticket is `In Progress`, dev-owned), read `gh pr checks <pr>` + `gh pr view <pr>
+  --json mergeable,mergeStateStatus`:
+  - **Every `git.mergeChecks` context green AND `mergeable:MERGEABLE`** → `gh pr merge <pr>
+    --squash --delete-branch` (delete the source branch — feature branches must not pile up), then
+    `git -C <repo> worktree remove --force ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<id>`
+    (cleanup), then move the ticket to **`In Review`** (now it's landing/deploying for the owner to verify).
   - **A check FAILED** (the PR's CI is the build gate, §12c) → the ticket isn't done: read the CI
-    failure (`gh pr checks`/`gh run view --log-failed`), **fix it and re-push** to the same branch
-    (updating the PR), comment the cause on the ticket. Cap at ~2 fix cycles (count prior
-    fix comments); the 3rd is a **`Bail-shape: fix-exhausted`** block (§9), not another attempt.
+    failure (`gh pr checks`/`gh run view --log-failed`), **fix it in the ticket's worktree and
+    re-push** the same branch (updating the PR), comment the cause on the ticket. Cap at ~2 fix
+    cycles (count prior fix comments); the 3rd is a **`Bail-shape: fix-exhausted`** block (§9).
+  - **`mergeStateStatus:DIRTY`** (the branch conflicts with `defaultBranch` — this does NOT
+    self-resolve, so never just "leave it") → in the ticket's worktree, `git fetch origin` and
+    **rebase onto `origin/<defaultBranch>`**, resolve conflicts, `git push --force-with-lease` the
+    same branch. If the rebase can't be resolved cleanly → `fix-exhausted` block (§9). (Same ~2-cycle cap.)
   - **Pending** ⇒ leave for the next fire.
 - **Deploy PRs (`deploy.style:"release-pr"`):** for each `deploy.environments` with **`auto:true`**
-  (skip `auto:false` — the operator's prod gate), `gh pr list --search "head:<deployPrPrefix> is:open"`
-  — the pipeline's per-**release** deploy PR. If **mergeable** and not failing → `gh pr merge <pr>
-  --squash` to deploy that env; then run the env's `healthCheck` if set. (These are
-  `GITHUB_TOKEN`-created so the PR checks don't run on them — merge on mergeable, don't wait for
-  checks that will never report.)
+  (skip `auto:false` — the operator's prod gate), `gh pr list --search "head:<deployPrPrefix>
+  is:open"`. The pipeline opens one deploy PR **per release**; if more than one is open (a burst of
+  releases), **merge the newest** (highest `deploy/<env>/vX.Y.Z` version) and leave the older ones
+  for the pipeline to auto-close. If it's **mergeable** and not failing → `gh pr merge <pr>
+  --squash` to deploy that env (do **NOT** `--delete-branch` — the release pipeline owns those
+  branches); then run the env's `healthCheck` if set. (Deploy PRs are `GITHUB_TOKEN`-created so the
+  PR checks don't run on them — merge on mergeable, don't wait for checks that will never report.)
 Both are idempotent + race-safe (already-merged ⇒ no-op) and are the ONLY merge/deploy actions
 under this model (Dev runs no `deploy.command`; Step 6 skips Step 6.5). A PR that isn't ready is
 left for the next fire — never force-merged.
@@ -281,14 +291,24 @@ not a failure — it protected `defaultBranch` and real users.
 ### Step 6 — Ship (per config)
 Only after green gates:
 
-**If `git.landing:"pr"` (conventions §12b): land via a PR — do NOT commit to `defaultBranch`.**
-Instead of the direct-commit sequence below: `git fetch`; branch **`dev-loop/<ticket-id>`**
-off `origin/<resolved defaultBranch>`; commit **only** this ticket's files (staging
-discipline §7) with the ticket-id + the repo's commit convention + co-author trailer; push
-the branch; open a PR to the resolved `defaultBranch` via **`gh pr create`** (title per the
-repo's PR-title convention; body links the ticket + a one-line summary + how-to-verify);
-comment the PR URL on the ticket. **The PR's CI validates the build (Step 5) — you do not build
-locally in pr mode.**
+**If `git.landing:"pr"` (conventions §12b): land via a PR in an ISOLATED worktree — never touch
+`defaultBranch` or the shared checkout.** Because two dev tiers (senior/junior) can run against
+the **same repo checkout** concurrently, do ALL of a pr-mode ticket's work in a **per-ticket git
+worktree** so they never collide on one working tree (§7):
+1. Create it once (at claim / before implementing), at a path **outside the repo** so nothing
+   ever lands in the working tree: `git -C <repo> fetch origin` then `git -C <repo> worktree add
+   ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id> -b dev-loop/<ticket-id>
+   origin/<resolved defaultBranch>` — a fresh branch off the up-to-date base in its own dir.
+   **Do the Step-4 implementation IN that worktree dir**, not the shared checkout. (If the branch
+   already exists from a prior fire, reuse the existing worktree / `worktree add` onto it.)
+2. Commit **only** this ticket's files (§7) with the ticket-id + the repo's commit convention +
+   co-author trailer; `git -C <worktree> push -u origin dev-loop/<ticket-id>`.
+3. Open a PR to the resolved `defaultBranch` via **`gh pr create`** (title per the repo's PR-title
+   convention; body links the ticket + a one-line summary + how-to-verify); comment the PR URL on
+   the ticket. **The PR's CI validates the build (Step 5) — you do not build locally in pr mode.**
+4. The worktree is removed **after the PR merges** (Step 0.5). The shared checkout stays on
+   `defaultBranch` the whole time; prune stale worktrees at fire-start (`git -C <repo> worktree
+   prune`). Two dev tiers on the same repo never fight over the working tree.
 **If `git.autoMerge:true` (§12c):** do NOT merge inline, and **keep the ticket `In Progress`
 (you still own landing it) — do NOT move it to `In Review` yet.** Dev merges its own feature PR
 at **fire-start (Step 0.5)** once its `git.mergeChecks` are green + it's mergeable (polled via

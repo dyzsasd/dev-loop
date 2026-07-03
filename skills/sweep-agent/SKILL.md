@@ -127,6 +127,15 @@ set, then verify), comment `Orphaned — reset from a stalled/aborted run; re-qu
 If a shipped artifact exists, **leave it** — Dev will reconcile it; don't fight a
 run that got far.
 
+**In `git.landing:"pr"` (§12c) an open PR IS a shipped artifact — do NOT reset it.**
+An `In Progress` ticket in pr mode is *supposed* to sit there while its `dev-loop/<id>` feature
+PR waits on CI + auto-merge (that can exceed the 6h idle window if CI is slow or a check is
+red), and its "artifact" is the **PR**, not a `defaultBranch` commit. So before treating a
+pr-mode ticket as an orphan, also check `gh pr list --search "head:dev-loop/<id> is:open"` (and
+`--state merged`): if an open or merged PR referencing the ticket exists, it is **not** an
+orphan — leave it (Dev's Step 0.5 owns merging/fixing it). Only reset when there is **no**
+such PR **and** no commit **and** no `updatedAt` movement for the interval.
+
 ### Job 3 — Stale workflow signals (conservative)
 - **`needs-pm`/`needs-qa` without `blocked`** that the owner hasn't acted on for a
   clear interval → leave a one-line comment resurfacing it for the owner; only

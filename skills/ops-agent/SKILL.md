@@ -88,10 +88,14 @@ the set of probes you'll poll (healthChecks + baseUrl + criticalRoutes count). I
 
 ### Job 1 — Poll prod health (read-only) and confirm before acting (anti-flap)
 Probe running production — all read-only, all outward:
-- **Health checks:** the resolved `deploy.healthCheck` for **each** repo in `repos[]`
-  (single-repo ⇒ the top-level `deploy.healthCheck`, unchanged — §19). A URL must
-  return 2xx; a command must exit 0. A repo whose resolved deploy is empty has no
-  healthCheck — skip it (§19).
+- **Health checks:** the resolved deploy healthCheck(s) for **each** repo in `repos[]`
+  (single-repo ⇒ the top-level, unchanged — §19). A URL must return 2xx; a command must exit 0.
+  A repo whose resolved deploy is empty has no healthCheck — skip it (§19).
+  - **`deploy.style:"command"` (or absent):** the single `deploy.healthCheck`.
+  - **`deploy.style:"release-pr"` (§12c):** there is no top-level `deploy.healthCheck` — poll each
+    **`deploy.environments[].healthCheck`** instead, for the environments Ops watches (the
+    `auto:true` non-prod env(s) that actually get deployed by the loop, and prod if you also watch
+    running prod). Skip envs with no `healthCheck` set.
 - **App surface:** `testEnv.baseUrl` root — expect a non-5xx (the same baseline Dev's
   Step-6.5 uses when no healthCheck is set).
 - **Critical routes (optional):** each entry in `ops.criticalRoutes` (a path/URL
