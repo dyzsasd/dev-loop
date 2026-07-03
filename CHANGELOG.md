@@ -5,6 +5,16 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
+## 0.29.0 - 2026-07-03
+- **W3 human intake is now discoverable + processed** (conventions §9a / PM Job B). The spec let
+  a human file a `Todo` to PM, but PM only queried In Review + blocked, so a plain intake could
+  sit unseen. Now: label the intake `dev-loop` + `pm` + **`needs-pm`** (the routing label PM
+  already scans every fire), and PM recognizes a **fresh human ask** (vs a stale block, by the
+  latest comment) and processes it per §9a — a **direction/research** ask → PM updates the
+  `strategyDoc` + Decisions log and files the implied Feature tickets; a **build** ask → PM grooms
+  Dev children — then clears `needs-pm` and closes the parent. This is how operator direction (e.g.
+  "add feature X") enters the loop and gets the doc updated by PM.
+
 ## 0.28.0 - 2026-07-03
 Hardening + multi-repo + tooling pass on the pr/autoMerge/release-pr model (§12b/§12c/§19).
 
