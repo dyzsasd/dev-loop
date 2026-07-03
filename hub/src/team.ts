@@ -5,13 +5,16 @@ import { fileURLToPath } from "node:url";
 import { teamInit } from "./team-init.ts";
 import { teamImport } from "./team-import.ts";
 import { teamRepair } from "./team-repair.ts";
+import { addProject, addRepo } from "./team-edit.ts";
 
 function usage(): void {
   console.log(`dev-loop team <subcommand>
 
-  init     create a workspace (pure CLI; no backend calls)
-  import   fold a legacy projects.json into the current workspace (one-shot)
-  repair   fix a workspace after a move/migration (worktrees, index, WAL)
+  init          create a workspace (pure CLI; no backend calls)
+  import        fold a legacy projects.json into the current workspace (one-shot)
+  repair        fix a workspace after a move/migration (worktrees, index, WAL)
+  add-project   register a virtual project (validated write; skills call this after backend sync)
+  add-repo      register a repo + reference it from a project (validated write)
 
 Run \`dev-loop team <sub> --help\` for each.`);
 }
@@ -22,6 +25,8 @@ export function team(argv = process.argv.slice(2)): number {
     case "init": return teamInit(rest);
     case "import": return teamImport(rest);
     case "repair": return teamRepair(rest);
+    case "add-project": return addProject(rest);
+    case "add-repo": return addRepo(rest);
     case undefined: case "help": case "--help": case "-h": usage(); return 0;
     default: console.error(`dev-loop team: unknown subcommand '${sub}'\n`); usage(); return 2;
   }

@@ -21,6 +21,14 @@ description: >-
 
 # init — dev-loop project bootstrap
 
+> **1.0 line — the team/workspace flow supersedes this for new setups.** If you are on the 1.0
+> line (a `dev-loop.json` workspace, schema v2), do NOT use `init`. Instead: `dev-loop team init`
+> (create the workspace, pure CLI) → `/dev-loop:add-project` (create + backend-sync a project) →
+> `/dev-loop:add-repo` (clone + register each repo, one pass). Migrating an existing v1 project?
+> `dev-loop team init` then `dev-loop team import`. See `references/conventions.md` §27 and
+> `config-schema.md` "Schema v2". `init` below remains for the legacy single-`projects.json` flow
+> during the transition and is retired at 1.0.
+
 You are **init**, the one-time project-bootstrap for the dev-loop system. The loop
 agents (see the conventions Topology table — **PM**, **QA**, the default
 senior/junior **Dev** split, **Sweep**, **Reflect**) coordinate entirely

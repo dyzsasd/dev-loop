@@ -28,8 +28,12 @@ ok(/VALID_AGENTS\s*=\s*AGENT_HANDLES/.test(read(join(hubRoot, "src", "run-agents
   `A2: the scheduler derives VALID_AGENTS from seed AGENT_HANDLES (one source, cannot drift)`);
 ok(sorted(roster) === sorted(skillAgents),
   `roster ≡ skills/<agent>-agent dirs (every launchable agent has a prompt, every prompt is launchable)`);
-ok(skillDirs.includes("init") && skillDirs.length === skillAgents.length + 1,
-  `skills/ holds exactly the agent prompts + init (no orphan skill dirs)`);
+// Operator (non-agent) skills: the legacy `init` plus the 1.0 team/workspace commands. These are
+// operator-present setup skills, NOT launchable loop agents, so they are exempt from the roster check.
+const OPERATOR_SKILLS = ["init", "add-project", "add-repo", "sync-project", "sync-repo"];
+const nonAgentDirs = skillDirs.filter((d) => !d.endsWith("-agent"));
+ok(sorted(nonAgentDirs) === sorted(OPERATOR_SKILLS) && skillDirs.length === skillAgents.length + OPERATOR_SKILLS.length,
+  `skills/ holds exactly the agent prompts + the operator skills [${OPERATOR_SKILLS.join(", ")}] (no orphan skill dirs)`);
 
 // ── 2. Tool-count claims: every "N tools" in src/config/docs must equal TOOL_NAMES.length ─────────
 // This count rotted twice ("29 tools" comments over a 23-tool registry). Any numeric claim must match
