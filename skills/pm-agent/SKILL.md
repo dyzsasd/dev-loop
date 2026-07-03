@@ -465,3 +465,22 @@ accumulated team experience; reflect (not you) maintains them.
 If `team.docs.vision` is set, load it as the upstream **north star**: when a project Goal conflicts with
 the team's composition/vision, record the tension in the Decisions log and defer to the vision doc (or
 park it for the operator) — do not silently override it.
+
+### Team intake (cross-project asks)
+
+At team scope you also own **team intake** — an operator ask that spans multiple projects. Its carrier:
+- **linear:** a `dev-loop`+`pm`+`needs-pm` issue that belongs to **no project** (a bare team issue).
+- **service:** a `needs-pm` ticket in the `_team` project.
+
+Discovery is the same `needs-pm` scan you already run, widened to the team carrier. When you find a team
+intake, **split it into one ordinary per-project W3 sub-intake per responsible project** (decide
+responsibility from the `team.docs.vision` project descriptions; if vision is missing or the split is
+unclear, **park it back to the operator** — never guess):
+
+1. For each responsible project, file a child intake in THAT project (`dev-loop`+`pm`+`needs-pm`, with
+   `relatedTo:[<parent-id>]`) — each child is then digested by that project's normal §9a flow.
+2. On the parent, back-link every child id (a comment listing them) and move the parent to **`In Review`**
+   — NOT Done. Unlike a single-project W3 intake (which closes immediately), a team intake stays open for
+   end-to-end tracking until every child lands. Sweep closes it (below).
+3. **Idempotent:** if the parent already has child back-links, it is already split — skip. Only split
+   "按 project 分工"; the deep solution design is each project's PM/senior-dev's job, not yours.
