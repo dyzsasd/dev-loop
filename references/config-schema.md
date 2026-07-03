@@ -175,8 +175,9 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       `dev-loop/<ticket-id>` per ticket, pushes it, and opens a **PR** to `defaultBranch` via
       `gh` (requires `gh` installed + authed), then moves the ticket to `In Review`; it
       **never deploys** (the human's merge ships it, and Step 6.5 is skipped). Under `"pr"`,
-      PM/QA treat an In Review ticket as a PR awaiting merge — verify only after it's merged
-      (§12b). Use `"pr"` when a repo wants human code-review + manual merge/release before
+      PM/QA treat an In Review ticket as awaiting the human's merge **+ deploy** — they verify
+      only once the change is **observable on the running env**, not merely merged (a pipeline
+      may need a separate deploy step; §12b). Use `"pr"` when a repo wants human code-review + manual merge/release before
       code lands; `"direct"` for fully-autonomous shipping.
   - *How much the agents decide vs escalate* — the top-level `autonomy` field.
     `"ask"` (default) keeps the conservative posture (escalate genuinely human-only

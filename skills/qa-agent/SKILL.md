@@ -116,11 +116,14 @@ swept (a 5-minute loop will otherwise re-probe an unchanged product forever):
 ### Job A — Re-test In Review bugs (confirm fixes first)
 Query `project` + `label:"dev-loop"` + `label:"qa"` + `state:"In Review"`.
 
-**In `git.landing:"pr"` (conventions §12b)** an In Review ticket is a **PR awaiting the
-human's merge** — the fix is NOT on the test env until merged. Check the PR first: **still
-open/unmerged** → don't re-test-fail (leave `In Review`, comment `awaiting human merge (PR
-<url>)`, move on); **merged** → re-test on the env as below → `Done`; **closed-unmerged** →
-close + follow-up (§3). In `landing:"direct"` (default) ignore this — re-test as normal.
+**In `git.landing:"pr"` (conventions §12b)** an In Review ticket is a fix **awaiting the
+human's merge + deploy** — and **merging the PR is NOT the same as it being deployed** (the
+pipeline may need a separate deploy step, e.g. a `deploy/*` PR to merge). Gate on what's
+**observable on the test env**: **not observable yet** (PR open, OR merged but not yet
+deployed) → don't re-test-fail (leave `In Review`, comment the wait-state once — `awaiting
+human merge (PR <url>)` / `awaiting deploy`, move on); **observable** → re-test as below →
+`Done` (or close + follow-up if still broken); **PR closed-unmerged** → close + follow-up
+(§3). In `landing:"direct"` (default) ignore this — re-test as normal.
 
 For each (oldest first):
 1. Comment that you're re-testing (claim it, conventions §7).
