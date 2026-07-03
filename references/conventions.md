@@ -2440,6 +2440,13 @@ This section records only the rules that change agent/operator behavior; the fie
 - **MCP scope for stewards.** A linear team's stewardship fires (sweep/ops/reflect/communication) run
   with the workspace root as cwd, where a repo-level `.mcp.json` does not apply — the Linear MCP must be
   configured in **user scope** (doctor warns `W05`). Delivery fires still run inside a repo, unaffected.
+- **Scheduling (1.0 team mode).** `dev-loop run` (or Agent View `/loop`) launches ONE scheduler for the
+  whole team; each agent keeps its own cadence, and when it fires the target project is chosen by a smooth
+  weighted round-robin (`weight` = share; `enabled:false`/`weight:0` opt out). The rotation cursor is shared
+  between `dev-loop run` and the `/loop` rows via `dev-loop next-project --agent <a>`, so the two run modes
+  never double-fire or starve a project. Preview the order with `dev-loop run --plan <n>`. Every fire is
+  recorded to `<ws>/.dev-loop/team/fires.jsonl`. A shared repo's base-clone mutations (fetch / worktree
+  add / prune) must run under `dev-loop with-repo-lock <ref> -- <cmd>`; worktree-internal work does not.
 - **The operator flow is:** `dev-loop team init` (pure CLI) → `/dev-loop:add-project` → `/dev-loop:add-repo`
   (both in a coding CLI; they do the backend writes) → launch the loop at the workspace level. `dev-loop
   doctor` is the read-only health gate; `dev-loop team repair` is the only mutating fixup.

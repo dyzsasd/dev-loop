@@ -6,6 +6,15 @@ experience** — a real failure observed while the agents ran, then hardened int
 ## Unreleased
 
 ### 1.0 line — team / workspace model (in progress)
+- **M3 team scheduling (0.32.0).** One team-level `dev-loop run` rotates fires across the enabled
+  projects with a smooth weighted round-robin (nginx SWRR — `rotation.ts`); `weight` sets share,
+  `enabled:false`/`weight:0` drop a project, and dev-loop.json hot-reloads on mtime (cursor pruned).
+  `dev-loop next-project --agent <a>` exposes the SAME cursor so Agent View `/loop` rows and
+  `dev-loop run` never double-fire or starve a project. `--plan <n>` previews the pick sequence
+  without firing; `--project` degrades to a filter. New `fires.jsonl` ledger records every fire
+  (backend-agnostic soak metric). The run lock is team-scoped. `dev-loop with-repo-lock <ref> -- <cmd>`
+  serializes base-clone mutations on a shared repo (`locks.ts`). Stewards still fire per-project this
+  milestone (team-scoping is M4).
 - **M1 config kernel (schema v2).** New per-workspace `dev-loop.json`: one workspace = one team = one
   backend; a physical repo **registry** + **virtual projects** that reference repos (one repo shareable
   across projects). New modules `team-config.ts` (types + E01-E11 validation + resolution API +
