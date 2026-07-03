@@ -255,6 +255,25 @@ normally `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (or the explicit
        release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs (their checks never run). Do NOT
        edit the product repo's release workflows — the loop *drives* the existing pipeline by
        merging its PRs, it does not reinvent it.
+   - **The reports interview — ask WHERE agent reports go** (conventions §22/§23). This is a
+     first-class choice, not a buried key — surface it and its tradeoff:
+     - **`reports.sink:"files"`** (default) — daily/weekly/monthly reports are machine-local files
+       under `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/reports/<agent>/…`; the operator reads them on
+       this machine and critiques via a sibling `<report>.review.md`. Lowest blast radius (§16).
+     - **`reports.sink:"linear"`** — reports are published as **Linear Documents** (one rolling doc
+       per agent) in a **dedicated** reports project, so the **team** can read them and the 点评 is
+       an operator **comment** on the doc. **State the tradeoff plainly** (§23): Linear is
+       hosted/shared/searchable/backed-up, so this **irreversibly widens the audience** from "you,
+       this machine" to "every workspace member + every wired integration + search + backups" — a
+       §16 defense-in-depth layer traded for team visibility. Independent of the §18 backend (a
+       `linear` backend does NOT auto-enable it; a `local`/`service` backend MAY use it for remote
+       review). On explicit opt-in, gather + provision per Step 7's **Linear report sink** item:
+       a **dedicated** `reports.linearProject` (never the §20 doc-base), `reports.operatorId` (the
+       operator's Linear user id — the 点评 author allowlist, via `list_users`), an **opaque**
+       `reports.reviewToken` (not a dictionary word), and `reports.localOnlyAgents` (defaults to
+       the dev tiers + `ops-agent` — highest-PII × highest-cadence — kept on files; the operator may
+       opt any in), plus the operator's attestation that the container has no outbound sync / no
+       non-operator subscribers.
    - `backend` (`"linear"` default / `"local"` / `"service"`, §18) — **ask which substrate**
      this project uses. For `"local"`, also gather the optional `localBoard` (board dir
      override; default `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/board/`) and `ticketPrefix` (ID
@@ -442,15 +461,15 @@ the loaded `projects.json` (conventions §11/§14). Create any that are **absent
   it to **lazy creation** on each agent's first write (either is fine — note which you
   did). Machine-local, never committed, **§16-bound (no secrets/PII in a report)**. In
   `dry-run`, just print that reports will appear here.
-- **Linear report sink** (conventions §23) — **only if** the operator sets
-  `reports.sink:"linear"` (default `files` needs nothing here). This is the cloud/remote
+- **Linear report sink** (conventions §23) — when the operator chose `reports.sink:"linear"`
+  in the Step-1 reports interview (default `files` needs nothing here). This is the cloud/remote
   posture and **widens the report audience** from "you, on this machine, never-synced" to
   "every workspace member + every wired integration + the search index + backups" — say
   that plainly. On explicit opt-in: (1) provision a **dedicated** reports project/initiative
   (`reports.linearProject`/`linearInitiative`) separate from the §20 doc-base; (2) resolve
-  and pin the **operator's Linear user id** (the 点评 author allowlist) via `list_users`;
-  (3) confirm `reports.reviewToken` is set to an **opaque** high-entropy string (not a
-  dictionary word — it must never collide with agent/ingested text); (4) get the operator's
+  and pin the operator's Linear user id as **`reports.operatorId`** (the 点评 author allowlist)
+  via `list_users`; (3) confirm `reports.reviewToken` is set to an **opaque** high-entropy string
+  (not a dictionary word — it must never collide with agent/ingested text); (4) get the operator's
   **attestation** that the reports container has no outbound integration sync and no
   non-operator subscribers (the MCP can't enumerate integrations, so this can't be
   runtime-checked); (5) keep `ops-agent` + `dev-agent` in
