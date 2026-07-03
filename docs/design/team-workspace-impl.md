@@ -296,7 +296,7 @@ pick(agent):
   cur[best] -= sum(weights);return best
 ```
 
-weight 2:1 的两 project → 序列 `A A B A A B …`;`--plan 6` 必须精确打印它(T3.1)。
+weight 2:1 的两 project → 序列 `A B A A B A …`(nginx 平滑 WRR:分散而非聚簇);`--plan 6` 必须精确打印它(T3.1)。
 `--once` = 每个选中 agent 各 fire 一次(project 由 WRR 选出;要专扫某 project 用
 `--project` 过滤器)。
 
@@ -518,7 +518,7 @@ E-code 附录。README:workspace quickstart。CHANGELOG:逐里程碑。
 
 | ID | 覆盖 | 规模 |
 |---|---|---|
-| T3.1 | `--plan`:weight 2:1 → 精确序列 `A A B A A B`;平手字典序;cursor 持久化(两次进程间续位);`next-project` 与 run 交替调用共享同一 cursor(不重不漏) | M |
+| T3.1 | `--plan`:weight 2:1 → 精确序列 `A B A A B A`;平手字典序;cursor 持久化(两次进程间续位);`next-project` 与 run 交替调用共享同一 cursor(不重不漏) | M |
 | T3.2 | enabled:false / weight:0(delivery 停、steward 照常)→ 轮换排除;全 disabled → skip + 提示;热重载(mtime 变 → plan 变;坏 JSON → 保旧配置 + 报错;cursor 修剪) | M |
 | T3.3 | gate 键 per (agent,project);A 静默 → **同 tick 轮到 B(skip-advance)**;A 变更不解 B 的门 | S |
 | T3.4 | team run 锁:第二个 run 拒绝;stale 接管;fires.jsonl 行形状(两 backend 皆写) | S |

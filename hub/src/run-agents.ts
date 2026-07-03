@@ -4,12 +4,13 @@
 // shells out to `claude -p` or `codex exec` once per agent fire.
 import { spawn, execFileSync, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync, appendFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
-import { tryResolveWorkspace, wsStateRoot, wsHubDb } from "./workspace.ts";
-import { toLegacyView, WsValidationError } from "./team-config.ts";
+import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
+import { toLegacyView, WsValidationError, primaryRepo, type Workspace } from "./team-config.ts";
+import { rotationCandidates, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
@@ -168,6 +169,7 @@ type Options = {
   once: boolean;
   dryRun: boolean;
   devSplit: boolean;
+  plan: number;          // team mode: print the next N (agent, project) picks and exit (0 = off)
   project?: string;
   root: string;
   dataDir: string;
@@ -298,6 +300,7 @@ function parseArgs(argv: string[]): Options {
     once: false,
     dryRun: false,
     devSplit: false,
+    plan: 0,
     root: process.env.DEVLOOP_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT || defaultRoot(),
     dataDir: defaultDataDir(),
     dataDirExplicit: false,
@@ -336,6 +339,7 @@ function parseArgs(argv: string[]): Options {
       if (!AGENT_SET.has(agent)) die(`unknown agent in --interval '${agent}'`);
       intervals[agent as Agent] = parseDuration(raw.slice(eq + 1));
     } else if (a === "--once") opts.once = true;
+    else if (a === "--plan") { opts.plan = Number(next()); if (!Number.isInteger(opts.plan) || opts.plan <= 0) die("--plan must be a positive integer"); }
     else if (a === "--dry-run") opts.dryRun = true;
     else if (a === "--root") opts.root = resolve(next());
     else if (a === "--data") { opts.dataDir = resolve(next()); opts.dataDirExplicit = true; }
@@ -590,7 +594,17 @@ function displayCommand(command: string, args: string[], prompt: string): string
 // was banked on. Best-effort + lazy: opened once, skipped silently on a non-hub (linear/local) project, and
 // never allowed to crash a fire. One writable connection reused across fires (the scheduler is single-writer).
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
+let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean): void {
+  // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
+  // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
+  if (fireLedgerPath) {
+    try {
+      mkdirSync(dirname(fireLedgerPath), { recursive: true });
+      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut };
+      appendFileSync(fireLedgerPath, JSON.stringify(row) + "\n");
+    } catch { /* ledger is best-effort */ }
+  }
   try {
     if (fireDb === undefined) { try { fireDb = openDb(hubDb); } catch { fireDb = null; } }
     if (!fireDb) return;
@@ -721,23 +735,25 @@ type RunnerChild = ChildProcessByStdio<null, Readable, Readable>; // stdio: ["ig
 const activeChildren = new Set<RunnerChild>();
 
 // Schema v2: a discoverable workspace is authoritative for BOTH config and state paths (hub db, data dir,
-// gate/lock/log roots). A workspace found-but-invalid is a hard stop (fix it, don't run stale). No
-// workspace → the legacy projects.json chain (transition; removed at 1.0). This keeps `dev-loop run`
-// working the moment an operator migrates, without waiting for the M3 team scheduler.
-function resolveConfig(opts: Options): ProjectsConfig | null {
+// gate/lock/log roots). A workspace found-but-invalid is a hard stop (fix it, don't run stale).
+function resolveWs(opts: Options): Workspace | null {
   let ws;
   try { ws = tryResolveWorkspace(opts.cwd ?? process.cwd()); }
   catch (e) { if (e instanceof WsValidationError) die(e.message, 1); throw e; }
-  if (!ws) return readProjects(opts.dataDir);
+  if (!ws) return null;
   if (!opts.dataDirExplicit) opts.dataDir = wsStateRoot(ws);
   if (!opts.hubDbExplicit) opts.hubDb = wsHubDb(ws);
-  console.log(`dev-loop run: workspace '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
-  return toLegacyView(ws) as unknown as ProjectsConfig;
+  return ws;
 }
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
-  const cfg = resolveConfig(opts);
+  // Team mode: a discoverable workspace runs ONE team-level scheduler that rotates delivery/steward fires
+  // across the enabled projects (weighted round-robin). No workspace → the legacy fixed-project path below.
+  const ws = resolveWs(opts);
+  if (ws) return teamMain(opts, ws);
+
+  const cfg = readProjects(opts.dataDir);
   const project = resolveProject(opts, cfg);
   const cwd = resolveCwd(opts, cfg, project);
   if (!existsSync(cwd)) die(`cwd does not exist: ${cwd}`, 1);
@@ -859,6 +875,155 @@ async function main(): Promise<void> {
   };
   const timer = setInterval(tick, 1_000);
   tick();
+}
+
+// ─── Team mode: one scheduler, weighted round-robin across the enabled projects ─────────────────────────
+// Each agent has its own cadence slot (unchanged); when a slot fires, the target project is chosen by the
+// shared smooth-WRR cursor (rotation.ts). `--project` degrades to a filter (rotate over just that one).
+// In M3 EVERY agent still fires per-project (steward team-scoping is M4); rotation is the only new behavior.
+async function teamMain(opts: Options, ws: Workspace): Promise<void> {
+  const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
+  const backend = ws.file.team.backend;
+
+  // `--project` filter: restrict rotation to a single named project (must exist + be enabled).
+  const allCandidates = rotationCandidates(ws);
+  const candidates = opts.project ? allCandidates.filter((c) => c.key === opts.project) : allCandidates;
+  if (opts.project && !candidates.length) die(`--project '${opts.project}' is not an enabled, positively-weighted project in team '${ws.file.team.key}'`, 2);
+  if (!candidates.length) die(`no enabled, positively-weighted project to fire in team '${ws.file.team.key}' (all disabled or weight:0?)`, 2);
+
+  console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
+  console.log(`dev-loop run: agents=${opts.agents.map((a) => `${a}@${formatDuration(opts.intervals[a])}`).join(", ")}`);
+
+  // A local WRR picker over just the (possibly filtered) candidate set, persisting the shared cursor.
+  let schedState: SchedulerState = loadSchedulerState(ws);
+  const pickProject = (agent: Agent): string => {
+    // pickAndAdvance uses rotationCandidates(ws); to honor a --project filter we run the step on `candidates`.
+    const { pick, cur } = smoothWRRStep(candidates, schedState[agent] ?? {});
+    schedState[agent] = cur as CursorMap;
+    saveSchedulerState(ws, schedState);
+    return pick ?? candidates[0].key;
+  };
+
+  // --plan: print the next N (agent, project) picks WITHOUT firing or persisting (a preview).
+  if (opts.plan > 0) {
+    const preview: SchedulerState = JSON.parse(JSON.stringify(schedState));
+    console.log(`dev-loop run: --plan ${opts.plan} (agent → project; no fires, cursor untouched):`);
+    for (let i = 0; i < opts.plan; i++) {
+      for (const agent of opts.agents) {
+        const { pick, cur } = smoothWRRStep(candidates, preview[agent] ?? {});
+        preview[agent] = cur as CursorMap;
+        console.log(`  ${String(i + 1).padStart(3)}  ${agent} → ${pick}`);
+      }
+    }
+    return;
+  }
+
+  const fireLedger = wsFireLedger(ws);
+  fireLedgerPath = fireLedger; // recordFire appends here (backend-agnostic soak metric)
+
+  const cwdFor = (project: string): string | null => primaryRepo(ws, project);
+
+  // change-gate key per (agent, project) — service only, fails open (null key never skips). We evaluate it
+  // AFTER a pick; a gate-skip advances to the next candidate in the same slot fire so a quiet project never
+  // eats the fire opportunity of an active sibling.
+  const gateActive = opts.changeGate && backend === "service";
+  if (opts.changeGate && !gateActive) console.warn(`dev-loop run: --change-gate ignored on backend:"${backend}" (needs the service hub board cursor)`);
+  const gateState: Record<string, string> = gateActive ? loadGateState(opts, "team") : {};
+  const gateKey = (agent: Agent, project: string) => `${agent}:${project}`;
+
+  // A single fire for one agent: pick a project (skipping gated-unchanged ones up to one full rotation),
+  // resolve its cwd, and run. Returns after the fire (or immediately if every candidate is gated).
+  const fireAgentOnce = async (agent: Agent): Promise<void> => {
+    let project: string | null = null;
+    for (let attempt = 0; attempt < candidates.length; attempt++) {
+      const p = pickProject(agent); // advances the shared cursor every attempt (skip-advance)
+      if (gateActive && GATED_AGENTS.has(agent)) {
+        const key = changeKey(opts, cfg, p);
+        if (key !== null && gateState[gateKey(agent, p)] === key) continue; // unchanged ⇒ skip, try next candidate
+      }
+      project = p; break;
+    }
+    if (project === null) return; // every candidate gated-unchanged this round ⇒ no fire
+    const cwd = cwdFor(project);
+    if (!cwd || !existsSync(cwd)) { console.error(`[${agent}] project '${project}' has no usable repo cwd (${cwd ?? "none"}); skipping`); return; }
+    await runAgent(opts, cfg, agent, project, cwd);
+    if (gateActive && GATED_AGENTS.has(agent)) {
+      const key = changeKey(opts, cfg, project);
+      if (key !== null) { gateState[gateKey(agent, project)] = key; saveGateState(opts, "team", gateState); }
+    }
+  };
+
+  if (opts.once) {
+    for (const a of opts.agents) await fireAgentOnce(a);
+    process.exit(0);
+  }
+
+  // One scheduler per team: the run lock is team-scoped (two schedulers for one team double-fire everything).
+  const lockPath = wsLockPath(ws, "run");
+  if (!opts.dryRun) acquireRunLock(lockPath, ws.file.team.key);
+
+  // Hot-reload dev-loop.json on mtime change: enabled/weight edits take effect without a restart. A parse
+  // failure keeps the last-good config (never run with a half-written file).
+  let cfgMtime = safeMtime(ws.filePath);
+  const hotReload = () => {
+    const m = safeMtime(ws.filePath);
+    if (m === cfgMtime) return;
+    cfgMtime = m;
+    try {
+      const fresh = tryResolveWorkspace(ws.root);
+      if (fresh) { ws = fresh; const c = rotationCandidates(ws); candidates.length = 0; candidates.push(...(opts.project ? c.filter((x) => x.key === opts.project) : c)); schedState = pruneCursor(schedState, candidates.map((x) => x.key)); console.log(`dev-loop run: reloaded dev-loop.json — projects=${candidates.map((x) => x.key).join(", ")}`); }
+    } catch (e) { console.error(`dev-loop run: dev-loop.json reload failed (${(e as Error).message}); keeping the last-good config`); }
+  };
+
+  const slots: Slot[] = opts.agents.map((agent, i) => ({ agent, nextAt: Date.now() + i * opts.staggerMs, running: false }));
+  let stopping = false;
+  let fired = 0;
+  const drain = () => { if (stopping) return; stopping = true; clearInterval(timer); if (activeChildren.size === 0) process.exit(0); };
+  const interrupt = () => { const first = !stopping; drain(); if (first) console.log("dev-loop run: stopping; forwarding SIGINT to active agent processes"); for (const child of activeChildren) child.kill("SIGINT"); };
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
+
+  const tick = () => {
+    hotReload();
+    const now = Date.now();
+    for (const slot of slots) {
+      if (stopping || slot.running || slot.nextAt > now) continue;
+      slot.running = true;
+      fired++;
+      fireAgentOnce(slot.agent)
+        .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); })
+        .finally(() => {
+          slot.running = false;
+          slot.nextAt = Date.now() + opts.intervals[slot.agent];
+          if (stopping && activeChildren.size === 0) process.exit(0);
+        });
+      if (opts.maxFires && fired >= opts.maxFires) { console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining then exiting`); drain(); break; }
+    }
+  };
+  const timer = setInterval(tick, 1_000);
+  tick();
+}
+
+function safeMtime(p: string): number { try { return statSync(p).mtimeMs; } catch { return 0; } }
+function pruneCursor(state: SchedulerState, keys: string[]): SchedulerState {
+  const keep = new Set(keys); const out: SchedulerState = {};
+  for (const [agent, cur] of Object.entries(state)) { const c: CursorMap = {}; for (const [k, v] of Object.entries(cur)) if (keep.has(k)) c[k] = v; out[agent] = c; }
+  return out;
+}
+// The team run lock (O_EXCL + liveness-checked stale takeover) — mirrors the fixed-project lock in main().
+function acquireRunLock(lockPath: string, teamKey: string): void {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const take = () => writeFileSync(lockPath, JSON.stringify({ pid: process.pid, team: teamKey, startedAt: new Date().toISOString() }), { flag: "wx" });
+  try { take(); } catch {
+    let holder: { pid?: number } = {};
+    try { holder = JSON.parse(readFileSync(lockPath, "utf8")); } catch { /* unreadable = stale */ }
+    const alive = (() => { try { process.kill(holder.pid ?? -1, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } })();
+    if (alive) die(`another \`dev-loop run\` for team '${teamKey}' is already running (pid ${holder.pid}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
+    console.log(`dev-loop run: taking over stale team run lock (pid ${holder.pid ?? "?"} is gone)`);
+    try { unlinkSync(lockPath); } catch { /* raced */ }
+    take();
+  }
+  process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
 }
 
 main().catch((e) => die(e instanceof Error ? e.message : String(e), 1));
