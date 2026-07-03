@@ -158,6 +158,15 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "events":     ["human-parked"]  // default; the only event today — a ticket left blocked+needs-pm with Bail-shape: external-prereq
       },
 
+      "reports": {                    // OPTIONAL — where agent daily/weekly/monthly reports go (conventions §22/§23). Absent ⇒ sink "files".
+        "sink":            "files",   // "files" (default — machine-local tree under <data>/<key>/reports/…) | "linear" (publish as Linear Documents for team visibility; opt-in, §23 audience-widening)
+        "linearProject":   null,      // linear sink: id/name of the DEDICATED reports project (never the §20 doc-base)
+        "linearInitiative": null,     // linear sink: optional initiative container instead of a project
+        "operatorId":      null,      // linear sink: the operator's Linear user id (the 点评 author allowlist — resolve via list_users). A report-doc comment is a valid 点评 only if author.id==this AND body starts with reviewToken.
+        "reviewToken":     null,      // linear sink: an OPAQUE high-entropy 点评 sentinel (never a dictionary word). §16-class — never echoed into a report body/ticket/comment.
+        "localOnlyAgents": ["ops-agent", "dev-agent"]  // linear sink: agents kept on files regardless (highest-PII × highest-cadence). A split-dev project also pins senior-dev/junior-dev.
+      },
+
       "blockedStateName": null        // set to a real Linear state name if you add a "Blocked" column; else null → use the `blocked` label
     }
   }
@@ -439,7 +448,10 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   defense-in-depth layer (Linear is hosted/shared/searchable), so it is **opt-in, never the
   default**, and carries the §23 guardrails. Linear-sink-only keys:
   `reports.linearProject` / `reports.linearInitiative` (the **dedicated** reports container,
-  never the §20 doc-base), `reports.localOnlyAgents` (agents pinned to files regardless —
-  **defaults to `ops-agent` + `dev-agent`**, the highest-PII authors), and
-  `reports.reviewToken` (the operator's **opaque** high-entropy 点评 sentinel — not a
+  never the §20 doc-base), `reports.operatorId` (the operator's **Linear user id** — the 点评
+  author allowlist: a report-doc comment counts as a 点评 only if `author.id` matches this
+  **and** the body begins with `reviewToken`, §23; resolve it via `list_users` at init),
+  `reports.localOnlyAgents` (agents pinned to files regardless — **defaults to `ops-agent` +
+  `dev-agent`**, the highest-PII authors; a split-dev project pins `senior-dev`/`junior-dev`
+  too), and `reports.reviewToken` (the operator's **opaque** high-entropy 点评 sentinel — not a
   dictionary word). `lessons.md` stays machine-local in both sinks.
