@@ -929,6 +929,13 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     return;
   }
 
+  // Service backend: make sure the workspace hub daemon is up before the loop (operator needn't start it
+  // by hand). Best-effort — a failed ensure logs but never blocks the scheduler.
+  if (backend === "service" && !opts.dryRun) {
+    try { const { ensureHub } = await import("./hub.ts"); const c = await ensureHub(ws); if (c !== 0) console.warn(`dev-loop run: hub ensure returned ${c} (continuing)`); }
+    catch (e) { console.warn(`dev-loop run: hub ensure failed (${(e as Error).message}); continuing`); }
+  }
+
   const fireLedger = wsFireLedger(ws);
   fireLedgerPath = fireLedger; // recordFire appends here (backend-agnostic soak metric)
 
