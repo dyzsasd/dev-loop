@@ -232,7 +232,23 @@ Manage from the shell: `claude attach <id>` (open), `claude logs <id>` (recent o
 
 For unattended operation under tmux, launchd, systemd, cron, or a container supervisor, run the same
 `dev-loop run` command under that manager. The scheduler owns agent cadence, resolves the project from
-cwd or `--project`, injects the hub MCP for Claude/Codex, and writes logs under the dev-loop data dir.
+cwd or `--project`, wires MCP **per backend** (below), and writes logs under the dev-loop data dir.
+
+> **MCP wiring is backend-dependent (§18).** For `backend:"service"` the scheduler injects the
+> `dev-loop-hub` MCP inline (+ `--strict-mcp-config` for Claude / `-c` for Codex), so a service
+> project needs no `.mcp.json`. For `backend:"linear"`/`"local"` it injects **nothing** and does
+> **not** pass `--strict` — the agent inherits the operator's own MCP config (e.g. the **Linear
+> MCP**), so a `linear` project runs under `dev-loop run` as long as your normal Claude/Codex MCP
+> config has Linear. (An explicit `--mcp-config` / `<cwd>/.mcp.json` still wins on any backend.)
+
+### Two source-tree / packaged helpers
+- `dev-loop export-desktop-skill <agent> --project <key> [--zip]` — render a **self-contained**
+  Claude Desktop skill (the canonical agent SKILL + the load-bearing conventions + the project
+  config, inlined) so you can run e.g. QA in Claude Desktop with the Linear connector + Chrome
+  extension. Regenerate after any conventions/config change so the Desktop copy never drifts.
+- `node hub/src/release.ts <semver>` — one-shot **release** (source-tree only, like
+  `release-version`): stamp the 3 lockstep manifests → sync the `hub/` payload copy → run
+  version-sync + consistency + docs → print the `/plugin` reinstall hint.
 
 ```bash
 cd /path/to/product-repo

@@ -513,20 +513,25 @@ const hubNode = findCompatibleNode() ?? die(`dev-loop-hub MCP needs Node >= ${MI
 const tomlString = (s: string): string => JSON.stringify(s);
 const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
 
-function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile): { command: string; args: string[] } {
+function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string): { command: string; args: string[] } {
   const devSplit = runtimeDevSplit(opts) ? "true" : "false";
+  // MCP wiring is BACKEND-dependent (§18). Only backend:"service" needs the dev-loop-hub MCP; a
+  // linear/local project instead needs the operator's OWN MCP config to apply (e.g. the Linear MCP),
+  // so we must NOT inject the hub or pass --strict-mcp-config there — that would strip the Linear MCP
+  // and starve the agents of the board. An explicit --mcp-config / <cwd>/.mcp.json always wins.
+  const hubInject = backend === "service";
   // The CLI is the per-AGENT resolved coding agent (level 1), NOT the run-wide --cli — so one run can
   // mix claude/codex/opencode panes. Model + effort (level 2) are rendered in this coding agent's format.
   if (profile.codingAgent === "claude") {
-    // explicit --mcp-config file wins; otherwise inject the hub inline so a fresh project needs no .mcp.json.
-    const mcpArg = opts.mcpConfig ?? JSON.stringify({
+    // explicit --mcp-config file wins; else on service inject the hub inline (fresh project needs no
+    // .mcp.json); else (linear/local) pass NOTHING so claude's normal config — incl. the Linear MCP — applies.
+    const mcpArg = opts.mcpConfig ?? (hubInject ? JSON.stringify({
       mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb, DEVLOOP_DEV_SPLIT: devSplit } } },
-    });
+    }) : undefined);
     return {
       command: opts.claudeBin,
       args: [
-        "--mcp-config", mcpArg,
-        "--strict-mcp-config",
+        ...(mcpArg ? ["--mcp-config", mcpArg, "--strict-mcp-config"] : []),
         ...(profile.model ? ["--model", profile.model] : []),
         ...(profile.effort ? ["--effort", profile.effort] : []),
         ...opts.extraArgs,
@@ -535,17 +540,22 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
     };
   }
   if (profile.codingAgent === "codex") {
-    const args = [
-      "exec",
-      ...(profile.model ? ["--model", profile.model] : []),
-      ...(profile.effort ? ["-c", `model_reasoning_effort=${tomlString(profile.effort)}`] : []),
-      ...opts.extraArgs,
+    // service ⇒ inject the hub via -c overrides; linear/local ⇒ omit them and let codex's own
+    // ~/.codex/config.toml MCP servers (which the operator must wire the Linear MCP into) apply.
+    const hubOverrides = hubInject ? [
       "-c", `mcp_servers.dev-loop-hub.command=${tomlString(hubNode)}`,
       "-c", `mcp_servers.dev-loop-hub.args=${tomlStringArray([serverEntry])}`,
       "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_ACTOR=${tomlString(agent)}`,
       "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT=${tomlString(project)}`,
       "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_HUB_DB=${tomlString(opts.hubDb)}`,
       "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_DEV_SPLIT=${tomlString(devSplit)}`,
+    ] : [];
+    const args = [
+      "exec",
+      ...(profile.model ? ["--model", profile.model] : []),
+      ...(profile.effort ? ["-c", `model_reasoning_effort=${tomlString(profile.effort)}`] : []),
+      ...opts.extraArgs,
+      ...hubOverrides,
     ];
     if (!opts.codexSafe) args.push("--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check");
     args.push(prompt);
@@ -628,7 +638,8 @@ function saveGateState(opts: Options, project: string, state: GateState): void {
 async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string): Promise<number> {
   const profile = resolveLaunchProfile(opts, cfg, project, agent);
   const prompt = readPrompt(opts, agent, project, profile);
-  const { command, args } = commandFor(opts, agent, project, prompt, profile);
+  const backend = (cfg?.projects?.[project] as { backend?: string } | undefined)?.backend ?? "linear";
+  const { command, args } = commandFor(opts, agent, project, prompt, profile, backend);
   const env = {
     ...process.env,
     DEVLOOP_ACTOR: agent,

@@ -25,7 +25,9 @@ try {
   mkdirSync(outside, { recursive: true });
   writeFileSync(join(data, "projects.json"), JSON.stringify({
     defaultProject: "fallback",
-    projects: { demo: { repoPath: repo }, fallback: { repoPath: otherRepo } },
+    // demo is backend:"service" so the hub-injection assertions below apply (the hub MCP is
+    // service-only, §18); fallback is a default (linear) project used for the no-hub assertion.
+    projects: { demo: { repoPath: repo, backend: "service" }, fallback: { repoPath: otherRepo } },
   }));
   const common = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "demo"];
   const noProjectCommon = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--cwd", repo];
@@ -46,6 +48,13 @@ try {
   ok(/pm: claude --mcp-config .* --strict-mcp-config --model opus --effort max --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "claude dry-run injects model/effort defaults, keeps extra CLI args last, and renders without dumping the prompt");
   ok(/dev-loop-hub/.test(claude.out), "the inline --mcp-config defines the dev-loop-hub server (no plugin / .mcp.json needed)");
   ok(/communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "communication-agent gets its own default profile and remains overrideable through --cli-arg");
+
+  // P1-6: a LINEAR (default-backend) project must NOT inject the hub or --strict-mcp-config — the
+  // operator's own Claude config (incl. the Linear MCP) must apply, or the agents are starved of the board.
+  const linear = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "fallback"]);
+  ok(linear.code === 0, "linear-backend scheduler exits 0");
+  ok(!/dev-loop-hub/.test(linear.out), "linear backend injects NO dev-loop-hub MCP (operator's Linear MCP applies)");
+  ok(!/--strict-mcp-config/.test(linear.out) && !/--mcp-config/.test(linear.out), "linear backend passes no --mcp-config / --strict (uses claude's normal config)");
 
   const codex = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", ...common]);
   ok(codex.code === 0, "codex dry-run scheduler exits 0");
@@ -97,7 +106,7 @@ try {
   const overrideClaude = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
   ok(overrideClaude.code === 0, "claude model/effort override exits 0");
   ok(/launch=pm:claude:claude-sonnet-4-6\/xhigh/.test(overrideClaude.out), "claude model/effort override is reflected in launch summary");
-  ok(/pm: claude .* --model claude-sonnet-4-6 --effort xhigh /.test(overrideClaude.out), "claude command applies project model/effort override");
+  ok(/pm: claude .*--model claude-sonnet-4-6 --effort xhigh /.test(overrideClaude.out), "claude command applies project model/effort override");
 
   const overrideCodex = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "pm", ...common]);
   ok(overrideCodex.code === 0, "codex model/effort override exits 0");
@@ -130,7 +139,7 @@ try {
   ok(/junior-dev:codex:gpt-5\.5\/high/.test(twoLevel.out), "junior-dev resolves to its own codingAgent=codex, overriding --cli claude");
   ok(/junior-dev: codex exec --model gpt-5\.5 -c 'model_reasoning_effort="high"'/.test(twoLevel.out), "junior-dev renders a codex command inside a claude run (mixed-CLI)");
   ok(/senior-dev:claude:claude-opus-4-8\/max/.test(twoLevel.out), "senior-dev inherits the run CLI (claude) with its agents{} model/effort");
-  ok(/senior-dev: claude .* --model claude-opus-4-8 --effort max /.test(twoLevel.out), "senior-dev renders a claude command with its pinned model/effort");
+  ok(/senior-dev: claude .*--model claude-opus-4-8 --effort max /.test(twoLevel.out), "senior-dev renders a claude command with its pinned model/effort");
   ok(/pm:opencode:anthropic\/claude-opus-4-8\//.test(twoLevel.out), "pm resolves to codingAgent=opencode with its model");
   ok(/pm: opencode run --model anthropic\/claude-opus-4-8 /.test(twoLevel.out), "pm renders an opencode run command");
   ok(/sweep:claude:haiku\/low/.test(twoLevel.out), "sweep takes the per-coding-agent default (claude haiku/low) from codingAgentDefaults");

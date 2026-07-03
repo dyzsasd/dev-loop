@@ -26,8 +26,11 @@ repo, its test environment, and its ship/deploy settings. One file, many product
           "lang":          "ts",                  // INFORMATIONAL contributor hint only — no logic reads it
           "contributorSkill": null,               // optional per-repo skill Dev reads before coding; absent ⇒ top-level contributorSkill, else read this repo's CLAUDE.md
           "defaultBranch": "main",                // per-repo override; absent ⇒ git.defaultBranch (autoCommit/autoPush/autoDeploy stay product-level in git)
+          "landing":       null,                  // per-repo override; absent ⇒ git.landing. A multi-repo project can run one repo on "pr"+autoMerge and another on "direct" (conventions §12b/§12c/§19)
+          "autoMerge":     null,                  // per-repo override; absent ⇒ git.autoMerge (pr mode only)
+          "mergeChecks":   null,                  // per-repo override; absent ⇒ git.mergeChecks. REQUIRED per-repo in practice — each repo's PR-validation job names differ, so a pr+autoMerge repo needs its OWN check-context list
           "build":         null,                  // per-repo override of the top-level build gates; absent ⇒ top-level build
-          "deploy":        null                   // per-repo override; absent ⇒ top-level deploy. A repo resolving to NO deploy SKIPS deploy (never inherits another repo's)
+          "deploy":        null                   // per-repo override; absent ⇒ top-level deploy (incl. deploy.style/environments). A repo resolving to NO deploy SKIPS deploy (never inherits another repo's)
         }
       ],
       "strategyDoc":   "docs/strategy.md",    // PM's north star (required for pm-agent). Either a
@@ -86,6 +89,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
         "baseUrl":     "https://monpick.vercel.app",
         "setup":       "python3 -m venv .venv && .venv/bin/pip install -q playwright && .venv/bin/playwright install chromium",  // one-time harness bootstrap; QA runs it if the tooling is missing (optional)
         "testCommand": ".venv/bin/python3 tests/{suite}",  // {suite} filled per run; omit if N/A
+        "authConstraint": null,        // optional (conventions §12a/PM Job A): describe surfaces a HEADLESS agent can't reach — e.g. "protected /platform pages need a WorkOS login the scheduler can't perform; only /api/health + /api/status are open". PM/QA then use the degraded-verify path (diff review + build-green + open endpoints + deployed-version marker) for those surfaces and note it, rather than false-failing. Browser-level verification of those surfaces is the operator's attended path (e.g. QA in Claude Desktop + the Chrome extension).
         "notes":       "Personas: demo-creator@…/password123 (creator), demo-brand@… (brand)"
       },
 
@@ -337,8 +341,11 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `repoPath`/`build`/`git`/`deploy` remain authoritative and the loop emits **zero**
   routing artifacts (no `repo:<name>` labels, no provisioning) — single-repo is 100%
   unchanged. **Resolution:** each per-repo-overridable setting (`build`, `defaultBranch`,
-  `deploy`, `contributorSkill`, `lang`) is the repo's value if present, else the
-  top-level value; `autoCommit`/`autoPush`/`autoDeploy` stay product-level in `git`.
+  `landing`, `autoMerge`, `mergeChecks`, `deploy`, `contributorSkill`, `lang`) is the repo's value
+  if present, else the top-level value; `autoCommit`/`autoPush`/`autoDeploy` stay product-level in
+  `git`. So a multi-repo project can run one repo on `"pr"`+`autoMerge` (with its own PR-check
+  `mergeChecks` + `deploy.style:"release-pr"`) and a sibling on `"direct"` — Dev applies the
+  **ticket's target repo** (`repo:<name>`) resolved landing/deploy (conventions §19/§12c).
   `role` is load-bearing (`"docs"`/`"primary"` picks the **doc-home** repo that roots
   `strategyDoc`); `lang` is informational. Multi-repo tickets carry a `repo:<name>`
   label (the authoritative target). If both `repoPath` and `repos` are set, `repos`

@@ -5,6 +5,44 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
+## 0.28.0 - 2026-07-03
+Hardening + multi-repo + tooling pass on the pr/autoMerge/release-pr model (§12b/§12c/§19).
+
+**Correctness (pr mode):**
+- **Sweep no longer resets a pr-mode In Progress ticket** whose feature PR is open — an
+  open/merged `dev-loop/<id>` PR now counts as a shipped artifact (it was being treated as an
+  orphan while the PR waited on CI, causing duplicate re-work).
+- **Per-ticket `git worktree` isolation** for pr-mode work — concurrent senior/junior devs no
+  longer collide on the shared checkout; each ticket works in
+  `${DEVLOOP_DATA_DIR}/<key>/wt/<id>`, pruned/removed at the merge (§7/§12b/§12c).
+- **Conflicted (DIRTY) feature PRs self-heal** — Step 0.5 rebases onto `defaultBranch`,
+  `--force-with-lease`, or blocks `fix-exhausted`; they no longer strand.
+- Feature-PR merges now `--delete-branch` (branches stop piling up); deploy PRs don't (the
+  pipeline owns them). Multiple open deploy PRs → merge the **newest** version.
+
+**Capabilities:**
+- **`dev-loop run` now supports `backend:"linear"`/`"local"`** — the scheduler injects the hub
+  MCP + `--strict-mcp-config` **only** for `service`; linear/local inherit the operator's own
+  MCP config (the Linear MCP), instead of being starved of the board.
+- **Per-repo `git` overrides** — `repos[].landing`/`autoMerge`/`mergeChecks` (+ existing
+  `defaultBranch`/`build`/`deploy`) resolve per §19, so a multi-repo project can run one repo on
+  `pr`+`autoMerge` and a sibling on `direct`. Makes **adding a repo** a one-pass config edit +
+  idempotent `init` re-run.
+- **PM degraded-verification path** for auth-gated UIs a headless fire can't browse
+  (`testEnv.authConstraint`): diff-review + green CI + open endpoints + deployed-version marker,
+  clearly noted — instead of false-failing.
+- **Ops** understands `deploy.style:"release-pr"` health checks (`deploy.environments[].healthCheck`).
+
+**Tooling / init:**
+- `init` **derives `mergeChecks` from the repo's PR-validation workflow job names** (+ gh-auth
+  preflight), and **adversarially verifies each mapped Current-state claim** against the code
+  before writing it (the stale-surfaces class of bug).
+- New **`dev-loop export-desktop-skill <agent> --project <key> [--zip]`** — renders a
+  self-contained Claude Desktop skill (canonical SKILL + conventions + config inlined), so it
+  never drifts from a hand-written copy.
+- New **`node hub/src/release.ts <semver>`** — one-shot release (version stamp + hub-payload
+  sync + version-sync/consistency/docs + reinstall hint).
+
 ## 0.27.0 - 2026-07-03
 - In `landing:"pr"` mode, **the PR's CI (`git.mergeChecks`) is now the authoritative build/test
   gate** — Dev no longer runs the local `build`/`test` gate and needs **no local

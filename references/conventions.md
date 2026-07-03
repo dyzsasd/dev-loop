@@ -467,6 +467,14 @@ files**. If you're knowingly running more than one Dev, give each an isolated
 worktree/clone. If commits you didn't author appear mid-run, surface it in the
 report rather than building on top blindly.
 
+**In `git.landing:"pr"` the two-tier Dev (senior + junior) runs concurrently against one
+checkout by default, so isolation is MANDATORY, not optional: each pr-mode ticket does all its
+work in a dedicated `git worktree` on branch `dev-loop/<ticket-id>`, at a path **outside the
+repo** — `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id>` — created before
+implementing and removed after its PR merges (§12b Step 6 / §12c Step 0.5). The shared checkout
+stays on `defaultBranch` throughout; nothing worktree-related ever lands in the repo tree.
+`git worktree prune` at fire-start reaps any left by a crashed fire.**
+
 ---
 
 ## 8. Deduplication
@@ -952,17 +960,27 @@ Dev deploys an environment by **merging that env's deploy PR** — governed by
 and the deploy-PR merge (`release-pr`) are async — the checks/build take minutes — so Dev drives
 them here, at fire-start (alongside orphan reclaim, Step 0), never inline. In one pass:
 
+First `git -C <repo> worktree prune` (§7). Then:
 - **Feature PRs (when `git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"` —
-  for each, if **every `git.mergeChecks` context is green AND it is mergeable**, `gh pr merge
-  <pr> --squash`. A **failed** check ⇒ leave it, comment the failure on the linked ticket (failed
-  gate, not a merge). **Pending** ⇒ leave for the next fire.
+  for each (`gh pr checks <pr>` + `gh pr view <pr> --json mergeable,mergeStateStatus`):
+  - **every `git.mergeChecks` green AND `MERGEABLE`** → `gh pr merge <pr> --squash --delete-branch`
+    (feature branches must not pile up), then `git worktree remove --force` the ticket's worktree,
+    then move the ticket `In Progress → In Review`.
+  - **a check FAILED** (CI is the build gate) → read the CI log, **fix in the worktree + re-push**;
+    cap ~2 cycles → `fix-exhausted` block.
+  - **`mergeStateStatus:DIRTY`** (conflicts `defaultBranch` — never self-heals) → in the worktree,
+    rebase onto `origin/<defaultBranch>`, resolve, `git push --force-with-lease`; unresolvable →
+    `fix-exhausted` block.
+  - **Pending** ⇒ leave for the next fire.
 - **Deploy PRs (when `deploy.style:"release-pr"`):** for every `deploy.environments` entry with
   **`auto:true`**, `gh pr list --search "head:<deployPrPrefix> is:open"` — the release pipeline's
-  deploy PR (**per-release**, not per-ticket; it may bundle several merged tickets). If it is
-  **mergeable** and not failing, `gh pr merge <pr> --squash` → the repo's deploy workflow runs →
-  the env deploys; then run the env's `healthCheck` if set. **`auto:false` envs (prod) are skipped
-  entirely** — the operator's gate. (These PRs are `GITHUB_TOKEN`-created, so the PR checks don't
-  run on them; merge on mergeable, don't wait for checks that will never report.)
+  deploy PR (**per-release**, not per-ticket; it may bundle several merged tickets). If more than
+  one is open, **merge the newest version** and leave older ones for the pipeline to auto-close. If
+  **mergeable** and not failing, `gh pr merge <pr> --squash` (NOT `--delete-branch` — the pipeline
+  owns those branches) → the repo's deploy workflow runs → the env deploys; then run the env's
+  `healthCheck` if set. **`auto:false` envs (prod) are skipped entirely** — the operator's gate.
+  (These PRs are `GITHUB_TOKEN`-created, so the PR checks don't run on them; merge on mergeable,
+  don't wait for checks that will never report.)
 
 Both are **idempotent + race-safe**: a second dev fire finds the PR already merged and no-ops; the
 merge is atomic. A PR that isn't ready is left for the next fire — **never force-merged**. This is
@@ -1512,9 +1530,17 @@ the repo's own value **if present**, else the **top-level** value.
 |---|---|---|
 | `build` (typecheck/build/test) | `repos[].build` | top-level `build` |
 | `defaultBranch` | `repos[].defaultBranch` | `git.defaultBranch` |
-| `deploy` (command + healthCheck) | `repos[].deploy` | top-level `deploy` |
+| `landing` (direct/pr, §12b) | `repos[].landing` | `git.landing` |
+| `autoMerge` (§12c) | `repos[].autoMerge` | `git.autoMerge` |
+| `mergeChecks` (§12c) | `repos[].mergeChecks` | `git.mergeChecks` |
+| `deploy` (command/style/environments + healthCheck) | `repos[].deploy` | top-level `deploy` |
 | `contributorSkill` | `repos[].contributorSkill` | top-level `contributorSkill` (absent ⇒ read the repo's `CLAUDE.md`, today's behavior) |
 | `lang` (informational only) | `repos[].lang` | top-level `lang` |
+
+**Multi-repo pr mode:** `landing`/`autoMerge`/`mergeChecks`/`deploy` all resolve per-repo, so one
+repo can run `"pr"`+`autoMerge` with its own `mergeChecks` + release-PR deploy while a sibling runs
+`"direct"` — Dev reads the **ticket's target repo** (its `repo:<name>` label) and applies that
+repo's resolved landing/deploy. `autoCommit`/`autoPush`/`autoDeploy` stay product-level in `git`.
 
 The synthesized single-repo entry inherits **all** top-level `build`/`git`/`deploy`,
 which remain the authoritative single-repo source — so resolution on a single-repo

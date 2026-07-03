@@ -32,6 +32,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "resolve-project":["server", "resolve-project"],
   tickets:          ["cli-tickets", "tickets"],    // read-only terminal board list (DL-90)
   ticket:           ["cli-tickets", "ticket"],     // read-only single-ticket detail + comments (DL-90)
+  "export-desktop-skill": ["export-desktop-skill"],// render a self-contained Claude Desktop skill for an agent + project (P2-12)
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
   // via `node hub/src/release-version.ts <semver>` (Codex review 2026-06-27).
@@ -61,6 +62,7 @@ Usage: dev-loop <command> [args]
   identity-check [--expect <actor>[/<project>]]   verify this shell resolves the intended identity
   tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT]   read-only: list the resolved project's board (no daemon)
   ticket <id>                 read-only: show one ticket — detail + comments
+  export-desktop-skill <agent> --project <key> [--out <dir>] [--zip]   render a self-contained Claude Desktop skill
   version | help
 
 Identity rides DEVLOOP_ACTOR (per pane); project DEVLOOP_PROJECT (or the cwd); db DEVLOOP_HUB_DB.
