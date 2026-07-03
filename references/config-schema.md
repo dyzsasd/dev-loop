@@ -465,3 +465,72 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `dev-agent`**, the highest-PII authors; a split-dev project pins `senior-dev`/`junior-dev`
   too), and `reports.reviewToken` (the operator's **opaque** high-entropy 点评 sentinel — not a
   dictionary word). `lessons.md` stays machine-local in both sinks.
+
+---
+
+## Schema v2 — the workspace model (1.0 line)
+
+Starting with the 1.0 line, config is a per-**workspace** `dev-loop.json` (schema v2), not the
+machine-global `~/.dev-loop/projects.json` (v1). A workspace is one directory = one **team** = one
+Linear team = one **backend**. See `docs/design/team-workspace.md` (proposal) and
+`docs/design/team-workspace-impl.md` (engineering spec) for the full model; this is the operator quick
+reference.
+
+**Discovery precedence** (any dev-loop command resolves its workspace as): `DEVLOOP_WORKSPACE` (abs
+path) → `DEVLOOP_TEAM` (key → `~/.dev-loop/workspaces.json` index) → **cwd walked upward** to the first
+`dev-loop.json`. The index is a non-authoritative convenience that any in-workspace run rebuilds; it is
+**not** part of a migration (copy the workspace folder = migrate the machine, invariant I4).
+
+**Shape** (abridged; the authoritative field list is `hub/src/team-config.ts`):
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "team": {
+    "key": "jinko-devplatform", "backend": "linear" | "service",
+    "linearTeam": "Loop-1",                     // required for linear
+    "deployPolicy": { "dev": "auto", "prod": "manual" },   // a CEILING (§4.3), not a default
+    "docSystem": "backend" | "local",
+    "docs": { "vision": null, "lessons": { "mirror": false } },
+    "comms": { "provider": "lark" | "slack", "webhookEnv": "DEVLOOP_COMMS_WEBHOOK" },  // env NAME (§16)
+    "mode": "live", "autonomy": "full",
+    "agents": { "sweep": { "cadence": "30m" }, "ops": { "cadence": "1h" }, "reflect": { "cadence": "1d" } }
+  },
+  "repos": {                                     // the physical REGISTRY — each git clone registered once
+    "portal": { "path": "jinko-dev-platform", "owner": "devplatform",
+                "landing": "pr", "autoMerge": true, "mergeChecks": [...],
+                "build": {...}, "deploy": {...}, "ops": {...} }
+  },
+  "projects": {                                  // VIRTUAL units that REFERENCE repos (one repo, many projects)
+    "devplatform": { "enabled": true, "weight": 1, "linearProject": "…", "strategyDoc": {...},
+                     "testEnv": {...}, "devSplit": true, "repos": [ { "ref": "portal", "role": "primary" } ] }
+  }
+}
+```
+
+- **Physical fields** (landing/autoMerge/mergeChecks/build/deploy/ops) live ONLY on the registry — a
+  shared repo has one set of deploy facts, never a per-project override.
+- **Behavior fields** (mode/autonomy/docSystem/reports) resolve **project ∥ team** (nearest wins).
+- **Paths** in `repos.*.path` are **workspace-relative** and must stay inside the workspace.
+
+**Validation codes** (`dev-loop doctor`; full matrix in `team-config.ts` / `test/team-config.ts`):
+`E01` bad schemaVersion · `E02` bad team.key/backend · `E03` repo path escapes the workspace ·
+`E04` project references an unknown repo ref · `E05` a shared repo lacks a valid `owner` (independent
+of `enabled`) · `E06` a repo auto-deploys an env the `deployPolicy` pins to manual · `E07` comms
+provider/webhookEnv (must be an ENV NAME, never a URL) · `E08` bad enabled/weight · `E09` linear backend
+without `linearTeam` · `E10` two refs at one path / two projects claiming one `linearProjectId` ·
+`E11` reserved/invalid project key or repo ref (`team`/`lessons`/`wt`/`locks`/`hub.db`/… collide with the
+`.dev-loop/` layout; `_team` is the reserved intake project). Warnings: `W01` project with no repos ·
+`W02` repo referenced by nobody · `W05` linear steward fires need the Linear MCP in **user scope** ·
+`W06` workspace root inside a git work-tree with `.dev-loop/` not gitignored.
+
+**State layout** — everything lives under `<workspace>/.dev-loop/` (I4): `<project>/…` (per-project
+state + reports, the whole-tree move from `~/.dev-loop/<project>/`), `team/…` (stewardship state,
+rotation cursor, `fires.jsonl`), `lessons/` (INDEX + per-project shards + archive), `wt/<ticket>/<repo>/`
+(worktrees), `locks/`, `hub.db` + `daemon.json` (service). `~/.dev-loop/` keeps only the convenience
+index.
+
+**Commands** (all pure CLI): `dev-loop team init` (create a workspace — no LLM, no backend calls),
+`dev-loop team import` (one-shot v1→v2 into the current workspace), `dev-loop team repair` (fix
+worktrees/index/WAL after a move), `dev-loop doctor` (read-only verdict). Backend writes (create Linear
+projects, labels) happen in the coding-CLI skills `/dev-loop:add-project` and `/dev-loop:add-repo`.
