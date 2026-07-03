@@ -103,11 +103,16 @@ finish/hand it off rather than redoing it.
 When `git.autoMerge` and/or `deploy.style:"release-pr"` are set, the feature-PR merge and the
 deploy-PR merge are async (checks/build take minutes) — drive them **here** at fire-start, not
 inline. One pass (absent this config it's a no-op — a legacy project is unchanged):
-- **Feature PRs (`git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"`. For each,
-  if **every `git.mergeChecks` context is green AND the PR is mergeable** (`gh pr checks <pr>` +
-  `gh pr view <pr> --json mergeable,mergeStateStatus`) → `gh pr merge <pr> --squash`. A **failed**
-  check ⇒ don't merge; comment the failing check on the linked ticket (failed gate). **Pending** ⇒
-  leave for the next fire.
+- **Feature PRs (`git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"`. For each
+  (the linked ticket is `In Progress`, dev-owned):
+  - **Every `git.mergeChecks` context green AND mergeable** (`gh pr checks <pr>` + `gh pr view
+    <pr> --json mergeable,mergeStateStatus`) → `gh pr merge <pr> --squash`, then move the ticket to
+    **`In Review`** (now it's landing/deploying for the owner to verify).
+  - **A check FAILED** (the PR's CI is the build gate, §12c) → the ticket isn't done: read the CI
+    failure (`gh pr checks`/`gh run view --log-failed`), **fix it and re-push** to the same branch
+    (updating the PR), comment the cause on the ticket. Cap at ~2 fix cycles (count prior
+    fix comments); the 3rd is a **`Bail-shape: fix-exhausted`** block (§9), not another attempt.
+  - **Pending** ⇒ leave for the next fire.
 - **Deploy PRs (`deploy.style:"release-pr"`):** for each `deploy.environments` with **`auto:true`**
   (skip `auto:false` — the operator's prod gate), `gh pr list --search "head:<deployPrPrefix> is:open"`
   — the pipeline's per-**release** deploy PR. If **mergeable** and not failing → `gh pr merge <pr>
@@ -210,6 +215,16 @@ zero public surface), unit-test the security-critical core (token/authz/rate-lim
 and hand off with the explicit human enable-then-QA step spelled out.
 
 ### Step 5 — Gate before shipping
+**In `git.landing:"pr"` the build/test gate is the PR's CI (`git.mergeChecks`), not a local
+run (§12c).** Don't run — or require a local toolchain / `node_modules` for — `build`/`test`
+here: open the PR (Step 6) and let the repo's own PR-validation checks build+test it; Dev
+merges only when those checks are green (fire-start, Step 0.5) and iterates on a red one
+(reads the CI failure, fixes, re-pushes). This keeps "never ship red" enforced by the CI-green
+merge requirement without a fully-provisioned local env. You still do the read-only self-review
+(Step 5.5). **The local build gate below applies to `landing:"direct"` / `deploy.style:"command"`**
+— there Dev commits straight to `defaultBranch` with no PR CI to catch red before it lands, so
+a local run is the only pre-land gate.
+
 Run **the target repo's resolved `build` commands** (`typecheck`, `build`, `test`) in
 order (the repo's `build` else top-level `build`, §19; single-repo ⇒ top-level `build`,
 unchanged). If any
@@ -272,18 +287,21 @@ off `origin/<resolved defaultBranch>`; commit **only** this ticket's files (stag
 discipline §7) with the ticket-id + the repo's commit convention + co-author trailer; push
 the branch; open a PR to the resolved `defaultBranch` via **`gh pr create`** (title per the
 repo's PR-title convention; body links the ticket + a one-line summary + how-to-verify);
-comment the PR URL on the ticket.
-**If `git.autoMerge:true` (§12c):** do NOT merge inline. Dev merges its own feature PR at
-**fire-start (Step 0.5)** once its `git.mergeChecks` are green + it's mergeable (polled via
+comment the PR URL on the ticket. **The PR's CI validates the build (Step 5) — you do not build
+locally in pr mode.**
+**If `git.autoMerge:true` (§12c):** do NOT merge inline, and **keep the ticket `In Progress`
+(you still own landing it) — do NOT move it to `In Review` yet.** Dev merges its own feature PR
+at **fire-start (Step 0.5)** once its `git.mergeChecks` are green + it's mergeable (polled via
 `gh pr checks`, **not** GitHub `--auto`/branch protection — required checks would deadlock the
-release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs). Make sure your local gates (Step 5)
-mirror those checks so the PR isn't red — you must *ensure it passes*, not merge blindly.
-**Do not deploy — skip Step 6.5** (the human's merge ships it; OR — under
-`deploy.style:"release-pr"`, §12c — the release pipeline deploys, and Dev merges the
-`auto:true` deploy PR at fire-start). Then go to Step 7 (hand off to `In Review`). If
-`git.autoPush:false`, commit the branch locally and note that a human must push + open the
-PR (no `gh` call). The direct-commit sequence below runs **only** when `git.landing` is
-absent or `"direct"`.
+release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs). Only **after Step 0.5 merges the PR**
+does the ticket go to `In Review` (for the owner to verify the deployed change). A **red** check
+is not a wait — Step 0.5 reads the failure, fixes, and re-pushes (iterate; cap → block).
+**Do not deploy — skip Step 6.5** (under `deploy.style:"release-pr"`, §12c, the release pipeline
+deploys and Dev merges the `auto:true` deploy PR at fire-start).
+**If `git.autoMerge` is absent/false** (human merges, §12b): go to Step 7 now (hand off to
+`In Review` — the human reviews + merges the PR). If `git.autoPush:false`, commit the branch
+locally and note that a human must push + open the PR (no `gh` call). The direct-commit sequence
+below runs **only** when `git.landing` is absent or `"direct"`.
 
 - If `git.autoCommit`: make sure you're on **the target repo's resolved `defaultBranch`**
   first (`repos[].defaultBranch` else `git.defaultBranch`, §19; single-repo unchanged);

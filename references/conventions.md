@@ -919,16 +919,22 @@ the PR's checks take minutes, and (crucially) **do NOT rely on GitHub branch pro
 `gh pr merge --auto`.** Required-check gating deadlocks any PR whose checks don't report — and a
 release pipeline's own `deploy/*` PRs, created by the `GITHUB_TOKEN`, never trigger the PR
 checks — so a required-check rule would permanently block them. Instead **Dev polls the checks
-itself and merges when green** (see the fire-start step below). Rules:
-- Dev runs the check-equivalent gates **locally first** (Step 5 — typecheck/build/lint/whatever
-  `mergeChecks` names) so its PR isn't red; it must **ensure the PR passes**, not merge blindly.
+itself and merges when green** (the fire-start step below). Rules:
+- **The PR's CI IS the build/test gate** (`git.mergeChecks` = the check contexts / job names). Dev
+  does **NOT** run the `build`/`test` gate locally in pr mode and needs **no local `node_modules`
+  / toolchain** — it opens the PR and lets the repo's own PR-validation build+test it. "Never ship
+  red" is enforced by *merging only on green*, not by a local build. (Dev still does the read-only
+  self-review of its diff — that needs no build.)
 - It merges only when **every `mergeChecks` context is green AND the PR is mergeable**
   (`gh pr checks <pr>` + `gh pr view <pr> --json mergeable,mergeStateStatus`). A **failed** check
-  ⇒ the PR is red: do NOT merge — comment the failing check on the ticket and treat it like a
-  failed gate (reopen/fix next fire), never force-merge. Checks still **pending** ⇒ leave it for a
-  later fire.
-- The ticket goes to `In Review` when the PR is opened (§12b); the merge happens on a **later
-  fire** once green (so a single Dev fire never blocks minutes waiting on CI).
+  ⇒ the ticket isn't done: Dev **reads the CI failure, fixes it, and re-pushes** to the same
+  branch (iterate; cap ~2 cycles → `fix-exhausted` block, §9), never force-merge. **Pending** ⇒
+  leave it for a later fire.
+- **Ticket state:** with `autoMerge`, the ticket **stays `In Progress`** (Dev still owns landing
+  it) from PR-open until Dev merges the green PR; **only then → `In Review`** (the owner verifies
+  the deployed change, §12b). So the Dev tier keeps re-picking a red PR until it lands or blocks.
+  (Without `autoMerge`, §12b's human-merge flow moves the ticket to `In Review` at PR-open, since
+  the human reviews the PR.)
 
 ### `deploy.style:"release-pr"` — deploy by merging the release pipeline's deploy PRs
 Default **`"command"`** (absent ⇒ today's behavior: Dev runs `deploy.command` in Step 6/6.5,
