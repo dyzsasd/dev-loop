@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.0.0-rc.1 — team / workspace model (code-complete; GA pending operator soak)
 
 ### 1.0 line — team / workspace model (in progress)
 - **M3 team scheduling (0.32.0).** One team-level `dev-loop run` rotates fires across the enabled
@@ -24,6 +24,13 @@ experience** — a real failure observed while the agents ran, then hardened int
   write-flow, ops registry-dedup + owner routing, sweep per-project loop, communication via notify, PM
   loads lessons + vision). The service-backend op-API steward `project` override moves to M5 with the
   daemon work; linear stewards route cross-project via the Linear MCP today.
+- **M5 hub + intake (0.34.0 → rolled into rc.1).** `dev-loop hub start|stop|status|ensure` manages the
+  workspace hub daemon (service backend); `stop` checkpoints + truncates the WAL. `dev-loop run`
+  auto-ensures the daemon on a service team. Team intake (conventions §9b): PM splits a cross-project ask
+  into per-project W3 sub-intakes and sweep closes the parent when all children land. Version stamped to
+  **1.0.0-rc.1** — the 1.0 line is code-complete; GA (1.0.0) follows operator soak + the real backoffice
+  migration + a second-machine drill (see docs/design/team-workspace-GA.md). Deferred service-only polish:
+  the web team-overview page and the service op-API steward project override.
 - **M1 config kernel (schema v2).** New per-workspace `dev-loop.json`: one workspace = one team = one
   backend; a physical repo **registry** + **virtual projects** that reference repos (one repo shareable
   across projects). New modules `team-config.ts` (types + E01-E11 validation + resolution API +
