@@ -95,6 +95,28 @@ try {
   const docBad = run("server", ["doctor"], { cwd: lin });
   ok(/E04|E09/.test(docBad.out) && /DOCTOR_FAILED/.test(docBad.out), "doctor fails a workspace with E-code errors (read-only)");
 
+  // ── add-project / add-repo (the validated config mutators the skills call) ──
+  const em = join(tmp, "edit");
+  run("team", ["init", "--dir", em, "--key", "edit-team", "--backend", "linear", "--linear-team", "Loop-1"]);
+  mkdirSync(join(em, "portal"), { recursive: true });
+  mkdirSync(join(em, "shared-lib"), { recursive: true });
+  ok(run("team", ["add-project", "devplatform", "--linear-project", "DevPlatform", "--dev-split"], { cwd: em }).code === 0, "add-project exits 0");
+  ok(run("team", ["add-repo", "portal", "--project", "devplatform", "--path", "portal", "--role", "primary", "--landing", "pr", "--auto-merge", "--merge-check", "Lint & Build", "--typecheck-cmd", "tsc --noEmit"], { cwd: em }).code === 0, "add-repo (new registry entry) exits 0");
+  const em1 = readJson(join(em, "dev-loop.json"));
+  ok(em1.projects.devplatform.devSplit === true && em1.projects.devplatform.repos[0].ref === "portal", "add-project + add-repo wired the project→repo edge");
+  ok(em1.repos.portal.landing === "pr" && em1.repos.portal.autoMerge === true && em1.repos.portal.build.typecheck === "tsc --noEmit", "add-repo persisted the physical fields");
+  ok(JSON.stringify(em1.repos.portal.mergeChecks) === '["Lint & Build"]', "add-repo persisted mergeChecks");
+
+  run("team", ["add-project", "agentapi", "--linear-project", "AgentAPI"], { cwd: em });
+  run("team", ["add-repo", "shared", "--project", "devplatform", "--path", "shared-lib"], { cwd: em });
+  const noOwner = run("team", ["add-repo", "shared", "--project", "agentapi"], { cwd: em });
+  ok(noOwner.code !== 0 && /E05/.test(noOwner.out), "add-repo refuses to share a repo across projects without an owner (E05)");
+  const withOwner = run("team", ["add-repo", "shared", "--project", "agentapi", "--owner", "devplatform"], { cwd: em });
+  ok(withOwner.code === 0, "add-repo shares the repo once a valid owner is given");
+  const em2 = readJson(join(em, "dev-loop.json"));
+  ok(em2.repos.shared.owner === "devplatform" && em2.projects.agentapi.repos.some((r: { ref: string }) => r.ref === "shared"), "shared repo now referenced by both projects with an owner");
+  ok(run("server", ["doctor"], { cwd: em }).out.includes("DOCTOR_OK"), "the resulting workspace is doctor-clean");
+
   // ── team repair re-registers the index ──
   rmSync(join(HOME, "workspaces.json"), { force: true });
   writeFileSync(join(svc, "dev-loop.json"), JSON.stringify(svcCfg, null, 2)); // restore a valid file
