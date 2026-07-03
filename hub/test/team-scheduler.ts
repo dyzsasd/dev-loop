@@ -67,6 +67,14 @@ try {
   const rows = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   ok(rows.length >= 1 && rows[0].agent === "pm" && ["alpha", "beta"].includes(rows[0].project) && rows[0].exitCode === 0, "ledger row carries agent/project/exitCode (backend-agnostic soak metric)");
 
+  // ── regression: a shell-exported CLAUDE_CODE_EFFORT_LEVEL must NOT leak into agent fires (it would
+  //    override the per-agent --effort; precedence is env > --effort > model default). The scheduler strips it.
+  const effProbe = join(tmp, "eff-probe.sh");
+  const effOut = join(tmp, "eff-seen.txt");
+  writeFileSync(effProbe, `#!/bin/sh\necho "\${CLAUDE_CODE_EFFORT_LEVEL:-UNSET}" > ${effOut}\nexit 0\n`); chmodSync(effProbe, 0o755);
+  runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: effProbe, CLAUDE_CODE_EFFORT_LEVEL: "low" });
+  ok(readFileSync(effOut, "utf8").trim() === "UNSET", "an exported CLAUDE_CODE_EFFORT_LEVEL is stripped from agent fires (per-agent --effort stays authoritative)");
+
   // ── steward vs delivery fire scope (M4): sweep fires at the workspace ROOT; pm fires in a repo ──
   const stewardDry = runAgents(["--agents", "sweep", "--once", "--dry-run"], ws);
   ok(stewardDry.out.includes(`sweep: cwd=${ws} `), "a steward (sweep) fires with cwd = the workspace ROOT (team scope)");

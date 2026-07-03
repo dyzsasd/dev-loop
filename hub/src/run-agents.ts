@@ -670,7 +670,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const prompt = readPrompt(opts, agent, project, profile, teamScope);
   const backend = (cfg?.projects?.[profileProject] as { backend?: string } | undefined)?.backend ?? "linear";
   const { command, args } = commandFor(opts, agent, project, prompt, profile, backend);
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     DEVLOOP_ACTOR: agent,
     DEVLOOP_PROJECT: project,
@@ -683,6 +683,12 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     CLAUDE_PLUGIN_DATA: opts.dataDir,
     ...(teamScope ? { DEVLOOP_TEAM_SCOPE: "1" } : {}),
   };
+  // The scheduler sets reasoning effort PER AGENT via the resolved `--effort` flag (claude) / model_reasoning_effort
+  // (codex). Claude's effort precedence is CLAUDE_CODE_EFFORT_LEVEL (env) > --effort > model default — so an
+  // operator who exported CLAUDE_CODE_EFFORT_LEVEL (e.g. from an /effort or ultracode session) would silently
+  // OVERRIDE every agent's configured effort, flattening them all to one level. Strip it so the per-agent
+  // config is authoritative. (--model already outranks ANTHROPIC_MODEL, so the model needs no such strip.)
+  delete env.CLAUDE_CODE_EFFORT_LEVEL;
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
     console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}`);
