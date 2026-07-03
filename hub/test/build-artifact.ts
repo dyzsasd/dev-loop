@@ -70,6 +70,9 @@ try {
   ok(seed.code === 0, "compiled cli.js seed → exit 0 (compiled seed.js + db.js siblings load)");
   const doc = run(process.execPath, [distCli, "doctor"], { DEVLOOP_HUB_DB: db });
   ok(doc.code === 0 && /DOCTOR_OK/.test(doc.out), "compiled cli.js doctor → exit 0 + DOCTOR_OK (spawns compiled server.js; siblings resolve)");
+  // demo is a SERVICE-backend project (seeded into the hub above), so the scheduler injects the hub
+  // MCP (§18); the hub injection is backend-gated (linear/local get the operator's own MCP instead).
+  writeFileSync(join(tmp, "projects.json"), JSON.stringify({ projects: { demo: { backend: "service", repoPath: tmp } } }));
   const runner = run(process.execPath, [distCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--root", repoRoot, "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
   ok(runner.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high -p '?<prompt:\d+ chars>'?/.test(runner.out), "compiled cli.js run → dry-run renders a scheduled claude fire (inline --mcp-config hub)");
 
@@ -89,6 +92,7 @@ try {
   const instRun = run(process.execPath, [instCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
   ok(instRun.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high -p '?<prompt:\d+ chars>'?/.test(instRun.out),
     "installed cli.js run → finds bundled skills + injects the hub without --root");
+  rmSync(join(tmp, "projects.json"), { force: true }); // drop the service-demo run fixture so init-config below writes a fresh empty starter
   const cfgOut = join(tmp, "projects.json");
   const instConfig = run(process.execPath, [instCli, "init-config", "--dest", cfgOut]);
   const initConfigText = existsSync(cfgOut) ? readFileSync(cfgOut, "utf8") : "";

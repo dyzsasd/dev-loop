@@ -222,12 +222,23 @@ normally `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (or the explicit
    - `repoPath` — **required for Dev** (must be an existing directory; verify it).
      **Single-repo only.**
    - `repos[]` — **multi-repo only** (conventions §19): an array of
-     `{ name, path, role, lang, contributorSkill?, defaultBranch?, build?, deploy? }`.
-     Verify each `path` exists. Confirm the **doc-home** repo (`role:"docs"` else
-     `"primary"` else `repos[0]`) — `strategyDoc` is rooted there. `role` is
+     `{ name, path, role, lang, contributorSkill?, defaultBranch?, landing?, autoMerge?,
+     mergeChecks?, build?, deploy? }`. Verify each `path` exists. Confirm the **doc-home** repo
+     (`role:"docs"` else `"primary"` else `repos[0]`) — `strategyDoc` is rooted there. `role` is
      load-bearing; `lang` is informational. If `repos[]` is absent or has one entry,
      this is single-repo and you provision **no** `repo:<name>` labels and write no
      routing artifacts (§19).
+     - **Do the build / deploy / (for pr mode) mergeChecks interviews PER REPO** — each repo has
+       its own CI job names, landing style, and release pipeline, so run Step-1's deploy interview
+       and the P2-10 `mergeChecks` derivation **once per repo** (repo value else top-level, §19).
+       A repo left without its own `landing`/`mergeChecks` inherits the product-level ones — fine
+       for a repo that matches the top-level, wrong for one that doesn't (flag it).
+     - **Adding a repo to an EXISTING project is the same flow, idempotent:** re-run `/dev-loop:init`
+       after adding the `repos[]` entry — it verifies the new `path`, creates the missing
+       **`repo:<name>`** label, confirms the doc-home is still correct, and leaves every existing
+       value untouched. Existing open tickets then need the new `repo:<name>` target on the ones
+       that belong to it (Sweep flags any multi-repo ticket missing a target, §19); a project whose
+       board is still empty has zero migration cost.
    - `strategyDoc` — **required for PM** (a repo-file path relative to `repoPath`,
      OR a Linear document `{ "linearDocument": "<id|slug|url>" }` / a
      `linear.app/.../document/` URL).
@@ -248,13 +259,23 @@ normally `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (or the explicit
        `deploy.environments` per env: `{ auto, deployPrPrefix, healthCheck? }` — mark the non-prod
        env(s) `auto:true` (Dev merges their deploy PR at fire-start) and **prod `auto:false`** (the
        operator's manual gate). This shape needs `landing:"pr"` + `git.autoMerge:true` +
-       `git.mergeChecks` set to the **PR-check contexts (job names)** Dev waits on (read them from
-       the repo's PR-validation workflow, e.g. `["Lint & Build", "Verify Worker Route Contract"]`).
-       **No branch protection required** — Dev polls those checks (`gh pr checks`) and merges when
-       green; deliberately not GitHub `--auto`, since a required-check rule would deadlock the
-       release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs (their checks never run). Do NOT
-       edit the product repo's release workflows — the loop *drives* the existing pipeline by
-       merging its PRs, it does not reinvent it.
+       `git.mergeChecks` set to the **PR-check contexts (job names)** Dev waits on.
+       - **Derive `mergeChecks` from the repo, don't hand-type them** (P2-10): read the
+         **PR-triggered** workflows — `for f in .github/workflows/*.yml` where `on.pull_request`
+         targets the default branch — and extract every `jobs.*.name` (the check *context* GitHub
+         reports; if a job has no `name`, the check context is the job **key**). List them for the
+         operator to confirm as `mergeChecks`. Missing one silently blocks nothing; **including one
+         that doesn't run on every PR is worse** — Dev would wait forever — so only include checks
+         that fire on all PRs (no `if:`/path filter that could skip them), and note any you left
+         out. Also confirm the deploy-PR **branch prefixes** by listing recent PRs
+         (`gh pr list --search "head:deploy/" --state all`). Multi-repo: do this per repo.
+       - **Preflight the pr-mode prerequisites:** `gh auth status` succeeds and the token can push
+         + merge PRs on the repo; otherwise flag it (Dev can't open/merge PRs). **No branch
+         protection required** — Dev polls the checks (`gh pr checks`) and merges when green;
+         deliberately not GitHub `--auto`, since a required-check rule would deadlock the release
+         pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs (their checks never run). Do NOT edit the
+         product repo's release workflows — the loop *drives* the existing pipeline by merging its
+         PRs, it does not reinvent it.
    - **The reports interview — ask WHERE agent reports go** (conventions §22/§23). This is a
      first-class choice, not a buried key — surface it and its tradeoff:
      - **`reports.sink:"files"`** (default) — daily/weekly/monthly reports are machine-local files
@@ -355,6 +376,16 @@ modules, and obvious gaps — that **only** seeds the doc-base `Current state` s
 NON-FATAL** to init: log one line, degrade to *"current-state unmapped; flag operator"*
 (the log-one-line-and-continue posture, conventions §0), and continue — mark it `—` in
 the report.
+
+**Adversarially verify every mapped claim against the code before writing it (P2-11).** A
+map produced from partial reads / stale assumptions drifts (e.g. asserting a route group or
+directory that doesn't exist on disk). So run the map as **map → verify → write**: for each
+concrete claim it produces (a directory/route/module exists, a surface is real vs a
+stub/mock, a capability is present), **re-check it against the actual tree** (`ls`/`grep`/read
+the file) — a second read-only pass whose only job is to falsify claims — and write only what
+survives, marking anything unverifiable as *"(inferred — confirm)"* rather than asserting it.
+This is the same falsify-before-asserting discipline PM uses on its doc-base; catching a wrong
+"Current state" at init is far cheaper than the operator finding it later.
 
 ### Step 4 — Strategy doc (verify readable; offer to scaffold if absent)
 PM's north star. By the form detected in Step 1 (config-schema.md / pm-agent §0):
