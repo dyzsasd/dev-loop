@@ -67,6 +67,12 @@ try {
   const rows = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   ok(rows.length >= 1 && rows[0].agent === "pm" && ["alpha", "beta"].includes(rows[0].project) && rows[0].exitCode === 0, "ledger row carries agent/project/exitCode (backend-agnostic soak metric)");
 
+  // ── steward vs delivery fire scope (M4): sweep fires at the workspace ROOT; pm fires in a repo ──
+  const stewardDry = runAgents(["--agents", "sweep", "--once", "--dry-run"], ws);
+  ok(stewardDry.out.includes(`sweep: cwd=${ws} `), "a steward (sweep) fires with cwd = the workspace ROOT (team scope)");
+  const deliveryDry = runAgents(["--agents", "pm", "--once", "--dry-run"], ws);
+  ok(/pm: cwd=\S+\/(ra|rb) /.test(deliveryDry.out), "a delivery agent (pm) fires with cwd = a project repo (rotation)");
+
   // ── team run lock: a live holder blocks a second scheduler ──
   const lockPath = join(ws, ".dev-loop", "locks", "run.lock");
   mkdirSync(dirname(lockPath), { recursive: true });

@@ -484,7 +484,7 @@ function stripFrontmatter(raw: string): string {
   return end > 0 ? lines.slice(end + 1).join("\n").trimStart() : raw;
 }
 
-function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile): string {
+function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile, teamScope?: { enabledProjects: string[] }): string {
   const skill = join(opts.root, "skills", `${agent}-agent`, "SKILL.md");
   if (!existsSync(skill)) die(`skill file not found for '${agent}': ${skill}. Pass --root <dev-loop checkout>.`, 1);
   const split = runtimeDevSplit(opts);
@@ -494,12 +494,16 @@ function readPrompt(opts: Options, agent: Agent, project: string, profile: Launc
     .replaceAll("${DEVLOOP_DATA_DIR:-~/.dev-loop}", opts.dataDir)
     .replaceAll("${DEVLOOP_DATA_DIR}", opts.dataDir)
     .replaceAll("${DEVLOOP_PROJECTS_JSON}", projectsPath(opts.dataDir));
+  const teamLines = teamScope
+    ? `- team-scope: true (this is a TEAM-level fire — iterate/route across the enabled projects below, do not act on a single project only)
+- enabled projects: ${teamScope.enabledProjects.join(", ")}\n`
+    : "";
   return `You are launched by dev-loop's own scheduler. Run exactly one fresh fire for this agent, then stop.
 
 Scheduler context:
-- project: ${project}
+- project: ${project || "(team scope — no single project)"}
 - agent: ${agent}
-- selected agents: ${opts.agents.join(",")}
+${teamLines}- selected agents: ${opts.agents.join(",")}
 - coding agent: ${profile.codingAgent}
 - launch model: ${profile.model ?? "(cli default)"}
 - launch effort: ${profile.effort ?? "(cli default)"}
@@ -624,6 +628,9 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
 // implementers (ops/communication/reflect are time-based and always fire), and only on the service backend
 // (max(events.id) is the board-change signal — linear/local have no hub cursor, so the gate stays off there).
 const GATED_AGENTS = new Set<Agent>(["pm", "qa", "dev", "senior-dev", "junior-dev", "architect"]);
+// Stewardship agents (M4): in team mode these fire at TEAM scope (cwd = workspace root, project = _team/"",
+// DEVLOOP_TEAM_SCOPE=1) and iterate/route across the enabled projects, rather than rotating one project.
+const STEWARD_AGENTS = new Set<Agent>(["sweep", "ops", "reflect", "communication"]);
 function repoPathsFor(cfg: ProjectsConfig | null, project: string): string[] {
   const p = cfg?.projects?.[project] as { repoPath?: string; repos?: { path?: string }[] } | undefined;
   if (p?.repos?.length) return p.repos.map((r) => r.path).filter((x): x is string => !!x);
@@ -655,10 +662,13 @@ function saveGateState(opts: Options, project: string, state: GateState): void {
   } catch { /* best-effort — a lost gate write just means the next fire runs (fails open) */ }
 }
 
-async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string): Promise<number> {
-  const profile = resolveLaunchProfile(opts, cfg, project, agent);
-  const prompt = readPrompt(opts, agent, project, profile);
-  const backend = (cfg?.projects?.[project] as { backend?: string } | undefined)?.backend ?? "linear";
+async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string, teamScope?: { enabledProjects: string[] }): Promise<number> {
+  // For a team-scoped steward fire the launch profile resolves against a representative project (the first
+  // enabled one) since `project` is "" / "_team"; delivery fires resolve against their own project.
+  const profileProject = teamScope && teamScope.enabledProjects.length ? teamScope.enabledProjects[0] : project;
+  const profile = resolveLaunchProfile(opts, cfg, profileProject, agent);
+  const prompt = readPrompt(opts, agent, project, profile, teamScope);
+  const backend = (cfg?.projects?.[profileProject] as { backend?: string } | undefined)?.backend ?? "linear";
   const { command, args } = commandFor(opts, agent, project, prompt, profile, backend);
   const env = {
     ...process.env,
@@ -671,6 +681,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     DEVLOOP_PLUGIN_ROOT: opts.root,
     CLAUDE_PLUGIN_ROOT: opts.root,
     CLAUDE_PLUGIN_DATA: opts.dataDir,
+    ...(teamScope ? { DEVLOOP_TEAM_SCOPE: "1" } : {}),
   };
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
@@ -931,9 +942,18 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const gateState: Record<string, string> = gateActive ? loadGateState(opts, "team") : {};
   const gateKey = (agent: Agent, project: string) => `${agent}:${project}`;
 
-  // A single fire for one agent: pick a project (skipping gated-unchanged ones up to one full rotation),
-  // resolve its cwd, and run. Returns after the fire (or immediately if every candidate is gated).
+  // The enabled-project list a steward fire iterates over (also drives the launch-profile representative).
+  const enabledProjects = () => candidates.map((c) => c.key);
+  // Team scope for a steward: cwd = workspace root, project = _team (service) / "" (linear).
+  const stewardProject = backend === "service" ? "_team" : "";
+
+  // A single fire for one agent. Stewards (M4) fire at TEAM scope (no rotation). Delivery agents rotate:
+  // pick a project (skipping gated-unchanged ones up to one full rotation), resolve its cwd, and run.
   const fireAgentOnce = async (agent: Agent): Promise<void> => {
+    if (STEWARD_AGENTS.has(agent)) {
+      await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: enabledProjects() });
+      return;
+    }
     let project: string | null = null;
     for (let attempt = 0; attempt < candidates.length; attempt++) {
       const p = pickProject(agent); // advances the shared cursor every attempt (skip-advance)
