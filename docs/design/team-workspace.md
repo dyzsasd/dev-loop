@@ -1,6 +1,7 @@
 # Team / Workspace — dev-loop v-next 设计与改进方案
 
 > 状态:**proposal v3**(已并入操作者三轮反馈;见 §0.2 决定表)。2026-07-03。
+> 工程级细化(模块/类型/算法/任务分解):[`team-workspace-impl.md`](team-workspace-impl.md)。
 > 起点:0.29.0。**目标发行版本:1.0** —— 里程碑在 0.30–0.34 递进(clean break,运行时不再
 > 兼容 v1 配置;断裂发生在 0.x 线内),全部开发完成并稳定运行后发 **1.0.0 GA**(§11)。
 
