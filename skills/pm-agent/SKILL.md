@@ -156,12 +156,15 @@ both `Feature`s and any `Improvement`s you own. **In a split-dev project (conven
 §21a)** this query ALSO surfaces a senior-dev **design parent** (the design tier's
 verified increment) — handle those via the design gate below.
 
-**In `git.landing:"pr"` (conventions §12b)** an In Review ticket is a **PR awaiting the
-human's merge** — the change is NOT on the running env until merged. Check the ticket's PR
-first: **still open/unmerged** → do NOT verify-fail (leave it `In Review`, comment `awaiting
-human merge (PR <url>)`, skip to the next); **merged** → verify against the running product
-as below → `Done`; **closed-unmerged** (human rejected) → close + follow-up (§3). In
-`landing:"direct"` (default) ignore this — verify as normal.
+**In `git.landing:"pr"` (conventions §12b)** an In Review ticket is a change **awaiting the
+human's merge + deploy** — and **merging the PR is NOT the same as it being deployed** (the
+pipeline may need a separate deploy step, e.g. a `deploy/*` PR to merge). Gate on what's
+**observable on the running env**: **not observable yet** (PR open, OR merged but not yet
+deployed) → do NOT verify-fail (leave `In Review`, comment the wait-state once — `awaiting
+human merge (PR <url>)` / `awaiting deploy`, skip to next); **observable and meets criteria**
+→ verify as below → `Done`; **observable but wrong** → close + follow-up (§3);
+**PR closed-unmerged** (rejected) → close + follow-up (§3). In `landing:"direct"` (default)
+ignore this — verify as normal.
 
 For each (oldest first):
 1. Comment that you're verifying (claim it, conventions §7).

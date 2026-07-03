@@ -878,16 +878,23 @@ this ticket" = an **open or merged PR referencing the ticket id**
 a commit on `defaultBranch`. Use that so a ticket whose PR is open (awaiting the human's
 merge) is never re-implemented.
 
-**Verification (PM/QA Job A) in `pr` mode:** an `In Review` ticket is a **PR awaiting the
-human's merge**. The owner:
-- may pre-read the PR diff + the PR's own CI (build/lint) — but the change is **not** on the
-  running env until merged, so it CANNOT be browser/exercise-verified yet.
-- **PR still open/unmerged** → NOT a verify-fail: leave the ticket `In Review`, and move on
-  (the human is the gate). Comment `awaiting human merge (PR <url>)` **once** — if the ticket
-  already carries that note from a prior fire, skip it silently (don't re-comment every fire).
-- **PR merged** → verify against the running product as usual → `Done`.
-- **PR closed-unmerged** (human rejected) → treat as a failed review: `Canceled` + follow-up
-  (§3), noting the rejection.
+**Verification (PM/QA Job A) in `pr` mode:** an `In Review` ticket is a change **awaiting the
+human's merge + deploy**. Gate verification on what is **actually observable on the running
+target env** — **merging a PR is NOT the same as the change being deployed**: many pipelines
+need a separate deploy step (a `deploy/*` PR to merge, a `workflow_dispatch`, a promotion
+job), so a ticket can be merged-to-`main` yet not yet live on the test env. So:
+- may pre-read the PR diff + the PR's own CI (build/lint) — but do NOT mark Done off the diff.
+- **Change not yet observable on the running env** — PR still open, OR merged but the deploy
+  step hasn't run yet (the env still shows the old behavior/version) → **NOT a verify-fail**:
+  leave the ticket `In Review` and move on (the human is the gate). Comment the current
+  wait-state **once** (`awaiting human merge (PR <url>)` while open; `awaiting deploy` once
+  merged) — if that note is already there from a prior fire, skip it silently (don't re-comment
+  every fire). When possible, confirm "not deployed yet" positively (e.g. the env's
+  version/build endpoint still lags the merged change) rather than inferring it from the
+  feature's mere absence.
+- **Change observable on the env AND meets acceptance criteria** → `Done`.
+- **Change observable on the env but wrong** → failed review: close + follow-up (§3).
+- **PR closed-unmerged** (human rejected) → rejection: `Canceled` + follow-up (§3), noting it.
 
 This keeps the loop autonomous **up to the PR**, puts the human gate at **merge** (→ the
 env the branch merges into) and again at **release** (→ prod, via the downstream pipeline's
