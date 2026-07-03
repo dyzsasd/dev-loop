@@ -3,6 +3,8 @@
 > 上游:`team-workspace.md`(proposal v3,§ 引用均指向它与 `references/conventions.md`)。
 > 本稿是**工程级**:模块落点、类型定义、算法、命令规格、skill 规格,以及按里程碑切好的
 > 开发任务(**D-x.y**)与测试任务(**T-x.y**)。规模标记:S ≤ 半天,M ≈ 1 天,L ≈ 2–3 天。
+> 评审修订(同日):**M3/M4 重排**(steward team 化与 SKILL/op-API 同批,消除里程碑倒挂)、
+> E11 命名校验、import 事件重键、`next-project` 共享轮换 picker、fires.jsonl 账本。
 
 ---
 
@@ -34,10 +36,11 @@
 | `hub/src/cli.ts` | 改造 | M1/M3/M4/M5 | 路由:`team …`、`with-repo-lock`、`notify`、`hub …` |
 | `hub/src/run-agents.ts` | 改造 | M1(读 v2)/ M3(team 调度) | 兼容视图接入;WRR 轮换、enabled/weight、team 锁、`--plan` |
 | `hub/src/locks.ts` | 新增 | M3 | 从 daemon-lifecycle 抽出 O_EXCL+stale 锁;`with-repo-lock` 用 |
+| `hub/src/rotation.ts` | 新增 | M3 | 平滑 WRR + cursor 持久化 + `next-project` CLI(run 与 Agent View 共用) |
 | `hub/src/lessons.ts` | 新增 | M4 | lessons 库路径 + 预算检查(doctor 消费) |
 | `hub/src/comms.ts` | 新增 | M4 | slack/lark webhook 适配器 + `dev-loop notify` |
 | `hub/src/daemon-lifecycle.ts` | 改造 | M5 | workspace 化:`.dev-loop/daemon.json` 单运行文件、`hub start/stop/status` |
-| `hub/src/agentops.ts` / `tooldefs.ts` | 改造 | M5 | steward actor 的显式 project 覆盖(op-API) |
+| `hub/src/agentops.ts` / `tooldefs.ts` | 改造 | M4 | steward actor 的显式 project 覆盖(op-API;评审修订:自 M5 提前,steward team 化的硬依赖) |
 | `hub/src/daemonviews.ts` | 改造 | M5 | web UI team 总览页 |
 | `hub/src/export-desktop-skill.ts` | 改造 | M2 | `--team` 渲染 team 上下文 |
 | `skills/{add-project,add-repo,sync-project,sync-repo}/SKILL.md` | 新增 | M2 | 操作 skill(§10) |
@@ -107,15 +110,19 @@ export type DocRef = string | { linearDocument: string } | { hubDoc: string } | 
 | E02 | `team.key` 不匹配 `^[a-z0-9-]{2,32}$` 或 backend 非 linear/service |
 | E03 | `repos.*.path` 缺失 / 绝对路径 / 归一化后含 `..` 逃出 workspace |
 | E04 | `projects.*.repos[].ref` 指向未注册 repo |
-| E05 | repo 被 >1 个 **enabled** project 引用但无 `owner`;或 `owner` 不在引用者之列 |
+| E05 | repo 被 >1 个 project 引用但无 `owner`;或 `owner` 不在引用者之列(**不看 enabled** —— 校验结果不得随开关翻转,I2 原文) |
 | E06 | deployPolicy 上限违规:`deployPolicy[env]=manual` 而某 repo `deploy.environments[env].auto=true` |
 | E07 | `comms.provider` 非 slack/lark;或 `webhookEnv` 不匹配 `^[A-Z][A-Z0-9_]*$`(值里出现 `://` 一律拒 —— I5 防呆,防止有人把 URL 写进配置) |
 | E08 | `weight` 非有限数或 <0;`enabled` 非布尔 |
 | E09 | backend=linear 而 `team.linearTeam` 缺失 |
 | E10 | 两个 ref 归一化后指向同一 `path`;或两个 project 声明同一 `linearProjectId` |
+| E11 | project key / repo ref 不匹配 `^[a-z0-9][a-z0-9._-]{0,31}$`,或撞保留名 `team`/`lessons`/`wt`/`locks`/`_team`/`hub.db`/`daemon.json`(它们与 `.dev-loop/` 目录、锁文件共享命名空间) |
 
 Warning(doctor 报告、不 fail):W01 project 零 repos;W02 repo 未被任何 project 引用;
-W03 lessons 超预算(§7);W04 上次 sync 过旧(M2 起,读 `linearProjectId` 旁的 `syncedAt`)。
+W03 lessons 超预算(§7);W04 上次 sync 过旧(M2 起,读 `linearProjectId` 旁的 `syncedAt`);
+W05 backend=linear 时提示 **Linear MCP 须在 user scope 可用**(steward fire 的 cwd 是
+workspace 根,repo 级 `.mcp.json` 覆盖不到它);W06 workspace 根位于某个 git work-tree 内
+(`.dev-loop/` 状态与报告有被误提交的风险,I5 邻域)。
 
 ### 2.3 解析 API
 
@@ -132,7 +139,7 @@ export function inferProjectForRepo(ws, ref):
   | { kind: "unique"; key: string }
   | { kind: "ambiguous"; candidates: string[] }                  // 调用方必须报错要求 --project
   | { kind: "none" };
-export function ownerOf(ws, ref): string;                        // owner ∥ 唯一引用者(E05 保证可解)
+export function ownerOf(ws, ref): string;                        // owner ∥ 唯一引用者(E05 保证可解;零引用(W02)→ throw)
 ```
 
 ### 2.4 兼容视图 `toLegacyView(ws): ProjectsConfig` —— M1 的去风险核心
@@ -178,7 +185,13 @@ wsWorktree(ws, ticket, ref)// <root>/.dev-loop/wt/<ticket>/<ref>
 wsLockPath(ws, name)       // <root>/.dev-loop/locks/<name>.lock
 wsHubDb(ws)                // <root>/.dev-loop/hub.db
 wsDaemonRunfile(ws)        // <root>/.dev-loop/daemon.json
+wsFireLedger(ws)           // <root>/.dev-loop/team/fires.jsonl(§5.4,backend 无关账本)
 ```
+
+Worktree 路径分两步(评审修订):M1–M2 沿用整树平移后的 `.dev-loop/<project>/wt/<ticket>`
+(conventions §7 现行文本经 `${DEVLOOP_DATA_DIR}` 换根即成立,零改动);**M3 随
+with-repo-lock 一起迁到顶层 `wsWorktree`**(共享 repo 需要 ticket+ref 复合键),
+conventions §7/§12c 同批更新。
 
 `paths.ts` 改造:`devloopDataDir()` → workspace 命中时返回 `wsStateRoot`(`DEVLOOP_DATA_DIR`
 显式覆盖仍最高优,测试用);`hubDbPath()` 同理(`DEVLOOP_HUB_DB` 仍最高优);
@@ -229,6 +242,12 @@ dev-loop team import [--from ~/.dev-loop/projects.json] [--project <key>]...
 
 - repo 在 workspace 外 → 写入 config 假定目标 `<ws>/<name>`,打印**准确的 `mv` 命令**,
   以 exit 1 收尾(操作者搬完 → `dev-loop doctor` 转绿)。不自动移动 repo。
+- **hub 行拷贝的重键规则**(评审修订):`events.id` 是 AUTOINCREMENT —— 按原 id 排序
+  **不带 id 重插**(次序保持、id 重派,`sqlite_sequence` 不搬);tickets/documents/actors/
+  projects 是 TEXT id,原样拷贝(prefix 唯一性由 doctor 既有检查守护)。与 `_team` 播种的
+  先后无关,皆无冲突(T1.4 断言)。
+- **升级须知(写进 CHANGELOG,D1.10)**:装上 0.30 后运行时不再读 v1 —— 必须立即
+  `team init` + `team import`,否则一切命令以 WsNotFound 指引收场。
 - `--dry-run` 打印完整计划(逐文件/逐行动);默认执行。运行时**从不**读 v1(#11)。
 
 ### 4.3 `dev-loop doctor`(workspace 模式)+ `dev-loop team repair`
@@ -257,9 +276,13 @@ dev-loop team import [--from ~/.dev-loop/projects.json] [--project <key>]...
 ```
 delivery slot(pm/qa/senior-dev/junior-dev/dev)  = 每 agent 一个 slot,cadence 不变;
   fire 时用 WRR 选 project(见 5.3),cwd = primaryRepo(project),env 注入该 project。
-steward slot(sweep/ops/reflect/communication)   = 每 agent 一个 slot,team 作用域:
-  env DEVLOOP_TEAM_SCOPE=1、DEVLOOP_PROJECT="_team"(service)/ ""(linear)、cwd = ws root;
-  prompt 的 Scheduler context 附 enabled projects 清单。全 team disabled → skip。
+steward slot(sweep/ops/reflect/communication)   = 分两步走(评审修订,消除里程碑倒挂):
+  M3(0.32):与 delivery 相同 —— 按 WRR 选 project fire,行为与今天逐字节一致
+    (sweep/ops 的 SKILL 本就是 project 作用域,team 化必须与 SKILL 重写同批);
+  M4(0.33):切 team 作用域 —— env DEVLOOP_TEAM_SCOPE=1、DEVLOOP_PROJECT="_team"
+    (service)/ ""(linear)、cwd = ws root、prompt 附 enabled projects 清单;
+    与 SKILL 重写(D4.4–D4.6)+ op-API steward 覆盖(D4.2)同版本交付。
+  全 team disabled → skip。
 ```
 
 ### 5.3 加权轮换:平滑 WRR(nginx 算法,确定性)
@@ -274,7 +297,19 @@ pick(agent):
 ```
 
 weight 2:1 的两 project → 序列 `A A B A A B …`;`--plan 6` 必须精确打印它(T3.1)。
-change-gate 键改为 `"<agent>:<project>"`(仍 service-only、fail-open)。
+`--once` = 每个选中 agent 各 fire 一次(project 由 WRR 选出;要专扫某 project 用
+`--project` 过滤器)。
+
+- **实现载体 `rotation.ts`**:WRR + cursor 持久化(`.dev-loop/team/scheduler.json`,
+  tmp+rename 原子写,写入持 `locks.ts` 锁)+ CLI **`dev-loop next-project --agent <a>`**。
+  run-agents 与 **Agent View `/loop` 行共用同一 picker**:/loop 行模板先调 `next-project`
+  拿本 fire 的 project 再进 SKILL —— 两种跑法一份轮换状态,不重不漏(没有它,/loop 行在
+  team 模式下根本无从选 project —— 这正是 linear team 的主跑法)。
+- **change-gate × WRR**:gate 在 pick **之后**评估;skip 同样推进 cursor,且同一 tick 内
+  继续尝试下一候选(至多一整轮)—— 安静 project 不吞噬 fire 槽,活跃 project 不被邻居的
+  静默拖慢。键 = `"<agent>:<project>"`(仍 service-only、fail-open)。
+- **热重载时 cursor 修剪**:project 增删/权重变化 → 丢弃未知键、新键置 0,防陈旧 cursor
+  扭曲 argmax。
 
 ### 5.4 fire 环境与 prompt
 
@@ -282,6 +317,10 @@ change-gate 键改为 `"<agent>:<project>"`(仍 service-only、fail-open)。
 - `readPrompt` 替换变量追加 `${DEVLOOP_WORKSPACE}`、`${DEVLOOP_LESSONS_DIR}`;Scheduler
   context 增加 `team:`、steward fire 的 `enabled projects:` 行。
 - MCP 注入规则不变(backend-gated,0.28.0);service 的 hub db = `wsHubDb`。
+- **fires.jsonl 账本(backend 无关)**:每次 fire 结束 append 一行
+  `{ts, agent, project, codingAgent, model, effort, durationMs, exitCode, timedOut}` 到
+  `wsFireLedger`(service 仍写 hub `fire.completed` 事件)。现 `recordFire` 对非 hub
+  project 静默跳过 —— 没有这行,GA soak 的成功率指标对 linear team **无数据源**。
 
 ---
 
@@ -346,6 +385,8 @@ dev-loop notify [--title <T>] [--level info|warn|error] <text…>
 - **op-API steward 覆盖**:hub 工具新增可选 `project` 参数,仅当
   `DEVLOOP_ACTOR ∈ {ops, reflect, communication, sweep}` 时生效(否则 E_FORBIDDEN)——
   steward 以 `_team` 身份连接、按需对具体 project 建票/读板(ops 的 owner 路由落地机制)。
+  **评审修订:此项提前到 M4(D4.2)** —— 它是 steward team 化的硬依赖,不能晚一个版本;
+  本节其余(lifecycle/webui)仍在 M5。
 - `daemonviews.ts`:`/` 变 team 总览(project 卡片 + intake 谱系),`/p/<key>` 项目板。
 
 ---
@@ -407,32 +448,36 @@ E-code 附录。README:workspace quickstart。CHANGELOG:逐里程碑。
 
 | ID | 任务 | 规模 | 依赖 |
 |---|---|---|---|
-| D3.1 | run-agents team 模式:WRR + enabled/weight + team 锁 + 热重载 + `--plan` + `--project` 过滤器化 + gate 键 `<agent>:<project>` | L | M1 |
-| D3.2 | steward slot(TEAM_SCOPE env、cwd=root、`_team`/"" project、enabled 清单入 prompt) | M | D3.1 |
-| D3.3 | locks.ts 抽取(daemon-lifecycle 复用)+ `with-repo-lock` + conventions §7 | M | M1 |
-| D3.4 | Agent View / RUNNING 文档更新(行数=agent 种类) | S | D3.1 |
+| D3.1 | rotation.ts(平滑 WRR + cursor 持久化/原子写/热重载修剪)+ run-agents team 模式(enabled/weight + team 锁 + `--plan`/`--once` 语义 + `--project` 过滤器化 + gate 键与 skip-advance) | L | M1 |
+| D3.2 | `dev-loop next-project` CLI + Agent View `/loop` 行模板接入(与 run 共用轮换状态) | S | D3.1 |
+| D3.3 | fires.jsonl 账本(backend 无关 fire 结果,GA 指标数据源) | S | D3.1 |
+| D3.4 | locks.ts 抽取(daemon-lifecycle 复用)+ `with-repo-lock` + conventions §7/§12c(worktree 顶层化) | M | M1 |
+| D3.5 | Agent View / RUNNING 文档更新(行数=agent 种类;`next-project` 行模板) | S | D3.2 |
+
+> 注:本版 steward 仍 per-project fire(与今天一致);team 作用域化整体在 M4(D4.1)。
 
 ### M4 — stewardship + 文档库(0.33.0)
 
 | ID | 任务 | 规模 | 依赖 |
 |---|---|---|---|
-| D4.1 | lessons.ts(路径+预算)+ doctor W03 | S | M1 |
-| D4.2 | reflect SKILL 重写(写入流/下沉/mirror) | M | D4.1 |
-| D4.3 | ops SKILL team 化(去重巡检 + ownerOf 路由;service 侧走 M5 op-API,linear 侧即刻可用) | M | D3.2 |
-| D4.4 | sweep SKILL 逐 project 循环化 | S | D3.2 |
-| D4.5 | comms.ts + `notify` + communication SKILL + escalation 接线(pm/ops) | M | M1 |
-| D4.6 | delivery SKILL:lessons 新路径 + PM 装载 vision | S | D4.1 |
+| D4.1 | steward slot team 作用域化(TEAM_SCOPE env、cwd=root、`_team`/""、enabled 清单入 prompt)—— 自 M3 挪入,与 SKILL 同批 | M | M3 |
+| D4.2 | op-API steward project 覆盖 + `_team` 语义(agentops/tooldefs)—— 自 M5 提前,D4.5 的硬依赖 | M | M1 |
+| D4.3 | lessons.ts(路径+预算)+ doctor W03 | S | M1 |
+| D4.4 | reflect SKILL 重写(写入流/下沉/mirror) | M | D4.1/D4.3 |
+| D4.5 | ops SKILL team 化(registry 去重巡检 + ownerOf 路由,两 backend 同版齐活) | M | D4.1/D4.2 |
+| D4.6 | sweep SKILL 逐 project 循环化 | S | D4.1 |
+| D4.7 | comms.ts + `notify` + communication SKILL + escalation 接线(pm/ops) | M | M1 |
+| D4.8 | delivery SKILL:lessons 新路径 + PM 装载 vision | S | D4.3 |
 
 ### M5 — service team 化 + intake(0.34.0)
 
 | ID | 任务 | 规模 | 依赖 |
 |---|---|---|---|
-| D5.1 | daemon-lifecycle workspace 化 + `hub start/stop/status`(stop=checkpoint) | M | M1 |
+| D5.1 | daemon-lifecycle workspace 化 + `hub start/stop/status`(stop=checkpoint;autostart plist 迁移) | M | M1 |
 | D5.2 | `run` 对 service 自动 ensure hub | S | D5.1 |
-| D5.3 | op-API steward project 覆盖 + `_team` 语义(agentops/tooldefs) | M | D5.1 |
-| D5.4 | web UI team 总览 + `/p/<key>` | M | D5.1 |
-| D5.5 | team intake:pm 拆分 job + sweep 收口 job + conventions §9b | M | D4.4 |
-| D5.6 | **backoffice 实迁**(hub 行拷贝路径全程验证) | M | D5.1–D5.4 |
+| D5.3 | web UI team 总览 + `/p/<key>` | M | D5.1 |
+| D5.4 | team intake:pm 拆分 job + sweep 收口 job + conventions §9b | M | D4.6 |
+| D5.5 | **backoffice 实迁**(hub 行拷贝含 events 重键全程验证) | M | D5.1–D5.3 |
 
 ### GA — 1.0.0(无新功能)
 
@@ -453,10 +498,10 @@ E-code 附录。README:workspace quickstart。CHANGELOG:逐里程碑。
 
 | ID | 文件 | 覆盖 | 规模 |
 |---|---|---|---|
-| T1.1 | test/team-config.ts | E01–E10 逐码矩阵(含 `..` 逃逸、`://` 进 webhookEnv、E06 各 env、E05 owner 缺失/错列);effectiveProject 覆盖顺序;inferProject unique/ambiguous/none;ownerOf;toLegacyView 字段逐一对拍(路径绝对化) | L |
+| T1.1 | test/team-config.ts | E01–E11 逐码矩阵(含 `..` 逃逸、`://` 进 webhookEnv、E06 各 env、E05 owner 缺失/错列且**不随 enabled 翻转**、E11 保留名撞车);effectiveProject 覆盖顺序;inferProject unique/ambiguous/none;ownerOf(含零引用 throw);toLegacyView 字段逐一对拍(路径绝对化) | L |
 | T1.2 | test/workspace.ts | 爬升(repo 深层目录→root)、symlink realpath、非 workspace → null、DEVLOOP_WORKSPACE/TEAM precedence、索引自愈写入(DEVLOOP_HOME=tmp)、损坏索引不致命 | M |
 | T1.3 | test/team-init.ts | 非交互 flags → 文件树断言;重跑幂等;--force diff;service → hub.db 建 + `_team` 播种(openDb 只读验证);exit codes | M |
-| T1.4 | test/team-import.ts | v1 双 project fixture(linear+service):--dry-run 计划文本;实跑 → dev-loop.json 逐字段映射断言、状态目录 mv、lessons→分片、repo 外置 → mv 指引+exit 1、--hub-db 行拷贝(计数对拍) | L |
+| T1.4 | test/team-import.ts | v1 双 project fixture(linear+service):--dry-run 计划文本;实跑 → dev-loop.json 逐字段映射断言、状态目录 mv、lessons→分片、repo 外置 → mv 指引+exit 1、--hub-db 行拷贝(计数对拍 + **events 重键无冲突、次序保持**) | L |
 | T1.5 | test/doctor-workspace.ts | E-code 呈现;doctor 前后 workspace 文件 mtime/内容不变(只读契约);team repair 修坏 gitdir 的 worktree + WAL truncate + 索引重登记 | M |
 | T1.6 | test/run-agents.ts **改造** | fixture 换 workspace 形态;既有 30+ 断言全绿(兼容视图证明);新增:workspace 内 cwd 推断、共享 repo cwd → ambiguous 报错文案 | M |
 | T1.7 | npm test 链 + version-sync/build-artifact/consistency 适配 | 打包含新入口;dist chmod 断言沿用 | S |
@@ -473,21 +518,22 @@ E-code 附录。README:workspace quickstart。CHANGELOG:逐里程碑。
 
 | ID | 覆盖 | 规模 |
 |---|---|---|
-| T3.1 | `--plan`:weight 2:1 → 精确序列 `A A B A A B`;平手字典序;cursor 持久化(两次进程间续位) | M |
-| T3.2 | enabled:false / weight:0 → 不入轮换;全 disabled → steward skip + 提示;热重载(改 mtime 后 plan 变化;坏 JSON → 保旧配置 + 报错) | M |
-| T3.3 | gate 键 per (agent,project);A 变更不解 B 的门 | S |
-| T3.4 | team run 锁:第二个 run 拒绝;stale 接管 | S |
-| T3.5 | steward fire env/cwd 断言(dry-run):TEAM_SCOPE、`_team` vs ""、enabled 清单入 prompt | S |
-| T3.6 | with-repo-lock:并发两持有者串行(时间戳重叠断言);stale break;退出码透传;locks.ts 抽取后 lifecycle/lifecycle-race 既有测试不动全绿 | M |
+| T3.1 | `--plan`:weight 2:1 → 精确序列 `A A B A A B`;平手字典序;cursor 持久化(两次进程间续位);`next-project` 与 run 交替调用共享同一 cursor(不重不漏) | M |
+| T3.2 | enabled:false / weight:0(delivery 停、steward 照常)→ 轮换排除;全 disabled → skip + 提示;热重载(mtime 变 → plan 变;坏 JSON → 保旧配置 + 报错;cursor 修剪) | M |
+| T3.3 | gate 键 per (agent,project);A 静默 → **同 tick 轮到 B(skip-advance)**;A 变更不解 B 的门 | S |
+| T3.4 | team run 锁:第二个 run 拒绝;stale 接管;fires.jsonl 行形状(两 backend 皆写) | S |
+| T3.5 | with-repo-lock:并发两持有者串行(时间戳重叠断言);stale break;退出码透传;locks.ts 抽取后 lifecycle/lifecycle-race 既有测试不动全绿 | M |
 
 ### M4
 
 | ID | 覆盖 | 规模 |
 |---|---|---|
-| T4.1 | test/notify.ts:DRYRUN 两 provider payload 形状;--title/--level;env 缺失 exit 3;非 2xx exit 1(本地 http 假服);URL 值不出现在任何输出 | M |
-| T4.2 | test/lessons.ts:预算检查(超行/超字节→W03;边界值);路径 API | S |
-| T4.3 | docs.ts 扩展:reflect/ops/sweep/communication SKILL 的新锚点与路径 | S |
-| T4.4 | 验收(人工):lark 真实推送一条;reflect 干跑一轮产出 INDEX | S |
+| T4.1 | steward slot env/cwd 断言(dry-run):TEAM_SCOPE、`_team` vs ""、cwd=ws 根、enabled 清单入 prompt | S |
+| T4.2 | op-API project 覆盖:steward+project 参数生效;delivery actor 传 project → E_FORBIDDEN;`_team` 默认作用域 | M |
+| T4.3 | test/notify.ts:DRYRUN 两 provider payload 形状;--title/--level;env 缺失 exit 3;非 2xx exit 1(本地 http 假服);URL 值不出现在任何输出 | M |
+| T4.4 | test/lessons.ts:预算检查(超行/超字节→W03;边界值);路径 API | S |
+| T4.5 | docs.ts 扩展:reflect/ops/sweep/communication SKILL 的新锚点与路径 | S |
+| T4.6 | 验收(人工):lark 真实推送一条;reflect 干跑一轮产出 INDEX;ops 一轮去重巡检 + owner 路由建票 | S |
 
 ### M5
 
@@ -495,9 +541,8 @@ E-code 附录。README:workspace quickstart。CHANGELOG:逐里程碑。
 |---|---|---|
 | T5.1 | test/hub-lifecycle.ts:start 幂等(双起单实例)/status 字段/stop 后 wal 尺寸=0 且 runfile 清除;冷启动锁复用断言 | M |
 | T5.2 | run 自动 ensure(dry-run 打印 ensure 行;linear 不 ensure) | S |
-| T5.3 | op-API 覆盖:steward+project 参数生效;delivery actor 传 project → E_FORBIDDEN;`_team` 默认作用域 | M |
-| T5.4 | webui team 总览 smoke(项目卡片数 = enabled 数) | S |
-| T5.5 | intake e2e(hub fixture):team intake → PM 拆分幂等(反链去重)→ 子票 Done → sweep 收口 parent Done;单票 park → parent 留 In Review | M |
+| T5.3 | webui team 总览 smoke(项目卡片数 = enabled 数) | S |
+| T5.4 | intake e2e(hub fixture):team intake → PM 拆分幂等(反链去重)→ 子票 Done → sweep 收口 parent Done;单票 park → parent 留 In Review | M |
 
 ### GA
 
@@ -514,7 +559,7 @@ E-code 附录。README:workspace quickstart。CHANGELOG:逐里程碑。
 |---|---|
 | M1/0.30.0 | T1.1–T1.7 全绿;`npm test` 全绿;两 team import --dry-run 计划人工核对通过 |
 | M2/0.31.0 | T2.1–T2.2 绿;T2.3 runbook 完成(devplatform 在新 workspace 上真实跑通一轮 loop) |
-| M3/0.32.0 | T3.1–T3.6 绿;双 project 轮换烟测(--plan + 一次 live --once) |
-| M4/0.33.0 | T4.1–T4.3 绿;T4.4 lark 实推 + reflect 实跑 |
-| M5/0.34.0 | T5.1–T5.5 绿;backoffice 实迁后 web 总览可用、一张跨 project intake 端到端 |
+| M3/0.32.0 | T3.1–T3.5 绿;双 project 轮换烟测(--plan + 一次 live --once;Agent View 行模板走 next-project) |
+| M4/0.33.0 | T4.1–T4.5 绿;T4.6 lark 实推 + reflect/ops 实跑 |
+| M5/0.34.0 | T5.1–T5.4 绿;backoffice 实迁后 web 总览可用、一张跨 project intake 端到端 |
 | GA/1.0.0 | T6.1 演练通过 + T6.2 soak 达标;文档终审(D6.1)合入 |
