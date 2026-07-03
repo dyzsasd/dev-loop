@@ -236,9 +236,23 @@ normally `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (or the explicit
    - Plus the autonomy-bearing blocks the operator should set deliberately:
      `mode` (default `dry-run` for first contact, §12), `autonomy` (`ask` default /
 	   `full`, §12a), `build` (`typecheck`/`build`/`test`), `git`
-     (`defaultBranch`/`autoCommit`/`autoPush`/`autoDeploy`), `deploy`
-     (`command`/`healthCheck`), and `blockedStateName` (null unless they added a
-     real Blocked column).
+     (`defaultBranch`/`landing`/`autoCommit`/`autoPush`/`autoDeploy`; plus
+     `autoMerge`/`mergeChecks` if `landing:"pr"`, §12c), `deploy`, and
+     `blockedStateName` (null unless they added a real Blocked column).
+   - **The deploy interview — ask HOW this service deploys** (conventions §12c; the loop must
+     be *told*, never guess). Two shapes:
+     - **`deploy.style:"command"`** (default) — Dev runs a `deploy.command` (+ optional
+       `healthCheck`) after landing, per `autoDeploy`. The simple case.
+     - **`deploy.style:"release-pr"`** — the repo has its **own release pipeline**: merging a
+       feature PR opens a `deploy/<env>/<version>` PR, and *merging that PR* is the deploy. Gather
+       `deploy.environments` per env: `{ auto, deployPrPrefix, healthCheck? }` — mark the non-prod
+       env(s) `auto:true` (Dev merges their deploy PR at fire-start) and **prod `auto:false`** (the
+       operator's manual gate). This shape needs `landing:"pr"` + `git.autoMerge:true` +
+       `git.mergeChecks` (e.g. `["pr-validation"]`), and the repo must **require those checks on
+       `defaultBranch` and allow auto-merge** — verify/flag that in the readiness report (an
+       unprotected branch or auto-merge-off means Dev can't auto-merge and will leave PRs for a
+       human). Do NOT edit the product repo's release workflows — the loop *drives* the existing
+       pipeline by merging its PRs, it does not reinvent it.
    - `backend` (`"linear"` default / `"local"` / `"service"`, §18) — **ask which substrate**
      this project uses. For `"local"`, also gather the optional `localBoard` (board dir
      override; default `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/board/`) and `ticketPrefix` (ID

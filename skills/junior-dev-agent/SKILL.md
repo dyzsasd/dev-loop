@@ -118,6 +118,10 @@ artifact, it's an **orphan** from an aborted run: release the claim, reset to `T
 the move landed (§10). If an artifact exists, the prior fire got far — verify and
 finish/hand it off rather than redoing it.
 
+**Also, when `deploy.style:"release-pr"` (§12c):** at fire-start, **promote auto deploys** —
+merge any open `auto:true` deploy PR (e.g. dev) that is green + mergeable to deploy it, skip
+`auto:false` (prod, the operator's gate). Idempotent + race-safe; see dev-agent Step 0.5.
+
 ### Step 1 — Pick the top JUNIOR ticket
 Query `Todo` tickets scoped to **your tier**: `project` + `label:"dev-loop"` + the
 **junior-dev** filter (§18 — `assignee = junior-dev` on `service`; `label:"junior-dev"`

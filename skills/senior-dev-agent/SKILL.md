@@ -119,6 +119,10 @@ then crashed/compacted out mid-work, stranding it. First thing each fire: query 
 (If the target repo is unresolvable in a multi-repo project, **leave it** — it'll be handled
 as a missing-target block in Step 3, §19.)
 
+**Also, when `deploy.style:"release-pr"` (§12c):** at fire-start, **promote auto deploys** —
+merge any open `auto:true` deploy PR (e.g. dev) that is green + mergeable to deploy it, skip
+`auto:false` (prod, the operator's gate). Idempotent + race-safe; see dev-agent Step 0.5.
+
 ### Step 1 — Pick the top senior-assigned ticket
 Query `Todo` tickets in **your slice** (the per-backend dev-tier filter, §18), scoped
 `project` + `label:"dev-loop"`, **excluding** `blocked`. Rank them by the Dev pick order

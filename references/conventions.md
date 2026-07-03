@@ -24,6 +24,7 @@ defined in §21.)
 11. [Per-project config](#11-per-project-config)
 12. [Dry-run vs live](#12-dry-run-vs-live)
 12b. [Landing mode — direct-commit vs PR](#12b-landing-mode--direct-commit-vs-pr)
+12c. [Auto-merge + release-PR deploy](#12c-auto-merge--release-pr-deploy--the-agent-lands--deploys-human-gates-prod)
 13. [First-run setup](#13-first-run-setup)
 14. [Lessons file — per-operator corrections](#14-lessons-file--per-operator-corrections)
 15. [Test coverage — every Bug/Feature earns a regression test](#15-test-coverage--every-bugfeature-earns-a-regression-test)
@@ -900,6 +901,71 @@ This keeps the loop autonomous **up to the PR**, puts the human gate at **merge*
 env the branch merges into) and again at **release** (→ prod, via the downstream pipeline's
 own PR), and never pushes to `defaultBranch`. `pr` is the fit when a repo wants human review
 before code lands; `direct` is the fit for fully-autonomous shipping.
+
+---
+
+## 12c. Auto-merge + release-PR deploy — the agent lands & deploys, human gates prod
+
+The `pr` landing mode (§12b) leaves BOTH the merge and the deploy to the human. Some projects
+want the loop to go further — **the agent opens the PR, merges it (once CI is green), and drives
+the project's own release pipeline to deploy the non-prod env**, leaving only the **prod**
+promotion to the operator. Two opt-in config knobs express that, and they compose with
+`landing:"pr"`.
+
+### `git.autoMerge` — Dev merges its own feature PR
+Default **false** (absent ⇒ the human merges, §12b). With `landing:"pr"` + `git.autoMerge:true`:
+after opening the feature PR (§12b), Dev **enables auto-merge gated on `git.mergeChecks`** —
+`gh pr merge <pr> --squash --auto` — so the PR merges the moment its required checks (e.g.
+`pr-validation`) go green. Rules:
+- Dev runs the check-equivalent gates **locally first** (Step 5 — typecheck/build/lint/whatever
+  `mergeChecks` names) so its PR isn't red; it must **ensure the PR passes those checks**, not
+  merge blindly.
+- **Never force-merge a red or uncheck-able PR.** `--auto` requires the repo to (a) require the
+  `mergeChecks` on `defaultBranch` and (b) allow auto-merge. If the repo doesn't (auto-merge
+  unavailable / no required checks), Dev **leaves the PR open** and notes it needs the repo
+  setting or a human merge — fail-open, never a bare `--merge` on an ungated PR.
+- The ticket still goes to `In Review`; the merge (and any deploy) happen **asynchronously**.
+
+### `deploy.style:"release-pr"` — deploy by merging the release pipeline's deploy PRs
+Default **`"command"`** (absent ⇒ today's behavior: Dev runs `deploy.command` in Step 6/6.5,
+100% unchanged). With `"release-pr"`, the project's **own release pipeline** does the deploy:
+merging a feature PR triggers it, and it opens a **`deploy/<env>/<version>` PR per environment**.
+Dev deploys an environment by **merging that env's deploy PR** — governed by
+`deploy.environments`:
+- Each env: `{ auto: bool, deployPrPrefix: "deploy/<env>/", healthCheck?: <url|cmd> }`.
+- **`auto:true` (e.g. dev)** → Dev merges its deploy PR automatically. **`auto:false` (e.g. prod)**
+  → Dev **never** touches it; that is the operator's manual gate.
+- Dev runs **no** `deploy.command` and **no** Step 6.5 under `release-pr` (the pipeline deploys);
+  `autoDeploy` is ignored.
+
+**Fire-start "promote auto deploys" (every dev tier, when `deploy.style:"release-pr"`).** The
+deploy PR appears **asynchronously** — the release build takes minutes — so Dev does NOT wait
+inline. Instead, at fire-start (alongside orphan reclaim, Step 0) each dev fire, for every
+`deploy.environments` entry with `auto:true`:
+1. `gh pr list --search "head:<deployPrPrefix>" --state open` — find the release pipeline's open
+   deploy PR (it is **per-release**, not per-ticket — one PR may bundle several merged tickets).
+2. If it exists, is **mergeable**, and its checks are **green** → `gh pr merge <pr> --squash` →
+   the repo's deploy workflow runs → the env deploys. Then run the env's `healthCheck` if set.
+3. `auto:false` envs (prod) are **skipped entirely**. A PR that isn't green/mergeable is left for
+   the next fire (never force-merged).
+
+This step is **idempotent and race-safe**: a second dev fire finds the PR already merged and
+no-ops; the merge itself is atomic. It is project-level hygiene that happens to deploy — so it
+lives with **Dev** (which ships/deploys), never Sweep (hygiene-only, §1).
+
+### How it fits together (the operator's picture)
+```
+Dev  → open feature PR + enable auto-merge (gated on pr-validation)
+GitHub → merges feature PR when pr-validation is green → main
+release pipeline → opens deploy/dev + deploy/prod PRs
+Dev (next fire) → merges the deploy/dev PR (auto:true) → dev deploys
+PM/QA → verify once observable on dev (§12b) → Done
+operator → merges the deploy/prod PR (auto:false) → prod       ← the one manual gate
+```
+`deploy.style:"release-pr"` implies `landing:"pr"` + `git.autoMerge` (the feature must merge for
+the release pipeline to fire). Verification is the §12b "observable on the running env" rule,
+unchanged. **`init` captures this per project** (§13 / the deploy interview) — how the service
+deploys is project knowledge the loop must be told, not guessed.
 
 ---
 
