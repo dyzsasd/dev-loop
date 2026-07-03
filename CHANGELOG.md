@@ -5,6 +5,22 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
+### 1.0 line — team / workspace model (in progress)
+- **M1 config kernel (schema v2).** New per-workspace `dev-loop.json`: one workspace = one team = one
+  backend; a physical repo **registry** + **virtual projects** that reference repos (one repo shareable
+  across projects). New modules `team-config.ts` (types + E01-E11 validation + resolution API +
+  `toLegacyView` compat) and `workspace.ts` (discovery + `.dev-loop/` path API + self-healing index).
+  All run state (incl. the service `hub.db`) moves inside `<workspace>/.dev-loop/` so copying the folder
+  migrates the machine (invariant I4).
+- **New commands:** `dev-loop team init` (pure-CLI workspace creation; service also seeds the `_team`
+  intake project), `dev-loop team import` (one-shot v1->v2 migration — folds projects, moves state,
+  splits `lessons.md`, copies hub rows re-keying AUTOINCREMENT events), `dev-loop team repair` (worktree
+  repair + index re-register + WAL truncate). `dev-loop doctor` gains a read-only workspace verdict
+  (E-codes, repo existence, W05/W06). `dev-loop run` + the MCP server read workspace config automatically.
+- **Breaking (1.0):** runtime stops reading `~/.dev-loop/projects.json`; migrate once with `team import`.
+  (Staged: a v1 fallback remains through the pre-1.0 milestones.)
+
+
 ## 0.29.0 - 2026-07-03
 - **W3 human intake is now discoverable + processed** (conventions §9a / PM Job B). The spec let
   a human file a `Todo` to PM, but PM only queried In Review + blocked, so a plain intake could

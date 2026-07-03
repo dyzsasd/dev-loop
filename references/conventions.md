@@ -2409,3 +2409,37 @@ CLI (Codex, opencode, …) against the *same* `hub.db`. Full setup in
   attribution** (not anti-spoof) on every CLI. The localhost daemon is a service/web UI lifecycle
   helper, not a Claude-only dependency. **Claude Code is 100% unchanged**
   — second-CLI support is purely additive and opt-in.
+
+## 27. Team / workspace model (1.0 line)
+
+The 1.0 line reorganizes config around a **workspace** (see `docs/design/team-workspace.md` +
+`docs/design/team-workspace-impl.md`; the operator quick-reference lives in `config-schema.md` §"Schema
+v2"). One workspace directory = one **team** = one Linear team = one **backend**. Inside it, **repos**
+are the physical git-clone folders (a REGISTRY, each registered once) and **projects** are VIRTUAL config
+entries that reference repos — so one repo can serve several projects (declare `owner` for routing).
+This section records only the rules that change agent/operator behavior; the field schema is in
+`config-schema.md`.
+
+- **Config source.** Runtime reads `dev-loop.json` (schema v2), resolved by discovery (`DEVLOOP_WORKSPACE`
+  → `DEVLOOP_TEAM` index → cwd ascent). It is projected to the historical per-project shape internally
+  (`toLegacyView`), so every existing agent contract (§3/§4/§12b/§12c/reports) is unchanged. The legacy
+  `~/.dev-loop/projects.json` is a transition-only fallback and is removed at 1.0 (the clean break) —
+  after installing the 1.0 line an operator MUST `dev-loop team init` + `dev-loop team import` once.
+- **Portability (I4).** All run state is under `<workspace>/.dev-loop/` (per-project dirs, `team/`,
+  `lessons/`, `wt/`, `locks/`, and for service `hub.db`). Copying the workspace folder migrates the
+  machine; only env vars + credentials (§16) follow separately. `~/.dev-loop/` holds just a rebuildable
+  index. After a move run `dev-loop team repair` (fixes worktree absolute paths, re-registers the index,
+  truncates the WAL).
+- **Secrets (§16 extends).** `team.comms.webhookEnv` stores an ENV-VAR **name**, never the URL; a value
+  containing `://` is rejected (`E07`). This is what keeps "copy the folder" safe — no secret ever lands
+  in `dev-loop.json`.
+- **Backend is strictly team-level (I3).** linear or service, never mixed; `dev-loop team import` refuses
+  a v1 project whose `backend` differs from the team. There is no cross-team collaboration.
+- **deployPolicy is a ceiling.** `team.deployPolicy.<env> = "manual"` forbids any repo auto-deploying
+  that env (`E06`); `dev-loop doctor` and `/dev-loop:add-repo` enforce it.
+- **MCP scope for stewards.** A linear team's stewardship fires (sweep/ops/reflect/communication) run
+  with the workspace root as cwd, where a repo-level `.mcp.json` does not apply — the Linear MCP must be
+  configured in **user scope** (doctor warns `W05`). Delivery fires still run inside a repo, unaffected.
+- **The operator flow is:** `dev-loop team init` (pure CLI) → `/dev-loop:add-project` → `/dev-loop:add-repo`
+  (both in a coding CLI; they do the backend writes) → launch the loop at the workspace level. `dev-loop
+  doctor` is the read-only health gate; `dev-loop team repair` is the only mutating fixup.
