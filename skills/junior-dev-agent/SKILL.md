@@ -107,7 +107,9 @@ ticket, so it stalls forever. First thing each fire: query `project` + `label:"d
 for a shipped artifact
 on **the target repo's resolved `defaultBranch`** (the repo named by the ticket's
 `repo:<name>` label, §19; single-repo ⇒ `repoPath` + `git.defaultBranch`): a commit
-referencing the ticket id; or, if `autoPush:false`, a local commit. **If the target repo
+referencing the ticket id; or, if `autoPush:false`, a local commit; **in `git.landing:"pr"`
+(§12b) instead an open/merged PR referencing the ticket id
+(`gh pr list --search "<id>" --state all`)**. **If the target repo
 is unresolvable** (no/contradictory `repo:<name>` label in a multi-repo project) **leave
 it** — it'll be handled as a missing-target block in Step 3 (§19). If there's no
 artifact, it's an **orphan** from an aborted run: release the claim, reset to `Todo`

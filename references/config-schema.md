@@ -97,6 +97,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
 
       "git": {                        // how Dev lands code (autonomy choices live here)
         "defaultBranch": "main",
+        "landing":       "direct",    // "direct" (default when absent) commit to defaultBranch | "pr" branch dev-loop/<id> + gh PR per ticket, human merges (conventions §12b)
         "autoCommit":    true,
         "autoPush":      true,        // false → leave commits local
         "autoDeploy":    true         // false → skip deploy even if deploy.command set
@@ -168,6 +169,15 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   - *How code lands* — the `git` + `deploy` flags. Fully hands-off shipping is
     `autoCommit/autoPush/autoDeploy: true` with a `deploy.command`; to put a human
     in the loop on landing, set `autoPush`/`autoDeploy: false`.
+    - **`git.landing`** (`"direct"` default when absent | `"pr"`; conventions §12b) picks
+      the *shape* of landing. `"direct"` = Dev commits to `defaultBranch` and pushes/deploys
+      per the flags above (today's behavior, unchanged). `"pr"` = Dev branches
+      `dev-loop/<ticket-id>` per ticket, pushes it, and opens a **PR** to `defaultBranch` via
+      `gh` (requires `gh` installed + authed), then moves the ticket to `In Review`; it
+      **never deploys** (the human's merge ships it, and Step 6.5 is skipped). Under `"pr"`,
+      PM/QA treat an In Review ticket as a PR awaiting merge — verify only after it's merged
+      (§12b). Use `"pr"` when a repo wants human code-review + manual merge/release before
+      code lands; `"direct"` for fully-autonomous shipping.
   - *How much the agents decide vs escalate* — the top-level `autonomy` field.
     `"ask"` (default) keeps the conservative posture (escalate genuinely human-only
     calls to the user, surface open product-direction decisions). `"full"` grants
