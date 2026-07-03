@@ -15,6 +15,15 @@ experience** — a real failure observed while the agents ran, then hardened int
   (backend-agnostic soak metric). The run lock is team-scoped. `dev-loop with-repo-lock <ref> -- <cmd>`
   serializes base-clone mutations on a shared repo (`locks.ts`). Stewards still fire per-project this
   milestone (team-scoping is M4).
+- **M4 stewardship + docs + comms (0.33.0).** The stewardship agents (sweep/ops/reflect/communication)
+  now fire at TEAM scope (cwd = workspace root, `_team`/"" project, the enabled projects listed in the
+  prompt). New team **lessons library** (`lessons.ts`): a curated `INDEX.md` loaded every fire plus
+  per-project shards + a cold archive, with fixed load budgets (doctor W03); reflect is the sole writer.
+  New **outward channel** `dev-loop notify` (`comms.ts`, slack/lark) — orthogonal to the report sink, the
+  webhook URL read from an env var named in config (never stored). SKILLs updated for team mode (reflect
+  write-flow, ops registry-dedup + owner routing, sweep per-project loop, communication via notify, PM
+  loads lessons + vision). The service-backend op-API steward `project` override moves to M5 with the
+  daemon work; linear stewards route cross-project via the Linear MCP today.
 - **M1 config kernel (schema v2).** New per-workspace `dev-loop.json`: one workspace = one team = one
   backend; a physical repo **registry** + **virtual projects** that reference repos (one repo shareable
   across projects). New modules `team-config.ts` (types + E01-E11 validation + resolution API +

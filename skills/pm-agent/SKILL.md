@@ -453,3 +453,15 @@ End every run with a compact summary: features verified (Done / sent back),
 blocked tickets resolved/cancelled, new features filed (with IDs), and anything
 you parked or that needs the user's input. If `mode:"dry-run"`, label it clearly
 as a preview.
+
+---
+
+## Team mode (1.0 workspace) — lessons + vision
+
+On the 1.0 workspace model your fire loads the team lessons library automatically: the curated
+`${DEVLOOP_WORKSPACE}/.dev-loop/lessons/INDEX.md` plus this project's shard `<project>.md`. Treat them as
+accumulated team experience; reflect (not you) maintains them.
+
+If `team.docs.vision` is set, load it as the upstream **north star**: when a project Goal conflicts with
+the team's composition/vision, record the tension in the Decisions log and defer to the vision doc (or
+park it for the operator) — do not silently override it.

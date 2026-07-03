@@ -214,3 +214,22 @@ suspected-bad-deploy note; any incident marked recovered; the `ops-state.json` o
 list after this fire; and anything surfaced to the operator as a fact (a confirmed
 un-routable outage). If everything was green with no open incident, the report is a
 terse no-op. If `mode:"dry-run"`, label it a preview and confirm no writes were made.
+
+---
+
+## Team mode (1.0 workspace)
+
+When `DEVLOOP_TEAM_SCOPE=1` you run once for the whole team (cwd = workspace root). Iterate the **repo
+registry**, not projects:
+
+- Health-check each repo that is referenced by at least one **enabled** project, **once** — a repo shared
+  by several projects is checked a single time (the registry gives you this dedup for free). Skip a repo
+  whose only referrers are disabled.
+- Run each repo's `ops.checks` + environment health per `dev-loop.json`.
+- **Route by owner:** when a repo has a problem, file/resolve the alert ticket under that repo's **owner**
+  project (the `owner` field, or its sole referrer). A shared repo's alert goes to the owner only — never
+  duplicated across every referrer. On **linear**, create the issue directly in the owner project via the
+  Linear MCP (you have full cross-project access at team scope). On **service**, the steward `project`
+  override for the hub op-API lands with the M5 daemon work; until then, record the alert on the `_team`
+  board tagged with the owner project's key and let the owner project's PM triage it.
+- Reports go under `${DEVLOOP_WORKSPACE}/.dev-loop/team/`.

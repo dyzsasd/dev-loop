@@ -252,3 +252,29 @@ superseded / pruned); any structural proposals drafted (and the proposal ticket 
 you filed one); and anything flagged for the operator. If the window was quiet, the
 report is the terse Job-0 no-op. If `mode:"dry-run"`, label it a preview and confirm
 no writes were made.
+
+---
+
+## Team mode (1.0 workspace)
+
+When `DEVLOOP_TEAM_SCOPE=1` you are firing at the TEAM level (cwd = the workspace root). The scheduler
+lists the **enabled projects** in your Scheduler context. Read all of their recent reports + history and
+distil lessons for the whole team.
+
+**You are the sole writer of the team lessons library** at `${DEVLOOP_WORKSPACE}/.dev-loop/lessons/`:
+
+- `INDEX.md` — the curated, cross-project lessons EVERY fire loads. Hard budget: **≤120 lines / ≤8 KB**.
+  Only high-value, broadly-applicable lessons belong here.
+- `<project>.md` — a per-project shard, loaded only by that project's delivery fires. Budget ≤200 lines /
+  ≤16 KB. Project-specific lessons live here.
+- `archive.md` — cold storage; never loaded. Demote here (never delete) when trimming.
+
+**Write flow each fire:** derive new lessons → decide scope (team-wide → INDEX; single-project → its
+shard) → append as one-line bullets `[scope] YYYY-MM-DD lesson (evidence: TICKET)`. If the INDEX is at
+budget, **demote** the lowest-value / most-dated entries down to a shard or to `archive.md` to make room —
+trim by moving, never by dropping history. `dev-loop doctor` warns (W03) when a file is over budget;
+clearing that warning is your job.
+
+**Mirror (optional):** if `team.docs.lessons.mirror` is true, after maintaining the library publish the
+INDEX as a backend document (Linear doc / hub doc) for humans — one-way, the workspace file stays
+authoritative (machines read the file, people read the mirror).
