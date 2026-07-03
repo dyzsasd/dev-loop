@@ -235,47 +235,68 @@ work at a higher rate.
 ## Quick start
 
 ```bash
-# Install the runtime CLI/hub. This is enough for the scheduler path.
+# Install the runtime CLI/hub (Node ≥ 23.6). This is enough for everything below.
 npm i -g @dyzsasd/dev-loop
 ```
 
-On macOS, the global npm install also attempts to install a LaunchAgent that runs
-`dev-loop daemon up-all` at login. Set `DEVLOOP_SKIP_AUTOSTART=1` before install to opt out, or
-repair/reinstall it later with `dev-loop daemon install-autostart`.
+### 1.0 — the team / workspace model (recommended)
 
-Then pick the onboarding path that matches how you want to operate.
-
-**Path A — no Claude plugin, run with `dev-loop run`:**
-
-```bash
-# Create the per-project config yourself.
-dev-loop init-config
-$EDITOR ~/.dev-loop/projects.json
-
-# backend:"service" only — seed the project's board in the hub once (unique prefix per
-# project). Without this every fire boots the hub MCP into its "not seeded" refusal;
-# `dev-loop run` now preflights it and refuses to start, but seed first anyway.
-dev-loop seed <key> "<Project Name>" <PREFIX>
-
-# Dry-run once from inside the configured product repo.
-cd /path/to/product-repo
-dev-loop run --cli codex --agents core --once --dry-run
-
-# Switch mode:"live" in projects.json, then leave the loop running.
-dev-loop run --cli codex --agents core,communication
-```
-
-**Path B — Claude plugin-skill onboarding:**
+A **workspace** is one directory = one **team** = one Linear team = one backend. Inside it, **repos**
+are the physical git clones and **projects** are virtual config entries that reference them (a repo can
+be shared by several projects). All state — config, per-project boards, reports, lessons, and the
+service `hub.db` — lives under `<workspace>/.dev-loop/`, so **copying the folder migrates the machine**.
 
 ```bash
-dev-loop install-claude-plugin
-# In Claude Code, run the two /plugin commands printed by the installer, then:
-/dev-loop:init
+# 1. Create the workspace (pure CLI — no LLM, no backend calls).
+dev-loop team init --dir ~/work/my-team --key my-team \
+  --backend linear --linear-team "My Team" --deploy dev=auto,prod=manual --comms lark
+cd ~/work/my-team
 
-# After init writes ~/.dev-loop/projects.json, the normal loop is still dev-loop run.
-cd /path/to/product-repo
-dev-loop run --cli codex --agents core --once --dry-run
+# 2. In a coding CLI (Claude Code / Codex), create + backend-sync a project, then clone+register a repo:
+/dev-loop:add-project          # find-or-creates the Linear/hub project, records its id, scaffolds the strategy doc
+/dev-loop:add-repo             # git clone + auto-detect build/CI checks + deploy interview + validated write, one pass
+
+# 3. Health-check, then run ONE scheduler for the whole team (all agents, each with its own model/effort):
+dev-loop doctor                # read-only workspace verdict (E-codes / warnings)
+dev-loop run --once --dry-run  # preview the resolved per-agent commands (model + effort per agent)
+dev-loop run                   # the loop — rotates delivery agents across the enabled projects; ^C stops all
 ```
+
+`dev-loop run` replaces hand-starting one Agent-View `/loop` pane per agent. For a **linear** team the
+Linear MCP must be configured in Claude Code **user scope** (doctor warns if not — steward fires run at
+the workspace root). For a **service** team, `dev-loop hub start` (auto-ensured by `dev-loop run`) brings
+up the local hub daemon.
+
+### Migrate an existing v1 project
+
+```bash
+dev-loop team init --dir <workspace> --key <team> --backend linear --linear-team "<Team>"
+cd <workspace>
+dev-loop team import        # folds ~/.dev-loop/projects.json → registry + projects, moves state, splits lessons,
+                            #   copies hub rows (service). Prints `mv` hints if a repo lives outside the workspace.
+/dev-loop:sync-project      # (in a coding CLI) records linearProjectId / linearTeamId
+dev-loop doctor             # green
+```
+
+Runtime no longer reads `~/.dev-loop/projects.json` on the 1.0 line — migrate once with `team import`.
+
+### Move to another machine (copy the folder)
+
+```bash
+# On the source machine (service backend only): stop the hub so the WAL is checkpointed.
+dev-loop hub stop
+# Copy the whole workspace directory to the new machine (rsync/scp/git-of-your-own — your choice).
+rsync -a ~/work/my-team/  newhost:~/work/my-team/
+# On the new machine: install the CLI + your coding CLI, gh auth, and set the env vars named in config
+# (e.g. the comms webhook, any tokens — the NAMES are in dev-loop.json; the VALUES follow the machine).
+cd ~/work/my-team
+dev-loop team repair        # fixes git worktree absolute paths, re-registers the index, truncates the WAL
+dev-loop doctor             # green
+dev-loop run                # go
+```
+
+Only env vars + credentials follow separately (secrets are never stored in the workspace, §16). There is
+no step after `dev-loop run`.
 
 ## Requirements
 
@@ -338,15 +359,25 @@ Needs only the npm package + your chosen CLI (`claude` or `codex`) on `PATH`. Se
 
 ## Configure
 
-Per-project settings live in dev-loop's own config directory:
-`${DEVLOOP_PROJECTS_JSON}` when set, otherwise `~/.dev-loop/projects.json`
-(`DEVLOOP_DATA_DIR` changes that base directory). Create an empty starter, then add your
-own project entry:
+**1.0 (team / workspace):** config is a per-workspace `dev-loop.json` (schema v2) created by
+`dev-loop team init` and edited by the operator skills (`/dev-loop:add-project`, `/dev-loop:add-repo`)
+through **validated** mutators — never hand-edited into an invalid state. `team` holds the backend,
+deployPolicy ceiling, `docSystem`, `comms`, and per-steward cadences; `repos` is the physical registry;
+`projects` reference repos. Full reference incl. the E01–E11 validation codes and the `.dev-loop/` state
+layout: [`references/config-schema.md`](references/config-schema.md) → "Schema v2", and
+[`docs/design/team-workspace.md`](docs/design/team-workspace.md).
+
+<details><summary><strong>Legacy v1 (single <code>~/.dev-loop/projects.json</code>) — transition only</strong></summary>
+
+Per-project settings live in `${DEVLOOP_PROJECTS_JSON}` when set, otherwise `~/.dev-loop/projects.json`
+(`DEVLOOP_DATA_DIR` changes the base directory). Create an empty starter, then add a project entry:
 
 ```bash
 dev-loop init-config
 # Then map each project to its repo, strategy doc, test env, and git/deploy flags.
 ```
+
+Runtime stops reading v1 config on the 1.0 line — migrate with `dev-loop team import`.
 
 The dials (all per-project):
 - **`mode`** — `"dry-run"` (analyze + print, no writes) vs `"live"` (create/transition
@@ -360,38 +391,56 @@ The dials (all per-project):
 - **`notify`** *(optional)* — Slack/Lark webhook to ping you when a ticket is human-parked.
 - **`communication`** *(optional)* — enables daily article drafts; output is draft-only, either in the data dir or a repo docs directory.
 
-Full reference: [`references/config-schema.md`](references/config-schema.md).
+The mode/autonomy/reports/comms dials carry over to the 1.0 `team`/`projects` blocks (behavior fields
+resolve project ∥ team). Full v2 reference: [`references/config-schema.md`](references/config-schema.md).
+
+</details>
 
 ## Set up a project
 
-There are two supported setup paths:
+**1.0:** `dev-loop team init` creates the workspace, then in a coding CLI:
 
-- **With the Claude plugin:** run `/dev-loop:init` once. It scaffolds everything and prints a
-  readiness checklist before you go live. It creates only what's missing and overwrites nothing.
-- **Without the plugin:** create `~/.dev-loop/projects.json` from an empty starter with
-  `dev-loop init-config`, then fill in the project key, `repoPath` or
-  `repos[]`, `strategyDoc`, `testEnv`, backend, and `mode:"dry-run"`. For a `service` backend, run
-  `dev-loop init-service <key> "<name>" <PREFIX> --dry-run` to preview hub bootstrap, then without
-  `--dry-run` when the config is correct.
+- **`/dev-loop:add-project`** — creates + backend-syncs a Linear/hub project (records its id, reconciles
+  the team label set on the first project), scaffolds the strategy doc, and writes the project via the
+  validated `dev-loop team add-project` mutator.
+- **`/dev-loop:add-repo`** — clones (or registers) the repo, auto-detects the build + PR merge-check
+  names from `.github/workflows`, interviews the deploy shape under the team's deployPolicy ceiling,
+  provisions the `repo:<name>` label, appends a mini-MAP to the strategy doc, and writes it — one pass.
+- **`/dev-loop:sync-project`** / **`/dev-loop:sync-repo`** — reconcile config ↔ backend/reality later.
 
-Existing installs that still have `~/.claude/plugins/data/dev-loop/projects.json` are read as a
-legacy fallback, but new projects should be registered in `~/.dev-loop/projects.json`.
+`dev-loop doctor` is the read-only health gate; `dev-loop team repair` is the only mutating fixup.
 
-For `backend:"service"`, `init-service` starts the localhost daemon once. On macOS, the global npm
-install also installs the login item when scripts are allowed; if you skipped scripts or need to
-repair it, run `dev-loop daemon install-autostart`. The default web UI port is `8787` and probes
-upward if occupied.
+<details><summary><strong>Legacy v1 setup</strong></summary>
 
-As a backstop, the loop agents also re-apply the label/project checks on the first `live` run.
+- **With the Claude plugin:** run `/dev-loop:init` once (scaffolds everything, prints a readiness
+  checklist; creates only what's missing).
+- **Without the plugin:** `dev-loop init-config`, then fill the project key, `repoPath`/`repos[]`,
+  `strategyDoc`, `testEnv`, backend, `mode:"dry-run"`. For `service`, `dev-loop init-service <key>
+  "<name>" <PREFIX> --dry-run` previews the hub bootstrap; drop `--dry-run` when correct. It starts the
+  localhost daemon (default web UI port `8787`, probes upward if occupied).
+
+</details>
 
 ## Run the loop
 
 The main loop command is `dev-loop run`. It is a normal long-running process: dev-loop owns the
 cadence, loads the bundled agent skills, and calls the selected executor CLI once per agent fire.
-Use Claude or Codex as the executor:
+Use Claude or Codex as the executor.
+
+**On a 1.0 workspace, one `dev-loop run` drives the whole team**: delivery agents (pm/qa/senior-dev/
+junior-dev) rotate across the enabled projects by a smooth weighted round-robin (`weight` sets the
+share; `enabled:false`/`weight:0` opt a project out), and stewardship agents (sweep/ops/reflect/
+communication) fire at team scope. `--plan <n>` previews the pick order; `--project <key>` filters to
+one project. The rotation cursor is shared with Agent-View `/loop` rows via `dev-loop next-project`, so
+the two run modes never double-fire.
 
 ```bash
-# From inside a configured product repo; project is inferred from cwd.
+# Inside a workspace (1.0): one scheduler for the team.
+cd ~/work/my-team
+dev-loop run                                   # all agents; delivery rotates across enabled projects
+dev-loop run --plan 8 --agents pm              # preview the next 8 project picks (no fires)
+
+# Legacy v1: from inside a configured product repo; project is inferred from cwd.
 cd /path/to/product-repo
 dev-loop run --cli claude
 dev-loop run --cli codex --agents core,communication
@@ -435,6 +484,22 @@ launch them again; each agent re-reads ground truth and continues.
 > `mode:"dry-run"` (or `dev-loop run --once --dry-run`) first to see what it would do.
 
 📖 Full guide — onboarding, launch methods, models, resume, stop: [`docs/RUNNING.md`](docs/RUNNING.md).
+
+### Workspace commands (1.0)
+
+| Command | What it does |
+|---|---|
+| `dev-loop team init --dir <d> --key <k> --backend linear\|service …` | create a workspace (pure CLI; no backend calls) |
+| `dev-loop team import [--from <projects.json>] [--dry-run]` | one-shot v1→v2 migration into the current workspace |
+| `dev-loop team repair` | fix worktrees / index / WAL after a machine move (the only mutating fixup) |
+| `dev-loop team add-project <key> …` / `add-repo <ref> --project <k> …` | validated config writes (the skills call these) |
+| `/dev-loop:add-project` · `/dev-loop:add-repo` · `/dev-loop:sync-project` · `/dev-loop:sync-repo` | coding-CLI skills: create/sync with the backend |
+| `dev-loop run [--plan <n>] [--project <k>] [--once] [--dry-run]` | the team scheduler (one process, all agents) |
+| `dev-loop next-project --agent <a>` | the shared rotation picker for Agent-View `/loop` rows |
+| `dev-loop with-repo-lock <ref> -- <cmd>` | serialize base-clone mutations on a shared repo |
+| `dev-loop hub start\|stop\|status\|ensure` | workspace hub daemon (service backend; `stop` checkpoints the WAL) |
+| `dev-loop notify [--level info\|warn] [--title <t>] <text>` | push to the team's slack/lark channel |
+| `dev-loop doctor` | read-only workspace health verdict (E-codes / warnings) |
 
 ## Backends
 
@@ -521,8 +586,9 @@ pushes `v<version>`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Deep docs
 
-- [`references/conventions.md`](references/conventions.md) — the authoritative spec (state machine, labels, every protocol). Every agent reads it first.
-- [`references/config-schema.md`](references/config-schema.md) — the full `projects.json` field reference.
+- [`references/conventions.md`](references/conventions.md) — the authoritative spec (state machine, labels, every protocol; §27 = the 1.0 team/workspace rules). Every agent reads it first.
+- [`references/config-schema.md`](references/config-schema.md) — config field reference (legacy `projects.json` + the "Schema v2" workspace section incl. E01–E11).
+- [`docs/design/team-workspace.md`](docs/design/team-workspace.md) · [`…-impl.md`](docs/design/team-workspace-impl.md) · [`…-GA.md`](docs/design/team-workspace-GA.md) — the 1.0 team/workspace model: proposal, engineering spec, and the GA release checklist.
 - [`docs/RUNNING.md`](docs/RUNNING.md) — onboarding, launch methods, models, resume.
 - [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md) — the local hub / `service` backend.
 - [`docs/DAEMON.md`](docs/DAEMON.md) — the localhost web UI + daemon.
