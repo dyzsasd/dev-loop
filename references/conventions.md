@@ -690,6 +690,19 @@ board — is how operator direction enters the loop.
 
 ---
 
+### 9b. Team intake — cross-project asks (1.0 team mode)
+
+A team-scoped extension of §9a for an operator ask that spans several projects. Carrier: a `dev-loop`+`pm`+
+`needs-pm` issue in **no project** (linear) or a `needs-pm` ticket in the `_team` project (service). At team
+scope PM discovers it via the same `needs-pm` scan, then **splits it into one ordinary per-project W3
+sub-intake per responsible project** (`relatedTo:[<parent>]`), back-links the children, and moves the
+parent to **`In Review`** (not Done — a team intake tracks end-to-end). Each child is digested by its
+project's normal §9a flow. Sweep closes the parent (`Done`) once **all** children are `Done`, or holds it
+In Review and names the blocker if any child is parked. Split is idempotent (child back-links = already
+split); responsibility comes from the `team.docs.vision` project descriptions, and PM parks to the operator
+rather than guess. No new state machine — §9a mechanics, one level up. Same team (= same backend) only;
+cross-team collaboration does not exist (I3).
+
 ## 10. Querying Linear without drowning
 
 `list_issues` with no filter can return hundreds of KB (the workspace has

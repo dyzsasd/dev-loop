@@ -199,3 +199,12 @@ When `DEVLOOP_TEAM_SCOPE=1` you run once for the whole team (cwd = workspace roo
 backend query to that project + the `dev-loop` label, exactly as before, just repeated per project. Skip
 disabled projects. (Team-intake reconciliation is added in a later milestone; for now, per-project hygiene
 across the enabled set.)
+
+### Team-intake collection (close the loop)
+
+Each team fire, also reconcile open **team intakes** (parents in `In Review` that were split by PM, §9b):
+- If **every** child sub-intake is `Done` → move the parent to `Done` with a comment summarizing each
+  child's outcome. The cross-project ask is complete.
+- If **any** child is parked/blocked → leave the parent in `In Review` and comment which child is the
+  blocker, so the operator can see where the end-to-end ask is stuck.
+Do not touch a parent that has no child back-links yet (PM hasn't split it — leave it for PM).
