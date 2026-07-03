@@ -9,6 +9,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node
 import { dirname, join, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { tryResolveWorkspace } from "./workspace.ts";
+import { toLegacyView } from "./team-config.ts";
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (published)
 
@@ -19,7 +21,7 @@ const flag = (name: string): string | undefined => { const i = argv.indexOf(name
 const has = (name: string): boolean => argv.includes(name);
 const project = flag("--project") ?? process.env.DEVLOOP_PROJECT;
 if (!agentArg || !project) {
-  console.error("usage: dev-loop export-desktop-skill <agent> --project <key> [--out <dir>] [--zip]\n  e.g. dev-loop export-desktop-skill qa --project devplatform --zip");
+  console.error("usage: dev-loop export-desktop-skill <agent> --project <key> [--team] [--out <dir>] [--zip]\n  e.g. dev-loop export-desktop-skill qa --project devplatform --team --zip");
   process.exit(2);
 }
 const agent = agentArg.replace(/-agent$/, ""); // accept "qa" or "qa-agent"
@@ -37,11 +39,26 @@ const pluginRoot = (() => {
 const skillPath = join(pluginRoot, "skills", `${agent}-agent`, "SKILL.md");
 if (!existsSync(skillPath)) { console.error(`export-desktop-skill: no skill at ${skillPath}`); process.exit(1); }
 
-// ---- resolve + read the project config ----
-const projectsJson = process.env.DEVLOOP_PROJECTS_JSON ?? join(process.env.DEVLOOP_DATA_DIR ?? join(homedir(), ".dev-loop"), "projects.json");
-const cfg = existsSync(projectsJson) ? (JSON.parse(readFileSync(projectsJson, "utf8")) as { projects?: Record<string, Record<string, unknown>> }) : { projects: {} };
-const p = cfg.projects?.[project];
-if (!p) { console.error(`export-desktop-skill: project '${project}' not in ${projectsJson}`); process.exit(1); }
+// ---- resolve + read the project config (schema v2 workspace first, else legacy projects.json) ----
+// A discoverable workspace is authoritative; --team renders sibling-project context alongside the skill.
+const ws = tryResolveWorkspace();
+let p: Record<string, unknown> | undefined;
+let cfgSource: string;
+let teamContext = "";
+if (ws) {
+  p = toLegacyView(ws).projects[project] as Record<string, unknown> | undefined;
+  cfgSource = `workspace '${ws.file.team.key}' (${ws.filePath})`;
+  if (has("--team")) {
+    const siblings = Object.keys(ws.file.projects).filter((k) => k !== project && k !== "_team");
+    teamContext = `\n## Team context\n- **team**: ${ws.file.team.key} · **backend**: ${ws.file.team.backend}\n- **sibling projects**: ${siblings.length ? siblings.join(", ") : "(none)"}\n- This export is for **${project}** only; coordinate cross-project work through the team intake, not here.\n`;
+  }
+} else {
+  const projectsJson = process.env.DEVLOOP_PROJECTS_JSON ?? join(process.env.DEVLOOP_DATA_DIR ?? join(homedir(), ".dev-loop"), "projects.json");
+  const cfg = existsSync(projectsJson) ? (JSON.parse(readFileSync(projectsJson, "utf8")) as { projects?: Record<string, Record<string, unknown>> }) : { projects: {} };
+  p = cfg.projects?.[project];
+  cfgSource = projectsJson;
+}
+if (!p) { console.error(`export-desktop-skill: project '${project}' not in ${cfgSource}`); process.exit(1); }
 
 // ---- parse the canonical SKILL frontmatter + body ----
 const raw = readFileSync(skillPath, "utf8");
@@ -92,7 +109,7 @@ description: >-
 
 ## Project config (inlined)
 ${facts}
-
+${teamContext}
 ## Agent instructions
 ${canonicalBody.trim()}
 
