@@ -465,6 +465,7 @@ repo, its test environment, and its ship/deploy settings. One file, many product
   `dev-agent`**, the highest-PII authors; a split-dev project pins `senior-dev`/`junior-dev`
   too), and `reports.reviewToken` (the operator's **opaque** high-entropy 点评 sentinel — not a
   dictionary word). `lessons.md` stays machine-local in both sinks.
+  > **Effort is authoritative from config, not the shell.** `dev-loop run` passes each agent's resolved effort as `claude --effort <level>` (or codex `model_reasoning_effort`). Claude's precedence is `CLAUDE_CODE_EFFORT_LEVEL` (env) > `--effort` > model default, so the scheduler **strips `CLAUDE_CODE_EFFORT_LEVEL`** from each fire's environment — a value exported in your shell (e.g. from `/effort`/ultracode) would otherwise silently flatten every agent to one level. Valid claude levels: `low`/`medium`/`high`/`xhigh`/`max` (availability depends on the model).
 
 ---
 
