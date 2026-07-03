@@ -8,6 +8,8 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, sta
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
+import { tryResolveWorkspace, wsStateRoot, wsHubDb } from "./workspace.ts";
+import { toLegacyView, WsValidationError } from "./team-config.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
@@ -169,7 +171,9 @@ type Options = {
   project?: string;
   root: string;
   dataDir: string;
+  dataDirExplicit: boolean; // --data was passed → do not override from a discovered workspace
   hubDb: string;
+  hubDbExplicit: boolean;   // --hub-db was passed → do not override from a discovered workspace
   cwd?: string;
   logDir?: string;
   claudeBin: string;
@@ -296,7 +300,9 @@ function parseArgs(argv: string[]): Options {
     devSplit: false,
     root: process.env.DEVLOOP_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT || defaultRoot(),
     dataDir: defaultDataDir(),
+    dataDirExplicit: false,
     hubDb: defaultHubDb(),
+    hubDbExplicit: false,
     cliExplicit: false,
     claudeBin: process.env.DEVLOOP_CLAUDE_BIN || "claude",
     codexBin: process.env.DEVLOOP_CODEX_BIN || "codex",
@@ -332,8 +338,8 @@ function parseArgs(argv: string[]): Options {
     } else if (a === "--once") opts.once = true;
     else if (a === "--dry-run") opts.dryRun = true;
     else if (a === "--root") opts.root = resolve(next());
-    else if (a === "--data") opts.dataDir = resolve(next());
-    else if (a === "--hub-db") opts.hubDb = resolve(next());
+    else if (a === "--data") { opts.dataDir = resolve(next()); opts.dataDirExplicit = true; }
+    else if (a === "--hub-db") { opts.hubDb = resolve(next()); opts.hubDbExplicit = true; }
     else if (a === "--cwd") opts.cwd = resolve(next());
     else if (a === "--mcp-config") opts.mcpConfig = resolve(next());
     else if (a === "--max-fires") {
@@ -714,9 +720,24 @@ type Slot = { agent: Agent; nextAt: number; running: boolean };
 type RunnerChild = ChildProcessByStdio<null, Readable, Readable>; // stdio: ["ignore","pipe","pipe"]
 const activeChildren = new Set<RunnerChild>();
 
+// Schema v2: a discoverable workspace is authoritative for BOTH config and state paths (hub db, data dir,
+// gate/lock/log roots). A workspace found-but-invalid is a hard stop (fix it, don't run stale). No
+// workspace → the legacy projects.json chain (transition; removed at 1.0). This keeps `dev-loop run`
+// working the moment an operator migrates, without waiting for the M3 team scheduler.
+function resolveConfig(opts: Options): ProjectsConfig | null {
+  let ws;
+  try { ws = tryResolveWorkspace(opts.cwd ?? process.cwd()); }
+  catch (e) { if (e instanceof WsValidationError) die(e.message, 1); throw e; }
+  if (!ws) return readProjects(opts.dataDir);
+  if (!opts.dataDirExplicit) opts.dataDir = wsStateRoot(ws);
+  if (!opts.hubDbExplicit) opts.hubDb = wsHubDb(ws);
+  console.log(`dev-loop run: workspace '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
+  return toLegacyView(ws) as unknown as ProjectsConfig;
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
-  const cfg = readProjects(opts.dataDir);
+  const cfg = resolveConfig(opts);
   const project = resolveProject(opts, cfg);
   const cwd = resolveCwd(opts, cfg, project);
   if (!existsSync(cwd)) die(`cwd does not exist: ${cwd}`, 1);
