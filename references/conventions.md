@@ -646,7 +646,15 @@ A human may file work **directly into the loop** by creating a `dev-loop`-labell
 ticket in `Todo` assigned to PM (the intake owner). This is **not** the §2 human
 backlog — a `dev-loop`-labelled ticket born in this project's board is loop-fair-game;
 only an *un*-labelled ticket in the separate human backlog stays off-limits (init-only
-adoption). PM **grooms** the parent into concrete Dev children, then **closes the
+adoption).
+
+**Make it discoverable — label the intake `dev-loop` + `pm` + `needs-pm`.** `needs-pm` is the
+routing label PM scans every fire (pm-agent Job B), so it is the reliable **discovery signal**
+for an intake — PM's owner-scoped queries only cover `In Review` + `blocked`, so a plain `Todo`
+would otherwise sit unseen. PM tells a fresh intake (a human ask) apart from a stale `needs-pm`
+on a Dev-blocked ticket by the latest comment (a human ask vs a Dev bail-shape), and **clears
+`needs-pm`** once it has processed the intake. (A `Feature`/`Improvement` type helps signal a
+build ask; a bare direction question needs no type.) PM **grooms** the parent into concrete Dev children, then **closes the
 parent** — but the children must stay navigable back to it. Mechanics, in this order:
 
 1. **File each child** with `relatedTo:[<parent-id>]` — **child→parent is MANDATORY.**

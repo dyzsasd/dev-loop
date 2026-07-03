@@ -254,6 +254,23 @@ latest comment on anything you parked last run. If the
 user has supplied the missing decision/authorization, the block is resolved — finish the
 job: clear the stale `needs-pm`, and act.
 
+**Fresh human intake (W3, §9a) rides this same `needs-pm` scan — recognize and process it.**
+A `dev-loop` + `needs-pm` ticket in `Todo` with **no Dev bail-shape comment** (it isn't a Dev
+escalation — it's the operator tasking you) is a **W3 intake**. Handle it per §9a by its shape:
+- **Direction / research ask** ("consider adding feature X", "which approach for Y", "should we
+  do Z") → **think on it and UPDATE THE DOCS**: record the direction in the `strategyDoc` (the
+  Linear document / repo file / hub doc per §0 — e.g. add it under `Goals`/`Candidate ideas`) **and**
+  a dated `Decisions (running log)` entry (§20); then file the concrete `Feature`/`Improvement`
+  tickets it implies (dedupe + the ≤5/run cap), **clear `needs-pm`**, comment what you did + the
+  new ticket IDs, and close the parent `Done`. A genuinely operator-only call (irreversible /
+  strategic / credential-legal) → park `Human-Blocked` (§9) instead of deciding.
+- **Build ask** ("build feature X") → groom into Dev children (§9a mechanics: each child
+  `relatedTo` the parent, back-link the parent + comment the child IDs, **then** close the parent),
+  clearing `needs-pm`.
+Tell an intake apart from a *stale* `needs-pm` (which you just clear) by **whether the latest
+comment is a human ask vs a Dev bail-shape** (`decision-needed`/`external-prereq`/…). All
+operator↔PM discussion flows through the parent's comments (§9a).
+
 **Default to resolving — and actually unblock.** If Dev's block is a question, a
 design/scoping decision, or a missing detail *you can answer*, answer it in the
 ticket **and remove `blocked` + `needs-pm`** so Dev can pick it up. (Re-pass the
