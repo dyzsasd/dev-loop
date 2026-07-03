@@ -5,6 +5,18 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
+## 0.26.0 - 2026-07-03
+- `init` now runs an explicit **reports interview** (conventions §22/§23) — the operator
+  *chooses* where agent daily/weekly/monthly reports go: `reports.sink:"files"` (default,
+  machine-local) or `"linear"` (published as team-visible Linear Documents in a **dedicated**
+  reports project, one rolling doc per agent, 点评 = an operator comment), with the §23
+  audience-widening tradeoff surfaced up front. Previously the Linear sink was only handled
+  reactively "if the operator set the key"; now it's a first-class setup choice.
+- Pinned the previously-unnamed operator-id field as **`reports.operatorId`** (the 点评 author
+  allowlist: a report-doc comment is a valid review only if `author.id` matches it AND the body
+  begins with `reviewToken`), and documented `reports.*` in config-schema (schema block + notes).
+- No behavior change for existing projects — `reports.sink` absent ⇒ `"files"`, byte-for-byte.
+
 ## 0.25.0 - 2026-07-03
 - Added **auto-merge + release-PR deploy** (conventions §12c) — the *agent lands & deploys
   non-prod, human gates prod* model, composing with `landing:"pr"`:
