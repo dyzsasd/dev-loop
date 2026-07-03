@@ -8,11 +8,12 @@ experience** — a real failure observed while the agents ran, then hardened int
 ## 0.25.0 - 2026-07-03
 - Added **auto-merge + release-PR deploy** (conventions §12c) — the *agent lands & deploys
   non-prod, human gates prod* model, composing with `landing:"pr"`:
-  - **`git.autoMerge`** (default false): in pr mode, Dev merges its OWN feature PR via
-    `gh pr merge --auto` once **`git.mergeChecks`** (e.g. `["pr-validation"]`) go green — Dev
-    mirrors those checks in its local Step-5 gates so the PR isn't red, and never force-merges
-    a red/ungated PR (needs the repo to require the checks + allow auto-merge, else it leaves the
-    PR for a human).
+  - **`git.autoMerge`** (default false): in pr mode, Dev merges its OWN feature PR at fire-start
+    once **`git.mergeChecks`** (the PR-check contexts / job names) are green + mergeable — Dev
+    **polls `gh pr checks`**, deliberately NOT GitHub `--auto`/branch protection (a required-check
+    rule would deadlock the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs, whose checks
+    never run). Dev mirrors the checks in its local Step-5 gates so the PR isn't red, and never
+    force-merges a red PR (a failed check leaves it for a fix).
   - **`deploy.style:"release-pr"`** (default `"command"`, unchanged): the project's own release
     pipeline deploys. Merging a feature PR opens a `deploy/<env>/<version>` PR; Dev merges the
     `deploy.environments.<env>.auto:true` ones at a new fire-start **Step 0.5 (promote auto

@@ -248,11 +248,13 @@ normally `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json` (or the explicit
        `deploy.environments` per env: `{ auto, deployPrPrefix, healthCheck? }` — mark the non-prod
        env(s) `auto:true` (Dev merges their deploy PR at fire-start) and **prod `auto:false`** (the
        operator's manual gate). This shape needs `landing:"pr"` + `git.autoMerge:true` +
-       `git.mergeChecks` (e.g. `["pr-validation"]`), and the repo must **require those checks on
-       `defaultBranch` and allow auto-merge** — verify/flag that in the readiness report (an
-       unprotected branch or auto-merge-off means Dev can't auto-merge and will leave PRs for a
-       human). Do NOT edit the product repo's release workflows — the loop *drives* the existing
-       pipeline by merging its PRs, it does not reinvent it.
+       `git.mergeChecks` set to the **PR-check contexts (job names)** Dev waits on (read them from
+       the repo's PR-validation workflow, e.g. `["Lint & Build", "Verify Worker Route Contract"]`).
+       **No branch protection required** — Dev polls those checks (`gh pr checks`) and merges when
+       green; deliberately not GitHub `--auto`, since a required-check rule would deadlock the
+       release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs (their checks never run). Do NOT
+       edit the product repo's release workflows — the loop *drives* the existing pipeline by
+       merging its PRs, it does not reinvent it.
    - `backend` (`"linear"` default / `"local"` / `"service"`, §18) — **ask which substrate**
      this project uses. For `"local"`, also gather the optional `localBoard` (board dir
      override; default `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<key>/board/`) and `ticketPrefix` (ID

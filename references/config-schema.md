@@ -98,8 +98,8 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       "git": {                        // how Dev lands code (autonomy choices live here)
         "defaultBranch": "main",
         "landing":       "direct",    // "direct" (default when absent) commit to defaultBranch | "pr" branch dev-loop/<id> + gh PR per ticket (conventions §12b)
-        "autoMerge":     false,       // pr mode only (conventions §12c): true ⇒ Dev merges its OWN feature PR via `gh pr merge --auto` once mergeChecks pass (else the human merges). Needs the repo to require those checks + allow auto-merge.
-        "mergeChecks":   [],          // pr+autoMerge: the PR checks (e.g. ["pr-validation"]) that must be GREEN before Dev's feature PR auto-merges. Dev also mirrors them in its local Step-5 gates so the PR isn't red.
+        "autoMerge":     false,       // pr mode only (conventions §12c): true ⇒ Dev merges its OWN feature PR at fire-start once mergeChecks are green + mergeable (polls `gh pr checks`; deliberately NOT GitHub --auto/branch protection). Else the human merges.
+        "mergeChecks":   [],          // pr+autoMerge: the PR-check CONTEXTS (job names, e.g. ["Lint & Build","Verify Worker Route Contract"]) that must be GREEN before Dev merges its feature PR. Dev also mirrors them in its local Step-5 gates so the PR isn't red.
         "autoCommit":    true,
         "autoPush":      true,        // false → leave commits local
         "autoDeploy":    true         // false → skip deploy even if deploy.command set (ignored under deploy.style:"release-pr")
@@ -188,10 +188,12 @@ repo, its test environment, and its ship/deploy settings. One file, many product
       code lands; `"direct"` for fully-autonomous shipping.
     - **`git.autoMerge` + `deploy.style:"release-pr"`** (conventions §12c) push `pr` one step
       further — *agent lands & deploys non-prod, human gates prod*. `git.autoMerge:true`
-      (default false) makes Dev **merge its own feature PR** via `gh pr merge --auto` once
-      `git.mergeChecks` (e.g. `["pr-validation"]`) go green — requires the repo to **require
-      those checks on `defaultBranch` and allow auto-merge**; otherwise Dev leaves the PR for a
-      human (never force-merges). `deploy.style:"release-pr"` (default `"command"`, unchanged)
+      (default false) makes Dev **merge its own feature PR** at fire-start once `git.mergeChecks`
+      (the PR-check contexts / job names) are green + the PR is mergeable — Dev **polls
+      `gh pr checks`**, deliberately NOT GitHub `--auto`/branch protection (a required-check rule
+      would deadlock the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs, whose checks
+      never run). A failed check ⇒ Dev leaves it for a fix (never force-merges).
+      `deploy.style:"release-pr"` (default `"command"`, unchanged)
       says the project's **own release pipeline** deploys: merging a feature PR opens a
       `deploy/<env>/<version>` PR, and Dev merges the `deploy.environments.<env>.auto:true`
       ones at fire-start (Step 0.5), leaving `auto:false` (prod) as the operator's manual gate.

@@ -99,19 +99,24 @@ the **full** label set so you don't drop `dev-loop`/owner labels, §10), comment
 move landed (§10). If an artifact exists, the prior fire got far — verify and
 finish/hand it off rather than redoing it.
 
-### Step 0.5 — Promote auto deploys (only when `deploy.style:"release-pr"`, §12c)
-When the project deploys via its own release pipeline (`deploy.style:"release-pr"`), a merged
-feature PR asynchronously spawns a `deploy/<env>/<version>` PR per environment — so drive those
-here, at fire-start, not inline (the build takes minutes). For each `deploy.environments` entry
-with **`auto:true`** (skip `auto:false` — that's the operator's prod gate):
-1. `gh pr list --search "head:<deployPrPrefix>" --state open` — find the pipeline's open deploy PR
-   (per-**release**, not per-ticket; it may bundle several merged tickets).
-2. If it exists, is **mergeable**, and its checks are **green** → `gh pr merge <pr> --squash` to
-   deploy that env; then run the env's `healthCheck` if set. A PR that isn't green/mergeable is
-   left for the next fire — **never force-merge**.
-This is idempotent + race-safe (already-merged ⇒ no-op) and is the ONLY deploy action under
-`release-pr` (Dev runs no `deploy.command`; Step 6 skips Step 6.5). Absent this config it's a
-no-op — a `command`-style or no-deploy project is unchanged.
+### Step 0.5 — Merge eligible loop PRs (feature + deploy; §12c)
+When `git.autoMerge` and/or `deploy.style:"release-pr"` are set, the feature-PR merge and the
+deploy-PR merge are async (checks/build take minutes) — drive them **here** at fire-start, not
+inline. One pass (absent this config it's a no-op — a legacy project is unchanged):
+- **Feature PRs (`git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"`. For each,
+  if **every `git.mergeChecks` context is green AND the PR is mergeable** (`gh pr checks <pr>` +
+  `gh pr view <pr> --json mergeable,mergeStateStatus`) → `gh pr merge <pr> --squash`. A **failed**
+  check ⇒ don't merge; comment the failing check on the linked ticket (failed gate). **Pending** ⇒
+  leave for the next fire.
+- **Deploy PRs (`deploy.style:"release-pr"`):** for each `deploy.environments` with **`auto:true`**
+  (skip `auto:false` — the operator's prod gate), `gh pr list --search "head:<deployPrPrefix> is:open"`
+  — the pipeline's per-**release** deploy PR. If **mergeable** and not failing → `gh pr merge <pr>
+  --squash` to deploy that env; then run the env's `healthCheck` if set. (These are
+  `GITHUB_TOKEN`-created so the PR checks don't run on them — merge on mergeable, don't wait for
+  checks that will never report.)
+Both are idempotent + race-safe (already-merged ⇒ no-op) and are the ONLY merge/deploy actions
+under this model (Dev runs no `deploy.command`; Step 6 skips Step 6.5). A PR that isn't ready is
+left for the next fire — never force-merged.
 
 ### Step 1 — Pick the top ticket
 Query `Todo` tickets: `project` + `label:"dev-loop"`, **excluding** `blocked`.
@@ -268,12 +273,11 @@ discipline §7) with the ticket-id + the repo's commit convention + co-author tr
 the branch; open a PR to the resolved `defaultBranch` via **`gh pr create`** (title per the
 repo's PR-title convention; body links the ticket + a one-line summary + how-to-verify);
 comment the PR URL on the ticket.
-**If `git.autoMerge:true` (§12c):** enable auto-merge gated on `git.mergeChecks` —
-`gh pr merge <pr> --squash --auto` — so GitHub merges the PR the moment those checks (e.g.
-`pr-validation`) go green; make sure your local gates (Step 5) mirror those checks so the PR
-isn't red (you must *ensure it passes*, not merge blindly). If the repo can't auto-merge
-(no required checks / auto-merge disabled) leave the PR open and note it needs the repo
-setting or a human merge — **never** a bare `--merge` on an ungated PR.
+**If `git.autoMerge:true` (§12c):** do NOT merge inline. Dev merges its own feature PR at
+**fire-start (Step 0.5)** once its `git.mergeChecks` are green + it's mergeable (polled via
+`gh pr checks`, **not** GitHub `--auto`/branch protection — required checks would deadlock the
+release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs). Make sure your local gates (Step 5)
+mirror those checks so the PR isn't red — you must *ensure it passes*, not merge blindly.
 **Do not deploy — skip Step 6.5** (the human's merge ships it; OR — under
 `deploy.style:"release-pr"`, §12c — the release pipeline deploys, and Dev merges the
 `auto:true` deploy PR at fire-start). Then go to Step 7 (hand off to `In Review`). If

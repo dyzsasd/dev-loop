@@ -912,19 +912,23 @@ the project's own release pipeline to deploy the non-prod env**, leaving only th
 promotion to the operator. Two opt-in config knobs express that, and they compose with
 `landing:"pr"`.
 
-### `git.autoMerge` — Dev merges its own feature PR
-Default **false** (absent ⇒ the human merges, §12b). With `landing:"pr"` + `git.autoMerge:true`:
-after opening the feature PR (§12b), Dev **enables auto-merge gated on `git.mergeChecks`** —
-`gh pr merge <pr> --squash --auto` — so the PR merges the moment its required checks (e.g.
-`pr-validation`) go green. Rules:
+### `git.autoMerge` — Dev merges its own feature PR (poll-and-merge, no branch protection)
+Default **false** (absent ⇒ the human merges, §12b). With `landing:"pr"` + `git.autoMerge:true`,
+Dev merges its OWN feature PR — but the merge is a **fire-start action**, not an inline block:
+the PR's checks take minutes, and (crucially) **do NOT rely on GitHub branch protection +
+`gh pr merge --auto`.** Required-check gating deadlocks any PR whose checks don't report — and a
+release pipeline's own `deploy/*` PRs, created by the `GITHUB_TOKEN`, never trigger the PR
+checks — so a required-check rule would permanently block them. Instead **Dev polls the checks
+itself and merges when green** (see the fire-start step below). Rules:
 - Dev runs the check-equivalent gates **locally first** (Step 5 — typecheck/build/lint/whatever
-  `mergeChecks` names) so its PR isn't red; it must **ensure the PR passes those checks**, not
-  merge blindly.
-- **Never force-merge a red or uncheck-able PR.** `--auto` requires the repo to (a) require the
-  `mergeChecks` on `defaultBranch` and (b) allow auto-merge. If the repo doesn't (auto-merge
-  unavailable / no required checks), Dev **leaves the PR open** and notes it needs the repo
-  setting or a human merge — fail-open, never a bare `--merge` on an ungated PR.
-- The ticket still goes to `In Review`; the merge (and any deploy) happen **asynchronously**.
+  `mergeChecks` names) so its PR isn't red; it must **ensure the PR passes**, not merge blindly.
+- It merges only when **every `mergeChecks` context is green AND the PR is mergeable**
+  (`gh pr checks <pr>` + `gh pr view <pr> --json mergeable,mergeStateStatus`). A **failed** check
+  ⇒ the PR is red: do NOT merge — comment the failing check on the ticket and treat it like a
+  failed gate (reopen/fix next fire), never force-merge. Checks still **pending** ⇒ leave it for a
+  later fire.
+- The ticket goes to `In Review` when the PR is opened (§12b); the merge happens on a **later
+  fire** once green (so a single Dev fire never blocks minutes waiting on CI).
 
 ### `deploy.style:"release-pr"` — deploy by merging the release pipeline's deploy PRs
 Default **`"command"`** (absent ⇒ today's behavior: Dev runs `deploy.command` in Step 6/6.5,
@@ -938,27 +942,33 @@ Dev deploys an environment by **merging that env's deploy PR** — governed by
 - Dev runs **no** `deploy.command` and **no** Step 6.5 under `release-pr` (the pipeline deploys);
   `autoDeploy` is ignored.
 
-**Fire-start "promote auto deploys" (every dev tier, when `deploy.style:"release-pr"`).** The
-deploy PR appears **asynchronously** — the release build takes minutes — so Dev does NOT wait
-inline. Instead, at fire-start (alongside orphan reclaim, Step 0) each dev fire, for every
-`deploy.environments` entry with `auto:true`:
-1. `gh pr list --search "head:<deployPrPrefix>" --state open` — find the release pipeline's open
-   deploy PR (it is **per-release**, not per-ticket — one PR may bundle several merged tickets).
-2. If it exists, is **mergeable**, and its checks are **green** → `gh pr merge <pr> --squash` →
-   the repo's deploy workflow runs → the env deploys. Then run the env's `healthCheck` if set.
-3. `auto:false` envs (prod) are **skipped entirely**. A PR that isn't green/mergeable is left for
-   the next fire (never force-merged).
+**Fire-start "merge eligible loop PRs" (every dev tier).** Both the feature-PR merge (`autoMerge`)
+and the deploy-PR merge (`release-pr`) are async — the checks/build take minutes — so Dev drives
+them here, at fire-start (alongside orphan reclaim, Step 0), never inline. In one pass:
 
-This step is **idempotent and race-safe**: a second dev fire finds the PR already merged and
-no-ops; the merge itself is atomic. It is project-level hygiene that happens to deploy — so it
-lives with **Dev** (which ships/deploys), never Sweep (hygiene-only, §1).
+- **Feature PRs (when `git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"` —
+  for each, if **every `git.mergeChecks` context is green AND it is mergeable**, `gh pr merge
+  <pr> --squash`. A **failed** check ⇒ leave it, comment the failure on the linked ticket (failed
+  gate, not a merge). **Pending** ⇒ leave for the next fire.
+- **Deploy PRs (when `deploy.style:"release-pr"`):** for every `deploy.environments` entry with
+  **`auto:true`**, `gh pr list --search "head:<deployPrPrefix> is:open"` — the release pipeline's
+  deploy PR (**per-release**, not per-ticket; it may bundle several merged tickets). If it is
+  **mergeable** and not failing, `gh pr merge <pr> --squash` → the repo's deploy workflow runs →
+  the env deploys; then run the env's `healthCheck` if set. **`auto:false` envs (prod) are skipped
+  entirely** — the operator's gate. (These PRs are `GITHUB_TOKEN`-created, so the PR checks don't
+  run on them; merge on mergeable, don't wait for checks that will never report.)
+
+Both are **idempotent + race-safe**: a second dev fire finds the PR already merged and no-ops; the
+merge is atomic. A PR that isn't ready is left for the next fire — **never force-merged**. This is
+project-level work that lands & deploys, so it lives with **Dev** (which ships/deploys), never
+Sweep (hygiene-only, §1).
 
 ### How it fits together (the operator's picture)
 ```
-Dev  → open feature PR + enable auto-merge (gated on pr-validation)
-GitHub → merges feature PR when pr-validation is green → main
+Dev  → open feature PR (ticket → In Review)
+Dev (later fire) → feature PR checks (pr-validation) green + mergeable → Dev merges it → main
 release pipeline → opens deploy/dev + deploy/prod PRs
-Dev (next fire) → merges the deploy/dev PR (auto:true) → dev deploys
+Dev (later fire) → merges the deploy/dev PR (auto:true) → dev deploys
 PM/QA → verify once observable on dev (§12b) → Done
 operator → merges the deploy/prod PR (auto:false) → prod       ← the one manual gate
 ```
