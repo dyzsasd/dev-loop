@@ -24,6 +24,7 @@ defined in §21.)
 11. [Per-project config](#11-per-project-config)
 12. [Dry-run vs live](#12-dry-run-vs-live)
 12b. [Landing mode — direct-commit vs PR](#12b-landing-mode--direct-commit-vs-pr)
+12c. [Auto-merge + release-PR deploy](#12c-auto-merge--release-pr-deploy--the-agent-lands--deploys-human-gates-prod)
 13. [First-run setup](#13-first-run-setup)
 14. [Lessons file — per-operator corrections](#14-lessons-file--per-operator-corrections)
 15. [Test coverage — every Bug/Feature earns a regression test](#15-test-coverage--every-bugfeature-earns-a-regression-test)
@@ -900,6 +901,81 @@ This keeps the loop autonomous **up to the PR**, puts the human gate at **merge*
 env the branch merges into) and again at **release** (→ prod, via the downstream pipeline's
 own PR), and never pushes to `defaultBranch`. `pr` is the fit when a repo wants human review
 before code lands; `direct` is the fit for fully-autonomous shipping.
+
+---
+
+## 12c. Auto-merge + release-PR deploy — the agent lands & deploys, human gates prod
+
+The `pr` landing mode (§12b) leaves BOTH the merge and the deploy to the human. Some projects
+want the loop to go further — **the agent opens the PR, merges it (once CI is green), and drives
+the project's own release pipeline to deploy the non-prod env**, leaving only the **prod**
+promotion to the operator. Two opt-in config knobs express that, and they compose with
+`landing:"pr"`.
+
+### `git.autoMerge` — Dev merges its own feature PR (poll-and-merge, no branch protection)
+Default **false** (absent ⇒ the human merges, §12b). With `landing:"pr"` + `git.autoMerge:true`,
+Dev merges its OWN feature PR — but the merge is a **fire-start action**, not an inline block:
+the PR's checks take minutes, and (crucially) **do NOT rely on GitHub branch protection +
+`gh pr merge --auto`.** Required-check gating deadlocks any PR whose checks don't report — and a
+release pipeline's own `deploy/*` PRs, created by the `GITHUB_TOKEN`, never trigger the PR
+checks — so a required-check rule would permanently block them. Instead **Dev polls the checks
+itself and merges when green** (see the fire-start step below). Rules:
+- Dev runs the check-equivalent gates **locally first** (Step 5 — typecheck/build/lint/whatever
+  `mergeChecks` names) so its PR isn't red; it must **ensure the PR passes**, not merge blindly.
+- It merges only when **every `mergeChecks` context is green AND the PR is mergeable**
+  (`gh pr checks <pr>` + `gh pr view <pr> --json mergeable,mergeStateStatus`). A **failed** check
+  ⇒ the PR is red: do NOT merge — comment the failing check on the ticket and treat it like a
+  failed gate (reopen/fix next fire), never force-merge. Checks still **pending** ⇒ leave it for a
+  later fire.
+- The ticket goes to `In Review` when the PR is opened (§12b); the merge happens on a **later
+  fire** once green (so a single Dev fire never blocks minutes waiting on CI).
+
+### `deploy.style:"release-pr"` — deploy by merging the release pipeline's deploy PRs
+Default **`"command"`** (absent ⇒ today's behavior: Dev runs `deploy.command` in Step 6/6.5,
+100% unchanged). With `"release-pr"`, the project's **own release pipeline** does the deploy:
+merging a feature PR triggers it, and it opens a **`deploy/<env>/<version>` PR per environment**.
+Dev deploys an environment by **merging that env's deploy PR** — governed by
+`deploy.environments`:
+- Each env: `{ auto: bool, deployPrPrefix: "deploy/<env>/", healthCheck?: <url|cmd> }`.
+- **`auto:true` (e.g. dev)** → Dev merges its deploy PR automatically. **`auto:false` (e.g. prod)**
+  → Dev **never** touches it; that is the operator's manual gate.
+- Dev runs **no** `deploy.command` and **no** Step 6.5 under `release-pr` (the pipeline deploys);
+  `autoDeploy` is ignored.
+
+**Fire-start "merge eligible loop PRs" (every dev tier).** Both the feature-PR merge (`autoMerge`)
+and the deploy-PR merge (`release-pr`) are async — the checks/build take minutes — so Dev drives
+them here, at fire-start (alongside orphan reclaim, Step 0), never inline. In one pass:
+
+- **Feature PRs (when `git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"` —
+  for each, if **every `git.mergeChecks` context is green AND it is mergeable**, `gh pr merge
+  <pr> --squash`. A **failed** check ⇒ leave it, comment the failure on the linked ticket (failed
+  gate, not a merge). **Pending** ⇒ leave for the next fire.
+- **Deploy PRs (when `deploy.style:"release-pr"`):** for every `deploy.environments` entry with
+  **`auto:true`**, `gh pr list --search "head:<deployPrPrefix> is:open"` — the release pipeline's
+  deploy PR (**per-release**, not per-ticket; it may bundle several merged tickets). If it is
+  **mergeable** and not failing, `gh pr merge <pr> --squash` → the repo's deploy workflow runs →
+  the env deploys; then run the env's `healthCheck` if set. **`auto:false` envs (prod) are skipped
+  entirely** — the operator's gate. (These PRs are `GITHUB_TOKEN`-created, so the PR checks don't
+  run on them; merge on mergeable, don't wait for checks that will never report.)
+
+Both are **idempotent + race-safe**: a second dev fire finds the PR already merged and no-ops; the
+merge is atomic. A PR that isn't ready is left for the next fire — **never force-merged**. This is
+project-level work that lands & deploys, so it lives with **Dev** (which ships/deploys), never
+Sweep (hygiene-only, §1).
+
+### How it fits together (the operator's picture)
+```
+Dev  → open feature PR (ticket → In Review)
+Dev (later fire) → feature PR checks (pr-validation) green + mergeable → Dev merges it → main
+release pipeline → opens deploy/dev + deploy/prod PRs
+Dev (later fire) → merges the deploy/dev PR (auto:true) → dev deploys
+PM/QA → verify once observable on dev (§12b) → Done
+operator → merges the deploy/prod PR (auto:false) → prod       ← the one manual gate
+```
+`deploy.style:"release-pr"` implies `landing:"pr"` + `git.autoMerge` (the feature must merge for
+the release pipeline to fire). Verification is the §12b "observable on the running env" rule,
+unchanged. **`init` captures this per project** (§13 / the deploy interview) — how the service
+deploys is project knowledge the loop must be told, not guessed.
 
 ---
 

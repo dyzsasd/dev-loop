@@ -99,6 +99,25 @@ the **full** label set so you don't drop `dev-loop`/owner labels, §10), comment
 move landed (§10). If an artifact exists, the prior fire got far — verify and
 finish/hand it off rather than redoing it.
 
+### Step 0.5 — Merge eligible loop PRs (feature + deploy; §12c)
+When `git.autoMerge` and/or `deploy.style:"release-pr"` are set, the feature-PR merge and the
+deploy-PR merge are async (checks/build take minutes) — drive them **here** at fire-start, not
+inline. One pass (absent this config it's a no-op — a legacy project is unchanged):
+- **Feature PRs (`git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"`. For each,
+  if **every `git.mergeChecks` context is green AND the PR is mergeable** (`gh pr checks <pr>` +
+  `gh pr view <pr> --json mergeable,mergeStateStatus`) → `gh pr merge <pr> --squash`. A **failed**
+  check ⇒ don't merge; comment the failing check on the linked ticket (failed gate). **Pending** ⇒
+  leave for the next fire.
+- **Deploy PRs (`deploy.style:"release-pr"`):** for each `deploy.environments` with **`auto:true`**
+  (skip `auto:false` — the operator's prod gate), `gh pr list --search "head:<deployPrPrefix> is:open"`
+  — the pipeline's per-**release** deploy PR. If **mergeable** and not failing → `gh pr merge <pr>
+  --squash` to deploy that env; then run the env's `healthCheck` if set. (These are
+  `GITHUB_TOKEN`-created so the PR checks don't run on them — merge on mergeable, don't wait for
+  checks that will never report.)
+Both are idempotent + race-safe (already-merged ⇒ no-op) and are the ONLY merge/deploy actions
+under this model (Dev runs no `deploy.command`; Step 6 skips Step 6.5). A PR that isn't ready is
+left for the next fire — never force-merged.
+
 ### Step 1 — Pick the top ticket
 Query `Todo` tickets: `project` + `label:"dev-loop"`, **excluding** `blocked`.
 Rank them by the Dev pick order (conventions §5): urgent bug → urgent feature →
@@ -253,10 +272,18 @@ off `origin/<resolved defaultBranch>`; commit **only** this ticket's files (stag
 discipline §7) with the ticket-id + the repo's commit convention + co-author trailer; push
 the branch; open a PR to the resolved `defaultBranch` via **`gh pr create`** (title per the
 repo's PR-title convention; body links the ticket + a one-line summary + how-to-verify);
-comment the PR URL on the ticket. **Do not deploy — skip Step 6.5** (the human's merge
-ships it). Then go to Step 7 (hand off to `In Review`). If `git.autoPush:false`, commit the
-branch locally and note that a human must push + open the PR (no `gh` call). The
-direct-commit sequence below runs **only** when `git.landing` is absent or `"direct"`.
+comment the PR URL on the ticket.
+**If `git.autoMerge:true` (§12c):** do NOT merge inline. Dev merges its own feature PR at
+**fire-start (Step 0.5)** once its `git.mergeChecks` are green + it's mergeable (polled via
+`gh pr checks`, **not** GitHub `--auto`/branch protection — required checks would deadlock the
+release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs). Make sure your local gates (Step 5)
+mirror those checks so the PR isn't red — you must *ensure it passes*, not merge blindly.
+**Do not deploy — skip Step 6.5** (the human's merge ships it; OR — under
+`deploy.style:"release-pr"`, §12c — the release pipeline deploys, and Dev merges the
+`auto:true` deploy PR at fire-start). Then go to Step 7 (hand off to `In Review`). If
+`git.autoPush:false`, commit the branch locally and note that a human must push + open the
+PR (no `gh` call). The direct-commit sequence below runs **only** when `git.landing` is
+absent or `"direct"`.
 
 - If `git.autoCommit`: make sure you're on **the target repo's resolved `defaultBranch`**
   first (`repos[].defaultBranch` else `git.defaultBranch`, §19; single-repo unchanged);
