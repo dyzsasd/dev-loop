@@ -27,12 +27,16 @@ to `dev-loop team init` first and stop. Read `references/conventions.md` §20/§
 - **linearProject / hub project name:** the human name in the backend.
 - **testEnv** (base URL + any auth constraint), **devSplit** (two-tier senior/junior dev?),
   optional per-agent launch overrides.
+- **blockedStateName** — did the operator add a real "Blocked" column in Linear? Record its
+  name; else leave null (the `blocked` label park applies). Do not skip silently.
+- **comms** — confirm `team.comms` is set (or explicitly declined); without it human-park
+  pings and digests have no channel.
 
 ## 2. BACKEND SYNC (the reason this is a coding-CLI skill, not pure CLI)
 
 - **linear:** if this is the FIRST project in the team, reconcile the Linear team first — verify
   `team.linearTeam` exists, ensure the dev-loop label set (`dev-loop`, `needs-pm`, `Feature`/`Bug`/
-  `Improvement`, `pm`/`qa`, `senior-dev`/`junior-dev`, `blocked`, `env:dev`/`env:prod`, …), and
+  `Improvement`, `pm`/`qa`, `senior-dev`/`junior-dev`, `blocked`, `external-prereq` + `external-code`/`external-access` (§9c), `env:dev`/`env:prod`, …), and
   record `team.linearTeamId`. Then **find-or-create** the Linear project by name; record its id.
 - **service:** `dev-loop seed <key> "<name>" <UNIQUE_PREFIX>` into the workspace hub.db (the prefix
   must be unique across the team's projects — doctor enforces it).

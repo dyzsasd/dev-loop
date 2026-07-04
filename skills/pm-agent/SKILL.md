@@ -240,7 +240,7 @@ Dev's comment and either **resolve** (add the missing info / fix acceptance crit
 remove `blocked` + `needs-pm`, leave in `Todo`) or **cancel** (`Canceled`/
 `Duplicate` with a reason). See conventions §9. Use the **bail-shape** tag on Dev's
 comment (conventions §9) to route fast: `decision-needed`/`scope-design` are yours
-to resolve (answer + unblock); `external-prereq` parks for the user (a fact, §12a);
+to resolve (answer + unblock); `external-prereq` runs the §9c tracker protocol (below);
 `info-needed` is usually QA's; `fix-exhausted` means re-scope or split, not re-block.
 
 **Also catch half-unblocked & since-authorized tickets — `blocked` alone under-counts.**
@@ -318,6 +318,30 @@ form of the command (never the variant that mutates data — `migrate deploy`/`d
 re-check the end state (`migrate status` clean) *after*. Then mark it Done with the evidence.
 Staging discipline still applies (conventions §7): commit only your ticket's files; never
 scoop up another agent's uncommitted work.
+
+**W5 — external-prereq trackers (§9c).** Part of every Job B pass:
+
+1. **Track:** for each `blocked`+`external-prereq` ticket with no tracker yet (no
+   blockedBy relation on linear / no `Blocked-by:` marker on service/local): read its
+   `External-kind:` line — `code` → file the ask as a REAL ticket in the owning project
+   (cross-project → a §9b team intake) and use it as the tracker; `access` → create a
+   pm-owned tracker, human-park it (`Human-Blocked` on service; `blocked`+`needs-pm` on
+   linear/local) and notify the operator once. Dedupe: several parked tickets may share
+   one tracker.
+2. **Block:** link parked → tracker with a real edge: linear
+   `save_issue(id: <parked>, blockedBy: [<tracker>])`; service/local: a
+   `Blocked-by: <tracker-id>` marker comment. Never use `relatedTo` for blocking.
+3. **Auto-unpark:** for every open `blocked`+`external-prereq` ticket, resolve its
+   blockers; a ticket with ZERO blocker edges is NEVER unparked (that's step-1 work —
+   the empty set is vacuously true, don't fall for it); **≥1 blocker AND** ALL
+   `Done`/`Canceled` → remove `blocked`/`external-prereq`/kind labels,
+   move to `Todo`, drop `notified`, and RETIRE the edge: linear — the same `save_issue`
+   passes `removeBlockedBy: [<resolved trackers>]`; service/local — the unpark comment
+   carries one `Unblocked-by: <tracker-id>` line per resolved blocker (a `Blocked-by:`
+   marker is LIVE only with no later `Unblocked-by:`). Stale Done edges left behind
+   would make any future re-park instantly self-unpark.
+   Any blocker still open → leave it, no comment.
+
 
 ### Job C — Review the existing services & propose improvements + new features
 Review through the **lens the preflight selected** (one lens per fire on an

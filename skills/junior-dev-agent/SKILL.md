@@ -161,7 +161,11 @@ labels.)
   §9): add `blocked` + `needs-pm`(feature)/`needs-qa`(bug), release the claim, move back
   to `Todo`, comment exactly what's missing, tag the bail shape on the comment's first
   line (`Bail-shape: info-needed | decision-needed | scope-design | external-prereq |
-  fix-exhausted`, §9). Do **not** guess. Pick next.
+  fix-exhausted`, §9). For `external-prereq`, ALSO add a second machine-parseable line
+  `External-kind: code` (another repo/team must change code) or `External-kind: access`
+  (credentials/money/legal/permission) plus the **`external-prereq` label AND** the matching
+  `external-code`/`external-access` label — the W5 queries key on `blocked`+`external-prereq`.
+  Do **not** guess. Pick next.
 
 > **You are an implementer, not a designer.** If a ticket genuinely needs a *design*
 > decision (a new module shape, a cross-cutting architecture choice, an ambiguous

@@ -50,6 +50,19 @@ ok(projectCount(real.db) === 1, "a real seed still writes its project row");
 const bare = seed("bare.db", []);
 ok(bare.status === 0 && projectCount(bare.db) === 1, "bare `seed` still seeds the demo defaults (unchanged)");
 
+// ── 5. label backfill reaches EXISTING projects (a taxonomy addition must not strand old hubs) ──
+{
+  const { ensureSeed } = await import("../src/seed.ts");
+  const db = openDb(join(ROOT, "backfill.db"));
+  const pid = ensureSeed(db, "bf", "BF", "BF");
+  const count = (name: string) => (db.prepare("SELECT COUNT(*) c FROM labels WHERE project_id=? AND name=?").get(pid, name) as { c: number }).c;
+  ok(count("external-prereq") === 1 && count("external-code") === 1 && count("external-access") === 1, "the §9c external labels are seeded on create");
+  db.prepare("DELETE FROM labels WHERE project_id=? AND name=?").run(pid, "external-prereq"); // simulate a pre-taxonomy project
+  ensureSeed(db, "bf", "BF", "BF");                                                          // re-seed hits the EXISTING branch
+  ok(count("external-prereq") === 1, "re-running seed BACKFILLS a missing label on an existing project (no early-return skip)");
+  db.close();
+}
+
 rmSync(ROOT, { recursive: true, force: true });
 console.log(fails === 0 ? "\nSEED_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

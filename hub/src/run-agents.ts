@@ -599,13 +599,14 @@ function displayCommand(command: string, args: string[], prompt: string): string
 // never allowed to crash a fire. One writable connection reused across fires (the scheduler is single-writer).
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
-function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean): void {
+function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean,
+  extra?: { suspectError?: boolean; outputTail?: string }): void {
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
   // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
   if (fireLedgerPath) {
     try {
       mkdirSync(dirname(fireLedgerPath), { recursive: true });
-      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut };
+      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra ?? {}) };
       appendFileSync(fireLedgerPath, JSON.stringify(row) + "\n");
     } catch { /* ledger is best-effort */ }
   }
@@ -615,7 +616,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut } });
+      data: { codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -711,8 +712,14 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const startedAt = Date.now();
   const child: RunnerChild = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   activeChildren.add(child);
-  child.stdout.on("data", (d) => { process.stdout.write(`[${agent}] ${d}`); log.write(d); });
-  child.stderr.on("data", (d) => { process.stderr.write(`[${agent}] ${d}`); log.write(d); });
+  // Keep a rolling tail of the child's combined output. Some CLI failures exit 0 while printing an error
+  // body (e.g. claude -p emitting just "Execution error") — the exit code alone masks them, poisoning the
+  // fire ledger with fake successes the operator can't alert on. Bounded (2 KB) so memory is constant.
+  let outTail = "";
+  let outBytes = 0;
+  const keepTail = (d: Buffer | string) => { const s = d.toString(); outBytes += s.length; outTail = (outTail + s).slice(-2048); };
+  child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); log.write(d); });
+  child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); log.write(d); });
 
   return await new Promise((resolveExit) => {
     // Fire timeout: without it a wedged CLI child holds its slot's non-reentrancy flag forever —
@@ -733,17 +740,44 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     // Resolve on 'exit', not 'close': 'close' additionally waits for the stdio pipes, which a grandchild
     // the CLI spawned can hold open long after the CLI itself died — exactly the wedged case the fire
     // timeout exists for. The log stream stays open until 'close' so late pipe output is still captured.
+    // Finalize (suspect detection + ledger + resolve) runs AFTER the stdio pipes settle: on 'close', or a
+    // short grace timer after 'exit' — whichever first. Computing on bare 'exit' raced the last pipe chunk
+    // (a failure marker still in flight → false negative; real output in flight → false "no output"). The
+    // timer caps the wedged-grandchild case ('close' may be held open long after the CLI died), preserving
+    // the resolve-on-exit intent within a bounded 150ms.
+    let finalized = false;
+    let closed = false;
+    const finalize = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (finalized) return;
+      finalized = true;
+      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""} =====\n`);
+      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}`);
+      const exitCode = timedOut ? 124 : (code ?? 1);
+      // Suspect-error detection (narrow, tail-anchored to avoid false positives on error text an agent
+      // merely echoed mid-run): exit 0 but the LAST line is a known CLI failure marker, or no visible
+      // output at all (whitespace-only counts as none). Bare "Error:" is deliberately NOT matched — an
+      // agent's own prose can legitimately end that way. Telemetry only; the exit code stays untouched.
+      const lastLine = outTail.trimEnd().split("\n").pop()?.trim() ?? "";
+      const suspectError = exitCode === 0 && !timedOut && (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine));
+      if (suspectError) {
+        const why = outTail.trim() === "" ? `no visible output (${outBytes} bytes)` : `last line: ${JSON.stringify(lastLine.slice(0, 120))}`;
+        console.error(`[${agent}] exit 0 but the output looks like a FAILURE (${why}) — flagged suspectError in the fire ledger`);
+        log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
+      }
+      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut,
+        suspectError ? { suspectError: true, outputTail: outTail.slice(-400) } : undefined);
+      resolveExit(exitCode);
+    };
     child.on("exit", (code, signal) => {
       clearTimeout(fireTimer);
       clearTimeout(killTimer);
       activeChildren.delete(child);
-      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""} =====\n`);
-      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}`);
-      const exitCode = timedOut ? 124 : (code ?? 1);
-      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut);
-      resolveExit(exitCode);
+      if (closed) { finalize(code, signal); return; }        // pipes already drained → finalize now
+      const grace = setTimeout(() => finalize(code, signal), 150);
+      grace.unref?.();
+      child.once("close", () => { clearTimeout(grace); finalize(code, signal); });
     });
-    child.on("close", () => log.end());
+    child.on("close", () => { closed = true; log.end(); });
   });
 }
 

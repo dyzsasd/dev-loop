@@ -157,5 +157,40 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   ok(p.linearTeam === "Loop-1", "toLegacyView stamps team linearTeam");
 }
 
+// ── toLegacyView passthrough + the notify bridge (the blockedStateName / human-park-ping bugs) ──
+{
+  const f = base();
+  const bag = f.projects.devplatform as unknown as Record<string, unknown>;
+  bag.blockedStateName = "Blocked";                 // v1-era field the whitelist used to DROP
+  bag.communication = { articles: true };           // arbitrary operator field must survive too
+  f.team.comms = { provider: "lark", webhookEnv: "DEVLOOP_COMMS_WEBHOOK" };
+  const p = toLegacyView(mkWs(f)).projects.devplatform as Record<string, unknown>;
+  ok(p.blockedStateName === "Blocked", "toLegacyView passes through blockedStateName (agents/daemon read it)");
+  ok(JSON.stringify(p.communication) === '{"articles":true}', "toLegacyView passes through arbitrary operator fields");
+  ok(JSON.stringify(p.notify) === '{"type":"lark","webhookEnv":"DEVLOOP_COMMS_WEBHOOK"}',
+    "toLegacyView bridges team.comms → the legacy per-project notify block (daemon human-park pings keep working)");
+  // a project-level passthrough notify wins over the bridge
+  bag.notify = { type: "slack", webhookEnv: "MY_HOOK" };
+  const p2 = toLegacyView(mkWs(f)).projects.devplatform as Record<string, unknown>;
+  ok((p2.notify as { type?: string }).type === "slack", "a project's own notify passthrough beats the comms bridge");
+  // no comms + no notify → no notify key invented
+  delete bag.notify; delete (f.team as unknown as Record<string, unknown>).comms;
+  const p3 = toLegacyView(mkWs(f)).projects.devplatform as Record<string, unknown>;
+  ok(!("notify" in p3), "no comms and no notify → the bridge invents nothing");
+}
+
+// ── hostile passthrough: v1-era junk keys must LOSE to the computed values (spread-order guard) ──
+{
+  const f = base();
+  f.team.comms = { provider: "lark", webhookEnv: "HOOK" };
+  const bag = f.projects.devplatform as unknown as Record<string, unknown>;
+  Object.assign(bag, { backend: "service", repoPath: "/evil/path", linearTeam: "WrongTeam", comms: { provider: "slack", webhookEnv: "EVIL" } });
+  const p = toLegacyView(mkWs(f)).projects.devplatform as Record<string, unknown>;
+  ok(p.backend === "linear" && p.linearTeam === "Loop-1", "hostile passthrough: team backend/linearTeam beat project junk");
+  ok(p.repoPath === "/ws/jinko-dev-platform", "hostile passthrough: computed repoPath beats a stale literal");
+  ok((p.comms as { webhookEnv?: string }).webhookEnv === "HOOK", "hostile passthrough: team comms beats project junk");
+  ok(Array.isArray(p.repos) && (p.repos as { path?: string }[])[0].path === "/ws/jinko-dev-platform", "hostile passthrough: the legacy repos[] shape beats the v2 ref array");
+}
+
 console.log(fails === 0 ? "\nTEAM_CONFIG_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
