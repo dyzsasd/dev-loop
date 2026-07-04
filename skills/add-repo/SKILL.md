@@ -40,6 +40,11 @@ user to `dev-loop team init` first and stop. Read `dev-loop.json`, `references/c
   polls (§12c). List them; let the operator prune.
 - **Landing:** `pr` (default; agent opens a PR, CI is the build gate) or `direct`. If `pr` +
   `--auto-merge`, the agent merges its own PR once checks are green.
+- **Ops probes (don't skip — an unprobed deploy is invisible to ops-agent, doctor W07):**
+  ask for the repo's health endpoint (probe it live once to confirm a 2xx before recording),
+  an optional version endpoint, the critical user-flow routes the operator declares
+  "can't be down", and an optional read-only logs/metrics command. Persist via
+  `--ops-check <url>` / `--critical-route <path>` / `--logs-command "<cmd>"`.
 - **Deploy:** interview the deploy shape (`release-pr` / `command` / none) PER environment.
   **Enforce the team `deployPolicy` ceiling:** if `deployPolicy.<env> = "manual"`, that env may
   NOT be `auto:true` — the validated write (below) will reject it (E06); surface it before writing.

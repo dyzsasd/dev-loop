@@ -38,8 +38,8 @@ export interface RepoEntry {
   autoMerge?: boolean;
   mergeChecks?: string[];
   build?: { typecheck?: string; build?: string };
-  deploy?: { style?: string; environments?: Record<string, { auto?: boolean; deployPrPrefix?: string; command?: string }> };
-  ops?: { checks?: string[] };
+  deploy?: { style?: string; healthCheck?: string; environments?: Record<string, { auto?: boolean; deployPrPrefix?: string; command?: string; healthCheck?: string }> };
+  ops?: { checks?: string[]; criticalRoutes?: string[]; logsCommand?: string };
 }
 
 export interface ProjectRepoRef { ref: string; role?: string }
@@ -183,6 +183,19 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       if (typeof owner !== "string" || !owner.trim()) E("E05", `repos.${ref}.owner`, `repo '${ref}' is shared by ${referrers.length} projects (${referrers.join(", ")}); it must declare an owner`);
       else if (!referrers.includes(owner)) E("E05", `repos.${ref}.owner`, `repo '${ref}' owner '${owner}' is not among its referrers (${referrers.join(", ")})`);
     }
+  }
+
+  // W07 — a DEPLOYED repo with no health probe leaves ops blind: referenced by an enabled project,
+  // carries a deploy block, but has neither a healthCheck (top-level or per-environment) nor ops.checks.
+  for (const [ref, r] of Object.entries(repos)) {
+    if (!r?.deploy) continue;
+    const referrers = refCount.get(ref) ?? [];
+    const enabledReferrer = referrers.some((k) => projects[k]?.enabled !== false);
+    if (!enabledReferrer) continue;
+    const hasProbe = !!r.deploy.healthCheck
+      || Object.values(r.deploy.environments ?? {}).some((e) => !!e?.healthCheck)
+      || !!(r.ops?.checks?.length);
+    if (!hasProbe) W("W07", `repos.${ref}`, `repo '${ref}' deploys but has NO health probe (no deploy healthCheck, no ops.checks) — ops-agent is blind to it; add one via /dev-loop:add-repo --ops-check`);
   }
 
   // E06 — deployPolicy is a CEILING: policy[env]="manual" forbids any repo auto-deploying that env (§4.3).

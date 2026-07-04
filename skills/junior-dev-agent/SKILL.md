@@ -156,6 +156,12 @@ labels.)
   (§9) — `Bail-shape: info-needed` (or `scope-design` if the work spans repos and needs
   splitting) — routed to PM; **never default to `repos[0]`**. Single-repo projects skip
   this.
+- **Sensitive? Not yours (§21a override).** If the ticket carries the `sensitive` label —
+  or its ACs plainly touch auth/permissions, payment/money, PII, secrets, or data
+  migration/deletion — AND it has no senior-authored `Design:` pointer: do **not**
+  implement. Block it (`Bail-shape: decision-needed`, routed to PM) with the comment
+  `sensitive work mis-routed to junior — needs senior design first (§21a)`. A sensitive
+  ticket WITH a resolvable senior design pointer is implementable like any designed child.
 - **Enough info?** It needs clear, testable acceptance criteria and (for bugs) a real
   repro. If it's missing, contradictory, or under-specified — **block it** (conventions
   §9): add `blocked` + `needs-pm`(feature)/`needs-qa`(bug), release the claim, move back

@@ -55,7 +55,7 @@ export function addProject(argv: string[]): number {
 export function addRepo(argv: string[]): number {
   const [ref, ...rest] = argv;
   if (!ref || ref.startsWith("--")) die("usage: dev-loop team add-repo <ref> --project <key> [--path <rel>] [--role primary|docs] [--remote <url>] [--owner <proj>] [--landing pr|direct] [--auto-merge] [--merge-check <name>]... [--typecheck-cmd <c>] [--build-cmd <c>] [--deploy-style <s>] [--ops-check <url>]...");
-  const o: Record<string, unknown> = { mergeChecks: [] as string[], opsChecks: [] as string[] };
+  const o: Record<string, unknown> = { mergeChecks: [] as string[], opsChecks: [] as string[], criticalRoutes: [] as string[] };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]; const next = () => rest[++i] ?? die(`${a} requires a value`);
     if (a === "--project") o.project = next();
@@ -70,6 +70,8 @@ export function addRepo(argv: string[]): number {
     else if (a === "--build-cmd") o.build = next();
     else if (a === "--deploy-style") o.deployStyle = next();
     else if (a === "--ops-check") (o.opsChecks as string[]).push(next());
+    else if (a === "--critical-route") (o.criticalRoutes as string[]).push(next());
+    else if (a === "--logs-command") o.logsCommand = next();
     else die(`unknown option '${a}'`);
   }
   const project = o.project as string | undefined;
@@ -88,7 +90,10 @@ export function addRepo(argv: string[]): number {
       if ((o.mergeChecks as string[]).length) entry.mergeChecks = o.mergeChecks as string[];
       if (o.typecheck || o.build) entry.build = { ...(o.typecheck ? { typecheck: o.typecheck as string } : {}), ...(o.build ? { build: o.build as string } : {}) };
       if (o.deployStyle) entry.deploy = { style: o.deployStyle as string, environments: {} };
-      if ((o.opsChecks as string[]).length) entry.ops = { checks: o.opsChecks as string[] };
+      if ((o.opsChecks as string[]).length || (o.criticalRoutes as string[]).length || o.logsCommand)
+        entry.ops = { ...((o.opsChecks as string[]).length ? { checks: o.opsChecks as string[] } : {}),
+                      ...((o.criticalRoutes as string[]).length ? { criticalRoutes: o.criticalRoutes as string[] } : {}),
+                      ...(o.logsCommand ? { logsCommand: o.logsCommand as string } : {}) };
       file.repos[ref] = entry;
     } else if (o.owner) {
       file.repos[ref].owner = o.owner as string; // updating owner on an existing shared repo

@@ -33,6 +33,9 @@ const LABELS: Array<{ name: string; kind: string }> = [
   // (another repo/team must change code) vs `external-access` (credentials/billing/legal/permission).
   { name: "external-prereq", kind: "workflow" },
   { name: "external-code", kind: "subtype" }, { name: "external-access", kind: "subtype" },
+  // §21a sensitive-work routing: auth/permissions, payment/money, PII, secrets, data migration —
+  // forces the senior design tier; set by the FILER, never removed by hygiene.
+  { name: "sensitive", kind: "subtype" },
   // DL-32 (design §7): release/env labels — no new state, no schema ALTER. They ride this ensureLabels
   // backfill (INSERT OR IGNORE, idempotent), not a dedicated migration.
   { name: "env:dev", kind: "workflow" }, { name: "env:prod", kind: "workflow" },
