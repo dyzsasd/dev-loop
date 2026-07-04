@@ -3,6 +3,16 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 1.0.0-rc.2 — fixes on top of rc.1
+
+- **fix(plugin):** `install-claude-plugin` now pins the marketplace to THIS CLI's version. Without a pin
+  Claude Code resolved the npm `latest` dist-tag, which — for a prerelease published under `next` — silently
+  installed the OLD plugin and omitted the newest skills (`/dev-loop:add-project` etc.). `--version` overrides.
+- **fix(run):** the scheduler strips `CLAUDE_CODE_EFFORT_LEVEL` from each agent fire's env so the per-agent
+  `--effort` stays authoritative (the env var outranks the flag; an exported value flattened every agent).
+- **docs:** README rewritten to lead with the 1.0 team/workspace flow (init/import/add-project/add-repo/run,
+  cross-machine migration, workspace-commands table); config-schema effort-precedence note.
+
 ## 1.0.0-rc.1 — team / workspace model (code-complete; GA pending operator soak)
 
 ### 1.0 line — team / workspace model (in progress)
