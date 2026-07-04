@@ -237,8 +237,8 @@ rewrite, not a folder move), using these exact names.
 
 | State | Meaning | Who moves it here |
 |---|---|---|
-| `Backlog` | Idea captured but not yet ready for dev (optional parking) — **also the staging state for a design's child tickets** until the design gate promotes them to `Todo` (§21a) | PM/QA (incl. design-child staging by senior-dev, §21a) |
-| `Todo` | Groomed, ready to be picked up | PM/QA (on create, incl. a verify-fail follow-up), Dev (on un-block) |
+| `Backlog` | **The universal intake state (§5a)**: EVERY newly-discovered ticket lands here — PM ideation, QA bugs, Architect tech-debt, human intake (§9a) — plus a design's staged children (§21a). Not yet visible to any dev pick-query. | every filing agent + humans (on create); senior-dev (design-child staging, §21a) |
+| `Todo` | Groomed, ready to be picked up. **Reachable ONLY via PM promotion (§5a)** — with three carve-outs: an owner's verify-fail follow-up (already-groomed work, stays Todo), an un-block re-queue, and a CONFIRMED ops incident (prod-down cannot wait a PM fire). | PM (promotion, §5a); owner (verify-fail follow-up); Dev (un-block); Ops (confirmed incident only) |
 | `In Progress` | A Dev has claimed it and is actively working | Dev (claim) |
 | `In Review` | Dev finished; awaiting verification by the owner | Dev (done coding) |
 | `Human-Blocked` | **(`service` only)** Parked for the operator — an unresolvable human-only block (decision/credential/legal). The daemon periodically reminds the channel (§9 / DL-26). Resumes to `Todo` on resolution. | PM (when it can't resolve a block) / operator |
@@ -255,6 +255,18 @@ original). Each ticket is thus exactly **one verified increment**, and a failed 
 **superseded, never silently reopened** — so the history shows what shipped-but-failed vs
 what's now queued. If the follow-up needs a human decision, park it (`Human-Blocked` on
 `service`, §9). Never leave the original in `In Review`.
+
+**The shared verification standard (all owners, all layers).** Every verification —
+Dev's own Step 5.5 pass AND the owner's In Review check — classifies deltas against the
+ticket's spec with the same three classes: **MISSING** (the spec asked for it; the
+diff/behavior lacks it), **EXTRA** (the diff contains it; no AC asked for it — scope
+creep), **MISUNDERSTANDING** (the wrong thing was built). **Any hit = verify-fail, even
+when the code is clean.** And: the ticket/PR/handoff description is the implementer's
+SELF-CLAIM — use it to *locate* the change (commit, PR, routes, design pointer), never as
+*evidence*; every verdict input is the actual diff or the behavior you observed. Dev's
+Step 5.5 is the implementer's own gate; the owner's Stage-1 triage at In Review is the
+INDEPENDENT re-check of the same three classes — both run, always; the second exists
+precisely because the first is a self-claim.
 
 **Split-dev escalation rides this same rule, routed to senior-dev (§21a).** In a two-tier
 project (§21a), when a **junior-dev**-built ticket fails verification on a **real** acceptance-
@@ -309,6 +321,10 @@ Labels do triple duty: typing, ownership/routing, and workflow signalling.
   `Bug`/`Feature` that couldn't be covered in the fix itself (§15). Filed by Dev,
   owned by `qa` (QA verifies the test exists and passes); implemented like any
   other `Todo` ticket.
+- `sensitive` — the work touches {authn/authz/permissions, payment or money movement,
+  PII storage/handling, secrets/credentials, data migration/backfill/deletion}. Set by the
+  FILER at creation (same actor that sets the dev tier, §21a) and never removed by hygiene.
+  Routing consequence (§21a): `sensitive` ⇒ senior-dev, always — design before code.
 - `external-code` / `external-access` — the two **kinds** of external prerequisite
   (§9c), applied ALONGSIDE the `external-prereq` workflow label on the parked ticket
   and its tracker: `external-code` = another repo/team must change code (actionable
@@ -391,6 +407,30 @@ design **child** sits in `Backlog` (not `Todo`) until the design gate promotes i
 every pick set until then (§21a).
 
 ---
+
+### 5a. Backlog-first intake & the Todo depth cap
+
+**The board is the funnel; PM is the gate.** Every newly-discovered ticket — PM's own ideas,
+QA bugs, Architect tech-debt, human intake (§9a) — is filed `state:"Backlog"`, NEVER `Todo`.
+`Todo` is the *commitment* queue: what the team is actually going to build next, and only PM
+puts work there (the verify-fail follow-up, the un-block re-queue, and a confirmed ops
+incident are the sole carve-outs, §3). This kills the flood failure mode — a 30-finding
+audit night no longer buries the board; it deepens the Backlog, and PM meters it in.
+
+**PM's grooming & promotion pass (pm-agent Job B2), every fire:**
+1. Query `project` + `dev-loop` + `state:"Backlog"`, EXCLUDING staged design children
+   (tickets with a `Design:` pointer / relatedTo a non-Done design parent — the §21a gate
+   owns those).
+2. Groom: dedupe/merge (§8), `Cancel` stale or obsolete ideas (with a comment why), refine
+   vague ones into §6-conformant tickets (real ACs, type, owner, tier per §21a, repo target).
+3. Promote the top of the §5 pick order Backlog→Todo **only while** the Todo depth is below
+   the cap: `count(state:"Todo", not blocked)` < `intake.todoDepthCap` (config, default
+   **10**; per-tier counts in a split-dev project). Re-pass the full label set (§10).
+4. At/over the cap → promote nothing this fire (grooming still happens). A drained Todo is
+   refilled next PM fire — the loop's throughput, not the discovery rate, sets the pace.
+
+An ordinary Backlog ticket awaiting promotion is **normal**, not stranded — Sweep's
+stranded-child rule (§21a) applies only to design children whose parent is Done.
 
 ## 6. Ticket templates
 
@@ -659,7 +699,10 @@ URL), make **no** POST, and add **no** `notified` label.
 ### 9a. W3 — human-initiated intake (parent → Dev children; parent-close + back-link)
 
 A human may file work **directly into the loop** by creating a `dev-loop`-labelled
-ticket in `Todo` assigned to PM (the intake owner). This is **not** the §2 human
+ticket in **`Backlog`** assigned to PM (the intake owner) — never `Todo`: a human ticket is
+ALWAYS routed through PM (groom → promote, §5a); no human-filed ticket goes straight to a
+dev pick-query. (A `Todo` human filing is tolerated for discoverability — Sweep routes it
+back to Backlog+`needs-pm` for PM — but Backlog is the contract.) This is **not** the §2 human
 backlog — a `dev-loop`-labelled ticket born in this project's board is loop-fair-game;
 only an *un*-labelled ticket in the separate human backlog stays off-limits (init-only
 adoption).
@@ -1890,6 +1933,15 @@ prod-down fix is exactly not the place for the cheap tier); **Architect when it 
 `tech-debt` Improvement** (⇒ **junior-dev** — scoped, behavior-preserving refactors). An un-tiered
 ticket is invisible to BOTH dev pick-queries and strands until Sweep's slow-cadence repair.
 Same one rule:
+- **SENSITIVE ⇒ senior-dev, ALWAYS — this overrides every bullet below.** A ticket labelled
+  `sensitive` (§4: auth/permissions, payment/money, PII, secrets, data migration/deletion —
+  or whose ACs plainly touch those even unlabelled) goes to the senior tier even for a
+  one-line fix: senior produces a complete design FIRST (design-and-delegate for
+  module-scale work; for a small sensitive fix senior writes the design into the ticket
+  body — `Design: parent <id>` form — and may direct-code it). "When borderline, junior"
+  NEVER applies to sensitive work; a mis-routed sensitive ticket is re-tiered to senior,
+  never implemented by junior. Fully autonomous — no human gate; the protection is the
+  mandatory design step + the owner's independent verification, not a pause.
 - **new module / new feature** (needs a design) ⇒ assign **senior-dev** (design-and-delegate).
 - **improvement / bug-fix** (a scoped change) ⇒ assign **junior-dev**. (QA's findings are bug-fixes /
   drift-improvements by nature, so QA-filed tickets default to **junior-dev**.)
@@ -2236,6 +2288,17 @@ review→lessons loop; the two coexist (per-agent "what I did" vs Reflect's loop
 the loop did").
 
 ---
+
+### 22a. The team daily digest (director view)
+
+The operator is a director: they read ONE pushed message a day, not report trees. The
+communication agent (team scope) composes the digest per the contract in its SKILL — Team KPIs
+(verbatim from `dev-loop metrics`; board numbers via MCP on linear), QA quality (filed vs
+escaped), board flow (promotion pace, oldest In Review, W5 trackers), the north-star delta
+(reflect's weekly), and a "needs the director" section that is EMPTY on a good day — delivered
+via `dev-loop notify` (team.comms). Reflect (team scope) additionally writes ONE weekly
+consolidated team retrospective + the north-star delta. Numbers always come from code
+(`dev-loop metrics`) or explicit board queries — never from an agent's memory of what it did.
 
 ## 23. Reports in Linear — the `reports.sink` option
 

@@ -26,6 +26,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "next-project":   ["rotation"],                  // print the next project for an agent's fire (shared WRR cursor)
   "with-repo-lock": ["with-repo-lock"],            // serialize base-clone mutations on a shared repo
   notify:           ["comms"],                     // push a message to the team's slack/lark channel
+  metrics:          ["metrics"],                   // team KPIs from fires.jsonl (+ hub board on service)
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
@@ -82,7 +83,7 @@ if (cmd === "version" || cmd === "--version" || cmd === "-v") { console.log(vers
 const route = ROUTES[cmd];
 if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); process.exit(2); }
 
-const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub"]);
+const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics"]);
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {

@@ -15,6 +15,8 @@ import { hubDbPath } from "./paths.ts";
 import { tryResolveWorkspace, wsHubDb } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, type Workspace } from "./team-config.ts";
 import { checkLessonsBudget } from "./lessons.ts";
+import * as metricsMod from "./metrics.ts";
+const require_metrics = () => metricsMod;
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
 // the service runtime wiring (below). Library callers that only want the DB-integrity verdict (init-service
@@ -154,6 +156,14 @@ export function doctorWorkspace(ws: Workspace): boolean {
   // apply; the Linear MCP must be configured in USER scope or stewards are starved of the board.
   if (ws.file.team.backend === "linear")
     warn(`[W05] linear steward fires run at the workspace root — ensure the Linear MCP is configured in USER scope (a repo .mcp.json won't apply there)`);
+
+  // Director signal: 7d fire success from the fires.jsonl ledger (informational; a degrading agent —
+  // rising failures/timeouts/suspectErrors — should reach the operator without ssh'ing into logs).
+  try {
+    const { fireMetrics } = require_metrics();
+    const fm = fireMetrics(join(ws.root, ".dev-loop", "team", "fires.jsonl"), 7 * 86_400_000);
+    if (fm.fires > 0) info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect`);
+  } catch { /* metrics are informational */ }
 
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
   if (isGitWorkTree(ws.root)) {

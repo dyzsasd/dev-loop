@@ -170,6 +170,7 @@ type Options = {
   dryRun: boolean;
   devSplit: boolean;
   plan: number;          // team mode: print the next N (agent, project) picks and exit (0 = off)
+  intervalsExplicit: Set<Agent>; // agents whose cadence came from --interval (beats config cadence)
   project?: string;
   root: string;
   dataDir: string;
@@ -301,6 +302,7 @@ function parseArgs(argv: string[]): Options {
     dryRun: false,
     devSplit: false,
     plan: 0,
+    intervalsExplicit: new Set<Agent>(),
     root: process.env.DEVLOOP_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT || defaultRoot(),
     dataDir: defaultDataDir(),
     dataDirExplicit: false,
@@ -338,6 +340,7 @@ function parseArgs(argv: string[]): Options {
       const agent = raw.slice(0, eq);
       if (!AGENT_SET.has(agent)) die(`unknown agent in --interval '${agent}'`);
       intervals[agent as Agent] = parseDuration(raw.slice(eq + 1));
+      opts.intervalsExplicit.add(agent as Agent);
     } else if (a === "--once") opts.once = true;
     else if (a === "--plan") { opts.plan = Number(next()); if (!Number.isInteger(opts.plan) || opts.plan <= 0) die("--plan must be a positive integer"); }
     else if (a === "--dry-run") opts.dryRun = true;
@@ -785,6 +788,21 @@ type Slot = { agent: Agent; nextAt: number; running: boolean };
 type RunnerChild = ChildProcessByStdio<null, Readable, Readable>; // stdio: ["ignore","pipe","pipe"]
 const activeChildren = new Set<RunnerChild>();
 
+// Config-driven cadence (the `agents.<agent>.cadence` field): CLI --interval > config cadence >
+// built-in DEFAULT_INTERVALS. Previously `cadence` was seeded by `team init` and documented but NEVER
+// read — a dead knob whose silent default (10m ops) contradicted the seeded value. A malformed cadence
+// warns and keeps the default (a config typo must not kill the loop).
+function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string | undefined): void {
+  for (const agent of opts.agents) {
+    if (opts.intervalsExplicit.has(agent)) continue;              // --interval wins
+    const cad = cadenceFor(agent);
+    if (!cad) continue;
+    if (!/^\d+(?:\.\d+)?(ms|s|m|h|d)?$/.test(cad.trim())) { console.warn(`dev-loop run: ignoring malformed cadence '${cad}' for ${agent} (use e.g. "10m", "1h")`); continue; }
+    opts.intervals[agent] = parseDuration(cad.trim());
+    console.log(`dev-loop run: cadence ${agent}=${formatDuration(opts.intervals[agent])} (from config)`);
+  }
+}
+
 // Schema v2: a discoverable workspace is authoritative for BOTH config and state paths (hub db, data dir,
 // gate/lock/log roots). A workspace found-but-invalid is a hard stop (fix it, don't run stale).
 function resolveWs(opts: Options): Workspace | null {
@@ -806,6 +824,7 @@ async function main(): Promise<void> {
 
   const cfg = readProjects(opts.dataDir);
   const project = resolveProject(opts, cfg);
+  applyConfigCadence(opts, (agent) => (cfg?.projects?.[project] as { agents?: Record<string, { cadence?: string }> } | undefined)?.agents?.[agent]?.cadence);
   const cwd = resolveCwd(opts, cfg, project);
   if (!existsSync(cwd)) die(`cwd does not exist: ${cwd}`, 1);
   // Service-backend preflight: an unseeded project means every fire boots the hub MCP straight into its
@@ -943,6 +962,10 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   if (!candidates.length) die(`no enabled, positively-weighted project to fire in team '${ws.file.team.key}' (all disabled or weight:0?)`, 2);
 
   console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
+  applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence);
+  // Prod-monitoring guard: a team with health probes but no scheduled ops agent runs blind.
+  const hasProbes = Object.values(ws.file.repos).some((r) => !!(r.ops?.checks?.length) || !!r.deploy?.healthCheck || Object.values(r.deploy?.environments ?? {}).some((e) => !!e?.healthCheck));
+  if (hasProbes && !opts.agents.includes("ops")) console.warn(`dev-loop run: WARNING health probes are configured but 'ops' is not scheduled — prod incidents will go unnoticed. Launch with --agents core,ops (or all).`);
   console.log(`dev-loop run: agents=${opts.agents.map((a) => `${a}@${formatDuration(opts.intervals[a])}`).join(", ")}`);
 
   // A local WRR picker over just the (possibly filtered) candidate set, persisting the shared cursor.
@@ -978,6 +1001,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   const fireLedger = wsFireLedger(ws);
   fireLedgerPath = fireLedger; // recordFire appends here (backend-agnostic soak metric)
+  try { const { pruneFireLedger } = await import("./metrics.ts"); pruneFireLedger(fireLedger); } catch { /* best-effort */ }
 
   const cwdFor = (project: string): string | null => primaryRepo(ws, project);
 

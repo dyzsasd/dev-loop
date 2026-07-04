@@ -256,3 +256,19 @@ the **enabled projects** in your Scheduler context.
 --title "<t>" "<message>"`. It reads `team.comms` (slack/lark) and the webhook URL from the env var named
 in `webhookEnv` — you never see or handle the URL/secret (§16). This is a PUSH (digests, escalations) and
 is independent of the report **sink** (§23), which remains where the durable report is archived.
+
+**The team daily digest (the §22 digest contract — the director's one message a day).** Numbers
+come from code; narrative comes from you. Compose EXACTLY these sections, then push via
+`dev-loop notify --title "Daily <team> <date>"`:
+1. **Team KPIs** — run `dev-loop metrics --window 24h --json` and quote its numbers verbatim
+   (fires + success rate + suspectErrors; on service also throughput/accept-rate/blocked). On a
+   linear team, compute the board numbers yourself via MCP: shipped (→Done, 24h), verify-fails
+   (In Review→Canceled, 24h), Todo depth vs `intake.todoDepthCap`, blocked count by bail-shape.
+2. **QA quality** — bugs filed (24h) vs escaped-to-prod (`incident`/`signal` Bugs); re-test fails.
+3. **Board flow** — Backlog groomed/promoted by PM (its Job B2 close line), oldest In Review age,
+   W5 trackers open.
+4. **North-star delta** — one or two lines from reflect's latest weekly delta (see reflect); on
+   days without one, the newest strategy-doc Decisions entry, or "no movement".
+5. **Needs the director** — ONLY genuinely human-parked items (Human-Blocked / external-access
+   trackers); an empty section is a good day.
+Keep it under ~25 lines — a director reads ONE message, not a log.

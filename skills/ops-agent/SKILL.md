@@ -132,7 +132,17 @@ Only on a **confirmed, repeated** degradation (Job 1):
    hazard) in a **split-dev** project, keep — or add, if missing — the `senior-dev`
    tier marker (§21a; per-backend encoding per §18).
 2. **Otherwise file ONE incident Bug** (§6 Bug template) — `dev-loop` + `Bug` + `qa`
-   + the **`incident`** sub-label, in `Todo`. **Set the dev tier at filing (§21a):**
+   + the **`incident`** sub-label, in `Todo` — **the documented §5a urgent bypass**: a
+   CONFIRMED prod degradation is the one discovery that skips Backlog (it cannot wait a
+   PM grooming fire); everything else you file goes through §5a like every agent.
+3. **Instant alert (the operator gets paged, not surprised).** After filing (or on the
+   FIRST refresh of) a confirmed incident, push it to the team channel:
+   `dev-loop notify --level error --title "INCIDENT <project>" "<ticket-id>: <surface>
+   <symptom> since <first-seen>; priority <P>"` — **once per incident**: record
+   `notifiedAt` on the incident entry in `ops-state.json` so refreshes don't re-ping;
+   re-notify only on an escalation to Urgent (prod fully down). If `team.comms`/notify is
+   unconfigured, state that as a fact in your report (the daily digest is then the only
+   channel) — never invent a webhook. A failed notify never fails the fire. **Set the dev tier at filing (§21a):**
    in a **split-dev** project (detected only from §21a's explicit signals) route the
    incident to **senior-dev direct-code** — add a `Mode: direct-code` line to the
    body and encode the tier per backend (§18: assignee `senior-dev` on `service`;
@@ -165,7 +175,10 @@ Only on a **confirmed, repeated** degradation (Job 1):
 
 ### Job 3 — Close the loop on a recovered incident (report, don't verify)
 For each incident in `ops-state.json` whose failing probes now **pass** (and pass the
-re-check): add a dated comment `Prod recovered as of <time>; probes green again.` and
+re-check): add a dated comment `Prod recovered as of <time>; probes green again.`, and — if the
+incident was alerted (its `notifiedAt` marker is set) — close the bracket:
+`dev-loop notify --level info --title "RECOVERED <project>" "<ticket-id>: probes green
+again as of <time> (down <duration>)"` (an un-alerted blip stays silent). Then
 **drop it from `ops-state.json`'s open list** so a future failure files fresh. **Do
 NOT mark the ticket Done or move its state** — verifying the fix and closing the
 ticket is **QA's** job (the owner verifies In Review, §3). You only record that prod

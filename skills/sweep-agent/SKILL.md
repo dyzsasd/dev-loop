@@ -77,11 +77,13 @@ its owner label is picked up by **nobody**. Find and fix them:
     `Done`) → **finish the crashed promotion**: move it `Backlog → Todo` (PM's design-gate pass
     crashed mid-promote, §21a). If the parent is `Canceled` instead → `Cancel` the child too (it
     references a superseded design). Backlog is otherwise invisible to every dev pick-query.
-  - **No owner label** (`pm`/`qa` both absent) → assign the owner per type (§4):
-    `Feature` → `pm`; `Bug` → `qa` (an `incident` Bug is `qa` too, §4); `Improvement` →
-    `pm` by default, `qa` if it carries `coverage` or `tech-debt` (an Architect-filed
-    refactor is QA-verifiable, §4) or was clearly QA-driven. Re-pass the **full** label
-    set, then re-fetch to confirm (§10), and comment why.
+  - **No owner label** (`pm`/`qa` both absent) in `Todo` → this is UNPROCESSED INTAKE
+    that bypassed the §5a gate (usually a human filing straight to Todo). **Route it to
+    PM, don't legitimize it:** move `state:"Backlog"` + add `needs-pm` (re-pass the full
+    label set, §10), comment `routed to PM intake (§5a): un-owned Todo ticket`. PM's Job
+    B2 grooms + promotes it properly (owner, tier, sensitivity). In `Backlog`/other
+    states, assign the owner per type as before (`Feature`→`pm`; `Bug`→`qa`;
+    `Improvement`→`pm`, `qa` if `coverage`/`tech-debt`).
   - **Owner/type contradiction** (e.g. a `Bug` tagged `pm` only, a `Feature` tagged
     `qa` only) → fix the owner label to match type so the correct agent verifies it.
   - **Missing type label** (no `Feature`/`Bug`/`Improvement`) → if the title/body
@@ -100,9 +102,11 @@ its owner label is picked up by **nobody**. Find and fix them:
     (`Feature`/`Bug`/`Improvement`, not `blocked`, not a design parent awaiting its gate)
     that carries **neither** `senior-dev` nor `junior-dev` (the `assignee` actor on
     `service` / the dev-tier label on `linear`/`local`) is invisible to **both** dev
-    pick-queries — picked by nobody. **Route it: default `junior-dev`** (a scoped
-    bug-fix/improvement), `senior-dev` only if the title/body clearly describe a new
-    module/feature needing design ("when borderline, junior", §21a). Re-pass the full set
+    pick-queries — picked by nobody. **Route it: `sensitive`-labelled (or plainly
+    auth/payment/PII/secrets/data-migration) ⇒ `senior-dev`, ALWAYS (§21a override —
+    never downgrade sensitive work to the cheap tier); else default `junior-dev`** (a
+    scoped bug-fix/improvement), `senior-dev` only if the title/body clearly describe a
+    new module/feature needing design ("when borderline, junior", §21a). Re-pass the full set
     + re-fetch (§10), comment why. This is the §21a-named safety net for a filer that
     forgot the tier. The opposite fault is as bad: a ticket carrying **both** tier labels
     (possible on `linear`/`local`, where the shared Linear identity means both tiers'

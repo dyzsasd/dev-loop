@@ -108,7 +108,7 @@ export function teamInit(argv = process.argv.slice(2)): number {
     mode: o.mode ?? "dry-run",
     ...(parseComms(o.comms) ? { comms: parseComms(o.comms) } : {}),
     reports: { sink: o.reports ?? "files" },
-    agents: { sweep: { cadence: "30m" }, ops: { cadence: "1h" }, reflect: { cadence: "1d" }, communication: { cadence: "1d" } },
+    agents: { sweep: { cadence: "30m" }, ops: { cadence: "10m" }, reflect: { cadence: "1d" }, communication: { cadence: "1d" } },
   };
   const file: TeamFile = { schemaVersion: 2, team, repos: {}, projects: {} };
 

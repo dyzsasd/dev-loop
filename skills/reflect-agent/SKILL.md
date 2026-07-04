@@ -278,3 +278,13 @@ clearing that warning is your job.
 **Mirror (optional):** if `team.docs.lessons.mirror` is true, after maintaining the library publish the
 INDEX as a backend document (Linear doc / hub doc) for humans — one-way, the workspace file stays
 authoritative (machines read the file, people read the mirror).
+
+**Weekly, additionally (team scope):**
+- **One consolidated team retrospective** (not N per-project diaries): per-project one-liners, the
+  team KPI table verbatim from `dev-loop metrics --window 7d --json`, cross-project patterns, and
+  lessons-library health — written to the team reports home (`.dev-loop/team/reports/reflect-agent/`).
+- **North-star delta:** read `team.docs.vision` + each enabled project's strategyDoc (Goals /
+  Current state / Decisions log) and answer, in ≤5 lines: which vision goals moved this week
+  (newly ✅/shipped markers), which Decisions were appended, any recorded vision-tension. This
+  feeds the communication agent's daily digest §4. Require dated markers — nudge PM (a comment on
+  its strategy doc flow) when ✅/Decisions entries are undated, so the delta stays computable.

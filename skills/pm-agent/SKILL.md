@@ -7,7 +7,7 @@ description: >-
   In Review features" for a product wired into dev-loop. The PM reads the
   product's strategy doc, **proactively reviews the existing services** against a
   product-review rubric, exercises the real product, and files Feature/Improvement
-  tickets into Linear (Todo) — including improvements and net-new capabilities that
+  tickets into Linear (Backlog, §5a — PM promotes to Todo at pace) — including improvements and net-new capabilities that
   go beyond the strategy doc. It **keeps the strategy doc itself current** —
   recording shipped progress and any new direction it decides to pursue back into
   the doc so it stays a living north star, not a stale snapshot. It also verifies
@@ -140,7 +140,7 @@ the same ground every fire, rotate the **review lens** and track progress:
   code change. If `strategyDoc` is a Linear document, also skim any sibling/linked design
   docs the project references (e.g. an Architecture/Design appendix) for new direction.
 - **Steady-state is a throttle, not a full stop.** Once **every** rubric lens has
-  been swept at the current SHA *and* the `Todo` backlog is healthily deep with
+  been swept at the current SHA *and* the `Todo` queue is at its `intake.todoDepthCap` (§5a) with
   unworked tickets, report the terse no-op ("all review lenses swept at `<sha>`;
   Todo backlog deep — waiting on Dev / a HEAD change") and stop *for that fire*.
   Re-open a full rotation when `HEAD` moves materially, **when the project doc
@@ -186,8 +186,16 @@ For each (oldest first):
    confirmed even that far, leave it `In Review` (inconclusive, not a pass) and note that the
    authed-UI check needs the operator's attended path (a browser session — e.g. QA in Claude
    Desktop with the Chrome extension). Record this as a lessons.md rule so it's not re-litigated.
+2b. **Stage 1 — spec-compliance triage (BEFORE any quality/UX judgement, §3 shared
+   standard).** Fetch the actual shipped diff (the commit/PR the handoff cites; in pr-mode
+   the PR diff, §12b) and read it against the ticket's ACs + Context. Classify every
+   delta: **MISSING** (AC asked, diff/behavior lacks) / **EXTRA** (diff has it, no AC
+   asked — scope creep) / **MISUNDERSTANDING** (wrong thing built). **Any hit ⇒
+   verify-fail (step 4), even if the code is clean and the exercised ACs pass.** Note:
+   the handoff comment is the implementer's SELF-CLAIM — use it only to locate the
+   change, never as evidence.
 3. Check every acceptance-criteria box that passes.
-4. **Pass** → `state:"Done"`, comment summarizing what you confirmed.
+4. **Pass** (all ACs pass AND Stage 1 is clean) → `state:"Done"`, comment summarizing what you confirmed.
    **Fail** → **close + follow-up** (design §11 / conventions §3): set the original
    `state:"Canceled"` with a comment `review failed: <which criteria + the observed
    behaviour>; superseded by <new-id>`, **then create a follow-up** ticket carrying the
@@ -343,6 +351,25 @@ scoop up another agent's uncommitted work.
    Any blocker still open → leave it, no comment.
 
 
+### Job B2 — Groom the Backlog & promote at pace (§5a)
+
+You are the ONLY gate between discovery and commitment. Every fire:
+
+1. Query `project` + `label:"dev-loop"` + `state:"Backlog"`, **excluding** staged design
+   children (a `Design:` pointer / relatedTo a non-Done design parent — the §21a gate owns
+   those; touching them here double-promotes).
+2. **Groom:** dedupe/merge (§8 — set `duplicateOf`, one canonical survivor); `Cancel`
+   stale/obsolete ideas with a comment why; refine vague tickets into §6 shape (real ACs,
+   type, owner label, dev tier per §21a — incl. the `sensitive` ⇒ senior override — and the
+   `repo:<name>` target in multi-repo). A human intake found here (`needs-pm`) is groomed
+   the same way, then clears `needs-pm`.
+3. **Promote** Backlog→Todo in §5 pick order, **only while**
+   `count(state:"Todo", not blocked)` < `intake.todoDepthCap` (config; default 10 —
+   per-tier counts in split-dev). Re-pass the full label set per move (§10), verify after
+   write.
+4. At/over the cap: promote nothing — grooming still happened, and that's a valid fire.
+   Report `promoted <n>, groomed <m>, canceled <k>, Todo depth <d>/<cap>` in your close.
+
 ### Job C — Review the existing services & propose improvements + new features
 Review through the **lens the preflight selected** (one lens per fire on an
 unchanged SHA; `strategy-gaps` first on a new SHA). The `strategyDoc` is your
@@ -372,7 +399,11 @@ capabilities that make the product better, even when they aren't written in the 
 4. File survivors with the right type: a missing/new capability → **Feature**; a
    refinement of something that already exists → **Improvement**. Use the template
    (conventions §6), labels `dev-loop` + `Feature`/`Improvement` + `pm`, a
-   `priority` (1=Urgent…4=Low) reflecting impact, `state:"Todo"`, set `project`.
+   `priority` (1=Urgent…4=Low) reflecting impact, **`state:"Backlog"`** (§5a — the
+   universal intake state; your own Job B2 promotes at pace, so your ideas queue like
+   everyone else's), set `project`. **Sensitive classification (§4/§21a):** work touching
+   auth/permissions, payment/money, PII, secrets, or data migration/deletion gets the
+   `sensitive` label at THIS filing step — it forces the senior design tier.
    **Dev model & tier routing:** conventions §21a — split-dev is detected ONLY from the
    explicit signals (`devSplit:true` config / `DEVLOOP_DEV_SPLIT` runtime), never inferred
    from history/models{}/tickets; every filed dev ticket gets its tier per the §21a Routing

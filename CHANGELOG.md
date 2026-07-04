@@ -3,6 +3,37 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased (rc.3 candidates) — the autonomy overhaul (operator = director)
+
+- **Backlog-first intake (§5a, NEW).** Every discovery filing (PM ideation, QA bugs, Architect
+  tech-debt, human intake §9a) now lands in `Backlog`; `Todo` is the commitment queue reachable ONLY
+  via PM's new **Job B2** (groom: dedupe/merge/cancel/refine → promote in §5 order while
+  `intake.todoDepthCap` — default 10 — holds). Carve-outs: verify-fail follow-ups, un-block
+  re-queues, confirmed ops incidents (the urgent bypass). Sweep now ROUTES un-owned Todo strays back
+  to Backlog+needs-pm instead of legitimizing them — a human ticket can no longer bypass PM.
+- **Sensitive-work routing (§21a override, NEW).** Auth/permissions, payment/money, PII, secrets,
+  data-migration work gets the `sensitive` label (seeded) at filing ⇒ senior-dev ALWAYS, design
+  before code; junior bails a mis-routed sensitive ticket; single-dev mode designs-then-codes;
+  Sweep never tier-downgrades sensitive work. Fully autonomous — the protection is the mandatory
+  design + independent verification, not a human pause.
+- **Ops instant alerting + the cadence fix.** ops pushes `dev-loop notify --level error` once per
+  CONFIRMED incident (+ a recovery message; notifiedAt tracked); add-repo now interviews health/
+  version endpoints + critical routes + a logs command (`--critical-route`/`--logs-command` flags);
+  doctor warns **W07** for a deployed repo with no probe; `dev-loop run` warns when probes exist but
+  ops isn't scheduled. **Bug fix:** `agents.<agent>.cadence` was seeded + documented but NEVER read —
+  the scheduler now resolves CLI `--interval` > config cadence > built-ins (team-init seeds ops 10m).
+- **Verification standard (§3).** MISSING/EXTRA/MISUNDERSTANDING promoted to the shared owner-side
+  standard: PM Job A gains a Stage-1 spec-compliance triage on the ACTUAL diff (scope creep is now
+  detectable), QA re-tests gain a diff skim, and both verify jobs carry "the handoff is a
+  self-claim — locate with it, never judge by it". Dev's own Step 5.5 stays the first line.
+- **Director metrics (W5).** New `hub/src/metrics.ts` + `dev-loop metrics [--window 7d] [--json]`:
+  fire success/timeouts/suspectErrors + per-agent medians from fires.jsonl (all backends) and
+  throughput/accept-rate/blocked/QA-escape-ratio from hub events (service). fires.jsonl now rotates
+  (90d) at scheduler start; doctor prints the 7d fire success line. conventions §22a defines the
+  team daily digest contract (communication pushes ONE director message a day via team.comms;
+  numbers from code, narrative from the LLM); reflect (team scope) adds a weekly consolidated team
+  retrospective + the north-star delta against team.docs.vision.
+
 ## Unreleased (rc.3 candidates) — cross-machine test findings (9-item list)
 
 - **W5 external-prerequisite tracker (§9c, NEW).** An `external-prereq` park is no longer a dead end:

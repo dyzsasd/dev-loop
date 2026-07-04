@@ -531,6 +531,20 @@ rotation cursor, `fires.jsonl`), `lessons/` (INDEX + per-project shards + archiv
 (worktrees), `locks/`, `hub.db` + `daemon.json` (service). `~/.dev-loop/` keeps only the convenience
 index.
 
+**Intake & pacing (§5a):** `projects.<key>.intake.todoDepthCap` (default **10**) — PM promotes
+Backlog→Todo only while `count(Todo, not blocked)` is below the cap (per-tier in split-dev). All
+discovery filings land in `Backlog`; `Todo` is PM-promotion-only (carve-outs: verify-fail
+follow-ups, un-block re-queues, confirmed ops incidents).
+
+**Agent cadence:** `team.agents.<agent>.cadence` (duration literal, e.g. `"10m"`/`"1h"`/`"1d"`) is
+read by `dev-loop run` — resolution: CLI `--interval` > config cadence > built-in defaults. v1:
+`projects.<key>.agents.<agent>.cadence`. A malformed value warns and keeps the default.
+
+**Ops probes:** `repos.<ref>.ops = { checks?: [url|cmd], criticalRoutes?: [path], logsCommand?: cmd }`
+plus `deploy.healthCheck` / `deploy.environments.<env>.healthCheck`. A deployed repo with NO probe
+draws doctor warning **W07** (ops-agent would be blind). ops pushes a confirmed incident to the team
+channel via `dev-loop notify --level error` (once per incident) and a recovery message when green.
+
 **Commands** (all pure CLI): `dev-loop team init` (create a workspace — no LLM, no backend calls),
 `dev-loop team import` (one-shot v1→v2 into the current workspace), `dev-loop team repair` (fix
 worktrees/index/WAL after a move), `dev-loop doctor` (read-only verdict). Backend writes (create Linear
