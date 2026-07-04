@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased (rc.3 candidates) — the autonomy overhaul (operator = director)
+## 1.0.0-rc.3 — the autonomy overhaul (operator = director) + field-fix batch
 
 - **Backlog-first intake (§5a, NEW).** Every discovery filing (PM ideation, QA bugs, Architect
   tech-debt, human intake §9a) now lands in `Backlog`; `Todo` is the commitment queue reachable ONLY
@@ -34,7 +34,7 @@ experience** — a real failure observed while the agents ran, then hardened int
   numbers from code, narrative from the LLM); reflect (team scope) adds a weekly consolidated team
   retrospective + the north-star delta against team.docs.vision.
 
-## Unreleased (rc.3 candidates) — cross-machine test findings (9-item list)
+### rc.3 also ships — cross-machine test findings (9-item list)
 
 - **W5 external-prerequisite tracker (§9c, NEW).** An `external-prereq` park is no longer a dead end:
   Dev bails now tag `External-kind: code|access` (+ `external-code`/`external-access` labels, seeded);
