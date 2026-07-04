@@ -60,12 +60,27 @@ try {
 
   // ── fires.jsonl ledger: a real --once fire (fake CLI bin) appends a row on BOTH backends ──
   const fakeBin = join(tmp, "fake-claude.sh");
-  writeFileSync(fakeBin, "#!/bin/sh\nexit 0\n"); chmodSync(fakeBin, 0o755);
+  // Prints a line: a truly silent exit-0 is (correctly) flagged suspectError — a healthy CLI always emits output.
+  writeFileSync(fakeBin, "#!/bin/sh\necho 'fire ok'\nexit 0\n"); chmodSync(fakeBin, 0o755);
   const once = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: fakeBin });
   const ledger = join(ws, ".dev-loop", "team", "fires.jsonl");
   ok(once.code === 0 && existsSync(ledger), "--once with a fake CLI fires and writes the fires.jsonl ledger");
   const rows = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   ok(rows.length >= 1 && rows[0].agent === "pm" && ["alpha", "beta"].includes(rows[0].project) && rows[0].exitCode === 0, "ledger row carries agent/project/exitCode (backend-agnostic soak metric)");
+
+  // ── suspectError: a CLI that prints "Execution error" and exits 0 must be flagged in the ledger ──
+  {
+    const crashBin = join(tmp, "crash-claude.sh");
+    writeFileSync(crashBin, "#!/bin/sh\necho 'Execution error'\nexit 0\n"); chmodSync(crashBin, 0o755);
+    const r = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: crashBin });
+    ok(/suspectError/.test(r.out), "the scheduler warns on an exit-0 fire whose output is a failure marker");
+    const rows2 = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const last = rows2[rows2.length - 1];
+    ok(last.exitCode === 0 && last.suspectError === true && /Execution error/.test(last.outputTail ?? ""),
+      "the ledger row carries suspectError + the output tail (fake success no longer masked)");
+    const healthy = rows2.find((row: { suspectError?: boolean }) => row.suspectError === undefined);
+    ok(!!healthy, "healthy fires carry NO suspectError flag (narrow detection, no false positives)");
+  }
 
   // ── regression: a shell-exported CLAUDE_CODE_EFFORT_LEVEL must NOT leak into agent fires (it would
   //    override the per-agent --effort; precedence is env > --effort > model default). The scheduler strips it.

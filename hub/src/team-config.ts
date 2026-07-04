@@ -53,6 +53,8 @@ export interface ProjectEntry {
   strategyDoc?: DocRef;
   testEnv?: { baseUrl?: string; authConstraint?: string };
   devSplit?: boolean;
+  blockedStateName?: string | null;   // a real Linear "Blocked" column name; null → the `blocked` label park (§9)
+  notify?: unknown;                   // v1-era per-project notify block (passthrough; team.comms is canonical on v2)
   agents?: unknown;
   models?: unknown;
   efforts?: unknown;
@@ -320,6 +322,10 @@ export function toLegacyView(ws: Workspace): LegacyProjectsConfig {
     });
     const primary = primaryRepo(ws, key);
     projects[key] = {
+      // Passthrough FIRST: any operator-set field the v2 schema doesn't model explicitly (blockedStateName,
+      // a v1-era notify block kept by `team import`, communication, …) must survive into the legacy view —
+      // a whitelist here silently strips config that agents/daemon read (the blockedStateName bug).
+      ...(p as unknown as Record<string, unknown>),
       backend: t.backend,
       linearTeam: t.linearTeam,
       linearProject: p.linearProject,
@@ -340,7 +346,13 @@ export function toLegacyView(ws: Workspace): LegacyProjectsConfig {
       codingAgentDefaults: eff.codingAgentDefaults,
       deployPolicy: t.deployPolicy,
       comms: t.comms,
-      ...(primary ? { repoPath: primary } : {}),
+      // notify bridge: v1 consumers (the daemon's human-park pings, agent prompts) read a per-project
+      // `notify` block. On v2 the canonical channel is team.comms — bridge it to the legacy shape unless
+      // the project carries its own passthrough notify (env-var NAME only; never a URL, §16/I5).
+      ...(p.notify === undefined && t.comms ? { notify: { type: t.comms.provider, webhookEnv: t.comms.webhookEnv } } : {}),
+      // repoPath is COMPUTED from the registry (or absent): a stale hand-written literal riding the
+      // passthrough must not hijack cwd→project resolution on a zero-repo project.
+      repoPath: primary ?? undefined,
       repos,
     };
   }

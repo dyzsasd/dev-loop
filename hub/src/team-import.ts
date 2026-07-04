@@ -80,6 +80,11 @@ export function teamImport(argv = process.argv.slice(2)): number {
     const v1p = v1.projects![srcKey];
     if (v1p.backend && v1p.backend !== teamBackend)
       die(`project '${srcKey}' is backend:'${v1p.backend}' but the team backend is '${teamBackend}' — one team, one backend (I3). Import it into a separate ${v1p.backend} workspace.`);
+    // linearTeam is re-homed to the TEAM level — a mismatch would silently re-target every ticket to the
+    // workspace's team, so it is a hard stop (same shape as the backend-mismatch guard above).
+    const v1Team = (v1p as { linearTeam?: string }).linearTeam;
+    if (teamBackend === "linear" && v1Team && ws.file.team.linearTeam && v1Team !== ws.file.team.linearTeam)
+      die(`project '${srcKey}' is linearTeam:'${v1Team}' but this workspace is team '${ws.file.team.linearTeam}' — import it into a workspace for that Linear team instead.`);
     if (file.projects[key]) die(`project '${key}' already exists in the workspace dev-loop.json; use --rename`);
 
     // Registry entries from repoPath / repos[].
@@ -104,15 +109,52 @@ export function teamImport(argv = process.argv.slice(2)): number {
         }
         file.repos[ref] = entry;
         if (!inside) plan.push(`MOVE  repo '${ref}' is OUTSIDE the workspace (${abs}); registered at '${entry.path}'. Run:  mv ${abs} ${join(ws.root, entry.path)}`);
+      } else {
+        // The ref is already registered (add-repo earlier, or a repo shared across imported projects).
+        // Physical fields live ONCE on the registry (§4.2): MERGE each v1 field the entry LACKS (a bare
+        // add-repo registration followed by an import must not lose build/deploy facts — they'd land
+        // nowhere and fires would run with no gates); a CONFLICTING value is kept registry-wins + surfaced.
+        const existing = file.repos[ref] as unknown as Record<string, unknown>;
+        const conflicts: string[] = [];
+        for (const f of ["landing", "autoMerge", "mergeChecks", "build", "deploy", "ops"] as const) {
+          const v = (r as Record<string, unknown>)[f] ?? (v1p as Record<string, unknown>)[f];
+          if (v === undefined) continue;
+          if (existing[f] === undefined) { existing[f] = v; plan.push(`MERGE  repo '${ref}': adopted ${f} from project '${srcKey}' (registry entry lacked it)`); }
+          else if (JSON.stringify(v) !== JSON.stringify(existing[f])) conflicts.push(f);
+        }
+        if (conflicts.length) plan.push(`WARN  repo '${ref}' already registered — project '${srcKey}' carried DIFFERENT ${conflicts.join("/")}; kept the registry values (physical facts live once, §4.2). Review manually if intentional.`);
       }
       refs.push({ ref, role: r.role });
     }
 
     const proj: ProjectEntry = { repos: refs };
     const projBag = proj as unknown as Record<string, unknown>;
-    for (const f of ["strategyDoc", "testEnv", "devSplit", "linearProject", "linearProjectId", "agents", "models", "efforts", "defaultCodingAgent", "codingAgentDefaults"] as const) {
-      const v = (v1p as Record<string, unknown>)[f];
-      if (v !== undefined) projBag[f] = v;
+    // Generic passthrough: EVERY v1 project field survives except the ones this import re-homes (physical
+    // repo facts → the registry; backend/linearTeam → team; notify → handled below). A whitelist here
+    // silently dropped operator config (blockedStateName, communication, …) — never again.
+    const REHOMED = new Set(["repoPath", "repos", "backend", "linearTeam", "notify", "landing", "autoMerge", "mergeChecks", "build", "deploy", "ops"]);
+    for (const [f, v] of Object.entries(v1p as Record<string, unknown>)) {
+      if (!REHOMED.has(f) && v !== undefined) projBag[f] = v;
+    }
+    // notify: lift the env-name form to team.comms (the v2 canonical channel) when comms is unset; keep an
+    // env-name notify as a project passthrough for the legacy daemon path; NEVER copy an inline webhook/secret
+    // literal into dev-loop.json (§16/I5 — the workspace folder must stay copyable with zero secrets).
+    const notify = (v1p as { notify?: Record<string, unknown> }).notify;
+    if (notify && typeof notify === "object") {
+      const clean: Record<string, unknown> = { ...notify };
+      const stripped: string[] = [];
+      if (typeof clean.webhook === "string") { delete clean.webhook; stripped.push("webhook"); }
+      if (typeof clean.secret === "string") { delete clean.secret; stripped.push("secret"); }
+      if (stripped.length) plan.push(`NOTIFY project '${srcKey}': inline ${stripped.join("+")} NOT copied into dev-loop.json (§16/I5) — export the value in an env var and set notify.webhookEnv/secretEnv instead`);
+      // Only keep a passthrough notify that is still USABLE (has an env-name webhook). A stripped husk
+      // ({type} with no webhookEnv) would suppress the team.comms bridge in toLegacyView while itself
+      // resolving to nothing — permanently killing human-park pings for this project.
+      if (typeof clean.webhookEnv === "string") projBag.notify = clean;
+      const envName = notify.webhookEnv;
+      if (!file.team.comms && (notify.type === "slack" || notify.type === "lark") && typeof envName === "string" && /^[A-Z][A-Z0-9_]*$/.test(envName)) {
+        file.team.comms = { provider: notify.type, webhookEnv: envName };
+        plan.push(`COMMS  team.comms ← project '${srcKey}' notify (${notify.type}, env ${envName})`);
+      }
     }
     file.projects[key] = proj;
     plan.push(`CONFIG project '${srcKey}'${key !== srcKey ? ` → '${key}'` : ""}: ${refs.length} repo ref(s) [${refs.map((r) => r.ref).join(", ")}]`);

@@ -3,6 +3,31 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased (rc.3 candidates) — cross-machine test findings (9-item list)
+
+- **W5 external-prerequisite tracker (§9c, NEW).** An `external-prereq` park is no longer a dead end:
+  Dev bails now tag `External-kind: code|access` (+ `external-code`/`external-access` labels, seeded);
+  PM creates/dedupes a TRACKER ticket per external need (code-kind → a real ticket in the owning
+  project / a §9b team intake; access-kind → human-park + notify once); the parked ticket is linked with
+  a REAL blocking edge (linear: `save_issue blockedBy` — native, append-only; service/local: a
+  `Blocked-by: <id>` marker comment); PM auto-unparks when all blockers are Done/Canceled, Sweep
+  backstops + closes orphan trackers. Kills "work rotting behind a label until a human re-reads comments".
+- **fix(config): toLegacyView passthrough + notify bridge.** The legacy view spread a WHITELIST, silently
+  dropping operator fields (`blockedStateName`, `communication`, …) and never emitting `notify` — so on a
+  v2 workspace the daemon's human-park pings silently no-oped. Now the raw project entry passes through
+  first, and `team.comms` bridges to the legacy per-project `notify {type, webhookEnv}` unless the project
+  carries its own.
+- **fix(import): generic field passthrough + notify→comms lift.** `team import` now preserves every v1
+  project field it doesn't re-home, lifts an env-name `notify` to `team.comms`, and STRIPS inline
+  webhook/secret literals (never copied into dev-loop.json, §16/I5) with exact guidance printed.
+- **feat(run): suspectError detection.** A fire that exits 0 while its output is a failure marker
+  ("Execution error"/"API Error"/bare "Error:" as the LAST line, or zero output at all) is flagged
+  `suspectError` + `outputTail` in fires.jsonl and the hub event — fake successes no longer poison the
+  success-rate ledger. Detection is tail-anchored (no false positives on error text an agent echoed mid-run).
+- **labels:** `external-prereq` + `external-code`/`external-access` seeded; add-project/init ensure them;
+  init's readiness checklist now includes explicit Blocked-state (`blockedStateName`) and outward-channel
+  rows (silently-skipped ≠ decided).
+
 ## 1.0.0-rc.2 — fixes on top of rc.1
 
 - **fix(plugin):** `install-claude-plugin` now pins the marketplace to THIS CLI's version. Without a pin

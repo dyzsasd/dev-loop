@@ -309,6 +309,13 @@ Labels do triple duty: typing, ownership/routing, and workflow signalling.
   `Bug`/`Feature` that couldn't be covered in the fix itself (§15). Filed by Dev,
   owned by `qa` (QA verifies the test exists and passes); implemented like any
   other `Todo` ticket.
+- `external-code` / `external-access` — the two **kinds** of external prerequisite
+  (§9c), applied ALONGSIDE the `external-prereq` workflow label on the parked ticket
+  and its tracker: `external-code` = another repo/team must change code (actionable
+  inside the team → file the ask as a real ticket and block on it); `external-access`
+  = credentials / billing / legal / permission only a human can grant (→ human-park
+  the tracker + notify). The kind decides routing; without it every external park
+  degrades to "wait for a human to read comments".
 
 **Ownership / routing (every ticket carries exactly one owner label):**
 - `pm` — PM owns it (PM verifies). On every `Feature`, and on `Improvement`s by
@@ -338,6 +345,9 @@ both (harmless extra labels on `service`).
 
 **Workflow signalling:**
 - `blocked` — Dev couldn't proceed; needs owner attention (§9).
+- `external-prereq` — the park marker for a ticket waiting on something OUTSIDE the
+  loop; always paired with a kind sub-label (`external-code`/`external-access`) and,
+  from §9c, a TRACKER ticket the parked work is blocked by.
 - `needs-pm` / `needs-qa` — routes a blocked ticket to the right owner.
 - `notified` — set by PM after it has announced a human-parked ticket to the operator's
   out-of-band channel (§9 notify), so it is announced exactly once. Dropped when the ticket
@@ -521,8 +531,14 @@ dependency, or a suspected-but-unconfirmed duplicate — it does **not** guess:
      (QA Job B), even if not tagged `needs-qa`.
    - **decision-needed / scope-design** (a product/scoping call) → PM (`needs-pm`)
      or the bug's owner.
-   - **external-prereq** (real credentials/money/legal, or a capability this run
-     lacks) → park for the user; report as a fact (§12a), don't retry.
+   - **external-prereq** → park + hand to the §9c tracker protocol; report as a
+     fact (§12a), don't retry. The bail comment MUST add a second machine-parseable
+     line naming the kind — `External-kind: code` (another repo/team must change
+     code) or `External-kind: access` (credentials/money/legal/permission) — and apply
+     the **`external-prereq` workflow label PLUS** the matching kind sub-label
+     (`external-code`/`external-access`) — the W5 queries key on `blocked`+
+     `external-prereq`; a park without the label is invisible to the tracker pass. The kind decides whether
+     PM can route it as real work inside the team or must human-park it.
    - **fix-exhausted** (tried, couldn't make the gates/self-review pass) → don't
      blindly re-attempt; it needs new info or a different approach. Cap blind
      retries at 2 — the 3rd is a block, not another attempt.
@@ -702,6 +718,48 @@ In Review and names the blocker if any child is parked. Split is idempotent (chi
 split); responsibility comes from the `team.docs.vision` project descriptions, and PM parks to the operator
 rather than guess. No new state machine — §9a mechanics, one level up. Same team (= same backend) only;
 cross-team collaboration does not exist (I3).
+
+### 9c. W5 — the external-prerequisite tracker (park → block → auto-unpark)
+
+An `external-prereq` park used to be a dead end: a label + a comment, resurrected only
+if a human happened to read it. W5 makes the dependency a first-class, machine-walkable
+edge with an owner and an exit condition. No new state machine — three steps:
+
+1. **Track.** PM (Job B), on discovering an `external-prereq` park without a tracker:
+   create ONE dedicated tracker ticket for the external need (dedupe first — several
+   parked tickets can share a tracker). `external-prereq` + the kind sub-label; type
+   `Improvement`; owner `pm`. By kind:
+   - `external-code` → the need is actionable INSIDE the team: file the ask as a real
+     ticket in the owning project (cross-project → a §9b team intake) — THAT ticket is
+     the tracker; it flows through the normal loop.
+   - `external-access` → only a human can clear it: tracker goes to the human park
+     (`Human-Blocked` on `service`; `blocked`+`needs-pm` park on linear/local) and PM
+     notifies the operator (§9 notify / `dev-loop notify`) — once (`notified`).
+2. **Block.** Link the parked ticket to its tracker with a REAL blocking edge, not
+   `relatedTo`: on **linear**, `save_issue(id: <parked>, blockedBy: [<tracker>])`
+   (append-only; `removeBlockedBy` to clear). On **service/local** (no native relation),
+   write a machine-parseable marker comment on the parked ticket —
+   `Blocked-by: <tracker-id>` on its own line — the §18 per-backend encoding of the same
+   edge. `relatedTo` remains for kinship; it is NEVER a blocking edge.
+3. **Auto-unpark.** Every PM fire (Sweep backstops it): query open `blocked` +
+   `external-prereq` tickets; resolve each one's blockers (linear: the issue's
+   blockedBy relations; service/local: the `Blocked-by:` markers). **A ticket with ZERO
+   blocker edges is NEVER an unpark candidate** — the empty set is vacuously "all
+   resolved", but it just means step 1 hasn't run (or it IS a tracker): route it to
+   step 1 / the digest instead. **≥1 blocker AND** ALL blockers
+   `Done`/`Canceled` → unpark: remove `blocked` + `external-prereq` (+ kind), move back
+   to `Todo`, drop `notified`, and **retire the edge** — linear: the SAME `save_issue`
+   passes `removeBlockedBy: [<each resolved tracker>]`; service/local (comments are
+   append-only): the unpark comment carries one machine-parseable line per resolved
+   blocker — `Unblocked-by: <tracker-id>` — and edge resolution counts a `Blocked-by:
+   <id>` marker as LIVE only when no later `Unblocked-by: <id>` exists. Without edge
+   retirement, a later re-park inherits stale Done blockers and instantly self-unparks. Any blocker
+   still open → leave parked (no comment spam). A tracker with no live parked
+   dependents is closed by Sweep in its hygiene pass.
+
+Trackers are ordinary tickets — visible on the board, reported in digests, countable.
+The failure mode this kills: work silently rotting behind a label because the human
+forgot which comment said what was needed.
 
 ## 10. Querying Linear without drowning
 

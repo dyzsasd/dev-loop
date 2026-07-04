@@ -77,6 +77,54 @@ try {
   const events = JSON.parse(ev.stdout.trim());
   ok(events.length === 2 && events.every((e: { id: number }, i: number) => e.id === i + 1) && events.map((e: { kind: string }) => e.kind).join(",") === "e.a,e.b", "import copies events with fresh sequential ids, order preserved (re-key)");
 
+  // ── import passthrough + notify handling (the blockedStateName / comms-unification fixes) ──
+  {
+    const svc2 = join(tmp, "svc2");
+    run("team", ["init", "--dir", svc2, "--key", "svc2-team", "--backend", "service"]);
+    mkdirSync(join(svc2, "r2"), { recursive: true });
+    writeFileSync(join(tmp, "legacy2.json"), JSON.stringify({ projects: {
+      web2: { backend: "service", repoPath: join(svc2, "r2"), blockedStateName: "Blocked",
+              communication: { articles: true },
+              notify: { type: "lark", webhookEnv: "DEVLOOP_NOTIFY_HOOK", webhook: "https://secret.example/inline-TOKEN", events: ["human-parked"] } },
+    } }));
+    const im2 = run("team", ["import", "--from", join(tmp, "legacy2.json")], { cwd: svc2 });
+    ok(im2.code === 0, "import (passthrough fixture) exits 0");
+    ok(/inline webhook NOT copied/.test(im2.out), "import warns that an inline webhook URL is not copied (I5)");
+    ok(/team\.comms ← project 'web2' notify/.test(im2.out), "import lifts the env-name notify to team.comms");
+    const cfg2 = readJson(join(svc2, "dev-loop.json"));
+    ok(cfg2.projects.web2.blockedStateName === "Blocked", "import passes through blockedStateName");
+    ok(cfg2.projects.web2.communication?.articles === true, "import passes through arbitrary operator fields");
+    ok(cfg2.team.comms?.provider === "lark" && cfg2.team.comms?.webhookEnv === "DEVLOOP_NOTIFY_HOOK", "team.comms lifted from the v1 notify block");
+    ok(!JSON.stringify(cfg2).includes("inline-TOKEN"), "the inline webhook URL never lands in dev-loop.json (I5)");
+    ok(cfg2.projects.web2.notify?.webhookEnv === "DEVLOOP_NOTIFY_HOOK" && !("webhook" in cfg2.projects.web2.notify), "the env-name notify survives as a project passthrough, minus the literal");
+  }
+
+  // ── import: notify HUSK (inline url only, no env) is dropped entirely — must not suppress the comms bridge ──
+  {
+    const svc3 = join(tmp, "svc3");
+    run("team", ["init", "--dir", svc3, "--key", "svc3-team", "--backend", "service"]);
+    mkdirSync(join(svc3, "r3"), { recursive: true });
+    writeFileSync(join(tmp, "legacy3.json"), JSON.stringify({ projects: {
+      web3: { backend: "service", repoPath: join(svc3, "r3"), notify: { type: "slack", webhook: "https://hooks.slack.com/only-inline" } },
+    } }));
+    const im3 = run("team", ["import", "--from", join(tmp, "legacy3.json")], { cwd: svc3 });
+    ok(im3.code === 0 && /inline webhook NOT copied/.test(im3.out), "husk import warns about the stripped inline webhook");
+    const cfg3 = readJson(join(svc3, "dev-loop.json"));
+    ok(!("notify" in cfg3.projects.web3), "a webhookEnv-less notify husk is DROPPED (it would suppress the comms bridge while resolving to nothing)");
+    ok(!JSON.stringify(cfg3).includes("only-inline"), "the inline URL never lands in dev-loop.json");
+  }
+
+  // ── import rejects a linearTeam mismatch (tickets must not silently re-target another team) ──
+  {
+    const lin3 = join(tmp, "lin3");
+    run("team", ["init", "--dir", lin3, "--key", "lin3-team", "--backend", "linear", "--linear-team", "Team-A"]);
+    writeFileSync(join(tmp, "legacyTeamB.json"), JSON.stringify({ projects: {
+      other: { backend: "linear", linearTeam: "Team-B", repoPath: join(lin3, "x") },
+    } }));
+    const mm = run("team", ["import", "--from", join(tmp, "legacyTeamB.json")], { cwd: lin3 });
+    ok(mm.code !== 0 && /linearTeam:'Team-B'/.test(mm.out), "import refuses a project whose linearTeam differs from the workspace team");
+  }
+
   // ── import rejects a backend mismatch (one team one backend, I3) ──
   const linTmp = join(tmp, "lin2");
   run("team", ["init", "--dir", linTmp, "--key", "lin2", "--backend", "linear", "--linear-team", "L"]);

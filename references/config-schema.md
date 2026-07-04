@@ -535,3 +535,15 @@ index.
 `dev-loop team import` (one-shot v1→v2 into the current workspace), `dev-loop team repair` (fix
 worktrees/index/WAL after a move), `dev-loop doctor` (read-only verdict). Backend writes (create Linear
 projects, labels) happen in the coding-CLI skills `/dev-loop:add-project` and `/dev-loop:add-repo`.
+
+**Channel & blocked-state on v2 (unification notes):**
+- `team.comms` is the **canonical** outward channel on the 1.0 line. The runtime bridges it to the
+  legacy per-project `notify {type, webhookEnv}` view (`toLegacyView`), so the daemon's human-park pings
+  and agent prompts keep working unchanged. A v1-era `notify` block imported by `team import` passes
+  through per-project and beats the bridge; inline `webhook`/`secret` **literals are never copied** into
+  `dev-loop.json` (§16/I5) — `team import` strips them and tells you which env var to export.
+- `blockedStateName` (and any other operator-set project field the v2 schema doesn't model) **passes
+  through** `projects.<key>` unchanged into the legacy view — set it exactly as in v1 (a real Linear
+  "Blocked" column name, or null for the `blocked`-label park, §9).
+- Labels: the seeded taxonomy now includes `external-prereq` + `external-code`/`external-access`
+  (the §9c external-prerequisite tracker protocol).

@@ -348,8 +348,9 @@ missing ones** via `create_issue_label`:
 `incident`, `tech-debt`, `signal` (these three are the outward agents' sub-labels, §21),
 `senior-dev`, `junior-dev` (the §21a dev-tier routing labels — required for the two-tier Dev
 on `linear`/`local`; harmless on `service`, which routes by the assignee actor),
-and `notified` (PM's once-per-ticket marker for the operator-notify on a human-park, §9 —
-harmless if no `notify` block is configured).
+`notified` (PM's once-per-ticket marker for the operator-notify on a human-park, §9 —
+harmless if no `notify` block is configured), and the §9c external-prerequisite set:
+`external-prereq`, `external-code`, `external-access`.
 
 **Multi-repo only (conventions §19):** also create one **`repo:<name>`** label per
 `repos[]` entry (e.g. `repo:web`, `repo:api`). **Single-repo provisions none** — the
@@ -558,6 +559,10 @@ what's still needed. One line per check, grouped:
 - **Linear** (linear backend only): each workflow label (existed vs.
   created); the project. *(— for `local`: skipped, the board dir is the container.)*
 - **Strategy doc**: readable / scaffolded / still-needed.
+- **Blocked-state mapping**: `blockedStateName` recorded (a real Linear "Blocked" column)
+  or explicitly `null` (label park, §9) — ✗ if never asked (silently skipped ≠ decided).
+- **Outward channel**: `notify`/`team.comms` configured (provider + env-var NAME) or
+  explicitly declined — ✗ if unset-by-omission (human-park pings would silently no-op).
 - **Test env**: `setup` ran; reachability smoke.
 - **Build**: typecheck/build run clean.
 - **Runtime files**: `pm-state.json`, `qa-state.json`, `lessons.md` present.

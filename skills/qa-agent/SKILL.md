@@ -171,7 +171,7 @@ For each (oldest first):
 First query your own: `project` + `label:"dev-loop"` + `label:"qa"` + `label:"blocked"`. Then
 **widen to every `project` + `label:"dev-loop"` + `label:"blocked"` ticket** and read Dev's
 latest comment. (Keep `project` in *both* queries — the widening is across owners
-within this project, never across projects; another project's backlog is off-limits, §2.) **Route by the bail-shape tag** (conventions §9): `info-needed` is yours to clear (supply the repro/account/clarification, then unblock); `decision-needed`/`scope-design` → leave for PM; `external-prereq` → park + escalate to the user as a fact (§12a); `fix-exhausted` → add what you can (a sharper repro/expected) and re-queue, don't just re-block. When Dev (or PM) blocked a ticket because it **needs more
+within this project, never across projects; another project's backlog is off-limits, §2.) **Route by the bail-shape tag** (conventions §9): `info-needed` is yours to clear (supply the repro/account/clarification, then unblock); `decision-needed`/`scope-design` → leave for PM; `external-prereq` → leave parked for PM's §9c tracker pass (PM routes by `External-kind:` — `code` becomes a real ticket in the owning project, `access` is human-parked + notified once; don't escalate it yourself); `fix-exhausted` → add what you can (a sharper repro/expected) and re-queue, don't just re-block. When Dev (or PM) blocked a ticket because it **needs more
 information** — an unclear or re-requested repro, missing reproduction steps, an
 ambiguous expected-vs-actual, a test account or seed data — *supplying that is
 QA's job even when the ticket isn't tagged `needs-qa`*. A blocked ticket nobody

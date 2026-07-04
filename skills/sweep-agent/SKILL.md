@@ -144,6 +144,25 @@ such PR **and** no commit **and** no `updatedAt` movement for the interval.
   their judgement; just make sure nothing is *invisible*.
 - **Terminal tickets** (`Done`/`Canceled`/`Duplicate`) → never touch; they're done.
 
+### Job 3b — W5 backstop: external-prereq unpark + tracker hygiene (§9c)
+
+Backstop PM's tracker pass every fire (per-project scope — in team mode, repeat per
+enabled project like the other jobs):
+1. **Unpark:** any open `blocked`+`external-prereq` ticket with **≥1 LIVE blocker edge**
+   (linear: blockedBy relations; service/local: `Blocked-by:` markers with no later
+   `Unblocked-by:` line) where ALL blockers are `Done`/`Canceled` → unpark it exactly as
+   PM would: labels off, back to `Todo`, `Unparked: blocker <id> resolved`, and retire
+   the edge (linear `removeBlockedBy`; service/local an `Unblocked-by: <id>` line in the
+   unpark comment). **Zero live edges = NOT a candidate** — that's PM step-1 work, or the
+   ticket IS a tracker; the empty set is vacuously "all resolved", don't fall for it.
+2. **Tracker hygiene:** a ticket is provably a TRACKER only structurally — OTHER tickets
+   reference it via blockedBy / `Blocked-by:` markers. A tracker whose dependents are all
+   closed/unparked → close it with a comment. A ticket with no incoming edge is NOT
+   provably a tracker — leave it.
+3. **Digest flag:** a `blocked`+`external-prereq` ticket with NO tracker edge and NO
+   `External-kind:` line is a legacy park PM must re-triage — flag it in Job 4's digest.
+Report all three counts in the digest.
+
 ### Job 4 — Board health digest (report only, no mutation)
 Compute and report a one-screen health snapshot — pure signal that helps the
 operator (and the other agents) see systemic drift:
