@@ -45,13 +45,13 @@ try {
   // A1: the plugin payload is packaged ONCE, at the package root (the `files` array) — no duplicate
   // dist/plugin tree. The scheduler resolves it via resolve(here,"..") = the package root.
   ok(!existsSync(join(distDir, "plugin")), "no duplicate dist/plugin payload (A1: packaged once at the root)");
-  ok(existsSync(join(hubRoot, ".claude-plugin", "plugin.json")) && existsSync(join(hubRoot, "skills", "init", "SKILL.md")) && existsSync(join(hubRoot, "references", "conventions.md")),
+  ok(existsSync(join(hubRoot, ".claude-plugin", "plugin.json")) && existsSync(join(hubRoot, "skills", "pm-agent", "SKILL.md")) && existsSync(join(hubRoot, "references", "conventions.md")),
     "npm package root includes the Claude plugin manifest + skills + references (the single packaged copy)");
   const pack = run("npm", ["--silent", "pack", "--dry-run", "--json"]);
   const packedFiles = new Set(parsePackJson(pack.stdout)[0]?.files?.map((f) => f.path) ?? []);
   ok(pack.code === 0
     && packedFiles.has(".claude-plugin/plugin.json")
-    && packedFiles.has("skills/init/SKILL.md")
+    && packedFiles.has("skills/pm-agent/SKILL.md")
     && packedFiles.has("hooks/hooks.json")
     && packedFiles.has("postinstall.cjs")
     && packedFiles.has("dist/hook-session-start.js")
@@ -92,13 +92,11 @@ try {
   const instRun = run(process.execPath, [instCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
   ok(instRun.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high -p '?<prompt:\d+ chars>'?/.test(instRun.out),
     "installed cli.js run → finds bundled skills + injects the hub without --root");
-  rmSync(join(tmp, "projects.json"), { force: true }); // drop the service-demo run fixture so init-config below writes a fresh empty starter
-  const cfgOut = join(tmp, "projects.json");
-  const instConfig = run(process.execPath, [instCli, "init-config", "--dest", cfgOut]);
-  const initConfigText = existsSync(cfgOut) ? readFileSync(cfgOut, "utf8") : "";
-  const initConfigJson = initConfigText ? JSON.parse(initConfigText) as { projects?: Record<string, unknown>; defaultProject?: string } : null;
-  ok(instConfig.code === 0 && !!initConfigJson && Object.keys(initConfigJson.projects ?? {}).length === 0 && !initConfigJson.defaultProject && !/monpick|acme-suite/.test(initConfigText),
-    "installed cli.js init-config → writes an empty projects.json starter with no predefined projects");
+  // 1.0: the compiled CLI must create a WORKSPACE (init-config was removed with the v1 clean break).
+  const wsDir = join(tmp, "ba-ws");
+  const instTeam = run(process.execPath, [instCli, "team", "init", "--dir", wsDir, "--key", "ba-team", "--backend", "linear", "--linear-team", "L"]);
+  ok(instTeam.code === 0 && existsSync(join(wsDir, "dev-loop.json")),
+    "installed cli.js team init → writes a schema-v2 dev-loop.json workspace");
   const mktDir = join(tmp, "claude-marketplace");
   const instClaudePlugin = run(process.execPath, [instCli, "install-claude-plugin", "--dest", mktDir]);
   const mktFile = join(mktDir, ".claude-plugin", "marketplace.json");

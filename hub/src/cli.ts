@@ -30,7 +30,6 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
-  "init-config":    ["init-config"],               // write an empty projects.json for clone-free scheduler setup
   "install-claude-plugin": ["install-claude-plugin"], // register a local npm-source marketplace so Claude Code loads the published plugin
   "init-service":   ["init-service"],              // turnkey bootstrap (DL-60)
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
@@ -60,14 +59,13 @@ Usage: dev-loop <command> [args]
                               daemon lifecycle — idempotent localhost web UI + optional login autostart
   team init|import|repair|add-project|add-repo
                               workspace (schema v2): create / migrate-from-v1 / repair / validated config writes
-  hub start|stop|status       workspace hub daemon lifecycle (service backend; stop checkpoints the WAL)
+  hub start|stop|status|ensure   workspace hub daemon lifecycle (service backend; stop checkpoints the WAL)
   metrics [--window 7d] [--json]   team KPIs — fire success from fires.jsonl (+ board KPIs on service)
   notify [--level info|warn|error] [--title T] <text>   push to the team's slack/lark channel (team.comms)
   next-project --agent <a>    print the agent's next rotation pick (shared cursor with run; for /loop rows)
   with-repo-lock <ref> -- <cmd>   run a command holding a shared repo's base-clone lock
   init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project (seed → doctor → daemon up)
   run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents by calling the selected CLI
-  init-config                 write an empty ~/.dev-loop/projects.json starter
   install-claude-plugin      register a local npm-source marketplace so /plugin install can load it
   mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers other servers)
   seed <key> <name> [PREFIX]  seed a project + actors + labels into the hub db
@@ -75,7 +73,7 @@ Usage: dev-loop <command> [args]
   identity-check [--expect <actor>[/<project>]]   verify this shell resolves the intended identity
   tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT]   read-only: list the resolved project's board (no daemon)
   ticket <id>                 read-only: show one ticket — detail + comments
-  export-desktop-skill <agent> --project <key> [--out <dir>] [--zip]   render a self-contained Claude Desktop skill
+  export-desktop-skill <agent> --project <key> [--team] [--out <dir>] [--zip]   render a self-contained Claude Desktop skill
   version | help
 
 Identity rides DEVLOOP_ACTOR (per pane); project DEVLOOP_PROJECT (or the cwd); db DEVLOOP_HUB_DB.

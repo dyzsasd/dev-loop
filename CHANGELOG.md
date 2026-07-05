@@ -3,6 +3,28 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 1.0.0 — GA: the team/workspace model ships
+
+The whole 1.0 train (rc.1 → rc.3 below, plus this batch) lands as one release. Only rc.1 was
+ever published to npm (under `next`); 1.0.0 supersedes rc.2/rc.3 directly.
+
+- **BREAKING — v1 config removed (hard clean break).** The runtime no longer reads
+  `~/.dev-loop/projects.json` (no fallback, no deprecation window): `paths.ts` /
+  `resolve-project.ts` / `run-agents.ts` resolve the workspace only; `DEVLOOP_PROJECTS_JSON` and
+  explicit `--data` survive strictly as test/CI injection. The legacy `init` skill, the
+  `init-config` command, and `hubfile.mjs`/`hubcall.mjs` are deleted. Migrate once with
+  `dev-loop team init` + `dev-loop team import`.
+- **Docs restructure — README is usage-only.** `README.md` rewritten lean (quick start, migrate,
+  move machines, configure, run, command table, day-to-day, agents); the design/architecture
+  content moved to the new `docs/ARCHITECTURE.md` (layers, workflows, backends, safety boundary,
+  self-evolution). `README.zh-CN.md` mirrors it; `README.fr.md` reduced to an unmaintained pointer.
+- **Doc-consistency pass (49 findings).** conventions/config-schema/skills brought fully in line
+  with the shipped design: Backlog-first wording everywhere (§9a direction paragraphs, §15
+  coverage, §25 W3, topology table), §11/§13 heads state the workspace is THE config and the team
+  flow canonical, config-schema banners mark v1 as import-only LEGACY, design docs get
+  status-at-GA banners, package/plugin descriptions refreshed to the nine-agent 1.0 model.
+- **License:** MIT (root + hub).
+
 ## 1.0.0-rc.3 — the autonomy overhaul (operator = director) + field-fix batch
 
 - **Backlog-first intake (§5a, NEW).** Every discovery filing (PM ideation, QA bugs, Architect

@@ -63,12 +63,12 @@ export function resolveIdentity(): { actor: string; projectKey: string; projectF
     : { actor, projectKey: "", projectFromCwd: false, projectResolved: false };
 }
 
-// Config resolution (schema v2 first, DL-team). A discoverable workspace (dev-loop.json) is the
-// AUTHORITATIVE source: it is loaded, validated, and projected to the legacy ProjectsConfig shape via
-// toLegacyView so every existing consumer reads it unchanged. A workspace that is FOUND but INVALID is a
-// loud error the operator must fix — we surface it and return null rather than silently running stale v1.
-// Only when NO workspace is discoverable do we fall back to the legacy ~/.dev-loop/projects.json chain
-// (that fallback is slated for removal at the 1.0 clean break; kept through the transition — R3).
+// Config resolution (1.0): a discoverable workspace (dev-loop.json, schema v2) is THE config —
+// loaded, validated, and projected to the legacy ProjectsConfig shape via toLegacyView so every
+// consumer reads one shape. A workspace FOUND but INVALID is a loud error (never run stale). The ONLY
+// non-workspace source is an EXPLICIT DEVLOOP_PROJECTS_JSON injection (tests/CI); the implicit v1
+// fallback (~/.dev-loop/projects.json + the legacy plugin dir) was REMOVED at 1.0 — migrate once with
+// `dev-loop team init && dev-loop team import`.
 export function loadProjectsConfig(): ProjectsConfig | null {
   try {
     const ws = tryResolveWorkspace();

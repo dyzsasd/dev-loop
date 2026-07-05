@@ -19,26 +19,25 @@ export function devloopHome(): string {
   return process.env.DEVLOOP_HOME || join(homedir(), ".dev-loop");
 }
 
-export function legacyClaudeDataDir(): string {
-  return join(homedir(), ".claude", "plugins", "data", "dev-loop");
-}
-
 export function devloopDataDir(): string {
   return process.env.DEVLOOP_DATA_DIR || devloopHome();
 }
 
+// 1.0 clean break: the runtime does NOT read a machine-global v1 projects.json anymore. This path
+// exists for (a) `dev-loop team import`'s --from default (the one-shot migration bridge) and (b) the
+// EXPLICIT DEVLOOP_PROJECTS_JSON injection used by tests/CI and callers that pass a --data dir.
 export function devloopProjectsPath(dataDir = devloopDataDir()): string {
   return process.env.DEVLOOP_PROJECTS_JSON || join(dataDir, "projects.json");
 }
 
-export function projectConfigCandidates(dataDir = devloopDataDir()): string[] {
-  const primary = devloopProjectsPath(dataDir);
-  const candidates = [
-    primary,
-    process.env.CLAUDE_PLUGIN_DATA ? join(process.env.CLAUDE_PLUGIN_DATA, "projects.json") : undefined,
-    join(legacyClaudeDataDir(), "projects.json"),
-  ].filter((x): x is string => !!x);
-  return [...new Set(candidates)];
+// EXPLICIT config sources only (env var, or the caller-provided data dir). The implicit fallback chain
+// (~/.dev-loop/projects.json + the legacy Claude-plugin data dir) was removed at 1.0 — a workspace
+// (dev-loop.json) is the only operator-facing config; migrate once with `dev-loop team import`.
+export function projectConfigCandidates(dataDir?: string): string[] {
+  const out: string[] = [];
+  if (process.env.DEVLOOP_PROJECTS_JSON) out.push(process.env.DEVLOOP_PROJECTS_JSON);
+  else if (dataDir) out.push(join(dataDir, "projects.json"));
+  return out;
 }
 
 export function hubDbPath(): string {

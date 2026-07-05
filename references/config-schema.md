@@ -1,5 +1,10 @@
 # dev-loop — Config schema
 
+> **1.0: the CURRENT config is the workspace `dev-loop.json` (schema v2)** — jump to the
+> ["Schema v2 — the workspace model"](#schema-v2--the-workspace-model-10-line) section below.
+> The v1 `projects.json` documented next is **LEGACY**, retained ONLY as the field reference
+> for `dev-loop team import` (the one-shot migration); the 1.0 runtime does not read it.
+
 The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect /
 Communication) read
 `DEVLOOP_PROJECTS_JSON` when set, otherwise `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`.
@@ -522,7 +527,7 @@ provider/webhookEnv (must be an ENV NAME, never a URL) · `E08` bad enabled/weig
 without `linearTeam` · `E10` two refs at one path / two projects claiming one `linearProjectId` ·
 `E11` reserved/invalid project key or repo ref (`team`/`lessons`/`wt`/`locks`/`hub.db`/… collide with the
 `.dev-loop/` layout; `_team` is the reserved intake project). Warnings: `W01` project with no repos ·
-`W02` repo referenced by nobody · `W05` linear steward fires need the Linear MCP in **user scope** ·
+`W02` repo referenced by nobody · `W03` lessons INDEX/shard over budget · `W04` project sync stale · `W05` linear steward fires need the Linear MCP in **user scope** ·
 `W06` workspace root inside a git work-tree with `.dev-loop/` not gitignored.
 
 **State layout** — everything lives under `<workspace>/.dev-loop/` (I4): `<project>/…` (per-project

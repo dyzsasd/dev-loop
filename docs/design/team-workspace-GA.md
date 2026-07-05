@@ -1,8 +1,11 @@
 # Team / Workspace 1.0 — GA readiness
 
-> Status at `1.0.0-rc.1`: the team/workspace model is **code-complete and fully tested**. The remaining
-> GA gates are operator-run (soak + real migrations on live infra) or explicitly-deferred service-only
-> polish. This doc is the release checklist.
+> Status at **1.0.0 (GA)**: the team/workspace model is code-complete, reviewed twice
+> (24-agent adversarial pass + a 5-lens doc-consistency pass), and shipped as one train
+> (rc.1 → rc.3 → 1.0.0). The v1 config path was REMOVED at 1.0.0 (clean break — migrate
+> with `dev-loop team import`); the soak gate was waived by operator decision. Full suite:
+> 43 test files green. Deferred to 1.1: the hub op-API steward project override and the
+> web team-overview page.
 
 ## What shipped (code + tests, all on PR #20)
 
@@ -14,7 +17,7 @@
 | **M4** stewardship + lessons + comms | steward-slot team-scoping, `lessons.ts` (INDEX/shards/archive + budgets, doctor W03), `comms.ts` + `dev-loop notify` (slack/lark), steward+delivery SKILL rewrites | lessons (8), comms (9) |
 | **M5** hub + intake | `dev-loop hub start/stop/status/ensure` (workspace daemon + WAL checkpoint), `run` auto-ensure, team intake (conventions §9b + pm/sweep) | hub-lifecycle (8) |
 
-**Full suite: 48 test files green (`npm test`, exit 0). Typecheck clean.** The pre-existing suite (daemon,
+**Full suite: 43 test files green (`npm test`, exit 0). Typecheck clean.** The pre-existing suite (daemon,
 lifecycle, agent-api, shim, migrate, …) is byte-identical green — the v1 fixed-project path and the daemon
 lifecycle were never behavior-changed (only additively wrapped).
 
