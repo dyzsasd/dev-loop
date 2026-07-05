@@ -167,7 +167,11 @@ REPLACE-style — or you'll drop `dev-loop`/owner labels.)
   (conventions §9): add `blocked` + `needs-pm`(feature)/`needs-qa`(bug), unassign,
   move back to `Todo`, comment exactly what's missing. Tag the bail shape on the
   comment's first line (`Bail-shape: info-needed | decision-needed | scope-design |
-  external-prereq | fix-exhausted`, §9) so the right owner picks it up. Do **not**
+  external-prereq | fix-exhausted`, §9) so the right owner picks it up. For `external-prereq`, ALSO add a second machine-parseable line
+  `External-kind: code` (another repo/team must change code) or `External-kind: access`
+  (credentials/money/legal/permission) plus the **`external-prereq` label AND** the matching
+  `external-code`/`external-access` label — the W5 queries key on `blocked`+`external-prereq`;
+  PM's §9c tracker routing depends on both. Do **not**
   guess. Pick next.
 
 ### Step 4 — Implement

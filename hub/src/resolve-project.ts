@@ -6,6 +6,8 @@
 import { realpathSync, readFileSync, existsSync } from "node:fs";
 import { relative, isAbsolute } from "node:path";
 import { projectConfigCandidates } from "./paths.ts";
+import { tryResolveWorkspace } from "./workspace.ts";
+import { toLegacyView, WsValidationError } from "./team-config.ts";
 
 export interface ProjectsConfig {
   defaultProject?: string;
@@ -61,11 +63,20 @@ export function resolveIdentity(): { actor: string; projectKey: string; projectF
     : { actor, projectKey: "", projectFromCwd: false, projectResolved: false };
 }
 
-// Locate + parse projects.json from the standalone dev-loop home first, with the historical Claude plugin
-// data dir as a read-only compatibility fallback. Returns null when not found; a file that EXISTS but does
-// not parse also falls through to the next candidate, but loudly — a trailing comma from a hand edit must
-// not be indistinguishable from "no config" (it used to surface as a wrong "project not resolved").
+// Config resolution (schema v2 first, DL-team). A discoverable workspace (dev-loop.json) is the
+// AUTHORITATIVE source: it is loaded, validated, and projected to the legacy ProjectsConfig shape via
+// toLegacyView so every existing consumer reads it unchanged. A workspace that is FOUND but INVALID is a
+// loud error the operator must fix — we surface it and return null rather than silently running stale v1.
+// Only when NO workspace is discoverable do we fall back to the legacy ~/.dev-loop/projects.json chain
+// (that fallback is slated for removal at the 1.0 clean break; kept through the transition — R3).
 export function loadProjectsConfig(): ProjectsConfig | null {
+  try {
+    const ws = tryResolveWorkspace();
+    if (ws) return toLegacyView(ws) as unknown as ProjectsConfig;
+  } catch (e) {
+    if (e instanceof WsValidationError) { console.error(`[dev-loop] ${e.message}`); return null; }
+    throw e; // WsNotFound is already swallowed by tryResolveWorkspace; anything else is unexpected
+  }
   for (const p of projectConfigCandidates()) {
     if (!existsSync(p)) continue;
     try { return JSON.parse(readFileSync(p, "utf8")) as ProjectsConfig; }

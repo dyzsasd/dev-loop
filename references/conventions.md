@@ -237,8 +237,8 @@ rewrite, not a folder move), using these exact names.
 
 | State | Meaning | Who moves it here |
 |---|---|---|
-| `Backlog` | Idea captured but not yet ready for dev (optional parking) — **also the staging state for a design's child tickets** until the design gate promotes them to `Todo` (§21a) | PM/QA (incl. design-child staging by senior-dev, §21a) |
-| `Todo` | Groomed, ready to be picked up | PM/QA (on create, incl. a verify-fail follow-up), Dev (on un-block) |
+| `Backlog` | **The universal intake state (§5a)**: EVERY newly-discovered ticket lands here — PM ideation, QA bugs, Architect tech-debt, human intake (§9a) — plus a design's staged children (§21a). Not yet visible to any dev pick-query. | every filing agent + humans (on create); senior-dev (design-child staging, §21a) |
+| `Todo` | Groomed, ready to be picked up. **Reachable ONLY via PM promotion (§5a)** — with three carve-outs: an owner's verify-fail follow-up (already-groomed work, stays Todo), an un-block re-queue, and a CONFIRMED ops incident (prod-down cannot wait a PM fire). | PM (promotion, §5a); owner (verify-fail follow-up); Dev (un-block); Ops (confirmed incident only) |
 | `In Progress` | A Dev has claimed it and is actively working | Dev (claim) |
 | `In Review` | Dev finished; awaiting verification by the owner | Dev (done coding) |
 | `Human-Blocked` | **(`service` only)** Parked for the operator — an unresolvable human-only block (decision/credential/legal). The daemon periodically reminds the channel (§9 / DL-26). Resumes to `Todo` on resolution. | PM (when it can't resolve a block) / operator |
@@ -255,6 +255,18 @@ original). Each ticket is thus exactly **one verified increment**, and a failed 
 **superseded, never silently reopened** — so the history shows what shipped-but-failed vs
 what's now queued. If the follow-up needs a human decision, park it (`Human-Blocked` on
 `service`, §9). Never leave the original in `In Review`.
+
+**The shared verification standard (all owners, all layers).** Every verification —
+Dev's own Step 5.5 pass AND the owner's In Review check — classifies deltas against the
+ticket's spec with the same three classes: **MISSING** (the spec asked for it; the
+diff/behavior lacks it), **EXTRA** (the diff contains it; no AC asked for it — scope
+creep), **MISUNDERSTANDING** (the wrong thing was built). **Any hit = verify-fail, even
+when the code is clean.** And: the ticket/PR/handoff description is the implementer's
+SELF-CLAIM — use it to *locate* the change (commit, PR, routes, design pointer), never as
+*evidence*; every verdict input is the actual diff or the behavior you observed. Dev's
+Step 5.5 is the implementer's own gate; the owner's Stage-1 triage at In Review is the
+INDEPENDENT re-check of the same three classes — both run, always; the second exists
+precisely because the first is a self-claim.
 
 **Split-dev escalation rides this same rule, routed to senior-dev (§21a).** In a two-tier
 project (§21a), when a **junior-dev**-built ticket fails verification on a **real** acceptance-
@@ -309,6 +321,17 @@ Labels do triple duty: typing, ownership/routing, and workflow signalling.
   `Bug`/`Feature` that couldn't be covered in the fix itself (§15). Filed by Dev,
   owned by `qa` (QA verifies the test exists and passes); implemented like any
   other `Todo` ticket.
+- `sensitive` — the work touches {authn/authz/permissions, payment or money movement,
+  PII storage/handling, secrets/credentials, data migration/backfill/deletion}. Set by the
+  FILER at creation (same actor that sets the dev tier, §21a) and never removed by hygiene.
+  Routing consequence (§21a): `sensitive` ⇒ senior-dev, always — design before code.
+- `external-code` / `external-access` — the two **kinds** of external prerequisite
+  (§9c), applied ALONGSIDE the `external-prereq` workflow label on the parked ticket
+  and its tracker: `external-code` = another repo/team must change code (actionable
+  inside the team → file the ask as a real ticket and block on it); `external-access`
+  = credentials / billing / legal / permission only a human can grant (→ human-park
+  the tracker + notify). The kind decides routing; without it every external park
+  degrades to "wait for a human to read comments".
 
 **Ownership / routing (every ticket carries exactly one owner label):**
 - `pm` — PM owns it (PM verifies). On every `Feature`, and on `Improvement`s by
@@ -338,6 +361,9 @@ both (harmless extra labels on `service`).
 
 **Workflow signalling:**
 - `blocked` — Dev couldn't proceed; needs owner attention (§9).
+- `external-prereq` — the park marker for a ticket waiting on something OUTSIDE the
+  loop; always paired with a kind sub-label (`external-code`/`external-access`) and,
+  from §9c, a TRACKER ticket the parked work is blocked by.
 - `needs-pm` / `needs-qa` — routes a blocked ticket to the right owner.
 - `notified` — set by PM after it has announced a human-parked ticket to the operator's
   out-of-band channel (§9 notify), so it is announced exactly once. Dropped when the ticket
@@ -381,6 +407,30 @@ design **child** sits in `Backlog` (not `Todo`) until the design gate promotes i
 every pick set until then (§21a).
 
 ---
+
+### 5a. Backlog-first intake & the Todo depth cap
+
+**The board is the funnel; PM is the gate.** Every newly-discovered ticket — PM's own ideas,
+QA bugs, Architect tech-debt, human intake (§9a) — is filed `state:"Backlog"`, NEVER `Todo`.
+`Todo` is the *commitment* queue: what the team is actually going to build next, and only PM
+puts work there (the verify-fail follow-up, the un-block re-queue, and a confirmed ops
+incident are the sole carve-outs, §3). This kills the flood failure mode — a 30-finding
+audit night no longer buries the board; it deepens the Backlog, and PM meters it in.
+
+**PM's grooming & promotion pass (pm-agent Job B2), every fire:**
+1. Query `project` + `dev-loop` + `state:"Backlog"`, EXCLUDING staged design children
+   (tickets with a `Design:` pointer / relatedTo a non-Done design parent — the §21a gate
+   owns those).
+2. Groom: dedupe/merge (§8), `Cancel` stale or obsolete ideas (with a comment why), refine
+   vague ones into §6-conformant tickets (real ACs, type, owner, tier per §21a, repo target).
+3. Promote the top of the §5 pick order Backlog→Todo **only while** the Todo depth is below
+   the cap: `count(state:"Todo", not blocked)` < `intake.todoDepthCap` (config, default
+   **10**; per-tier counts in a split-dev project). Re-pass the full label set (§10).
+4. At/over the cap → promote nothing this fire (grooming still happens). A drained Todo is
+   refilled next PM fire — the loop's throughput, not the discovery rate, sets the pace.
+
+An ordinary Backlog ticket awaiting promotion is **normal**, not stranded — Sweep's
+stranded-child rule (§21a) applies only to design children whose parent is Done.
 
 ## 6. Ticket templates
 
@@ -521,8 +571,14 @@ dependency, or a suspected-but-unconfirmed duplicate — it does **not** guess:
      (QA Job B), even if not tagged `needs-qa`.
    - **decision-needed / scope-design** (a product/scoping call) → PM (`needs-pm`)
      or the bug's owner.
-   - **external-prereq** (real credentials/money/legal, or a capability this run
-     lacks) → park for the user; report as a fact (§12a), don't retry.
+   - **external-prereq** → park + hand to the §9c tracker protocol; report as a
+     fact (§12a), don't retry. The bail comment MUST add a second machine-parseable
+     line naming the kind — `External-kind: code` (another repo/team must change
+     code) or `External-kind: access` (credentials/money/legal/permission) — and apply
+     the **`external-prereq` workflow label PLUS** the matching kind sub-label
+     (`external-code`/`external-access`) — the W5 queries key on `blocked`+
+     `external-prereq`; a park without the label is invisible to the tracker pass. The kind decides whether
+     PM can route it as real work inside the team or must human-park it.
    - **fix-exhausted** (tried, couldn't make the gates/self-review pass) → don't
      blindly re-attempt; it needs new info or a different approach. Cap blind
      retries at 2 — the 3rd is a block, not another attempt.
@@ -643,7 +699,10 @@ URL), make **no** POST, and add **no** `notified` label.
 ### 9a. W3 — human-initiated intake (parent → Dev children; parent-close + back-link)
 
 A human may file work **directly into the loop** by creating a `dev-loop`-labelled
-ticket in `Todo` assigned to PM (the intake owner). This is **not** the §2 human
+ticket in **`Backlog`** assigned to PM (the intake owner) — never `Todo`: a human ticket is
+ALWAYS routed through PM (groom → promote, §5a); no human-filed ticket goes straight to a
+dev pick-query. (A `Todo` human filing is tolerated for discoverability — Sweep routes it
+back to Backlog+`needs-pm` for PM — but Backlog is the contract.) This is **not** the §2 human
 backlog — a `dev-loop`-labelled ticket born in this project's board is loop-fair-game;
 only an *un*-labelled ticket in the separate human backlog stays off-limits (init-only
 adoption).
@@ -689,6 +748,61 @@ daemon) **PM** emits the §9 `notify` webhook once. This — a `Todo` to PM, not
 board — is how operator direction enters the loop.
 
 ---
+
+### 9b. Team intake — cross-project asks (1.0 team mode)
+
+A team-scoped extension of §9a for an operator ask that spans several projects. Carrier: a `dev-loop`+`pm`+
+`needs-pm` issue in **no project** (linear) or a `needs-pm` ticket in the `_team` project (service). At team
+scope PM discovers it via the same `needs-pm` scan, then **splits it into one ordinary per-project W3
+sub-intake per responsible project** (`relatedTo:[<parent>]`), back-links the children, and moves the
+parent to **`In Review`** (not Done — a team intake tracks end-to-end). Each child is digested by its
+project's normal §9a flow. Sweep closes the parent (`Done`) once **all** children are `Done`, or holds it
+In Review and names the blocker if any child is parked. Split is idempotent (child back-links = already
+split); responsibility comes from the `team.docs.vision` project descriptions, and PM parks to the operator
+rather than guess. No new state machine — §9a mechanics, one level up. Same team (= same backend) only;
+cross-team collaboration does not exist (I3).
+
+### 9c. W5 — the external-prerequisite tracker (park → block → auto-unpark)
+
+An `external-prereq` park used to be a dead end: a label + a comment, resurrected only
+if a human happened to read it. W5 makes the dependency a first-class, machine-walkable
+edge with an owner and an exit condition. No new state machine — three steps:
+
+1. **Track.** PM (Job B), on discovering an `external-prereq` park without a tracker:
+   create ONE dedicated tracker ticket for the external need (dedupe first — several
+   parked tickets can share a tracker). `external-prereq` + the kind sub-label; type
+   `Improvement`; owner `pm`. By kind:
+   - `external-code` → the need is actionable INSIDE the team: file the ask as a real
+     ticket in the owning project (cross-project → a §9b team intake) — THAT ticket is
+     the tracker; it flows through the normal loop.
+   - `external-access` → only a human can clear it: tracker goes to the human park
+     (`Human-Blocked` on `service`; `blocked`+`needs-pm` park on linear/local) and PM
+     notifies the operator (§9 notify / `dev-loop notify`) — once (`notified`).
+2. **Block.** Link the parked ticket to its tracker with a REAL blocking edge, not
+   `relatedTo`: on **linear**, `save_issue(id: <parked>, blockedBy: [<tracker>])`
+   (append-only; `removeBlockedBy` to clear). On **service/local** (no native relation),
+   write a machine-parseable marker comment on the parked ticket —
+   `Blocked-by: <tracker-id>` on its own line — the §18 per-backend encoding of the same
+   edge. `relatedTo` remains for kinship; it is NEVER a blocking edge.
+3. **Auto-unpark.** Every PM fire (Sweep backstops it): query open `blocked` +
+   `external-prereq` tickets; resolve each one's blockers (linear: the issue's
+   blockedBy relations; service/local: the `Blocked-by:` markers). **A ticket with ZERO
+   blocker edges is NEVER an unpark candidate** — the empty set is vacuously "all
+   resolved", but it just means step 1 hasn't run (or it IS a tracker): route it to
+   step 1 / the digest instead. **≥1 blocker AND** ALL blockers
+   `Done`/`Canceled` → unpark: remove `blocked` + `external-prereq` (+ kind), move back
+   to `Todo`, drop `notified`, and **retire the edge** — linear: the SAME `save_issue`
+   passes `removeBlockedBy: [<each resolved tracker>]`; service/local (comments are
+   append-only): the unpark comment carries one machine-parseable line per resolved
+   blocker — `Unblocked-by: <tracker-id>` — and edge resolution counts a `Blocked-by:
+   <id>` marker as LIVE only when no later `Unblocked-by: <id>` exists. Without edge
+   retirement, a later re-park inherits stale Done blockers and instantly self-unparks. Any blocker
+   still open → leave parked (no comment spam). A tracker with no live parked
+   dependents is closed by Sweep in its hygiene pass.
+
+Trackers are ordinary tickets — visible on the board, reported in digests, countable.
+The failure mode this kills: work silently rotting behind a label because the human
+forgot which comment said what was needed.
 
 ## 10. Querying Linear without drowning
 
@@ -1819,6 +1933,15 @@ prod-down fix is exactly not the place for the cheap tier); **Architect when it 
 `tech-debt` Improvement** (⇒ **junior-dev** — scoped, behavior-preserving refactors). An un-tiered
 ticket is invisible to BOTH dev pick-queries and strands until Sweep's slow-cadence repair.
 Same one rule:
+- **SENSITIVE ⇒ senior-dev, ALWAYS — this overrides every bullet below.** A ticket labelled
+  `sensitive` (§4: auth/permissions, payment/money, PII, secrets, data migration/deletion —
+  or whose ACs plainly touch those even unlabelled) goes to the senior tier even for a
+  one-line fix: senior produces a complete design FIRST (design-and-delegate for
+  module-scale work; for a small sensitive fix senior writes the design into the ticket
+  body — `Design: parent <id>` form — and may direct-code it). "When borderline, junior"
+  NEVER applies to sensitive work; a mis-routed sensitive ticket is re-tiered to senior,
+  never implemented by junior. Fully autonomous — no human gate; the protection is the
+  mandatory design step + the owner's independent verification, not a pause.
 - **new module / new feature** (needs a design) ⇒ assign **senior-dev** (design-and-delegate).
 - **improvement / bug-fix** (a scoped change) ⇒ assign **junior-dev**. (QA's findings are bug-fixes /
   drift-improvements by nature, so QA-filed tickets default to **junior-dev**.)
@@ -2166,6 +2289,17 @@ the loop did").
 
 ---
 
+### 22a. The team daily digest (director view)
+
+The operator is a director: they read ONE pushed message a day, not report trees. The
+communication agent (team scope) composes the digest per the contract in its SKILL — Team KPIs
+(verbatim from `dev-loop metrics`; board numbers via MCP on linear), QA quality (filed vs
+escaped), board flow (promotion pace, oldest In Review, W5 trackers), the north-star delta
+(reflect's weekly), and a "needs the director" section that is EMPTY on a good day — delivered
+via `dev-loop notify` (team.comms). Reflect (team scope) additionally writes ONE weekly
+consolidated team retrospective + the north-star delta. Numbers always come from code
+(`dev-loop metrics`) or explicit board queries — never from an agent's memory of what it did.
+
 ## 23. Reports in Linear — the `reports.sink` option
 
 §22 reports default to **machine-local files**. An operator running the loop in a **cloud /
@@ -2409,3 +2543,44 @@ CLI (Codex, opencode, …) against the *same* `hub.db`. Full setup in
   attribution** (not anti-spoof) on every CLI. The localhost daemon is a service/web UI lifecycle
   helper, not a Claude-only dependency. **Claude Code is 100% unchanged**
   — second-CLI support is purely additive and opt-in.
+
+## 27. Team / workspace model (1.0 line)
+
+The 1.0 line reorganizes config around a **workspace** (see `docs/design/team-workspace.md` +
+`docs/design/team-workspace-impl.md`; the operator quick-reference lives in `config-schema.md` §"Schema
+v2"). One workspace directory = one **team** = one Linear team = one **backend**. Inside it, **repos**
+are the physical git-clone folders (a REGISTRY, each registered once) and **projects** are VIRTUAL config
+entries that reference repos — so one repo can serve several projects (declare `owner` for routing).
+This section records only the rules that change agent/operator behavior; the field schema is in
+`config-schema.md`.
+
+- **Config source.** Runtime reads `dev-loop.json` (schema v2), resolved by discovery (`DEVLOOP_WORKSPACE`
+  → `DEVLOOP_TEAM` index → cwd ascent). It is projected to the historical per-project shape internally
+  (`toLegacyView`), so every existing agent contract (§3/§4/§12b/§12c/reports) is unchanged. The legacy
+  `~/.dev-loop/projects.json` is a transition-only fallback and is removed at 1.0 (the clean break) —
+  after installing the 1.0 line an operator MUST `dev-loop team init` + `dev-loop team import` once.
+- **Portability (I4).** All run state is under `<workspace>/.dev-loop/` (per-project dirs, `team/`,
+  `lessons/`, `wt/`, `locks/`, and for service `hub.db`). Copying the workspace folder migrates the
+  machine; only env vars + credentials (§16) follow separately. `~/.dev-loop/` holds just a rebuildable
+  index. After a move run `dev-loop team repair` (fixes worktree absolute paths, re-registers the index,
+  truncates the WAL).
+- **Secrets (§16 extends).** `team.comms.webhookEnv` stores an ENV-VAR **name**, never the URL; a value
+  containing `://` is rejected (`E07`). This is what keeps "copy the folder" safe — no secret ever lands
+  in `dev-loop.json`.
+- **Backend is strictly team-level (I3).** linear or service, never mixed; `dev-loop team import` refuses
+  a v1 project whose `backend` differs from the team. There is no cross-team collaboration.
+- **deployPolicy is a ceiling.** `team.deployPolicy.<env> = "manual"` forbids any repo auto-deploying
+  that env (`E06`); `dev-loop doctor` and `/dev-loop:add-repo` enforce it.
+- **MCP scope for stewards.** A linear team's stewardship fires (sweep/ops/reflect/communication) run
+  with the workspace root as cwd, where a repo-level `.mcp.json` does not apply — the Linear MCP must be
+  configured in **user scope** (doctor warns `W05`). Delivery fires still run inside a repo, unaffected.
+- **Scheduling (1.0 team mode).** `dev-loop run` (or Agent View `/loop`) launches ONE scheduler for the
+  whole team; each agent keeps its own cadence, and when it fires the target project is chosen by a smooth
+  weighted round-robin (`weight` = share; `enabled:false`/`weight:0` opt out). The rotation cursor is shared
+  between `dev-loop run` and the `/loop` rows via `dev-loop next-project --agent <a>`, so the two run modes
+  never double-fire or starve a project. Preview the order with `dev-loop run --plan <n>`. Every fire is
+  recorded to `<ws>/.dev-loop/team/fires.jsonl`. A shared repo's base-clone mutations (fetch / worktree
+  add / prune) must run under `dev-loop with-repo-lock <ref> -- <cmd>`; worktree-internal work does not.
+- **The operator flow is:** `dev-loop team init` (pure CLI) → `/dev-loop:add-project` → `/dev-loop:add-repo`
+  (both in a coding CLI; they do the backend writes) → launch the loop at the workspace level. `dev-loop
+  doctor` is the read-only health gate; `dev-loop team repair` is the only mutating fixup.

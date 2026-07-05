@@ -29,6 +29,13 @@ const LABELS: Array<{ name: string; kind: string }> = [
   { name: "tech-debt", kind: "subtype" }, { name: "signal", kind: "subtype" }, { name: "coverage", kind: "subtype" },
   { name: "blocked", kind: "workflow" }, { name: "needs-pm", kind: "workflow" },
   { name: "needs-qa", kind: "workflow" }, { name: "notified", kind: "workflow" },
+  // W5 external-prerequisite tracker (§9c): the park marker + the two routing sub-kinds — `external-code`
+  // (another repo/team must change code) vs `external-access` (credentials/billing/legal/permission).
+  { name: "external-prereq", kind: "workflow" },
+  { name: "external-code", kind: "subtype" }, { name: "external-access", kind: "subtype" },
+  // §21a sensitive-work routing: auth/permissions, payment/money, PII, secrets, data migration —
+  // forces the senior design tier; set by the FILER, never removed by hygiene.
+  { name: "sensitive", kind: "subtype" },
   // DL-32 (design §7): release/env labels — no new state, no schema ALTER. They ride this ensureLabels
   // backfill (INSERT OR IGNORE, idempotent), not a dedicated migration.
   { name: "env:dev", kind: "workflow" }, { name: "env:prod", kind: "workflow" },
@@ -48,9 +55,18 @@ export function findProject(db: DatabaseSync, key: string): string | null {
   return r?.id ?? null;
 }
 
+// Labels ride an INSERT OR IGNORE backfill (UNIQUE(project_id,name)), so re-running seed on an EXISTING
+// project picks up any label added to LABELS since it was created — without this, a new taxonomy entry
+// (e.g. the §9c external-prereq set) never reached already-seeded hub projects (ensureProject used to
+// early-return before the label loop).
+function backfillLabels(db: DatabaseSync, projectId: string): void {
+  const insL = db.prepare("INSERT OR IGNORE INTO labels(id,project_id,name,kind) VALUES (?,?,?,?)");
+  for (const l of LABELS) insL.run(randomUUID(), projectId, l.name, l.kind);
+}
+
 export function ensureProject(db: DatabaseSync, key: string, name: string, prefix = "DL"): string {
   const existing = db.prepare("SELECT id FROM projects WHERE key=?").get(key) as { id: string } | undefined;
-  if (existing) return existing.id;
+  if (existing) { backfillLabels(db, existing.id); return existing.id; }
   // ticket ids are a GLOBAL primary key, so two projects sharing one hub.db MUST have distinct
   // prefixes or their tickets collide on insert (the real multi-project bug P3 closes).
   const clash = db.prepare("SELECT key FROM projects WHERE ticket_prefix=?").get(prefix) as { key: string } | undefined;
@@ -59,8 +75,7 @@ export function ensureProject(db: DatabaseSync, key: string, name: string, prefi
   db.prepare(
     "INSERT INTO projects(id,key,name,ticket_prefix,ticket_seq,created_at) VALUES (?,?,?,?,0,?)",
   ).run(id, key, name, prefix, nowIso());
-  const insL = db.prepare("INSERT OR IGNORE INTO labels(id,project_id,name,kind) VALUES (?,?,?,?)");
-  for (const l of LABELS) insL.run(randomUUID(), id, l.name, l.kind);
+  backfillLabels(db, id);
   return id;
 }
 

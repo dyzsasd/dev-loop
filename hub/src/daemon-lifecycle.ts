@@ -387,12 +387,16 @@ function uninstallAutostart(): number {
 // `ensure` is an accepted alias for `up` (the design's `daemon ensure` — idempotent one-per-project start).
 export type LifecycleSub = "up" | "ensure" | "up-all" | "down" | "status" | "install-autostart" | "uninstall-autostart";
 export const LIFECYCLE_SUBS: readonly LifecycleSub[] = ["up", "ensure", "up-all", "down", "status", "install-autostart", "uninstall-autostart"];
-export async function daemonLifecycle(sub: LifecycleSub): Promise<void> {
-  const code = sub === "up" || sub === "ensure" ? await daemonUp()
+// The exit-code core, exported so composable callers (e.g. `dev-loop hub stop` → down + WAL checkpoint)
+// can run a lifecycle op WITHOUT the process.exit that daemonLifecycle applies.
+export async function daemonLifecycleCode(sub: LifecycleSub): Promise<number> {
+  return sub === "up" || sub === "ensure" ? await daemonUp()
     : sub === "up-all" ? await daemonUpAll()
     : sub === "down" ? await daemonDown()
     : sub === "status" ? await daemonStatus()
     : sub === "install-autostart" ? installAutostart()
     : uninstallAutostart();
-  process.exit(code);
+}
+export async function daemonLifecycle(sub: LifecycleSub): Promise<void> {
+  process.exit(await daemonLifecycleCode(sub));
 }

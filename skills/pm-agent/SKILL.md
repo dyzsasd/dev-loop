@@ -7,7 +7,7 @@ description: >-
   In Review features" for a product wired into dev-loop. The PM reads the
   product's strategy doc, **proactively reviews the existing services** against a
   product-review rubric, exercises the real product, and files Feature/Improvement
-  tickets into Linear (Todo) — including improvements and net-new capabilities that
+  tickets into Linear (Backlog, §5a — PM promotes to Todo at pace) — including improvements and net-new capabilities that
   go beyond the strategy doc. It **keeps the strategy doc itself current** —
   recording shipped progress and any new direction it decides to pursue back into
   the doc so it stays a living north star, not a stale snapshot. It also verifies
@@ -140,7 +140,7 @@ the same ground every fire, rotate the **review lens** and track progress:
   code change. If `strategyDoc` is a Linear document, also skim any sibling/linked design
   docs the project references (e.g. an Architecture/Design appendix) for new direction.
 - **Steady-state is a throttle, not a full stop.** Once **every** rubric lens has
-  been swept at the current SHA *and* the `Todo` backlog is healthily deep with
+  been swept at the current SHA *and* the `Todo` queue is at its `intake.todoDepthCap` (§5a) with
   unworked tickets, report the terse no-op ("all review lenses swept at `<sha>`;
   Todo backlog deep — waiting on Dev / a HEAD change") and stop *for that fire*.
   Re-open a full rotation when `HEAD` moves materially, **when the project doc
@@ -186,8 +186,16 @@ For each (oldest first):
    confirmed even that far, leave it `In Review` (inconclusive, not a pass) and note that the
    authed-UI check needs the operator's attended path (a browser session — e.g. QA in Claude
    Desktop with the Chrome extension). Record this as a lessons.md rule so it's not re-litigated.
+2b. **Stage 1 — spec-compliance triage (BEFORE any quality/UX judgement, §3 shared
+   standard).** Fetch the actual shipped diff (the commit/PR the handoff cites; in pr-mode
+   the PR diff, §12b) and read it against the ticket's ACs + Context. Classify every
+   delta: **MISSING** (AC asked, diff/behavior lacks) / **EXTRA** (diff has it, no AC
+   asked — scope creep) / **MISUNDERSTANDING** (wrong thing built). **Any hit ⇒
+   verify-fail (step 4), even if the code is clean and the exercised ACs pass.** Note:
+   the handoff comment is the implementer's SELF-CLAIM — use it only to locate the
+   change, never as evidence.
 3. Check every acceptance-criteria box that passes.
-4. **Pass** → `state:"Done"`, comment summarizing what you confirmed.
+4. **Pass** (all ACs pass AND Stage 1 is clean) → `state:"Done"`, comment summarizing what you confirmed.
    **Fail** → **close + follow-up** (design §11 / conventions §3): set the original
    `state:"Canceled"` with a comment `review failed: <which criteria + the observed
    behaviour>; superseded by <new-id>`, **then create a follow-up** ticket carrying the
@@ -240,7 +248,7 @@ Dev's comment and either **resolve** (add the missing info / fix acceptance crit
 remove `blocked` + `needs-pm`, leave in `Todo`) or **cancel** (`Canceled`/
 `Duplicate` with a reason). See conventions §9. Use the **bail-shape** tag on Dev's
 comment (conventions §9) to route fast: `decision-needed`/`scope-design` are yours
-to resolve (answer + unblock); `external-prereq` parks for the user (a fact, §12a);
+to resolve (answer + unblock); `external-prereq` runs the §9c tracker protocol (below);
 `info-needed` is usually QA's; `fix-exhausted` means re-scope or split, not re-block.
 
 **Also catch half-unblocked & since-authorized tickets — `blocked` alone under-counts.**
@@ -319,6 +327,49 @@ re-check the end state (`migrate status` clean) *after*. Then mark it Done with 
 Staging discipline still applies (conventions §7): commit only your ticket's files; never
 scoop up another agent's uncommitted work.
 
+**W5 — external-prereq trackers (§9c).** Part of every Job B pass:
+
+1. **Track:** for each `blocked`+`external-prereq` ticket with no tracker yet (no
+   blockedBy relation on linear / no `Blocked-by:` marker on service/local): read its
+   `External-kind:` line — `code` → file the ask as a REAL ticket in the owning project
+   (cross-project → a §9b team intake) and use it as the tracker; `access` → create a
+   pm-owned tracker, human-park it (`Human-Blocked` on service; `blocked`+`needs-pm` on
+   linear/local) and notify the operator once. Dedupe: several parked tickets may share
+   one tracker.
+2. **Block:** link parked → tracker with a real edge: linear
+   `save_issue(id: <parked>, blockedBy: [<tracker>])`; service/local: a
+   `Blocked-by: <tracker-id>` marker comment. Never use `relatedTo` for blocking.
+3. **Auto-unpark:** for every open `blocked`+`external-prereq` ticket, resolve its
+   blockers; a ticket with ZERO blocker edges is NEVER unparked (that's step-1 work —
+   the empty set is vacuously true, don't fall for it); **≥1 blocker AND** ALL
+   `Done`/`Canceled` → remove `blocked`/`external-prereq`/kind labels,
+   move to `Todo`, drop `notified`, and RETIRE the edge: linear — the same `save_issue`
+   passes `removeBlockedBy: [<resolved trackers>]`; service/local — the unpark comment
+   carries one `Unblocked-by: <tracker-id>` line per resolved blocker (a `Blocked-by:`
+   marker is LIVE only with no later `Unblocked-by:`). Stale Done edges left behind
+   would make any future re-park instantly self-unpark.
+   Any blocker still open → leave it, no comment.
+
+
+### Job B2 — Groom the Backlog & promote at pace (§5a)
+
+You are the ONLY gate between discovery and commitment. Every fire:
+
+1. Query `project` + `label:"dev-loop"` + `state:"Backlog"`, **excluding** staged design
+   children (a `Design:` pointer / relatedTo a non-Done design parent — the §21a gate owns
+   those; touching them here double-promotes).
+2. **Groom:** dedupe/merge (§8 — set `duplicateOf`, one canonical survivor); `Cancel`
+   stale/obsolete ideas with a comment why; refine vague tickets into §6 shape (real ACs,
+   type, owner label, dev tier per §21a — incl. the `sensitive` ⇒ senior override — and the
+   `repo:<name>` target in multi-repo). A human intake found here (`needs-pm`) is groomed
+   the same way, then clears `needs-pm`.
+3. **Promote** Backlog→Todo in §5 pick order, **only while**
+   `count(state:"Todo", not blocked)` < `intake.todoDepthCap` (config; default 10 —
+   per-tier counts in split-dev). Re-pass the full label set per move (§10), verify after
+   write.
+4. At/over the cap: promote nothing — grooming still happened, and that's a valid fire.
+   Report `promoted <n>, groomed <m>, canceled <k>, Todo depth <d>/<cap>` in your close.
+
 ### Job C — Review the existing services & propose improvements + new features
 Review through the **lens the preflight selected** (one lens per fire on an
 unchanged SHA; `strategy-gaps` first on a new SHA). The `strategyDoc` is your
@@ -348,7 +399,11 @@ capabilities that make the product better, even when they aren't written in the 
 4. File survivors with the right type: a missing/new capability → **Feature**; a
    refinement of something that already exists → **Improvement**. Use the template
    (conventions §6), labels `dev-loop` + `Feature`/`Improvement` + `pm`, a
-   `priority` (1=Urgent…4=Low) reflecting impact, `state:"Todo"`, set `project`.
+   `priority` (1=Urgent…4=Low) reflecting impact, **`state:"Backlog"`** (§5a — the
+   universal intake state; your own Job B2 promotes at pace, so your ideas queue like
+   everyone else's), set `project`. **Sensitive classification (§4/§21a):** work touching
+   auth/permissions, payment/money, PII, secrets, or data migration/deletion gets the
+   `sensitive` label at THIS filing step — it forces the senior design tier.
    **Dev model & tier routing:** conventions §21a — split-dev is detected ONLY from the
    explicit signals (`devSplit:true` config / `DEVLOOP_DEV_SPLIT` runtime), never inferred
    from history/models{}/tickets; every filed dev ticket gets its tier per the §21a Routing
@@ -453,3 +508,34 @@ End every run with a compact summary: features verified (Done / sent back),
 blocked tickets resolved/cancelled, new features filed (with IDs), and anything
 you parked or that needs the user's input. If `mode:"dry-run"`, label it clearly
 as a preview.
+
+---
+
+## Team mode (1.0 workspace) — lessons + vision
+
+On the 1.0 workspace model your fire loads the team lessons library automatically: the curated
+`${DEVLOOP_WORKSPACE}/.dev-loop/lessons/INDEX.md` plus this project's shard `<project>.md`. Treat them as
+accumulated team experience; reflect (not you) maintains them.
+
+If `team.docs.vision` is set, load it as the upstream **north star**: when a project Goal conflicts with
+the team's composition/vision, record the tension in the Decisions log and defer to the vision doc (or
+park it for the operator) — do not silently override it.
+
+### Team intake (cross-project asks)
+
+At team scope you also own **team intake** — an operator ask that spans multiple projects. Its carrier:
+- **linear:** a `dev-loop`+`pm`+`needs-pm` issue that belongs to **no project** (a bare team issue).
+- **service:** a `needs-pm` ticket in the `_team` project.
+
+Discovery is the same `needs-pm` scan you already run, widened to the team carrier. When you find a team
+intake, **split it into one ordinary per-project W3 sub-intake per responsible project** (decide
+responsibility from the `team.docs.vision` project descriptions; if vision is missing or the split is
+unclear, **park it back to the operator** — never guess):
+
+1. For each responsible project, file a child intake in THAT project (`dev-loop`+`pm`+`needs-pm`, with
+   `relatedTo:[<parent-id>]`) — each child is then digested by that project's normal §9a flow.
+2. On the parent, back-link every child id (a comment listing them) and move the parent to **`In Review`**
+   — NOT Done. Unlike a single-project W3 intake (which closes immediately), a team intake stays open for
+   end-to-end tracking until every child lands. Sweep closes it (below).
+3. **Idempotent:** if the parent already has child back-links, it is already split — skip. Only split
+   "按 project 分工"; the deep solution design is each project's PM/senior-dev's job, not yours.
