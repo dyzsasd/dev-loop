@@ -72,8 +72,8 @@ try {
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_PROJECT="demo"/.test(inferred.out), "inferred project is injected into Codex with -c");
 
   const unresolved = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--cwd", outside]);
-  ok(unresolved.code === 2 && /no project resolved from cwd/.test(unresolved.out) && /Configured projects: demo, fallback/.test(unresolved.out),
-    "runner refuses to guess defaultProject/demo when cwd is outside every configured repo");
+  ok(unresolved.code === 2 && /no workspace found from/.test(unresolved.out) && /Configured projects: demo, fallback/.test(unresolved.out),
+    "runner refuses to guess defaultProject/demo when cwd is outside every configured repo (1.0 message points at team init/import)");
 
   const split = run(["--cli", "claude", "--once", "--dry-run", "--agents", "core", "--dev-split", ...common]);
   ok(split.code === 0, "--dev-split dry-run exits 0");

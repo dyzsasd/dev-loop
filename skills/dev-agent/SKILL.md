@@ -37,7 +37,7 @@ Dev-specific boot steps:
 
 - From config, load `linearProject`, `linearTeam`, `repoPath`, `strategyDoc`, `build`,
   `git`, `deploy`, `mode`, `autonomy` (§12a), the optional `codex` block (§24), and —
-  if present — `repos[]` (conventions §19).
+  if present — `repos[]` (the conventions "Topology at a glance" table9).
 - **If `devSplit:true` (§21a) or the scheduler context says `DEVLOOP_DEV_SPLIT:true`,
   DEFER — graceful no-op:** this project runs the two-tier split, so
   `senior-dev`/`junior-dev` own the queue; you are the legacy single-dev fallback and
@@ -142,7 +142,7 @@ Take the top one.
 ### Step 2 — Claim it (atomic, conventions §7)
 `save_issue`: `state:"In Progress"`, `assignee:"me"`. Re-fetch; if it's not
 assigned to you / not In Progress, another Dev won the race — pick the next.
-(This re-fetch is the verify-after-write guard from conventions §10 — apply it to
+(This re-fetch is the verify-after-write guard from the conventions "Topology at a glance" table0 — apply it to
 **every** state move you make this run, e.g. the In Review hand-off (Step 7) and any
 block (Step 3): Linear state-matching is fuzzy, so confirm the move landed. And when
 adding/removing a label, re-pass the **full** label set — `save_issue` labels are
@@ -180,7 +180,7 @@ label; single-repo ⇒ `repoPath`, unchanged — §19). **Before coding, read th
 contributor skill** if one is resolved (`repos[].contributorSkill` else top-level
 `contributorSkill`) and follow it; **when absent, fall back to reading the repo's own
 CLAUDE.md** (today's behavior) and match its conventions/style. Make the smallest change that satisfies **all**
-acceptance criteria. **Cover the change (conventions §15).** For a `Bug` or `Feature`, either add a
+acceptance criteria. **Cover the change (the conventions "Topology at a glance" table5).** For a `Bug` or `Feature`, either add a
 regression test in the repo's harness this run (fails before, passes after — run it
 in the Step-5 gate), OR file a deduped `[coverage]` follow-up (`Improvement` + `qa`
 + `coverage`, `relatedTo` the parent) **before** hand-off so a later Dev fire writes
@@ -198,7 +198,8 @@ to ship safely in one pass — or its riskiest part can't be checked by
 typecheck/build/test (e.g. a signup-funnel or other critical UI flow that only a
 human/visual QA can confirm) — ship the foundational, low-risk, *testable* slice
 now and file follow-up ticket(s) for the deferred slice(s): create them with the
-same type/owner labels + `dev-loop`, `relatedTo` the original, in `Todo`, with
+same type/owner labels + `dev-loop`, `relatedTo` the original, in `Backlog`
+(§5a — PM grooms + promotes at pace), with
 crisp ACs. **Every Dev-filed ticket (splits and `[coverage]` follow-ups) inherits the
 parent's `repo:<name>` target (§19);** when a split actually crosses into a *different*
 repo, the mandatory handoff must cite the new ticket ID **and** set its `repo:<name>`
@@ -295,7 +296,7 @@ not a failure — it protected `defaultBranch` and real users.
 ### Step 6 — Ship (per config)
 Only after green gates:
 
-**If `git.landing:"pr"` (conventions §12b): land via a PR in an ISOLATED worktree — never touch
+**If `git.landing:"pr"` (the conventions "Topology at a glance" table2b): land via a PR in an ISOLATED worktree — never touch
 `defaultBranch` or the shared checkout.** Because two dev tiers (senior/junior) can run against
 the **same repo checkout** concurrently, do ALL of a pr-mode ticket's work in a **per-ticket git
 worktree** so they never collide on one working tree (§7):
@@ -340,7 +341,7 @@ below runs **only** when `git.landing` is absent or `"direct"`.
   entirely** and NEVER inherits another repo's `deploy.command`/`healthCheck`. Remember
   there is no cross-repo deploy barrier — only per-repo or idempotent deploys are safe,
   §19. Single-repo ⇒ top-level `deploy`, unchanged.) **The first time a run would deploy to production —
-  and any time you're overriding the configured `mode` mid-run (conventions §12) —
+  and any time you're overriding the configured `mode` mid-run (the conventions "Topology at a glance" table2) —
   confirm the blast radius with the user before that first irreversible deploy,
   unless they've already authorized hands-off shipping this session.** Once
   authorized, proceed per config without re-asking on every ticket. **Under
@@ -384,7 +385,7 @@ can verify. **If you shipped only part of the ticket's ACs, the handoff MUST cit
 the follow-up ticket ID you filed this run for the rest (see the split rule) — a
 "split to a follow-up" with no filed ID is incomplete; file it now, then hand off.**
 **Likewise, a `Bug`/`Feature` hand-off MUST state its coverage outcome
-(conventions §15): the regression test you added this run, OR the `[coverage]`
+(the conventions "Topology at a glance" table5): the regression test you added this run, OR the `[coverage]`
 follow-up ticket ID you filed this run, OR the exemption reason. "I'll add a test
 later" with no test and no filed ticket is incomplete.**
 Then loop to Step 1.
@@ -405,7 +406,7 @@ Then loop to Step 1.
 - Respect `mode` and the `git`/`deploy` flags exactly — they encode the user's
   autonomy choice. When `autoDeploy` is on, you are shipping to real users; treat
   the green-gate rule as inviolable.
-- **Respect `autonomy` (conventions §12a).** Under `autonomy:"full"`, *decide and
+- **Respect `autonomy` (the conventions "Topology at a glance" table2a).** Under `autonomy:"full"`, *decide and
   act, don't ask* — make scoping/splitting/prioritization calls yourself and ship
   per config; never pause for an interactive human confirmation (not even before
   the first prod deploy). Caution stays the **method**: verify against the running

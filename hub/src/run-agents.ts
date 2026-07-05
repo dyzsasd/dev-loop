@@ -370,8 +370,11 @@ function parseArgs(argv: string[]): Options {
   return opts;
 }
 
-function readProjects(dataDir: string): ProjectsConfig | null {
-  for (const p of projectConfigCandidates(dataDir)) {
+// 1.0 clean break: with no workspace, config comes ONLY from an EXPLICIT injection — the --data flag
+// or DEVLOOP_PROJECTS_JSON (tests/CI). The implicit machine-global v1 fallback is gone.
+function readProjects(opts: Options): ProjectsConfig | null {
+  if (!opts.dataDirExplicit && !process.env.DEVLOOP_PROJECTS_JSON) return null;
+  for (const p of projectConfigCandidates(opts.dataDir)) {
     if (!existsSync(p)) continue;
     try { return JSON.parse(readFileSync(p, "utf8")) as ProjectsConfig; }
     catch (e) { die(`could not parse ${p}: ${(e as Error).message}`, 1); }
@@ -391,7 +394,7 @@ function resolveProject(opts: Options, cfg: ProjectsConfig | null): string {
   const cwd = opts.cwd || process.cwd();
   const keys = Object.keys(cfg?.projects ?? {});
   const configured = keys.length ? keys.join(", ") : "none";
-  die(`no project resolved from cwd ${cwd}. Add this repo to ${projectsPath(opts.dataDir)} as repoPath/repos[].path, pass --project <key>, or set DEVLOOP_PROJECT. Configured projects: ${configured}.`, 2);
+  die(`no workspace found from ${cwd} (and no explicit --data/DEVLOOP_PROJECTS_JSON injection). 1.0 no longer reads ~/.dev-loop/projects.json — create a workspace: dev-loop team init; migrate a v1 setup once: dev-loop team import. Configured projects: ${configured}.`, 2);
 }
 
 function resolveCwd(opts: Options, cfg: ProjectsConfig | null, project: string): string {
@@ -822,7 +825,7 @@ async function main(): Promise<void> {
   const ws = resolveWs(opts);
   if (ws) return teamMain(opts, ws);
 
-  const cfg = readProjects(opts.dataDir);
+  const cfg = readProjects(opts);
   const project = resolveProject(opts, cfg);
   applyConfigCadence(opts, (agent) => (cfg?.projects?.[project] as { agents?: Record<string, { cadence?: string }> } | undefined)?.agents?.[agent]?.cadence);
   const cwd = resolveCwd(opts, cfg, project);

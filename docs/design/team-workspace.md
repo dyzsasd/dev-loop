@@ -1,5 +1,12 @@
 # Team / Workspace — dev-loop v-next 设计与改进方案
 
+> **状态注记(1.0.0 定稿):** 本文是设计**记录**,保留原貌;实际交付与下文计划的差异:
+> ① 里程碑未按 0.30–0.34 分版发布 —— M1–M5 作为一列火车在 rc.1→1.0.0 上一次性交付;
+> ② v1 配置回退曾按 R3 暂存过渡期,**已于 1.0.0 彻底移除**(连同 legacy `init` skill、
+> `init-config` 命令);③ doctor 保持只读,修复动作在 `dev-loop team repair`(R2);
+> ④ hub op-API 的 steward project 覆盖(D4.2)与 web team 总览(D5.3)**延至 1.1**;
+> ⑤ 最终状态以 `team-workspace-GA.md` 与 CHANGELOG 为准。
+
 > 状态:**proposal v3.1**(三轮操作者反馈 + 设计评审修订:M3/M4 里程碑重排、命名校验、
 > import 事件重键、`next-project` 共享轮换 picker)。2026-07-03。
 > 工程级细化(模块/类型/算法/任务分解):[`team-workspace-impl.md`](team-workspace-impl.md)。

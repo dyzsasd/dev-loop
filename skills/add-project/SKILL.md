@@ -36,7 +36,7 @@ to `dev-loop team init` first and stop. Read `references/conventions.md` §20/§
 
 - **linear:** if this is the FIRST project in the team, reconcile the Linear team first — verify
   `team.linearTeam` exists, ensure the dev-loop label set (`dev-loop`, `needs-pm`, `Feature`/`Bug`/
-  `Improvement`, `pm`/`qa`, `senior-dev`/`junior-dev`, `blocked`, `external-prereq` + `external-code`/`external-access` (§9c), `env:dev`/`env:prod`, …), and
+  `Improvement`, `pm`/`qa`, `senior-dev`/`junior-dev`, `blocked`, `external-prereq` + `external-code`/`external-access` (§9c), `sensitive` (§21a), `env:dev`/`env:prod`, …), and
   record `team.linearTeamId`. Then **find-or-create** the Linear project by name; record its id.
 - **service:** `dev-loop seed <key> "<name>" <UNIQUE_PREFIX>` into the workspace hub.db (the prefix
   must be unique across the team's projects — doctor enforces it).

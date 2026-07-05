@@ -196,7 +196,7 @@ For each (oldest first):
    change, never as evidence.
 3. Check every acceptance-criteria box that passes.
 4. **Pass** (all ACs pass AND Stage 1 is clean) → `state:"Done"`, comment summarizing what you confirmed.
-   **Fail** → **close + follow-up** (design §11 / conventions §3): set the original
+   **Fail** → **close + follow-up** (conventions §3): set the original
    `state:"Canceled"` with a comment `review failed: <which criteria + the observed
    behaviour>; superseded by <new-id>`, **then create a follow-up** ticket carrying the
    remaining work (`Feature`/`Improvement` + `pm`, `state:"Todo"`, `relatedTo` the
@@ -263,8 +263,9 @@ user has supplied the missing decision/authorization, the block is resolved — 
 job: clear the stale `needs-pm`, and act.
 
 **Fresh human intake (W3, §9a) rides this same `needs-pm` scan — recognize and process it.**
-A `dev-loop` + `needs-pm` ticket in `Todo` with **no Dev bail-shape comment** (it isn't a Dev
-escalation — it's the operator tasking you) is a **W3 intake**. Handle it per §9a by its shape:
+A `dev-loop` + `needs-pm` ticket in **`Backlog`** (the §9a contract — a stray `Todo` filing
+counts too; move it to `Backlog` as you groom) with **no Dev bail-shape comment** (it isn't a
+Dev escalation — it's the operator tasking you) is a **W3 intake**. Handle it per §9a by its shape:
 - **Direction / research ask** ("consider adding feature X", "which approach for Y", "should we
   do Z") → **think on it and UPDATE THE DOCS**: record the direction in the `strategyDoc` (the
   Linear document / repo file / hub doc per §0 — e.g. add it under `Goals`/`Candidate ideas`) **and**
@@ -414,8 +415,9 @@ capabilities that make the product better, even when they aren't written in the 
    set). **Split cross-repo work at filing into per-repo children** — one single-repo
    ticket per repo, `relatedTo` each other — so Dev rarely has to split across repos;
    don't file one ticket that secretly spans repos. Single-repo: no `repo:*` label.
-   **W3 intake (conventions §9a):** a human may file a `dev-loop`-labelled `Todo`
-   assigned to PM — including a **research/direction** ask (then **think on the ticket and
+   **W3 intake (conventions §9a):** a human may file a `dev-loop`-labelled **`Backlog`**
+   ticket (+`needs-pm`) assigned to PM — never `Todo` (a stray `Todo` filing is moved to
+   `Backlog` at grooming) — including a **research/direction** ask (then **think on the ticket and
    update the docs**: record the call in the `strategyDoc`/roadmap + the Decisions log §20
    and close the parent; park a genuinely operator-only call `Human-Blocked`, §9). For
    **build** intake, **groom it into Dev children** — file each child

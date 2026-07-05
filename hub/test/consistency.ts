@@ -30,7 +30,7 @@ ok(sorted(roster) === sorted(skillAgents),
   `roster ≡ skills/<agent>-agent dirs (every launchable agent has a prompt, every prompt is launchable)`);
 // Operator (non-agent) skills: the legacy `init` plus the 1.0 team/workspace commands. These are
 // operator-present setup skills, NOT launchable loop agents, so they are exempt from the roster check.
-const OPERATOR_SKILLS = ["init", "add-project", "add-repo", "sync-project", "sync-repo"];
+const OPERATOR_SKILLS = ["add-project", "add-repo", "sync-project", "sync-repo"]; // legacy `init` removed at 1.0 (team init + add-project/add-repo replace it)
 const nonAgentDirs = skillDirs.filter((d) => !d.endsWith("-agent"));
 ok(sorted(nonAgentDirs) === sorted(OPERATOR_SKILLS) && skillDirs.length === skillAgents.length + OPERATOR_SKILLS.length,
   `skills/ holds exactly the agent prompts + the operator skills [${OPERATOR_SKILLS.join(", ")}] (no orphan skill dirs)`);

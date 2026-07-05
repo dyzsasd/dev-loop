@@ -1,5 +1,12 @@
 # Team / Workspace 1.0 — 详细设计稿 + 开发/测试任务
 
+> **状态注记(1.0.0 定稿):** 本文是设计**记录**,保留原貌;实际交付与下文计划的差异:
+> ① 里程碑未按 0.30–0.34 分版发布 —— M1–M5 作为一列火车在 rc.1→1.0.0 上一次性交付;
+> ② v1 配置回退曾按 R3 暂存过渡期,**已于 1.0.0 彻底移除**(连同 legacy `init` skill、
+> `init-config` 命令);③ doctor 保持只读,修复动作在 `dev-loop team repair`(R2);
+> ④ hub op-API 的 steward project 覆盖(D4.2)与 web team 总览(D5.3)**延至 1.1**;
+> ⑤ 最终状态以 `team-workspace-GA.md` 与 CHANGELOG 为准。
+
 > 上游:`team-workspace.md`(proposal v3,§ 引用均指向它与 `references/conventions.md`)。
 > 本稿是**工程级**:模块落点、类型定义、算法、命令规格、skill 规格,以及按里程碑切好的
 > 开发任务(**D-x.y**)与测试任务(**T-x.y**)。规模标记:S ≤ 半天,M ≈ 1 天,L ≈ 2–3 天。

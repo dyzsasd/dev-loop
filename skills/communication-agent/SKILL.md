@@ -257,7 +257,7 @@ the **enabled projects** in your Scheduler context.
 in `webhookEnv` — you never see or handle the URL/secret (§16). This is a PUSH (digests, escalations) and
 is independent of the report **sink** (§23), which remains where the durable report is archived.
 
-**The team daily digest (the §22 digest contract — the director's one message a day).** Numbers
+**The team daily digest (the §22a digest contract — the director's one message a day).** Numbers
 come from code; narrative comes from you. Compose EXACTLY these sections, then push via
 `dev-loop notify --title "Daily <team> <date>"`:
 1. **Team KPIs** — run `dev-loop metrics --window 24h --json` and quote its numbers verbatim

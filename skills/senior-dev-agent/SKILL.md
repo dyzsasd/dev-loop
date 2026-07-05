@@ -156,7 +156,7 @@ labels are REPLACE-style — or you'll drop `dev-loop`/owner/dev-tier labels.)
   `needs-pm`, unassign, move back to `Todo`, comment exactly what's missing with the bail
   shape on the first line (`Bail-shape: info-needed | decision-needed | scope-design |
   external-prereq | fix-exhausted`, §9). Don't guess. Pick next.
-- **Pick your MODE (§21a / §8 of conventions):** both kinds of ticket are senior-assigned;
+- **Pick your MODE (§21a / conventions §21a (the two-modes contract)):** both kinds of ticket are senior-assigned;
   the ticket's **mode marker** tells you which:
 
   | Marker on the ticket | Mode | Go to |

@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { STATES } from "./db.ts";
-import { devloopDataDir, legacyClaudeDataDir } from "./paths.ts";
+import { devloopDataDir } from "./paths.ts";
 
 // ticket row → API shape (mirrors the MCP server's toTicket; labels/related_to are JSON columns).
 // Shared by the HTML views below and the daemon.ts JSON API routes (a row-shape helper, not view-only).
@@ -426,7 +426,7 @@ export function roadmapPage(db: DatabaseSync, projectId: string, opts: { writabl
 const REPORT_DATED: Record<string, RegExp> = { daily: /^\d{4}-\d{2}-\d{2}$/, weekly: /^\d{4}-W\d{2}$/, monthly: /^\d{4}-\d{2}$/ };
 export function reportsRoot(projectKey: string): string {
   if (process.env.DEVLOOP_REPORTS_DIR) return process.env.DEVLOOP_REPORTS_DIR;
-  const bases = [devloopDataDir(), process.env.CLAUDE_PLUGIN_DATA, legacyClaudeDataDir()].filter(Boolean) as string[];
+  const bases = [devloopDataDir(), process.env.CLAUDE_PLUGIN_DATA].filter(Boolean) as string[]; // 1.0: the legacy Claude-plugin data dir is no longer scanned
   const candidates = bases.flatMap((b) => [join(b, projectKey, "reports"), join(b, "reports")]);
   for (const c of candidates) { try { if (statSync(c).isDirectory()) return c; } catch { /* not here */ } }
   return candidates[0]; // AC-formula path; may not exist → empty state at read time
