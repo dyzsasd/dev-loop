@@ -3,7 +3,114 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.0.0-rc.3 — the autonomy overhaul (operator = director) + field-fix batch
+
+- **Backlog-first intake (§5a, NEW).** Every discovery filing (PM ideation, QA bugs, Architect
+  tech-debt, human intake §9a) now lands in `Backlog`; `Todo` is the commitment queue reachable ONLY
+  via PM's new **Job B2** (groom: dedupe/merge/cancel/refine → promote in §5 order while
+  `intake.todoDepthCap` — default 10 — holds). Carve-outs: verify-fail follow-ups, un-block
+  re-queues, confirmed ops incidents (the urgent bypass). Sweep now ROUTES un-owned Todo strays back
+  to Backlog+needs-pm instead of legitimizing them — a human ticket can no longer bypass PM.
+- **Sensitive-work routing (§21a override, NEW).** Auth/permissions, payment/money, PII, secrets,
+  data-migration work gets the `sensitive` label (seeded) at filing ⇒ senior-dev ALWAYS, design
+  before code; junior bails a mis-routed sensitive ticket; single-dev mode designs-then-codes;
+  Sweep never tier-downgrades sensitive work. Fully autonomous — the protection is the mandatory
+  design + independent verification, not a human pause.
+- **Ops instant alerting + the cadence fix.** ops pushes `dev-loop notify --level error` once per
+  CONFIRMED incident (+ a recovery message; notifiedAt tracked); add-repo now interviews health/
+  version endpoints + critical routes + a logs command (`--critical-route`/`--logs-command` flags);
+  doctor warns **W07** for a deployed repo with no probe; `dev-loop run` warns when probes exist but
+  ops isn't scheduled. **Bug fix:** `agents.<agent>.cadence` was seeded + documented but NEVER read —
+  the scheduler now resolves CLI `--interval` > config cadence > built-ins (team-init seeds ops 10m).
+- **Verification standard (§3).** MISSING/EXTRA/MISUNDERSTANDING promoted to the shared owner-side
+  standard: PM Job A gains a Stage-1 spec-compliance triage on the ACTUAL diff (scope creep is now
+  detectable), QA re-tests gain a diff skim, and both verify jobs carry "the handoff is a
+  self-claim — locate with it, never judge by it". Dev's own Step 5.5 stays the first line.
+- **Director metrics (W5).** New `hub/src/metrics.ts` + `dev-loop metrics [--window 7d] [--json]`:
+  fire success/timeouts/suspectErrors + per-agent medians from fires.jsonl (all backends) and
+  throughput/accept-rate/blocked/QA-escape-ratio from hub events (service). fires.jsonl now rotates
+  (90d) at scheduler start; doctor prints the 7d fire success line. conventions §22a defines the
+  team daily digest contract (communication pushes ONE director message a day via team.comms;
+  numbers from code, narrative from the LLM); reflect (team scope) adds a weekly consolidated team
+  retrospective + the north-star delta against team.docs.vision.
+
+### rc.3 also ships — cross-machine test findings (9-item list)
+
+- **W5 external-prerequisite tracker (§9c, NEW).** An `external-prereq` park is no longer a dead end:
+  Dev bails now tag `External-kind: code|access` (+ `external-code`/`external-access` labels, seeded);
+  PM creates/dedupes a TRACKER ticket per external need (code-kind → a real ticket in the owning
+  project / a §9b team intake; access-kind → human-park + notify once); the parked ticket is linked with
+  a REAL blocking edge (linear: `save_issue blockedBy` — native, append-only; service/local: a
+  `Blocked-by: <id>` marker comment); PM auto-unparks when all blockers are Done/Canceled, Sweep
+  backstops + closes orphan trackers. Kills "work rotting behind a label until a human re-reads comments".
+- **fix(config): toLegacyView passthrough + notify bridge.** The legacy view spread a WHITELIST, silently
+  dropping operator fields (`blockedStateName`, `communication`, …) and never emitting `notify` — so on a
+  v2 workspace the daemon's human-park pings silently no-oped. Now the raw project entry passes through
+  first, and `team.comms` bridges to the legacy per-project `notify {type, webhookEnv}` unless the project
+  carries its own.
+- **fix(import): generic field passthrough + notify→comms lift.** `team import` now preserves every v1
+  project field it doesn't re-home, lifts an env-name `notify` to `team.comms`, and STRIPS inline
+  webhook/secret literals (never copied into dev-loop.json, §16/I5) with exact guidance printed.
+- **feat(run): suspectError detection.** A fire that exits 0 while its output is a failure marker
+  ("Execution error"/"API Error"/bare "Error:" as the LAST line, or zero output at all) is flagged
+  `suspectError` + `outputTail` in fires.jsonl and the hub event — fake successes no longer poison the
+  success-rate ledger. Detection is tail-anchored (no false positives on error text an agent echoed mid-run).
+- **labels:** `external-prereq` + `external-code`/`external-access` seeded; add-project/init ensure them;
+  init's readiness checklist now includes explicit Blocked-state (`blockedStateName`) and outward-channel
+  rows (silently-skipped ≠ decided).
+
+## 1.0.0-rc.2 — fixes on top of rc.1
+
+- **fix(plugin):** `install-claude-plugin` now pins the marketplace to THIS CLI's version. Without a pin
+  Claude Code resolved the npm `latest` dist-tag, which — for a prerelease published under `next` — silently
+  installed the OLD plugin and omitted the newest skills (`/dev-loop:add-project` etc.). `--version` overrides.
+- **fix(run):** the scheduler strips `CLAUDE_CODE_EFFORT_LEVEL` from each agent fire's env so the per-agent
+  `--effort` stays authoritative (the env var outranks the flag; an exported value flattened every agent).
+- **docs:** README rewritten to lead with the 1.0 team/workspace flow (init/import/add-project/add-repo/run,
+  cross-machine migration, workspace-commands table); config-schema effort-precedence note.
+
+## 1.0.0-rc.1 — team / workspace model (code-complete; GA pending operator soak)
+
+### 1.0 line — team / workspace model (in progress)
+- **M3 team scheduling (0.32.0).** One team-level `dev-loop run` rotates fires across the enabled
+  projects with a smooth weighted round-robin (nginx SWRR — `rotation.ts`); `weight` sets share,
+  `enabled:false`/`weight:0` drop a project, and dev-loop.json hot-reloads on mtime (cursor pruned).
+  `dev-loop next-project --agent <a>` exposes the SAME cursor so Agent View `/loop` rows and
+  `dev-loop run` never double-fire or starve a project. `--plan <n>` previews the pick sequence
+  without firing; `--project` degrades to a filter. New `fires.jsonl` ledger records every fire
+  (backend-agnostic soak metric). The run lock is team-scoped. `dev-loop with-repo-lock <ref> -- <cmd>`
+  serializes base-clone mutations on a shared repo (`locks.ts`). Stewards still fire per-project this
+  milestone (team-scoping is M4).
+- **M4 stewardship + docs + comms (0.33.0).** The stewardship agents (sweep/ops/reflect/communication)
+  now fire at TEAM scope (cwd = workspace root, `_team`/"" project, the enabled projects listed in the
+  prompt). New team **lessons library** (`lessons.ts`): a curated `INDEX.md` loaded every fire plus
+  per-project shards + a cold archive, with fixed load budgets (doctor W03); reflect is the sole writer.
+  New **outward channel** `dev-loop notify` (`comms.ts`, slack/lark) — orthogonal to the report sink, the
+  webhook URL read from an env var named in config (never stored). SKILLs updated for team mode (reflect
+  write-flow, ops registry-dedup + owner routing, sweep per-project loop, communication via notify, PM
+  loads lessons + vision). The service-backend op-API steward `project` override moves to M5 with the
+  daemon work; linear stewards route cross-project via the Linear MCP today.
+- **M5 hub + intake (0.34.0 → rolled into rc.1).** `dev-loop hub start|stop|status|ensure` manages the
+  workspace hub daemon (service backend); `stop` checkpoints + truncates the WAL. `dev-loop run`
+  auto-ensures the daemon on a service team. Team intake (conventions §9b): PM splits a cross-project ask
+  into per-project W3 sub-intakes and sweep closes the parent when all children land. Version stamped to
+  **1.0.0-rc.1** — the 1.0 line is code-complete; GA (1.0.0) follows operator soak + the real backoffice
+  migration + a second-machine drill (see docs/design/team-workspace-GA.md). Deferred service-only polish:
+  the web team-overview page and the service op-API steward project override.
+- **M1 config kernel (schema v2).** New per-workspace `dev-loop.json`: one workspace = one team = one
+  backend; a physical repo **registry** + **virtual projects** that reference repos (one repo shareable
+  across projects). New modules `team-config.ts` (types + E01-E11 validation + resolution API +
+  `toLegacyView` compat) and `workspace.ts` (discovery + `.dev-loop/` path API + self-healing index).
+  All run state (incl. the service `hub.db`) moves inside `<workspace>/.dev-loop/` so copying the folder
+  migrates the machine (invariant I4).
+- **New commands:** `dev-loop team init` (pure-CLI workspace creation; service also seeds the `_team`
+  intake project), `dev-loop team import` (one-shot v1->v2 migration — folds projects, moves state,
+  splits `lessons.md`, copies hub rows re-keying AUTOINCREMENT events), `dev-loop team repair` (worktree
+  repair + index re-register + WAL truncate). `dev-loop doctor` gains a read-only workspace verdict
+  (E-codes, repo existence, W05/W06). `dev-loop run` + the MCP server read workspace config automatically.
+- **Breaking (1.0):** runtime stops reading `~/.dev-loop/projects.json`; migrate once with `team import`.
+  (Staged: a v1 fallback remains through the pre-1.0 milestones.)
+
 
 ## 0.29.0 - 2026-07-03
 - **W3 human intake is now discoverable + processed** (conventions §9a / PM Job B). The spec let

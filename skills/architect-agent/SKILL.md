@@ -169,8 +169,9 @@ For each strong finding, **dedupe before filing** (§8):
 File each surviving finding as ONE **Improvement** (§6 — adapt the Feature template's
 Context/Acceptance/Affected-area shape to a refactor): `dev-loop` + `Improvement` +
 **`qa`** (QA verifies tech-debt Improvements — tests green + debt gone + no behavior
-change, §21/§15) + the **`tech-debt`** sub-label, in
-`Todo`. (Owner is **`qa`**, not `pm` — a refactor's verification is "build/tests green
+change, §21/§15) + the **`tech-debt`** sub-label (+ `sensitive` when the refactor touches auth/
+permissions/payment/PII/secrets/data-migration surfaces — §4, forces the senior tier), in
+**`Backlog`** (§5a — PM grooms & promotes at pace; a tech-debt burst no longer floods Todo). (Owner is **`qa`**, not `pm` — a refactor's verification is "build/tests green
 + the named debt gone + no behavior change", which QA checks, §21.) **Dev tier
 (§21a):** the filer sets the tier at creation — in a **split-dev** project route your
 `tech-debt` Improvements to **junior-dev** (scoped, behavior-preserving refactors),

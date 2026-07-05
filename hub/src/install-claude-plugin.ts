@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pkgVersion } from "./paths.ts";
 
 const MARKETPLACE = "dev-loop-npm";
 const PLUGIN = "dev-loop";
@@ -48,8 +49,14 @@ export function installClaudePlugin(argv = process.argv.slice(2)): number {
     else die(`unknown option '${a}'`);
   }
 
+  // Default the version pin to THIS CLI's own version so the installed plugin matches the CLI the operator
+  // just installed. Without a pin, Claude Code resolves the npm `latest` dist-tag — which SKIPS a prerelease
+  // published under another tag (e.g. an rc on `next`), silently installing an OLDER plugin than the CLI and
+  // omitting its newest skills (add-project/add-repo, …). `--version <semver|dist-tag>` overrides; pass
+  // `--version latest` to opt back into the floating latest.
+  const version = opts.version || pkgVersion();
   const source: Record<string, string> = { source: "npm", package: opts.pkg };
-  if (opts.version) source.version = opts.version;
+  if (version && version !== "latest") source.version = version;
   const marketplace = { name: MARKETPLACE, owner: { name: "Shuai" }, plugins: [{ name: PLUGIN, source }] };
   const file = join(opts.dest, ".claude-plugin", "marketplace.json");
   const json = JSON.stringify(marketplace, null, 2) + "\n";
@@ -64,7 +71,8 @@ export function installClaudePlugin(argv = process.argv.slice(2)): number {
   console.log(`\nNow run these two interactive Claude Code commands:`);
   console.log(`  /plugin marketplace add ${opts.dest}`);
   console.log(`  /plugin install ${PLUGIN}@${MARKETPLACE}`);
-  console.log(`\nThen /reload-plugins (or restart). Skills appear as /dev-loop:pm-agent … /dev-loop:init.`);
+  console.log(`\nInstalls @dyzsasd/dev-loop@${version || "latest"} (pinned to this CLI's version; pass --version to change).`);
+  console.log(`Then /reload-plugins (or restart). Skills appear as /dev-loop:pm-agent … /dev-loop:add-project.`);
   if (!opts.dryRun && !existsSync(file)) die(`failed to write ${file}`, 1);
   return 0;
 }

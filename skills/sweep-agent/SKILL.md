@@ -77,11 +77,13 @@ its owner label is picked up by **nobody**. Find and fix them:
     `Done`) → **finish the crashed promotion**: move it `Backlog → Todo` (PM's design-gate pass
     crashed mid-promote, §21a). If the parent is `Canceled` instead → `Cancel` the child too (it
     references a superseded design). Backlog is otherwise invisible to every dev pick-query.
-  - **No owner label** (`pm`/`qa` both absent) → assign the owner per type (§4):
-    `Feature` → `pm`; `Bug` → `qa` (an `incident` Bug is `qa` too, §4); `Improvement` →
-    `pm` by default, `qa` if it carries `coverage` or `tech-debt` (an Architect-filed
-    refactor is QA-verifiable, §4) or was clearly QA-driven. Re-pass the **full** label
-    set, then re-fetch to confirm (§10), and comment why.
+  - **No owner label** (`pm`/`qa` both absent) in `Todo` → this is UNPROCESSED INTAKE
+    that bypassed the §5a gate (usually a human filing straight to Todo). **Route it to
+    PM, don't legitimize it:** move `state:"Backlog"` + add `needs-pm` (re-pass the full
+    label set, §10), comment `routed to PM intake (§5a): un-owned Todo ticket`. PM's Job
+    B2 grooms + promotes it properly (owner, tier, sensitivity). In `Backlog`/other
+    states, assign the owner per type as before (`Feature`→`pm`; `Bug`→`qa`;
+    `Improvement`→`pm`, `qa` if `coverage`/`tech-debt`).
   - **Owner/type contradiction** (e.g. a `Bug` tagged `pm` only, a `Feature` tagged
     `qa` only) → fix the owner label to match type so the correct agent verifies it.
   - **Missing type label** (no `Feature`/`Bug`/`Improvement`) → if the title/body
@@ -100,9 +102,11 @@ its owner label is picked up by **nobody**. Find and fix them:
     (`Feature`/`Bug`/`Improvement`, not `blocked`, not a design parent awaiting its gate)
     that carries **neither** `senior-dev` nor `junior-dev` (the `assignee` actor on
     `service` / the dev-tier label on `linear`/`local`) is invisible to **both** dev
-    pick-queries — picked by nobody. **Route it: default `junior-dev`** (a scoped
-    bug-fix/improvement), `senior-dev` only if the title/body clearly describe a new
-    module/feature needing design ("when borderline, junior", §21a). Re-pass the full set
+    pick-queries — picked by nobody. **Route it: `sensitive`-labelled (or plainly
+    auth/payment/PII/secrets/data-migration) ⇒ `senior-dev`, ALWAYS (§21a override —
+    never downgrade sensitive work to the cheap tier); else default `junior-dev`** (a
+    scoped bug-fix/improvement), `senior-dev` only if the title/body clearly describe a
+    new module/feature needing design ("when borderline, junior", §21a). Re-pass the full set
     + re-fetch (§10), comment why. This is the §21a-named safety net for a filer that
     forgot the tier. The opposite fault is as bad: a ticket carrying **both** tier labels
     (possible on `linear`/`local`, where the shared Linear identity means both tiers'
@@ -143,6 +147,25 @@ such PR **and** no commit **and** no `updatedAt` movement for the interval.
   `needs-qa`). Owner agents handle their own blocked queue (§9) — don't pre-empt
   their judgement; just make sure nothing is *invisible*.
 - **Terminal tickets** (`Done`/`Canceled`/`Duplicate`) → never touch; they're done.
+
+### Job 3b — W5 backstop: external-prereq unpark + tracker hygiene (§9c)
+
+Backstop PM's tracker pass every fire (per-project scope — in team mode, repeat per
+enabled project like the other jobs):
+1. **Unpark:** any open `blocked`+`external-prereq` ticket with **≥1 LIVE blocker edge**
+   (linear: blockedBy relations; service/local: `Blocked-by:` markers with no later
+   `Unblocked-by:` line) where ALL blockers are `Done`/`Canceled` → unpark it exactly as
+   PM would: labels off, back to `Todo`, `Unparked: blocker <id> resolved`, and retire
+   the edge (linear `removeBlockedBy`; service/local an `Unblocked-by: <id>` line in the
+   unpark comment). **Zero live edges = NOT a candidate** — that's PM step-1 work, or the
+   ticket IS a tracker; the empty set is vacuously "all resolved", don't fall for it.
+2. **Tracker hygiene:** a ticket is provably a TRACKER only structurally — OTHER tickets
+   reference it via blockedBy / `Blocked-by:` markers. A tracker whose dependents are all
+   closed/unparked → close it with a comment. A ticket with no incoming edge is NOT
+   provably a tracker — leave it.
+3. **Digest flag:** a `blocked`+`external-prereq` ticket with NO tracker edge and NO
+   `External-kind:` line is a legacy park PM must re-triage — flag it in Job 4's digest.
+Report all three counts in the digest.
 
 ### Job 4 — Board health digest (report only, no mutation)
 Compute and report a one-screen health snapshot — pure signal that helps the
@@ -189,3 +212,22 @@ entirely** (fail-closed). Report the `created/updated/skipped/failed` counts. Re
 End with: tickets re-labeled/re-routed (IDs + what changed), orphans reset, signals
 nudged, anything flagged for the operator, and the Job-4 health digest. If
 `mode:"dry-run"`, label it a preview.
+
+---
+
+## Team mode (1.0 workspace)
+
+When `DEVLOOP_TEAM_SCOPE=1` you run once for the whole team (cwd = workspace root). Loop over each
+**enabled project** in your Scheduler context and do your normal board-hygiene pass for each — scope every
+backend query to that project + the `dev-loop` label, exactly as before, just repeated per project. Skip
+disabled projects. (Team-intake reconciliation is added in a later milestone; for now, per-project hygiene
+across the enabled set.)
+
+### Team-intake collection (close the loop)
+
+Each team fire, also reconcile open **team intakes** (parents in `In Review` that were split by PM, §9b):
+- If **every** child sub-intake is `Done` → move the parent to `Done` with a comment summarizing each
+  child's outcome. The cross-project ask is complete.
+- If **any** child is parked/blocked → leave the parent in `In Review` and comment which child is the
+  blocker, so the operator can see where the end-to-end ask is stuck.
+Do not touch a parent that has no child back-links yet (PM hasn't split it — leave it for PM).

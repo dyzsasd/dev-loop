@@ -4,10 +4,13 @@
 // shells out to `claude -p` or `codex exec` once per agent fire.
 import { spawn, execFileSync, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync, appendFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
+import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
+import { toLegacyView, WsValidationError, primaryRepo, type Workspace } from "./team-config.ts";
+import { rotationCandidates, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
@@ -166,10 +169,14 @@ type Options = {
   once: boolean;
   dryRun: boolean;
   devSplit: boolean;
+  plan: number;          // team mode: print the next N (agent, project) picks and exit (0 = off)
+  intervalsExplicit: Set<Agent>; // agents whose cadence came from --interval (beats config cadence)
   project?: string;
   root: string;
   dataDir: string;
+  dataDirExplicit: boolean; // --data was passed → do not override from a discovered workspace
   hubDb: string;
+  hubDbExplicit: boolean;   // --hub-db was passed → do not override from a discovered workspace
   cwd?: string;
   logDir?: string;
   claudeBin: string;
@@ -294,9 +301,13 @@ function parseArgs(argv: string[]): Options {
     once: false,
     dryRun: false,
     devSplit: false,
+    plan: 0,
+    intervalsExplicit: new Set<Agent>(),
     root: process.env.DEVLOOP_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT || defaultRoot(),
     dataDir: defaultDataDir(),
+    dataDirExplicit: false,
     hubDb: defaultHubDb(),
+    hubDbExplicit: false,
     cliExplicit: false,
     claudeBin: process.env.DEVLOOP_CLAUDE_BIN || "claude",
     codexBin: process.env.DEVLOOP_CODEX_BIN || "codex",
@@ -329,11 +340,13 @@ function parseArgs(argv: string[]): Options {
       const agent = raw.slice(0, eq);
       if (!AGENT_SET.has(agent)) die(`unknown agent in --interval '${agent}'`);
       intervals[agent as Agent] = parseDuration(raw.slice(eq + 1));
+      opts.intervalsExplicit.add(agent as Agent);
     } else if (a === "--once") opts.once = true;
+    else if (a === "--plan") { opts.plan = Number(next()); if (!Number.isInteger(opts.plan) || opts.plan <= 0) die("--plan must be a positive integer"); }
     else if (a === "--dry-run") opts.dryRun = true;
     else if (a === "--root") opts.root = resolve(next());
-    else if (a === "--data") opts.dataDir = resolve(next());
-    else if (a === "--hub-db") opts.hubDb = resolve(next());
+    else if (a === "--data") { opts.dataDir = resolve(next()); opts.dataDirExplicit = true; }
+    else if (a === "--hub-db") { opts.hubDb = resolve(next()); opts.hubDbExplicit = true; }
     else if (a === "--cwd") opts.cwd = resolve(next());
     else if (a === "--mcp-config") opts.mcpConfig = resolve(next());
     else if (a === "--max-fires") {
@@ -474,7 +487,7 @@ function stripFrontmatter(raw: string): string {
   return end > 0 ? lines.slice(end + 1).join("\n").trimStart() : raw;
 }
 
-function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile): string {
+function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile, teamScope?: { enabledProjects: string[] }): string {
   const skill = join(opts.root, "skills", `${agent}-agent`, "SKILL.md");
   if (!existsSync(skill)) die(`skill file not found for '${agent}': ${skill}. Pass --root <dev-loop checkout>.`, 1);
   const split = runtimeDevSplit(opts);
@@ -484,12 +497,16 @@ function readPrompt(opts: Options, agent: Agent, project: string, profile: Launc
     .replaceAll("${DEVLOOP_DATA_DIR:-~/.dev-loop}", opts.dataDir)
     .replaceAll("${DEVLOOP_DATA_DIR}", opts.dataDir)
     .replaceAll("${DEVLOOP_PROJECTS_JSON}", projectsPath(opts.dataDir));
+  const teamLines = teamScope
+    ? `- team-scope: true (this is a TEAM-level fire — iterate/route across the enabled projects below, do not act on a single project only)
+- enabled projects: ${teamScope.enabledProjects.join(", ")}\n`
+    : "";
   return `You are launched by dev-loop's own scheduler. Run exactly one fresh fire for this agent, then stop.
 
 Scheduler context:
-- project: ${project}
+- project: ${project || "(team scope — no single project)"}
 - agent: ${agent}
-- selected agents: ${opts.agents.join(",")}
+${teamLines}- selected agents: ${opts.agents.join(",")}
 - coding agent: ${profile.codingAgent}
 - launch model: ${profile.model ?? "(cli default)"}
 - launch effort: ${profile.effort ?? "(cli default)"}
@@ -584,14 +601,25 @@ function displayCommand(command: string, args: string[], prompt: string): string
 // was banked on. Best-effort + lazy: opened once, skipped silently on a non-hub (linear/local) project, and
 // never allowed to crash a fire. One writable connection reused across fires (the scheduler is single-writer).
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
-function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean): void {
+let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
+function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean,
+  extra?: { suspectError?: boolean; outputTail?: string }): void {
+  // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
+  // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
+  if (fireLedgerPath) {
+    try {
+      mkdirSync(dirname(fireLedgerPath), { recursive: true });
+      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra ?? {}) };
+      appendFileSync(fireLedgerPath, JSON.stringify(row) + "\n");
+    } catch { /* ledger is best-effort */ }
+  }
   try {
     if (fireDb === undefined) { try { fireDb = openDb(hubDb); } catch { fireDb = null; } }
     if (!fireDb) return;
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut } });
+      data: { codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -604,6 +632,9 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
 // implementers (ops/communication/reflect are time-based and always fire), and only on the service backend
 // (max(events.id) is the board-change signal — linear/local have no hub cursor, so the gate stays off there).
 const GATED_AGENTS = new Set<Agent>(["pm", "qa", "dev", "senior-dev", "junior-dev", "architect"]);
+// Stewardship agents (M4): in team mode these fire at TEAM scope (cwd = workspace root, project = _team/"",
+// DEVLOOP_TEAM_SCOPE=1) and iterate/route across the enabled projects, rather than rotating one project.
+const STEWARD_AGENTS = new Set<Agent>(["sweep", "ops", "reflect", "communication"]);
 function repoPathsFor(cfg: ProjectsConfig | null, project: string): string[] {
   const p = cfg?.projects?.[project] as { repoPath?: string; repos?: { path?: string }[] } | undefined;
   if (p?.repos?.length) return p.repos.map((r) => r.path).filter((x): x is string => !!x);
@@ -635,12 +666,15 @@ function saveGateState(opts: Options, project: string, state: GateState): void {
   } catch { /* best-effort — a lost gate write just means the next fire runs (fails open) */ }
 }
 
-async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string): Promise<number> {
-  const profile = resolveLaunchProfile(opts, cfg, project, agent);
-  const prompt = readPrompt(opts, agent, project, profile);
-  const backend = (cfg?.projects?.[project] as { backend?: string } | undefined)?.backend ?? "linear";
+async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string, teamScope?: { enabledProjects: string[] }): Promise<number> {
+  // For a team-scoped steward fire the launch profile resolves against a representative project (the first
+  // enabled one) since `project` is "" / "_team"; delivery fires resolve against their own project.
+  const profileProject = teamScope && teamScope.enabledProjects.length ? teamScope.enabledProjects[0] : project;
+  const profile = resolveLaunchProfile(opts, cfg, profileProject, agent);
+  const prompt = readPrompt(opts, agent, project, profile, teamScope);
+  const backend = (cfg?.projects?.[profileProject] as { backend?: string } | undefined)?.backend ?? "linear";
   const { command, args } = commandFor(opts, agent, project, prompt, profile, backend);
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     DEVLOOP_ACTOR: agent,
     DEVLOOP_PROJECT: project,
@@ -651,7 +685,14 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     DEVLOOP_PLUGIN_ROOT: opts.root,
     CLAUDE_PLUGIN_ROOT: opts.root,
     CLAUDE_PLUGIN_DATA: opts.dataDir,
+    ...(teamScope ? { DEVLOOP_TEAM_SCOPE: "1" } : {}),
   };
+  // The scheduler sets reasoning effort PER AGENT via the resolved `--effort` flag (claude) / model_reasoning_effort
+  // (codex). Claude's effort precedence is CLAUDE_CODE_EFFORT_LEVEL (env) > --effort > model default — so an
+  // operator who exported CLAUDE_CODE_EFFORT_LEVEL (e.g. from an /effort or ultracode session) would silently
+  // OVERRIDE every agent's configured effort, flattening them all to one level. Strip it so the per-agent
+  // config is authoritative. (--model already outranks ANTHROPIC_MODEL, so the model needs no such strip.)
+  delete env.CLAUDE_CODE_EFFORT_LEVEL;
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
     console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}`);
@@ -674,8 +715,14 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const startedAt = Date.now();
   const child: RunnerChild = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   activeChildren.add(child);
-  child.stdout.on("data", (d) => { process.stdout.write(`[${agent}] ${d}`); log.write(d); });
-  child.stderr.on("data", (d) => { process.stderr.write(`[${agent}] ${d}`); log.write(d); });
+  // Keep a rolling tail of the child's combined output. Some CLI failures exit 0 while printing an error
+  // body (e.g. claude -p emitting just "Execution error") — the exit code alone masks them, poisoning the
+  // fire ledger with fake successes the operator can't alert on. Bounded (2 KB) so memory is constant.
+  let outTail = "";
+  let outBytes = 0;
+  const keepTail = (d: Buffer | string) => { const s = d.toString(); outBytes += s.length; outTail = (outTail + s).slice(-2048); };
+  child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); log.write(d); });
+  child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); log.write(d); });
 
   return await new Promise((resolveExit) => {
     // Fire timeout: without it a wedged CLI child holds its slot's non-reentrancy flag forever —
@@ -696,17 +743,44 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     // Resolve on 'exit', not 'close': 'close' additionally waits for the stdio pipes, which a grandchild
     // the CLI spawned can hold open long after the CLI itself died — exactly the wedged case the fire
     // timeout exists for. The log stream stays open until 'close' so late pipe output is still captured.
+    // Finalize (suspect detection + ledger + resolve) runs AFTER the stdio pipes settle: on 'close', or a
+    // short grace timer after 'exit' — whichever first. Computing on bare 'exit' raced the last pipe chunk
+    // (a failure marker still in flight → false negative; real output in flight → false "no output"). The
+    // timer caps the wedged-grandchild case ('close' may be held open long after the CLI died), preserving
+    // the resolve-on-exit intent within a bounded 150ms.
+    let finalized = false;
+    let closed = false;
+    const finalize = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (finalized) return;
+      finalized = true;
+      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""} =====\n`);
+      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}`);
+      const exitCode = timedOut ? 124 : (code ?? 1);
+      // Suspect-error detection (narrow, tail-anchored to avoid false positives on error text an agent
+      // merely echoed mid-run): exit 0 but the LAST line is a known CLI failure marker, or no visible
+      // output at all (whitespace-only counts as none). Bare "Error:" is deliberately NOT matched — an
+      // agent's own prose can legitimately end that way. Telemetry only; the exit code stays untouched.
+      const lastLine = outTail.trimEnd().split("\n").pop()?.trim() ?? "";
+      const suspectError = exitCode === 0 && !timedOut && (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine));
+      if (suspectError) {
+        const why = outTail.trim() === "" ? `no visible output (${outBytes} bytes)` : `last line: ${JSON.stringify(lastLine.slice(0, 120))}`;
+        console.error(`[${agent}] exit 0 but the output looks like a FAILURE (${why}) — flagged suspectError in the fire ledger`);
+        log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
+      }
+      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut,
+        suspectError ? { suspectError: true, outputTail: outTail.slice(-400) } : undefined);
+      resolveExit(exitCode);
+    };
     child.on("exit", (code, signal) => {
       clearTimeout(fireTimer);
       clearTimeout(killTimer);
       activeChildren.delete(child);
-      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""} =====\n`);
-      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}`);
-      const exitCode = timedOut ? 124 : (code ?? 1);
-      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut);
-      resolveExit(exitCode);
+      if (closed) { finalize(code, signal); return; }        // pipes already drained → finalize now
+      const grace = setTimeout(() => finalize(code, signal), 150);
+      grace.unref?.();
+      child.once("close", () => { clearTimeout(grace); finalize(code, signal); });
     });
-    child.on("close", () => log.end());
+    child.on("close", () => { closed = true; log.end(); });
   });
 }
 
@@ -714,10 +788,43 @@ type Slot = { agent: Agent; nextAt: number; running: boolean };
 type RunnerChild = ChildProcessByStdio<null, Readable, Readable>; // stdio: ["ignore","pipe","pipe"]
 const activeChildren = new Set<RunnerChild>();
 
+// Config-driven cadence (the `agents.<agent>.cadence` field): CLI --interval > config cadence >
+// built-in DEFAULT_INTERVALS. Previously `cadence` was seeded by `team init` and documented but NEVER
+// read — a dead knob whose silent default (10m ops) contradicted the seeded value. A malformed cadence
+// warns and keeps the default (a config typo must not kill the loop).
+function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string | undefined): void {
+  for (const agent of opts.agents) {
+    if (opts.intervalsExplicit.has(agent)) continue;              // --interval wins
+    const cad = cadenceFor(agent);
+    if (!cad) continue;
+    if (!/^\d+(?:\.\d+)?(ms|s|m|h|d)?$/.test(cad.trim())) { console.warn(`dev-loop run: ignoring malformed cadence '${cad}' for ${agent} (use e.g. "10m", "1h")`); continue; }
+    opts.intervals[agent] = parseDuration(cad.trim());
+    console.log(`dev-loop run: cadence ${agent}=${formatDuration(opts.intervals[agent])} (from config)`);
+  }
+}
+
+// Schema v2: a discoverable workspace is authoritative for BOTH config and state paths (hub db, data dir,
+// gate/lock/log roots). A workspace found-but-invalid is a hard stop (fix it, don't run stale).
+function resolveWs(opts: Options): Workspace | null {
+  let ws;
+  try { ws = tryResolveWorkspace(opts.cwd ?? process.cwd()); }
+  catch (e) { if (e instanceof WsValidationError) die(e.message, 1); throw e; }
+  if (!ws) return null;
+  if (!opts.dataDirExplicit) opts.dataDir = wsStateRoot(ws);
+  if (!opts.hubDbExplicit) opts.hubDb = wsHubDb(ws);
+  return ws;
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
+  // Team mode: a discoverable workspace runs ONE team-level scheduler that rotates delivery/steward fires
+  // across the enabled projects (weighted round-robin). No workspace → the legacy fixed-project path below.
+  const ws = resolveWs(opts);
+  if (ws) return teamMain(opts, ws);
+
   const cfg = readProjects(opts.dataDir);
   const project = resolveProject(opts, cfg);
+  applyConfigCadence(opts, (agent) => (cfg?.projects?.[project] as { agents?: Record<string, { cadence?: string }> } | undefined)?.agents?.[agent]?.cadence);
   const cwd = resolveCwd(opts, cfg, project);
   if (!existsSync(cwd)) die(`cwd does not exist: ${cwd}`, 1);
   // Service-backend preflight: an unseeded project means every fire boots the hub MCP straight into its
@@ -838,6 +945,176 @@ async function main(): Promise<void> {
   };
   const timer = setInterval(tick, 1_000);
   tick();
+}
+
+// ─── Team mode: one scheduler, weighted round-robin across the enabled projects ─────────────────────────
+// Each agent has its own cadence slot (unchanged); when a slot fires, the target project is chosen by the
+// shared smooth-WRR cursor (rotation.ts). `--project` degrades to a filter (rotate over just that one).
+// In M3 EVERY agent still fires per-project (steward team-scoping is M4); rotation is the only new behavior.
+async function teamMain(opts: Options, ws: Workspace): Promise<void> {
+  const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
+  const backend = ws.file.team.backend;
+
+  // `--project` filter: restrict rotation to a single named project (must exist + be enabled).
+  const allCandidates = rotationCandidates(ws);
+  const candidates = opts.project ? allCandidates.filter((c) => c.key === opts.project) : allCandidates;
+  if (opts.project && !candidates.length) die(`--project '${opts.project}' is not an enabled, positively-weighted project in team '${ws.file.team.key}'`, 2);
+  if (!candidates.length) die(`no enabled, positively-weighted project to fire in team '${ws.file.team.key}' (all disabled or weight:0?)`, 2);
+
+  console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
+  applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence);
+  // Prod-monitoring guard: a team with health probes but no scheduled ops agent runs blind.
+  const hasProbes = Object.values(ws.file.repos).some((r) => !!(r.ops?.checks?.length) || !!r.deploy?.healthCheck || Object.values(r.deploy?.environments ?? {}).some((e) => !!e?.healthCheck));
+  if (hasProbes && !opts.agents.includes("ops")) console.warn(`dev-loop run: WARNING health probes are configured but 'ops' is not scheduled — prod incidents will go unnoticed. Launch with --agents core,ops (or all).`);
+  console.log(`dev-loop run: agents=${opts.agents.map((a) => `${a}@${formatDuration(opts.intervals[a])}`).join(", ")}`);
+
+  // A local WRR picker over just the (possibly filtered) candidate set, persisting the shared cursor.
+  let schedState: SchedulerState = loadSchedulerState(ws);
+  const pickProject = (agent: Agent): string => {
+    // pickAndAdvance uses rotationCandidates(ws); to honor a --project filter we run the step on `candidates`.
+    const { pick, cur } = smoothWRRStep(candidates, schedState[agent] ?? {});
+    schedState[agent] = cur as CursorMap;
+    saveSchedulerState(ws, schedState);
+    return pick ?? candidates[0].key;
+  };
+
+  // --plan: print the next N (agent, project) picks WITHOUT firing or persisting (a preview).
+  if (opts.plan > 0) {
+    const preview: SchedulerState = JSON.parse(JSON.stringify(schedState));
+    console.log(`dev-loop run: --plan ${opts.plan} (agent → project; no fires, cursor untouched):`);
+    for (let i = 0; i < opts.plan; i++) {
+      for (const agent of opts.agents) {
+        const { pick, cur } = smoothWRRStep(candidates, preview[agent] ?? {});
+        preview[agent] = cur as CursorMap;
+        console.log(`  ${String(i + 1).padStart(3)}  ${agent} → ${pick}`);
+      }
+    }
+    return;
+  }
+
+  // Service backend: make sure the workspace hub daemon is up before the loop (operator needn't start it
+  // by hand). Best-effort — a failed ensure logs but never blocks the scheduler.
+  if (backend === "service" && !opts.dryRun) {
+    try { const { ensureHub } = await import("./hub.ts"); const c = await ensureHub(ws); if (c !== 0) console.warn(`dev-loop run: hub ensure returned ${c} (continuing)`); }
+    catch (e) { console.warn(`dev-loop run: hub ensure failed (${(e as Error).message}); continuing`); }
+  }
+
+  const fireLedger = wsFireLedger(ws);
+  fireLedgerPath = fireLedger; // recordFire appends here (backend-agnostic soak metric)
+  try { const { pruneFireLedger } = await import("./metrics.ts"); pruneFireLedger(fireLedger); } catch { /* best-effort */ }
+
+  const cwdFor = (project: string): string | null => primaryRepo(ws, project);
+
+  // change-gate key per (agent, project) — service only, fails open (null key never skips). We evaluate it
+  // AFTER a pick; a gate-skip advances to the next candidate in the same slot fire so a quiet project never
+  // eats the fire opportunity of an active sibling.
+  const gateActive = opts.changeGate && backend === "service";
+  if (opts.changeGate && !gateActive) console.warn(`dev-loop run: --change-gate ignored on backend:"${backend}" (needs the service hub board cursor)`);
+  const gateState: Record<string, string> = gateActive ? loadGateState(opts, "team") : {};
+  const gateKey = (agent: Agent, project: string) => `${agent}:${project}`;
+
+  // The enabled-project list a steward fire iterates over (also drives the launch-profile representative).
+  const enabledProjects = () => candidates.map((c) => c.key);
+  // Team scope for a steward: cwd = workspace root, project = _team (service) / "" (linear).
+  const stewardProject = backend === "service" ? "_team" : "";
+
+  // A single fire for one agent. Stewards (M4) fire at TEAM scope (no rotation). Delivery agents rotate:
+  // pick a project (skipping gated-unchanged ones up to one full rotation), resolve its cwd, and run.
+  const fireAgentOnce = async (agent: Agent): Promise<void> => {
+    if (STEWARD_AGENTS.has(agent)) {
+      await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: enabledProjects() });
+      return;
+    }
+    let project: string | null = null;
+    for (let attempt = 0; attempt < candidates.length; attempt++) {
+      const p = pickProject(agent); // advances the shared cursor every attempt (skip-advance)
+      if (gateActive && GATED_AGENTS.has(agent)) {
+        const key = changeKey(opts, cfg, p);
+        if (key !== null && gateState[gateKey(agent, p)] === key) continue; // unchanged ⇒ skip, try next candidate
+      }
+      project = p; break;
+    }
+    if (project === null) return; // every candidate gated-unchanged this round ⇒ no fire
+    const cwd = cwdFor(project);
+    if (!cwd || !existsSync(cwd)) { console.error(`[${agent}] project '${project}' has no usable repo cwd (${cwd ?? "none"}); skipping`); return; }
+    await runAgent(opts, cfg, agent, project, cwd);
+    if (gateActive && GATED_AGENTS.has(agent)) {
+      const key = changeKey(opts, cfg, project);
+      if (key !== null) { gateState[gateKey(agent, project)] = key; saveGateState(opts, "team", gateState); }
+    }
+  };
+
+  if (opts.once) {
+    for (const a of opts.agents) await fireAgentOnce(a);
+    process.exit(0);
+  }
+
+  // One scheduler per team: the run lock is team-scoped (two schedulers for one team double-fire everything).
+  const lockPath = wsLockPath(ws, "run");
+  if (!opts.dryRun) acquireRunLock(lockPath, ws.file.team.key);
+
+  // Hot-reload dev-loop.json on mtime change: enabled/weight edits take effect without a restart. A parse
+  // failure keeps the last-good config (never run with a half-written file).
+  let cfgMtime = safeMtime(ws.filePath);
+  const hotReload = () => {
+    const m = safeMtime(ws.filePath);
+    if (m === cfgMtime) return;
+    cfgMtime = m;
+    try {
+      const fresh = tryResolveWorkspace(ws.root);
+      if (fresh) { ws = fresh; const c = rotationCandidates(ws); candidates.length = 0; candidates.push(...(opts.project ? c.filter((x) => x.key === opts.project) : c)); schedState = pruneCursor(schedState, candidates.map((x) => x.key)); console.log(`dev-loop run: reloaded dev-loop.json — projects=${candidates.map((x) => x.key).join(", ")}`); }
+    } catch (e) { console.error(`dev-loop run: dev-loop.json reload failed (${(e as Error).message}); keeping the last-good config`); }
+  };
+
+  const slots: Slot[] = opts.agents.map((agent, i) => ({ agent, nextAt: Date.now() + i * opts.staggerMs, running: false }));
+  let stopping = false;
+  let fired = 0;
+  const drain = () => { if (stopping) return; stopping = true; clearInterval(timer); if (activeChildren.size === 0) process.exit(0); };
+  const interrupt = () => { const first = !stopping; drain(); if (first) console.log("dev-loop run: stopping; forwarding SIGINT to active agent processes"); for (const child of activeChildren) child.kill("SIGINT"); };
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
+
+  const tick = () => {
+    hotReload();
+    const now = Date.now();
+    for (const slot of slots) {
+      if (stopping || slot.running || slot.nextAt > now) continue;
+      slot.running = true;
+      fired++;
+      fireAgentOnce(slot.agent)
+        .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); })
+        .finally(() => {
+          slot.running = false;
+          slot.nextAt = Date.now() + opts.intervals[slot.agent];
+          if (stopping && activeChildren.size === 0) process.exit(0);
+        });
+      if (opts.maxFires && fired >= opts.maxFires) { console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining then exiting`); drain(); break; }
+    }
+  };
+  const timer = setInterval(tick, 1_000);
+  tick();
+}
+
+function safeMtime(p: string): number { try { return statSync(p).mtimeMs; } catch { return 0; } }
+function pruneCursor(state: SchedulerState, keys: string[]): SchedulerState {
+  const keep = new Set(keys); const out: SchedulerState = {};
+  for (const [agent, cur] of Object.entries(state)) { const c: CursorMap = {}; for (const [k, v] of Object.entries(cur)) if (keep.has(k)) c[k] = v; out[agent] = c; }
+  return out;
+}
+// The team run lock (O_EXCL + liveness-checked stale takeover) — mirrors the fixed-project lock in main().
+function acquireRunLock(lockPath: string, teamKey: string): void {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const take = () => writeFileSync(lockPath, JSON.stringify({ pid: process.pid, team: teamKey, startedAt: new Date().toISOString() }), { flag: "wx" });
+  try { take(); } catch {
+    let holder: { pid?: number } = {};
+    try { holder = JSON.parse(readFileSync(lockPath, "utf8")); } catch { /* unreadable = stale */ }
+    const alive = (() => { try { process.kill(holder.pid ?? -1, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } })();
+    if (alive) die(`another \`dev-loop run\` for team '${teamKey}' is already running (pid ${holder.pid}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
+    console.log(`dev-loop run: taking over stale team run lock (pid ${holder.pid ?? "?"} is gone)`);
+    try { unlinkSync(lockPath); } catch { /* raced */ }
+    take();
+  }
+  process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
 }
 
 main().catch((e) => die(e instanceof Error ? e.message : String(e), 1));

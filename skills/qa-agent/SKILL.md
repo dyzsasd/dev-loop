@@ -6,7 +6,7 @@ description: >-
   "test happy paths and edge cases", "file bug tickets", or "re-test the fixed
   bugs / In Review bugs" for a product wired into dev-loop. QA reads Linear +
   commit history to decide what to test, exercises happy paths and edge cases in
-  the configured test environment, files Bug tickets into Linear (Todo), and
+  the configured test environment, files Bug tickets into Linear (Backlog, §5a), and
   re-tests Bug tickets that reach In Review. Coordinates with PM and Dev purely
   through Linear ticket state. Always test in the configured test environment —
   ask the user if it is unknown.
@@ -134,7 +134,13 @@ For each (oldest first):
    separate defect already owned by another ticket →
    comment there and dedupe (don't reopen this one or file a duplicate); a
    brand-new separate defect → file it in Job C.
-3. **Reproduces no more** → `state:"Done"`, comment what you re-ran.
+2b. **Spec triage (§3 shared standard):** skim the fix's actual diff (the commit/PR the
+   handoff cites) — changes not traceable to THIS bug's repro/ACs = **EXTRA**; a fix that
+   addressed a different failure than the reported repro = **MISUNDERSTANDING**; either ⇒
+   treat as **Still broken** below (`re-test failed: EXTRA|MISUNDERSTANDING — <what>`),
+   even when the repro itself now passes. The handoff text is the implementer's
+   self-claim — locate with it, never judge by it.
+3. **Reproduces no more** (and the triage above is clean) → `state:"Done"`, comment what you re-ran.
    **Still broken / regressed** → **close + follow-up** (design §11 / conventions §3):
    set the original `state:"Canceled"` with a comment `re-test failed: <still-failing
    repro + any new symptom>; superseded by <new-id>`, **then file a follow-up** `Bug` +
@@ -171,7 +177,7 @@ For each (oldest first):
 First query your own: `project` + `label:"dev-loop"` + `label:"qa"` + `label:"blocked"`. Then
 **widen to every `project` + `label:"dev-loop"` + `label:"blocked"` ticket** and read Dev's
 latest comment. (Keep `project` in *both* queries — the widening is across owners
-within this project, never across projects; another project's backlog is off-limits, §2.) **Route by the bail-shape tag** (conventions §9): `info-needed` is yours to clear (supply the repro/account/clarification, then unblock); `decision-needed`/`scope-design` → leave for PM; `external-prereq` → park + escalate to the user as a fact (§12a); `fix-exhausted` → add what you can (a sharper repro/expected) and re-queue, don't just re-block. When Dev (or PM) blocked a ticket because it **needs more
+within this project, never across projects; another project's backlog is off-limits, §2.) **Route by the bail-shape tag** (conventions §9): `info-needed` is yours to clear (supply the repro/account/clarification, then unblock); `decision-needed`/`scope-design` → leave for PM; `external-prereq` → leave parked for PM's §9c tracker pass (PM routes by `External-kind:` — `code` becomes a real ticket in the owning project, `access` is human-parked + notified once; don't escalate it yourself); `fix-exhausted` → add what you can (a sharper repro/expected) and re-queue, don't just re-block. When Dev (or PM) blocked a ticket because it **needs more
 information** — an unclear or re-requested repro, missing reproduction steps, an
 ambiguous expected-vs-actual, a test account or seed data — *supplying that is
 QA's job even when the ticket isn't tagged `needs-qa`*. A blocked ticket nobody
@@ -225,8 +231,11 @@ value. For each, do exactly one of:
      not a 500; acting on another owner's id should be denied.
 4. For each defect, **dedupe first** (conventions §8). Survivors become **Bug**
    tickets: the bug template (conventions §6) with a *real, minimal* repro,
-   labels `dev-loop` + `Bug` + `qa` (+ `edge-case` if applicable), a `priority`
-   matching severity (1=Urgent for broken core flows/data leaks), `state:"Todo"`,
+   labels `dev-loop` + `Bug` + `qa` (+ `edge-case` if applicable; + `sensitive` when the
+   defect touches auth/permissions, payment/money, PII, secrets, or data migration — §4,
+   it forces the senior tier per §21a), a `priority`
+   matching severity (1=Urgent for broken core flows/data leaks), **`state:"Backlog"`**
+   (§5a — PM grooms & promotes; your verify-fail follow-ups in Job A stay `Todo`),
    set `project`. **Multi-repo (§19):** set the bug's `repo:<name>` target (re-pass the
    full label set) — map the broken surface to its repo (the route/module you reproduced
    it in; if a bug genuinely spans repos, file per-repo children, `relatedTo`). If you

@@ -156,12 +156,22 @@ labels.)
   (§9) — `Bail-shape: info-needed` (or `scope-design` if the work spans repos and needs
   splitting) — routed to PM; **never default to `repos[0]`**. Single-repo projects skip
   this.
+- **Sensitive? Not yours (§21a override).** If the ticket carries the `sensitive` label —
+  or its ACs plainly touch auth/permissions, payment/money, PII, secrets, or data
+  migration/deletion — AND it has no senior-authored `Design:` pointer: do **not**
+  implement. Block it (`Bail-shape: decision-needed`, routed to PM) with the comment
+  `sensitive work mis-routed to junior — needs senior design first (§21a)`. A sensitive
+  ticket WITH a resolvable senior design pointer is implementable like any designed child.
 - **Enough info?** It needs clear, testable acceptance criteria and (for bugs) a real
   repro. If it's missing, contradictory, or under-specified — **block it** (conventions
   §9): add `blocked` + `needs-pm`(feature)/`needs-qa`(bug), release the claim, move back
   to `Todo`, comment exactly what's missing, tag the bail shape on the comment's first
   line (`Bail-shape: info-needed | decision-needed | scope-design | external-prereq |
-  fix-exhausted`, §9). Do **not** guess. Pick next.
+  fix-exhausted`, §9). For `external-prereq`, ALSO add a second machine-parseable line
+  `External-kind: code` (another repo/team must change code) or `External-kind: access`
+  (credentials/money/legal/permission) plus the **`external-prereq` label AND** the matching
+  `external-code`/`external-access` label — the W5 queries key on `blocked`+`external-prereq`.
+  Do **not** guess. Pick next.
 
 > **You are an implementer, not a designer.** If a ticket genuinely needs a *design*
 > decision (a new module shape, a cross-cutting architecture choice, an ambiguous

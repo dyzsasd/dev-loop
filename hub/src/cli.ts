@@ -21,6 +21,12 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   serve:            ["server"],                    // the stdio MCP server (the agent transport; = the dev-loop-hub bin)
   shim:             ["shim"],                      // thin stdio MCP → loopback daemon op-API (DL-55)
   daemon:           ["daemon"],                    // up | down | status | ensure (DL-41)
+  team:             ["team"],                      // init | import | repair | add-project | add-repo — workspace (v2)
+  hub:              ["hub"],                        // start | stop | status | ensure — the workspace hub daemon (service)
+  "next-project":   ["rotation"],                  // print the next project for an agent's fire (shared WRR cursor)
+  "with-repo-lock": ["with-repo-lock"],            // serialize base-clone mutations on a shared repo
+  notify:           ["comms"],                     // push a message to the team's slack/lark channel
+  metrics:          ["metrics"],                   // team KPIs from fires.jsonl (+ hub board on service)
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
@@ -52,6 +58,8 @@ Usage: dev-loop <command> [args]
   shim                        run the thin stdio MCP shim → the loopback daemon op-API (hub.transport:"daemon")
   daemon up|up-all|down|status|install-autostart|uninstall-autostart
                               daemon lifecycle — idempotent localhost web UI + optional login autostart
+  team init|import|repair     workspace (schema v2): create / migrate-from-v1 / repair-after-move
+  hub start|stop|status       workspace hub daemon lifecycle (service backend; stop checkpoints the WAL)
   init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project (seed → doctor → daemon up)
   run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents by calling the selected CLI
   init-config                 write an empty ~/.dev-loop/projects.json starter
@@ -75,7 +83,9 @@ if (cmd === "version" || cmd === "--version" || cmd === "-v") { console.log(vers
 const route = ROUTES[cmd];
 if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); process.exit(2); }
 
-const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init-service", "identity-check", "tickets", "ticket"]);
+const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics"]);
+// NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
+// but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {
   const compatible = findCompatibleNode();
   if (compatible && compatible !== process.execPath) {

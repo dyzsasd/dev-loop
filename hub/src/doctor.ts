@@ -12,6 +12,11 @@ import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { hubDbPath } from "./paths.ts";
+import { tryResolveWorkspace, wsHubDb } from "./workspace.ts";
+import { validateTeamFile, effectiveRepo, type Workspace } from "./team-config.ts";
+import { checkLessonsBudget } from "./lessons.ts";
+import * as metricsMod from "./metrics.ts";
+const require_metrics = () => metricsMod;
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
 // the service runtime wiring (below). Library callers that only want the DB-integrity verdict (init-service
@@ -21,6 +26,23 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean } = 
   const pass = (m: string) => console.log("✅ " + m);
   const fail = (m: string) => { console.log("❌ " + m); ok = false; };
   const info = (m: string) => console.log("•  " + m);
+
+  // Schema v2: when a workspace is discoverable, run its (READ-ONLY) checks first and point the DB checks
+  // below at the workspace hub.db. Library callers (init-service) pass an explicit dbPath and skip this.
+  let ws: Workspace | null = null;
+  if (opts.reconcile) {
+    try { ws = tryResolveWorkspace(); }
+    catch (e) { console.log(`❌ dev-loop.json invalid: ${(e as Error).message}`); console.log("\nDOCTOR_FAILED"); return false; }
+    if (ws) {
+      ok = doctorWorkspace(ws) && ok;
+      if (ws.file.team.backend === "linear") {
+        // A linear team has no hub.db; the workspace checks ARE the whole verdict.
+        console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
+        return ok;
+      }
+      dbPath = wsHubDb(ws); // service: check the workspace's own hub.db below
+    }
+  }
 
   console.log(`dev-loop-hub doctor — ${dbPath}`);
 
@@ -102,6 +124,61 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean } = 
 
   console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
   return ok;
+}
+
+// ── Schema-v2 workspace checks (READ-ONLY; R2 — mutating fixups live in `dev-loop team repair`) ──────────
+// Reports the E-code/W-code verdict for a dev-loop.json, that every registered repo exists and is a git
+// repo, and the two migration/leak warnings (W05 user-scope MCP for linear steward fires; W06 workspace
+// inside a git work-tree). Never writes, never repairs.
+export function doctorWorkspace(ws: Workspace): boolean {
+  let ok = true;
+  const pass = (m: string) => console.log("✅ " + m);
+  const fail = (m: string) => { console.log("❌ " + m); ok = false; };
+  const warn = (m: string) => console.log("⚠️  " + m);
+  const info = (m: string) => console.log("•  " + m);
+
+  console.log(`\ndev-loop workspace — '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
+
+  const { errors, warnings } = validateTeamFile(ws.file);
+  if (errors.length) for (const e of errors) fail(`[${e.code}] ${e.path}: ${e.message}`);
+  else pass(`dev-loop.json valid (${Object.keys(ws.file.repos).length} repos, ${Object.keys(ws.file.projects).length} projects)`);
+  for (const w of [...warnings, ...checkLessonsBudget(ws)]) warn(`[${w.code}] ${w.path}: ${w.message}`);
+
+  // Every registered repo exists on disk + is a git repo (path existence + realpath sanity).
+  for (const ref of Object.keys(ws.file.repos)) {
+    const dir = effectiveRepo(ws, ref).absPath;
+    if (!existsSync(dir)) fail(`repo '${ref}' path missing on disk: ${dir} (clone it, or /dev-loop:sync-repo)`);
+    else if (!isGitWorkTree(dir)) warn(`repo '${ref}' at ${dir} is not a git repo yet`);
+    else pass(`repo '${ref}' → ${dir}`);
+  }
+
+  // W05 — a linear team's steward fires run at the workspace ROOT (cwd), where a repo-level .mcp.json can't
+  // apply; the Linear MCP must be configured in USER scope or stewards are starved of the board.
+  if (ws.file.team.backend === "linear")
+    warn(`[W05] linear steward fires run at the workspace root — ensure the Linear MCP is configured in USER scope (a repo .mcp.json won't apply there)`);
+
+  // Director signal: 7d fire success from the fires.jsonl ledger (informational; a degrading agent —
+  // rising failures/timeouts/suspectErrors — should reach the operator without ssh'ing into logs).
+  try {
+    const { fireMetrics } = require_metrics();
+    const fm = fireMetrics(join(ws.root, ".dev-loop", "team", "fires.jsonl"), 7 * 86_400_000);
+    if (fm.fires > 0) info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect`);
+  } catch { /* metrics are informational */ }
+
+  // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
+  if (isGitWorkTree(ws.root)) {
+    let ignored = false;
+    try { execFileSync("git", ["-C", ws.root, "check-ignore", "-q", ".dev-loop"], { stdio: "ignore" }); ignored = true; } catch { /* not ignored */ }
+    if (!ignored) warn(`[W06] the workspace root is inside a git work-tree and .dev-loop/ is not gitignored — state/reports could be committed (add .dev-loop/ to .gitignore)`);
+    else info("workspace root is inside a git repo but .dev-loop/ is gitignored");
+  }
+
+  return ok;
+}
+
+function isGitWorkTree(dir: string): boolean {
+  try { return execFileSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() === "true"; }
+  catch { return false; }
 }
 
 // ── DL-81: service runtime-wiring reconcile ──────────────────────────────────────────────────────────────
