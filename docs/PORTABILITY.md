@@ -1,5 +1,10 @@
 # Running dev-loop on a second CLI (Codex / opencode) — P8
 
+> **1.0 note:** on the workspace model, config lives in `<workspace>/dev-loop.json` (schema v2) and
+> state under `<workspace>/.dev-loop/` — references to `~/.dev-loop/projects.json` below are the
+> LEGACY v1 layout (transition-only). The portability contract itself (Claude/Codex/opencode) is
+> unchanged; per-agent cadence now also comes from `team.agents.<agent>.cadence`.
+
 The whole reason the loop's system-of-record is a **local hub** (a plain **stdio MCP server** over
 `node:sqlite`, identity via **env vars**, plus an optional localhost daemon for the web UI/autostart —
 see [`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md))
