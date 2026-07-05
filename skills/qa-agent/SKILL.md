@@ -63,7 +63,7 @@ no Linear mutations — print the bugs you *would* file.
 Jobs A and B are cheap Linear queries — always run them. Job C's full happy-path +
 edge-case battery is expensive, so don't re-run it against a build you've already
 swept (a 5-minute loop will otherwise re-probe an unchanged product forever):
-- Keep a small `qa-state.json` **next to the `projects.json` you loaded**, holding
+- Keep a small `qa-state.json` **in the project state dir**, holding
   per-project the repo SHA you last fully swept and when.
 - Each run, compute HEAD for **every** repo in `repos[]` (single-repo ⇒ just `repoPath`,
   unchanged); `qa-state.json` holds a **per-repo SHA map** (§19). **Greenfield:** a

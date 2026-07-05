@@ -8,7 +8,7 @@ description: >-
   existing clone), auto-detects the build + PR merge-check names, interviews the deploy shape
   under the team's deployPolicy ceiling, writes the registry entry + project reference through
   the VALIDATED `dev-loop team add-repo` mutator, provisions the `repo:<name>` label, and
-  appends the repo's current state to the project strategy doc. Schema v2 (team/workspace) only.
+  appends the repo's current state to the project strategy doc. 1.x workspace schema only.
 ---
 
 # add-repo — register a repo into a workspace project (one pass)
@@ -16,10 +16,10 @@ description: >-
 You are operator-present. The goal: after this skill, `dev-loop doctor` is green and the repo is
 a first-class member of a project — clonable, buildable, deployable within policy, and mapped.
 
-**Preconditions.** A workspace exists (`dev-loop.json`, schema v2) and the target project exists
+**Preconditions.** A workspace exists (`dev-loop.json`, 1.x workspace schema) and the target project exists
 (if not, run `/dev-loop:add-project` first). Resolve the workspace from cwd; if none, tell the
 user to `dev-loop team init` first and stop. Read `dev-loop.json`, `references/conventions.md`
-§7/§12b/§12c/§19/§27, and `references/config-schema.md` "Schema v2".
+§7/§12b/§12c/§19/§27, and `references/config-schema.md`.
 
 ## 1. DETECT — identify the repo and where it goes
 

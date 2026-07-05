@@ -75,7 +75,7 @@ Defined ONCE here — each SKILL's §0 carries a one-line pointer, not a copy:
 
 1. **Read this file** (conventions.md) — it overrides the SKILL on conflict.
 2. **Load config** (§11): read `DEVLOOP_PROJECTS_JSON` if set, else
-   the workspace `dev-loop.json` (schema v2, §27; internal test injection `DEVLOOP_PROJECTS_JSON` as
+   the workspace `dev-loop.json` (1.x workspace schema, §27; internal test injection `DEVLOOP_PROJECTS_JSON` as
    read-only fallback); resolve your project (explicit `DEVLOOP_PROJECT` wins,
    else cwd, §19).
 3. **Resolve the backend** (§18): `backend` absent ⇒ `"linear"` (the Linear MCP);
@@ -870,17 +870,14 @@ Four footguns that silently corrupt the loop — every skill must handle them:
 ## 11. Per-project config
 
 The agents are product-agnostic; everything product-specific lives in **the workspace's
-`dev-loop.json`** (schema v2 — §27; field reference: `references/config-schema.md` "Schema
-v2"). The runtime projects it to the historical per-project view internally, so the field
-names below (`mode`, `autonomy`, `testEnv`, …) are unchanged. **1.0 clean break:** the v1
-machine-global `~/.dev-loop/projects.json` is NOT read anymore — migrate once with
-`dev-loop team init && dev-loop team import`. (`DEVLOOP_PROJECTS_JSON` survives only as an
-EXPLICIT internal injection for tests/CI; it is not an operator path.)
+`dev-loop.json`** (1.x workspace schema — §27; field reference:
+`references/config-schema.md`). The runtime projects it to the historical per-project view internally, so the field
+names below (`mode`, `autonomy`, `testEnv`, …) are unchanged. `DEVLOOP_PROJECTS_JSON` survives
+only as an explicit internal injection for tests/CI; it is not an operator path.
 
 On startup each skill:
 1. Resolves the workspace (env → index → cwd ascent, §27) and loads `dev-loop.json`;
-   if none resolves, stop and tell the operator to run `dev-loop team init` (new) or
-   `dev-loop team import` (migrating).
+   if none resolves, stop and tell the operator to run `dev-loop team init`.
 2. **Interactive skill project selection ladder** (in order): (a) if the user **named** a project, use
    it; (b) else if the cwd is at or under exactly one registered repo path in `repos.*.path`, select
    the project(s) that reference that repo — if exactly one project matches, use it; if several
@@ -892,7 +889,7 @@ On startup each skill:
    must stop/no-op with a setup hint.
 3. Loads the resolved project view: `linearProject`, `linearTeam`, target repo path(s),
    `strategyDoc`, `testEnv`, repo `build`/`deploy`/`git` facts, `mode`, `autonomy`, and backend
-   (`"linear"` or `"service"` in schema v2). Per-agent `codingAgent` / `model` / `effort` /
+   (`"linear"` or `"service"` in the workspace schema). Per-agent `codingAgent` / `model` / `effort` /
    `cadence` may also be configured, but **`dev-loop run` applies them at process launch**; skills
    do not choose their own model mid-fire. See `config-schema.md` and `docs/RUNNING.md`.
 
@@ -905,7 +902,7 @@ paths, URLs, or deploy commands.
 (last-reviewed/swept SHA and review-lens state), `reports/`, runner logs, and related working
 state. Team-scoped state lives under `<workspace>/.dev-loop/team/`; lessons live under
 `<workspace>/.dev-loop/lessons/`. These files are machine-local, never committed, and created
-lazily on first run. A legacy v1 data-dir layout is read only by the one-shot import path.
+lazily on first run.
 
 **Bounded retention + atomic writes (state files are a working set, not an archive).**
 `pm-state.json` / `qa-state.json` exist to answer a fixed set of look-back questions —
@@ -1148,7 +1145,7 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
    correct with the user (these gate real deploys).
 4. Create the runtime files lazily if absent under `<workspace>/.dev-loop/<project-key>/`
    and the team lessons index under `<workspace>/.dev-loop/lessons/`.
-5. **Legacy local backend only** (§18): skip steps 1–2 (no Linear labels/project to
+5. **`local` backend fallback only** (§18): skip steps 1–2 (no Linear labels/project to
    provision — labels are just strings, and the board dir is the project container)
    and instead scaffold the board — `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/board/` with
    `tickets/` and a `counter.json` (`{ "prefix": "<ticketPrefix|DL>", "next": 1 }`) —
@@ -1163,8 +1160,7 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
 curated `INDEX.md` (loaded every fire, hard budget), per-project shards (`<project>.md`,
 loaded by that project's delivery fires), and a cold `archive.md` (§5.1 of the design;
 reflect is the sole writer; doctor warns W03 over budget). This section's rules about WHO
-writes and HOW rules apply are unchanged. (`dev-loop team import` migrates a v1 per-project
-`lessons.md` into the library as that project's shard; the v1 layout is no longer read.) Each skill reads it at the very top of every fire
+writes and HOW rules apply are unchanged. Each skill reads the team lessons library at the very top of every fire
 (right after conventions + config) and applies any rule under its section that fire.
 
 **Reflect is the curator of this file.** Every other agent only *reads* its own
@@ -1397,7 +1393,7 @@ source id must ride as a separate **`externalId`** — a data-fidelity loss, not
 
 ### Local board layout
 The legacy local board is **machine-local per-operator runtime state** — it lives in the
-v1 data dir (§11), **never** in the product repo (a board of
+configured local data dir (§11), **never** in the product repo (a board of
 ticket-state would otherwise churn the repo with coordination commits). Default:
 
 ```
@@ -1409,8 +1405,8 @@ ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/board/
 ```
 
 `<project-key>` is the config key, so multiple local projects stay isolated. The path
-is overridable via `localBoard` (§11). It is created by the legacy init path (or lazily on
-first write) and **must be a dedicated dev-loop board dir on a single local
+is overridable via `localBoard` (§11). It is created lazily on
+first write and **must be a dedicated dev-loop board dir on a single local
 filesystem** — never a shared/pre-existing dir, and never a network mount (the
 atomic-rename below needs one filesystem). Never committed, never shared.
 `strategyDoc` in local mode is a **repo file** (read/edit/commit) — never a Linear
@@ -2232,7 +2228,7 @@ The `lessons.md` rule is what changes the agent's behavior on **every subsequent
 ### `lessons.md` is now multi-writer — lock it
 Before §22, `lessons.md` had exactly one writer (Reflect). The carve-out makes multiple
 concurrent writers possible (each its own section). Atomic-rename alone prevents corrupt
-JSON but **not lost updates** (two agents read v1, both write, last rename wins, one rule —
+JSON but **not lost updates** (two agents read the same old copy, both write, last rename wins, one rule —
 possibly a Reflect-curated one — is silently dropped). So a `lessons.md` edit is a **locked
 read-modify-write**: acquire an atomic exclusive-create lock as in §18 (an `O_EXCL`
 `lessons.md.lock` in the same dir), **re-read**, edit **only your own section**,
@@ -2545,19 +2541,17 @@ CLI (Codex, opencode, …) against the *same* `hub.db`. Full setup in
 
 ## 27. Team / workspace model (1.0 line)
 
-The 1.0 line reorganizes config around a **workspace** (see `docs/design/team-workspace.md` +
-`docs/design/team-workspace-impl.md`; the operator quick-reference lives in `config-schema.md` §"Schema
-v2"). One workspace directory = one **team** = one Linear team = one **backend**. Inside it, **repos**
+The 1.0 line organizes config around a **workspace** (see `docs/design/team-workspace.md` +
+`docs/design/team-workspace-impl.md`; the operator quick-reference lives in `config-schema.md`).
+One workspace directory = one **team** = one Linear team = one **backend**. Inside it, **repos**
 are the physical git-clone folders (a REGISTRY, each registered once) and **projects** are VIRTUAL config
 entries that reference repos — so one repo can serve several projects (declare `owner` for routing).
 This section records only the rules that change agent/operator behavior; the field schema is in
 `config-schema.md`.
 
-- **Config source.** Runtime reads `dev-loop.json` (schema v2), resolved by discovery (`DEVLOOP_WORKSPACE`
+- **Config source.** Runtime reads `dev-loop.json` (the 1.x workspace schema), resolved by discovery (`DEVLOOP_WORKSPACE`
   → `DEVLOOP_TEAM` index → cwd ascent). It is projected to the historical per-project shape internally
-  (`toLegacyView`), so every existing agent contract (§3/§4/§12b/§12c/reports) is unchanged. The legacy
-  `~/.dev-loop/projects.json` runtime path is gone in 1.0; an operator migrating from v1 runs
-  `dev-loop team init` + `dev-loop team import` once.
+  (`toLegacyView`), so every existing agent contract (§3/§4/§12b/§12c/reports) is unchanged.
 - **Portability (I4).** All run state is under `<workspace>/.dev-loop/` (per-project dirs, `team/`,
   `lessons/`, `wt/`, `locks/`, and for service `hub.db`). Copying the workspace folder migrates the
   machine; only env vars + credentials (§16) follow separately. `~/.dev-loop/` holds just a rebuildable
@@ -2566,8 +2560,8 @@ This section records only the rules that change agent/operator behavior; the fie
 - **Secrets (§16 extends).** `team.comms.webhookEnv` stores an ENV-VAR **name**, never the URL; a value
   containing `://` is rejected (`E07`). This is what keeps "copy the folder" safe — no secret ever lands
   in `dev-loop.json`.
-- **Backend is strictly team-level (I3).** linear or service, never mixed; `dev-loop team import` refuses
-  a v1 project whose `backend` differs from the team. There is no cross-team collaboration.
+- **Backend is strictly team-level (I3).** linear or service, never mixed. A workspace is initialized
+  with exactly one backend, and there is no cross-team collaboration.
 - **deployPolicy is a ceiling.** `team.deployPolicy.<env> = "manual"` forbids any repo auto-deploying
   that env (`E06`); `dev-loop doctor` and `/dev-loop:add-repo` enforce it.
 - **MCP scope for stewards.** A linear team's stewardship fires (sweep/ops/reflect/communication) run

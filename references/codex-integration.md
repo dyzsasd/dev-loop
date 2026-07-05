@@ -52,7 +52,7 @@ ship gates (Dev §5/§5.5/§6/§6.5), or the security doctrine (§16). A Codex r
    codex features list | grep -E 'image_generation'
    # image_generation   stable   true
    ```
-4. Add the `codex` block to the project entry in `dev-loop.json` (schema v2). Absent ⇒ off.
+4. Add the `codex` block to the project entry in `dev-loop.json`. Absent ⇒ off.
 
 `/dev-loop:init` does **not** install Codex for you (it's a separate vendor CLI), but it
 notes the option in its readiness checklist when a `codex` block is present.

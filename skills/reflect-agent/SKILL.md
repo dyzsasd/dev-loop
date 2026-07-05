@@ -73,8 +73,8 @@ operations, different transport) → lessons (§14: your section + `## Shared`) 
   **Reflect** or **Shared** section this fire; it is also the file you curate in Job 2.
 - **State files & run logs:** note the agent state files (`pm-state.json`,
   `qa-state.json`) — they record the last reflection window so you don't re-process an
-  already-reflected span. If a run-log dir (`logs/<agent>-<date>.log` next to
-  `projects.json`) exists — some launchers tee agent output there — it's an extra
+  already-reflected span. If a run-log dir (`logs/<agent>-<date>.log` in the project
+  state dir) exists — some launchers tee agent output there — it's an extra
   evidence source; **it is optional, so if it's absent, skip it silently** and rely on
   Linear + git, which are always present.
 
@@ -121,7 +121,7 @@ project (§2):
   `signal` spike = a user-facing problem). Use tight, scoped queries (§10) — never page
   the workspace.
 - **Outward-agent state (if those agents run):** read `ops-state.json` (open incidents /
-  recurrence) and `architect-state.json` (swept dimensions) next to `projects.json` — optional;
+  recurrence) and `architect-state.json` (swept dimensions) in the project state dir — optional;
   skip silently if absent. On the `service` backend, read agent activity from the hub's
   `list_events` feed.
 - **Throughput:** Todo→Done cycle time (oldest-open age, median time-in-state),

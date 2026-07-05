@@ -5,7 +5,7 @@ description: >-
   clone/worktrees. Use when the user invokes /dev-loop:sync-repo, or asks to "sync the repo",
   "the CI checks changed", "re-detect the build", "the repo moved", or "fix the worktrees". Reports
   drift between the detected reality and the registry, writes only confirmed changes, clones the repo
-  if it is missing, and runs `dev-loop team repair` for worktree/index/WAL fixups. Schema v2 only.
+  if it is missing, and runs `dev-loop team repair` for worktree/index/WAL fixups. 1.x workspace schema only.
 ---
 
 # sync-repo — reconcile a repo's registry entry with reality
