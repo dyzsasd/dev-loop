@@ -1,8 +1,7 @@
 # Running dev-loop
 
-This is the operational guide for the **1.0 workspace model**. If you are setting up a new
-team, use this flow. The old machine-global `~/.dev-loop/projects.json` runtime path is no
-longer read by 1.0; use `dev-loop team import` once if you are migrating a v1 install.
+This is the operational guide for the **1.0 workspace model**. A workspace is the starting
+point: one directory, one team, one backend, and one `dev-loop.json`.
 
 ## 1. Create a Workspace
 
@@ -213,16 +212,3 @@ Reports may also go to Linear docs when `reports.sink:"linear"` is configured.
 - For service teams, run `dev-loop hub stop` before copying the workspace or doing maintenance.
 - `dev-loop doctor` remains read-only. Use `dev-loop team repair` for post-move repair work such as
   worktree repair, index rebuilds, and WAL checkpointing.
-
-## Legacy Migration
-
-The 1.0 runtime does not read `~/.dev-loop/projects.json`. To migrate an old install:
-
-```bash
-dev-loop team init --dir <workspace> --key <team> --backend <linear|service> ...
-cd <workspace>
-dev-loop team import
-dev-loop doctor
-```
-
-After that, run only from the workspace and treat `dev-loop.json` as the source of truth.

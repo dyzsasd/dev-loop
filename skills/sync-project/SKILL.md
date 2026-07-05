@@ -5,7 +5,7 @@ description: >-
   invokes /dev-loop:sync-project, or asks to "sync the project", "reconcile with Linear", "the
   project was renamed/archived in Linear", or "check config vs backend drift". Read-only by default:
   it reports drift (rename, archive, missing labels, strategy-doc divergence, a missing
-  linearProjectId) and only writes after the operator confirms each direction. Schema v2 only.
+  linearProjectId) and only writes after the operator confirms each direction. 1.x workspace schema only.
 ---
 
 # sync-project — reconcile config ↔ backend
@@ -23,8 +23,7 @@ project's `linearProject` / `linearProjectId` (or hub project) from `dev-loop.js
 
 Compare and list every divergence:
 
-- **linearProjectId missing** in config but the project exists in the backend → offer to record it
-  (this is the common post-`team import` fixup).
+- **linearProjectId missing** in config but the project exists in the backend → offer to record it.
 - **rename:** backend name ≠ `linearProject` → offer to update config (or rename the backend).
 - **archived** in the backend → recommend `enabled:false` in config (stop delivery fires) rather
   than deleting; confirm.

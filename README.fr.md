@@ -51,16 +51,6 @@ Pour une équipe **linear**, configurez le Linear MCP dans le **user scope** de 
 équipe **service**, `dev-loop run` démarre automatiquement le hub local ; utilisez
 `dev-loop hub status` pour l'inspecter.
 
-### Migrer depuis v1 (`~/.dev-loop/projects.json`)
-
-Le runtime 1.0 **ne lit plus la configuration v1**. Migrez une seule fois :
-
-```bash
-dev-loop team init --dir <workspace> --key <team> --backend <linear|service> ...
-cd <workspace> && dev-loop team import      # fusionne les projects, déplace l'état, sépare les lessons
-dev-loop doctor
-```
-
 ### Passer sur une autre machine
 
 ```bash
@@ -84,7 +74,7 @@ Les secrets ne sont jamais écrits dans le workspace : la configuration ne garde
 
 ## Configuration
 
-Toute la configuration vit dans **`dev-loop.json`** (schema v2) à la racine du workspace.
+Toute la configuration vit dans **`dev-loop.json`** (schéma workspace 1.x) à la racine du workspace.
 Elle est écrite par `team init` et par des mutators validés ; en pratique, vous la modifiez
 rarement à la main :
 
@@ -96,8 +86,8 @@ rarement à la main :
   `intake.todoDepthCap` (profondeur de la file engagée que le PM maintient, 10 par défaut) et
   overrides de lancement par agent (`agents.pm = { model, effort, cadence }`, etc.).
 
-Référence complète des champs : [`references/config-schema.md`](references/config-schema.md)
-("Schema v2"). Spécification du comportement des agents :
+Référence complète des champs : [`references/config-schema.md`](references/config-schema.md).
+Spécification du comportement des agents :
 [`references/conventions.md`](references/conventions.md).
 
 ## Lancer la loop
@@ -122,7 +112,7 @@ rotation cursor, ce qui évite les déclenchements en double.
 
 | Commande | Rôle |
 |---|---|
-| `dev-loop team init / import / repair` | créer un workspace / faire la migration v1 / réparer après un changement de machine |
+| `dev-loop team init / repair` | créer un workspace / réparer après un changement de machine |
 | `dev-loop team add-project / add-repo` | écritures de config validées (appelées par les skills `/dev-loop:*`) |
 | `/dev-loop:add-project` · `/dev-loop:add-repo` · `/dev-loop:sync-project` · `/dev-loop:sync-repo` | skills de coding CLI : sync backend, clone + détection, correction de drift |
 | `dev-loop run [--plan n] [--project k] [--once] [--dry-run]` | team scheduler |

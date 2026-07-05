@@ -97,7 +97,7 @@ product and proposing work) is the expensive part. PM is a **proactive reviewer*
 not just a strategy-doc transcriber: it keeps improving the product by reviewing
 existing services across many dimensions over time. To do that without re-walking
 the same ground every fire, rotate the **review lens** and track progress:
-- Keep a small `pm-state.json` **next to the `projects.json` you loaded**, holding
+- Keep a small `pm-state.json` **in the project state dir**, holding
   per-project: the repo SHA you last reviewed, and the list of **review lenses you
   have already swept at that SHA** (with timestamps).
 - The **review rubric** (the "rules" PM reviews against — extend per product):

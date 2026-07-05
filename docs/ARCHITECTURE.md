@@ -277,11 +277,10 @@ Separately, the `service` hub can run the agents themselves from Codex (Mode B);
 
 ## Status
 
-**v1.0.0.** Nine launchable agents — **PM / QA / senior-dev / junior-dev / Sweep / Reflect /
+**1.0.0.** Nine launchable agents — **PM / QA / senior-dev / junior-dev / Sweep / Reflect /
 Ops / Architect / Communication** — run under the workspace model: one `dev-loop.json`
 workspace, one team, one backend, and real repos cloned inside the workspace. Coordination is
 backend-pluggable between **Linear** and the **local service hub** (`node:sqlite` SoR with
 per-agent identity, localhost web UI, versioned docs, Linear mirror, and CLI portability).
-The legacy v1 `projects.json` runtime path is gone; migrate once with `dev-loop team import`.
 Autonomy for push/deploy remains opt-in and gated on a green build. Full history in
 [`CHANGELOG.md`](../CHANGELOG.md).

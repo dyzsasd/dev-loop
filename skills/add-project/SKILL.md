@@ -8,7 +8,7 @@ description: >-
   label taxonomy (first project also reconciles the Linear team + linearTeamId), scaffolds the
   project strategy doc, interviews test-env / dev-split / launch config, and writes the project
   through the VALIDATED `dev-loop team add-project` mutator. Repos are added separately with
-  /dev-loop:add-repo. Schema v2 (team/workspace) only.
+  /dev-loop:add-repo. 1.x workspace schema only.
 ---
 
 # add-project — register a virtual project + backend sync

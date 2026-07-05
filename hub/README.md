@@ -47,16 +47,6 @@ For a **linear** team, configure the Linear MCP in Claude Code **user scope** (d
 `W05` if the stewards couldn't reach the board). For a **service** team, `dev-loop run`
 auto-starts the local hub (`dev-loop hub status` to inspect it).
 
-### Migrating from v1 (`~/.dev-loop/projects.json`)
-
-The 1.0 runtime **does not read v1 config**. Migrate once:
-
-```bash
-dev-loop team init --dir <workspace> --key <team> --backend <linear|service> ...
-cd <workspace> && dev-loop team import      # folds projects, moves state, splits lessons
-dev-loop doctor
-```
-
 ### Moving to another machine
 
 ```bash
@@ -79,7 +69,7 @@ to copy.
 
 ## Configure
 
-Everything lives in the workspace's **`dev-loop.json`** (schema v2), written by `team init`
+Everything lives in the workspace's **`dev-loop.json`** (the 1.x workspace schema), written by `team init`
 and the validated mutators — you rarely hand-edit it:
 
 - `team` — backend, deploy-policy ceiling (`prod` stays manual unless you say otherwise),
@@ -90,8 +80,8 @@ and the validated mutators — you rarely hand-edit it:
   `intake.todoDepthCap` (how deep PM keeps the committed queue, default 10), launch overrides
   per agent (`agents.pm = { model, effort, cadence }` …).
 
-Full field reference: [`references/config-schema.md`](references/config-schema.md) ("Schema
-v2"). The agent behavior spec: [`references/conventions.md`](references/conventions.md).
+Full field reference: [`references/config-schema.md`](references/config-schema.md). The agent
+behavior spec: [`references/conventions.md`](references/conventions.md).
 
 ## Run the loop
 
@@ -114,7 +104,7 @@ first — the rows and the scheduler share one rotation cursor and never double-
 
 | Command | What it does |
 |---|---|
-| `dev-loop team init / import / repair` | create a workspace / one-shot v1 migration / fix after a machine move |
+| `dev-loop team init / repair` | create a workspace / fix after a machine move |
 | `dev-loop team add-project / add-repo` | validated config writes (the `/dev-loop:*` skills call these) |
 | `/dev-loop:add-project` · `/dev-loop:add-repo` · `/dev-loop:sync-project` · `/dev-loop:sync-repo` | coding-CLI skills: backend sync, clone + detect, drift reconcile |
 | `dev-loop run [--plan n] [--project k] [--once] [--dry-run]` | the team scheduler |

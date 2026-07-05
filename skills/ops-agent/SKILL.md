@@ -65,7 +65,7 @@ and the optional **`ops`** block (`ops.checks` / `ops.criticalRoutes` /
 daily/weekly/monthly roll-up and distill un-acted `*.review.md` reviews (the §22
 carve-out); at close append the daily entry (a pure no-op fire appends nothing).
 
-**Read `ops-state.json`** next to `projects.json` (your own state file — create it
+**Read `ops-state.json`** in the project state dir (your own state file — create it
 lazily, `{ "openIncidents": [], "lastCheck": null }`, if absent): it holds the
 currently-open incident(s) you filed (ticket ID + the failing check(s) + first-seen)
 and the last-check timestamp, so you dedupe across fires instead of refiling.

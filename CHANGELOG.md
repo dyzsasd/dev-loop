@@ -8,20 +8,20 @@ experience** — a real failure observed while the agents ran, then hardened int
 The whole 1.0 train (rc.1 → rc.3 below, plus this batch) lands as one release. Only rc.1 was
 ever published to npm (under `next`); 1.0.0 supersedes rc.2/rc.3 directly.
 
-- **BREAKING — v1 config removed (hard clean break).** The runtime no longer reads
-  `~/.dev-loop/projects.json` (no fallback, no deprecation window): `paths.ts` /
+- **BREAKING — 1.x workspace config is the only runtime path.** The runtime no longer reads
+  the 0.x global project config (no fallback, no deprecation window): `paths.ts` /
   `resolve-project.ts` / `run-agents.ts` resolve the workspace only; `DEVLOOP_PROJECTS_JSON` and
   explicit `--data` survive strictly as test/CI injection. The legacy `init` skill, the
-  `init-config` command, and `hubfile.mjs`/`hubcall.mjs` are deleted. Migrate once with
-  `dev-loop team init` + `dev-loop team import`.
-- **Docs restructure — README is usage-only.** `README.md` rewritten lean (quick start, migrate,
+  `init-config` command, and `hubfile.mjs`/`hubcall.mjs` are deleted. New work starts with
+  `dev-loop team init`, then `/dev-loop:add-project` and `/dev-loop:add-repo`.
+- **Docs restructure — README is usage-only.** `README.md` rewritten lean (quick start,
   move machines, configure, run, command table, day-to-day, agents); the design/architecture
   content moved to the new `docs/ARCHITECTURE.md` (layers, workflows, backends, safety boundary,
   self-evolution). `README.zh-CN.md` mirrors it; `README.fr.md` reduced to an unmaintained pointer.
 - **Doc-consistency pass (49 findings).** conventions/config-schema/skills brought fully in line
   with the shipped design: Backlog-first wording everywhere (§9a direction paragraphs, §15
   coverage, §25 W3, topology table), §11/§13 heads state the workspace is THE config and the team
-  flow canonical, config-schema banners mark v1 as import-only LEGACY, design docs get
+  flow canonical, config-schema describes the 1.x workspace schema, design docs get
   status-at-GA banners, package/plugin descriptions refreshed to the nine-agent 1.0 model.
 - **License:** MIT (root + hub).
 
@@ -65,14 +65,14 @@ ever published to npm (under `next`); 1.0.0 supersedes rc.2/rc.3 directly.
   a REAL blocking edge (linear: `save_issue blockedBy` — native, append-only; service/local: a
   `Blocked-by: <id>` marker comment); PM auto-unparks when all blockers are Done/Canceled, Sweep
   backstops + closes orphan trackers. Kills "work rotting behind a label until a human re-reads comments".
-- **fix(config): toLegacyView passthrough + notify bridge.** The legacy view spread a WHITELIST, silently
+- **fix(config): toLegacyView passthrough + notify bridge.** The compatibility view spread a WHITELIST, silently
   dropping operator fields (`blockedStateName`, `communication`, …) and never emitting `notify` — so on a
-  v2 workspace the daemon's human-park pings silently no-oped. Now the raw project entry passes through
+  workspace config the daemon's human-park pings silently no-oped. Now the raw project entry passes through
   first, and `team.comms` bridges to the legacy per-project `notify {type, webhookEnv}` unless the project
   carries its own.
-- **fix(import): generic field passthrough + notify→comms lift.** `team import` now preserves every v1
-  project field it doesn't re-home, lifts an env-name `notify` to `team.comms`, and STRIPS inline
-  webhook/secret literals (never copied into dev-loop.json, §16/I5) with exact guidance printed.
+- **fix(config): generic field passthrough + notify→comms lift.** Workspace config now preserves operator
+  project fields it does not re-home, lifts an env-name `notify` to `team.comms`, and strips inline
+  webhook/secret literals (never copied into `dev-loop.json`, §16/I5) with exact guidance printed.
 - **feat(run): suspectError detection.** A fire that exits 0 while its output is a failure marker
   ("Execution error"/"API Error"/bare "Error:" as the LAST line, or zero output at all) is flagged
   `suspectError` + `outputTail` in fires.jsonl and the hub event — fake successes no longer poison the
@@ -88,7 +88,7 @@ ever published to npm (under `next`); 1.0.0 supersedes rc.2/rc.3 directly.
   installed the OLD plugin and omitted the newest skills (`/dev-loop:add-project` etc.). `--version` overrides.
 - **fix(run):** the scheduler strips `CLAUDE_CODE_EFFORT_LEVEL` from each agent fire's env so the per-agent
   `--effort` stays authoritative (the env var outranks the flag; an exported value flattened every agent).
-- **docs:** README rewritten to lead with the 1.0 team/workspace flow (init/import/add-project/add-repo/run,
+- **docs:** README rewritten to lead with the 1.0 team/workspace flow (init/add-project/add-repo/run,
   cross-machine migration, workspace-commands table); config-schema effort-precedence note.
 
 ## 1.0.0-rc.1 — team / workspace model (code-complete; GA pending operator soak)
@@ -117,21 +117,20 @@ ever published to npm (under `next`); 1.0.0 supersedes rc.2/rc.3 directly.
   auto-ensures the daemon on a service team. Team intake (conventions §9b): PM splits a cross-project ask
   into per-project W3 sub-intakes and sweep closes the parent when all children land. Version stamped to
   **1.0.0-rc.1** — the 1.0 line is code-complete; GA (1.0.0) follows operator soak + the real backoffice
-  migration + a second-machine drill (see docs/design/team-workspace-GA.md). Deferred service-only polish:
+  workspace rollout + a second-machine drill (see docs/design/team-workspace-GA.md). Deferred service-only polish:
   the web team-overview page and the service op-API steward project override.
-- **M1 config kernel (schema v2).** New per-workspace `dev-loop.json`: one workspace = one team = one
+- **M1 config kernel (1.x workspace schema).** New per-workspace `dev-loop.json`: one workspace = one team = one
   backend; a physical repo **registry** + **virtual projects** that reference repos (one repo shareable
   across projects). New modules `team-config.ts` (types + E01-E11 validation + resolution API +
   `toLegacyView` compat) and `workspace.ts` (discovery + `.dev-loop/` path API + self-healing index).
   All run state (incl. the service `hub.db`) moves inside `<workspace>/.dev-loop/` so copying the folder
-  migrates the machine (invariant I4).
+  is enough to move machines (invariant I4).
 - **New commands:** `dev-loop team init` (pure-CLI workspace creation; service also seeds the `_team`
-  intake project), `dev-loop team import` (one-shot v1->v2 migration — folds projects, moves state,
-  splits `lessons.md`, copies hub rows re-keying AUTOINCREMENT events), `dev-loop team repair` (worktree
+  intake project), `dev-loop team repair` (worktree
   repair + index re-register + WAL truncate). `dev-loop doctor` gains a read-only workspace verdict
   (E-codes, repo existence, W05/W06). `dev-loop run` + the MCP server read workspace config automatically.
-- **Breaking (1.0):** runtime stops reading `~/.dev-loop/projects.json`; migrate once with `team import`.
-  (Staged: a v1 fallback remains through the pre-1.0 milestones.)
+- **Breaking (1.0):** runtime stops reading the 0.x global project config. Start from the 1.x
+  workspace model (`team init` + add/sync skills).
 
 
 ## 0.29.0 - 2026-07-03

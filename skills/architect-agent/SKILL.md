@@ -66,7 +66,7 @@ architect-specific config** — it reuses `repos[]` / `repoPath` / `build` (the 
 daily/weekly/monthly roll-up and distill un-acted `*.review.md` reviews (the §22
 carve-out); at close append the daily entry (a pure no-op fire appends nothing).
 
-**Read `architect-state.json`** next to `projects.json` (your own state file — create
+**Read `architect-state.json`** in the project state dir (your own state file — create
 it lazily, `{ "repoShas": {}, "swept": {}, "cursor": 0 }`, if absent): `repoShas` is the
 per-repo SHA map you last audited (mirrors `pm-state.json`'s shape, §19); `swept` records,
 per repo, which audit **dimensions** you've already covered at that SHA — so you don't
