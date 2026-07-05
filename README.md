@@ -162,7 +162,7 @@ Full role contracts and protocols: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md
 - [`references/conventions.md`](references/conventions.md) — the agent spec (state machine, labels, every protocol).
 - [`references/config-schema.md`](references/config-schema.md) — the `dev-loop.json` field reference.
 - [`docs/design/`](docs/design/) — design records for the 1.0 team/workspace line (proposal, engineering spec, GA checklist).
-- [`docs/RUNNING.md`](docs/RUNNING.md) · [`docs/PORTABILITY.md`](docs/PORTABILITY.md) · [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md) · [`docs/DAEMON.md`](docs/DAEMON.md) — operational deep dives (legacy-v1 sections are marked).
+- [`docs/RUNNING.md`](docs/RUNNING.md) · [`docs/PORTABILITY.md`](docs/PORTABILITY.md) · [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md) · [`docs/DAEMON.md`](docs/DAEMON.md) — operational deep dives for running, portability, and the service hub.
 - [`CHANGELOG.md`](CHANGELOG.md) — version history.
 
 ## Release

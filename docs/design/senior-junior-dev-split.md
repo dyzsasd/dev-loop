@@ -1,5 +1,10 @@
 # Design — senior-dev / junior-dev split (2026-06-27)
 
+> **Status note (1.0.0):** this is the design record that introduced the two-tier Dev model.
+> Current behavior is governed by [`references/conventions.md`](../../references/conventions.md)
+> §21a and [`references/config-schema.md`](../../references/config-schema.md). Older roster details
+> below, including references to the retired Director work, are preserved as design history.
+
 > Operator-approved refactor: split the single **Dev** agent into a **senior-dev** (opus,
 > effort max) that designs-and-delegates (and direct-codes on escalation) and a **junior-dev**
 > (sonnet, effort high) that implements pre-designed tickets. The split is the NEW *recommended*
@@ -325,7 +330,7 @@ The legacy single `dev` pane remains available only when explicitly requested wi
 `dev-loop run --agents legacy` or an explicit `pm,qa,dev,sweep` list (Claude opus/max;
 Codex `gpt-5.5`/`xhigh` unless overridden).
 Older external launchers may still carry a knob such as `DEV_SPLIT=1`; split launchers should either
-set `DEVLOOP_DEV_SPLIT=true` for every pane or persist `devSplit:true` in `projects.json`. The
+set `DEVLOOP_DEV_SPLIT=true` for every pane or persist `devSplit:true` in `dev-loop.json`. The
 existing effort tiers are unchanged: `pm=max`, `reflect/architect=xhigh`, `qa/sweep=high`, plus
 `senior-dev=max` / `junior-dev=high`.
 

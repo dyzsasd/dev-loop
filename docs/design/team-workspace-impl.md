@@ -1,30 +1,32 @@
-# Team / Workspace 1.0 — 详细设计稿 + 开发/测试任务
+# Team / Workspace 1.0 — 工程设计记录与任务拆分
 
-> **状态注记(1.0.0 定稿):** 本文是设计**记录**,保留原貌;实际交付与下文计划的差异:
-> ① 里程碑未按 0.30–0.34 分版发布 —— M1–M5 作为一列火车在 rc.1→1.0.0 上一次性交付;
-> ② v1 配置回退曾按 R3 暂存过渡期,**已于 1.0.0 彻底移除**(连同 legacy `init` skill、
-> `init-config` 命令);③ doctor 保持只读,修复动作在 `dev-loop team repair`(R2);
-> ④ hub op-API 的 steward project 覆盖(D4.2)与 web team 总览(D5.3)**延至 1.1**;
-> ⑤ 最终状态以 `team-workspace-GA.md` 与 CHANGELOG 为准。
+> **状态注记（1.0.0 定稿）：** 本文是工程设计记录，保留提出方案时的结构和任务编号。实际交付与下文的差异：
+> ① 没有按 0.30–0.34 分版发布，M1–M5 在 rc.1→1.0.0 期间一次性交付；
+> ② v1 配置回退期已经结束，1.0.0 彻底移除了 legacy `init` skill 和 `init-config` 命令；
+> ③ `doctor` 保持只读，修复动作归到 `dev-loop team repair`；
+> ④ hub op-API 的 steward project 覆盖（D4.2）与 web team 总览（D5.3）延至 1.1；
+> ⑤ 最终交付状态以 [`team-workspace-GA.md`](team-workspace-GA.md) 与
+> [`CHANGELOG.md`](../../CHANGELOG.md) 为准。
 
-> 上游:`team-workspace.md`(proposal v3,§ 引用均指向它与 `references/conventions.md`)。
-> 本稿是**工程级**:模块落点、类型定义、算法、命令规格、skill 规格,以及按里程碑切好的
-> 开发任务(**D-x.y**)与测试任务(**T-x.y**)。规模标记:S ≤ 半天,M ≈ 1 天,L ≈ 2–3 天。
-> 评审修订(同日):**M3/M4 重排**(steward team 化与 SKILL/op-API 同批,消除里程碑倒挂)、
+> 上游：[`team-workspace.md`](team-workspace.md)（proposal v3，§ 引用均指向它与
+> [`references/conventions.md`](../../references/conventions.md)）。
+> 本稿是**工程级**记录：模块落点、类型定义、算法、命令规格、skill 规格，以及按里程碑切分的
+> 开发任务（**D-x.y**）与测试任务（**T-x.y**）。规模标记：S ≤ 半天，M ≈ 1 天，L ≈ 2–3 天。
+> 评审修订（同日）：**M3/M4 重排**（steward team 化与 SKILL/op-API 同批，消除里程碑倒挂）、
 > E11 命名校验、import 事件重键、`next-project` 共享轮换 picker、fires.jsonl 账本。
 
 ---
 
-## 0. 两个设计细化(相对 proposal 的显式偏差)
+## 0. 两个设计细化（相对 proposal 的显式偏差）
 
-- **R1 状态目录形状**:proposal §3.3 画的是 `.dev-loop/state/<project>/` + `.dev-loop/reports/<project>/`。
-  实现取**整体平移**:今天 `~/.dev-loop/<project>/…` 的全部内部结构(pm-state.json、reports/、
-  runner-logs/、scheduler-gate.json)原样搬进 `<ws>/.dev-loop/<project>/…`;team 级 agent 用
-  `<ws>/.dev-loop/team/…`。理由:M1 零 SKILL 改动(SKILL 里的路径全部经 `${DEVLOOP_DATA_DIR}`
-  替换,只换根即可),import = 一次 `mv`。
-- **R2 doctor 只读契约不破**:proposal §10.3 说 doctor 做 worktree repair —— 但 doctor 的既有
-  契约是 READ-ONLY(DL-54:绝不 create/修复,防止把毁掉的 SoR 洗绿)。修复动作全部归到新命令
-  **`dev-loop team repair`**(worktree repair、索引重登记、WAL checkpoint);doctor 只检测报告。
+- **R1 状态目录形状**：proposal §3.3 画的是 `.dev-loop/state/<project>/` +
+  `.dev-loop/reports/<project>/`。实现选择**整体平移**：把 `~/.dev-loop/<project>/…` 的内部结构
+  （pm-state.json、reports/、runner-logs/、scheduler-gate.json）原样搬进
+  `<ws>/.dev-loop/<project>/…`；team 级 agent 使用 `<ws>/.dev-loop/team/…`。理由：M1 不需要改
+  SKILL 路径语义，import 也只需要一次 `mv`。
+- **R2 doctor 只读契约不破**：proposal §10.3 曾把 worktree repair 放进 doctor，但 doctor 的既有
+  契约是 READ-ONLY（DL-54：绝不 create/修复，避免把损坏的 SoR “洗绿”）。修复动作全部归到新命令
+  **`dev-loop team repair`**（worktree repair、索引重登记、WAL checkpoint）；doctor 只检查和报告。
 
 ---
 
@@ -402,11 +404,11 @@ dev-loop notify [--title <T>] [--level info|warn|error] <text…>
 
 | skill | 步骤(编号即执行序) | 幂等键 / 失败面 |
 |---|---|---|
-| **add-project** | 1 resolveWorkspace + 读 config;2 面试 key/linearProject/testEnv/devSplit/agents;3 **backend 同步**:linear → find-or-create project、落 `linearProjectId`(+首轮 team 对账:验 team、ensure label 集、落 `linearTeamId`);service → `dev-loop seed <key> …`;4 strategyDoc 脚手架(§20 headings,按 docSystem);5 写 `projects.<key>`(repos 空);6 `dev-loop doctor` | 幂等键 = `linearProjectId` 已存在 ⇒ 跳建改核;Linear 无权限/重名 → 列候选让操作者选;绝不建重复 project |
-| **add-repo** | 1 定位 project(参数/推断);2 clone `<ws>/<name>`(已有目录 → 登记);3 侦测 build(package.json scripts / tsconfig)+ 从 `.github/workflows` PR 触发的 job names 派生 `mergeChecks`(0.28.0 P2-10 规程);4 部署面试(release-pr/command;**E06 上限现场校验**);5 写 `repos.<ref>` + project 引用 `{ref, role}`;共享(引用数>1)⇒ 要求 `owner`;6 label `repo:<name>`(该 project 第 2 个 repo 起);7 mini-MAP + 对抗校验(P2-11)追加 strategyDoc Current state;8 `dev-loop doctor` | 幂等键 = registry 已有同 path ⇒ 转 sync-repo 语义;clone 失败/检测不出 build → 面试兜底,不猜 |
-| **sync-project** | 1 读 config + backend project 实况;2 diff(改名/归档/label 缺失/strategyDoc 漂移);3 呈现 → 确认 → 写回(config 或 backend,方向逐项确认);4 落 `syncedAt` | 只读默认,写需确认;归档的 backend project → 建议 `enabled:false` |
-| **sync-repo** | 1 重侦测 build/mergeChecks/deploy 与 remote 漂移 → diff → 确认写回;2 clone-if-missing(按 `remote`);3 `dev-loop team repair`(worktree) | 检测结果与人工配置冲突 → 呈现差异,不静默覆盖 |
-| **init(legacy)** | 退役为指路壳:打印 team init / add-project / add-repo 三步指引后结束 | — |
+| **add-project** | 1 resolveWorkspace + 读 config；2 询问 key/linearProject/testEnv/devSplit/agents；3 **同步 backend**：linear → find-or-create project、写入 `linearProjectId`，首轮顺带校验 team、确保 label 集、写入 `linearTeamId`；service → `dev-loop seed <key> …`；4 按 docSystem 脚手架 strategyDoc（§20 headings）；5 写 `projects.<key>`（repos 空）；6 `dev-loop doctor` | 幂等键 = `linearProjectId` 已存在 ⇒ 跳过创建，改为核对；Linear 无权限/重名 → 列候选让操作者选择；绝不重复创建 project |
+| **add-repo** | 1 定位 project（参数/推断）；2 clone `<ws>/<name>`（已有目录则登记）；3 检测 build（package.json scripts / tsconfig）并从 `.github/workflows` 的 PR job names 派生 `mergeChecks`；4 询问 deploy（release-pr/command，现场校验 **E06 上限**）；5 写 `repos.<ref>` + project 引用 `{ref, role}`，共享 repo（引用数 >1）要求 `owner`；6 添加 `repo:<name>` label（该 project 第 2 个 repo 起）；7 mini-MAP + 对抗校验后追加到 strategyDoc Current state；8 `dev-loop doctor` | 幂等键 = registry 已有同 path ⇒ 转为 sync-repo 语义；clone 失败或检测不出 build → 询问兜底，不猜 |
+| **sync-project** | 1 读 config + backend project 实况；2 diff（改名/归档/label 缺失/strategyDoc 漂移）；3 呈现差异 → 确认 → 写回 config 或 backend，方向逐项确认；4 写入 `syncedAt` | 默认只读，写入需确认；归档的 backend project → 建议 `enabled:false` |
+| **sync-repo** | 1 重新检测 build/mergeChecks/deploy 与 remote 漂移 → diff → 确认写回；2 clone-if-missing（按 `remote`）；3 `dev-loop team repair`（worktree） | 检测结果与人工配置冲突 → 呈现差异，不静默覆盖 |
+| **init（legacy）** | 退役为指路壳：打印 team init / add-project / add-repo 三步指引后结束 | — |
 
 **delivery/steward SKILL 改造点**(M4/M5):lessons 新路径(§7)、PM boot 装载
 `docs.vision`、ops team 化(registry 去重巡检 + `ownerOf` 路由 + op-API project 参数)、

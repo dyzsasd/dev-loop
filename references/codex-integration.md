@@ -52,7 +52,7 @@ ship gates (Dev §5/§5.5/§6/§6.5), or the security doctrine (§16). A Codex r
    codex features list | grep -E 'image_generation'
    # image_generation   stable   true
    ```
-4. Add the `codex` block to the project in `projects.json` (below). Absent ⇒ off.
+4. Add the `codex` block to the project entry in `dev-loop.json` (schema v2). Absent ⇒ off.
 
 `/dev-loop:init` does **not** install Codex for you (it's a separate vendor CLI), but it
 notes the option in its readiness checklist when a `codex` block is present.
@@ -61,7 +61,7 @@ notes the option in its readiness checklist when a `codex` block is present.
 
 ## Config block
 
-Add an optional `codex` object to a project in `projects.json` (full schema in
+Add an optional `codex` object to a project in `dev-loop.json` (full schema in
 [`config-schema.md`](config-schema.md)):
 
 ```jsonc
@@ -263,7 +263,7 @@ Hard limits:
   proceeds without Codex, exactly as if `codex.enabled` were false.
 - **Security (§16):** never pass secrets/PII into a Codex prompt or image description;
   treat Codex's stdout like any tool output (no raw secrets into tickets/reports). Codex
-  inherits your local Codex auth/config — no new credential lives in `projects.json`.
+  inherits your local Codex auth/config — no new credential lives in `dev-loop.json`.
 - **Determinism:** prefer `codex exec`/`codex exec review` (synchronous) in the loop; the
   `--background` + `/codex:status`/`/codex:result` flow is for an attended operator.
 
