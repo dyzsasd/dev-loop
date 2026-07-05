@@ -1,19 +1,16 @@
 # dev-loop Hub — Architecture
 
-> **Build status (live):** P0 (de-risk) ✅ · P2 (hub MVP + `service` backend) ✅ v0.13.0 · P3
-> (isolation guards, doctor) ✅ v0.14.0 · P4 (versioned documents) ✅ v0.15.0 · P5 (discussion
-> board + Director) ✅ v0.16.0 · P6 (two-way IM channel) ✅ v0.17.0 · P7 (one-way Linear mirror)
-> ✅ v0.18.0 · **P8 (second-CLI portability) ✅ v0.19.0** — **the full P0→P8 ladder is shipped.**
-> **The "daemon arrives at P5/P6" framing below is SUPERSEDED — there is STILL NO daemon.** P5's
-> Director is a **loop agent**; P6's channel is **POLL-based** (the Director reaches OUT each fire —
-> a loopback needs no inbound endpoint); P7's mirror is a **per-fire push** Sweep runs; P8 is
-> packaging + an env contract + the per-CLI identity gate (the hub was already a portable stdio MCP).
-> A daemon is deferred to *if/when* a PUSH-webhook channel is wanted (sub-fire-latency chat), which
-> is not built. Where this doc says a capability is "deferred to PN", consult the CHANGELOG +
-> conventions §18/§25/§26 + docs/PORTABILITY.md for what shipped.
+> **Status note (1.0.0):** this is a historical architecture record for the hub/service backend.
+> The P0→P8 ladder shipped before 1.0, and later work added the workspace-managed service daemon
+> (`dev-loop hub start|stop|status|ensure`) plus the localhost web UI described in
+> [`DAEMON.md`](DAEMON.md). Some older sections below still discuss a daemon-free MVP and deferred
+> daemon work; treat those as design history. For current operation, read
+> [`RUNNING.md`](RUNNING.md), [`PORTABILITY.md`](PORTABILITY.md), [`DAEMON.md`](DAEMON.md), and the
+> 1.0 workspace model in [`references/conventions.md`](../references/conventions.md) §27.
 > The hub uses built-in `node:sqlite` (not better-sqlite3 — P0 found zero native deps possible).
 >
-> Status (original): **proposal for operator sign-off (LK8). No code is written against this until the operator approves it AND the P0 spike (below) passes.**
+> Original status: proposal for operator sign-off (LK8). The text below is preserved as the design
+> rationale that led to the shipped hub.
 > Audience: the operator, and the loop agents that coordinate through it.
 > Companion: `references/conventions.md` (the shared brain — every section here references it by `§`).
 

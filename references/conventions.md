@@ -882,41 +882,30 @@ On startup each skill:
    if none resolves, stop and tell the operator to run `dev-loop team init` (new) or
    `dev-loop team import` (migrating).
 2. **Interactive skill project selection ladder** (in order): (a) if the user **named** a project, use
-   it; (b) else if the cwd is at or under **exactly one** project's `repoPath` (or any
-   `repos[].path`, §19), **auto-select it** — canonical `realpath` + segment-boundary
-   containment, nearest-ancestor wins on overlap, two distinct projects tying at equal
-   depth ⇒ ambiguous ⇒ fall through (never guess); (c) else if exactly **one** project is
-   configured, use it; (d) else use **`defaultProject`** if set; (e) else ask. Precedence:
-   **explicit choice > cwd-match > configured default > prompt** — cwd is the default
-   DRIVER, never an override. For **unattended launchers** (`dev-loop run`, daemon lifecycle,
-   and any process manager), use the stricter machine rule: **explicit `DEVLOOP_PROJECT` /
-   `--project` > cwd-match > unresolved**. They do not guess `defaultProject`, the first
-   configured project, or `demo`; a cwd outside every configured repo must stop/no-op with a
-   setup hint. (For the hub backend this is the `DEVLOOP_PROJECT` contract: §18.)
-3. Loads that project's `linearProject`, `linearTeam`, `repoPath`,
-   `strategyDoc`, `testEnv`, `build`, `deploy`, `git`, `mode`, and `autonomy`
-   (optional — see §12; absent ⇒ the conservative `"ask"` default). It also loads
-   `backend` (`"linear"` | `"local"`; **absent ⇒ `"linear"`**, so existing projects
-   are unchanged) and, for `local`, the optional `localBoard` path and `ticketPrefix`
-   (§18). (Per-agent `models` / `efforts` may also be set, but they are applied by
-   **`dev-loop run`** at process launch — `claude --model … --effort …` or
-   `codex exec --model … -c model_reasoning_effort=…` — not loaded or chosen by the
-   agents; see config-schema.md and `docs/RUNNING.md`.)
+   it; (b) else if the cwd is at or under exactly one registered repo path in `repos.*.path`, select
+   the project(s) that reference that repo — if exactly one project matches, use it; if several
+   projects share the repo, ask; (c) else if exactly **one enabled project** exists, use it; (d) else
+   ask. Precedence: **explicit choice > cwd-match > single enabled project > prompt**. For
+   **unattended launchers** (`dev-loop run`, daemon lifecycle, and process managers), use the
+   stricter machine rule: **explicit `DEVLOOP_PROJECT` / `--project` > cwd-match > unresolved**.
+   They do not guess the first configured project or `demo`; a cwd outside every configured repo
+   must stop/no-op with a setup hint.
+3. Loads the resolved project view: `linearProject`, `linearTeam`, target repo path(s),
+   `strategyDoc`, `testEnv`, repo `build`/`deploy`/`git` facts, `mode`, `autonomy`, and backend
+   (`"linear"` or `"service"` in schema v2). Per-agent `codingAgent` / `model` / `effort` /
+   `cadence` may also be configured, but **`dev-loop run` applies them at process launch**; skills
+   do not choose their own model mid-fire. See `config-schema.md` and `docs/RUNNING.md`.
 
-If `projects.json` is missing or the chosen project lacks a required field, the
-skill asks the user for the missing value and offers to write it back to config —
-it never guesses repo paths, URLs, or deploy commands.
+If `dev-loop.json` is missing or the chosen project lacks a required field, the skill asks the
+user for the missing value and writes it through the validated team mutator. It never guesses repo
+paths, URLs, or deploy commands.
 
-**Runtime files in the data dir.** Alongside `projects.json`, each agent keeps
-local per-operator state next to it: `pm-state.json` / `qa-state.json` (the
-last-reviewed/swept SHA and swept review-lenses (PM) / swept surfaces (QA)) live next to
-`projects.json` (internally project-keyed), while the optional `lessons.md` (per-operator
-behavioral corrections, §14) lives **per-project** under `<project-key>/` (DL-80, matching
-`reports/`; the legacy root file is the fallback). These are
-machine-local — never committed, never shared; created lazily on first run. **In
-`local` backend mode (§18) the ticket board also lives here** —
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/board/` (`tickets/`, `counter.json`), or wherever
-`localBoard` points — under the same machine-local, never-committed rule.
+**Runtime files in the workspace.** Each agent keeps local per-operator state under
+`<workspace>/.dev-loop/<project-key>/`: `pm-state.json` / `qa-state.json`
+(last-reviewed/swept SHA and review-lens state), `reports/`, runner logs, and related working
+state. Team-scoped state lives under `<workspace>/.dev-loop/team/`; lessons live under
+`<workspace>/.dev-loop/lessons/`. These files are machine-local, never committed, and created
+lazily on first run. A legacy v1 data-dir layout is read only by the one-shot import path.
 
 **Bounded retention + atomic writes (state files are a working set, not an archive).**
 `pm-state.json` / `qa-state.json` exist to answer a fixed set of look-back questions —
@@ -950,7 +939,7 @@ mutates real Linear or ships real code.
 **Mid-run overrides.** If the user explicitly asks for live behavior while config
 says `dry-run` (e.g. "actually move the ticket", "merge and deploy"), treat it as
 an explicit, session-scoped override — honor it, and offer to persist `mode:
-"live"` to `projects.json` so a recurring/looped run stays consistent. Because
+"live"` to `dev-loop.json` so a recurring/looped run stays consistent. Because
 crossing from `dry-run` to `live` unlocks irreversible, outward-facing actions
 (commits to `defaultBranch`, pushes, and especially a **production deploy** that
 may then run on every loop tick), confirm the blast radius **once** before the
@@ -1157,15 +1146,14 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
 2. Ensure the `linearProject` exists; if not, ask the user before creating it.
 3. Confirm `strategyDoc` is readable and `testEnv`/`build`/`deploy` commands are
    correct with the user (these gate real deploys).
-4. Create the runtime files if absent: `pm-state.json`, `qa-state.json` (next to
-   `projects.json`), and a `lessons.md` skeleton **under `<project-key>/`** (§14, matching
-   `reports/`). (`/dev-loop:init` does this for you.)
-5. **If `backend:"local"`** (§18): skip steps 1–2 (no Linear labels/project to
+4. Create the runtime files lazily if absent under `<workspace>/.dev-loop/<project-key>/`
+   and the team lessons index under `<workspace>/.dev-loop/lessons/`.
+5. **Legacy local backend only** (§18): skip steps 1–2 (no Linear labels/project to
    provision — labels are just strings, and the board dir is the project container)
    and instead scaffold the board — `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/board/` with
    `tickets/` and a `counter.json` (`{ "prefix": "<ticketPrefix|DL>", "next": 1 }`) —
    and ensure `strategyDoc` is a **repo file** (a Linear document can't back a local
-   board). `/dev-loop:init` does this.
+   board). New 1.0 workspaces use `linear` or `service`.
 
 ---
 
@@ -1365,7 +1353,7 @@ in backend terms.
 
 **Default is `linear`.** `backend` absent ⇒ `"linear"`, so existing behavior is
 **100% unchanged**; `local` and `service` are strictly opt-in via per-project config
-(§11) and bootstrapped by `/dev-loop:init`. Every rule elsewhere in this document is
+(§11) and bootstrapped by `dev-loop team init` + `/dev-loop:add-project`. Every rule elsewhere in this document is
 backend-agnostic — this section is the only place they diverge.
 
 ### Backend parity — the work plane, the surface plane, and switching
@@ -1397,8 +1385,8 @@ local-usable frontmatter state (the §3 local state set is the seven classic nam
 **abstract behavior is invariant** ("the ticket leaves Dev's pick set until the human resolves it,
 then resumes to `Todo`"); only the mechanism + the reminder differ.
 
-**Switching a project's backend is chosen at init — changing it later is a data migration, not a
-config edit (deferred).** `backend` is set once at `/dev-loop:init`; flipping it on a project that
+**Switching a team's backend is chosen at init — changing it later is a data migration, not a
+config edit (deferred).** `backend` is set once at `dev-loop team init`; flipping it on a team that
 **already has tickets** is out of scope today. The only cross-store seam is the **one-way
 hub→Linear `mirror` (a projection for human visibility, not a bridge)** — Linear is never read
 back as truth (split-brain is enforced). A future importer **cannot preserve source ticket ids as
@@ -1408,8 +1396,8 @@ source id must ride as a separate **`externalId`** — a data-fidelity loss, not
 **If the operator wants Linear visibility without migrating ⇒ `service` + `mirror`.**
 
 ### Local board layout
-The local board is **machine-local per-operator runtime state** — it lives in the
-data dir next to `projects.json` (§11), **never** in the product repo (a board of
+The legacy local board is **machine-local per-operator runtime state** — it lives in the
+v1 data dir (§11), **never** in the product repo (a board of
 ticket-state would otherwise churn the repo with coordination commits). Default:
 
 ```
@@ -1421,7 +1409,7 @@ ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/board/
 ```
 
 `<project-key>` is the config key, so multiple local projects stay isolated. The path
-is overridable via `localBoard` (§11). It is created by `/dev-loop:init` (or lazily on
+is overridable via `localBoard` (§11). It is created by the legacy init path (or lazily on
 first write) and **must be a dedicated dev-loop board dir on a single local
 filesystem** — never a shared/pre-existing dir, and never a network mount (the
 atomic-rename below needs one filesystem). Never committed, never shared.
@@ -1627,7 +1615,7 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
   `dev-loop-hub` → `dev-loop serve`, with `env` expanding the per-pane
   `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`); the launcher sets those per agent pane
   (see `docs/RUNNING.md`). The hub DB (`hub.db`, WAL) is machine-local runtime state, never
-  committed (like the local board). `mode`/`autonomy` stay authoritative in `projects.json`
+  committed (like the local board). `mode`/`autonomy` stay authoritative in `dev-loop.json`
   (the hub project row is advisory).
 
 ---
@@ -1848,8 +1836,8 @@ than restating it:
   to the right inward agent.
 - **Read-only on what they observe** (prod / code / sources). No mutating commands, no
   edits, no actions that change the observed system.
-- **Stateless per fire** (§0). Ops/Architect each keep a state file next to
-  `projects.json` — `ops-state.json` / `architect-state.json` — re-read from disk every
+- **Stateless per fire** (§0). Ops/Architect each keep state under the workspace's
+  `.dev-loop/` tree — `ops-state.json` / `architect-state.json` — re-read from disk every
   fire; conversation memory is never trusted.
 - **Scoped to the `dev-loop` label** (§2) and **backend-aware** (§18) and **multi-repo
   aware** (§19) — same firewall, templates, and reports as every other agent.
@@ -2392,8 +2380,8 @@ required:
   sync and no non-operator subscribers (the MCP can't enumerate integrations, so this isn't
   runtime-enforceable), plus an explicit audience-widening warning.
 
-**Per-fire mechanics (deterministic, stateless).** A machine-local `reports-state.json` (next
-to `projects.json`) holds the **doc-id cache** (project+agent → documentId), the **acted
+**Per-fire mechanics (deterministic, stateless).** A machine-local `reports-state.json` under
+the workspace `.dev-loop/` tree holds the **doc-id cache** (project+agent → documentId), the **acted
 ledger** (`commentId → {actedAt, commentUpdatedAt, lessonShort}`), and `lastReviewPollAt`.
 **`lessons.md`, the ledger, the doc-id cache, and the per-agent report-lock all stay
 machine-local in both sinks** — only the body + 点评 thread move to Linear.
@@ -2568,8 +2556,8 @@ This section records only the rules that change agent/operator behavior; the fie
 - **Config source.** Runtime reads `dev-loop.json` (schema v2), resolved by discovery (`DEVLOOP_WORKSPACE`
   → `DEVLOOP_TEAM` index → cwd ascent). It is projected to the historical per-project shape internally
   (`toLegacyView`), so every existing agent contract (§3/§4/§12b/§12c/reports) is unchanged. The legacy
-  `~/.dev-loop/projects.json` is a transition-only fallback and is removed at 1.0 (the clean break) —
-  after installing the 1.0 line an operator MUST `dev-loop team init` + `dev-loop team import` once.
+  `~/.dev-loop/projects.json` runtime path is gone in 1.0; an operator migrating from v1 runs
+  `dev-loop team init` + `dev-loop team import` once.
 - **Portability (I4).** All run state is under `<workspace>/.dev-loop/` (per-project dirs, `team/`,
   `lessons/`, `wt/`, `locks/`, and for service `hub.db`). Copying the workspace folder migrates the
   machine; only env vars + credentials (§16) follow separately. `~/.dev-loop/` holds just a rebuildable

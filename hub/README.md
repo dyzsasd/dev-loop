@@ -1,6 +1,6 @@
 # dev-loop
 
-**English** · [中文](README.zh-CN.md) · [Français](README.fr.md)
+**English** · [中文](https://github.com/dyzsasd/dev-loop/blob/main/README.zh-CN.md) · [Français](https://github.com/dyzsasd/dev-loop/blob/main/README.fr.md)
 
 **An autonomous dev team in a folder.** Nine launchable agents (PM, QA, a senior/junior Dev
 pair, Sweep, Reflect, Ops, Architect, Communication) build, test, ship, watch, and explain your
@@ -13,7 +13,7 @@ implementer's claims, and everything the team does lands in reports and metrics 
 in one message a day.
 
 > How it works inside — layers, protocols, backends, self-evolution:
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). This README is about **using** it.
+> [`docs/ARCHITECTURE.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/ARCHITECTURE.md). This README is about **using** it.
 
 ---
 
@@ -153,23 +153,23 @@ first — the rows and the scheduler share one rotation cursor and never double-
 | **Architect** | whole-codebase tech-debt audits | daily, per project |
 | **Communication** | the daily director digest + article drafts | daily, team scope |
 
-Full role contracts and protocols: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) +
+Full role contracts and protocols: [`docs/ARCHITECTURE.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/ARCHITECTURE.md) +
 [`references/conventions.md`](references/conventions.md).
 
 ## Docs
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — layers, workflows, backends, safety, self-evolution.
+- [`docs/ARCHITECTURE.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/ARCHITECTURE.md) — layers, workflows, backends, safety, self-evolution.
 - [`references/conventions.md`](references/conventions.md) — the agent spec (state machine, labels, every protocol).
 - [`references/config-schema.md`](references/config-schema.md) — the `dev-loop.json` field reference.
-- [`docs/design/`](docs/design/) — design records for the 1.0 team/workspace line (proposal, engineering spec, GA checklist).
-- [`docs/RUNNING.md`](docs/RUNNING.md) · [`docs/PORTABILITY.md`](docs/PORTABILITY.md) · [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md) · [`docs/DAEMON.md`](docs/DAEMON.md) — operational deep dives (legacy-v1 sections are marked).
-- [`CHANGELOG.md`](CHANGELOG.md) — version history.
+- [`docs/design/`](https://github.com/dyzsasd/dev-loop/tree/main/docs/design) — design records for the 1.0 team/workspace line (proposal, engineering spec, GA checklist).
+- [`docs/RUNNING.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/RUNNING.md) · [`docs/PORTABILITY.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/PORTABILITY.md) · [`docs/HUB-ARCHITECTURE.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/HUB-ARCHITECTURE.md) · [`docs/DAEMON.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/DAEMON.md) — operational deep dives for running, portability, and the service hub.
+- [`CHANGELOG.md`](https://github.com/dyzsasd/dev-loop/blob/main/CHANGELOG.md) — version history.
 
 ## Release
 
 Releases are cut by the **Release npm package** GitHub Actions workflow from `main`
 (stamps the version, runs the suite, publishes with provenance, tags). See
-[`docs/RELEASING.md`](docs/RELEASING.md).
+[`docs/RELEASING.md`](https://github.com/dyzsasd/dev-loop/blob/main/docs/RELEASING.md).
 
 ## License
 

@@ -1,18 +1,13 @@
 # dev-loop — Config schema
 
-> **1.0: the CURRENT config is the workspace `dev-loop.json` (schema v2)** — jump to the
-> ["Schema v2 — the workspace model"](#schema-v2--the-workspace-model-10-line) section below.
-> The v1 `projects.json` documented next is **LEGACY**, retained ONLY as the field reference
-> for `dev-loop team import` (the one-shot migration); the 1.0 runtime does not read it.
+> **Current config:** 1.0 uses a workspace-local `dev-loop.json` (schema v2). Start at
+> ["Schema v2 — the workspace model"](#schema-v2--the-workspace-model-10-line) unless you are
+> reading old config for a migration.
+>
+> The v1 `projects.json` section below is retained only as a field reference for
+> `dev-loop team import`. The 1.0 runtime does **not** read it.
 
-The dev-loop agents (PM / QA / Dev / Sweep / Reflect / Ops / Architect /
-Communication) read
-`DEVLOOP_PROJECTS_JSON` when set, otherwise `${DEVLOOP_DATA_DIR:-~/.dev-loop}/projects.json`.
-Legacy Claude plugin data is only a compatibility fallback. The config maps each product to its Linear project, its
-repo, its test environment, and its ship/deploy settings. One file, many products.
-`/dev-loop:init` gathers and writes this file with you (operator-present setup).
-
-## Schema
+## Legacy v1 Schema (`projects.json`, import reference only)
 
 ```jsonc
 {

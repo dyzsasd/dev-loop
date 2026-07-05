@@ -41,9 +41,10 @@ dev-loop is three layers; the `npm i -g @dyzsasd/dev-loop` package ships all thr
    file board are alternative ticket backends; the hub is the one that adds per-agent identity, the
    doc system, and the namespace.)*
 3. **Agents — skills + plugin + scheduler.** The role-specialized agents are a set of **SKILLs**
-   (packaged as the Claude **plugin**) plus the **scheduler** (`dev-loop run`). You start the loop
-   two ways: the `dev-loop run` scheduler (**Mode B**), or Claude/Codex's own loop command against
-   the installed plugin (**Mode A**, e.g. `/loop 5m /dev-loop:pm-agent`). See [Install](#install).
+   (packaged as the Claude **plugin**) plus the **scheduler** (`dev-loop run`). You normally start
+   the loop with the `dev-loop run` scheduler; Claude Code Agent View can also run the installed
+   plugin rows directly. See the [README](../README.md) quick start and
+   [`RUNNING.md`](RUNNING.md) for launch details.
 
 ## How it works
 
@@ -66,7 +67,7 @@ dev-loop is three layers; the `npm i -g @dyzsasd/dev-loop` package ships all thr
 
 Five **inward** (build-facing) agents, a default **two-tier Dev**, three **outward**
 agents, and a one-time **setup** command. Every agent reads
-[`references/conventions.md`](references/conventions.md) first — the full state machine,
+[`references/conventions.md`](../references/conventions.md) first — the full state machine,
 label taxonomy, ticket templates, and protocols.
 
 ### Inward — the build loop
@@ -209,8 +210,8 @@ Coordination is pluggable; the agents and protocols are identical across all thr
 
 The **work plane** (states, transitions, responsibilities, and the agent loop) is identical
 across backends. The **surface plane** (per-agent identity, web UI) expands by
-backend. See [conventions §18](references/conventions.md) +
-[`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md).
+backend. See [conventions §18](../references/conventions.md) +
+[`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md).
 
 ### Loop-governance rails are `service`-only
 
@@ -240,7 +241,7 @@ model.
 - It reads the loop's **own** output and distills **recurring** patterns (≥2 occurrences,
   each citing ticket IDs / commit SHAs) into `lessons.md` — the per-operator override every
   agent reads at the top of every run.
-- **The hard boundary** ([conventions §17](references/conventions.md)): Reflect may edit
+- **The hard boundary** ([conventions §17](../references/conventions.md)): Reflect may edit
   `lessons.md` autonomously (local, reversible, never committed) but **must not** auto-rewrite
   the SKILLs or `conventions.md`. Structural changes are **drafted as proposals** for the
   operator to apply by git commit. Self-modification of the core is *surfaced, not executed* —
@@ -267,23 +268,20 @@ The loop can use **OpenAI Codex** as a power tool via the
 second-model review** (Dev Step 5.5 + Architect; advisory, never touches the board),
 **image generation** (PM mockups + Dev production assets — the one thing the loop can't do
 itself), and a one-shot **rescue** before a `fix-exhausted` block. See
-[conventions §24](references/conventions.md) + [`references/codex-integration.md`](references/codex-integration.md).
+[conventions §24](../references/conventions.md) + [`references/codex-integration.md`](../references/codex-integration.md).
 
 Separately, the `service` hub can run the agents themselves from Codex (Mode B); see
-[`docs/PORTABILITY.md`](docs/PORTABILITY.md). Run any agent there with, e.g.,
+[`PORTABILITY.md`](PORTABILITY.md). Run any agent there with, e.g.,
 `dev-loop run --cli codex --agents communication` — the scheduler injects the per-agent
 `dev-loop-hub` actor/MCP override itself, so no manual Codex config is needed.
 
 ## Status
 
-**v0.23.3.** Ten launchable agents — five inward (**PM / QA / Dev / Sweep / Reflect**),
-three outward (**Ops / Architect / Communication**), and a default two-tier
-**senior-dev / junior-dev** Dev split — plus the `init` onboarding command.
-Coordination is backend-pluggable: **Linear** (default), a **local file board**, or the
-**local hub** (`node:sqlite` SoR with per-agent identity + a localhost web UI + versioned
-docs + a one-way Linear mirror + CLI-portability). Recent: dev-loop now uses its own
-`~/.dev-loop` config/data home by default instead of Claude plugin data, refuses to guess a project
-when neither `--project` nor the current repo identifies one, and can install a macOS LaunchAgent so
-the service hub daemon starts on login with a stable localhost port. Validated end-to-end and battle-tested across long live runs;
-autonomy (push/deploy) is opt-in per project and gated on a green build. Full history in
-[`CHANGELOG.md`](CHANGELOG.md).
+**v1.0.0.** Nine launchable agents — **PM / QA / senior-dev / junior-dev / Sweep / Reflect /
+Ops / Architect / Communication** — run under the workspace model: one `dev-loop.json`
+workspace, one team, one backend, and real repos cloned inside the workspace. Coordination is
+backend-pluggable between **Linear** and the **local service hub** (`node:sqlite` SoR with
+per-agent identity, localhost web UI, versioned docs, Linear mirror, and CLI portability).
+The legacy v1 `projects.json` runtime path is gone; migrate once with `dev-loop team import`.
+Autonomy for push/deploy remains opt-in and gated on a green build. Full history in
+[`CHANGELOG.md`](../CHANGELOG.md).

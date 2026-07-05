@@ -130,31 +130,29 @@ Supporting goals (all in scope this milestone):
 ## Current state
 
 - **What it is:** a standalone `dev-loop` npm package + Claude Code plugin
-  (`github.com/dyzsasd/dev-loop`) implementing **ten launchable autonomous agents** that
-  coordinate entirely through ticket state (no agent calls another): five inward/build
-  (**PM, QA, legacy Dev, Sweep, Reflect**), three outward (**Ops, Architect,
-  Communication**), plus **senior-dev / junior-dev** — the default two-tier split-dev pair
-  (§21a; with `devSplit` on, the legacy single `dev` defers).
-- **Main surfaces / modules:** `skills/` — **11 SKILLs** (the ten agents + `init`);
-  `references/` — `conventions.md` (the authoritative shared spec), `config-schema.md`,
-  `codex-integration.md`; `hub/` — the `node:sqlite` MCP system-of-record, **v0.23.3**
-  (`hub/package.json`), with a **29-file `test/` suite** run via `npm test` plus
-  `npm run doctor`; `docs/` (architecture · running · portability · daemon · designs ·
-  reviews) and `config/` (example `projects.json` + per-CLI MCP templates).
-- **Coordination backends (§18):** `linear` (default) / `local` / `service` (the hub) —
-  **plus the shipped opt-in daemon transport**: `hub.transport:"daemon"` routes the thin
-  stdio shim to the loopback daemon op-API (the default stays direct-db stdio).
-- **How it runs:** the scheduler **`dev-loop run`** fires the stateless-per-fire agents,
-  with **two-level per-agent `codingAgent` (claude/codex) + `model` + `effort` config**
-  (built-in defaults + `projects.json` overrides, `a11f9e5`); the daemon adds the
-  localhost web UI (board · tickets · roadmap · reports · activity) and the Lark/Slack
-  channel bridge.
-- **Operator steering:** daily/weekly reports + `<report>.review.md` (点评) distilled into
-  per-project `lessons.md` rules; direction lands via `docs/STRATEGY.md` / hub docs behind
-  the operator-publish gate.
+  (`github.com/dyzsasd/dev-loop`) implementing **nine launchable autonomous agents** that
+  coordinate through ticket state: PM, QA, senior-dev, junior-dev, Sweep, Reflect, Ops,
+  Architect, and Communication. The legacy single `dev` path remains only as an explicit fallback
+  for projects that opt out of split Dev.
+- **1.0 runtime model:** one workspace directory = one team = one backend = one `dev-loop.json`.
+  The machine-global `~/.dev-loop/projects.json` runtime path is gone; migrate once with
+  `dev-loop team import`.
+- **Main surfaces / modules:** `skills/` agent and operator skills; `references/` shared specs
+  (`conventions.md`, `config-schema.md`, `codex-integration.md`); `hub/` — the `node:sqlite`
+  MCP/service backend, **v1.0.0** (`hub/package.json`), with the full npm test suite; `docs/`
+  for architecture, running, portability, daemon, design records, and reviews; `config/` for
+  MCP templates and example workspace config.
+- **Coordination backends (§18/§27):** `linear` and `service` are the current 1.0 paths. The
+  service hub stores state under `<workspace>/.dev-loop/`, exposes the localhost web UI, and can
+  mirror to Linear.
+- **How it runs:** the scheduler **`dev-loop run`** fires stateless-per-fire agents with
+  per-agent coding CLI, model, effort, and cadence resolved from `dev-loop.json`. Agent View rows
+  share the same `next-project` rotation picker.
+- **Operator steering:** daily/weekly reports and 点评 are distilled into lessons; direction lands
+  through the strategy/doc system and operator-reviewed changes.
 
-(operator, 2026-07-02: Current state re-synced to HEAD; for the always-current picture see
-README.md + CHANGELOG.md.)
+(operator, 2026-07-05: Current state re-synced to the 1.0 workspace release. For the
+always-current user-facing picture, see README.md + CHANGELOG.md.)
 
 ## Personas
 
