@@ -58,8 +58,13 @@ Usage: dev-loop <command> [args]
   shim                        run the thin stdio MCP shim → the loopback daemon op-API (hub.transport:"daemon")
   daemon up|up-all|down|status|install-autostart|uninstall-autostart
                               daemon lifecycle — idempotent localhost web UI + optional login autostart
-  team init|import|repair     workspace (schema v2): create / migrate-from-v1 / repair-after-move
+  team init|import|repair|add-project|add-repo
+                              workspace (schema v2): create / migrate-from-v1 / repair / validated config writes
   hub start|stop|status       workspace hub daemon lifecycle (service backend; stop checkpoints the WAL)
+  metrics [--window 7d] [--json]   team KPIs — fire success from fires.jsonl (+ board KPIs on service)
+  notify [--level info|warn|error] [--title T] <text>   push to the team's slack/lark channel (team.comms)
+  next-project --agent <a>    print the agent's next rotation pick (shared cursor with run; for /loop rows)
+  with-repo-lock <ref> -- <cmd>   run a command holding a shared repo's base-clone lock
   init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project (seed → doctor → daemon up)
   run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents by calling the selected CLI
   init-config                 write an empty ~/.dev-loop/projects.json starter

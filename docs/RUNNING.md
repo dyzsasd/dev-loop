@@ -1,7 +1,25 @@
 # Running dev-loop
 
-How to onboard a project, launch the agents, pick a model per agent, and resume. The npm package is
-the normal install path for the service backend, MCP configs, daemon, doctor, and scheduler:
+> **1.0 line — start here, not below.** On the workspace model (schema v2) the flow is:
+>
+> ```bash
+> npm i -g @dyzsasd/dev-loop
+> dev-loop team init --dir <workspace> --key <team> --backend linear|service [--linear-team "<Team>"] \
+>   [--deploy dev=auto,prod=manual] [--comms lark|slack]
+> cd <workspace>
+> # in a coding CLI: /dev-loop:add-project  then  /dev-loop:add-repo   (backend sync + clone, one pass)
+> dev-loop doctor && dev-loop run --once --dry-run   # verify, preview per-agent model/effort
+> dev-loop run                                       # ONE scheduler for the whole team
+> ```
+>
+> Migrating a v1 project: `dev-loop team import`. Full reference: README "Quick start" +
+> `references/config-schema.md` "Schema v2" + `references/conventions.md` §27/§5a.
+> **Everything below this box describes the LEGACY v1 single-`projects.json` flow** — still
+> functional through the transition (the runtime falls back to it only when no workspace is
+> discoverable) and removed at 1.0 GA. Do not follow it for a new setup.
+
+How to onboard a project, launch the agents, pick a model per agent, and resume (LEGACY v1). The npm
+package is the normal install path for the service backend, MCP configs, daemon, doctor, and scheduler:
 
 ```bash
 npm i -g @dyzsasd/dev-loop

@@ -141,7 +141,11 @@ the slowest — a daily retrospective that observes the loop and curates `lesson
 ```
         PM ──proposes feature──┐                 ┌──QA proposes bug──┐
                                ▼                 ▼                   │
-   strategy doc ──►  [Todo] ◄────────── grooming/unblock ───────────┘
+   strategy doc ──►  [Backlog] ◄─────── every discovery filing ─────┘
+                       │
+      PM grooms + promotes (§5a, depth-capped)
+                       ▼
+                    [Todo] ◄── un-block re-queue / verify-fail follow-up / ops incident (carve-outs)
                        │
         Dev claims ────┼──► [In Progress] ──ships──► [In Review]
                        │                                  │
@@ -152,9 +156,11 @@ the slowest — a daily retrospective that observes the loop and curates `lesson
 ```
 
 - **PM** reads the product's strategy doc, exercises the real product, files
-  **feature** tickets, and **verifies feature tickets** that reach `In Review`.
+  **feature** tickets (into `Backlog`, §5a), **grooms + promotes** the Backlog to
+  `Todo` at pace (Job B2), and **verifies feature tickets** that reach `In Review`.
 - **QA** runs happy-path + edge-case tests in the configured test environment,
-  files **bug** tickets, and **re-tests bug tickets** that reach `In Review`.
+  files **bug** tickets (into `Backlog`, §5a), and **re-tests bug tickets** that
+  reach `In Review`.
 - **Dev** pulls `Todo` tickets in priority order, grooms them (enough info? a
   duplicate?), implements, ships, and moves them to `In Review`.
 - **Sweep** is the lifecycle janitor (slower cadence): it fixes tickets that fall
