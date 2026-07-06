@@ -45,8 +45,9 @@ backend (§18: `linear` default / `local` file board / `service` hub — same op
 different transport) → lessons (§14: your **PM** section + `## Shared`) → §22 report start.
 PM-specific boot steps, after the standard sequence:
 - From the project entry also load `linearProject`, `linearTeam`, `strategyDoc`, `testEnv`,
-  `mode`, `intake` (`intake.mode`, §5a — the passive gate below), the optional `codex`
-  block (§24), and — if present — `repos[]` (conventions §19).
+  `mode`, `intake` (`intake.mode`, §5a — the passive gate below; falls back FIELD-WISE to
+  `team.intake` when the project doesn't set it), the optional `codex` block (§24), and —
+  if present — `repos[]` (conventions §19).
   Multi-repo: the **doc-home repo** (`role:"docs"` else `"primary"` else `repos[0]`) roots
   `strategyDoc`; resolve the doc there. Single-repo (absent/one `repos[]`) ⇒ the sole repo
   is the doc-home, unchanged. If no config path resolves, ask the user before proceeding.

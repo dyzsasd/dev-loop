@@ -156,6 +156,7 @@ machine, export the same env vars, run `dev-loop team repair`, then `dev-loop do
 | `comms` | Slack/Lark channel config. Store env var names only. |
 | `mode` | Default `"live"` / `"dry-run"` for projects that do not override. |
 | `autonomy` | Default autonomy posture for projects that do not override. |
+| `intake` | Team-wide default intake block (`mode`, `todoDepthCap`); seeded by `team init --intake-mode`. Projects override **field-wise** (nearest wins per field), so a project tuning only `todoDepthCap` keeps a team-level `"passive"`. |
 | `defaultCodingAgent` | Default executor CLI (`claude`, `codex`, or `opencode`) when an agent does not override. |
 | `codingAgentDefaults` | Default `{ model, effort }` per executor CLI. |
 | `agents` | Team-scope agent launch config, mainly cadence for Sweep/Ops/Reflect/Communication. |
@@ -189,7 +190,7 @@ agent behavior.
 | `linearProject` / `linearProjectId` | Backend project name/id. |
 | `strategyDoc` | Strategy document reference, usually `{ "path": "docs/STRATEGY.md" }`. |
 | `testEnv` | Base URL, auth constraints, setup notes, and verification hints. |
-| `intake.mode` | `"autonomous"` (default): PM proactively reviews the product/strategy doc and files its own work. `"passive"`: PM originates nothing — it only responds to explicit `needs-pm` intake (conventions §5a); verification, unblocking, and grooming are unchanged. |
+| `intake.mode` | `"autonomous"` (default): PM proactively reviews the product/strategy doc and files its own work. `"passive"`: PM originates nothing — it only responds to explicit `needs-pm` intake (conventions §5a); verification, unblocking, and grooming are unchanged. Falls back to `team.intake` field-wise. |
 | `intake.todoDepthCap` | PM keeps committed `Todo` depth under this cap; default 10. |
 | `devSplit` | `true` uses senior-dev + junior-dev. |
 | `mode` / `autonomy` | Project overrides for team defaults. |

@@ -13,7 +13,11 @@ experience** — a real failure observed while the agents ran, then hardened int
   flow exactly as before — the knob governs origination, not the pipeline. Backend-agnostic by
   construction (the §9a label contract is the carrier on linear/service/local alike). Config is
   validated (**E12**: intake.mode + todoDepthCap), `team add-project` gains `--intake-mode`, and
-  pm dry-run scheduler lines carry an `intake=passive` marker.
+  pm dry-run scheduler lines carry an `intake=passive` marker. Settable at BOTH setup entry
+  points: `team init --intake-mode` seeds a team-wide default (`team.intake`) that projects
+  override **field-wise** (mode and todoDepthCap resolve independently, nearest wins — a project
+  tuning only its cap keeps a team-level passive), and the add-project interview asks per project.
+  The Desktop export inlines the resolved mode (no config access there).
 
 ## 1.0.0 — GA: the team/workspace model ships
 
