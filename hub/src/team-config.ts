@@ -23,6 +23,7 @@ export interface TeamBlock {
   docs?: { vision?: DocRef | null; lessons?: { mirror?: boolean } };
   autonomy?: string;
   mode?: string;
+  intake?: { mode?: "autonomous" | "passive"; todoDepthCap?: number };
   comms?: { provider: "slack" | "lark"; webhookEnv: string };
   reports?: unknown;
   agents?: Record<string, AgentLaunchConfig>;
@@ -125,6 +126,17 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   if (team.backend !== "linear" && team.backend !== "service") E("E02", "team.backend", `team.backend must be "linear" or "service" (got ${JSON.stringify(team.backend)})`);
   if (team.backend === "linear" && (typeof team.linearTeam !== "string" || !team.linearTeam.trim())) E("E09", "team.linearTeam", "backend:\"linear\" requires team.linearTeam");
 
+  // E12 — an intake block (team default or per project): mode governs PM origination (§5a).
+  const checkIntake = (raw: unknown, path: string) => {
+    const it = raw as { mode?: unknown; todoDepthCap?: unknown };
+    if (it === null || typeof it !== "object" || Array.isArray(it)) { E("E12", path, "intake must be an object"); return; }
+    if (it.mode !== undefined && it.mode !== "autonomous" && it.mode !== "passive")
+      E("E12", `${path}.mode`, `intake.mode must be "autonomous" or "passive" (got ${JSON.stringify(it.mode)})`);
+    if (it.todoDepthCap !== undefined && (typeof it.todoDepthCap !== "number" || !Number.isInteger(it.todoDepthCap) || it.todoDepthCap < 1))
+      E("E12", `${path}.todoDepthCap`, `intake.todoDepthCap must be an integer >= 1 (got ${JSON.stringify(it.todoDepthCap)})`);
+  };
+  if (team.intake !== undefined) checkIntake(team.intake, "team.intake");
+
   // E07 — comms: provider ∈ {slack,lark}; webhookEnv is an ENV-VAR NAME, never a URL literal (I5).
   if (team.comms !== undefined) {
     const c = team.comms as { provider?: unknown; webhookEnv?: unknown };
@@ -164,17 +176,7 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       if (prev) E("E10", `projects.${key}.linearProjectId`, `linearProjectId '${p.linearProjectId}' is claimed by both ${prev} and ${key}`);
       else seenLinearProjectId.set(p.linearProjectId, key);
     }
-    // E12 — intake block: mode governs PM origination (§5a); todoDepthCap is the Todo promotion cap.
-    if (p?.intake !== undefined) {
-      const it = p.intake as { mode?: unknown; todoDepthCap?: unknown };
-      if (it === null || typeof it !== "object" || Array.isArray(it)) E("E12", `projects.${key}.intake`, "intake must be an object");
-      else {
-        if (it.mode !== undefined && it.mode !== "autonomous" && it.mode !== "passive")
-          E("E12", `projects.${key}.intake.mode`, `intake.mode must be "autonomous" or "passive" (got ${JSON.stringify(it.mode)})`);
-        if (it.todoDepthCap !== undefined && (typeof it.todoDepthCap !== "number" || !Number.isInteger(it.todoDepthCap) || it.todoDepthCap < 1))
-          E("E12", `projects.${key}.intake.todoDepthCap`, `intake.todoDepthCap must be an integer >= 1 (got ${JSON.stringify(it.todoDepthCap)})`);
-      }
-    }
+    if (p?.intake !== undefined) checkIntake(p.intake, `projects.${key}.intake`);
     const refs = Array.isArray(p?.repos) ? p.repos : [];
     if (!refs.length) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);
     for (const rr of refs) {
@@ -284,6 +286,9 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
     reports: p.reports ?? t.reports,
     defaultCodingAgent: p.defaultCodingAgent ?? t.defaultCodingAgent,
     codingAgentDefaults: p.codingAgentDefaults ?? t.codingAgentDefaults,
+    // intake merges FIELD-WISE (not whole-block nearest-wins): mode and todoDepthCap are orthogonal
+    // knobs, so a project tuning only its cap must not silently drop a team-level "passive".
+    ...(p.intake || t.intake ? { intake: { ...t.intake, ...p.intake } } : {}),
   };
 }
 
@@ -364,6 +369,7 @@ export function toLegacyView(ws: Workspace): LegacyProjectsConfig {
       autonomy: eff.autonomy,
       docSystem: eff.docSystem,
       reports: eff.reports,
+      intake: eff.intake,
       agents: p.agents,
       models: p.models,
       efforts: p.efforts,

@@ -447,7 +447,10 @@ audit night no longer buries the board; it deepens the Backlog, and PM meters it
 An ordinary Backlog ticket awaiting promotion is **normal**, not stranded — Sweep's
 stranded-child rule (§21a) applies only to design children whose parent is Done.
 
-**Intake mode — `intake.mode: "autonomous" (default) | "passive"` (per project).** The knob
+**Intake mode — `intake.mode: "autonomous" (default) | "passive"`.** Set per project, or as a
+team-wide default (`team.intake`, seeded by `team init --intake-mode` / per project by
+`team add-project --intake-mode`); a project overrides the team default **field-wise** (mode
+and todoDepthCap resolve independently, nearest wins). The knob
 governs **origination**, not the pipeline. `autonomous` is everything above **plus** PM's
 proactive review (pm-agent Job C: strategy-doc direction, lens rotation, doc-watch,
 unprompted `Feature`/`Improvement` filings). Under **`passive`** PM originates nothing:

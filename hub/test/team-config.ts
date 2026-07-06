@@ -76,6 +76,28 @@ ok(normalizedRel("../x") === null && normalizedRel("/x") === null, "normalizedRe
 { const f = base(); f.projects.devplatform.intake = { todoDepthCap: 2.5 }; ok(has(f, "E12"), "E12: a fractional todoDepthCap is rejected"); }
 { const f = base(); (f.projects.devplatform as { intake?: unknown }).intake = "passive"; ok(has(f, "E12"), "E12: a non-object intake block is rejected"); }
 { const f = base(); (f.projects.devplatform as { intake?: unknown }).intake = []; ok(has(f, "E12"), "E12: an ARRAY intake block is rejected (typeof [] === 'object' must not slip through)"); }
+{ const f = base(); f.team.intake = { mode: "passive" }; ok(codes(f).length === 0, "E12: a team-level intake default is valid"); }
+{ const f = base(); f.team.intake = { mode: "directed" as "passive" }; ok(has(f, "E12"), "E12: a bad team-level intake.mode is rejected"); }
+
+// ── intake inheritance: team default → project, FIELD-WISE override (§5a) ──
+{
+  const f = base(); f.team.intake = { mode: "passive" };
+  const view = toLegacyView(mkWs(f)).projects.devplatform as { intake?: { mode?: string; todoDepthCap?: number } };
+  ok(view.intake?.mode === "passive", "a team-level intake.mode reaches the project view (nearest wins)");
+}
+{
+  const f = base(); f.team.intake = { mode: "passive" };
+  f.projects.devplatform.intake = { todoDepthCap: 5 };
+  const eff = effectiveProject(mkWs(f), "devplatform");
+  ok(eff.intake?.mode === "passive" && eff.intake?.todoDepthCap === 5,
+    "a project tuning ONLY todoDepthCap keeps the team-level passive (field-wise merge, not whole-block)");
+}
+{
+  const f = base(); f.team.intake = { mode: "passive" };
+  f.projects.devplatform.intake = { mode: "autonomous" };
+  ok(effectiveProject(mkWs(f), "devplatform").intake?.mode === "autonomous", "a project intake.mode overrides the team default");
+}
+{ const f = base(); ok(effectiveProject(mkWs(f), "devplatform").intake === undefined, "no intake anywhere → the resolved view carries none (agents default to autonomous)"); }
 
 // ── E07 comms env-name discipline (I5) ──
 { const f = base(); f.team.comms = { provider: "lark", webhookEnv: "https://hook.example/x" as string }; ok(has(f, "E07"), "E07: webhookEnv is a URL, not an env name"); }

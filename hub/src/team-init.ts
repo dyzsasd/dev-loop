@@ -32,6 +32,8 @@ Options:
   --reports files|linear|hub      report sink default (default: files)
   --mode live|dry-run             team mode default (default: dry-run for first contact)
   --autonomy full|guarded         team autonomy default (default: guarded)
+  --intake-mode autonomous|passive  team intake default (§5a; default: autonomous — passive means
+                                  PM originates nothing and only responds to explicit needs-pm intake)
   --yes                     accept defaults for anything not passed (non-interactive)
   --force                   overwrite an existing dev-loop.json (prints the diff first)`);
 }
@@ -39,7 +41,7 @@ Options:
 interface Opts {
   dir: string; key?: string; backend?: string; linearTeam?: string;
   deploy?: string; docSystem?: string; comms?: string; reports?: string;
-  mode?: string; autonomy?: string; yes: boolean; force: boolean;
+  mode?: string; autonomy?: string; intakeMode?: string; yes: boolean; force: boolean;
 }
 
 function parseArgs(argv: string[]): Opts {
@@ -58,6 +60,7 @@ function parseArgs(argv: string[]): Opts {
     else if (a === "--reports") o.reports = next();
     else if (a === "--mode") o.mode = next();
     else if (a === "--autonomy") o.autonomy = next();
+    else if (a === "--intake-mode") o.intakeMode = next();
     else if (a === "--yes") o.yes = true;
     else if (a === "--force") o.force = true;
     else die(`unknown option '${a}'`);
@@ -106,6 +109,8 @@ export function teamInit(argv = process.argv.slice(2)): number {
     docs: { vision: null, lessons: { mirror: false } },
     autonomy: o.autonomy ?? "guarded",
     mode: o.mode ?? "dry-run",
+    ...(o.intakeMode ? { intake: { mode: o.intakeMode as "autonomous" | "passive" } } : {}), // E12 validates the value below
+
     ...(parseComms(o.comms) ? { comms: parseComms(o.comms) } : {}),
     reports: { sink: o.reports ?? "files" },
     agents: { sweep: { cadence: "30m" }, ops: { cadence: "10m" }, reflect: { cadence: "1d" }, communication: { cadence: "1d" } },
