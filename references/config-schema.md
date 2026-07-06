@@ -110,6 +110,7 @@ machine, export the same env vars, run `dev-loop team repair`, then `dev-loop do
       },
 
       "intake": {
+        "mode": "autonomous",
         "todoDepthCap": 10
       },
 
@@ -188,6 +189,7 @@ agent behavior.
 | `linearProject` / `linearProjectId` | Backend project name/id. |
 | `strategyDoc` | Strategy document reference, usually `{ "path": "docs/STRATEGY.md" }`. |
 | `testEnv` | Base URL, auth constraints, setup notes, and verification hints. |
+| `intake.mode` | `"autonomous"` (default): PM proactively reviews the product/strategy doc and files its own work. `"passive"`: PM originates nothing — it only responds to explicit `needs-pm` intake (conventions §5a); verification, unblocking, and grooming are unchanged. |
 | `intake.todoDepthCap` | PM keeps committed `Todo` depth under this cap; default 10. |
 | `devSplit` | `true` uses senior-dev + junior-dev. |
 | `mode` / `autonomy` | Project overrides for team defaults. |
@@ -212,6 +214,7 @@ agent behavior.
 | `E09` | Linear backend without `linearTeam`. |
 | `E10` | Duplicate repo paths or duplicate `linearProjectId`. |
 | `E11` | Reserved/invalid project key or repo ref. |
+| `E12` | Bad `intake` block: `mode` not `"autonomous"`/`"passive"`, or `todoDepthCap` not a positive integer. |
 
 Common warnings:
 
@@ -245,13 +248,29 @@ Everything runtime-related lives under `<workspace>/.dev-loop/`:
 
 | Command | Meaning |
 |---|---|
+| `dev-loop install-claude-plugin` | Register the npm-backed Claude Code plugin marketplace and print the two interactive `/plugin` commands. |
 | `dev-loop team init` | Create a workspace. Pure CLI: no LLM and no backend calls. |
 | `dev-loop team repair` | Repair worktrees/index/WAL after a move. |
 | `dev-loop doctor` | Read-only workspace verdict. |
+| `dev-loop run` | Schedule the team from the workspace config. |
+| `dev-loop hub start|stop|status|ensure` | Manage the workspace service hub daemon; normal 1.x lifecycle for `backend:"service"`. |
 | `/dev-loop:add-project` | Coding-CLI skill that syncs backend project/labels and writes project config. |
 | `/dev-loop:add-repo` | Coding-CLI skill that clones/detects/registers repo config. |
 | `/dev-loop:sync-project` | Reconcile config vs backend project drift. |
 | `/dev-loop:sync-repo` | Re-detect repo build/deploy/remote drift. |
+
+Low-level compatibility/debugging commands such as `dev-loop daemon ...`, `seed`,
+`init-service`, `serve`, and `mcp-merge` are intentionally not the first-run path for new
+workspaces.
+
+## Troubleshooting Map
+
+| Signal | Meaning | Next step |
+|---|---|---|
+| `/dev-loop:*` commands are missing in Claude Code | The dev-loop plugin is not installed or the session has not refreshed. | Run `dev-loop install-claude-plugin`, execute the printed `/plugin` commands, then restart/refresh Claude Code. |
+| `W05` | Linear steward fires need the Linear MCP in user scope. | Configure Linear MCP in Claude Code user scope, then rerun `dev-loop doctor`. |
+| `W06` | `.dev-loop/` may be committed by accident. | Add `.dev-loop/` to the workspace repo's ignore rules. |
+| Service hub has no URL | Daemon is stopped or cwd/workspace resolution failed. | Run `dev-loop hub ensure && dev-loop hub status` from the workspace root. |
 
 ## Security Notes
 

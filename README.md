@@ -23,6 +23,13 @@ in one message a day.
 npm i -g @dyzsasd/dev-loop        # Node ≥ 23.6; installs the `dev-loop` CLI
 ```
 
+If you want the `/dev-loop:*` slash commands in Claude Code, register the npm-backed plugin
+marketplace once, then run the two `/plugin ...` commands printed by the CLI inside Claude Code:
+
+```bash
+dev-loop install-claude-plugin
+```
+
 A **workspace** is one directory = one team = one Linear team (or one local hub) = one
 `dev-loop.json`. Repos are real clones inside it; projects are virtual groupings of repos.
 All state lives under `<workspace>/.dev-loop/`, so **copying the folder migrates machines**.
@@ -33,7 +40,8 @@ dev-loop team init --dir ~/work/my-team --key my-team \
   --backend linear --linear-team "My Team" --deploy dev=auto,prod=manual --comms lark
 cd ~/work/my-team
 
-# 2. In a coding CLI (Claude Code / Codex): create + backend-sync a project, then add repos
+# 2. In Claude Code (plugin installed) or another coding CLI with the dev-loop skills available:
+#    create + backend-sync a project, then add repos
 #      /dev-loop:add-project      — find-or-creates the Linear/hub project, labels, strategy doc
 #      /dev-loop:add-repo         — clone + detect build/CI checks + deploy & ops-probe interview
 
@@ -62,6 +70,8 @@ to copy.
 ## Requirements
 
 - **Node ≥ 23.6** and a coding CLI on `PATH`: `claude` (Claude Code) and/or `codex`.
+- For Claude Code slash commands: `dev-loop install-claude-plugin`, then the printed
+  `/plugin marketplace add ...` and `/plugin install ...` commands inside Claude Code.
 - **`gh` CLI** authenticated (Dev opens/merges PRs with it).
 - A backend: **Linear** (the Linear MCP configured in Claude Code user scope) or nothing —
   the bundled **service hub** (local sqlite + web UI) needs no external service.
@@ -94,6 +104,7 @@ dev-loop run                              # everything, default cadences
 dev-loop run --agents core,ops            # pick agents/groups (core = pm,qa,senior,junior,sweep)
 dev-loop run --plan 8 --agents pm         # preview the next 8 project picks (no fires)
 dev-loop run --interval pm=2m --max-fires 50   # cadence override + cost cap
+dev-loop run --change-gate --fire-timeout 45m  # skip quiet fires + kill stuck ones
 dev-loop run --once --dry-run             # print every resolved command, launch nothing
 ```
 
@@ -104,6 +115,7 @@ first — the rows and the scheduler share one rotation cursor and never double-
 
 | Command | What it does |
 |---|---|
+| `dev-loop install-claude-plugin` | register the npm-backed Claude Code plugin marketplace and print the two `/plugin` commands |
 | `dev-loop team init / repair` | create a workspace / fix after a machine move |
 | `dev-loop team add-project / add-repo` | validated config writes (the `/dev-loop:*` skills call these) |
 | `/dev-loop:add-project` · `/dev-loop:add-repo` · `/dev-loop:sync-project` · `/dev-loop:sync-repo` | coding-CLI skills: backend sync, clone + detect, drift reconcile |
@@ -115,6 +127,10 @@ first — the rows and the scheduler share one rotation cursor and never double-
 | `dev-loop next-project --agent <a>` | the shared rotation picker for Agent-View `/loop` rows |
 | `dev-loop with-repo-lock <ref> -- <cmd>` | serialize base-clone operations on a shared repo |
 | `dev-loop export-desktop-skill <agent> --project <k> [--team]` | render a self-contained Claude Desktop skill |
+
+Low-level compatibility/debugging commands such as `dev-loop daemon ...`, `seed`, `init-service`,
+`serve`, and `mcp-merge` still exist. New 1.x workspace users should normally start from
+`team`, `hub`, and `run`.
 
 ## What you'll see day to day
 
@@ -148,11 +164,13 @@ Full role contracts and protocols: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md
 
 ## Docs
 
+- [`docs/INDEX.md`](docs/INDEX.md) — which docs are current guides vs historical design records.
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — local development, tests, build, and doc rules for contributors.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — layers, workflows, backends, safety, self-evolution.
 - [`references/conventions.md`](references/conventions.md) — the agent spec (state machine, labels, every protocol).
 - [`references/config-schema.md`](references/config-schema.md) — the `dev-loop.json` field reference.
 - [`docs/design/`](docs/design/) — design records for the 1.0 team/workspace line (proposal, engineering spec, GA checklist).
-- [`docs/RUNNING.md`](docs/RUNNING.md) · [`docs/PORTABILITY.md`](docs/PORTABILITY.md) · [`docs/HUB-ARCHITECTURE.md`](docs/HUB-ARCHITECTURE.md) · [`docs/DAEMON.md`](docs/DAEMON.md) — operational deep dives for running, portability, and the service hub.
+- [`docs/RUNNING.md`](docs/RUNNING.md) · [`docs/PORTABILITY.md`](docs/PORTABILITY.md) · [`docs/DAEMON.md`](docs/DAEMON.md) — operational deep dives for running, portability, and the service hub.
 - [`CHANGELOG.md`](CHANGELOG.md) — version history.
 
 ## Release

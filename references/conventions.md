@@ -8,6 +8,11 @@ body, this file wins — keeping the agents interoperable is the whole point. (T
 agents form the build loop; the outward agents — Ops/Architect/Communication — are
 defined in §21.)
 
+For new 1.x workspaces, `linear` and `service` are the current operator-facing backends. The
+`local` file board remains documented here because older configs and compatibility paths still map
+to it, but new operator docs should steer no-cloud users to `service` when they want a web UI,
+metrics, or per-agent identity.
+
 ## Table of contents
 0. [Prime directive — every fire is fresh](#0-prime-directive--every-fire-is-fresh)
 - [Topology at a glance](#topology-at-a-glance)
@@ -441,6 +446,25 @@ audit night no longer buries the board; it deepens the Backlog, and PM meters it
 
 An ordinary Backlog ticket awaiting promotion is **normal**, not stranded — Sweep's
 stranded-child rule (§21a) applies only to design children whose parent is Done.
+
+**Intake mode — `intake.mode: "autonomous" (default) | "passive"` (per project).** The knob
+governs **origination**, not the pipeline. `autonomous` is everything above **plus** PM's
+proactive review (pm-agent Job C: strategy-doc direction, lens rotation, doc-watch,
+unprompted `Feature`/`Improvement` filings). Under **`passive`** PM originates nothing:
+no Job C, no doc-watch trigger, no unprompted filings — the ONLY source of new product
+work is explicit intake directed at PM (§9a `needs-pm`). Responding to an explicit ask is
+NOT origination: a direction/build intake still gets its full §9a treatment, including
+scoped ideation on that ask (expanding the operator's request into concrete child
+tickets). Everything else is IDENTICAL in both modes — Job A verification, Job B
+unblocking, Job B2 grooming/promotion, and the other agents' discovery filings (QA bugs,
+Architect tech-debt, ops incidents) still flow through the Backlog funnel; quiet *those*
+with their own switches (project `enabled`/`weight`, `run --agents`), never via
+intake.mode. A passive project may run without a `strategyDoc` — the doc becomes grooming
+context, not a work trigger; when none is configured, a §9a direction ask's durable record
+is the intake ticket itself (the closing comment carries the decision + the filed child
+IDs — PM does not scaffold a doc unprompted). Backend-agnostic by construction: the
+directed-ticket carrier is the same §9a label contract (`Backlog` +
+`dev-loop`+`pm`+`needs-pm`) on linear, service, and local alike.
 
 ## 6. Ticket templates
 
@@ -888,8 +912,8 @@ On startup each skill:
    They do not guess the first configured project or `demo`; a cwd outside every configured repo
    must stop/no-op with a setup hint.
 3. Loads the resolved project view: `linearProject`, `linearTeam`, target repo path(s),
-   `strategyDoc`, `testEnv`, repo `build`/`deploy`/`git` facts, `mode`, `autonomy`, and backend
-   (`"linear"` or `"service"` in the workspace schema). Per-agent `codingAgent` / `model` / `effort` /
+   `strategyDoc`, `testEnv`, repo `build`/`deploy`/`git` facts, `mode`, `autonomy`, `intake`
+   (§5a), and backend (`"linear"` or `"service"` in the workspace schema). Per-agent `codingAgent` / `model` / `effort` /
    `cadence` may also be configured, but **`dev-loop run` applies them at process launch**; skills
    do not choose their own model mid-fire. See `config-schema.md` and `docs/RUNNING.md`.
 
@@ -2493,8 +2517,8 @@ The three capabilities (each detailed in `references/codex-integration.md`):
 `{ enabled, review, rescue, imageGen, assetsDir, model?, effort? }`. Absent ⇒ off. No
 secret lives here — Codex uses your local `codex login` auth/config (§16). Prerequisites
 (install the CLI, `codex login`, install codex-plugin-cc) are operator-present, one-time;
-`/dev-loop:init` notes the option in its readiness checklist when a `codex` block is
-present but does **not** install the vendor CLI for you.
+the 1.x workspace bootstrap records the option when a `codex` block is present but does
+**not** install the vendor CLI for you.
 
 ---
 

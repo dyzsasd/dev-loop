@@ -1,8 +1,9 @@
 # Running dev-loop on Another CLI
 
 The 1.0 workspace model is CLI-portable by design. A workspace owns the config
-(`<workspace>/dev-loop.json`) and state (`<workspace>/.dev-loop/`); Claude Code, Codex, and
-opencode are execution surfaces that can run the same agent skills against the same board.
+(`<workspace>/dev-loop.json`) and state (`<workspace>/.dev-loop/`). Claude Code and Codex are the
+documented/certified execution surfaces today; opencode follows the same contract but should be
+identity-gated on the installed version before unattended use.
 
 For unattended operation, prefer the built-in scheduler:
 

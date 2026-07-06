@@ -52,6 +52,7 @@ export interface ProjectEntry {
   syncedAt?: string;
   strategyDoc?: DocRef;
   testEnv?: { baseUrl?: string; authConstraint?: string };
+  intake?: { mode?: "autonomous" | "passive"; todoDepthCap?: number };
   devSplit?: boolean;
   blockedStateName?: string | null;   // a real Linear "Blocked" column name; null → the `blocked` label park (§9)
   notify?: unknown;                   // v1-era per-project notify block (passthrough; team.comms is canonical on v2)
@@ -107,7 +108,7 @@ export function normalizedRel(p: string | undefined): string | null {
   return out.length ? out.join("/") : null;
 }
 
-// ─── Validation (E01–E11 + W01–W04) ───────────────────────────────────────────
+// ─── Validation (E01–E12 + W01–W04) ───────────────────────────────────────────
 export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: WsWarning[] } {
   const errors: WsError[] = [];
   const warnings: WsWarning[] = [];
@@ -162,6 +163,17 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       const prev = seenLinearProjectId.get(p.linearProjectId);
       if (prev) E("E10", `projects.${key}.linearProjectId`, `linearProjectId '${p.linearProjectId}' is claimed by both ${prev} and ${key}`);
       else seenLinearProjectId.set(p.linearProjectId, key);
+    }
+    // E12 — intake block: mode governs PM origination (§5a); todoDepthCap is the Todo promotion cap.
+    if (p?.intake !== undefined) {
+      const it = p.intake as { mode?: unknown; todoDepthCap?: unknown };
+      if (it === null || typeof it !== "object" || Array.isArray(it)) E("E12", `projects.${key}.intake`, "intake must be an object");
+      else {
+        if (it.mode !== undefined && it.mode !== "autonomous" && it.mode !== "passive")
+          E("E12", `projects.${key}.intake.mode`, `intake.mode must be "autonomous" or "passive" (got ${JSON.stringify(it.mode)})`);
+        if (it.todoDepthCap !== undefined && (typeof it.todoDepthCap !== "number" || !Number.isInteger(it.todoDepthCap) || it.todoDepthCap < 1))
+          E("E12", `projects.${key}.intake.todoDepthCap`, `intake.todoDepthCap must be an integer >= 1 (got ${JSON.stringify(it.todoDepthCap)})`);
+      }
     }
     const refs = Array.isArray(p?.repos) ? p.repos : [];
     if (!refs.length) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);

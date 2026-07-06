@@ -77,7 +77,7 @@ Usage: dev-loop <command> [args]
   version | help
 
 Identity rides DEVLOOP_ACTOR (per pane); project DEVLOOP_PROJECT (or the cwd); db DEVLOOP_HUB_DB.
-Docs: https://github.com/dyzsasd/dev-loop  (docs/RUNNING.md, docs/PORTABILITY.md, docs/HUB-ARCHITECTURE.md)`);
+Docs: https://github.com/dyzsasd/dev-loop  (docs/INDEX.md, docs/RUNNING.md, docs/PORTABILITY.md, docs/DAEMON.md)`);
 };
 
 if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { usage(); process.exit(0); }

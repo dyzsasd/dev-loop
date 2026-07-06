@@ -9,7 +9,7 @@ node_modules/
 # literal path and drops a stray `${HOME` dir into the tree (note the db files there end in `}`, so the
 # *.db rules above miss them). The real fix removed the nested default from the templates; this is
 # belt-and-suspenders so such a stray — any ${...}-literal path — can never be committed.
-${*
+$\{*
 # hub daemon lifecycle runfile + log (DL-41/DL-47) + cold-start lock (DL-46): machine-local pid/port/startup
 # lines, never committed (defaults to ~/.dev-loop, but covered here in case an operator points
 # DEVLOOP_RUN_DIR/DEVLOOP_HUB_DB into the repo — the .log is created by daemonUp() in the same lcRunDir())

@@ -28,7 +28,20 @@ when steward agents cannot reach the board.
 the hub. Project/repo onboarding runs from a coding CLI because it may inspect code, create
 backend objects, and interview you about build/deploy details.
 
-In Claude Code or Codex:
+First make the dev-loop skills available in the coding CLI you will use for onboarding. In
+Claude Code, install the npm-backed plugin marketplace once:
+
+```bash
+dev-loop install-claude-plugin
+```
+
+The command prints two interactive `/plugin ...` commands. Run those inside Claude Code, then
+restart or refresh the session so `/dev-loop:*` commands are visible. Codex can run scheduled
+agent fires through `dev-loop run --cli codex`; for operator-present onboarding, use an environment
+where the same dev-loop skills are available, or call the validated `dev-loop team add-project` /
+`dev-loop team add-repo` mutators directly after doing the backend sync yourself.
+
+In the coding CLI:
 
 ```text
 /dev-loop:add-project
@@ -80,6 +93,8 @@ dev-loop run --agents core,ops
 dev-loop run --project devplatform --agents pm,qa
 dev-loop run --plan 8 --agents pm
 dev-loop run --interval pm=2m --max-fires 50
+dev-loop run --change-gate --fire-timeout 45m
+dev-loop run --stagger 30s
 dev-loop run --once --dry-run
 ```
 
@@ -90,6 +105,16 @@ Agent groups:
 | `core` | `pm`, `qa`, `senior-dev`, `junior-dev`, `sweep` |
 | `outward` | `ops`, `architect`, `communication` |
 | `legacy` | the old single `dev` agent, only for projects that explicitly opt out of split Dev |
+
+Long-running options:
+
+| Option | Use |
+|---|---|
+| `--change-gate` | On `service`, skip spawning inward agents when neither the board nor repo HEAD changed since their last fire. This saves the most tokens on quiet teams. |
+| `--fire-timeout <dur>` | Kill a stuck fire; default is `1h`, and `0` disables the timeout. |
+| `--stagger <dur>` | Delay initial slots so a cold start does not launch every agent at once. |
+| `--max-fires <n>` | Stop after a fixed number of fires, useful for trial runs and budget caps. |
+| `--codex-safe` | For attended Codex runs, omit unsafe bypass flags so tool calls can ask for approval. |
 
 ## 5. Agent View
 
@@ -170,8 +195,13 @@ dev-loop hub ensure
 ```
 
 The hub stores its SQLite database under `<workspace>/.dev-loop/hub.db`. The web UI is localhost
-only and read-first; human write routes are opt-in. See [`DAEMON.md`](DAEMON.md) and
-[`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md) for the HTTP surface and storage model.
+only and read-first; human write routes are opt-in.
+
+`dev-loop hub start|stop|status|ensure` is the normal 1.x workspace lifecycle. The older
+`dev-loop daemon ...`, `seed`, and `init-service` commands are still present for compatibility and
+low-level debugging; do not start there for a new workspace. See [`DAEMON.md`](DAEMON.md) for the
+HTTP surface and raw daemon lifecycle, and [`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md) for the
+historical storage rationale.
 
 ## 8. Moving a Workspace
 
@@ -212,3 +242,13 @@ Reports may also go to Linear docs when `reports.sink:"linear"` is configured.
 - For service teams, run `dev-loop hub stop` before copying the workspace or doing maintenance.
 - `dev-loop doctor` remains read-only. Use `dev-loop team repair` for post-move repair work such as
   worktree repair, index rebuilds, and WAL checkpointing.
+
+## 11. Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `/dev-loop:add-project` is not available in Claude Code | The plugin marketplace is not installed or the session has not refreshed. | Run `dev-loop install-claude-plugin`, execute the printed `/plugin` commands in Claude Code, then restart/refresh Claude Code. |
+| `doctor` reports `W05` on a Linear team | Steward agents run from the workspace root, where repo-level MCP config may not apply. | Configure the Linear MCP in Claude Code user scope. |
+| A service workspace has no web UI URL | The workspace hub daemon is stopped or the cwd does not resolve to the workspace. | Run `dev-loop hub ensure` and then `dev-loop hub status` from the workspace. |
+| A copied workspace opens the wrong state | Absolute worktree paths or the workspace index still point at the old machine. | Run `dev-loop team repair`, then `dev-loop doctor`. |
+| A quiet loop still spends tokens | Agents are firing just to discover no work moved. | Use `dev-loop run --change-gate` on `backend:"service"` teams. |

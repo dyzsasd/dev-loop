@@ -95,5 +95,20 @@ for (const tree of ["skills", "references"]) {
   ok(diff === "", `hub/${tree} build copy is byte-identical to ${tree}/ ${diff ? `(${diff} — run \`npm run build\`)` : ""}`);
 }
 
+// ── 6. Ignore-file patterns must stay parseable by common repo search tools ───────────────────────
+// DL-44's literal-${...} guard originally used `${*`, which git accepts but ripgrep parses as an
+// unclosed alternate group. New developers commonly start with `rg --files`; this catches that
+// exact regression class without depending on ripgrep being installed in CI.
+const gitignore = read(join(repoRoot, ".gitignore"));
+ok(!/^\$\{\*$/m.test(gitignore), ".gitignore does not contain the invalid ripgrep glob `${*`");
+ok(/^\$\\\{\*$/m.test(gitignore), ".gitignore keeps the literal-${...} guard with an escaped `{`");
+
+// ── 7. Public CLI help should point new users at current docs, not historical design records ──────
+const cliSource = read(join(hubRoot, "src", "cli.ts"));
+ok(/docs\/INDEX\.md, docs\/RUNNING\.md, docs\/PORTABILITY\.md, docs\/DAEMON\.md/.test(cliSource),
+  "CLI help points at the current documentation entrypoints");
+ok(!/Docs:[^\n]*docs\/HUB-ARCHITECTURE\.md/.test(cliSource),
+  "CLI help does not promote HUB-ARCHITECTURE.md as a first-run guide");
+
 console.log(fails === 0 ? "\nCONSISTENCY_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

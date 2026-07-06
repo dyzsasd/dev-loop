@@ -7,6 +7,11 @@
 > (DL-10), an activity view (DL-17), board filters/swimlanes (DL-20/DL-31), and an **opt-in,
 > off-by-default human web-write** path for tickets (DL-29). It is **not** a new coordinator
 > (strategyDoc Decisions log, 2026-06-23).
+>
+> **1.x workspace note:** for normal operation, manage this daemon with
+> `dev-loop hub start|stop|status|ensure` from a workspace. The raw `dev-loop daemon ...`,
+> `seed`, and `init-service` commands still exist for compatibility and low-level debugging, but
+> they are not the recommended starting point for a new workspace.
 
 ## What it is
 
@@ -41,8 +46,22 @@ read connection.
 
 ## Running it
 
+Normal workspace lifecycle:
+
 ```sh
-DEVLOOP_PROJECT=<project-key> DEVLOOP_HUB_DB="$HOME/.dev-loop/hub.db" dev-loop daemon up
+cd <workspace>
+dev-loop hub ensure
+dev-loop hub status
+```
+
+For `backend:"service"`, `dev-loop run` calls `hub ensure` automatically. `dev-loop hub stop`
+performs the WAL checkpoint you want before copying a workspace to another machine.
+
+Raw daemon lifecycle, mainly for compatibility/debugging:
+
+```sh
+DEVLOOP_WORKSPACE=<workspace> DEVLOOP_PROJECT=<project-key> \
+  DEVLOOP_HUB_DB="<workspace>/.dev-loop/hub.db" dev-loop daemon up
 # → [daemon] up: started '<project-key>' → http://127.0.0.1:<port>
 ```
 
@@ -51,18 +70,21 @@ Environment (same contract as the MCP server, `docs/RUNNING.md`):
 | Var | Meaning | Default |
 |---|---|---|
 | `DEVLOOP_PROJECT` | the project to serve (must already exist). Optional only when the command's cwd is inside a configured `repoPath` / `repos[].path`; otherwise unresolved/no-op. | unset |
-| `DEVLOOP_HUB_DB` | path to the hub SQLite db | `~/.dev-loop/hub.db` |
+| `DEVLOOP_WORKSPACE` | workspace root; preferred in 1.x launchers | unset |
+| `DEVLOOP_HUB_DB` | path to the hub SQLite db | `<workspace>/.dev-loop/hub.db` when a workspace resolves; otherwise `~/.dev-loop/hub.db` compatibility default |
 | `DEVLOOP_DAEMON_PORT` | listen port; also forces `daemon up`'s port when set | `8787` |
 | `DEVLOOP_ACTOR` | identity that **attributes** daemon writes and gates roadmap **publish** (only `operator` may publish; any other known actor gets drafts only). Must be a known actor or the daemon refuses to start the write surface. | `operator` |
-| `DEVLOOP_RUN_DIR` | dir for the `daemon up` runfile + log (DL-41) | the hub DB's dir (`~/.dev-loop`) |
+| `DEVLOOP_RUN_DIR` | dir for the raw `daemon up` runfile + log (DL-41) | the hub DB's dir |
 
-The daemon refuses to serve a project that hasn't been seeded (`dev-loop init-service <key> "<name>"
-<PREFIX>` or `dev-loop seed <key> "<name>" <PREFIX>`) — it never auto-creates a board.
+The raw daemon refuses to serve a project that has not been seeded. In the 1.x workspace flow,
+`/dev-loop:add-project` performs that backend sync before writing project config. The lower-level
+`dev-loop seed <key> "<name>" <PREFIX>` and `dev-loop init-service ...` commands are compatibility
+tools for tests and debugging.
 
-### Managed lifecycle — `daemon up | up-all | down | status`
+### Raw lifecycle — `daemon up | up-all | down | status`
 
-For a hands-off / auto-started web UI, the daemon has an **idempotent per-project lifecycle**
-(additive — `npm run daemon`, the foreground boot above, is unchanged):
+For compatibility/debugging, the daemon also has an **idempotent per-project lifecycle**
+(additive — the workspace `dev-loop hub ...` wrapper is the normal 1.x entry):
 
 ```sh
 DEVLOOP_PROJECT=<project-key> dev-loop daemon up         # `ensure` is an alias for `up`
