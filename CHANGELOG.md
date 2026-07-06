@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.1.0
 
 - **feat(pm): passive intake mode (§5a).** New per-project `intake.mode: "autonomous" (default) |
   "passive"`. Under `passive` PM originates NO work of its own — the preflight lens/SHA/doc-watch
