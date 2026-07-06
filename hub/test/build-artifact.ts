@@ -9,7 +9,7 @@
 // suite (a) builds dist/, (b) smoke-runs the compiled bins, and (c) exercises those two entry points from a dist/
 // COPY in an installed-like layout (no repo config/ sibling — the exact `npm i -g dev-loop` shape).
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -22,7 +22,9 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 // Run a subprocess from hubRoot; capture status + stdout + merged out. NEVER throws — a non-zero exit is data the
 // test asserts on (spawnSync, unlike execFileSync, returns the status instead of throwing on a non-zero exit).
 const run = (cmd: string, args: string[], env: Record<string, string> = {}): { code: number; out: string; stdout: string } => {
-  const r = spawnSync(cmd, args, { cwd: hubRoot, encoding: "utf8", env: { ...process.env, ...env } });
+  // DEVLOOP_HOME isolates EVERY subprocess: the compiled `team init` below self-registers the workspace
+  // index, and without this it wrote ba-team → a deleted tmp dir into the REAL ~/.dev-loop/workspaces.json.
+  const r = spawnSync(cmd, args, { cwd: hubRoot, encoding: "utf8", env: { ...process.env, DEVLOOP_HOME: join(tmp, "home"), ...env } });
   return { code: r.status ?? 1, out: (r.stdout ?? "") + (r.stderr ?? ""), stdout: r.stdout ?? "" };
 };
 
@@ -97,6 +99,10 @@ try {
   const instTeam = run(process.execPath, [instCli, "team", "init", "--dir", wsDir, "--key", "ba-team", "--backend", "linear", "--linear-team", "L"]);
   ok(instTeam.code === 0 && existsSync(join(wsDir, "dev-loop.json")),
     "installed cli.js team init → writes a schema-v2 dev-loop.json workspace");
+  // Regression: init's index self-registration must land in DEVLOOP_HOME, not the real ~/.dev-loop.
+  const baIdx = join(tmp, "home", "workspaces.json");
+  const baHome = existsSync(baIdx) ? JSON.parse(readFileSync(baIdx, "utf8")) as Record<string, string> : {};
+  ok([wsDir, realpathSync(wsDir)].includes(baHome["ba-team"]), "team init registered the workspace index inside DEVLOOP_HOME (no real ~/.dev-loop pollution)");
   const mktDir = join(tmp, "claude-marketplace");
   const instClaudePlugin = run(process.execPath, [instCli, "install-claude-plugin", "--dest", mktDir]);
   const mktFile = join(mktDir, ".claude-plugin", "marketplace.json");
