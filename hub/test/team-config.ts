@@ -68,6 +68,15 @@ ok(normalizedRel("../x") === null && normalizedRel("/x") === null, "normalizedRe
 { const f = base(); f.repos.portal.deploy!.environments!.prod.auto = true; ok(has(f, "E06"), "E06: auto-deploy prod under manual ceiling"); }
 { const f = base(); f.team.deployPolicy = { dev: "manual" }; f.repos.portal.deploy!.environments!.dev.auto = true; ok(has(f, "E06"), "E06: dev ceiling manual + auto:true"); }
 
+// ── E12 intake block (mode governs PM origination, §5a) ──
+{ const f = base(); f.projects.devplatform.intake = { mode: "passive" }; ok(codes(f).length === 0, "E12: intake.mode 'passive' is valid"); }
+{ const f = base(); f.projects.devplatform.intake = { mode: "autonomous", todoDepthCap: 5 }; ok(codes(f).length === 0, "E12: intake.mode 'autonomous' + a positive todoDepthCap is valid"); }
+{ const f = base(); f.projects.devplatform.intake = { mode: "directed" as "passive" }; ok(has(f, "E12"), "E12: an unknown intake.mode is rejected"); }
+{ const f = base(); f.projects.devplatform.intake = { todoDepthCap: 0 }; ok(has(f, "E12"), "E12: todoDepthCap 0 is rejected (must be >= 1)"); }
+{ const f = base(); f.projects.devplatform.intake = { todoDepthCap: 2.5 }; ok(has(f, "E12"), "E12: a fractional todoDepthCap is rejected"); }
+{ const f = base(); (f.projects.devplatform as { intake?: unknown }).intake = "passive"; ok(has(f, "E12"), "E12: a non-object intake block is rejected"); }
+{ const f = base(); (f.projects.devplatform as { intake?: unknown }).intake = []; ok(has(f, "E12"), "E12: an ARRAY intake block is rejected (typeof [] === 'object' must not slip through)"); }
+
 // ── E07 comms env-name discipline (I5) ──
 { const f = base(); f.team.comms = { provider: "lark", webhookEnv: "https://hook.example/x" as string }; ok(has(f, "E07"), "E07: webhookEnv is a URL, not an env name"); }
 { const f = base(); f.team.comms = { provider: "teams" as "slack", webhookEnv: "DEVLOOP_COMMS_WEBHOOK" }; ok(has(f, "E07"), "E07: bad provider"); }

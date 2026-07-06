@@ -27,6 +27,10 @@ to `dev-loop team init` first and stop. Read `references/conventions.md` §20/§
 - **linearProject / hub project name:** the human name in the backend.
 - **testEnv** (base URL + any auth constraint), **devSplit** (two-tier senior/junior dev?),
   optional per-agent launch overrides.
+- **intake.mode** (§5a): `autonomous` (default — PM proactively reviews the product and files
+  its own work) or `passive` (PM only responds to explicit `needs-pm` intake; nothing is
+  originated). Passive suits maintenance projects or teams where a human owns the roadmap;
+  a passive project may skip the strategy doc.
 - **blockedStateName** — did the operator add a real "Blocked" column in Linear? Record its
   name; else leave null (the `blocked` label park applies). Do not skip silently.
 - **comms** — confirm `team.comms` is set (or explicitly declined); without it human-park
@@ -53,7 +57,8 @@ Scaffold the project strategy doc with the §20 headings (Vision / Goals / Non-g
 
 ```
 dev-loop team add-project <key> [--linear-project "<name>"] [--linear-project-id <id>] \
-  [--test-url <url>] [--dev-split] [--weight <n>] [--enabled true|false]
+  [--test-url <url>] [--dev-split] [--weight <n>] [--enabled true|false] \
+  [--intake-mode autonomous|passive]
 ```
 
 The mutator re-validates the whole `dev-loop.json` and refuses an invalid result. It writes the

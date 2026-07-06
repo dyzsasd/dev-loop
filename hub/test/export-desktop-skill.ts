@@ -38,5 +38,19 @@ ok(/dev\.example\.com/.test(md) && /landing.*:.*pr/.test(md), "inlines the proje
 const noProj = spawnSync(process.execPath, [src, "qa"], { encoding: "utf8" });
 ok(noProj.status === 2 && /--project/.test(noProj.stderr ?? ""), "missing --project exits 2 with usage");
 
+// A passive-intake project must carry its mode into the export — Desktop has no config access,
+// so an un-inlined intake.mode would let an exported PM originate work the config forbids (§5a).
+writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { demo: {
+  backend: "linear", mode: "live", linearTeam: "T", linearProject: "P",
+  intake: { mode: "passive" },
+  testEnv: { baseUrl: "https://dev.example.com" },
+} } }));
+const rp = spawnSync(process.execPath, [src, "pm", "--project", "demo", "--out", out], {
+  encoding: "utf8",
+  env: { ...process.env, DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+});
+const pmMd = rp.status === 0 ? readFileSync(join(out, "devloop-pm-demo", "SKILL.md"), "utf8") : "";
+ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.test(pmMd), "a passive project's export inlines intake.mode + the §5a posture");
+
 console.log(fails === 0 ? "\nEXPORT_DESKTOP_SKILL_OK" : `\n${fails} FAILED — run: node hub/src/export-desktop-skill.ts <agent> --project <key>`);
 process.exit(fails === 0 ? 0 : 1);

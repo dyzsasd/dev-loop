@@ -18,7 +18,7 @@
 # OPT-IN daemon transport (DL-55): a 100% `serve` drop-in — the shim proxies ALL 23 server.ts tools
 # through the ONE running daemon's loopback op-API instead of opening hub.db directly (identity rides
 # env → X-Devloop-Actor header); change args to ["shim"] (from ["serve"]).
-# REQUIRES the per-project daemon up (DL-42 auto-start or `dev-loop daemon up`) + settings_json.hub.transport=
+# REQUIRES the workspace hub daemon up (DL-42 auto-start, `dev-loop hub ensure`, or raw `dev-loop daemon up` for debugging) + settings_json.hub.transport=
 # "daemon" (DL-43). The shim discovers the loopback port from the DL-41 runfile `~/.dev-loop/daemon-<key>.json`
 # (override with DEVLOOP_HUB_PORT) — never hardcodes 8787.
 [mcp_servers.dev-loop-hub]

@@ -1,6 +1,8 @@
 # dev-loop — Strategy
 
-> PM's north star. Seeded by `/dev-loop:init` on 2026-06-23 (operator-present setup).
+> PM's north star. Historically seeded by the pre-1.0 `/dev-loop:init` on 2026-06-23
+> (operator-present setup); current workspaces use `dev-loop team init` +
+> `/dev-loop:add-project` + `/dev-loop:add-repo`.
 > `Current state` was seeded once from a read-only code map; `Vision` / `Goals` /
 > `Non-goals` / `Personas` come from the operator interview. PM owns this doc thereafter
 > (append-only — record shipped progress and new direction here so it stays a living

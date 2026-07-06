@@ -96,6 +96,17 @@ try {
   const deliveryDry = runAgents(["--agents", "pm", "--once", "--dry-run"], ws);
   ok(/pm: cwd=\S+\/(ra|rb) /.test(deliveryDry.out), "a delivery agent (pm) fires with cwd = a project repo (rotation)");
 
+  // ── intake.mode:"passive" is surfaced on pm dry-run lines (§5a) ──
+  {
+    const c = JSON.parse(readFileSync(cfgPath, "utf8"));
+    c.projects.alpha.intake = { mode: "passive" };
+    writeFileSync(cfgPath, JSON.stringify(c, null, 2));
+    const passiveDry = runAgents(["--agents", "pm", "--project", "alpha", "--once", "--dry-run"], ws);
+    ok(/pm: cwd=\S+ .* intake=passive/.test(passiveDry.out), "a pm dry-run fire on a passive project carries the intake=passive marker");
+    delete c.projects.alpha.intake;
+    writeFileSync(cfgPath, JSON.stringify(c, null, 2));
+  }
+
   // ── team run lock: a live holder blocks a second scheduler ──
   const lockPath = join(ws, ".dev-loop", "locks", "run.lock");
   mkdirSync(dirname(lockPath), { recursive: true });

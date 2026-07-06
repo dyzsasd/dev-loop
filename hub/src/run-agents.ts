@@ -698,7 +698,8 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   delete env.CLAUDE_CODE_EFFORT_LEVEL;
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
-    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}`);
+    const intakeMode = (cfg?.projects?.[project] as { intake?: { mode?: string } } | undefined)?.intake?.mode;
+    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
     return 0;
   }

@@ -8,15 +8,18 @@
 
 ## What it is
 
-dev-loop is a **Claude Code plugin** made of role-specialized agents: Product Manager, QA,
-Developer(s), and a few coordinators. Together with a small set of conventions, they can run a
+dev-loop is a **standalone npm package plus optional coding-CLI plugins/skills** made of
+role-specialized agents: Product Manager, QA, Developer(s), and a few coordinators. Together
+with a small set of conventions, they can run a
 complete software-development lifecycle **without a human in the inner loop**. You provide the
 product, the strategy doc, and the autonomy settings; the loop turns that into shipped,
 verified increments and records what it learned.
 
-It is deliberately **substrate-agnostic**. Coordination can run through **Linear** by default,
-a **machine-local file board**, or a **local hub**: an MCP system of record over `node:sqlite`
-with per-agent identity and a localhost web UI. The agents and protocols stay the same.
+It is deliberately **substrate-agnostic**. New 1.x workspaces normally coordinate through
+**Linear** or the bundled **service hub**: an MCP system of record over `node:sqlite` with
+per-agent identity and a localhost web UI. The legacy machine-local file board is still
+described in [`references/conventions.md`](../references/conventions.md) for compatibility, but
+it is not the recommended path for new workspaces. The agents and protocols stay the same.
 
 Three rules stay true everywhere:
 - **The board is the channel** — agents hand work off through ticket state, not direct calls.
@@ -31,15 +34,16 @@ Three rules stay true everywhere:
 dev-loop is three layers; the `npm i -g @dyzsasd/dev-loop` package ships all three:
 
 1. **Interface — the `dev-loop` CLI + the MCP.** The operation surface. The `dev-loop` command
-   (`serve` · `run` · `daemon` · `doctor` · `init-service` · `mcp-merge` · `seed` · …) is how *you*
-   drive setup and scheduling; the `dev-loop-hub` **MCP** server is how the *agents* read and write.
-   Both are thin clients over the hub.
+   (`team` · `run` · `hub` · `doctor` · `metrics` · `notify` · …) is how *you* drive setup and
+   scheduling; the `dev-loop-hub` **MCP** server is how the *agents* read and write. Low-level
+   commands such as `serve`, `daemon`, `seed`, `init-service`, and `mcp-merge` remain available for
+   compatibility/debugging, but the 1.x operator path starts with `team init`.
 2. **Hub — the backend service.** A local system-of-record over `node:sqlite` (the `service`
    backend) that powers the **ticket system** and the **document system** (strategy/roadmap/design,
    versioned), and maintains the **per-project namespace** — each project's board, actors, and docs
    are isolated. It runs as a localhost daemon with a read-only web UI. *(Linear or a machine-local
-   file board are alternative ticket backends; the hub is the one that adds per-agent identity, the
-   doc system, and the namespace.)*
+   file board are alternative ticket backends in the shared conventions; the hub is the one that
+   adds per-agent identity, the doc system, and the namespace.)*
 3. **Agents — skills + plugin + scheduler.** The role-specialized agents are a set of **SKILLs**
    (packaged as the Claude **plugin**) plus the **scheduler** (`dev-loop run`). You normally start
    the loop with the `dev-loop run` scheduler; Claude Code Agent View can also run the installed
@@ -99,11 +103,13 @@ pair by default. Use `--agents legacy` only for the old single-Dev loop.
 | **`architect-agent`** | Whole-codebase **tech-health auditor** (slow, daily-ish). Audits a **rotating** dimension (drift / duplication / dead code / dep-staleness + CVEs / consistency / missing abstractions), SHA-gated, and files `tech-debt` Improvements. Read-only on code — never implements. |
 | **`communication-agent`** | The PR/media lead. Reads strategy, roadmap, shipped work, and public-safe product facts, then drafts one public-facing product article per cadence (daily by default). Draft-only: never publishes externally, never commits/pushes/deploys, never verifies. Can run from Codex with `DEVLOOP_ACTOR=communication`. |
 
-### Setup — not a loop agent
+### Setup — not loop agents
 
 | Command | What it does |
 |---|---|
-| **`/dev-loop:init`** | One-time, idempotent, operator-present setup. Runs **DETECT → MAP → ASSEMBLE → LOAD**: detect the project shape (greenfield / brownfield / adopting; single- or multi-repo), read-only-map a brownfield codebase into the PM doc-base, gather config, ensure labels + the project, scaffold the strategy doc + runtime files, optionally adopt named human tickets (per-ticket confirmation), and print a readiness checklist. Never files tickets, verifies, or ships. |
+| **`dev-loop team init`** | Pure CLI workspace creation. Writes `dev-loop.json` and workspace state scaffolding; does not call an LLM and does not touch Linear/the hub. |
+| **`/dev-loop:add-project`** | Operator-present coding-CLI skill. Finds or creates the backend project, ensures labels, scaffolds the strategy doc, interviews project settings, and writes the validated project config. |
+| **`/dev-loop:add-repo`** | Operator-present coding-CLI skill. Clones/registers a repo, detects build/CI/deploy/health facts, appends current-state notes, and writes the validated repo config. |
 
 ---
 
@@ -118,7 +124,7 @@ order → `In Progress` → ships → `In Review` → the **owner** verifies (PM
 a Bug). **Pass → `Done`. Fail → close + file a follow-up** (a failed increment is *superseded,
 never silently reopened*, so history shows what shipped-but-failed vs what's queued).
 
-### 2. Two-tier Dev — design-and-delegate *(opt-in)*
+### 2. Two-tier Dev — design-and-delegate *(default)*
 For a **new module or feature**, PM routes the ticket to **senior-dev**. Senior authors a
 living **design doc**, decomposes it into concrete child tickets **staged in `Backlog`**
 (unpickable), each carrying a `Design:` pointer, and moves the design parent → `In Review`.
@@ -133,10 +139,11 @@ Bug) cancels it and files a **senior-dev direct-code** follow-up; senior codes i
 the senior fix *also* fails → `fix-exhausted` → **`Human-Blocked`** (you). The cheap tier
 tries first; the expensive tier is the safety net; you are the terminal.
 
-### 4. Onboarding — `init` (DETECT → MAP → ASSEMBLE → LOAD)
-Wire a product into the loop once: detect its shape, map a brownfield codebase into the PM
-doc-base (or interview a greenfield one), provision labels/project, scaffold the strategy doc
-+ runtime files, and print a readiness checklist — before you flip `mode:"live"`.
+### 4. Onboarding — workspace → project → repos
+Wire a product into the loop once: create the workspace with `dev-loop team init`, then run
+`/dev-loop:add-project` and `/dev-loop:add-repo` from a coding CLI with the dev-loop skills
+available. The skills inspect the code, provision labels/project, scaffold the strategy doc,
+record build/deploy/probe facts, and end with `dev-loop doctor` before you launch `dev-loop run`.
 
 ### 5. Self-evolution — report → 点评 → lesson → behavior
 Every agent writes reports; Reflect distills recurring patterns into `lessons.md`; you drop a
@@ -161,9 +168,9 @@ split-brain enforced — Linear is never read back as truth). Run the loop on th
 watch it in Linear.
 
 ### 9. Observe — the localhost web UI *(hub backend)*
-A persistent localhost daemon serves a read-only board, ticket detail, the roadmap editor,
+A persistent localhost daemon serves a read-mostly board, ticket detail, the roadmap editor,
 reports, and an activity/throughput view over the same SoR — so you *watch* the loop without
-touching it. The agents stay daemon-free (they coordinate through MCP, not the web UI).
+touching it. Agents coordinate through MCP/the op API, not through the human web UI.
 
 ---
 
@@ -200,13 +207,15 @@ work at a higher rate.
 
 ## Backends
 
-Coordination is pluggable; the agents and protocols are identical across all three.
+Coordination is pluggable; the agents and protocols are identical across the current 1.x
+operator-facing backends. The legacy `local` file board is kept in the conventions for
+compatibility and historical context.
 
 | Backend | What it is | Gives you |
 |---|---|---|
 | **`linear`** *(default)* | Coordinate through the Linear MCP | Cloud, team-visible, the Linear app as UI |
-| **`local`** | A machine-local markdown file board in the data dir | Zero-cloud, minimal, no Linear required |
 | **`service`** | A local **hub** — an MCP system-of-record over `node:sqlite` | **Real per-agent identity**, a localhost **web UI**, versioned operator-published docs, the one-way Linear mirror, CLI-portability |
+| **`local`** *(legacy compatibility)* | A machine-local markdown file board in the data dir | Zero-cloud, minimal, no web UI/identity; not recommended for new workspaces |
 
 The **work plane** (states, transitions, responsibilities, and the agent loop) is identical
 across backends. The **surface plane** (per-agent identity, web UI) expands by
@@ -251,7 +260,7 @@ model.
 
 You steer the loop by reviewing its trail, not by editing code inside the loop.
 - **Reports.** Each agent writes a daily log rolled up weekly/monthly under
-  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/` — machine-local, never committed,
+  `<workspace>/.dev-loop/<project-key>/reports/<agent>/` — machine-local, never committed,
   secret/PII-safe. A no-op fire writes nothing.
 - **点评.** Drop a sibling `<report>.review.md` with free-form prose; at its next run the
   agent distills your critique into one `lessons.md` rule under its own section and obeys it

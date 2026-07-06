@@ -80,8 +80,9 @@ const j = (v: unknown): string => (v === undefined || v === null ? "—" : typeo
 const g = (p as { git?: Record<string, unknown> }).git ?? {};
 const te = (p as { testEnv?: Record<string, unknown> }).testEnv ?? {};
 const rep = (p as { reports?: Record<string, unknown> }).reports ?? {};
+const intake = (p as { intake?: { mode?: string } }).intake ?? {};
 const facts = [
-  `- **backend**: ${j(p.backend ?? "linear")}  ·  **mode**: ${j(p.mode)}  ·  **autonomy**: ${j(p.autonomy)}  ·  **devSplit**: ${j(p.devSplit)}`,
+  `- **backend**: ${j(p.backend ?? "linear")}  ·  **mode**: ${j(p.mode)}  ·  **autonomy**: ${j(p.autonomy)}  ·  **devSplit**: ${j(p.devSplit)}${intake.mode ? `  ·  **intake.mode**: ${j(intake.mode)}${intake.mode === "passive" ? " (§5a — originate NOTHING; respond to explicit needs-pm intake only)" : ""}` : ""}`,
   `- **Linear**: team ${j(p.linearTeam)} · project ${j(p.linearProject)} · firewall label \`dev-loop\` (scope EVERY query to it + the project)`,
   `- **test env**: ${j(te.baseUrl)}${te.testCommand ? ` · testCommand ${j(te.testCommand)}` : ""}`,
   te.notes ? `- **test-env notes**: ${j(te.notes)}` : "",

@@ -24,7 +24,7 @@ function mutate(apply: (file: TeamFile, ws: Workspace) => void): Workspace {
 // ── add-project ───────────────────────────────────────────────────────────────
 export function addProject(argv: string[]): number {
   const [key, ...rest] = argv;
-  if (!key || key.startsWith("--")) die("usage: dev-loop team add-project <key> [--linear-project <name>] [--linear-project-id <id>] [--test-url <url>] [--dev-split] [--weight <n>] [--enabled true|false]");
+  if (!key || key.startsWith("--")) die("usage: dev-loop team add-project <key> [--linear-project <name>] [--linear-project-id <id>] [--test-url <url>] [--dev-split] [--weight <n>] [--enabled true|false] [--intake-mode autonomous|passive]");
   const o: Record<string, string | boolean> = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]; const next = () => rest[++i] ?? die(`${a} requires a value`);
@@ -34,6 +34,7 @@ export function addProject(argv: string[]): number {
     else if (a === "--dev-split") o.devSplit = true;
     else if (a === "--weight") o.weight = next();
     else if (a === "--enabled") o.enabled = next();
+    else if (a === "--intake-mode") o.intakeMode = next();
     else die(`unknown option '${a}'`);
   }
   const ws = mutate((file) => {
@@ -45,6 +46,8 @@ export function addProject(argv: string[]): number {
     if (o.devSplit) p.devSplit = true;
     if (o.weight !== undefined) p.weight = Number(o.weight);
     if (o.enabled !== undefined) p.enabled = o.enabled === "true" || o.enabled === true;
+    if (o.intakeMode !== undefined) p.intake = { mode: o.intakeMode as "autonomous" | "passive" }; // E12 validates the value
+
     file.projects[key] = p;
   });
   console.log(`added project '${key}' to ${ws.filePath} (0 repos — add one with \`dev-loop team add-repo\`)`);

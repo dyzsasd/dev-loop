@@ -3,6 +3,18 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+- **feat(pm): passive intake mode (§5a).** New per-project `intake.mode: "autonomous" (default) |
+  "passive"`. Under `passive` PM originates NO work of its own — the preflight lens/SHA/doc-watch
+  machinery and Job C are skipped entirely; the only source of new product work is explicit
+  `needs-pm` intake (§9a), which still gets its full treatment including scoped ideation on the
+  ask. Jobs A/B/B2 (verify, unblock, groom+promote) are unchanged, and QA/Architect/ops filings
+  flow exactly as before — the knob governs origination, not the pipeline. Backend-agnostic by
+  construction (the §9a label contract is the carrier on linear/service/local alike). Config is
+  validated (**E12**: intake.mode + todoDepthCap), `team add-project` gains `--intake-mode`, and
+  pm dry-run scheduler lines carry an `intake=passive` marker.
+
 ## 1.0.0 — GA: the team/workspace model ships
 
 The whole 1.0 train (rc.1 → rc.3 below, plus this batch) lands as one release. Only rc.1 was
