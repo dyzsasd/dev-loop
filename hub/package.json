@@ -1,6 +1,6 @@
 {
   "name": "@dyzsasd/dev-loop",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "An autonomous dev team in a folder \u2014 nine agents (PM, QA, senior/junior Dev, Sweep, Reflect, Ops, Architect, Communication) coordinating through ticket state on Linear or a bundled zero-dep local hub (node:sqlite + web UI). 1.0 team/workspace model: one dev-loop.json workspace = one team; Backlog-first intake with a PM-gated queue; sensitive work routes to a senior design tier; a team scheduler (dev-loop run) drives every agent with its own model/effort/cadence; director-grade metrics + a daily digest (dev-loop metrics / notify). Runs on Claude Code or Codex.",
   "keywords": [
