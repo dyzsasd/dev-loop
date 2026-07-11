@@ -72,3 +72,33 @@ export async function updateIssue(
   const r = d.issueUpdate as { success?: boolean } | undefined;
   if (!r?.success) throw new Error("linear issueUpdate failed");
 }
+
+// ── Workspace fingerprint stamp (concept P4) ─────────────────────────────────────────────────────
+// ONE dev-loop workspace drives one Linear project. The marker `[dev-loop:workspace:<id>]` in the
+// project DESCRIPTION records which workspace claimed it; a second workspace pointed at the same
+// project sees the foreign id and warns instead of silently double-driving every agent. Same §16
+// posture as the mirror above: token as a function arg, read-only except appending our own marker,
+// and a mismatch NEVER overwrites the incumbent's stamp.
+export const WORKSPACE_MARKER_RE = /\[dev-loop:workspace:([A-Za-z0-9-]+)\]/;
+export const workspaceMarker = (workspaceId: string): string => `[dev-loop:workspace:${workspaceId}]`;
+
+export type StampResult =
+  | { status: "stamped" }                       // no marker was present; ours is now appended
+  | { status: "already" }                       // the project already carries THIS workspace's marker
+  | { status: "mismatch"; foundId: string };    // ANOTHER workspace claimed it — caller must warn loudly
+
+export async function stampWorkspaceMarker(
+  fetchImpl: FetchImpl, token: string, linearProjectId: string, workspaceId: string,
+): Promise<StampResult> {
+  const d = await gql(fetchImpl, token,
+    "query($id:String!){ project(id:$id){ id description } }", { id: linearProjectId });
+  const desc = String((d.project as { description?: string } | undefined)?.description ?? "");
+  const m = desc.match(WORKSPACE_MARKER_RE);
+  if (m) return m[1] === workspaceId ? { status: "already" } : { status: "mismatch", foundId: m[1] };
+  const next = desc.trim() ? `${desc}\n\n${workspaceMarker(workspaceId)}` : workspaceMarker(workspaceId);
+  const u = await gql(fetchImpl, token,
+    "mutation($id:String!,$i:ProjectUpdateInput!){ projectUpdate(id:$id, input:$i){ success } }", { id: linearProjectId, i: { description: next } });
+  const r = u.projectUpdate as { success?: boolean } | undefined;
+  if (!r?.success) throw new Error("linear projectUpdate failed");
+  return { status: "stamped" };
+}

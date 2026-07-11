@@ -7,13 +7,14 @@ import { realpathSync, readFileSync, existsSync } from "node:fs";
 import { relative, isAbsolute } from "node:path";
 import { projectConfigCandidates } from "./paths.ts";
 import { tryResolveWorkspace } from "./workspace.ts";
-import { toLegacyView, WsValidationError } from "./team-config.ts";
+import { toLegacyView, WsValidationError, type HubBlock } from "./team-config.ts";
 
 export interface ProjectsConfig {
   defaultProject?: string;
   // The shape resolveProjectFromCwd matches on (repoPath/repos), plus the few fields the daemon reads to
-  // resolve per-project behavior — DL-83: hub.docs/director/strategyDoc drive the /roadmap divergence banner.
-  projects?: Record<string, { repoPath?: string; repos?: { path?: string }[]; hub?: { docs?: boolean }; director?: unknown; strategyDoc?: unknown }>;
+  // resolve per-project behavior — DL-83: hub.docs/director/strategyDoc drive the /roadmap divergence
+  // banner; the hub block is the shared HubBlock (docs passthrough + the D8 agentInterface map).
+  projects?: Record<string, { repoPath?: string; repos?: { path?: string }[]; hub?: HubBlock; director?: unknown; strategyDoc?: unknown }>;
 }
 
 // The candidate repo paths for a project (§19): repos[].path if present, else [repoPath].

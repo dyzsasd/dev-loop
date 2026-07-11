@@ -13,6 +13,26 @@ export type DocRef = string | { linearDocument: string } | { hubDoc: string } | 
 
 export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string }
 
+// The hub block (D8): `agentInterface` maps a coding agent → how its fires reach the hub board on
+// backend:"service" — "cli" (the dev-loop write-layer verbs; identity rides the fire env) or "mcp"
+// (the scheduler-injected dev-loop-hub MCP server). `docs` + the index signature keep operator
+// passthrough fields (e.g. the DL-83 `hub.docs` flag the daemon reads off the projected view) type-legal.
+export type AgentInterface = "cli" | "mcp";
+export interface HubBlock { agentInterface?: Record<string, AgentInterface>; docs?: unknown; [key: string]: unknown }
+
+// D9 (direct full rollout): claude flips to the CLI interface everywhere immediately; codex flipped
+// too once the P8 env-propagation certification PASSED (2026-07-11, codex-cli 0.130.0 — codex exec
+// propagates the fire env into shell subprocesses; docs/PORTABILITY.md §4); opencode registers MCP via
+// the operator's merged config and stays "mcp". An unknown coding agent defaults to "mcp" (today's behavior).
+export const DEFAULT_AGENT_INTERFACE: Record<string, AgentInterface> = { claude: "cli", codex: "cli", opencode: "mcp" };
+
+// The ONE resolver every consumer (scheduler, doctor) reads the interface through: an explicit
+// hub.agentInterface.<codingAgent> wins (the D8 rollback switch), else the D9 default.
+export function agentInterfaceFor(hub: HubBlock | undefined, codingAgent: string): AgentInterface {
+  const v = hub?.agentInterface?.[codingAgent];
+  return v === "cli" || v === "mcp" ? v : (DEFAULT_AGENT_INTERFACE[codingAgent] ?? "mcp");
+}
+
 export interface TeamBlock {
   key: string;
   backend: "linear" | "service";
@@ -29,6 +49,7 @@ export interface TeamBlock {
   agents?: Record<string, AgentLaunchConfig>;
   defaultCodingAgent?: string;
   codingAgentDefaults?: Record<string, { model?: string; effort?: string }>;
+  hub?: HubBlock;
 }
 
 export interface RepoEntry {
@@ -66,11 +87,17 @@ export interface ProjectEntry {
   docSystem?: string;
   defaultCodingAgent?: string;
   codingAgentDefaults?: unknown;
+  hub?: HubBlock;
   repos: ProjectRepoRef[];
 }
 
 export interface TeamFile {
   schemaVersion: 2;
+  // Workspace fingerprint (concept P4): a random-but-stable id `team init` mints once. On linear backends
+  // add-project/sync-project stamp it into the Linear project description marker so a SECOND workspace
+  // pointed at the same Linear project is detected (a loud mismatch warning) instead of double-driving it.
+  // Optional: configs written by older CLIs lack it, and validation tolerates unknown/extra top-level keys.
+  workspaceId?: string;
   team: TeamBlock;
   repos: Record<string, RepoEntry>;
   projects: Record<string, ProjectEntry>;
@@ -129,7 +156,12 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   if (!team || typeof team !== "object") { E("E02", "team", "missing team block"); return { errors, warnings }; }
   if (typeof team.key !== "string" || !TEAM_KEY_RE.test(team.key)) E("E02", "team.key", `team.key must match ${TEAM_KEY_RE}`);
   if (team.backend !== "linear" && team.backend !== "service") E("E02", "team.backend", `team.backend must be "linear" or "service" (got ${JSON.stringify(team.backend)})`);
-  if (team.backend === "linear" && (typeof team.linearTeam !== "string" || !team.linearTeam.trim())) E("E09", "team.linearTeam", "backend:\"linear\" requires team.linearTeam");
+  // E09 is a load-time WARNING, not an error: `team init --backend linear --yes` legitimately writes a
+  // blank linearTeam to fill later, and a hard load failure would lock the operator out of the very
+  // commands that repair it (team set / add-project / doctor). The HARD failure lives where a linear
+  // fire would actually launch on the blank value: toLegacyView (the runtime projection) throws E09.
+  if (team.backend === "linear" && (typeof team.linearTeam !== "string" || !team.linearTeam.trim()))
+    W("E09", "team.linearTeam", `backend:"linear" has a blank team.linearTeam — fires cannot target a Linear team until it is filled: dev-loop team set team.linearTeam "<Team Name>"`);
 
   // E12 — an intake block (team default or per project): mode governs PM origination (§5a).
   const checkIntake = (raw: unknown, path: string) => {
@@ -141,6 +173,23 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       E("E12", `${path}.todoDepthCap`, `intake.todoDepthCap must be an integer >= 1 (got ${JSON.stringify(it.todoDepthCap)})`);
   };
   if (team.intake !== undefined) checkIntake(team.intake, "team.intake");
+
+  // E13 — a hub block (team default or per project): agentInterface maps coding agent → "cli"|"mcp" (D8).
+  // Keys are validated STRICTLY (mirror run-agents.ts CODING_AGENTS — the drift tripwire): a typo'd key
+  // would otherwise silently not apply and the fire would launch on the default interface.
+  const CODING_AGENT_KEYS = new Set(["claude", "codex", "opencode"]);
+  const checkHub = (raw: unknown, path: string) => {
+    const h = raw as { agentInterface?: unknown };
+    if (h === null || typeof h !== "object" || Array.isArray(h)) { E("E13", path, "hub must be an object"); return; }
+    if (h.agentInterface === undefined) return;
+    const ai = h.agentInterface as Record<string, unknown> | null;
+    if (ai === null || typeof ai !== "object" || Array.isArray(ai)) { E("E13", `${path}.agentInterface`, "hub.agentInterface must be an object mapping coding agent → \"cli\"|\"mcp\""); return; }
+    for (const [ca, v] of Object.entries(ai)) {
+      if (!CODING_AGENT_KEYS.has(ca)) E("E13", `${path}.agentInterface.${ca}`, `unknown coding agent '${ca}' (expected claude, codex, or opencode)`);
+      else if (v !== "cli" && v !== "mcp") E("E13", `${path}.agentInterface.${ca}`, `agent interface must be "cli" or "mcp" (got ${JSON.stringify(v)})`);
+    }
+  };
+  if (team.hub !== undefined) checkHub(team.hub, "team.hub");
 
   // E07 — comms: provider ∈ {slack,lark}; webhookEnv is an ENV-VAR NAME, never a URL literal (I5).
   if (team.comms !== undefined) {
@@ -182,6 +231,7 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       else seenLinearProjectId.set(p.linearProjectId, key);
     }
     if (p?.intake !== undefined) checkIntake(p.intake, `projects.${key}.intake`);
+    if (p?.hub !== undefined) checkHub(p.hub, `projects.${key}.hub`);
     const refs = Array.isArray(p?.repos) ? p.repos : [];
     if (!refs.length) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);
     for (const rr of refs) {
@@ -294,6 +344,15 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
     // intake merges FIELD-WISE (not whole-block nearest-wins): mode and todoDepthCap are orthogonal
     // knobs, so a project tuning only its cap must not silently drop a team-level "passive".
     ...(p.intake || t.intake ? { intake: { ...t.intake, ...p.intake } } : {}),
+    // hub merges FIELD-WISE too, one level deeper for agentInterface (a per-coding-agent map): a project
+    // flipping only claude must not silently drop a team-level codex setting (D8 rollback granularity).
+    ...(p.hub || t.hub ? {
+      hub: {
+        ...t.hub, ...p.hub,
+        ...(t.hub?.agentInterface || p.hub?.agentInterface
+          ? { agentInterface: { ...t.hub?.agentInterface, ...p.hub?.agentInterface } } : {}),
+      },
+    } : {}),
   };
 }
 
@@ -343,6 +402,13 @@ export interface LegacyProjectsConfig {
 
 export function toLegacyView(ws: Workspace): LegacyProjectsConfig {
   const t = ws.file.team;
+  // The E09 hard-fail seam: a blank linearTeam LOADS (warning, so team set/add-project/doctor can repair
+  // it) but must never reach a running agent — an unscoped Linear query pollutes other teams' boards.
+  // toLegacyView is the one projection every runtime consumer reads (the team scheduler's teamMain,
+  // resolve-project's loadProjectsConfig — which already catches WsValidationError and degrades loudly),
+  // so throwing here fails exactly the paths that would exercise the backend, and nothing else.
+  if (t.backend === "linear" && !(t.linearTeam ?? "").trim())
+    throw new WsValidationError([{ code: "E09", path: "team.linearTeam", message: `backend:"linear" has a blank team.linearTeam — a fire cannot target a Linear team. Fill it: dev-loop team set team.linearTeam "<Team Name>"` }], ws.filePath);
   const projects: Record<string, Record<string, unknown>> = {};
   for (const key of Object.keys(ws.file.projects)) {
     const p = ws.file.projects[key];
@@ -375,6 +441,7 @@ export function toLegacyView(ws: Workspace): LegacyProjectsConfig {
       docSystem: eff.docSystem,
       reports: eff.reports,
       intake: eff.intake,
+      hub: eff.hub,
       agents: p.agents,
       models: p.models,
       efforts: p.efforts,
