@@ -152,12 +152,17 @@ try {
   {
     team(["init", "--dir", svcWs, "--key", "svc-sched", "--backend", "service"], tmp);
     mkdirSync(join(svcWs, "rg"), { recursive: true }); mkdirSync(join(svcWs, "rd"), { recursive: true });
-    team(["add-project", "gamma", "--weight", "1"], svcWs);
+    team(["add-project", "gamma", "--weight", "1"], svcWs); // auto-seeds its hub row (service)
     team(["add-repo", "rg", "--project", "gamma", "--path", "rg", "--role", "primary"], svcWs);
-    team(["add-project", "delta", "--weight", "2"], svcWs); // weight 2 ⇒ delta is every agent's FIRST pick
+    // delta: a config entry with NO hub row — add-project now AUTO-SEEDS on service, so stage the drift
+    // by hand (the shape still arrives via hand-edited configs / copied workspaces; weight 2 ⇒ delta is
+    // every agent's FIRST pick, the token-burn shape the guard closes).
+    {
+      const c2 = JSON.parse(readFileSync(join(svcWs, "dev-loop.json"), "utf8"));
+      c2.projects.delta = { weight: 2, repos: [] };
+      writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c2, null, 2));
+    }
     team(["add-repo", "rd", "--project", "delta", "--path", "rd", "--role", "primary"], svcWs);
-    // seed gamma ONLY — delta has a config entry but no hub row (the token-burn shape the guard closes)
-    spawnSync("node", [join(hubRoot, "src", "seed.ts"), "gamma", "Gamma", "GM", join(svcWs, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
     const r = runAgents(["--agents", "pm,qa", "--once"], svcWs, { DEVLOOP_CLAUDE_BIN: fakeBin });
     ok(r.code === 0, "an unseeded sibling does not fail the run");
     const warns = r.out.match(/project 'delta' is backend:"service" but not seeded/g) ?? [];
@@ -166,6 +171,45 @@ try {
     const svcRows = readFileSync(join(svcWs, ".dev-loop", "team", "fires.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
     ok(svcRows.length === 2 && svcRows.every((row: { project: string }) => row.project === "gamma"),
       "no fire launched for the unseeded project; both fires went to the seeded sibling (skip-advance)");
+
+    // ── D8/D9 in TEAM mode: a service claude fire on the default interface ("cli") gets NO hub MCP
+    //    injection, and the spawn env carries the FULL identity the dev-loop write layer needs —
+    //    the env block IS the identity transport for interface="cli" fires. Pause delta (weight 0)
+    //    so the rotation deterministically lands the probe fire on the seeded gamma. ──
+    {
+      const c2 = JSON.parse(readFileSync(join(svcWs, "dev-loop.json"), "utf8"));
+      c2.projects.delta.weight = 0;
+      writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c2, null, 2));
+    }
+    const argsFile = join(tmp, "svc-fire-args.txt");
+    const envFile = join(tmp, "svc-fire-env.txt");
+    const probeBin = join(tmp, "probe-claude.sh");
+    writeFileSync(probeBin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${argsFile}\nenv | grep '^DEVLOOP' > ${envFile}\necho 'fire ok'\nexit 0\n`); chmodSync(probeBin, 0o755);
+    const probed = runAgents(["--agents", "pm", "--once"], svcWs, { DEVLOOP_CLAUDE_BIN: probeBin });
+    ok(probed.code === 0, "service team-mode claude fire (interface=cli default) exits 0");
+    const fireArgs = readFileSync(argsFile, "utf8");
+    ok(!/--mcp-config/.test(fireArgs) && !/--strict-mcp-config/.test(fireArgs) && !/dev-loop-hub/.test(fireArgs),
+      "the team-mode claude fire carries NO hub MCP injection (D9: claude defaults to the CLI interface)");
+    const fireEnv = readFileSync(envFile, "utf8");
+    ok(/^DEVLOOP_ACTOR=pm$/m.test(fireEnv) && /^DEVLOOP_PROJECT=gamma$/m.test(fireEnv),
+      "the fire env pins DEVLOOP_ACTOR + DEVLOOP_PROJECT (the CLI's identity ladder)");
+    ok(new RegExp(`^DEVLOOP_HUB_DB=${join(svcWs, ".dev-loop", "hub.db").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m").test(fireEnv),
+      "the fire env pins DEVLOOP_HUB_DB at the workspace hub.db (the CLI's SoR path)");
+    ok(/^DEVLOOP_DEV_SPLIT=(true|false)$/m.test(fireEnv),
+      "the fire env carries DEVLOOP_DEV_SPLIT (the write layer's fire marker for its operator-write guard)");
+
+    // The rollback switch: pin claude back to "mcp" on the project → the injection returns.
+    {
+      const c3 = JSON.parse(readFileSync(join(svcWs, "dev-loop.json"), "utf8"));
+      c3.projects.gamma.hub = { agentInterface: { claude: "mcp" } };
+      writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c3, null, 2));
+      rmSync(argsFile, { force: true });
+      runAgents(["--agents", "pm", "--once"], svcWs, { DEVLOOP_CLAUDE_BIN: probeBin });
+      ok(/--mcp-config/.test(readFileSync(argsFile, "utf8")) && /dev-loop-hub/.test(readFileSync(argsFile, "utf8")),
+        "hub.agentInterface.claude=\"mcp\" restores the inline hub injection (the D8 rollback switch, team mode)");
+      delete c3.projects.gamma.hub;
+      writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c3, null, 2));
+    }
   }
 
   // ── team run lock: a live holder blocks a second scheduler ──
@@ -199,10 +243,11 @@ try {
   ok(seq.join(",") === "A-in,A-out,B-in,B-out", `with-repo-lock serializes concurrent holders (got: ${seq.join(",")})`);
 
   console.log(fails === 0 ? "\nTEAM_SCHEDULER_OK" : `\n${fails} CHECK(S) FAILED`);
-  process.exit(fails === 0 ? 0 : 1);
 } finally {
   // The service run auto-ensures the workspace hub daemon — always stop it so no process outlives the test.
+  // NOTE: exit via process.exitCode AFTER this block — a process.exit() inside the try would skip it entirely.
   try { spawnSync("node", [join(hubRoot, "src", "hub.ts"), "stop"], { cwd: svcWs, env: env(), encoding: "utf8", timeout: 20000 }); } catch { /* never started */ }
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
 }
+process.exit(fails === 0 ? 0 : 1);
 })();

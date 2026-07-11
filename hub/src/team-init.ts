@@ -4,6 +4,7 @@
 // for a service backend the hub.db + seeded _team intake project). Backend writes (verify Linear team,
 // labels, create projects) are deferred to the first `/dev-loop:add-project`, which runs in a coding CLI.
 import { existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateTeamFile, TEAM_INTAKE_PROJECT, type TeamFile, type Workspace } from "./team-config.ts";
@@ -86,7 +87,9 @@ function parseComms(s: string | undefined): { provider: "slack" | "lark"; webhoo
   return { provider, webhookEnv: env?.trim() || "DEVLOOP_COMMS_WEBHOOK" };
 }
 
-export function teamInit(argv = process.argv.slice(2)): number {
+// opts.next: the trailing "Next: …" guidance block — the init wizard (init-wizard.ts) composes this
+// function and prints its own, richer epilogue (doctor verdict + NEXT line), so it passes next:false.
+export function teamInit(argv = process.argv.slice(2), opts: { next?: boolean } = {}): number {
   const o = parseArgs(argv);
   if (!o.key) die("--key <team-key> is required");
   if (o.backend !== "linear" && o.backend !== "service") die("--backend must be linear or service");
@@ -97,7 +100,18 @@ export function teamInit(argv = process.argv.slice(2)): number {
   if (existsSync(filePath) && !o.force) {
     console.log(`dev-loop.json already exists: ${filePath}`);
     console.log("Edit it directly, or rerun with --force to replace it. (init is idempotent.)");
+    provisionClaudePermissions(o.dir); // idempotent repair path: pre-D8 workspaces gain the allow rule on re-init
     return 0;
+  }
+
+  // Workspace fingerprint (concept P4): random once, STABLE forever — a --force rewrite keeps the id the
+  // previous file carried, so re-init never orphans the markers already stamped onto Linear projects.
+  let workspaceId: string = randomUUID();
+  if (existsSync(filePath)) {
+    try {
+      const prev = (JSON.parse(readFileSync(filePath, "utf8")) as { workspaceId?: unknown }).workspaceId;
+      if (typeof prev === "string" && prev.trim()) workspaceId = prev;
+    } catch { /* unreadable previous file → mint fresh */ }
   }
 
   const team: TeamFile["team"] = {
@@ -115,13 +129,12 @@ export function teamInit(argv = process.argv.slice(2)): number {
     reports: { sink: o.reports ?? "files" },
     agents: { sweep: { cadence: "30m" }, ops: { cadence: "10m" }, reflect: { cadence: "1d" }, communication: { cadence: "1d" } },
   };
-  const file: TeamFile = { schemaVersion: 2, team, repos: {}, projects: {} };
+  const file: TeamFile = { schemaVersion: 2, workspaceId, team, repos: {}, projects: {} };
 
   // Validate before writing — init must never emit a file that doctor would reject (an empty repos/projects
-  // map is valid; a linear team with a blank linearTeam under --yes only warns, filled at add-project).
+  // map is valid; a blank linearTeam under --yes is only the E09 WARNING, filled via `team set`/add-project).
   const { errors } = validateTeamFile(file);
-  const hard = errors.filter((e) => !(e.code === "E09" && o.yes)); // --yes tolerates a to-be-filled linearTeam
-  if (hard.length) die("refusing to write an invalid config:\n" + hard.map((e) => `  [${e.code}] ${e.path}: ${e.message}`).join("\n"), 1);
+  if (errors.length) die("refusing to write an invalid config:\n" + errors.map((e) => `  [${e.code}] ${e.path}: ${e.message}`).join("\n"), 1);
 
   if (existsSync(filePath) && o.force) {
     console.log("--force: replacing existing dev-loop.json. Previous content:");
@@ -134,15 +147,21 @@ export function teamInit(argv = process.argv.slice(2)): number {
   upsertWorkspaceIndex(o.key, o.dir);
   console.log(`wrote ${filePath}`);
   console.log(`scaffolded ${join(o.dir, ".dev-loop")}/ {team, lessons, wt, locks}`);
+  provisionClaudePermissions(o.dir);
 
   if (o.backend === "service") {
     seedServiceHub(ws);
     console.log(`initialized hub.db + seeded '${TEAM_INTAKE_PROJECT}' intake project (prefix TEAM)`);
   }
 
-  console.log("");
-  console.log("Next: in a coding CLI (claude/codex), run  /dev-loop:add-project  to create your first project,");
-  console.log("then  /dev-loop:add-repo  to clone + register a repo. `dev-loop doctor` checks the workspace.");
+  if (o.backend === "linear" && !(team.linearTeam ?? "").trim())
+    console.log(`NOTE: team.linearTeam is blank — the workspace loads, but fires refuse to launch until you fill it: dev-loop team set team.linearTeam "<Team Name>"`);
+
+  if (opts.next !== false) {
+    console.log("");
+    console.log("Next: in a coding CLI (claude/codex), run  /dev-loop:add-project  to create your first project,");
+    console.log("then  /dev-loop:add-repo  to clone + register a repo. `dev-loop doctor` checks the workspace.");
+  }
   return 0;
 }
 
@@ -150,6 +169,38 @@ export function teamInit(argv = process.argv.slice(2)): number {
 function seedServiceHub(ws: Workspace): void {
   const db = openDb(wsHubDb(ws));
   try { ensureSeed(db, TEAM_INTAKE_PROJECT, "Team Intake", "TEAM"); } finally { db.close(); }
+}
+
+// ── D8: workspace Claude-settings permission for the CLI interface ───────────────────────────────
+// Agents on interface="cli" call `dev-loop …` from inside a Claude Code fire, so `team init` (and
+// `team add-project`, idempotently) provision the workspace-level allow rule once. CREATE-OR-MERGE,
+// never clobber: every unknown key/entry in .claude/settings.json is preserved; a malformed or
+// unexpected-shape file is left untouched with a note (the operator adds the rule by hand).
+export const DEVLOOP_PERMISSION = "Bash(dev-loop *)";
+export function provisionClaudePermissions(root: string): void {
+  const file = join(root, ".claude", "settings.json");
+  const manual = (why: string) =>
+    console.log(`NOTE: ${file} ${why} — left untouched; add ${JSON.stringify(DEVLOOP_PERMISSION)} to permissions.allow yourself`);
+  let settings: Record<string, unknown> = {};
+  if (existsSync(file)) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(readFileSync(file, "utf8")); }
+    catch { manual("is not valid JSON"); return; }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) { manual("is not a JSON object"); return; }
+    settings = parsed as Record<string, unknown>;
+  }
+  const rawPerm = settings.permissions;
+  if (rawPerm !== undefined && (rawPerm === null || typeof rawPerm !== "object" || Array.isArray(rawPerm))) { manual("has a non-object `permissions` key"); return; }
+  const permissions = (rawPerm ?? {}) as Record<string, unknown>;
+  const rawAllow = permissions.allow;
+  if (rawAllow !== undefined && !Array.isArray(rawAllow)) { manual("has a non-array `permissions.allow`"); return; }
+  const allow = (rawAllow ?? []) as unknown[];
+  if (allow.includes(DEVLOOP_PERMISSION)) { console.log(`${file} already allows ${DEVLOOP_PERMISSION} (unchanged)`); return; }
+  permissions.allow = [...allow, DEVLOOP_PERMISSION];
+  settings.permissions = permissions;
+  mkdirSync(join(root, ".claude"), { recursive: true });
+  writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+  console.log(`provisioned ${file}: permissions.allow += ${JSON.stringify(DEVLOOP_PERMISSION)} (agents call the dev-loop CLI, D8)`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
