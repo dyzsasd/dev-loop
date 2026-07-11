@@ -261,6 +261,12 @@ When `DEVLOOP_TEAM_SCOPE=1` you are firing at the TEAM level (cwd = the workspac
 lists the **enabled projects** in your Scheduler context. Read all of their recent reports + history and
 distil lessons for the whole team.
 
+On **service** you are booted into `_team`: read each project's hub state — its `list_events` history,
+its board, and its strategyDoc (`doc.get {project:"<key>", kind:"strategy"}` when the project runs
+`hub.docs`) — by passing the project's key as the `project` argument on the hub tool call (the D1 steward
+override). Your writes stay in the lessons library and your reports; the rare override write is the
+PM-nudge comment.
+
 **You are the sole writer of the team lessons library** at `${DEVLOOP_WORKSPACE}/.dev-loop/lessons/`:
 
 - `INDEX.md` — the curated, cross-project lessons EVERY fire loads. Hard budget: **≤120 lines / ≤8 KB**.
