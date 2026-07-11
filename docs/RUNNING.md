@@ -8,9 +8,19 @@ point: one directory, one team, one backend, and one `dev-loop.json`.
 A workspace is one directory, one team, one backend, and one `dev-loop.json`. Repos are real
 git clones inside the workspace; projects are virtual delivery units that reference those repos.
 
+The fastest path is the guided wizard:
+
 ```bash
 npm i -g @dyzsasd/dev-loop        # Node >= 23.6
+dev-loop init                     # interactive on a TTY; --yes accepts every default (service backend)
+```
 
+`dev-loop init` composes everything below — `team init`, the first `add-project`, an offered
+first `add-repo --detect`, the Claude permissions entry — and finishes with the doctor verdict
+plus its `NEXT:` line. Re-running it on an existing workspace *resumes* (prints `NEXT:`) instead
+of re-initializing. The rest of this section is the piece-by-piece manual path.
+
+```bash
 dev-loop team init --dir ~/work/my-team --key my-team \
   --backend linear --linear-team "My Team" \
   --deploy dev=auto,prod=manual --comms lark
@@ -21,6 +31,18 @@ cd ~/work/my-team
 Use `--backend service` when you want the bundled local hub instead of Linear. For a Linear
 team, configure the Linear MCP in Claude Code user scope; `dev-loop doctor` warns with `W05`
 when steward agents cannot reach the board.
+
+`team init --backend linear --yes` may leave `team.linearTeam` blank. The workspace still loads
+(doctor reports it as the `E09` warning) so you can finish onboarding, but fires refuse to launch
+until you fill it:
+
+```bash
+dev-loop team set team.linearTeam "My Team"
+```
+
+`team init` also mints a stable `workspaceId` fingerprint. On Linear backends, `add-project` and
+`/dev-loop:sync-project` stamp it into the Linear project description; if another workspace already
+stamped a project, dev-loop warns loudly instead of double-driving the same board.
 
 ## 2. Add Projects and Repos
 
@@ -58,7 +80,21 @@ What those skills do:
 | `/dev-loop:sync-repo` | Re-detects repo build/deploy/remote drift, repairs missing clones, and refreshes repo metadata. |
 
 The CLI equivalents `dev-loop team add-project` and `dev-loop team add-repo` perform validated
-config writes; the slash skills are the friendly coding-CLI wrappers around them.
+config writes; the slash skills are the friendly coding-CLI wrappers around them. The CLI path is
+self-sufficient for the common cases:
+
+- On `backend:"service"`, `team add-project <key>` **auto-seeds** the hub.db row (find-or-create,
+  with a derived unique ticket prefix; override via `--name` / `--prefix`), so fires get board
+  access without a separate `dev-loop seed` step.
+- `team add-repo <ref> --project <key> --path <rel> --detect` detects repo facts deterministically
+  (no LLM): clones from `--remote` if the path is missing, maps `package.json` `typecheck`/`build`
+  scripts to runner commands, and lists CI workflow job names as candidate merge checks. It
+  registers with `landing:"pr"` and no auto-merge; interview-only fields (deploy, ops probes) stay
+  unset and `dev-loop doctor` keeps the gap visible.
+- `dev-loop team set <path> <value>` updates a single operator-tunable field with full re-validation
+  (e.g. `team.mode`, `team.linearTeam`, `projects.<key>.weight`,
+  `repos.<ref>.deploy.environments.<env>.auto`). See the whitelist in
+  [`references/config-schema.md`](../references/config-schema.md).
 
 ## 3. Verify Before Running
 
@@ -70,7 +106,14 @@ dev-loop run --once --dry-run
 ```
 
 `doctor` is read-only. It validates schema, repo paths, deploy-policy ceilings, health probes,
-Linear MCP reachability for steward fires, and workspace layout. `--dry-run` prints the exact
+Linear MCP reachability for steward fires, workspace layout, and — on a service workspace with
+`interface:"cli"` agents (the Claude default) — the CLI preflight: `dev-loop` resolvable on PATH
+(`W09`), at a write-verbs version (`W10`), and an identity smoke under a fire-shaped env (`W11`).
+Its final line is `NEXT:` — the
+single most-blocking step in fix order: invalid config → the E-code fix; blank `linearTeam` → the
+`team set` fill; no projects → `add-project`; an unseeded service project → the exact `dev-loop
+seed` command; no repos → `add-repo`; everything wired but `team.mode:"dry-run"` → the
+`dev-loop team set team.mode live` flip; all green → `dev-loop run`. `--dry-run` prints the exact
 command that would launch each agent, including its selected coding CLI, model, effort, project,
 and cadence.
 
@@ -80,6 +123,13 @@ The scheduler is the normal 1.0 launch path:
 
 ```bash
 dev-loop run
+```
+
+`team init` defaults to `mode: "dry-run"` for first contact; flip it once doctor's `NEXT:` line
+says everything else is green:
+
+```bash
+dev-loop team set team.mode live
 ```
 
 One scheduler drives the whole team. Delivery agents rotate across enabled, positively-weighted
