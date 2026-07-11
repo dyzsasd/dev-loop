@@ -137,13 +137,30 @@ dev-loop daemon uninstall-autostart
 
 ## Read endpoints
 
+**Multi-project routing (F2, decision D2).** One daemon serves **every** hub project: a `/p/<key>/`
+path prefix resolves the project **per request** (unknown key → friendly HTML `404`), and every page
+link/form action the UI emits is in that canonical `/p/<key>/…` form. **Bare** paths (everything below
+without the prefix) keep serving the **boot** project, so old URLs and bookmarks survive. Bare `GET /`
+is special: it renders the **project index** — one card per project (open counts by state,
+last-activity), with `_team` pinned last as “Team intake” — or `302`-redirects straight to
+`/p/<key>/` when the hub holds exactly **one** real (non-`_team`) project. The JSON `/api/*` surface
+(including the op-API and its D1 role-gated `project` override) stays **boot-scoped on bare paths
+only** — under `/p/<key>/` it is unmounted (`404`), except the SSE live stream: `/p/<key>/api/stream`
+follows its project, bare `/api/stream` follows the boot project, and `/api/stream?all=1` (what the
+index page subscribes to) watches the whole ledger.
+
 | Method · path | Returns |
 |---|---|
-| `GET /` | the **web UI** board (DL-2): server-rendered HTML, tickets in columns by state. Filters (DL-20): `?state=`, `?type=`, `?label=`, `?assignee=`, `?q=` (free-text over id/title); swimlanes (DL-31): `?group=assignee` |
-| `GET /ticket/:id` | the **web UI** ticket detail (DL-2): HTML with the full description + comments; friendly `404` HTML if unknown |
-| `GET /roadmap` | the **roadmap document** view + edit form (DL-3); the operator additionally sees the publish control |
-| `GET /reports` + `GET /reports/<agent>/<level>/<date>` | the agent **reports** index + one rendered report (DL-10), read-only filesystem view |
-| `GET /activity` | **activity & throughput** over the events ledger (DL-17): recent feed, Done throughput, per-actor counts, cycle time |
+| `GET /` | the **project index** (or the single-real-project `302` → `/p/<key>/`, preserving any filter query) |
+| `GET /p/<key>/` | the **web UI** board (DL-2): server-rendered HTML, tickets in columns by state. Filters (DL-20): `?state=`, `?type=`, `?label=`, `?assignee=`, `?q=` (free-text over id/title); swimlanes (DL-31): `?group=assignee` |
+| `GET [/p/<key>]/ticket/:id` | the **web UI** ticket detail (DL-2): HTML with the full description + comments; friendly `404` HTML if unknown |
+| `GET [/p/<key>]/docs` | the **docs index** (F4/D3): every hub doc — kind, title, published-vs-latest badge (`published vN` · `draft vM pending`), latest author, updated-at |
+| `GET [/p/<key>]/doc/:slug` | the **doc viewer** (kind-agnostic): rendered markdown of the latest version (`?v=N` picks an exact one), status/version meta; when the DL-29 double gate is open it adds the CAS draft-edit form, and the operator additionally sees the publish button on gated kinds (`design` is never publish-gated). `/doc/<kind>` `302`s to the kind's canonical slug |
+| `GET [/p/<key>]/doc/:slug/history` | the **version ledger**: status/author/summary/CAS-base/date per version, with view + diff-vs-previous links |
+| `GET [/p/<key>]/doc/:slug/diff?from=N&to=N` | the **unified diff** between two versions (server-rendered, fully escaped) |
+| `GET [/p/<key>]/roadmap` | `302` → the roadmap **doc page** (`/doc/<slug>`) — D3 folded the dedicated roadmap page into the docs system (edit form, publish, and the DL-83 divergence banner live there) |
+| `GET [/p/<key>]/reports` + `…/reports/<agent>/<level>/<date>` | the agent **reports** index + one rendered report (DL-10), read-only filesystem view |
+| `GET [/p/<key>]/activity` | **activity & throughput** over the events ledger (DL-17): recent feed, Done throughput, per-actor counts, cycle time |
 | `GET /api` | JSON API index (the project + the endpoint list) |
 | `GET /api/health` | `{ ok: true, project }` — liveness |
 | `GET /api/tickets` | all tickets for the project. Filters: `?state=`, `?type=`, `?label=`, `?assignee=` (DL-31), `?limit=` |
@@ -158,13 +175,17 @@ All require `writeOriginOk` (localhost `Host` + same-origin `Origin`, DL-19) and
 
 | Method · path | Gate |
 |---|---|
-| `POST /roadmap/save` | DL-3 — saves a new roadmap draft (CAS on `baseVersion`); any known write actor |
-| `POST /roadmap/publish` | DL-3 — publishes a version; **operator only** (`DEVLOOP_ACTOR=operator`) |
-| `POST /ticket` | DL-29 — create a ticket; requires `settings_json.humanWrite.enabled` |
-| `POST /ticket/:id/comment` · `/move` · `/assign` | DL-29 — comment / move state / (un)assign; requires `settings_json.humanWrite.enabled` |
+| `POST [/p/<key>]/doc/:slug/save` | F4/D3 — saves a new DRAFT of any hub doc (CAS on `baseVersion`; kind is server-derived from the stored doc, or from the slug when creating a singleton kind); requires `settings_json.humanWrite.enabled` (the DL-29 double gate) |
+| `POST [/p/<key>]/doc/:slug/publish` | F4/D3 — publishes a version; the same double gate **plus operator only** (`DEVLOOP_ACTOR=operator`, docstore's single gate) |
+| `POST [/p/<key>]/roadmap/save` · `/roadmap/publish` | legacy DL-3 aliases — resolve the roadmap doc's slug server-side and behave exactly like the `/doc/:slug/*` routes (incl. the humanWrite gate) |
+| `POST [/p/<key>]/ticket` | DL-29 — create a ticket; requires `settings_json.humanWrite.enabled` |
+| `POST [/p/<key>]/ticket/:id/comment` · `/move` · `/assign` | DL-29 — comment / move state / (un)assign; requires `settings_json.humanWrite.enabled` |
 
-Each write redirects (303 PRG) back to the affected page on success; the board/ticket pages render the
-create/comment/move/assign **forms only when the write surface is enabled**.
+Each write redirects (303 PRG) back to the affected page on success; the board/ticket/doc pages render
+their **forms only when the write surface is enabled** (and a rejected doc save re-renders the doc page
+with the typed text preserved — DL-14). When the resolved project has gated docs with drafts ahead of
+their published version, every project page's header shows an **`N drafts pending`** chip → `/docs`
+(docs P6a), so agent-drafted direction can't silently stall awaiting the operator publish.
 
 ## Agent op-API — `POST /api/op/<op>` (DL-43/P2, opt-in)
 

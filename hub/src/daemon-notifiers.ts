@@ -6,7 +6,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { openDb, logEvent } from "./db.ts";
 import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Transport, type FetchImpl } from "./channel.ts";
-import { eventData } from "./daemonviews.ts";
+import { eventData } from "./views/activity.ts";
 
 // ─── DL-26: Human-Blocked periodic notifier (service backend, option b) ───────
 // On `service` the daemon owns the ENTIRE Human-Blocked notification lifecycle: the FIRST ping the

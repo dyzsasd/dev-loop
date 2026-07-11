@@ -20,14 +20,22 @@ import { openDb, actorExists } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig } from "./resolve-project.ts";
 import { hubDbPath, pkgVersion } from "./paths.ts";
-import { resolveDoc, docSave, docPublish, statusForDocErr } from "./docstore.ts";
+import { resolveDoc, docSave, docPublish, statusForDocErr, type DocKind } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp, resolveProjectOverride } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
 import { scrubErr } from "./channel.ts"; // the notifier's channel deps moved to daemon-notifiers.ts (A3); scrubErr stays for /api/health + the unhandledRejection guard
-// DL-74: the HTML view layer (every page renderer + esc/toTicket/eventData) lives in daemonviews.ts; the
-// per-project process-lifecycle subsystem lives in daemon-lifecycle.ts. This file keeps HTTP routing
-// (createDaemon), the write-route handlers, the background timers, and the CLI dispatch + foreground boot.
-import { page, esc, toTicket, boardPage, ticketPage, roadmapPage, activityPage, reportsIndexPage, reportsRoot, reportPage } from "./daemonviews.ts";
+// DL-74/F1: the HTML view layer lives in src/views/* (ui/board/ticket/roadmap/activity/reports) with
+// daemonviews.ts as the compat façade; the HTML GET routes are dispatched off the typed registry
+// (views/registry.ts). The per-project process-lifecycle subsystem lives in daemon-lifecycle.ts. This
+// file keeps HTTP routing (createDaemon), the write-route handlers (which re-render via the view fns
+// below), the background timers, and the CLI dispatch + foreground boot.
+import { page, esc, href, toTicket } from "./views/ui.ts";
+import { boardPage } from "./views/board.ts";
+import { ticketPage } from "./views/ticket.ts";
+import { docPage, draftsPendingCount, roadmapDocSlug, isSingletonKind } from "./views/docs.ts";
+import { projectIndexPage } from "./views/projects.ts";
+import { matchViewRoute, decodeSeg } from "./views/registry.ts";
+import { TEAM_INTAKE_PROJECT } from "./team-config.ts"; // F2/D2: the index pins _team last; the single-REAL-project redirect excludes it
 import { daemonLifecycle, LIFECYCLE_SUBS, type LifecycleSub } from "./daemon-lifecycle.ts";
 import { // A3: extracted timers; imported for the foreground boot, re-exported (below) for the tests.
   blockedNotifyTick, startBlockedNotifier, noProgressNotifyTick,
@@ -36,6 +44,8 @@ import { // A3: extracted timers; imported for the foreground boot, re-exported 
 
 export interface DaemonOpts {
   db: DatabaseSync;          // read connection (PRAGMA query_only=ON) — every GET route reads through this
+  // The BOOT project: the fallback every bare path serves (old URLs/bookmarks keep working). F2 (D2):
+  // a /p/<key>/ path prefix re-resolves the project PER REQUEST, so one daemon serves every hub project.
   projectId: string;
   projectKey: string;
   // DL-3 roadmap write surface (optional — absent ⇒ the daemon stays GET-only, exactly as DL-1/DL-2):
@@ -112,14 +122,8 @@ function healthLiveness(db: DatabaseSync, writeDb?: DatabaseSync): { ok: boolean
   }
 }
 
-// Defensively decode a single URL path segment. A malformed / incomplete percent-escape
-// (e.g. "%", "%ZZ", an incomplete UTF-8 sequence "%E0%A4") makes decodeURIComponent throw a
-// URIError — that is a CLIENT error, so callers surface 400 (matching the daemon's existing
-// "bad request url" → 400 contract) instead of letting it fall through to the generic 500 catch
-// (DL-7). Returns null when the segment cannot be decoded.
-function decodeSeg(seg: string): string | null {
-  try { return decodeURIComponent(seg); } catch { return null; }
-}
+// decodeSeg (the DL-7 malformed-percent-escape → 400 helper) moved to views/registry.ts — the view
+// handlers and the /api routes below share the one implementation (imported above).
 
 // Read an application/x-www-form-urlencoded body (the roadmap edit/publish forms), bounded so a runaway
 // upload can't exhaust memory. Localhost-only, but defensive anyway. Two correctness points: accumulate
@@ -155,11 +159,11 @@ function redirect(res: ServerResponse, location: string): void {
   res.end();
 }
 
-// POST /roadmap/save | /roadmap/publish — the ONLY write routes. Both hard-target the kind:"roadmap"
-// document through docstore (DB-doc-only; no filesystem path ⇒ §17 firewall). save → a DRAFT via the
-// CAS (a stale baseVersion is surfaced as a CONFLICT, never last-write-wins); publish → operator-gated.
-// `statusForDocErr` (the docstore-error → HTTP-status map) now lives in docstore.ts so this roadmap path
-// and the DL-43/DL-62 agent op-API can't drift on it.
+// POST /doc/:slug/save | /doc/:slug/publish (F4/D3 — plus the legacy /roadmap/* aliases, which resolve
+// the roadmap doc's slug server-side). Every doc write goes through docstore (DB-doc-only; no filesystem
+// path ⇒ §17 firewall). save → a DRAFT via the CAS (a stale baseVersion is surfaced as a CONFLICT, never
+// last-write-wins); publish → operator-gated in docstore. `statusForDocErr` (the docstore-error →
+// HTTP-status map) lives in docstore.ts so this path and the DL-43/DL-62 agent op-API can't drift on it.
 
 // DL-19: CSRF + DNS-rebinding guard for the write routes. The daemon is http localhost-only, so the
 // ONLY legitimate origin is the host the operator's own browser connected to. Refuse:
@@ -174,6 +178,12 @@ function redirect(res: ServerResponse, location: string): void {
 // (127.0.0.1) ONLY — see the `HOST = "127.0.0.1"` bind below. If that bind ever widens (0.0.0.0, ::1,
 // a LAN address), this guard must widen with it (resolve/validate accordingly), or it silently weakens.
 const LOCAL_HOST = /^(127\.0\.0\.1|localhost)(:\d+)?$/;
+// F2: the grammar a PATH-derived /p/<key> project key must satisfy before any DB lookup or filesystem
+// use — one safe segment, no "/", no leading dot (kills "." / ".." traversal). Slightly wider than the
+// config KEY_RE (allows "_team" and uppercase) so every legitimately-seeded key stays reachable.
+// WHATWG URL parsing normalizes dot-segments (incl. %2e%2e) out of url.pathname BEFORE routing, so
+// encoded traversal renders the index instead of reaching this guard; the regex backstops raw shapes.
+const SAFE_KEY = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 function writeOriginOk(req: IncomingMessage): boolean {
   const host = req.headers.host;
   if (!host || !LOCAL_HOST.test(host)) return false;            // (a) foreign/rebound Host → refuse before any write
@@ -185,30 +195,47 @@ function writeOriginOk(req: IncomingMessage): boolean {
   return true;                                                  // no Origin/Referer → non-browser client (allowed)
 }
 
-async function handleRoadmapWrite(action: "save" | "publish", req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string, roadmapRepoFileStrategy?: string): Promise<void> {
+async function handleDocWrite(action: "save" | "publish", slug: string, req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string, roadmapRepoFileStrategy: string | undefined, successPath?: string): Promise<void> {
   let form: URLSearchParams;
   // If the body was rejected (too large / aborted), the socket may already be destroyed — only respond
   // when the response is still writable, so we never throw write-after-destroy into the outer catch.
   try { form = await parseFormBody(req); }
   catch (e) { if (!res.headersSent && !res.destroyed) json(res, 400, { error: (e as Error).message }); return; }
-  // Resolve the roadmap doc's slug SERVER-SIDE (never from the form) so the write target can't be redirected.
-  const slug = resolveDoc(writeDb, projectId, undefined, "roadmap")?.slug ?? "roadmap";
+  // kind is SERVER-derived (never a form field, §17/DL-9): the stored doc's kind, or — for a first
+  // draft — the slug itself when it names a singleton gated kind (the docPage create affordance).
+  const d = resolveDoc(writeDb, projectId, slug);
+  const kind = d?.kind ?? (isSingletonKind(slug) ? slug : undefined);
+  if (!kind) return json(res, 404, { error: `no document '${slug}' in ${projectKey}` });
+  // create-collision guard: the singleton kinds are UNIQUE per project — creating slug X while the
+  // kind already lives at slug Y would trip the partial unique index (a 500); refuse it as a conflict.
+  if (!d && resolveDoc(writeDb, projectId, undefined, kind)) {
+    return json(res, 409, { error: `CONFLICT: a '${kind}' document already exists under another slug` });
+  }
   // DL-14: on a rejected re-render, preserve the user's submitted body in the textarea (so a CAS
-  // conflict / validation error doesn't discard a substantial edit). roadmapPage recomputes the hidden
+  // conflict / validation error doesn't discard a substantial edit). docPage recomputes the hidden
   // `baseVersion` from the current latest, so an immediate re-submit targets the right base.
-  const rerender = (msg: string, submittedBody?: string) =>
-    htmlOut(res, statusForDocErr(msg), page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: true, canPublish: actor === "operator", notice: { kind: "error", msg }, submittedBody, roadmapRepoFileStrategy })));
+  const rerender = (msg: string, submittedBody?: string) => {
+    const inner = docPage(db, projectId, projectKey, slug, { canEdit: true, canPublish: actor === "operator", notice: { kind: "error", msg }, submittedBody, roadmapRepoFileStrategy });
+    return typeof inner === "string"
+      ? htmlOut(res, statusForDocErr(msg), page(`${slug} · ${projectKey}`, projectKey, inner, { active: "docs", drafts: draftsPendingCount(db, projectId) }))
+      : json(res, statusForDocErr(msg), { error: msg }); // doc vanished mid-flight — no page to re-render
+  };
+  const done = href(projectKey, successPath ?? `/doc/${encodeURIComponent(slug)}`); // PRG target (the legacy alias keeps /roadmap → its 302)
 
   if (action === "save") {
     const baseVersion = Number(form.get("baseVersion"));
     if (!Number.isInteger(baseVersion) || baseVersion < 0) return json(res, 400, { error: "baseVersion must be a non-negative integer" });
-    const r = docSave(writeDb, projectId, actor, { slug, kind: "roadmap", body: form.get("body") ?? "", baseVersion, summary: form.get("summary") ?? undefined });
-    return r.ok ? redirect(res, "/roadmap") : rerender(r.error, form.get("body") ?? ""); // 409 CONFLICT (stale base) — surfaced, and the typed edit is preserved (DL-14)
+    const r = docSave(writeDb, projectId, actor, { slug, kind: kind as DocKind, body: form.get("body") ?? "", baseVersion, summary: form.get("summary") ?? undefined });
+    return r.ok ? redirect(res, done) : rerender(r.error, form.get("body") ?? ""); // 409 CONFLICT (stale base) — surfaced, and the typed edit is preserved (DL-14)
   }
+  // design is NEVER publish-gated — the latest draft IS the live design (docstore DL-split semantics).
+  // The UI renders no publish button for it; refuse a hand-crafted POST too, or a stray 'current' pin
+  // would freeze default reads on an old version while later drafts silently go unread (codex 2026-07-11).
+  if (kind === "design") return json(res, 409, { error: "CONFLICT: 'design' docs are never published — the latest draft is live" });
   const version = Number(form.get("version"));
   if (!Number.isInteger(version) || version <= 0) return json(res, 400, { error: "version must be a positive integer" });
-  const r = docPublish(writeDb, projectId, actor, { kind: "roadmap", version });
-  return r.ok ? redirect(res, "/roadmap") : rerender(r.error); // non-operator → 403; missing version → 404
+  const r = docPublish(writeDb, projectId, actor, { slug, version });
+  return r.ok ? redirect(res, done) : rerender(r.error); // non-operator → 403; missing version → 404
 }
 
 // ─── DL-29: opt-in human web-write surface (design §11 subsystem D) ──────────────────────────────
@@ -234,10 +261,10 @@ async function handleTicketWrite(seg: string[], req: IncomingMessage, res: Serve
 
   if (seg.length === 1) { // POST /ticket — create, then PRG to the new ticket
     const r = createTicket(writeDb, projectId, actor, { title: form.get("title") ?? "", description: form.get("description") ?? undefined, type: form.get("type") ?? undefined });
-    if (r.ok) return redirect(res, `/ticket/${encodeURIComponent(r.id)}`);
+    if (r.ok) return redirect(res, href(projectKey, `/ticket/${encodeURIComponent(r.id)}`));
     // DL-86: a rejected create re-renders the BOARD as HTML with the error inline + the typed title preserved
     // (mirrors the /roadmap/save rerender), instead of dead-ending the operator on a raw-JSON {error} page.
-    return htmlOut(res, r.status, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, {}, true, undefined, { notice: { kind: "error", msg: r.error }, submittedTitle: form.get("title") ?? "" })));
+    return htmlOut(res, r.status, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, {}, true, undefined, { notice: { kind: "error", msg: r.error }, submittedTitle: form.get("title") ?? "" }), { active: "board" }));
   }
   const id = decodeSeg(seg[1]);
   if (id === null) return json(res, 400, { error: "malformed percent-escape in path" });
@@ -245,13 +272,13 @@ async function handleTicketWrite(seg: string[], req: IncomingMessage, res: Serve
   const r = verb === "comment" ? addComment(writeDb, projectId, actor, id, form.get("body") ?? "")
     : verb === "move" ? moveTicket(writeDb, projectId, actor, id, form.get("state") ?? "")
     : assignTicket(writeDb, projectId, actor, id, form.get("assignee") ?? "");
-  if (r.ok) return redirect(res, `/ticket/${encodeURIComponent(id)}`);
+  if (r.ok) return redirect(res, href(projectKey, `/ticket/${encodeURIComponent(id)}`));
   // DL-86: a rejected move/assign/comment re-renders the TICKET PAGE as HTML with the error inline (+ the typed
   // comment preserved on a rejected comment), instead of a raw-JSON dead-end. If the ticket is gone (ticketPage
   // null) fall back to the JSON error — there is no page to re-render.
-  const inner = ticketPage(db, projectId, id, true, { notice: { kind: "error", msg: r.error }, submittedComment: verb === "comment" ? (form.get("body") ?? "") : undefined });
+  const inner = ticketPage(db, projectId, projectKey, id, true, { notice: { kind: "error", msg: r.error }, submittedComment: verb === "comment" ? (form.get("body") ?? "") : undefined });
   if (!inner) return json(res, r.status, { error: r.error });
-  return htmlOut(res, r.status, page(`${id} · ${projectKey}`, projectKey, inner));
+  return htmlOut(res, r.status, page(`${id} · ${projectKey}`, projectKey, inner, { active: "board" }));
 }
 
 // ─── DL-43: opt-in daemon agent op-API (/api/op/*) — the MCP↔daemon unification foundation (P1) ───────────
@@ -334,25 +361,81 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
 // Build the HTTP server over an already-opened, project-resolved db. Exported so tests (and a later
 // in-process embed) can start it without the CLI bootstrap below. GET routes issue ONLY SELECTs; the
 // optional DL-3 /roadmap/* POST routes write the roadmap doc through the separate `writeDb` connection.
-export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadmapRepoFileStrategy }: DaemonOpts): Server {
+// F2 (D2): one daemon serves EVERY hub project — /p/<key>/… re-resolves the project per request, bare
+// paths fall back to the boot project, and bare GET / is the hub project index (or the single-real-
+// project redirect), so the workspace hub is never a dead `_team` landing again.
+export function createDaemon({ db, projectId: bootProjectId, projectKey: bootProjectKey, writeDb, actor, roadmapRepoFileStrategy }: DaemonOpts): Server {
   const canWrite = !!writeDb && !!actor;
   let streamCount = 0; const MAX_STREAMS = 16; // bound concurrent SSE connections (one operator, a few tabs)
+  // F2: the DL-83 divergence flag is per-PROJECT config, and opts carry only the BOOT project's
+  // boot-resolved value — a /p/<key>/roadmap request for a SIBLING must not inherit it. Resolve a
+  // sibling's flag from the same config source the boot path uses, cached per key (config resolution
+  // is boot-time semantics — the boot value itself is a one-shot resolve, so a cache matches it).
+  const divergenceCache = new Map<string, string | undefined>([[bootProjectKey, roadmapRepoFileStrategy]]);
+  const divergenceFor = (key: string): string | undefined => {
+    if (!divergenceCache.has(key)) {
+      let v: string | undefined;
+      try { v = roadmapDivergenceDoc(loadProjectsConfig()?.projects?.[key]); } catch { v = undefined; }
+      divergenceCache.set(key, v);
+    }
+    return divergenceCache.get(key);
+  };
   return createServer(async (req, res) => {
     const method = req.method ?? "GET";
     let url: URL;
     try { url = new URL(req.url ?? "/", "http://127.0.0.1"); } catch { return json(res, 400, { error: "bad request url" }); }
-    const path = url.pathname.replace(/\/+$/, "") || "/";
-    const seg = path.split("/").filter(Boolean); // [] for "/"
+    const rawPath = url.pathname.replace(/\/+$/, "") || "/";
+    let seg = rawPath.split("/").filter(Boolean); // [] for "/"
+    let projectId = bootProjectId, projectKey = bootProjectKey, prefixed = false;
 
     try {
-      // ── DL-3 write surface: the ONLY non-GET routes. They hard-target the kind:"roadmap" doc through
-      //    docstore (DB-doc-only — no filesystem path ⇒ §17 firewall). Present ONLY when a write
-      //    connection + actor were supplied; otherwise the daemon stays GET-only (DL-1/DL-2 behavior).
-      if (method === "POST" && canWrite && (path === "/roadmap/save" || path === "/roadmap/publish")) {
+      // ── F2 (D2): per-request project resolution — /p/<key>/… resolves <key> against the hub's
+      // projects table (404 page for an unknown key) and strips the prefix, so every downstream route
+      // (views, write routes, SSE) runs against the RESOLVED project; bare paths keep the boot project
+      // (old URLs/bookmarks and the /api JSON surface are unchanged). SAFE_KEY is defense-in-depth
+      // (codex 2026-07-11): the resolved key later feeds filesystem joins (reportsRoot), and the DB
+      // doesn't enforce the config key grammar — so a path-derived key must be a single safe name
+      // (no "/", no leading "." ⇒ no ".." traversal) BEFORE it is looked up. A key outside the
+      // grammar can't be a real config project, so it 404s like any unknown key.
+      if (seg[0] === "p" && seg.length >= 2) {
+        const key = decodeSeg(seg[1]);
+        if (key === null) return json(res, 400, { error: "malformed percent-escape in path" });
+        const row = SAFE_KEY.test(key)
+          ? db.prepare("SELECT id,key FROM projects WHERE key=?").get(key) as { id: string; key: string } | undefined
+          : undefined;
+        if (!row) return htmlOut(res, 404, page("Not found", "", `<a class="back" href="/">← projects</a><p class="empty">No project <code>${esc(key)}</code> on this hub.</p>`, { hub: true }));
+        prefixed = true; projectId = row.id; projectKey = row.key; seg = seg.slice(2);
+      }
+      const path = "/" + seg.join("/"); // the project-local path (prefix stripped; equals rawPath when bare)
+
+      // Under a /p/<key>/ prefix only the HTML views, the write routes, and the project-scoped SSE
+      // stream are mounted. The JSON /api/* surface — including the op-API and its D1 role-gated
+      // `project` override — stays boot-scoped on the bare path, so a URL prefix can never bypass the
+      // D1 override matrix.
+      if (prefixed && seg[0] === "api" && !(seg.length === 2 && seg[1] === "stream")) {
+        return json(res, 404, { error: `not found: ${rawPath}` });
+      }
+      // ── F4/D3 doc write surface: POST [/p/<key>]/doc/:slug/save|publish, plus the legacy
+      //    /roadmap/save|publish aliases (slug resolved server-side). All doc writes go through
+      //    docstore (DB-doc-only — no filesystem path ⇒ §17 firewall) and ride the DL-29 DOUBLE gate:
+      //    canWrite AND the RESOLVED project's humanWrite.enabled (read FRESH per request) — gate
+      //    closed ⇒ these POSTs are NOT matched and fall through to the read-only 405, exactly like
+      //    the ticket writes. Publish is additionally operator-only (docstore's single gate).
+      const isDocWrite = seg.length === 3 && seg[0] === "doc" && (seg[2] === "save" || seg[2] === "publish");
+      const isRoadmapAlias = path === "/roadmap/save" || path === "/roadmap/publish";
+      if (method === "POST" && canWrite && (isDocWrite || isRoadmapAlias) && humanWriteEnabled(db, projectId)) {
         // DL-19: refuse a cross-origin (CSRF) or foreign-Host (DNS-rebinding) write BEFORE any docSave/
-        // docPublish — the guard runs ahead of handleRoadmapWrite, so a refused request never mutates.
+        // docPublish — the guard runs ahead of handleDocWrite, so a refused request never mutates.
         if (!writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
-        await handleRoadmapWrite(path === "/roadmap/save" ? "save" : "publish", req, res, db, writeDb!, projectId, projectKey, actor!, roadmapRepoFileStrategy);
+        let slug: string;
+        if (isDocWrite) {
+          const s = decodeSeg(seg[1]);
+          if (s === null) return json(res, 400, { error: "malformed percent-escape in path" });
+          slug = s;
+        } else {
+          slug = roadmapDocSlug(writeDb!, projectId); // the alias hard-targets the roadmap doc — never caller input
+        }
+        await handleDocWrite(seg[seg.length - 1] as "save" | "publish", slug, req, res, db, writeDb!, projectId, projectKey, actor!, divergenceFor(projectKey), isRoadmapAlias ? "/roadmap" : undefined);
         return;
       }
       // DL-29: opt-in human ticket-write routes — present ONLY when canWrite AND humanWrite.enabled. When
@@ -379,48 +462,42 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadma
         return json(res, 405, { error: "read-only daemon: only GET is allowed" });
       }
 
-      // GET / — the web UI board (DL-2): server-rendered HTML, read-only, columns by state. DL-20:
-      // optional server-side filter/search via the query string (state/type/label/assignee + free-text q).
-      if (path === "/") {
-        const sp = url.searchParams;
-        const filters = { state: sp.get("state") ?? undefined, type: sp.get("type") ?? undefined, label: sp.get("label") ?? undefined, assignee: sp.get("assignee") ?? undefined, q: sp.get("q") ?? undefined };
-        // DL-31: validate ?group to the single known view ("assignee" → swimlanes); anything else ⇒ default board.
-        const group = sp.get("group") === "assignee" ? "assignee" : undefined;
-        return htmlOut(res, 200, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, filters, canWrite && humanWriteEnabled(db, projectId), group)));
+      // ── F2 (D2): bare GET / is the hub PROJECT INDEX, not a board — every board lives under
+      // /p/<key>/. With exactly ONE real (non-_team) project an index would hold a single card, so
+      // redirect straight to that board (D2's single-project allowance), preserving any filter query
+      // (an old bookmarked /?state=… board URL lands filtered, not lost).
+      if (!prefixed && path === "/") {
+        const real = db.prepare("SELECT key FROM projects WHERE key<>? ORDER BY key").all(TEAM_INTAKE_PROJECT) as { key: string }[];
+        if (real.length === 1) {
+          res.writeHead(302, { location: href(real[0].key, `/${url.search}`), "content-length": 0 });
+          res.end();
+          return;
+        }
+        return htmlOut(res, 200, page("projects · dev-loop hub", "", projectIndexPage(db, Date.now()), { hub: true }));
       }
 
-      // GET /roadmap — the roadmap doc view + edit form (+ operator-only publish) (DL-3).
-      if (path === "/roadmap") {
-        return htmlOut(res, 200, page(`roadmap · ${projectKey}`, projectKey, roadmapPage(db, projectId, { writable: canWrite, canPublish: canWrite && actor === "operator", roadmapRepoFileStrategy })));
-      }
-
-      // GET /activity — read-only activity & throughput over the events ledger (DL-17). Pure SELECTs
-      // through the query_only db; Date.now() injected so activityPage stays pure/testable.
-      if (path === "/activity") {
-        return htmlOut(res, 200, page(`activity · ${projectKey}`, projectKey, activityPage(db, projectId, projectKey, Date.now())));
-      }
-
-      // GET /reports — the agent reports index (DL-10, read-only filesystem view; empty state if absent).
-      if (path === "/reports") {
-        return htmlOut(res, 200, page(`reports · ${projectKey}`, projectKey, reportsIndexPage(reportsRoot(projectKey))));
-      }
-      // GET /reports/<agent>/<level>/<date> — one report, read-only (path-validated → 400 traversal, 404 absent).
-      if (seg[0] === "reports" && seg.length === 4) {
-        const agent = decodeSeg(seg[1]), level = decodeSeg(seg[2]), date = decodeSeg(seg[3]);
-        if (agent === null || level === null || date === null) return json(res, 400, { error: "malformed percent-escape in path" });
-        const r = reportPage(reportsRoot(projectKey), agent, level, date);
-        if (r === "badpath") return json(res, 400, { error: "invalid report path" });
-        if (r === null) return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="/reports">← reports</a><p class="empty">No report ${esc(agent)}/${esc(level)}/${esc(date)}.</p>`));
-        return htmlOut(res, 200, page(`${date} · ${agent} · ${projectKey}`, projectKey, r.html));
-      }
-
-      // GET /ticket/:id — the web UI detail view (DL-2): full description + comments.
-      if (seg[0] === "ticket" && seg.length === 2) {
-        const id = decodeSeg(seg[1]);
-        if (id === null) return json(res, 400, { error: "malformed percent-escape in path" });
-        const inner = ticketPage(db, projectId, id, canWrite && humanWriteEnabled(db, projectId));
-        if (!inner) return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="/">← board</a><p class="empty">No ticket ${esc(id)} in ${esc(projectKey)}.</p>`));
-        return htmlOut(res, 200, page(`${id} · ${projectKey}`, projectKey, inner));
+      // ── The HTML view routes (board / roadmap / activity / reports / ticket) — F1: dispatched off
+      // the typed view-route registry (views/registry.ts), one entry per page, behavior byte-identical
+      // to the previous inline blocks (hub/test/daemon.ts asserts every route). The ViewCtx resolves
+      // everything per request: humanWrite is a LAZY fresh read (only the routes that render write
+      // affordances pay the settings SELECT — DL-29), canPublish mirrors the DL-3 operator gate. View
+      // patterns never overlap /api/*, so dispatching here leaves the JSON surface untouched.
+      const vm = matchViewRoute(method, seg);
+      if (vm) {
+        const out = vm.route.handler({
+          db, projectId, projectKey, url, params: vm.params,
+          humanWrite: () => canWrite && humanWriteEnabled(db, projectId),
+          writable: canWrite,
+          canPublish: canWrite && actor === "operator",
+          roadmapRepoFileStrategy: divergenceFor(projectKey),
+          draftsPending: () => draftsPendingCount(db, projectId), // docs P6a header chip — LAZY, resolved-project scope
+        });
+        if (out.kind === "redirect") { // D3: /roadmap → the roadmap doc page; /doc/<kind> → its canonical slug
+          res.writeHead(out.status, { location: out.location, "content-length": 0 });
+          res.end();
+          return;
+        }
+        return out.kind === "html" ? htmlOut(res, out.status, out.html) : json(res, out.status, out.body);
       }
 
       // GET /api — JSON API index (was GET / before DL-2 added the web UI at the root).
@@ -436,11 +513,17 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadma
       // checks max(events.id) — an O(1) read on the AUTOINCREMENT PK — and emits only when it ADVANCES, so
       // the board/activity pages refresh themselves as agents mutate the ledger. node:sqlite is synchronous,
       // so we poll on a setInterval (a few ms of work) rather than hold any long DB operation.
+      // F2 (D2) scoping: a /p/<key>/api/stream subscription follows ITS project (a sibling board never
+      // reloads on the boot project's churn); the bare path keeps the boot project; ?all=1 (the hub
+      // project-index page) watches the whole ledger across projects.
       if (path === "/api/stream") {
         if (streamCount >= MAX_STREAMS) return json(res, 503, { error: "too many live connections" });
         streamCount++;
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", "connection": "keep-alive", "x-accel-buffering": "no" });
-        const maxId = (): number => Number((db.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events WHERE project_id=?").get(projectId) as { m: number }).m);
+        const all = !prefixed && url.searchParams.get("all") === "1";
+        const maxId = all
+          ? (): number => Number((db.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events").get() as { m: number }).m)
+          : (): number => Number((db.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events WHERE project_id=?").get(projectId) as { m: number }).m);
         let last = maxId();
         res.write(`retry: 3000\ndata: ${last}\n\n`); // initial baseline + client reconnect hint
         const iv = setInterval(() => {
@@ -508,9 +591,10 @@ export function createDaemon({ db, projectId, projectKey, writeDb, actor, roadma
 
       // DL-36: an unknown /api/* path is a machine client → JSON 404 (unchanged). An unknown NON-API path is
       // a page navigation (a typo'd URL) → serve the friendly HTML 404, like the ghost-ticket route, instead
-      // of a raw-JSON dead-end. Read-only; query_only preserved.
-      if (seg[0] === "api") return json(res, 404, { error: `not found: ${path}` });
-      return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="/">← board</a><p class="empty">No page <code>${esc(path)}</code> in ${esc(projectKey)}.</p>`));
+      // of a raw-JSON dead-end. Read-only; query_only preserved. rawPath in the message so a prefixed miss
+      // names the URL the client actually requested.
+      if (seg[0] === "api") return json(res, 404, { error: `not found: ${rawPath}` });
+      return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="${esc(href(projectKey, "/"))}">← board</a><p class="empty">No page <code>${esc(rawPath)}</code> in ${esc(projectKey)}.</p>`));
     } catch (e) {
       return json(res, 500, { error: (e as Error).message });
     }

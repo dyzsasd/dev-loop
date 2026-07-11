@@ -200,7 +200,8 @@ Certain actions must never be performed by an agent. In the hub they have **no M
 - enable the Linear mirror,
 - **publish a strategy/roadmap document draft→current** (§14, §16) — *(correction, as shipped:
   no such `dev-loop-hub` CLI subcommand exists; the operator publishes via the MCP `doc.publish`
-  tool (`DEVLOOP_ACTOR=operator`) or the daemon web `/roadmap` page)*,
+  tool (`DEVLOOP_ACTOR=operator`) or the daemon web doc pages (`/doc/<slug>` — every gated kind,
+  F4/D3; `/roadmap` redirects there))*,
 - apply a §17 SKILL/conventions change (this remains a git commit — see §16).
 
 **Honest scope of this protection.** Because a determined/compromised agent can bypass MCP and write `hub.db` directly (§4), "no tool surface" defends against honest-but-buggy agents and prompt-injection-via-MCP — **not** a malicious process. That is why the *truly* unforgeable authorizations (self-modify, irreversible prod ops) are kept **outside** the hub entirely (§16), where the existing §17/§22/§23 firewalls already put them.

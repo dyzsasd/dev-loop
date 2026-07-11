@@ -45,8 +45,11 @@ try {
   ok(isAlive(r1.pid), "the spawned daemon process is alive (detached, survives the `up` command)");
   const h1 = await fetch(`${r1.url}/api/health`).then((x) => x.json()).catch(() => null) as { ok?: boolean; project?: string } | null;
   ok(!!h1 && h1.ok === true && h1.project === PROJ, "the live daemon serves /api/health for this project");
+  // ui P3 (2026-07): a genuinely EMPTY board renders the guided empty-state card in place of the
+  // well grid (class="board" appears only once tickets exist) — assert the new contract precisely.
   const board = await fetch(r1.url + "/").then((x) => x.text()).catch(() => "");
-  ok(board.includes("<!doctype html") && board.includes('class="board"'), "GET / renders the web-UI board (the surface the auto-start delivers)");
+  ok(board.includes("<!doctype html") && board.includes('class="empty-state"') && board.includes("No tickets yet"),
+    "GET / renders the web-UI board surface (empty project ⇒ the guided empty-state card)");
 
   // ── a second `up` no-ops: same single process, no EADDRINUSE ──
   const up2 = lc("up");
