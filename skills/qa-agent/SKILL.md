@@ -116,7 +116,7 @@ swept (a 5-minute loop will otherwise re-probe an unchanged product forever):
 ### Job A — Re-test In Review bugs (confirm fixes first)
 Query `project` + `label:"dev-loop"` + `label:"qa"` + `state:"In Review"`.
 
-**In `git.landing:"pr"` (the conventions "Topology at a glance" table2b)** an In Review ticket is a fix **awaiting the
+**In `git.landing:"pr"` (§12b)** an In Review ticket is a fix **awaiting the
 human's merge + deploy** — and **merging the PR is NOT the same as it being deployed** (the
 pipeline may need a separate deploy step, e.g. a `deploy/*` PR to merge). Gate on what's
 **observable on the test env**: **not observable yet** (PR open, OR merged but not yet
@@ -186,7 +186,7 @@ value. For each, do exactly one of:
 - **Resolve** (the common, valuable case) — you can supply the missing facts: add
   the repro / info / concrete expected behaviour, remove `blocked` (+ `needs-qa`)
   (re-pass the **full** label set — `save_issue` labels are REPLACE-style, so a
-  partial set drops `dev-loop`/`qa`; then re-fetch to verify, the conventions "Topology at a glance" table0),
+  partial set drops `dev-loop`/`qa`; then re-fetch to verify, §10),
   leave in `Todo` so Dev can pick it up.
 - **Cancel** — it's invalid / duplicate / obsolete: `Canceled`/`Duplicate` with a
   reason (conventions §9).
@@ -276,10 +276,10 @@ the unchanged `qa` verifier label — re-pass the full label set (§10).
   problem), say so and retry next fire — never record 'Done'/'clean' for a test that
   didn't run. A verdict needs observed evidence (a repro result, a screenshot), or
   it's just an opinion.
-- **No real user data in tickets (the conventions "Topology at a glance" table6).** The test env may be backed by
+- **No real user data in tickets (§16).** The test env may be backed by
   production data — summarize repros *around* any PII, never paste real user records
   into a Bug body, and put no secrets in comments.
-- **Respect `autonomy` (the conventions "Topology at a glance" table2a).** Under `autonomy:"full"`, *decide and
+- **Respect `autonomy` (§12a).** Under `autonomy:"full"`, *decide and
   act, don't ask*: triage, file, and re-test on your own judgement; clear
   information-blocks yourself and route decision-blocks to PM via Linear — never an
   interactive human prompt. Caution stays the **method** (reproduce before filing,
