@@ -21,6 +21,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   serve:            ["server"],                    // the stdio MCP server (the agent transport; = the dev-loop-hub bin)
   shim:             ["shim"],                      // thin stdio MCP → loopback daemon op-API (DL-55)
   daemon:           ["daemon"],                    // up | down | status | ensure (DL-41)
+  init:             ["init-wizard"],               // guided onboarding wizard — composes team init + first project/repo + doctor NEXT (P1)
   team:             ["team"],                      // init | import | repair | add-project | add-repo — workspace (v2)
   hub:              ["hub"],                        // start | stop | status | ensure — the workspace hub daemon (service)
   "next-project":   ["rotation"],                  // print the next project for an agent's fire (shared WRR cursor)
@@ -35,8 +36,17 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
   "identity-check": ["server", "identity-check"],  // the portability gate (PORTABILITY.md §4)
   "resolve-project":["server", "resolve-project"],
-  tickets:          ["cli-tickets", "tickets"],    // read-only terminal board list (DL-90)
-  ticket:           ["cli-tickets", "ticket"],     // read-only single-ticket detail + comments (DL-90)
+  tickets:          ["cli-tickets", "tickets"],    // read-only terminal board list (DL-90; --json = op-shaped list_issues)
+  ticket:           ["cli-tickets", "ticket"],     // read-only single-ticket detail + comments (DL-90; create/update re-route below)
+  op:               ["cli-agentops", "op"],        // LAYER 0 (A1/D8): dispatch ANY hub op with raw JSON args through agentOp()
+  comment:          ["cli-agentops", "comment"],   // comment add <id> — save_comment sugar
+  comments:         ["cli-agentops", "comments"],  // a ticket's comments as JSON (list_comments)
+  labels:           ["cli-agentops", "labels"],    // the project's labels as JSON (list_issue_labels)
+  label:            ["cli-agentops", "label"],     // label create <name> [--kind K] (create_issue_label)
+  project:          ["cli-agentops", "project"],   // the active project as JSON (get_project)
+  events:           ["cli-agentops", "events"],    // attribution events as JSON (list_events; --since filters client-side)
+  doc:              ["cli-agentops", "doc"],       // doc list|get|history|diff|save|publish — doc.* 1:1 (save: CAS, CONFLICT → exit 3)
+  mirror:           ["cli-agentops", "mirror"],    // mirror push|status — the one-way Linear mirror
   "export-desktop-skill": ["export-desktop-skill"],// render a self-contained Claude Desktop skill for an agent + project (P2-12)
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
@@ -57,7 +67,9 @@ Usage: dev-loop <command> [args]
   shim                        run the thin stdio MCP shim → the loopback daemon op-API (hub.transport:"daemon")
   daemon up|up-all|down|status|install-autostart|uninstall-autostart
                               daemon lifecycle — idempotent localhost web UI + optional login autostart
-  team init|import|repair|add-project|add-repo
+  init [--dir <path>] [--yes]  guided setup — workspace + first project/repo (interactive on a TTY;
+                              --yes takes every default), ends with the doctor verdict + its NEXT line
+  team init|import|repair|set|add-project|add-repo
                               workspace (schema v2): create / migrate-from-v1 / repair / validated config writes
   hub start|stop|status|ensure   workspace hub daemon lifecycle (service backend; stop checkpoints the WAL)
   metrics [--window 7d] [--json]   team KPIs — fire success from fires.jsonl (+ board KPIs on service)
@@ -71,11 +83,23 @@ Usage: dev-loop <command> [args]
   seed <key> <name> [PREFIX]  seed a project + actors + labels into the hub db
   doctor                      health-check the hub system-of-record (DOCTOR_OK)
   identity-check [--expect <actor>[/<project>]]   verify this shell resolves the intended identity
-  tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT]   read-only: list the resolved project's board (no daemon)
-  ticket <id>                 read-only: show one ticket — detail + comments
+  tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
+          [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)
+  ticket <id> [--json]        read-only: show one ticket — detail + comments
+  op <op-name> [--args-json '<JSON>']   dispatch ANY hub op as the acting agent (raw JSON in/out; stdin ok)
+  ticket create|update …      create / update a ticket (labels REPLACE the full set; relatedTo is APPEND-only)
+  comment add <id> (--body TEXT | --body-file F | '-')   comment on a ticket (authored as DEVLOOP_ACTOR)
+  comments <id>               a ticket's comments as JSON
+  labels | label create <name> [--kind K]   list / create labels
+  project                     the active project as JSON
+  events [--ticket ID] [--since ISO] [--limit N]   attribution events as JSON
+  doc list|get|history|diff|save|publish …   the doc family 1:1 (save: --base-version CAS; CONFLICT → exit 3)
+  mirror push|status          one-way Linear mirror
+                              (run \`dev-loop op --help\` for the write layer's full flag surface + exit codes)
   export-desktop-skill <agent> --project <key> [--team] [--out <dir>] [--zip]   render a self-contained Claude Desktop skill
   version | help
 
+Write-layer exit codes: 0 ok · 1 domain error · 2 usage · 3 doc CAS conflict · 4 identity/guard · 5 hub unavailable.
 Identity rides DEVLOOP_ACTOR (per pane); project DEVLOOP_PROJECT (or the cwd); db DEVLOOP_HUB_DB.
 Docs: https://github.com/dyzsasd/dev-loop  (docs/INDEX.md, docs/RUNNING.md, docs/PORTABILITY.md, docs/DAEMON.md)`);
 };
@@ -83,10 +107,15 @@ Docs: https://github.com/dyzsasd/dev-loop  (docs/INDEX.md, docs/RUNNING.md, docs
 if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { usage(); process.exit(0); }
 if (cmd === "version" || cmd === "--version" || cmd === "-v") { console.log(version()); process.exit(0); }
 
-const route = ROUTES[cmd];
+// `ticket create|update` are the WRITE sugar verbs (cli-agentops, A1); every other `ticket …` stays the
+// DL-90 read-only detail view (cli-tickets). Decided HERE so the two entries keep single responsibilities.
+const route = cmd === "ticket" && (rest[0] === "create" || rest[0] === "update")
+  ? (["cli-agentops", "ticket"] as [string, ...string[]])
+  : ROUTES[cmd];
 if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); process.exit(2); }
 
-const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics"]);
+const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics",
+  "op", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror"]); // the A1 write layer opens hub.db (direct-db transport)
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {

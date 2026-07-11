@@ -23,12 +23,9 @@
 // supplies only its handler factory (server.ts → dispatch; this shim → proxy below).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { request as httpRequest } from "node:http";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { resolveIdentity } from "./resolve-project.ts";
 import { ok, err, registerTools, type McpResult } from "./tooldefs.ts"; // DL-85: the ONE {name,description,inputSchema} registry + the shared ok()/err() + the McpResult type
-import { hubDbPath } from "./paths.ts";
+import { opRunfilePath, resolveOpPort, postOp } from "./op-client.ts"; // A1: the ONE loopback op-API HTTP client (runfile/port + POST + outcome classification), shared with cli-agentops.ts
 
 // ─── identity + project ──────────────────────────────────────────────────────
 // DL-85: the DEVLOOP_ACTOR + DEVLOOP_PROJECT/cwd resolution lives ONCE in resolve-project.ts (was re-derived
@@ -36,28 +33,10 @@ import { hubDbPath } from "./paths.ts";
 // server would attribute writes to. (The shim ignores projectFromCwd — only server.ts's not-seeded error uses it.)
 const { actor: ACTOR, projectKey: PROJECT_KEY, projectResolved } = resolveIdentity();
 
-// ─── DL-41 lifecycle runfile path (REPLICATES daemon.ts lcDbPath/lcRunDir/lcRunfile, :959-961) ──────────────
-// The shim is a standalone thin client and must NOT import the 92KB daemon (DL-55 affected-area: NOT daemon.ts),
-// so it re-derives the stable runfile path convention here — this comment is the drift tripwire against
-// daemon.ts. runDir = DEVLOOP_RUN_DIR ?? dirname(hubDbPath()); file = daemon-<key>.json.
-const DB_PATH = hubDbPath();
-const RUN_DIR = process.env.DEVLOOP_RUN_DIR ?? dirname(DB_PATH);
-const RUNFILE = join(RUN_DIR, `daemon-${PROJECT_KEY}.json`);
-
-// Resolve the daemon's loopback port WITHOUT hardcoding 8787 (folded critique #89): an explicit
-// DEVLOOP_HUB_PORT override wins (a foreground `npm run daemon` writes NO runfile; tests inject the in-process
-// port), else the DL-41 lifecycle runfile's recorded port. null ⇒ neither is available (→ a clear MCP error).
-// Re-read per call ON PURPOSE (not memoized): the DL-41 daemon can restart on a new port mid-session, and the
-// shim must follow the live runfile without itself restarting — a cached port would go stale → false ECONNREFUSED.
-function resolvePort(): number | null {
-  const envPort = process.env.DEVLOOP_HUB_PORT?.trim();
-  if (envPort) { const n = Number(envPort); if (Number.isInteger(n) && n > 0 && n < 65536) return n; }
-  try {
-    const info = JSON.parse(readFileSync(RUNFILE, "utf8")) as { port?: unknown };
-    if (typeof info.port === "number" && Number.isInteger(info.port) && info.port > 0) return info.port;
-  } catch { /* no/garbled runfile → the daemon was not lifecycle-started here */ }
-  return null;
-}
+// The DL-41 runfile path + per-call port resolution + the POST /api/op transport all live in op-client.ts
+// (A1 extraction — shared with the CLI write layer, byte-identical behavior); the shim keeps only its
+// MCP-shaped rendering of the three outcomes below.
+const RUNFILE = opRunfilePath(PROJECT_KEY);
 
 // ─── MCP result helpers + the McpResult type are imported from tooldefs.ts (DL-85 — one definition; a 2xx body ──
 // produces an IDENTICAL tool result to server.ts's stdio path because both use the SAME ok()/err()). ───────────
@@ -76,58 +55,27 @@ const noProject = (): McpResult => err(
   "no project resolved. Set DEVLOOP_PROJECT=<key>, or launch from inside a repo configured in ~/.dev-loop/projects.json.");
 
 // ─── proxy one core op → POST http://127.0.0.1:<port>/api/op/<op> (X-Devloop-Actor: ACTOR), as the MCP shape ──
-// daemon {status,body}: a 2xx → ok(body) (identical to server.ts's ok()); a DORMANT-mount 404 (body
-// {error:"not found: …"}) → the dormant hint; any other non-2xx → err(body.error) plus the body's extra
-// fields (e.g. doc.save's CONFLICT latestVersion/latestAuthor/hint) — a genuine op result, 400/403/
-// 404-not-found/500 forwarded verbatim, parity with the stdio path's toMcp(); a dead/absent daemon (no
-// runfile / ECONNREFUSED / timeout) → the daemon-down hint.
-function proxy(op: string, args: Record<string, unknown>): Promise<McpResult> {
-  if (!projectResolved) return Promise.resolve(noProject());
-  const port = resolvePort();
-  if (port === null) {
-    return Promise.resolve(daemonDown(` (no lifecycle runfile at ${RUNFILE}, and DEVLOOP_HUB_PORT is unset)`));
-  }
-  const body = JSON.stringify(args ?? {});
-  return new Promise<McpResult>((resolve) => {
-    let settled = false;
-    const finish = (r: McpResult) => { if (!settled) { settled = true; resolve(r); } };
-    const req = httpRequest(
-      {
-        hostname: "127.0.0.1", port, method: "POST", path: `/api/op/${op}`,
-        headers: {
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
-          "x-devloop-actor": ACTOR, // identity env→header (Decision #2/#5) — the only attribution the daemon trusts
-        },
-      },
-      (res) => {
-        let d = ""; res.setEncoding("utf8");
-        res.on("data", (c) => (d += c));
-        res.on("end", () => {
-          const status = res.statusCode ?? 0;
-          let parsed: unknown = null;
-          try { parsed = d ? JSON.parse(d) : null; } catch { /* non-JSON body (a bare daemon error) */ }
-          if (status >= 200 && status < 300) { finish(ok(parsed)); return; }
-          const emsg = typeof (parsed as { error?: unknown })?.error === "string" ? (parsed as { error: string }).error : "";
-          // A dormant mount answers EVERY /api/op/* with 404 {error:"not found: <path>"} (daemon.ts:759),
-          // distinct from a genuine op-level 404 ({error:"no such ticket …"}) which is a real result to forward.
-          if (status === 404 && (parsed === null || /^not found:/.test(emsg))) { finish(opApiDormant()); return; }
-          // forward the body's fields BESIDE `error` (destructured off so it can't clobber the message) —
-          // e.g. doc.save's CONFLICT retry data — byte-identical to server.ts's toMcp() spread.
-          const { error: _error, ...extra } = (parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}) as Record<string, unknown>;
-          finish(err(emsg || `op '${op}' failed: HTTP ${status}`, extra));
-        });
-      },
-    );
-    req.on("error", (e: NodeJS.ErrnoException) => {
-      const why = e.code === "ECONNREFUSED" ? " (connection refused — a stale runfile / a daemon that died?)"
-        : e.message === "timeout" ? " (no response within 30s — the daemon hung?)"
-        : ` (${e.code ?? e.message})`;
-      finish(daemonDown(why));
-    });
-    req.setTimeout(30000, () => { req.destroy(new Error("timeout")); }); // never a silent hang
-    req.end(body);
-  });
+// The HTTP transport (per-call port resolution / request / timeout / dormant-vs-down classification) is
+// op-client.ts's resolveOpPort/postOp (A1 extraction — behavior byte-identical to the pre-extraction inline
+// client, shared with the CLI write layer). This wrapper renders the three outcomes as MCP results: a 2xx →
+// ok(body) (identical to server.ts's ok()); a DORMANT mount → the dormant hint; any other non-2xx →
+// err(body.error) plus the body's extra fields (e.g. doc.save's CONFLICT latestVersion/latestAuthor/hint) —
+// a genuine op result, 400/403/404-not-found/500 forwarded verbatim, parity with the stdio path's toMcp();
+// a dead/absent daemon (no runfile / ECONNREFUSED / timeout) → the daemon-down hint.
+async function proxy(op: string, args: Record<string, unknown>): Promise<McpResult> {
+  if (!projectResolved) return noProject();
+  const port = resolveOpPort(PROJECT_KEY);
+  if (port === null) return daemonDown(` (no lifecycle runfile at ${RUNFILE}, and DEVLOOP_HUB_PORT is unset)`);
+  const out = await postOp(port, op, args ?? {}, ACTOR); // identity env→header (Decision #2/#5) — the only attribution the daemon trusts
+  if (out.kind === "down") return daemonDown(out.detail);
+  if (out.kind === "dormant") return opApiDormant();
+  const { status, body: parsed } = out;
+  if (status >= 200 && status < 300) return ok(parsed);
+  const emsg = typeof (parsed as { error?: unknown })?.error === "string" ? (parsed as { error: string }).error : "";
+  // forward the body's fields BESIDE `error` (destructured off so it can't clobber the message) —
+  // e.g. doc.save's CONFLICT retry data — byte-identical to server.ts's toMcp() spread.
+  const { error: _error, ...extra } = (parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}) as Record<string, unknown>;
+  return err(emsg || `op '${op}' failed: HTTP ${status}`, extra);
 }
 
 // ─── the MCP server — the SAME TOOL_NAMES tools/schemas as server.ts (a 100% drop-in transport, DL-85) ───────
@@ -139,7 +87,7 @@ const server = new McpServer({ name: "dev-loop-hub", version: "0.1.0" });
 registerTools(server, (name) => {
   if (name === "whoami") {
     return () => {
-      const port = projectResolved ? resolvePort() : null;
+      const port = projectResolved ? resolveOpPort(PROJECT_KEY) : null;
       return ok({ actor: ACTOR, project: projectResolved ? PROJECT_KEY : null, transport: "daemon", url: port ? `http://127.0.0.1:${port}` : null });
     };
   }
