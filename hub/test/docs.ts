@@ -75,6 +75,27 @@ ok(afterCross.kind === "strategy" && afterCross.title === "Strategy Doc", "DL-9:
 ok((await call(dq, "doc.history", { slug: "main" })).data.length === 1, "DL-9: no stray version appended — slug 'main' still has exactly 1 version");
 ok((await call(dq, "doc.save", { slug: "main", kind: "strategy", body: "STRATEGY V2", baseVersion: 1 })).data.version === 2, "DL-9 control: a same-kind save at the slug still appends (v2) — the guard blocks only a kind MISMATCH");
 
-for (const c of [pm, reflect, operator, beta, dq]) await c.close();
+// CONFLICT recovery converges (doc.get/doc.save version-semantics fix): doc.get's DEFAULT read returns
+// the PUBLISHED version while doc.save's CAS keys on the LATEST (drafts included), so the old documented
+// loop ("on CONFLICT re-read via doc.get and re-apply") could never converge once a draft existed past
+// the published version — the default read handed back the published number, the CAS rejected it, forever.
+// The fix is additive: the CONFLICT payload carries {latestVersion, latestAuthor, hint} and doc.get takes
+// version:"latest" for the newest draft, so a second writer can retry mechanically.
+const pmR = await as("pm", "docr", "DR");
+const reflectR = await as("reflect", "docr");
+const operatorR = await as("operator", "docr");
+await call(pmR, "doc.save", { slug: "strategy", kind: "strategy", body: "published base", baseVersion: 0 });
+await call(operatorR, "doc.publish", { kind: "strategy", version: 1 });
+ok((await call(pmR, "doc.save", { slug: "strategy", kind: "strategy", body: "pm draft past published", baseVersion: 1 })).data.version === 2, "convergence setup: published v1 + a pm DRAFT v2 past it");
+ok((await call(reflectR, "doc.get", { kind: "strategy" })).data.version === 1, "second writer's DEFAULT doc.get → the PUBLISHED v1 (the version the CAS does NOT key on)");
+const conflict = await call(reflectR, "doc.save", { slug: "strategy", kind: "strategy", body: "reflect edit", baseVersion: 1 });
+ok(conflict.isError && /CONFLICT/.test(conflict.data.error), "save with the published baseVersion 1 → CONFLICT (the draft v2 is the CAS key)");
+ok(conflict.data.latestVersion === 2 && conflict.data.latestAuthor === "pm", "CONFLICT payload carries latestVersion=2 + latestAuthor=pm — a mechanical retry needs no prose-parsing");
+ok(typeof conflict.data.hint === "string" && conflict.data.hint.includes(`version:"latest"`), "CONFLICT payload carries the retry hint (doc.get version:\"latest\")");
+const latest = (await call(reflectR, "doc.get", { kind: "strategy", version: "latest" })).data;
+ok(latest.version === 2 && latest.body === "pm draft past published" && latest.status === "draft", `doc.get version:"latest" → the v2 DRAFT past the published current`);
+ok((await call(reflectR, "doc.save", { slug: "strategy", kind: "strategy", body: "reflect edit re-applied", baseVersion: 2 })).data.version === 3, "the retry with the returned latestVersion=2 SUCCEEDS (the loop converges)");
+
+for (const c of [pm, reflect, operator, beta, dq, pmR, reflectR, operatorR]) await c.close();
 console.log(fails === 0 ? "\nHUB_DOCS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

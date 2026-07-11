@@ -67,7 +67,9 @@ updating (Job C step 5):
   own working knowledge base, §20) with `doc.save({ kind:"strategy", body, baseVersion:<the
   version you just read>, summary })` — this writes a **DRAFT** only; **you cannot publish**
   (only the operator can, via `doc.publish`). On a save, note "strategy draft v\<n\> saved —
-  awaiting operator publish"; on a CONFLICT re-read via `doc.get` and re-apply.
+  awaiting operator publish"; on a CONFLICT the error carries `latestVersion` — re-read via
+  `doc.get({ kind, version:"latest" })` (the default read returns the *published* version,
+  which the CAS does **not** key on), re-apply, and re-save with `baseVersion:latestVersion`.
   - **You own direction** (there is no Director agent): the `strategy` doc above is the
     default north-star; if you also keep a `kind:"roadmap"` doc you draft it the same way
     (`doc.save` DRAFT; the operator publishes via `doc.publish`). Record every material

@@ -44,7 +44,10 @@ import { createLabel, listLabels, getProject } from "./labelstore.ts";
 
 export interface OpResult { status: number; body: unknown }
 const okR = (body: unknown): OpResult => ({ status: 200, body });
-const errR = (status: number, error: string): OpResult => ({ status, body: { error } });
+// `extra` rides alongside `error` in the body (e.g. doc.save's CONFLICT latestVersion/latestAuthor/hint) —
+// the daemon serializes the body verbatim and server.ts/shim.ts spread it into the MCP error, so a caller
+// can recover mechanically instead of parsing the prose. It must not carry an `error` key of its own.
+const errR = (status: number, error: string, extra?: Record<string, unknown>): OpResult => ({ status, body: { error, ...extra } });
 
 // The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-67) the IM channel
 // + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 23 server.ts tools 1:1 (the shim is a
@@ -298,14 +301,17 @@ function opDocList(db: DatabaseSync, projectId: string, a: { kind?: string }): O
     : db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? ORDER BY kind").all(projectId));
 }
 
-function opDocGet(db: DatabaseSync, projectId: string, projectKey: string, a: { slug?: string; kind?: string; version?: number }): OpResult {
+function opDocGet(db: DatabaseSync, projectId: string, projectKey: string, a: { slug?: string; kind?: string; version?: number | "latest" }): OpResult {
   const bad = docSelectorErr(a); if (bad) return errR(400, bad);
-  // mirror server.ts's zod (version: int>0, optional). Re-check by hand (no zod on the op-API path): an
-  // out-of-range version must 400 like the stdio path, not fall through to the version===0 empty-doc branch.
-  if (a.version !== undefined && (!Number.isInteger(a.version) || (a.version as number) <= 0)) return errR(400, "version must be a positive integer");
+  // mirror server.ts's zod (version: int>0 | "latest", optional). Re-check by hand (no zod on the op-API path):
+  // an out-of-range version must 400 like the stdio path, not fall through to the version===0 empty-doc branch.
+  if (a.version !== undefined && a.version !== "latest" && (!Number.isInteger(a.version) || (a.version as number) <= 0)) return errR(400, `version must be a positive integer or "latest"`);
   const d = resolveDoc(db, projectId, a.slug, a.kind);
   if (!d) return errR(404, `no document ${a.slug ?? a.kind} in ${projectKey}`);
-  const ver = a.version ?? (d.current_version > 0 ? d.current_version : latestVersion(db, d.id));
+  // "latest" → the newest version INCLUDING drafts past the published current — what doc.save's CAS keys on
+  // (the CONFLICT-recovery read). The default stays the PUBLISHED version (readers see the operator-gated doc).
+  const ver = a.version === "latest" ? latestVersion(db, d.id)
+    : a.version ?? (d.current_version > 0 ? d.current_version : latestVersion(db, d.id));
   if (ver === 0) return okR({ ...d, version: 0, body: "", unpublished: true, empty: true });
   const v = db.prepare("SELECT version,body,status,summary,base_version,author,created_at FROM document_versions WHERE doc_id=? AND version=?").get(d.id, ver) as Record<string, unknown> | undefined;
   if (!v) return errR(404, `no version ${ver} of ${d.slug}`);
@@ -344,7 +350,7 @@ function opDocSave(db: DatabaseSync, projectId: string, actor: string, a: Partia
   if (!Number.isInteger(a.baseVersion) || (a.baseVersion as number) < 0) return errR(400, "baseVersion must be a non-negative integer");
   if (!(DOC_KINDS as readonly string[]).includes(a.kind as string)) return errR(400, `invalid kind '${a.kind}'; one of ${DOC_KINDS.join(", ")}`);
   const r = docSave(db, projectId, actor, a as DocSaveArgs);
-  return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error);
+  return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error, r.conflict); // a CAS CONFLICT carries {latestVersion,latestAuthor,hint} for a mechanical retry
 }
 
 // `db` MUST be a WRITABLE connection (docPublish does BEGIN IMMEDIATE + UPDATEs + a doc.publish event). The
@@ -467,7 +473,7 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "list_comments": return opListComments(db, projectId, projectKey, args as { issueId?: string });
     case "list_events": return opListEvents(db, projectId, args as { limit?: number });
     case "doc.list": return opDocList(db, projectId, args as { kind?: string });
-    case "doc.get": return opDocGet(db, projectId, projectKey, args as { slug?: string; kind?: string; version?: number });
+    case "doc.get": return opDocGet(db, projectId, projectKey, args as { slug?: string; kind?: string; version?: number | "latest" });
     case "doc.history": return opDocHistory(db, projectId, args as { slug?: string; kind?: string });
     case "doc.diff": return opDocDiff(db, projectId, args as { slug?: string; kind?: string; from?: number; to?: number });
     case "doc.save": return opDocSave(db, projectId, actor, args as Partial<DocSaveArgs>);
