@@ -15,7 +15,10 @@ import { DOC_KINDS } from "./docstore.ts"; // the doc-kind enum for doc.save's z
 // ─── MCP result helpers (one definition; was duplicated server.ts:117-118 ≡ shim.ts:73-74) ──────────────────
 export type McpResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 export const ok = (data: unknown): McpResult => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
-export const err = (message: string): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }] });
+// `extra` = machine-readable fields riding alongside `error` (e.g. doc.save's CONFLICT latestVersion/
+// latestAuthor/hint). Callers pass the op error body MINUS its `error` key (both transports destructure it
+// off), so `extra` can never clobber `message` and the two transports serialize byte-identically.
+export const err = (message: string, extra?: Record<string, unknown>): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message, ...extra }) }] });
 
 // ─── the canonical tool-name list — whoami (answered locally per transport) + the 22 op-backed tools ────────
 // agentops.ts derives AGENT_OPS = TOOL_NAMES minus "whoami" (the only tool that is NOT an op-API op), so this
@@ -68,11 +71,11 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
 
   "doc.list": { description: "List this project's documents (no bodies).", inputSchema: { kind: z.string().optional() } },
   "doc.get": {
-    description: "Get a document by slug or kind. Omit version → the published (current) version; if never published, the latest DRAFT with unpublished:true. version=N → that historical version.",
-    inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive().optional() },
+    description: `Get a document by slug or kind. Omit version → the published (current) version; if never published, the latest DRAFT with unpublished:true. version=N → that historical version. version:"latest" → the newest version INCLUDING drafts past the published current — what doc.save's CAS keys on (use it to recover from a save CONFLICT).`,
+    inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.union([z.number().int().positive(), z.literal("latest")]).optional() },
   },
   "doc.save": {
-    description: "Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the doc's latest version, else CONFLICT (never last-write-wins). NEVER publishes — only the operator can (doc.publish).",
+    description: `Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the doc's LATEST version (drafts included — NOT the published version doc.get returns by default), else CONFLICT with {latestVersion,latestAuthor,hint}. Recover: doc.get {version:"latest"}, re-apply your change, re-save with baseVersion=latestVersion. NEVER publishes — only the operator can (doc.publish).`,
     inputSchema: { slug: z.string(), kind: z.enum(DOC_KINDS), title: z.string().optional(), body: z.string(), baseVersion: z.number().int().min(0), summary: z.string().optional() },
   },
   "doc.history": { description: "A document's version ledger (no bodies; newest first).", inputSchema: { slug: z.string().optional(), kind: z.string().optional() } },

@@ -1611,7 +1611,10 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
 - **strategyDoc + documents (P4).** Under `service` the `strategyDoc` is a **repo file** by
   default (read/edit/commit, as in `local`). Set **`hub.docs:true`** (or a `{ "hubDoc": "<kind>" }`
   strategyDoc) to make the strategy + roadmap **first-class hub documents** —
-  versioned, attributable, optimistic-CAS (`doc.save` returns CONFLICT, never last-write-wins),
+  versioned, attributable, optimistic-CAS (`doc.save` returns CONFLICT, never last-write-wins —
+  the CONFLICT carries `latestVersion`; recover with `doc.get {version:"latest"}` + re-apply +
+  re-save with `baseVersion:latestVersion`, since the CAS keys on the LATEST draft, not the
+  published version `doc.get` returns by default),
   and **operator-published**: any agent appends `draft` versions via `doc.save`, but only the
   **operator** (DEVLOOP_ACTOR=`operator`) may flip a draft→`current` via `doc.publish`. Tools:
   `doc.list/get/save/history/diff/publish`. **§17 firewall (structural):** doc tools are

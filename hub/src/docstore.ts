@@ -25,7 +25,12 @@ export interface DocRow {
 
 // A discriminated result so callers map it to their own surface: server.ts → ok()/err(); the daemon →
 // an HTTP status. `error` carries the same human message the MCP `err()` used (CONFLICT / FORBIDDEN / …).
-export type DocResult<T> = { ok: true; data: T } | { ok: false; error: string };
+// A CAS CONFLICT additionally carries `conflict` — machine-readable retry data. This exists because
+// doc.get's DEFAULT read returns the PUBLISHED version while the CAS keys on the LATEST (drafts included):
+// a caller that re-read the default could never converge once a draft existed past the published version.
+// `latestVersion` is exactly what the retry's baseVersion must be (read the body via doc.get version:"latest").
+export type DocConflict = { latestVersion: number; latestAuthor: string | null; hint: string };
+export type DocResult<T> = { ok: true; data: T } | { ok: false; error: string; conflict?: DocConflict };
 
 // Map a docstore error message (the store returns prose, not codes) to the right HTTP status, so EVERY
 // caller that surfaces a DocResult over HTTP — the DL-3 roadmap write routes AND the DL-43/DL-62 agent
@@ -48,8 +53,9 @@ export const latestVersion = (db: DatabaseSync, docId: string): number =>
 export interface DocSaveArgs { slug: string; kind: DocKind; title?: string; body: string; baseVersion: number; summary?: string; }
 
 // Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the
-// doc's latest version, else CONFLICT (never last-write-wins). NEVER publishes. The DL-9 kind-
-// immutability guard and DL-6 actor semantics are preserved verbatim from the original MCP handler.
+// doc's latest version, else CONFLICT (never last-write-wins) carrying the DocConflict retry data.
+// NEVER publishes. The DL-9 kind-immutability guard and DL-6 actor semantics are preserved verbatim
+// from the original MCP handler.
 export function docSave(db: DatabaseSync, projectId: string, actor: string, a: DocSaveArgs): DocResult<{ doc: string; kind: string; version: number; status: string }> {
   const t = nowIso();
   db.exec("BEGIN IMMEDIATE"); // RESERVED lock before the read → cross-process CAS is atomic (§7)
@@ -71,7 +77,12 @@ export function docSave(db: DatabaseSync, projectId: string, actor: string, a: D
     // share a slug, so resolveDoc-by-slug stays correct.)
     if (a.kind !== d.kind) { db.exec("ROLLBACK"); return { ok: false, error: `CONFLICT: slug '${a.slug}' is a '${d.kind}' document — refusing a '${a.kind}' save (a document's kind is immutable; use a distinct slug)` }; }
     const latest = latestVersion(db, d.id);
-    if (a.baseVersion !== latest) { db.exec("ROLLBACK"); return { ok: false, error: `CONFLICT: '${a.slug}' is at version ${latest}, your baseVersion ${a.baseVersion} is stale — re-read (doc.get) and re-apply` }; }
+    if (a.baseVersion !== latest) {
+      const latestAuthor = (db.prepare("SELECT author FROM document_versions WHERE doc_id=? AND version=?").get(d.id, latest) as { author: string } | undefined)?.author ?? null;
+      db.exec("ROLLBACK");
+      return { ok: false, error: `CONFLICT: '${a.slug}' is at version ${latest}, your baseVersion ${a.baseVersion} is stale — re-read the latest draft (doc.get version:"latest"), re-apply your change, and re-save with baseVersion ${latest}`,
+        conflict: { latestVersion: latest, latestAuthor, hint: `doc.get { slug:"${a.slug}", version:"latest" }, re-apply your change, then doc.save with baseVersion ${latest}` } };
+    }
     const nv = latest + 1;
     db.prepare("INSERT INTO document_versions(id,doc_id,version,body,status,summary,base_version,author,created_at) VALUES (?,?,?,?,'draft',?,?,?,?)").run(randomUUID(), d.id, nv, a.body, a.summary ?? "", a.baseVersion, actor, t);
     db.prepare("UPDATE documents SET title=?, updated_at=? WHERE id=?").run(a.title ?? d.title, t, d.id);

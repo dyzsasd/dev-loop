@@ -183,8 +183,9 @@ Author the design, decompose it into staged child tickets, hand the design paren
        slug:"<module>", body, summary })`. The `design` kind is **multi-instance** (one doc
        per module slug) and is **NOT operator-publish-gated** — your `doc.save` draft **IS**
        the live design (read back with `doc.get({ kind:"design", slug })`, which returns the
-       latest version; there is no `current`-publish step). On a CONFLICT, re-read via
-       `doc.get` and re-apply your edits on the new `baseVersion`.
+       latest version; there is no `current`-publish step). On a CONFLICT, the error carries
+       `latestVersion` — re-read via `doc.get({ kind:"design", slug, version:"latest" })`,
+       re-apply your edits, and re-save with `baseVersion:latestVersion`.
      - **`linear` / `local`** ⇒ a committed repo file **`docs/design/<slug>.md`** in the
        doc-home repo (§19). Write/edit it and commit **only** that file (staging discipline,
        §7 — never scoop another agent's uncommitted work) with a clear message

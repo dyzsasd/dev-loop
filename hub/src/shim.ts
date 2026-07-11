@@ -77,8 +77,9 @@ const noProject = (): McpResult => err(
 
 // ─── proxy one core op → POST http://127.0.0.1:<port>/api/op/<op> (X-Devloop-Actor: ACTOR), as the MCP shape ──
 // daemon {status,body}: a 2xx → ok(body) (identical to server.ts's ok()); a DORMANT-mount 404 (body
-// {error:"not found: …"}) → the dormant hint; any other non-2xx → err(body.error) (a genuine op result —
-// 400/403/404-not-found/500 forwarded verbatim, parity with the stdio path); a dead/absent daemon (no
+// {error:"not found: …"}) → the dormant hint; any other non-2xx → err(body.error) plus the body's extra
+// fields (e.g. doc.save's CONFLICT latestVersion/latestAuthor/hint) — a genuine op result, 400/403/
+// 404-not-found/500 forwarded verbatim, parity with the stdio path's toMcp(); a dead/absent daemon (no
 // runfile / ECONNREFUSED / timeout) → the daemon-down hint.
 function proxy(op: string, args: Record<string, unknown>): Promise<McpResult> {
   if (!projectResolved) return Promise.resolve(noProject());
@@ -111,7 +112,10 @@ function proxy(op: string, args: Record<string, unknown>): Promise<McpResult> {
           // A dormant mount answers EVERY /api/op/* with 404 {error:"not found: <path>"} (daemon.ts:759),
           // distinct from a genuine op-level 404 ({error:"no such ticket …"}) which is a real result to forward.
           if (status === 404 && (parsed === null || /^not found:/.test(emsg))) { finish(opApiDormant()); return; }
-          finish(err(emsg || `op '${op}' failed: HTTP ${status}`));
+          // forward the body's fields BESIDE `error` (destructured off so it can't clobber the message) —
+          // e.g. doc.save's CONFLICT retry data — byte-identical to server.ts's toMcp() spread.
+          const { error: _error, ...extra } = (parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}) as Record<string, unknown>;
+          finish(err(emsg || `op '${op}' failed: HTTP ${status}`, extra));
         });
       },
     );
