@@ -186,6 +186,25 @@ try {
   ok(rep.code === 0 && /REPAIR_OK/.test(rep.out), "team repair exits 0");
   ok(readJson(join(HOME, "workspaces.json"))["svc-team"] === realpathSync(svc), "repair re-registers the workspace index");
 
+  // ── _team is structural: config rejects it everywhere a project key lands ──
+  const teamIntake = run("team", ["add-project", "_team"], { cwd: svc });
+  ok(teamIntake.code !== 0 && /E11/.test(teamIntake.out) && /hub\.db row/.test(teamIntake.out),
+    "add-project _team is refused (E11: the intake project lives only as a hub.db row)");
+
+  // ── doctor W08: config↔hub reconcile on a service workspace ──
+  // hub.db holds _team (reserved), _probe_ (hand-seeded, no config), web (in both); add a config project
+  // with no hub row to trigger the warn side.
+  ok(run("team", ["add-project", "ghost"], { cwd: svc }).code === 0, "add-project ghost (config-only, never seeded) exits 0");
+  const docSvc = run("server", ["doctor"], { cwd: svc });
+  ok(/\[W08\] projects\.ghost:.*no hub\.db row/.test(docSvc.out) && /dev-loop seed ghost/.test(docSvc.out),
+    "doctor warns W08 for a config project with no hub row, naming the exact seed command");
+  ok(/DOCTOR_OK/.test(docSvc.out), "W08 is a warning — the doctor verdict stays OK");
+  ok(/hub project '_probe_' has no dev-loop\.json entry/.test(docSvc.out),
+    "doctor reports (info) a hub row with no config entry");
+  ok(!/'_team' has no dev-loop\.json entry/.test(docSvc.out),
+    "the reserved _team intake row is NOT flagged by the reconcile");
+  ok(!/\[W08\] projects\.web/.test(docSvc.out), "a project present in both config and hub yields no W08");
+
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {

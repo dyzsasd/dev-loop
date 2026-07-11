@@ -2,7 +2,8 @@
 import {
   validateTeamFile, effectiveProject, effectiveRepo, reposOfProject, primaryRepo,
   referencingProjects, inferProjectForRepo, ownerOf, toLegacyView, normalizedRel,
-  parseWorkspaceFile, WsValidationError, type TeamFile, type Workspace,
+  parseWorkspaceFile, WsValidationError, isTeamProject, deliveryProjects,
+  type TeamFile, type Workspace,
 } from "../src/team-config.ts";
 
 let fails = 0;
@@ -124,7 +125,17 @@ for (const bad of ["team", "lessons", "wt", "locks", "hub.db"]) {
   ok(has(f, "E11"), `E11: reserved project key '${bad}'`);
 }
 { const f = base(); f.repos["_bad"] = { path: "x" }; ok(has(f, "E11"), "E11: repo ref with leading underscore"); }
-{ const f = base(); f.projects["_team"] = { repos: [{ ref: "portal" }] }; f.repos.portal.owner = "devplatform"; ok(!has(f, "E11"), "E11: _team is the permitted reserved intake project key"); }
+// `_team` is STRUCTURAL: the intake project lives only as a hub.db row (team init seeds it) — a config
+// projects._team is rejected, so no consumer ever needs a hand-written exclusion to hold.
+{ const f = base(); f.projects["_team"] = { repos: [{ ref: "portal" }] }; f.repos.portal.owner = "devplatform"; ok(has(f, "E11"), "E11: _team is rejected as a config project key (hub-db-only intake row)"); }
+
+// ── the centralized _team exclusion helpers (the ONE place the exclusion lives) ──
+{
+  ok(isTeamProject("_team") && !isTeamProject("team") && !isTeamProject("devplatform"), "isTeamProject matches only the reserved intake key");
+  const f = base();
+  (f.projects as Record<string, unknown>)["_team"] = { repos: [] }; // hand-built Workspace that never passed validation
+  ok(deliveryProjects(mkWs(f)).join(",") === "devplatform", "deliveryProjects drops _team even on a hand-built workspace");
+}
 
 // ── W01/W02 warnings (not errors) ──
 { const f = base(); f.repos.orphan = { path: "orphan-dir" }; ok(validateTeamFile(f).warnings.some((w) => w.code === "W02"), "W02: registered repo referenced by nobody"); }

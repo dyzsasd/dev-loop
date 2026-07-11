@@ -10,7 +10,7 @@ import { dirname, join, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { tryResolveWorkspace } from "./workspace.ts";
-import { toLegacyView } from "./team-config.ts";
+import { toLegacyView, deliveryProjects } from "./team-config.ts";
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (published)
 
@@ -49,7 +49,7 @@ if (ws) {
   p = toLegacyView(ws).projects[project] as Record<string, unknown> | undefined;
   cfgSource = `workspace '${ws.file.team.key}' (${ws.filePath})`;
   if (has("--team")) {
-    const siblings = Object.keys(ws.file.projects).filter((k) => k !== project && k !== "_team");
+    const siblings = deliveryProjects(ws).filter((k) => k !== project);
     teamContext = `\n## Team context\n- **team**: ${ws.file.team.key} · **backend**: ${ws.file.team.backend}\n- **sibling projects**: ${siblings.length ? siblings.join(", ") : "(none)"}\n- This export is for **${project}** only; coordinate cross-project work through the team intake, not here.\n`;
   }
 } else {
