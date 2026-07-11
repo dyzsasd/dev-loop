@@ -104,7 +104,8 @@ finish/hand it off rather than redoing it.
 When `git.autoMerge` and/or `deploy.style:"release-pr"` are set, the feature-PR merge and the
 deploy-PR merge are async (checks/build take minutes) — drive them **here** at fire-start, not
 inline. One pass (absent this config it's a no-op — a legacy project is unchanged):
-First `git -C <repo> worktree prune` (drop worktrees whose PR already merged). Then:
+First `git -C <repo> worktree prune` (drop worktrees whose PR already merged; a base-clone
+mutation — under `dev-loop with-repo-lock`, §7). Then:
 - **Feature PRs (`git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"`. For each
   (the linked ticket is `In Progress`, dev-owned), read `gh pr checks <pr>` + `gh pr view <pr>
   --json mergeable,mergeStateStatus`:
@@ -176,7 +177,11 @@ REPLACE-style — or you'll drop `dev-loop`/owner labels.)
 
 ### Step 4 — Implement
 Work in **the target repo's path** (the `repos[]` entry for the ticket's `repo:<name>`
-label; single-repo ⇒ `repoPath`, unchanged — §19). **Before coding, read the repo's
+label; single-repo ⇒ `repoPath`, unchanged — §19). **Where exactly: if you are
+senior-dev/junior-dev executing this substrate (split-dev, §21a), or `git.landing:"pr"`,
+work in the ticket's per-ticket worktree** (conventions §7 — created at claim / before
+implementing), never the shared checkout; only the legacy solo `dev` in `landing:"direct"`
+works in place. **Before coding, read the repo's
 contributor skill** if one is resolved (`repos[].contributorSkill` else top-level
 `contributorSkill`) and follow it; **when absent, fall back to reading the repo's own
 CLAUDE.md** (today's behavior) and match its conventions/style. Make the smallest change that satisfies **all**
@@ -299,11 +304,13 @@ Only after green gates:
 **If `git.landing:"pr"` (§12b): land via a PR in an ISOLATED worktree — never touch
 `defaultBranch` or the shared checkout.** Because two dev tiers (senior/junior) can run against
 the **same repo checkout** concurrently, do ALL of a pr-mode ticket's work in a **per-ticket git
-worktree** so they never collide on one working tree (§7):
+worktree** so they never collide on one working tree (§7 — in split-dev that same isolation is
+mandatory in EVERY landing mode; the steps below are the pr-mode landing):
 1. Create it once (at claim / before implementing), at a path **outside the repo** so nothing
    ever lands in the working tree: `git -C <repo> fetch origin` then `git -C <repo> worktree add
    ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id> -b dev-loop/<ticket-id>
-   origin/<resolved defaultBranch>` — a fresh branch off the up-to-date base in its own dir.
+   origin/<resolved defaultBranch>` — a fresh branch off the up-to-date base in its own dir
+   (fetch/worktree-add mutate the base clone — run them under `dev-loop with-repo-lock`, §7).
    **Do the Step-4 implementation IN that worktree dir**, not the shared checkout. (If the branch
    already exists from a prior fire, reuse the existing worktree / `worktree add` onto it.)
 2. Commit **only** this ticket's files (§7) with the ticket-id + the repo's commit convention +
@@ -328,7 +335,18 @@ deploys and Dev merges the `auto:true` deploy PR at fire-start).
 locally and note that a human must push + open the PR (no `gh` call). The direct-commit sequence
 below runs **only** when `git.landing` is absent or `"direct"`.
 
-- If `git.autoCommit`: make sure you're on **the target repo's resolved `defaultBranch`**
+**In `landing:"direct"` under the split (§21a — you are senior-dev or junior-dev executing
+this substrate):** the bullets below still gate WHAT happens (`autoCommit`/`autoPush`/
+`autoDeploy`), but the commit lands on `dev-loop/<ticket-id>` in the ticket's worktree and
+reaches `defaultBranch` via the **§7 direct merge-back sequence** (sync/rebase-if-stale →
+ONE `dev-loop with-repo-lock` invocation wrapping the `--ff-only` merge + push → worktree
+cleanup — mechanics in conventions §7, don't improvise them) — never a commit in the shared
+checkout. Deploy runs from the base clone after the merge-back. Only the legacy solo `dev`
+(split off, one writer) commits in place per the bullets as written (§7).
+
+- If `git.autoCommit` (legacy solo `dev` only — in split-direct the commit goes on
+  `dev-loop/<ticket-id>` in the worktree instead, §7): make sure you're on **the target
+  repo's resolved `defaultBranch`**
   first (`repos[].defaultBranch` else `git.defaultBranch`, §19; single-repo unchanged);
   if that branch doesn't exist in the repo, commit on the repo's current branch and note
   it — never create a divergent branch. Commit with a message referencing the
@@ -370,7 +388,8 @@ is alive before walking away:
    `defaultBranch`** (`git revert --no-edit <commit(s)>` — revert *all* of them if the
    ticket shipped more than one, e.g. a separate regression-test commit), push, re-run
    **that repo's resolved `deploy.command`** (§19; single-repo ⇒ top-level
-   `defaultBranch`/`deploy`, unchanged), and confirm the smoke check now passes (prod
+   `defaultBranch`/`deploy`, unchanged — in a split-dev project the revert+push mutate the
+   base clone, so run them under `dev-loop with-repo-lock`, §7), and confirm the smoke check now passes (prod
    restored to the prior good state). Then reopen the ticket to `Todo` with `Bail-shape:
    fix-exhausted` (§9), commenting what broke, the reverted commit sha, and that prod
    was restored. **A reverted prod-breaker is a SUCCESS** — it protected real users;
@@ -425,3 +444,69 @@ Then loop to Step 1.
 End with: tickets picked, what shipped (with commit/deploy refs), what moved to
 In Review, what you blocked (and why), what you marked Duplicate/Canceled, and any
 build/deploy failures. If `mode:"dry-run"`, label it a preview.
+
+---
+
+<!-- cli-cheatsheet:begin agent=dev -->
+## CLI cheat-sheet — `backend:"service"`, `interface:"cli"` (§18)
+
+<!-- GENERATED from the CLI usage strings by hub/src/gen-cheatsheets.ts (D9) — never hand-edit between
+     the markers; hub/test/cli-cheatsheet.ts byte-checks this block against a fresh render. -->
+
+On a CLI-interface fire (D8 — no hub MCP; `hub.agentInterface` decides per coding agent) every §18 op
+below is invoked as a `dev-loop` command: JSON on stdout, errors as JSON on stderr, identity from the
+fire env (`DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB` — never touch these). Full write-layer
+surface: `dev-loop op --help`.
+
+**FIRST — verify identity, fail closed.** Before ANY other board or repo action, run:
+
+```text
+dev-loop project --json        # get_project as the acting actor — the CLI whoami
+```
+
+Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) or `5` (hub
+unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
+fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
+
+Your ops: queue reads (Steps 0–1), `save_issue` update (claim, block, In-Review hand-off), comments, split / `[coverage]` follow-up creates (Step 4), and hub-doc reads where the project runs `hub.docs`.
+
+```text
+# list_issues
+dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
+                 [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)
+    --json = EXACTLY the op list_issues body (updated_at DESC, terminal states included, cap 250);
+    --all/--owner and --assignee '' are human-view only (usage error with --json).
+
+# get_issue
+dev-loop ticket <id> [--json]        read-only: show one ticket — detail + comments
+    --json = EXACTLY the op get_issue body (the ticket + its comments + referencedBy).
+
+# save_issue (create)
+dev-loop ticket create --title T --type Bug|Feature|Improvement [--description TEXT|'-'] [--description-file F]
+                       [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
+    --blocked-by writes the §9c blocking-edge marker comment ('Blocked-by: <id>', one line per id) after the create.
+
+# save_issue (update)
+dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
+                       [--related-to +ids] [--duplicate-of ID|'']
+    HAZARD: labels REPLACE the full set (re-pass all).
+    HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
+
+# save_comment
+dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)
+
+# doc.get
+dev-loop doc get (--slug S | --kind K) [--version N|latest]
+```
+
+Respect `mode` (§12) yourself — the CLI has no dry-run gate: in `dry-run`, make no write-verb calls.
+
+Exit codes (every write-layer verb):
+
+```text
+0 ok · 1 domain error (op 4xx/5xx; body on stderr) · 2 usage · 3 doc.save CAS CONFLICT (payload on stderr)
+4 identity/guard (unknown actor; unresolved/unseeded project; a WRITE as 'operator' inside an agent fire —
+  DEVLOOP_TEAM_SCOPE/DEVLOOP_DEV_SPLIT set — without --i-am-the-operator) · 5 hub unavailable (daemon down/
+  dormant, or hub.db busy past the 5s busy_timeout)
+```
+<!-- cli-cheatsheet:end agent=dev -->

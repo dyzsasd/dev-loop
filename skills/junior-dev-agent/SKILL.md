@@ -109,7 +109,9 @@ on **the target repo's resolved `defaultBranch`** (the repo named by the ticket'
 `repo:<name>` label, §19; single-repo ⇒ `repoPath` + `git.defaultBranch`): a commit
 referencing the ticket id; or, if `autoPush:false`, a local commit; **in `git.landing:"pr"`
 (§12b) instead an open/merged PR referencing the ticket id
-(`gh pr list --search "<id>" --state all`)**. **If the target repo
+(`gh pr list --search "<id>" --state all`)**; **in `landing:"direct"` an unmerged
+`dev-loop/<id>` branch/worktree also counts (conventions §7)** — the prior fire got as far
+as committing; finish it by landing via the §7 merge-back rather than redoing the work. **If the target repo
 is unresolvable** (no/contradictory `repo:<name>` label in a multi-repo project) **leave
 it** — it'll be handled as a missing-target block in Step 3 (§19). If there's no
 artifact, it's an **orphan** from an aborted run: release the claim, reset to `Todo`
@@ -216,6 +218,11 @@ code-review self-review (Step 5.5, blocks on Critical/High) → ship per config 
 → post-deploy smoke + autonomous rollback (Step 6.5) → hand off to `In Review`
 (Step 7), then loop to Step 1. Junior-specific riders on that sequence:
 
+- **Worktree isolation is always on for you (conventions §7).** You are one of two
+  concurrent writers (§21a), so EVERY ticket's work — implement, gate, commit — happens in
+  its per-ticket worktree **regardless of `git.landing`**; in `landing:"direct"` you land on
+  `defaultBranch` via the §7 direct merge-back sequence (dev-agent Step 6), never by
+  committing in the shared checkout.
 - **No design children (Step 4).** You do NOT spawn design children or re-decompose the
   design — that is senior-dev's job; you implement the one increment your ticket scopes,
   and any *split* follow-up you file is a **same-tier `junior-dev` ticket** (it inherits
@@ -289,3 +296,69 @@ file: a structural ask is a §17 `[junior-dev-proposal]` (or a `lessons.md` entr
 permits), never an unattended edit. The per-module **design doc** is the one exception in the
 split, and it is **not yours** — senior-dev authors it autonomously as a product artifact (§21a);
 you only *read* it. You implement, gate, ship, and hand off — nothing structural.
+
+---
+
+<!-- cli-cheatsheet:begin agent=junior-dev -->
+## CLI cheat-sheet — `backend:"service"`, `interface:"cli"` (§18)
+
+<!-- GENERATED from the CLI usage strings by hub/src/gen-cheatsheets.ts (D9) — never hand-edit between
+     the markers; hub/test/cli-cheatsheet.ts byte-checks this block against a fresh render. -->
+
+On a CLI-interface fire (D8 — no hub MCP; `hub.agentInterface` decides per coding agent) every §18 op
+below is invoked as a `dev-loop` command: JSON on stdout, errors as JSON on stderr, identity from the
+fire env (`DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB` — never touch these). Full write-layer
+surface: `dev-loop op --help`.
+
+**FIRST — verify identity, fail closed.** Before ANY other board or repo action, run:
+
+```text
+dev-loop project --json        # get_project as the acting actor — the CLI whoami
+```
+
+Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) or `5` (hub
+unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
+fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
+
+Your ops: slice reads (Steps 0–1), `save_issue` update (claim, block, In-Review hand-off), comments, and `doc get --kind design --slug <slug>` (the `Design:` pointer read, Step 4). The ONLY tickets you create are your own same-tier split / `[coverage]` follow-ups (dev-agent Step 4) — you never spawn design children or route work.
+
+```text
+# list_issues
+dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
+                 [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)
+    --json = EXACTLY the op list_issues body (updated_at DESC, terminal states included, cap 250);
+    --all/--owner and --assignee '' are human-view only (usage error with --json).
+
+# get_issue
+dev-loop ticket <id> [--json]        read-only: show one ticket — detail + comments
+    --json = EXACTLY the op get_issue body (the ticket + its comments + referencedBy).
+
+# save_issue (create)
+dev-loop ticket create --title T --type Bug|Feature|Improvement [--description TEXT|'-'] [--description-file F]
+                       [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
+    --blocked-by writes the §9c blocking-edge marker comment ('Blocked-by: <id>', one line per id) after the create.
+
+# save_issue (update)
+dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
+                       [--related-to +ids] [--duplicate-of ID|'']
+    HAZARD: labels REPLACE the full set (re-pass all).
+    HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
+
+# save_comment
+dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)
+
+# doc.get
+dev-loop doc get (--slug S | --kind K) [--version N|latest]
+```
+
+Respect `mode` (§12) yourself — the CLI has no dry-run gate: in `dry-run`, make no write-verb calls.
+
+Exit codes (every write-layer verb):
+
+```text
+0 ok · 1 domain error (op 4xx/5xx; body on stderr) · 2 usage · 3 doc.save CAS CONFLICT (payload on stderr)
+4 identity/guard (unknown actor; unresolved/unseeded project; a WRITE as 'operator' inside an agent fire —
+  DEVLOOP_TEAM_SCOPE/DEVLOOP_DEV_SPLIT set — without --i-am-the-operator) · 5 hub unavailable (daemon down/
+  dormant, or hub.db busy past the 5s busy_timeout)
+```
+<!-- cli-cheatsheet:end agent=junior-dev -->

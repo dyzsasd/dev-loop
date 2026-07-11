@@ -554,13 +554,58 @@ files**. If you're knowingly running more than one Dev, give each an isolated
 worktree/clone. If commits you didn't author appear mid-run, surface it in the
 report rather than building on top blindly.
 
-**In `git.landing:"pr"` the two-tier Dev (senior + junior) runs concurrently against one
-checkout by default, so isolation is MANDATORY, not optional: each pr-mode ticket does all its
-work in a dedicated `git worktree` on branch `dev-loop/<ticket-id>`, at a path **outside the
-repo** — `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id>` — created before
-implementing and removed after its PR merges (§12b Step 6 / §12c Step 0.5). The shared checkout
-stays on `defaultBranch` throughout; nothing worktree-related ever lands in the repo tree.
-`git worktree prune` at fire-start reaps any left by a crashed fire.**
+**Per-ticket worktree isolation is MANDATORY whenever more than one dev tier can write.**
+Two cases, and they compose:
+
+- **Split-dev (§21a) — in EVERY landing mode.** When the two-tier pair is enabled
+  (`devSplit:true` config / `DEVLOOP_DEV_SPLIT` runtime), senior-dev and junior-dev run
+  concurrently and would otherwise share ONE working tree — `index.lock` collisions,
+  half-staged mixes, one agent committing the other's WIP. So **every dev-tier
+  implementation fire** (junior builds AND senior direct-code) does ALL of its ticket's
+  work in a dedicated worktree, **regardless of `git.landing`** — `"direct"` included.
+- **`git.landing:"pr"` (§12b/§12c) — even for the legacy solo `dev`.** The
+  branch-per-ticket flow needs the shared checkout parked on `defaultBranch` anyway.
+
+The worktree pattern (both cases): a dedicated `git worktree` on branch
+`dev-loop/<ticket-id>`, at a path **outside the repo** —
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id>` — created off the up-to-date
+base before implementing and removed after the ticket lands. The shared checkout stays on
+`defaultBranch` throughout; nothing worktree-related ever lands in the repo tree;
+`git worktree prune` at fire-start reaps any left by a crashed fire. Base-clone mutations
+(fetch / worktree add / remove / prune, and the direct merge-back below) run under
+`dev-loop with-repo-lock <repo-ref> -- <cmd>` (§27); worktree-internal work needs no lock.
+How a worktree LANDS depends on `git.landing`:
+
+- **`"pr"`** — unchanged: push the branch, open the PR (§12b / dev-agent Step 6); the
+  worktree is removed after the PR merges (§12c / dev-agent Step 0.5).
+- **`"direct"` — the direct merge-back sequence.** The worktree merges back to the base
+  branch; nothing is ever committed in the shared checkout. With the ticket's gates green
+  and its files committed on `dev-loop/<ticket-id>` in the worktree (per `git.autoCommit`;
+  staging discipline above — only that ticket's files):
+  1. **Sync.** `dev-loop with-repo-lock <repo-ref> -- git fetch origin` (when a remote is
+     configured — a fetch mutates the shared refs, so it takes the lock). If the resolved
+     `defaultBranch` advanced since the branch was created (the other tier landed first),
+     `git -C <worktree> rebase origin/<defaultBranch>` (the local `<defaultBranch>` when no
+     remote) — worktree-internal, no lock. If the rebase pulled in ANY new commits, re-run
+     the build/test gate before landing (the combined state was never built). An
+     unresolvable rebase → `fix-exhausted` block (§9).
+  2. **Land atomically** — ONE `dev-loop with-repo-lock` invocation wrapping the whole
+     fast-forward + push:
+     `dev-loop with-repo-lock <repo-ref> -- sh -c 'git checkout <defaultBranch> && git pull
+     --ff-only && git merge --ff-only dev-loop/<ticket-id> && git push origin
+     <defaultBranch>'` — drop the `git pull --ff-only` when no remote is configured, and the
+     final `push` when `git.autoPush` is false. `--ff-only` is load-bearing: if the merge
+     refuses, the base advanced under you — go back to step 1 and retry (cap ~2 cycles →
+     `fix-exhausted` block, §9); never create a merge knot on `defaultBranch`.
+  3. **Clean up** (under the same lock, or a second invocation): `git worktree remove` the
+     ticket's worktree, then `git branch -d dev-loop/<ticket-id>`. Deploy (`git.autoDeploy`,
+     dev-agent Step 6/6.5) runs from the base clone AFTER the merge-back — the Step-6 flag
+     ladder is unchanged (`autoPush:false` stops there; no deploy); a Step-6.5 revert
+     mutates the base clone too — run it under the same lock.
+
+**The legacy solo `dev` in `landing:"direct"` (split off — ONE writer) is explicitly
+exempt:** it keeps today's in-place behavior, committing directly on `defaultBranch` in the
+shared checkout (§12b). One writer has nothing to race with.
 
 ---
 
@@ -871,6 +916,10 @@ cheap board scan (the full body stays on `get_issue`); `updatedSince:<ISO>` read
 changed; `relatedTo:<id>` finds a design parent's children; and `query` now searches
 title + description **+ comment bodies** with whitespace-AND-ed terms — so a §8 dedup query
 catches a reworded duplicate whose only match is a comment (e.g. a `review failed:` note).
+On an `interface:"cli"` fire (§18) the same levers ride the read verbs — `dev-loop tickets
+--json [--fields summary] [--updated-since ISO] [--related-to ID] [--q TEXT] [--limit N]`
+is byte-identical to the `list_issues` op, and `dev-loop ticket <id> --json` is `get_issue`;
+your SKILL's cheat-sheet block carries the exact flag surface.
 
 **Local backend (§18): the same discipline, on files.** `list_issues` becomes a
 glob+parse+filter over the board's `tickets/*.md`; still filter to the narrow slice
@@ -881,7 +930,11 @@ frontmatter rewrite (re-read the file to confirm `state:`/`labels:` landed).
 
 ### Linear MCP write hazards (read before any `save_issue`)
 
-Four footguns that silently corrupt the loop — every skill must handle them:
+Four footguns that silently corrupt the loop — every skill must handle them. They are
+**carrier-independent** (§18): on an `interface:"cli"` fire #1 and the `relatedTo`
+append-only union surface verbatim as the `dev-loop ticket update` flags (`--labels`
+REPLACES the full set; `--related-to` only ADDS), and the cheat-sheet block in each
+SKILL repeats them as HAZARD lines:
 
 1. **`labels` is REPLACE-style on update.** `save_issue(labels:[X])` overwrites the
    **entire** label set — it does not add X. (Unlike `blocks`/`relatedTo`, which are
@@ -1022,7 +1075,11 @@ finished ticket. **Absent ⇒ `"direct"`** — today's behavior, so every existi
 
 - **`"direct"` (default)** — Dev commits to the target repo's resolved `defaultBranch` and,
   per `git.autoPush`/`autoDeploy`, pushes and (if a `deploy.command` resolves) deploys
-  (dev-agent Step 6/6.5). The human is not in the landing loop.
+  (dev-agent Step 6/6.5). The human is not in the landing loop. **In a split-dev project
+  (§21a) the commit still happens in the ticket's isolated worktree and reaches
+  `defaultBranch` via the §7 direct merge-back sequence** — `direct` names WHERE the change
+  lands (no PR, no human gate), not a license for two tiers to share the checkout; only the
+  legacy solo `dev` (one writer) commits in place (§7).
 - **`"pr"`** — Dev does **not** commit to `defaultBranch`. Per finished ticket it:
   1. `git fetch`, then branches **`dev-loop/<ticket-id>`** off the up-to-date
      `origin/<resolved defaultBranch>`.
@@ -1510,10 +1567,11 @@ The §10 query discipline still applies: fetch the narrow slice you need (filter
 most specific predicate; `get_issue` one file when that's all you need), never read
 every file blindly.
 
-**Service backend:** every op above maps to the **identically-named hub MCP tool**
+**Service backend:** every op above maps to the **identically-named hub op**
 (`list_issues`/`get_issue`/`save_issue`/`save_comment`/`list_comments`/`list_issue_labels`/
-`create_issue_label`/`get_project`) with the same args + semantics — see *The `service`
-backend* below.
+`create_issue_label`/`get_project`) with the same args + semantics; whether a fire invokes
+that op as a hub MCP tool or as a `dev-loop` CLI command is the interface question — see
+*The `service` backend* below.
 
 ### ID allocation (race-safe via exclusive create)
 `counter.json` (`{ "prefix": "...", "next": N }`, `prefix` from `ticketPrefix` (§11)
@@ -1566,11 +1624,32 @@ the file board. It is the path to what Linear's shared identity can't give the l
 per-agent attribution**, structural per-project scoping, and a native event feed. Opt-in;
 `backend` absent ⇒ `linear` (unchanged).
 
-- **Op mapping — 1:1 with the Linear MCP.** The hub exposes tools with the **same names and
-  arg shapes** as the Linear MCP (`list_issues`/`get_issue`/`save_issue`/`save_comment`/
-  `list_comments`/`list_issue_labels`/`create_issue_label`/`get_project`), so every job ports
-  with **zero prose rewrite** — same filters, same REPLACE-style labels (§10#1), same
-  verify-after-write (§7/§10#2). The only divergences are improvements: `state` is a CHECKed
+- **Op mapping — the op names are the canonical vocabulary; the CARRIER is per backend +
+  interface.** Every rule in this document and every SKILL speaks in the op names
+  (`list_issues`/`get_issue`/`save_issue`/`save_comment`/`list_comments`/`list_issue_labels`/
+  `create_issue_label`/`get_project`, plus the `doc.*`/`list_events`/`mirror.*` families) —
+  the **same names and arg shapes** as the Linear MCP, so every job ports with **zero prose
+  rewrite** — same filters, same REPLACE-style labels (§10#1), same verify-after-write
+  (§7/§10#2). How a fire actually *invokes* an op (D8, `hub.agentInterface` resolved per
+  coding agent — also the rollback switch):
+  - `backend:"linear"` → the **Linear MCP tool** of that name, permanently (no wrapper CLI
+    exists or will be built for Linear).
+  - `backend:"service"` + `interface:"mcp"` → the **identically-named hub MCP tool**
+    (unchanged — the scheduler injects `dev-loop-hub` into the fire).
+  - `backend:"service"` + `interface:"cli"` (the D9 default for claude AND codex fires —
+    codex certified 2026-07-11; opencode stays `"mcp"` — **no hub MCP is injected**) → the
+    matching **`dev-loop` CLI command** (`save_issue` →
+    `dev-loop ticket create|update`, `doc.save` → `dev-loop doc save`, any op by name →
+    `dev-loop op <op-name>`), identity riding the fire env. Each agent SKILL ends with a
+    **generated CLI cheat-sheet block** (between `<!-- cli-cheatsheet:begin/end -->` markers)
+    scoped to the ops that agent uses — rendered from the CLI's own usage strings by
+    `hub/src/gen-cheatsheets.ts` and byte-checked by `hub/test/cli-cheatsheet.ts`, so the
+    sheet cannot drift from the CLI. Its first command is the fail-closed identity check
+    (`dev-loop project --json`; exit 4 ⇒ stop the fire, touch nothing). Exit codes are the
+    machine contract: `0` ok · `1` domain error · `2` usage · `3` `doc.save` CAS CONFLICT ·
+    `4` identity/guard · `5` hub unavailable.
+
+  The only divergences from Linear are improvements: `state` is a CHECKed
   enum (a typo'd state **errors** instead of silently mis-routing — this *kills* the §10#2
   fuzzy-match footgun), and ticket-id allocation is race-safe in-transaction.
 - **Identity (the headline win).** Each agent pane connects as a **distinct actor** via the
@@ -1656,12 +1735,14 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
   carrying the actor + timestamp (a strict upgrade: true per-agent attribution). No manual
   state-move comment is required — the hub logs the transition event automatically (like
   Linear's feed).
-- **Setup.** The hub is registered as an MCP server in the CLI (normally a `.mcp.json` naming
-  `dev-loop-hub` → `dev-loop serve`, with `env` expanding the per-pane
-  `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`); the launcher sets those per agent pane
-  (see `docs/RUNNING.md`). The hub DB (`hub.db`, WAL) is machine-local runtime state, never
-  committed (like the local board). `mode`/`autonomy` stay authoritative in `dev-loop.json`
-  (the hub project row is advisory).
+- **Setup.** On `interface:"cli"` fires (the D8 default — see the op-mapping bullet) nothing is
+  registered: the PATH-installed `dev-loop` binary is the board access, and the launcher's fire
+  env (`DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`, per agent pane) is the identity
+  transport. On `interface:"mcp"` fires the hub is registered as an MCP server in the CLI
+  (normally a `.mcp.json` naming `dev-loop-hub` → `dev-loop serve`, with `env` expanding the
+  same per-pane variables; see `docs/RUNNING.md`). The hub DB (`hub.db`, WAL) is machine-local
+  runtime state, never committed (like the local board). `mode`/`autonomy` stay authoritative in
+  `dev-loop.json` (the hub project row is advisory).
 
 ---
 
