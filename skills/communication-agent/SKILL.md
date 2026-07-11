@@ -274,8 +274,20 @@ come from code; narrative comes from you. Compose EXACTLY these sections, then p
    W5 trackers open.
 4. **North-star delta** — one or two lines from reflect's latest weekly delta (see reflect); on
    days without one, the newest strategy-doc Decisions entry, or "no movement".
+   <!-- moves-with-§22a --> Plus one line per doc version the operator published since the last
+   digest, quoted as `published vN: <summary>` (the `doc history` summary field — the §9a
+   investigation protocol's propagation line).
 5. **Needs the director** — ONLY genuinely human-parked items (Human-Blocked / external-access
-   trackers); an empty section is a good day.
+   trackers); an empty section is a good day. Compose it from these lines, each omitted when zero:
+   <!-- moves-with-§22a --> · **Human-Blocked**: count + the oldest park's age (workflows P3 —
+   from the board, never memory; the same numbers the daemon reminder carries).
+   <!-- moves-with-§22a --> · **Investigation proposals pending**: each open §9a `investigation`
+   ticket parked for operator approval, with its doc + version (the ticket's
+   `Proposes: doc:<slug> vN (published vM)` line).
+   <!-- moves-with-§22a --> · **Drafts pending publish**: count of docs whose drafts trail the
+   published version (`doc list`; mirrors the daemon's `doc_drafts.notified` one-liner).
+   <!-- moves-with-§22a --> · **Unconsumed operator doc edits** (`intake.mode:"passive"` projects
+   only): foreign doc versions no PM fire has digested yet (mirrors `doc_foreign_edit.notified`).
 Keep it under ~25 lines — a director reads ONE message, not a log.
 
 ---
