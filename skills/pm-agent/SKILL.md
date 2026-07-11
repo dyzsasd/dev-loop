@@ -576,3 +576,95 @@ fires running this same scan; the idempotence check becomes per-project — your
 the parent back-links a child in YOUR project. When the back-links cover every responsible project per
 `team.docs.vision`, move the parent to `In Review` (an override write); until then leave it for the
 remaining PMs.
+
+---
+
+<!-- cli-cheatsheet:begin agent=pm -->
+## CLI cheat-sheet — `backend:"service"`, `interface:"cli"` (§18)
+
+<!-- GENERATED from the CLI usage strings by hub/src/gen-cheatsheets.ts (D9) — never hand-edit between
+     the markers; hub/test/cli-cheatsheet.ts byte-checks this block against a fresh render. -->
+
+On a CLI-interface fire (D8 — no hub MCP; `hub.agentInterface` decides per coding agent) every §18 op
+below is invoked as a `dev-loop` command: JSON on stdout, errors as JSON on stderr, identity from the
+fire env (`DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB` — never touch these). Full write-layer
+surface: `dev-loop op --help`.
+
+**FIRST — verify identity, fail closed.** Before ANY other board or repo action, run:
+
+```text
+dev-loop project --json        # get_project as the acting actor — the CLI whoami
+```
+
+Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) or `5` (hub
+unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
+fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
+
+Your ops: board reads for Jobs A/B/B2/C, `save_issue` create (file Features/Improvements, intake children) and update (verify/groom/promote, unblock), comments, and the hub `strategy`/`roadmap` docs — `doc save` writes a DRAFT only (`doc.publish` stays the operator's).
+
+```text
+# list_issues
+dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
+                 [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)
+    --json = EXACTLY the op list_issues body (updated_at DESC, terminal states included, cap 250);
+    --all/--owner and --assignee '' are human-view only (usage error with --json).
+
+# get_issue
+dev-loop ticket <id> [--json]        read-only: show one ticket — detail + comments
+    --json = EXACTLY the op get_issue body (the ticket + its comments + referencedBy).
+
+# save_issue (create)
+dev-loop ticket create --title T --type Bug|Feature|Improvement [--description TEXT|'-'] [--description-file F]
+                       [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
+    --blocked-by writes the §9c blocking-edge marker comment ('Blocked-by: <id>', one line per id) after the create.
+
+# save_issue (update)
+dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
+                       [--related-to +ids] [--duplicate-of ID|'']
+    HAZARD: labels REPLACE the full set (re-pass all).
+    HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
+
+# save_comment
+dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)
+
+# list_comments
+dev-loop comments <id>
+
+# doc.get
+dev-loop doc get (--slug S | --kind K) [--version N|latest]
+
+# doc.save
+dev-loop doc save --slug S --kind K --base-version N (--file F | stdin) [--title T] [--summary TEXT]
+    Optimistic CAS: --base-version MUST equal the doc's LATEST version (drafts included — NOT the published
+    version doc get returns by default), else exit 3 with the CONFLICT payload ({latestVersion,latestAuthor,
+    hint}) as JSON on stderr. Recover: doc get --slug S --version latest, re-apply your change, re-save with
+    --base-version <latestVersion>.
+```
+
+Respect `mode` (§12) yourself — the CLI has no dry-run gate: in `dry-run`, make no write-verb calls.
+
+**`doc save` exit `3` (CONFLICT) — the recovery loop is mandatory, never a blind retry:** `doc get
+--slug <S> --kind <K> --version latest` → re-apply YOUR change → re-save with
+`--base-version <latestVersion>` (from the CONFLICT payload; the CAS keys on the LATEST draft).
+
+**`--project` is `_team`-only for you, and ONLY inside the §9b team-intake job (D1):**
+
+```text
+--project <key>       act on that project instead of the booted one — role-gated SERVER-side (the D1 matrix:
+                      stewards → any project or "_team"; pm → "_team" only; everyone else → FORBIDDEN).
+```
+
+The intake scan rides LAYER 0 (the read verbs take no `--project`): `dev-loop op list_issues
+--args-json '{"project":"_team","label":"needs-pm"}'`; the parent back-link is `dev-loop comment
+add <id> --project _team --body "…"`. Never point the override at a sibling project's board — every
+key but `_team` is refused server-side (FORBIDDEN, exit 1).
+
+Exit codes (every write-layer verb):
+
+```text
+0 ok · 1 domain error (op 4xx/5xx; body on stderr) · 2 usage · 3 doc.save CAS CONFLICT (payload on stderr)
+4 identity/guard (unknown actor; unresolved/unseeded project; a WRITE as 'operator' inside an agent fire —
+  DEVLOOP_TEAM_SCOPE/DEVLOOP_DEV_SPLIT set — without --i-am-the-operator) · 5 hub unavailable (daemon down/
+  dormant, or hub.db busy past the 5s busy_timeout)
+```
+<!-- cli-cheatsheet:end agent=pm -->
