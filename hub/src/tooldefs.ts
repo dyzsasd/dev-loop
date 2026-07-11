@@ -133,9 +133,23 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
   "mirror.status": { description: "Mirror coverage: mapped tickets, total tickets, last push time. No secret, no Linear read.", inputSchema: {} },
 };
 
+// ─── D1: ONE optional `project` arg on every op-backed tool (whoami excluded) ───────────────────────────────
+// Injected structurally over DEFS (not 22 hand-copies) so a future op cannot forget it. The server-side
+// role matrix lives at the agentops.ts dispatch choke point (resolveProjectOverride): stewards
+// (sweep/ops/reflect/communication) may pass any existing project key or "_team"; pm may pass "_team" only
+// (the §9b team-intake board); every other actor only its booted project (403 FORBIDDEN). Omitted ⇒ the
+// booted project, exactly the pre-D1 behavior. (This file stays a LEAF — the matrix is only DESCRIBED here;
+// whoami reports THIS transport's booted identity and is never overridable.)
+const PROJECT_OVERRIDE = z.string().optional().describe(
+  "Act on this project key instead of your booted project. Role-gated server-side: stewards (sweep/ops/reflect/communication) may name any project or \"_team\"; pm may name \"_team\" only; everyone else only their booted project.");
+for (const name of TOOL_NAMES) {
+  // z.ZodRawShape's index signature is read-only; this is the ONE deliberate post-construction write.
+  if (name !== "whoami") (DEFS[name].inputSchema as Record<string, z.ZodType>).project = PROJECT_OVERRIDE;
+}
+
 // ─── the iterator: register every tool on `server`, sourcing the triple from DEFS and the handler from the ──
 // caller's per-name factory (server.ts → dispatch through agentOp; shim.ts → proxy to the daemon op-API; both
-// override whoami, and server.ts also overrides create_issue_label as a native call). One generic bridge cast
+// override whoami). One generic bridge cast
 // (ToolHandler → the SDK's ToolCallback) lives HERE, once, instead of at 23 call sites in two files.
 export type ToolHandler = (args: Record<string, unknown>) => McpResult | Promise<McpResult>;
 export function registerTools(server: McpServer, makeHandler: (name: ToolName) => ToolHandler): void {

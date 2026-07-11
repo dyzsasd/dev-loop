@@ -42,7 +42,11 @@ read connection.
   single-host cooperative attribution, **not** anti-spoof (§16); revisited only under the deferred remote/auth
   phase. (Full op-API config + reference: DL-58.)
 - **One project.** Like the MCP server, it serves exactly the project named by `DEVLOOP_PROJECT`
-  and refuses to start against an unknown/phantom project (the §2 firewall is structural).
+  and refuses to start against an unknown/phantom project (the §2 firewall is structural). The one
+  role-gated exception is the D1 **`project` override** on the agent op-API (below): stewards
+  (sweep/ops/reflect/communication) may name any existing project key or `_team`, PM may name
+  `_team` only, every other actor is refused (`403 FORBIDDEN`) — enforced server-side at the shared
+  `agentOp()` dispatch choke point, identically on both transports.
 
 ## Running it
 
@@ -179,6 +183,12 @@ opt-in it returns `404`, byte-identical to a pure read surface.
 - **Identity:** the actor rides the **`X-Devloop-Actor`** header (the shim forwards its per-pane
   `DEVLOOP_ACTOR`), dodging the `claude -p` Authorization-header-drop; the daemon validates it against
   the `actors` table (cooperative attribution, single-host — §16, not anti-spoof).
+- **Project override (D1):** every op accepts an optional **`project`** key in the JSON body, role-gated
+  server-side (the matrix above): stewards → any project key or `_team`; pm → `_team` only; everyone
+  else → `403 FORBIDDEN` (forbidden-first, so a refused actor never learns which keys exist; an
+  *allowed* actor's unknown key gets the normal `404`). Omitted ⇒ the daemon's pinned project,
+  byte-identical to the pre-override behavior. The server-side dry-run mode gate judges the
+  **effective** (overridden) project.
 - **Gate:** every **mutating** op passes `writeOriginOk` (the DL-19 localhost `Host`+`Origin` CSRF /
   DNS-rebind wall) **first**, then resolves the pinned project (§2) and appends an attributed event.
   Honest caveat: `doc.publish` over the op-API is a **cooperative** (claim-based) gate vs the
