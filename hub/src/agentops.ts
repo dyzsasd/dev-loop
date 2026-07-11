@@ -8,7 +8,7 @@
 // channel/mirror/label families (which also reuse the shared ticketwrite/docstore/channelstore/
 // mirrorstore/labelstore) — has EXACTLY ONE definition. The old "edit both files" drift tripwire is RETIRED:
 // a change to any policy now lands in ONE place, and the differential-parity suite (test/shim.ts +
-// test/agent-api.ts, shim ≡ stdio for all 23 tools) is the structural guard against a future re-divergence.
+// test/agent-api.ts, shim ≡ stdio for all 24 tools) is the structural guard against a future re-divergence.
 //
 // Each function takes a hub connection + the caller's already-resolved+validated actor (server.ts resolves it
 // from DEVLOOP_ACTOR + the G1 phantom-actor guard; the daemon from the X-Devloop-Actor header) and returns an
@@ -41,7 +41,7 @@ import { channelRegister, channelSend, channelPoll, channelAck, channelStatus, s
 // + mirror.status are reused VERBATIM from the shared mirrorstore (so the op-API + server.ts can't drift on the
 // DL-11 DRYRUN invariant / reconcile-by-marker idempotency), and the label/project ops + the SINGLE LABEL_KINDS /
 // DL-22 reject from labelstore. mirror.push is ASYNC (Linear network / dryrun build) → agentOp returns a Promise.
-import { mirrorPush, mirrorStatus, type MirrorPushArgs } from "./mirrorstore.ts";
+import { mirrorPush, mirrorStatus, mirrorPollComments, type MirrorPushArgs, type MirrorPollArgs } from "./mirrorstore.ts";
 import { createLabel, listLabels, getProject } from "./labelstore.ts";
 
 export interface OpResult { status: number; body: unknown }
@@ -52,7 +52,7 @@ const okR = (body: unknown): OpResult => ({ status: 200, body });
 const errR = (status: number, error: string, extra?: Record<string, unknown>): OpResult => ({ status, body: { error, ...extra } });
 
 // The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-67) the IM channel
-// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 23 server.ts tools 1:1 (the shim is a
+// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 24 server.ts tools 1:1 (the shim is a
 // 100% drop-in). The op names are the `/api/op/<op>` path segments and the MCP tool names (dotted for the
 // doc/channel/mirror families). DL-85: they are EXACTLY TOOL_NAMES minus "whoami"
 // (the only tool answered locally per-transport, never an op) — DERIVED from the one source so there is no
@@ -64,7 +64,7 @@ export const AGENT_OPS: readonly AgentOp[] = TOOL_NAMES.filter((n): n is AgentOp
 // doc.publish join the ticket writes; the doc/event reads stay read-only (parity with the read ticket ops).
 export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish",
   "channel.register", "channel.send", "channel.poll", "channel.ack", // DL-67: the 4 channel writes (register/send/poll/ack mutate the channels/channel_messages tables); channel.status stays a read (query_only)
-  "mirror.push", "create_issue_label"]); // DL-68: the 2 writes (mirror.push → mirror_map + the one-way Linear network write; create_issue_label → labels). mirror.status/list_issue_labels/get_project stay reads (query_only)
+  "mirror.push", "mirror.pollComments", "create_issue_label"]); // DL-68/D5: the 3 writes (mirror.push → mirror_map + the one-way Linear network write; mirror.pollComments → needs-pm intake tickets + the machine-local acted-ledger; create_issue_label → labels). mirror.status/list_issue_labels/get_project stay reads (query_only)
 export const isAgentOp = (s: string): s is AgentOp => (AGENT_OPS as readonly string[]).includes(s);
 
 // ─── row → API shape + readers (verbatim mirror of server.ts toTicket/getRow) ──
@@ -437,6 +437,16 @@ async function opMirrorPush(db: DatabaseSync, projectId: string, actor: string, 
   return r.ok ? okR(r.data) : errR(400, r.error); // §16-safe error (isEnvName / scrubErr inside mirrorstore); the token never appears
 }
 
+// ASYNC (mirrorPollComments awaits the Linear comment/content reads). Same hand-validation discipline as
+// opMirrorPush: tokenEnv a non-empty string → a clean 400, never a crash inside the store. The poller's
+// errors are all client 400s (bad input / unset-or-literal token); a failed Linear read is counted in
+// `failed` + logged scrubbed, never an op error — parity with mirror.push's failure discipline.
+async function opMirrorPollComments(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { tokenEnv?: unknown }): Promise<OpResult> {
+  if (typeof a.tokenEnv !== "string" || !a.tokenEnv) return errR(400, "tokenEnv required (a non-empty string)");
+  const r = await mirrorPollComments(db, projectId, projectKey, actor, a as MirrorPollArgs);
+  return r.ok ? okR(r.data) : errR(400, r.error); // §16-safe error (isEnvName / scrubErr inside mirrorstore); the token never appears
+}
+
 function opMirrorStatus(db: DatabaseSync, projectId: string): OpResult {
   return okR(mirrorStatus(db, projectId)); // read; coverage counts, no secret, no Linear read
 }
@@ -519,6 +529,7 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "channel.ack": return opChannelAck(db, projectId, projectKey, actor, args as { messageId?: unknown; actedInto?: unknown });
     case "channel.status": return opChannelStatus(db, projectId);
     case "mirror.push": return opMirrorPush(db, projectId, actor, args as { teamId?: unknown; tokenEnv?: unknown; projectId?: unknown; stateMap?: unknown; limit?: unknown });
+    case "mirror.pollComments": return opMirrorPollComments(db, projectId, projectKey, actor, args as { tokenEnv?: unknown });
     case "mirror.status": return opMirrorStatus(db, projectId);
     case "list_issue_labels": return opListLabels(db, projectId);
     case "create_issue_label": return opCreateLabel(db, projectId, actor, args as { name?: unknown; kind?: unknown });

@@ -189,6 +189,13 @@ ok(mStatus.status === 0 && j(mStatus.stdout).mapped === 0 && j(mStatus.stdout).t
 const mPush = cli(["mirror", "push", "--team-id", "team-x", "--token-env", "DEVLOOP_LINEAR_TOKEN"], { DEVLOOP_MIRROR_DRYRUN: "1" });
 ok(mPush.status === 0 && j(mPush.stdout).dryrun === true && Array.isArray(j(mPush.stdout).ops) && j(mPush.stdout).ops.length > 0,
   "mirror push (DRYRUN) → the would-push ops, no network, no mirror_map row");
+// D5: `mirror poll` reaches mirror.pollComments; with no pushed docs it is a clean no-op (no Linear read,
+// so no live endpoint needed) — the deep poller behavior lives in test/mirror.ts against the mock Linear.
+const mPoll = cli(["mirror", "poll", "--token-env", "DEVLOOP_LINEAR_TOKEN"], { DEVLOOP_LINEAR_TOKEN: "lin_x", DEVLOOP_MIRROR_DRYRUN: "1" });
+ok(mPoll.status === 0 && j(mPoll.stdout).docs === 0 && j(mPoll.stdout).filed === 0 && j(mPoll.stdout).dryrun === true,
+  "mirror poll (DRYRUN, no pushed docs) → clean no-op poll result");
+const mPollBad = cli(["mirror", "poll"]);
+ok(mPollBad.status === 2 && /--token-env/.test(mPollBad.stderr), "mirror poll without --token-env → usage exit 2");
 
 // ═══ 5. exit-code contract ═════════════════════════════════════════════════════════════════════════════════
 const unknownFlag = cli(["ticket", "create", "--bogus", "x"]);

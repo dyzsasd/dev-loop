@@ -61,6 +61,12 @@ LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; erro
       --base-version <latestVersion>.
   dev-loop doc publish (--slug S | --kind K) --version N        OPERATOR-ONLY (cooperative role gate)
   dev-loop mirror push --team-id T --token-env NAME [--project-id P] [--state-map '<JSON>'] [--limit N]
+      With --project-id, the PUBLISHED strategy/roadmap/decisions + LATEST design docs ALSO mirror as Linear
+      Documents parented to that Linear project (one-way, hash-skipped; doc counts ride the 'docs' result field).
+  dev-loop mirror poll --token-env NAME
+      Comment→intake on the mirrored docs: files ONE needs-pm Backlog ticket per NEW human comment (doc slug +
+      version + quote + URL) and per detected Linear-side body edit (overwritten next push — never written
+      back). Dedup rides a machine-local acted-ledger; DRYRUN previews the would-file tickets.
   dev-loop mirror status
 
 Every verb also accepts:
@@ -435,7 +441,7 @@ async function main(): Promise<never> {
       fail("usage: dev-loop doc list|get|history|diff|save|publish …");
     }
 
-    // ── mirror push|status ──
+    // ── mirror push|poll|status ──
     case "mirror": {
       const [verb, ...margs] = rest;
       if (verb === "push") {
@@ -456,6 +462,15 @@ async function main(): Promise<never> {
         if (flags["--project"] !== undefined) args.project = str(flags, "--project");
         emit("mirror.push", await runOp(openHub(), "mirror.push", args));
       }
+      if (verb === "poll") {
+        const { flags, pos } = parseFlags(margs, { "--token-env": "v", ...COMMON });
+        iAmTheOperator = flags["--i-am-the-operator"] === true;
+        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+        const tokenEnv = str(flags, "--token-env"); if (!tokenEnv) fail("mirror poll needs --token-env NAME (the env-var NAME, never the secret)");
+        const args: Record<string, unknown> = { tokenEnv };
+        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+        emit("mirror.pollComments", await runOp(openHub(), "mirror.pollComments", args));
+      }
       if (verb === "status") {
         const { flags, pos } = parseFlags(margs, COMMON);
         if (pos.length) fail(`unexpected argument '${pos[0]}'`);
@@ -463,7 +478,7 @@ async function main(): Promise<never> {
         if (flags["--project"] !== undefined) args.project = str(flags, "--project");
         emit("mirror.status", await runOp(openHub(), "mirror.status", args));
       }
-      fail("usage: dev-loop mirror push|status …");
+      fail("usage: dev-loop mirror push|poll|status …");
     }
 
     default:

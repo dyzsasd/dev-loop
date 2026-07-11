@@ -2,8 +2,12 @@
 // §16: the API token arrives as a function ARG (the caller reads it from process.env); this module
 // NEVER logs/returns the token. Every call has a HARD timeout. A failure is a thrown Error carrying
 // only an HTTP status / a truncated Linear error message (never the token, never request headers).
-// STRICTLY ONE-WAY: this module only WRITES Linear (issueCreate/issueUpdate) + reads ONLY to
-// reconcile its own mapping (findByMarker) — it NEVER imports Linear state back as truth.
+// STRICTLY ONE-WAY: this module only WRITES Linear (issueCreate/issueUpdate + the D5 documentCreate/
+// documentUpdate) + reads ONLY to (a) reconcile its own mapping (findByMarker/findDocByMarker) and
+// (b) serve the D5 comment→intake poller (getDocumentContent/listDocComments) — those poller reads are
+// INTAKE (a human comment / a divergence flag becomes a needs-pm ticket), never a state import: no hub
+// ticket/doc field is ever written from what Linear returns, and a Linear-side body edit is only ever
+// FLAGGED (then overwritten by the next push) — Linear never becomes a second source of truth.
 export type FetchImpl = typeof fetch;
 const timeoutMs = (): number => Number(process.env.DEVLOOP_MIRROR_TIMEOUT_MS) || 10_000;
 // The endpoint defaults to the real Linear; DEVLOOP_LINEAR_API_URL overrides it (an integration-test /
@@ -71,6 +75,75 @@ export async function updateIssue(
     "mutation($id:String!,$i:IssueUpdateInput!){ issueUpdate(id:$id, input:$i){ success } }", { id, i: input });
   const r = d.issueUpdate as { success?: boolean } | undefined;
   if (!r?.success) throw new Error("linear issueUpdate failed");
+}
+
+// ── D5 doc mirror: Linear Documents (create/update/reconcile) + the comment→intake poller reads ──
+// Same §16 posture as the issue mirror above: token as an arg, timeouts via gql, thrown errors carry
+// only status/truncated message. Documents parent to the mirrored Linear PROJECT (documentCreate's
+// projectId) — the caller gates doc pushes on having one.
+export interface MirrorDocument { title: string; content: string; }
+
+// reconcile-by-marker for docs: find a previously-mirrored Linear Document by the `[hub:doc:<slug>]`
+// marker in its title, so a crash between documentCreate and recording the mapping never double-creates.
+export async function findDocByMarker(fetchImpl: FetchImpl, token: string, marker: string): Promise<string | null> {
+  const d = await gql(fetchImpl, token,
+    "query($q:String!){ documents(filter:{ title:{ containsIgnoreCase:$q } }, first:1){ nodes{ id } } }", { q: marker });
+  const nodes = ((d.documents as Record<string, unknown>)?.nodes ?? []) as { id: string }[];
+  return nodes[0]?.id ?? null;
+}
+
+export async function createDocument(
+  fetchImpl: FetchImpl, token: string, projectId: string, doc: MirrorDocument,
+): Promise<string> {
+  const d = await gql(fetchImpl, token,
+    "mutation($i:DocumentCreateInput!){ documentCreate(input:$i){ success document{ id } } }",
+    { i: { title: doc.title, content: doc.content, projectId } });
+  const r = d.documentCreate as { success?: boolean; document?: { id: string } } | undefined;
+  if (!r?.success || !r.document?.id) throw new Error("linear documentCreate failed");
+  return r.document.id;
+}
+
+export async function updateDocument(
+  fetchImpl: FetchImpl, token: string, id: string, doc: MirrorDocument,
+): Promise<void> {
+  const d = await gql(fetchImpl, token,
+    "mutation($id:String!,$i:DocumentUpdateInput!){ documentUpdate(id:$id, input:$i){ success } }",
+    { id, i: { title: doc.title, content: doc.content } });
+  const r = d.documentUpdate as { success?: boolean } | undefined;
+  if (!r?.success) throw new Error("linear documentUpdate failed");
+}
+
+// Poller read (INTAKE, not state import): the mirrored document's current upstream body, compared by the
+// caller against what IT last pushed to detect a Linear-side edit — the hub never adopts this content.
+export async function getDocumentContent(fetchImpl: FetchImpl, token: string, id: string): Promise<string | null> {
+  const d = await gql(fetchImpl, token, "query($id:String!){ document(id:$id){ content } }", { id });
+  const doc = d.document as { content?: string | null } | undefined;
+  return doc?.content ?? null;
+}
+
+// Poller read (INTAKE): human comments on a mirrored document. `isHuman` = a user-authored comment
+// (bot/integration comments carry botActor and are ignored — the mirror itself never comments, but
+// other integrations might). The author identity is NOT returned (an unverified provider id is never
+// operator authority, §16) — only the body/url/timestamps the intake ticket quotes as provenance.
+// Cursor-paginated (a busy doc must not silently drop comments past the first page); the page cap is a
+// runaway guard only — 10×100 comments on ONE mirrored doc is far past any sane loop's traffic.
+export interface DocComment { id: string; body: string; url: string | null; createdAt: string; isHuman: boolean; }
+export async function listDocComments(fetchImpl: FetchImpl, token: string, docId: string): Promise<DocComment[]> {
+  type Node = { id: string; body?: string; url?: string | null; createdAt?: string; user?: { id: string } | null; botActor?: { id: string } | null };
+  const out: DocComment[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < 10; page++) {
+    const d = await gql(fetchImpl, token,
+      "query($docId:ID!,$after:String){ comments(filter:{ documentContent:{ document:{ id:{ eq:$docId } } } }, first:100, after:$after){ nodes{ id body url createdAt user{ id } botActor{ id } } pageInfo{ hasNextPage endCursor } } }",
+      { docId, after });
+    const c = d.comments as { nodes?: Node[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } | undefined;
+    for (const n of c?.nodes ?? []) {
+      out.push({ id: n.id, body: String(n.body ?? ""), url: n.url ?? null, createdAt: String(n.createdAt ?? ""), isHuman: !!n.user && !n.botActor });
+    }
+    if (!c?.pageInfo?.hasNextPage || !c.pageInfo.endCursor) break;
+    after = c.pageInfo.endCursor;
+  }
+  return out;
 }
 
 // ── Workspace fingerprint stamp (concept P4) ─────────────────────────────────────────────────────

@@ -55,9 +55,9 @@ export const CHEATSHEETS: Record<string, CheatSpec> = {
     scope: "Your ops: queue reads (Steps 0–1), `save_issue` update (claim, block, In-Review hand-off), comments, split / `[coverage]` follow-up creates (Step 4), and hub-doc reads where the project runs `hub.docs`.",
   },
   "sweep-agent": {
-    verbs: ["tickets", "ticket", "op", "ticket update", "comment add", "labels", "label create", "mirror push", "mirror status"],
+    verbs: ["tickets", "ticket", "op", "ticket update", "comment add", "labels", "label create", "mirror push", "mirror poll", "mirror status"],
     project: "steward",
-    scope: "Your ops: board reads (Jobs 1–4), `save_issue` update for the re-label/re-route/orphan-reset fixes (never a create — you file no new work), comments, label reads/provisioning, and Job 5's `mirror.push`/`mirror.status`.",
+    scope: "Your ops: board reads (Jobs 1–4), `save_issue` update for the re-label/re-route/orphan-reset fixes (never a create — you file no new work), comments, label reads/provisioning, and Job 5's `mirror.push`/`mirror.pollComments`/`mirror.status` (the poller's needs-pm intake tickets are the ONE sanctioned exception to \"file no new work\" — they carry a human's words, not yours).",
   },
   "reflect-agent": {
     verbs: ["tickets", "ticket", "op", "events", "doc get", "ticket create", "comment add"],
@@ -90,7 +90,7 @@ const OP_OF: Record<string, string> = {
   "project": "get_project", "events": "list_events",
   "doc list": "doc.list", "doc get": "doc.get", "doc history": "doc.history", "doc diff": "doc.diff",
   "doc save": "doc.save", "doc publish": "doc.publish",
-  "mirror push": "mirror.push", "mirror status": "mirror.status",
+  "mirror push": "mirror.push", "mirror poll": "mirror.pollComments", "mirror status": "mirror.status",
 };
 
 export const shortName = (dir: string): string => dir.replace(/-agent$/, "");
