@@ -40,6 +40,7 @@ import { daemonLifecycle, LIFECYCLE_SUBS, type LifecycleSub } from "./daemon-lif
 import { // A3: extracted timers; imported for the foreground boot, re-exported (below) for the tests.
   blockedNotifyTick, startBlockedNotifier, noProgressNotifyTick,
   startNoProgressNotifier, walCheckpointTick, startWalCheckpoint,
+  resolveBlockedReminderHours, startDocForeignEditNotifier, startDocDraftsPendingNotifier,
 } from "./daemon-notifiers.ts";
 
 export interface DaemonOpts {
@@ -606,6 +607,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
 export {
   blockedNotifyTick, startBlockedNotifier, noProgressNotifyTick,
   startNoProgressNotifier, walCheckpointTick, startWalCheckpoint,
+  resolveBlockedReminderHours, startDocForeignEditNotifier, startDocDraftsPendingNotifier,
 };
 
 // DL-41 dispatch — a lifecycle subcommand handles itself and exits; ANY other invocation (incl. the
@@ -656,32 +658,48 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try { roadmapRepoFileStrategy = roadmapDivergenceDoc(loadProjectsConfig()?.projects?.[PROJECT_KEY]); }
   catch { roadmapRepoFileStrategy = undefined; }
   const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR, roadmapRepoFileStrategy });
-  // DL-26: read the per-project Human-Blocked reminder cadence (settings_json.humanBlockedReminderHours).
-  // DL-76: read the loop no-progress circuit-breaker window (settings_json.noProgressWindowHours) from the
-  // SAME parse — both are operator-set, hours, 0/absent ⇒ off (true no-op, no timer).
-  let cadenceHours = 0, noProgressWindowHours = 0;
+  // DL-59: resolve the daemon's OWN view of the project config ONCE — the §9 `notify` webhook (so a project
+  // with ONLY a notify webhook still receives reminders; team.comms is bridged into it by toLegacyView), the
+  // comms presence (the workflows-P3 reminder default below), and intake.mode (the docs-P3 passive notifier).
+  // §16: the block stays in config/env; the daemon reads it but never writes it to the DB. Read at BOOT:
+  // an already-running daemon picks config changes up on restart only (references/config-schema.md).
+  let projCfg: Record<string, unknown> | undefined;
+  try { projCfg = loadProjectsConfig()?.projects?.[PROJECT_KEY] as Record<string, unknown> | undefined; } catch { projCfg = undefined; }
+  const notify: unknown = projCfg?.notify;
+  // DL-26: the per-project Human-Blocked reminder cadence (settings_json.humanBlockedReminderHours). Workflows
+  // P3: ABSENT now defaults to 24h when the workspace has a comms channel (team.comms present) — explicit 0
+  // stays the opt-out (resolveBlockedReminderHours). DL-76: the loop no-progress circuit-breaker window
+  // (settings_json.noProgressWindowHours) from the SAME parse — operator-set, hours, 0/absent ⇒ off.
+  const commsConfigured = projCfg?.comms !== undefined;
+  let cadenceHours = resolveBlockedReminderHours(undefined, commsConfigured), noProgressWindowHours = 0;
   try {
     const row = writeDb.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
     const settings = JSON.parse(row?.settings_json ?? "{}");
-    cadenceHours = Number(settings?.humanBlockedReminderHours) || 0;
+    cadenceHours = resolveBlockedReminderHours(settings, commsConfigured);
     noProgressWindowHours = Number(settings?.noProgressWindowHours) || 0;
-  } catch { cadenceHours = 0; noProgressWindowHours = 0; }
-  // DL-59: also resolve the §9 `notify` webhook (projects.json) so a project with ONLY a notify webhook (no
-  // registered bot/webhook channel) still receives Human-Blocked reminders — the daemon is the single emitter
-  // on `service`. §16: the block stays in config/env; the daemon reads it but never writes it to the DB.
-  let notify: unknown;
-  try { notify = (loadProjectsConfig()?.projects?.[PROJECT_KEY] as { notify?: unknown } | undefined)?.notify; } catch { notify = undefined; }
+  } catch { /* malformed settings_json ⇒ keep the comms-aware default + noProgress off */ }
   server.listen(PORT, HOST, () => {
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : PORT;
     console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${HOST}:${port}/  (reads read-only; /roadmap editable, localhost-only)`);
+    const baseUrl = `http://${HOST}:${port}`;
     // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
-    const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, cadenceHours, notify });
+    const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, cadenceHours, notify });
     if (notifier) console.log(`[daemon] Human-Blocked notifier active (every ${cadenceHours}h via the configured channel / §9 notify webhook)`);
     // DL-76: loop no-progress / runaway circuit-breaker — alert ONCE when 0 accepted change (Done) lands in the
     // rolling window. No channel/notify OR noProgressWindowHours≤0 ⇒ no-op (mirrors the Human-Blocked notifier).
-    const noProgress = startNoProgressNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl: `http://${HOST}:${port}`, windowHours: noProgressWindowHours, notify });
+    const noProgress = startNoProgressNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, windowHours: noProgressWindowHours, notify });
     if (noProgress) console.log(`[daemon] no-progress detector active (alert on 0 accepted change in ${noProgressWindowHours}h via the configured channel / §9 notify webhook)`);
+    // Docs P3: passive-intake foreign-doc-edit notifier — under intake.mode:"passive" PM's doc-watch is off,
+    // so an unconsumed HUMAN (non-agent) doc version emits one comms line, deduped per version. Autonomous
+    // mode / no send target ⇒ no timer (PM's own doc-watch owns propagation there).
+    const intakeMode = (projCfg?.intake as { mode?: string } | undefined)?.mode;
+    const foreignDocs = startDocForeignEditNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, intakeMode, notify });
+    if (foreignDocs) console.log(`[daemon] passive-intake doc-edit notifier active (operator/web doc edits → one comms line per version)`);
+    // Docs P6b: drafts-pending notifier — a gated doc whose drafts trail the published current for >24h gets
+    // one DAILY comms line (deduped per version), so agent-drafted direction can't silently stall unpublished.
+    const draftsNotifier = startDocDraftsPendingNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, notify });
+    if (draftsNotifier) console.log(`[daemon] drafts-pending notifier active (daily line while a doc draft trails its published version)`);
     // P3b: bound the single-writer connection's WAL via a DEDICATED busy_timeout=0 maintenance connection
     // (never blocks the synchronous event loop under a concurrent reader — Codex review 2026-06-27).
     startWalCheckpoint(DB_PATH);

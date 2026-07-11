@@ -5,8 +5,46 @@
 // daemon.ts) keep resolving `.../daemon.ts`.
 import { DatabaseSync } from "node:sqlite";
 import { openDb, logEvent } from "./db.ts";
-import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Transport, type FetchImpl } from "./channel.ts";
+import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Creds, type Transport, type FetchImpl } from "./channel.ts";
 import { eventData } from "./views/activity.ts";
+
+// ─── DL-59 send-target resolution, shared by every notifier tick ───────────────────────────────────
+// ONE send target: the DB `channels` row (getEnabledChannel) takes PRECEDENCE so a project with a
+// registered bot/webhook channel is byte-for-byte unchanged; the §9 `notify` webhook (projects.json /
+// the team.comms bridge) is the FALLBACK that closed the L2 leak (a notify-only project previously got
+// NO alert). Choosing exactly one target means a project configured with BOTH can never double-send
+// the same alert. `null` ⇒ no channel AND no notify webhook ⇒ the caller is a true no-op.
+interface SendTarget { provider: Provider; creds: Creds; channelRef: string; transport: Transport; label: string }
+function resolveTarget(writeDb: DatabaseSync, projectId: string, notify: unknown): SendTarget | null {
+  const dbCh = getEnabledChannel(writeDb, projectId);
+  const nt = dbCh ? null : resolveNotifyWebhook(notify);
+  if (!dbCh && !nt) return null;
+  return dbCh
+    ? { provider: dbCh.provider as Provider, creds: resolveCreds(dbCh), channelRef: dbCh.channel_ref, transport: (dbCh.transport as Transport) ?? "bot", label: `${dbCh.provider}/${dbCh.transport ?? "bot"}` }
+    : { provider: nt!.provider, creds: nt!.creds, channelRef: "", transport: "webhook" as Transport, label: `${nt!.provider}/webhook (§9 notify)` };
+}
+
+// compact §16-safe duration for a notifier one-liner: "3d" / "26h" / "5m" (never raw ms)
+const fmtDur = (ms: number): string => {
+  const h = Math.floor(ms / 3_600_000);
+  return h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ms / 60_000))}m`;
+};
+
+// ─── workflows P3: the Human-Blocked reminder DEFAULT ──────────────────────────────────────────────
+// The parking state had a producer (PM parks, §9a) but the consumer side shipped default-OFF, so on a
+// comms-configured workspace a parked ticket could sit silent forever. New default: once the team has
+// an outward channel (team.comms — which toLegacyView also bridges into the §9 `notify` block the
+// daemon reads), an ABSENT humanBlockedReminderHours means 24h. An EXPLICIT 0 (or any non-positive /
+// non-numeric explicit value — the pre-change coercion) stays the opt-out, and without a comms channel
+// the default remains 0 (there is nowhere to remind INTO; the send-target guard would no-op anyway).
+// Read at daemon BOOT: an already-running daemon picks the new default up on restart only
+// (references/config-schema.md documents the migration note).
+export const DEFAULT_BLOCKED_REMINDER_HOURS = 24;
+export function resolveBlockedReminderHours(settings: unknown, commsConfigured: boolean): number {
+  const raw = (settings as { humanBlockedReminderHours?: unknown } | null | undefined)?.humanBlockedReminderHours;
+  if (raw !== undefined && raw !== null) return Number(raw) > 0 ? Number(raw) : 0; // explicit value wins; 0/junk ⇒ off
+  return commsConfigured ? DEFAULT_BLOCKED_REMINDER_HOURS : 0;
+}
 
 // ─── DL-26: Human-Blocked periodic notifier (service backend, option b) ───────
 // On `service` the daemon owns the ENTIRE Human-Blocked notification lifecycle: the FIRST ping the
@@ -20,17 +58,9 @@ export async function blockedNotifyTick(opts: {
   cadenceMs: number; nowMs: number; fetchImpl?: FetchImpl; notify?: unknown;
 }): Promise<number> {
   const { writeDb, projectId, projectKey, baseUrl, cadenceMs, nowMs } = opts;
-  // DL-59: resolve ONE send target. The DB `channels` row (getEnabledChannel) takes PRECEDENCE so a project
-  // with a registered bot/webhook channel is byte-for-byte unchanged; the §9 `notify` webhook (projects.json,
-  // resolveNotifyWebhook) is the FALLBACK that closes the L2 leak (a notify-only project previously got NO
-  // alert — a true no-op here). Choosing exactly one target means a project configured with BOTH can never
-  // double-send the same park (the AC's no-double-send), at no extra marker/state cost.
-  const dbCh = getEnabledChannel(writeDb, projectId);
-  const nt = dbCh ? null : resolveNotifyWebhook(opts.notify);
-  if (!dbCh && !nt) return 0; // no DB channel AND no §9 notify webhook ⇒ nothing to do (true no-op)
-  const target = dbCh
-    ? { provider: dbCh.provider as Provider, creds: resolveCreds(dbCh), channelRef: dbCh.channel_ref, transport: (dbCh.transport as Transport) ?? "bot", label: `${dbCh.provider}/${dbCh.transport ?? "bot"}` }
-    : { provider: nt!.provider, creds: nt!.creds, channelRef: "", transport: "webhook" as Transport, label: `${nt!.provider}/webhook (§9 notify)` };
+  // DL-59: ONE send target (DB channel wins over the §9 notify webhook — see resolveTarget) or a true no-op.
+  const target = resolveTarget(writeDb, projectId, opts.notify);
+  if (!target) return 0;
   const rows = writeDb.prepare(
     "SELECT id,title FROM tickets WHERE project_id=? AND state='Human-Blocked' ORDER BY updated_at",
   ).all(projectId) as { id: string; title: string }[];
@@ -46,8 +76,19 @@ export async function blockedNotifyTick(opts: {
     ).get(t.id) as { m: string | null };
     const due = !last.m || (nowMs - Date.parse(last.m)) >= cadenceMs;
     if (!due) continue;
-    // §16 allow-list line: id + truncated title + localhost url ONLY. No description/labels/PII/secrets.
-    const line = `[${projectKey}] human-blocked: ${t.id} ${cleanLine(t.title, 80)} · ${baseUrl}/ticket/${t.id}`;
+    // Age in the state (workflows P3: the reminder must say HOW LONG the loop has been parked on a human):
+    // the newest issue.transition INTO Human-Blocked from the events ledger — stateless, like the due-ness
+    // read. A ticket with no such event (seeded/imported directly into the state) just omits the age.
+    const enteredIso = (writeDb.prepare(
+      "SELECT data, created_at FROM events WHERE ticket_id=? AND kind='issue.transition' ORDER BY id DESC",
+    ).all(t.id) as { data: string; created_at: string }[])
+      .find((e) => eventData(e.data).to === "Human-Blocked")?.created_at;
+    const enteredMs = enteredIso ? Date.parse(enteredIso) : NaN;
+    const age = Number.isFinite(enteredMs) ? ` for ${fmtDur(nowMs - enteredMs)}` : "";
+    // §16 allow-list line: id + truncated title + age + the FIXED resume action + localhost url ONLY.
+    // No description/labels/PII/secrets. The resume action is the loop's consumer side (workflows P3):
+    // the operator moves the ticket back to Todo (web move form, or the named CLI verb) and the loop resumes.
+    const line = `[${projectKey}] human-blocked${age}: ${t.id} ${cleanLine(t.title, 80)} — resume: move it back to Todo (dev-loop ticket update ${t.id} --state Todo) · ${baseUrl}/ticket/${t.id}`;
     try {
       if (CHANNEL_DRYRUN) {
         // DL-34: dry-run is WRITE-FREE (the DL-11 invariant) — preview only, NO marker / NO ledger
@@ -76,10 +117,10 @@ export function startBlockedNotifier(opts: {
   writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
   cadenceHours: number; tickMs?: number; notify?: unknown;
 }): ReturnType<typeof setInterval> | null {
-  if (!(opts.cadenceHours > 0)) return null;                          // disabled
+  if (!(opts.cadenceHours > 0)) return null;                          // disabled (0 = the explicit opt-out)
   // DL-59: start if EITHER a registered DB channel OR the §9 `notify` webhook is configured — a notify-only
   // project must no longer be a no-op. `notify` flows through `...opts` into each blockedNotifyTick run.
-  if (!getEnabledChannel(opts.writeDb, opts.projectId) && !resolveNotifyWebhook(opts.notify)) return null; // neither ⇒ true no-op
+  if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null; // neither ⇒ true no-op
   const cadenceMs = opts.cadenceHours * 3_600_000;
   const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_BLOCKED_TICK_MS) || 60_000);
   // .catch, not void: a throw from the tick's DB reads (transient SQLITE_BUSY, disk error) was an
@@ -111,14 +152,10 @@ export async function noProgressNotifyTick(opts: {
   windowMs: number; nowMs: number; fetchImpl?: FetchImpl; notify?: unknown;
 }): Promise<number> {
   const { writeDb, projectId, projectKey, baseUrl, windowMs, nowMs } = opts;
-  // Resolve ONE send target FIRST (cheap) — identical precedence to blockedNotifyTick (DL-59): a DB `channels`
-  // row wins; else the §9 `notify` webhook; else true no-op (so a no-channel project does zero ledger work).
-  const dbCh = getEnabledChannel(writeDb, projectId);
-  const nt = dbCh ? null : resolveNotifyWebhook(opts.notify);
-  if (!dbCh && !nt) return 0;
-  const target = dbCh
-    ? { provider: dbCh.provider as Provider, creds: resolveCreds(dbCh), channelRef: dbCh.channel_ref, transport: (dbCh.transport as Transport) ?? "bot", label: `${dbCh.provider}/${dbCh.transport ?? "bot"}` }
-    : { provider: nt!.provider, creds: nt!.creds, channelRef: "", transport: "webhook" as Transport, label: `${nt!.provider}/webhook (§9 notify)` };
+  // Resolve ONE send target FIRST (cheap) — DL-59 precedence via resolveTarget: a DB `channels` row wins;
+  // else the §9 `notify` webhook; else true no-op (so a no-channel project does zero ledger work).
+  const target = resolveTarget(writeDb, projectId, opts.notify);
+  if (!target) return 0;
 
   // "net accepted change" over the rolling window = COUNT of issue.transition events whose `to` is Done within
   // [now − windowMs, now]. SAME done-count logic as activityPage (the `to` lives in JSON `data`, so the filter
@@ -179,7 +216,7 @@ export function startNoProgressNotifier(opts: {
 }): ReturnType<typeof setInterval> | null {
   if (!(opts.windowHours > 0)) return null;                            // disabled (absent / ≤0 ⇒ true no-op)
   // Start only if a send target exists (DL-59): a registered DB channel OR the §9 notify webhook — else no-op.
-  if (!getEnabledChannel(opts.writeDb, opts.projectId) && !resolveNotifyWebhook(opts.notify)) return null;
+  if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null;
   const windowMs = opts.windowHours * 3_600_000;
   // Re-check ≈ hourly by default (the stall window is measured in hours; a tighter poll just re-scans the
   // ledger for nothing, and the marker de-dup makes any extra tick harmless). Env-overridable for tests.
@@ -188,6 +225,148 @@ export function startNoProgressNotifier(opts: {
   const timer = setInterval(run, tickMs);
   timer.unref?.();  // never keep the process alive solely for this detector
   run();            // immediate first tick — a stall already in progress at boot is caught without waiting
+  return timer;
+}
+
+// ─── docs P3: passive-intake foreign-doc-edit notifier ─────────────────────────────────────────────
+// Under `intake.mode:"passive"` PM's doc-watch is OFF (§5a) — an operator/web edit to a hub doc would
+// otherwise vanish (nothing reads the doc hunting for direction, and nothing tells the operator so).
+// This tick is the daemon-side consumer: a doc version authored by a NON-AGENT actor (the web editor
+// and CLI/MCP operator writes land as `operator`, actors.kind='human'; an unknown author fails FOREIGN
+// — fail-notify) that has sat unconsumed past a settle window emits ONE comms line, deduped per
+// version, so a burst of saves in an editing session collapses to the final version's line. The
+// predicate is actor-KIND based, not a single-handle exclusion: ANY agent's draft (pm, qa, senior-dev)
+// is loop-internal work that must never self-trigger this human-intake channel (the self-trigger
+// exclusion of the PM doc-watch, docstore.latestForeignVersion, generalized to the whole agent team).
+// `design` docs are excluded: latest-is-live, watched by the Design: pointer flow, not PM intake.
+// Same envelope as blockedNotifyTick: DL-59 target, DL-34 write-free dry-run, §16 one-liner, DL-33 cap.
+export async function docForeignEditNotifyTick(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  settleMs: number; nowMs: number; fetchImpl?: FetchImpl; notify?: unknown;
+}): Promise<number> {
+  const { writeDb, projectId, projectKey, baseUrl, settleMs, nowMs } = opts;
+  const target = resolveTarget(writeDb, projectId, opts.notify);
+  if (!target) return 0;
+  const docs = writeDb.prepare(
+    "SELECT id, slug FROM documents WHERE project_id=? AND kind!='design' ORDER BY slug",
+  ).all(projectId) as { id: string; slug: string }[];
+  // one markers read for the whole tick (the ledger is append-only; parse-in-process like activityPage)
+  const markers = (writeDb.prepare(
+    "SELECT data FROM events WHERE project_id=? AND kind='doc_foreign_edit.notified'",
+  ).all(projectId) as { data: string }[]).map((e) => eventData(e.data));
+  let sent = 0;
+  for (const d of docs) {
+    if (sent >= CHANNEL_SEND_CAP) break;
+    const v = writeDb.prepare(
+      `SELECT version, author, created_at FROM document_versions
+        WHERE doc_id=? AND NOT EXISTS (SELECT 1 FROM actors a WHERE a.handle=author AND a.kind='agent')
+        ORDER BY version DESC LIMIT 1`,
+    ).get(d.id) as { version: number; author: string; created_at: string } | undefined;
+    if (!v) continue;                                              // no human-authored version ⇒ nothing foreign
+    if (nowMs - Date.parse(v.created_at) < settleMs) continue;     // still settling (mid-edit burst) ⇒ next tick
+    if (markers.some((m) => m.slug === d.slug && Number(m.version) >= v.version)) continue; // deduped per version
+    // §16 allow-list: slug + version + author HANDLE + the canonical /p/<key>/ doc url ONLY (no body text).
+    const line = cleanLine(`[${projectKey}] doc edit: '${d.slug}' v${v.version} by ${v.author} awaits PM intake (passive mode) — review at ${baseUrl}/p/${projectKey}/doc/${d.slug}`, 240);
+    try {
+      if (CHANNEL_DRYRUN) {
+        console.error(`[daemon] [dry-run] would notify doc edit '${d.slug}' v${v.version} via ${target.label}: ${line}`); // DL-34: write-free
+      } else {
+        await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+        logEvent(writeDb, { project_id: projectId, ticket_id: null, actor: "daemon", kind: "doc_foreign_edit.notified", data: { slug: d.slug, version: v.version } }); // marker ONLY on a real send
+      }
+      sent++;
+    } catch (e) {
+      console.error(`[daemon] doc-edit notify failed for '${d.slug}': ${scrubErr((e as Error).message)}`); // no marker ⇒ retried next tick
+    }
+  }
+  return sent;
+}
+
+export function startDocForeignEditNotifier(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  intakeMode?: string; settleMs?: number; tickMs?: number; notify?: unknown;
+}): ReturnType<typeof setInterval> | null {
+  // Autonomous mode ⇒ no timer: PM's own doc-watch (latest FOREIGN version, pm-agent SKILL) owns the
+  // propagation there, and a comms line on top would just be duplicate noise. Passive is the gap (§5a).
+  if (opts.intakeMode !== "passive") return null;
+  if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null; // no send target ⇒ true no-op
+  const settleMs = opts.settleMs ?? (Number(process.env.DEVLOOP_DOC_FOREIGN_SETTLE_MS) || 15 * 60_000);
+  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_DOC_NOTIFY_TICK_MS) || 10 * 60_000);
+  const run = () => { docForeignEditNotifyTick({ ...opts, settleMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] doc-edit notifier tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
+  const timer = setInterval(run, tickMs);
+  timer.unref?.();
+  run(); // immediate first tick — an edit already sitting unconsumed at boot is surfaced without waiting
+  return timer;
+}
+
+// ─── docs P6b: drafts-pending notifier ─────────────────────────────────────────────────────────────
+// PM records direction as a DRAFT; only the operator may publish (docstore's single gate). Absent a
+// nudge, agents keep executing the stale published version while the draft silently stalls — the web
+// header chip (views/docs.ts draftsPendingCount) covers an operator who LOOKS, this line covers one who
+// doesn't. Due = a gated doc (kind != 'design') whose drafts have trailed the published current for
+// longer than `pendingMs` (measured from the FIRST unpublished version — a fresh draft on top does not
+// reset the clock). Cadence = one line per `remindMs` (daily) while pending, deduped per version: the
+// SAME latest version is never re-announced within a remind period, and a NEW draft version past the
+// settle re-announces immediately (the marker names {slug, version}). Same envelope as the ticks above.
+export async function docDraftsPendingNotifyTick(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  pendingMs: number; remindMs: number; nowMs: number; fetchImpl?: FetchImpl; notify?: unknown;
+}): Promise<number> {
+  const { writeDb, projectId, projectKey, baseUrl, pendingMs, remindMs, nowMs } = opts;
+  const target = resolveTarget(writeDb, projectId, opts.notify);
+  if (!target) return 0;
+  const docs = (writeDb.prepare(
+    `SELECT d.id, d.slug, d.current_version,
+            (SELECT COALESCE(MAX(v.version),0) FROM document_versions v WHERE v.doc_id=d.id) AS latest
+       FROM documents d WHERE d.project_id=? AND d.kind!='design' ORDER BY d.slug`,
+  ).all(projectId) as { id: string; slug: string; current_version: number; latest: number }[])
+    .filter((d) => d.latest > d.current_version); // the header-chip predicate (views/docs.ts), server-side
+  const markers = (writeDb.prepare(
+    "SELECT data, created_at FROM events WHERE project_id=? AND kind='doc_drafts.notified' ORDER BY id DESC",
+  ).all(projectId) as { data: string; created_at: string }[])
+    .map((e) => { const m = eventData(e.data); return { slug: m.slug as unknown, version: m.version as unknown, at: e.created_at }; });
+  let sent = 0;
+  for (const d of docs) {
+    if (sent >= CHANNEL_SEND_CAP) break;
+    // trailing-since = the FIRST version past the published current (append-only ⇒ always version+1)
+    const since = (writeDb.prepare(
+      "SELECT created_at FROM document_versions WHERE doc_id=? AND version=?",
+    ).get(d.id, d.current_version + 1) as { created_at: string } | undefined)?.created_at;
+    if (!since || !(nowMs - Date.parse(since) >= pendingMs)) continue; // not yet trailing long enough
+    const last = markers.find((m) => m.slug === d.slug);              // newest marker for this doc (DESC scan)
+    if (last && Number(last.version) === d.latest && nowMs - Date.parse(last.at) < remindMs) continue; // deduped
+    // §16 allow-list: slug + version numbers + the canonical /p/<key>/ doc url ONLY (no body/title text).
+    const over = d.current_version > 0 ? `over published v${d.current_version}` : "(never published)";
+    const line = cleanLine(`[${projectKey}] ${d.slug}: draft v${d.latest} pending ${over} — review at ${baseUrl}/p/${projectKey}/doc/${d.slug}`, 240);
+    try {
+      if (CHANNEL_DRYRUN) {
+        console.error(`[daemon] [dry-run] would notify drafts-pending '${d.slug}' v${d.latest} via ${target.label}: ${line}`); // DL-34: write-free
+      } else {
+        await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+        logEvent(writeDb, { project_id: projectId, ticket_id: null, actor: "daemon", kind: "doc_drafts.notified", data: { slug: d.slug, version: d.latest } }); // marker ONLY on a real send
+      }
+      sent++;
+    } catch (e) {
+      console.error(`[daemon] drafts-pending notify failed for '${d.slug}': ${scrubErr((e as Error).message)}`); // no marker ⇒ retried next tick
+    }
+  }
+  return sent;
+}
+
+export function startDocDraftsPendingNotifier(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  pendingMs?: number; remindMs?: number; tickMs?: number; notify?: unknown;
+}): ReturnType<typeof setInterval> | null {
+  if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null; // no send target ⇒ true no-op
+  const pendingMs = opts.pendingMs ?? 24 * 3_600_000;   // "trailing for > 24h" (docs P6b)
+  const remindMs = opts.remindMs ?? 24 * 3_600_000;     // one DAILY line while pending
+  // Re-check ≈ hourly by default: the thresholds are day-scale and the per-version dedupe makes any
+  // extra tick harmless (the no-progress precedent). Env-overridable for tests.
+  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_DOC_DRAFTS_TICK_MS) || 3_600_000);
+  const run = () => { docDraftsPendingNotifyTick({ ...opts, pendingMs, remindMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] drafts-pending tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
+  const timer = setInterval(run, tickMs);
+  timer.unref?.();
+  run(); // immediate first tick — a draft already stalled at boot is surfaced without waiting
   return timer;
 }
 

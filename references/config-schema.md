@@ -219,6 +219,48 @@ agent behavior.
 | `reports` | Report sink and review-channel config. | — |
 | `repos` | Repo references: `{ "ref": "...", "role": "primary" }`. | — |
 
+## Hub daemon notifier settings (`backend:"service"`)
+
+The hub daemon's background notifiers read two per-project knobs from the hub DB's
+`projects.settings_json` (operator-set via seed/CLI — deliberately **not** part of
+`dev-loop.json`; see `docs/DAEMON.md` → *Background notifiers*):
+
+| Field | Meaning |
+|---|---|
+| `humanBlockedReminderHours` | Cadence (hours) of the daemon's Human-Blocked reminder — the first ping when a ticket is parked plus the periodic repeats (conventions §9a). **Default: `24` whenever a comms channel is configured (`team.comms` present — it is bridged to the daemon as the §9 `notify` webhook), else `0` (off).** An explicit `0` stays the opt-out even with comms configured; an explicit positive value always wins over the default. |
+| `noProgressWindowHours` | Rolling window (hours) for the loop no-progress circuit-breaker; `0`/absent ⇒ off (no default flip). |
+
+The passive-intake doc-edit notifier keys off the project's effective `intake.mode`
+(`"passive"` only) and the drafts-pending notifier runs whenever a send target exists —
+neither has a `settings_json` field.
+
+**Migration note:** the daemon resolves these values — including the comms presence that
+drives the 24h default, and `intake.mode` for the doc-edit notifier — once at **boot**. An
+already-running daemon does not pick up the new 24h default, nor any later change to
+`settings_json`, `team.comms`, or `intake.mode`, until it restarts
+(`dev-loop hub stop && dev-loop hub ensure`).
+
+## Linear mirror (`mirror`, `backend:"service"` only)
+
+The optional one-way hub→Linear projection (conventions §18). Sweep Job 5 drives it —
+`mirror.push` then `mirror.pollComments`, both every Job 5 fire (see
+`skills/sweep-agent/SKILL.md` for the cadence contract and
+`docs/HUB-ARCHITECTURE.md` §15 for the mechanism). The D5 doc mirror + comment poller are
+a **semantics extension of the existing keys — no new keys were added**:
+
+| Field | Meaning |
+|---|---|
+| `mirror.teamId` | The Linear team id the mirrored issues are created in. |
+| `mirror.tokenEnv` | The env-var **NAME** of the Linear token — never the secret value; the hub reads it server-side, and it is reused by BOTH `mirror.push` and `mirror.pollComments`. |
+| `mirror.projectId` | Optional Linear project id — parents the mirrored issues AND, since D5, is REQUIRED for the doc mirror: without it the published `strategy`/`roadmap`/`decisions` + latest `design` docs are skipped wholesale with a visible `docs.note` (config guidance, never a push failure). |
+| `mirror.stateMap` | Hub State → Linear workflow-state id map; a missing entry leaves the state in the mirrored body only (never a push failure). |
+| `mirror.limit` | Cap on the tickets considered per push. |
+
+The poller's dedup state is **machine-local**, not hub state:
+`<dataDir>/mirror-state/<projectKey>.json` (the reports-state pattern), where `<dataDir>`
+resolves from `DEVLOOP_DATA_DIR`, else `DEVLOOP_HOME`, else `~/.dev-loop`. Re-pointing the
+data dir therefore re-files intake at worst — it never corrupts hub state.
+
 ## Operator-tunable fields (`dev-loop team set`)
 
 ```bash
