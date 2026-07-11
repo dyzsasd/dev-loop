@@ -51,7 +51,7 @@ export interface DaemonOpts {
 // (hub.docs:false/absent AND no director config AND a string strategyDoc) → the /roadmap divergence banner;
 // else undefined (the hub roadmap IS the north-star — hub.docs:true or a director chairs it — or the config
 // is unknown) → no banner. Pure + derived from config ONLY (never request input, §17), so it is unit-testable.
-export function roadmapDivergenceDoc(proj: { hub?: { docs?: boolean }; director?: unknown; strategyDoc?: unknown } | undefined | null): string | undefined {
+export function roadmapDivergenceDoc(proj: { hub?: { docs?: unknown }; director?: unknown; strategyDoc?: unknown } | undefined | null): string | undefined {
   if (!proj) return undefined;
   if (proj.hub?.docs === true) return undefined;   // a first-class hub doc IS the north-star
   if (proj.director != null) return undefined;      // a Director drafts/chairs the hub roadmap → north-star
