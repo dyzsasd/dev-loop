@@ -8,7 +8,22 @@ experience** — a real failure observed while the agents ran, then hardened int
 > Must release as **1.2.0**: doctor's W10 pins `WRITE_VERBS_MIN_VERSION="1.2.0"` and
 > config-schema documents the E09 demotion as "since 1.2".
 
-- **feat(cli): the agent write layer — CLI-first interface (D8).** `dev-loop op <op-name>`
+- **feat(webui): the professional multi-project web UI + docs system (D2/D3).** The workspace
+  daemon serves every hub project under `/p/<key>/` (bare paths fall back to the boot project;
+  unknown keys 404 via a safe-segment guard); `GET /` is a project index with per-state colored
+  dot counts and `_team` pinned last as a distinct "Team intake" card; SSE reloads are scoped to
+  the resolved project. Design tokens v2 (surface/ink tiers, 7 workflow-state colors, signal
+  colors incl. incident, full type/spacing/radius/shadow/focus scales, WCAG-AA dark values,
+  guard-tested: no raw hex outside `:root`, no literal radii, every `var()` resolves). Board:
+  column wells, state-dot headers, full card spec with semantic label chips and guided empty
+  states. Ticket detail: two-column layout with a unified state-history + comment timeline from
+  the events ledger. Activity: stat tiles + sectioned metric cards + a real event timeline; board
+  search now matches descriptions with snippets. Docs system: `/docs` index (published-vs-draft
+  badges), `/doc/<slug>` viewer (version picker, DL-83 divergence banner), `/history`, `/diff` —
+  with a CAS draft-edit form + version-bound operator Publish button behind the existing DL-29
+  double gate; `/roadmap` is now a 302 to the roadmap doc page; a header chip counts pending
+  drafts. Views split into `hub/src/views/*` behind a re-exporting façade with a typed route
+  registry. `.doc` markdown finally has real heading hierarchy. `dev-loop op <op-name>`
   dispatches any of the 22 hub ops through the same `agentOp()` choke point the MCP server uses
   (identity + G1/G2 guards included), plus sugar verbs: `ticket create/update`, `comment add`,
   `comments`, `labels`, `label create`, `project`, `events`, `doc list/get/history/diff/save/publish`,
