@@ -51,8 +51,15 @@ Install the runtime once:
 npm i -g @dyzsasd/dev-loop
 ```
 
-For `backend:"service"`, `dev-loop run` injects the hub MCP configuration per fire. Manual setup is
-needed only when you bypass the scheduler.
+For `backend:"service"`, how a fire reaches the hub depends on the configured agent interface
+(`hub.agentInterface`, D8): coding agents on `"cli"` (the default for Claude Code and — since the
+2026-07-11 P8 certification below — Codex) get **no** MCP injection — they call the PATH-installed
+`dev-loop` write verbs, with identity exported in the fire env — while agents on `"mcp"` (the
+default for opencode; the rollback setting for claude/codex) reach the hub over MCP: `dev-loop run`
+injects the configuration inline per fire for claude/codex, while opencode registers it through the
+operator's merged config (its template below), the scheduler passing only the identity env. Manual
+MCP setup is needed when you bypass the scheduler for an `"mcp"`-interface claude/codex fire, or
+once up front for opencode.
 
 Templates:
 
@@ -77,9 +84,17 @@ DEVLOOP_WORKSPACE=<workspace> DEVLOOP_ACTOR=qa DEVLOOP_PROJECT=<project> \
   dev-loop identity-check --expect qa/<project>
 ```
 
-Then run a real CLI-to-MCP check:
+Then prove the identity crosses the CLI boundary. The probe depends on the agent interface — a
+`"cli"`-interface fire uses the CLI's spawned shell, an `"mcp"`-interface fire uses the MCP
+subprocess, and a CLI may propagate env into one but not the other (Codex does exactly that):
 
 ```bash
+# interface "cli": have the CLI run the same probe in its own shell (the P8 ceremony;
+# see the Codex certification below)
+DEVLOOP_ACTOR=qa DEVLOOP_PROJECT=<project> DEVLOOP_HUB_DB=<db> <cli-headless-run> \
+  "run dev-loop identity-check --expect qa/<project> and print its output"
+
+# interface "mcp": call the injected hub MCP server through the CLI
 DEVLOOP_ACTOR=qa <cli-headless-run> \
   "call the dev-loop-hub whoami tool and print only its actor and project"
 ```
@@ -91,16 +106,35 @@ Pass criteria:
 | actor/project match expectation | safe to onboard that CLI path |
 | actor falls back to `operator`, project is wrong, or the tool cannot run | do not run unattended until the launcher passes identity through |
 
-`identity-check` proves your shell environment is coherent. `whoami` proves the CLI passed the same
-identity into the MCP subprocess.
+`identity-check` in your own shell proves the launcher environment is coherent. The
+through-the-CLI probe proves the CLI passed the same identity into the surface the fire actually
+uses — its spawned shell (`"cli"`) or the MCP subprocess (`"mcp"`).
 
 ## 4. Codex
 
-Codex is supported through `dev-loop run --cli codex`. The scheduler injects the actor, project, and
-hub DB with Codex `-c` overrides because Codex does not reliably inherit per-pane environment
-variables into MCP subprocesses.
+Codex is supported through `dev-loop run --cli codex`. On `backend:"service"` its fires default to
+the `"cli"` interface (certified below): the scheduler injects no MCP and exports the identity env
+per fire, and the agent reaches the board through the PATH-installed `dev-loop` write verbs.
 
-Manual certified shape:
+### Codex CLI interface — CERTIFIED (2026-07-11, P8)
+
+Run end-to-end against a scratch service workspace on `codex-cli 0.130.0`. **Result: certified —
+`hub.agentInterface.codex` defaults to `"cli"`.**
+
+| Check | Result |
+|---|---|
+| Launcher-side gate: `dev-loop identity-check --expect pm/certproj` under the exact fire env | ✅ exit 0, `pass:true` |
+| Fire-shaped `codex exec` (the scheduler's own rendered shape: `--model gpt-5.5 -c 'model_reasoning_effort="xhigh"' --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`, cwd = the project repo, env = the `runAgent` identity block), prompt = run the same `identity-check` | ✅ the probe ran inside Codex's spawned shell and printed `{"actor":"pm","project":"certproj",…,"matchesExpectation":true,"pass":true}`, exit 0 |
+
+**What was proven:** `codex exec` propagates the launching process env (`DEVLOOP_ACTOR` /
+`DEVLOOP_PROJECT` / `DEVLOOP_HUB_DB` / `DEVLOOP_DEV_SPLIT`) into the shell commands the agent runs
+(`/bin/zsh -lc …`) — the identity transport every interface=`"cli"` fire depends on. This is
+distinct from (and does not overturn) the 2026-06-25 finding that Codex does **not** forward the
+process env into MCP *subprocesses*: when Codex is rolled back to `"mcp"`
+(`hub.agentInterface.codex: "mcp"`), identity must still ride `-c` config overrides, which the
+scheduler applies automatically.
+
+Manual certified shape for an `"mcp"`-interface (rollback) run:
 
 ```bash
 codex exec \
@@ -117,8 +151,8 @@ Use manual `codex exec` only for attended tests or one-off debugging. For the lo
 dev-loop run --cli codex --agents core,communication
 ```
 
-Unattended Codex runs need the default unsafe executor mode so MCP tool calls are not cancelled for
-approval. Use `--codex-safe` only for attended runs where you want to approve each tool call.
+Unattended Codex runs need the default unsafe executor mode so shell/MCP tool calls are not cancelled
+for approval. Use `--codex-safe` only for attended runs where you want to approve each tool call.
 
 ## 5. opencode
 
@@ -150,7 +184,8 @@ Before leaving a new CLI unattended:
 
 1. `dev-loop run --once --dry-run` prints the expected command.
 2. `identity-check` passes with the expected actor/project.
-3. A real `whoami` MCP call through the CLI returns the same actor/project.
+3. The through-the-CLI identity probe for the fire's interface (§3: `identity-check` inside the
+   CLI's shell on `"cli"`, `whoami` over MCP on `"mcp"`) returns the same actor/project.
 4. A read-only board call succeeds.
 5. A dry-run agent fire exits cleanly.
 

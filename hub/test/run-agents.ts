@@ -18,16 +18,28 @@ try {
   const data = join(tmp, "data");
   const repo = join(tmp, "repo");
   const otherRepo = join(tmp, "other-repo");
+  const svcCliRepo = join(tmp, "svc-cli-repo");       // distinct repos so cwd→project inference stays unambiguous
+  const svcCodexRepo = join(tmp, "svc-codex-repo");
   const outside = join(tmp, "outside");
   mkdirSync(data, { recursive: true });
   mkdirSync(repo, { recursive: true });
   mkdirSync(otherRepo, { recursive: true });
+  mkdirSync(svcCliRepo, { recursive: true });
+  mkdirSync(svcCodexRepo, { recursive: true });
   mkdirSync(outside, { recursive: true });
   writeFileSync(join(data, "projects.json"), JSON.stringify({
     defaultProject: "fallback",
-    // demo is backend:"service" so the hub-injection assertions below apply (the hub MCP is
-    // service-only, §18); fallback is a default (linear) project used for the no-hub assertion.
-    projects: { demo: { repoPath: repo, backend: "service" }, fallback: { repoPath: otherRepo } },
+    // demo is backend:"service" PINNED to interface="mcp" for BOTH coding agents via hub.agentInterface
+    // (the D8 rollback switch) so the hub-injection assertions below stay BYTE-IDENTICAL to the pre-D9
+    // behavior. svccli is service on the DEFAULTS (D9 + the 2026-07-11 P8 cert: claude→cli, codex→cli);
+    // svccodexcli pins codex to cli EXPLICITLY (the pre-cert opt-in shape — must resolve the same as the
+    // default). fallback is a default (linear) project for the no-hub assertion.
+    projects: {
+      demo: { repoPath: repo, backend: "service", hub: { agentInterface: { claude: "mcp", codex: "mcp" } } },
+      svccli: { repoPath: svcCliRepo, backend: "service" },
+      svccodexcli: { repoPath: svcCodexRepo, backend: "service", hub: { agentInterface: { codex: "cli" } } },
+      fallback: { repoPath: otherRepo },
+    },
   }));
   const common = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "demo"];
   const noProjectCommon = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--cwd", repo];
@@ -66,13 +78,36 @@ try {
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_DEV_SPLIT="false"/.test(codex.out), "codex dry-run injects the runtime dev-split switch");
   ok(!/dangerously-bypass/.test(codex.out), "--codex-safe omits unsafe bypass flags");
 
+  // ── D8/D9 interface flip: claude on a service project DEFAULTS to interface="cli" — the scheduler
+  //    injects NO hub MCP and passes NO --strict-mcp-config; the agent reaches the board through the
+  //    PATH-installed `dev-loop` write layer (identity rides the spawn env). demo above (pinned "mcp")
+  //    keeps the old command line byte-identical; svccli exercises the new default. ──
+  const svcCliCommon = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "svccli"];
+  const cliDefault = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...svcCliCommon]);
+  ok(cliDefault.code === 0, "service + claude on the D9 default (interface=cli) exits 0");
+  ok(/pm: claude --model opus --effort max -p '?<prompt:\d+ chars>'?/.test(cliDefault.out),
+    "interface=cli claude command drops the hub injection entirely (model/effort/prompt only)");
+  ok(!/--mcp-config/.test(cliDefault.out) && !/--strict-mcp-config/.test(cliDefault.out) && !/dev-loop-hub/.test(cliDefault.out),
+    "interface=cli passes no --mcp-config / --strict-mcp-config and defines no dev-loop-hub server");
+  ok(/pm: cwd=\S+ cli=claude .*interface=cli/.test(cliDefault.out), "the dry-run info line names the resolved interface on a service project");
+  const cliExplicitMcp = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--mcp-config", join(tmp, "custom-mcp.json"), ...svcCliCommon]);
+  ok(/--mcp-config \S*custom-mcp\.json --strict-mcp-config/.test(cliExplicitMcp.out),
+    "an EXPLICIT --mcp-config still applies under interface=cli (operator-passed config always wins)");
+  const codexDefault = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "pm", ...svcCliCommon]);
+  ok(codexDefault.code === 0 && !/mcp_servers\.dev-loop-hub/.test(codexDefault.out),
+    "codex now DEFAULTS to interface=cli on service (P8 env-propagation certified 2026-07-11) — no -c hub overrides");
+  ok(/pm: cwd=\S+ cli=codex .*interface=cli/.test(codexDefault.out), "the codex dry-run info line names the resolved cli interface");
+  const codexCli = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "pm", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "svccodexcli"]);
+  ok(codexCli.code === 0 && !/mcp_servers\.dev-loop-hub/.test(codexCli.out),
+    "an EXPLICIT hub.agentInterface.codex=\"cli\" resolves the same as the post-P8 default (no -c hub overrides)");
+
   const inferred = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", ...noProjectCommon]);
   ok(inferred.code === 0, "runner can omit --project when cwd is inside a configured repo");
   ok(/project=demo cwd=/.test(inferred.out), "cwd→repoPath inference resolves the project");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_PROJECT="demo"/.test(inferred.out), "inferred project is injected into Codex with -c");
 
   const unresolved = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--cwd", outside]);
-  ok(unresolved.code === 2 && /no workspace found from/.test(unresolved.out) && /Configured projects: demo, fallback/.test(unresolved.out),
+  ok(unresolved.code === 2 && /no workspace found from/.test(unresolved.out) && /Configured projects: demo, svccli, svccodexcli, fallback/.test(unresolved.out),
     "runner refuses to guess defaultProject/demo when cwd is outside every configured repo (1.0 message points at team init/import)");
 
   const split = run(["--cli", "claude", "--once", "--dry-run", "--agents", "core", "--dev-split", ...common]);
