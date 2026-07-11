@@ -88,9 +88,14 @@ export interface Workspace {
 
 // The .dev-loop/ layout (impl §3.2, R1) shares its top-level namespace with project state dirs, so a
 // project key / repo ref may not collide with these. `_team` is the reserved service-intake project —
-// permitted ONLY as that exact system key (it also violates the leading-char rule below, by design).
+// it exists ONLY as a hub.db row (seeded by `team init`), never as a config project (E11 rejects it).
 export const RESERVED_NAMES = new Set(["team", "lessons", "wt", "locks", "reports", "hub.db", "daemon.json", "scheduler.json", "fires.jsonl"]);
 export const TEAM_INTAKE_PROJECT = "_team";
+// The ONE place the `_team` exclusion lives: any code iterating config projects for delivery/rotation/
+// reporting must route through these, so the exclusion cannot drift across call sites — and stays correct
+// even for hand-built Workspace objects that never passed validation.
+export function isTeamProject(key: string): boolean { return key === TEAM_INTAKE_PROJECT; }
+export function deliveryProjects(ws: Workspace): string[] { return Object.keys(ws.file.projects).filter((k) => !isTeamProject(k)); }
 const KEY_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const TEAM_KEY_RE = /^[a-z0-9-]{2,32}$/;
@@ -167,7 +172,7 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   const seenLinearProjectId = new Map<string, string>();
   const refCount = new Map<string, string[]>(); // ref → [project keys referencing it]
   for (const [key, p] of Object.entries(projects)) {
-    validateName(key, `projects.${key}`, E, /* allowTeamIntake */ true);
+    validateName(key, `projects.${key}`, E);
     if (p?.enabled !== undefined && typeof p.enabled !== "boolean") E("E08", `projects.${key}.enabled`, "enabled must be a boolean");
     if (p?.weight !== undefined && (typeof p.weight !== "number" || !Number.isFinite(p.weight) || p.weight < 0))
       E("E08", `projects.${key}.weight`, "weight must be a finite number >= 0");
@@ -228,8 +233,8 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   return { errors, warnings };
 }
 
-function validateName(name: string, path: string, E: (c: string, p: string, m: string) => void, allowTeamIntake = false): void {
-  if (allowTeamIntake && name === TEAM_INTAKE_PROJECT) return; // reserved system key, permitted here only
+function validateName(name: string, path: string, E: (c: string, p: string, m: string) => void): void {
+  if (name === TEAM_INTAKE_PROJECT) { E("E11", path, `'${TEAM_INTAKE_PROJECT}' is the reserved hub intake project — it lives only as a hub.db row (team init seeds it), never in dev-loop.json`); return; }
   if (RESERVED_NAMES.has(name)) { E("E11", path, `'${name}' is a reserved name (.dev-loop/ layout); pick another key/ref`); return; }
   if (!KEY_RE.test(name)) E("E11", path, `'${name}' must match ${KEY_RE} (lowercase, no leading _/-/.)`);
 }

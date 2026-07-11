@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolveWorkspace, wsFireLedger, wsHubDb } from "./workspace.ts";
-import type { Workspace } from "./team-config.ts";
+import { deliveryProjects, type Workspace } from "./team-config.ts";
 
 // ─── fires.jsonl ──────────────────────────────────────────────────────────────
 export interface FireRow { ts: string; agent: string; project: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean }
@@ -135,8 +135,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     try {
       const board: Record<string, BoardMetrics> = {};
       const roll = { throughput: 0, verifyFails: 0, blockedNow: 0, bugsFiled: 0, escaped: 0 };
-      for (const key of Object.keys(ws.file.projects)) {
-        if (key === "_team") continue;
+      for (const key of deliveryProjects(ws)) {
         const pid = findProject(db, key);
         if (!pid) continue;
         const m = boardMetrics(db, pid, windowMs);

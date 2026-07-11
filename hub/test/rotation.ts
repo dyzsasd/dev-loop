@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { smoothWRRStep, rotationCandidates, pickAndAdvance, loadSchedulerState, type SchedulerState } from "../src/rotation.ts";
+import { smoothWRRStep, rotationCandidates, stewardProjects, pickAndAdvance, loadSchedulerState, type SchedulerState } from "../src/rotation.ts";
 import type { Workspace, TeamFile } from "../src/team-config.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -47,6 +47,9 @@ function mkWs(projects: TeamFile["projects"]): Workspace {
   const cands = rotationCandidates(ws);
   ok(cands.map((c) => c.key).join(",") === "a,d", "candidates exclude weight:0, enabled:false, and _team");
   ok(cands.find((c) => c.key === "d")!.weight === 2, "candidate weight carried through");
+  // T3.2: weight:0 = delivery paused, stewards continue — the steward list keeps b (weight:0) while
+  // dropping c (enabled:false) and the _team intake row.
+  ok(stewardProjects(ws).join(",") === "a,b,d", "stewardProjects keeps weight:0 (maintenance mode) and drops enabled:false + _team");
 }
 
 // ── hot-reload cursor prune: a stale cursor key for a removed project doesn't distort argmax ──

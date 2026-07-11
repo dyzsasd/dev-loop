@@ -13,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { hubDbPath } from "./paths.ts";
 import { tryResolveWorkspace, wsHubDb } from "./workspace.ts";
-import { validateTeamFile, effectiveRepo, type Workspace } from "./team-config.ts";
+import { validateTeamFile, effectiveRepo, deliveryProjects, isTeamProject, type Workspace } from "./team-config.ts";
 import { checkLessonsBudget } from "./lessons.ts";
 import * as metricsMod from "./metrics.ts";
 const require_metrics = () => metricsMod;
@@ -25,6 +25,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean } = 
   let ok = true;
   const pass = (m: string) => console.log("✅ " + m);
   const fail = (m: string) => { console.log("❌ " + m); ok = false; };
+  const warn = (m: string) => console.log("⚠️  " + m);
   const info = (m: string) => console.log("•  " + m);
 
   // Schema v2: when a workspace is discoverable, run its (READ-ONLY) checks first and point the DB checks
@@ -99,6 +100,20 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean } = 
     ? fail(`duplicate ticket_prefix across projects: ${[...new Set(dupes)].join(", ")} — ticket ids will collide on the shared db`)
     : pass(`ticket prefixes unique across projects`);
   info(`valid DEVLOOP_ACTOR values: ${(db.prepare("SELECT handle FROM actors WHERE active=1 ORDER BY handle").all() as { handle: string }[]).map((r) => r.handle).join(", ")}`);
+
+  // W08 — config↔hub reconcile (service workspace only). A config project with NO hub row burns every
+  // fire on the hub's G2 refusal (the team scheduler skips it at pick time) → warn with the exact seed
+  // command. A hub row with NO config entry is merely unscheduled (historical / hand-seeded) → info.
+  // `_team` is the reserved intake row: expected in the hub, forbidden in config (E11).
+  if (ws) {
+    const hubKeys = new Set(projects.map((p) => p.key));
+    for (const key of deliveryProjects(ws)) {
+      if (!hubKeys.has(key)) warn(`[W08] projects.${key}: config project '${key}' has no hub.db row — its fires get no board access; seed it once: dev-loop seed ${key} "<Project Name>" <UNIQUE_PREFIX>`);
+    }
+    for (const p of projects) {
+      if (!isTeamProject(p.key) && !Object.hasOwn(ws.file.projects, p.key)) info(`hub project '${p.key}' has no dev-loop.json entry (unscheduled; historical or hand-seeded)`);
+    }
+  }
 
   // 5. §17 secrecy guard — the db must NOT be tracked by git (it's machine-local runtime state)
   const dir = dirname(dbPath);

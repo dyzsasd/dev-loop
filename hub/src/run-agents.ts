@@ -9,12 +9,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
-import { toLegacyView, WsValidationError, primaryRepo, type Workspace } from "./team-config.ts";
-import { rotationCandidates, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
+import { toLegacyView, WsValidationError, primaryRepo, TEAM_INTAKE_PROJECT, type Workspace } from "./team-config.ts";
+import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
-import { findProject, AGENT_HANDLES } from "./seed.ts";
+import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -637,7 +637,9 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
 const GATED_AGENTS = new Set<Agent>(["pm", "qa", "dev", "senior-dev", "junior-dev", "architect"]);
 // Stewardship agents (M4): in team mode these fire at TEAM scope (cwd = workspace root, project = _team/"",
 // DEVLOOP_TEAM_SCOPE=1) and iterate/route across the enabled projects, rather than rotating one project.
-const STEWARD_AGENTS = new Set<Agent>(["sweep", "ops", "reflect", "communication"]);
+// Derived from seed.ts's STEWARD_HANDLES (the A2 pattern) — the same set the D1 project-override matrix
+// (agentops.resolveProjectOverride) grants cross-project access to, so scheduler and hub cannot drift.
+const STEWARD_AGENTS = new Set<Agent>(STEWARD_HANDLES);
 function repoPathsFor(cfg: ProjectsConfig | null, project: string): string[] {
   const p = cfg?.projects?.[project] as { repoPath?: string; repos?: { path?: string }[] } | undefined;
   if (p?.repos?.length) return p.repos.map((r) => r.path).filter((x): x is string => !!x);
@@ -959,11 +961,24 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
   const backend = ws.file.team.backend;
 
-  // `--project` filter: restrict rotation to a single named project (must exist + be enabled).
+  // `--project` filter: restrict DELIVERY rotation to a single named project. It must exist + be enabled;
+  // a weight:0 target is NOT an error — that just pauses delivery (the block below decides), and stewards
+  // are never narrowed by the filter either way.
+  if (opts.project) {
+    const p = ws.file.projects[opts.project];
+    if (!p) die(`--project '${opts.project}' is not a project in team '${ws.file.team.key}'`, 2);
+    if (p.enabled === false) die(`--project '${opts.project}' is disabled (enabled:false) in team '${ws.file.team.key}'`, 2);
+  }
   const allCandidates = rotationCandidates(ws);
   const candidates = opts.project ? allCandidates.filter((c) => c.key === opts.project) : allCandidates;
-  if (opts.project && !candidates.length) die(`--project '${opts.project}' is not an enabled, positively-weighted project in team '${ws.file.team.key}'`, 2);
-  if (!candidates.length) die(`no enabled, positively-weighted project to fire in team '${ws.file.team.key}' (all disabled or weight:0?)`, 2);
+  // weight:0 = maintenance mode (T3.2): delivery rotation pauses but stewards keep covering the project —
+  // so an all-weight:0 team still runs its selected stewards. Refuse only when NOTHING could ever fire.
+  const stewardsSelected = opts.agents.some((a) => STEWARD_AGENTS.has(a));
+  if (!candidates.length) {
+    const scope = opts.project ? `--project '${opts.project}' is weight:0` : `no enabled, positively-weighted project in team '${ws.file.team.key}' (all disabled or weight:0?)`;
+    if (!stewardsSelected || !stewardProjects(ws).length) die(`${scope} — nothing to fire (weight:0 pauses delivery; only stewards keep covering it)`, 2);
+    console.warn(`dev-loop run: delivery rotation paused — ${scope} (weight:0 pauses delivery only); steward fires continue`);
+  }
 
   console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
   applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence);
@@ -990,7 +1005,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       for (const agent of opts.agents) {
         const { pick, cur } = smoothWRRStep(candidates, preview[agent] ?? {});
         preview[agent] = cur as CursorMap;
-        console.log(`  ${String(i + 1).padStart(3)}  ${agent} → ${pick}`);
+        console.log(`  ${String(i + 1).padStart(3)}  ${agent} → ${pick ?? "(delivery paused)"}`);
       }
     }
     return;
@@ -1017,28 +1032,51 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const gateState: Record<string, string> = gateActive ? loadGateState(opts, "team") : {};
   const gateKey = (agent: Agent, project: string) => `${agent}:${project}`;
 
-  // The enabled-project list a steward fire iterates over (also drives the launch-profile representative).
-  const enabledProjects = () => candidates.map((c) => c.key);
+  // The project list a steward fire iterates over (it also drives the launch-profile representative):
+  // every ENABLED project at ANY weight — weight:0 pauses DELIVERY only (T3.2) — and never narrowed by
+  // --project (a steward fire is team-scope, not part of the rotation).
+  const stewardScope = () => stewardProjects(ws);
   // Team scope for a steward: cwd = workspace root, project = _team (service) / "" (linear).
-  const stewardProject = backend === "service" ? "_team" : "";
+  const stewardProject = backend === "service" ? TEAM_INTAKE_PROJECT : "";
+
+  // Pick-time seed guard (service): a config project with no hub.db row boots the hub MCP straight into
+  // its G2 refusal — a full LLM turn with zero board access. The legacy fixed-project path dies at startup
+  // (main() above); a rotating team must instead SKIP the unseeded project (warn once per project per
+  // process) and keep its siblings firing. Fails open on an unreadable hub db — the fire surfaces that.
+  const unseededWarned = new Set<string>();
+  const seededInHub = (project: string): boolean => {
+    if (backend !== "service") return true;
+    if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
+    if (!fireDb) return true;
+    try { return !!findProject(fireDb, project); } catch { return true; }
+  };
+  const warnUnseeded = (agent: Agent, project: string): void => {
+    if (unseededWarned.has(project)) return;
+    unseededWarned.add(project);
+    console.error(`[${agent}] project '${project}' is backend:"service" but not seeded in ${opts.hubDb} — ${opts.dryRun ? "real fires would get no hub tools" : "skipping its fires (siblings keep rotating)"}; seed it once: dev-loop seed ${project} "<Project Name>" <UNIQUE_PREFIX>`);
+  };
 
   // A single fire for one agent. Stewards (M4) fire at TEAM scope (no rotation). Delivery agents rotate:
-  // pick a project (skipping gated-unchanged ones up to one full rotation), resolve its cwd, and run.
+  // pick a project (skipping gated-unchanged + unseeded ones up to one full rotation), resolve its cwd, and run.
   const fireAgentOnce = async (agent: Agent): Promise<void> => {
     if (STEWARD_AGENTS.has(agent)) {
-      await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: enabledProjects() });
+      await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: stewardScope() });
       return;
     }
     let project: string | null = null;
     for (let attempt = 0; attempt < candidates.length; attempt++) {
       const p = pickProject(agent); // advances the shared cursor every attempt (skip-advance)
+      if (!seededInHub(p)) {
+        warnUnseeded(agent, p);
+        if (!opts.dryRun) continue; // skip the token burn; a dry-run previews on (same shape as the legacy preflight)
+      }
       if (gateActive && GATED_AGENTS.has(agent)) {
         const key = changeKey(opts, cfg, p);
         if (key !== null && gateState[gateKey(agent, p)] === key) continue; // unchanged ⇒ skip, try next candidate
       }
       project = p; break;
     }
-    if (project === null) return; // every candidate gated-unchanged this round ⇒ no fire
+    if (project === null) return; // every candidate gated-unchanged / unseeded this round ⇒ no fire
     const cwd = cwdFor(project);
     if (!cwd || !existsSync(cwd)) { console.error(`[${agent}] project '${project}' has no usable repo cwd (${cwd ?? "none"}); skipping`); return; }
     await runAgent(opts, cfg, agent, project, cwd);

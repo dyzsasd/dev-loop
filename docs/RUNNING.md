@@ -82,9 +82,14 @@ The scheduler is the normal 1.0 launch path:
 dev-loop run
 ```
 
-One scheduler drives the whole team. Delivery agents rotate across enabled projects with weighted
-round-robin. Stewardship agents run at team scope. Press `Ctrl-C` to stop the scheduler and any
-active agent subprocess.
+One scheduler drives the whole team. Delivery agents rotate across enabled, positively-weighted
+projects with weighted round-robin. Stewardship agents run at team scope over every enabled project
+regardless of weight: `weight: 0` pauses a project's delivery rotation only (maintenance mode) while
+stewards keep covering it, and `enabled: false` removes it from both. `--project` narrows the delivery
+rotation only — steward fires always keep team-wide coverage. On a service backend, a configured
+project that was never seeded into hub.db is skipped at pick time (warned once, with the exact
+`dev-loop seed` command; siblings keep rotating) — `dev-loop doctor` reports the same drift as `W08`.
+Press `Ctrl-C` to stop the scheduler and any active agent subprocess.
 
 Useful variants:
 

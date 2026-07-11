@@ -3,6 +3,39 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+- **feat(hub): role-gated `project` override on every hub op (D1, closes GA-deferred D4.2).**
+  All 22 agent ops accept an optional `project` argument, enforced server-side at the shared
+  `agentOp()` choke point on BOTH transports (stdio + daemon op-API): stewards
+  (`sweep`/`ops`/`reflect`/`communication`, booted `_team`) may name any configured project key or
+  `_team`; **PM may name `_team` only** (the §9b team-intake carrier); every other actor is refused
+  `FORBIDDEN`, forbidden-first, so key existence never leaks. Omitting `project` is byte-identical
+  to the old behavior. This un-deadletters §9b team intake, ops owner-routed alerts, and sweep
+  per-project hygiene on `backend:"service"`. The op-API dry-run gate judges the *effective*
+  project.
+- **feat(scheduler): weight:0 maintenance mode restored (T3.2) + pick-time seed guard + doctor W08.**
+  Steward fires (sweep/ops/reflect/communication) now enumerate every *enabled* project via
+  `stewardProjects()` regardless of `weight` — `weight:0` means *delivery paused, stewards
+  continue*, as designed; `--project` narrows delivery rotation but no longer narrows team-scope
+  steward coverage. Team-mode `run` gains the legacy pick-time guard: a config project with no
+  hub.db row warns once (with the exact `dev-loop seed` command) and skip-advances instead of
+  burning an LLM fire with zero board access. `dev-loop doctor` reconciles config↔hub both ways
+  (**W08**).
+- **BREAKING(config): `projects._team` is rejected at validation (E11).** `_team` lives only as a
+  hub.db intake row (seeded by `team init`); a dev-loop.json that hand-declares it now fails to
+  load. Fix: delete the entry — team intake needs no config row.
+- **fix(paths): dev-loop path env vars reject literal `undefined`/`null` segments** loudly, naming
+  the variable at fault, instead of silently planting a schema-only `undefined/hub.db` in the cwd
+  (the `daemon up` seeded-probe and the read-only tickets CLI both reproduced it).
+- **fix(docstore): the doc.save CONFLICT recovery loop converges.** CONFLICT now carries
+  `{latestVersion, latestAuthor, hint}`, `doc.get` accepts `version:"latest"`, and the documented
+  recovery loop (re-read latest → re-apply → re-save) actually terminates once drafts exist past
+  the published version. `doc.get`'s default read is unchanged.
+- **fix(skills): restored 11 corrupted `§`-references** in dev-agent/qa-agent (a find/replace had
+  mangled `§1x` into `…"Topology at a glance" tablex`) and added a lint (`test/skill-refs.ts`)
+  asserting every SKILL `§`-reference resolves to a real conventions.md heading.
+
 ## 1.1.0
 
 - **feat(pm): passive intake mode (§5a).** New per-project `intake.mode: "autonomous" (default) |

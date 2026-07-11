@@ -185,8 +185,8 @@ agent behavior.
 
 | Field | Meaning |
 |---|---|
-| `enabled` | `false` removes the project from scheduling. |
-| `weight` | Weighted round-robin weight. `0` pauses scheduling. |
+| `enabled` | `false` removes the project from scheduling entirely — both delivery rotation and steward coverage. |
+| `weight` | Weighted round-robin share of delivery fires. `0` pauses delivery rotation only (maintenance mode) — stewards (sweep/ops/reflect/communication) keep covering the project. |
 | `linearProject` / `linearProjectId` | Backend project name/id. |
 | `strategyDoc` | Strategy document reference, usually `{ "path": "docs/STRATEGY.md" }`. |
 | `testEnv` | Base URL, auth constraints, setup notes, and verification hints. |
@@ -214,7 +214,7 @@ agent behavior.
 | `E08` | Bad `enabled` / `weight`. |
 | `E09` | Linear backend without `linearTeam`. |
 | `E10` | Duplicate repo paths or duplicate `linearProjectId`. |
-| `E11` | Reserved/invalid project key or repo ref. |
+| `E11` | Reserved/invalid project key or repo ref. `_team` is the hub-only intake row (seeded by `team init` into hub.db) and is rejected as a config project. |
 | `E12` | Bad `intake` block: `mode` not `"autonomous"`/`"passive"`, or `todoDepthCap` not a positive integer. |
 
 Common warnings:
@@ -228,6 +228,7 @@ Common warnings:
 | `W05` | Linear steward fires need the Linear MCP in user scope. |
 | `W06` | Workspace root is inside a git worktree and `.dev-loop/` is not ignored. |
 | `W07` | Deployed repo has no health probe for Ops. |
+| `W08` | Service workspace: a config project has no hub.db row — its fires get no board access (the scheduler skips it at pick time); run the printed `dev-loop seed` command. |
 
 ## State Layout
 
