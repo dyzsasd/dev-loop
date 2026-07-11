@@ -5,6 +5,47 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
+> Must release as **1.2.0**: doctor's W10 pins `WRITE_VERBS_MIN_VERSION="1.2.0"` and
+> config-schema documents the E09 demotion as "since 1.2".
+
+- **feat(cli): the agent write layer — CLI-first interface (D8).** `dev-loop op <op-name>`
+  dispatches any of the 22 hub ops through the same `agentOp()` choke point the MCP server uses
+  (identity + G1/G2 guards included), plus sugar verbs: `ticket create/update`, `comment add`,
+  `comments`, `labels`, `label create`, `project`, `events`, `doc list/get/history/diff/save/publish`,
+  `mirror push/status`; `tickets`/`ticket <id>` gain `--json` + filter flags with byte-parity to the
+  MCP output. Exit-code contract: 0 ok · 1 domain · 2 usage · 3 doc CAS CONFLICT (machine payload on
+  stderr) · 4 identity/guard · 5 hub unavailable. Direct-db by default; `hub.transport:"daemon"`
+  routes over the loopback op-API via the shared `op-client.ts` (shim now reuses it). sqlite gains
+  `busy_timeout=5000`.
+- **feat(scheduler): `hub.agentInterface` — CLI is the default agent transport on `service` (D9).**
+  Per-coding-agent map (team + per-project, field-wise merge, E13): **claude→"cli"** and — after a
+  live P8 certification on codex-cli 0.130.0 proved `codex exec` propagates fire env to shell
+  subprocesses — **codex→"cli"** too (opencode stays "mcp"). `interface=cli` drops the inline hub
+  `--mcp-config` injection entirely (identity rides the fire env); `interface=mcp` restores the old
+  wiring verbatim — it is the rollback switch. `team init`/`add-project` provision
+  `permissions.allow: ["Bash(dev-loop *)"]` in the workspace Claude settings; doctor gains W09-W11
+  CLI preflights (binary on PATH, version, identity smoke).
+- **feat(skills): per-agent CLI cheat-sheets, generated.** Every agent SKILL carries a
+  marker-fenced command block scoped to the ops that agent uses, rendered by
+  `hub/src/gen-cheatsheets.ts` from the CLI's own usage strings; `test/cli-cheatsheet.ts` fails the
+  chain when a block drifts from the generator. Fail-closed rule rides the first line of every
+  block: identity probe exits 4/5 ⇒ stop, report, never touch the repo.
+- **feat(team): the onboarding rail.** `dev-loop team set <path> <value>` (whitelisted, validated
+  single-field mutator); blank `linearTeam` demoted from load-time brick to warning (**E09**, hard
+  only at fire time — `team init --backend linear --yes` no longer writes an unloadable workspace);
+  doctor computes a **NEXT:** line (the single most-blocking next step) so setup is self-resuming;
+  `team add-project` auto-seeds the hub row on service; `team add-repo --detect` registers a repo
+  from deterministic facts (package.json scripts, workflow job names); `team init` stamps a
+  `workspaceId` fingerprint, and add-project/sync-project mark the Linear project with it so two
+  workspaces double-driving one Linear team are detected.
+- **feat(init): `dev-loop init` — one guided, resumable setup wizard.** Composes team init →
+  add-project (auto-seeded) → add-repo --detect → permissions → doctor NEXT; `--yes` produces a
+  runnable service workspace non-interactively; the plugin/MCP step is now only needed for the
+  linear backend. README quick starts (en/zh/fr) lead with the 3-command zero-config path.
+- **feat(conventions): per-ticket worktree isolation is mandatory for split-dev in every landing
+  mode (§7).** Two concurrent dev writers no longer share one checkout in `landing:"direct"`; the
+  locked merge-back sequence (fetch → rebase → gate → ff-only merge under `with-repo-lock`) is
+  specified; legacy solo dev keeps in-place commits.
 - **feat(hub): role-gated `project` override on every hub op (D1, closes GA-deferred D4.2).**
   All 22 agent ops accept an optional `project` argument, enforced server-side at the shared
   `agentOp()` choke point on BOTH transports (stdio + daemon op-API): stewards
