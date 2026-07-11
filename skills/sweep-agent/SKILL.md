@@ -167,6 +167,22 @@ enabled project like the other jobs):
    `External-kind:` line is a legacy park PM must re-triage — flag it in Job 4's digest.
 Report all three counts in the digest.
 
+### Job 3c — D4 backstop: direction-section audit on doc-only commits (§20)
+
+On a project whose `strategyDoc` is a **repo file** (no publish gate — PM's commit IS the
+landing, conventions §20), audit the doc-home repo's recent **doc-only commits** touching
+the strategy doc (bounded — since your last fire / a ~24h window;
+`git -C <repo> log -p -- <strategyDoc path>` is enough). A diff that changes a **direction
+section** (`Vision`, `Goals (north star)`, `Non-goals`, any `Appetite`/`No-gos` heading)
+must trace to an approved §9a `investigation` ticket (the commit message or the ticket's
+`Proposes:` line + the operator's approval comment). A direction-section change with **no
+linked approval ticket** is a D4 policy breach: **flag it in the Job 4 digest for the
+operator** (name the commit + the section) — never revert or edit the doc
+(report-don't-mutate). Progress-section commits (`Current state`, `Decisions (running
+log)`, `Candidate ideas`, `Personas`/`Glossary`) are PM's autonomous lane — never flag
+those. Hub-doc projects skip this job (the operator-publish gate holds the direction line,
+§18).
+
 ### Job 4 — Board health digest (report only, no mutation)
 Compute and report a one-screen health snapshot — pure signal that helps the
 operator (and the other agents) see systemic drift:
@@ -182,19 +198,42 @@ If `backend:"service"` **and** a `mirror` config is present (conventions §18), 
 hub's tickets outward to Linear for **human visibility** — hygiene-adjacent ("keep the
 outside view current"). Call `mirror.push({ teamId, tokenEnv, projectId?, stateMap?, limit? })`
 once with the config's values (the `tokenEnv` is the env-var **NAME** — the hub reads the
-Linear token **server-side**; you never see or pass the secret). It is **ONE-WAY** (hub →
-Linear) and **incremental** (an unchanged ticket is skipped by content hash), so a fire is
+Linear token **server-side**; you never see or pass the secret). With the config's Linear
+`projectId`, the same push ALSO mirrors the project's PUBLISHED strategy/roadmap/decisions
++ LATEST design hub docs as Linear Documents parented to that project — one-way,
+hash-skipped, drafts stay private until the operator publishes; doc counts ride the `docs`
+result field, so report them alongside `created/updated/skipped/failed`. Without a
+`projectId` docs are skipped wholesale and `docs.note` says so — that is config guidance
+for the operator, not a fire failure. The push is **ONE-WAY** (hub → Linear) and
+**incremental** (an unchanged ticket/doc is skipped by content hash), so a fire is
 cheap when nothing changed. The hub **never reads Linear as truth**; a human edit on a
-mirrored issue is overwritten next push (the banner says so). **Never block** on the mirror —
-a failed push (`failed > 0`) is logged + retried next fire, not a fire failure. Absent a
-`mirror` config, or under `backend:"linear"`/`"local"` (no hub to mirror from) ⇒ **skip
-entirely** (fail-closed). Report the `created/updated/skipped/failed` counts. Respect `mode`
-(§12): in `dry-run`, the hub's `DEVLOOP_MIRROR_DRYRUN` makes this a no-network preview.
+mirrored issue is overwritten next push (the banner says so).
+
+**Second call each Job 5 fire, right after the push:** `mirror.pollComments({ tokenEnv })`
+(CLI: `dev-loop mirror poll --token-env NAME`) — the comment→intake poller. It files ONE
+`needs-pm` Backlog intake per NEW human comment on a mirrored doc (provenance: doc slug +
+mirrored version + quoted text + comment URL) and ONE **High** `needs-pm` intake per
+detected Linear-side body edit (the next push overwrites that edit; the poller never
+writes back). These intake tickets are the ONE sanctioned exception to your "file no new
+work" guardrail — they carry a human's words, not yours. Dedup rides a machine-local
+acted-ledger, so a re-poll is cheap and idempotent; the cadence is the push's (every Job 5
+fire — a comment waits at most one sweep cycle); the poll skips cleanly when no docs have
+been pushed yet.
+
+**Never block** on the mirror — a failed push or poll (`failed > 0`) is logged + retried
+next fire, not a fire failure. Absent a `mirror` config, or under
+`backend:"linear"`/`"local"` (no hub to mirror from) ⇒ **skip entirely** (fail-closed).
+Report the `created/updated/skipped/failed` ticket counts, the `docs` counts, and the
+poller's `filed/divergences`. Respect `mode` (§12): in `dry-run`, the hub's
+`DEVLOOP_MIRROR_DRYRUN` makes the push a no-network preview, and the poll still READS
+Linear (reads are side-effect-free) but only previews the would-file tickets — no ticket
+filed, no ledger byte written.
 
 ## 2. Guardrails
 - **Hygiene only.** Never verify a ticket, write code, file a Feature/Bug/Improvement
   for new work, or ship/deploy. Your only mutations are label/owner/route fixes and
-  orphan resets that *route work to the right agent*.
+  orphan resets that *route work to the right agent*. (One sanctioned exception: Job 5's
+  `mirror.pollComments` intake tickets — they carry a human's words, not yours.)
 - **Conservative by default.** If a fix isn't obvious (ambiguous type, unclear
   owner), **report it for the operator instead of guessing** — a wrong re-label
   mis-routes work, which is worse than a flagged one.
@@ -258,7 +297,7 @@ Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) 
 unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
 fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
 
-Your ops: board reads (Jobs 1–4), `save_issue` update for the re-label/re-route/orphan-reset fixes (never a create — you file no new work), comments, label reads/provisioning, and Job 5's `mirror.push`/`mirror.status`.
+Your ops: board reads (Jobs 1–4), `save_issue` update for the re-label/re-route/orphan-reset fixes (never a create — you file no new work), comments, label reads/provisioning, and Job 5's `mirror.push`/`mirror.pollComments`/`mirror.status` (the poller's needs-pm intake tickets are the ONE sanctioned exception to "file no new work" — they carry a human's words, not yours).
 
 ```text
 # list_issues
@@ -292,6 +331,14 @@ dev-loop label create <name> [--kind K]
 
 # mirror.push
 dev-loop mirror push --team-id T --token-env NAME [--project-id P] [--state-map '<JSON>'] [--limit N]
+    With --project-id, the PUBLISHED strategy/roadmap/decisions + LATEST design docs ALSO mirror as Linear
+    Documents parented to that Linear project (one-way, hash-skipped; doc counts ride the 'docs' result field).
+
+# mirror.pollComments
+dev-loop mirror poll --token-env NAME
+    Comment→intake on the mirrored docs: files ONE needs-pm Backlog ticket per NEW human comment (doc slug +
+    version + quote + URL) and per detected Linear-side body edit (overwritten next push — never written
+    back). Dedup rides a machine-local acted-ledger; DRYRUN previews the would-file tickets.
 
 # mirror.status
 dev-loop mirror status

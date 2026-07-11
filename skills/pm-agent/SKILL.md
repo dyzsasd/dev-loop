@@ -152,10 +152,26 @@ the same ground every fire, rotate the **review lens** and track progress:
   write can never leave invalid JSON — a partial write is the likely cause of the one
   `pm-state.json` corruption on record (175 KB live file reset to a `.corrupt-bak`).
 - **Watch the project doc every fire — a cheap, always-run check like Jobs A/B, not
-  gated by the SHA.** Re-read `strategyDoc` each run and detect whether the owner has
-  *added or changed* anything since last fire (track the doc's last-seen state in
-  `pm-state.json` — e.g. a content hash/length, or the set of goals/headings present).
-  **New or changed doc content is work to tackle now:** resolve it into concrete,
+  gated by the SHA.** Detect whether someone ELSE has *added or changed* direction since
+  last fire, by the doc's form (§0):
+  - **Hub document** — the watch predicate is the doc's **latest FOREIGN version**, never
+    a hash of the published body: run `dev-loop doc history --slug <strategy-slug>` (rows
+    come back newest-first, each carrying `version` + `author`) and take the FIRST row
+    whose author is not your own actor handle; that `{version, author}` pair is the watch
+    cursor — persist it as the `docWatch` state in `pm-state.json`. A cursor advance
+    means someone else — the operator via the web editor, the CLI, or MCP — saved a
+    version: treat it as a first-class direction trigger and attribute it ("operator
+    edited vN"). Your own drafts can NEVER advance the cursor (the self-trigger
+    exclusion; the hub-side primitive with identical semantics is
+    `docstore.latestForeignVersion`), and a draft you saved on top does not mask an older
+    unconsumed foreign version — you compare the fetched pair against the STORED pair,
+    not against the newest row. (Deliberate decision: no new CLI flag exists for this —
+    `doc history`'s existing output suffices; cite that invocation, never a
+    `--latest-foreign` flag.)
+  - **Linear document / repo file** (no version ledger) — keep tracking the doc's
+    last-seen state in `pm-state.json` (a content hash/length, or the set of
+    goals/headings present) and treat any change since last fire as the same trigger.
+  **New or changed foreign doc content is work to tackle now:** resolve it into concrete,
   testable tickets and file them this fire (subject to dedupe), **even on an unchanged
   `HEAD` and even if the current lens was already swept**. The owner editing the north
   star is a first-class trigger — never sit on freshly-written direction waiting for a
@@ -176,7 +192,12 @@ Dev's finished work is the most valuable thing to move. Query:
 `project` + `label:"dev-loop"` + `label:"pm"` + `state:"In Review"` — this covers
 both `Feature`s and any `Improvement`s you own. **In a split-dev project (conventions
 §21a)** this query ALSO surfaces a senior-dev **design parent** (the design tier's
-verified increment) — handle those via the design gate below.
+verified increment) — handle those via the design gate below. **An `investigation`
+ticket In Review is awaiting the OPERATOR, not you (§9a investigation protocol):** never
+verify-fail it — check for the operator's verdict (hub: the proposed version published —
+version-bound; repo file: an approval comment), then act: apply the proposed diff +
+commit and close `Done` (repo), confirm + close on a hub publish, or revise/abandon on a
+rejection comment.
 
 **In `git.landing:"pr"` (conventions §12b)** an In Review ticket is a change **awaiting the
 human's merge + deploy** — and **merging the PR is NOT the same as it being deployed** (the
@@ -290,7 +311,9 @@ counts too; move it to `Backlog` as you groom) with **no Dev bail-shape comment*
 Dev escalation — it's the operator tasking you) is a **W3 intake**. Handle it per §9a by its shape:
 - **Direction / research ask** ("consider adding feature X", "which approach for Y", "should we
   do Z") → **think on it and UPDATE THE DOCS**: record the direction in the `strategyDoc` (the
-  Linear document / repo file / hub doc per §0 — e.g. add it under `Goals`/`Candidate ideas`) **and**
+  Linear document / repo file / hub doc per §0 — e.g. add it under `Goals`/`Candidate ideas`;
+  on a repo-file doc a direction-SECTION change rides the §20 D4 investigation proposal first —
+  see the Investigation-ask bullet below) **and**
   a dated `Decisions (running log)` entry (§20); then file the concrete `Feature`/`Improvement`
   tickets it implies (dedupe + the ≤5/run cap), **clear `needs-pm`**, comment what you did + the
   new ticket IDs, and close the parent `Done`. A genuinely operator-only call (irreversible /
@@ -298,6 +321,17 @@ Dev escalation — it's the operator tasking you) is a **W3 intake**. Handle it 
 - **Build ask** ("build feature X") → groom into Dev children (§9a mechanics: each child
   `relatedTo` the parent, back-link the parent + comment the child IDs, **then** close the parent),
   clearing `needs-pm`.
+- **Investigation ask** (the ticket carries the **`investigation`** label — a direction call the
+  OPERATOR must approve BEFORE the doc changes; also what the §18 mirror-comment poller files, and
+  what YOU file for a §20 D4 direction-section edit) → run the §9a **investigation protocol**:
+  investigate (board/repo/product evidence), post your **findings as a comment**; if a doc change
+  is warranted — hub doc: `doc save` a DRAFT (CAS; the `--summary` is mandatory) and record
+  `Proposes: doc:<slug> v<N> (published v<M>)` on the ticket; repo file: post the **unified diff**
+  in a fenced block, do **NOT** commit — then park the ticket **`In Review` assigned to the
+  operator** (`Human-Blocked` per §9 if they must act outside the board). On approval (hub: the
+  proposed version published — version-bound; repo: an approval comment) apply + commit next fire
+  and close `Done`; on rejection revise or abandon (`Canceled`) — hub drafts stay in `doc.history`
+  as provenance.
 Tell an intake apart from a *stale* `needs-pm` (which you just clear) by **whether the latest
 comment is a human ask vs a Dev bail-shape** (`decision-needed`/`external-prereq`/…). All
 operator↔PM discussion flows through the parent's comments (§9a).
@@ -329,7 +363,10 @@ rules.
 When the block is genuinely human-only, move the ticket to **`state:"Human-Blocked"`** (a real
 parking state on `service`, DL-25): the persistent daemon then detects it structurally and
 periodically reminds the operator on its own (DL-26, cadence =
-`settings_json.humanBlockedReminderHours`). **On `service` the daemon is the single operator-alert
+`settings_json.humanBlockedReminderHours` — absent now means **24h** whenever `team.comms`
+is configured (the daemon reads the bridged §9 `notify` block), an explicit `0` remains the
+opt-out, and without comms it stays off; the daemon resolves this at **boot**, so an
+already-running daemon picks it up on restart only). **On `service` the daemon is the single operator-alert
 emitter for BOTH transports** — a registered bot/webhook `channel` (DL-52) *or* the §9 `notify`
 webhook block (DL-59 teaches the notifier to read `notify` as the fallback), so a webhook-only
 `service` project is covered without a registered channel — therefore **you don't emit the one-shot
@@ -484,6 +521,14 @@ capabilities that make the product better, even when they aren't written in the 
        with a clear message like `docs(strategy): mark <goal> shipped; add <new
        theme>`. In `dry-run`, print the intended diff and make no write. A doc-only
        commit is low-risk; keep it scoped.
+       **Section-level policy (§20 D4):** the autonomous commit covers PROGRESS
+       sections only — `Current state` / shipped markers, `Decisions (running log)`
+       appends, `Candidate ideas`, `Personas`/`Glossary`. A DIRECTION section
+       (`Vision`, `Goals (north star)`, `Non-goals`, any `Appetite`/`No-gos`) changes
+       ONLY through the §9a investigation protocol — findings + the unified diff on a
+       `needs-pm`+`investigation` ticket, operator approval, THEN the commit. Sweep
+       audits doc-only commits for direction-section changes without a linked
+       approval ticket, so an autonomous direction commit gets flagged.
 
 ## 2. Guardrails
 

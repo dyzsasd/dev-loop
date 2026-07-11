@@ -106,7 +106,7 @@ numbered sections below.
 | **QA** | `Bug`, `Improvement`(`qa`), `coverage` — files to `Backlog` (§5a) | In Review `qa` items; info-blocks; new-bug sweep | Linear state + labels |
 | **Dev** | (ships everyone's tickets) | `Todo` in pick order (§5), excluding `blocked` | In Review, for the owner |
 | **senior-dev / junior-dev** *(default split of Dev, §21a)* | senior: authors module **design** docs + verifies-gates-then-delegates to junior; junior: ships pre-designed tickets | senior: its design + escalation tickets; junior: its `Todo` slice (design children + improvements/bugs) | In Review, for the owner (escalation routes a junior fail UP to senior) |
-| **Sweep** | (nothing — hygiene only) | Tickets that fall through the cracks: missing/wrong owner label, orphaned `In Progress`, stale signals (cross-owner) | re-label/re-route → the right owner |
+| **Sweep** | (nothing — hygiene only) | Tickets that fall through the cracks: missing/wrong owner label, orphaned `In Progress`, stale signals (cross-owner); un-approved direction-section doc commits (§20 D4 audit — flag only) | re-label/re-route → the right owner |
 | **Reflect** | (nothing — observes the loop) | The loop's own behavior over a window: tickets/git/logs/throughput/QA outcomes (read-only) | `lessons.md` (autonomous) + a drafted proposal in the report (never auto-applies SKILL/conventions) |
 | **Ops** *(outward · observe-and-file §21)* | (nothing — watches running prod) | RUNNING prod over time: health checks / baseUrl / critical routes / logs (read-only); CONFIRMED+REPEATED degradation only (anti-flap) | files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod down) — never rolls back (Dev's Step 6.5) |
 | **Architect** *(outward · observe-and-file §21)* | (nothing — audits whole-codebase tech health) | the codebase as a whole on a rotating dimension (drift/dup/dead-code/dep-CVE/consistency/missing-abstractions), SHA-gated (§19), read-only | files `Improvement`+`qa`+`tech-debt` — never implements (Dev does) |
@@ -297,7 +297,13 @@ When PM cannot resolve a block (it needs a genuine human decision / credential /
 sign-off), on `service` it moves the ticket to **`Human-Blocked`** instead of the
 `blocked` + `needs-pm` + `external-prereq` label park. The persistent daemon detects the
 state structurally and periodically pings the configured Slack/Lark channel until it's
-resolved (DL-26; cadence = `settings_json.humanBlockedReminderHours`, default off). The
+resolved (DL-26; cadence = `settings_json.humanBlockedReminderHours` — **default 24h once a
+comms channel is configured** (`team.comms` present — it is what makes the reminder
+deliverable); an explicit `0` is the opt-out; with no comms channel the default remains
+off. Migration note: the daemon reads the cadence and the comms presence at **boot**, so a
+running daemon adopts the new default on restart only — `dev-loop hub stop && dev-loop hub
+ensure`; see `references/config-schema.md` "Hub daemon notifier settings" and
+`docs/DAEMON.md` "Background notifiers"). The
 operator (or PM, once unblocked out-of-band) moves it back to **`Todo`**. Dev never
 picks it up (it isn't `Todo`). On `linear`/`local` (no daemon; adding a state is costly)
 the label-based park (§9) remains; `blockedStateName` config names the real state where
@@ -336,6 +342,12 @@ Labels do triple duty: typing, ownership/routing, and workflow signalling.
   `Bug`/`Feature` that couldn't be covered in the fix itself (§15). Filed by Dev,
   owned by `qa` (QA verifies the test exists and passes); implemented like any
   other `Todo` ticket.
+- `investigation` — a §9a direction intake that must ride the **propose → operator
+  approves** loop (the investigation protocol, §9a): PM investigates, posts findings +
+  a doc-change proposal on the ticket, and the OPERATOR approves before the doc
+  changes. Applied ALONGSIDE `needs-pm` on the intake, by the filer — the director
+  (web form / CLI / Linear), the §18 mirror-comment poller, or PM itself when a §20
+  direction-section edit needs sign-off (D4).
 - `sensitive` — the work touches {authn/authz/permissions, payment or money movement,
   PII storage/handling, secrets/credentials, data migration/backfill/deletion}. Set by the
   FILER at creation (same actor that sets the dev tier, §21a) and never removed by hygiene.
@@ -826,9 +838,52 @@ build follow-on) or grooms children and closes per the steps above (build follow
 the call is genuinely the operator's — irreversible / strategic / a credential or legal
 decision — PM **parks it `Human-Blocked`** (§9) instead of deciding for them, and the
 operator is pinged out-of-band: on `service` the **daemon** auto-reminds on the
-`Human-Blocked` state (cadence `humanBlockedReminderHours`); on `linear`/`local` (no
+`Human-Blocked` state (cadence `humanBlockedReminderHours` — default 24h once a comms
+channel is configured, explicit `0` opts out, off without comms; resolved at daemon boot,
+so a running daemon adopts the default on restart only — §3, config-schema.md "Hub daemon
+notifier settings"); on `linear`/`local` (no
 daemon) **PM** emits the §9 `notify` webhook once. This — a `Backlog` intake to PM, not a discussion
 board — is how operator direction enters the loop.
+
+**The investigation protocol (P4/D4) — propose → the operator approves → then the doc
+changes.** The direction intake above lets PM digest an ask autonomously (edit the doc,
+operator reviews after the fact). Some direction changes must be approved BEFORE they
+land: a direction-**section** edit of a repo-file strategy doc (§20 D4 — Vision / Goals /
+Non-goals / Appetite / No-gos), a `team.docs.vision` change (D7), or any ask the director
+explicitly files for investigation. Those ride this flow — the same §9a machinery with one
+approval stop, no new states or tools:
+
+1. **File.** The director files the intake `Backlog` + `dev-loop`+`pm`+`needs-pm` +
+   **`investigation`** (§4/§13) — by ANY entry: the hub web ticket form, the CLI, a Linear
+   issue, or a comment on a mirrored doc (the §18 `mirror.pollComments` poller converts
+   those into exactly this shape). PM opens one itself when a §20 direction-section edit
+   needs sign-off (D4).
+2. **Investigate.** PM's Job-B `needs-pm` scan picks it up; PM gathers real evidence — the
+   board, the repo/code, the running product — and posts its **findings as a comment** on
+   the ticket.
+3. **Propose** (when a doc change is warranted). Hub-doc backends: PM saves a **DRAFT**
+   (`doc.save`, optimistic CAS; the `summary` is **mandatory** here — it is what the
+   approval and the §22a digest quote) and records **`Proposes: doc:<slug> v<N>
+   (published v<M>)`** on the ticket. Repo-file backends: PM posts the **unified diff in a
+   fenced block** on the ticket **without committing**.
+4. **Park.** PM moves the ticket to **`In Review` assigned to the operator** — the review
+   is the operator's, so PM's own Job A treats an `investigation` ticket as awaiting
+   approval, never as work to verify-fail. When the approval needs the operator to act
+   **outside the board**, use the §9 human-park semantics instead (`Human-Blocked` on
+   `service` — the daemon reminder above carries the nudge).
+5. **Approve.** Hub: the operator publishes the exact proposed version (`doc.publish
+   {version:N}`, operator-only) — **version-bound**: the publish approves precisely the
+   content PM proposed, even if newer drafts sit on top; the publish IS the approval, no
+   separate comment needed. Repo file: the operator replies an **approval comment**; PM's
+   next fire sees it (the Job-B re-read of parked tickets), applies the diff, **commits**,
+   and closes the ticket `Done` citing the commit.
+6. **Reject / revise.** A rejection is a comment; PM **revises** (a new draft/diff + a
+   fresh `Proposes:` line) or **abandons** (`Canceled`, with the reason). Hub drafts are
+   never deleted — `doc.history` keeps them as provenance.
+7. **Propagate.** Nothing pushes: agents re-read the doc on their next fire (`doc.get`'s
+   default read returns the published version, so a publish lands team-wide by itself; a
+   repo-file commit is picked up the same way), and the §22a digest carries
+   **`published vN: <summary>`** so the director sees the direction land.
 
 ---
 
@@ -1230,7 +1285,8 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
 1. Ensure the workflow labels exist (create only the missing ones via
    `create_issue_label` on the configured team): `dev-loop`, `pm`, `qa`,
    `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`, `incident`, `tech-debt`,
-   `signal`, `notified`, `senior-dev`, `junior-dev`, `sensitive` (§21a routing), and the
+   `signal`, `investigation` (§9a investigation intake), `notified`, `senior-dev`,
+   `junior-dev`, `sensitive` (§21a routing), and the
    §9c external-prerequisite set: `external-prereq`, `external-code`, `external-access`. (`notified` marks a §9 human-park whose
    operator notification has been sent — the daemon's reminder timer keys on it. `senior-dev`/`junior-dev` are the §21a dev-tier
    routing labels — required for the two-tier Dev on `linear`/`local`; harmless extras on
@@ -1729,6 +1785,22 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
   skipped by content hash), §16 (the Linear token is an env-var NAME, read server-side), and
   audience-widening like `reports.sink:"linear"` (§23) — a mirrored body must be §16-safe. A hub
   Canceled/Duplicate mirrors as a state change, never a hard-delete. Absent ⇒ no mirror.
+  **Doc mirror (D5):** with a Linear `projectId` configured, `mirror.push` ALSO projects the
+  hub's PUBLISHED `strategy`/`roadmap`/`decisions` + LATEST `design` docs (`notes` never —
+  scratch tier) as Linear Documents parented to that project — title-marked
+  `[hub:doc:<projectKey>/<slug>]` (the project-key discriminator prevents cross-project slug
+  collisions), a pinned banner "Mirrored from dev-loop — body edits here are overwritten;
+  comment here or file a ticket to give direction.", content-hash-skipped, and
+  published-versions-only (agent drafts stay private until the operator publishes — the D5
+  decision keeps the doc gate intact in Linear). **Sweep Job 5 additionally runs
+  `mirror.pollComments`:** every NEW human comment on a mirrored Document files ONE
+  `Backlog` + `dev-loop`+`pm`+`needs-pm` intake ticket carrying provenance (doc slug +
+  mirrored version + quoted comment + comment URL) — explicit intake, so it flows under §5a
+  passive mode too; a Linear-side BODY edit is detected against the last-PUSHED body and
+  filed ONCE as a High `needs-pm` divergence flag warning that the next push overwrites it —
+  the hub NEVER writes Linear content back into a doc. Dedup is a machine-local acted-ledger
+  (`<dataDir>/mirror-state/<projectKey>.json`, the §23 reports-state pattern), not hub
+  state — so the strictly-one-way doctrine is unchanged: comments become tickets, never state.
 - **Reflect's activity window.** In place of Linear's activity feed (or the local comment log
   + git), Reflect reconstructs the window from the hub's **`list_events`** — an append-only
   feed of `issue.create` / `issue.transition` (with `from`/`to`) / `comment.add`, each
@@ -1933,6 +2005,27 @@ document → `get_document`/`save_document`), per pm-agent §0.
   `Decisions (running log)`, and keeps `Personas`/`Glossary` accurate as features ship
   (PM Job C step 5). So init never overwrites PM, and PM never re-seeds what init
   already wrote.
+
+### Section-level write policy on repo-file backends (D4)
+
+Where the strategy doc is a **repo file** there is no publish gate — PM's commit IS the
+landing — so PM's write policy splits **by section**:
+
+- **Progress sections — autonomous.** `Current state` (shipped markers/✅), `Decisions
+  (running log)` appends, `Candidate ideas`, and `Personas`/`Glossary` upkeep: PM commits
+  these directly, exactly as before (pm-agent Job C step 5). Recording reality is not a
+  direction change.
+- **Direction sections — propose first.** `Vision`, `Goals (north star)`, `Non-goals` —
+  plus any `Appetite` / `No-gos` headings a doc carries: changing WHAT the product pursues
+  requires the §9a **investigation protocol** (findings + the unified diff on a
+  `needs-pm`+`investigation` ticket → operator approval → only then the commit). Hub-doc
+  backends don't need this split — the operator-publish gate already holds the direction
+  line (§18).
+
+**Sweep is the backstop (report-only):** each fire it audits recent doc-only commits
+touching the strategy doc; a diff that changes a direction section with no linked approval
+ticket is flagged in the board-health digest for the operator (never reverted — Sweep
+doesn't mutate content).
 
 ---
 
