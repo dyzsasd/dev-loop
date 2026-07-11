@@ -10,7 +10,7 @@ import { dirname, join, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { tryResolveWorkspace } from "./workspace.ts";
-import { toLegacyView, deliveryProjects } from "./team-config.ts";
+import { toLegacyView, deliveryProjects, WsValidationError } from "./team-config.ts";
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (published)
 
@@ -46,7 +46,16 @@ let p: Record<string, unknown> | undefined;
 let cfgSource: string;
 let teamContext = "";
 if (ws) {
-  p = toLegacyView(ws).projects[project] as Record<string, unknown> | undefined;
+  // Operator entry point: a workspace that fails the runtime projection (e.g. blank linearTeam
+  // demoted to a load warning) must print the E-code list, never a raw stack trace (same as team.ts).
+  let legacy: ReturnType<typeof toLegacyView>;
+  try {
+    legacy = toLegacyView(ws);
+  } catch (e) {
+    if (e instanceof WsValidationError) { console.error(`export-desktop-skill: ${e.message}`); process.exit(1); }
+    throw e;
+  }
+  p = legacy.projects[project] as Record<string, unknown> | undefined;
   cfgSource = `workspace '${ws.file.team.key}' (${ws.filePath})`;
   if (has("--team")) {
     const siblings = deliveryProjects(ws).filter((k) => k !== project);

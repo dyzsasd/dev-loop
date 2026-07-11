@@ -9,7 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
-import { toLegacyView, WsValidationError, primaryRepo, TEAM_INTAKE_PROJECT, type Workspace } from "./team-config.ts";
+import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, type Workspace, type HubBlock, type AgentInterface } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
@@ -22,11 +22,14 @@ import type { DatabaseSync } from "node:sqlite";
 const VALID_AGENTS = AGENT_HANDLES;
 type Agent = (typeof VALID_AGENTS)[number];
 
-// A coding-agent CLI the scheduler can drive. `claude` + `codex` are fully wired (the scheduler
-// self-injects the hub MCP for them); `opencode` is recognized everywhere in config (per-agent
-// selection + per-coding-agent defaults) and launched best-effort via `opencode run` — its MCP is
-// registered through the operator's merged opencode config, not inline (see docs/PORTABILITY.md).
-// Adding a CLI = extend this union + DEFAULT_LAUNCH_PROFILES + commandFor().
+// A coding-agent CLI the scheduler can drive. `claude` + `codex` are fully wired; `opencode` is
+// recognized everywhere in config (per-agent selection + per-coding-agent defaults) and launched
+// best-effort via `opencode run` — its MCP is registered through the operator's merged opencode
+// config, not inline (see docs/PORTABILITY.md). On backend:"service" how a fire reaches the hub is
+// the D8 agent interface (hub.agentInterface, resolved per coding agent): "cli" fires get NO hub MCP
+// injection — the agent calls the PATH-installed `dev-loop` write verbs, identity riding the spawn
+// env — while "mcp" fires keep the scheduler-injected dev-loop-hub server (claude inline JSON /
+// codex -c overrides). Adding a CLI = extend this union + DEFAULT_LAUNCH_PROFILES + commandFor().
 type CodingAgent = "claude" | "codex" | "opencode";
 type RunnerCli = CodingAgent; // the --cli flag / DEVLOOP_RUNNER_CLI sets the run-wide DEFAULT coding agent
 const CODING_AGENTS: readonly CodingAgent[] = ["claude", "codex", "opencode"];
@@ -153,6 +156,7 @@ type ProjectsConfig = {
     defaultCodingAgent?: string;                                       // project-wide level-1 default coding agent
     codingAgentDefaults?: Partial<Record<CodingAgent, CodingAgentDefault>>; // per-coding-agent default model + effort
     agents?: Partial<Record<Agent, AgentLaunchConfig>>;               // per-agent: codingAgent + model + effort
+    hub?: HubBlock;                                                    // D8: agentInterface per coding agent ("cli"|"mcp"; service only)
     // Back-compat per-agent maps (still honored, below agents{} / above codingAgentDefaults):
     models?: Partial<Record<Agent, ModelConfigValue>>;
     efforts?: Partial<Record<Agent, EffortConfigValue>>;
@@ -533,18 +537,21 @@ const hubNode = findCompatibleNode() ?? die(`dev-loop-hub MCP needs Node >= ${MI
 const tomlString = (s: string): string => JSON.stringify(s);
 const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
 
-function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string): { command: string; args: string[] } {
+function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string, iface: AgentInterface): { command: string; args: string[] } {
   const devSplit = runtimeDevSplit(opts) ? "true" : "false";
-  // MCP wiring is BACKEND-dependent (§18). Only backend:"service" needs the dev-loop-hub MCP; a
-  // linear/local project instead needs the operator's OWN MCP config to apply (e.g. the Linear MCP),
-  // so we must NOT inject the hub or pass --strict-mcp-config there — that would strip the Linear MCP
-  // and starve the agents of the board. An explicit --mcp-config / <cwd>/.mcp.json always wins.
-  const hubInject = backend === "service";
+  // MCP wiring is BACKEND-dependent (§18) AND interface-dependent (D8/D9). Only backend:"service" needs
+  // the dev-loop-hub MCP; a linear/local project instead needs the operator's OWN MCP config to apply
+  // (e.g. the Linear MCP), so we must NOT inject the hub or pass --strict-mcp-config there — that would
+  // strip the Linear MCP and starve the agents of the board. On service, interface="cli" fires get NO
+  // injection either: the agent reaches the board through the PATH-installed `dev-loop` write verbs,
+  // identity riding the spawn env (runAgent). An explicit --mcp-config always wins on claude.
+  const hubInject = backend === "service" && iface === "mcp";
   // The CLI is the per-AGENT resolved coding agent (level 1), NOT the run-wide --cli — so one run can
   // mix claude/codex/opencode panes. Model + effort (level 2) are rendered in this coding agent's format.
   if (profile.codingAgent === "claude") {
-    // explicit --mcp-config file wins; else on service inject the hub inline (fresh project needs no
-    // .mcp.json); else (linear/local) pass NOTHING so claude's normal config — incl. the Linear MCP — applies.
+    // explicit --mcp-config file wins; else on service+interface="mcp" inject the hub inline (fresh
+    // project needs no .mcp.json); else (linear/local, or service on the D9 "cli" interface) pass
+    // NOTHING — claude's normal config applies and a "cli" fire talks to the hub via `dev-loop`.
     const mcpArg = opts.mcpConfig ?? (hubInject ? JSON.stringify({
       mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb, DEVLOOP_DEV_SPLIT: devSplit } } },
     }) : undefined);
@@ -560,8 +567,8 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
     };
   }
   if (profile.codingAgent === "codex") {
-    // service ⇒ inject the hub via -c overrides; linear/local ⇒ omit them and let codex's own
-    // ~/.codex/config.toml MCP servers (which the operator must wire the Linear MCP into) apply.
+    // service+interface="mcp" ⇒ inject the hub via -c overrides; linear/local (or a "cli"-flipped
+    // codex, post-P8) ⇒ omit them and let codex's own ~/.codex/config.toml MCP servers apply.
     const hubOverrides = hubInject ? [
       "-c", `mcp_servers.dev-loop-hub.command=${tomlString(hubNode)}`,
       "-c", `mcp_servers.dev-loop-hub.args=${tomlStringArray([serverEntry])}`,
@@ -678,7 +685,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const profile = resolveLaunchProfile(opts, cfg, profileProject, agent);
   const prompt = readPrompt(opts, agent, project, profile, teamScope);
   const backend = (cfg?.projects?.[profileProject] as { backend?: string } | undefined)?.backend ?? "linear";
-  const { command, args } = commandFor(opts, agent, project, prompt, profile, backend);
+  // D8 agent interface (service only; meaningless elsewhere): "cli" fires get no hub MCP injection.
+  const iface = agentInterfaceFor((cfg?.projects?.[profileProject] as { hub?: HubBlock } | undefined)?.hub, profile.codingAgent);
+  const { command, args } = commandFor(opts, agent, project, prompt, profile, backend, iface);
+  // This env block IS the identity transport for interface="cli" fires (D8): the `dev-loop` write layer
+  // resolves the actor from DEVLOOP_ACTOR, the project from DEVLOOP_PROJECT, the SoR from DEVLOOP_HUB_DB,
+  // and treats DEVLOOP_DEV_SPLIT/DEVLOOP_TEAM_SCOPE as the fire markers behind its operator-write guard —
+  // the same values both MCP injections carry. Removing any of these strands every "cli" fire (exit 4).
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     DEVLOOP_ACTOR: agent,
@@ -701,7 +714,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
     const intakeMode = (cfg?.projects?.[project] as { intake?: { mode?: string } } | undefined)?.intake?.mode;
-    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""}`);
+    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
     return 0;
   }
