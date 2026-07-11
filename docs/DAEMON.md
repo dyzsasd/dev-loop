@@ -198,7 +198,7 @@ opt-in it returns `404`, byte-identical to a pure read surface.
   then point the MCP `args` at `hub/src/shim.ts` instead of `hub/src/server.ts` (same per-pane
   `DEVLOOP_ACTOR`). See `references/config-schema.md` (`hub.transport`).
 - **Shape:** `POST /api/op/<op>` with a JSON body; `<op>` mirrors the MCP tools 1:1 — the shim is a
-  **100% `server.ts` drop-in** (all 23 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
+  **100% `server.ts` drop-in** (all 24 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
   `list_comments`/`whoami` · `doc.*`/`list_events` · `channel.*` · `mirror.*` ·
   labels/`get_project`).
 - **Identity:** the actor rides the **`X-Devloop-Actor`** header (the shim forwards its per-pane
@@ -231,6 +231,32 @@ This is **cooperative attribution + a localhost trust boundary, not an anti-spoo
 human-only guarantee is that the surface is reachable only from `127.0.0.1` (`writeOriginOk`), not that
 the actor string can't be set.
 
+## Background notifiers
+
+Besides serving HTTP, the daemon runs a small set of interval notifiers (`hub/src/daemon-notifiers.ts`)
+that push **one-line, §16-safe** alerts to the team's outward channel. They all share the same envelope:
+
+- **One send target** (DL-59): a registered DB `channels` row wins; else the §9 `notify` webhook
+  (`team.comms` is bridged into it); **neither ⇒ the notifier is a true no-op** (no timer, no ledger work).
+- **Stateless due-ness + per-send dedupe markers** in the events ledger (`*.notified` events) — a daemon
+  restart never double-sends, and a failed send writes no marker so it retries next tick.
+- **Dry-run is write-free** (DL-34, `DEVLOOP_CHANNEL_DRYRUN=1`): preview to stderr, no send, no marker.
+- **Boot-time config**: cadences, `team.comms` presence, and `intake.mode` are resolved once at daemon
+  boot — an already-running daemon picks changes up **on restart only**
+  (`references/config-schema.md` → *Hub daemon notifier settings*).
+
+| Notifier | Fires when | Cadence / dedupe |
+|---|---|---|
+| **Human-Blocked reminder** (DL-26, workflows P3) | a ticket sits in `Human-Blocked` — first ping on detection, then repeats. The line names the ticket, **its age in the state**, and the **resume action** (`dev-loop ticket update <id> --state Todo`) + the ticket URL | `settings_json.humanBlockedReminderHours`; **default 24h when `team.comms` is configured, else off**; explicit `0` = opt-out. Tick 60s (`DEVLOOP_BLOCKED_TICK_MS`) |
+| **No-progress circuit-breaker** (DL-76) | zero tickets reached `Done` in the trailing `settings_json.noProgressWindowHours` window (cold start excluded) | once per stall episode; re-alerts only after progress resumed. Tick 1h (`DEVLOOP_NOPROGRESS_TICK_MS`) |
+| **Passive-intake doc-edit notifier** (docs P3) | `intake.mode:"passive"` **only** — PM's doc-watch is off, so a hub-doc version authored by a **non-agent** actor (operator/web edit; `actors.kind` decides, so no agent draft can self-trigger) that sat unconsumed past a settle window gets one line naming slug/version/author + the `/p/<key>/doc/<slug>` URL. `design` docs excluded | deduped **per version** (an editing burst collapses to the final version's line). Settle 15m (`DEVLOOP_DOC_FOREIGN_SETTLE_MS`), tick 10m (`DEVLOOP_DOC_NOTIFY_TICK_MS`) |
+| **Drafts-pending notifier** (docs P6b) | a publish-gated doc's drafts trail the published current for **>24h** (measured from the first unpublished version — a fresh draft on top does not reset the clock): `"strategy: draft v14 pending over published v12 — review at /p/<key>/doc/strategy"` | one **daily** line while pending, deduped per version; a **new** draft version re-announces immediately. Tick 1h (`DEVLOOP_DOC_DRAFTS_TICK_MS`) |
+
+In autonomous intake mode the doc-edit notifier stays off by design: PM's own doc-watch (keyed on the
+latest **foreign** version — `dev-loop doc history` exposes version+author) owns that propagation, and a
+comms line on top would be duplicate noise. The drafts-pending notifier runs in **both** modes — only the
+operator can publish, so the nudge is always aimed at a human.
+
 ## Tests
 
 `hub/test/daemon.ts` (wired into `npm test`) seeds a project through the real MCP write path, starts the
@@ -238,4 +264,6 @@ daemon in-process on an ephemeral localhost port, and asserts: the web UI (board
 JSON read endpoint, board filters/swimlanes, the friendly non-API `404` vs JSON `/api` `404`, the
 read-only `405` when human-write is off, the `127.0.0.1` bind, and — for the opt-in write surface — the
 `405`-when-disabled / `303`-same-origin / `403`-cross-origin+foreign-Host behavior, the `STATES` move
-guard, and operator attribution (the DL-29 cases).
+guard, and operator attribution (the DL-29 cases). The notifier suites — `hub/test/blocked.ts`,
+`hub/test/no-progress.ts`, `hub/test/doc-notify.ts` — cover the background notifiers above (due-ness,
+dedupe, the comms-derived reminder default, self-trigger exclusion, and write-free dry-run).

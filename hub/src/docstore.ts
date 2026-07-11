@@ -50,6 +50,20 @@ export const resolveDoc = (db: DatabaseSync, projectId: string, slug?: string, k
 export const latestVersion = (db: DatabaseSync, docId: string): number =>
   (db.prepare("SELECT max(version) v FROM document_versions WHERE doc_id=?").get(docId) as { v: number | null }).v ?? 0;
 
+// Docs P3 (operator-edit propagation): the newest version of a doc authored by anyone OTHER than
+// `selfActor` — the doc-watch primitive. PM's watch keys on THIS (a new foreign version = someone
+// else edited, e.g. the operator via the web editor), never on a body hash, so PM's own drafts can
+// never re-trigger its own watch. `null` = no such doc, or every version is selfActor's own.
+// (Version rows are append-only, so a returned {version,author} is stable — safe to persist as a
+// watch cursor. The CLI surface is `dev-loop doc history`: rows carry version+author newest-first.)
+export function latestForeignVersion(db: DatabaseSync, projectId: string, slug: string, selfActor: string): { version: number; author: string } | null {
+  const d = db.prepare("SELECT id FROM documents WHERE project_id=? AND slug=?").get(projectId, slug) as { id: string } | undefined;
+  if (!d) return null;
+  const v = db.prepare("SELECT version, author FROM document_versions WHERE doc_id=? AND author<>? ORDER BY version DESC LIMIT 1")
+    .get(d.id, selfActor) as { version: number; author: string } | undefined;
+  return v ?? null;
+}
+
 export interface DocSaveArgs { slug: string; kind: DocKind; title?: string; body: string; baseVersion: number; summary?: string; }
 
 // Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the
