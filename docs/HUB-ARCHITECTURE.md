@@ -385,6 +385,25 @@ human-visibility only — never disaster recovery.**
   the banner. **DEFERRED:** the launcher/`doctor` dual-backend refusal (refuse to arm a `linear`-backed
   fire for a `live` hub project; flag a project configured for both) — re-openable if a project ever
   runs both backends at once.
+- **Doc mirror (D5, 2026-07):** when the `mirror` config carries a Linear `projectId`, `mirror.push`
+  ALSO projects the hub's **published `strategy`/`roadmap`/`decisions` + latest `design`** docs
+  (`notes` never) as **Linear Documents** parented to that project — schema-v4 widens
+  `mirror_map.hub_kind` to `('ticket','doc')` (`hub_id` = the doc slug). Same discipline as tickets:
+  title marker **`[hub:doc:<projectKey>/<slug>]`** (the project-key discriminator is load-bearing —
+  slugs collide across projects), pinned "body edits here are overwritten; comment here or file a
+  ticket" banner, content-hash skip, mapping-row-first crash safety, DL-11 DRYRUN preview; doc counts
+  ride a separate `docs` result field. **Drafts stay private** — a gated doc re-mirrors only on
+  operator publish. The mapping row stamps `last_pushed_version` + `last_pushed_body_hash` (what
+  Linear actually holds) at push time.
+- **Comment→intake poller (D5):** `mirror.pollComments` (CLI `dev-loop mirror poll`, Sweep Job 5's
+  second call) reads comments on the mirrored Documents and files ONE `Backlog + dev-loop + pm +
+  needs-pm` intake ticket per **new human comment** (provenance: doc slug + mirrored version + quoted
+  text + comment URL; bot/integration comments ignored) and ONE **High** intake per detected
+  Linear-side **body edit** (compared against the last-PUSHED body baseline, so the flag still fires
+  while a newer hub version awaits its push; the edit is never written back — the next push overwrites
+  it). Dedup is a **machine-local acted-ledger** (`<dataDir>/mirror-state/<projectKey>.json`, the
+  reports-state.json pattern), not hub state. Still strictly one-way: the poller's Linear reads are
+  intake-only — no hub ticket/doc field is ever written from Linear content.
 
 ---
 

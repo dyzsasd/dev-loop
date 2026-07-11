@@ -20,7 +20,7 @@ export const ok = (data: unknown): McpResult => ({ content: [{ type: "text" as c
 // off), so `extra` can never clobber `message` and the two transports serialize byte-identically.
 export const err = (message: string, extra?: Record<string, unknown>): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message, ...extra }) }] });
 
-// ─── the canonical tool-name list — whoami (answered locally per transport) + the 22 op-backed tools ────────
+// ─── the canonical tool-name list — whoami (answered locally per transport) + the 23 op-backed tools ────────
 // agentops.ts derives AGENT_OPS = TOOL_NAMES minus "whoami" (the only tool that is NOT an op-API op), so this
 // is the ONE source of the tool/op names. Order matches the historical AGENT_OPS order (registration order is
 // irrelevant to MCP — tools resolve by name — but keeping it stable keeps diffs/feeds readable).
@@ -29,7 +29,7 @@ export const TOOL_NAMES = [
   "list_issues", "get_issue", "save_issue", "save_comment", "list_comments",
   "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish",
   "channel.register", "channel.send", "channel.poll", "channel.ack", "channel.status",
-  "mirror.push", "mirror.status", "list_issue_labels", "create_issue_label", "get_project",
+  "mirror.push", "mirror.pollComments", "mirror.status", "list_issue_labels", "create_issue_label", "get_project",
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -121,7 +121,7 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
   },
 
   "mirror.push": {
-    description: "ONE-WAY push: project hub tickets → Linear issues (create-or-update, idempotent + incremental — an unchanged ticket is skipped by content hash). The hub NEVER reads Linear as truth; a human Linear edit is overwritten. `tokenEnv` is the env-var NAME (the §16 secret is read server-side). A missing stateMap entry ⇒ no stateId (state stays in the body; never fails the push). DRYRUN returns the would-push ops, no network.",
+    description: "ONE-WAY push: project hub tickets → Linear issues (create-or-update, idempotent + incremental — an unchanged ticket is skipped by content hash). With projectId (the Linear project), ALSO projects the published strategy/roadmap/decisions + latest design docs as Linear Documents parented there (same hash-skip; doc counts ride the `docs` result field). The hub NEVER reads Linear as truth; a human Linear edit is overwritten. `tokenEnv` is the env-var NAME (the §16 secret is read server-side). A missing stateMap entry ⇒ no stateId (state stays in the body; never fails the push). DRYRUN returns the would-push ops, no network.",
     inputSchema: {
       teamId: z.string().min(1),
       tokenEnv: z.string().min(1),
@@ -130,11 +130,15 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
       limit: z.number().int().min(1).max(500).optional(),
     },
   },
-  "mirror.status": { description: "Mirror coverage: mapped tickets, total tickets, last push time. No secret, no Linear read.", inputSchema: {} },
+  "mirror.pollComments": {
+    description: "Comment→intake for the mirrored docs: reads NEW human comments on the pushed Linear Documents and files ONE needs-pm Backlog ticket per comment (doc slug + version + quoted text + comment URL), plus ONE per detected Linear-side BODY edit (flagged as divergence — the next push overwrites it; nothing is ever written back). Dedup rides a machine-local acted-ledger, not hub state. `tokenEnv` is the env-var NAME (§16). DRYRUN previews the would-file tickets (Linear is still read; nothing is filed or ledgered).",
+    inputSchema: { tokenEnv: z.string().min(1) },
+  },
+  "mirror.status": { description: "Mirror coverage: mapped tickets/docs, total tickets, mirrorable docs, last push time. No secret, no Linear read.", inputSchema: {} },
 };
 
 // ─── D1: ONE optional `project` arg on every op-backed tool (whoami excluded) ───────────────────────────────
-// Injected structurally over DEFS (not 22 hand-copies) so a future op cannot forget it. The server-side
+// Injected structurally over DEFS (not 23 hand-copies) so a future op cannot forget it. The server-side
 // role matrix lives at the agentops.ts dispatch choke point (resolveProjectOverride): stewards
 // (sweep/ops/reflect/communication) may pass any existing project key or "_team"; pm may pass "_team" only
 // (the §9b team-intake board); every other actor only its booted project (403 FORBIDDEN). Omitted ⇒ the
