@@ -24,11 +24,11 @@ const ok = (cond: boolean, m: string) => { console.log((cond ? "✅ " : "❌ ") 
 execFileSync("node", ["src/seed.ts", "agp", "AgentAPI Project", "AGP", DB], { encoding: "utf8" });
 
 // ─── seed one ticket through the real stdio MCP write path (the daemon must read what agents wrote) ───
-async function as(actor: string): Promise<Client> {
+async function as(actor: string, project = "agp"): Promise<Client> { // project: the D1 matrix needs stdio clients booted into a sibling ("agp2") and the steward home ("_team")
   const c = new Client({ name: `aaptest-${actor}`, version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "agp", DEVLOOP_HUB_DB: DB },
+    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB },
   }));
   return c;
 }
@@ -343,6 +343,73 @@ const giEmpty = await rawStdio(verifier, "get_issue", { id: "" });
 ok(giEmpty.isError && /no such ticket/.test(giEmpty.data.error ?? ""), `DL-69: stdio get_issue id:"" → 'no such ticket' (byte-identical to pre-refactor — NOT a 400)`);
 const dsEmpty = await op("doc.save", { slug: "", kind: "notes", body: "x", baseVersion: 0 }, { "x-devloop-actor": "pm" }); // kind:notes is unused in agp (no UNIQUE(project,kind) clash); slug:"" must REACH docSave (create), not hit a synthetic slug-required 400
 ok(dsEmpty.status === 200, `DL-69: op doc.save slug:"" reaches docSave (creates), not the slug-required 400 (got ${dsEmpty.status} ${JSON.stringify(dsEmpty.body)})`);
+
+// ═══ D1: the `project` override — the role-based matrix, enforced server-side on BOTH transports ═══════════
+// (docs/design/2026-07-review-decisions.md D1) Stewards (sweep/ops/reflect/communication) may pass any
+// existing project key or "_team"; pm may pass "_team" only; every other actor only its booted project.
+// Forbidden-first: a forbidden actor gets the SAME 403 for a real and a ghost key (no existence leak);
+// an ALLOWED actor's ghost key gets the existing not-found shape. No arg ⇒ the booted project (back-compat).
+execFileSync("node", ["src/seed.ts", "agp2", "AgentAPI Sibling", "AG2", DB], { encoding: "utf8" });
+execFileSync("node", ["src/seed.ts", "_team", "Team Intake", "TEAM", DB], { encoding: "utf8" });     // the reserved intake board, seeded exactly as team-init does
+const SWEEP = { "x-devloop-actor": "sweep" }, OPS = { "x-devloop-actor": "ops" }, PMH = { "x-devloop-actor": "pm" };
+const agp2 = await as("dev", "agp2");                                                               // a stdio client PINNED to the sibling — verifies override writes landed in agp2's rows
+const sib = await call(agp2, "save_issue", { title: "Sibling seed", type: "Feature", labels: ["dev-loop", "Feature", "pm"] });
+// steward override READ: the daemon is booted for agp, yet sweep reads the agp2 board
+const ovRead = await op("list_issues", { project: "agp2" }, SWEEP);
+ok(ovRead.status === 200 && ovRead.body.some((t: any) => t.id === sib.id), "D1: steward (sweep) list_issues project:agp2 → 200, the SIBLING board (cross-project read)");
+// steward override WRITE: a comment lands in agp2, attributed to sweep, events in the TARGET project's feed
+const ovWrite = await op("save_comment", { project: "agp2", issueId: sib.id, body: "sweep hygiene note" }, SWEEP);
+ok(ovWrite.status === 200 && ovWrite.body.author === "sweep", `D1: steward save_comment project:agp2 → 200 authored by sweep (got ${ovWrite.status})`);
+ok((await call(agp2, "get_issue", { id: sib.id })).comments.some((c: any) => c.author === "sweep"), "D1: the override write landed in agp2 (visible on agp2's OWN stdio path)");
+ok((await call(agp2, "list_events", { limit: 50 })).some((e: any) => e.actor === "sweep" && e.kind === "comment.add" && e.ticket_id === sib.id), "D1: the comment.add event is in the TARGET project's feed, attributed to sweep");
+// steward create into _team (ops owner-routed alert home until it can name the owner project directly)
+const ovTeam = await op("save_issue", { project: "_team", title: "Ops alert: repo X degraded", type: "Bug", labels: ["dev-loop", "Bug", "qa", "incident"] }, OPS);
+ok(ovTeam.status === 200 && ovTeam.body.created_by === "ops" && ovTeam.body.id.startsWith("TEAM-"), `D1: steward (ops) save_issue project:_team → created on the team board with the TEAM- prefix (got ${ovTeam.body.id})`);
+// steward → a GHOST key: the existing not-found shape (an allowed actor may learn a key doesn't exist)
+const ovGhost = await op("list_issues", { project: "no-such" }, SWEEP);
+ok(ovGhost.status === 404 && /no such project 'no-such'/.test(ovGhost.body.error), `D1: steward → unknown project key → 404 not-found (got ${ovGhost.status} ${JSON.stringify(ovGhost.body)})`);
+// pm → "_team": read AND write OK, regardless of pm's booted project (the §9b team-intake carrier)
+ok((await op("list_issues", { project: "_team" }, PMH)).status === 200, "D1: pm list_issues project:_team → 200 (team-intake scan)");
+const pmTeam = await op("save_issue", { project: "_team", title: "Split me per project", type: "Feature", labels: ["dev-loop", "pm", "needs-pm"] }, PMH);
+ok(pmTeam.status === 200 && pmTeam.body.created_by === "pm" && pmTeam.body.id.startsWith("TEAM-"), `D1: pm save_issue project:_team → 200 created on the team board (got ${pmTeam.body.id})`);
+// pm → a sibling REAL project: 403 FORBIDDEN; a GHOST key gets the SAME 403 (forbidden-first — no existence leak)
+const pmSib = await op("list_issues", { project: "agp2" }, PMH);
+ok(pmSib.status === 403 && /^FORBIDDEN/.test(pmSib.body.error), `D1: pm → a sibling real project → 403 FORBIDDEN (pm may pass only _team; got ${pmSib.status})`);
+const pmGhost = await op("list_issues", { project: "no-such" }, PMH);
+ok(pmGhost.status === 403 && /^FORBIDDEN/.test(pmGhost.body.error), "D1: pm → a GHOST key → the SAME 403 FORBIDDEN, never a key-revealing 404 (forbidden-first)");
+// every NON-steward actor: any project ≠ booted → 403 (read AND write refused before any row is touched).
+// architect + operator are in the bucket ON PURPOSE — the D1 matrix grants override to exactly
+// stewards + pm/_team, so a future roster drift that silently widened it must trip here.
+for (const who of ["dev", "qa", "senior-dev", "junior-dev", "architect", "operator"]) {
+  ok((await op("list_issues", { project: "agp2" }, { "x-devloop-actor": who })).status === 403, `D1: ${who} list_issues project:agp2 → 403 FORBIDDEN (non-steward actors never cross their boot pin)`);
+}
+ok((await op("save_comment", { project: "agp2", issueId: sib.id, body: "nope" }, DEV)).status === 403, "D1: dev save_comment project:agp2 → 403 FORBIDDEN (the write never lands)");
+ok((await call(agp2, "get_issue", { id: sib.id })).comments.every((c: any) => c.body !== "nope"), "D1: the refused cross-project comment wrote NOTHING in agp2");
+// an explicit SAME-key pass is a no-op, never an error; a non-string project is a clean 400 (raw-JSON path)
+ok((await op("list_issues", { project: "agp" }, DEV)).status === 200, "D1: dev project:agp (its booted key) → 200 (explicit same-key pass-through)");
+ok((await op("list_issues", { project: 5 }, DEV)).status === 400, "D1: non-string project → 400 (hand-validated on the raw-JSON path, mirrors the stdio zod)");
+// no `project` arg ⇒ exactly the booted board (back-compat): the sibling's rows never bleed in
+ok(!(await op("list_issues", {}, DEV)).body.some((t: any) => t.id === sib.id), "D1: no project arg → the booted agp board only (back-compat, no sibling bleed)");
+// the effective key (not the booted one) names the target in op error messages
+const ovMiss = await op("get_issue", { project: "agp2", id: "AG2-999" }, SWEEP);
+ok(ovMiss.status === 404 && /in agp2/.test(ovMiss.body.error), `D1: a not-found INSIDE an override names the effective project (got ${JSON.stringify(ovMiss.body)})`);
+// STDIO transport parity: the same matrix holds through server.ts (the agentOp choke point, not a daemon gate)
+const sweepStdio = await as("sweep", "_team");                                                      // booted exactly as the scheduler boots a steward
+const stdioOv = await call(sweepStdio, "save_issue", { project: "agp2", title: "Sweep re-route via stdio", type: "Improvement", labels: ["dev-loop", "pm"] });
+ok(stdioOv.created_by === "sweep" && stdioOv.id.startsWith("AG2-"), `D1: stdio steward (booted _team) save_issue project:agp2 → lands in the sibling (got ${stdioOv.id})`);
+const stdioForbidden = await rawStdio(verifier, "list_issues", { project: "agp2" });                // verifier = dev, booted agp
+ok(stdioForbidden.isError && /^FORBIDDEN/.test(stdioForbidden.data.error ?? ""), "D1: stdio dev list_issues project:agp2 → FORBIDDEN (same guard on the direct-db transport)");
+ok(stdioForbidden.data.error === pmSib.body.error.replace("'pm'", "'dev'"), "D1: the FORBIDDEN message is byte-identical across transports (one resolver, agentops.ts)");
+// the server-side dry-run gate judges the EFFECTIVE project: agp (booted) live, agp2 dry-run
+const setModeOf = (key: string, mode: string) => { const s = openDb(DB); s.prepare("UPDATE projects SET mode=? WHERE key=?").run(mode, key); s.close(); };
+setModeOf("agp2", "dry-run");
+const dryOv = await op("save_comment", { project: "agp2", issueId: sib.id, body: "dry sibling" }, SWEEP);
+ok(dryOv.status === 403 && /dry-run/.test(dryOv.body.error) && /'agp2'/.test(dryOv.body.error), `D1: a steward WRITE into a dry-run SIBLING → 403 naming agp2 (the gate follows the override; got ${JSON.stringify(dryOv.body)})`);
+ok((await op("list_issues", { project: "agp2" }, SWEEP)).status === 200, "D1: a steward READ of the dry-run sibling still serves (reads are never mode-gated)");
+ok((await op("save_comment", { issueId: feat.id, body: "booted board still live" }, DEV)).status === 200, "D1: the BOOTED board stays writable while the sibling is dry-run (per-project gate)");
+setModeOf("agp2", "live");
+await agp2.close();
+await sweepStdio.close();
 
 // ═══ honor `mode` server-side: a WRITE under dry-run is refused; reads are NOT gated (design Decision #4) ═══
 setMode("dry-run");

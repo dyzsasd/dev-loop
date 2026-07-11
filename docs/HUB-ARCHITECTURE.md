@@ -214,7 +214,7 @@ Certain actions must never be performed by an agent. In the hub they have **no M
 In the hub, isolation stops being label self-discipline and becomes a **WHERE clause the agent cannot widen**:
 
 - `projects` is a real row. **Every** tool takes a **required** `project` argument; there is **no unscoped query** (project cannot be omitted). Every query is implicitly `WHERE project_id = ?`.
-- The shim is **bound to one project** by the launcher (`DEVLOOP_PROJECT`), and the server validates membership; a call naming a different project is `FORBIDDEN`.
+- The shim is **bound to one project** by the launcher (`DEVLOOP_PROJECT`), and the server validates membership; a call naming a different project is `FORBIDDEN`. *(Status 2026-07, D1: the FORBIDDEN default stands for delivery actors, but the `project` arg is now a shipped, role-gated override — stewards (sweep/ops/reflect/communication) may name any project or `_team`, PM may name `_team` only — enforced at the shared `agentOp()` choke point on both transports; see `docs/design/2026-07-review-decisions.md` D1.)*
 - This removes the §18 "a glob must never escape the board dir" hazard entirely — it is a column predicate, not a filesystem path.
 - The `dev-loop` label is **retained on tickets** only for cross-backend parity (so a mirrored/exported ticket still reads correctly); it is no longer load-bearing for isolation.
 

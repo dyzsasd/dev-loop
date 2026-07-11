@@ -22,7 +22,7 @@ import { loadProjectsConfig } from "./resolve-project.ts";
 import { hubDbPath, pkgVersion } from "./paths.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
-import { agentOp, AGENT_WRITE_OPS, isAgentOp } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
+import { agentOp, AGENT_WRITE_OPS, isAgentOp, resolveProjectOverride } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
 import { scrubErr } from "./channel.ts"; // the notifier's channel deps moved to daemon-notifiers.ts (A3); scrubErr stays for /api/health + the unhandledRejection guard
 // DL-74: the HTML view layer (every page renderer + esc/toTicket/eventData) lives in daemonviews.ts; the
 // per-project process-lifecycle subsystem lives in daemon-lifecycle.ts. This file keeps HTTP routing
@@ -308,18 +308,26 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
   if (!actor) return json(res, 400, { error: "missing X-Devloop-Actor header (the caller's actor)" });
   if (!actorExists(writeDb, actor)) return json(res, 400, { error: `unknown actor '${actor}'` });
   const isWrite = AGENT_WRITE_OPS.has(op);
-  // (3) honor `mode` server-side (design Decision #4): a WRITE op in a dry-run project is refused (defense-in-
-  //     depth atop agent-side mode authority). Live ⇒ byte-identical to the stdio path (reads are never gated).
-  if (isWrite && projectMode(db, projectId) === "dry-run") return json(res, 403, { error: `project '${projectKey}' is in dry-run mode — the op-API refuses writes (mode honored server-side; §12/§18)` });
-  // (4) parse the JSON args (bounded). A rejected body may have destroyed the socket — guard the response.
+  // (3) parse the JSON args (bounded) — BEFORE the mode gate, because the D1 `project` override rides the
+  //     body and the gate must judge the EFFECTIVE project. Parsing mutates nothing, so "mode-gated before
+  //     any mutation" still holds. A rejected body may have destroyed the socket — guard the response.
   let args: Record<string, unknown>;
   try { args = await parseJsonBody(req); }
   catch (e) { if (!res.headersSent && !res.destroyed) json(res, 400, { error: (e as Error).message }); return; }
-  // (5) dispatch — writes through writeDb (atomic txn + attributed event in ticketwrite), reads through the
+  // (4) D1 project override — resolve the effective project through the SAME matrix agentOp applies (one
+  //     resolver, agentops.ts), so a forbidden/unknown override errors identically to the stdio path.
+  const ov = resolveProjectOverride(db, projectId, projectKey, actor, args.project);
+  if (!ov.ok) return json(res, ov.result.status, ov.result.body);
+  // (5) honor `mode` server-side (design Decision #4) on the EFFECTIVE project: a WRITE op into a dry-run
+  //     project is refused (defense-in-depth atop agent-side mode authority) — an override into a dry-run
+  //     sibling is gated by the SIBLING's mode, not the booted board's. Reads are never gated.
+  if (isWrite && projectMode(db, ov.projectId) === "dry-run") return json(res, 403, { error: `project '${ov.projectKey}' is in dry-run mode — the op-API refuses writes (mode honored server-side; §12/§18)` });
+  // (6) dispatch — writes through writeDb (atomic txn + attributed event in ticketwrite), reads through the
   //     query_only db. agentOp mirrors server.ts; an op-level validation/not-found maps to its HTTP status.
+  //     The effective ids go in; agentOp's own choke-point resolve degenerates to the same-key fast path.
   //     AWAIT: agentOp returns OpResult|Promise<OpResult> — the DL-67 channel.send/poll ops are async (network/
   //     dryrun build); the sync ops resolve immediately, so awaiting them is a no-op (back-compat).
-  const r = await agentOp(op, isWrite ? writeDb : db, projectId, projectKey, actor, args);
+  const r = await agentOp(op, isWrite ? writeDb : db, ov.projectId, ov.projectKey, actor, args);
   return json(res, r.status, r.body);
 }
 

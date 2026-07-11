@@ -20,6 +20,8 @@
 // so its label.create attribution event fires identically on both transports.)
 import { DatabaseSync } from "node:sqlite";
 import { TOOL_NAMES, type ToolName } from "./tooldefs.ts"; // DL-85: the ONE tool/op name source; AGENT_OPS derives from it
+import { STEWARD_HANDLES } from "./seed.ts"; // D1: the steward roster (ONE definition, next to AGENT_HANDLES) the override matrix grants cross-project access to
+import { TEAM_INTAKE_PROJECT } from "./team-config.ts"; // D1: the reserved "_team" intake key — the only override pm may pass
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
@@ -460,11 +462,44 @@ function opGetProject(db: DatabaseSync, projectId: string): OpResult {
   return okR(getProject(db, projectId)); // read
 }
 
+// ─── D1: the project override — a role-based permission matrix, enforced at the dispatch choke point ──────
+// Hub identity pins an agent to ONE project at boot (DEVLOOP_PROJECT), which made the team-scope features
+// (§9b team intake, ops owner-routed alerts, sweep per-project hygiene) dead letters on backend:"service".
+// Every op-backed tool now takes an optional `project` arg (tooldefs.ts injects the schema); THIS resolver
+// decides whether the caller may cross its boot pin — by ACTOR ROLE only (job-level conditions live
+// prompt-side in the SKILLs; they are not server-enforceable — docs/design/2026-07-review-decisions.md D1):
+//   • stewards (STEWARD_HANDLES: sweep/ops/reflect/communication, normally booted `_team`) → any existing
+//     project key or `_team`;
+//   • pm → `_team` ONLY (the §9b team-intake board), regardless of its booted project;
+//   • every other actor → its booted project only (an explicit same-key pass is a no-op, never an error).
+// FORBIDDEN-first, existence second: a forbidden actor gets the SAME 403 whether or not the key exists, so
+// the matrix never leaks which project keys exist; only an ALLOWED actor's unknown key gets the 404 (the
+// existing not-found shape). No `project` arg ⇒ exactly the booted behavior (backward compatible).
+const STEWARD_ACTORS: ReadonlySet<string> = new Set(STEWARD_HANDLES);
+export type ProjectOverride = { ok: true; projectId: string; projectKey: string } | { ok: false; result: OpResult };
+export function resolveProjectOverride(db: DatabaseSync, bootedProjectId: string, bootedProjectKey: string, actor: string, requested: unknown): ProjectOverride {
+  if (requested === undefined) return { ok: true, projectId: bootedProjectId, projectKey: bootedProjectKey };
+  if (typeof requested !== "string") return { ok: false, result: errR(400, "project must be a string (a project key)") }; // the op-API parses raw JSON — mirror the stdio zod (DL-63)
+  if (requested === bootedProjectKey) return { ok: true, projectId: bootedProjectId, projectKey: bootedProjectKey };
+  if (!STEWARD_ACTORS.has(actor) && !(actor === "pm" && requested === TEAM_INTAKE_PROJECT))
+    return { ok: false, result: errR(403, `FORBIDDEN: actor '${actor}' may not act on project '${requested}' (booted: '${bootedProjectKey}'). Only stewards (${STEWARD_HANDLES.join("/")}) may target another project; pm only '${TEAM_INTAKE_PROJECT}'.`) };
+  const row = db.prepare("SELECT id,key FROM projects WHERE key=?").get(requested) as { id: string; key: string } | undefined;
+  if (!row) return { ok: false, result: errR(404, `no such project '${requested}'`) };
+  return { ok: true, projectId: row.id, projectKey: row.key };
+}
+
 // Dispatch one op. `db` is the WRITABLE connection for the write ops (save_issue/save_comment) and may be
 // the daemon's query_only read connection for the read ops — the daemon passes the right one per op. `actor`
 // is already resolved+validated by the daemon (the G1 guard). `args` is the parsed JSON body (a non-object
 // body is normalized to {} by the caller). Throws only on a genuine DB fault (→ the daemon's 500 catch).
 export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projectKey: string, actor: string, args: Record<string, unknown>): OpResult | Promise<OpResult> {
+  // D1 choke point: EVERY op resolves its effective project HERE, so no op can bypass the override matrix.
+  // Both transports flow through this line (server.ts dispatches straight into agentOp; the daemon ALSO
+  // pre-resolves with the same function for its dry-run mode gate, then passes the effective ids in — that
+  // second resolve degenerates to the same-key fast path above, so the two can't disagree).
+  const ov = resolveProjectOverride(db, projectId, projectKey, actor, args.project);
+  if (!ov.ok) return ov.result;
+  ({ projectId, projectKey } = ov);
   switch (op) {
     case "list_issues": return opListIssues(db, projectId, actor, args as ListIssuesArgs);
     case "get_issue": return opGetIssue(db, projectId, projectKey, args as { id?: string });
