@@ -281,8 +281,10 @@ itself), and a one-shot **rescue** before a `fix-exhausted` block. See
 
 Separately, the `service` hub can run the agents themselves from Codex (Mode B); see
 [`PORTABILITY.md`](PORTABILITY.md). Run any agent there with, e.g.,
-`dev-loop run --cli codex --agents communication` — the scheduler injects the per-agent
-`dev-loop-hub` actor/MCP override itself, so no manual Codex config is needed.
+`dev-loop run --cli codex --agents communication` — the scheduler carries the per-agent
+identity itself (exported in the fire env on the default `"cli"` interface, certified
+2026-07-11; injected as `-c` MCP overrides on the `"mcp"` rollback), so no manual Codex
+config is needed.
 
 ## Status
 

@@ -277,3 +277,77 @@ come from code; narrative comes from you. Compose EXACTLY these sections, then p
 5. **Needs the director** — ONLY genuinely human-parked items (Human-Blocked / external-access
    trackers); an empty section is a good day.
 Keep it under ~25 lines — a director reads ONE message, not a log.
+
+---
+
+<!-- cli-cheatsheet:begin agent=communication -->
+## CLI cheat-sheet — `backend:"service"`, `interface:"cli"` (§18)
+
+<!-- GENERATED from the CLI usage strings by hub/src/gen-cheatsheets.ts (D9) — never hand-edit between
+     the markers; hub/test/cli-cheatsheet.ts byte-checks this block against a fresh render. -->
+
+On a CLI-interface fire (D8 — no hub MCP; `hub.agentInterface` decides per coding agent) every §18 op
+below is invoked as a `dev-loop` command: JSON on stdout, errors as JSON on stderr, identity from the
+fire env (`DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB` — never touch these). Full write-layer
+surface: `dev-loop op --help`.
+
+**FIRST — verify identity, fail closed.** Before ANY other board or repo action, run:
+
+```text
+dev-loop project --json        # get_project as the acting actor — the CLI whoami
+```
+
+Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) or `5` (hub
+unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
+fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
+
+Your ops are READ-ONLY: project facts, board reads and published `strategy`/`roadmap` docs for the article/digest sources. Your outward push stays `dev-loop notify` (never a hand-rolled webhook), and your only writes are the draft file + your report.
+
+```text
+# list_issues
+dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
+                 [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)
+    --json = EXACTLY the op list_issues body (updated_at DESC, terminal states included, cap 250);
+    --all/--owner and --assignee '' are human-view only (usage error with --json).
+
+# get_issue
+dev-loop ticket <id> [--json]        read-only: show one ticket — detail + comments
+    --json = EXACTLY the op get_issue body (the ticket + its comments + referencedBy).
+
+# ANY op by name (LAYER 0 — raw JSON args)
+dev-loop op <op-name> [--args-json '<JSON>']
+    Dispatch any hub op; args ride --args-json, or stdin when --args-json is absent and stdin is piped.
+
+# get_project
+dev-loop project
+
+# doc.list
+dev-loop doc list [--kind K]
+
+# doc.get
+dev-loop doc get (--slug S | --kind K) [--version N|latest]
+```
+
+Respect `mode` (§12) yourself — the CLI has no dry-run gate: in `dry-run`, make no write-verb calls.
+
+**Cross-project steward override (D1, §18):** you boot as `_team`; every write-layer verb takes
+`--project <key>` (role-gated SERVER-side — a refused actor learns nothing about which keys exist):
+
+```text
+--project <key>       act on that project instead of the booted one — role-gated SERVER-side (the D1 matrix:
+                      stewards → any project or "_team"; pm → "_team" only; everyone else → FORBIDDEN).
+```
+
+`tickets`/`ticket <id>` take no `--project` — a cross-project read rides LAYER 0: `dev-loop op
+list_issues --args-json '{"project":"<key>","label":"dev-loop"}'` (same for `op get_issue`).
+Omit `--project` entirely to act on the `_team` board itself.
+
+Exit codes (every write-layer verb):
+
+```text
+0 ok · 1 domain error (op 4xx/5xx; body on stderr) · 2 usage · 3 doc.save CAS CONFLICT (payload on stderr)
+4 identity/guard (unknown actor; unresolved/unseeded project; a WRITE as 'operator' inside an agent fire —
+  DEVLOOP_TEAM_SCOPE/DEVLOOP_DEV_SPLIT set — without --i-am-the-operator) · 5 hub unavailable (daemon down/
+  dormant, or hub.db busy past the 5s busy_timeout)
+```
+<!-- cli-cheatsheet:end agent=communication -->
