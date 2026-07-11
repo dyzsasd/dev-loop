@@ -800,6 +800,17 @@ split); responsibility comes from the `team.docs.vision` project descriptions, a
 rather than guess. No new state machine — §9a mechanics, one level up. Same team (= same backend) only;
 cross-team collaboration does not exist (I3).
 
+**Mechanism on `service` (D1):** the carrier is the hub op-API **`project` override** — every hub tool
+(`whoami` aside) takes an optional `project` argument, role-gated **server-side on both transports**
+(stdio and the daemon op-API): the stewards (`sweep`/`ops`/`reflect`/`communication`, booted `_team`) may
+name any seeded project key or `_team`; **PM may name `_team` only** — and uses it for exactly this
+job. PM is never booted at team scope on `service`; instead **every per-project PM fire** scans the
+`_team` board (`list_issues {project:"_team", label:"needs-pm"}`), files the child for **its own booted
+project** on its own board (no override needed), back-links it on the parent via the override, and the
+fire whose back-link completes the responsibility set moves the parent to `In Review`. Any other actor
+naming a foreign key is refused (`FORBIDDEN`), and a forbidden actor gets the same refusal for a real and
+a ghost key — key existence never leaks. Omitting `project` means the booted project, unchanged.
+
 ### 9c. W5 — the external-prerequisite tracker (park → block → auto-unpark)
 
 An `external-prereq` park used to be a dead end: a label + a comment, resurrected only
@@ -1604,6 +1615,14 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
   ladder), so `DEVLOOP_PROJECT` is **optional** (a launcher spawning the server with cwd inside a
   repo need not set it). Identity is still ambient — not passed per call. The cross-project
   firewall (§2) is **unchanged + structural**: a hub process only ever touches its own project's rows.
+  The ONE role-gated exception (D1): every hub tool except `whoami` accepts an optional `project`
+  argument — stewards (`sweep`/`ops`/`reflect`/`communication`) may name any seeded project key
+  (a hub.db row, not a dev-loop.json entry) or `_team`, PM may name `_team` only (§9b), every other
+  actor is refused with `FORBIDDEN` —
+  enforced server-side at the shared dispatch choke point, identically on the stdio server and the
+  daemon op-API. Forbidden-first: a refused actor learns nothing about which keys exist (only an
+  allowed actor's unknown key gets the not-found error). Omitting `project` is byte-identical to the
+  pre-override behavior.
 - **Relations.** `save_issue` takes `duplicateOf` (scalar — set it with `state:"Duplicate"`,
   §8 dedupe) and `relatedTo` (**append-only** — re-passing unions into the set, never
   replaces; §4 splits, §15 coverage); both surface on `get_issue`. `parentId`/`blockedBy`/
@@ -2599,7 +2618,10 @@ This section records only the rules that change agent/operator behavior; the fie
   configured in **user scope** (doctor warns `W05`). Delivery fires still run inside a repo, unaffected.
 - **Scheduling (1.0 team mode).** `dev-loop run` (or Agent View `/loop`) launches ONE scheduler for the
   whole team; each agent keeps its own cadence, and when it fires the target project is chosen by a smooth
-  weighted round-robin (`weight` = share; `enabled:false`/`weight:0` opt out). The rotation cursor is shared
+  weighted round-robin (`weight` = share; `enabled:false` removes a project from BOTH delivery rotation
+  and steward coverage; `weight:0` is maintenance mode — delivery rotation pauses while the stewards
+  (sweep/ops/reflect/communication) keep covering it). `--project` narrows the delivery rotation only;
+  steward fires always keep team-wide coverage. The rotation cursor is shared
   between `dev-loop run` and the `/loop` rows via `dev-loop next-project --agent <a>`, so the two run modes
   never double-fire or starve a project. Preview the order with `dev-loop run --plan <n>`. Every fire is
   recorded to `<ws>/.dev-loop/team/fires.jsonl`. A shared repo's base-clone mutations (fetch / worktree

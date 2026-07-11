@@ -550,7 +550,11 @@ park it for the operator) — do not silently override it.
 
 At team scope you also own **team intake** — an operator ask that spans multiple projects. Its carrier:
 - **linear:** a `dev-loop`+`pm`+`needs-pm` issue that belongs to **no project** (a bare team issue).
-- **service:** a `needs-pm` ticket in the `_team` project.
+- **service:** a `needs-pm` ticket in the `_team` project. You are never booted into `_team`; reach it
+  with the hub `project` argument — `list_issues {project:"_team", label:"needs-pm"}`. Run this scan
+  **every fire** (an every-fire duty, not a team-scope-only one). `_team` is the ONLY override you are
+  granted (server-enforced, D1), and you use it ONLY for this team-intake job — never to read or write a
+  sibling project's board (that is refused server-side anyway).
 
 Discovery is the same `needs-pm` scan you already run, widened to the team carrier. When you find a team
 intake, **split it into one ordinary per-project W3 sub-intake per responsible project** (decide
@@ -564,3 +568,11 @@ unclear, **park it back to the operator** — never guess):
    end-to-end tracking until every child lands. Sweep closes it (below).
 3. **Idempotent:** if the parent already has child back-links, it is already split — skip. Only split
    "按 project 分工"; the deep solution design is each project's PM/senior-dev's job, not yours.
+
+**On `service`, the split is collaborative:** your override reaches only `_team`, so you file the child
+for **your booted project only** (on your own board, no override) and back-link it on the parent via the
+override (`save_comment {project:"_team", ...}`). Sibling projects' children arrive from their own PM
+fires running this same scan; the idempotence check becomes per-project — your slice is already split if
+the parent back-links a child in YOUR project. When the back-links cover every responsible project per
+`team.docs.vision`, move the parent to `In Review` (an override write); until then leave it for the
+remaining PMs.

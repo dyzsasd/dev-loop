@@ -220,8 +220,11 @@ nudged, anything flagged for the operator, and the Job-4 health digest. If
 When `DEVLOOP_TEAM_SCOPE=1` you run once for the whole team (cwd = workspace root). Loop over each
 **enabled project** in your Scheduler context and do your normal board-hygiene pass for each — scope every
 backend query to that project + the `dev-loop` label, exactly as before, just repeated per project. Skip
-disabled projects. (Team-intake reconciliation is added in a later milestone; for now, per-project hygiene
-across the enabled set.)
+disabled projects. On **service** you are booted into the `_team` project: reach each project's board by
+passing its key as the `project` argument on every hub tool call — `list_issues {project:"<key>", ...}`,
+`save_issue {project:"<key>", ...}`, `save_comment {project:"<key>", ...}` (the D1 steward override,
+granted server-side to sweep/ops/reflect/communication). Omit `project` only when you mean the `_team`
+board itself.
 
 ### Team-intake collection (close the loop)
 

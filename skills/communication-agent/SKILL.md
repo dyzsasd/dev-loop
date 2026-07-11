@@ -252,6 +252,11 @@ label it a preview and confirm no writes were made.
 When `DEVLOOP_TEAM_SCOPE=1` you speak for the whole team (cwd = workspace root). Compose the digest across
 the **enabled projects** in your Scheduler context.
 
+On **service** you are booted into `_team`: where a digest line needs a board read that `dev-loop metrics
+--json` does not provide (the QA-quality Bug slices, oldest `In Review` age, W5 trackers), query that
+project's board via the hub `project` argument — `list_issues {project:"<key>", ...}` (the D1 steward
+override). Read-only: your only writes remain `dev-loop notify` and your report sink.
+
 **Outward push** uses the team channel, not a hand-rolled webhook: run `dev-loop notify --level info|warn
 --title "<t>" "<message>"`. It reads `team.comms` (slack/lark) and the webhook URL from the env var named
 in `webhookEnv` — you never see or handle the URL/secret (§16). This is a PUSH (digests, escalations) and

@@ -242,7 +242,9 @@ registry**, not projects:
 - **Route by owner:** when a repo has a problem, file/resolve the alert ticket under that repo's **owner**
   project (the `owner` field, or its sole referrer). A shared repo's alert goes to the owner only — never
   duplicated across every referrer. On **linear**, create the issue directly in the owner project via the
-  Linear MCP (you have full cross-project access at team scope). On **service**, the steward `project`
-  override for the hub op-API lands with the M5 daemon work; until then, record the alert on the `_team`
-  board tagged with the owner project's key and let the owner project's PM triage it.
+  Linear MCP (you have full cross-project access at team scope). On **service**, file (or refresh) the
+  alert directly in the owner project via the steward `project` override on the hub tools (shipped, D1):
+  `save_issue {project:"<owner-key>", ...}` / `list_issues {project:"<owner-key>", ...}` for the dedupe
+  scan — the same file-or-refresh discipline as a single-project fire, with the attributed event landing
+  in the owner project's feed. The old record-on-`_team`-and-tag fallback is retired.
 - Reports go under `${DEVLOOP_WORKSPACE}/.dev-loop/team/`.
