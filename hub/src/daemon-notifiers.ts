@@ -4,6 +4,8 @@
 // re-exports them so the existing test imports (test/blocked.ts, no-progress.ts, wal-checkpoint.ts,
 // daemon.ts) keep resolving `.../daemon.ts`.
 import { DatabaseSync } from "node:sqlite";
+import { statSync, readFileSync } from "node:fs";  // docs P3b: the repo-file strategy watch reads mtime + content hash (never the content into a message)
+import { createHash } from "node:crypto";
 import { openDb, logEvent } from "./db.ts";
 import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Creds, type Transport, type FetchImpl } from "./channel.ts";
 import { eventData } from "./views/activity.ts";
@@ -247,8 +249,10 @@ export async function docForeignEditNotifyTick(opts: {
   const { writeDb, projectId, projectKey, baseUrl, settleMs, nowMs } = opts;
   const target = resolveTarget(writeDb, projectId, opts.notify);
   if (!target) return 0;
+  // D6: archived docs are retired — no intake nag. (docArchive is design-only, which kind!='design'
+  // already excludes; archived=0 is the structural belt against any other archival path.)
   const docs = writeDb.prepare(
-    "SELECT id, slug FROM documents WHERE project_id=? AND kind!='design' ORDER BY slug",
+    "SELECT id, slug FROM documents WHERE project_id=? AND kind!='design' AND archived=0 ORDER BY slug",
   ).all(projectId) as { id: string; slug: string }[];
   // one markers read for the whole tick (the ledger is append-only; parse-in-process like activityPage)
   const markers = (writeDb.prepare(
@@ -299,6 +303,88 @@ export function startDocForeignEditNotifier(opts: {
   return timer;
 }
 
+// ─── docs P3b: passive-intake REPO-FILE strategy-doc watch ─────────────────────────────────────────
+// docForeignEditNotifyTick covers HUB docs only, but the default config keeps the strategy doc as a
+// repo FILE (config-schema: strategyDoc {path} / a plain string) — under intake.mode:"passive" PM's
+// doc-watch is off (§5a), so an operator edit to that file vanished exactly like a hub-doc edit did.
+// This is the file-side twin: watch the file's CONTENT HASH (resolved once at boot via
+// resolve-project.repoFileStrategyPath — the same doc-home rule PM boots with) and, on a SETTLED change
+// (mtime older than the settle window — the burst-collapse twin of the hub tick's version created_at),
+// emit ONE §16 comms line naming the PATH ONLY (never a byte of file content — the doc body never
+// crosses the channel, §16). Ledger-dedupe BY HASH: the first observation records a silent
+// `strategy_file.baseline` marker (a file has no authorship column, so "unchanged since boot" and
+// "operator edit" are indistinguishable on first sight — never cry wolf at every daemon start); after
+// that, a hash differing from the LAST recorded one (baseline or notified) fires once, and the
+// `strategy_file_edit.notified` marker (written ONLY on a real send — the DL-26 invariant, so a failed
+// send retries next tick) makes the same content never re-fire. DL-34: dry-run is fully write-free
+// (no baseline either — a cold dry-run tick just observes). Same envelope otherwise: DL-59 target,
+// per-tick resolution, id-only failure log.
+export async function strategyFileEditNotifyTick(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string;
+  filePath: string; displayPath?: string; settleMs: number; nowMs: number; fetchImpl?: FetchImpl; notify?: unknown;
+}): Promise<number> {
+  const { writeDb, projectId, projectKey, filePath, settleMs, nowMs } = opts;
+  const displayPath = opts.displayPath ?? filePath;
+  const target = resolveTarget(writeDb, projectId, opts.notify);
+  if (!target) return 0;
+  let mtimeMs: number, hash: string;
+  try {
+    hash = createHash("sha256").update(readFileSync(filePath)).digest("hex"); // hash stays in-process; NEVER the content into a line/event
+    // stat AFTER the read (Codex review 2026-07-12): the mtime must describe a write AT-OR-AFTER the
+    // content we just hashed — stat-then-read could hash a mid-save write while judging settledness by
+    // the PREVIOUS write's age (a premature line + a second one for the final content). If a save lands
+    // between read and stat, the newer mtime fails the settle check and the next tick re-reads cleanly.
+    mtimeMs = statSync(filePath).mtimeMs;
+  } catch { return 0; } // missing/unreadable file ⇒ nothing to watch this tick (a broken strategyDoc path is doctor's beat)
+  // The last recorded hash for THIS path (baseline or notified, whichever is newest) — stateless from
+  // the ledger, so a daemon restart keeps the watch exactly where it was (an edit made while the daemon
+  // was down still fires: the persisted hash predates it).
+  const last = (writeDb.prepare(
+    "SELECT data FROM events WHERE project_id=? AND kind IN ('strategy_file.baseline','strategy_file_edit.notified') ORDER BY id DESC",
+  ).all(projectId) as { data: string }[]).map((e) => eventData(e.data)).find((m) => m.path === displayPath);
+  if (!last) {
+    // first observation = the baseline, recorded SILENTLY (no send): the daemon cannot attribute the
+    // current bytes to anyone. Dry-run stays write-free (DL-34) — it just observes and waits for live.
+    if (!CHANNEL_DRYRUN) logEvent(writeDb, { project_id: projectId, ticket_id: null, actor: "daemon", kind: "strategy_file.baseline", data: { path: displayPath, hash } });
+    return 0;
+  }
+  if (last.hash === hash) return 0;                 // unchanged, or this exact content already announced (hash dedupe)
+  if (nowMs - mtimeMs < settleMs) return 0;         // still settling (mid-edit burst collapses to the final content's line)
+  // §16 closed allow-list: projectKey + the CONFIG path + the fixed passive-mode action. No file content.
+  const line = cleanLine(`[${projectKey}] operator edited ${displayPath} — PM is passive; file a needs-pm ticket to act`, 240);
+  try {
+    if (CHANNEL_DRYRUN) {
+      console.error(`[daemon] [dry-run] would notify strategy-file edit '${displayPath}' via ${target.label}: ${line}`); // DL-34: write-free
+    } else {
+      await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+      logEvent(writeDb, { project_id: projectId, ticket_id: null, actor: "daemon", kind: "strategy_file_edit.notified", data: { path: displayPath, hash } }); // marker ONLY on a real send
+    }
+    return 1;
+  } catch (e) {
+    console.error(`[daemon] strategy-file notify failed for '${displayPath}': ${scrubErr((e as Error).message)}`); // no marker ⇒ retried next tick
+    return 0;
+  }
+}
+
+export function startStrategyFileEditNotifier(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string;
+  filePath?: string | null; displayPath?: string; intakeMode?: string; settleMs?: number; tickMs?: number; notify?: unknown;
+}): ReturnType<typeof setInterval> | null {
+  // Same gate as the hub-doc tick: passive intake ONLY (autonomous mode ⇒ PM's own strategy-doc read
+  // owns propagation), plus a resolved repo-file path and a send target — else a true no-op.
+  if (opts.intakeMode !== "passive") return null;
+  if (!opts.filePath) return null;                                             // no repo-file strategy doc (hub/Linear form, or zero-repo)
+  if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null;  // no send target ⇒ true no-op
+  const filePath = opts.filePath;
+  const settleMs = opts.settleMs ?? (Number(process.env.DEVLOOP_STRATEGY_FILE_SETTLE_MS) || 15 * 60_000); // the hub-doc settle window's twin
+  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_STRATEGY_FILE_TICK_MS) || 10 * 60_000);
+  const run = () => { strategyFileEditNotifyTick({ ...opts, filePath, settleMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] strategy-file notifier tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
+  const timer = setInterval(run, tickMs);
+  timer.unref?.();
+  run(); // immediate first tick — seeds the baseline at boot (or surfaces an edit already settled past a prior baseline)
+  return timer;
+}
+
 // ─── docs P6b: drafts-pending notifier ─────────────────────────────────────────────────────────────
 // PM records direction as a DRAFT; only the operator may publish (docstore's single gate). Absent a
 // nudge, agents keep executing the stale published version while the draft silently stalls — the web
@@ -318,8 +404,8 @@ export async function docDraftsPendingNotifyTick(opts: {
   const docs = (writeDb.prepare(
     `SELECT d.id, d.slug, d.current_version,
             (SELECT COALESCE(MAX(v.version),0) FROM document_versions v WHERE v.doc_id=d.id) AS latest
-       FROM documents d WHERE d.project_id=? AND d.kind!='design' ORDER BY d.slug`,
-  ).all(projectId) as { id: string; slug: string; current_version: number; latest: number }[])
+       FROM documents d WHERE d.project_id=? AND d.kind!='design' AND d.archived=0 ORDER BY d.slug`,
+  ).all(projectId) as { id: string; slug: string; current_version: number; latest: number }[]) // D6: archived docs never nag (kind filter + the archived=0 structural belt)
     .filter((d) => d.latest > d.current_version); // the header-chip predicate (views/docs.ts), server-side
   const markers = (writeDb.prepare(
     "SELECT data, created_at FROM events WHERE project_id=? AND kind='doc_drafts.notified' ORDER BY id DESC",

@@ -104,9 +104,10 @@ export const VIEW_ROUTES: ViewRoute[] = [
   },
   // ── F4 (D3): the docs system — index / viewer / history / diff (views/docs.ts) ──
   // GET /docs — every hub doc with kind, title, published-vs-latest badge, author, updated-at.
+  // D6: archived docs are hidden by default; ?archived=1 shows them (any other value ⇒ default hide).
   {
     method: "GET", pattern: "/docs", handler: (c) =>
-      html(200, page(`docs · ${c.projectKey}`, c.projectKey, docsIndexPage(c.db, c.projectId, c.projectKey), { active: "docs", drafts: c.draftsPending() })),
+      html(200, page(`docs · ${c.projectKey}`, c.projectKey, docsIndexPage(c.db, c.projectId, c.projectKey, c.url.searchParams.get("archived") === "1"), { active: "docs", drafts: c.draftsPending() })),
   },
   // GET /doc/:slug — the kind-agnostic doc viewer (+ ?v=N picker; gated CAS edit + operator publish).
   {

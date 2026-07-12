@@ -195,6 +195,12 @@ Author the design, decompose it into staged child tickets, hand the design paren
        junior's direct-landing merge-back target (§7), so run this one-file commit (+ push)
        under `dev-loop with-repo-lock <repo-ref>` — it must never interleave with a landing
        worktree.
+   - **Retire, don't delete (conventions §21a / D6):** when a module you own is removed or its
+     design is superseded, archive its design doc — `service`: `dev-loop doc archive --slug
+     <module>` (design-only; the op refuses singleton kinds; `--restore` reverses it; the doc
+     leaves the /docs registry and the notifiers but its history stays readable — never delete);
+     `linear`/`local`: move `docs/design/<slug>.md` to `docs/design/archive/` in a one-line
+     commit. Name the superseded doc from the new one (traceability).
    - **Small feature ⇒ NO separate doc.** Write the design directly into the ticket specs —
      the parent ticket body carries the design, and each child cites it via
      `Design: parent <parent-id>`.
@@ -276,6 +282,9 @@ deltas:
   (dev-agent Step 6) — never a commit in the shared checkout.
 - **Ship under your own `senior-dev` identity** — the claim, commits, comments, and the
   In-Review hand-off are yours, not `dev`'s.
+- **Deploy ceiling (conventions §12d):** before any deploy step, re-validate the resolved
+  deploy action against `team.deployPolicy` — a `"manual"` env is a hard bail + operator
+  park, never a prompt.
 
 Then loop to Step 1.
 
@@ -350,7 +359,7 @@ Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) 
 unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
 fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
 
-Your ops: slice reads (Steps 0–1), `save_issue` update (claim, block, hand-off) and create (spawn the staged `Backlog` children), comments, and the hub `design` doc-kind — `dev-loop doc save --kind design --slug <module>` (multi-instance, NOT publish-gated: your saved draft IS the live design, §21a).
+Your ops: slice reads (Steps 0–1), `save_issue` update (claim, block, hand-off) and create (spawn the staged `Backlog` children), comments, and the hub `design` doc-kind — `dev-loop doc save --kind design --slug <module>` (multi-instance, NOT publish-gated: your saved draft IS the live design, §21a); retire a module's design doc with `doc archive` (D6: hidden by default, never deleted; `--restore` brings it back).
 
 ```text
 # list_issues
@@ -389,6 +398,11 @@ dev-loop doc save --slug S --kind K --base-version N (--file F | stdin) [--title
     version doc get returns by default), else exit 3 with the CONFLICT payload ({latestVersion,latestAuthor,
     hint}) as JSON on stderr. Recover: doc get --slug S --version latest, re-apply your change, re-save with
     --base-version <latestVersion>.
+
+# doc.archive
+dev-loop doc archive --slug S [--restore]
+    DESIGN docs only (singleton kinds refuse) — D6 retention: an archived doc is hidden from the /docs
+    index and the notifiers by default, NEVER deleted (doc get/history stay readable). --restore un-archives.
 ```
 
 Respect `mode` (§12) yourself — the CLI has no dry-run gate: in `dry-run`, make no write-verb calls.

@@ -60,6 +60,9 @@ LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; erro
       hint}) as JSON on stderr. Recover: doc get --slug S --version latest, re-apply your change, re-save with
       --base-version <latestVersion>.
   dev-loop doc publish (--slug S | --kind K) --version N        OPERATOR-ONLY (cooperative role gate)
+  dev-loop doc archive --slug S [--restore]
+      DESIGN docs only (singleton kinds refuse) — D6 retention: an archived doc is hidden from the /docs
+      index and the notifiers by default, NEVER deleted (doc get/history stay readable). --restore un-archives.
   dev-loop mirror push --team-id T --token-env NAME [--project-id P] [--state-map '<JSON>'] [--limit N]
       With --project-id, the PUBLISHED strategy/roadmap/decisions + LATEST design docs ALSO mirror as Linear
       Documents parented to that Linear project (one-way, hash-skipped; doc counts ride the 'docs' result field).
@@ -438,7 +441,19 @@ async function main(): Promise<never> {
         if (flags["--project"] !== undefined) args.project = str(flags, "--project");
         emit("doc.publish", await runOp(openHub(), "doc.publish", args));
       }
-      fail("usage: dev-loop doc list|get|history|diff|save|publish …");
+      if (verb === "archive") {
+        // D6: a metadata flip on a retired DESIGN doc (slug-only — design is multi-instance; the op
+        // refuses singleton kinds server-side). --restore maps to archived:false; the default archives.
+        const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--restore": "b", ...COMMON });
+        iAmTheOperator = flags["--i-am-the-operator"] === true;
+        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+        const slug = str(flags, "--slug"); if (!slug) fail("doc archive needs --slug S");
+        const args: Record<string, unknown> = { slug };
+        if (flags["--restore"] === true) args.archived = false;
+        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+        emit("doc.archive", await runOp(openHub(), "doc.archive", args));
+      }
+      fail("usage: dev-loop doc list|get|history|diff|save|publish|archive …");
     }
 
     // ── mirror push|poll|status ──

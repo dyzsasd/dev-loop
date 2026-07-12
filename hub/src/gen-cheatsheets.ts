@@ -40,9 +40,9 @@ export const CHEATSHEETS: Record<string, CheatSpec> = {
     scope: "Your ops: board reads for Jobs A/B/C, `save_issue` update (claim, re-test → Done, close+supersede, unblock) and create (file Bugs + the verify-fail follow-ups), and comments (claims, evidence, sign-offs).",
   },
   "senior-dev-agent": {
-    verbs: ["tickets", "ticket", "ticket create", "ticket update", "comment add", "comments", "doc get", "doc save"],
+    verbs: ["tickets", "ticket", "ticket create", "ticket update", "comment add", "comments", "doc get", "doc save", "doc archive"],
     project: "none",
-    scope: "Your ops: slice reads (Steps 0–1), `save_issue` update (claim, block, hand-off) and create (spawn the staged `Backlog` children), comments, and the hub `design` doc-kind — `dev-loop doc save --kind design --slug <module>` (multi-instance, NOT publish-gated: your saved draft IS the live design, §21a).",
+    scope: "Your ops: slice reads (Steps 0–1), `save_issue` update (claim, block, hand-off) and create (spawn the staged `Backlog` children), comments, and the hub `design` doc-kind — `dev-loop doc save --kind design --slug <module>` (multi-instance, NOT publish-gated: your saved draft IS the live design, §21a); retire a module's design doc with `doc archive` (D6: hidden by default, never deleted; `--restore` brings it back).",
   },
   "junior-dev-agent": {
     verbs: ["tickets", "ticket", "ticket create", "ticket update", "comment add", "doc get"],
@@ -89,7 +89,7 @@ const OP_OF: Record<string, string> = {
   "labels": "list_issue_labels", "label create": "create_issue_label",
   "project": "get_project", "events": "list_events",
   "doc list": "doc.list", "doc get": "doc.get", "doc history": "doc.history", "doc diff": "doc.diff",
-  "doc save": "doc.save", "doc publish": "doc.publish",
+  "doc save": "doc.save", "doc publish": "doc.publish", "doc archive": "doc.archive",
   "mirror push": "mirror.push", "mirror poll": "mirror.pollComments", "mirror status": "mirror.status",
 };
 

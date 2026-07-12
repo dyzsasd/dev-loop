@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS documents (
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','current')),
   current_version INTEGER NOT NULL DEFAULT 0,   -- 0 = never published; else the live PUBLISHED version
+  archived INTEGER NOT NULL DEFAULT 0,          -- D6 retention (v5): a RETIRED design doc — hidden by default in /docs + excluded from chips/notifiers, NEVER deleted (history stays readable). design-only by policy (docstore.docArchive refuses singleton kinds)
   created_by TEXT NOT NULL,                     -- actor HANDLE (like tickets.created_by), not a FK to actors(id)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -246,7 +247,7 @@ const mirrorMapHasTicketOnlyCheck = (db: DatabaseSync): boolean => {
 const userVersion = (db: DatabaseSync): number =>
   (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
 
-const SCHEMA_VERSION = 4; // bump when adding a migration below (DL-25 → v1; DL-52 channels.transport → v2; DL split documents.kind+='design' → v3; D5 mirror_map.hub_kind+='doc' → v4)
+const SCHEMA_VERSION = 5; // bump when adding a migration below (DL-25 → v1; DL-52 channels.transport → v2; DL split documents.kind+='design' → v3; D5 mirror_map.hub_kind+='doc' → v4; D6 documents.archived → v5)
 function migrate(db: DatabaseSync): void {
   if (userVersion(db) >= SCHEMA_VERSION) return; // fast path: already current, no txn
   db.exec("PRAGMA foreign_keys=OFF");
@@ -360,6 +361,18 @@ function migrate(db: DatabaseSync): void {
         `);
       }
       db.exec("PRAGMA user_version=4");
+    }
+    if (userVersion(db) < 5) {
+      // v5 (D6): add documents.archived (0/1, default 0) — retired design docs get a metadata flag
+      // (hidden by default, never deleted). Additive ALTER with a default (the v2 channels.transport
+      // shape — no table rebuild needed; existing rows backfill to 0, byte-for-byte otherwise).
+      // A SEPARATE version, NOT an extension of v4: v4 is unreleased but this branch has already
+      // stamped user_version=4 into live dev DBs (the operator's own hub.db) — extending v4 would
+      // silently skip them. Guarded on column presence: a fresh/SCHEMA-created documents table
+      // already carries `archived` ⇒ skip the ALTER (no "duplicate column" error).
+      if (tableExists(db, "documents") && !columnExists(db, "documents", "archived"))
+        db.exec("ALTER TABLE documents ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+      db.exec("PRAGMA user_version=5");
     }
     db.exec("COMMIT");
   } catch (e) {

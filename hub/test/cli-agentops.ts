@@ -182,6 +182,17 @@ ok(pubOk.status === 0 && j(pubOk.stdout).current_version === 2 && j(pubOk.stdout
   "doc publish as operator → published (the single publish gate)");
 const dList = cli(["doc", "list"]);
 ok(dList.status === 0 && j(dList.stdout).some((d: any) => d.slug === "notes" && d.current_version === 2), "doc list → the registry row shows the published current");
+// D6: doc archive — design-only metadata flip (default archives, --restore un-archives); usage guards
+cli(["doc", "save", "--slug", "cli-mod", "--kind", "design", "--base-version", "0"], {}, "design body");
+const aOk = cli(["doc", "archive", "--slug", "cli-mod"]);
+ok(aOk.status === 0 && j(aOk.stdout).archived === true && j(aOk.stdout).kind === "design", "doc archive on a design doc → archived:true");
+ok(j(cli(["doc", "list", "--kind", "design"]).stdout).some((d: any) => d.slug === "cli-mod" && d.archived === 1), "doc list carries the archived flag");
+const aRestore = cli(["doc", "archive", "--slug", "cli-mod", "--restore"]);
+ok(aRestore.status === 0 && j(aRestore.stdout).archived === false, "doc archive --restore → archived:false (reversible)");
+const aSingleton = cli(["doc", "archive", "--slug", "notes"]);
+ok(aSingleton.status === 1 && /only design docs archive/.test(aSingleton.stderr), `doc archive on a singleton kind → domain exit 1 (got ${aSingleton.status})`);
+const aNoSlug = cli(["doc", "archive"]);
+ok(aNoSlug.status === 2 && /--slug S/.test(aNoSlug.stderr), "doc archive without --slug → usage exit 2");
 
 // ═══ 4. mirror family (side-effect-free DRYRUN) ════════════════════════════════════════════════════════════
 const mStatus = cli(["mirror", "status"]);

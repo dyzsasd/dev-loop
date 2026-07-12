@@ -31,9 +31,12 @@ export const roadmapDocSlug = (db: DatabaseSync, projectId: string): string =>
 
 // docs P6a: how many gated docs have a draft AHEAD of their published current (design excluded — its
 // drafts are live, never "pending publish"). Drives the header "N drafts pending" chip (page() opts).
+// D6: archived docs never count — a retired doc must not keep a "pending" nag alive. (The archive op
+// is design-only, which the kind filter already excludes; the explicit archived=0 is the structural
+// belt so a row archived by any other path can never resurrect the chip.)
 export function draftsPendingCount(db: DatabaseSync, projectId: string): number {
   const r = db.prepare(
-    `SELECT COUNT(*) AS n FROM documents d WHERE d.project_id=? AND d.kind!='design'
+    `SELECT COUNT(*) AS n FROM documents d WHERE d.project_id=? AND d.kind!='design' AND d.archived=0
        AND (SELECT COALESCE(MAX(v.version),0) FROM document_versions v WHERE v.doc_id=d.id) > d.current_version`,
   ).get(projectId) as { n: number };
   return Number(r.n);
@@ -53,14 +56,16 @@ function versionBadge(kind: string, published: number, latest: number): string {
 
 // GET /docs — every hub doc for the project, grouped by kind in DOC_KINDS order (design is
 // multi-instance — one row per module slug). Each row: title → viewer, slug, version badge,
-// latest author, updated-at.
-export function docsIndexPage(db: DatabaseSync, projectId: string, projectKey: string): string {
+// latest author, updated-at. D6: archived (retired design) docs are HIDDEN by default —
+// ?archived=1 shows them (badged), and the default view names how many are hidden (a discoverable
+// footer link, never a silent hole in the registry). Nothing is ever deleted.
+export function docsIndexPage(db: DatabaseSync, projectId: string, projectKey: string, showArchived = false): string {
   const rows = db.prepare(
-    `SELECT d.kind,d.slug,d.title,d.current_version,d.updated_at,
+    `SELECT d.kind,d.slug,d.title,d.current_version,d.archived,d.updated_at,
             (SELECT COALESCE(MAX(v.version),0) FROM document_versions v WHERE v.doc_id=d.id) AS latest,
             (SELECT v.author FROM document_versions v WHERE v.doc_id=d.id ORDER BY v.version DESC LIMIT 1) AS latest_author
-       FROM documents d WHERE d.project_id=? ORDER BY d.slug`,
-  ).all(projectId) as { kind: string; slug: string; title: string; current_version: number; updated_at: string; latest: number; latest_author: string | null }[];
+       FROM documents d WHERE d.project_id=?${showArchived ? "" : " AND d.archived=0"} ORDER BY d.slug`,
+  ).all(projectId) as { kind: string; slug: string; title: string; current_version: number; archived: number; updated_at: string; latest: number; latest_author: string | null }[];
 
   const sections = DOC_KINDS.map((kind) => {
     const docs = rows.filter((r) => r.kind === kind);
@@ -68,13 +73,22 @@ export function docsIndexPage(db: DatabaseSync, projectId: string, projectKey: s
     const items = docs.map((r) =>
       `<div class="rlevel"><span class="rkey">${esc(r.slug)}</span>`
       + `<a class="doclink" href="${esc(docHref(projectKey, r.slug))}">${esc(r.title)}</a>`
+      + (r.archived ? `<span class="lbl">archived</span>` : "")
       + versionBadge(r.kind, r.current_version, r.latest)
       + `<span class="sub">by ${esc(r.latest_author ?? "—")} · <time datetime="${esc(r.updated_at)}">${esc(r.updated_at)}</time></span></div>`).join("");
     return `<section class="ragent"><h3>${esc(kind)}</h3>${items}</section>`;
   }).filter(Boolean).join("");
 
+  // The hidden-archived footer: only on the default view, only when something IS hidden.
+  const hiddenN = showArchived ? 0
+    : Number((db.prepare("SELECT COUNT(*) AS n FROM documents WHERE project_id=? AND archived=1").get(projectId) as { n: number }).n);
+  const archivedFoot = hiddenN > 0
+    ? `<p class="empty">${hiddenN} archived doc${hiddenN === 1 ? "" : "s"} hidden — <a href="${esc(href(projectKey, "/docs?archived=1"))}">show archived</a></p>`
+    : showArchived ? `<p class="empty"><a href="${esc(href(projectKey, "/docs"))}">hide archived</a></p>` : "";
+
   return `<a class="back" href="${esc(href(projectKey, "/"))}">← board</a><article class="detail"><h1>Documents</h1>`
     + (sections || `<p class="empty">No documents in ${esc(projectKey)} yet — agents create them via <code>doc.save</code> (hub.docs), or start one at <code>/doc/&lt;kind&gt;</code>.</p>`)
+    + archivedFoot
     + `</article>`;
 }
 
@@ -165,7 +179,7 @@ export function docPage(db: DatabaseSync, projectId: string, projectKey: string,
   }
 
   return `<a class="back" href="${esc(href(projectKey, "/docs"))}">← docs</a><article class="detail">`
-    + `<div class="card-top"><span class="id">${esc(kind)}</span><span class="badge">${esc(d?.status ?? "—")}</span></div>`
+    + `<div class="card-top"><span class="id">${esc(kind)}</span><span class="badge">${esc(d?.status ?? "—")}</span>${d?.archived ? `<span class="badge">archived</span>` : ""}</div>`
     + `<h1>${esc(title)}</h1>` + divergence + notice + meta + view + controls + `</article>`;
 }
 
