@@ -93,7 +93,9 @@ mutator 写入，通常不需要手动编辑：
   `comms`（Slack/Lark channel，对应环境变量名），以及各 agent 的 cadence。
 - `repos` — 物理 repo 注册表：路径、build/typecheck 命令、PR merge check、deploy 形态、
   health probe。
-- `projects` — 引用 repo 的交付单元：strategy doc、test environment、`intake.todoDepthCap`
+- `projects` — 引用 repo 的交付单元：strategy doc、test environment、`intake.mode`
+  （默认 `autonomous`；`passive` = PM 不再自主发起工作，只响应显式的 `needs-pm`
+  请求——验证与 grooming 照常进行）、`intake.todoDepthCap`
   （PM 维持的已承诺队列深度，默认 10），以及各 agent 的启动覆盖项
   (`agents.pm = { model, effort, cadence }` 等)。
 
