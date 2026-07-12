@@ -113,6 +113,44 @@ try {
   const badRevalidate = run("team", ["set", "projects.web.weight", "-1"], { cwd: lin });
   ok(badRevalidate.code === 1 && /E08/.test(badRevalidate.out), "team set re-validates the WHOLE file (E08 rejects a negative weight)");
 
+  // ═══ projects.<k>.communication.* — the whitelisted per-project article config (E14) ═══
+  ok(run("team", ["set", "projects.web.communication.language", "fr"], { cwd: lin }).code === 0
+    && readJson(join(lin, "dev-loop.json")).projects.web.communication.language === "fr",
+    "team set creates + writes projects.<k>.communication.language (first touch builds the block)");
+  ok(run("team", ["set", "projects.web.communication.maxWords", "700"], { cwd: lin }).code === 0
+    && readJson(join(lin, "dev-loop.json")).projects.web.communication.maxWords === 700,
+    "team set writes an INTEGER communication.maxWords");
+  ok(run("team", ["set", "projects.web.communication.output", "repo"], { cwd: lin }).code === 0
+    && readJson(join(lin, "dev-loop.json")).projects.web.communication.output === "repo",
+    "team set writes the communication.output enum");
+  ok(run("team", ["set", "projects.web.communication.includeUnreleased", "true"], { cwd: lin }).code === 0
+    && readJson(join(lin, "dev-loop.json")).projects.web.communication.includeUnreleased === true,
+    "team set writes a BOOLEAN communication.includeUnreleased");
+  const badOut = run("team", ["set", "projects.web.communication.output", "s3"], { cwd: lin });
+  ok(badOut.code === 2 && /must be one of data\|repo/.test(badOut.out), "team set validates the communication.output enum");
+  const badWords = run("team", ["set", "projects.web.communication.maxWords", "many"], { cwd: lin });
+  ok(badWords.code === 2 && /expects an integer/.test(badWords.out), "team set rejects a non-integer maxWords");
+  const badCommKey = run("team", ["set", "projects.web.communication.articles", "true"], { cwd: lin });
+  ok(badCommKey.code === 2 && /not an operator-settable path/.test(badCommKey.out),
+    "an unknown communication key is NOT settable (E14 strict keys start at the whitelist)");
+
+  // ═══ projects.<k>.notify.* — the per-project §9 webhook override (E15) ═══
+  const nOrder = run("team", ["set", "projects.web.notify.webhookEnv", "MY_HOOK"], { cwd: lin });
+  ok(nOrder.code === 2 && /set the provider first/.test(nOrder.out), "notify.webhookEnv before type is refused with the ordering hint");
+  const nBoot = run("team", ["set", "projects.web.notify.type", "slack"], { cwd: lin });
+  ok(nBoot.code === 0 && readJson(join(lin, "dev-loop.json")).projects.web.notify.webhookEnv === "DEVLOOP_COMMS_WEBHOOK",
+    "team set projects.<k>.notify.type bootstraps the block with the standard env NAME default");
+  ok(run("team", ["set", "projects.web.notify.webhookEnv", "MY_HOOK"], { cwd: lin }).code === 0
+    && readJson(join(lin, "dev-loop.json")).projects.web.notify.webhookEnv === "MY_HOOK",
+    "team set overrides notify.webhookEnv once the block exists");
+  const nUrl = run("team", ["set", "projects.web.notify.webhookEnv", "https://hooks.slack.com/x"], { cwd: lin });
+  ok(nUrl.code === 1 && /E15/.test(nUrl.out), "a URL in notify.webhookEnv is rejected by E15 re-validation (env NAME only, §16)");
+  const nType = run("team", ["set", "projects.web.notify.type", "teams"], { cwd: lin });
+  ok(nType.code === 2 && /must be one of slack\|lark/.test(nType.out), "team set validates the notify.type enum");
+  const nLit = run("team", ["set", "projects.web.notify.webhook", "https://hooks.slack.com/x"], { cwd: lin });
+  ok(nLit.code === 2 && /not an operator-settable path/.test(nLit.out),
+    "an inline notify.webhook literal is not settable (E15 rejects it in the file too)");
+
   // repos.<ref>.deploy.* — register a repo first
   mkdirSync(join(lin, "web-repo"), { recursive: true });
   run("team", ["add-repo", "webr", "--project", "web", "--path", "web-repo"], { cwd: lin });

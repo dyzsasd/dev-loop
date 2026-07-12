@@ -165,7 +165,8 @@ Long-running options:
 
 | Option | Use |
 |---|---|
-| `--change-gate` | On `service`, skip spawning inward agents when neither the board nor repo HEAD changed since their last fire. This saves the most tokens on quiet teams. |
+| `--change-gate` | On `service`, skip spawning inward agents when neither the board nor repo HEAD changed since their last fire — the biggest saver on quiet teams. pm/qa are REVIEW tiers whose lens-rotation / coverage-expansion do their best work when nothing changed, so a quiet board only defers them: after `--change-gate-ttl` (default 4h; 0 = never) they fire once anyway and the gate re-arms; dev-tier + architect keep the pure gate. |
+| `--change-gate-ttl <dur>` | How long a quiet board may defer a gated pm/qa fire before it runs anyway (then the gate re-arms). Default `4h`; `0` = never — the pure change gate for pm/qa too. |
 | `--fire-timeout <dur>` | Kill a stuck fire; default is `1h`, and `0` disables the timeout. |
 | `--stagger <dur>` | Delay initial slots so a cold start does not launch every agent at once. |
 | `--max-fires <n>` | Stop after a fixed number of fires, useful for trial runs and budget caps. |
@@ -306,4 +307,4 @@ Reports may also go to Linear docs when `reports.sink:"linear"` is configured.
 | `doctor` reports `W05` on a Linear team | Steward agents run from the workspace root, where repo-level MCP config may not apply. | Configure the Linear MCP in Claude Code user scope. |
 | A service workspace has no web UI URL | The workspace hub daemon is stopped or the cwd does not resolve to the workspace. | Run `dev-loop hub ensure` and then `dev-loop hub status` from the workspace. |
 | A copied workspace opens the wrong state | Absolute worktree paths or the workspace index still point at the old machine. | Run `dev-loop team repair`, then `dev-loop doctor`. |
-| A quiet loop still spends tokens | Agents are firing just to discover no work moved. | Use `dev-loop run --change-gate` on `backend:"service"` teams. |
+| A quiet loop still spends tokens | Agents are firing just to discover no work moved. | Use `dev-loop run --change-gate` on `backend:"service"` teams. pm/qa still fire once per `--change-gate-ttl` window by design — raise the TTL (or set 0) to quiet them completely. |

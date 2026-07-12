@@ -136,6 +136,19 @@ export function teamImport(argv = process.argv.slice(2)): number {
     for (const [f, v] of Object.entries(v1p as Record<string, unknown>)) {
       if (!REHOMED.has(f) && v !== undefined) projBag[f] = v;
     }
+    // communication: v1 blocks may carry keys the v2 schema doesn't model (E14 validates the block
+    // STRICTLY — the silent-suppression guard). Keep the known article fields and drop the rest with a
+    // plan line; the block itself is kept even when emptied — its PRESENCE is what opts article drafting
+    // in, and an import must not silently turn that off. Import must always emit a VALID dev-loop.json.
+    const comm = projBag.communication;
+    if (comm && typeof comm === "object" && !Array.isArray(comm)) {
+      const KNOWN_COMM = new Set(["cadence", "language", "audience", "tone", "maxWords", "sourceWindowDays", "output", "outputDir", "repoOutputDir", "includeUnreleased"]);
+      const kept: Record<string, unknown> = {};
+      const dropped: string[] = [];
+      for (const [f, v] of Object.entries(comm as Record<string, unknown>)) { if (KNOWN_COMM.has(f)) kept[f] = v; else dropped.push(f); }
+      if (dropped.length) plan.push(`COMMUN project '${srcKey}': unknown communication key(s) ${dropped.join(", ")} NOT copied (E14 validates the block strictly; fields: references/config-schema.md)`);
+      projBag.communication = kept;
+    }
     // notify: lift the env-name form to team.comms (the v2 canonical channel) when comms is unset; keep an
     // env-name notify as a project passthrough for the legacy daemon path; NEVER copy an inline webhook/secret
     // literal into dev-loop.json (§16/I5 — the workspace folder must stay copyable with zero secrets).
@@ -146,10 +159,18 @@ export function teamImport(argv = process.argv.slice(2)): number {
       if (typeof clean.webhook === "string") { delete clean.webhook; stripped.push("webhook"); }
       if (typeof clean.secret === "string") { delete clean.secret; stripped.push("secret"); }
       if (stripped.length) plan.push(`NOTIFY project '${srcKey}': inline ${stripped.join("+")} NOT copied into dev-loop.json (§16/I5) — export the value in an env var and set notify.webhookEnv/secretEnv instead`);
-      // Only keep a passthrough notify that is still USABLE (has an env-name webhook). A stripped husk
-      // ({type} with no webhookEnv) would suppress the team.comms bridge in toLegacyView while itself
-      // resolving to nothing — permanently killing human-park pings for this project.
-      if (typeof clean.webhookEnv === "string") projBag.notify = clean;
+      // E15 validates the passthrough strictly: keep only the keys the v2 schema models, with a plan line
+      // for anything dropped (same shape as the communication sanitize above).
+      const KNOWN_NOTIFY = new Set(["type", "webhookEnv", "secretEnv", "events"]);
+      const junk = Object.keys(clean).filter((f) => !KNOWN_NOTIFY.has(f));
+      for (const f of junk) delete clean[f];
+      if (junk.length) plan.push(`NOTIFY project '${srcKey}': unknown notify key(s) ${junk.join(", ")} NOT copied (E15 validates the block strictly)`);
+      // Only keep a passthrough notify that is still USABLE (has an env-name webhook AND a provider the
+      // daemon can send over — resolveNotifyWebhook is slack/lark-only). A stripped husk ({type} with no
+      // webhookEnv) would suppress the team.comms bridge in toLegacyView while itself resolving to
+      // nothing — permanently killing human-park pings for this project.
+      if (typeof clean.webhookEnv === "string" && (clean.type === "slack" || clean.type === "lark")) projBag.notify = clean;
+      else if (typeof clean.webhookEnv === "string") plan.push(`NOTIFY project '${srcKey}': provider '${String(clean.type)}' is not slack/lark — the notify block resolves to nothing and was NOT copied (team.comms will bridge instead)`);
       const envName = notify.webhookEnv;
       if (!file.team.comms && (notify.type === "slack" || notify.type === "lark") && typeof envName === "string" && /^[A-Z][A-Z0-9_]*$/.test(envName)) {
         file.team.comms = { provider: notify.type, webhookEnv: envName };

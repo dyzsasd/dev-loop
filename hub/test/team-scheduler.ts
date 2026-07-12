@@ -148,6 +148,39 @@ try {
     writeFileSync(cfgPath, JSON.stringify(c, null, 2));
   }
 
+  // ── §22a digest gate re-key: a team-scope fire carries the TEAM.COMMS fact, so the digest can never
+  //    be silently suppressed by a missing per-project "communication" block (agents P5) ──
+  {
+    const promptFile = join(tmp, "comms-prompt.txt");
+    const promptDump = join(tmp, "comms-claude.sh");
+    writeFileSync(promptDump, `#!/bin/sh\nprintf '%s\\n' "$@" > ${promptFile}\nexit 0\n`); chmodSync(promptDump, 0o755);
+    // no team.comms → the fire is told the channel is missing and to surface it, not to push
+    runAgents(["--agents", "communication", "--once"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
+    let prompt = readFileSync(promptFile, "utf8");
+    ok(/team comms: not configured/.test(prompt), "a team-scope fire without team.comms carries the 'not configured' fact");
+    ok(/§22a digest gate: no team comms channel — skip the digest push/.test(prompt),
+      "a communication fire without team.comms is told to skip the digest push (and surface the gap)");
+    // team.comms present → the digest gate is THIS, not any per-project communication block (none exists here)
+    ok((team(["set", "team.comms.provider", "slack"], ws).status ?? 1) === 0, "team set wires team.comms for the digest-gate probe");
+    rmSync(promptFile, { force: true });
+    runAgents(["--agents", "communication", "--once"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
+    prompt = readFileSync(promptFile, "utf8");
+    ok(/team comms: slack \(webhook env DEVLOOP_COMMS_WEBHOOK\)/.test(prompt),
+      "a team-scope fire with team.comms carries provider + webhook env NAME (never the URL)");
+    ok(/§22a digest gate: the team comms line above IS the digest gate/.test(prompt) && /article drafting only/.test(prompt),
+      "a communication fire is told the digest keys on team.comms — a missing per-project communication block never suppresses it");
+    // a non-communication steward gets the comms fact but NOT the §22a digest directive
+    rmSync(promptFile, { force: true });
+    runAgents(["--agents", "sweep", "--once"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
+    prompt = readFileSync(promptFile, "utf8");
+    ok(/team comms: slack/.test(prompt) && !/§22a digest gate/.test(prompt),
+      "other stewards see the comms fact but no digest directive (communication-only)");
+    // drop comms again so later fixtures stay byte-identical to before this block
+    const cComms = JSON.parse(readFileSync(cfgPath, "utf8"));
+    delete cComms.team.comms;
+    writeFileSync(cfgPath, JSON.stringify(cComms, null, 2));
+  }
+
   // ── pick-time seed guard (service): an unseeded project never fires, warned ONCE, siblings unaffected ──
   {
     team(["init", "--dir", svcWs, "--key", "svc-sched", "--backend", "service"], tmp);

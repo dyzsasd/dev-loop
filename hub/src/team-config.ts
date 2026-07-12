@@ -77,7 +77,8 @@ export interface ProjectEntry {
   intake?: { mode?: "autonomous" | "passive"; todoDepthCap?: number };
   devSplit?: boolean;
   blockedStateName?: string | null;   // a real Linear "Blocked" column name; null → the `blocked` label park (§9)
-  notify?: unknown;                   // v1-era per-project notify block (passthrough; team.comms is canonical on v2)
+  notify?: unknown;                   // per-project §9 notify webhook override (E15; team.comms is canonical on v2 and bridges into it)
+  communication?: unknown;            // the communication agent's ARTICLE config (E14); NOT the §22a digest gate (that keys on team.comms)
   agents?: unknown;
   models?: unknown;
   efforts?: unknown;
@@ -191,6 +192,66 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   };
   if (team.hub !== undefined) checkHub(team.hub, "team.hub");
 
+  // E14 — a per-project `communication` block: the communication agent's ARTICLE config (cadence,
+  // language, output shape — read by skills/communication-agent §0). Keys are validated STRICTLY:
+  // presence of this block decides whether the agent drafts at all, so a typo'd key must fail loudly
+  // instead of silently changing what a fire does. NOTE it is deliberately NOT the §22a team-digest
+  // gate — the digest keys on team.comms presence (the channel), never on this block.
+  const COMMUNICATION_KEYS = "cadence, language, audience, tone, maxWords, sourceWindowDays, output, outputDir, repoOutputDir, includeUnreleased";
+  const checkCommunication = (raw: unknown, path: string) => {
+    const c = raw as Record<string, unknown>;
+    if (c === null || typeof c !== "object" || Array.isArray(c)) { E("E14", path, "communication must be an object"); return; }
+    for (const [k, v] of Object.entries(c)) {
+      switch (k) {
+        case "cadence": case "language": case "audience": case "tone": case "outputDir": case "repoOutputDir":
+          if (typeof v !== "string" || !v.trim()) E("E14", `${path}.${k}`, `communication.${k} must be a non-empty string`);
+          break;
+        case "maxWords": case "sourceWindowDays":
+          if (typeof v !== "number" || !Number.isInteger(v) || v < 1) E("E14", `${path}.${k}`, `communication.${k} must be an integer >= 1`);
+          break;
+        case "output":
+          if (v !== "data" && v !== "repo") E("E14", `${path}.output`, `communication.output must be "data" or "repo" (got ${JSON.stringify(v)})`);
+          break;
+        case "includeUnreleased":
+          if (typeof v !== "boolean") E("E14", `${path}.includeUnreleased`, "communication.includeUnreleased must be a boolean");
+          break;
+        default:
+          E("E14", `${path}.${k}`, `unknown communication key '${k}' (expected ${COMMUNICATION_KEYS})`);
+      }
+    }
+  };
+
+  // E15 — a per-project `notify` block: the §9 one-way webhook the daemon's human-park pings ride.
+  // On v2 team.comms is canonical (toLegacyView bridges it into notify), so a project-level block is an
+  // explicit OVERRIDE — validated strictly for the same silent-suppression reason as E14. §16/I5: env-var
+  // NAMES only; an inline webhook/secret literal is rejected outright (a copied workspace folder must
+  // never carry a credential).
+  const checkNotify = (raw: unknown, path: string) => {
+    const n = raw as Record<string, unknown>;
+    if (n === null || typeof n !== "object" || Array.isArray(n)) { E("E15", path, "notify must be an object"); return; }
+    for (const [k, v] of Object.entries(n)) {
+      switch (k) {
+        case "type":
+          if (v !== "slack" && v !== "lark") E("E15", `${path}.type`, `notify.type must be "slack" or "lark" (got ${JSON.stringify(v)})`);
+          break;
+        case "webhookEnv": case "secretEnv":
+          if (typeof v !== "string" || !ENV_NAME_RE.test(v) || /:\/\//.test(v))
+            E("E15", `${path}.${k}`, `notify.${k} must be an ENV-VAR NAME (e.g. DEVLOOP_COMMS_WEBHOOK), not a URL/secret (§16)`);
+          break;
+        case "webhook": case "secret":
+          E("E15", `${path}.${k}`, `inline notify.${k} literals never live in dev-loop.json (§16/I5) — export the value in an env var and set notify.${k}Env to its NAME`);
+          break;
+        case "events":
+          if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) E("E15", `${path}.events`, "notify.events must be an array of event-name strings");
+          break;
+        default:
+          E("E15", `${path}.${k}`, `unknown notify key '${k}' (expected type, webhookEnv, secretEnv, events)`);
+      }
+    }
+    if (!("type" in n)) E("E15", `${path}.type`, `notify.type is required ("slack" or "lark")`);
+    if (!("webhookEnv" in n)) E("E15", `${path}.webhookEnv`, "notify.webhookEnv (an ENV-VAR NAME) is required — without it the block is a dead send target");
+  };
+
   // E07 — comms: provider ∈ {slack,lark}; webhookEnv is an ENV-VAR NAME, never a URL literal (I5).
   if (team.comms !== undefined) {
     const c = team.comms as { provider?: unknown; webhookEnv?: unknown };
@@ -232,6 +293,8 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
     }
     if (p?.intake !== undefined) checkIntake(p.intake, `projects.${key}.intake`);
     if (p?.hub !== undefined) checkHub(p.hub, `projects.${key}.hub`);
+    if (p?.communication !== undefined) checkCommunication(p.communication, `projects.${key}.communication`);
+    if (p?.notify !== undefined) checkNotify(p.notify, `projects.${key}.notify`);
     const refs = Array.isArray(p?.repos) ? p.repos : [];
     if (!refs.length) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);
     for (const rr of refs) {

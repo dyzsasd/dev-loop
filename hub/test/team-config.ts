@@ -150,6 +150,38 @@ ok(agentInterfaceFor({ agentInterface: { codex: "mcp" } }, "codex") === "mcp", "
 }
 { const f = base(); ok(effectiveProject(mkWs(f), "devplatform").hub === undefined, "no hub anywhere → the resolved view carries none (defaults apply)"); }
 
+// ── E14 per-project communication block (article config; strict keys — agents P5) ──
+{
+  const f = base();
+  f.projects.devplatform.communication = {
+    cadence: "daily", language: "en", audience: "builders", tone: "clear", maxWords: 900,
+    sourceWindowDays: 7, output: "data", outputDir: "communications", repoOutputDir: "docs/communications", includeUnreleased: false,
+  };
+  ok(codes(f).length === 0, "E14: a fully-populated valid communication block passes");
+}
+{ const f = base(); f.projects.devplatform.communication = {}; ok(codes(f).length === 0, "E14: an EMPTY communication block is valid (presence alone opts article drafting in)"); }
+{ const f = base(); f.projects.devplatform.communication = { articles: true }; ok(has(f, "E14"), "E14: an unknown communication key is rejected (strict — a typo must not silently change a fire)"); }
+{ const f = base(); f.projects.devplatform.communication = { output: "s3" }; ok(has(f, "E14"), "E14: output must be data|repo"); }
+{ const f = base(); f.projects.devplatform.communication = { maxWords: 0 }; ok(has(f, "E14"), "E14: maxWords must be >= 1"); }
+{ const f = base(); f.projects.devplatform.communication = { sourceWindowDays: 2.5 }; ok(has(f, "E14"), "E14: a fractional sourceWindowDays is rejected"); }
+{ const f = base(); f.projects.devplatform.communication = { language: "" }; ok(has(f, "E14"), "E14: an empty-string field is rejected"); }
+{ const f = base(); f.projects.devplatform.communication = { includeUnreleased: "yes" }; ok(has(f, "E14"), "E14: a non-boolean includeUnreleased is rejected"); }
+{ const f = base(); f.projects.devplatform.communication = "daily"; ok(has(f, "E14"), "E14: a non-object communication block is rejected"); }
+{ const f = base(); f.projects.devplatform.communication = ["daily"]; ok(has(f, "E14"), "E14: an ARRAY communication block is rejected"); }
+
+// ── E15 per-project notify block (§9 webhook override; env NAMES only, §16/I5) ──
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhookEnv: "MY_HOOK" }; ok(codes(f).length === 0, "E15: a valid notify override passes"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "lark", webhookEnv: "MY_HOOK", secretEnv: "MY_SECRET", events: ["human-parked"] }; ok(codes(f).length === 0, "E15: secretEnv + events are valid"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "teams", webhookEnv: "MY_HOOK" }; ok(has(f, "E15"), "E15: an unknown provider type is rejected"); }
+{ const f = base(); f.projects.devplatform.notify = { webhookEnv: "MY_HOOK" }; ok(has(f, "E15"), "E15: a notify block without type is rejected"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack" }; ok(has(f, "E15"), "E15: a notify block without webhookEnv is rejected (a dead send target)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhookEnv: "https://hooks.slack.com/x" }; ok(has(f, "E15"), "E15: a URL in webhookEnv is rejected (env NAME only)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhook: "https://hooks.slack.com/x" }; ok(has(f, "E15"), "E15: an inline webhook literal is rejected outright (§16/I5)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "lark", webhookEnv: "MY_HOOK", secret: "shhh" }; ok(has(f, "E15"), "E15: an inline secret literal is rejected outright (§16/I5)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhookEnv: "MY_HOOK", extra: 1 }; ok(has(f, "E15"), "E15: an unknown notify key is rejected (strict)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhookEnv: "MY_HOOK", events: "human-parked" }; ok(has(f, "E15"), "E15: a non-array events is rejected"); }
+{ const f = base(); f.projects.devplatform.notify = ["slack"]; ok(has(f, "E15"), "E15: an ARRAY notify block is rejected"); }
+
 // ── E07 comms env-name discipline (I5) ──
 { const f = base(); f.team.comms = { provider: "lark", webhookEnv: "https://hook.example/x" as string }; ok(has(f, "E07"), "E07: webhookEnv is a URL, not an env name"); }
 { const f = base(); f.team.comms = { provider: "teams" as "slack", webhookEnv: "DEVLOOP_COMMS_WEBHOOK" }; ok(has(f, "E07"), "E07: bad provider"); }
@@ -254,11 +286,11 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   const f = base();
   const bag = f.projects.devplatform as unknown as Record<string, unknown>;
   bag.blockedStateName = "Blocked";                 // v1-era field the whitelist used to DROP
-  bag.communication = { articles: true };           // arbitrary operator field must survive too
+  bag.communication = { language: "en" };           // a (valid, E14) communication block must survive too
   f.team.comms = { provider: "lark", webhookEnv: "DEVLOOP_COMMS_WEBHOOK" };
   const p = toLegacyView(mkWs(f)).projects.devplatform as Record<string, unknown>;
   ok(p.blockedStateName === "Blocked", "toLegacyView passes through blockedStateName (agents/daemon read it)");
-  ok(JSON.stringify(p.communication) === '{"articles":true}', "toLegacyView passes through arbitrary operator fields");
+  ok(JSON.stringify(p.communication) === '{"language":"en"}', "toLegacyView passes through the communication block (the agent reads it off the legacy view)");
   ok(JSON.stringify(p.notify) === '{"type":"lark","webhookEnv":"DEVLOOP_COMMS_WEBHOOK"}',
     "toLegacyView bridges team.comms → the legacy per-project notify block (daemon human-park pings keep working)");
   // a project-level passthrough notify wins over the bridge
