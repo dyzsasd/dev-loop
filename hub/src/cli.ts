@@ -22,7 +22,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   shim:             ["shim"],                      // thin stdio MCP → loopback daemon op-API (DL-55)
   daemon:           ["daemon"],                    // up | down | status | ensure (DL-41)
   init:             ["init-wizard"],               // guided onboarding wizard — composes team init + first project/repo + doctor NEXT (P1)
-  team:             ["team"],                      // init | import | repair | add-project | add-repo — workspace (v2)
+  team:             ["team"],                      // init | import | repair | set | add-project | add-repo — workspace (v2)
   hub:              ["hub"],                        // start | stop | status | ensure — the workspace hub daemon (service)
   "next-project":   ["rotation"],                  // print the next project for an agent's fire (shared WRR cursor)
   "with-repo-lock": ["with-repo-lock"],            // serialize base-clone mutations on a shared repo
@@ -45,8 +45,8 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   label:            ["cli-agentops", "label"],     // label create <name> [--kind K] (create_issue_label)
   project:          ["cli-agentops", "project"],   // the active project as JSON (get_project)
   events:           ["cli-agentops", "events"],    // attribution events as JSON (list_events; --since filters client-side)
-  doc:              ["cli-agentops", "doc"],       // doc list|get|history|diff|save|publish — doc.* 1:1 (save: CAS, CONFLICT → exit 3)
-  mirror:           ["cli-agentops", "mirror"],    // mirror push|status — the one-way Linear mirror
+  doc:              ["cli-agentops", "doc"],       // doc list|get|history|diff|save|publish|archive — doc.* 1:1 (save: CAS, CONFLICT → exit 3)
+  mirror:           ["cli-agentops", "mirror"],    // mirror push|poll|status — the one-way Linear mirror + comment→intake poll
   "export-desktop-skill": ["export-desktop-skill"],// render a self-contained Claude Desktop skill for an agent + project (P2-12)
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
@@ -94,8 +94,8 @@ Usage: dev-loop <command> [args]
   labels | label create <name> [--kind K]   list / create labels
   project                     the active project as JSON
   events [--ticket ID] [--since ISO] [--limit N]   attribution events as JSON
-  doc list|get|history|diff|save|publish …   the doc family 1:1 (save: --base-version CAS; CONFLICT → exit 3)
-  mirror push|status          one-way Linear mirror
+  doc list|get|history|diff|save|publish|archive …   the doc family 1:1 (save: --base-version CAS; CONFLICT → exit 3)
+  mirror push|poll|status     one-way Linear mirror; poll = comment→needs-pm intake
                               (run \`dev-loop op --help\` for the write layer's full flag surface + exit codes)
   export-desktop-skill <agent> --project <key> [--team] [--out <dir>] [--zip]   render a self-contained Claude Desktop skill
   version | help

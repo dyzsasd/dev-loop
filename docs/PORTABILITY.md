@@ -1,6 +1,6 @@
 # Running dev-loop on Another CLI
 
-The 1.0 workspace model is CLI-portable by design. A workspace owns the config
+The 1.x workspace model is CLI-portable by design. A workspace owns the config
 (`<workspace>/dev-loop.json`) and state (`<workspace>/.dev-loop/`). Claude Code and Codex are the
 documented/certified execution surfaces today; opencode follows the same contract but should be
 identity-gated on the installed version before unattended use.
@@ -38,7 +38,7 @@ Every agent fire needs three pieces of identity:
 | `DEVLOOP_PLUGIN_ROOT` | bundled or checkout root used for skills/references |
 
 The older `DEVLOOP_PROJECTS_JSON`, `DEVLOOP_DATA_DIR`, and `CLAUDE_PLUGIN_*` variables exist only for
-compatibility paths. New 1.0 launchers should use the workspace contract above.
+compatibility paths. New 1.x launchers should use the workspace contract above.
 
 Secrets stay outside the workspace. Config stores environment variable names only; the launching
 environment provides the values.
