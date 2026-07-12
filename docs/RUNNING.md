@@ -1,6 +1,6 @@
 # Running dev-loop
 
-This is the operational guide for the **1.0 workspace model**. A workspace is the starting
+This is the operational guide for the **1.x workspace model**. A workspace is the starting
 point: one directory, one team, one backend, and one `dev-loop.json`.
 
 ## 1. Create a Workspace
@@ -46,12 +46,15 @@ stamped a project, dev-loop warns loudly instead of double-driving the same boar
 
 ## 2. Add Projects and Repos
 
-`team init` creates only the workspace. It does not call an LLM and it does not touch Linear or
-the hub. Project/repo onboarding runs from a coding CLI because it may inspect code, create
-backend objects, and interview you about build/deploy details.
+`team init` creates only the workspace. It does not call an LLM and it does not touch Linear
+(on a `service` backend it initializes `hub.db` and seeds the `_team` intake row). Project/repo
+onboarding has two paths: the validated **CLI mutators** (`team add-project` / `team add-repo
+--detect` — what `dev-loop init` composes; self-sufficient on `service`, no plugin needed), and
+the **LLM-assisted skills** below, which can inspect code, create backend objects, and interview
+you about build/deploy details. The plugin/MCP setup is only *required* for the `linear` backend.
 
-First make the dev-loop skills available in the coding CLI you will use for onboarding. In
-Claude Code, install the npm-backed plugin marketplace once:
+For the LLM-assisted path, first make the dev-loop skills available in the coding CLI you will
+use for onboarding. In Claude Code, install the npm-backed plugin marketplace once:
 
 ```bash
 dev-loop install-claude-plugin
@@ -119,7 +122,7 @@ and cadence.
 
 ## 4. Run the Team
 
-The scheduler is the normal 1.0 launch path:
+The scheduler is the normal 1.x launch path:
 
 ```bash
 dev-loop run
@@ -251,7 +254,9 @@ dev-loop hub ensure
 ```
 
 The hub stores its SQLite database under `<workspace>/.dev-loop/hub.db`. The web UI is localhost
-only and read-first; human write routes are opt-in.
+only and read-first; human write routes are opt-in. One daemon serves **every** hub project:
+`GET /` is a project index and each project lives under `/p/<key>/` (board, ticket detail, the
+versioned doc pages, reports, activity); bare paths keep serving the boot project.
 
 `dev-loop hub start|stop|status|ensure` is the normal 1.x workspace lifecycle. The older
 `dev-loop daemon ...`, `seed`, and `init-service` commands are still present for compatibility and

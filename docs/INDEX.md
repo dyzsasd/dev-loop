@@ -13,15 +13,17 @@ Start here when you are deciding which dev-loop document is current.
 
 - [`references/config-schema.md`](../references/config-schema.md) — `dev-loop.json` schema and doctor codes.
 - [`references/conventions.md`](../references/conventions.md) — authoritative agent protocol. Skills defer to this file on conflicts.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — how dev-loop works inside: layers, agents, workflows, backends.
 - [`DAEMON.md`](DAEMON.md) — low-level localhost daemon HTTP surface. Use `dev-loop hub ...` for normal 1.x workspace lifecycle; use raw `dev-loop daemon ...` only for compatibility/debugging.
+- [`design/2026-07-review-decisions.md`](design/2026-07-review-decisions.md) — the 2026-07 full-review operator decision record (D1–D11), shipped as 1.2.0. Current policy for the agent interface (CLI-first), web UI routing, doc-change flow, and retention.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — how to work on this repository locally.
 
 ## Historical Design Records
 
-These explain why the 1.0 system looks the way it does. They are not the quickest way to learn how to run it.
+These explain why the 1.x system looks the way it does. They are not the quickest way to learn how to run it.
 
-- [`docs/design/`](design/) — design records for the 1.0 workspace line and related subsystems.
-- [`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md) — historical hub/service architecture record. Its status note names later 1.0 changes.
+- [`docs/design/`](design/) — design records for the 1.x workspace line and related subsystems, including [`design/skill-template.md`](design/skill-template.md) — the uniform SKILL template + per-fire context budgets shipped in 1.2.0.
+- [`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md) — historical hub/service architecture record. Its status note names the later 1.x changes (through the 1.2.0 review).
 - [`DESIGN-agile-for-ai-workflows.md`](DESIGN-agile-for-ai-workflows.md) — workflow design notes.
 - [`strategy-archive/`](strategy-archive/) and [`reviews/`](reviews/) — archived strategy and review material.
 

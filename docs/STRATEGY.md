@@ -46,12 +46,19 @@ stdio MCP shim** that carries identity via an **environment variable**, never an
 `Authorization` header — because headless `claude -p` drops that header on tool calls, which
 would silently strip attribution from every fire. The per-CLI **identity gate** (call
 `whoami` through the CLI, expect the launcher-set actor) stays the onboarding test for every
-new client.
+new client. _(amended 2026-07, D8/1.2.0: on `backend:"service"` the default agent transport is
+now the `dev-loop` **CLI itself** — identity still rides the fire env — with the stdio MCP
+shim/server kept as the sibling client and the `hub.agentInterface` rollback; the identity gate
+probes whichever surface the fire actually uses — `identity-check` in the CLI's shell on
+`"cli"`, `whoami` over MCP on `"mcp"`.)_
 
 The invariants are non-negotiable and transport-independent: the **§17 self-evolution
 firewall** (no agent ever auto-edits a SKILL / conventions / plugin / code file — structural
 changes are operator git commits, surfaced as proposals), **§2 project isolation** (one daemon
-= one pinned project, no cross-project endpoint), and **§16 secrets/localhost-only** (binds
+= one pinned project, no cross-project endpoint — _amended 2026-07, D1/D2: one daemon now
+serves every hub project under `/p/<key>/`, and hub ops accept a role-gated `project` override:
+stewards any project or `_team`, PM `_team` only, delivery actors still refused server-side_),
+and **§16 secrets/localhost-only** (binds
 127.0.0.1 only; secrets live in env, referenced by name, read server-side; the SoR holds no
 plaintext credential). The phased build is in `docs/design/daemon-multicli-repositioning.md`.
 
@@ -101,7 +108,8 @@ the Claude plugin) unbroken byte-for-byte. **Full design + critique-folded decis
 
 **Hard invariants (transport-independent, every phase):** §17 firewall (no agent auto-edits a
 SKILL/conventions/plugin/code file — structural changes are operator-committed proposals);
-§2 isolation (one daemon = one pinned project, no cross-project endpoint); §16 (binds 127.0.0.1
+§2 isolation (one daemon = one pinned project, no cross-project endpoint — see the D1/D2
+amendment in the Vision above); §16 (binds 127.0.0.1
 only; secrets in env by name); identity is **cooperative, not anti-spoof** on one host (honest);
 every mutating op-API endpoint passes the `writeOriginOk` CSRF/DNS-rebind guard first. Honest
 caveat: `doc.publish` over the op API becomes a cooperative (claim-based) gate vs today's
@@ -114,7 +122,7 @@ Supporting goals (all in scope this milestone):
   better dedupe/blocked handling across the agent SKILLs. (Edits to SKILL/conventions files
   hit the §17 self-edit boundary and stay human-gated — drafted as proposals.)
 - **Operator-facing polish & docs** — onboarding (`init`), `RUNNING.md`, README accuracy
-  (currently reads v0.15.0 while git is 0.19.2), examples, and error messages.
+  (read v0.15.0 while git was 0.19.2 when this was recorded), examples, and error messages.
 - **Broaden portability** — more CLIs / backends / integrations (Linear mirror, Lark/Slack
   channel, Codex) certified and documented.
 
@@ -140,12 +148,16 @@ Supporting goals (all in scope this milestone):
   New installs start from `dev-loop team init`; `dev-loop.json` is the source of truth.
 - **Main surfaces / modules:** `skills/` agent and operator skills; `references/` shared specs
   (`conventions.md`, `config-schema.md`, `codex-integration.md`); `hub/` — the `node:sqlite`
-  MCP/service backend, **1.0.0** (`hub/package.json`), with the full npm test suite; `docs/`
+  service backend + `dev-loop` CLI, **1.2.0 line** (see `CHANGELOG.md`), with the full npm test
+  suite; `docs/`
   for architecture, running, portability, daemon, design records, and reviews; `config/` for
   MCP templates and example workspace config.
-- **Coordination backends (§18/§27):** `linear` and `service` are the current 1.0 paths. The
-  service hub stores state under `<workspace>/.dev-loop/`, exposes the localhost web UI, and can
-  mirror to Linear.
+- **Coordination backends (§18/§27):** `linear` and `service` are the current 1.x paths. The
+  service hub stores state under `<workspace>/.dev-loop/`, exposes the multi-project localhost
+  web UI (`/p/<key>/` + the docs pages), can
+  mirror to Linear (tickets + published docs, with the comment→intake poller), and is reached by
+  agents through the `dev-loop` CLI by default (`hub.agentInterface`; MCP is the sibling +
+  rollback).
 - **How it runs:** the scheduler **`dev-loop run`** fires stateless-per-fire agents with
   per-agent coding CLI, model, effort, and cadence resolved from `dev-loop.json`. Agent View rows
   share the same `next-project` rotation picker.
@@ -154,6 +166,13 @@ Supporting goals (all in scope this milestone):
 
 (operator, 2026-07-05: Current state re-synced to the 1.0 workspace release. For the
 always-current user-facing picture, see README.md + CHANGELOG.md.)
+
+(operator, 2026-07-12: Current state re-synced to the **1.2.0** release — the 2026-07 full
+review, decisions D1–D11 in `docs/design/2026-07-review-decisions.md`: CLI-first agent
+interface (D8/D9; claude + codex certified), guided `dev-loop init` wizard, multi-project web
+UI + docs system (D2/D3), role-gated hub `project` override (D1), PM investigation protocol +
+Linear doc mirror (D4/D5), doc archiving (D6), and the uniform SKILL template with enforced
+context budgets.)
 
 ## Personas
 
@@ -190,6 +209,13 @@ always-current user-facing picture, see README.md + CHANGELOG.md.)
 - **(operator, 2026-07-02) DL-78 reconcile.** The 2026-06-27 decline of model-tiering (DL-78) was superseded by the operator-directed per-agent codingAgent/model/effort config shipped in a11f9e5 (2026-07-01). Recorded retroactively so the ledger and the shipped scheduler agree.
 - **(operator, 2026-07-02) DL-2 amendment — the daemon web UI may carry a tiny inline script.** The original "no client JS, no bundler" doctrine (DL-2, 2026-06-23) is relaxed to permit a single ~15-line inline progressive-enhancement script for SSE live updates (`GET /api/stream`): the board/activity pages now refresh themselves as agents mutate the ledger, degrading to a static page when JS is off. Still no bundler, no dependency, no external script; a CSP (`connect-src 'self'`) bounds it. The UI's whole point is watching an autonomous loop — a dead page that needs manual F5 defeated that.
 - **(operator, 2026-07-02) Linear-parity scope — what we build, and what we deliberately skip.** BUILT (the features that serve agents-coordinating + an operator-reviewing): relation-aware querying (`list_issues relatedTo:<id>` + `get_issue.referencedBy`), per-ticket history (`list_events ticketId:`), incremental reads (`updatedSince`), and native Linear priority on the mirror. DELIBERATELY SKIPPED (a queryable data model, not a project-management app) — do NOT re-propose these on the rotating competitive-parity lens without a new concrete need: **cycles/sprints + estimates** (agents fire on cadence, not sprint economics; `/activity` accept-rate + cycle-time are the value metrics), **due dates** (the DL-89 WIP-aging flags supersede), **milestones/initiatives** (the roadmap doc-kind covers), **saved views** (URL filters suffice), **reactions/threads** (agents coordinate via flat comments), **attachments** (the §22 reports tree is the artifact store), **SLAs** (Ops cadence + the DL-76 no-progress breaker). DEFERRED (real value, not yet built): a default `list_issues` limit + summary-field mode (a behavior change needing SKILL/§10 coordination), and comment-body search.
+- **(operator, 2026-07-10) The 2026-07 full review → 1.2.0.** Six-dimension design review; every
+  decision recorded as **D1–D11 in `docs/design/2026-07-review-decisions.md`** (the durable
+  record — this line is a pointer, not the ledger). Shipped as **1.2.0** (PR #21): CLI-first
+  agent interface (D8/D9), `dev-loop init` wizard, multi-project web UI + docs system (D2/D3),
+  hub `project` override (D1), investigation protocol + doc mirror (D4/D5), retention/archive
+  (D6), SKILL template + context budgets. Repo hygiene (D11): `examples/` + `evaluation.xlsx`
+  moved out to `~/workspace/jinko/writing-loop/`.
 
 ## Candidate ideas
 
