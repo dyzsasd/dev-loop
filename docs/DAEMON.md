@@ -2,7 +2,9 @@
 
 > **Status:** a persistent localhost HTTP service over the existing hub system-of-record
 > (`node:sqlite`). It does **not** change the agents: they stay stateless-per-fire and keep
-> coordinating through the **MCP server** (`hub/src/server.ts`). The daemon is an additive
+> coordinating through the hub **op layer** — the `dev-loop` CLI write verbs by default since
+> the D8 interface flip, or the **MCP server** (`hub/src/server.ts`) on the `"mcp"`
+> interface / the shim. The daemon is an additive
 > **human-facing surface** — a web UI + read API (DL-2), the roadmap doc editor (DL-3), reports
 > (DL-10), an activity view (DL-17), board filters/swimlanes (DL-20/DL-31), and an **opt-in,
 > off-by-default human web-write** path for tickets (DL-29). It is **not** a new coordinator
@@ -41,9 +43,12 @@ read connection.
   from the stdio `server.ts` publish gate, which reads the daemon **process's own** `DEVLOOP_ACTOR`. Same
   single-host cooperative attribution, **not** anti-spoof (§16); revisited only under the deferred remote/auth
   phase. (Full op-API config + reference: DL-58.)
-- **One project.** Like the MCP server, it serves exactly the project named by `DEVLOOP_PROJECT`
-  and refuses to start against an unknown/phantom project (the §2 firewall is structural). The one
-  role-gated exception is the D1 **`project` override** on the agent op-API (below): stewards
+- **One boot project; per-request `/p/<key>/` routing for the web UI.** The daemon boots pinned
+  to the project named by `DEVLOOP_PROJECT` and refuses to start against an unknown/phantom
+  project (the §2 firewall is structural). Since D2 the **human web pages** additionally serve
+  every hub project under a `/p/<key>/` prefix (resolved per request — see *Read endpoints*);
+  **bare paths and the JSON/op API stay boot-scoped**. The one role-gated exception is the D1
+  **`project` override** on the agent op-API (below): stewards
   (sweep/ops/reflect/communication) may name any existing project key or `_team`, PM may name
   `_team` only, every other actor is refused (`403 FORBIDDEN`) — enforced server-side at the shared
   `agentOp()` dispatch choke point, identically on both transports.
@@ -81,9 +86,10 @@ Environment (same contract as the MCP server, `docs/RUNNING.md`):
 | `DEVLOOP_RUN_DIR` | dir for the raw `daemon up` runfile + log (DL-41) | the hub DB's dir |
 
 The raw daemon refuses to serve a project that has not been seeded. In the 1.x workspace flow,
-`/dev-loop:add-project` performs that backend sync before writing project config. The lower-level
-`dev-loop seed <key> "<name>" <PREFIX>` and `dev-loop init-service ...` commands are compatibility
-tools for tests and debugging.
+`dev-loop team add-project` **auto-seeds** the hub row on a `service` backend (the
+`/dev-loop:add-project` skill performs the same backend sync) before writing project config. The
+lower-level `dev-loop seed <key> "<name>" <PREFIX>` and `dev-loop init-service ...` commands are
+compatibility tools for tests and debugging.
 
 ### Raw lifecycle — `daemon up | up-all | down | status`
 
@@ -154,7 +160,7 @@ index page subscribes to) watches the whole ledger.
 | `GET /` | the **project index** (or the single-real-project `302` → `/p/<key>/`, preserving any filter query) |
 | `GET /p/<key>/` | the **web UI** board (DL-2): server-rendered HTML, tickets in columns by state. Filters (DL-20): `?state=`, `?type=`, `?label=`, `?assignee=`, `?q=` (free-text over id/title); swimlanes (DL-31): `?group=assignee` |
 | `GET [/p/<key>]/ticket/:id` | the **web UI** ticket detail (DL-2): HTML with the full description + comments; friendly `404` HTML if unknown |
-| `GET [/p/<key>]/docs` | the **docs index** (F4/D3): every hub doc — kind, title, published-vs-latest badge (`published vN` · `draft vM pending`), latest author, updated-at |
+| `GET [/p/<key>]/docs` | the **docs index** (F4/D3): the hub docs — kind, title, published-vs-latest badge (`published vN` · `draft vM pending`), latest author, updated-at. **Archived** design docs are hidden by default (D6): `?archived=1` shows them badged, and a footer names the hidden count |
 | `GET [/p/<key>]/doc/:slug` | the **doc viewer** (kind-agnostic): rendered markdown of the latest version (`?v=N` picks an exact one), status/version meta; when the DL-29 double gate is open it adds the CAS draft-edit form, and the operator additionally sees the publish button on gated kinds (`design` is never publish-gated). `/doc/<kind>` `302`s to the kind's canonical slug |
 | `GET [/p/<key>]/doc/:slug/history` | the **version ledger**: status/author/summary/CAS-base/date per version, with view + diff-vs-previous links |
 | `GET [/p/<key>]/doc/:slug/diff?from=N&to=N` | the **unified diff** between two versions (server-rendered, fully escaped) |
@@ -190,13 +196,15 @@ their published version, every project page's header shows an **`N drafts pendin
 ## Agent op-API — `POST /api/op/<op>` (DL-43/P2, opt-in)
 
 The **agent** write/read surface (distinct from the human web-write above): the thin stdio MCP shim
-(`hub/src/shim.ts`) proxies its tool calls here instead of opening `hub.db` directly, so all writes
-serialize through the one daemon process (the P3 single-writer path). **Default-off** — absent the
-opt-in it returns `404`, byte-identical to a pure read surface.
+(`hub/src/shim.ts`) — and, since D8, the `dev-loop` CLI write verbs, both through the shared
+`hub/src/op-client.ts` — proxy their tool calls here instead of opening `hub.db` directly, so all
+writes serialize through the one daemon process (the P3 single-writer path). **Default-off** — absent
+the opt-in it returns `404`, byte-identical to a pure read surface.
 
-- **Enable:** set the project's `settings_json.hub.transport = "daemon"` (read **fresh per request**),
-  then point the MCP `args` at `hub/src/shim.ts` instead of `hub/src/server.ts` (same per-pane
-  `DEVLOOP_ACTOR`). See `references/config-schema.md` (`hub.transport`).
+- **Enable:** set the project's `settings_json.hub.transport = "daemon"` (read **fresh per request/
+  command**). The CLI write verbs pick it up automatically; for an `"mcp"`-interface fire, point the
+  MCP `args` at `hub/src/shim.ts` instead of `hub/src/server.ts` (same per-pane `DEVLOOP_ACTOR`).
+  Reference: `docs/design/daemon-multicli-repositioning.md` (`hub.transport`, DL-58).
 - **Shape:** `POST /api/op/<op>` with a JSON body; `<op>` mirrors the MCP tools 1:1 — the shim is a
   **100% `server.ts` drop-in** (all 25 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
   `list_comments`/`whoami` · `doc.*`/`list_events` · `channel.*` · `mirror.*` ·
@@ -221,8 +229,8 @@ opt-in it returns `404`, byte-identical to a pure read surface.
 Off by default — with no config the `POST /ticket*` routes are absent (they `405`, byte-identical to a
 pure read surface) and the forms don't render. To enable, an **operator** sets the project's
 `settings_json.humanWrite.enabled` to `true` (the only field this block reads). It is **operator-set
-via seed / CLI / git — never by an agent** (design §11): the hub agents coordinate through the MCP
-server, and the human web-write path is for a human at the localhost board. The flag is read **fresh
+via seed / CLI / git — never by an agent** (design §11): the hub agents coordinate through the
+CLI/op layer, and the human web-write path is for a human at the localhost board. The flag is read **fresh
 per request**, so toggling it takes effect without a restart. Writes are attributed to the daemon's
 `DEVLOOP_ACTOR` (default `operator`); comment/description bodies are stored **verbatim** (operator
 DATA — no command-verb parser, no channel scrub), and every interpolated value is HTML-escaped at render.

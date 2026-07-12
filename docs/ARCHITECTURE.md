@@ -35,14 +35,15 @@ Three rules stay true everywhere:
 dev-loop is three layers; the `npm i -g @dyzsasd/dev-loop` package ships all three:
 
 1. **Interface — the `dev-loop` CLI + the MCP.** The operation surface. The `dev-loop` command
-   (`team` · `run` · `hub` · `doctor` · `metrics` · `notify` · …) is how *you* drive setup and
-   scheduling — and, since the CLI-first flip (D8), how the *agents* read and write the hub board
+   (`init` · `team` · `run` · `hub` · `doctor` · `metrics` · `notify` · …) is how *you* drive setup
+   and scheduling — and, since the CLI-first flip (D8), how the *agents* read and write the hub board
    by default too (the `dev-loop` write verbs, identity from the fire env). The `dev-loop-hub`
    **MCP** server remains a sibling thin client over the same op layer — the transport for
-   Linear-backend agents, `"mcp"`-interface fires (the `hub.agentInterface` rollback switch), and
-   external MCP hosts. Low-level
+   `"mcp"`-interface fires (the `hub.agentInterface` rollback switch) and external MCP hosts;
+   Linear-backend agents keep coordinating through the **Linear** MCP. Low-level
    commands such as `serve`, `daemon`, `seed`, `init-service`, and `mcp-merge` remain available for
-   compatibility/debugging, but the 1.x operator path starts with `team init`.
+   compatibility/debugging, but the 1.x operator path starts with the `dev-loop init` guided wizard
+   (`team init` and friends are its composable pieces).
 2. **Hub — the backend service.** A local system-of-record over `node:sqlite` (the `service`
    backend) that powers the **ticket system** and the **document system** (strategy/roadmap/design,
    versioned), and maintains the **per-project namespace** — each project's board, actors, and docs
@@ -69,7 +70,9 @@ dev-loop is three layers; the `npm i -g @dyzsasd/dev-loop` package ships all thr
   are proposed for a human to apply.
 - **You steer by reviewing.** Agents write daily, weekly, and monthly reports. Add a **点评**
   (critique) next to one, and the agent distills it into a `lessons.md` rule it follows from
-  then on.
+  then on. For a **direction change**, file a `needs-pm` + `investigation` ticket: PM
+  investigates, proposes the doc change on the ticket (a hub draft or a unified diff), and only
+  your version-bound approval publishes it — agents pick the new direction up on the next fire.
 
 ---
 
@@ -113,7 +116,8 @@ pair by default. Use `--agents legacy` only for the old single-Dev loop.
 
 | Command | What it does |
 |---|---|
-| **`dev-loop team init`** | Pure CLI workspace creation. Writes `dev-loop.json` and workspace state scaffolding; does not call an LLM and does not touch Linear/the hub. |
+| **`dev-loop init`** | The guided, resumable setup wizard — the primary path. Composes `team init` → the first `add-project` (auto-seeded on `service`) → an offered `add-repo --detect` → the Claude permissions entry, and ends with doctor's `NEXT:` line; `--yes` yields a runnable service workspace non-interactively. |
+| **`dev-loop team init`** | Pure CLI workspace creation. Writes `dev-loop.json` and workspace state scaffolding; does not call an LLM and does not touch Linear (on a `service` backend it initializes `hub.db` and seeds the `_team` intake row). |
 | **`/dev-loop:add-project`** | Operator-present coding-CLI skill. Finds or creates the backend project, ensures labels, scaffolds the strategy doc, interviews project settings, and writes the validated project config. |
 | **`/dev-loop:add-repo`** | Operator-present coding-CLI skill. Clones/registers a repo, detects build/CI/deploy/health facts, appends current-state notes, and writes the validated repo config. |
 
@@ -150,10 +154,12 @@ the senior fix *also* fails → `fix-exhausted` → **`Human-Blocked`** (you). T
 tries first; the expensive tier is the safety net; you are the terminal.
 
 ### 4. Onboarding — workspace → project → repos
-Wire a product into the loop once: create the workspace with `dev-loop team init`, then run
-`/dev-loop:add-project` and `/dev-loop:add-repo` from a coding CLI with the dev-loop skills
-available. The skills inspect the code, provision labels/project, scaffold the strategy doc,
-record build/deploy/probe facts, and end with `dev-loop doctor` before you launch `dev-loop run`.
+Wire a product into the loop once: run **`dev-loop init`** — the guided, resumable wizard
+composes `team init`, the first `add-project` (auto-seeded on `service`), an offered
+`add-repo --detect`, and the Claude permissions entry, ending with doctor's `NEXT:` line.
+The operator-present `/dev-loop:add-project` + `/dev-loop:add-repo` skills remain the
+LLM-assisted path (they inspect code, interview you about build/deploy details, and do the
+backend sync — the plugin/MCP setup they need is only required for the `linear` backend).
 
 ### 5. Self-evolution — report → 点评 → lesson → behavior
 Every agent writes reports; Reflect distills recurring patterns into `lessons.md`; you drop a
@@ -226,7 +232,7 @@ compatibility and historical context.
 | Backend | What it is | Gives you |
 |---|---|---|
 | **`linear`** *(default)* | Coordinate through the Linear MCP | Cloud, team-visible, the Linear app as UI |
-| **`service`** | A local **hub** — an MCP system-of-record over `node:sqlite` | **Real per-agent identity**, a localhost **web UI**, versioned operator-published docs, the one-way Linear mirror, CLI-portability |
+| **`service`** | A local **hub** — a system-of-record over `node:sqlite`, reached through the `dev-loop` CLI by default (MCP sibling) | **Real per-agent identity**, a localhost multi-project **web UI**, versioned operator-published docs, the one-way Linear mirror, CLI-portability |
 | **`local`** *(legacy compatibility)* | A machine-local markdown file board in the data dir | Zero-cloud, minimal, no web UI/identity; not recommended for new workspaces |
 
 The **work plane** (states, transitions, responsibilities, and the agent loop) is identical
@@ -300,10 +306,12 @@ config is needed.
 
 ## Status
 
-**1.0.0.** Nine launchable agents — **PM / QA / senior-dev / junior-dev / Sweep / Reflect /
+**1.2.0.** Nine launchable agents — **PM / QA / senior-dev / junior-dev / Sweep / Reflect /
 Ops / Architect / Communication** — run under the workspace model: one `dev-loop.json`
 workspace, one team, one backend, and real repos cloned inside the workspace. Coordination is
 backend-pluggable between **Linear** and the **local service hub** (`node:sqlite` SoR with
-per-agent identity, localhost web UI, versioned docs, Linear mirror, and CLI portability).
+per-agent identity, a multi-project localhost web UI + docs system, Linear mirror, and CLI
+portability); on the hub, agents read and write through the `dev-loop` CLI by default
+(claude and codex both certified — `hub.agentInterface` is the rollback switch).
 Autonomy for push/deploy remains opt-in and gated on a green build. Full history in
 [`CHANGELOG.md`](../CHANGELOG.md).

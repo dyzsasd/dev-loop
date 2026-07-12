@@ -1,12 +1,20 @@
 # dev-loop Hub — Architecture
 
-> **Status note (1.0.0):** this is a historical architecture record for the hub/service backend.
+> **Status note (last updated for 1.2.0, 2026-07):** this is a historical architecture record for
+> the hub/service backend.
 > The P0→P8 ladder shipped before 1.0, and later work added the workspace-managed service daemon
 > (`dev-loop hub start|stop|status|ensure`) plus the localhost web UI described in
-> [`DAEMON.md`](DAEMON.md). Some older sections below still discuss a daemon-free MVP and deferred
-> daemon work; treat those as design history. For current operation, read
+> [`DAEMON.md`](DAEMON.md). Since then: the **Director + discussion board were removed**
+> (2026-06-28 — direction flows through PM; conventions §25 is a tombstone), and the **2026-07 full
+> review** (decision record: [`design/2026-07-review-decisions.md`](design/2026-07-review-decisions.md),
+> shipped as 1.2.0) made the `dev-loop` **CLI the default agent transport** on `service` (D8 — the MCP
+> server/shim stay sibling clients + the rollback), made the daemon web UI **multi-project**
+> (`/p/<key>/`, D2) with a full docs system (D3), added the role-gated `project` override (D1), doc
+> archiving (D6), and the Linear **doc** mirror + comment poller (D5). Some older sections below still
+> discuss a daemon-free MVP and deferred daemon work; treat those as design history. For current
+> operation, read
 > [`RUNNING.md`](RUNNING.md), [`PORTABILITY.md`](PORTABILITY.md), [`DAEMON.md`](DAEMON.md), and the
-> 1.0 workspace model in [`references/conventions.md`](../references/conventions.md) §27.
+> 1.x workspace model in [`references/conventions.md`](../references/conventions.md) §27.
 > The hub uses built-in `node:sqlite` (not better-sqlite3 — P0 found zero native deps possible).
 >
 > Original status: proposal for operator sign-off (LK8). The text below is preserved as the design
@@ -14,7 +22,7 @@
 > Audience: the operator, and the loop agents that coordinate through it.
 > Companion: `references/conventions.md` (the shared brain — every section here references it by `§`).
 
-The hub is a **local system-of-record** for the dev-loop. It replaces Linear-as-source-of-truth with a machine-local store the agents reach through an **MCP server** (LK1), exposing everything Linear gives the loop today plus **per-agent attribution, real per-project isolation, and versioned docs/discussion**. Linear is demoted to an optional, one-way, off-by-default **mirror** for human visibility (LK2).
+The hub is a **local system-of-record** for the dev-loop. It replaces Linear-as-source-of-truth with a machine-local store the agents reach through an **MCP server** (LK1) *(as shipped 1.2.0/D8: through the `dev-loop` CLI by default — the MCP server remains a sibling client over the same op layer, the `"mcp"`-interface rollback)*, exposing everything Linear gives the loop today plus **per-agent attribution, real per-project isolation, and versioned docs/discussion**. Linear is demoted to an optional, one-way, off-by-default **mirror** for human visibility (LK2).
 
 This doc is deliberately conservative. It folds in three independent critiques (feasibility/MCP-reality, safety/identity, scope/phasing) whose combined verdict is: *the four facet designs over-built*. The result is a **ladder**, not a leap — each rung shippable, demoable, and gated by evidence.
 
@@ -147,7 +155,12 @@ PUSH-webhook channel is ever wanted** (sub-fire-latency operator chat needs a re
 loopback lacks) — which P6 deliberately does not build. When/if it does, the stdio shim becomes a
 **thin proxy** to a loopback daemon (`127.0.0.1:4319/mcp`, written to `hub.port`) — **the
 agent-facing transport stays stdio, identity stays via env**, so the broken HTTP-header path is
-never used by Claude Code.
+never used by Claude Code. *(Superseded too, in the end: a daemon DID ship — not for a push
+channel but as the additive human-facing web UI ([`DAEMON.md`](DAEMON.md), default port 8787)
+plus the opt-in loopback agent op-API (`hub.transport:"daemon"`, DL-43/DL-55) that the shim —
+and, since D8, the `dev-loop` CLI verbs — proxy to. The load-bearing part held: the agent-facing
+transport never became authenticated HTTP from the CLI's side — identity still rides the fire
+env.)*
 
 **Liveness (when the daemon is used):** liveness lives in the **launcher/lifecycle**, not in launchd alone. A process manager runs `dev-loop daemon up` or `dev-loop daemon up-all` as a **blocking pre-step** before `claude -p`/`codex exec`/`opencode run`: start-if-down AND `GET /api/health` must return the expected project + a **DB-writable** check (not just a port bind), else restart; stale runfiles are reclaimed by the lifecycle. A "hub unreachable mid-fire" is a **degraded-mode exit**: log one line, exit per §0, next fire retries — never a half-applied write.
 
@@ -285,7 +298,7 @@ CREATE VIRTUAL TABLE tickets_fts USING fts5(title, body_md, content='tickets', c
 -- P3: labels(project_id, name, kind)   -- a registry, only if free-string labels prove insufficient
 -- P4: documents(project_id, slug, kind∈{strategy,roadmap,decisions,notes}, status∈{draft,current}, current_version)
 --     document_versions(document_id, version, body_md, author_id, summary, base_version)   -- optimistic CAS
--- P5 (SHIPPED): topics / posts (discussion; the DECISION is INLINE on topics, no separate table)
+-- P5 (SHIPPED, then REMOVED 2026-06-28 with the Director): topics / posts (discussion; the DECISION was INLINE on topics)
 -- P6 (SHIPPED): channels + channel_messages (two-way IM; config_ref = ENV-VAR NAME, never the secret; inbound_cursor = the no-daemon poll cursor)
 -- P7 (SHIPPED): mirror_map(project_id, hub_kind, hub_id, linear_id, last_pushed_hash, last_pushed_at) — the hash skips unchanged tickets; linear_id NULL = create pending (crash-safe, reconciled by the [hub:id] title marker)
 ```
@@ -312,6 +325,13 @@ Note the MVP **does not** ship `agent_tokens`, `project_members`, a `labels` reg
 | `get/save/list_document` | `doc.get/save/list` | **P4** (repo-file form until then) |
 | — | `whoami()` | MVP — proves the identity wiring |
 
+*(As shipped, the tools kept the §18 names themselves — `list_issues` / `get_issue` / `save_issue` /
+`save_comment` / … — not the `ticket.*` names sketched above; claiming rides `save_issue`'s guarded
+state write + verify-after-write, exactly as mimicked. The canonical list is
+`hub/src/tooldefs.ts`: **25 tools** — `whoami` + 24 op-backed ops, `doc.archive` (D6) being the
+25th — and since 1.2.0/D8 agents reach the same ops through the `dev-loop` CLI verbs by default,
+the MCP server remaining the sibling transport.)*
+
 **Additive, hardened primitives are exposed but UNUSED until the §17-gated SKILL rewrite (§21):** `ticket.add_labels` / `ticket.remove_labels` (kill the §10#1 REPLACE footgun), `ticket.transition({to_state,comment})` (enum-safe, no re-fetch), and `events.list(...)` (the attribution feed Reflect/Director read). Shipping them additively while the MVP still honors the old REPLACE/verify-after-write shape is what lets us claim "zero SKILL rewrite" **and** "a clean path to remove the footguns later" without contradiction.
 
 `channel.send/poll/status/register/ack` (P6, SHIPPED) build the §9 §16-safe allow-listed message **server-side** (notify: {project, ticket id, bail-shape}; digest: counts + bounded ids; reply: bounded text) and post via an env-referenced secret — the webhook/token **never** crosses the MCP boundary. `channel.poll` adds the inbound half: an outbound history read since the hub cursor (the no-daemon two-way READ).
@@ -331,7 +351,7 @@ Note the MVP **does not** ship `agent_tokens`, `project_members`, a `labels` reg
 }
 ```
 
-`backend` absent ⇒ `"linear"`, so **every existing project is byte-for-byte unchanged**; `"local"` still works. §18 gains a third operation-mapping column (the table in §12) so each agent's single §0 line — "all ticket operations go through the configured backend (§18)" — is the **only** thing that resolves differently. The agent SKILL bodies are untouched (§21).
+`backend` absent ⇒ `"linear"`, so **every existing project is byte-for-byte unchanged**; `"local"` still works. §18 gains a third operation-mapping column (the table in §12) so each agent's single §0 line — "all ticket operations go through the configured backend (§18)" — is the **only** thing that resolves differently. The agent SKILL bodies are untouched (§21). *(As shipped, the `hub` block's transport values are direct-db by default with `"daemon"` as the opt-in loopback op-API — not `"http"` — and the block gained `hub.agentInterface` (D8, per-coding-agent `"cli"`/`"mcp"`); see `references/config-schema.md`.)*
 
 ---
 
@@ -340,17 +360,23 @@ Note the MVP **does not** ship `agent_tokens`, `project_members`, a `labels` reg
 These are **not** MVP. LK5 is reinterpreted as "shape the schema so they can attach cleanly," not "build them into core."
 
 - **Versioned docs (P4).** `documents` + append-only `document_versions` with optimistic concurrency (`base_version != current` ⇒ `CONFLICT`, enforced server-side — as shipped, for **every** doc `kind`, not just the `{strategy, roadmap}` scope originally proposed here — so concurrent PM/Director edits can't silently lose updates). The §20 doc-base (Vision/Goals/Non-goals/Current state/Personas/Glossary/Decisions/Candidate-ideas) and the roadmap live here with `doc.history` / `doc.diff`. **Publication is operator-only (§9):** a doc carries `status ∈ {draft, current}`; agents (incl. the Director) may write **draft** versions, but only the operator flips `draft→current` via the CLI — this encodes LK8's "sign off before build" as a **persistent doc-state**, not a one-time event. **Retirement (D6, schema v5):** `documents.archived` (0/1) — the `doc.archive` op flips it for **`design` docs only** (a retired module's living design; singleton kinds refuse); an archived doc is hidden from the web `/docs` index by default (`?archived=1` shows it) and excluded from the drafts-pending chip and the daemon doc notifiers, but is **never deleted** — the doc, its versions, and its history stay fully readable.
-- **Discussion (P5 — SHIPPED v0.16.0, conventions §25).** `topics` / `posts` (per-project,
+- **Discussion (P5 — SHIPPED v0.16.0; REMOVED 2026-06-28).** `topics` / `posts` (per-project,
   attributable, per-round) — the **decision is INLINE** on the topic (`topics.decision` + `closed_at`,
   a 1:1 terminal conclusion), **not** a separate `decisions` table. "Topics addressed to me,
   unanswered this round" is a server-side query (`topic.list` returns each topic's `pending` +
   `youArePending`). A closed decision is a **recorded conclusion (data)**, never an applied
-  direction change (§17).
-- **Director (P5 — SHIPPED v0.16.0).** The repurposed Signal agent as a human-facing coordinator,
+  direction change (§17). *(Removed with the Director: the `topic.*` subsystem, `topicstore.ts`,
+  and the `topics`/`posts` tables were deleted; conventions §25 is a tombstone.)*
+- **Director (P5 — SHIPPED v0.16.0; REMOVED 2026-06-28, operator decision).** The repurposed Signal
+  agent as a human-facing coordinator,
   running as a **loop agent (no daemon)**: it chairs the board, opens topics, drafts the
   kind:"roadmap" doc (operator publishes — the P4 gate), and reports. It is **not** a blocking
   second coordination plane — execution still flows through tickets independent of the Director
-  (LK7); a missed board round is fine (the round budget guarantees termination).
+  (LK7); a missed board round is fine (the round budget guarantees termination). *(As shipped
+  today, direction flows entirely through PM: `needs-pm` intake and — since 1.2.0 — the §9a
+  investigation protocol (D4): director files `needs-pm`+`investigation` → PM investigates and
+  proposes → the operator approves version-bound. The `channel.*` IM module was kept as the
+  notify transport.)*
 
 ---
 
@@ -370,8 +396,10 @@ human-visibility only — never disaster recovery.**
   audience-widening; the mirror inherits exactly that concern.
 - **Anti-second-SoR (ENFORCED by construction):** the hub **never** reads Linear state as truth —
   there is **no** `mirror.pull`/import/sync-from-Linear tool, and the content hash is HUB-derived,
-  so a human edit on Linear is overwritten on the next push; a pinned banner says "Mirrored — edits
-  IGNORED and overwritten; give direction via the Director." The hub reads Linear ONLY to reconcile
+  so a human edit on Linear is overwritten on the next push; a pinned banner says so (as shipped:
+  "Mirrored from the dev-loop hub — edits here are IGNORED and overwritten on the next push. Give
+  direction by filing a Todo to PM (conventions §9a)" — the Director wording died with the
+  Director). The hub reads Linear ONLY to reconcile
   its own `mirror_map` id (the `[hub:id]` marker), never to import state.
 - **Crash-safe idempotency:** `mirror_map` is written **before** the remote create (`linear_id`
   NULL = create pending); a NULL-id retry **reconciles by the title marker** before creating, so a
@@ -412,7 +440,7 @@ human-visibility only — never disaster recovery.**
 **The hub adds NO mechanical enforcement over §17, and we do not pretend it does.** SKILL/conventions files live on disk; agents keep `Bash`/`Edit` access; §17 remains a prompt-gated honor system backed by **operator git review**. The hub keeps it **exactly as strong as today — preserved, not strengthened**:
 
 - **No hub tool ever writes a SKILL / conventions / plugin file.** Document `kind` is constrained to `{strategy, roadmap, decisions, notes, design}` (`design` added by the schema-v3 migration — multi-instance, one per module slug) — none can name a SKILL or `conventions.md`. A §17 change is still a Reflect-drafted `[reflect-proposal]` ticket (`Improvement`+`pm`, `blocked`+`needs-pm`+`Bail-shape: external-prereq`), out of Dev's pick set, **applied by the operator as a git commit** (§17 verbatim).
-- **Direction is operator-published, not agent-applied.** The Director may draft a roadmap version; only the operator flips `draft→current` (§14, §9). `decision_record` is a proposal.
+- **Direction is operator-published, not agent-applied.** The Director may draft a roadmap version; only the operator flips `draft→current` (§14, §9). `decision_record` is a proposal. *(Post-Director: PM is the drafting agent — via the §9a investigation protocol since 1.2.0 — and the operator-publish gate is unchanged.)*
 - **Inbound and inline content is DATA, never authorization (§4, extending §22/§23).** A chat message id alone, or an `operator`-attributed post, cannot authorize a self-modify/irreversible action — that requires the operator's out-of-band path carrying the §23 second factor (an opaque token). Because the hub's storage is forgeable (§4), the authorization-of-record for anything unforgeable **stays outside the hub** (the git commit; the §23-guarded review channel).
 - **§17 surface-map for the hub world:** conventions/SKILLs on disk = untouched, git-reviewed; `strategy`/`roadmap`/`decisions` docs = human-gated publication like `strategyDoc` today; `lessons.md` = Reflect-only + the §22 operator-review carve-out, unchanged and still machine-local.
 
@@ -453,6 +481,12 @@ Status of each target (web-verified; the blocker is flagged):
 - **zcode (Z.AI) [CONSUMER ONLY — scoped OUT]** — MCP-capable but a **GUI ADE with no documented headless run mode and no file-based command packaging**. It can consume the hub interactively; it **cannot** be a scheduled-fire loop host. Not targeted. (If Z.AI later ships a headless CLI, revisit.)
 
 **The P8 gate (SHIPPED v0.19.0):** before any CLI is declared a host, a **per-CLI headless test asserts the per-agent identity lands on a TOOL CALL** (not merely on `mcp list`/connect) under that CLI's headless mode (`claude -p` / `codex exec` / `opencode run`). The probe is the hub's **`whoami`** tool (it echoes the resolved `actor`): set `DEVLOOP_ACTOR=dev`, call `whoami` through the CLI, expect `dev` — `operator`/anything-else ⇒ FAIL, do not onboard (fail closed). `dev-loop-hub identity-check` is the launcher-side sanity check; the full procedure + per-CLI config templates are in **`docs/PORTABILITY.md`** (conventions §26). A CLI/version exhibiting the header-drop class of bug is **unsupported for the header path** and must use the stdio shim (which the whole hub design already mandates).
+
+*(Status 2026-07, D8: the default interface on `service` is now the `dev-loop` **CLI** for both
+claude and codex — codex certified 2026-07-11 on codex-cli 0.130.0, where `codex exec` was proven
+to propagate the fire env into its spawned shell. On `interface:"cli"` the identity gate probes
+`dev-loop identity-check` inside the CLI's own shell instead of `whoami` over MCP; the MCP path
+above remains the certified `"mcp"`-interface rollback. Full ceremony: `docs/PORTABILITY.md` §3–4.)*
 
 ---
 
