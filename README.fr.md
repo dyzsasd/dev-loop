@@ -102,6 +102,8 @@ rarement à la main :
 - `repos` — registre physique : chemin, commandes build/typecheck, PR merge checks,
   forme du deploy, health probes.
 - `projects` — unités de livraison qui référencent des repos : strategy doc, test environment,
+  `intake.mode` (`autonomous` par défaut ; `passive` = le PM n'origine plus rien et ne répond
+  qu'aux demandes explicites `needs-pm` — vérification et grooming continuent),
   `intake.todoDepthCap` (profondeur de la file engagée que le PM maintient, 10 par défaut) et
   overrides de lancement par agent (`agents.pm = { model, effort, cadence }`, etc.).
 
