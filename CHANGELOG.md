@@ -3,10 +3,11 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.2.0
 
-> Must release as **1.2.0**: doctor's W10 pins `WRITE_VERBS_MIN_VERSION="1.2.0"` and
-> config-schema documents the E09 demotion as "since 1.2".
+The 2026-07 full-review release (decision record: `docs/design/2026-07-review-decisions.md`;
+PR #21). Doctor's W10 pins `WRITE_VERBS_MIN_VERSION="1.2.0"` — the CLI write verbs below are
+first certified at this version.
 
 - **refactor(skills): the uniform SKILL template + per-fire context budgets.** All 14 SKILLs
   migrated to a lean anchor-citing template (role / mission / boot / jobs / hard limits / report /
