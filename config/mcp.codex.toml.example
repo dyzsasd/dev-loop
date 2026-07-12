@@ -15,7 +15,7 @@
 # Leave DEVLOOP_ACTOR ABSENT below (the -c override supplies it per pane). VERIFY the [mcp_servers.<name>]
 # schema against your Codex version (formats drift). Confirm with the §4 gate before trusting writes.
 
-# OPT-IN daemon transport (DL-55): a 100% `serve` drop-in — the shim proxies ALL 24 server.ts tools
+# OPT-IN daemon transport (DL-55): a 100% `serve` drop-in — the shim proxies ALL 25 server.ts tools
 # through the ONE running daemon's loopback op-API instead of opening hub.db directly (identity rides
 # env → X-Devloop-Actor header); change args to ["shim"] (from ["serve"]).
 # REQUIRES the workspace hub daemon up (DL-42 auto-start, `dev-loop hub ensure`, or raw `dev-loop daemon up` for debugging) + settings_json.hub.transport=

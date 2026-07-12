@@ -415,6 +415,34 @@ ok(dTools.includes("mirror.pollComments") && !dTools.some((n: string) => /mirror
 const stratNow = (await call(docsW, "doc.get", { slug: "strat", version: "latest" })).data;
 ok(!String(stratNow.body).includes("rogue"), "D5: the Linear-side edit was NEVER imported into the hub doc (flag, don't write back)");
 
+// ═══ D5 divergence-dedupe RESET (Phase 4 nit): a push-overwrite invalidates the filed divergence ═══
+// ledger.divergence[slug] keys on the upstream content hash and was never cleared after a push
+// OVERWROTE the diverged upstream — so a human RE-APPLYING the byte-identical edit was silently never
+// re-filed. The poller now reconciles against last_pushed_at (the push side's existing record, stamped
+// on every non-skip doc push): an entry filed BEFORE the last stamping push is stale and is dropped.
+// Regression: divergence filed → push overwrites → the SAME edit re-applied → a SECOND ticket is filed.
+await call(docsW, "doc.save", { slug: "gadget", kind: "design", title: "Gadget design", body: "gadget v1", baseVersion: 0 });
+ok((await call(docsW, "mirror.push", PUSH_P)).data.docs.created === 1, "dedupe-reset setup: the gadget design doc pushed (design mirrors its latest)");
+const gadgetId = Object.entries(upstreamDocs).find(([, v]) => v.title.includes("[hub:doc:docp/gadget]"))![0];
+const gTickets = async () => (await call(docsW, "list_issues", { state: "Backlog", query: "gadget" })).data
+  .filter((t: any) => t.title.includes("Linear-side edit")).length;
+const divergedContent = upstreamDocs[gadgetId].content + "\nhuman edit KEEP-ME";
+upstreamDocs[gadgetId].content = divergedContent; // the human edit
+const rr1 = (await call(docsW, "mirror.pollComments", POLL)).data;
+ok(rr1.divergences === 1 && (await gTickets()) === 1, "dedupe-reset setup: the human edit files divergence ticket #1");
+await new Promise((r) => setTimeout(r, 5)); // the reconcile is STRICTLY-newer: last_pushed_at must postdate filedAt
+await call(docsW, "doc.save", { slug: "gadget", kind: "design", body: "gadget v2", baseVersion: 1 });
+ok((await call(docsW, "mirror.push", PUSH_P)).data.docs.updated >= 1
+  && upstreamDocs[gadgetId].content.includes("gadget v2") && !upstreamDocs[gadgetId].content.includes("KEEP-ME"),
+  "dedupe-reset setup: the v2 push OVERWRITES the diverged upstream (the human edit is gone from Linear; last_pushed_at stamped)");
+const rr2 = (await call(docsW, "mirror.pollComments", POLL)).data;
+ok(rr2.divergences === 0 && (await gTickets()) === 1,
+  "after the overwrite: upstream matches the new baseline — the stale ledger entry is DROPPED, nothing re-filed");
+upstreamDocs[gadgetId].content = divergedContent; // the BYTE-IDENTICAL re-applied edit (same upstream hash as ticket #1)
+const rr3 = (await call(docsW, "mirror.pollComments", POLL)).data;
+ok(rr3.divergences === 1 && (await gTickets()) === 2,
+  "REGRESSION (dedupe reset): the byte-identical re-applied edit files a SECOND divergence ticket — the push cleared the hash dedupe");
+
 for (const c of [dry, dryLive, sweep, beta, docsW, docsOp, docsDry, docsW2, docsOp2]) await c.close();
 mockLinear.close();
 console.log(fails === 0 ? "\nMIRROR_OK" : `\n${fails} CHECK(S) FAILED`);

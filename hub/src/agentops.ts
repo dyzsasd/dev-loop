@@ -8,7 +8,7 @@
 // channel/mirror/label families (which also reuse the shared ticketwrite/docstore/channelstore/
 // mirrorstore/labelstore) — has EXACTLY ONE definition. The old "edit both files" drift tripwire is RETIRED:
 // a change to any policy now lands in ONE place, and the differential-parity suite (test/shim.ts +
-// test/agent-api.ts, shim ≡ stdio for all 24 tools) is the structural guard against a future re-divergence.
+// test/agent-api.ts, shim ≡ stdio for all 25 tools) is the structural guard against a future re-divergence.
 //
 // Each function takes a hub connection + the caller's already-resolved+validated actor (server.ts resolves it
 // from DEVLOOP_ACTOR + the G1 phantom-actor guard; the daemon from the X-Devloop-Actor header) and returns an
@@ -29,7 +29,7 @@ import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./tic
 // (exactly as the 5 ticket ops reuse ticketwrite.ts), so both transports share one publish gate + one CAS.
 // The doc READS (doc.list/get/history/diff) + list_events are the SINGLE definition of those SELECTs — since
 // DL-69 server.ts's handlers dispatch through them (no longer a 1:1 duplicate of a server.ts copy).
-import { resolveDoc, latestVersion, docSave, docPublish, statusForDocErr, DOC_KINDS, type DocSaveArgs, type DocPublishArgs } from "./docstore.ts";
+import { resolveDoc, latestVersion, docSave, docPublish, docArchive, statusForDocErr, DOC_KINDS, type DocSaveArgs, type DocPublishArgs, type DocArchiveArgs } from "./docstore.ts";
 // DL-67 channel family — the channel register/send/poll/ack/status HANDLER logic + the DL-4 roadmap bridge are
 // reused VERBATIM from the shared, side-effect-free channelstore (exactly as the doc family reuses
 // docstore), so the op-API and the stdio server.ts can never drift. channel.send/poll are ASYNC
@@ -52,7 +52,7 @@ const okR = (body: unknown): OpResult => ({ status: 200, body });
 const errR = (status: number, error: string, extra?: Record<string, unknown>): OpResult => ({ status, body: { error, ...extra } });
 
 // The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-67) the IM channel
-// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 24 server.ts tools 1:1 (the shim is a
+// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 25 server.ts tools 1:1 (the shim is a
 // 100% drop-in). The op names are the `/api/op/<op>` path segments and the MCP tool names (dotted for the
 // doc/channel/mirror families). DL-85: they are EXACTLY TOOL_NAMES minus "whoami"
 // (the only tool answered locally per-transport, never an op) — DERIVED from the one source so there is no
@@ -62,7 +62,7 @@ export const AGENT_OPS: readonly AgentOp[] = TOOL_NAMES.filter((n): n is AgentOp
 // The MUTATING subset — the daemon applies writeOriginOk + the dry-run mode gate to exactly these (reads
 // never mutate, so they bypass both). Kept here next to AGENT_OPS so the two lists can't drift. doc.save /
 // doc.publish join the ticket writes; the doc/event reads stay read-only (parity with the read ticket ops).
-export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish",
+export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish", "doc.archive", // D6: the archived-flag flip mutates the documents row
   "channel.register", "channel.send", "channel.poll", "channel.ack", // DL-67: the 4 channel writes (register/send/poll/ack mutate the channels/channel_messages tables); channel.status stays a read (query_only)
   "mirror.push", "mirror.pollComments", "create_issue_label"]); // DL-68/D5: the 3 writes (mirror.push → mirror_map + the one-way Linear network write; mirror.pollComments → needs-pm intake tickets + the machine-local acted-ledger; create_issue_label → labels). mirror.status/list_issue_labels/get_project stay reads (query_only)
 export const isAgentOp = (s: string): s is AgentOp => (AGENT_OPS as readonly string[]).includes(s);
@@ -298,9 +298,11 @@ const docSelectorErr = (a: { slug?: unknown; kind?: unknown }): string | null =>
 
 function opDocList(db: DatabaseSync, projectId: string, a: { kind?: string }): OpResult {
   const bad = docSelectorErr(a); if (bad) return errR(400, bad);
+  // D6: `archived` rides the row (additive) so callers can see retirement state; archived docs are NOT
+  // filtered out here — doc.list is the machine registry read (the web /docs index owns the default-hide).
   return okR(a.kind
-    ? db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? AND kind=? ORDER BY kind").all(projectId, a.kind)
-    : db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? ORDER BY kind").all(projectId));
+    ? db.prepare("SELECT id,kind,slug,title,status,current_version,archived,created_by,updated_at FROM documents WHERE project_id=? AND kind=? ORDER BY kind").all(projectId, a.kind)
+    : db.prepare("SELECT id,kind,slug,title,status,current_version,archived,created_by,updated_at FROM documents WHERE project_id=? ORDER BY kind").all(projectId));
 }
 
 function opDocGet(db: DatabaseSync, projectId: string, projectKey: string, a: { slug?: string; kind?: string; version?: number | "latest" }): OpResult {
@@ -362,6 +364,16 @@ function opDocPublish(db: DatabaseSync, projectId: string, actor: string, a: Par
   if (!Number.isInteger(a.version) || (a.version as number) <= 0) return errR(400, "version must be a positive integer");
   const r = docPublish(db, projectId, actor, a as DocPublishArgs);
   return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error);
+}
+
+// `db` MUST be a WRITABLE connection (docArchive UPDATEs documents + logs a doc.archive event). The
+// design-only refusal + idempotent flip live inside docArchive (shared with server.ts) — D6 retention.
+function opDocArchive(db: DatabaseSync, projectId: string, actor: string, a: Partial<DocArchiveArgs>): OpResult {
+  // re-validate the zod shapes the stdio/shim path enforces (slug required string, archived optional boolean)
+  if (typeof a.slug !== "string") return errR(400, "slug required (a string)");
+  if (a.archived !== undefined && typeof a.archived !== "boolean") return errR(400, "archived must be a boolean");
+  const r = docArchive(db, projectId, actor, a as DocArchiveArgs);
+  return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error); // missing doc → 404; a singleton kind → 409 (kind-policy refusal, the DL-9 precedent)
 }
 
 // ─── DL-67: the IM channel family (channel.*) — thin op-API wrappers over the shared channelstore ──
@@ -523,6 +535,7 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "doc.diff": return opDocDiff(db, projectId, args as { slug?: string; kind?: string; from?: number; to?: number });
     case "doc.save": return opDocSave(db, projectId, actor, args as Partial<DocSaveArgs>);
     case "doc.publish": return opDocPublish(db, projectId, actor, args as Partial<DocPublishArgs>);
+    case "doc.archive": return opDocArchive(db, projectId, actor, args as Partial<DocArchiveArgs>);
     case "channel.register": return opChannelRegister(db, projectId, actor, args as { provider?: unknown; configRef?: unknown; secretRef?: unknown; channelRef?: unknown });
     case "channel.send": return opChannelSend(db, projectId, projectKey, actor, args as { kind?: unknown; ticketId?: unknown; bailShape?: unknown; digest?: unknown; replyTo?: unknown; text?: unknown });
     case "channel.poll": return opChannelPoll(db, projectId, projectKey, actor);

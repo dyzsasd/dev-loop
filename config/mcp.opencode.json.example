@@ -9,7 +9,7 @@
         "DEVLOOP_HUB_DB": "/ABSOLUTE/PATH/.dev-loop/hub.db"
       },
       "_DEVLOOP_PROJECT_note": "literal empty (NOT shell-expanded here) ⇒ the hub auto-resolves the project from the spawned process's cwd (DL-13); set a non-empty value to pin one explicitly, or omit the key.",
-      "_shim_note": "OPT-IN daemon transport (DL-55): a 100% `serve` drop-in — the shim proxies ALL 24 server.ts tools through the running daemon's loopback op-API instead of opening hub.db directly (identity rides env → X-Devloop-Actor header); change command to [\"dev-loop\", \"shim\"]. REQUIRES the workspace hub daemon up (`dev-loop hub ensure`; raw `dev-loop daemon up` is for debugging) + settings_json.hub.transport=\"daemon\" (DL-43).",
+      "_shim_note": "OPT-IN daemon transport (DL-55): a 100% `serve` drop-in — the shim proxies ALL 25 server.ts tools through the running daemon's loopback op-API instead of opening hub.db directly (identity rides env → X-Devloop-Actor header); change command to [\"dev-loop\", \"shim\"]. REQUIRES the workspace hub daemon up (`dev-loop hub ensure`; raw `dev-loop daemon up` is for debugging) + settings_json.hub.transport=\"daemon\" (DL-43).",
       "enabled": true
     }
   }

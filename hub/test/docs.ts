@@ -96,6 +96,27 @@ const latest = (await call(reflectR, "doc.get", { kind: "strategy", version: "la
 ok(latest.version === 2 && latest.body === "pm draft past published" && latest.status === "draft", `doc.get version:"latest" → the v2 DRAFT past the published current`);
 ok((await call(reflectR, "doc.save", { slug: "strategy", kind: "strategy", body: "reflect edit re-applied", baseVersion: 2 })).data.version === 3, "the retry with the returned latestVersion=2 SUCCEEDS (the loop converges)");
 
-for (const c of [pm, reflect, operator, beta, dq, pmR, reflectR, operatorR]) await c.close();
+// D6 retention: doc.archive flips the archived flag on RETIRED design docs — design-only, idempotent,
+// reversible (archived:false), never a delete: doc.get/doc.history stay fully readable, and doc.list
+// carries the flag (the web /docs index owns the default-hide; the machine registry read shows all).
+const dArch = await as("senior-dev", "docarch", "DA");
+await call(dArch, "doc.save", { slug: "auth", kind: "design", title: "Auth design", body: "v1 design", baseVersion: 0 });
+await call(dArch, "doc.save", { slug: "strategy", kind: "strategy", body: "north star", baseVersion: 0 });
+ok((await call(dArch, "doc.list")).data.every((d: any) => d.archived === 0), "D6: doc.list carries archived (0 by default) on every row");
+const arch = await call(dArch, "doc.archive", { slug: "auth" });
+ok(!arch.isError && arch.data.archived === true && arch.data.kind === "design", "D6: doc.archive on a design doc → archived:true");
+ok((await call(dArch, "doc.list", { kind: "design" })).data[0].archived === 1, "D6: doc.list shows the archived flag after the flip");
+ok((await call(dArch, "doc.get", { slug: "auth" })).data.body === "v1 design", "D6: an archived doc's body stays fully readable (hidden, never deleted)");
+ok((await call(dArch, "doc.history", { slug: "auth" })).data.length === 1, "D6: an archived doc's version history stays readable");
+ok(!(await call(dArch, "doc.archive", { slug: "auth" })).isError, "D6: re-archiving is idempotent (no error)");
+const singleton = await call(dArch, "doc.archive", { slug: "strategy" });
+ok(singleton.isError && /only design docs archive/.test(singleton.data.error), "D6: a singleton kind (strategy) REFUSES to archive (the living registry is never visibility-flipped)");
+ok((await call(dArch, "doc.list", { kind: "strategy" })).data[0].archived === 0, "D6: the refused singleton archive changed nothing");
+ok((await call(dArch, "doc.archive", { slug: "ghost" })).isError, "D6: doc.archive on a missing slug → err (no such document)");
+const restore = await call(dArch, "doc.archive", { slug: "auth", archived: false });
+ok(!restore.isError && restore.data.archived === false && (await call(dArch, "doc.list", { kind: "design" })).data[0].archived === 0,
+  "D6: archived:false RESTORES the doc (the flip is reversible)");
+
+for (const c of [pm, reflect, operator, beta, dq, pmR, reflectR, operatorR, dArch]) await c.close();
 console.log(fails === 0 ? "\nHUB_DOCS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

@@ -12,9 +12,10 @@ import { latestForeignVersion } from "../src/docstore.ts";
 import {
   docForeignEditNotifyTick, startDocForeignEditNotifier,
   docDraftsPendingNotifyTick, startDocDraftsPendingNotifier,
+  strategyFileEditNotifyTick, startStrategyFileEditNotifier,
 } from "../src/daemon-notifiers.ts";
 import { execFileSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import type { FetchImpl } from "../src/channel.ts";
 
 let fails = 0;
@@ -198,6 +199,99 @@ const dBase = (db: DB) => ({ writeDb: db, projectId: "p", projectKey: "k", baseU
   db2.close();
 }
 
+// ── docs P3b: repo-file strategy-doc watch — baseline, settled edit → ONE line, hash dedupe, §16 ──
+{
+  const db = seedDb("/tmp/dl-docn-sfile.db");
+  const DIR = "/tmp/dl-docn-sfile-repo";
+  rmSync(DIR, { recursive: true, force: true });
+  mkdirSync(DIR, { recursive: true });
+  const FILE = `${DIR}/STRATEGY.md`;
+  // write content and pin mtime `ageMs` in the past (the settle window keys on mtime, not wall-clock now)
+  const writeAged = (body: string, ageMs: number) => { writeFileSync(FILE, body); const t = new Date(Date.now() - ageMs); utimesSync(FILE, t, t); };
+  const now = Date.now();
+  const sBase = { writeDb: db, projectId: "p", projectKey: "k", filePath: FILE, displayPath: "docs/STRATEGY.md", settleMs: 15 * M };
+  const { cap, fetchImpl, text } = capturing();
+
+  writeAged("SECRET-GOAL-ONE", 30 * M);
+  const n0 = await strategyFileEditNotifyTick({ ...sBase, nowMs: now, fetchImpl });
+  ok(n0 === 0 && cap.length === 0 && evc(db, "strategy_file.baseline") === 1 && evc(db, "strategy_file_edit.notified") === 0,
+    "P3b: the FIRST observation records a silent baseline — no line at daemon boot (a file has no authorship to call foreign)");
+  const n0b = await strategyFileEditNotifyTick({ ...sBase, nowMs: now, fetchImpl });
+  ok(n0b === 0 && evc(db, "strategy_file.baseline") === 1, "P3b: an unchanged file after the baseline stays silent (and never re-baselines)");
+  ok(!JSON.stringify(db.prepare("SELECT data FROM events WHERE kind='strategy_file.baseline'").all()).includes("SECRET-GOAL-ONE"),
+    "P3b §16: the baseline marker carries path+hash only — never a byte of file content");
+
+  writeAged("SECRET-GOAL-TWO", 30 * M); // a settled operator edit (mtime 30m > settle 15m)
+  const n1 = await strategyFileEditNotifyTick({ ...sBase, nowMs: now, fetchImpl });
+  ok(n1 === 1 && cap.length === 1 && evc(db, "strategy_file_edit.notified") === 1,
+    "P3b: a SETTLED content change → ONE comms line + the {path,hash} marker");
+  ok(text(0).includes("[k] operator edited docs/STRATEGY.md") && text(0).includes("PM is passive; file a needs-pm ticket to act"),
+    "P3b: the line names the CONFIG path + the fixed passive-mode action");
+  ok(!text(0).includes("SECRET-GOAL"), "P3b §16: the line never carries file content — the path only");
+  const n2 = await strategyFileEditNotifyTick({ ...sBase, nowMs: now + 5 * M, fetchImpl });
+  ok(n2 === 0 && cap.length === 1, "P3b: the SAME content never re-sends (ledger-dedupe by hash)");
+
+  writeAged("SECRET-GOAL-THREE", 5 * M); // a fresh edit still inside the settle window
+  const n3 = await strategyFileEditNotifyTick({ ...sBase, nowMs: now, fetchImpl });
+  ok(n3 === 0 && cap.length === 1, "P3b: an edit YOUNGER than the settle window waits (mid-edit burst collapses to one line)");
+  writeAged("SECRET-GOAL-THREE", 20 * M); // the same content, now settled
+  const n4 = await strategyFileEditNotifyTick({ ...sBase, nowMs: now, fetchImpl });
+  ok(n4 === 1 && cap.length === 2 && evc(db, "strategy_file_edit.notified") === 2, "P3b: the edit fires once settled (dedupe is per hash, not per doc)");
+
+  rmSync(FILE);
+  const n5 = await strategyFileEditNotifyTick({ ...sBase, nowMs: now, fetchImpl });
+  ok(n5 === 0 && cap.length === 2, "P3b: a missing/unreadable file → a clean no-op this tick (a broken path is doctor's beat)");
+  db.close();
+  // no send target ⇒ true no-op: no baseline, no marker (the resolveTarget guard runs first)
+  const db2 = seedDb("/tmp/dl-docn-sfile2.db", { channel: false });
+  mkdirSync(DIR, { recursive: true });
+  writeFileSync(FILE, "content");
+  ok((await strategyFileEditNotifyTick({ ...sBase, writeDb: db2, nowMs: Date.now() })) === 0 && evc(db2, "strategy_file.baseline") === 0,
+    "P3b: no DB channel AND no §9 notify → true no-op (not even a baseline)");
+  db2.close();
+}
+
+// ── docs P3b: startStrategyFileEditNotifier gates — passive-only + a resolved file + a send target ──
+{
+  const db = seedDb("/tmp/dl-docn-sfstart.db");
+  const DIR = "/tmp/dl-docn-sfile-repo";
+  mkdirSync(DIR, { recursive: true });
+  const FILE = `${DIR}/STRATEGY.md`;
+  writeFileSync(FILE, "north star");
+  const mk = (intakeMode?: string, filePath?: string | null) =>
+    startStrategyFileEditNotifier({ writeDb: db, projectId: "p", projectKey: "k", filePath, intakeMode });
+  ok(mk("autonomous", FILE) === null, "P3b start gate: intake.mode autonomous → NO timer (PM's own strategy read owns propagation)");
+  ok(mk(undefined, FILE) === null, "P3b start gate: intake.mode absent (defaults autonomous) → NO timer");
+  ok(mk("passive", undefined) === null, "P3b start gate: passive but NO repo-file strategy doc resolved → NO timer");
+  const t = mk("passive", FILE);
+  ok(t !== null, "P3b start gate: passive + a resolved file + a send target → timer started");
+  if (t) clearInterval(t);
+  db.close();
+  const db2 = seedDb("/tmp/dl-docn-sfstart2.db", { channel: false });
+  ok(startStrategyFileEditNotifier({ writeDb: db2, projectId: "p", projectKey: "k", filePath: FILE, intakeMode: "passive" }) === null,
+    "P3b start gate: passive but NO send target → true no-op (no timer)");
+  db2.close();
+}
+
+// ── D6: archived docs are excluded from BOTH doc notifiers (the structural archived=0 belt) ───────
+{
+  const db = seedDb("/tmp/dl-docn-arch.db");
+  const now = Date.now();
+  // a doc that would trip BOTH ticks: a settled operator version (foreign-edit) trailing a published
+  // current (drafts-pending) — then force-archive it via SQL (the belt: no op archives singletons today).
+  const id = addDoc(db, "strategy", "strategy", 1);
+  addVer(db, id, 1, "pm", isoAgo(now, 90 * H), "current");
+  addVer(db, id, 2, "operator", isoAgo(now, 40 * H));
+  db.prepare("UPDATE documents SET archived=1 WHERE id=?").run(id);
+  const { cap, fetchImpl } = capturing();
+  const nF = await docForeignEditNotifyTick({ ...fBase(db), nowMs: now, fetchImpl });
+  const nD = await docDraftsPendingNotifyTick({ ...dBase(db), nowMs: now, fetchImpl });
+  ok(nF === 0 && nD === 0 && cap.length === 0, "D6: an archived doc is excluded from the foreign-edit AND drafts-pending ticks (no line, no marker)");
+  db.prepare("UPDATE documents SET archived=0 WHERE id=?").run(id);
+  ok((await docForeignEditNotifyTick({ ...fBase(db), nowMs: now, fetchImpl })) === 1, "D6 control: restoring the doc re-arms the notifier (the silence was the archived flag)");
+  db.close();
+}
+
 // ── docs P6b: start guard — a send target is required ─────────────────────────────────────────────
 {
   const db = seedDb("/tmp/dl-docn-dstart.db"); // channel, no docs ⇒ immediate tick sends nothing
@@ -211,13 +305,19 @@ const dBase = (db: DB) => ({ writeDb: db, projectId: "p", projectKey: "k", baseU
   db2.close();
 }
 
-// ── DL-34: dry-run is WRITE-FREE for BOTH ticks — no network, no marker (child process) ───────────
+// ── DL-34: dry-run is WRITE-FREE for ALL THREE ticks — no network, no marker (child process) ──────
 {
   const DDB = "/tmp/dl-docn-dry.db";
   clean(DDB);
+  const SDIR = "/tmp/dl-docn-dry-repo";
+  rmSync(SDIR, { recursive: true, force: true });
+  mkdirSync(SDIR, { recursive: true });
+  const SFILE = `${SDIR}/STRATEGY.md`;
+  writeFileSync(SFILE, "edited north star");
+  const aged = new Date(Date.now() - 30 * M); utimesSync(SFILE, aged, aged); // settled (30m > 15m)
   const child = `
     import { openDb } from "${CWD}/src/db.ts";
-    import { docForeignEditNotifyTick, docDraftsPendingNotifyTick } from "${CWD}/src/daemon-notifiers.ts";
+    import { docForeignEditNotifyTick, docDraftsPendingNotifyTick, strategyFileEditNotifyTick } from "${CWD}/src/daemon-notifiers.ts";
     const db = openDb(process.env.DDB);
     db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','k','n','t')").run();
     db.prepare("INSERT INTO channels(id,project_id,provider,config_ref,secret_ref,channel_ref,enabled,created_at,updated_at) VALUES('c','p','slack','TESTTOK',NULL,'C1',1,'t','t')").run();
@@ -226,22 +326,30 @@ const dBase = (db: DB) => ({ writeDb: db, projectId: "p", projectKey: "k", baseU
     db.prepare("INSERT INTO documents(id,project_id,kind,slug,title,status,current_version,created_by,created_at,updated_at) VALUES('d1','p','strategy','strategy','strategy','draft',1,'pm','t','t')").run();
     db.prepare("INSERT INTO document_versions(id,doc_id,version,body,status,summary,base_version,author,created_at) VALUES('d1-v1','d1',1,'b','current','',0,'pm',?)").run(iso(90*3600000));
     db.prepare("INSERT INTO document_versions(id,doc_id,version,body,status,summary,base_version,author,created_at) VALUES('d1-v2','d1',2,'b','draft','',1,'operator',?)").run(iso(30*3600000));
+    // a PRIOR live baseline for the strategy FILE (a different hash than the file now holds) — so the
+    // dry-run tick has a change to preview; a COLD dry-run must not even write the baseline (asserted below).
+    db.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('p',NULL,'daemon','strategy_file.baseline',?,?)").run(JSON.stringify({ path: "docs/STRATEGY.md", hash: "0".repeat(64) }), iso(48*3600000));
     let preview = "", fetched = false;
     const origErr = console.error; console.error = (m) => { preview += String(m) + "\\n"; };
     const f = async () => { fetched = true; return { status: 200, json: async () => ({ ok: true }) }; };
     const base = { writeDb: db, projectId: "p", projectKey: "k", baseUrl: "http://127.0.0.1:8787", nowMs: now, fetchImpl: f };
     const nF = await docForeignEditNotifyTick({ ...base, settleMs: 900000 });
     const nD = await docDraftsPendingNotifyTick({ ...base, pendingMs: 86400000, remindMs: 86400000 });
+    const nS = await strategyFileEditNotifyTick({ ...base, filePath: process.env.SFILE, displayPath: "docs/STRATEGY.md", settleMs: 900000 });
+    // COLD dry-run twin: a second path with NO baseline must stay fully write-free (no baseline row either)
+    await strategyFileEditNotifyTick({ ...base, filePath: process.env.SFILE, displayPath: "docs/OTHER.md", settleMs: 900000 });
     console.error = origErr;
-    const markers = db.prepare("SELECT count(*) c FROM events WHERE kind IN ('doc_foreign_edit.notified','doc_drafts.notified')").get().c;
-    console.log(JSON.stringify({ nF, nD, fetched, markers, previewHasEdit: preview.includes("doc edit"), previewHasDrafts: preview.includes("drafts-pending") }));
+    const markers = db.prepare("SELECT count(*) c FROM events WHERE kind IN ('doc_foreign_edit.notified','doc_drafts.notified','strategy_file_edit.notified')").get().c;
+    const baselines = db.prepare("SELECT count(*) c FROM events WHERE kind='strategy_file.baseline'").get().c;
+    console.log(JSON.stringify({ nF, nD, nS, fetched, markers, baselines, previewHasEdit: preview.includes("doc edit"), previewHasDrafts: preview.includes("drafts-pending"), previewHasFile: preview.includes("operator edited docs/STRATEGY.md") }));
     db.close();
   `;
   const out = execFileSync("node", ["--input-type=module", "-e", child],
-    { env: { ...process.env, DDB, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
+    { env: { ...process.env, DDB, SFILE, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
   const res = JSON.parse(out.trim().split("\n").pop() as string);
-  ok(res.markers === 0 && res.fetched === false, "DL-34: dry-run is write-free for both doc ticks — NO marker, NO network");
-  ok(res.previewHasEdit && res.previewHasDrafts, "DL-34: the dry-run previews name the doc-edit + drafts-pending lines");
+  ok(res.markers === 0 && res.fetched === false, "DL-34: dry-run is write-free for all three doc ticks — NO marker, NO network");
+  ok(res.baselines === 1, "DL-34: a COLD dry-run strategy-file tick writes NO baseline either (only the seeded one exists)");
+  ok(res.previewHasEdit && res.previewHasDrafts && res.previewHasFile, "DL-34: the dry-run previews name the doc-edit + drafts-pending + strategy-file lines");
   clean(DDB);
 }
 

@@ -20,7 +20,7 @@ export const DOC_KINDS = ["strategy", "roadmap", "decisions", "notes", "design"]
 export type DocKind = (typeof DOC_KINDS)[number];
 export interface DocRow {
   id: string; project_id: string; kind: string; slug: string; title: string;
-  status: string; current_version: number; created_by: string; created_at: string; updated_at: string;
+  status: string; current_version: number; archived: number; created_by: string; created_at: string; updated_at: string;
 }
 
 // A discriminated result so callers map it to their own surface: server.ts → ok()/err(); the daemon →
@@ -104,6 +104,26 @@ export function docSave(db: DatabaseSync, projectId: string, actor: string, a: D
     db.exec("COMMIT");
     return { ok: true, data: { doc: a.slug, kind: d.kind, version: nv, status: "draft" } };
   } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
+}
+
+export interface DocArchiveArgs { slug: string; archived?: boolean; }
+
+// D6 retention: flip a RETIRED design doc's `archived` flag (default true; archived:false restores).
+// A metadata write, deliberately NOT a doc.save rider: archiving has no content to CAS on, and routing
+// it through the version ledger would mint a phantom draft per flip (versions are append-only) — the
+// flag lives on the `documents` row, like `status`. DESIGN DOCS ONLY: the singleton kinds
+// (strategy/roadmap/decisions/notes) are the project's living registry — retiring one is a publish/
+// content decision, never a visibility flip — so they refuse (→ 409 via statusForDocErr, the DL-9
+// kind-policy precedent). Selected by slug alone (design is multi-instance; a kind selector would be
+// ambiguous). Idempotent; the doc + its history stay fully readable (hidden by default, never deleted).
+export function docArchive(db: DatabaseSync, projectId: string, actor: string, a: DocArchiveArgs): DocResult<{ doc: string; kind: string; archived: boolean }> {
+  const d = db.prepare("SELECT * FROM documents WHERE project_id=? AND slug=?").get(projectId, a.slug) as DocRow | undefined;
+  if (!d) return { ok: false, error: `no document ${a.slug}` };
+  if (d.kind !== "design") return { ok: false, error: `CONFLICT: '${a.slug}' is a '${d.kind}' document — only design docs archive (the singleton kinds are the living registry, D6)` };
+  const flag = a.archived === false ? 0 : 1;
+  db.prepare("UPDATE documents SET archived=?, updated_at=? WHERE id=?").run(flag, nowIso(), d.id);
+  logEvent(db, { project_id: projectId, actor, kind: "doc.archive", data: { slug: a.slug, archived: !!flag } });
+  return { ok: true, data: { doc: a.slug, kind: d.kind, archived: !!flag } };
 }
 
 export interface DocPublishArgs { slug?: string; kind?: string; version: number; }

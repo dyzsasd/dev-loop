@@ -310,7 +310,7 @@ export async function mirrorPollComments(
   // provenance and the divergence baseline use THOSE, so both stay correct while a newer hub version is
   // still awaiting its push (the doc row's own version may have moved on since).
   const rows = db.prepare(`
-    SELECT m.linear_id, m.last_pushed_hash, m.last_pushed_version, m.last_pushed_body_hash,
+    SELECT m.linear_id, m.last_pushed_hash, m.last_pushed_at, m.last_pushed_version, m.last_pushed_body_hash,
            d.slug, d.kind, d.title, v.version, v.body
     FROM mirror_map m
     JOIN documents d ON d.project_id = m.project_id AND d.slug = m.hub_id
@@ -318,10 +318,21 @@ export async function mirrorPollComments(
       THEN (SELECT max(version) FROM document_versions WHERE doc_id = d.id) ELSE d.current_version END
     WHERE m.project_id = ? AND m.hub_kind = 'doc' AND m.linear_id IS NOT NULL
     ORDER BY d.slug`).all(projectId) as unknown as (MirrorDocRow &
-      { linear_id: string; last_pushed_hash: string | null; last_pushed_version: number | null; last_pushed_body_hash: string | null })[];
+      { linear_id: string; last_pushed_hash: string | null; last_pushed_at: string | null; last_pushed_version: number | null; last_pushed_body_hash: string | null })[];
   let comments = 0, filed = 0, divergences = 0, alreadyActed = 0, failed = 0;
   const ops: NonNullable<MirrorPollResult["ops"]> = [];
   for (const d of rows) {
+    // Divergence dedupe RESET: ledger.divergence[slug] keys on the upstream content hash, but a push
+    // that lands AFTER the ticket was filed OVERWRITES that diverged upstream — the hashed content is
+    // gone from Linear, so a human RE-APPLYING the byte-identical edit is a NEW divergence and must
+    // re-file (without this, it was silently deduped forever). The push side already RECORDS the
+    // reconcile signal — last_pushed_at is stamped on every non-skip doc push — so the poller (the
+    // ledger's sole owner) reconciles here: an entry filed BEFORE the last stamping push is stale ⇒
+    // drop it. STRICTLY newer: a push that merely predates the filing is the very baseline the
+    // divergence was computed against, and clearing on it would re-file the SAME ticket every poll.
+    // The in-memory delete persists via the poll's own saveLedger calls (none in DRYRUN — write-free).
+    const staleDiv = ledger.divergence[d.slug];
+    if (staleDiv && d.last_pushed_at && Date.parse(d.last_pushed_at) > Date.parse(staleDiv.filedAt)) delete ledger.divergence[d.slug];
     // (1) comment → intake: every unseen HUMAN comment files one needs-pm Backlog ticket.
     try {
       for (const c of await listDocComments(fetchImpl, token, d.linear_id)) {

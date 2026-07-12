@@ -89,7 +89,7 @@ const TICKETS_BEFORE = 4, COMMENTS_BEFORE = 2;
 
 // ── run the REAL migration via openDb() ──────────────────────────────────────
 const db = openDb(PATH);
-ok(uv(db) === 4, "DL-27/DL-52/DL-split/D5: openDb migrated the v0 DB → user_version=4 (v1 state-widen + v2 channels.transport + v3 documents.kind+='design' + v4 mirror_map.hub_kind+='doc')");
+ok(uv(db) === 5, "DL-27/DL-52/DL-split/D5/D6: openDb migrated the v0 DB → user_version=5 (v1 state-widen + v2 channels.transport + v3 documents.kind+='design' + v4 mirror_map.hub_kind+='doc' + v5 documents.archived)");
 ok(count(db, "tickets") === TICKETS_BEFORE && count(db, "comments") === COMMENTS_BEFORE, "DL-27: migration is lossless (ticket + comment row counts preserved)");
 // FK children kept: the DROP+RENAME (with foreign_keys OFF) left no dangling comment→ticket references.
 ok((db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length === 0, "DL-27: FK children kept — foreign_key_check finds no violations after the rebuild");
@@ -138,11 +138,18 @@ ok(insMap("mD", "doc", "strat"), "D5: post-migration hub_kind CHECK accepts 'doc
 ok(!insMap("mDup", "doc", "strat"), "D5: UNIQUE(project_id, hub_kind, hub_id) still holds — a duplicate doc mapping is rejected");
 ok(insMap("mT2", "ticket", "strat"), "D5: uniqueness is per-kind — a 'ticket' mapping may share hub_id with a 'doc' mapping");
 ok(!insMap("mBad", "topic", "z"), "D5: the widened hub_kind CHECK still rejects an unmirrored kind ('topic' stays deferred)");
+// D6 v5: the ALTER added documents.archived, backfilled existing rows to 0, and new inserts default to 0.
+ok((db.prepare("PRAGMA table_info(documents)").all() as { name: string }[]).some((c) => c.name === "archived"),
+  "D6: v5 migration added the documents.archived column (ALTER on a pre-v5 documents table)");
+ok((db.prepare("SELECT archived FROM documents WHERE id='d0'").get() as { archived: number }).archived === 0,
+  "D6: the pre-v5 doc row backfilled to archived=0 (existing docs byte-for-byte visible)");
+ok((db.prepare("SELECT archived FROM documents WHERE id='dA'").get() as { archived: number }).archived === 0,
+  "D6: a post-migration insert without the column defaults to archived=0");
 db.close();
 
-// ── idempotent re-open: a second openDb on the now-v4 DB is the fast-path no-op (no re-migrate, data intact) ──
+// ── idempotent re-open: a second openDb on the now-v5 DB is the fast-path no-op (no re-migrate, data intact) ──
 const db2 = openDb(PATH);
-ok(uv(db2) === 4 && count(db2, "tickets") === TICKETS_BEFORE + 1, "DL-27/DL-52/DL-split/D5: re-opening a v4 DB is idempotent (still v4; the prior HB row persists, no double-migrate)");
+ok(uv(db2) === 5 && count(db2, "tickets") === TICKETS_BEFORE + 1, "DL-27/DL-52/DL-split/D5/D6: re-opening a v5 DB is idempotent (still v5; the prior HB row persists, no double-migrate)");
 ok((db2.prepare("SELECT hub_kind FROM mirror_map WHERE id='mD'").get() as { hub_kind: string }).hub_kind === "doc", "D5: the doc mapping row persists across the idempotent re-open");
 db2.close();
 

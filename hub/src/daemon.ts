@@ -18,7 +18,7 @@ import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists } from "./db.ts";
 import { findProject } from "./seed.ts";
-import { loadProjectsConfig } from "./resolve-project.ts";
+import { loadProjectsConfig, repoFileStrategyPath } from "./resolve-project.ts"; // + docs P3b: the ONE strategyDoc→repo-file rule (doc-home, §19)
 import { hubDbPath, pkgVersion } from "./paths.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr, type DocKind } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
@@ -41,6 +41,7 @@ import { // A3: extracted timers; imported for the foreground boot, re-exported 
   blockedNotifyTick, startBlockedNotifier, noProgressNotifyTick,
   startNoProgressNotifier, walCheckpointTick, startWalCheckpoint,
   resolveBlockedReminderHours, startDocForeignEditNotifier, startDocDraftsPendingNotifier,
+  startStrategyFileEditNotifier, // docs P3b: the passive-mode repo-FILE strategy-doc watch
 } from "./daemon-notifiers.ts";
 
 export interface DaemonOpts {
@@ -696,6 +697,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const intakeMode = (projCfg?.intake as { mode?: string } | undefined)?.mode;
     const foreignDocs = startDocForeignEditNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, intakeMode, notify });
     if (foreignDocs) console.log(`[daemon] passive-intake doc-edit notifier active (operator/web doc edits → one comms line per version)`);
+    // Docs P3b: the repo-FILE twin — the DEFAULT config keeps the strategy doc as a repo file, which the
+    // hub-doc tick above can't see. Resolve it exactly the way PM's boot does (repoFileStrategyPath: the
+    // doc-home repo roots a relative path, §19) and watch its content hash; a settled operator edit emits
+    // one deduped comms line naming the PATH only (§16). Passive intake + a resolved file + a target only.
+    const strategyFile = repoFileStrategyPath(projCfg as Parameters<typeof repoFileStrategyPath>[0]);
+    const strategyWatch = startStrategyFileEditNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, intakeMode, filePath: strategyFile?.abs, displayPath: strategyFile?.display, notify });
+    if (strategyWatch) console.log(`[daemon] passive-intake strategy-file watch active (${strategyFile!.display} → one comms line per settled edit)`);
     // Docs P6b: drafts-pending notifier — a gated doc whose drafts trail the published current for >24h gets
     // one DAILY comms line (deduped per version), so agent-drafted direction can't silently stall unpublished.
     const draftsNotifier = startDocDraftsPendingNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, notify });

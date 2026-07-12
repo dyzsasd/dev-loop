@@ -10,7 +10,7 @@ import { request as httpRequest } from "node:http";
 import { openDb } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
 import { createDaemon } from "../src/daemon.ts";
-import { docSave, docPublish, resolveDoc, latestVersion } from "../src/docstore.ts";
+import { docSave, docPublish, docArchive, resolveDoc, latestVersion } from "../src/docstore.ts";
 import { draftsPendingCount } from "../src/views/docs.ts";
 
 const DB = "/tmp/hub-webui-docs/hub.db";
@@ -196,6 +196,31 @@ docPublish(w, projectId, "operator", { slug: "decision-log", version: 1 });
 docPublish(w, projectId, "operator", { slug: "notes", version: 1 });
 ok(draftsPendingCount(w, projectId) === 0, "publishing every pending draft zeroes the count");
 ok(!(await get(opd.base, "/p/dcs/")).text.includes('class="chip-drafts"'), "no pending drafts ⇒ no header chip");
+
+// ═══ 13. D6 archived docs: index hides by default, ?archived=1 shows, viewer stays readable, chip excludes ═══
+ok(docArchive(w, projectId, "senior-dev", { slug: "auth" }).ok, "D6 seed: the auth design doc archived (docstore.docArchive)");
+const idxHid = await get(opd.base, "/p/dcs/docs");
+ok(idxHid.status === 200 && !idxHid.text.includes('href="/p/dcs/doc/auth"'), "D6: the default /docs index HIDES the archived design doc");
+ok(idxHid.text.includes("1 archived doc hidden") && idxHid.text.includes('href="/p/dcs/docs?archived=1"'),
+  "D6: the default index names how many are hidden and links ?archived=1 (never a silent hole)");
+const idxAll = await get(opd.base, "/p/dcs/docs?archived=1");
+ok(idxAll.status === 200 && idxAll.text.includes('href="/p/dcs/doc/auth"') && idxAll.text.includes(">archived</span>"),
+  "D6: ?archived=1 shows the archived doc, badged 'archived'");
+ok(!idxAll.text.includes("archived doc hidden"), "D6: the show-archived view carries no hidden-count footer");
+const archView = await get(opd.base, "/p/dcs/doc/auth");
+ok(archView.status === 200 && archView.text.includes(">archived</span>") && archView.text.includes("Auth v2"),
+  "D6: an archived doc's viewer stays fully readable at its direct URL (badged; hidden ≠ deleted)");
+ok((await get(opd.base, "/p/dcs/doc/auth/history")).status === 200, "D6: an archived doc's history stays readable");
+// restore is reversible and re-lists the doc
+ok(docArchive(w, projectId, "senior-dev", { slug: "auth", archived: false }).ok
+  && (await get(opd.base, "/p/dcs/docs")).text.includes('href="/p/dcs/doc/auth"'), "D6: archived:false restores the doc to the default index");
+// chip exclusion is STRUCTURAL (archived=0 in the predicate), not just a side effect of the design-only op:
+// force-archive a GATED doc with a pending draft via SQL (no op path does this today) — the chip must drop it.
+docSave(w, projectId, "pm", { slug: "strategy", kind: "strategy", body: "# Strategy v4\n", baseVersion: 3, summary: "pending again" });
+ok(draftsPendingCount(w, projectId) === 1, "D6 setup: a fresh pending strategy draft counts (1)");
+w.prepare("UPDATE documents SET archived=1 WHERE project_id=? AND slug='strategy'").run(projectId);
+ok(draftsPendingCount(w, projectId) === 0, "D6: an archived doc never counts toward the drafts-pending chip (archived=0 is in the predicate)");
+w.prepare("UPDATE documents SET archived=0 WHERE project_id=? AND slug='strategy'").run(projectId);
 
 opd.close(); devd.close(); w.close();
 console.log(fails === 0 ? "\nWEBUI_DOCS_OK" : `\n${fails} CHECK(S) FAILED`);

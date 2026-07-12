@@ -20,14 +20,14 @@ export const ok = (data: unknown): McpResult => ({ content: [{ type: "text" as c
 // off), so `extra` can never clobber `message` and the two transports serialize byte-identically.
 export const err = (message: string, extra?: Record<string, unknown>): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message, ...extra }) }] });
 
-// ─── the canonical tool-name list — whoami (answered locally per transport) + the 23 op-backed tools ────────
+// ─── the canonical tool-name list — whoami (answered locally per transport) + the 24 op-backed tools ────────
 // agentops.ts derives AGENT_OPS = TOOL_NAMES minus "whoami" (the only tool that is NOT an op-API op), so this
 // is the ONE source of the tool/op names. Order matches the historical AGENT_OPS order (registration order is
 // irrelevant to MCP — tools resolve by name — but keeping it stable keeps diffs/feeds readable).
 export const TOOL_NAMES = [
   "whoami",
   "list_issues", "get_issue", "save_issue", "save_comment", "list_comments",
-  "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish",
+  "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish", "doc.archive",
   "channel.register", "channel.send", "channel.poll", "channel.ack", "channel.status",
   "mirror.push", "mirror.pollComments", "mirror.status", "list_issue_labels", "create_issue_label", "get_project",
 ] as const;
@@ -83,6 +83,10 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
   "doc.publish": {
     description: "OPERATOR-ONLY: publish a draft version → current (the live doc). Cooperative role-gate (DEVLOOP_ACTOR=operator), not anti-spoof — see §18/HUB-ARCHITECTURE §16.",
     inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive() },
+  },
+  "doc.archive": {
+    description: "Archive a RETIRED design doc (D6 retention): hidden by default in the /docs index and excluded from chips/notifiers — NEVER deleted (the doc + its version history stay readable via doc.get/doc.history). DESIGN kind only; singleton kinds (strategy/roadmap/decisions/notes) refuse. archived:false restores it. A metadata flip, not a version — no body/baseVersion.",
+    inputSchema: { slug: z.string(), archived: z.boolean().optional() },
   },
 
   "channel.register": {

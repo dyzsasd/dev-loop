@@ -198,7 +198,7 @@ opt-in it returns `404`, byte-identical to a pure read surface.
   then point the MCP `args` at `hub/src/shim.ts` instead of `hub/src/server.ts` (same per-pane
   `DEVLOOP_ACTOR`). See `references/config-schema.md` (`hub.transport`).
 - **Shape:** `POST /api/op/<op>` with a JSON body; `<op>` mirrors the MCP tools 1:1 — the shim is a
-  **100% `server.ts` drop-in** (all 24 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
+  **100% `server.ts` drop-in** (all 25 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
   `list_comments`/`whoami` · `doc.*`/`list_events` · `channel.*` · `mirror.*` ·
   labels/`get_project`).
 - **Identity:** the actor rides the **`X-Devloop-Actor`** header (the shim forwards its per-pane
@@ -249,13 +249,15 @@ that push **one-line, §16-safe** alerts to the team's outward channel. They all
 |---|---|---|
 | **Human-Blocked reminder** (DL-26, workflows P3) | a ticket sits in `Human-Blocked` — first ping on detection, then repeats. The line names the ticket, **its age in the state**, and the **resume action** (`dev-loop ticket update <id> --state Todo`) + the ticket URL | `settings_json.humanBlockedReminderHours`; **default 24h when `team.comms` is configured, else off**; explicit `0` = opt-out. Tick 60s (`DEVLOOP_BLOCKED_TICK_MS`) |
 | **No-progress circuit-breaker** (DL-76) | zero tickets reached `Done` in the trailing `settings_json.noProgressWindowHours` window (cold start excluded) | once per stall episode; re-alerts only after progress resumed. Tick 1h (`DEVLOOP_NOPROGRESS_TICK_MS`) |
-| **Passive-intake doc-edit notifier** (docs P3) | `intake.mode:"passive"` **only** — PM's doc-watch is off, so a hub-doc version authored by a **non-agent** actor (operator/web edit; `actors.kind` decides, so no agent draft can self-trigger) that sat unconsumed past a settle window gets one line naming slug/version/author + the `/p/<key>/doc/<slug>` URL. `design` docs excluded | deduped **per version** (an editing burst collapses to the final version's line). Settle 15m (`DEVLOOP_DOC_FOREIGN_SETTLE_MS`), tick 10m (`DEVLOOP_DOC_NOTIFY_TICK_MS`) |
+| **Passive-intake doc-edit notifier** (docs P3) | `intake.mode:"passive"` **only** — PM's doc-watch is off, so a hub-doc version authored by a **non-agent** actor (operator/web edit; `actors.kind` decides, so no agent draft can self-trigger) that sat unconsumed past a settle window gets one line naming slug/version/author + the `/p/<key>/doc/<slug>` URL. `design` docs excluded; **archived** docs excluded (D6) | deduped **per version** (an editing burst collapses to the final version's line). Settle 15m (`DEVLOOP_DOC_FOREIGN_SETTLE_MS`), tick 10m (`DEVLOOP_DOC_NOTIFY_TICK_MS`) |
+| **Passive-intake strategy-FILE watch** (docs P3b) | `intake.mode:"passive"` **only**, and the project's `strategyDoc` is a **repo file** (a plain string / `{ path }` — the default config shape; resolved at boot via the §19 doc-home rule, `repoFileStrategyPath`). The daemon watches the file's **content hash**; a **settled** change (file mtime older than the settle window) emits one line: `operator edited <path> — PM is passive; file a needs-pm ticket to act`. **The PATH only — never a byte of file content** (§16) | deduped **by content hash** (ledger markers). The **first observation seeds a silent baseline** (a file has no authorship, so boot-state is never announced). Settle 15m (`DEVLOOP_STRATEGY_FILE_SETTLE_MS`), tick 10m (`DEVLOOP_STRATEGY_FILE_TICK_MS`) |
 | **Drafts-pending notifier** (docs P6b) | a publish-gated doc's drafts trail the published current for **>24h** (measured from the first unpublished version — a fresh draft on top does not reset the clock): `"strategy: draft v14 pending over published v12 — review at /p/<key>/doc/strategy"` | one **daily** line while pending, deduped per version; a **new** draft version re-announces immediately. Tick 1h (`DEVLOOP_DOC_DRAFTS_TICK_MS`) |
 
-In autonomous intake mode the doc-edit notifier stays off by design: PM's own doc-watch (keyed on the
-latest **foreign** version — `dev-loop doc history` exposes version+author) owns that propagation, and a
-comms line on top would be duplicate noise. The drafts-pending notifier runs in **both** modes — only the
-operator can publish, so the nudge is always aimed at a human.
+In autonomous intake mode the doc-edit notifier and the strategy-file watch stay off by design: PM's own
+doc-watch / strategy-doc read (keyed on the latest **foreign** version — `dev-loop doc history` exposes
+version+author) owns that propagation, and a comms line on top would be duplicate noise. The
+drafts-pending notifier runs in **both** modes — only the operator can publish, so the nudge is always
+aimed at a human.
 
 ## Tests
 

@@ -232,7 +232,7 @@ try {
   // THE 100% DROP-IN TRIPWIRE: the shim proxies EVERY server.ts tool (a future server.ts tool not proxied trips this)
   const stdioTools = (await pm.listTools()).tools.map((t: any) => t.name).sort();
   const shimTools = (await devShim.listTools()).tools.map((t: any) => t.name).sort();
-  ok(JSON.stringify(stdioTools) === JSON.stringify(shimTools) && shimTools.length === 24, `the shim proxies ALL ${stdioTools.length} server.ts tools — a 100% drop-in (got shim=${shimTools.length}, stdio=${stdioTools.length})`);
+  ok(JSON.stringify(stdioTools) === JSON.stringify(shimTools) && shimTools.length === 25, `the shim proxies ALL ${stdioTools.length} server.ts tools — a 100% drop-in (got shim=${shimTools.length}, stdio=${stdioTools.length})`);
 
   // ═══ D1: the `project` override rides BOTH transports identically (shim body ≡ stdio zod arg) ═══════════════
   // The override is resolved at the agentops.ts choke point, so the shim (which just forwards `project` in the
