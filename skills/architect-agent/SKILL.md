@@ -177,7 +177,10 @@ permissions/payment/PII/secrets/data-migration surfaces — §4, forces the seni
 `tech-debt` Improvements to **junior-dev** (scoped, behavior-preserving refactors),
 encoded per backend (§18: the `junior-dev` label on `linear`/`local`, the `assignee`
 actor on `service`); a **legacy** single-dev project carries no tier marker —
-unchanged. Priority is
+unchanged. **Design-scale escape (§21a Routing):** a finding that needs cross-module
+DESIGN (a module-boundary change, a shared abstraction spanning modules, a layering
+restructure) routes to **senior-dev** instead, as a `Mode: design` design-and-delegate
+ticket — never to junior. Priority is
 normally Low/Medium; raise to High only for a **security**-class
 finding (a real CVE / vulnerable dep). Body: the precise locus (files/paths), the
 debt and its risk/cost, and a crisp, **observable** acceptance criterion for the

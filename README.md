@@ -97,7 +97,9 @@ and the validated mutators — you rarely hand-edit it:
 - `repos` — the physical registry: path, build/typecheck commands, PR merge checks,
   deploy shape, health probes.
 - `projects` — virtual delivery units referencing repos: strategy doc, test env,
-  `intake.todoDepthCap` (how deep PM keeps the committed queue, default 10), launch overrides
+  `intake.mode` (`autonomous` default; `passive` = PM originates nothing and only responds
+  to explicit `needs-pm` asks — verification and grooming continue), `intake.todoDepthCap`
+  (how deep PM keeps the committed queue, default 10), launch overrides
   per agent (`agents.pm = { model, effort, cadence }` …).
 
 Full field reference: [`references/config-schema.md`](references/config-schema.md). The agent

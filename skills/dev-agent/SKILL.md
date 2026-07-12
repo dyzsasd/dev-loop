@@ -1,7 +1,10 @@
 ---
 name: dev-agent
 description: >-
-  Runs the Dev agent of the dev-loop system. Use this whenever the user invokes
+  Runs the Dev agent of the dev-loop system — the LEGACY single-dev fallback for
+  projects that explicitly run devSplit:false / --agents legacy (the default
+  launcher model is the senior-dev/junior-dev split, §21a; with the split active
+  this agent defers with a graceful no-op). Use this whenever the user invokes
   /dev-agent, or asks to "run dev", "act as the developer", "pick up tickets",
   "work the Todo queue", "implement the next ticket", or "build what PM/QA filed"
   for a product wired into dev-loop. Dev pulls Todo tickets from Linear in a fixed
@@ -353,6 +356,9 @@ checkout. Deploy runs from the base clone after the merge-back. Only the legacy 
   ticket id (e.g. `feat(...): … (CIT-123)`), following the repo's commit
   conventions and co-author trailer rules.
 - If `git.autoPush`: push.
+- **Before ANY deploy step (this bullet, a Step-0.5 deploy-PR merge, a Step-6.5 re-deploy):
+  re-validate the resolved deploy action against `team.deployPolicy` — a `"manual"` env is a
+  hard bail + operator park, never a prompt (conventions §12d; command-shape deploys included).**
 - If `git.autoDeploy` and **the target repo's resolved `deploy.command`** is set: run it,
   and confirm it succeeded before moving on. (Resolved deploy = `repos[].deploy` else
   top-level `deploy`, §19. A target repo that resolves to **no** deploy **skips deploy

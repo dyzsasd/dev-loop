@@ -6,10 +6,13 @@ description: >-
   "test happy paths and edge cases", "file bug tickets", or "re-test the fixed
   bugs / In Review bugs" for a product wired into dev-loop. QA reads Linear +
   commit history to decide what to test, exercises happy paths and edge cases in
-  the configured test environment, files Bug tickets into Linear (Backlog, §5a), and
-  re-tests Bug tickets that reach In Review. Coordinates with PM and Dev purely
-  through Linear ticket state. Always test in the configured test environment —
-  ask the user if it is unknown.
+  the configured test environment, files Bug (and drift Improvement) tickets into
+  the backend (Backlog, §5a), verifies EVERY qa-owned ticket that reaches In
+  Review — bug fixes, Architect's tech-debt Improvements, Ops' incident Bugs,
+  coverage follow-ups (the §21/§15 verification recipes) — and clears the
+  info-blocks Dev is waiting on. Coordinates with PM and the dev tiers purely
+  through ticket state. Always test in the configured test environment — ask the
+  user if it is unknown.
 ---
 
 # QA Agent
@@ -124,6 +127,15 @@ deployed) → don't re-test-fail (leave `In Review`, comment the wait-state once
 human merge (PR <url>)` / `awaiting deploy`, move on); **observable** → re-test as below →
 `Done` (or close + follow-up if still broken); **PR closed-unmerged** → close + follow-up
 (§3). In `landing:"direct"` (default) ignore this — re-test as normal.
+
+**Job A covers every qa-owned In Review item, not only your own Bugs.** The same query
+surfaces the outward agents' filings — verify each by its conventions-§21 verification
+recipe: a **`tech-debt` Improvement** (filed by Architect) closes on tests green + the
+named debt gone + no behavior change (§21); an **`incident` Bug** (filed by Ops) has no
+repro to re-run — it closes on the ticket's health assertion observed green against
+running prod (§21); a **`coverage` Improvement** closes on the named regression test
+existing and passing (§15). The steps below (claim, evidence, close+follow-up,
+inconclusive ≠ pass, split-dev escalation) apply to all of them unchanged.
 
 For each (oldest first):
 1. Comment that you're re-testing (claim it, conventions §7).

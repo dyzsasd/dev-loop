@@ -8,6 +8,40 @@ experience** — a real failure observed while the agents ran, then hardened int
 > Must release as **1.2.0**: doctor's W10 pins `WRITE_VERBS_MIN_VERSION="1.2.0"` and
 > config-schema documents the E09 demotion as "since 1.2".
 
+- **feat(config): `communication` + `notify` blocks validated and documented (E14/E15); digest
+  re-keyed; change-gate TTL.** The per-project `communication` block (which shapes the §22a
+  director digest and article drafts) and the `notify` block are now strict-validated, fully
+  documented in config-schema, and joined the `dev-loop team set` whitelist; the digest gate keys
+  on `team.comms` presence — it can no longer vanish silently because a per-project block is
+  absent. `--change-gate` gains a TTL for pm/qa fires (their best work happens when nothing
+  changed); dev-tier fires keep the pure gate.
+- **feat(docs): repo-file strategy watch, mirror divergence re-file, D6 archived flag.** (1) The
+  passive-intake notifier now covers the DEFAULT config shape: when `intake.mode:"passive"` and the
+  `strategyDoc` is a repo **file** (plain string / `{path}` — resolved via the §19 doc-home rule,
+  `repoFileStrategyPath`), the daemon watches the file's content hash and, on a settled change (15m,
+  as hub docs), emits one deduped comms line — "operator edited <path> — PM is passive; file a
+  needs-pm ticket to act" — naming the PATH only, never file content (§16); first observation seeds
+  a silent baseline (ledger-dedupe by hash; dry-run fully write-free). (2) `mirror.pollComments` now
+  RESETS its divergence dedupe after a push overwrites the diverged upstream (reconciled against
+  `last_pushed_at`), so a human re-applying the byte-identical Linear edit files a SECOND intake
+  ticket instead of being silently swallowed forever. (3) D6 retention: `documents.archived`
+  (schema **v5**, additive) + the `doc.archive` op / `dev-loop doc archive --slug S [--restore]` —
+  DESIGN docs only (singleton kinds refuse, 409); archived docs are hidden from the `/docs` index
+  by default (`?archived=1` shows them, badged; a footer names the hidden count), excluded from the
+  drafts-pending chip and the doc notifiers, and NEVER deleted (viewer/history/doc.get stay
+  readable). Tool count 24 → 25; the senior-dev cheat-sheet gains the verb.
+- **feat(docs-flow): the PM investigation protocol + doc-change machinery (D4/D5).** Conventions
+  §9a gains the full flow: director files `needs-pm`+`investigation` → PM investigates → proposes
+  (hub: CAS draft + mandatory summary + "Proposes: doc:<slug> vN" on the ticket; repo: unified diff
+  on the ticket) → operator approves version-bound (`doc.publish` / approval comment) → agents pick
+  up on next fire. Repo-file strategy docs follow the D4 section split (progress autonomous,
+  direction sections require the flow; Sweep audits doc-only commits). Human-Blocked reminders
+  default to 24h once comms is configured, naming the resume command. Passive-mode operator doc
+  edits and >24h-pending drafts each emit one deduped comms line. `mirror.push` projects published
+  strategy/roadmap/decisions + latest design docs as Linear Documents (one-way, banner, hash-
+  idempotent; schema v4); the new `mirror.pollComments` op / `dev-loop mirror poll` converts human
+  comments on mirrored docs (and detected Linear-side body edits) into `needs-pm` intake tickets
+  with provenance — never a write-back.
 - **feat(webui): the professional multi-project web UI + docs system (D2/D3).** The workspace
   daemon serves every hub project under `/p/<key>/` (bare paths fall back to the boot project;
   unknown keys 404 via a safe-segment guard); `GET /` is a project index with per-state colored

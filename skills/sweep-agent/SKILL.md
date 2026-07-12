@@ -5,12 +5,15 @@ description: >-
   whenever the user invokes /sweep-agent, or asks to "run sweep", "clean up the
   loop", "fix stranded/mislabeled tickets", "unstick the board", or "do lifecycle
   hygiene" for a product wired into dev-loop. Sweep owns "the cracks" between the
-  three owner-scoped agents (PM/QA/Dev): tickets that are missing or have the wrong
-  owner label (and so are invisible to every other agent's queries), orphaned
-  In Progress tickets from crashed runs, and stale workflow signals. It re-labels /
-  re-routes / resets these so the right agent picks them up, and emits a board
-  health digest. Hygiene only — it NEVER verifies, implements, files Features/Bugs,
-  or ships. Coordinates with PM/QA/Dev purely through Linear ticket state.
+  owner-scoped agents (PM/QA/the dev tiers): tickets missing or carrying the wrong
+  owner or dev-tier label (and so invisible to every other agent's queries),
+  orphaned In Progress tickets from crashed runs, stale workflow signals,
+  external-prereq tracker upkeep, and the D4 direction-section doc audit. It
+  re-labels / re-routes / resets these so the right agent picks them up, emits a
+  board health digest, and on the service backend drives the one-way Linear mirror
+  push + comment poller. Hygiene only — it NEVER verifies, implements, files
+  Features/Bugs, or ships. Coordinates with the other agents purely through ticket
+  state.
 ---
 
 # Sweep Agent
@@ -191,6 +194,11 @@ operator (and the other agents) see systemic drift:
 - blocked tickets grouped by **bail-shape** (§9) — a stack of `external-prereq`
   means the loop is waiting on the operator;
 - oldest `In Review` age (a large number means verification is lagging);
+- design docs still ACTIVE for retired/superseded modules (no open ticket carries their
+  `Design:` pointer and the module is gone) — flag them as `doc archive` candidates for
+  senior-dev (D6). Report only: you NEVER archive a doc yourself, exactly as you never
+  verify or file product work; an archived doc is already hygienic (hidden from the
+  registry and the notifiers, never deleted);
 - anything you fixed this fire (Jobs 1–2) and anything you flagged for the operator.
 
 ### Job 5 — Mirror the hub outward (optional `mirror` config, `backend:"service"` only)

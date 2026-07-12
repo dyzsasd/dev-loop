@@ -16,8 +16,9 @@ product, the strategy doc, and the autonomy settings; the loop turns that into s
 verified increments and records what it learned.
 
 It is deliberately **substrate-agnostic**. New 1.x workspaces normally coordinate through
-**Linear** or the bundled **service hub**: an MCP system of record over `node:sqlite` with
-per-agent identity and a localhost web UI. The legacy machine-local file board is still
+**Linear** or the bundled **service hub**: a system of record over `node:sqlite` with
+per-agent identity and a localhost web UI, reached by agents through the `dev-loop` CLI by
+default (an MCP server remains as a sibling thin client over the same op layer). The legacy machine-local file board is still
 described in [`references/conventions.md`](../references/conventions.md) for compatibility, but
 it is not the recommended path for new workspaces. The agents and protocols stay the same.
 
@@ -35,13 +36,18 @@ dev-loop is three layers; the `npm i -g @dyzsasd/dev-loop` package ships all thr
 
 1. **Interface — the `dev-loop` CLI + the MCP.** The operation surface. The `dev-loop` command
    (`team` · `run` · `hub` · `doctor` · `metrics` · `notify` · …) is how *you* drive setup and
-   scheduling; the `dev-loop-hub` **MCP** server is how the *agents* read and write. Low-level
+   scheduling — and, since the CLI-first flip (D8), how the *agents* read and write the hub board
+   by default too (the `dev-loop` write verbs, identity from the fire env). The `dev-loop-hub`
+   **MCP** server remains a sibling thin client over the same op layer — the transport for
+   Linear-backend agents, `"mcp"`-interface fires (the `hub.agentInterface` rollback switch), and
+   external MCP hosts. Low-level
    commands such as `serve`, `daemon`, `seed`, `init-service`, and `mcp-merge` remain available for
    compatibility/debugging, but the 1.x operator path starts with `team init`.
 2. **Hub — the backend service.** A local system-of-record over `node:sqlite` (the `service`
    backend) that powers the **ticket system** and the **document system** (strategy/roadmap/design,
    versioned), and maintains the **per-project namespace** — each project's board, actors, and docs
-   are isolated. It runs as a localhost daemon with a read-only web UI. *(Linear or a machine-local
+   are isolated. It runs as a localhost daemon with a read-mostly, multi-project web UI
+   (project-scoped `/p/<key>/` routes; doc edit/publish is a double-gated opt-in). *(Linear or a machine-local
    file board are alternative ticket backends in the shared conventions; the hub is the one that
    adds per-agent identity, the doc system, and the namespace.)*
 3. **Agents — skills + plugin + scheduler.** The role-specialized agents are a set of **SKILLs**
@@ -78,7 +84,7 @@ label taxonomy, ticket templates, and protocols.
 
 | Agent | What it does |
 |---|---|
-| **`pm-agent`** | Reads the strategy doc, exercises the real product, files **Feature** tickets, proactively proposes improvements, **verifies** features that reach `In Review`, unblocks its own blocked tickets, and keeps the strategy doc current. Routes each ticket to a dev tier when the two-tier Dev is on. |
+| **`pm-agent`** | Reads the strategy doc, exercises the real product, files **Feature** tickets, proactively proposes improvements, **verifies** features that reach `In Review`, unblocks its own blocked tickets, and keeps the strategy doc current. Routes each ticket to a dev tier when the two-tier Dev is on. Respects `intake.mode`: under `"passive"` it originates nothing and only responds to explicit `needs-pm` intake (verification, unblocking, and grooming continue). |
 | **`qa-agent`** | Runs happy-path + edge-case tests in the configured test env, files **Bug** tickets (and `drift` → Improvement), **re-tests** bugs at `In Review`, routes each filed ticket to a dev tier, and clears info-blocks for Dev. |
 | **`dev-agent`** | Legacy single-Dev fallback. Pulls `Todo` tickets in priority order, grooms, implements, gates on build/test, self-reviews, ships per config, smoke-checks prod, and hands off to `In Review`. Use it only with `devSplit:false` / `--agents legacy`; the default `core` loop uses senior-dev + junior-dev. |
 | **`sweep-agent`** | Lifecycle janitor (slower cadence). Fixes the cracks: missing/wrong owner or **dev-tier** labels (invisible to every query → stranded), orphaned `In Progress` from crashed runs, stale signals, board-health reports. On the hub backend it also runs the optional **one-way Linear mirror** push. Hygiene only. |
@@ -119,10 +125,14 @@ The agents are intentionally simple. The value comes from the **workflows**: age
 to ticket state without a central orchestrator.
 
 ### 1. The core build loop
-PM (from the strategy doc) and QA (from testing) file `Todo` tickets → Dev claims in priority
-order → `In Progress` → ships → `In Review` → the **owner** verifies (PM for a Feature, QA for
-a Bug). **Pass → `Done`. Fail → close + file a follow-up** (a failed increment is *superseded,
-never silently reopened*, so history shows what shipped-but-failed vs what's queued).
+PM (from the strategy doc) and QA (from testing) file tickets into **`Backlog`**; PM grooms,
+dedupes, and **promotes to `Todo`** at pace under a depth cap (Backlog-first intake) → Dev
+claims in priority order → `In Progress` → ships → `In Review` → the **owner** verifies (PM
+for a Feature, QA for a Bug). **Pass → `Done`. Fail → close + file a follow-up** (a failed
+increment is *superseded, never silently reopened*, so history shows what shipped-but-failed
+vs what's queued). A project can also run **passive intake** (`intake.mode:"passive"`): PM
+originates no work of its own and only responds to explicit `needs-pm` asks, while
+verification, unblocking, and grooming continue unchanged.
 
 ### 2. Two-tier Dev — design-and-delegate *(default)*
 For a **new module or feature**, PM routes the ticket to **senior-dev**. Senior authors a
@@ -168,9 +178,11 @@ split-brain enforced — Linear is never read back as truth). Run the loop on th
 watch it in Linear.
 
 ### 9. Observe — the localhost web UI *(hub backend)*
-A persistent localhost daemon serves a read-mostly board, ticket detail, the roadmap editor,
-reports, and an activity/throughput view over the same SoR — so you *watch* the loop without
-touching it. Agents coordinate through MCP/the op API, not through the human web UI.
+A persistent localhost daemon serves a read-mostly board, ticket detail, the versioned doc
+pages (strategy/roadmap/design — viewing always; editing/publishing only behind the explicit
+double opt-in), reports, and an activity/throughput view over the same SoR — project-scoped
+under `/p/<key>/` with a server-side project index landing — so you *watch* the loop without
+touching it. Agents coordinate through the CLI/op API (or MCP), never through the human web UI.
 
 ---
 
