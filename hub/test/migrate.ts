@@ -71,15 +71,25 @@ const TICKETS_BEFORE = 4, COMMENTS_BEFORE = 2;
   v0.exec("CREATE TABLE document_versions (id TEXT PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES documents(id), version INTEGER NOT NULL, body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','current')), summary TEXT NOT NULL DEFAULT '', base_version INTEGER NOT NULL DEFAULT 0, author TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(doc_id, version));");
   v0.prepare("INSERT INTO documents(id,project_id,kind,slug,title,created_by,created_at,updated_at) VALUES('d0','p','strategy','strat','Strat','pm','t','t')").run();
   v0.prepare("INSERT INTO document_versions(id,doc_id,version,body,author,created_at) VALUES('dv0','d0',1,'goal one','pm','t')").run();
+  // D5: a pre-v4 mirror_map (the P7 ticket-only hub_kind CHECK) + a pushed row AND a create-pending
+  // (NULL linear_id) row — proves the v4 rebuild widens hub_kind to admit 'doc' and is lossless (both
+  // ticket mapping rows survive the DROP+RENAME byte-for-byte, crash-safety state included).
+  v0.exec("CREATE TABLE mirror_map (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), hub_kind TEXT NOT NULL DEFAULT 'ticket' CHECK(hub_kind IN ('ticket')), hub_id TEXT NOT NULL, linear_id TEXT, last_pushed_hash TEXT, last_pushed_at TEXT, created_at TEXT NOT NULL, UNIQUE(project_id, hub_kind, hub_id));");
+  v0.exec("CREATE INDEX idx_mirror_project ON mirror_map(project_id, hub_kind);");
+  v0.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,linear_id,last_pushed_hash,last_pushed_at,created_at) VALUES('m0','p','ticket','T0','lin_1','hash_1','t','t')").run();
+  v0.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,created_at) VALUES('m1','p','ticket','T1','t')").run();
   v0.exec("PRAGMA user_version=0");
   // sanity — this really IS a v0 DB: version 0 AND the old CHECK rejects 'Human-Blocked'.
   ok(uv(v0) === 0 && rejects(v0, "X", "Human-Blocked"), "DL-27: fixture is a genuine v0 DB (user_version=0; old CHECK rejects 'Human-Blocked')");
+  let v0DocRejected = false;
+  try { v0.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,created_at) VALUES('mx','p','doc','strat','t')").run(); } catch { v0DocRejected = true; }
+  ok(v0DocRejected, "D5: fixture mirror_map is genuinely pre-v4 (the ticket-only CHECK rejects hub_kind='doc')");
   v0.close();
 }
 
 // ── run the REAL migration via openDb() ──────────────────────────────────────
 const db = openDb(PATH);
-ok(uv(db) === 3, "DL-27/DL-52/DL-split: openDb migrated the v0 DB → user_version=3 (v1 state-widen + v2 channels.transport + v3 documents.kind+='design')");
+ok(uv(db) === 5, "DL-27/DL-52/DL-split/D5/D6: openDb migrated the v0 DB → user_version=5 (v1 state-widen + v2 channels.transport + v3 documents.kind+='design' + v4 mirror_map.hub_kind+='doc' + v5 documents.archived)");
 ok(count(db, "tickets") === TICKETS_BEFORE && count(db, "comments") === COMMENTS_BEFORE, "DL-27: migration is lossless (ticket + comment row counts preserved)");
 // FK children kept: the DROP+RENAME (with foreign_keys OFF) left no dangling comment→ticket references.
 ok((db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length === 0, "DL-27: FK children kept — foreign_key_check finds no violations after the rebuild");
@@ -108,11 +118,39 @@ ok(!insDoc("dC", "design", "module-a"), "DL-split: UNIQUE(project_id,slug) still
 ok(insDoc("dD", "notes", "n1"), "DL-split: a first 'notes' doc inserts");
 ok(!insDoc("dE", "notes", "n2"), "DL-split: singleton kinds stay one-per-kind — a 2nd 'notes' doc is rejected by the partial unique index uq_documents_singleton_kind");
 ok(!insDoc("dBad", "bogus", "z"), "DL-split: the widened kind CHECK still rejects an unknown kind ('bogus')");
+// D5 v4: the mirror_map rebuild is lossless and the widened hub_kind CHECK admits 'doc' (and only 'doc').
+ok(count(db, "mirror_map") === 2, "D5: v4 mirror_map rebuild is lossless (both ticket mapping rows preserved)");
+const m0 = db.prepare("SELECT hub_kind,hub_id,linear_id,last_pushed_hash,last_pushed_at FROM mirror_map WHERE id='m0'").get() as Record<string, unknown>;
+ok(m0.hub_kind === "ticket" && m0.hub_id === "T0" && m0.linear_id === "lin_1" && m0.last_pushed_hash === "hash_1" && m0.last_pushed_at === "t",
+  "D5: a pushed ticket mapping row survives the rebuild byte-for-byte (linear_id + hash + timestamp)");
+ok((db.prepare("SELECT linear_id FROM mirror_map WHERE id='m1'").get() as { linear_id: string | null }).linear_id === null,
+  "D5: a create-pending (NULL linear_id) mapping row survives the rebuild (crash-safety state kept)");
+const insMap = (id: string, kind: string, hubId: string): boolean => {
+  try { db.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,created_at) VALUES(?,?,?,?,'t')").run(id, "p", kind, hubId); return true; } catch { return false; }
+};
+// the rebuild added the doc-push provenance columns; pre-v4 ticket rows carry NULL in them (additive)
+const mmCols = (db.prepare("PRAGMA table_info(mirror_map)").all() as { name: string }[]).map((c) => c.name);
+ok(mmCols.includes("last_pushed_version") && mmCols.includes("last_pushed_body_hash"),
+  "D5: v4 rebuild added last_pushed_version + last_pushed_body_hash (the poller's provenance/baseline columns)");
+ok((db.prepare("SELECT last_pushed_version v, last_pushed_body_hash h FROM mirror_map WHERE id='m0'").get() as { v: unknown; h: unknown }).v === null,
+  "D5: pre-v4 rows carry NULL in the new columns (nothing back-filled, nothing invented)");
+ok(insMap("mD", "doc", "strat"), "D5: post-migration hub_kind CHECK accepts 'doc'");
+ok(!insMap("mDup", "doc", "strat"), "D5: UNIQUE(project_id, hub_kind, hub_id) still holds — a duplicate doc mapping is rejected");
+ok(insMap("mT2", "ticket", "strat"), "D5: uniqueness is per-kind — a 'ticket' mapping may share hub_id with a 'doc' mapping");
+ok(!insMap("mBad", "topic", "z"), "D5: the widened hub_kind CHECK still rejects an unmirrored kind ('topic' stays deferred)");
+// D6 v5: the ALTER added documents.archived, backfilled existing rows to 0, and new inserts default to 0.
+ok((db.prepare("PRAGMA table_info(documents)").all() as { name: string }[]).some((c) => c.name === "archived"),
+  "D6: v5 migration added the documents.archived column (ALTER on a pre-v5 documents table)");
+ok((db.prepare("SELECT archived FROM documents WHERE id='d0'").get() as { archived: number }).archived === 0,
+  "D6: the pre-v5 doc row backfilled to archived=0 (existing docs byte-for-byte visible)");
+ok((db.prepare("SELECT archived FROM documents WHERE id='dA'").get() as { archived: number }).archived === 0,
+  "D6: a post-migration insert without the column defaults to archived=0");
 db.close();
 
-// ── idempotent re-open: a second openDb on the now-v3 DB is the fast-path no-op (no re-migrate, data intact) ──
+// ── idempotent re-open: a second openDb on the now-v5 DB is the fast-path no-op (no re-migrate, data intact) ──
 const db2 = openDb(PATH);
-ok(uv(db2) === 3 && count(db2, "tickets") === TICKETS_BEFORE + 1, "DL-27/DL-52/DL-split: re-opening a v3 DB is idempotent (still v3; the prior HB row persists, no double-migrate)");
+ok(uv(db2) === 5 && count(db2, "tickets") === TICKETS_BEFORE + 1, "DL-27/DL-52/DL-split/D5/D6: re-opening a v5 DB is idempotent (still v5; the prior HB row persists, no double-migrate)");
+ok((db2.prepare("SELECT hub_kind FROM mirror_map WHERE id='mD'").get() as { hub_kind: string }).hub_kind === "doc", "D5: the doc mapping row persists across the idempotent re-open");
 db2.close();
 
 clean(PATH);

@@ -12,6 +12,10 @@ import { openDb } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { findProject } from "./seed.ts";
 import { hubDbPath } from "./paths.ts";
+// A1 (--json): the JSON mode dispatches the SAME list_issues/get_issue ops the MCP transports serve, so
+// `tickets --json` is byte-identical to `dev-loop op list_issues` / the stdio ok() body (the parity contract).
+// Reads stay reads: both ops only SELECT, so the query_only connection below still holds (AC5).
+import { agentOp, type AgentOp, type OpResult } from "./agentops.ts";
 
 const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]); // §3 terminal states — hidden unless --all
 const PRIORITY: Record<number, string> = { 1: "Urgent", 2: "High", 3: "Medium", 4: "Low", 0: "None" }; // §5 (mirrors daemonviews)
@@ -21,25 +25,63 @@ const prioOf = (p: number): string => PRIORITY[p] ?? String(p);
 const ownerOf = (labels: string[]): string => (labels.includes("pm") ? "pm" : labels.includes("qa") ? "qa" : "—");
 const parseArr = (j: string): string[] => { try { const a = JSON.parse(j); return Array.isArray(a) ? a : []; } catch { return []; } };
 
-interface ListRow { id: string; title: string; type: string; state: string; assignee: string | null; priority: number; labels: string; updated_at: string }
-interface DetailRow extends ListRow { description: string; created_at: string; related_to: string; duplicate_of: string | null }
+interface ListRow { id: string; title: string; type: string; state: string; assignee: string | null; priority: number; labels: string; related_to: string; updated_at: string }
+interface DetailRow extends ListRow { description: string; created_at: string; duplicate_of: string | null }
 
-// `dev-loop tickets [--all] [--state <name>] [--type <T>] [--owner <pm|qa>] [--label <name>] [--q <text>|<text>]` — board list, one line per ticket.
-function listTickets(db: DatabaseSync, projectId: string, args: string[]): number {
-  let all = false, state: string | undefined, q: string | undefined, type: string | undefined, owner: string | undefined, label: string | undefined;
+// A1: the read verbs' --json mode is a thin call-through to the SAME agentOp() the MCP transports dispatch —
+// the printed line is JSON.stringify(body), byte-identical to `dev-loop op <op>` and to the stdio ok() text.
+// list_issues/get_issue are the SYNC read ops (only channel/mirror ops are async), so the cast is safe.
+function emitJson(db: DatabaseSync, projectId: string, projectKey: string, actor: string, op: AgentOp, args: Record<string, unknown>): number {
+  const r = agentOp(op, db, projectId, projectKey, actor, args) as OpResult;
+  if (r.status >= 200 && r.status < 300) { console.log(JSON.stringify(r.body)); return 0; }
+  console.error(JSON.stringify(r.body));
+  return 1;
+}
+
+// `dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT|TEXT] [--assignee A]
+//  [--related-to ID] [--updated-since ISO] [--fields summary|full] [--limit N] [--json]` — board list.
+function listTickets(db: DatabaseSync, projectId: string, projectKey: string, actor: string, args: string[]): number {
+  let all = false, json = false;
+  let state: string | undefined, q: string | undefined, type: string | undefined, owner: string | undefined, label: string | undefined;
+  let assignee: string | undefined, relatedTo: string | undefined, updatedSince: string | undefined, fields: string | undefined, limit: number | undefined;
+  const VALUE_FLAGS = new Set(["--state", "--q", "--type", "--owner", "--label", "--assignee", "--related-to", "--updated-since", "--fields", "--limit"]);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--all") all = true;
-    else if (a === "--state" || a === "--q" || a === "--type" || a === "--owner" || a === "--label") {
+    else if (a === "--json") json = true; // A1: op-shaped JSON output (see below)
+    else if (VALUE_FLAGS.has(a)) {
       const v = args[++i];
       if (v === undefined) { console.error(`dev-loop: ${a} needs a value`); return 2; } // a dangling flag is a usage error, not a silent no-filter (DL-91)
-      if (a === "--state") state = v; else if (a === "--q") q = v; else if (a === "--type") type = v; else if (a === "--owner") owner = v; else label = v;
+      if (a === "--state") state = v; else if (a === "--q") q = v; else if (a === "--type") type = v; else if (a === "--owner") owner = v; else if (a === "--label") label = v;
+      else if (a === "--assignee") assignee = v; else if (a === "--related-to") relatedTo = v; else if (a === "--updated-since") updatedSince = v;
+      else if (a === "--fields") {
+        if (v !== "summary" && v !== "full") { console.error(`dev-loop: --fields must be 'summary' or 'full'`); return 2; }
+        fields = v;
+      } else { // --limit
+        const n = Number(v);
+        if (!Number.isInteger(n) || n <= 0) { console.error(`dev-loop: --limit must be a positive integer`); return 2; }
+        limit = n;
+      }
     } else if (a.startsWith("-")) { console.error(`dev-loop: unknown flag '${a}'`); return 2; } // DL-93: reject unknown flags — never swallow the following arg as positional --q (the `--type Bug` footgun)
     else if (q === undefined) q = a; // positional free-text (parity with the web board's `q`)
   }
+  // ── A1 --json: the op-shaped list — EXACTLY `op list_issues` (updated_at DESC, terminal states included,
+  // the op's default cap) so the output byte-equals the op dispatcher / stdio for the same filters. --all is
+  // meaningless here (nothing is hidden) and --owner is a render-side concept — both are human-view flags.
+  if (json) {
+    if (all || owner) { console.error("dev-loop: --all/--owner are human-view flags — not available with --json (the op output already includes terminal states; filter the JSON yourself)"); return 2; }
+    // the op SILENTLY ignores an empty assignee (its truthy gate) — a no-op filter is a footgun, so refuse
+    // it loudly here; the human view keeps '' = unassigned (a local render capability the op lacks).
+    if (assignee !== undefined && assignee.trim() === "") { console.error("dev-loop: --assignee '' (unassigned) is not expressible in --json mode — the list_issues op ignores an empty assignee; use the human view"); return 2; }
+    const a: Record<string, unknown> = {};
+    if (state) a.state = state; if (type) a.type = type; if (label) a.label = label; if (q) a.query = q;
+    if (assignee !== undefined) a.assignee = assignee; if (relatedTo) a.relatedTo = relatedTo;
+    if (updatedSince) a.updatedSince = updatedSince; if (fields) a.fields = fields; if (limit !== undefined) a.limit = limit;
+    return emitJson(db, projectId, projectKey, actor, "list_issues", a);
+  }
   // board order (priority ASC, updated_at DESC) — verbatim from daemonviews.boardPage so the terminal view matches the web view.
   let rows = db.prepare(
-    "SELECT id,title,type,state,assignee,priority,labels,updated_at FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC",
+    "SELECT id,title,type,state,assignee,priority,labels,related_to,updated_at FROM tickets WHERE project_id=? ORDER BY priority ASC, updated_at DESC",
   ).all(projectId) as unknown as ListRow[];
   if (!all && !state) rows = rows.filter((r) => !TERMINAL.has(r.state)); // default (only when no explicit --state): non-terminal only — an explicit --state always wins, incl. a terminal one (DL-91)
   if (state) rows = rows.filter((r) => r.state === state);
@@ -47,6 +89,15 @@ function listTickets(db: DatabaseSync, projectId: string, args: string[]): numbe
   if (owner) rows = rows.filter((r) => ownerOf(parseArr(r.labels)) === owner);  // DL-93: owner via the §4 routing-label helper (same helper the render uses below)
   if (label) rows = rows.filter((r) => parseArr(r.labels).includes(label));     // DL-93: arbitrary label membership (e.g. --label blocked / edge-case / tech-debt)
   if (q) { const needle = q.toLowerCase(); rows = rows.filter((r) => r.id.toLowerCase().includes(needle) || (r.title ?? "").toLowerCase().includes(needle)); }
+  // A1 filters (human mode mirrors the op semantics): assignee "me" → the resolved actor, "" → unassigned.
+  if (assignee !== undefined) {
+    const who = assignee === "me" ? actor : assignee.trim() === "" ? null : assignee;
+    rows = rows.filter((r) => r.assignee === who);
+  }
+  if (relatedTo) rows = rows.filter((r) => parseArr(r.related_to).includes(relatedTo));
+  if (updatedSince) rows = rows.filter((r) => r.updated_at >= updatedSince);
+  if (limit !== undefined) rows = rows.slice(0, limit);
+  // --fields is a payload-size knob for the JSON mode; the human list already renders summary lines (no-op here).
   if (rows.length === 0) { console.log("No tickets."); return 0; }
   for (const r of rows) {
     console.log([
@@ -57,10 +108,17 @@ function listTickets(db: DatabaseSync, projectId: string, args: string[]): numbe
   return 0;
 }
 
-// `dev-loop ticket <id>` — one ticket's full detail + its comments (chronological).
-function showTicket(db: DatabaseSync, projectId: string, args: string[]): number {
+// `dev-loop ticket <id> [--json]` — one ticket's full detail + its comments (chronological).
+function showTicket(db: DatabaseSync, projectId: string, projectKey: string, actor: string, args: string[]): number {
+  let json = false;
+  for (const a of args) {
+    if (a === "--json") json = true;
+    else if (a.startsWith("-")) { console.error(`dev-loop: unknown flag '${a}'`); return 2; } // DL-93 discipline, same as the list verb
+  }
   const id = args.find((a) => !a.startsWith("-"));
-  if (!id) { console.error("dev-loop: usage: dev-loop ticket <id>"); return 2; }
+  if (!id) { console.error("dev-loop: usage: dev-loop ticket <id> [--json]"); return 2; }
+  // A1 --json: EXACTLY `op get_issue` (the ticket + comments + referencedBy) — byte-parity with the op layer.
+  if (json) return emitJson(db, projectId, projectKey, actor, "get_issue", { id });
   // §2 isolation: scope by project_id so a read can never reach another project's ticket.
   const t = db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as DetailRow | undefined;
   if (!t) { console.error(`dev-loop: ticket '${id}' not found in this project.`); return 1; }
@@ -83,7 +141,8 @@ function showTicket(db: DatabaseSync, projectId: string, args: string[]): number
 
 function main(): number {
   const [sub, ...rest] = process.argv.slice(2); // sub = "tickets" | "ticket" (cli.ts passes it as argv[0])
-  const { projectKey, projectFromCwd, projectResolved } = resolveIdentity(); // a read needs no DEVLOOP_ACTOR
+  // a read needs no DEVLOOP_ACTOR to run; the resolved actor only parameterizes assignee:"me" + attribution-free reads
+  const { actor, projectKey, projectFromCwd, projectResolved } = resolveIdentity();
   if (!projectResolved) {
     console.error("dev-loop: no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in ~/.dev-loop/projects.json.");
     return 1;
@@ -96,7 +155,7 @@ function main(): number {
     console.error(`dev-loop: project '${projectKey}' (${srcDesc}) is not seeded in the hub DB. Seed it once (\`dev-loop seed ${projectKey} "<name>" <UNIQUE_PREFIX>\`), or set DEVLOOP_PROJECT / run from inside the project repo.`);
     return 1;
   }
-  return sub === "ticket" ? showTicket(db, projectId, rest) : listTickets(db, projectId, rest);
+  return sub === "ticket" ? showTicket(db, projectId, projectKey, actor, rest) : listTickets(db, projectId, projectKey, actor, rest);
 }
 
 process.exit(main());

@@ -200,7 +200,8 @@ Certain actions must never be performed by an agent. In the hub they have **no M
 - enable the Linear mirror,
 - **publish a strategy/roadmap document draft→current** (§14, §16) — *(correction, as shipped:
   no such `dev-loop-hub` CLI subcommand exists; the operator publishes via the MCP `doc.publish`
-  tool (`DEVLOOP_ACTOR=operator`) or the daemon web `/roadmap` page)*,
+  tool (`DEVLOOP_ACTOR=operator`) or the daemon web doc pages (`/doc/<slug>` — every gated kind,
+  F4/D3; `/roadmap` redirects there))*,
 - apply a §17 SKILL/conventions change (this remains a git commit — see §16).
 
 **Honest scope of this protection.** Because a determined/compromised agent can bypass MCP and write `hub.db` directly (§4), "no tool surface" defends against honest-but-buggy agents and prompt-injection-via-MCP — **not** a malicious process. That is why the *truly* unforgeable authorizations (self-modify, irreversible prod ops) are kept **outside** the hub entirely (§16), where the existing §17/§22/§23 firewalls already put them.
@@ -214,7 +215,7 @@ Certain actions must never be performed by an agent. In the hub they have **no M
 In the hub, isolation stops being label self-discipline and becomes a **WHERE clause the agent cannot widen**:
 
 - `projects` is a real row. **Every** tool takes a **required** `project` argument; there is **no unscoped query** (project cannot be omitted). Every query is implicitly `WHERE project_id = ?`.
-- The shim is **bound to one project** by the launcher (`DEVLOOP_PROJECT`), and the server validates membership; a call naming a different project is `FORBIDDEN`.
+- The shim is **bound to one project** by the launcher (`DEVLOOP_PROJECT`), and the server validates membership; a call naming a different project is `FORBIDDEN`. *(Status 2026-07, D1: the FORBIDDEN default stands for delivery actors, but the `project` arg is now a shipped, role-gated override — stewards (sweep/ops/reflect/communication) may name any project or `_team`, PM may name `_team` only — enforced at the shared `agentOp()` choke point on both transports; see `docs/design/2026-07-review-decisions.md` D1.)*
 - This removes the §18 "a glob must never escape the board dir" hazard entirely — it is a column predicate, not a filesystem path.
 - The `dev-loop` label is **retained on tickets** only for cross-backend parity (so a mirrored/exported ticket still reads correctly); it is no longer load-bearing for isolation.
 
@@ -338,7 +339,7 @@ Note the MVP **does not** ship `agent_tokens`, `project_members`, a `labels` reg
 
 These are **not** MVP. LK5 is reinterpreted as "shape the schema so they can attach cleanly," not "build them into core."
 
-- **Versioned docs (P4).** `documents` + append-only `document_versions` with optimistic concurrency (`base_version != current` ⇒ `CONFLICT`, enforced server-side — as shipped, for **every** doc `kind`, not just the `{strategy, roadmap}` scope originally proposed here — so concurrent PM/Director edits can't silently lose updates). The §20 doc-base (Vision/Goals/Non-goals/Current state/Personas/Glossary/Decisions/Candidate-ideas) and the roadmap live here with `doc.history` / `doc.diff`. **Publication is operator-only (§9):** a doc carries `status ∈ {draft, current}`; agents (incl. the Director) may write **draft** versions, but only the operator flips `draft→current` via the CLI — this encodes LK8's "sign off before build" as a **persistent doc-state**, not a one-time event.
+- **Versioned docs (P4).** `documents` + append-only `document_versions` with optimistic concurrency (`base_version != current` ⇒ `CONFLICT`, enforced server-side — as shipped, for **every** doc `kind`, not just the `{strategy, roadmap}` scope originally proposed here — so concurrent PM/Director edits can't silently lose updates). The §20 doc-base (Vision/Goals/Non-goals/Current state/Personas/Glossary/Decisions/Candidate-ideas) and the roadmap live here with `doc.history` / `doc.diff`. **Publication is operator-only (§9):** a doc carries `status ∈ {draft, current}`; agents (incl. the Director) may write **draft** versions, but only the operator flips `draft→current` via the CLI — this encodes LK8's "sign off before build" as a **persistent doc-state**, not a one-time event. **Retirement (D6, schema v5):** `documents.archived` (0/1) — the `doc.archive` op flips it for **`design` docs only** (a retired module's living design; singleton kinds refuse); an archived doc is hidden from the web `/docs` index by default (`?archived=1` shows it) and excluded from the drafts-pending chip and the daemon doc notifiers, but is **never deleted** — the doc, its versions, and its history stay fully readable.
 - **Discussion (P5 — SHIPPED v0.16.0, conventions §25).** `topics` / `posts` (per-project,
   attributable, per-round) — the **decision is INLINE** on the topic (`topics.decision` + `closed_at`,
   a 1:1 terminal conclusion), **not** a separate `decisions` table. "Topics addressed to me,
@@ -384,6 +385,25 @@ human-visibility only — never disaster recovery.**
   the banner. **DEFERRED:** the launcher/`doctor` dual-backend refusal (refuse to arm a `linear`-backed
   fire for a `live` hub project; flag a project configured for both) — re-openable if a project ever
   runs both backends at once.
+- **Doc mirror (D5, 2026-07):** when the `mirror` config carries a Linear `projectId`, `mirror.push`
+  ALSO projects the hub's **published `strategy`/`roadmap`/`decisions` + latest `design`** docs
+  (`notes` never) as **Linear Documents** parented to that project — schema-v4 widens
+  `mirror_map.hub_kind` to `('ticket','doc')` (`hub_id` = the doc slug). Same discipline as tickets:
+  title marker **`[hub:doc:<projectKey>/<slug>]`** (the project-key discriminator is load-bearing —
+  slugs collide across projects), pinned "body edits here are overwritten; comment here or file a
+  ticket" banner, content-hash skip, mapping-row-first crash safety, DL-11 DRYRUN preview; doc counts
+  ride a separate `docs` result field. **Drafts stay private** — a gated doc re-mirrors only on
+  operator publish. The mapping row stamps `last_pushed_version` + `last_pushed_body_hash` (what
+  Linear actually holds) at push time.
+- **Comment→intake poller (D5):** `mirror.pollComments` (CLI `dev-loop mirror poll`, Sweep Job 5's
+  second call) reads comments on the mirrored Documents and files ONE `Backlog + dev-loop + pm +
+  needs-pm` intake ticket per **new human comment** (provenance: doc slug + mirrored version + quoted
+  text + comment URL; bot/integration comments ignored) and ONE **High** intake per detected
+  Linear-side **body edit** (compared against the last-PUSHED body baseline, so the flag still fires
+  while a newer hub version awaits its push; the edit is never written back — the next push overwrites
+  it). Dedup is a **machine-local acted-ledger** (`<dataDir>/mirror-state/<projectKey>.json`, the
+  reports-state.json pattern), not hub state. Still strictly one-way: the poller's Linear reads are
+  intake-only — no hub ticket/doc field is ever written from Linear content.
 
 ---
 
@@ -458,7 +478,7 @@ monpick today: `backend` absent (⇒ linear), `linearProject:MonPick`, a Linear-
 
 - **SKILL bodies: unchanged.** Each agent's single §0 line — "all ticket operations go through the configured backend (§18)" — now resolves to the hub. The bodies still say `save_issue`, still re-pass the full REPLACE-style label set, still verify-after-write; the hub honors all of that.
 - **conventions.md: one additive edit.** §18 gains the `service` value and the third operation-mapping column (§12/§13). §11 config gains the optional `hub` block. No existing rule changes meaning. (Applied by the operator under §17 — a human git commit, like any conventions change.)
-- **The launcher: a small, real change.** `dev-loop run` exports `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT` per fire and injects the hub MCP; an external launcher must do the same before each fire. This is operator-owned runtime wiring, not Claude plugin state.
+- **The launcher: a small, real change.** `dev-loop run` exports `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB` per fire, and — for coding agents on the `"mcp"` interface (`hub.agentInterface`, D8) — injects the hub MCP; agents on the `"cli"` interface (the claude default since D9; the codex default since the 2026-07-11 P8 certification) get no injection and reach the hub through the PATH-installed `dev-loop` write verbs. An external launcher must export the same identity env before each fire. This is operator-owned runtime wiring, not Claude plugin state.
 
 **The footgun-removal SKILL rewrite is a SEPARATE, explicit, operator-driven, §17-gated phase with its own effort line — never an MVP byproduct.** Realizing the atomic-claim / add-remove-labels / enum-state benefits requires editing the bodies of the agent SKILLs (e.g. dev-agent's "re-fetch; if it's not yours, another Dev won" and "re-pass the full label set"). §17 forbids agents from rewriting their own SKILLs; only the operator may, in a coordinated, human-reviewed pass. Until that pass lands, the hardened primitives ship but sit unused, and the loop runs on the mimicked Linear-shaped contract. Presenting "footguns designed out" as a free win is the contradiction this section resolves.
 

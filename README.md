@@ -19,41 +19,51 @@ in one message a day.
 
 ## Quick start
 
+Three commands, nothing to configure — the default **service** backend (a bundled local
+sqlite hub + web board) needs no external service, no plugin, and no MCP setup:
+
 ```bash
 npm i -g @dyzsasd/dev-loop        # Node ≥ 23.6; installs the `dev-loop` CLI
+dev-loop init                     # guided setup — Enter through the defaults (or --yes)
+dev-loop run                      # ONE scheduler drives the whole team; ^C stops everything
 ```
 
-If you want the `/dev-loop:*` slash commands in Claude Code, register the npm-backed plugin
-marketplace once, then run the two `/plugin ...` commands printed by the CLI inside Claude Code:
+`init` creates the workspace and your first project (hub board row auto-seeded), offers to
+register your first repo (`--detect` reads build/CI facts straight from the clone), then ends
+with the doctor verdict and a `NEXT:` line naming the single most-blocking step. What you get:
+
+- a **web board**: `dev-loop hub start` → `http://127.0.0.1:8787` (`dev-loop run` also
+  auto-starts it; `dev-loop hub status` to inspect);
+- agents that reach the board through the `dev-loop` CLI directly — with Claude Code on the
+  service backend there is nothing else to install;
+- safe defaults: `mode: dry-run` (preview with `dev-loop run --once --dry-run`, flip with
+  `dev-loop team set team.mode live`), `prod` deploys stay manual, autonomy guarded —
+  `dev-loop doctor` re-prints the verdict + `NEXT:` line any time.
+
+A **workspace** is one directory = one team = one backend (the local hub, or one Linear team)
+= one `dev-loop.json`. Repos are real clones inside it; projects are virtual groupings of
+repos. All state lives under `<workspace>/.dev-loop/`, so **copying the folder migrates
+machines**.
+
+### Using Linear as the backend
+
+`dev-loop init --backend linear` asks for the Linear team name (or defers it — fill later
+with `dev-loop team set team.linearTeam "My Team"`). Linear onboarding runs in Claude Code,
+so two one-time setups apply to this backend:
+
+- Configure the **Linear MCP** in Claude Code **user scope** (doctor warns `W05` if the
+  stewards couldn't reach the board).
+- Register the npm-backed plugin marketplace for the `/dev-loop:*` slash commands, then run
+  the two `/plugin ...` commands printed by the CLI inside Claude Code:
 
 ```bash
 dev-loop install-claude-plugin
 ```
 
-A **workspace** is one directory = one team = one Linear team (or one local hub) = one
-`dev-loop.json`. Repos are real clones inside it; projects are virtual groupings of repos.
-All state lives under `<workspace>/.dev-loop/`, so **copying the folder migrates machines**.
-
-```bash
-# 1. Create the workspace (pure CLI — no LLM, no backend calls)
-dev-loop team init --dir ~/work/my-team --key my-team \
-  --backend linear --linear-team "My Team" --deploy dev=auto,prod=manual --comms lark
-cd ~/work/my-team
-
-# 2. In Claude Code (plugin installed) or another coding CLI with the dev-loop skills available:
-#    create + backend-sync a project, then add repos
-#      /dev-loop:add-project      — find-or-creates the Linear/hub project, labels, strategy doc
-#      /dev-loop:add-repo         — clone + detect build/CI checks + deploy & ops-probe interview
-
-# 3. Verify, preview, run
-dev-loop doctor                   # read-only health verdict
-dev-loop run --once --dry-run     # preview every agent's exact command (model + effort each)
-dev-loop run                      # ONE scheduler drives the whole team; ^C stops everything
-```
-
-For a **linear** team, configure the Linear MCP in Claude Code **user scope** (doctor warns
-`W05` if the stewards couldn't reach the board). For a **service** team, `dev-loop run`
-auto-starts the local hub (`dev-loop hub status` to inspect it).
+Then, inside Claude Code: `/dev-loop:add-project` (find-or-creates the Linear project,
+labels, strategy doc) and `/dev-loop:add-repo` (clone + detect build/CI checks + deploy &
+ops-probe interview). Verify and run exactly as above: `dev-loop doctor`,
+`dev-loop run --once --dry-run`, `dev-loop run`.
 
 ### Moving to another machine
 
@@ -87,7 +97,9 @@ and the validated mutators — you rarely hand-edit it:
 - `repos` — the physical registry: path, build/typecheck commands, PR merge checks,
   deploy shape, health probes.
 - `projects` — virtual delivery units referencing repos: strategy doc, test env,
-  `intake.todoDepthCap` (how deep PM keeps the committed queue, default 10), launch overrides
+  `intake.mode` (`autonomous` default; `passive` = PM originates nothing and only responds
+  to explicit `needs-pm` asks — verification and grooming continue), `intake.todoDepthCap`
+  (how deep PM keeps the committed queue, default 10), launch overrides
   per agent (`agents.pm = { model, effort, cadence }` …).
 
 Full field reference: [`references/config-schema.md`](references/config-schema.md). The agent
@@ -115,6 +127,7 @@ first — the rows and the scheduler share one rotation cursor and never double-
 
 | Command | What it does |
 |---|---|
+| `dev-loop init [--dir d] [--yes]` | guided onboarding: workspace + first project/repo, ends on doctor's `NEXT:` line |
 | `dev-loop install-claude-plugin` | register the npm-backed Claude Code plugin marketplace and print the two `/plugin` commands |
 | `dev-loop team init / repair` | create a workspace / fix after a machine move |
 | `dev-loop team add-project / add-repo` | validated config writes (the `/dev-loop:*` skills call these) |

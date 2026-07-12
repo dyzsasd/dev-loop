@@ -40,6 +40,11 @@ const TRANSPORT_CHECK = TRANSPORTS.map((t) => `'${t}'`).join(", ");
 // DOC_KINDS in docstore.ts (kept in lock-step by hand; docstore.ts is the LEAF that the zod enum imports).
 const DOC_KINDS = ["strategy", "roadmap", "decisions", "notes", "design"] as const;
 const DOC_KIND_CHECK = DOC_KINDS.map((k) => `'${k}'`).join(", ");
+// D5 (v4): same no-drift discipline for mirror_map.hub_kind — the CHECK in BOTH the fresh SCHEMA and the
+// v4 rebuild is built from this one source, so adding a mirrored kind can't desync create vs migrate.
+// 'doc' = the D5 one-way doc mirror (published strategy/roadmap/decisions + latest design → Linear Documents).
+const HUB_KINDS = ["ticket", "doc"] as const;
+const HUB_KIND_CHECK = HUB_KINDS.map((k) => `'${k}'`).join(", ");
 
 // ─── Schema ────────────────────────────────────────────────────────────────
 const SCHEMA = `
@@ -127,6 +132,7 @@ CREATE TABLE IF NOT EXISTS documents (
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','current')),
   current_version INTEGER NOT NULL DEFAULT 0,   -- 0 = never published; else the live PUBLISHED version
+  archived INTEGER NOT NULL DEFAULT 0,          -- D6 retention (v5): a RETIRED design doc — hidden by default in /docs + excluded from chips/notifiers, NEVER deleted (history stays readable). design-only by policy (docstore.docArchive refuses singleton kinds)
   created_by TEXT NOT NULL,                     -- actor HANDLE (like tickets.created_by), not a FK to actors(id)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -198,11 +204,13 @@ CREATE INDEX IF NOT EXISTS idx_chanmsg_inbox ON channel_messages(project_id, dir
 CREATE TABLE IF NOT EXISTS mirror_map (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
-  hub_kind TEXT NOT NULL DEFAULT 'ticket' CHECK(hub_kind IN ('ticket')), -- tickets only for P7; docs/topics deferred
+  hub_kind TEXT NOT NULL DEFAULT 'ticket' CHECK(hub_kind IN (${HUB_KIND_CHECK})), -- P7 tickets + (v4, D5) docs; topics deferred. hub_id: ticket id / doc slug
   hub_id TEXT NOT NULL,
   linear_id TEXT,                  -- the mirrored Linear issue id; NULL = create pending (crash-safe)
   last_pushed_hash TEXT,           -- sha256 of the HUB-derived mirror content; an unchanged ticket is SKIPPED (incremental)
   last_pushed_at TEXT,
+  last_pushed_version INTEGER,     -- (D5, docs only) the hub doc version the last push projected — intake provenance stays exact even when the hub has since moved on
+  last_pushed_body_hash TEXT,      -- (D5, docs only) sha256 of the NORMALIZED pushed content — the poller's body-edit baseline (valid even mid pending-push); NULL for tickets
   created_at TEXT NOT NULL,
   UNIQUE(project_id, hub_kind, hub_id)
 );
@@ -228,10 +236,18 @@ const documentsHasTableLevelKindUnique = (db: DatabaseSync): boolean => {
   const r = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='documents'").get() as { sql: string } | undefined;
   return !!r && /UNIQUE\s*\(\s*project_id\s*,\s*kind\s*\)/i.test(r.sql);
 };
+// pre-v4 marker: the stored mirror_map CREATE SQL carries the P7 ticket-only CHECK `hub_kind IN ('ticket')`
+// (the v4 rebuild widens it to HUB_KIND_CHECK). Same guard discipline as v3: the SCHEMA re-exec above created
+// a MISSING mirror_map with the new CHECK already, so only a genuine pre-v4 table (old CHECK in its stored
+// SQL) is rebuilt; a fresh/already-rebuilt table is skipped. The regex tolerates arbitrary inner whitespace.
+const mirrorMapHasTicketOnlyCheck = (db: DatabaseSync): boolean => {
+  const r = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='mirror_map'").get() as { sql: string } | undefined;
+  return !!r && /CHECK\s*\(\s*hub_kind\s+IN\s*\(\s*'ticket'\s*\)\s*\)/i.test(r.sql);
+};
 const userVersion = (db: DatabaseSync): number =>
   (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
 
-const SCHEMA_VERSION = 3; // bump when adding a migration below (DL-25 → v1; DL-52 channels.transport → v2; DL split documents.kind+='design' → v3)
+const SCHEMA_VERSION = 5; // bump when adding a migration below (DL-25 → v1; DL-52 channels.transport → v2; DL split documents.kind+='design' → v3; D5 mirror_map.hub_kind+='doc' → v4; D6 documents.archived → v5)
 function migrate(db: DatabaseSync): void {
   if (userVersion(db) >= SCHEMA_VERSION) return; // fast path: already current, no txn
   db.exec("PRAGMA foreign_keys=OFF");
@@ -314,6 +330,49 @@ function migrate(db: DatabaseSync): void {
         `);
       }
       db.exec("PRAGMA user_version=3");
+    }
+    if (userVersion(db) < 4) {
+      // v4 (D5): widen mirror_map.hub_kind CHECK to admit 'doc' (the one-way doc mirror). SQLite cannot
+      // ALTER a CHECK, so this is the DL-25/v3 lossless rebuild shape: explicit column copy (never
+      // SELECT *), FK off (the migrate() wrapper) for the DROP+RENAME, index recreated. CHECK comes from
+      // HUB_KIND_CHECK (no drift). Guard on the OLD TABLE SHAPE (the stored ticket-only CHECK), not on
+      // user_version alone: a fresh DB's mirror_map was created WITH the widened CHECK by the SCHEMA
+      // re-exec above ⇒ skip the rebuild. Existing 'ticket' rows are copied byte-for-byte (additive only).
+      if (tableExists(db, "mirror_map") && mirrorMapHasTicketOnlyCheck(db)) {
+        db.exec(`
+          CREATE TABLE mirror_map_new (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id),
+            hub_kind TEXT NOT NULL DEFAULT 'ticket' CHECK(hub_kind IN (${HUB_KIND_CHECK})),
+            hub_id TEXT NOT NULL,
+            linear_id TEXT,
+            last_pushed_hash TEXT,
+            last_pushed_at TEXT,
+            last_pushed_version INTEGER,
+            last_pushed_body_hash TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(project_id, hub_kind, hub_id)
+          );
+          INSERT INTO mirror_map_new (id,project_id,hub_kind,hub_id,linear_id,last_pushed_hash,last_pushed_at,created_at)
+            SELECT id,project_id,hub_kind,hub_id,linear_id,last_pushed_hash,last_pushed_at,created_at FROM mirror_map;
+          DROP TABLE mirror_map;
+          ALTER TABLE mirror_map_new RENAME TO mirror_map;
+          CREATE INDEX IF NOT EXISTS idx_mirror_project ON mirror_map(project_id, hub_kind);
+        `);
+      }
+      db.exec("PRAGMA user_version=4");
+    }
+    if (userVersion(db) < 5) {
+      // v5 (D6): add documents.archived (0/1, default 0) — retired design docs get a metadata flag
+      // (hidden by default, never deleted). Additive ALTER with a default (the v2 channels.transport
+      // shape — no table rebuild needed; existing rows backfill to 0, byte-for-byte otherwise).
+      // A SEPARATE version, NOT an extension of v4: v4 is unreleased but this branch has already
+      // stamped user_version=4 into live dev DBs (the operator's own hub.db) — extending v4 would
+      // silently skip them. Guarded on column presence: a fresh/SCHEMA-created documents table
+      // already carries `archived` ⇒ skip the ALTER (no "duplicate column" error).
+      if (tableExists(db, "documents") && !columnExists(db, "documents", "archived"))
+        db.exec("ALTER TABLE documents ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+      db.exec("PRAGMA user_version=5");
     }
     db.exec("COMMIT");
   } catch (e) {

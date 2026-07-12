@@ -73,6 +73,8 @@ async function callRaw(c: Client, name: string, args: Record<string, unknown>): 
 let server: ReturnType<typeof createDaemon> | undefined;
 let rdb: ReturnType<typeof openDb> | undefined;
 let wdb: ReturnType<typeof openDb> | undefined;
+const servers: ReturnType<typeof createDaemon>[] = []; // the extra D1 _team daemon — torn down alongside the main one
+const rdbs: ReturnType<typeof openDb>[] = [];           // its read+write connections
 try {
   // ─── seed one ticket through the REAL stdio MCP write path (so the daemon reads what an agent wrote) ───
   const pm = await stdio("pm"); // also the cross-path read verifier below (reads are actor-agnostic)
@@ -230,7 +232,53 @@ try {
   // THE 100% DROP-IN TRIPWIRE: the shim proxies EVERY server.ts tool (a future server.ts tool not proxied trips this)
   const stdioTools = (await pm.listTools()).tools.map((t: any) => t.name).sort();
   const shimTools = (await devShim.listTools()).tools.map((t: any) => t.name).sort();
-  ok(JSON.stringify(stdioTools) === JSON.stringify(shimTools) && shimTools.length === 23, `the shim proxies ALL ${stdioTools.length} server.ts tools — a 100% drop-in (got shim=${shimTools.length}, stdio=${stdioTools.length})`);
+  ok(JSON.stringify(stdioTools) === JSON.stringify(shimTools) && shimTools.length === 25, `the shim proxies ALL ${stdioTools.length} server.ts tools — a 100% drop-in (got shim=${shimTools.length}, stdio=${stdioTools.length})`);
+
+  // ═══ D1: the `project` override rides BOTH transports identically (shim body ≡ stdio zod arg) ═══════════════
+  // The override is resolved at the agentops.ts choke point, so the shim (which just forwards `project` in the
+  // op-API JSON body) and the direct-db server MUST return byte-identical results AND byte-identical refusals.
+  execFileSync("node", ["src/seed.ts", "shm2", "Shim Sibling", "SH2", DB], { encoding: "utf8" });
+  const sweepShim = await shim({ DEVLOOP_ACTOR: "sweep", DEVLOOP_RUN_DIR: RUN_DIR });
+  const sweepStd = await stdio("sweep");
+  const devStd = await stdio("dev");
+  // steward override WRITE through the shim lands in the sibling project, attributed to sweep
+  const ovT = await call(sweepShim, "save_issue", { project: "shm2", title: "Steward override via shim", type: "Improvement", labels: ["dev-loop", "pm"] });
+  ok(ovT.id.startsWith("SH2-") && ovT.created_by === "sweep", `D1: shim steward save_issue project:shm2 → created in the SIBLING with its prefix, created_by sweep (got ${ovT.id})`);
+  // differential parity on the override READS: shim ≡ stdio, byte-identical
+  ok(JSON.stringify(await call(sweepShim, "list_issues", { project: "shm2" })) === JSON.stringify(await call(sweepStd, "list_issues", { project: "shm2" })), "D1 differential parity: shim list_issues project:shm2 ≡ stdio (byte-identical sibling board)");
+  ok(JSON.stringify(await call(sweepShim, "get_issue", { project: "shm2", id: ovT.id })) === JSON.stringify(await call(sweepStd, "get_issue", { project: "shm2", id: ovT.id })), "D1 differential parity: shim get_issue project:shm2 ≡ stdio (byte-identical overridden read)");
+  // FORBIDDEN parity: a delivery actor's override is refused with the SAME error text on both transports
+  const devOvShim = await callRaw(devShim, "list_issues", { project: "shm2" });
+  const devOvStd = await callRaw(devStd, "list_issues", { project: "shm2" });
+  ok(devOvShim.isError && /FORBIDDEN/.test(devOvShim.text), `D1: shim dev list_issues project:shm2 → FORBIDDEN (got ${devOvShim.text})`);
+  ok(devOvShim.text === devOvStd.text, "D1 differential parity: the FORBIDDEN refusal is byte-identical shim ≡ stdio (one resolver)");
+  // not-found parity: an ALLOWED actor's unknown key gets the same not-found shape on both transports
+  const ghostShim = await callRaw(sweepShim, "list_issues", { project: "nope" });
+  const ghostStd = await callRaw(sweepStd, "list_issues", { project: "nope" });
+  ok(ghostShim.isError && /no such project 'nope'/.test(ghostShim.text) && ghostShim.text === ghostStd.text, `D1 differential parity: steward → unknown key → identical not-found on both transports (got ${ghostShim.text})`);
+  // THE SHIPPED STEWARD SHAPE: a steward booted `_team` (exactly how the scheduler + `dev-loop hub start`
+  // wire it — the workspace daemon is keyed to _team) reaches a SIBLING project through the _team daemon.
+  // Requires _team's OWN settings to opt in (agentApiEnabled reads the BOOTED project) — the regression this
+  // guards: a dormant _team mount would kill every steward override on the daemon transport.
+  execFileSync("node", ["src/seed.ts", "_team", "Team Intake", "TEAM", DB], { encoding: "utf8" });
+  const teamDb = openDb(DB);
+  const teamProjectId = findProject(teamDb, "_team")!;
+  teamDb.prepare("UPDATE projects SET settings_json=? WHERE id=?").run(JSON.stringify({ hub: { transport: "daemon" } }), teamProjectId);
+  teamDb.close();
+  const teamRdb = openDb(DB); teamRdb.exec("PRAGMA query_only=ON");
+  const teamWdb = openDb(DB);
+  rdbs.push(teamRdb, teamWdb);
+  const teamServer = createDaemon({ db: teamRdb, projectId: teamProjectId, projectKey: "_team", writeDb: teamWdb, actor: "operator" });
+  servers.push(teamServer);
+  teamServer.listen(0, "127.0.0.1");
+  await once(teamServer, "listening");
+  const teamPort = (teamServer.address() as { port: number }).port;
+  writeFileSync(`${RUN_DIR}/daemon-_team.json`, JSON.stringify({ project: "_team", pid: process.pid, port: teamPort, host: "127.0.0.1", url: `http://127.0.0.1:${teamPort}`, startedAt: new Date().toISOString() }, null, 2));
+  const teamSweepShim = await shim({ DEVLOOP_ACTOR: "sweep", DEVLOOP_PROJECT: "_team", DEVLOOP_RUN_DIR: RUN_DIR });
+  ok((await call(teamSweepShim, "whoami", {})).project === "_team", "D1: the steward shim boots against the _team daemon (its own runfile, the shipped shape)");
+  const teamOv = await call(teamSweepShim, "save_comment", { project: "shm2", issueId: ovT.id, body: "steward via the _team daemon" });
+  ok(teamOv.author === "sweep" && teamOv.ticket_id === ovT.id, `D1: sweep booted _team → override write into the sibling THROUGH the _team daemon (got ${JSON.stringify(teamOv)})`);
+  ok(JSON.stringify(await call(teamSweepShim, "get_issue", { project: "shm2", id: ovT.id })) === JSON.stringify(await call(sweepStd, "get_issue", { project: "shm2", id: ovT.id })), "D1 differential parity: the _team-booted steward's override read ≡ stdio (byte-identical)");
 
   // ═══ port discovery via a DEVLOOP_HUB_PORT OVERRIDE (no runfile present) — proves 8787 is not hardcoded ════
   const overrideShim = await shim({ DEVLOOP_ACTOR: "dev", DEVLOOP_RUN_DIR: EMPTY_RUN, DEVLOOP_HUB_PORT: String(port) });
@@ -276,8 +324,10 @@ try {
 } finally {
   for (const c of clients) { try { await c.close(); } catch {} } // tear down EVERY spawned MCP subprocess
   try { server?.close(); } catch {}
+  for (const s of servers) { try { s.close(); } catch {} }
   try { rdb?.close(); } catch {}
   try { wdb?.close(); } catch {}
+  for (const d of rdbs) { try { d.close(); } catch {} }
 }
 
 console.log(fails === 0 ? "\nSHIM_OK" : `\n${fails} CHECK(S) FAILED`);

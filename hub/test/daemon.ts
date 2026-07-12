@@ -23,11 +23,11 @@ const ok = (cond: boolean, m: string) => { console.log((cond ? "✅ " : "❌ ") 
 execFileSync("node", ["src/seed.ts", "dmn", "Daemon Project", "DMN", DB], { encoding: "utf8" });
 
 // ─── seed data through the real MCP write path (the daemon must read what agents wrote) ───
-async function as(actor: string): Promise<Client> {
+async function as(actor: string, project = "dmn"): Promise<Client> {
   const c = new Client({ name: `dtest-${actor}`, version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "dmn", DEVLOOP_HUB_DB: DB },
+    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB },
   }));
   return c;
 }
@@ -71,8 +71,9 @@ async function getHtml(path: string): Promise<{ status: number; type: string; te
   return { status: r.status, type: r.headers.get("content-type") ?? "", text: await r.text() };
 }
 
-// ─── DL-2: the server-rendered web UI (board at /, ticket detail at /ticket/:id) ───
-// GET / — the board UI renders the seeded tickets grouped into state columns
+// ─── DL-2: the server-rendered web UI (board, ticket detail at /ticket/:id) ───
+// GET / — with exactly ONE real project seeded, / 302-redirects to /p/dmn/ (F2/D2 single-project
+// allowance) and fetch follows it, so every "/" board request below exercises redirect → board.
 const board = await getHtml("/");
 ok(board.status === 200 && board.type.includes("text/html"), "GET / → 200 text/html (web UI board)");
 ok(board.text.includes("<!doctype html") && board.text.includes('class="board"'), "board page is an HTML doc with the board container");
@@ -110,7 +111,7 @@ ok(ghost.status === 404 && ghost.type.includes("text/html"), "GET /ticket/<unkno
 
 // DL-8 — the detail view surfaces relatedTo / duplicateOf as click-through links, ONLY when present
 const relView = await getHtml(`/ticket/${bug.id}`);          // bug relatedTo=[feat.id]
-ok(relView.text.includes("<dt>Related</dt>") && relView.text.includes(`href="/ticket/${feat.id}"`), "DL-8: a ticket with relatedTo → a Related row linking to /ticket/<id>");
+ok(relView.text.includes("<dt>Related</dt>") && relView.text.includes(`href="/p/dmn/ticket/${feat.id}"`), "DL-8: a ticket with relatedTo → a Related row linking to the ticket (canonical /p/<key>/ form)");
 const noRelView = await getHtml(`/ticket/${feat.id}`);       // feat has no relations
 ok(!noRelView.text.includes("<dt>Related</dt>") && !noRelView.text.includes("Duplicate of"), "DL-8: a ticket with no relations → no Related/Duplicate row (no dangling labels)");
 
@@ -137,8 +138,8 @@ ok(act.text.includes("Acceptance rate"), "DL-79: an acceptance-rate section rend
 ok(act.text.includes("Per-actor activity") && act.text.includes(">pm<"), "DL-17 AC3: per-actor activity lists the actor (pm)");
 // AC4 — cycle time per recently-Done ticket (the bug: create → Done)
 ok(act.text.includes("Cycle time") && act.text.includes(bug.id), "DL-17 AC4: cycle-time section lists the recently-Done ticket");
-// AC1/AC6 — the header nav links to /activity (rendered on every page, e.g. the board)
-ok(board.text.includes('href="/activity"'), "DL-17 AC1/AC6: the header nav links to /activity");
+// AC1/AC6 — the header nav links to /activity (rendered on every page, e.g. the board; F2: canonical /p/<key>/ form)
+ok(board.text.includes('href="/p/dmn/activity"'), "DL-17 AC1/AC6: the header nav links to the project's /activity");
 // AC7 — non-GET is refused 405 (read-only), consistent with the other read routes
 ok((await get("/activity", "POST")).status === 405, "DL-17 AC7: POST /activity → 405 (read-only daemon)");
 
@@ -219,9 +220,15 @@ ok(post.status === 405, "POST /api/tickets → 405 (read-only daemon — no muta
 const del = await get(`/api/tickets/${feat.id}`, "DELETE");
 ok(del.status === 405, "DELETE /api/tickets/:id → 405 (read-only)");
 
-// ─── DL-3: roadmap view/edit write surface — markdown render, CAS, operator-publish gate, §17 firewall ───
+// ─── DL-3 (→ F4/D3): the doc write surface — markdown render, CAS, operator-publish gate, §17 firewall.
+// GET /roadmap is now a 302 onto the roadmap DOC page (/doc/<slug>); the edit/publish forms live there
+// and POST /doc/<slug>/save|publish (the legacy /roadmap/save|publish aliases keep working, resolving
+// the slug server-side). ALL doc writes ride the DL-29 double gate (canWrite + humanWrite.enabled), so
+// enable the flag for this block (it is restored OFF after DL-19, before the DL-29 gate assertions).
 // Writable daemons take a SEPARATE writable connection + an actor; the read connection stays query_only.
 // One runs as the OPERATOR (may publish), one as a NON-operator (drafts only).
+const setHumanWrite = (on: boolean) => { const s = openDb(DB); s.prepare("UPDATE projects SET settings_json=? WHERE id=?").run(JSON.stringify({ humanWrite: { enabled: on } }), projectId); s.close(); };
+setHumanWrite(true);
 async function startWritable(actor: string, roadmapRepoFileStrategy?: string): Promise<{ base: string; close: () => void }> {
   const wdb = openDb(DB);                                   // writable — backs ONLY the /roadmap/* routes
   const rdb = openDb(DB); rdb.exec("PRAGMA query_only=ON");
@@ -240,19 +247,25 @@ const opd = await startWritable("operator");
 const devd = await startWritable("dev");          // a non-operator actor
 const verifier = await as("pm");                  // an MCP client to inspect doc state precisely
 
-// AC1 — GET /roadmap renders the current roadmap doc (markdown) + version/status, + the edit/publish controls.
+// D3 — GET /roadmap 302-redirects onto the roadmap doc page (its slug resolved server-side).
+const rmRedir = await fetch(opd.base + "/roadmap", { redirect: "manual" });
+ok(rmRedir.status === 302 && rmRedir.headers.get("location") === "/p/dmn/doc/roadmap", `D3: GET /roadmap → 302 to the roadmap doc page (got ${rmRedir.status} ${rmRedir.headers.get("location")})`);
+await rmRedir.arrayBuffer();
+// AC1 — the (followed) roadmap doc page renders the current doc (markdown) + version/status + the edit control.
 const rm = await gettext(opd.base, "/roadmap");
-ok(rm.status === 200 && rm.text.includes("<li>DL-1 daemon foundation</li>"), "GET /roadmap → 200 with the roadmap body RENDERED from markdown (- item → <li>)");
-ok(rm.text.includes("Published (v1)"), "roadmap view shows the version/status (published v1)");
-ok(rm.text.includes('action="/roadmap/save"'), "roadmap shows the edit form (draft-save)");
-ok(rm.text.includes('action="/roadmap/publish"'), "operator daemon shows the publish control");
+ok(rm.status === 200 && rm.text.includes("<li>DL-1 daemon foundation</li>"), "GET /roadmap (followed) → 200 with the roadmap body RENDERED from markdown (- item → <li>)");
+ok(rm.text.includes("Published (v1)"), "roadmap doc page shows the version/status (published v1)");
+ok(rm.text.includes('action="/p/dmn/doc/roadmap/save"'), "roadmap doc page shows the edit form (draft-save; canonical /doc/<slug>/save action)");
+ok(!rm.text.includes('action="/p/dmn/doc/roadmap/publish"'), "published == latest ⇒ no publish control (nothing pending to publish)");
 
 // AC2 — edit saves a DRAFT via the CAS; it does NOT publish (published current stays v1).
 const save = await postForm(opd.base, "/roadmap/save", { baseVersion: "1", body: "# Roadmap\n- DL-1 daemon foundation\n- DL-2 web UI\n", summary: "add DL-2" });
-ok(save.status === 303 && save.location === "/roadmap", "POST /roadmap/save → 303 redirect (Post/Redirect/Get)");
+ok(save.status === 303 && save.location === "/p/dmn/roadmap", "POST /roadmap/save → 303 redirect (Post/Redirect/Get, canonical /p/<key>/ target)");
 ok((await get("/api/docs/roadmap")).body.current_version === 1, "after save, the PUBLISHED current is still v1 (a draft never auto-publishes)");
 const rm2 = await gettext(opd.base, "/roadmap");
 ok(rm2.text.includes("Draft (v2, unpublished)") && rm2.text.includes("<li>DL-2 web UI</li>"), "roadmap now shows the v2 DRAFT (unpublished) with the new content");
+ok(rm2.text.includes('action="/p/dmn/doc/roadmap/publish"') && rm2.text.includes("Publish v2 → current"), "a pending draft ⇒ the operator page shows the publish control bound to the EXACT version (v2)");
+ok(rm2.text.includes('class="chip-drafts"') && rm2.text.includes("1 draft pending"), "docs P6a: a pending draft renders the header drafts chip (count for this project)");
 
 // AC2 — optimistic CAS: a stale baseVersion is surfaced as a CONFLICT (409), never last-write-wins.
 const stale = await postForm(opd.base, "/roadmap/save", { baseVersion: "1", body: "STALE OVERWRITE — keep my edit", summary: "racing" });
@@ -264,14 +277,14 @@ ok((await call(verifier, "doc.history", { kind: "roadmap" })).length === 2, "the
 
 // AC3 — only the OPERATOR may publish; a non-operator daemon must not (UI hides it AND the endpoint 403s).
 const devView = await gettext(devd.base, "/roadmap");
-ok(!devView.text.includes('action="/roadmap/publish"') && devView.text.includes('action="/roadmap/save"'), "non-operator UI hides publish, still offers draft-save");
+ok(!devView.text.includes('action="/p/dmn/doc/roadmap/publish"') && devView.text.includes('action="/p/dmn/doc/roadmap/save"'), "non-operator UI hides publish, still offers draft-save");
 const devPub = await postForm(devd.base, "/roadmap/publish", { version: "2" });
 ok(devPub.status === 403 && /FORBIDDEN/.test(devPub.text), "non-operator POST /roadmap/publish → 403 FORBIDDEN (operator-publish gate)");
 ok((await call(verifier, "doc.get", { kind: "roadmap" })).current_version === 1, "after the forbidden publish attempt, published current is STILL v1");
 
 // AC3 — the operator CAN publish the v2 draft → current.
 const opPub = await postForm(opd.base, "/roadmap/publish", { version: "2" });
-ok(opPub.status === 303 && opPub.location === "/roadmap", "operator POST /roadmap/publish → 303 (published)");
+ok(opPub.status === 303 && opPub.location === "/p/dmn/roadmap", "operator POST /roadmap/publish → 303 (published)");
 const nowPub = await call(verifier, "doc.get", { kind: "roadmap" });
 ok(nowPub.current_version === 2 && nowPub.version === 2, "operator publish moved the live roadmap → v2");
 
@@ -317,7 +330,7 @@ const rfs = await startWritable("operator", "docs/STRATEGY.md");
 const rfsView = await gettext(rfs.base, "/roadmap");
 ok(rfsView.text.includes(BANNER) && rfsView.text.includes("docs/STRATEGY.md") && rfsView.text.includes('class="notice n-info"'),
    "DL-83: repo-file-strategy daemon → /roadmap shows the neutral divergence banner (n-info, not n-err) naming the strategyDoc");
-ok(rfsView.text.includes('action="/roadmap/save"'),
+ok(rfsView.text.includes('action="/p/dmn/doc/roadmap/save"'),
    "DL-83: the banner is informational — it does NOT hide the existing edit control (AC2)");
 const xss = await startWritable("operator", "docs/<script>.md");
 ok((await gettext(xss.base, "/roadmap")).text.includes("docs/&lt;script&gt;.md"),
@@ -357,6 +370,12 @@ const sameO = await rawPost(opPort, "/roadmap/save", { origin: `http://127.0.0.1
 ok(sameO.status === 303, `DL-19 AC3: a same-origin submit (matching Origin/Host) still saves → 303 (got ${sameO.status})`);
 ok((await call(verifier, "doc.history", { kind: "roadmap" })).length === baseV + 1, "DL-19 AC3: the same-origin save DID create a new draft (the guard allows legitimate writes)");
 
+// F4/D3 — doc writes ride the DL-29 double gate: with humanWrite OFF the doc-save POST is NOT matched
+// (→ the read-only 405), and the doc page renders NO edit form (the affordance and the route close together).
+setHumanWrite(false);
+ok((await postForm(opd.base, "/doc/roadmap/save", { baseVersion: "1", body: "gated" })).status === 405, "F4: humanWrite OFF ⇒ POST /doc/<slug>/save → 405 (double gate — route absent, like the ticket writes)");
+ok(!(await gettext(opd.base, "/roadmap")).text.includes('action="/p/dmn/doc/roadmap/save"'), "F4: humanWrite OFF ⇒ the doc page hides the edit form (affordance follows the gate)");
+
 // ── DL-10: agent reports view (read-only filesystem source) — seed a temp §22 reports tree ───────
 const RROOT = "/tmp/hub-reports/reports";
 try { rmSync("/tmp/hub-reports", { recursive: true }); } catch {}
@@ -377,7 +396,7 @@ ok(repIdx.text.includes("dev-agent") && repIdx.text.includes("pm-agent"), "repor
 ok(repIdx.text.includes("2026-06-23") && repIdx.text.includes("2026-06-22") && repIdx.text.includes("2026-W26"), "lists daily + weekly dated reports");
 ok(repIdx.text.indexOf("2026-06-23") < repIdx.text.indexOf("2026-06-22"), "dailies are most-recent-first");
 ok(!repIdx.text.includes("点评"), "the *.review.md 点评 sibling is EXCLUDED from the listing (§22)");
-ok(repIdx.text.includes('href="/reports/dev-agent/daily/2026-06-23"'), "each report links to its per-report route");
+ok(repIdx.text.includes('href="/p/dmn/reports/dev-agent/daily/2026-06-23"'), "each report links to its per-report route (canonical /p/<key>/ form)");
 
 // AC2 — a selected report renders read-only (markdown rendered) with a back-link (no dead end)
 const repView = await getHtml("/reports/dev-agent/daily/2026-06-23");
@@ -399,17 +418,17 @@ try { rmSync("/tmp/hub-reports", { recursive: true }); } catch {}
 
 // ── DL-29: opt-in human web-write routes (create/comment/move/assign) — gated by humanWrite.enabled,
 // the same localhost CSRF/DNS-rebinding guard, attributed to the daemon actor (operator). Reuses `opd`
-// (operator writable daemon); humanWrite is read FRESH per request so a live toggle takes effect. ───────
-const setHumanWrite = (on: boolean) => { const s = openDb(DB); s.prepare("UPDATE projects SET settings_json=? WHERE id=?").run(JSON.stringify({ humanWrite: { enabled: on } }), projectId); s.close(); };
+// (operator writable daemon); humanWrite is read FRESH per request so a live toggle takes effect
+// (setHumanWrite is defined at the DL-3/F4 doc-write block above, which shares the same gate). ───────
 
 // AC1 — humanWrite DISABLED ⇒ POST is not a write route → falls through to 405 (byte-identical read-only).
 ok((await postForm(opd.base, "/ticket", { title: "should 405" })).status === 405, "DL-29 AC1: POST /ticket with humanWrite DISABLED → 405 (byte-identical read-only)");
-ok(!(await gettext(opd.base, "/")).text.includes('action="/ticket"'), "DL-29: board shows NO create form when humanWrite disabled");
+ok(!(await gettext(opd.base, "/")).text.includes('action="/p/dmn/ticket"'), "DL-29: board shows NO create form when humanWrite disabled");
 
 setHumanWrite(true);
 // AC1/AC3 — same-origin create (postForm sends no Origin ⇒ allowed) → 303 PRG; attributed to operator; reads back.
 const created = await postForm(opd.base, "/ticket", { title: "Human-filed via board", type: "Bug" });
-ok(created.status === 303 && /^\/ticket\/DMN-\d+$/.test(created.location ?? ""), `DL-29 AC1: POST /ticket (enabled, same-origin) → 303 to the new ticket (got ${created.status} ${created.location})`);
+ok(created.status === 303 && /^\/p\/dmn\/ticket\/DMN-\d+$/.test(created.location ?? ""), `DL-29 AC1: POST /ticket (enabled, same-origin) → 303 to the new ticket (got ${created.status} ${created.location})`);
 const nid = (created.location ?? "").split("/").pop()!;
 const nt = (await get(`/api/tickets/${nid}`)).body;
 ok(nt.title === "Human-filed via board" && nt.type === "Bug" && nt.state === "Todo", "DL-29: the created ticket reads back (title/type/Todo) via the API + board");
@@ -430,8 +449,8 @@ ok((await postForm(opd.base, `/ticket/${nid}/assign`, { assignee: "ghost" })).st
 ok((await postForm(opd.base, `/ticket/${nid}/assign`, { assignee: "" })).status === 303 && (await get(`/api/tickets/${nid}`)).body.assignee === null, "DL-29: assign with an empty handle → unassigned (null)");
 // render — the forms appear only when enabled (the dormant flag drives the UI too).
 const tHtml = (await gettext(opd.base, `/ticket/${nid}`)).text;
-ok(tHtml.includes(`action="/ticket/${nid}/comment"`) && tHtml.includes(`action="/ticket/${nid}/move"`) && tHtml.includes(`action="/ticket/${nid}/assign"`), "DL-29: the ticket page renders the comment/move/assign forms when enabled");
-ok((await gettext(opd.base, "/")).text.includes('action="/ticket"'), "DL-29: the board renders the create form when enabled");
+ok(tHtml.includes(`action="/p/dmn/ticket/${nid}/comment"`) && tHtml.includes(`action="/p/dmn/ticket/${nid}/move"`) && tHtml.includes(`action="/p/dmn/ticket/${nid}/assign"`), "DL-29: the ticket page renders the comment/move/assign forms when enabled (canonical /p/<key>/ actions)");
+ok((await gettext(opd.base, "/")).text.includes('action="/p/dmn/ticket"'), "DL-29: the board renders the create form when enabled");
 
 // ─── DL-86: a FAILED human write RE-RENDERS the page as HTML with the error inline (+ preserved input), NOT raw JSON ───
 // (before: any non-ok write dead-ended on a bare {error} JSON page — the operator lost their place and typed input).
@@ -444,14 +463,14 @@ const asFail = await postForm(opd.base, `/ticket/${nid}/assign`, { assignee: "gh
 ok(asFail.status === 400 && asFail.text.includes('class="notice') && asFail.text.includes("unknown assignee") && !asFail.text.trimStart().startsWith("{"), "DL-86: a rejected assign re-renders the ticket page as HTML with the error, not raw JSON");
 // (c) a rejected CREATE (empty title) → the BOARD re-renders as HTML with the error + the create form intact, not JSON.
 const crFail = await postForm(opd.base, "/ticket", { title: "   " });
-ok(crFail.status === 400 && crFail.text.includes('class="notice') && crFail.text.includes("title required") && crFail.text.includes('action="/ticket"') && !crFail.text.trimStart().startsWith("{"), "DL-86: a rejected create re-renders the board as HTML (error + create form), not raw JSON");
+ok(crFail.status === 400 && crFail.text.includes('class="notice') && crFail.text.includes("title required") && crFail.text.includes('action="/p/dmn/ticket"') && !crFail.text.trimStart().startsWith("{"), "DL-86: a rejected create re-renders the board as HTML (error + create form), not raw JSON");
 // (d) the rejected writes changed NOTHING — the re-render is side-effect-free (state/assignee unchanged from the DL-29 block).
 const after86 = (await get(`/api/tickets/${nid}`)).body;
 ok(after86.state === "In Review" && after86.assignee === null, "DL-86: the rejected move/assign left the ticket unchanged (re-render is side-effect-free)");
 // (e) AC2/AC3 input-preservation (unit): the only NON-empty write failures are unreachable over HTTP (createTicket/
 //     addComment reject empties; a missing ticket 404s with no page), so exercise the preservation slot directly —
 //     ticketPage keeps a typed comment + boardPage keeps a typed title, both HTML-escaped (DL-14-style).
-const tpKeep = ticketPage(ddb, projectId, nid, true, { notice: { kind: "error", msg: "boom" }, submittedComment: "draft <b>keep</b>" });
+const tpKeep = ticketPage(ddb, projectId, "dmn", nid, true, { notice: { kind: "error", msg: "boom" }, submittedComment: "draft <b>keep</b>" });
 ok(!!tpKeep && tpKeep.includes("draft &lt;b&gt;keep&lt;/b&gt;") && tpKeep.includes('class="notice'), "DL-86 AC2: ticketPage preserves the typed comment in the textarea (HTML-escaped) + shows the notice");
 const bpKeep = boardPage(ddb, projectId, "dmn", {}, true, undefined, { notice: { kind: "error", msg: "title required" }, submittedTitle: "kept <i>title</i>" });
 ok(bpKeep.includes('value="kept &lt;i&gt;title&lt;/i&gt;"') && bpKeep.includes("title required"), "DL-86 AC3: boardPage preserves the typed title (escaped) + shows the notice");
@@ -485,11 +504,11 @@ const swim = await getHtml("/?group=assignee");
 ok(swim.text.includes('class="swimlanes"') && swim.text.includes('class="lane-h"') && swim.text.includes("@dev") && swim.text.includes("unassigned"), "DL-31: ?group=assignee renders assignee swimlanes incl. an unassigned lane");
 ok(swim.text.includes('class="board"'), "DL-31: each swimlane reuses the aligned state columns (.board) — server-rendered, no client JS");
 // the group toggle is the discoverable, deep-linkable entry point; filters preserve the active view.
-ok(chipBoard.text.includes('href="/?group=assignee"'), "DL-31: the default board exposes a group→assignee toggle link");
+ok(chipBoard.text.includes('href="/p/dmn/?group=assignee"'), "DL-31: the default board exposes a group→assignee toggle link");
 const swimFiltered = await getHtml("/?group=assignee&type=Bug");
 ok(swimFiltered.text.includes('name="group" value="assignee"'), "DL-31: a filter within the swimlane view preserves group (hidden input carries it through a search)");
-ok(swimFiltered.text.includes('class="lbl clearall" href="/?group=assignee"'), "DL-31: 'clear all' in the swimlane view drops every filter but KEEPS the view (→ /?group=assignee, not a no-op)");
-ok((await getHtml("/?type=Bug")).text.includes('class="lbl clearall" href="/"'), "DL-31: 'clear all' on the default (non-grouped) board still clears to / (unchanged from DL-20)");
+ok(swimFiltered.text.includes('class="lbl clearall" href="/p/dmn/?group=assignee"'), "DL-31: 'clear all' in the swimlane view drops every filter but KEEPS the view (→ /p/dmn/?group=assignee, not a no-op)");
+ok((await getHtml("/?type=Bug")).text.includes('class="lbl clearall" href="/p/dmn/"'), "DL-31: 'clear all' on the default (non-grouped) board still clears to the project board (unchanged from DL-20 modulo the F2 canonical prefix)");
 ok(swimFiltered.text.includes(bCard) && !swimFiltered.text.includes(fCard), "DL-31: filters still narrow within swimlanes (?type=Bug → only the Bug card, feat excluded)");
 
 // ═══ DL-45: the board composition summary band (by type / owner / priority; non-terminal; filter-aware) ═══
@@ -518,6 +537,103 @@ ok(bandFeat.text.includes("Feature <b>1</b>") && bandFeat.text.includes("Bug <b>
 // AC4 — under ?group=assignee swimlanes the band summarizes the same filtered set
 const bandSwim = await getHtml(`/?label=${BL}&group=assignee`);
 ok(bandSwim.text.includes('class="summary"') && bandSwim.text.includes("pm <b>2</b>") && bandSwim.text.includes("qa <b>1</b>"), "DL-45 AC4: the band renders + is correct under ?group=assignee swimlanes");
+
+// ═══ F2 (D2): multi-project routing — /p/<key>/ prefix, project-index landing, SSE scoping ═══
+// Up to here the hub held ONE real project (dmn), so bare GET / redirected to its board (D2's
+// single-project allowance) — pin that contract first, then seed a sibling + the _team intake row
+// and assert the index landing, per-project boards, isolation, and per-project SSE scope.
+const redir = await fetch(base + "/", { redirect: "manual" });
+ok(redir.status === 302 && redir.headers.get("location") === "/p/dmn/", `F2: single real project → GET / 302-redirects to /p/dmn/ (got ${redir.status} ${redir.headers.get("location")})`);
+await redir.arrayBuffer();
+const redirQ = await fetch(base + "/?type=Bug", { redirect: "manual" });
+ok(redirQ.headers.get("location") === "/p/dmn/?type=Bug", "F2: the single-project redirect preserves the filter query (old bookmarked / URLs stay filtered)");
+await redirQ.arrayBuffer();
+
+// bare-path boot fallback (the D2 compat contract): old non-root URLs keep serving the BOOT project
+ok((await getHtml(`/ticket/${feat.id}`)).text.includes("Daemon foundation"), "F2: bare /ticket/:id still serves the boot project (bookmark fallback)");
+ok((await getHtml("/roadmap")).status === 200, "F2: bare /roadmap still serves the boot project");
+// …and the explicit /p/dmn/ board equals the boot board
+const dmnBoard = await getHtml("/p/dmn/");
+ok(dmnBoard.status === 200 && dmnBoard.text.includes(feat.id), "F2: /p/dmn/ (the canonical form) renders the boot project's board");
+
+// seed a SIBLING project + the _team intake pseudo-project (the workspace-hub layout), each with a ticket
+execFileSync("node", ["src/seed.ts", "sib", "Sibling Project", "SIB", DB], { encoding: "utf8" });
+execFileSync("node", ["src/seed.ts", "_team", "Team intake", "TEAM", DB], { encoding: "utf8" });
+const sibPm = await as("pm", "sib");
+const sibFeat = await call(sibPm, "save_issue", { title: "Sibling-only work", type: "Feature", labels: ["dev-loop", "Feature", "pm"], priority: 3 });
+await sibPm.close();
+const teamPm = await as("pm", "_team");
+await call(teamPm, "save_issue", { title: "Cross-project ask", type: "Feature", labels: ["dev-loop", "Feature", "pm"], priority: 3 });
+await teamPm.close();
+
+// the PROJECT INDEX: >1 real project ⇒ bare GET / renders one card per project, Team intake pinned last
+const idx = await getHtml("/");
+ok(idx.status === 200 && idx.text.includes('class="projects"'), "F2: with >1 real project GET / renders the PROJECT INDEX (no busiest-project redirect)");
+ok(idx.text.includes('href="/p/dmn/"') && idx.text.includes('href="/p/sib/"') && idx.text.includes("Sibling Project"), "F2: the index lists one card per real project (key + name → /p/<key>/)");
+ok(idx.text.includes("Team intake") && idx.text.includes('href="/p/_team/"') && idx.text.includes('class="pcard team"'), "F2: _team renders as the visually-distinct 'Team intake' card, not a peer project");
+ok(idx.text.indexOf('href="/p/sib/"') < idx.text.indexOf('href="/p/_team/"'), "F2: the Team-intake card is PINNED LAST (after every real project)");
+ok(idx.text.includes("1 open intake ticket"), "F2: the Team-intake card carries its intake count");
+ok(idx.text.includes('class="pstate"') && idx.text.includes('class="dot"'), "F2: project cards show per-state open counts as colored state dots");
+ok(idx.text.includes("last activity"), "F2: project cards show a last-activity timestamp");
+ok(idx.text.includes("/api/stream?all=1"), "F2: the index page's live script subscribes to the ALL-projects stream scope");
+
+// /p/<key>/ — a sibling project's board from the SAME daemon, fully scoped
+const sibBoard = await getHtml("/p/sib/");
+ok(sibBoard.status === 200 && sibBoard.text.includes(sibFeat.id) && sibBoard.text.includes("Sibling-only work"), "F2: /p/sib/ renders the SIBLING project's board from the one daemon");
+ok(!sibBoard.text.includes(feat.id), "F2: the sibling board never leaks the boot project's tickets (per-request scoping)");
+ok(sibBoard.text.includes(`href="/p/sib/ticket/${sibFeat.id}"`), "F2: sibling board links stay under /p/sib/ (every view link rides href())");
+ok(sibBoard.text.includes('<a class="proj" href="/"') && sibBoard.text.includes('aria-current="page"') && sibBoard.text.includes('href="/p/sib/docs"'), "F2: header = project switcher (name → /) + project-scoped nav with an active state (docs replaced roadmap — D3)");
+ok((await getHtml(`/p/sib/ticket/${sibFeat.id}`)).text.includes("Sibling-only work"), "F2: /p/<key>/ticket/:id renders project-scoped");
+ok((await getHtml(`/p/sib/ticket/${feat.id}`)).status === 404, "F2: a boot-project ticket id under /p/sib/ → 404 (project isolation)");
+ok((await getHtml("/p/sib/activity")).status === 200, "F2: /p/<key>/activity renders for the sibling");
+const noProj = await getHtml("/p/nope/");
+ok(noProj.status === 404 && noProj.type.includes("text/html") && noProj.text.includes("No project"), "F2: /p/<unknown>/ → friendly HTML 404 naming the key");
+// defense-in-depth (codex 2026-07-11): a traversal-shaped key is refused by grammar BEFORE any DB
+// lookup or filesystem use (the key later feeds reportsRoot's path joins). Bare/percent-encoded dot
+// segments ("..", "%2e%2e") are already collapsed by the WHATWG URL parse and never reach routing;
+// an ENCODED slash survives as one segment and decodes to a multi-name path — SAFE_KEY refuses it.
+ok((await getHtml("/p/..%2f../reports")).status === 404, "F2: /p/<'../..'>/… (encoded-slash traversal key) → 404 by the SAFE_KEY grammar gate");
+ok((await getHtml("/p/a%2Fb/")).status === 404, "F2: a key with an encoded '/' never resolves (single-safe-segment grammar)");
+ok((await get("/p/sib/api/tickets")).status === 404, "F2: /p/<key>/api/* (non-stream) → 404 — the JSON surface (incl. the D1-gated op-API) stays boot-scoped");
+
+// writes under the prefix land in the RESOLVED project (per-project DL-29 gate: enable sib's humanWrite)
+const sibId = findProject(ddb, "sib")!;
+{ const s = openDb(DB); s.prepare("UPDATE projects SET settings_json=? WHERE id=?").run(JSON.stringify({ humanWrite: { enabled: true } }), sibId); s.close(); }
+const sibCreate = await postForm(opd.base, "/p/sib/ticket", { title: "Filed under the sibling", type: "Bug" });
+ok(sibCreate.status === 303 && /^\/p\/sib\/ticket\/SIB-\d+$/.test(sibCreate.location ?? ""), `F2: POST under /p/sib/ writes to the SIBLING project (SIB- id; got ${sibCreate.location})`);
+ok((await postForm(opd.base, "/ticket", { title: "still gated" })).status === 405, "F2: the bare write path still follows the BOOT project's humanWrite flag (dmn is off → 405)");
+
+// ── F2 SSE scoping: /p/<key>/api/stream follows ITS project; ?all=1 watches the whole ledger ──
+function openStream(path: string): { text: () => string; close: () => void; opened: Promise<void> } {
+  let buf = "";
+  let req!: ReturnType<typeof httpRequest>;
+  const opened = new Promise<void>((resolve, reject) => {
+    req = httpRequest(base + path, (res2) => { res2.setEncoding("utf8"); res2.on("data", (c: string) => (buf += c)); resolve(); });
+    req.on("error", reject); req.end();
+  });
+  return { text: () => buf, close: () => req.destroy(), opened };
+}
+const firstData = (s: string): string | undefined => s.match(/data: (\d+)/)?.[1];
+const countData = (s: string): number => (s.match(/^data: /gm) ?? []).length;
+const sDmn = openStream("/p/dmn/api/stream"), sSib = openStream("/p/sib/api/stream"), sAll = openStream("/api/stream?all=1");
+await Promise.all([sDmn.opened, sSib.opened, sAll.opened]);
+await new Promise((r) => setTimeout(r, 300)); // let the initial baseline frames land
+const dmnBase = firstData(sDmn.text()), sibBase = firstData(sSib.text()), allBase = firstData(sAll.text());
+ok(dmnBase !== undefined && sibBase !== undefined && allBase !== undefined, "F2 SSE: every stream sends its baseline frame");
+ok(dmnBase !== sibBase, `F2 SSE: /p/<key>/api/stream baselines are PROJECT-scoped (dmn ${dmnBase} ≠ sib ${sibBase})`);
+ok(Number(allBase) >= Math.max(Number(dmnBase), Number(sibBase)), "F2 SSE: ?all=1 (the index scope) baselines at the global ledger head");
+// an event in the SIBLING project reaches the sib + all streams but NEVER the /p/dmn stream
+const dmnData0 = countData(sDmn.text());
+const sibPm2 = await as("pm", "sib");
+await call(sibPm2, "save_comment", { issueId: sibFeat.id, body: "sib-side activity" });
+await sibPm2.close();
+let sawSib = false;
+for (let i = 0; i < 24 && !sawSib; i++) { await new Promise((r) => setTimeout(r, 250)); sawSib = countData(sSib.text()) > 1; }
+ok(sawSib, "F2 SSE: a sibling-project event reaches the /p/sib stream (data frame after the write)");
+await new Promise((r) => setTimeout(r, 2500)); // one more full poll tick for the dmn stream's timer
+ok(countData(sDmn.text()) === dmnData0, "F2 SSE: the sibling event does NOT reach the /p/dmn stream (event for project A never hits a /p/b subscriber)");
+ok(countData(sAll.text()) > 1, "F2 SSE: the ?all=1 stream sees the sibling event (index-page scope)");
+sDmn.close(); sSib.close(); sAll.close();
 
 await verifier.close();
 opd.close();

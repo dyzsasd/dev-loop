@@ -42,7 +42,11 @@ read connection.
   single-host cooperative attribution, **not** anti-spoof (§16); revisited only under the deferred remote/auth
   phase. (Full op-API config + reference: DL-58.)
 - **One project.** Like the MCP server, it serves exactly the project named by `DEVLOOP_PROJECT`
-  and refuses to start against an unknown/phantom project (the §2 firewall is structural).
+  and refuses to start against an unknown/phantom project (the §2 firewall is structural). The one
+  role-gated exception is the D1 **`project` override** on the agent op-API (below): stewards
+  (sweep/ops/reflect/communication) may name any existing project key or `_team`, PM may name
+  `_team` only, every other actor is refused (`403 FORBIDDEN`) — enforced server-side at the shared
+  `agentOp()` dispatch choke point, identically on both transports.
 
 ## Running it
 
@@ -133,13 +137,30 @@ dev-loop daemon uninstall-autostart
 
 ## Read endpoints
 
+**Multi-project routing (F2, decision D2).** One daemon serves **every** hub project: a `/p/<key>/`
+path prefix resolves the project **per request** (unknown key → friendly HTML `404`), and every page
+link/form action the UI emits is in that canonical `/p/<key>/…` form. **Bare** paths (everything below
+without the prefix) keep serving the **boot** project, so old URLs and bookmarks survive. Bare `GET /`
+is special: it renders the **project index** — one card per project (open counts by state,
+last-activity), with `_team` pinned last as “Team intake” — or `302`-redirects straight to
+`/p/<key>/` when the hub holds exactly **one** real (non-`_team`) project. The JSON `/api/*` surface
+(including the op-API and its D1 role-gated `project` override) stays **boot-scoped on bare paths
+only** — under `/p/<key>/` it is unmounted (`404`), except the SSE live stream: `/p/<key>/api/stream`
+follows its project, bare `/api/stream` follows the boot project, and `/api/stream?all=1` (what the
+index page subscribes to) watches the whole ledger.
+
 | Method · path | Returns |
 |---|---|
-| `GET /` | the **web UI** board (DL-2): server-rendered HTML, tickets in columns by state. Filters (DL-20): `?state=`, `?type=`, `?label=`, `?assignee=`, `?q=` (free-text over id/title); swimlanes (DL-31): `?group=assignee` |
-| `GET /ticket/:id` | the **web UI** ticket detail (DL-2): HTML with the full description + comments; friendly `404` HTML if unknown |
-| `GET /roadmap` | the **roadmap document** view + edit form (DL-3); the operator additionally sees the publish control |
-| `GET /reports` + `GET /reports/<agent>/<level>/<date>` | the agent **reports** index + one rendered report (DL-10), read-only filesystem view |
-| `GET /activity` | **activity & throughput** over the events ledger (DL-17): recent feed, Done throughput, per-actor counts, cycle time |
+| `GET /` | the **project index** (or the single-real-project `302` → `/p/<key>/`, preserving any filter query) |
+| `GET /p/<key>/` | the **web UI** board (DL-2): server-rendered HTML, tickets in columns by state. Filters (DL-20): `?state=`, `?type=`, `?label=`, `?assignee=`, `?q=` (free-text over id/title); swimlanes (DL-31): `?group=assignee` |
+| `GET [/p/<key>]/ticket/:id` | the **web UI** ticket detail (DL-2): HTML with the full description + comments; friendly `404` HTML if unknown |
+| `GET [/p/<key>]/docs` | the **docs index** (F4/D3): every hub doc — kind, title, published-vs-latest badge (`published vN` · `draft vM pending`), latest author, updated-at |
+| `GET [/p/<key>]/doc/:slug` | the **doc viewer** (kind-agnostic): rendered markdown of the latest version (`?v=N` picks an exact one), status/version meta; when the DL-29 double gate is open it adds the CAS draft-edit form, and the operator additionally sees the publish button on gated kinds (`design` is never publish-gated). `/doc/<kind>` `302`s to the kind's canonical slug |
+| `GET [/p/<key>]/doc/:slug/history` | the **version ledger**: status/author/summary/CAS-base/date per version, with view + diff-vs-previous links |
+| `GET [/p/<key>]/doc/:slug/diff?from=N&to=N` | the **unified diff** between two versions (server-rendered, fully escaped) |
+| `GET [/p/<key>]/roadmap` | `302` → the roadmap **doc page** (`/doc/<slug>`) — D3 folded the dedicated roadmap page into the docs system (edit form, publish, and the DL-83 divergence banner live there) |
+| `GET [/p/<key>]/reports` + `…/reports/<agent>/<level>/<date>` | the agent **reports** index + one rendered report (DL-10), read-only filesystem view |
+| `GET [/p/<key>]/activity` | **activity & throughput** over the events ledger (DL-17): recent feed, Done throughput, per-actor counts, cycle time |
 | `GET /api` | JSON API index (the project + the endpoint list) |
 | `GET /api/health` | `{ ok: true, project }` — liveness |
 | `GET /api/tickets` | all tickets for the project. Filters: `?state=`, `?type=`, `?label=`, `?assignee=` (DL-31), `?limit=` |
@@ -154,13 +175,17 @@ All require `writeOriginOk` (localhost `Host` + same-origin `Origin`, DL-19) and
 
 | Method · path | Gate |
 |---|---|
-| `POST /roadmap/save` | DL-3 — saves a new roadmap draft (CAS on `baseVersion`); any known write actor |
-| `POST /roadmap/publish` | DL-3 — publishes a version; **operator only** (`DEVLOOP_ACTOR=operator`) |
-| `POST /ticket` | DL-29 — create a ticket; requires `settings_json.humanWrite.enabled` |
-| `POST /ticket/:id/comment` · `/move` · `/assign` | DL-29 — comment / move state / (un)assign; requires `settings_json.humanWrite.enabled` |
+| `POST [/p/<key>]/doc/:slug/save` | F4/D3 — saves a new DRAFT of any hub doc (CAS on `baseVersion`; kind is server-derived from the stored doc, or from the slug when creating a singleton kind); requires `settings_json.humanWrite.enabled` (the DL-29 double gate) |
+| `POST [/p/<key>]/doc/:slug/publish` | F4/D3 — publishes a version; the same double gate **plus operator only** (`DEVLOOP_ACTOR=operator`, docstore's single gate) |
+| `POST [/p/<key>]/roadmap/save` · `/roadmap/publish` | legacy DL-3 aliases — resolve the roadmap doc's slug server-side and behave exactly like the `/doc/:slug/*` routes (incl. the humanWrite gate) |
+| `POST [/p/<key>]/ticket` | DL-29 — create a ticket; requires `settings_json.humanWrite.enabled` |
+| `POST [/p/<key>]/ticket/:id/comment` · `/move` · `/assign` | DL-29 — comment / move state / (un)assign; requires `settings_json.humanWrite.enabled` |
 
-Each write redirects (303 PRG) back to the affected page on success; the board/ticket pages render the
-create/comment/move/assign **forms only when the write surface is enabled**.
+Each write redirects (303 PRG) back to the affected page on success; the board/ticket/doc pages render
+their **forms only when the write surface is enabled** (and a rejected doc save re-renders the doc page
+with the typed text preserved — DL-14). When the resolved project has gated docs with drafts ahead of
+their published version, every project page's header shows an **`N drafts pending`** chip → `/docs`
+(docs P6a), so agent-drafted direction can't silently stall awaiting the operator publish.
 
 ## Agent op-API — `POST /api/op/<op>` (DL-43/P2, opt-in)
 
@@ -173,12 +198,18 @@ opt-in it returns `404`, byte-identical to a pure read surface.
   then point the MCP `args` at `hub/src/shim.ts` instead of `hub/src/server.ts` (same per-pane
   `DEVLOOP_ACTOR`). See `references/config-schema.md` (`hub.transport`).
 - **Shape:** `POST /api/op/<op>` with a JSON body; `<op>` mirrors the MCP tools 1:1 — the shim is a
-  **100% `server.ts` drop-in** (all 23 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
+  **100% `server.ts` drop-in** (all 25 tools: `list_issues`/`get_issue`/`save_issue`/`save_comment`/
   `list_comments`/`whoami` · `doc.*`/`list_events` · `channel.*` · `mirror.*` ·
   labels/`get_project`).
 - **Identity:** the actor rides the **`X-Devloop-Actor`** header (the shim forwards its per-pane
   `DEVLOOP_ACTOR`), dodging the `claude -p` Authorization-header-drop; the daemon validates it against
   the `actors` table (cooperative attribution, single-host — §16, not anti-spoof).
+- **Project override (D1):** every op accepts an optional **`project`** key in the JSON body, role-gated
+  server-side (the matrix above): stewards → any project key or `_team`; pm → `_team` only; everyone
+  else → `403 FORBIDDEN` (forbidden-first, so a refused actor never learns which keys exist; an
+  *allowed* actor's unknown key gets the normal `404`). Omitted ⇒ the daemon's pinned project,
+  byte-identical to the pre-override behavior. The server-side dry-run mode gate judges the
+  **effective** (overridden) project.
 - **Gate:** every **mutating** op passes `writeOriginOk` (the DL-19 localhost `Host`+`Origin` CSRF /
   DNS-rebind wall) **first**, then resolves the pinned project (§2) and appends an attributed event.
   Honest caveat: `doc.publish` over the op-API is a **cooperative** (claim-based) gate vs the
@@ -200,6 +231,34 @@ This is **cooperative attribution + a localhost trust boundary, not an anti-spoo
 human-only guarantee is that the surface is reachable only from `127.0.0.1` (`writeOriginOk`), not that
 the actor string can't be set.
 
+## Background notifiers
+
+Besides serving HTTP, the daemon runs a small set of interval notifiers (`hub/src/daemon-notifiers.ts`)
+that push **one-line, §16-safe** alerts to the team's outward channel. They all share the same envelope:
+
+- **One send target** (DL-59): a registered DB `channels` row wins; else the §9 `notify` webhook
+  (`team.comms` is bridged into it); **neither ⇒ the notifier is a true no-op** (no timer, no ledger work).
+- **Stateless due-ness + per-send dedupe markers** in the events ledger (`*.notified` events) — a daemon
+  restart never double-sends, and a failed send writes no marker so it retries next tick.
+- **Dry-run is write-free** (DL-34, `DEVLOOP_CHANNEL_DRYRUN=1`): preview to stderr, no send, no marker.
+- **Boot-time config**: cadences, `team.comms` presence, and `intake.mode` are resolved once at daemon
+  boot — an already-running daemon picks changes up **on restart only**
+  (`references/config-schema.md` → *Hub daemon notifier settings*).
+
+| Notifier | Fires when | Cadence / dedupe |
+|---|---|---|
+| **Human-Blocked reminder** (DL-26, workflows P3) | a ticket sits in `Human-Blocked` — first ping on detection, then repeats. The line names the ticket, **its age in the state**, and the **resume action** (`dev-loop ticket update <id> --state Todo`) + the ticket URL | `settings_json.humanBlockedReminderHours`; **default 24h when `team.comms` is configured, else off**; explicit `0` = opt-out. Tick 60s (`DEVLOOP_BLOCKED_TICK_MS`) |
+| **No-progress circuit-breaker** (DL-76) | zero tickets reached `Done` in the trailing `settings_json.noProgressWindowHours` window (cold start excluded) | once per stall episode; re-alerts only after progress resumed. Tick 1h (`DEVLOOP_NOPROGRESS_TICK_MS`) |
+| **Passive-intake doc-edit notifier** (docs P3) | `intake.mode:"passive"` **only** — PM's doc-watch is off, so a hub-doc version authored by a **non-agent** actor (operator/web edit; `actors.kind` decides, so no agent draft can self-trigger) that sat unconsumed past a settle window gets one line naming slug/version/author + the `/p/<key>/doc/<slug>` URL. `design` docs excluded; **archived** docs excluded (D6) | deduped **per version** (an editing burst collapses to the final version's line). Settle 15m (`DEVLOOP_DOC_FOREIGN_SETTLE_MS`), tick 10m (`DEVLOOP_DOC_NOTIFY_TICK_MS`) |
+| **Passive-intake strategy-FILE watch** (docs P3b) | `intake.mode:"passive"` **only**, and the project's `strategyDoc` is a **repo file** (a plain string / `{ path }` — the default config shape; resolved at boot via the §19 doc-home rule, `repoFileStrategyPath`). The daemon watches the file's **content hash**; a **settled** change (file mtime older than the settle window) emits one line: `operator edited <path> — PM is passive; file a needs-pm ticket to act`. **The PATH only — never a byte of file content** (§16) | deduped **by content hash** (ledger markers). The **first observation seeds a silent baseline** (a file has no authorship, so boot-state is never announced). Settle 15m (`DEVLOOP_STRATEGY_FILE_SETTLE_MS`), tick 10m (`DEVLOOP_STRATEGY_FILE_TICK_MS`) |
+| **Drafts-pending notifier** (docs P6b) | a publish-gated doc's drafts trail the published current for **>24h** (measured from the first unpublished version — a fresh draft on top does not reset the clock): `"strategy: draft v14 pending over published v12 — review at /p/<key>/doc/strategy"` | one **daily** line while pending, deduped per version; a **new** draft version re-announces immediately. Tick 1h (`DEVLOOP_DOC_DRAFTS_TICK_MS`) |
+
+In autonomous intake mode the doc-edit notifier and the strategy-file watch stay off by design: PM's own
+doc-watch / strategy-doc read (keyed on the latest **foreign** version — `dev-loop doc history` exposes
+version+author) owns that propagation, and a comms line on top would be duplicate noise. The
+drafts-pending notifier runs in **both** modes — only the operator can publish, so the nudge is always
+aimed at a human.
+
 ## Tests
 
 `hub/test/daemon.ts` (wired into `npm test`) seeds a project through the real MCP write path, starts the
@@ -207,4 +266,6 @@ daemon in-process on an ephemeral localhost port, and asserts: the web UI (board
 JSON read endpoint, board filters/swimlanes, the friendly non-API `404` vs JSON `/api` `404`, the
 read-only `405` when human-write is off, the `127.0.0.1` bind, and — for the opt-in write surface — the
 `405`-when-disabled / `303`-same-origin / `403`-cross-origin+foreign-Host behavior, the `STATES` move
-guard, and operator attribution (the DL-29 cases).
+guard, and operator attribution (the DL-29 cases). The notifier suites — `hub/test/blocked.ts`,
+`hub/test/no-progress.ts`, `hub/test/doc-notify.ts` — cover the background notifiers above (due-ness,
+dedupe, the comms-derived reminder default, self-trigger exclusion, and write-free dry-run).

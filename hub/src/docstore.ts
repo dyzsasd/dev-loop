@@ -20,12 +20,17 @@ export const DOC_KINDS = ["strategy", "roadmap", "decisions", "notes", "design"]
 export type DocKind = (typeof DOC_KINDS)[number];
 export interface DocRow {
   id: string; project_id: string; kind: string; slug: string; title: string;
-  status: string; current_version: number; created_by: string; created_at: string; updated_at: string;
+  status: string; current_version: number; archived: number; created_by: string; created_at: string; updated_at: string;
 }
 
 // A discriminated result so callers map it to their own surface: server.ts → ok()/err(); the daemon →
 // an HTTP status. `error` carries the same human message the MCP `err()` used (CONFLICT / FORBIDDEN / …).
-export type DocResult<T> = { ok: true; data: T } | { ok: false; error: string };
+// A CAS CONFLICT additionally carries `conflict` — machine-readable retry data. This exists because
+// doc.get's DEFAULT read returns the PUBLISHED version while the CAS keys on the LATEST (drafts included):
+// a caller that re-read the default could never converge once a draft existed past the published version.
+// `latestVersion` is exactly what the retry's baseVersion must be (read the body via doc.get version:"latest").
+export type DocConflict = { latestVersion: number; latestAuthor: string | null; hint: string };
+export type DocResult<T> = { ok: true; data: T } | { ok: false; error: string; conflict?: DocConflict };
 
 // Map a docstore error message (the store returns prose, not codes) to the right HTTP status, so EVERY
 // caller that surfaces a DocResult over HTTP — the DL-3 roadmap write routes AND the DL-43/DL-62 agent
@@ -45,11 +50,26 @@ export const resolveDoc = (db: DatabaseSync, projectId: string, slug?: string, k
 export const latestVersion = (db: DatabaseSync, docId: string): number =>
   (db.prepare("SELECT max(version) v FROM document_versions WHERE doc_id=?").get(docId) as { v: number | null }).v ?? 0;
 
+// Docs P3 (operator-edit propagation): the newest version of a doc authored by anyone OTHER than
+// `selfActor` — the doc-watch primitive. PM's watch keys on THIS (a new foreign version = someone
+// else edited, e.g. the operator via the web editor), never on a body hash, so PM's own drafts can
+// never re-trigger its own watch. `null` = no such doc, or every version is selfActor's own.
+// (Version rows are append-only, so a returned {version,author} is stable — safe to persist as a
+// watch cursor. The CLI surface is `dev-loop doc history`: rows carry version+author newest-first.)
+export function latestForeignVersion(db: DatabaseSync, projectId: string, slug: string, selfActor: string): { version: number; author: string } | null {
+  const d = db.prepare("SELECT id FROM documents WHERE project_id=? AND slug=?").get(projectId, slug) as { id: string } | undefined;
+  if (!d) return null;
+  const v = db.prepare("SELECT version, author FROM document_versions WHERE doc_id=? AND author<>? ORDER BY version DESC LIMIT 1")
+    .get(d.id, selfActor) as { version: number; author: string } | undefined;
+  return v ?? null;
+}
+
 export interface DocSaveArgs { slug: string; kind: DocKind; title?: string; body: string; baseVersion: number; summary?: string; }
 
 // Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the
-// doc's latest version, else CONFLICT (never last-write-wins). NEVER publishes. The DL-9 kind-
-// immutability guard and DL-6 actor semantics are preserved verbatim from the original MCP handler.
+// doc's latest version, else CONFLICT (never last-write-wins) carrying the DocConflict retry data.
+// NEVER publishes. The DL-9 kind-immutability guard and DL-6 actor semantics are preserved verbatim
+// from the original MCP handler.
 export function docSave(db: DatabaseSync, projectId: string, actor: string, a: DocSaveArgs): DocResult<{ doc: string; kind: string; version: number; status: string }> {
   const t = nowIso();
   db.exec("BEGIN IMMEDIATE"); // RESERVED lock before the read → cross-process CAS is atomic (§7)
@@ -71,7 +91,12 @@ export function docSave(db: DatabaseSync, projectId: string, actor: string, a: D
     // share a slug, so resolveDoc-by-slug stays correct.)
     if (a.kind !== d.kind) { db.exec("ROLLBACK"); return { ok: false, error: `CONFLICT: slug '${a.slug}' is a '${d.kind}' document — refusing a '${a.kind}' save (a document's kind is immutable; use a distinct slug)` }; }
     const latest = latestVersion(db, d.id);
-    if (a.baseVersion !== latest) { db.exec("ROLLBACK"); return { ok: false, error: `CONFLICT: '${a.slug}' is at version ${latest}, your baseVersion ${a.baseVersion} is stale — re-read (doc.get) and re-apply` }; }
+    if (a.baseVersion !== latest) {
+      const latestAuthor = (db.prepare("SELECT author FROM document_versions WHERE doc_id=? AND version=?").get(d.id, latest) as { author: string } | undefined)?.author ?? null;
+      db.exec("ROLLBACK");
+      return { ok: false, error: `CONFLICT: '${a.slug}' is at version ${latest}, your baseVersion ${a.baseVersion} is stale — re-read the latest draft (doc.get version:"latest"), re-apply your change, and re-save with baseVersion ${latest}`,
+        conflict: { latestVersion: latest, latestAuthor, hint: `doc.get { slug:"${a.slug}", version:"latest" }, re-apply your change, then doc.save with baseVersion ${latest}` } };
+    }
     const nv = latest + 1;
     db.prepare("INSERT INTO document_versions(id,doc_id,version,body,status,summary,base_version,author,created_at) VALUES (?,?,?,?,'draft',?,?,?,?)").run(randomUUID(), d.id, nv, a.body, a.summary ?? "", a.baseVersion, actor, t);
     db.prepare("UPDATE documents SET title=?, updated_at=? WHERE id=?").run(a.title ?? d.title, t, d.id);
@@ -79,6 +104,26 @@ export function docSave(db: DatabaseSync, projectId: string, actor: string, a: D
     db.exec("COMMIT");
     return { ok: true, data: { doc: a.slug, kind: d.kind, version: nv, status: "draft" } };
   } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
+}
+
+export interface DocArchiveArgs { slug: string; archived?: boolean; }
+
+// D6 retention: flip a RETIRED design doc's `archived` flag (default true; archived:false restores).
+// A metadata write, deliberately NOT a doc.save rider: archiving has no content to CAS on, and routing
+// it through the version ledger would mint a phantom draft per flip (versions are append-only) — the
+// flag lives on the `documents` row, like `status`. DESIGN DOCS ONLY: the singleton kinds
+// (strategy/roadmap/decisions/notes) are the project's living registry — retiring one is a publish/
+// content decision, never a visibility flip — so they refuse (→ 409 via statusForDocErr, the DL-9
+// kind-policy precedent). Selected by slug alone (design is multi-instance; a kind selector would be
+// ambiguous). Idempotent; the doc + its history stay fully readable (hidden by default, never deleted).
+export function docArchive(db: DatabaseSync, projectId: string, actor: string, a: DocArchiveArgs): DocResult<{ doc: string; kind: string; archived: boolean }> {
+  const d = db.prepare("SELECT * FROM documents WHERE project_id=? AND slug=?").get(projectId, a.slug) as DocRow | undefined;
+  if (!d) return { ok: false, error: `no document ${a.slug}` };
+  if (d.kind !== "design") return { ok: false, error: `CONFLICT: '${a.slug}' is a '${d.kind}' document — only design docs archive (the singleton kinds are the living registry, D6)` };
+  const flag = a.archived === false ? 0 : 1;
+  db.prepare("UPDATE documents SET archived=?, updated_at=? WHERE id=?").run(flag, nowIso(), d.id);
+  logEvent(db, { project_id: projectId, actor, kind: "doc.archive", data: { slug: a.slug, archived: !!flag } });
+  return { ok: true, data: { doc: a.slug, kind: d.kind, archived: !!flag } };
 }
 
 export interface DocPublishArgs { slug?: string; kind?: string; version: number; }

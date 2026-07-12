@@ -72,9 +72,10 @@ try {
   ok(seed.code === 0, "compiled cli.js seed → exit 0 (compiled seed.js + db.js siblings load)");
   const doc = run(process.execPath, [distCli, "doctor"], { DEVLOOP_HUB_DB: db });
   ok(doc.code === 0 && /DOCTOR_OK/.test(doc.out), "compiled cli.js doctor → exit 0 + DOCTOR_OK (spawns compiled server.js; siblings resolve)");
-  // demo is a SERVICE-backend project (seeded into the hub above), so the scheduler injects the hub
-  // MCP (§18); the hub injection is backend-gated (linear/local get the operator's own MCP instead).
-  writeFileSync(join(tmp, "projects.json"), JSON.stringify({ projects: { demo: { backend: "service", repoPath: tmp } } }));
+  // demo is a SERVICE-backend project (seeded into the hub above) PINNED to interface="mcp" (D8
+  // rollback switch) so the compiled artifact's hub-injection path stays exercised — under the D9
+  // default (claude→cli) the scheduler would inject nothing and this smoke would test less.
+  writeFileSync(join(tmp, "projects.json"), JSON.stringify({ projects: { demo: { backend: "service", repoPath: tmp, hub: { agentInterface: { claude: "mcp" } } } } }));
   const runner = run(process.execPath, [distCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--root", repoRoot, "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
   ok(runner.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high -p '?<prompt:\d+ chars>'?/.test(runner.out), "compiled cli.js run → dry-run renders a scheduled claude fire (inline --mcp-config hub)");
 

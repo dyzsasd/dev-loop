@@ -8,7 +8,7 @@
 // channel/mirror/label families (which also reuse the shared ticketwrite/docstore/channelstore/
 // mirrorstore/labelstore) — has EXACTLY ONE definition. The old "edit both files" drift tripwire is RETIRED:
 // a change to any policy now lands in ONE place, and the differential-parity suite (test/shim.ts +
-// test/agent-api.ts, shim ≡ stdio for all 23 tools) is the structural guard against a future re-divergence.
+// test/agent-api.ts, shim ≡ stdio for all 25 tools) is the structural guard against a future re-divergence.
 //
 // Each function takes a hub connection + the caller's already-resolved+validated actor (server.ts resolves it
 // from DEVLOOP_ACTOR + the G1 phantom-actor guard; the daemon from the X-Devloop-Actor header) and returns an
@@ -20,6 +20,8 @@
 // so its label.create attribution event fires identically on both transports.)
 import { DatabaseSync } from "node:sqlite";
 import { TOOL_NAMES, type ToolName } from "./tooldefs.ts"; // DL-85: the ONE tool/op name source; AGENT_OPS derives from it
+import { STEWARD_HANDLES } from "./seed.ts"; // D1: the steward roster (ONE definition, next to AGENT_HANDLES) the override matrix grants cross-project access to
+import { TEAM_INTAKE_PROJECT } from "./team-config.ts"; // D1: the reserved "_team" intake key — the only override pm may pass
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
@@ -27,7 +29,7 @@ import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./tic
 // (exactly as the 5 ticket ops reuse ticketwrite.ts), so both transports share one publish gate + one CAS.
 // The doc READS (doc.list/get/history/diff) + list_events are the SINGLE definition of those SELECTs — since
 // DL-69 server.ts's handlers dispatch through them (no longer a 1:1 duplicate of a server.ts copy).
-import { resolveDoc, latestVersion, docSave, docPublish, statusForDocErr, DOC_KINDS, type DocSaveArgs, type DocPublishArgs } from "./docstore.ts";
+import { resolveDoc, latestVersion, docSave, docPublish, docArchive, statusForDocErr, DOC_KINDS, type DocSaveArgs, type DocPublishArgs, type DocArchiveArgs } from "./docstore.ts";
 // DL-67 channel family — the channel register/send/poll/ack/status HANDLER logic + the DL-4 roadmap bridge are
 // reused VERBATIM from the shared, side-effect-free channelstore (exactly as the doc family reuses
 // docstore), so the op-API and the stdio server.ts can never drift. channel.send/poll are ASYNC
@@ -39,15 +41,18 @@ import { channelRegister, channelSend, channelPoll, channelAck, channelStatus, s
 // + mirror.status are reused VERBATIM from the shared mirrorstore (so the op-API + server.ts can't drift on the
 // DL-11 DRYRUN invariant / reconcile-by-marker idempotency), and the label/project ops + the SINGLE LABEL_KINDS /
 // DL-22 reject from labelstore. mirror.push is ASYNC (Linear network / dryrun build) → agentOp returns a Promise.
-import { mirrorPush, mirrorStatus, type MirrorPushArgs } from "./mirrorstore.ts";
+import { mirrorPush, mirrorStatus, mirrorPollComments, type MirrorPushArgs, type MirrorPollArgs } from "./mirrorstore.ts";
 import { createLabel, listLabels, getProject } from "./labelstore.ts";
 
 export interface OpResult { status: number; body: unknown }
 const okR = (body: unknown): OpResult => ({ status: 200, body });
-const errR = (status: number, error: string): OpResult => ({ status, body: { error } });
+// `extra` rides alongside `error` in the body (e.g. doc.save's CONFLICT latestVersion/latestAuthor/hint) —
+// the daemon serializes the body verbatim and server.ts/shim.ts spread it into the MCP error, so a caller
+// can recover mechanically instead of parsing the prose. It must not carry an `error` key of its own.
+const errR = (status: number, error: string, extra?: Record<string, unknown>): OpResult => ({ status, body: { error, ...extra } });
 
 // The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-67) the IM channel
-// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 23 server.ts tools 1:1 (the shim is a
+// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 25 server.ts tools 1:1 (the shim is a
 // 100% drop-in). The op names are the `/api/op/<op>` path segments and the MCP tool names (dotted for the
 // doc/channel/mirror families). DL-85: they are EXACTLY TOOL_NAMES minus "whoami"
 // (the only tool answered locally per-transport, never an op) — DERIVED from the one source so there is no
@@ -57,9 +62,9 @@ export const AGENT_OPS: readonly AgentOp[] = TOOL_NAMES.filter((n): n is AgentOp
 // The MUTATING subset — the daemon applies writeOriginOk + the dry-run mode gate to exactly these (reads
 // never mutate, so they bypass both). Kept here next to AGENT_OPS so the two lists can't drift. doc.save /
 // doc.publish join the ticket writes; the doc/event reads stay read-only (parity with the read ticket ops).
-export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish",
+export const AGENT_WRITE_OPS = new Set<AgentOp>(["save_issue", "save_comment", "doc.save", "doc.publish", "doc.archive", // D6: the archived-flag flip mutates the documents row
   "channel.register", "channel.send", "channel.poll", "channel.ack", // DL-67: the 4 channel writes (register/send/poll/ack mutate the channels/channel_messages tables); channel.status stays a read (query_only)
-  "mirror.push", "create_issue_label"]); // DL-68: the 2 writes (mirror.push → mirror_map + the one-way Linear network write; create_issue_label → labels). mirror.status/list_issue_labels/get_project stay reads (query_only)
+  "mirror.push", "mirror.pollComments", "create_issue_label"]); // DL-68/D5: the 3 writes (mirror.push → mirror_map + the one-way Linear network write; mirror.pollComments → needs-pm intake tickets + the machine-local acted-ledger; create_issue_label → labels). mirror.status/list_issue_labels/get_project stay reads (query_only)
 export const isAgentOp = (s: string): s is AgentOp => (AGENT_OPS as readonly string[]).includes(s);
 
 // ─── row → API shape + readers (verbatim mirror of server.ts toTicket/getRow) ──
@@ -293,19 +298,24 @@ const docSelectorErr = (a: { slug?: unknown; kind?: unknown }): string | null =>
 
 function opDocList(db: DatabaseSync, projectId: string, a: { kind?: string }): OpResult {
   const bad = docSelectorErr(a); if (bad) return errR(400, bad);
+  // D6: `archived` rides the row (additive) so callers can see retirement state; archived docs are NOT
+  // filtered out here — doc.list is the machine registry read (the web /docs index owns the default-hide).
   return okR(a.kind
-    ? db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? AND kind=? ORDER BY kind").all(projectId, a.kind)
-    : db.prepare("SELECT id,kind,slug,title,status,current_version,created_by,updated_at FROM documents WHERE project_id=? ORDER BY kind").all(projectId));
+    ? db.prepare("SELECT id,kind,slug,title,status,current_version,archived,created_by,updated_at FROM documents WHERE project_id=? AND kind=? ORDER BY kind").all(projectId, a.kind)
+    : db.prepare("SELECT id,kind,slug,title,status,current_version,archived,created_by,updated_at FROM documents WHERE project_id=? ORDER BY kind").all(projectId));
 }
 
-function opDocGet(db: DatabaseSync, projectId: string, projectKey: string, a: { slug?: string; kind?: string; version?: number }): OpResult {
+function opDocGet(db: DatabaseSync, projectId: string, projectKey: string, a: { slug?: string; kind?: string; version?: number | "latest" }): OpResult {
   const bad = docSelectorErr(a); if (bad) return errR(400, bad);
-  // mirror server.ts's zod (version: int>0, optional). Re-check by hand (no zod on the op-API path): an
-  // out-of-range version must 400 like the stdio path, not fall through to the version===0 empty-doc branch.
-  if (a.version !== undefined && (!Number.isInteger(a.version) || (a.version as number) <= 0)) return errR(400, "version must be a positive integer");
+  // mirror server.ts's zod (version: int>0 | "latest", optional). Re-check by hand (no zod on the op-API path):
+  // an out-of-range version must 400 like the stdio path, not fall through to the version===0 empty-doc branch.
+  if (a.version !== undefined && a.version !== "latest" && (!Number.isInteger(a.version) || (a.version as number) <= 0)) return errR(400, `version must be a positive integer or "latest"`);
   const d = resolveDoc(db, projectId, a.slug, a.kind);
   if (!d) return errR(404, `no document ${a.slug ?? a.kind} in ${projectKey}`);
-  const ver = a.version ?? (d.current_version > 0 ? d.current_version : latestVersion(db, d.id));
+  // "latest" → the newest version INCLUDING drafts past the published current — what doc.save's CAS keys on
+  // (the CONFLICT-recovery read). The default stays the PUBLISHED version (readers see the operator-gated doc).
+  const ver = a.version === "latest" ? latestVersion(db, d.id)
+    : a.version ?? (d.current_version > 0 ? d.current_version : latestVersion(db, d.id));
   if (ver === 0) return okR({ ...d, version: 0, body: "", unpublished: true, empty: true });
   const v = db.prepare("SELECT version,body,status,summary,base_version,author,created_at FROM document_versions WHERE doc_id=? AND version=?").get(d.id, ver) as Record<string, unknown> | undefined;
   if (!v) return errR(404, `no version ${ver} of ${d.slug}`);
@@ -344,7 +354,7 @@ function opDocSave(db: DatabaseSync, projectId: string, actor: string, a: Partia
   if (!Number.isInteger(a.baseVersion) || (a.baseVersion as number) < 0) return errR(400, "baseVersion must be a non-negative integer");
   if (!(DOC_KINDS as readonly string[]).includes(a.kind as string)) return errR(400, `invalid kind '${a.kind}'; one of ${DOC_KINDS.join(", ")}`);
   const r = docSave(db, projectId, actor, a as DocSaveArgs);
-  return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error);
+  return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error, r.conflict); // a CAS CONFLICT carries {latestVersion,latestAuthor,hint} for a mechanical retry
 }
 
 // `db` MUST be a WRITABLE connection (docPublish does BEGIN IMMEDIATE + UPDATEs + a doc.publish event). The
@@ -354,6 +364,16 @@ function opDocPublish(db: DatabaseSync, projectId: string, actor: string, a: Par
   if (!Number.isInteger(a.version) || (a.version as number) <= 0) return errR(400, "version must be a positive integer");
   const r = docPublish(db, projectId, actor, a as DocPublishArgs);
   return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error);
+}
+
+// `db` MUST be a WRITABLE connection (docArchive UPDATEs documents + logs a doc.archive event). The
+// design-only refusal + idempotent flip live inside docArchive (shared with server.ts) — D6 retention.
+function opDocArchive(db: DatabaseSync, projectId: string, actor: string, a: Partial<DocArchiveArgs>): OpResult {
+  // re-validate the zod shapes the stdio/shim path enforces (slug required string, archived optional boolean)
+  if (typeof a.slug !== "string") return errR(400, "slug required (a string)");
+  if (a.archived !== undefined && typeof a.archived !== "boolean") return errR(400, "archived must be a boolean");
+  const r = docArchive(db, projectId, actor, a as DocArchiveArgs);
+  return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error); // missing doc → 404; a singleton kind → 409 (kind-policy refusal, the DL-9 precedent)
 }
 
 // ─── DL-67: the IM channel family (channel.*) — thin op-API wrappers over the shared channelstore ──
@@ -429,6 +449,16 @@ async function opMirrorPush(db: DatabaseSync, projectId: string, actor: string, 
   return r.ok ? okR(r.data) : errR(400, r.error); // §16-safe error (isEnvName / scrubErr inside mirrorstore); the token never appears
 }
 
+// ASYNC (mirrorPollComments awaits the Linear comment/content reads). Same hand-validation discipline as
+// opMirrorPush: tokenEnv a non-empty string → a clean 400, never a crash inside the store. The poller's
+// errors are all client 400s (bad input / unset-or-literal token); a failed Linear read is counted in
+// `failed` + logged scrubbed, never an op error — parity with mirror.push's failure discipline.
+async function opMirrorPollComments(db: DatabaseSync, projectId: string, projectKey: string, actor: string, a: { tokenEnv?: unknown }): Promise<OpResult> {
+  if (typeof a.tokenEnv !== "string" || !a.tokenEnv) return errR(400, "tokenEnv required (a non-empty string)");
+  const r = await mirrorPollComments(db, projectId, projectKey, actor, a as MirrorPollArgs);
+  return r.ok ? okR(r.data) : errR(400, r.error); // §16-safe error (isEnvName / scrubErr inside mirrorstore); the token never appears
+}
+
 function opMirrorStatus(db: DatabaseSync, projectId: string): OpResult {
   return okR(mirrorStatus(db, projectId)); // read; coverage counts, no secret, no Linear read
 }
@@ -454,11 +484,44 @@ function opGetProject(db: DatabaseSync, projectId: string): OpResult {
   return okR(getProject(db, projectId)); // read
 }
 
+// ─── D1: the project override — a role-based permission matrix, enforced at the dispatch choke point ──────
+// Hub identity pins an agent to ONE project at boot (DEVLOOP_PROJECT), which made the team-scope features
+// (§9b team intake, ops owner-routed alerts, sweep per-project hygiene) dead letters on backend:"service".
+// Every op-backed tool now takes an optional `project` arg (tooldefs.ts injects the schema); THIS resolver
+// decides whether the caller may cross its boot pin — by ACTOR ROLE only (job-level conditions live
+// prompt-side in the SKILLs; they are not server-enforceable — docs/design/2026-07-review-decisions.md D1):
+//   • stewards (STEWARD_HANDLES: sweep/ops/reflect/communication, normally booted `_team`) → any existing
+//     project key or `_team`;
+//   • pm → `_team` ONLY (the §9b team-intake board), regardless of its booted project;
+//   • every other actor → its booted project only (an explicit same-key pass is a no-op, never an error).
+// FORBIDDEN-first, existence second: a forbidden actor gets the SAME 403 whether or not the key exists, so
+// the matrix never leaks which project keys exist; only an ALLOWED actor's unknown key gets the 404 (the
+// existing not-found shape). No `project` arg ⇒ exactly the booted behavior (backward compatible).
+const STEWARD_ACTORS: ReadonlySet<string> = new Set(STEWARD_HANDLES);
+export type ProjectOverride = { ok: true; projectId: string; projectKey: string } | { ok: false; result: OpResult };
+export function resolveProjectOverride(db: DatabaseSync, bootedProjectId: string, bootedProjectKey: string, actor: string, requested: unknown): ProjectOverride {
+  if (requested === undefined) return { ok: true, projectId: bootedProjectId, projectKey: bootedProjectKey };
+  if (typeof requested !== "string") return { ok: false, result: errR(400, "project must be a string (a project key)") }; // the op-API parses raw JSON — mirror the stdio zod (DL-63)
+  if (requested === bootedProjectKey) return { ok: true, projectId: bootedProjectId, projectKey: bootedProjectKey };
+  if (!STEWARD_ACTORS.has(actor) && !(actor === "pm" && requested === TEAM_INTAKE_PROJECT))
+    return { ok: false, result: errR(403, `FORBIDDEN: actor '${actor}' may not act on project '${requested}' (booted: '${bootedProjectKey}'). Only stewards (${STEWARD_HANDLES.join("/")}) may target another project; pm only '${TEAM_INTAKE_PROJECT}'.`) };
+  const row = db.prepare("SELECT id,key FROM projects WHERE key=?").get(requested) as { id: string; key: string } | undefined;
+  if (!row) return { ok: false, result: errR(404, `no such project '${requested}'`) };
+  return { ok: true, projectId: row.id, projectKey: row.key };
+}
+
 // Dispatch one op. `db` is the WRITABLE connection for the write ops (save_issue/save_comment) and may be
 // the daemon's query_only read connection for the read ops — the daemon passes the right one per op. `actor`
 // is already resolved+validated by the daemon (the G1 guard). `args` is the parsed JSON body (a non-object
 // body is normalized to {} by the caller). Throws only on a genuine DB fault (→ the daemon's 500 catch).
 export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projectKey: string, actor: string, args: Record<string, unknown>): OpResult | Promise<OpResult> {
+  // D1 choke point: EVERY op resolves its effective project HERE, so no op can bypass the override matrix.
+  // Both transports flow through this line (server.ts dispatches straight into agentOp; the daemon ALSO
+  // pre-resolves with the same function for its dry-run mode gate, then passes the effective ids in — that
+  // second resolve degenerates to the same-key fast path above, so the two can't disagree).
+  const ov = resolveProjectOverride(db, projectId, projectKey, actor, args.project);
+  if (!ov.ok) return ov.result;
+  ({ projectId, projectKey } = ov);
   switch (op) {
     case "list_issues": return opListIssues(db, projectId, actor, args as ListIssuesArgs);
     case "get_issue": return opGetIssue(db, projectId, projectKey, args as { id?: string });
@@ -467,17 +530,19 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "list_comments": return opListComments(db, projectId, projectKey, args as { issueId?: string });
     case "list_events": return opListEvents(db, projectId, args as { limit?: number });
     case "doc.list": return opDocList(db, projectId, args as { kind?: string });
-    case "doc.get": return opDocGet(db, projectId, projectKey, args as { slug?: string; kind?: string; version?: number });
+    case "doc.get": return opDocGet(db, projectId, projectKey, args as { slug?: string; kind?: string; version?: number | "latest" });
     case "doc.history": return opDocHistory(db, projectId, args as { slug?: string; kind?: string });
     case "doc.diff": return opDocDiff(db, projectId, args as { slug?: string; kind?: string; from?: number; to?: number });
     case "doc.save": return opDocSave(db, projectId, actor, args as Partial<DocSaveArgs>);
     case "doc.publish": return opDocPublish(db, projectId, actor, args as Partial<DocPublishArgs>);
+    case "doc.archive": return opDocArchive(db, projectId, actor, args as Partial<DocArchiveArgs>);
     case "channel.register": return opChannelRegister(db, projectId, actor, args as { provider?: unknown; configRef?: unknown; secretRef?: unknown; channelRef?: unknown });
     case "channel.send": return opChannelSend(db, projectId, projectKey, actor, args as { kind?: unknown; ticketId?: unknown; bailShape?: unknown; digest?: unknown; replyTo?: unknown; text?: unknown });
     case "channel.poll": return opChannelPoll(db, projectId, projectKey, actor);
     case "channel.ack": return opChannelAck(db, projectId, projectKey, actor, args as { messageId?: unknown; actedInto?: unknown });
     case "channel.status": return opChannelStatus(db, projectId);
     case "mirror.push": return opMirrorPush(db, projectId, actor, args as { teamId?: unknown; tokenEnv?: unknown; projectId?: unknown; stateMap?: unknown; limit?: unknown });
+    case "mirror.pollComments": return opMirrorPollComments(db, projectId, projectKey, actor, args as { tokenEnv?: unknown });
     case "mirror.status": return opMirrorStatus(db, projectId);
     case "list_issue_labels": return opListLabels(db, projectId);
     case "create_issue_label": return opCreateLabel(db, projectId, actor, args as { name?: unknown; kind?: unknown });

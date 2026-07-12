@@ -3,6 +3,141 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 1.2.0
+
+The 2026-07 full-review release (decision record: `docs/design/2026-07-review-decisions.md`;
+PR #21). Doctor's W10 pins `WRITE_VERBS_MIN_VERSION="1.2.0"` — the CLI write verbs below are
+first certified at this version.
+
+- **refactor(skills): the uniform SKILL template + per-fire context budgets.** All 14 SKILLs
+  migrated to a lean anchor-citing template (role / mission / boot / jobs / hard limits / report /
+  generated cheat-sheet) — the ten agent SKILLs shrank from 4,141 to 2,472 lines (−40%; agent
+  prose −49%) with every shared mechanic cited from conventions once instead of restated (the
+  escalation ladder previously lived in 5 places). The boot rule (§0a) is now **section-
+  selective**: each SKILL declares a machine-readable `Sections:` line and agents read ONLY those
+  conventions sections plus Topology, instead of the whole ~200KB file. `dev-loop metrics
+  --context` prints the per-agent per-fire context bill (SKILL prose + cheat block + cited
+  conventions spans + lessons caps, bytes and ~tokens); `test/context-budget.ts` enforces
+  per-SKILL line/byte ceilings, the cheat-block ceiling, and the Sections-line grammar with
+  set-equality against actual citations — context growth is now a failing test, not a drift.
+- **feat(config): `communication` + `notify` blocks validated and documented (E14/E15); digest
+  re-keyed; change-gate TTL.** The per-project `communication` block (which shapes the §22a
+  director digest and article drafts) and the `notify` block are now strict-validated, fully
+  documented in config-schema, and joined the `dev-loop team set` whitelist; the digest gate keys
+  on `team.comms` presence — it can no longer vanish silently because a per-project block is
+  absent. `--change-gate` gains a TTL for pm/qa fires (their best work happens when nothing
+  changed); dev-tier fires keep the pure gate.
+- **feat(docs): repo-file strategy watch, mirror divergence re-file, D6 archived flag.** (1) The
+  passive-intake notifier now covers the DEFAULT config shape: when `intake.mode:"passive"` and the
+  `strategyDoc` is a repo **file** (plain string / `{path}` — resolved via the §19 doc-home rule,
+  `repoFileStrategyPath`), the daemon watches the file's content hash and, on a settled change (15m,
+  as hub docs), emits one deduped comms line — "operator edited <path> — PM is passive; file a
+  needs-pm ticket to act" — naming the PATH only, never file content (§16); first observation seeds
+  a silent baseline (ledger-dedupe by hash; dry-run fully write-free). (2) `mirror.pollComments` now
+  RESETS its divergence dedupe after a push overwrites the diverged upstream (reconciled against
+  `last_pushed_at`), so a human re-applying the byte-identical Linear edit files a SECOND intake
+  ticket instead of being silently swallowed forever. (3) D6 retention: `documents.archived`
+  (schema **v5**, additive) + the `doc.archive` op / `dev-loop doc archive --slug S [--restore]` —
+  DESIGN docs only (singleton kinds refuse, 409); archived docs are hidden from the `/docs` index
+  by default (`?archived=1` shows them, badged; a footer names the hidden count), excluded from the
+  drafts-pending chip and the doc notifiers, and NEVER deleted (viewer/history/doc.get stay
+  readable). Tool count 24 → 25; the senior-dev cheat-sheet gains the verb.
+- **feat(docs-flow): the PM investigation protocol + doc-change machinery (D4/D5).** Conventions
+  §9a gains the full flow: director files `needs-pm`+`investigation` → PM investigates → proposes
+  (hub: CAS draft + mandatory summary + "Proposes: doc:<slug> vN" on the ticket; repo: unified diff
+  on the ticket) → operator approves version-bound (`doc.publish` / approval comment) → agents pick
+  up on next fire. Repo-file strategy docs follow the D4 section split (progress autonomous,
+  direction sections require the flow; Sweep audits doc-only commits). Human-Blocked reminders
+  default to 24h once comms is configured, naming the resume command. Passive-mode operator doc
+  edits and >24h-pending drafts each emit one deduped comms line. `mirror.push` projects published
+  strategy/roadmap/decisions + latest design docs as Linear Documents (one-way, banner, hash-
+  idempotent; schema v4); the new `mirror.pollComments` op / `dev-loop mirror poll` converts human
+  comments on mirrored docs (and detected Linear-side body edits) into `needs-pm` intake tickets
+  with provenance — never a write-back.
+- **feat(webui): the professional multi-project web UI + docs system (D2/D3).** The workspace
+  daemon serves every hub project under `/p/<key>/` (bare paths fall back to the boot project;
+  unknown keys 404 via a safe-segment guard); `GET /` is a project index with per-state colored
+  dot counts and `_team` pinned last as a distinct "Team intake" card; SSE reloads are scoped to
+  the resolved project. Design tokens v2 (surface/ink tiers, 7 workflow-state colors, signal
+  colors incl. incident, full type/spacing/radius/shadow/focus scales, WCAG-AA dark values,
+  guard-tested: no raw hex outside `:root`, no literal radii, every `var()` resolves). Board:
+  column wells, state-dot headers, full card spec with semantic label chips and guided empty
+  states. Ticket detail: two-column layout with a unified state-history + comment timeline from
+  the events ledger. Activity: stat tiles + sectioned metric cards + a real event timeline; board
+  search now matches descriptions with snippets. Docs system: `/docs` index (published-vs-draft
+  badges), `/doc/<slug>` viewer (version picker, DL-83 divergence banner), `/history`, `/diff` —
+  with a CAS draft-edit form + version-bound operator Publish button behind the existing DL-29
+  double gate; `/roadmap` is now a 302 to the roadmap doc page; a header chip counts pending
+  drafts. Views split into `hub/src/views/*` behind a re-exporting façade with a typed route
+  registry. `.doc` markdown finally has real heading hierarchy. `dev-loop op <op-name>`
+  dispatches any of the 22 hub ops through the same `agentOp()` choke point the MCP server uses
+  (identity + G1/G2 guards included), plus sugar verbs: `ticket create/update`, `comment add`,
+  `comments`, `labels`, `label create`, `project`, `events`, `doc list/get/history/diff/save/publish`,
+  `mirror push/status`; `tickets`/`ticket <id>` gain `--json` + filter flags with byte-parity to the
+  MCP output. Exit-code contract: 0 ok · 1 domain · 2 usage · 3 doc CAS CONFLICT (machine payload on
+  stderr) · 4 identity/guard · 5 hub unavailable. Direct-db by default; `hub.transport:"daemon"`
+  routes over the loopback op-API via the shared `op-client.ts` (shim now reuses it). sqlite gains
+  `busy_timeout=5000`.
+- **feat(scheduler): `hub.agentInterface` — CLI is the default agent transport on `service` (D9).**
+  Per-coding-agent map (team + per-project, field-wise merge, E13): **claude→"cli"** and — after a
+  live P8 certification on codex-cli 0.130.0 proved `codex exec` propagates fire env to shell
+  subprocesses — **codex→"cli"** too (opencode stays "mcp"). `interface=cli` drops the inline hub
+  `--mcp-config` injection entirely (identity rides the fire env); `interface=mcp` restores the old
+  wiring verbatim — it is the rollback switch. `team init`/`add-project` provision
+  `permissions.allow: ["Bash(dev-loop *)"]` in the workspace Claude settings; doctor gains W09-W11
+  CLI preflights (binary on PATH, version, identity smoke).
+- **feat(skills): per-agent CLI cheat-sheets, generated.** Every agent SKILL carries a
+  marker-fenced command block scoped to the ops that agent uses, rendered by
+  `hub/src/gen-cheatsheets.ts` from the CLI's own usage strings; `test/cli-cheatsheet.ts` fails the
+  chain when a block drifts from the generator. Fail-closed rule rides the first line of every
+  block: identity probe exits 4/5 ⇒ stop, report, never touch the repo.
+- **feat(team): the onboarding rail.** `dev-loop team set <path> <value>` (whitelisted, validated
+  single-field mutator); blank `linearTeam` demoted from load-time brick to warning (**E09**, hard
+  only at fire time — `team init --backend linear --yes` no longer writes an unloadable workspace);
+  doctor computes a **NEXT:** line (the single most-blocking next step) so setup is self-resuming;
+  `team add-project` auto-seeds the hub row on service; `team add-repo --detect` registers a repo
+  from deterministic facts (package.json scripts, workflow job names); `team init` stamps a
+  `workspaceId` fingerprint, and add-project/sync-project mark the Linear project with it so two
+  workspaces double-driving one Linear team are detected.
+- **feat(init): `dev-loop init` — one guided, resumable setup wizard.** Composes team init →
+  add-project (auto-seeded) → add-repo --detect → permissions → doctor NEXT; `--yes` produces a
+  runnable service workspace non-interactively; the plugin/MCP step is now only needed for the
+  linear backend. README quick starts (en/zh/fr) lead with the 3-command zero-config path.
+- **feat(conventions): per-ticket worktree isolation is mandatory for split-dev in every landing
+  mode (§7).** Two concurrent dev writers no longer share one checkout in `landing:"direct"`; the
+  locked merge-back sequence (fetch → rebase → gate → ff-only merge under `with-repo-lock`) is
+  specified; legacy solo dev keeps in-place commits.
+- **feat(hub): role-gated `project` override on every hub op (D1, closes GA-deferred D4.2).**
+  All 22 agent ops accept an optional `project` argument, enforced server-side at the shared
+  `agentOp()` choke point on BOTH transports (stdio + daemon op-API): stewards
+  (`sweep`/`ops`/`reflect`/`communication`, booted `_team`) may name any configured project key or
+  `_team`; **PM may name `_team` only** (the §9b team-intake carrier); every other actor is refused
+  `FORBIDDEN`, forbidden-first, so key existence never leaks. Omitting `project` is byte-identical
+  to the old behavior. This un-deadletters §9b team intake, ops owner-routed alerts, and sweep
+  per-project hygiene on `backend:"service"`. The op-API dry-run gate judges the *effective*
+  project.
+- **feat(scheduler): weight:0 maintenance mode restored (T3.2) + pick-time seed guard + doctor W08.**
+  Steward fires (sweep/ops/reflect/communication) now enumerate every *enabled* project via
+  `stewardProjects()` regardless of `weight` — `weight:0` means *delivery paused, stewards
+  continue*, as designed; `--project` narrows delivery rotation but no longer narrows team-scope
+  steward coverage. Team-mode `run` gains the legacy pick-time guard: a config project with no
+  hub.db row warns once (with the exact `dev-loop seed` command) and skip-advances instead of
+  burning an LLM fire with zero board access. `dev-loop doctor` reconciles config↔hub both ways
+  (**W08**).
+- **BREAKING(config): `projects._team` is rejected at validation (E11).** `_team` lives only as a
+  hub.db intake row (seeded by `team init`); a dev-loop.json that hand-declares it now fails to
+  load. Fix: delete the entry — team intake needs no config row.
+- **fix(paths): dev-loop path env vars reject literal `undefined`/`null` segments** loudly, naming
+  the variable at fault, instead of silently planting a schema-only `undefined/hub.db` in the cwd
+  (the `daemon up` seeded-probe and the read-only tickets CLI both reproduced it).
+- **fix(docstore): the doc.save CONFLICT recovery loop converges.** CONFLICT now carries
+  `{latestVersion, latestAuthor, hint}`, `doc.get` accepts `version:"latest"`, and the documented
+  recovery loop (re-read latest → re-apply → re-save) actually terminates once drafts exist past
+  the published version. `doc.get`'s default read is unchanged.
+- **fix(skills): restored 11 corrupted `§`-references** in dev-agent/qa-agent (a find/replace had
+  mangled `§1x` into `…"Topology at a glance" tablex`) and added a lint (`test/skill-refs.ts`)
+  asserting every SKILL `§`-reference resolves to a real conventions.md heading.
+
 ## 1.1.0
 
 - **feat(pm): passive intake mode (§5a).** New per-project `intake.mode: "autonomous" (default) |

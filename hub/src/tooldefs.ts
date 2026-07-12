@@ -15,18 +15,21 @@ import { DOC_KINDS } from "./docstore.ts"; // the doc-kind enum for doc.save's z
 // ─── MCP result helpers (one definition; was duplicated server.ts:117-118 ≡ shim.ts:73-74) ──────────────────
 export type McpResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 export const ok = (data: unknown): McpResult => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
-export const err = (message: string): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }] });
+// `extra` = machine-readable fields riding alongside `error` (e.g. doc.save's CONFLICT latestVersion/
+// latestAuthor/hint). Callers pass the op error body MINUS its `error` key (both transports destructure it
+// off), so `extra` can never clobber `message` and the two transports serialize byte-identically.
+export const err = (message: string, extra?: Record<string, unknown>): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message, ...extra }) }] });
 
-// ─── the canonical tool-name list — whoami (answered locally per transport) + the 22 op-backed tools ────────
+// ─── the canonical tool-name list — whoami (answered locally per transport) + the 24 op-backed tools ────────
 // agentops.ts derives AGENT_OPS = TOOL_NAMES minus "whoami" (the only tool that is NOT an op-API op), so this
 // is the ONE source of the tool/op names. Order matches the historical AGENT_OPS order (registration order is
 // irrelevant to MCP — tools resolve by name — but keeping it stable keeps diffs/feeds readable).
 export const TOOL_NAMES = [
   "whoami",
   "list_issues", "get_issue", "save_issue", "save_comment", "list_comments",
-  "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish",
+  "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish", "doc.archive",
   "channel.register", "channel.send", "channel.poll", "channel.ack", "channel.status",
-  "mirror.push", "mirror.status", "list_issue_labels", "create_issue_label", "get_project",
+  "mirror.push", "mirror.pollComments", "mirror.status", "list_issue_labels", "create_issue_label", "get_project",
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -68,11 +71,11 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
 
   "doc.list": { description: "List this project's documents (no bodies).", inputSchema: { kind: z.string().optional() } },
   "doc.get": {
-    description: "Get a document by slug or kind. Omit version → the published (current) version; if never published, the latest DRAFT with unpublished:true. version=N → that historical version.",
-    inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive().optional() },
+    description: `Get a document by slug or kind. Omit version → the published (current) version; if never published, the latest DRAFT with unpublished:true. version=N → that historical version. version:"latest" → the newest version INCLUDING drafts past the published current — what doc.save's CAS keys on (use it to recover from a save CONFLICT).`,
+    inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.union([z.number().int().positive(), z.literal("latest")]).optional() },
   },
   "doc.save": {
-    description: "Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the doc's latest version, else CONFLICT (never last-write-wins). NEVER publishes — only the operator can (doc.publish).",
+    description: `Create (baseVersion 0) or append a new DRAFT version. Optimistic CAS: baseVersion MUST equal the doc's LATEST version (drafts included — NOT the published version doc.get returns by default), else CONFLICT with {latestVersion,latestAuthor,hint}. Recover: doc.get {version:"latest"}, re-apply your change, re-save with baseVersion=latestVersion. NEVER publishes — only the operator can (doc.publish).`,
     inputSchema: { slug: z.string(), kind: z.enum(DOC_KINDS), title: z.string().optional(), body: z.string(), baseVersion: z.number().int().min(0), summary: z.string().optional() },
   },
   "doc.history": { description: "A document's version ledger (no bodies; newest first).", inputSchema: { slug: z.string().optional(), kind: z.string().optional() } },
@@ -80,6 +83,10 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
   "doc.publish": {
     description: "OPERATOR-ONLY: publish a draft version → current (the live doc). Cooperative role-gate (DEVLOOP_ACTOR=operator), not anti-spoof — see §18/HUB-ARCHITECTURE §16.",
     inputSchema: { slug: z.string().optional(), kind: z.string().optional(), version: z.number().int().positive() },
+  },
+  "doc.archive": {
+    description: "Archive a RETIRED design doc (D6 retention): hidden by default in the /docs index and excluded from chips/notifiers — NEVER deleted (the doc + its version history stay readable via doc.get/doc.history). DESIGN kind only; singleton kinds (strategy/roadmap/decisions/notes) refuse. archived:false restores it. A metadata flip, not a version — no body/baseVersion.",
+    inputSchema: { slug: z.string(), archived: z.boolean().optional() },
   },
 
   "channel.register": {
@@ -118,7 +125,7 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
   },
 
   "mirror.push": {
-    description: "ONE-WAY push: project hub tickets → Linear issues (create-or-update, idempotent + incremental — an unchanged ticket is skipped by content hash). The hub NEVER reads Linear as truth; a human Linear edit is overwritten. `tokenEnv` is the env-var NAME (the §16 secret is read server-side). A missing stateMap entry ⇒ no stateId (state stays in the body; never fails the push). DRYRUN returns the would-push ops, no network.",
+    description: "ONE-WAY push: project hub tickets → Linear issues (create-or-update, idempotent + incremental — an unchanged ticket is skipped by content hash). With projectId (the Linear project), ALSO projects the published strategy/roadmap/decisions + latest design docs as Linear Documents parented there (same hash-skip; doc counts ride the `docs` result field). The hub NEVER reads Linear as truth; a human Linear edit is overwritten. `tokenEnv` is the env-var NAME (the §16 secret is read server-side). A missing stateMap entry ⇒ no stateId (state stays in the body; never fails the push). DRYRUN returns the would-push ops, no network.",
     inputSchema: {
       teamId: z.string().min(1),
       tokenEnv: z.string().min(1),
@@ -127,12 +134,30 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
       limit: z.number().int().min(1).max(500).optional(),
     },
   },
-  "mirror.status": { description: "Mirror coverage: mapped tickets, total tickets, last push time. No secret, no Linear read.", inputSchema: {} },
+  "mirror.pollComments": {
+    description: "Comment→intake for the mirrored docs: reads NEW human comments on the pushed Linear Documents and files ONE needs-pm Backlog ticket per comment (doc slug + version + quoted text + comment URL), plus ONE per detected Linear-side BODY edit (flagged as divergence — the next push overwrites it; nothing is ever written back). Dedup rides a machine-local acted-ledger, not hub state. `tokenEnv` is the env-var NAME (§16). DRYRUN previews the would-file tickets (Linear is still read; nothing is filed or ledgered).",
+    inputSchema: { tokenEnv: z.string().min(1) },
+  },
+  "mirror.status": { description: "Mirror coverage: mapped tickets/docs, total tickets, mirrorable docs, last push time. No secret, no Linear read.", inputSchema: {} },
 };
+
+// ─── D1: ONE optional `project` arg on every op-backed tool (whoami excluded) ───────────────────────────────
+// Injected structurally over DEFS (not 23 hand-copies) so a future op cannot forget it. The server-side
+// role matrix lives at the agentops.ts dispatch choke point (resolveProjectOverride): stewards
+// (sweep/ops/reflect/communication) may pass any existing project key or "_team"; pm may pass "_team" only
+// (the §9b team-intake board); every other actor only its booted project (403 FORBIDDEN). Omitted ⇒ the
+// booted project, exactly the pre-D1 behavior. (This file stays a LEAF — the matrix is only DESCRIBED here;
+// whoami reports THIS transport's booted identity and is never overridable.)
+const PROJECT_OVERRIDE = z.string().optional().describe(
+  "Act on this project key instead of your booted project. Role-gated server-side: stewards (sweep/ops/reflect/communication) may name any project or \"_team\"; pm may name \"_team\" only; everyone else only their booted project.");
+for (const name of TOOL_NAMES) {
+  // z.ZodRawShape's index signature is read-only; this is the ONE deliberate post-construction write.
+  if (name !== "whoami") (DEFS[name].inputSchema as Record<string, z.ZodType>).project = PROJECT_OVERRIDE;
+}
 
 // ─── the iterator: register every tool on `server`, sourcing the triple from DEFS and the handler from the ──
 // caller's per-name factory (server.ts → dispatch through agentOp; shim.ts → proxy to the daemon op-API; both
-// override whoami, and server.ts also overrides create_issue_label as a native call). One generic bridge cast
+// override whoami). One generic bridge cast
 // (ToolHandler → the SDK's ToolCallback) lives HERE, once, instead of at 23 call sites in two files.
 export type ToolHandler = (args: Record<string, unknown>) => McpResult | Promise<McpResult>;
 export function registerTools(server: McpServer, makeHandler: (name: ToolName) => ToolHandler): void {

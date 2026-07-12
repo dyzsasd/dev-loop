@@ -18,41 +18,50 @@ PII、密钥或数据迁移的敏感改动，先由 senior 出设计；验收由
 
 ## 快速开始
 
+三条命令，零配置——默认的 **service** backend（内置的本地 sqlite hub + web 看板）不依赖任何
+外部服务，也不需要安装 plugin 或配置 MCP：
+
 ```bash
 npm i -g @dyzsasd/dev-loop        # Node ≥ 23.6；安装 `dev-loop` CLI
+dev-loop init                     # 引导式初始化——一路回车接受默认值（或用 --yes）
+dev-loop run                      # 一个 scheduler 驱动整支团队；按 ^C 停止全部任务
 ```
 
-如果你想在 Claude Code 里使用 `/dev-loop:*` slash command，先注册 npm 版 plugin marketplace，
-然后把 CLI 打印出的两条 `/plugin ...` 命令粘到 Claude Code 里执行：
+`init` 会创建 workspace 和你的第一个 project（hub 看板行自动 seed），并提议注册第一个
+repo（`--detect` 直接从 clone 里读取 build/CI 事实），最后打印 doctor 结论和一行 `NEXT:`，
+指出当前最需要做的一步。你会得到：
+
+- 一块 **web 看板**：`dev-loop hub start` → `http://127.0.0.1:8787`（`dev-loop run`
+  也会自动启动它；用 `dev-loop hub status` 查看状态）；
+- agent 直接通过 `dev-loop` CLI 访问看板——在 service backend 上配合 Claude Code，
+  不需要再安装任何东西；
+- 安全的默认值：`mode: dry-run`（用 `dev-loop run --once --dry-run` 预览，用
+  `dev-loop team set team.mode live` 切换）、`prod` 部署保持手动、autonomy 为 guarded——
+  随时可以用 `dev-loop doctor` 重新打印结论和 `NEXT:` 行。
+
+一个 **workspace** 就是一个目录、一支团队、一个 backend（本地 hub 或一个 Linear team），
+以及一份 `dev-loop.json`。repo 是 workspace 里的真实代码 clone；project 是对 repo 的虚拟
+分组。所有状态都放在 `<workspace>/.dev-loop/` 下，所以**复制整个文件夹就能搬到另一台机器**。
+
+### 使用 Linear 作为 backend
+
+`dev-loop init --backend linear` 会询问 Linear team 的名字（也可以先跳过，之后用
+`dev-loop team set team.linearTeam "My Team"` 补上）。Linear 的 onboarding 在 Claude Code
+里进行，因此这个 backend 需要两项一次性配置：
+
+- 把 **Linear MCP** 配在 Claude Code 的 **user scope** 下（如果 steward 无法访问看板，
+  doctor 会提示 `W05`）。
+- 注册 npm 版 plugin marketplace 以获得 `/dev-loop:*` slash command，然后把 CLI 打印出的
+  两条 `/plugin ...` 命令粘到 Claude Code 里执行：
 
 ```bash
 dev-loop install-claude-plugin
 ```
 
-一个 **workspace** 就是一个目录、一支团队、一个 Linear team（或一个本地 hub），以及一份
-`dev-loop.json`。repo 是 workspace 里的真实代码 clone；project 是对 repo 的虚拟分组。
-所有状态都放在 `<workspace>/.dev-loop/` 下，所以**复制整个文件夹就能搬到另一台机器**。
-
-```bash
-# 1. 创建 workspace（纯 CLI，不调用 LLM，也不访问后端）
-dev-loop team init --dir ~/work/my-team --key my-team \
-  --backend linear --linear-team "My Team" --deploy dev=auto,prod=manual --comms lark
-cd ~/work/my-team
-
-# 2. 在 Claude Code（已安装 plugin）或其他已加载 dev-loop skills 的 coding CLI 里：
-#    创建并同步 project，然后添加 repo
-#      /dev-loop:add-project      — 查找或创建 Linear/hub project、label 和 strategy doc
-#      /dev-loop:add-repo         — clone repo，检测 build/CI 检查，并询问 deploy 与 health probe
-
-# 3. 检查、预览、运行
-dev-loop doctor                   # 只读健康检查
-dev-loop run --once --dry-run     # 预览每个 agent 的完整命令，包括各自的 model + effort
-dev-loop run                      # 一个 scheduler 驱动整支团队；按 ^C 停止全部任务
-```
-
-使用 **linear** backend 时，请把 Linear MCP 配在 Claude Code 的 **user scope** 下；如果 steward
-无法访问看板，`dev-loop doctor` 会提示 `W05`。使用 **service** backend 时，`dev-loop run`
-会自动启动本地 hub，可用 `dev-loop hub status` 查看状态。
+之后在 Claude Code 里运行：`/dev-loop:add-project`（查找或创建 Linear project、label 和
+strategy doc）和 `/dev-loop:add-repo`（clone repo + 检测 build/CI 检查 + 询问 deploy 与
+health probe）。检查和运行的方式与上面完全相同：`dev-loop doctor`、
+`dev-loop run --once --dry-run`、`dev-loop run`。
 
 ### 换到另一台机器
 
@@ -84,7 +93,9 @@ mutator 写入，通常不需要手动编辑：
   `comms`（Slack/Lark channel，对应环境变量名），以及各 agent 的 cadence。
 - `repos` — 物理 repo 注册表：路径、build/typecheck 命令、PR merge check、deploy 形态、
   health probe。
-- `projects` — 引用 repo 的交付单元：strategy doc、test environment、`intake.todoDepthCap`
+- `projects` — 引用 repo 的交付单元：strategy doc、test environment、`intake.mode`
+  （默认 `autonomous`；`passive` = PM 不再自主发起工作，只响应显式的 `needs-pm`
+  请求——验证与 grooming 照常进行）、`intake.todoDepthCap`
   （PM 维持的已承诺队列深度，默认 10），以及各 agent 的启动覆盖项
   (`agents.pm = { model, effort, cadence }` 等)。
 
@@ -114,6 +125,7 @@ dev-loop run --once --dry-run             # 打印解析后的命令，不启动
 
 | 命令 | 作用 |
 |---|---|
+| `dev-loop init [--dir d] [--yes]` | 引导式 onboarding：workspace + 第一个 project/repo，以 doctor 的 `NEXT:` 行收尾 |
 | `dev-loop install-claude-plugin` | 注册 npm 版 Claude Code plugin marketplace，并打印两条 `/plugin` 命令 |
 | `dev-loop team init / repair` | 创建 workspace / 换机后修复 |
 | `dev-loop team add-project / add-repo` | 带校验的配置写入（`/dev-loop:*` skill 会调用这些命令） |

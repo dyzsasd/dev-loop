@@ -2,7 +2,9 @@
 import {
   validateTeamFile, effectiveProject, effectiveRepo, reposOfProject, primaryRepo,
   referencingProjects, inferProjectForRepo, ownerOf, toLegacyView, normalizedRel,
-  parseWorkspaceFile, WsValidationError, type TeamFile, type Workspace,
+  parseWorkspaceFile, WsValidationError, isTeamProject, deliveryProjects,
+  agentInterfaceFor, DEFAULT_AGENT_INTERFACE,
+  type TeamFile, type Workspace, type HubBlock,
 } from "../src/team-config.ts";
 
 let fails = 0;
@@ -35,9 +37,14 @@ ok(has(null, "E01"), "E01: non-object config");
 { const f = base(); (f.team as { key: string }).key = "BadKey"; ok(has(f, "E02"), "E02: uppercase team.key"); }
 { const f = base(); (f.team as { backend: string }).backend = "sqlite"; ok(has(f, "E02"), "E02: bad backend"); }
 
-// ── E09 linear needs linearTeam ──
-{ const f = base(); delete (f.team as { linearTeam?: string }).linearTeam; ok(has(f, "E09"), "E09: linear backend without linearTeam"); }
-{ const f = base(); f.team.backend = "service"; delete (f.team as { linearTeam?: string }).linearTeam; ok(!has(f, "E09"), "E09: service backend does NOT require linearTeam"); }
+// ── E09 blank linearTeam: a load-time WARNING (never an error), hard-failed only at toLegacyView ──
+// `team init --backend linear --yes` writes a blank linearTeam to fill later; a load error would lock the
+// operator out of the exact commands that repair it (team set / add-project / doctor).
+{ const f = base(); delete (f.team as { linearTeam?: string }).linearTeam;
+  ok(!has(f, "E09"), "E09: blank linearTeam is NOT a load error anymore (the workspace must stay loadable to repair)");
+  ok(validateTeamFile(f).warnings.some((w) => w.code === "E09" && /team set team\.linearTeam/.test(w.message)), "E09: blank linearTeam WARNS with the team set repair command"); }
+{ const f = base(); f.team.backend = "service"; delete (f.team as { linearTeam?: string }).linearTeam;
+  ok(validateTeamFile(f).warnings.every((w) => w.code !== "E09"), "E09: service backend does NOT warn about linearTeam"); }
 
 // ── E03 path escape ──
 { const f = base(); f.repos.portal.path = "/abs/path"; ok(has(f, "E03"), "E03: absolute repo path"); }
@@ -99,6 +106,82 @@ ok(normalizedRel("../x") === null && normalizedRel("/x") === null, "normalizedRe
 }
 { const f = base(); ok(effectiveProject(mkWs(f), "devplatform").intake === undefined, "no intake anywhere → the resolved view carries none (agents default to autonomous)"); }
 
+// ── E13 hub.agentInterface (D8: per-coding-agent hub interface; D9 defaults) ──
+{ const f = base(); f.team.hub = { agentInterface: { claude: "cli", codex: "mcp" } }; ok(codes(f).length === 0, "E13: a valid team hub.agentInterface passes"); }
+{ const f = base(); f.projects.devplatform.hub = { agentInterface: { claude: "mcp" } }; ok(codes(f).length === 0, "E13: a valid project hub.agentInterface passes"); }
+{ const f = base(); f.team.hub = { agentInterface: { claude: "sse" as "cli" } }; ok(has(f, "E13"), "E13: an unknown interface value is rejected"); }
+{ const f = base(); f.team.hub = { agentInterface: { cluade: "cli" as "cli" } as Record<string, "cli"> }; ok(has(f, "E13"), "E13: a typo'd coding-agent key is rejected (it would silently not apply)"); }
+{ const f = base(); (f.team as { hub?: unknown }).hub = "cli"; ok(has(f, "E13"), "E13: a non-object hub block is rejected"); }
+{ const f = base(); (f.team as { hub?: unknown }).hub = { agentInterface: ["cli"] }; ok(has(f, "E13"), "E13: an ARRAY agentInterface is rejected"); }
+{ const f = base(); (f.projects.devplatform as { hub?: unknown }).hub = { agentInterface: { claude: true } }; ok(has(f, "E13"), "E13: a boolean interface value on a project is rejected"); }
+{ const f = base(); f.team.hub = { docs: true }; ok(codes(f).length === 0, "E13: a hub block with only passthrough fields (docs) validates clean"); }
+
+// ── agentInterfaceFor: the D9 defaults + the config override (the D8 rollback switch) ──
+ok(DEFAULT_AGENT_INTERFACE.claude === "cli" && DEFAULT_AGENT_INTERFACE.codex === "cli" && DEFAULT_AGENT_INTERFACE.opencode === "mcp",
+  "D9 defaults: claude→cli, codex→cli (P8 certified 2026-07-11), opencode→mcp");
+ok(agentInterfaceFor(undefined, "claude") === "cli", "agentInterfaceFor: no hub block → claude defaults to cli");
+ok(agentInterfaceFor(undefined, "codex") === "cli" && agentInterfaceFor(undefined, "opencode") === "mcp", "agentInterfaceFor: codex defaults to cli (post-P8 cert); opencode stays mcp");
+ok(agentInterfaceFor(undefined, "future-cli") === "mcp", "agentInterfaceFor: an unknown coding agent defaults to mcp (today's behavior)");
+ok(agentInterfaceFor({ agentInterface: { claude: "mcp" } }, "claude") === "mcp", "agentInterfaceFor: an explicit override beats the default (rollback switch)");
+ok(agentInterfaceFor({ agentInterface: { codex: "mcp" } }, "codex") === "mcp", "agentInterfaceFor: codex can be rolled back to mcp by config (the D8 rollback switch)");
+
+// ── hub inheritance: team default → project, FIELD-WISE per coding agent (like intake) ──
+{
+  const f = base(); f.team.hub = { agentInterface: { claude: "mcp", codex: "cli" } };
+  f.projects.devplatform.hub = { agentInterface: { claude: "cli" } };
+  const eff = effectiveProject(mkWs(f), "devplatform");
+  const ai = (eff.hub as HubBlock).agentInterface!;
+  ok(ai.claude === "cli" && ai.codex === "cli",
+    "a project flipping only claude keeps the team-level codex setting (per-coding-agent field-wise merge)");
+}
+{
+  const f = base(); f.team.hub = { agentInterface: { claude: "mcp" } };
+  const view = toLegacyView(mkWs(f)).projects.devplatform as { hub?: HubBlock };
+  ok(view.hub?.agentInterface?.claude === "mcp", "a team-level hub.agentInterface reaches the legacy view (the scheduler's read path)");
+}
+{
+  const f = base();
+  const bag = f.projects.devplatform as unknown as Record<string, unknown>;
+  bag.hub = { docs: true };                                  // DL-83 passthrough must survive the merge
+  f.team.hub = { agentInterface: { claude: "mcp" } };
+  const view = toLegacyView(mkWs(f)).projects.devplatform as { hub?: HubBlock };
+  ok(view.hub?.docs === true && view.hub?.agentInterface?.claude === "mcp",
+    "the hub merge preserves passthrough fields (hub.docs) alongside the merged agentInterface");
+}
+{ const f = base(); ok(effectiveProject(mkWs(f), "devplatform").hub === undefined, "no hub anywhere → the resolved view carries none (defaults apply)"); }
+
+// ── E14 per-project communication block (article config; strict keys — agents P5) ──
+{
+  const f = base();
+  f.projects.devplatform.communication = {
+    cadence: "daily", language: "en", audience: "builders", tone: "clear", maxWords: 900,
+    sourceWindowDays: 7, output: "data", outputDir: "communications", repoOutputDir: "docs/communications", includeUnreleased: false,
+  };
+  ok(codes(f).length === 0, "E14: a fully-populated valid communication block passes");
+}
+{ const f = base(); f.projects.devplatform.communication = {}; ok(codes(f).length === 0, "E14: an EMPTY communication block is valid (presence alone opts article drafting in)"); }
+{ const f = base(); f.projects.devplatform.communication = { articles: true }; ok(has(f, "E14"), "E14: an unknown communication key is rejected (strict — a typo must not silently change a fire)"); }
+{ const f = base(); f.projects.devplatform.communication = { output: "s3" }; ok(has(f, "E14"), "E14: output must be data|repo"); }
+{ const f = base(); f.projects.devplatform.communication = { maxWords: 0 }; ok(has(f, "E14"), "E14: maxWords must be >= 1"); }
+{ const f = base(); f.projects.devplatform.communication = { sourceWindowDays: 2.5 }; ok(has(f, "E14"), "E14: a fractional sourceWindowDays is rejected"); }
+{ const f = base(); f.projects.devplatform.communication = { language: "" }; ok(has(f, "E14"), "E14: an empty-string field is rejected"); }
+{ const f = base(); f.projects.devplatform.communication = { includeUnreleased: "yes" }; ok(has(f, "E14"), "E14: a non-boolean includeUnreleased is rejected"); }
+{ const f = base(); f.projects.devplatform.communication = "daily"; ok(has(f, "E14"), "E14: a non-object communication block is rejected"); }
+{ const f = base(); f.projects.devplatform.communication = ["daily"]; ok(has(f, "E14"), "E14: an ARRAY communication block is rejected"); }
+
+// ── E15 per-project notify block (§9 webhook override; env NAMES only, §16/I5) ──
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhookEnv: "MY_HOOK" }; ok(codes(f).length === 0, "E15: a valid notify override passes"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "lark", webhookEnv: "MY_HOOK", secretEnv: "MY_SECRET", events: ["human-parked"] }; ok(codes(f).length === 0, "E15: secretEnv + events are valid"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "teams", webhookEnv: "MY_HOOK" }; ok(has(f, "E15"), "E15: an unknown provider type is rejected"); }
+{ const f = base(); f.projects.devplatform.notify = { webhookEnv: "MY_HOOK" }; ok(has(f, "E15"), "E15: a notify block without type is rejected"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack" }; ok(has(f, "E15"), "E15: a notify block without webhookEnv is rejected (a dead send target)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhookEnv: "https://hooks.slack.com/x" }; ok(has(f, "E15"), "E15: a URL in webhookEnv is rejected (env NAME only)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhook: "https://hooks.slack.com/x" }; ok(has(f, "E15"), "E15: an inline webhook literal is rejected outright (§16/I5)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "lark", webhookEnv: "MY_HOOK", secret: "shhh" }; ok(has(f, "E15"), "E15: an inline secret literal is rejected outright (§16/I5)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhookEnv: "MY_HOOK", extra: 1 }; ok(has(f, "E15"), "E15: an unknown notify key is rejected (strict)"); }
+{ const f = base(); f.projects.devplatform.notify = { type: "slack", webhookEnv: "MY_HOOK", events: "human-parked" }; ok(has(f, "E15"), "E15: a non-array events is rejected"); }
+{ const f = base(); f.projects.devplatform.notify = ["slack"]; ok(has(f, "E15"), "E15: an ARRAY notify block is rejected"); }
+
 // ── E07 comms env-name discipline (I5) ──
 { const f = base(); f.team.comms = { provider: "lark", webhookEnv: "https://hook.example/x" as string }; ok(has(f, "E07"), "E07: webhookEnv is a URL, not an env name"); }
 { const f = base(); f.team.comms = { provider: "teams" as "slack", webhookEnv: "DEVLOOP_COMMS_WEBHOOK" }; ok(has(f, "E07"), "E07: bad provider"); }
@@ -124,7 +207,17 @@ for (const bad of ["team", "lessons", "wt", "locks", "hub.db"]) {
   ok(has(f, "E11"), `E11: reserved project key '${bad}'`);
 }
 { const f = base(); f.repos["_bad"] = { path: "x" }; ok(has(f, "E11"), "E11: repo ref with leading underscore"); }
-{ const f = base(); f.projects["_team"] = { repos: [{ ref: "portal" }] }; f.repos.portal.owner = "devplatform"; ok(!has(f, "E11"), "E11: _team is the permitted reserved intake project key"); }
+// `_team` is STRUCTURAL: the intake project lives only as a hub.db row (team init seeds it) — a config
+// projects._team is rejected, so no consumer ever needs a hand-written exclusion to hold.
+{ const f = base(); f.projects["_team"] = { repos: [{ ref: "portal" }] }; f.repos.portal.owner = "devplatform"; ok(has(f, "E11"), "E11: _team is rejected as a config project key (hub-db-only intake row)"); }
+
+// ── the centralized _team exclusion helpers (the ONE place the exclusion lives) ──
+{
+  ok(isTeamProject("_team") && !isTeamProject("team") && !isTeamProject("devplatform"), "isTeamProject matches only the reserved intake key");
+  const f = base();
+  (f.projects as Record<string, unknown>)["_team"] = { repos: [] }; // hand-built Workspace that never passed validation
+  ok(deliveryProjects(mkWs(f)).join(",") === "devplatform", "deliveryProjects drops _team even on a hand-built workspace");
+}
 
 // ── W01/W02 warnings (not errors) ──
 { const f = base(); f.repos.orphan = { path: "orphan-dir" }; ok(validateTeamFile(f).warnings.some((w) => w.code === "W02"), "W02: registered repo referenced by nobody"); }
@@ -193,11 +286,11 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   const f = base();
   const bag = f.projects.devplatform as unknown as Record<string, unknown>;
   bag.blockedStateName = "Blocked";                 // v1-era field the whitelist used to DROP
-  bag.communication = { articles: true };           // arbitrary operator field must survive too
+  bag.communication = { language: "en" };           // a (valid, E14) communication block must survive too
   f.team.comms = { provider: "lark", webhookEnv: "DEVLOOP_COMMS_WEBHOOK" };
   const p = toLegacyView(mkWs(f)).projects.devplatform as Record<string, unknown>;
   ok(p.blockedStateName === "Blocked", "toLegacyView passes through blockedStateName (agents/daemon read it)");
-  ok(JSON.stringify(p.communication) === '{"articles":true}', "toLegacyView passes through arbitrary operator fields");
+  ok(JSON.stringify(p.communication) === '{"language":"en"}', "toLegacyView passes through the communication block (the agent reads it off the legacy view)");
   ok(JSON.stringify(p.notify) === '{"type":"lark","webhookEnv":"DEVLOOP_COMMS_WEBHOOK"}',
     "toLegacyView bridges team.comms → the legacy per-project notify block (daemon human-park pings keep working)");
   // a project-level passthrough notify wins over the bridge
@@ -208,6 +301,27 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   delete bag.notify; delete (f.team as unknown as Record<string, unknown>).comms;
   const p3 = toLegacyView(mkWs(f)).projects.devplatform as Record<string, unknown>;
   ok(!("notify" in p3), "no comms and no notify → the bridge invents nothing");
+}
+
+// ── toLegacyView is the E09 hard-fail seam: a blank linearTeam loads, but never reaches a runtime ──
+{
+  const f = base(); (f.team as { linearTeam?: string }).linearTeam = "  ";
+  try { toLegacyView(mkWs(f)); ok(false, "toLegacyView throws on a blank linearTeam (linear)"); }
+  catch (e) {
+    ok(e instanceof WsValidationError && (e as WsValidationError).errors[0]?.code === "E09", "toLegacyView throws WsValidationError [E09] on a blank linearTeam");
+    ok(/team set team\.linearTeam/.test((e as Error).message), "the E09 launch failure names the team set repair command");
+  }
+}
+{ const f = base(); f.team.backend = "service"; delete (f.team as { linearTeam?: string }).linearTeam;
+  ok(!!toLegacyView(mkWs(f)).projects.devplatform, "toLegacyView does NOT throw for a service backend without linearTeam"); }
+
+// ── forward compatibility: unknown top-level keys (workspaceId, future fields) must not break loads ──
+{
+  const f = base() as TeamFile & Record<string, unknown>;
+  f.workspaceId = "0f0e0d0c-1111-2222-3333-444455556666";
+  f.someFutureField = { nested: true };
+  ok(codes(f).length === 0, "unknown/extra top-level keys (workspaceId, future fields) validate clean (older CLIs stay compatible)");
+  ok(!!toLegacyView(mkWs(f)).projects.devplatform, "toLegacyView is unaffected by extra top-level keys");
 }
 
 // ── hostile passthrough: v1-era junk keys must LOSE to the computed values (spread-order guard) ──

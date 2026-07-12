@@ -12,6 +12,11 @@ import { openDb, nowIso } from "./db.ts";
 // The ONE agent roster (A2): the scheduler's VALID_AGENTS derives from this, and the consistency test
 // asserts skills/<agent>-agent dirs match it — so adding an agent is a single edit, not three in lock-step.
 export const AGENT_HANDLES = ["pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "communication"] as const;
+// The team-scope STEWARD roles (M4): the scheduler fires these once for the whole team (project `_team`),
+// and the D1 hub project-override matrix (agentops.resolveProjectOverride) lets exactly these actors cross
+// project boundaries server-side. ONE definition next to the roster (the A2 pattern) — run-agents.ts's
+// STEWARD_AGENTS and the agentops guard both derive from it, so the two lists cannot drift.
+export const STEWARD_HANDLES = ["sweep", "ops", "reflect", "communication"] as const;
 // `signal` is a RETIRED actor: kept as an INACTIVE actor so its historical comment/event
 // attribution stays readable, but refused for NEW writes (actorExists/G1 filter active=1).
 const RETIRED_HANDLES = ["signal"];

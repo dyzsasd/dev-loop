@@ -101,11 +101,14 @@ ok(noCtx.code === 0 && noCtx.out.includes("DOCTOR_OK") && !noCtx.out.includes("s
 
 // (AC4b/c) service context present but NOTHING wired — every reconcile check WARNs, yet the verdict stays
 // DOCTOR_OK (exit 0): the reconcile is best-effort, NEVER a hard-fail (only the DB-integrity checks gate).
+// The .mcp.json reconcile is an MCP-interface concern (D8), so these fixtures PIN interface="mcp" —
+// under the D9 default (claude→cli) the registration is correctly "not required" (asserted further below).
+const MCP_IFACE = { agentInterface: { claude: "mcp" } };
 const bareRepo = mkdtempSync(join(tmpdir(), "dl81-repo-"));    // no .mcp.json
 const emptyRun = mkdtempSync(join(tmpdir(), "dl81-run-"));     // no daemon-alpha.json runfile
 const emptyRoot = mkdtempSync(join(tmpdir(), "dl81-root-"));   // no hooks/hooks.json
 const cfgWarn = join(recRoot, "warn.projects.json");
-writeFileSync(cfgWarn, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: bareRepo } } }));
+writeFileSync(cfgWarn, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: bareRepo, hub: MCP_IFACE } } }));
 const warnRun = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: cfgWarn, DEVLOOP_RUN_DIR: emptyRun, DEVLOOP_PLUGIN_ROOT: emptyRoot });
 ok(warnRun.code === 0 && warnRun.out.includes("DOCTOR_OK") && !warnRun.out.includes("DOCTOR_FAILED"),
    "doctor: service context, nothing wired → still DOCTOR_OK exit 0 (reconcile is non-fatal, DL-81 AC2)");
@@ -130,7 +133,7 @@ await new Promise<void>((r) => stub.listen(0, "127.0.0.1", () => r()));
 const stubPort = (stub.address() as { port: number }).port;
 writeFileSync(join(okRun, "daemon-alpha.json"), JSON.stringify({ project: "alpha", pid: process.pid, port: stubPort, host: "127.0.0.1", url: `http://127.0.0.1:${stubPort}`, startedAt: "2026-01-01T00:00:00.000Z" }));
 const cfgOk = join(recRoot, "ok.projects.json");
-writeFileSync(cfgOk, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: okRepo } } }));
+writeFileSync(cfgOk, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: okRepo, hub: MCP_IFACE } } }));
 const okR = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: cfgOk, DEVLOOP_RUN_DIR: okRun, DEVLOOP_PLUGIN_ROOT: okRoot });
 stub.close();
 ok(okR.code === 0 && okR.out.includes("DOCTOR_OK")
@@ -142,12 +145,20 @@ ok(okR.code === 0 && okR.out.includes("DOCTOR_OK")
 const binRepo = mkdtempSync(join(tmpdir(), "dl81-binrepo-"));
 writeFileSync(join(binRepo, ".mcp.json"), JSON.stringify({ mcpServers: { "dev-loop-hub": { command: "dev-loop", args: ["serve"], env: { DEVLOOP_ACTOR: "${DEVLOOP_ACTOR:-operator}", DEVLOOP_PROJECT: "${DEVLOOP_PROJECT:-alpha}" } } } }));
 const cfgBin = join(recRoot, "bin.projects.json");
-writeFileSync(cfgBin, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: binRepo } } }));
+writeFileSync(cfgBin, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: binRepo, hub: MCP_IFACE } } }));
 const binR = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: cfgBin, DEVLOOP_RUN_DIR: emptyRun, DEVLOOP_PLUGIN_ROOT: emptyRoot });
 ok(binR.code === 0 && binR.out.includes("registers dev-loop-hub → dev-loop serve (DEVLOOP_ACTOR wired)"),
    "doctor: the installed `dev-loop serve` bin shape PASSes the .mcp.json reconcile");
 ok(!/\.mcp\.json — the dev-loop-hub entry/.test(binR.out),
    "doctor: the installed bin shape no longer trips the 're-run init to repair' false alarm");
+
+// D8 scope: the SAME bare-repo project on the D9 DEFAULT (claude→cli, no hub pin) must NOT warn about a
+// missing .mcp.json registration — the CLI interface needs none, so the reconcile reports it not required.
+const cfgCli = join(recRoot, "cli.projects.json");
+writeFileSync(cfgCli, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: bareRepo } } }));
+const cliR = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: cfgCli, DEVLOOP_RUN_DIR: emptyRun, DEVLOOP_PLUGIN_ROOT: emptyRoot });
+ok(cliR.code === 0 && cliR.out.includes('.mcp.json — not required') && !cliR.out.includes("is not registered"),
+   "doctor: a service project on interface=cli (D9 default) reports the .mcp.json registration NOT REQUIRED (no false 're-run init' warn)");
 try { for (const d of [recRoot, bareRepo, emptyRun, emptyRoot, okRepo, okRoot, okRun, binRepo]) rmSync(d, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
 
 console.log(fails === 0 ? "\nHUB_ISOLATION_OK" : `\n${fails} CHECK(S) FAILED`);
