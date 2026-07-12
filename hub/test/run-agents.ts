@@ -197,6 +197,16 @@ try {
   const bad = run(["--cli", "claude", "--once", "--dry-run", "--agents", "nope", ...common]);
   ok(bad.code === 2 && /unknown agent\/group 'nope'/.test(bad.out), "unknown agent fails with a usage error");
 
+  // R1a change-gate TTL: --help documents the pm/qa review-tier bypass + the knob (behavior is covered
+  // by run-agents-live.ts §6a–6d); a bad TTL value fails like every other duration flag.
+  const help = run(["--help"]);
+  ok(/--change-gate-ttl <dur>/.test(help.out) && /default 4h; 0 = defer forever/.test(help.out),
+    "--help documents --change-gate-ttl with its default and the 0 = pure-gate escape");
+  ok(/pm\/qa are REVIEW tiers/.test(help.out) && /dev-tier \+ architect keep the pure gate/.test(help.out),
+    "--help explains WHY pm/qa bypass the gate (lens-rotation / coverage-expansion thrive on a quiet board)");
+  const badTtl = run(["--cli", "claude", "--once", "--dry-run", "--change-gate-ttl", "soon", ...common]);
+  ok(badTtl.code === 2 && /invalid duration 'soon'/.test(badTtl.out), "--change-gate-ttl rejects a malformed duration");
+
   // DX regression: a garbage DEVLOOP_RUNNER_CLI used to crash with an opaque
   // "Cannot read properties of undefined (reading 'model')" — now the same clean die() as --cli.
   const runEnv = (args: string[], env: Record<string, string>) => {

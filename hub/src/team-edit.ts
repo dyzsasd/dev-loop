@@ -47,6 +47,16 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^projects\.[^.]+\.testEnv\.authConstraint$/, kind: "string" },
   { re: /^projects\.[^.]+\.intake\.mode$/, kind: ["autonomous", "passive"] as const },
   { re: /^projects\.[^.]+\.intake\.todoDepthCap$/, kind: "int" },
+  // communication: the communication agent's per-project ARTICLE config (E14 strict keys; NOT the §22a
+  // digest gate — that keys on team.comms). First touch of any leaf creates the block via the walk.
+  { re: /^projects\.[^.]+\.communication\.(cadence|language|audience|tone|outputDir|repoOutputDir)$/, kind: "string" },
+  { re: /^projects\.[^.]+\.communication\.(maxWords|sourceWindowDays)$/, kind: "int" },
+  { re: /^projects\.[^.]+\.communication\.output$/, kind: ["data", "repo"] as const },
+  { re: /^projects\.[^.]+\.communication\.includeUnreleased$/, kind: "boolean" },
+  // notify: the per-project §9 webhook OVERRIDE (E15; team.comms is canonical and bridges into it).
+  // Env-var NAMES only — E15 re-validation rejects URL/secret literals on write (§16/I5).
+  { re: /^projects\.[^.]+\.notify\.type$/, kind: ["slack", "lark"] as const },
+  { re: /^projects\.[^.]+\.notify\.(webhookEnv|secretEnv)$/, kind: "string" },
   { re: /^repos\.[^.]+\.deploy\.style$/, kind: "string" },
   { re: /^repos\.[^.]+\.deploy\.healthCheck$/, kind: "string" },
   { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.auto$/, kind: "boolean" },
@@ -56,7 +66,9 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
 ];
 const SETTABLE_SUMMARY =
   "team.{mode,linearTeam,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap}, " +
-  "projects.<key>.{enabled,weight,devSplit,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap}, " +
+  "projects.<key>.{enabled,weight,devSplit,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
+  "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
+  "notify.{type,webhookEnv,secretEnv}}, " +
   "repos.<ref>.deploy.{style,healthCheck,environments.<env>.{auto,deployPrPrefix,command,healthCheck}}";
 
 function coerce(kind: SetKind, raw: string, path: string): unknown {
@@ -99,6 +111,15 @@ export async function teamSet(argv: string[]): Promise<number> {
       return;
     }
     if (path === "team.comms.webhookEnv" && !file.team.comms) die(`team.comms is not configured yet — set the provider first: dev-loop team set team.comms.provider slack|lark`);
+    // projects.<k>.notify mirrors the team.comms bootstrap (E15 requires type + webhookEnv together): a
+    // lone type gets the standard env NAME default; a lone webhookEnv/secretEnv has no provider to guess.
+    const notifyFirstTouch = path.match(/^projects\.([^.]+)\.notify\.(type|webhookEnv|secretEnv)$/);
+    if (notifyFirstTouch && !(file.projects[notifyFirstTouch[1]] as { notify?: unknown }).notify) {
+      if (notifyFirstTouch[2] !== "type") die(`projects.${notifyFirstTouch[1]}.notify is not configured yet — set the provider first: dev-loop team set projects.${notifyFirstTouch[1]}.notify.type slack|lark`);
+      (file.projects[notifyFirstTouch[1]] as { notify?: unknown }).notify = { type: coerced, webhookEnv: "DEVLOOP_COMMS_WEBHOOK" };
+      msg = `set ${path}: (unset) → ${JSON.stringify(coerced)} (webhookEnv defaulted to DEVLOOP_COMMS_WEBHOOK)`;
+      return;
+    }
     let node = file as unknown as Record<string, unknown>;
     for (const seg of segs.slice(0, -1)) {
       if (!Object.hasOwn(node, seg)) node[seg] = {};

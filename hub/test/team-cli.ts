@@ -97,19 +97,37 @@ try {
     mkdirSync(join(svc2, "r2"), { recursive: true });
     writeFileSync(join(tmp, "legacy2.json"), JSON.stringify({ projects: {
       web2: { backend: "service", repoPath: join(svc2, "r2"), blockedStateName: "Blocked",
-              communication: { articles: true },
-              notify: { type: "lark", webhookEnv: "DEVLOOP_NOTIFY_HOOK", webhook: "https://secret.example/inline-TOKEN", events: ["human-parked"] } },
+              communication: { articles: true, language: "en" },
+              notify: { type: "lark", webhookEnv: "DEVLOOP_NOTIFY_HOOK", webhook: "https://secret.example/inline-TOKEN", channel: "#dev", events: ["human-parked"] } },
     } }));
     const im2 = run("team", ["import", "--from", join(tmp, "legacy2.json")], { cwd: svc2 });
     ok(im2.code === 0, "import (passthrough fixture) exits 0");
     ok(/inline webhook NOT copied/.test(im2.out), "import warns that an inline webhook URL is not copied (I5)");
     ok(/team\.comms ← project 'web2' notify/.test(im2.out), "import lifts the env-name notify to team.comms");
+    ok(/unknown communication key\(s\) articles NOT copied/.test(im2.out), "import warns about a dropped unknown communication key (E14 strict)");
+    ok(/unknown notify key\(s\) channel NOT copied/.test(im2.out), "import warns about a dropped unknown notify key (E15 strict)");
     const cfg2 = readJson(join(svc2, "dev-loop.json"));
     ok(cfg2.projects.web2.blockedStateName === "Blocked", "import passes through blockedStateName");
-    ok(cfg2.projects.web2.communication?.articles === true, "import passes through arbitrary operator fields");
+    ok(cfg2.projects.web2.communication?.language === "en" && !("articles" in cfg2.projects.web2.communication),
+      "import keeps the E14-known communication fields and drops the junk (block presence preserved)");
     ok(cfg2.team.comms?.provider === "lark" && cfg2.team.comms?.webhookEnv === "DEVLOOP_NOTIFY_HOOK", "team.comms lifted from the v1 notify block");
     ok(!JSON.stringify(cfg2).includes("inline-TOKEN"), "the inline webhook URL never lands in dev-loop.json (I5)");
     ok(cfg2.projects.web2.notify?.webhookEnv === "DEVLOOP_NOTIFY_HOOK" && !("webhook" in cfg2.projects.web2.notify), "the env-name notify survives as a project passthrough, minus the literal");
+  }
+
+  // ── import: an ALL-junk communication block keeps its (empty) presence — article drafting stays on ──
+  {
+    const svc2b = join(tmp, "svc2b");
+    run("team", ["init", "--dir", svc2b, "--key", "svc2b-team", "--backend", "service"]);
+    mkdirSync(join(svc2b, "r2b"), { recursive: true });
+    writeFileSync(join(tmp, "legacy2b.json"), JSON.stringify({ projects: {
+      web2b: { backend: "service", repoPath: join(svc2b, "r2b"), communication: { articles: true } },
+    } }));
+    const im2b = run("team", ["import", "--from", join(tmp, "legacy2b.json")], { cwd: svc2b });
+    ok(im2b.code === 0, "import with an all-junk communication block still exits 0 (the file stays E14-valid)");
+    const cfg2b = readJson(join(svc2b, "dev-loop.json"));
+    ok("communication" in cfg2b.projects.web2b && Object.keys(cfg2b.projects.web2b.communication).length === 0,
+      "the emptied communication block is KEPT — presence opts article drafting in, and import must not silently turn it off");
   }
 
   // ── import: notify HUSK (inline url only, no env) is dropped entirely — must not suppress the comms bridge ──
