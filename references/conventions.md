@@ -15,6 +15,7 @@ metrics, or per-agent identity.
 
 ## Table of contents
 0. [Prime directive — every fire is fresh](#0-prime-directive--every-fire-is-fresh)
+0a. [The standard boot sequence](#0a-the-standard-boot-sequence-every-agent-every-fire)
 - [Topology at a glance](#topology-at-a-glance)
 1. [What the loop is](#1-what-the-loop-is)
 2. [Safety boundary — the `dev-loop` label](#2-safety-boundary--the-dev-loop-label)
@@ -71,15 +72,21 @@ need no external context to proceed.
   retries. Never halt mid-flight waiting for a human (that violates the
   autonomous-loop posture, §12a). *If you had already taken a side-effecting
   action this fire* (filed/moved a ticket, committed, deployed), still write the
-  normal close-report (each skill's §3) before exiting, so the state stays
+  normal close-report (your SKILL's REPORT line, §22) before exiting, so the state stays
   auditable. Genuine external-prerequisite blocks are recorded on the ticket
   (§9), not raised as an interactive prompt.
 
-### The standard boot sequence (every agent, every fire)
+### 0a. The standard boot sequence (every agent, every fire)
 
-Defined ONCE here — each SKILL's §0 carries a one-line pointer, not a copy:
+Defined ONCE here — each SKILL's BOOT line carries a one-line pointer (cite §0a), not a copy:
 
-1. **Read this file** (conventions.md) — it overrides the SKILL on conflict.
+1. **Read this file SELECTIVELY** — the **Topology at a glance** block below, plus
+   exactly the sections your SKILL's `Sections:` line names (§0, §0a and §2 are
+   always among them by construction). A cited `##` section includes its `###`
+   lettered children (citing §9 loads §9a–§9c; citing only §9c loads just §9c).
+   This file still overrides the SKILL on conflict. Mid-fire you may read an
+   uncited section rather than guess — then flag it in your report as a
+   `Sections:` gap for the operator to fix; never guess at a protocol.
 2. **Load config** (§11): read `DEVLOOP_PROJECTS_JSON` if set, else
    the workspace `dev-loop.json` (1.x workspace schema, §27; internal test injection `DEVLOOP_PROJECTS_JSON` as
    read-only fallback); resolve your project (explicit `DEVLOOP_PROJECT` wins,
@@ -92,7 +99,7 @@ Defined ONCE here — each SKILL's §0 carries a one-line pointer, not a copy:
    (+ `## Dev` for the split tiers) plus `## Shared`.
 5. **§22 report start**: finalize any due daily/weekly/monthly roll-up, then
    check for un-acted `<report>.review.md` files (点评) and distill per §22.
-6. Open with the one-line run summary your SKILL's §0 specifies, then proceed.
+6. Open with the one-line run summary your SKILL's BOOT specifies, then proceed.
 
 ---
 
@@ -298,6 +305,21 @@ SELF-CLAIM — use it to *locate* the change (commit, PR, routes, design pointer
 Step 5.5 is the implementer's own gate; the owner's Stage-1 triage at In Review is the
 INDEPENDENT re-check of the same three classes — both run, always; the second exists
 precisely because the first is a self-claim.
+
+**Auth-constrained surfaces — the degraded-verify path (`testEnv.authConstraint`, all
+verification owners).** When the increment lives behind a login a headless fire cannot
+perform (e.g. a WorkOS-gated page — no real logged-in browser), do NOT false-fail it and
+do NOT mark it Done off the diff alone. Verify by the strongest evidence you *can* get:
+(a) read the shipped diff against the ACs (spec-compliance review); (b) confirm build/CI
+is green for that change; (c) exercise any **open** endpoint the feature exposes
+(health/status/public API); (d) confirm the change is actually **deployed** (the env's
+version/build marker moved to include it, not just merged — §12b). If all of that holds,
+close `Done` with a comment saying **exactly** what you could and couldn't exercise
+("verified via diff + green CI + `/api/status` at v0.X.Y; the authed UI itself was not
+browser-exercised — authConstraint"). If it can't be confirmed even that far, leave it
+`In Review` (inconclusive ≠ pass) and note that the authed check needs the operator's
+attended path (a real browser session). Record the constraint as a lessons.md rule (§14)
+so it isn't re-litigated every fire.
 
 **Split-dev escalation rides this same rule, routed to senior-dev (§21a).** In a two-tier
 project (§21a), when a **junior-dev**-built ticket fails verification on a **real** acceptance-
@@ -1544,7 +1566,7 @@ store**, or through the **local hub service** (an MCP system of record — see
 `docs/HUB-ARCHITECTURE.md`) — with the *same* state machine, label semantics, and
 protocols; only the storage primitive changes. This section is the **single
 abstraction point**: every "ticket operation" each skill performs maps to one of these
-backends, defined once here. Each skill's §0 carries just one line — "all ticket
+backends, defined once here. Each SKILL's BOOT carries just one line — "all ticket
 operations go through the configured backend (§18)" — instead of re-stating every job
 in backend terms.
 
@@ -1667,7 +1689,7 @@ verify-after-write (§7/§10):
 | `save_issue` (update) | read-modify-rewrite frontmatter under the per-ticket lock (below); **labels REPLACE-style** — re-pass the FULL set (§10 #1); **append-only lists (`relatedTo`) merge** — re-read, union, write; append a state-move comment; bump `updated` |
 | `list_comments` / `save_comment` | read / append-only-write the `## Comments` section (chronological) |
 | `create_issue_label` | **no-op** — labels are plain strings; no registry to provision (init skips the label step in local mode) |
-| `get_document` / `save_document` | only the **repo-file** form applies — `strategyDoc` is a repo file (§11, pm-agent §0) |
+| `get_document` / `save_document` | only the **repo-file** form applies — `strategyDoc` is a repo file (§11, form detection §20) |
 
 The §10 query discipline still applies: fetch the narrow slice you need (filter by the
 most specific predicate; `get_issue` one file when that's all you need), never read
@@ -2039,11 +2061,30 @@ archived period that points at the archive. Vision / Goals / Non-goals / Persona
 live doc; only the historical decision *detail* rolls out. The archive is provenance, never
 re-ingested per fire. (This doc's own 2026-06 milestone was rolled to `docs/strategy-archive/2026-06.md`.)
 
-### Where it lives
+### Where it lives — the strategyDoc form-detection rule
 In the **doc-home repo** (§19). A single flat file containing these headings IS the
-doc-base; a larger product may split it into a doc set under the same path. Read and
-maintain it exactly as `strategyDoc` is today (repo file → read/commit; Linear
-document → `get_document`/`save_document`), per pm-agent §0.
+doc-base; a larger product may split it into a doc set under the same path.
+
+`strategyDoc` may be a **Linear document**, a **hub document**, *or* a **repo file**.
+Detect the form ONCE per fire (precedence in this order) and use it consistently for
+both reading and updating:
+- **Linear document** — `strategyDoc` is an object `{ "linearDocument": "<id|slug|url>" }`,
+  or a string containing `linear.app/.../document/`. Read with `get_document`; update with
+  `save_document`. No git/file access. (Requires a Linear-connected backend — init rejects
+  `{linearDocument}` under `backend:"local"`, §18.)
+- **Hub document** (`backend:"service"` only, §18) — `strategyDoc` is `{ "hubDoc": "<kind>" }`
+  (e.g. `{ "hubDoc": "strategy" }`), or `hub.docs:true`. Read with `doc.get({ kind })` — an
+  `unpublished:true` result means **no version has ever been published**, so `doc.get`
+  returned the latest DRAFT (the only content there is): treat it as the working
+  north-star but say so; once a published version exists, `doc.get` returns it by default
+  (§18). Agents write **DRAFTs only** via `doc.save` (mandatory
+  `baseVersion`; the operator alone publishes via `doc.publish`); on a CONFLICT recover per
+  the §18 CAS rule (`doc.get {version:"latest"}` → re-apply → re-save with
+  `baseVersion:latestVersion` — the CAS keys on the latest draft, not the published version).
+- **Repo file** — a `{ "path": "<repo-relative>" }` object (the usual config form,
+  `config-schema.md`) or any other plain string: a path relative to the doc-home repo
+  (§19). Read/edit and (in `live`) commit, honoring the D4 section-level write policy
+  below. **Remains the default under `service`** unless `hub.docs`/`{hubDoc}` is set.
 
 ### init ↔ PM handoff (no double-write)
 - **init seeds `Current state` exactly once, if absent** (from brownfield mapping,
@@ -2283,8 +2324,13 @@ and **cites the strategy/roadmap item it serves** (traceability: strategy → ro
   the operator's approval comment (or the operator moving the parent back themselves); PM's next
   fire sees it (the §9 re-scan of parked tickets) and runs the normal pass path below. A rejection
   comment = a failed review (§3 close + follow-up).
-- **Pass → PM moves the parent `Done` and PROMOTES every staged child `Backlog → Todo`** (re-passing
-  the full label set, §10) — now junior-dev can pick them. This reuses the existing Backlog-staging +
+- **Pass → PM PROMOTES every staged child `Backlog → Todo` FIRST, THEN moves the parent `Done`**
+  (re-passing the full label set, §10 — each child keeps `dev-loop` + its dev-tier + its `pm`/`qa`
+  verifier label) — now junior-dev can pick them. **Order matters:** promotion is idempotent
+  (re-verifying an already-promoted design is safe), but a `Done` parent with children still stranded
+  in `Backlog` after a mid-promotion crash is NOT — no gate ever fires on them again and Sweep's
+  slow-cadence repair is the only rescue. Parent-`Done` last means a crash leaves a re-triggerable
+  In-Review parent, never orphaned children. This reuses the existing Backlog-staging +
   promotion shape (a staged child sits in `Backlog` like any parked idea; the `Backlog → Todo` move is
   the same kind PM already makes) rather than inventing a new state. (The only structural difference
   from §9a is that the design *parent* goes to `In Review` first — because **the design is itself the
@@ -2364,7 +2410,7 @@ Full design + the file-by-file change map: `docs/design/senior-junior-dev-split.
 Every agent leaves a durable, human-readable trail of what it did, and the operator may
 critique any of it (a **点评 / review**); the agent reads an un-acted critique and
 **changes how it works**. This is **one shared capability** — defined here once; each
-SKILL carries a single §0 line pointing back here. It is **additive and on by default**.
+SKILL's REPORT line points back here. It is **additive and on by default**.
 The true back-compat invariant is narrow: **no change to ticket / product / board
 behavior** — the only added effects are local report files you can read or ignore and a
 cheap review-glob at run-start. (It is *not* literally "zero behavior change": every fire
