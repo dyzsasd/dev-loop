@@ -135,6 +135,26 @@ machine, export the same env vars, run `dev-loop team repair`, then `dev-loop do
         "sink": "files"
       },
 
+      "communication": {                       // communication agent ARTICLE config (all fields optional)
+        "cadence": "daily",
+        "language": "en",
+        "audience": "builders and product teams",
+        "tone": "clear, specific, optimistic but not hypey",
+        "maxWords": 900,
+        "sourceWindowDays": 7,
+        "output": "data",                      // "data" (state dir) | "repo" (doc-home repo)
+        "outputDir": "communications",
+        "repoOutputDir": "docs/communications",
+        "includeUnreleased": false
+      },
+
+      "notify": {                              // per-project §9 webhook OVERRIDE (team.comms is canonical)
+        "type": "slack",                       // "slack" | "lark"
+        "webhookEnv": "MY_PROJECT_WEBHOOK",    // env var NAME, never the URL
+        "secretEnv": null,                     // optional Lark sign-secret env NAME
+        "events": ["human-parked"]             // optional event scope
+      },
+
       "repos": [
         { "ref": "portal", "role": "primary" }
       ]
@@ -165,7 +185,7 @@ single-field mutator; see [Operator-tunable fields](#operator-tunable-fields-dev
 | `linearTeam` / `linearTeamId` | Linear team name/id for `backend:"linear"`. | ✓ `team.linearTeam` |
 | `deployPolicy` | Per-environment ceiling. `manual` means no repo may auto-deploy that environment. | — |
 | `docSystem` / `docs` | Where team/product docs live. | — |
-| `comms` | Slack/Lark channel config. Store env var names only. | ✓ `team.comms.provider`, `team.comms.webhookEnv` |
+| `comms` | Slack/Lark channel config (`dev-loop notify`). Store env var names only. Its presence is also the **§22a team-digest gate**: with `team.comms` set, the team-scope communication fire composes and pushes the daily director digest — a per-project `communication` block never gates the digest. | ✓ `team.comms.provider`, `team.comms.webhookEnv` |
 | `mode` | Default `"live"` / `"dry-run"` for projects that do not override. | ✓ `team.mode` |
 | `autonomy` | Default autonomy posture for projects that do not override. | — |
 | `intake` | Team-wide default intake block (`mode`, `todoDepthCap`); seeded by `team init --intake-mode`. Projects override **field-wise** (nearest wins per field), so a project tuning only `todoDepthCap` keeps a team-level `"passive"`. | ✓ `team.intake.mode`, `team.intake.todoDepthCap` |
@@ -208,7 +228,7 @@ agent behavior.
 | `enabled` | `false` removes the project from scheduling entirely — both delivery rotation and steward coverage. | ✓ `projects.<key>.enabled` |
 | `weight` | Weighted round-robin share of delivery fires. `0` pauses delivery rotation only (maintenance mode) — stewards (sweep/ops/reflect/communication) keep covering the project. | ✓ `projects.<key>.weight` |
 | `linearProject` / `linearProjectId` | Backend project name/id. | — |
-| `strategyDoc` | Strategy document reference, usually `{ "path": "docs/STRATEGY.md" }`. | — |
+| `strategyDoc` | Strategy document reference, usually `{ "path": "docs/STRATEGY.md" }`. Under `intake.mode:"passive"` + `backend:"service"` the daemon watches the repo-file form for operator edits (see [Hub daemon notifier settings](#hub-daemon-notifier-settings-backendservice)). | — |
 | `testEnv` | Base URL, auth constraints, setup notes, and verification hints. | ✓ `projects.<key>.testEnv.baseUrl`, `.testEnv.authConstraint` |
 | `intake.mode` | `"autonomous"` (default): PM proactively reviews the product/strategy doc and files its own work. `"passive"`: PM originates nothing — it only responds to explicit `needs-pm` intake (conventions §5a); verification, unblocking, and grooming are unchanged. Falls back to `team.intake` field-wise. | ✓ `projects.<key>.intake.mode` |
 | `intake.todoDepthCap` | PM keeps committed `Todo` depth under this cap; default 10. | ✓ `projects.<key>.intake.todoDepthCap` |
@@ -217,7 +237,54 @@ agent behavior.
 | `hub.agentInterface` | Project override of `team.hub.agentInterface`, merged **per coding agent** (a project flipping only `claude` keeps the team-level `codex` setting). | — |
 | `agents` | Per-agent coding CLI, model, effort, and cadence overrides. | — |
 | `reports` | Report sink and review-channel config. | — |
+| `communication` | The communication agent's **article** config (see [`projects.<key>.communication`](#projectskeycommunication--article-drafting) below). Presence of this block is what makes per-project article drafting fire; it is **not** the §22a digest gate. | ✓ `projects.<key>.communication.*` (every scalar field) |
+| `notify` | Per-project §9 webhook **override** (see [`projects.<key>.notify`](#projectskeynotify--the-9-webhook-override) below). Absent ⇒ `team.comms` is bridged in automatically. | ✓ `projects.<key>.notify.{type,webhookEnv,secretEnv}` |
 | `repos` | Repo references: `{ "ref": "...", "role": "primary" }`. | — |
+
+### `projects.<key>.communication` — article drafting
+
+Read by the communication agent (`skills/communication-agent`) each fire. **All fields are
+optional**; the block's *presence* is what opts a project into per-project article drafting
+(no block + no explicit user request ⇒ the agent no-ops for that project). Keys are validated
+**strictly** (`E14`): an unknown key is a hard config error, because a typo here would silently
+change what a fire does. Edit path: `dev-loop team set projects.<key>.communication.<field> <value>`.
+
+| Field | Type / values | Default | Meaning |
+|---|---|---|---|
+| `cadence` | string | `"daily"` | How often an article is drafted. |
+| `language` | string | `"en"` | Article language. |
+| `audience` | string | `"current and prospective users"` | Who the article addresses. |
+| `tone` | string | `"clear, concrete, human, and restrained"` | Style directive. |
+| `maxWords` | integer ≥ 1 | `900` | Article length budget. |
+| `sourceWindowDays` | integer ≥ 1 | `7` | How far back shipped-work sources reach. |
+| `output` | `"data"` \| `"repo"` | `"data"` | Draft destination: the project state dir, or the doc-home repo. |
+| `outputDir` | string | `"communications"` | Subdir under the state dir (`output:"data"`). |
+| `repoOutputDir` | string | `"docs/communications"` | Repo path (`output:"repo"`). |
+| `includeUnreleased` | boolean | `false` | Whether roadmap items may appear (clearly framed as upcoming). |
+
+**The §22a director digest is NOT gated on this block.** The team daily digest (conventions
+§22a) keys on **`team.comms` presence**: a team-scope communication fire composes and pushes
+the digest whenever `team.comms` is configured, whether or not any project carries a
+`communication` block — the scheduler stamps the comms fact into every team-scope fire's
+context. A missing per-project block therefore never silently suppresses the director's one
+message a day; conversely, without `team.comms` there is no digest channel and the fire
+reports the missing channel instead.
+
+### `projects.<key>.notify` — the §9 webhook override
+
+The one-way webhook the hub daemon's notifiers (Human-Blocked pings, no-progress alerts) send
+over. On the 1.x workspace schema **`team.comms` is canonical**: when a project has no `notify`
+block, `team.comms` is bridged into it automatically, so most workspaces never write this block.
+Set it only to point ONE project at a different channel. Keys are validated strictly (`E15`).
+Edit path: `dev-loop team set projects.<key>.notify.<field> <value>` (setting `type` first
+bootstraps the block with `webhookEnv` defaulted to `DEVLOOP_COMMS_WEBHOOK`).
+
+| Field | Type / values | Meaning |
+|---|---|---|
+| `type` | `"slack"` \| `"lark"` | Provider (required). |
+| `webhookEnv` | env-var NAME | Where the webhook URL lives at runtime (required). **Never a URL** — inline `webhook`/`secret` literals are rejected (`E15`, §16). |
+| `secretEnv` | env-var NAME | Optional Lark sign-secret env name. |
+| `events` | string array | Optional event scope (e.g. `["human-parked"]`); omitting an event name opts it out. |
 
 ## Hub daemon notifier settings (`backend:"service"`)
 
@@ -232,12 +299,23 @@ The hub daemon's background notifiers read two per-project knobs from the hub DB
 
 The passive-intake doc-edit notifier keys off the project's effective `intake.mode`
 (`"passive"` only) and the drafts-pending notifier runs whenever a send target exists —
-neither has a `settings_json` field.
+neither has a `settings_json` field. The doc-edit notifier has a sibling **strategy-FILE
+watch** (same `"passive"`-only gate, also no `settings_json` field): it additionally
+requires the project's `strategyDoc` to be the **repo-file form** — a plain string or
+`{ "path": … }` (NOT `{hubDoc}`/`{linearDocument}`, not a `linear.app/…/document/` URL,
+and not when `hub.docs:true`) — resolved ONCE at boot via the doc-home rule (the repo
+with `role:"docs"`, else `"primary"`, else `repos[0]`; an explicit `"<repo-name>:path"`
+overrides; conventions §19). It watches the file's **content hash** with a 15-minute
+settle window (an editing burst collapses to one line), seeds a SILENT baseline on first
+observation (a boot never announces pre-existing content), dedupes by hash in the hub
+events ledger, and its one line names the configured path ONLY — never file content
+(§16).
 
 **Migration note:** the daemon resolves these values — including the comms presence that
-drives the 24h default, and `intake.mode` for the doc-edit notifier — once at **boot**. An
+drives the 24h default, `intake.mode` for the doc-edit notifier, and the `strategyDoc`
+form/path for the strategy-file watch — once at **boot**. An
 already-running daemon does not pick up the new 24h default, nor any later change to
-`settings_json`, `team.comms`, or `intake.mode`, until it restarts
+`settings_json`, `team.comms`, `intake.mode`, or `strategyDoc`, until it restarts
 (`dev-loop hub stop && dev-loop hub ensure`).
 
 ## Linear mirror (`mirror`, `backend:"service"` only)
@@ -275,6 +353,11 @@ leave `dev-loop.json` invalid. Only the whitelisted paths above (`team set` ✓ 
   `team.comms.webhookEnv` · `team.intake.mode` (`autonomous`|`passive`) · `team.intake.todoDepthCap`
 - `projects.<key>.enabled` · `.weight` · `.devSplit` · `.testEnv.baseUrl` · `.testEnv.authConstraint` ·
   `.intake.mode` · `.intake.todoDepthCap`
+- `projects.<key>.communication.{cadence,language,audience,tone,outputDir,repoOutputDir}` (strings) ·
+  `.communication.{maxWords,sourceWindowDays}` (integers) · `.communication.output` (`data`|`repo`) ·
+  `.communication.includeUnreleased` (boolean)
+- `projects.<key>.notify.type` (`slack`|`lark`; first touch bootstraps the block with the standard
+  `DEVLOOP_COMMS_WEBHOOK` env name) · `.notify.webhookEnv` · `.notify.secretEnv`
 - `repos.<ref>.deploy.style` · `.deploy.healthCheck` ·
   `.deploy.environments.<env>.{auto,deployPrPrefix,command,healthCheck}`
 
@@ -301,6 +384,8 @@ workspace-fingerprint mismatch check against every mapped Linear project.
 | `E11` | Reserved/invalid project key or repo ref. `_team` is the hub-only intake row (seeded by `team init` into hub.db) and is rejected as a config project. |
 | `E12` | Bad `intake` block: `mode` not `"autonomous"`/`"passive"`, or `todoDepthCap` not a positive integer. |
 | `E13` | Bad `hub` block: `agentInterface` key not a known coding agent (`claude`/`codex`/`opencode` — typos would silently not apply), or a value other than `"cli"`/`"mcp"`. |
+| `E14` | Bad `projects.<key>.communication` block: an unknown key (strict — a typo would silently change what a communication fire does), a wrong type, or `output` not `"data"`/`"repo"`. |
+| `E15` | Bad `projects.<key>.notify` block: an unknown key, missing/bad `type` or `webhookEnv`, an env name that looks like a URL, or an **inline `webhook`/`secret` literal** (§16 — export the value in an env var and store its NAME). |
 
 Common warnings:
 

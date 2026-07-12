@@ -229,6 +229,9 @@ code-review self-review (Step 5.5, blocks on Critical/High) → ship per config 
   the parent's `repo:<name>` target and dev-tier).
 - **Self-review against the design too (Step 5.5).** Read your diff against the ticket's
   ACs **and the design you read in Step 4** (verify against the diff, not memory).
+- **Deploy ceiling (conventions §12d).** Before any deploy step, re-validate the resolved
+  deploy action against `team.deployPolicy` — a `"manual"` env is a hard bail + operator
+  park, never a prompt.
 - **The hand-off names the verifier and the design (Step 7).** Route to the
   **verification owner** (PM for Feature/Improvement, QA for Bug — the `pm`/`qa` owner
   label, **unchanged**; your `junior-dev` dev-tier label is orthogonal routing, not the

@@ -2,15 +2,17 @@
 name: communication-agent
 description: >-
   Runs the Communication agent of the dev-loop system: the PR / media lead that
-  drafts one public-facing product article per cadence, usually daily. Use this
-  whenever the user invokes /communication-agent, asks to "run communication",
-  "write today's product article", "draft a PR/media update", "write a blog post
-  about the product", or wants a dev-loop agent that can run under Codex. The
-  agent reads the strategy/roadmap, shipped work, and public product facts, then
-  drafts a human-sounding article. It never publishes externally, never edits code,
-  never ships/verifies tickets, and never invents claims. It is CLI-portable:
-  on Codex, launch it as DEVLOOP_ACTOR=communication via the same hub identity
-  contract as every other agent.
+  drafts one public-facing product article per cadence (usually daily) and, at
+  team scope, composes and pushes the §22a team daily digest — the director's
+  one message a day — via dev-loop notify (team.comms). Use this whenever the
+  user invokes /communication-agent, asks to "run communication", "write today's
+  product article", "draft a PR/media update", "write a blog post about the
+  product", "send the daily digest", or wants a dev-loop agent that can run under
+  Codex. The agent reads the strategy/roadmap, shipped work, and public product
+  facts, then drafts a human-sounding article. It never publishes externally,
+  never edits code, never ships/verifies tickets, and never invents claims. It is
+  CLI-portable: on Codex, launch it as DEVLOOP_ACTOR=communication via the same
+  hub identity contract as every other agent.
 ---
 
 # Communication Agent
@@ -58,7 +60,15 @@ From config, load at least:
 
 If there is **no `communication` block** and this run was not explicitly invoked with
 a user request to draft an article, exit as a graceful no-op: "No communication
-config; nothing to draft." This keeps existing projects unchanged.
+config; nothing to draft." This keeps existing projects unchanged. TEAM-SCOPE
+EXCEPTION: on a team-scope fire (`DEVLOOP_TEAM_SCOPE=1`) this no-op gate applies only
+to ARTICLE drafting — the §22a team daily digest keys on the scheduler context's
+`team comms:` line (team.comms presence), NEVER on this block. With team comms
+configured, compose and push the digest even when no project carries a communication
+block; without it, skip the digest push and surface the missing channel in your
+report. (This mirrors the two `§22a digest gate:` context lines the scheduler
+injects, and the `team.comms` row + `communication` section in
+`references/config-schema.md`.)
 
 Suggested config shape:
 
@@ -95,6 +105,11 @@ Defaults when fields are absent:
 - `output:"repo"` writes to the doc-home repo at
   `<repo>/docs/communications/YYYY-MM-DD.md` unless `repoOutputDir` overrides it.
   Leave the file for operator review. Do not commit, push, or publish it.
+- Drafts retention (conventions §22, D6): communications drafts keep a ≈ **90-day**
+  tail — at fire start prune drafts older than 90 days from the `output:"data"`
+  directory (machine-local files you own). `output:"repo"` drafts are
+  operator-reviewed repo files — never delete them yourself; note an over-retention
+  tail in your report instead.
 
 **Reports & operator review:** conventions §22 — at fire start finalize any due
 daily/weekly/monthly roll-up and distill un-acted `*.review.md` reviews (the §22
@@ -262,33 +277,10 @@ override). Read-only: your only writes remain `dev-loop notify` and your report 
 in `webhookEnv` — you never see or handle the URL/secret (§16). This is a PUSH (digests, escalations) and
 is independent of the report **sink** (§23), which remains where the durable report is archived.
 
-**The team daily digest (the §22a digest contract — the director's one message a day).** Numbers
-come from code; narrative comes from you. Compose EXACTLY these sections, then push via
-`dev-loop notify --title "Daily <team> <date>"`:
-1. **Team KPIs** — run `dev-loop metrics --window 24h --json` and quote its numbers verbatim
-   (fires + success rate + suspectErrors; on service also throughput/accept-rate/blocked). On a
-   linear team, compute the board numbers yourself via MCP: shipped (→Done, 24h), verify-fails
-   (In Review→Canceled, 24h), Todo depth vs `intake.todoDepthCap`, blocked count by bail-shape.
-2. **QA quality** — bugs filed (24h) vs escaped-to-prod (`incident`/`signal` Bugs); re-test fails.
-3. **Board flow** — Backlog groomed/promoted by PM (its Job B2 close line), oldest In Review age,
-   W5 trackers open.
-4. **North-star delta** — one or two lines from reflect's latest weekly delta (see reflect); on
-   days without one, the newest strategy-doc Decisions entry, or "no movement".
-   <!-- moves-with-§22a --> Plus one line per doc version the operator published since the last
-   digest, quoted as `published vN: <summary>` (the `doc history` summary field — the §9a
-   investigation protocol's propagation line).
-5. **Needs the director** — ONLY genuinely human-parked items (Human-Blocked / external-access
-   trackers); an empty section is a good day. Compose it from these lines, each omitted when zero:
-   <!-- moves-with-§22a --> · **Human-Blocked**: count + the oldest park's age (workflows P3 —
-   from the board, never memory; the same numbers the daemon reminder carries).
-   <!-- moves-with-§22a --> · **Investigation proposals pending**: each open §9a `investigation`
-   ticket parked for operator approval, with its doc + version (the ticket's
-   `Proposes: doc:<slug> vN (published vM)` line).
-   <!-- moves-with-§22a --> · **Drafts pending publish**: count of docs whose drafts trail the
-   published version (`doc list`; mirrors the daemon's `doc_drafts.notified` one-liner).
-   <!-- moves-with-§22a --> · **Unconsumed operator doc edits** (`intake.mode:"passive"` projects
-   only): foreign doc versions no PM fire has digested yet (mirrors `doc_foreign_edit.notified`).
-Keep it under ~25 lines — a director reads ONE message, not a log.
+**The team daily digest — compose it per the conventions §22a digest contract** (the five
+sections — Team KPIs / QA quality / Board flow / North-star delta / Needs the director —
+the ~25-line cap, and the `dev-loop notify --title "Daily <team> <date>"` push are all
+specified THERE; this file deliberately carries no copy of them).
 
 ---
 

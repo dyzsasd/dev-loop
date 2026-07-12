@@ -35,7 +35,8 @@ Present the diff; for each accepted change, edit `repos.<ref>` (via `dev-loop te
 ## 4. REPAIR
 
 Run `dev-loop team repair` — it does `git worktree repair` + prune (fixes absolute-path breakage
-after a machine move, §10.3), re-registers the workspace index, and (service) truncates the hub WAL.
+after a machine move; see docs/PORTABILITY.md), re-registers the workspace index, and (service)
+truncates the hub WAL.
 
 ## 5. VERIFY
 

@@ -265,7 +265,10 @@ strategy/roadmap item it serves**, and the staged child tickets faithfully decom
 (read the linked design doc — the hub `design` doc-kind on `service`, or `docs/design/<slug>.md`
 on `linear`/`local`). For a **big-module / docs-design-level** design, surface it for the
 **operator** to sign off (same posture as a significant product decision); ordinary designs
-you verify directly.
+you verify directly. The sign-off carrier is the §21a design-gate park (the §9a Human-Blocked
+machinery): park the design PARENT `Human-Blocked` assigned to the operator (the
+`blocked`+`needs-pm`+`external-prereq` park on `linear`/`local`, §9) naming the design doc +
+child IDs; on the operator's approval comment, run the normal pass path below.
 - **Pass** → **PROMOTE every staged child `Backlog → Todo` FIRST, THEN move the design
   parent `state:"Done"`** (re-pass the full label set — `save_issue` labels are REPLACE-style,
   §10 — so the child keeps `dev-loop` + its `junior-dev` dev-tier + its `pm`/`qa` verifier
@@ -590,6 +593,11 @@ accumulated team experience; reflect (not you) maintains them.
 If `team.docs.vision` is set, load it as the upstream **north star**: when a project Goal conflicts with
 the team's composition/vision, record the tension in the Decisions log and defer to the vision doc (or
 park it for the operator) — do not silently override it.
+
+The vision doc is **propose-only for you (D7, conventions §27):** when it drifts from reality, file a
+§9a `investigation`-flow proposal against it at workspace scope (the §9b `_team` intake carrier) —
+findings + the proposed diff on the ticket, the operator approves BEFORE the doc changes. Never an
+autonomous vision edit.
 
 ### Team intake (cross-project asks)
 

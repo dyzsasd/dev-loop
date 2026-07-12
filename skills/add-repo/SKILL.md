@@ -29,7 +29,7 @@ user to `dev-loop team init` first and stop. Read `dev-loop.json`, `references/c
   to clone or an existing path already inside the workspace.
 - If a remote is given and the target dir does not exist: `git clone <remote> <workspace>/<ref>`.
   If a path is given, confirm it is INSIDE the workspace (relative path); a repo outside the
-  workspace breaks portability (I4) — offer to `mv` it in.
+  workspace breaks the copy-the-folder portability rule (conventions §27) — offer to `mv` it in.
 
 ## 2. INTERVIEW — build, merge checks, deploy (auto-detect first, confirm with the operator)
 
