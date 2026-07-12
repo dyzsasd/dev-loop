@@ -8,6 +8,17 @@ experience** — a real failure observed while the agents ran, then hardened int
 > Must release as **1.2.0**: doctor's W10 pins `WRITE_VERBS_MIN_VERSION="1.2.0"` and
 > config-schema documents the E09 demotion as "since 1.2".
 
+- **refactor(skills): the uniform SKILL template + per-fire context budgets.** All 14 SKILLs
+  migrated to a lean anchor-citing template (role / mission / boot / jobs / hard limits / report /
+  generated cheat-sheet) — the ten agent SKILLs shrank from 4,141 to 2,472 lines (−40%; agent
+  prose −49%) with every shared mechanic cited from conventions once instead of restated (the
+  escalation ladder previously lived in 5 places). The boot rule (§0a) is now **section-
+  selective**: each SKILL declares a machine-readable `Sections:` line and agents read ONLY those
+  conventions sections plus Topology, instead of the whole ~200KB file. `dev-loop metrics
+  --context` prints the per-agent per-fire context bill (SKILL prose + cheat block + cited
+  conventions spans + lessons caps, bytes and ~tokens); `test/context-budget.ts` enforces
+  per-SKILL line/byte ceilings, the cheat-block ceiling, and the Sections-line grammar with
+  set-equality against actual citations — context growth is now a failing test, not a drift.
 - **feat(config): `communication` + `notify` blocks validated and documented (E14/E15); digest
   re-keyed; change-gate TTL.** The per-project `communication` block (which shapes the §22a
   director digest and article drafts) and the `notify` block are now strict-validated, fully
