@@ -72,7 +72,8 @@ Usage: dev-loop <command> [args]
   team init|import|repair|set|add-project|add-repo
                               workspace (schema v2): create / migrate-from-v1 / repair / validated config writes
   hub start|stop|status|ensure   workspace hub daemon lifecycle (service backend; stop checkpoints the WAL)
-  metrics [--window 7d] [--json]   team KPIs — fire success from fires.jsonl (+ board KPIs on service)
+  metrics [--window 7d] [--json] [--context]   team KPIs — fire success from fires.jsonl (+ board KPIs
+                              on service); --context = the per-agent per-fire context bill (§0a)
   notify [--level info|warn|error] [--title T] <text>   push to the team's slack/lark channel (team.comms)
   next-project --agent <a>    print the agent's next rotation pick (shared cursor with run; for /loop rows)
   with-repo-lock <ref> -- <cmd>   run a command holding a shared repo's base-clone lock
