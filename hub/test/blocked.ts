@@ -6,6 +6,7 @@
 // because DEVLOOP_CHANNEL_DRYRUN is read once at channel.ts import time.
 import { openDb } from "../src/db.ts";
 import { blockedNotifyTick, startBlockedNotifier } from "../src/daemon.ts";
+import { resolveBlockedReminderHours, DEFAULT_BLOCKED_REMINDER_HOURS } from "../src/daemon-notifiers.ts";
 import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import type { FetchImpl } from "../src/channel.ts";
@@ -220,6 +221,55 @@ const base = (db: ReturnType<typeof openDb>) =>
   ok(res.markers === 0 && res.fetched === false, "DL-59/DL-34: a notify-only project under dry-run → NO network, NO marker (write-free)");
   ok(res.previewHasNotify && res.previewHasId, "DL-59: the dry-run preview names the §9 notify target + the ticket id");
   clean(NDB);
+}
+
+// ── workflows P3: the reminder DEFAULT flips to 24h when a comms channel is configured ───────────
+// (team.comms present); an EXPLICIT humanBlockedReminderHours:0 stays the opt-out, and without comms
+// the default remains 0 (nowhere to remind into). Explicit positive values win over the default.
+{
+  ok(resolveBlockedReminderHours(undefined, true) === DEFAULT_BLOCKED_REMINDER_HOURS && DEFAULT_BLOCKED_REMINDER_HOURS === 24,
+    "P3: no settings at all + comms configured → the 24h default");
+  ok(resolveBlockedReminderHours({}, true) === 24, "P3: humanBlockedReminderHours ABSENT + comms configured → 24h");
+  ok(resolveBlockedReminderHours({ humanBlockedReminderHours: 0 }, true) === 0, "P3: an EXPLICIT 0 stays the opt-out even with comms configured");
+  ok(resolveBlockedReminderHours({ humanBlockedReminderHours: 6 }, true) === 6, "P3: an explicit positive value wins over the default");
+  ok(resolveBlockedReminderHours({}, false) === 0, "P3: absent + NO comms channel → still off (pre-change behavior)");
+  ok(resolveBlockedReminderHours({ humanBlockedReminderHours: "junk" }, true) === 0, "P3: an explicit non-numeric value coerces to off (the pre-change coercion), never to the default");
+}
+
+// ── P3 end-to-end: an AGED park reminds on the comms-derived default; an explicit 0 starts NO timer ──
+{
+  const db = seed("/tmp/dl-blk-default.db", 1);
+  const now = Date.now();
+  // parked 26h ago (the transition event) + last notified 25h ago → due under the 24h DEFAULT cadence
+  db.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('p','HB0','pm','issue.transition',?,?)")
+    .run(JSON.stringify({ from: "Todo", to: "Human-Blocked" }), new Date(now - 26 * 3_600_000).toISOString());
+  db.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('p','HB0','daemon','human_blocked.notified','{}',?)")
+    .run(new Date(now - 25 * 3_600_000).toISOString());
+  const cadenceMs = resolveBlockedReminderHours({}, true) * 3_600_000; // the comms-configured default, as the daemon boot resolves it
+  const cap: { body: string }[] = [];
+  const capFetch: FetchImpl = (async (_url, init) => { cap.push({ body: String((init as { body?: string })?.body ?? "") }); return { status: 200, json: async () => ({ ok: true }) } as unknown as Response; }) as FetchImpl;
+  const n = await blockedNotifyTick({ ...base(db), cadenceMs, nowMs: now, fetchImpl: capFetch });
+  ok(n === 1 && cap.length === 1, "P3: a 26h-old park (last ping 25h ago) reminds under the comms-derived 24h default");
+  const text = cap.length ? (JSON.parse(cap[0].body) as { text: string }).text : "";
+  ok(text.includes("HB0") && text.includes("t0"), "P3 message: names the ticket (id + title)");
+  ok(text.includes("for 26h"), "P3 message: names the age in the Human-Blocked state (from the transition event)");
+  ok(text.includes("resume") && text.includes("dev-loop ticket update HB0 --state Todo") && text.includes("/ticket/HB0"),
+    "P3 message: names the resume action (move back to Todo — CLI verb + ticket url)");
+  // explicit opt-out: cadence resolves to 0 ⇒ startBlockedNotifier starts NO timer at all
+  const t0 = startBlockedNotifier({ writeDb: db, projectId: "p", projectKey: "k", baseUrl: "http://127.0.0.1:8787", cadenceHours: resolveBlockedReminderHours({ humanBlockedReminderHours: 0 }, true), notify: { type: "slack", webhookEnv: "DEFINITELY_UNSET_NOTIFY_ENV" } });
+  ok(t0 === null, "P3: humanBlockedReminderHours:0 (explicit opt-out) → no timer even with comms configured");
+  db.close();
+}
+
+// ── P3: a park with NO transition event (seeded directly into the state) still reminds — age omitted ──
+{
+  const db = seed("/tmp/dl-blk-noage.db", 1);
+  const cap: { body: string }[] = [];
+  const capFetch: FetchImpl = (async (_url, init) => { cap.push({ body: String((init as { body?: string })?.body ?? "") }); return { status: 200, json: async () => ({ ok: true }) } as unknown as Response; }) as FetchImpl;
+  const n = await blockedNotifyTick({ ...base(db), nowMs: Date.now(), fetchImpl: capFetch });
+  const text = cap.length ? (JSON.parse(cap[0].body) as { text: string }).text : "";
+  ok(n === 1 && text.includes("human-blocked:") && !text.includes(" for "), "P3: no transition event in the ledger → the line simply omits the age (never blocks the ping)");
+  db.close();
 }
 
 console.log(fails === 0 ? "\nBLOCKED_OK" : `\n${fails} CHECK(S) FAILED`);

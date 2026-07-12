@@ -20,44 +20,53 @@ des reports et des métriques que vous pouvez lire en un seul message par jour.
 
 ## Démarrage rapide
 
+Trois commandes, rien à configurer — le backend **service** par défaut (un hub sqlite local
+intégré + un board web) ne dépend d'aucun service externe et ne demande ni plugin ni MCP :
+
 ```bash
 npm i -g @dyzsasd/dev-loop        # Node ≥ 23.6 ; installe le CLI `dev-loop`
+dev-loop init                     # setup guidé — Entrée accepte chaque défaut (ou --yes)
+dev-loop run                      # un scheduler pilote toute l'équipe ; ^C arrête tout
 ```
 
-Pour obtenir les commandes slash `/dev-loop:*` dans Claude Code, enregistrez une fois le
-marketplace plugin basé sur npm, puis lancez dans Claude Code les deux commandes `/plugin ...`
-affichées par le CLI :
+`init` crée le workspace et votre premier project (la ligne du board hub est auto-seedée),
+propose d'enregistrer votre premier repo (`--detect` lit les faits build/CI directement dans
+le clone), puis se termine par le verdict du doctor et une ligne `NEXT:` qui nomme l'étape la
+plus bloquante. Ce que vous obtenez :
+
+- un **board web** : `dev-loop hub start` → `http://127.0.0.1:8787` (`dev-loop run` le
+  démarre aussi automatiquement ; `dev-loop hub status` pour l'inspecter) ;
+- des agents qui atteignent le board directement via le CLI `dev-loop` — avec Claude Code
+  sur le backend service, il n'y a rien d'autre à installer ;
+- des défauts sûrs : `mode: dry-run` (prévisualisez avec `dev-loop run --once --dry-run`,
+  basculez avec `dev-loop team set team.mode live`), les déploiements `prod` restent
+  manuels, autonomy guarded — `dev-loop doctor` réimprime à tout moment le verdict et la
+  ligne `NEXT:`.
+
+Un **workspace** est à la fois un dossier, une équipe, un backend (le hub local, ou une
+Linear team) et un fichier `dev-loop.json`. Les repos sont de vrais clones dans ce dossier ;
+les projects sont des regroupements virtuels de repos. Tout l'état vit dans
+`<workspace>/.dev-loop/`, donc **copier le dossier permet de changer de machine**.
+
+### Utiliser Linear comme backend
+
+`dev-loop init --backend linear` demande le nom de la Linear team (ou le diffère — remplissez
+plus tard avec `dev-loop team set team.linearTeam "My Team"`). L'onboarding Linear se fait
+dans Claude Code, donc deux configurations uniques s'appliquent à ce backend :
+
+- Configurez le **Linear MCP** dans le **user scope** de Claude Code (`dev-loop doctor`
+  signale `W05` si les stewards n'arrivent pas à lire le board).
+- Enregistrez le marketplace plugin basé sur npm pour les commandes slash `/dev-loop:*`,
+  puis lancez dans Claude Code les deux commandes `/plugin ...` affichées par le CLI :
 
 ```bash
 dev-loop install-claude-plugin
 ```
 
-Un **workspace** est à la fois un dossier, une équipe, une Linear team (ou un hub local) et
-un fichier `dev-loop.json`. Les repos sont de vrais clones dans ce dossier ; les projects sont
-des regroupements virtuels de repos. Tout l'état vit dans `<workspace>/.dev-loop/`, donc
-**copier le dossier permet de changer de machine**.
-
-```bash
-# 1. Créer le workspace (pur CLI : pas de LLM, pas d'appel backend)
-dev-loop team init --dir ~/work/my-team --key my-team \
-  --backend linear --linear-team "My Team" --deploy dev=auto,prod=manual --comms lark
-cd ~/work/my-team
-
-# 2. Dans Claude Code (plugin installé) ou un autre coding CLI où les skills dev-loop
-#    sont disponibles : créer et synchroniser un project, puis ajouter les repos
-#      /dev-loop:add-project      — trouve ou crée le project Linear/hub, les labels et le strategy doc
-#      /dev-loop:add-repo         — clone le repo, détecte build/CI, puis demande deploy et health probe
-
-# 3. Vérifier, prévisualiser, lancer
-dev-loop doctor                   # diagnostic de santé en lecture seule
-dev-loop run --once --dry-run     # prévisualise la commande exacte de chaque agent (model + effort)
-dev-loop run                      # un scheduler pilote toute l'équipe ; ^C arrête tout
-```
-
-Pour une équipe **linear**, configurez le Linear MCP dans le **user scope** de Claude Code ;
-`dev-loop doctor` signale `W05` si les stewards n'arrivent pas à lire le board. Pour une
-équipe **service**, `dev-loop run` démarre automatiquement le hub local ; utilisez
-`dev-loop hub status` pour l'inspecter.
+Ensuite, dans Claude Code : `/dev-loop:add-project` (trouve ou crée le project Linear, les
+labels et le strategy doc) et `/dev-loop:add-repo` (clone le repo + détecte build/CI + demande
+deploy et health probe). Vérifiez et lancez exactement comme ci-dessus : `dev-loop doctor`,
+`dev-loop run --once --dry-run`, `dev-loop run`.
 
 ### Passer sur une autre machine
 
@@ -93,6 +102,8 @@ rarement à la main :
 - `repos` — registre physique : chemin, commandes build/typecheck, PR merge checks,
   forme du deploy, health probes.
 - `projects` — unités de livraison qui référencent des repos : strategy doc, test environment,
+  `intake.mode` (`autonomous` par défaut ; `passive` = le PM n'origine plus rien et ne répond
+  qu'aux demandes explicites `needs-pm` — vérification et grooming continuent),
   `intake.todoDepthCap` (profondeur de la file engagée que le PM maintient, 10 par défaut) et
   overrides de lancement par agent (`agents.pm = { model, effort, cadence }`, etc.).
 
@@ -123,6 +134,7 @@ rotation cursor, ce qui évite les déclenchements en double.
 
 | Commande | Rôle |
 |---|---|
+| `dev-loop init [--dir d] [--yes]` | onboarding guidé : workspace + premier project/repo, se termine sur la ligne `NEXT:` du doctor |
 | `dev-loop install-claude-plugin` | enregistre le marketplace plugin Claude Code basé sur npm et affiche les deux commandes `/plugin` |
 | `dev-loop team init / repair` | créer un workspace / réparer après un changement de machine |
 | `dev-loop team add-project / add-repo` | écritures de config validées (appelées par les skills `/dev-loop:*`) |

@@ -1,6 +1,6 @@
 // team init / import / repair + doctor workspace checks — integration via the real CLI entry points.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,9 +39,14 @@ try {
   ok(ibad.code !== 0 && /E12/.test(ibad.out), "init refuses an unknown intake mode (E12)");
   ok(readJson(join(lin, "dev-loop.json")).team.intake === undefined, "init without --intake-mode seeds NO intake block (agents default to autonomous)");
 
+  // ── workspaceId fingerprint (concept P4): minted at init, STABLE across --force re-init ──
+  ok(typeof linCfg.workspaceId === "string" && linCfg.workspaceId.length >= 8, "init mints a workspaceId fingerprint");
+
   // ── idempotency + validation refusal ──
   const i2 = run("team", ["init", "--dir", lin, "--key", "lin-team", "--backend", "linear", "--linear-team", "Loop-1"]);
   ok(i2.code === 0 && /already exists/.test(i2.out), "re-init is idempotent (exit 0, no clobber)");
+  const if2 = run("team", ["init", "--dir", lin, "--key", "lin-team", "--backend", "linear", "--linear-team", "Loop-1", "--force"]);
+  ok(if2.code === 0 && readJson(join(lin, "dev-loop.json")).workspaceId === linCfg.workspaceId, "--force re-init PRESERVES the workspaceId (markers already stamped on Linear stay valid)");
   const bad = run("team", ["init", "--dir", join(tmp, "bad"), "--key", "BadKey", "--backend", "linear", "--linear-team", "X"]);
   ok(bad.code !== 0 && /E02|team.key/.test(bad.out), "init refuses an invalid team key (E02)");
 
@@ -92,19 +97,37 @@ try {
     mkdirSync(join(svc2, "r2"), { recursive: true });
     writeFileSync(join(tmp, "legacy2.json"), JSON.stringify({ projects: {
       web2: { backend: "service", repoPath: join(svc2, "r2"), blockedStateName: "Blocked",
-              communication: { articles: true },
-              notify: { type: "lark", webhookEnv: "DEVLOOP_NOTIFY_HOOK", webhook: "https://secret.example/inline-TOKEN", events: ["human-parked"] } },
+              communication: { articles: true, language: "en" },
+              notify: { type: "lark", webhookEnv: "DEVLOOP_NOTIFY_HOOK", webhook: "https://secret.example/inline-TOKEN", channel: "#dev", events: ["human-parked"] } },
     } }));
     const im2 = run("team", ["import", "--from", join(tmp, "legacy2.json")], { cwd: svc2 });
     ok(im2.code === 0, "import (passthrough fixture) exits 0");
     ok(/inline webhook NOT copied/.test(im2.out), "import warns that an inline webhook URL is not copied (I5)");
     ok(/team\.comms ← project 'web2' notify/.test(im2.out), "import lifts the env-name notify to team.comms");
+    ok(/unknown communication key\(s\) articles NOT copied/.test(im2.out), "import warns about a dropped unknown communication key (E14 strict)");
+    ok(/unknown notify key\(s\) channel NOT copied/.test(im2.out), "import warns about a dropped unknown notify key (E15 strict)");
     const cfg2 = readJson(join(svc2, "dev-loop.json"));
     ok(cfg2.projects.web2.blockedStateName === "Blocked", "import passes through blockedStateName");
-    ok(cfg2.projects.web2.communication?.articles === true, "import passes through arbitrary operator fields");
+    ok(cfg2.projects.web2.communication?.language === "en" && !("articles" in cfg2.projects.web2.communication),
+      "import keeps the E14-known communication fields and drops the junk (block presence preserved)");
     ok(cfg2.team.comms?.provider === "lark" && cfg2.team.comms?.webhookEnv === "DEVLOOP_NOTIFY_HOOK", "team.comms lifted from the v1 notify block");
     ok(!JSON.stringify(cfg2).includes("inline-TOKEN"), "the inline webhook URL never lands in dev-loop.json (I5)");
     ok(cfg2.projects.web2.notify?.webhookEnv === "DEVLOOP_NOTIFY_HOOK" && !("webhook" in cfg2.projects.web2.notify), "the env-name notify survives as a project passthrough, minus the literal");
+  }
+
+  // ── import: an ALL-junk communication block keeps its (empty) presence — article drafting stays on ──
+  {
+    const svc2b = join(tmp, "svc2b");
+    run("team", ["init", "--dir", svc2b, "--key", "svc2b-team", "--backend", "service"]);
+    mkdirSync(join(svc2b, "r2b"), { recursive: true });
+    writeFileSync(join(tmp, "legacy2b.json"), JSON.stringify({ projects: {
+      web2b: { backend: "service", repoPath: join(svc2b, "r2b"), communication: { articles: true } },
+    } }));
+    const im2b = run("team", ["import", "--from", join(tmp, "legacy2b.json")], { cwd: svc2b });
+    ok(im2b.code === 0, "import with an all-junk communication block still exits 0 (the file stays E14-valid)");
+    const cfg2b = readJson(join(svc2b, "dev-loop.json"));
+    ok("communication" in cfg2b.projects.web2b && Object.keys(cfg2b.projects.web2b.communication).length === 0,
+      "the emptied communication block is KEPT — presence opts article drafting in, and import must not silently turn it off");
   }
 
   // ── import: notify HUSK (inline url only, no env) is dropped entirely — must not suppress the comms bridge ──
@@ -179,12 +202,123 @@ try {
   const badMode = run("team", ["add-project", "maint2", "--intake-mode", "directed"], { cwd: em });
   ok(badMode.code !== 0 && /E12/.test(badMode.out), "add-project rejects an unknown intake mode via E12 (validated write)");
 
+  // ── D8: .claude/settings.json permission provisioning (init + add-project; create-or-merge, never clobber) ──
+  {
+    const st = join(em, ".claude", "settings.json");
+    const stJson = readJson(st);
+    ok(Array.isArray(stJson.permissions?.allow) && stJson.permissions.allow.includes("Bash(dev-loop *)"),
+      "team init provisions .claude/settings.json permissions.allow: Bash(dev-loop *)");
+    ok(stJson.permissions.allow.filter((x: string) => x === "Bash(dev-loop *)").length === 1,
+      "repeated add-project calls do not duplicate the allow entry (idempotent)");
+    // pre-existing file with other keys → MERGE, preserving everything
+    const custom = join(tmp, "merge-ws");
+    mkdirSync(join(custom, ".claude"), { recursive: true });
+    writeFileSync(join(custom, ".claude", "settings.json"),
+      JSON.stringify({ theme: "dark", permissions: { deny: ["Bash(rm *)"], allow: ["Bash(git *)"] }, hooks: { note: 1 } }, null, 2));
+    run("team", ["init", "--dir", custom, "--key", "merge-team", "--backend", "linear", "--linear-team", "L"]);
+    const merged = readJson(join(custom, ".claude", "settings.json"));
+    ok(merged.theme === "dark" && merged.hooks?.note === 1 && JSON.stringify(merged.permissions.deny) === '["Bash(rm *)"]',
+      "provisioning preserves unknown keys + deny rules (create-or-merge, never clobber)");
+    ok(JSON.stringify(merged.permissions.allow) === '["Bash(git *)","Bash(dev-loop *)"]',
+      "the dev-loop rule is APPENDED to the existing allow list");
+    // already present → note + byte-stable file (the idempotent re-init repair path)
+    const before = readFileSync(join(custom, ".claude", "settings.json"), "utf8");
+    const again = run("team", ["init", "--dir", custom, "--key", "merge-team", "--backend", "linear", "--linear-team", "L"]);
+    ok(/already allows/.test(again.out) && readFileSync(join(custom, ".claude", "settings.json"), "utf8") === before,
+      "re-init skips with a note when the entry is already present (file byte-stable)");
+    // malformed settings.json → left untouched with a manual-fix note; init itself still succeeds
+    const badWs = join(tmp, "badset-ws");
+    mkdirSync(join(badWs, ".claude"), { recursive: true });
+    writeFileSync(join(badWs, ".claude", "settings.json"), "{not json");
+    const badRun = run("team", ["init", "--dir", badWs, "--key", "badset-team", "--backend", "linear", "--linear-team", "L"]);
+    ok(badRun.code === 0 && /left untouched/.test(badRun.out) && readFileSync(join(badWs, ".claude", "settings.json"), "utf8") === "{not json",
+      "a malformed settings.json is NEVER clobbered (note printed; init still succeeds)");
+  }
+
   // ── team repair re-registers the index ──
   rmSync(join(HOME, "workspaces.json"), { force: true });
   writeFileSync(join(svc, "dev-loop.json"), JSON.stringify(svcCfg, null, 2)); // restore a valid file
   const rep = run("team", ["repair"], { cwd: svc });
   ok(rep.code === 0 && /REPAIR_OK/.test(rep.out), "team repair exits 0");
   ok(readJson(join(HOME, "workspaces.json"))["svc-team"] === realpathSync(svc), "repair re-registers the workspace index");
+
+  // ── _team is structural: config rejects it everywhere a project key lands ──
+  const teamIntake = run("team", ["add-project", "_team"], { cwd: svc });
+  ok(teamIntake.code !== 0 && /E11/.test(teamIntake.out) && /hub\.db row/.test(teamIntake.out),
+    "add-project _team is refused (E11: the intake project lives only as a hub.db row)");
+
+  // ── add-project AUTO-SEEDS the hub row on backend:"service" (find-or-create; starves the W08 path) ──
+  const ap = run("team", ["add-project", "ghost"], { cwd: svc });
+  ok(ap.code === 0 && /seeded hub row 'ghost' \(prefix GHOST\)/.test(ap.out), "add-project on service auto-seeds the hub row with a derived prefix");
+  const ghostRow = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT key,ticket_prefix FROM projects WHERE key=?').get('ghost');console.log(JSON.stringify(r??null));db.close()})`, join(svc, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  ok(/"ticket_prefix":"GHOST"/.test(ghostRow.stdout), "the auto-seeded hub row exists with the derived prefix");
+
+  // ── doctor W08: config↔hub reconcile on a service workspace ──
+  // hub.db holds _team (reserved), _probe_ (hand-seeded, no config), web + ghost (in both). add-project
+  // now auto-seeds, so stage the drift by hand: inject a config project with no hub row.
+  {
+    const cfgNow = readJson(join(svc, "dev-loop.json"));
+    cfgNow.projects.phantom = { repos: [] };
+    writeFileSync(join(svc, "dev-loop.json"), JSON.stringify(cfgNow, null, 2) + "\n");
+  }
+  const docSvc = run("server", ["doctor"], { cwd: svc });
+  ok(/\[W08\] projects\.phantom:.*no hub\.db row/.test(docSvc.out) && /dev-loop seed phantom/.test(docSvc.out),
+    "doctor warns W08 for a config project with no hub row, naming the exact seed command");
+  ok(/DOCTOR_OK/.test(docSvc.out), "W08 is a warning — the doctor verdict stays OK");
+  ok(/NEXT: dev-loop seed phantom/.test(docSvc.out), "doctor NEXT surfaces the unseeded project as the most-blocking step");
+  ok(/hub project '_probe_' has no dev-loop\.json entry/.test(docSvc.out),
+    "doctor reports (info) a hub row with no config entry");
+  ok(!/'_team' has no dev-loop\.json entry/.test(docSvc.out),
+    "the reserved _team intake row is NOT flagged by the reconcile");
+  ok(!/\[W08\] projects\.web/.test(docSvc.out), "a project present in both config and hub yields no W08");
+
+  // ── doctor D8/D9 CLI-interface preflight (W09/W10/W11), staged both ways ──
+  // The svc team runs claude on the D9 default (interface="cli"), so doctor must preflight the
+  // PATH-installed dev-loop write layer; flipped fully to "mcp" it must print none of it.
+  {
+    const nodeDir = dirname(process.execPath); // run() spawns `node` via PATH, so keep node's own dir on it
+    const basePath = `${nodeDir}:/usr/bin:/bin`;
+    const shim = (dir: string, body: string): string => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "dev-loop"), `#!/bin/sh\n${body}`); chmodSync(join(dir, "dev-loop"), 0o755);
+      return dir;
+    };
+    // (a) no dev-loop anywhere on PATH → W09; verdict stays OK (warning class, like W08)
+    const w9 = run("server", ["doctor"], { cwd: svc, extra: { PATH: basePath } });
+    ok(/\[W09\] dev-loop is not runnable on PATH/.test(w9.out) && /DOCTOR_OK/.test(w9.out),
+      "doctor warns W09 when dev-loop is missing from a fire's PATH (warning only, verdict stays OK)");
+    ok(/agent interface: .*claude→cli/.test(w9.out), "doctor names the resolved agent interfaces before the CLI checks");
+    // (b) a pre-write-layer install → W10
+    const oldBin = shim(join(tmp, "bin-old"), `if [ "$1" = "--version" ]; then echo 1.1.0; exit 0; fi\nexit 2\n`);
+    const w10 = run("server", ["doctor"], { cwd: svc, extra: { PATH: `${oldBin}:${basePath}` } });
+    ok(/\[W10\] dev-loop '1\.1\.0' on PATH predates the CLI write layer \(need >= 1\.2\.0\)/.test(w10.out) && /DOCTOR_OK/.test(w10.out),
+      "doctor warns W10 for a dev-loop that predates the write verbs");
+    // (c) current version, but the identity smoke fails closed (exit 4) → W11
+    const failBin = shim(join(tmp, "bin-fail"), `if [ "$1" = "--version" ]; then echo 1.2.0; exit 0; fi\necho 'dev-loop: project not seeded' >&2\nexit 4\n`);
+    const w11 = run("server", ["doctor"], { cwd: svc, extra: { PATH: `${failBin}:${basePath}` } });
+    ok(/\[W11\] identity smoke failed: `dev-loop project` exited 4 for project 'web'/.test(w11.out) && /dev-loop: project not seeded/.test(w11.out),
+      "doctor warns W11 when the fire-shaped identity smoke fails (the fail-closed regression), quoting stderr");
+    // (d) healthy install → both pass lines, no W09/W10/W11; the smoke env is fire-shaped
+    const envCap = join(tmp, "doctor-smoke-env.txt");
+    const okBin = shim(join(tmp, "bin-ok"), `if [ "$1" = "--version" ]; then echo 1.2.0; exit 0; fi\nenv | grep '^DEVLOOP' > ${envCap}\necho '{}'\nexit 0\n`);
+    const okDoc = run("server", ["doctor"], { cwd: svc, extra: { PATH: `${okBin}:${basePath}` } });
+    ok(/dev-loop 1\.2\.0 on PATH/.test(okDoc.out) && /identity smoke: dev-loop project → 'web' as pm/.test(okDoc.out) && !/\[W(09|10|11)\]/.test(okDoc.out),
+      "a healthy dev-loop install passes the version check + identity smoke (no W09/W10/W11)");
+    const cap = readFileSync(envCap, "utf8");
+    ok(/^DEVLOOP_ACTOR=pm$/m.test(cap) && /^DEVLOOP_PROJECT=web$/m.test(cap) && /^DEVLOOP_HUB_DB=/m.test(cap) && /^DEVLOOP_DEV_SPLIT=false$/m.test(cap),
+      "the identity smoke runs under a fire-shaped env (actor/project/hub-db/dev-split)");
+    // (e) a team fully on interface="mcp" → the CLI preflight prints NOTHING (checks stay scoped to cli)
+    {
+      const cfgNow = readJson(join(svc, "dev-loop.json"));
+      cfgNow.team.hub = { agentInterface: { claude: "mcp" } };
+      writeFileSync(join(svc, "dev-loop.json"), JSON.stringify(cfgNow, null, 2) + "\n");
+      const mcpDoc = run("server", ["doctor"], { cwd: svc, extra: { PATH: basePath } });
+      ok(!/\[W09\]/.test(mcpDoc.out) && !/agent interface:/.test(mcpDoc.out) && /DOCTOR_OK/.test(mcpDoc.out),
+        "a service team fully on interface=mcp skips the CLI preflight entirely (no W09 without dev-loop on PATH)");
+      delete cfgNow.team.hub;
+      writeFileSync(join(svc, "dev-loop.json"), JSON.stringify(cfgNow, null, 2) + "\n");
+    }
+  }
 
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);

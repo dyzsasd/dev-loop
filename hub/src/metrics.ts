@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolveWorkspace, wsFireLedger, wsHubDb } from "./workspace.ts";
-import type { Workspace } from "./team-config.ts";
+import { deliveryProjects, type Workspace } from "./team-config.ts";
 
 // ─── fires.jsonl ──────────────────────────────────────────────────────────────
 export interface FireRow { ts: string; agent: string; project: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean }
@@ -119,10 +119,22 @@ function parseWindow(s: string): number {
 export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
   let windowMs = 7 * 86_400_000;
   let asJson = false;
+  let context = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--window") windowMs = parseWindow(argv[++i] ?? "7d");
     else if (argv[i] === "--json") asJson = true;
-    else if (argv[i] === "--help" || argv[i] === "-h") { console.log("usage: dev-loop metrics [--window 7d|24h|30d] [--json]  — team KPIs from fires.jsonl (+ hub board on service)"); return 0; }
+    else if (argv[i] === "--context") context = true;
+    else if (argv[i] === "--help" || argv[i] === "-h") { console.log("usage: dev-loop metrics [--window 7d|24h|30d] [--json] [--context]  — team KPIs from fires.jsonl (+ hub board on service); --context = the per-agent per-fire context bill (plugin-static, needs no workspace)"); return 0; }
+  }
+  // --context: the per-agent context bill (task #8 — SKILL prose + cheat sheet + the conventions
+  // §-spans its Sections line cites + lessons caps). It lives under `metrics`, not `doctor`: the
+  // bill is a director-view NUMBER over the plugin's static sources (skills/ + conventions.md) that
+  // needs no workspace, hub db, or backend, while doctor's DOCTOR_OK contract stays a boolean health
+  // gate over a workspace's system-of-record. Handled BEFORE resolveWorkspace() for exactly that
+  // reason — the bill must print anywhere, including a machine with no team at all.
+  if (context) {
+    const { printContextBill } = await import("./context-bill.ts");
+    return printContextBill(asJson);
   }
   const ws: Workspace = resolveWorkspace();
   const fires = fireMetrics(wsFireLedger(ws), windowMs);
@@ -135,8 +147,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     try {
       const board: Record<string, BoardMetrics> = {};
       const roll = { throughput: 0, verifyFails: 0, blockedNow: 0, bugsFiled: 0, escaped: 0 };
-      for (const key of Object.keys(ws.file.projects)) {
-        if (key === "_team") continue;
+      for (const key of deliveryProjects(ws)) {
         const pid = findProject(db, key);
         if (!pid) continue;
         const m = boardMetrics(db, pid, windowMs);
@@ -165,5 +176,8 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  metricsCli().then((c) => process.exit(c));
+  // exitCode (not process.exit): stdout to a PIPE is async on POSIX — a hard exit truncates a large
+  // --context --json payload mid-flush. Nothing here holds the event loop open (the db is closed in
+  // metricsCli's finally), so Node exits as soon as stdout drains.
+  metricsCli().then((c) => { process.exitCode = c; });
 }

@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { resolveProjectFromCwd, loadProjectsConfig } from "../src/resolve-project.ts";
+import { resolveProjectFromCwd, loadProjectsConfig, repoFileStrategyPath } from "../src/resolve-project.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -72,6 +72,39 @@ ok((await whoamiFrom("beta", R("work/repo/sub"))).project === "beta", "an explic
   if (prevEnv === undefined) delete process.env.DEVLOOP_PROJECTS_JSON; else process.env.DEVLOOP_PROJECTS_JSON = prevEnv;
   ok(cfgBad === null, "malformed projects.json → null (falls through to next candidate)");
   ok(errs.some((l) => /malformed JSON/.test(l) && l.includes(badPath)), "malformed projects.json → one loud stderr line naming the file");
+}
+
+// ── docs P3b: repoFileStrategyPath — the ONE strategyDoc→repo-file rule (doc-home §19, PM SKILL §0) ──
+{
+  const repos = [
+    { path: "/w/api", role: "primary", name: "api" },
+    { path: "/w/handbook", role: "docs", name: "handbook" },
+    { path: "/w/web", name: "web" },
+  ];
+  ok(repoFileStrategyPath({ repos, strategyDoc: "docs/STRATEGY.md" })?.abs === "/w/handbook/docs/STRATEGY.md",
+    "P3b: a relative string roots at the DOC-HOME repo (role:'docs' wins over 'primary')");
+  ok(repoFileStrategyPath({ repos: [repos[0], repos[2]], strategyDoc: "docs/STRATEGY.md" })?.abs === "/w/api/docs/STRATEGY.md",
+    "P3b: no 'docs' role → 'primary' roots it");
+  ok(repoFileStrategyPath({ repos: [repos[2]], strategyDoc: "docs/STRATEGY.md" })?.abs === "/w/web/docs/STRATEGY.md",
+    "P3b: no roles at all → repos[0] roots it");
+  ok(repoFileStrategyPath({ repoPath: "/w/solo", strategyDoc: { path: "docs/STRATEGY.md" } })?.abs === "/w/solo/docs/STRATEGY.md",
+    "P3b: the { path } object form (the config-schema's usual spelling) is repo-file too; repoPath roots a repo-less legacy project");
+  const q = repoFileStrategyPath({ repos, strategyDoc: "web:notes/plan.md" });
+  ok(q?.abs === "/w/web/notes/plan.md" && q?.display === "web:notes/plan.md",
+    "P3b: an explicit repo-qualified '<repo-name>:path' overrides the doc-home (display keeps the config spelling)");
+  ok(repoFileStrategyPath({ repos, strategyDoc: "nosuch:notes/plan.md" })?.abs === "/w/handbook/nosuch:notes/plan.md",
+    "P3b: a colon prefix that names NO registered repo falls through as a plain relative path (a colon is a legal filename byte)");
+  ok(repoFileStrategyPath({ repos, strategyDoc: "/abs/STRATEGY.md" })?.abs === "/abs/STRATEGY.md",
+    "P3b: an absolute path stands alone");
+  ok(repoFileStrategyPath({ repos, strategyDoc: { hubDoc: "strategy" } }) === null, "P3b: { hubDoc } is NOT a repo file → null");
+  ok(repoFileStrategyPath({ repos, strategyDoc: { linearDocument: "abc" } }) === null, "P3b: { linearDocument } is NOT a repo file → null");
+  ok(repoFileStrategyPath({ repos, strategyDoc: "https://linear.app/team/document/strat-123" }) === null,
+    "P3b: a linear.app/…/document/ string is the Linear form (PM precedence) → null");
+  ok(repoFileStrategyPath({ repos, hub: { docs: true }, strategyDoc: "docs/STRATEGY.md" }) === null,
+    "P3b: hub.docs:true → the hub doc is the north-star; the repo file is not watched → null");
+  ok(repoFileStrategyPath({ repos }) === null, "P3b: no strategyDoc → null");
+  ok(repoFileStrategyPath({ strategyDoc: "docs/STRATEGY.md" }) === null, "P3b: a zero-repo project has nothing to root the file at → null");
+  ok(repoFileStrategyPath(undefined) === null, "P3b: an unknown project record → null");
 }
 
 console.log(fails === 0 ? "\nRESOLVE_PROJECT_OK" : `\n${fails} CHECK(S) FAILED`);

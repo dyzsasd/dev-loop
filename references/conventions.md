@@ -15,6 +15,7 @@ metrics, or per-agent identity.
 
 ## Table of contents
 0. [Prime directive — every fire is fresh](#0-prime-directive--every-fire-is-fresh)
+0a. [The standard boot sequence](#0a-the-standard-boot-sequence-every-agent-every-fire)
 - [Topology at a glance](#topology-at-a-glance)
 1. [What the loop is](#1-what-the-loop-is)
 2. [Safety boundary — the `dev-loop` label](#2-safety-boundary--the-dev-loop-label)
@@ -32,6 +33,7 @@ metrics, or per-agent identity.
 12. [Dry-run vs live](#12-dry-run-vs-live)
 12b. [Landing mode — direct-commit vs PR](#12b-landing-mode--direct-commit-vs-pr)
 12c. [Auto-merge + release-PR deploy](#12c-auto-merge--release-pr-deploy--the-agent-lands--deploys-human-gates-prod)
+12d. [Deploy ceiling — the runtime re-check](#12d-deploy-ceiling--the-runtime-re-check-teamdeploypolicy)
 13. [First-run setup](#13-first-run-setup)
 14. [Lessons file — per-operator corrections](#14-lessons-file--per-operator-corrections)
 15. [Test coverage — every Bug/Feature earns a regression test](#15-test-coverage--every-bugfeature-earns-a-regression-test)
@@ -70,15 +72,21 @@ need no external context to proceed.
   retries. Never halt mid-flight waiting for a human (that violates the
   autonomous-loop posture, §12a). *If you had already taken a side-effecting
   action this fire* (filed/moved a ticket, committed, deployed), still write the
-  normal close-report (each skill's §3) before exiting, so the state stays
+  normal close-report (your SKILL's REPORT line, §22) before exiting, so the state stays
   auditable. Genuine external-prerequisite blocks are recorded on the ticket
   (§9), not raised as an interactive prompt.
 
-### The standard boot sequence (every agent, every fire)
+### 0a. The standard boot sequence (every agent, every fire)
 
-Defined ONCE here — each SKILL's §0 carries a one-line pointer, not a copy:
+Defined ONCE here — each SKILL's BOOT line carries a one-line pointer (cite §0a), not a copy:
 
-1. **Read this file** (conventions.md) — it overrides the SKILL on conflict.
+1. **Read this file SELECTIVELY** — the **Topology at a glance** block below, plus
+   exactly the sections your SKILL's `Sections:` line names (§0, §0a and §2 are
+   always among them by construction). A cited `##` section includes its `###`
+   lettered children (citing §9 loads §9a–§9c; citing only §9c loads just §9c).
+   This file still overrides the SKILL on conflict. Mid-fire you may read an
+   uncited section rather than guess — then flag it in your report as a
+   `Sections:` gap for the operator to fix; never guess at a protocol.
 2. **Load config** (§11): read `DEVLOOP_PROJECTS_JSON` if set, else
    the workspace `dev-loop.json` (1.x workspace schema, §27; internal test injection `DEVLOOP_PROJECTS_JSON` as
    read-only fallback); resolve your project (explicit `DEVLOOP_PROJECT` wins,
@@ -91,7 +99,7 @@ Defined ONCE here — each SKILL's §0 carries a one-line pointer, not a copy:
    (+ `## Dev` for the split tiers) plus `## Shared`.
 5. **§22 report start**: finalize any due daily/weekly/monthly roll-up, then
    check for un-acted `<report>.review.md` files (点评) and distill per §22.
-6. Open with the one-line run summary your SKILL's §0 specifies, then proceed.
+6. Open with the one-line run summary your SKILL's BOOT specifies, then proceed.
 
 ---
 
@@ -100,13 +108,28 @@ Defined ONCE here — each SKILL's §0 carries a one-line pointer, not a copy:
 The one-screen map every agent reads first. Detail is one hop away in the
 numbered sections below.
 
+**Missions — one line per agent:**
+
+| Agent | Mission |
+|---|---|
+| **PM** | Owns product direction: curates the strategy doc, files + grooms work, verifies `pm`-owned In Review increments, and is the only Backlog→Todo gate (§5a). |
+| **QA** | Breaks the product on purpose: tests happy paths + edge cases, files Bugs/drift, verifies every `qa`-owned In Review item, and clears info-blocks (§9). |
+| **Dev** *(legacy)* | The single-dev fallback (`devSplit:false` only): picks the whole §5 Todo queue, implements, gates, ships, hands off at In Review. |
+| **senior-dev** | The design lead of the split (§21a): authors living per-module designs and delegates staged children, or direct-codes escalations. |
+| **junior-dev** | The implementer of the split (§21a): builds pre-designed/scoped tickets against their `Design:` pointer through the same ship gates as `dev`. |
+| **Sweep** | The lifecycle janitor: re-labels / re-routes / resets tickets no owner query can see; report-don't-mutate hygiene (+ the optional Linear mirror, §18). |
+| **Reflect** | The meta retrospective: studies the loop's OWN behavior and curates `lessons.md`; proposes — never applies — structural change (§17). |
+| **Ops** | The SRE watcher: polls running prod and files/refreshes ONE confirmed `incident` Bug; never fixes, verifies, or rolls back (§21). |
+| **Architect** | The code-health auditor: audits one rotating whole-codebase dimension and files capped `tech-debt` Improvements; read-only on code (§21). |
+| **Communication** | The PR/media lead: drafts the public product article and composes + pushes the §22a team daily digest; never publishes externally (§21). |
+
 | Agent | Owns (files + verifies) | Picks up | Hands off via |
 |---|---|---|---|
 | **PM** | `Feature`, `Improvement`(`pm`) — files to `Backlog`; **grooms + promotes Backlog→Todo (§5a)** | In Review `pm` items; `blocked`+`needs-pm`; Backlog grooming (Job B2); review lenses (Job C preflight) | Linear state + labels |
 | **QA** | `Bug`, `Improvement`(`qa`), `coverage` — files to `Backlog` (§5a) | In Review `qa` items; info-blocks; new-bug sweep | Linear state + labels |
 | **Dev** | (ships everyone's tickets) | `Todo` in pick order (§5), excluding `blocked` | In Review, for the owner |
 | **senior-dev / junior-dev** *(default split of Dev, §21a)* | senior: authors module **design** docs + verifies-gates-then-delegates to junior; junior: ships pre-designed tickets | senior: its design + escalation tickets; junior: its `Todo` slice (design children + improvements/bugs) | In Review, for the owner (escalation routes a junior fail UP to senior) |
-| **Sweep** | (nothing — hygiene only) | Tickets that fall through the cracks: missing/wrong owner label, orphaned `In Progress`, stale signals (cross-owner) | re-label/re-route → the right owner |
+| **Sweep** | (nothing — hygiene only) | Tickets that fall through the cracks: missing/wrong owner label, orphaned `In Progress`, stale signals (cross-owner); un-approved direction-section doc commits (§20 D4 audit — flag only) | re-label/re-route → the right owner |
 | **Reflect** | (nothing — observes the loop) | The loop's own behavior over a window: tickets/git/logs/throughput/QA outcomes (read-only) | `lessons.md` (autonomous) + a drafted proposal in the report (never auto-applies SKILL/conventions) |
 | **Ops** *(outward · observe-and-file §21)* | (nothing — watches running prod) | RUNNING prod over time: health checks / baseUrl / critical routes / logs (read-only); CONFIRMED+REPEATED degradation only (anti-flap) | files/refreshes a `Bug`+`qa`+`incident` (Urgent when prod down) — never rolls back (Dev's Step 6.5) |
 | **Architect** *(outward · observe-and-file §21)* | (nothing — audits whole-codebase tech health) | the codebase as a whole on a rotating dimension (drift/dup/dead-code/dep-CVE/consistency/missing-abstractions), SHA-gated (§19), read-only | files `Improvement`+`qa`+`tech-debt` — never implements (Dev does) |
@@ -283,6 +306,21 @@ Step 5.5 is the implementer's own gate; the owner's Stage-1 triage at In Review 
 INDEPENDENT re-check of the same three classes — both run, always; the second exists
 precisely because the first is a self-claim.
 
+**Auth-constrained surfaces — the degraded-verify path (`testEnv.authConstraint`, all
+verification owners).** When the increment lives behind a login a headless fire cannot
+perform (e.g. a WorkOS-gated page — no real logged-in browser), do NOT false-fail it and
+do NOT mark it Done off the diff alone. Verify by the strongest evidence you *can* get:
+(a) read the shipped diff against the ACs (spec-compliance review); (b) confirm build/CI
+is green for that change; (c) exercise any **open** endpoint the feature exposes
+(health/status/public API); (d) confirm the change is actually **deployed** (the env's
+version/build marker moved to include it, not just merged — §12b). If all of that holds,
+close `Done` with a comment saying **exactly** what you could and couldn't exercise
+("verified via diff + green CI + `/api/status` at v0.X.Y; the authed UI itself was not
+browser-exercised — authConstraint"). If it can't be confirmed even that far, leave it
+`In Review` (inconclusive ≠ pass) and note that the authed check needs the operator's
+attended path (a real browser session). Record the constraint as a lessons.md rule (§14)
+so it isn't re-litigated every fire.
+
 **Split-dev escalation rides this same rule, routed to senior-dev (§21a).** In a two-tier
 project (§21a), when a **junior-dev**-built ticket fails verification on a **real** acceptance-
 criteria failure (NOT a transient/flaky/infra error — junior simply retries those), the follow-up
@@ -297,7 +335,13 @@ When PM cannot resolve a block (it needs a genuine human decision / credential /
 sign-off), on `service` it moves the ticket to **`Human-Blocked`** instead of the
 `blocked` + `needs-pm` + `external-prereq` label park. The persistent daemon detects the
 state structurally and periodically pings the configured Slack/Lark channel until it's
-resolved (DL-26; cadence = `settings_json.humanBlockedReminderHours`, default off). The
+resolved (DL-26; cadence = `settings_json.humanBlockedReminderHours` — **default 24h once a
+comms channel is configured** (`team.comms` present — it is what makes the reminder
+deliverable); an explicit `0` is the opt-out; with no comms channel the default remains
+off. Migration note: the daemon reads the cadence and the comms presence at **boot**, so a
+running daemon adopts the new default on restart only — `dev-loop hub stop && dev-loop hub
+ensure`; see `references/config-schema.md` "Hub daemon notifier settings" and
+`docs/DAEMON.md` "Background notifiers"). The
 operator (or PM, once unblocked out-of-band) moves it back to **`Todo`**. Dev never
 picks it up (it isn't `Todo`). On `linear`/`local` (no daemon; adding a state is costly)
 the label-based park (§9) remains; `blockedStateName` config names the real state where
@@ -336,6 +380,12 @@ Labels do triple duty: typing, ownership/routing, and workflow signalling.
   `Bug`/`Feature` that couldn't be covered in the fix itself (§15). Filed by Dev,
   owned by `qa` (QA verifies the test exists and passes); implemented like any
   other `Todo` ticket.
+- `investigation` — a §9a direction intake that must ride the **propose → operator
+  approves** loop (the investigation protocol, §9a): PM investigates, posts findings +
+  a doc-change proposal on the ticket, and the OPERATOR approves before the doc
+  changes. Applied ALONGSIDE `needs-pm` on the intake, by the filer — the director
+  (web form / CLI / Linear), the §18 mirror-comment poller, or PM itself when a §20
+  direction-section edit needs sign-off (D4).
 - `sensitive` — the work touches {authn/authz/permissions, payment or money movement,
   PII storage/handling, secrets/credentials, data migration/backfill/deletion}. Set by the
   FILER at creation (same actor that sets the dev tier, §21a) and never removed by hygiene.
@@ -455,7 +505,16 @@ governs **origination**, not the pipeline. `autonomous` is everything above **pl
 proactive review (pm-agent Job C: strategy-doc direction, lens rotation, doc-watch,
 unprompted `Feature`/`Improvement` filings). Under **`passive`** PM originates nothing:
 no Job C, no doc-watch trigger, no unprompted filings — the ONLY source of new product
-work is explicit intake directed at PM (§9a `needs-pm`). Responding to an explicit ask is
+work is explicit intake directed at PM (§9a `needs-pm`). On `backend:"service"` the hub
+daemon BACKSTOPS passive mode so an operator edit is never silently lost: a settled
+non-agent edit to a hub doc, AND a settled edit to a repo-FILE `strategyDoc` (the default
+config shape — a plain string or `{ "path": … }`; the daemon watches the file's content
+hash, the path resolved once at boot by the §19 doc-home rule), each emit ONE deduped
+comms line — the file line reads `operator edited <path> — PM is passive; file a needs-pm
+ticket to act` — naming the slug/path only, never doc/file content (§16). The line is a
+nudge, not intake: acting on it still requires an explicit §9a `needs-pm` ticket.
+(Settings: `config-schema.md` "Hub daemon notifier settings"; mechanism: `docs/DAEMON.md`
+"Background notifiers".) Responding to an explicit ask is
 NOT origination: a direction/build intake still gets its full §9a treatment, including
 scoped ideation on that ask (expanding the operator's request into concrete child
 tickets). Everything else is IDENTICAL in both modes — Job A verification, Job B
@@ -554,13 +613,58 @@ files**. If you're knowingly running more than one Dev, give each an isolated
 worktree/clone. If commits you didn't author appear mid-run, surface it in the
 report rather than building on top blindly.
 
-**In `git.landing:"pr"` the two-tier Dev (senior + junior) runs concurrently against one
-checkout by default, so isolation is MANDATORY, not optional: each pr-mode ticket does all its
-work in a dedicated `git worktree` on branch `dev-loop/<ticket-id>`, at a path **outside the
-repo** — `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id>` — created before
-implementing and removed after its PR merges (§12b Step 6 / §12c Step 0.5). The shared checkout
-stays on `defaultBranch` throughout; nothing worktree-related ever lands in the repo tree.
-`git worktree prune` at fire-start reaps any left by a crashed fire.**
+**Per-ticket worktree isolation is MANDATORY whenever more than one dev tier can write.**
+Two cases, and they compose:
+
+- **Split-dev (§21a) — in EVERY landing mode.** When the two-tier pair is enabled
+  (`devSplit:true` config / `DEVLOOP_DEV_SPLIT` runtime), senior-dev and junior-dev run
+  concurrently and would otherwise share ONE working tree — `index.lock` collisions,
+  half-staged mixes, one agent committing the other's WIP. So **every dev-tier
+  implementation fire** (junior builds AND senior direct-code) does ALL of its ticket's
+  work in a dedicated worktree, **regardless of `git.landing`** — `"direct"` included.
+- **`git.landing:"pr"` (§12b/§12c) — even for the legacy solo `dev`.** The
+  branch-per-ticket flow needs the shared checkout parked on `defaultBranch` anyway.
+
+The worktree pattern (both cases): a dedicated `git worktree` on branch
+`dev-loop/<ticket-id>`, at a path **outside the repo** —
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id>` — created off the up-to-date
+base before implementing and removed after the ticket lands. The shared checkout stays on
+`defaultBranch` throughout; nothing worktree-related ever lands in the repo tree;
+`git worktree prune` at fire-start reaps any left by a crashed fire. Base-clone mutations
+(fetch / worktree add / remove / prune, and the direct merge-back below) run under
+`dev-loop with-repo-lock <repo-ref> -- <cmd>` (§27); worktree-internal work needs no lock.
+How a worktree LANDS depends on `git.landing`:
+
+- **`"pr"`** — unchanged: push the branch, open the PR (§12b / dev-agent Step 6); the
+  worktree is removed after the PR merges (§12c / dev-agent Step 0.5).
+- **`"direct"` — the direct merge-back sequence.** The worktree merges back to the base
+  branch; nothing is ever committed in the shared checkout. With the ticket's gates green
+  and its files committed on `dev-loop/<ticket-id>` in the worktree (per `git.autoCommit`;
+  staging discipline above — only that ticket's files):
+  1. **Sync.** `dev-loop with-repo-lock <repo-ref> -- git fetch origin` (when a remote is
+     configured — a fetch mutates the shared refs, so it takes the lock). If the resolved
+     `defaultBranch` advanced since the branch was created (the other tier landed first),
+     `git -C <worktree> rebase origin/<defaultBranch>` (the local `<defaultBranch>` when no
+     remote) — worktree-internal, no lock. If the rebase pulled in ANY new commits, re-run
+     the build/test gate before landing (the combined state was never built). An
+     unresolvable rebase → `fix-exhausted` block (§9).
+  2. **Land atomically** — ONE `dev-loop with-repo-lock` invocation wrapping the whole
+     fast-forward + push:
+     `dev-loop with-repo-lock <repo-ref> -- sh -c 'git checkout <defaultBranch> && git pull
+     --ff-only && git merge --ff-only dev-loop/<ticket-id> && git push origin
+     <defaultBranch>'` — drop the `git pull --ff-only` when no remote is configured, and the
+     final `push` when `git.autoPush` is false. `--ff-only` is load-bearing: if the merge
+     refuses, the base advanced under you — go back to step 1 and retry (cap ~2 cycles →
+     `fix-exhausted` block, §9); never create a merge knot on `defaultBranch`.
+  3. **Clean up** (under the same lock, or a second invocation): `git worktree remove` the
+     ticket's worktree, then `git branch -d dev-loop/<ticket-id>`. Deploy (`git.autoDeploy`,
+     dev-agent Step 6/6.5) runs from the base clone AFTER the merge-back — the Step-6 flag
+     ladder is unchanged (`autoPush:false` stops there; no deploy); a Step-6.5 revert
+     mutates the base clone too — run it under the same lock.
+
+**The legacy solo `dev` in `landing:"direct"` (split off — ONE writer) is explicitly
+exempt:** it keeps today's in-place behavior, committing directly on `defaultBranch` in the
+shared checkout (§12b). One writer has nothing to race with.
 
 ---
 
@@ -781,9 +885,52 @@ build follow-on) or grooms children and closes per the steps above (build follow
 the call is genuinely the operator's — irreversible / strategic / a credential or legal
 decision — PM **parks it `Human-Blocked`** (§9) instead of deciding for them, and the
 operator is pinged out-of-band: on `service` the **daemon** auto-reminds on the
-`Human-Blocked` state (cadence `humanBlockedReminderHours`); on `linear`/`local` (no
+`Human-Blocked` state (cadence `humanBlockedReminderHours` — default 24h once a comms
+channel is configured, explicit `0` opts out, off without comms; resolved at daemon boot,
+so a running daemon adopts the default on restart only — §3, config-schema.md "Hub daemon
+notifier settings"); on `linear`/`local` (no
 daemon) **PM** emits the §9 `notify` webhook once. This — a `Backlog` intake to PM, not a discussion
 board — is how operator direction enters the loop.
+
+**The investigation protocol (P4/D4) — propose → the operator approves → then the doc
+changes.** The direction intake above lets PM digest an ask autonomously (edit the doc,
+operator reviews after the fact). Some direction changes must be approved BEFORE they
+land: a direction-**section** edit of a repo-file strategy doc (§20 D4 — Vision / Goals /
+Non-goals / Appetite / No-gos), a `team.docs.vision` change (D7), or any ask the director
+explicitly files for investigation. Those ride this flow — the same §9a machinery with one
+approval stop, no new states or tools:
+
+1. **File.** The director files the intake `Backlog` + `dev-loop`+`pm`+`needs-pm` +
+   **`investigation`** (§4/§13) — by ANY entry: the hub web ticket form, the CLI, a Linear
+   issue, or a comment on a mirrored doc (the §18 `mirror.pollComments` poller converts
+   those into exactly this shape). PM opens one itself when a §20 direction-section edit
+   needs sign-off (D4).
+2. **Investigate.** PM's Job-B `needs-pm` scan picks it up; PM gathers real evidence — the
+   board, the repo/code, the running product — and posts its **findings as a comment** on
+   the ticket.
+3. **Propose** (when a doc change is warranted). Hub-doc backends: PM saves a **DRAFT**
+   (`doc.save`, optimistic CAS; the `summary` is **mandatory** here — it is what the
+   approval and the §22a digest quote) and records **`Proposes: doc:<slug> v<N>
+   (published v<M>)`** on the ticket. Repo-file backends: PM posts the **unified diff in a
+   fenced block** on the ticket **without committing**.
+4. **Park.** PM moves the ticket to **`In Review` assigned to the operator** — the review
+   is the operator's, so PM's own Job A treats an `investigation` ticket as awaiting
+   approval, never as work to verify-fail. When the approval needs the operator to act
+   **outside the board**, use the §9 human-park semantics instead (`Human-Blocked` on
+   `service` — the daemon reminder above carries the nudge).
+5. **Approve.** Hub: the operator publishes the exact proposed version (`doc.publish
+   {version:N}`, operator-only) — **version-bound**: the publish approves precisely the
+   content PM proposed, even if newer drafts sit on top; the publish IS the approval, no
+   separate comment needed. Repo file: the operator replies an **approval comment**; PM's
+   next fire sees it (the Job-B re-read of parked tickets), applies the diff, **commits**,
+   and closes the ticket `Done` citing the commit.
+6. **Reject / revise.** A rejection is a comment; PM **revises** (a new draft/diff + a
+   fresh `Proposes:` line) or **abandons** (`Canceled`, with the reason). Hub drafts are
+   never deleted — `doc.history` keeps them as provenance.
+7. **Propagate.** Nothing pushes: agents re-read the doc on their next fire (`doc.get`'s
+   default read returns the published version, so a publish lands team-wide by itself; a
+   repo-file commit is picked up the same way), and the §22a digest carries
+   **`published vN: <summary>`** so the director sees the direction land.
 
 ---
 
@@ -799,6 +946,17 @@ In Review and names the blocker if any child is parked. Split is idempotent (chi
 split); responsibility comes from the `team.docs.vision` project descriptions, and PM parks to the operator
 rather than guess. No new state machine — §9a mechanics, one level up. Same team (= same backend) only;
 cross-team collaboration does not exist (I3).
+
+**Mechanism on `service` (D1):** the carrier is the hub op-API **`project` override** — every hub tool
+(`whoami` aside) takes an optional `project` argument, role-gated **server-side on both transports**
+(stdio and the daemon op-API): the stewards (`sweep`/`ops`/`reflect`/`communication`, booted `_team`) may
+name any seeded project key or `_team`; **PM may name `_team` only** — and uses it for exactly this
+job. PM is never booted at team scope on `service`; instead **every per-project PM fire** scans the
+`_team` board (`list_issues {project:"_team", label:"needs-pm"}`), files the child for **its own booted
+project** on its own board (no override needed), back-links it on the parent via the override, and the
+fire whose back-link completes the responsibility set moves the parent to `In Review`. Any other actor
+naming a foreign key is refused (`FORBIDDEN`), and a forbidden actor gets the same refusal for a real and
+a ghost key — key existence never leaks. Omitting `project` means the booted project, unchanged.
 
 ### 9c. W5 — the external-prerequisite tracker (park → block → auto-unpark)
 
@@ -860,6 +1018,10 @@ cheap board scan (the full body stays on `get_issue`); `updatedSince:<ISO>` read
 changed; `relatedTo:<id>` finds a design parent's children; and `query` now searches
 title + description **+ comment bodies** with whitespace-AND-ed terms — so a §8 dedup query
 catches a reworded duplicate whose only match is a comment (e.g. a `review failed:` note).
+On an `interface:"cli"` fire (§18) the same levers ride the read verbs — `dev-loop tickets
+--json [--fields summary] [--updated-since ISO] [--related-to ID] [--q TEXT] [--limit N]`
+is byte-identical to the `list_issues` op, and `dev-loop ticket <id> --json` is `get_issue`;
+your SKILL's cheat-sheet block carries the exact flag surface.
 
 **Local backend (§18): the same discipline, on files.** `list_issues` becomes a
 glob+parse+filter over the board's `tickets/*.md`; still filter to the narrow slice
@@ -870,7 +1032,11 @@ frontmatter rewrite (re-read the file to confirm `state:`/`labels:` landed).
 
 ### Linear MCP write hazards (read before any `save_issue`)
 
-Four footguns that silently corrupt the loop — every skill must handle them:
+Four footguns that silently corrupt the loop — every skill must handle them. They are
+**carrier-independent** (§18): on an `interface:"cli"` fire #1 and the `relatedTo`
+append-only union surface verbatim as the `dev-loop ticket update` flags (`--labels`
+REPLACES the full set; `--related-to` only ADDS), and the cheat-sheet block in each
+SKILL repeats them as HAZARD lines:
 
 1. **`labels` is REPLACE-style on update.** `save_issue(labels:[X])` overwrites the
    **entire** label set — it does not add X. (Unlike `blocks`/`relatedTo`, which are
@@ -1011,7 +1177,11 @@ finished ticket. **Absent ⇒ `"direct"`** — today's behavior, so every existi
 
 - **`"direct"` (default)** — Dev commits to the target repo's resolved `defaultBranch` and,
   per `git.autoPush`/`autoDeploy`, pushes and (if a `deploy.command` resolves) deploys
-  (dev-agent Step 6/6.5). The human is not in the landing loop.
+  (dev-agent Step 6/6.5). The human is not in the landing loop. **In a split-dev project
+  (§21a) the commit still happens in the ticket's isolated worktree and reaches
+  `defaultBranch` via the §7 direct merge-back sequence** — `direct` names WHERE the change
+  lands (no PR, no human gate), not a license for two tiers to share the checkout; only the
+  legacy solo `dev` (one writer) commits in place (§7).
 - **`"pr"`** — Dev does **not** commit to `defaultBranch`. Per finished ticket it:
   1. `git fetch`, then branches **`dev-loop/<ticket-id>`** off the up-to-date
      `origin/<resolved defaultBranch>`.
@@ -1149,6 +1319,31 @@ deploys is project knowledge the loop must be told, not guessed.
 
 ---
 
+## 12d. Deploy ceiling — the runtime re-check (team.deployPolicy)
+
+`team.deployPolicy.<env>` is a team-wide CEILING (§27): `"manual"` means NO repo may
+auto-deploy that environment. Config-time enforcement exists (`dev-loop doctor` and
+add-repo reject an `auto:true` env under a `manual` ceiling — E06), but config drifts,
+and a **command-shape deploy carries no per-env `auto:` flag for doctor to check** — the
+E06 blind spot. So the ceiling is ALSO re-validated at **runtime**, by the deploying
+agent, immediately before ANY deploy step:
+
+- **Before executing the resolved deploy action** — a `deploy.command` run (dev-agent
+  Step 6), a `release-pr` deploy-PR merge (Step 0.5 / §12c), or a Step-6.5 rollback
+  re-deploy — resolve which ENVIRONMENT it targets and check `team.deployPolicy.<env>`.
+  A `deploy.command` with no environment mapping targets the repo's deployed surface —
+  treat it as **prod** unless config clearly says otherwise.
+- **`"manual"` ⇒ HARD BAIL — never a prompt.** Do NOT run the deploy. The ship stops at
+  the pre-deploy step (commit/push per config still stand); block the ticket for the
+  **operator** — `Human-Blocked` on `service`, the `blocked`+`needs-pm`+`external-prereq`
+  park on `linear`/`local` (§9) — with a comment naming the env and the ceiling
+  (`deployPolicy.<env>="manual"` forbids auto-deploy; E06). A ceiling violation is a
+  config contradiction only the operator can resolve (raise the ceiling or fix the
+  repo's deploy shape); it is never resolved by an interactive mid-fire prompt (§12a).
+- `"auto"` / absent ⇒ proceed per the repo's own `git`/`deploy` flags, unchanged.
+
+---
+
 ## 13. First-run setup
 
 **The canonical bootstrap is the 1.0 team flow** — `dev-loop team init` (pure CLI
@@ -1162,7 +1357,8 @@ Idempotent; safe to re-run. Before the first live run against a workspace:
 1. Ensure the workflow labels exist (create only the missing ones via
    `create_issue_label` on the configured team): `dev-loop`, `pm`, `qa`,
    `edge-case`, `blocked`, `needs-pm`, `needs-qa`, `coverage`, `incident`, `tech-debt`,
-   `signal`, `notified`, `senior-dev`, `junior-dev`, `sensitive` (§21a routing), and the
+   `signal`, `investigation` (§9a investigation intake), `notified`, `senior-dev`,
+   `junior-dev`, `sensitive` (§21a routing), and the
    §9c external-prerequisite set: `external-prereq`, `external-code`, `external-access`. (`notified` marks a §9 human-park whose
    operator notification has been sent — the daemon's reminder timer keys on it. `senior-dev`/`junior-dev` are the §21a dev-tier
    routing labels — required for the two-tier Dev on `linear`/`local`; harmless extras on
@@ -1370,7 +1566,7 @@ store**, or through the **local hub service** (an MCP system of record — see
 `docs/HUB-ARCHITECTURE.md`) — with the *same* state machine, label semantics, and
 protocols; only the storage primitive changes. This section is the **single
 abstraction point**: every "ticket operation" each skill performs maps to one of these
-backends, defined once here. Each skill's §0 carries just one line — "all ticket
+backends, defined once here. Each SKILL's BOOT carries just one line — "all ticket
 operations go through the configured backend (§18)" — instead of re-stating every job
 in backend terms.
 
@@ -1493,16 +1689,17 @@ verify-after-write (§7/§10):
 | `save_issue` (update) | read-modify-rewrite frontmatter under the per-ticket lock (below); **labels REPLACE-style** — re-pass the FULL set (§10 #1); **append-only lists (`relatedTo`) merge** — re-read, union, write; append a state-move comment; bump `updated` |
 | `list_comments` / `save_comment` | read / append-only-write the `## Comments` section (chronological) |
 | `create_issue_label` | **no-op** — labels are plain strings; no registry to provision (init skips the label step in local mode) |
-| `get_document` / `save_document` | only the **repo-file** form applies — `strategyDoc` is a repo file (§11, pm-agent §0) |
+| `get_document` / `save_document` | only the **repo-file** form applies — `strategyDoc` is a repo file (§11, form detection §20) |
 
 The §10 query discipline still applies: fetch the narrow slice you need (filter by the
 most specific predicate; `get_issue` one file when that's all you need), never read
 every file blindly.
 
-**Service backend:** every op above maps to the **identically-named hub MCP tool**
+**Service backend:** every op above maps to the **identically-named hub op**
 (`list_issues`/`get_issue`/`save_issue`/`save_comment`/`list_comments`/`list_issue_labels`/
-`create_issue_label`/`get_project`) with the same args + semantics — see *The `service`
-backend* below.
+`create_issue_label`/`get_project`) with the same args + semantics; whether a fire invokes
+that op as a hub MCP tool or as a `dev-loop` CLI command is the interface question — see
+*The `service` backend* below.
 
 ### ID allocation (race-safe via exclusive create)
 `counter.json` (`{ "prefix": "...", "next": N }`, `prefix` from `ticketPrefix` (§11)
@@ -1555,11 +1752,32 @@ the file board. It is the path to what Linear's shared identity can't give the l
 per-agent attribution**, structural per-project scoping, and a native event feed. Opt-in;
 `backend` absent ⇒ `linear` (unchanged).
 
-- **Op mapping — 1:1 with the Linear MCP.** The hub exposes tools with the **same names and
-  arg shapes** as the Linear MCP (`list_issues`/`get_issue`/`save_issue`/`save_comment`/
-  `list_comments`/`list_issue_labels`/`create_issue_label`/`get_project`), so every job ports
-  with **zero prose rewrite** — same filters, same REPLACE-style labels (§10#1), same
-  verify-after-write (§7/§10#2). The only divergences are improvements: `state` is a CHECKed
+- **Op mapping — the op names are the canonical vocabulary; the CARRIER is per backend +
+  interface.** Every rule in this document and every SKILL speaks in the op names
+  (`list_issues`/`get_issue`/`save_issue`/`save_comment`/`list_comments`/`list_issue_labels`/
+  `create_issue_label`/`get_project`, plus the `doc.*`/`list_events`/`mirror.*` families) —
+  the **same names and arg shapes** as the Linear MCP, so every job ports with **zero prose
+  rewrite** — same filters, same REPLACE-style labels (§10#1), same verify-after-write
+  (§7/§10#2). How a fire actually *invokes* an op (D8, `hub.agentInterface` resolved per
+  coding agent — also the rollback switch):
+  - `backend:"linear"` → the **Linear MCP tool** of that name, permanently (no wrapper CLI
+    exists or will be built for Linear).
+  - `backend:"service"` + `interface:"mcp"` → the **identically-named hub MCP tool**
+    (unchanged — the scheduler injects `dev-loop-hub` into the fire).
+  - `backend:"service"` + `interface:"cli"` (the D9 default for claude AND codex fires —
+    codex certified 2026-07-11; opencode stays `"mcp"` — **no hub MCP is injected**) → the
+    matching **`dev-loop` CLI command** (`save_issue` →
+    `dev-loop ticket create|update`, `doc.save` → `dev-loop doc save`, any op by name →
+    `dev-loop op <op-name>`), identity riding the fire env. Each agent SKILL ends with a
+    **generated CLI cheat-sheet block** (between `<!-- cli-cheatsheet:begin/end -->` markers)
+    scoped to the ops that agent uses — rendered from the CLI's own usage strings by
+    `hub/src/gen-cheatsheets.ts` and byte-checked by `hub/test/cli-cheatsheet.ts`, so the
+    sheet cannot drift from the CLI. Its first command is the fail-closed identity check
+    (`dev-loop project --json`; exit 4 ⇒ stop the fire, touch nothing). Exit codes are the
+    machine contract: `0` ok · `1` domain error · `2` usage · `3` `doc.save` CAS CONFLICT ·
+    `4` identity/guard · `5` hub unavailable.
+
+  The only divergences from Linear are improvements: `state` is a CHECKed
   enum (a typo'd state **errors** instead of silently mis-routing — this *kills* the §10#2
   fuzzy-match footgun), and ticket-id allocation is race-safe in-transaction.
 - **Identity (the headline win).** Each agent pane connects as a **distinct actor** via the
@@ -1604,6 +1822,14 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
   ladder), so `DEVLOOP_PROJECT` is **optional** (a launcher spawning the server with cwd inside a
   repo need not set it). Identity is still ambient — not passed per call. The cross-project
   firewall (§2) is **unchanged + structural**: a hub process only ever touches its own project's rows.
+  The ONE role-gated exception (D1): every hub tool except `whoami` accepts an optional `project`
+  argument — stewards (`sweep`/`ops`/`reflect`/`communication`) may name any seeded project key
+  (a hub.db row, not a dev-loop.json entry) or `_team`, PM may name `_team` only (§9b), every other
+  actor is refused with `FORBIDDEN` —
+  enforced server-side at the shared dispatch choke point, identically on the stdio server and the
+  daemon op-API. Forbidden-first: a refused actor learns nothing about which keys exist (only an
+  allowed actor's unknown key gets the not-found error). Omitting `project` is byte-identical to the
+  pre-override behavior.
 - **Relations.** `save_issue` takes `duplicateOf` (scalar — set it with `state:"Duplicate"`,
   §8 dedupe) and `relatedTo` (**append-only** — re-passing unions into the set, never
   replaces; §4 splits, §15 coverage); both surface on `get_issue`. `parentId`/`blockedBy`/
@@ -1611,7 +1837,10 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
 - **strategyDoc + documents (P4).** Under `service` the `strategyDoc` is a **repo file** by
   default (read/edit/commit, as in `local`). Set **`hub.docs:true`** (or a `{ "hubDoc": "<kind>" }`
   strategyDoc) to make the strategy + roadmap **first-class hub documents** —
-  versioned, attributable, optimistic-CAS (`doc.save` returns CONFLICT, never last-write-wins),
+  versioned, attributable, optimistic-CAS (`doc.save` returns CONFLICT, never last-write-wins —
+  the CONFLICT carries `latestVersion`; recover with `doc.get {version:"latest"}` + re-apply +
+  re-save with `baseVersion:latestVersion`, since the CAS keys on the LATEST draft, not the
+  published version `doc.get` returns by default),
   and **operator-published**: any agent appends `draft` versions via `doc.save`, but only the
   **operator** (DEVLOOP_ACTOR=`operator`) may flip a draft→`current` via `doc.publish`. Tools:
   `doc.list/get/save/history/diff/publish`. **§17 firewall (structural):** doc tools are
@@ -1628,18 +1857,36 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
   skipped by content hash), §16 (the Linear token is an env-var NAME, read server-side), and
   audience-widening like `reports.sink:"linear"` (§23) — a mirrored body must be §16-safe. A hub
   Canceled/Duplicate mirrors as a state change, never a hard-delete. Absent ⇒ no mirror.
+  **Doc mirror (D5):** with a Linear `projectId` configured, `mirror.push` ALSO projects the
+  hub's PUBLISHED `strategy`/`roadmap`/`decisions` + LATEST `design` docs (`notes` never —
+  scratch tier) as Linear Documents parented to that project — title-marked
+  `[hub:doc:<projectKey>/<slug>]` (the project-key discriminator prevents cross-project slug
+  collisions), a pinned banner "Mirrored from dev-loop — body edits here are overwritten;
+  comment here or file a ticket to give direction.", content-hash-skipped, and
+  published-versions-only (agent drafts stay private until the operator publishes — the D5
+  decision keeps the doc gate intact in Linear). **Sweep Job 5 additionally runs
+  `mirror.pollComments`:** every NEW human comment on a mirrored Document files ONE
+  `Backlog` + `dev-loop`+`pm`+`needs-pm` intake ticket carrying provenance (doc slug +
+  mirrored version + quoted comment + comment URL) — explicit intake, so it flows under §5a
+  passive mode too; a Linear-side BODY edit is detected against the last-PUSHED body and
+  filed ONCE as a High `needs-pm` divergence flag warning that the next push overwrites it —
+  the hub NEVER writes Linear content back into a doc. Dedup is a machine-local acted-ledger
+  (`<dataDir>/mirror-state/<projectKey>.json`, the §23 reports-state pattern), not hub
+  state — so the strictly-one-way doctrine is unchanged: comments become tickets, never state.
 - **Reflect's activity window.** In place of Linear's activity feed (or the local comment log
   + git), Reflect reconstructs the window from the hub's **`list_events`** — an append-only
   feed of `issue.create` / `issue.transition` (with `from`/`to`) / `comment.add`, each
   carrying the actor + timestamp (a strict upgrade: true per-agent attribution). No manual
   state-move comment is required — the hub logs the transition event automatically (like
   Linear's feed).
-- **Setup.** The hub is registered as an MCP server in the CLI (normally a `.mcp.json` naming
-  `dev-loop-hub` → `dev-loop serve`, with `env` expanding the per-pane
-  `DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`); the launcher sets those per agent pane
-  (see `docs/RUNNING.md`). The hub DB (`hub.db`, WAL) is machine-local runtime state, never
-  committed (like the local board). `mode`/`autonomy` stay authoritative in `dev-loop.json`
-  (the hub project row is advisory).
+- **Setup.** On `interface:"cli"` fires (the D8 default — see the op-mapping bullet) nothing is
+  registered: the PATH-installed `dev-loop` binary is the board access, and the launcher's fire
+  env (`DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`, per agent pane) is the identity
+  transport. On `interface:"mcp"` fires the hub is registered as an MCP server in the CLI
+  (normally a `.mcp.json` naming `dev-loop-hub` → `dev-loop serve`, with `env` expanding the
+  same per-pane variables; see `docs/RUNNING.md`). The hub DB (`hub.db`, WAL) is machine-local
+  runtime state, never committed (like the local board). `mode`/`autonomy` stay authoritative in
+  `dev-loop.json` (the hub project row is advisory).
 
 ---
 
@@ -1814,11 +2061,30 @@ archived period that points at the archive. Vision / Goals / Non-goals / Persona
 live doc; only the historical decision *detail* rolls out. The archive is provenance, never
 re-ingested per fire. (This doc's own 2026-06 milestone was rolled to `docs/strategy-archive/2026-06.md`.)
 
-### Where it lives
+### Where it lives — the strategyDoc form-detection rule
 In the **doc-home repo** (§19). A single flat file containing these headings IS the
-doc-base; a larger product may split it into a doc set under the same path. Read and
-maintain it exactly as `strategyDoc` is today (repo file → read/commit; Linear
-document → `get_document`/`save_document`), per pm-agent §0.
+doc-base; a larger product may split it into a doc set under the same path.
+
+`strategyDoc` may be a **Linear document**, a **hub document**, *or* a **repo file**.
+Detect the form ONCE per fire (precedence in this order) and use it consistently for
+both reading and updating:
+- **Linear document** — `strategyDoc` is an object `{ "linearDocument": "<id|slug|url>" }`,
+  or a string containing `linear.app/.../document/`. Read with `get_document`; update with
+  `save_document`. No git/file access. (Requires a Linear-connected backend — init rejects
+  `{linearDocument}` under `backend:"local"`, §18.)
+- **Hub document** (`backend:"service"` only, §18) — `strategyDoc` is `{ "hubDoc": "<kind>" }`
+  (e.g. `{ "hubDoc": "strategy" }`), or `hub.docs:true`. Read with `doc.get({ kind })` — an
+  `unpublished:true` result means **no version has ever been published**, so `doc.get`
+  returned the latest DRAFT (the only content there is): treat it as the working
+  north-star but say so; once a published version exists, `doc.get` returns it by default
+  (§18). Agents write **DRAFTs only** via `doc.save` (mandatory
+  `baseVersion`; the operator alone publishes via `doc.publish`); on a CONFLICT recover per
+  the §18 CAS rule (`doc.get {version:"latest"}` → re-apply → re-save with
+  `baseVersion:latestVersion` — the CAS keys on the latest draft, not the published version).
+- **Repo file** — a `{ "path": "<repo-relative>" }` object (the usual config form,
+  `config-schema.md`) or any other plain string: a path relative to the doc-home repo
+  (§19). Read/edit and (in `live`) commit, honoring the D4 section-level write policy
+  below. **Remains the default under `service`** unless `hub.docs`/`{hubDoc}` is set.
 
 ### init ↔ PM handoff (no double-write)
 - **init seeds `Current state` exactly once, if absent** (from brownfield mapping,
@@ -1830,6 +2096,27 @@ document → `get_document`/`save_document`), per pm-agent §0.
   `Decisions (running log)`, and keeps `Personas`/`Glossary` accurate as features ship
   (PM Job C step 5). So init never overwrites PM, and PM never re-seeds what init
   already wrote.
+
+### Section-level write policy on repo-file backends (D4)
+
+Where the strategy doc is a **repo file** there is no publish gate — PM's commit IS the
+landing — so PM's write policy splits **by section**:
+
+- **Progress sections — autonomous.** `Current state` (shipped markers/✅), `Decisions
+  (running log)` appends, `Candidate ideas`, and `Personas`/`Glossary` upkeep: PM commits
+  these directly, exactly as before (pm-agent Job C step 5). Recording reality is not a
+  direction change.
+- **Direction sections — propose first.** `Vision`, `Goals (north star)`, `Non-goals` —
+  plus any `Appetite` / `No-gos` headings a doc carries: changing WHAT the product pursues
+  requires the §9a **investigation protocol** (findings + the unified diff on a
+  `needs-pm`+`investigation` ticket → operator approval → only then the commit). Hub-doc
+  backends don't need this split — the operator-publish gate already holds the direction
+  line (§18).
+
+**Sweep is the backstop (report-only):** each fire it audits recent doc-only commits
+touching the strategy doc; a diff that changes a direction section with no linked approval
+ticket is flagged in the board-health digest for the operator (never reverted — Sweep
+doesn't mutate content).
 
 ---
 
@@ -1912,11 +2199,18 @@ language, it must be clearly labelled as upcoming and sourced to a roadmap item.
 
 ### The new sub-type labels
 These additive sub-type labels (§4) tag the outward agents' tickets so the right owner
-verifies and so the board is filterable:
-- **`incident`** — on Ops `Bug`s (owner `qa`).
+verifies and so the board is filterable. Each carries its **verification recipe** — who
+closes it and on what evidence (QA Job A cites these, it never re-derives them):
+- **`incident`** — on Ops `Bug`s (owner `qa`). **Verification recipe:** an incident has
+  NO repro to re-run — QA closes it by re-verifying the ticket's **health assertion**
+  against running prod (the probe/route/error-rate the ticket names, observed green on a
+  fresh check); inconclusive ≠ pass. Ops only *reports* recovery on the ticket — it
+  never closes or transitions it (observe-and-file).
 - **`tech-debt`** — on Architect `Improvement`s (owner **`qa`** — a refactor's safety is
   "build/tests green + the named debt gone + no behavior change", QA-verifiable, not a
-  product-exercise; same qa-Improvement precedent as `coverage`, §15).
+  product-exercise; same qa-Improvement precedent as `coverage`, §15). **Verification
+  recipe:** that triple — tests green + the NAMED debt observably gone + no behavior
+  change — is exactly what QA closes it on.
 
 They are provisioned once at setup alongside the other workflow labels (§13).
 
@@ -1952,7 +2246,10 @@ config, and post-deploy rollback all apply unchanged; the two SKILLs do not re-d
 its §6 filing step; QA when it files a `Bug`/`Improvement` (QA is a primary filer, not just PM);
 **Ops when it files an `incident` Bug** (⇒ **senior-dev direct-code** by default — an Urgent
 prod-down fix is exactly not the place for the cheap tier); **Architect when it files a
-`tech-debt` Improvement** (⇒ **junior-dev** — scoped, behavior-preserving refactors). An un-tiered
+`tech-debt` Improvement** (⇒ **junior-dev** — scoped, behavior-preserving refactors — EXCEPT a
+finding that needs **cross-module design**: a module-boundary change, a shared abstraction
+spanning modules, a layering restructure ⇒ **senior-dev** as a `Mode: design` design-and-delegate
+ticket, so the design gate — not a junior guess — shapes it). An un-tiered
 ticket is invisible to BOTH dev pick-queries and strands until Sweep's slow-cadence repair.
 Same one rule:
 - **SENSITIVE ⇒ senior-dev, ALWAYS — this overrides every bullet below.** A ticket labelled
@@ -1983,6 +2280,13 @@ and **cites the strategy/roadmap item it serves** (traceability: strategy → ro
 - **Granularity = LIVING per-module doc** — one per module, **updated as the module evolves** (not
   one-per-feature, not write-once). History lives in the hub doc versioning (`service`) or git
   (`linear`/`local`), so the doc stays current rather than accreting changelog noise.
+- **Retire, don't delete (D6 retention).** When a module is removed or its design is superseded,
+  senior-dev ARCHIVES its design doc: on `service`, `dev-loop doc archive --slug <module>` (the
+  `doc.archive` op — DESIGN docs only, the singleton kinds refuse; reversible via `--restore`). An
+  archived doc leaves the `/docs` index (`?archived=1` shows it), the drafts-pending chip, and the
+  daemon notifiers, but the doc + its full version history stay readable forever — never deleted,
+  never re-ingested per fire. On `linear`/`local`, move the repo file to `docs/design/archive/`
+  with a one-line commit. A superseding design doc should name what it replaced.
 - **Small features get NO separate doc** — the design lives in the parent + child ticket specs.
 - **senior-dev writes/commits it AUTONOMOUSLY** — like PM commits the `strategyDoc` (§20). It is
   **NOT** a §17 governing file (SKILL/conventions/code) and is **NOT** operator-publish-gated; the
@@ -2013,9 +2317,20 @@ and **cites the strategy/roadmap item it serves** (traceability: strategy → ro
 - **PM verifies** the design parent at `In Review`: the design is coherent, cites its strategy/roadmap
   parent, and the children faithfully decompose it. For a **big-module / docs-design-level** design the
   **operator** signs off (PM surfaces it, same posture as a significant product decision); ordinary
-  designs PM verifies directly.
-- **Pass → PM moves the parent `Done` and PROMOTES every staged child `Backlog → Todo`** (re-passing
-  the full label set, §10) — now junior-dev can pick them. This reuses the existing Backlog-staging +
+  designs PM verifies directly. **The sign-off carrier is the existing §9a Human-Blocked machinery,
+  never a report line:** PM parks the design PARENT — `Human-Blocked` assigned to the operator on
+  `service` (the §9a daemon reminder carries the nudge), the `blocked`+`needs-pm`+`external-prereq`
+  park on `linear`/`local` (§9) — with a comment naming the design doc + the child IDs. Approval =
+  the operator's approval comment (or the operator moving the parent back themselves); PM's next
+  fire sees it (the §9 re-scan of parked tickets) and runs the normal pass path below. A rejection
+  comment = a failed review (§3 close + follow-up).
+- **Pass → PM PROMOTES every staged child `Backlog → Todo` FIRST, THEN moves the parent `Done`**
+  (re-passing the full label set, §10 — each child keeps `dev-loop` + its dev-tier + its `pm`/`qa`
+  verifier label) — now junior-dev can pick them. **Order matters:** promotion is idempotent
+  (re-verifying an already-promoted design is safe), but a `Done` parent with children still stranded
+  in `Backlog` after a mid-promotion crash is NOT — no gate ever fires on them again and Sweep's
+  slow-cadence repair is the only rescue. Parent-`Done` last means a crash leaves a re-triggerable
+  In-Review parent, never orphaned children. This reuses the existing Backlog-staging +
   promotion shape (a staged child sits in `Backlog` like any parked idea; the `Backlog → Todo` move is
   the same kind PM already makes) rather than inventing a new state. (The only structural difference
   from §9a is that the design *parent* goes to `In Review` first — because **the design is itself the
@@ -2095,7 +2410,7 @@ Full design + the file-by-file change map: `docs/design/senior-junior-dev-split.
 Every agent leaves a durable, human-readable trail of what it did, and the operator may
 critique any of it (a **点评 / review**); the agent reads an un-acted critique and
 **changes how it works**. This is **one shared capability** — defined here once; each
-SKILL carries a single §0 line pointing back here. It is **additive and on by default**.
+SKILL's REPORT line points back here. It is **additive and on by default**.
 The true back-compat invariant is narrow: **no change to ticket / product / board
 behavior** — the only added effects are local report files you can read or ignore and a
 cheap review-glob at run-start. (It is *not* literally "zero behavior change": every fire
@@ -2193,9 +2508,10 @@ elapsed periods:** roll up only the just-completed period(s) and note any idle s
 (`idle — no activity`); do **not** backfill one stub file per skipped period, and **never
 fabricate** activity. The new file *is* the new marker — write it **atomically** (temp in
 the same dir + rename, §11) so an interrupted roll-up never leaves a half-written report or
-a phantom marker. **Retention:** at roll-up, prune the tail — keep ≈ **90 days of dailies**
-(weeklies / monthlies proportionally longer); a parent's summary already preserves a pruned
-daily.
+a phantom marker. **Retention (D6):** at roll-up, prune the tail — keep ≈ **90 days of dailies**,
+**52 weeks of weeklies**, and **monthlies forever**; communications article drafts follow the
+same **90-day** tail (the communication agent prunes its own output dir at fire start). A
+parent's summary already preserves a pruned daily.
 
 ### What a report says (terse, agent-appropriate)
 Bounded — a few lines per daily entry, a short paragraph per roll-up. Each covers: **what
@@ -2314,13 +2630,41 @@ the loop did").
 ### 22a. The team daily digest (director view)
 
 The operator is a director: they read ONE pushed message a day, not report trees. The
-communication agent (team scope) composes the digest per the contract in its SKILL — Team KPIs
-(verbatim from `dev-loop metrics`; board numbers via MCP on linear), QA quality (filed vs
-escaped), board flow (promotion pace, oldest In Review, W5 trackers), the north-star delta
-(reflect's weekly), and a "needs the director" section that is EMPTY on a good day — delivered
-via `dev-loop notify` (team.comms). Reflect (team scope) additionally writes ONE weekly
+communication agent (team scope) composes the digest per the contract below — delivered
+via `dev-loop notify` (team.comms). The digest is gated on **team.comms presence alone** —
+the scheduler stamps the comms fact into every team-scope fire's context, and a missing
+per-project `communication` block (which governs article drafting only) never suppresses
+it. Reflect (team scope) additionally writes ONE weekly
 consolidated team retrospective + the north-star delta. Numbers always come from code
 (`dev-loop metrics`) or explicit board queries — never from an agent's memory of what it did.
+
+**The digest contract** (defined here once; the communication SKILL cites it, never restates
+it). Numbers come from code; narrative comes from the communication agent. Compose EXACTLY
+these sections, then push via `dev-loop notify --title "Daily <team> <date>"`:
+1. **Team KPIs** — run `dev-loop metrics --window 24h --json` and quote its numbers verbatim
+   (fires + success rate + suspectErrors; on service also throughput/accept-rate/blocked). On a
+   linear team, compute the board numbers yourself via MCP: shipped (→Done, 24h), verify-fails
+   (In Review→Canceled, 24h), Todo depth vs `intake.todoDepthCap`, blocked count by bail-shape.
+2. **QA quality** — bugs filed (24h) vs escaped-to-prod (`incident`/`signal` Bugs); re-test fails.
+3. **Board flow** — Backlog groomed/promoted by PM (its Job B2 close line), oldest In Review age,
+   W5 trackers open.
+4. **North-star delta** — one or two lines from reflect's latest weekly delta (see reflect); on
+   days without one, the newest strategy-doc Decisions entry, or "no movement".
+   Plus one line per doc version the operator published since the last
+   digest, quoted as `published vN: <summary>` (the `doc history` summary field — the §9a
+   investigation protocol's propagation line).
+5. **Needs the director** — ONLY genuinely human-parked items (Human-Blocked / external-access
+   trackers); an empty section is a good day. Compose it from these lines, each omitted when zero:
+   · **Human-Blocked**: count + the oldest park's age (workflows P3 —
+   from the board, never memory; the same numbers the daemon reminder carries).
+   · **Investigation proposals pending**: each open §9a `investigation`
+   ticket parked for operator approval, with its doc + version (the ticket's
+   `Proposes: doc:<slug> vN (published vM)` line).
+   · **Drafts pending publish**: count of docs whose drafts trail the
+   published version (`doc list`; mirrors the daemon's `doc_drafts.notified` one-liner).
+   · **Unconsumed operator doc edits** (`intake.mode:"passive"` projects
+   only): foreign doc versions no PM fire has digested yet (mirrors `doc_foreign_edit.notified`).
+Keep it under ~25 lines — a director reads ONE message, not a log.
 
 ## 23. Reports in Linear — the `reports.sink` option
 
@@ -2590,13 +2934,22 @@ This section records only the rules that change agent/operator behavior; the fie
 - **Backend is strictly team-level (I3).** linear or service, never mixed. A workspace is initialized
   with exactly one backend, and there is no cross-team collaboration.
 - **deployPolicy is a ceiling.** `team.deployPolicy.<env> = "manual"` forbids any repo auto-deploying
-  that env (`E06`); `dev-loop doctor` and `/dev-loop:add-repo` enforce it.
+  that env (`E06`); `dev-loop doctor` and `/dev-loop:add-repo` enforce it at config time, and every
+  deploying agent re-validates it at runtime before any deploy step (§12d).
+- **`team.docs.vision` is operator-owned — PM propose-only (D7).** When the team vision doc drifts
+  from reality, PM may file a §9a **investigation-flow** proposal against it at WORKSPACE scope (the
+  §9b `_team` intake carrier: findings + the proposed diff on the ticket; the operator approves
+  BEFORE any edit lands). PM never edits the vision doc autonomously — the doc registry marks it
+  operator-owned.
 - **MCP scope for stewards.** A linear team's stewardship fires (sweep/ops/reflect/communication) run
   with the workspace root as cwd, where a repo-level `.mcp.json` does not apply — the Linear MCP must be
   configured in **user scope** (doctor warns `W05`). Delivery fires still run inside a repo, unaffected.
 - **Scheduling (1.0 team mode).** `dev-loop run` (or Agent View `/loop`) launches ONE scheduler for the
   whole team; each agent keeps its own cadence, and when it fires the target project is chosen by a smooth
-  weighted round-robin (`weight` = share; `enabled:false`/`weight:0` opt out). The rotation cursor is shared
+  weighted round-robin (`weight` = share; `enabled:false` removes a project from BOTH delivery rotation
+  and steward coverage; `weight:0` is maintenance mode — delivery rotation pauses while the stewards
+  (sweep/ops/reflect/communication) keep covering it). `--project` narrows the delivery rotation only;
+  steward fires always keep team-wide coverage. The rotation cursor is shared
   between `dev-loop run` and the `/loop` rows via `dev-loop next-project --agent <a>`, so the two run modes
   never double-fire or starve a project. Preview the order with `dev-loop run --plan <n>`. Every fire is
   recorded to `<ws>/.dev-loop/team/fires.jsonl`. A shared repo's base-clone mutations (fetch / worktree

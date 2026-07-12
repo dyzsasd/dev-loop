@@ -4,16 +4,17 @@
 // `dev-loop-hub resolve-project` subcommand (one rule, no prose/code drift). Backward-compatible: an
 // explicit DEVLOOP_PROJECT always wins (the caller checks that first); this runs only when it is unset.
 import { realpathSync, readFileSync, existsSync } from "node:fs";
-import { relative, isAbsolute } from "node:path";
+import { relative, isAbsolute, join } from "node:path";
 import { projectConfigCandidates } from "./paths.ts";
 import { tryResolveWorkspace } from "./workspace.ts";
-import { toLegacyView, WsValidationError } from "./team-config.ts";
+import { toLegacyView, WsValidationError, type HubBlock } from "./team-config.ts";
 
 export interface ProjectsConfig {
   defaultProject?: string;
   // The shape resolveProjectFromCwd matches on (repoPath/repos), plus the few fields the daemon reads to
-  // resolve per-project behavior — DL-83: hub.docs/director/strategyDoc drive the /roadmap divergence banner.
-  projects?: Record<string, { repoPath?: string; repos?: { path?: string }[]; hub?: { docs?: boolean }; director?: unknown; strategyDoc?: unknown }>;
+  // resolve per-project behavior — DL-83: hub.docs/director/strategyDoc drive the /roadmap divergence
+  // banner; the hub block is the shared HubBlock (docs passthrough + the D8 agentInterface map).
+  projects?: Record<string, { repoPath?: string; repos?: { path?: string }[]; hub?: HubBlock; director?: unknown; strategyDoc?: unknown }>;
 }
 
 // The candidate repo paths for a project (§19): repos[].path if present, else [repoPath].
@@ -47,6 +48,46 @@ export function resolveProjectFromCwd(cwd: string, config: ProjectsConfig): stri
     }
   }
   return best && !tie ? best.key : null;
+}
+
+// ─── docs P3b: the repo-file strategyDoc → absolute path (ONE rule, mirroring the PM/config resolution) ──────
+// The daemon's passive-mode strategy-file watch needs the SAME answer PM's boot gives (pm-agent SKILL §0 +
+// conventions §19 "Doc-home repo"), derived from the legacy-view project record the daemon already loads:
+//   • FORM: a plain-string strategyDoc is the repo-file form UNLESS it is a Linear document URL
+//     (a string containing linear.app/…/document/ — PM's precedence rule); `{ path: "…" }` (the
+//     config-schema's usual spelling) is repo-file too. `{ hubDoc }` / `{ linearDocument }` are NOT files.
+//     hub.docs:true means the hub strategy doc is the north-star (the repo file, if any, is vestigial —
+//     the hub-doc notifier owns operator edits there), so it resolves to null here.
+//   • ROOT: an absolute path stands alone; an explicit repo-qualified "<repo-name>:docs/strategy.md"
+//     roots at that registered repo (matched on the legacy repos[].name = the v2 repo ref; an unmatched
+//     prefix falls through as a plain relative path — a colon is a legal filename byte); otherwise the
+//     DOC-HOME repo roots it: role:"docs", else role:"primary", else repos[0], else repoPath (§19).
+// Returns { abs, display } — abs for fs reads, display (the config's own spelling) for §16-safe messages —
+// or null (not a repo file / no repo to root it). Pure: no fs access, trivially unit-testable.
+export interface RepoFileStrategy { abs: string; display: string }
+export function repoFileStrategyPath(proj: { repoPath?: string; repos?: { path?: string; role?: string; name?: string }[]; hub?: { docs?: unknown }; strategyDoc?: unknown } | undefined | null): RepoFileStrategy | null {
+  if (!proj) return null;
+  if (proj.hub?.docs === true) return null; // the hub strategy doc is the north-star; the file (if named) is not watched
+  const sd = proj.strategyDoc;
+  let rel: string | undefined;
+  if (typeof sd === "string") {
+    if (/linear\.app\/.*\/document\//.test(sd)) return null; // the Linear-document string form (PM SKILL precedence)
+    rel = sd;
+  } else if (sd && typeof sd === "object" && typeof (sd as { path?: unknown }).path === "string") {
+    rel = (sd as { path: string }).path;                     // { path } — the config-schema's usual repo-file spelling
+  }
+  if (!rel || !rel.trim()) return null;                      // absent / {hubDoc} / {linearDocument} / empty ⇒ not a repo file
+  if (isAbsolute(rel)) return { abs: rel, display: rel };
+  const m = /^([A-Za-z0-9._-]+):(.+)$/.exec(rel);            // explicit repo-qualified override (§19)
+  if (m) {
+    const named = proj.repos?.find((r) => r.name === m[1] && r.path);
+    if (named) return { abs: join(named.path!, m[2]), display: rel };
+  }
+  const home = proj.repos?.find((r) => r.role === "docs" && r.path)
+    ?? proj.repos?.find((r) => r.role === "primary" && r.path)
+    ?? proj.repos?.find((r) => r.path);
+  const root = home?.path ?? proj.repoPath;
+  return root ? { abs: join(root, rel), display: rel } : null; // zero-repo project ⇒ nothing to root the file at
 }
 
 // DL-85: the ONE DEVLOOP_ACTOR + DEVLOOP_PROJECT/cwd identity resolution (was re-derived in server.ts:21-32

@@ -13,6 +13,26 @@ export type DocRef = string | { linearDocument: string } | { hubDoc: string } | 
 
 export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string }
 
+// The hub block (D8): `agentInterface` maps a coding agent → how its fires reach the hub board on
+// backend:"service" — "cli" (the dev-loop write-layer verbs; identity rides the fire env) or "mcp"
+// (the scheduler-injected dev-loop-hub MCP server). `docs` + the index signature keep operator
+// passthrough fields (e.g. the DL-83 `hub.docs` flag the daemon reads off the projected view) type-legal.
+export type AgentInterface = "cli" | "mcp";
+export interface HubBlock { agentInterface?: Record<string, AgentInterface>; docs?: unknown; [key: string]: unknown }
+
+// D9 (direct full rollout): claude flips to the CLI interface everywhere immediately; codex flipped
+// too once the P8 env-propagation certification PASSED (2026-07-11, codex-cli 0.130.0 — codex exec
+// propagates the fire env into shell subprocesses; docs/PORTABILITY.md §4); opencode registers MCP via
+// the operator's merged config and stays "mcp". An unknown coding agent defaults to "mcp" (today's behavior).
+export const DEFAULT_AGENT_INTERFACE: Record<string, AgentInterface> = { claude: "cli", codex: "cli", opencode: "mcp" };
+
+// The ONE resolver every consumer (scheduler, doctor) reads the interface through: an explicit
+// hub.agentInterface.<codingAgent> wins (the D8 rollback switch), else the D9 default.
+export function agentInterfaceFor(hub: HubBlock | undefined, codingAgent: string): AgentInterface {
+  const v = hub?.agentInterface?.[codingAgent];
+  return v === "cli" || v === "mcp" ? v : (DEFAULT_AGENT_INTERFACE[codingAgent] ?? "mcp");
+}
+
 export interface TeamBlock {
   key: string;
   backend: "linear" | "service";
@@ -29,6 +49,7 @@ export interface TeamBlock {
   agents?: Record<string, AgentLaunchConfig>;
   defaultCodingAgent?: string;
   codingAgentDefaults?: Record<string, { model?: string; effort?: string }>;
+  hub?: HubBlock;
 }
 
 export interface RepoEntry {
@@ -56,7 +77,8 @@ export interface ProjectEntry {
   intake?: { mode?: "autonomous" | "passive"; todoDepthCap?: number };
   devSplit?: boolean;
   blockedStateName?: string | null;   // a real Linear "Blocked" column name; null → the `blocked` label park (§9)
-  notify?: unknown;                   // v1-era per-project notify block (passthrough; team.comms is canonical on v2)
+  notify?: unknown;                   // per-project §9 notify webhook override (E15; team.comms is canonical on v2 and bridges into it)
+  communication?: unknown;            // the communication agent's ARTICLE config (E14); NOT the §22a digest gate (that keys on team.comms)
   agents?: unknown;
   models?: unknown;
   efforts?: unknown;
@@ -66,11 +88,17 @@ export interface ProjectEntry {
   docSystem?: string;
   defaultCodingAgent?: string;
   codingAgentDefaults?: unknown;
+  hub?: HubBlock;
   repos: ProjectRepoRef[];
 }
 
 export interface TeamFile {
   schemaVersion: 2;
+  // Workspace fingerprint (concept P4): a random-but-stable id `team init` mints once. On linear backends
+  // add-project/sync-project stamp it into the Linear project description marker so a SECOND workspace
+  // pointed at the same Linear project is detected (a loud mismatch warning) instead of double-driving it.
+  // Optional: configs written by older CLIs lack it, and validation tolerates unknown/extra top-level keys.
+  workspaceId?: string;
   team: TeamBlock;
   repos: Record<string, RepoEntry>;
   projects: Record<string, ProjectEntry>;
@@ -88,9 +116,14 @@ export interface Workspace {
 
 // The .dev-loop/ layout (impl §3.2, R1) shares its top-level namespace with project state dirs, so a
 // project key / repo ref may not collide with these. `_team` is the reserved service-intake project —
-// permitted ONLY as that exact system key (it also violates the leading-char rule below, by design).
+// it exists ONLY as a hub.db row (seeded by `team init`), never as a config project (E11 rejects it).
 export const RESERVED_NAMES = new Set(["team", "lessons", "wt", "locks", "reports", "hub.db", "daemon.json", "scheduler.json", "fires.jsonl"]);
 export const TEAM_INTAKE_PROJECT = "_team";
+// The ONE place the `_team` exclusion lives: any code iterating config projects for delivery/rotation/
+// reporting must route through these, so the exclusion cannot drift across call sites — and stays correct
+// even for hand-built Workspace objects that never passed validation.
+export function isTeamProject(key: string): boolean { return key === TEAM_INTAKE_PROJECT; }
+export function deliveryProjects(ws: Workspace): string[] { return Object.keys(ws.file.projects).filter((k) => !isTeamProject(k)); }
 const KEY_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const TEAM_KEY_RE = /^[a-z0-9-]{2,32}$/;
@@ -124,7 +157,12 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   if (!team || typeof team !== "object") { E("E02", "team", "missing team block"); return { errors, warnings }; }
   if (typeof team.key !== "string" || !TEAM_KEY_RE.test(team.key)) E("E02", "team.key", `team.key must match ${TEAM_KEY_RE}`);
   if (team.backend !== "linear" && team.backend !== "service") E("E02", "team.backend", `team.backend must be "linear" or "service" (got ${JSON.stringify(team.backend)})`);
-  if (team.backend === "linear" && (typeof team.linearTeam !== "string" || !team.linearTeam.trim())) E("E09", "team.linearTeam", "backend:\"linear\" requires team.linearTeam");
+  // E09 is a load-time WARNING, not an error: `team init --backend linear --yes` legitimately writes a
+  // blank linearTeam to fill later, and a hard load failure would lock the operator out of the very
+  // commands that repair it (team set / add-project / doctor). The HARD failure lives where a linear
+  // fire would actually launch on the blank value: toLegacyView (the runtime projection) throws E09.
+  if (team.backend === "linear" && (typeof team.linearTeam !== "string" || !team.linearTeam.trim()))
+    W("E09", "team.linearTeam", `backend:"linear" has a blank team.linearTeam — fires cannot target a Linear team until it is filled: dev-loop team set team.linearTeam "<Team Name>"`);
 
   // E12 — an intake block (team default or per project): mode governs PM origination (§5a).
   const checkIntake = (raw: unknown, path: string) => {
@@ -136,6 +174,83 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       E("E12", `${path}.todoDepthCap`, `intake.todoDepthCap must be an integer >= 1 (got ${JSON.stringify(it.todoDepthCap)})`);
   };
   if (team.intake !== undefined) checkIntake(team.intake, "team.intake");
+
+  // E13 — a hub block (team default or per project): agentInterface maps coding agent → "cli"|"mcp" (D8).
+  // Keys are validated STRICTLY (mirror run-agents.ts CODING_AGENTS — the drift tripwire): a typo'd key
+  // would otherwise silently not apply and the fire would launch on the default interface.
+  const CODING_AGENT_KEYS = new Set(["claude", "codex", "opencode"]);
+  const checkHub = (raw: unknown, path: string) => {
+    const h = raw as { agentInterface?: unknown };
+    if (h === null || typeof h !== "object" || Array.isArray(h)) { E("E13", path, "hub must be an object"); return; }
+    if (h.agentInterface === undefined) return;
+    const ai = h.agentInterface as Record<string, unknown> | null;
+    if (ai === null || typeof ai !== "object" || Array.isArray(ai)) { E("E13", `${path}.agentInterface`, "hub.agentInterface must be an object mapping coding agent → \"cli\"|\"mcp\""); return; }
+    for (const [ca, v] of Object.entries(ai)) {
+      if (!CODING_AGENT_KEYS.has(ca)) E("E13", `${path}.agentInterface.${ca}`, `unknown coding agent '${ca}' (expected claude, codex, or opencode)`);
+      else if (v !== "cli" && v !== "mcp") E("E13", `${path}.agentInterface.${ca}`, `agent interface must be "cli" or "mcp" (got ${JSON.stringify(v)})`);
+    }
+  };
+  if (team.hub !== undefined) checkHub(team.hub, "team.hub");
+
+  // E14 — a per-project `communication` block: the communication agent's ARTICLE config (cadence,
+  // language, output shape — read by skills/communication-agent §0). Keys are validated STRICTLY:
+  // presence of this block decides whether the agent drafts at all, so a typo'd key must fail loudly
+  // instead of silently changing what a fire does. NOTE it is deliberately NOT the §22a team-digest
+  // gate — the digest keys on team.comms presence (the channel), never on this block.
+  const COMMUNICATION_KEYS = "cadence, language, audience, tone, maxWords, sourceWindowDays, output, outputDir, repoOutputDir, includeUnreleased";
+  const checkCommunication = (raw: unknown, path: string) => {
+    const c = raw as Record<string, unknown>;
+    if (c === null || typeof c !== "object" || Array.isArray(c)) { E("E14", path, "communication must be an object"); return; }
+    for (const [k, v] of Object.entries(c)) {
+      switch (k) {
+        case "cadence": case "language": case "audience": case "tone": case "outputDir": case "repoOutputDir":
+          if (typeof v !== "string" || !v.trim()) E("E14", `${path}.${k}`, `communication.${k} must be a non-empty string`);
+          break;
+        case "maxWords": case "sourceWindowDays":
+          if (typeof v !== "number" || !Number.isInteger(v) || v < 1) E("E14", `${path}.${k}`, `communication.${k} must be an integer >= 1`);
+          break;
+        case "output":
+          if (v !== "data" && v !== "repo") E("E14", `${path}.output`, `communication.output must be "data" or "repo" (got ${JSON.stringify(v)})`);
+          break;
+        case "includeUnreleased":
+          if (typeof v !== "boolean") E("E14", `${path}.includeUnreleased`, "communication.includeUnreleased must be a boolean");
+          break;
+        default:
+          E("E14", `${path}.${k}`, `unknown communication key '${k}' (expected ${COMMUNICATION_KEYS})`);
+      }
+    }
+  };
+
+  // E15 — a per-project `notify` block: the §9 one-way webhook the daemon's human-park pings ride.
+  // On v2 team.comms is canonical (toLegacyView bridges it into notify), so a project-level block is an
+  // explicit OVERRIDE — validated strictly for the same silent-suppression reason as E14. §16/I5: env-var
+  // NAMES only; an inline webhook/secret literal is rejected outright (a copied workspace folder must
+  // never carry a credential).
+  const checkNotify = (raw: unknown, path: string) => {
+    const n = raw as Record<string, unknown>;
+    if (n === null || typeof n !== "object" || Array.isArray(n)) { E("E15", path, "notify must be an object"); return; }
+    for (const [k, v] of Object.entries(n)) {
+      switch (k) {
+        case "type":
+          if (v !== "slack" && v !== "lark") E("E15", `${path}.type`, `notify.type must be "slack" or "lark" (got ${JSON.stringify(v)})`);
+          break;
+        case "webhookEnv": case "secretEnv":
+          if (typeof v !== "string" || !ENV_NAME_RE.test(v) || /:\/\//.test(v))
+            E("E15", `${path}.${k}`, `notify.${k} must be an ENV-VAR NAME (e.g. DEVLOOP_COMMS_WEBHOOK), not a URL/secret (§16)`);
+          break;
+        case "webhook": case "secret":
+          E("E15", `${path}.${k}`, `inline notify.${k} literals never live in dev-loop.json (§16/I5) — export the value in an env var and set notify.${k}Env to its NAME`);
+          break;
+        case "events":
+          if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) E("E15", `${path}.events`, "notify.events must be an array of event-name strings");
+          break;
+        default:
+          E("E15", `${path}.${k}`, `unknown notify key '${k}' (expected type, webhookEnv, secretEnv, events)`);
+      }
+    }
+    if (!("type" in n)) E("E15", `${path}.type`, `notify.type is required ("slack" or "lark")`);
+    if (!("webhookEnv" in n)) E("E15", `${path}.webhookEnv`, "notify.webhookEnv (an ENV-VAR NAME) is required — without it the block is a dead send target");
+  };
 
   // E07 — comms: provider ∈ {slack,lark}; webhookEnv is an ENV-VAR NAME, never a URL literal (I5).
   if (team.comms !== undefined) {
@@ -167,7 +282,7 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   const seenLinearProjectId = new Map<string, string>();
   const refCount = new Map<string, string[]>(); // ref → [project keys referencing it]
   for (const [key, p] of Object.entries(projects)) {
-    validateName(key, `projects.${key}`, E, /* allowTeamIntake */ true);
+    validateName(key, `projects.${key}`, E);
     if (p?.enabled !== undefined && typeof p.enabled !== "boolean") E("E08", `projects.${key}.enabled`, "enabled must be a boolean");
     if (p?.weight !== undefined && (typeof p.weight !== "number" || !Number.isFinite(p.weight) || p.weight < 0))
       E("E08", `projects.${key}.weight`, "weight must be a finite number >= 0");
@@ -177,6 +292,9 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       else seenLinearProjectId.set(p.linearProjectId, key);
     }
     if (p?.intake !== undefined) checkIntake(p.intake, `projects.${key}.intake`);
+    if (p?.hub !== undefined) checkHub(p.hub, `projects.${key}.hub`);
+    if (p?.communication !== undefined) checkCommunication(p.communication, `projects.${key}.communication`);
+    if (p?.notify !== undefined) checkNotify(p.notify, `projects.${key}.notify`);
     const refs = Array.isArray(p?.repos) ? p.repos : [];
     if (!refs.length) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);
     for (const rr of refs) {
@@ -228,8 +346,8 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   return { errors, warnings };
 }
 
-function validateName(name: string, path: string, E: (c: string, p: string, m: string) => void, allowTeamIntake = false): void {
-  if (allowTeamIntake && name === TEAM_INTAKE_PROJECT) return; // reserved system key, permitted here only
+function validateName(name: string, path: string, E: (c: string, p: string, m: string) => void): void {
+  if (name === TEAM_INTAKE_PROJECT) { E("E11", path, `'${TEAM_INTAKE_PROJECT}' is the reserved hub intake project — it lives only as a hub.db row (team init seeds it), never in dev-loop.json`); return; }
   if (RESERVED_NAMES.has(name)) { E("E11", path, `'${name}' is a reserved name (.dev-loop/ layout); pick another key/ref`); return; }
   if (!KEY_RE.test(name)) E("E11", path, `'${name}' must match ${KEY_RE} (lowercase, no leading _/-/.)`);
 }
@@ -289,6 +407,15 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
     // intake merges FIELD-WISE (not whole-block nearest-wins): mode and todoDepthCap are orthogonal
     // knobs, so a project tuning only its cap must not silently drop a team-level "passive".
     ...(p.intake || t.intake ? { intake: { ...t.intake, ...p.intake } } : {}),
+    // hub merges FIELD-WISE too, one level deeper for agentInterface (a per-coding-agent map): a project
+    // flipping only claude must not silently drop a team-level codex setting (D8 rollback granularity).
+    ...(p.hub || t.hub ? {
+      hub: {
+        ...t.hub, ...p.hub,
+        ...(t.hub?.agentInterface || p.hub?.agentInterface
+          ? { agentInterface: { ...t.hub?.agentInterface, ...p.hub?.agentInterface } } : {}),
+      },
+    } : {}),
   };
 }
 
@@ -338,6 +465,13 @@ export interface LegacyProjectsConfig {
 
 export function toLegacyView(ws: Workspace): LegacyProjectsConfig {
   const t = ws.file.team;
+  // The E09 hard-fail seam: a blank linearTeam LOADS (warning, so team set/add-project/doctor can repair
+  // it) but must never reach a running agent — an unscoped Linear query pollutes other teams' boards.
+  // toLegacyView is the one projection every runtime consumer reads (the team scheduler's teamMain,
+  // resolve-project's loadProjectsConfig — which already catches WsValidationError and degrades loudly),
+  // so throwing here fails exactly the paths that would exercise the backend, and nothing else.
+  if (t.backend === "linear" && !(t.linearTeam ?? "").trim())
+    throw new WsValidationError([{ code: "E09", path: "team.linearTeam", message: `backend:"linear" has a blank team.linearTeam — a fire cannot target a Linear team. Fill it: dev-loop team set team.linearTeam "<Team Name>"` }], ws.filePath);
   const projects: Record<string, Record<string, unknown>> = {};
   for (const key of Object.keys(ws.file.projects)) {
     const p = ws.file.projects[key];
@@ -370,6 +504,7 @@ export function toLegacyView(ws: Workspace): LegacyProjectsConfig {
       docSystem: eff.docSystem,
       reports: eff.reports,
       intake: eff.intake,
+      hub: eff.hub,
       agents: p.agents,
       models: p.models,
       efforts: p.efforts,

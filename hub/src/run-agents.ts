@@ -9,12 +9,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
-import { toLegacyView, WsValidationError, primaryRepo, type Workspace } from "./team-config.ts";
-import { rotationCandidates, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
+import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, type Workspace, type HubBlock, type AgentInterface } from "./team-config.ts";
+import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
-import { findProject, AGENT_HANDLES } from "./seed.ts";
+import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -22,11 +22,14 @@ import type { DatabaseSync } from "node:sqlite";
 const VALID_AGENTS = AGENT_HANDLES;
 type Agent = (typeof VALID_AGENTS)[number];
 
-// A coding-agent CLI the scheduler can drive. `claude` + `codex` are fully wired (the scheduler
-// self-injects the hub MCP for them); `opencode` is recognized everywhere in config (per-agent
-// selection + per-coding-agent defaults) and launched best-effort via `opencode run` — its MCP is
-// registered through the operator's merged opencode config, not inline (see docs/PORTABILITY.md).
-// Adding a CLI = extend this union + DEFAULT_LAUNCH_PROFILES + commandFor().
+// A coding-agent CLI the scheduler can drive. `claude` + `codex` are fully wired; `opencode` is
+// recognized everywhere in config (per-agent selection + per-coding-agent defaults) and launched
+// best-effort via `opencode run` — its MCP is registered through the operator's merged opencode
+// config, not inline (see docs/PORTABILITY.md). On backend:"service" how a fire reaches the hub is
+// the D8 agent interface (hub.agentInterface, resolved per coding agent): "cli" fires get NO hub MCP
+// injection — the agent calls the PATH-installed `dev-loop` write verbs, identity riding the spawn
+// env — while "mcp" fires keep the scheduler-injected dev-loop-hub server (claude inline JSON /
+// codex -c overrides). Adding a CLI = extend this union + DEFAULT_LAUNCH_PROFILES + commandFor().
 type CodingAgent = "claude" | "codex" | "opencode";
 type RunnerCli = CodingAgent; // the --cli flag / DEVLOOP_RUNNER_CLI sets the run-wide DEFAULT coding agent
 const CODING_AGENTS: readonly CodingAgent[] = ["claude", "codex", "opencode"];
@@ -153,6 +156,7 @@ type ProjectsConfig = {
     defaultCodingAgent?: string;                                       // project-wide level-1 default coding agent
     codingAgentDefaults?: Partial<Record<CodingAgent, CodingAgentDefault>>; // per-coding-agent default model + effort
     agents?: Partial<Record<Agent, AgentLaunchConfig>>;               // per-agent: codingAgent + model + effort
+    hub?: HubBlock;                                                    // D8: agentInterface per coding agent ("cli"|"mcp"; service only)
     // Back-compat per-agent maps (still honored, below agents{} / above codingAgentDefaults):
     models?: Partial<Record<Agent, ModelConfigValue>>;
     efforts?: Partial<Record<Agent, EffortConfigValue>>;
@@ -185,6 +189,7 @@ type Options = {
   codexSafe: boolean;
   maxFires: number;     // 0 = unlimited; else stop after N total fires (cost guard)
   changeGate: boolean;  // R1: skip spawning a gated inward agent when neither repo HEAD nor the board moved since its last fire (service backend only) — saves the full-turn cost of a fire that would just no-op
+  changeGateTtlMs: number; // R1a: quiet-board TTL for the pm/qa REVIEW tiers — after this long without a fire, a gated pm/qa fire runs even on an unchanged key (0 = never; the pure gate for them too)
   fireTimeoutMs: number; // 0 = none; else SIGTERM (then SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
   staggerMs: number;    // boot stagger between the initial slot fires (0 = all at once)
   mcpConfig?: string;   // claude: explicit MCP config; defaults to <cwd>/.mcp.json if present
@@ -234,7 +239,12 @@ Options:
   --change-gate               skip spawning a gated inward agent (pm/qa/dev/senior-dev/junior-dev/architect) when
                               neither any repo HEAD nor the hub board moved since its last fire — the biggest cost
                               saver on a quiet loop (service backend only; the agents already no-op in that case,
-                              this just avoids paying for the full turn to discover it)
+                              this just avoids paying for the full turn to discover it). pm/qa are REVIEW tiers
+                              whose lens-rotation / coverage-expansion work is at its best precisely when nothing
+                              changed, so an unchanged board only DEFERS them: after --change-gate-ttl without a
+                              fire they run once anyway (dev-tier + architect keep the pure gate)
+  --change-gate-ttl <dur>     how long a quiet board may defer a gated pm/qa fire before it runs anyway
+                              (default 4h; 0 = defer forever — the pure gate for pm/qa too)
   --fire-timeout <dur>        kill a fire that outlives this (SIGTERM, then SIGKILL after 10s; default 1h; 0 = none)
   --stagger <dur>             delay between the initial slot fires so a cold boot doesn't launch every agent at once (default 20s; 0 = simultaneous)
   --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
@@ -315,6 +325,7 @@ function parseArgs(argv: string[]): Options {
     codexSafe: false,
     maxFires: 0,
     changeGate: false,
+    changeGateTtlMs: 4 * 60 * 60_000,
     fireTimeoutMs: 60 * 60_000,
     staggerMs: 20_000,
     extraArgs,
@@ -354,6 +365,7 @@ function parseArgs(argv: string[]): Options {
       if (!Number.isInteger(opts.maxFires) || opts.maxFires < 0) die("--max-fires must be a non-negative integer (0 = unlimited)");
     }
     else if (a === "--change-gate") opts.changeGate = true;
+    else if (a === "--change-gate-ttl") { const v = next(); opts.changeGateTtlMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = pure gate for pm/qa too
     else if (a === "--fire-timeout") { const v = next(); opts.fireTimeoutMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = disabled (parseDuration rejects non-positive)
     else if (a === "--stagger") { const v = next(); opts.staggerMs = v.trim() === "0" ? 0 : parseDuration(v); }
     else if (a === "--codex-safe") opts.codexSafe = true;
@@ -490,7 +502,14 @@ function stripFrontmatter(raw: string): string {
   return end > 0 ? lines.slice(end + 1).join("\n").trimStart() : raw;
 }
 
-function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile, teamScope?: { enabledProjects: string[] }): string {
+// Team-scope fire context (M4 stewards): the enabled-project list plus the team comms channel fact.
+// teamComms is load-bearing for communication fires — the §22a director digest is gated on TEAM.COMMS
+// presence (the channel), NOT on any per-project "communication" block (that block only configures
+// article drafting, and `_team` never has one — keying the digest on it silently suppressed the
+// director's one message a day).
+type TeamScope = { enabledProjects: string[]; teamComms?: { provider: string; webhookEnv: string } | null };
+
+function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile, teamScope?: TeamScope): string {
   const skill = join(opts.root, "skills", `${agent}-agent`, "SKILL.md");
   if (!existsSync(skill)) die(`skill file not found for '${agent}': ${skill}. Pass --root <dev-loop checkout>.`, 1);
   const split = runtimeDevSplit(opts);
@@ -500,9 +519,19 @@ function readPrompt(opts: Options, agent: Agent, project: string, profile: Launc
     .replaceAll("${DEVLOOP_DATA_DIR:-~/.dev-loop}", opts.dataDir)
     .replaceAll("${DEVLOOP_DATA_DIR}", opts.dataDir)
     .replaceAll("${DEVLOOP_PROJECTS_JSON}", projectsPath(opts.dataDir));
+  const commsLine = teamScope
+    ? teamScope.teamComms
+      ? `- team comms: ${teamScope.teamComms.provider} (webhook env ${teamScope.teamComms.webhookEnv}) — \`dev-loop notify\` is wired\n`
+      : `- team comms: not configured — \`dev-loop notify\` has no channel\n`
+    : "";
+  const digestLine = teamScope && agent === "communication"
+    ? teamScope.teamComms
+      ? `- §22a digest gate: the team comms line above IS the digest gate — compose and push the team daily digest even when no project carries a per-project "communication" block (that block governs article drafting only, never the digest)\n`
+      : `- §22a digest gate: no team comms channel — skip the digest push and surface the missing channel in your report\n`
+    : "";
   const teamLines = teamScope
     ? `- team-scope: true (this is a TEAM-level fire — iterate/route across the enabled projects below, do not act on a single project only)
-- enabled projects: ${teamScope.enabledProjects.join(", ")}\n`
+- enabled projects: ${teamScope.enabledProjects.join(", ")}\n${commsLine}${digestLine}`
     : "";
   return `You are launched by dev-loop's own scheduler. Run exactly one fresh fire for this agent, then stop.
 
@@ -533,18 +562,21 @@ const hubNode = findCompatibleNode() ?? die(`dev-loop-hub MCP needs Node >= ${MI
 const tomlString = (s: string): string => JSON.stringify(s);
 const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
 
-function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string): { command: string; args: string[] } {
+function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string, iface: AgentInterface): { command: string; args: string[] } {
   const devSplit = runtimeDevSplit(opts) ? "true" : "false";
-  // MCP wiring is BACKEND-dependent (§18). Only backend:"service" needs the dev-loop-hub MCP; a
-  // linear/local project instead needs the operator's OWN MCP config to apply (e.g. the Linear MCP),
-  // so we must NOT inject the hub or pass --strict-mcp-config there — that would strip the Linear MCP
-  // and starve the agents of the board. An explicit --mcp-config / <cwd>/.mcp.json always wins.
-  const hubInject = backend === "service";
+  // MCP wiring is BACKEND-dependent (§18) AND interface-dependent (D8/D9). Only backend:"service" needs
+  // the dev-loop-hub MCP; a linear/local project instead needs the operator's OWN MCP config to apply
+  // (e.g. the Linear MCP), so we must NOT inject the hub or pass --strict-mcp-config there — that would
+  // strip the Linear MCP and starve the agents of the board. On service, interface="cli" fires get NO
+  // injection either: the agent reaches the board through the PATH-installed `dev-loop` write verbs,
+  // identity riding the spawn env (runAgent). An explicit --mcp-config always wins on claude.
+  const hubInject = backend === "service" && iface === "mcp";
   // The CLI is the per-AGENT resolved coding agent (level 1), NOT the run-wide --cli — so one run can
   // mix claude/codex/opencode panes. Model + effort (level 2) are rendered in this coding agent's format.
   if (profile.codingAgent === "claude") {
-    // explicit --mcp-config file wins; else on service inject the hub inline (fresh project needs no
-    // .mcp.json); else (linear/local) pass NOTHING so claude's normal config — incl. the Linear MCP — applies.
+    // explicit --mcp-config file wins; else on service+interface="mcp" inject the hub inline (fresh
+    // project needs no .mcp.json); else (linear/local, or service on the D9 "cli" interface) pass
+    // NOTHING — claude's normal config applies and a "cli" fire talks to the hub via `dev-loop`.
     const mcpArg = opts.mcpConfig ?? (hubInject ? JSON.stringify({
       mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb, DEVLOOP_DEV_SPLIT: devSplit } } },
     }) : undefined);
@@ -560,8 +592,8 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
     };
   }
   if (profile.codingAgent === "codex") {
-    // service ⇒ inject the hub via -c overrides; linear/local ⇒ omit them and let codex's own
-    // ~/.codex/config.toml MCP servers (which the operator must wire the Linear MCP into) apply.
+    // service+interface="mcp" ⇒ inject the hub via -c overrides; linear/local (or a "cli"-flipped
+    // codex, post-P8) ⇒ omit them and let codex's own ~/.codex/config.toml MCP servers apply.
     const hubOverrides = hubInject ? [
       "-c", `mcp_servers.dev-loop-hub.command=${tomlString(hubNode)}`,
       "-c", `mcp_servers.dev-loop-hub.args=${tomlStringArray([serverEntry])}`,
@@ -637,7 +669,9 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
 const GATED_AGENTS = new Set<Agent>(["pm", "qa", "dev", "senior-dev", "junior-dev", "architect"]);
 // Stewardship agents (M4): in team mode these fire at TEAM scope (cwd = workspace root, project = _team/"",
 // DEVLOOP_TEAM_SCOPE=1) and iterate/route across the enabled projects, rather than rotating one project.
-const STEWARD_AGENTS = new Set<Agent>(["sweep", "ops", "reflect", "communication"]);
+// Derived from seed.ts's STEWARD_HANDLES (the A2 pattern) — the same set the D1 project-override matrix
+// (agentops.resolveProjectOverride) grants cross-project access to, so scheduler and hub cannot drift.
+const STEWARD_AGENTS = new Set<Agent>(STEWARD_HANDLES);
 function repoPathsFor(cfg: ProjectsConfig | null, project: string): string[] {
   const p = cfg?.projects?.[project] as { repoPath?: string; repos?: { path?: string }[] } | undefined;
   if (p?.repos?.length) return p.repos.map((r) => r.path).filter((x): x is string => !!x);
@@ -657,7 +691,31 @@ function changeKey(opts: Options, cfg: ProjectsConfig | null, project: string): 
   });
   return `${cursor}|${heads.join(",")}`;
 }
-type GateState = Record<string, string>;
+// R1a — gate state per gated slot ("<agent>" fixed-project / "<agent>:<project>" team): the change-key the
+// slot last fired on plus WHEN it fired. pm/qa are REVIEW tiers (PM lens-rotation, QA coverage-expansion)
+// whose best work happens precisely when nothing changed — for them an unchanged key only DEFERS the fire:
+// once opts.changeGateTtlMs elapses since the last fire, the gate lets one through anyway (which re-arms
+// it). The dev tier + architect keep the PURE gate — an unchanged key means byte-identical inputs and a
+// guaranteed no-op. Pre-TTL state files stored a bare key string — read it as firedAt:0 (TTL long expired
+// ⇒ the next review fire runs; fails open, same as every other gate edge).
+const REVIEW_GATED_AGENTS = new Set<Agent>(["pm", "qa"]);
+type GateEntry = { key: string; firedAt: number };
+type GateState = Record<string, GateEntry | string>;
+function gateEntry(state: GateState, slot: string): GateEntry | null {
+  const v = state[slot];
+  if (v === undefined) return null;
+  return typeof v === "string" ? { key: v, firedAt: 0 } : v;
+}
+// Decide whether the gate SKIPS this fire. null key (no hub row / git error) never skips (fails open).
+function gateSkips(opts: Options, state: GateState, slot: string, agent: Agent, key: string | null): boolean {
+  if (key === null) return false;
+  const e = gateEntry(state, slot);
+  if (!e || e.key !== key) return false;                 // the code or the board moved ⇒ fire
+  if (REVIEW_GATED_AGENTS.has(agent) && opts.changeGateTtlMs > 0 && Date.now() - e.firedAt >= opts.changeGateTtlMs)
+    return false;                                        // quiet-board TTL elapsed ⇒ the review fire runs anyway
+  return true;
+}
+function gateRecord(state: GateState, slot: string, key: string): void { state[slot] = { key, firedAt: Date.now() }; }
 function gateStatePath(opts: Options, project: string): string { return join(opts.dataDir, project, "scheduler-gate.json"); }
 function loadGateState(opts: Options, project: string): GateState {
   try { return JSON.parse(readFileSync(gateStatePath(opts, project), "utf8")) as GateState; } catch { return {}; }
@@ -669,14 +727,20 @@ function saveGateState(opts: Options, project: string, state: GateState): void {
   } catch { /* best-effort — a lost gate write just means the next fire runs (fails open) */ }
 }
 
-async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string, teamScope?: { enabledProjects: string[] }): Promise<number> {
+async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string, teamScope?: TeamScope): Promise<number> {
   // For a team-scoped steward fire the launch profile resolves against a representative project (the first
   // enabled one) since `project` is "" / "_team"; delivery fires resolve against their own project.
   const profileProject = teamScope && teamScope.enabledProjects.length ? teamScope.enabledProjects[0] : project;
   const profile = resolveLaunchProfile(opts, cfg, profileProject, agent);
   const prompt = readPrompt(opts, agent, project, profile, teamScope);
   const backend = (cfg?.projects?.[profileProject] as { backend?: string } | undefined)?.backend ?? "linear";
-  const { command, args } = commandFor(opts, agent, project, prompt, profile, backend);
+  // D8 agent interface (service only; meaningless elsewhere): "cli" fires get no hub MCP injection.
+  const iface = agentInterfaceFor((cfg?.projects?.[profileProject] as { hub?: HubBlock } | undefined)?.hub, profile.codingAgent);
+  const { command, args } = commandFor(opts, agent, project, prompt, profile, backend, iface);
+  // This env block IS the identity transport for interface="cli" fires (D8): the `dev-loop` write layer
+  // resolves the actor from DEVLOOP_ACTOR, the project from DEVLOOP_PROJECT, the SoR from DEVLOOP_HUB_DB,
+  // and treats DEVLOOP_DEV_SPLIT/DEVLOOP_TEAM_SCOPE as the fire markers behind its operator-write guard —
+  // the same values both MCP injections carry. Removing any of these strands every "cli" fire (exit 4).
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     DEVLOOP_ACTOR: agent,
@@ -699,7 +763,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
     const intakeMode = (cfg?.projects?.[project] as { intake?: { mode?: string } } | undefined)?.intake?.mode;
-    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""}`);
+    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
     return 0;
   }
@@ -853,7 +917,7 @@ async function main(): Promise<void> {
   const gateActive = opts.changeGate && backend === "service";
   if (opts.changeGate && !gateActive) console.warn(`dev-loop run: --change-gate ignored on backend:"${backend ?? "linear"}" (needs the service hub board cursor)`);
   const gateState = gateActive ? loadGateState(opts, project) : {};
-  if (gateActive) console.log(`dev-loop run: change-gate ON for ${[...GATED_AGENTS].filter((g) => opts.agents.includes(g)).join(", ") || "(no gated agents selected)"}`);
+  if (gateActive) console.log(`dev-loop run: change-gate ON for ${[...GATED_AGENTS].filter((g) => opts.agents.includes(g)).join(", ") || "(no gated agents selected)"} (pm/qa quiet-board TTL ${opts.changeGateTtlMs > 0 ? formatDuration(opts.changeGateTtlMs) : "off — pure gate"})`);
   console.log(`dev-loop run: cli=${opts.cli} project=${project} cwd=${cwd}`);
   console.log(`dev-loop run: root=${opts.root} data=${opts.dataDir} hubDb=${opts.hubDb}`);
   const cfgDevSplit = cfg?.projects?.[project]?.devSplit === true;
@@ -917,10 +981,11 @@ async function main(): Promise<void> {
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
       // R1: for a gated agent, if neither the code nor the board moved since its last fire, skip the spawn
-      // entirely (the agent would just no-op). fails open: a null key (no hub / git error) never skips.
+      // entirely (the agent would just no-op) — except a pm/qa review fire past the quiet-board TTL (R1a).
+      // fails open: a null key (no hub / git error) never skips.
       if (gateActive && GATED_AGENTS.has(slot.agent)) {
         const key = changeKey(opts, cfg, project);
-        if (key !== null && gateState[slot.agent] === key) {
+        if (gateSkips(opts, gateState, slot.agent, slot.agent, key)) {
           slot.nextAt = now + opts.intervals[slot.agent];
           continue; // no change since last fire ⇒ don't pay for a no-op turn
         }
@@ -932,11 +997,12 @@ async function main(): Promise<void> {
         .finally(() => {
           slot.running = false;
           slot.nextAt = Date.now() + opts.intervals[slot.agent];
-          // Record the POST-fire change-key so the next tick compares against the state this fire left behind
-          // (an agent's own writes bump the key once, then it settles → skips until the NEXT external change).
+          // Record the POST-fire change-key (+ the fire time, the R1a TTL anchor) so the next tick compares
+          // against the state this fire left behind (an agent's own writes bump the key once, then it
+          // settles → skips until the NEXT external change or, for pm/qa, the TTL).
           if (gateActive && GATED_AGENTS.has(slot.agent)) {
             const key = changeKey(opts, cfg, project);
-            if (key !== null) { gateState[slot.agent] = key; saveGateState(opts, project, gateState); }
+            if (key !== null) { gateRecord(gateState, slot.agent, key); saveGateState(opts, project, gateState); }
           }
           if (stopping && activeChildren.size === 0) process.exit(0);
         });
@@ -959,11 +1025,24 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
   const backend = ws.file.team.backend;
 
-  // `--project` filter: restrict rotation to a single named project (must exist + be enabled).
+  // `--project` filter: restrict DELIVERY rotation to a single named project. It must exist + be enabled;
+  // a weight:0 target is NOT an error — that just pauses delivery (the block below decides), and stewards
+  // are never narrowed by the filter either way.
+  if (opts.project) {
+    const p = ws.file.projects[opts.project];
+    if (!p) die(`--project '${opts.project}' is not a project in team '${ws.file.team.key}'`, 2);
+    if (p.enabled === false) die(`--project '${opts.project}' is disabled (enabled:false) in team '${ws.file.team.key}'`, 2);
+  }
   const allCandidates = rotationCandidates(ws);
   const candidates = opts.project ? allCandidates.filter((c) => c.key === opts.project) : allCandidates;
-  if (opts.project && !candidates.length) die(`--project '${opts.project}' is not an enabled, positively-weighted project in team '${ws.file.team.key}'`, 2);
-  if (!candidates.length) die(`no enabled, positively-weighted project to fire in team '${ws.file.team.key}' (all disabled or weight:0?)`, 2);
+  // weight:0 = maintenance mode (T3.2): delivery rotation pauses but stewards keep covering the project —
+  // so an all-weight:0 team still runs its selected stewards. Refuse only when NOTHING could ever fire.
+  const stewardsSelected = opts.agents.some((a) => STEWARD_AGENTS.has(a));
+  if (!candidates.length) {
+    const scope = opts.project ? `--project '${opts.project}' is weight:0` : `no enabled, positively-weighted project in team '${ws.file.team.key}' (all disabled or weight:0?)`;
+    if (!stewardsSelected || !stewardProjects(ws).length) die(`${scope} — nothing to fire (weight:0 pauses delivery; only stewards keep covering it)`, 2);
+    console.warn(`dev-loop run: delivery rotation paused — ${scope} (weight:0 pauses delivery only); steward fires continue`);
+  }
 
   console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
   applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence);
@@ -990,7 +1069,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       for (const agent of opts.agents) {
         const { pick, cur } = smoothWRRStep(candidates, preview[agent] ?? {});
         preview[agent] = cur as CursorMap;
-        console.log(`  ${String(i + 1).padStart(3)}  ${agent} → ${pick}`);
+        console.log(`  ${String(i + 1).padStart(3)}  ${agent} → ${pick ?? "(delivery paused)"}`);
       }
     }
     return;
@@ -1014,37 +1093,62 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   // eats the fire opportunity of an active sibling.
   const gateActive = opts.changeGate && backend === "service";
   if (opts.changeGate && !gateActive) console.warn(`dev-loop run: --change-gate ignored on backend:"${backend}" (needs the service hub board cursor)`);
-  const gateState: Record<string, string> = gateActive ? loadGateState(opts, "team") : {};
+  if (gateActive) console.log(`dev-loop run: change-gate ON (pm/qa quiet-board TTL ${opts.changeGateTtlMs > 0 ? formatDuration(opts.changeGateTtlMs) : "off — pure gate"})`);
+  const gateState: GateState = gateActive ? loadGateState(opts, "team") : {};
   const gateKey = (agent: Agent, project: string) => `${agent}:${project}`;
 
-  // The enabled-project list a steward fire iterates over (also drives the launch-profile representative).
-  const enabledProjects = () => candidates.map((c) => c.key);
+  // The project list a steward fire iterates over (it also drives the launch-profile representative):
+  // every ENABLED project at ANY weight — weight:0 pauses DELIVERY only (T3.2) — and never narrowed by
+  // --project (a steward fire is team-scope, not part of the rotation).
+  const stewardScope = () => stewardProjects(ws);
   // Team scope for a steward: cwd = workspace root, project = _team (service) / "" (linear).
-  const stewardProject = backend === "service" ? "_team" : "";
+  const stewardProject = backend === "service" ? TEAM_INTAKE_PROJECT : "";
+
+  // Pick-time seed guard (service): a config project with no hub.db row boots the hub MCP straight into
+  // its G2 refusal — a full LLM turn with zero board access. The legacy fixed-project path dies at startup
+  // (main() above); a rotating team must instead SKIP the unseeded project (warn once per project per
+  // process) and keep its siblings firing. Fails open on an unreadable hub db — the fire surfaces that.
+  const unseededWarned = new Set<string>();
+  const seededInHub = (project: string): boolean => {
+    if (backend !== "service") return true;
+    if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
+    if (!fireDb) return true;
+    try { return !!findProject(fireDb, project); } catch { return true; }
+  };
+  const warnUnseeded = (agent: Agent, project: string): void => {
+    if (unseededWarned.has(project)) return;
+    unseededWarned.add(project);
+    console.error(`[${agent}] project '${project}' is backend:"service" but not seeded in ${opts.hubDb} — ${opts.dryRun ? "real fires would get no hub tools" : "skipping its fires (siblings keep rotating)"}; seed it once: dev-loop seed ${project} "<Project Name>" <UNIQUE_PREFIX>`);
+  };
 
   // A single fire for one agent. Stewards (M4) fire at TEAM scope (no rotation). Delivery agents rotate:
-  // pick a project (skipping gated-unchanged ones up to one full rotation), resolve its cwd, and run.
+  // pick a project (skipping gated-unchanged + unseeded ones up to one full rotation), resolve its cwd, and run.
   const fireAgentOnce = async (agent: Agent): Promise<void> => {
     if (STEWARD_AGENTS.has(agent)) {
-      await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: enabledProjects() });
+      // teamComms reads through `ws` at fire time so a hot-reloaded comms block takes effect next fire.
+      await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: stewardScope(), teamComms: ws.file.team.comms ?? null });
       return;
     }
     let project: string | null = null;
     for (let attempt = 0; attempt < candidates.length; attempt++) {
       const p = pickProject(agent); // advances the shared cursor every attempt (skip-advance)
+      if (!seededInHub(p)) {
+        warnUnseeded(agent, p);
+        if (!opts.dryRun) continue; // skip the token burn; a dry-run previews on (same shape as the legacy preflight)
+      }
       if (gateActive && GATED_AGENTS.has(agent)) {
         const key = changeKey(opts, cfg, p);
-        if (key !== null && gateState[gateKey(agent, p)] === key) continue; // unchanged ⇒ skip, try next candidate
+        if (gateSkips(opts, gateState, gateKey(agent, p), agent, key)) continue; // unchanged (and inside the pm/qa TTL) ⇒ skip, try next candidate
       }
       project = p; break;
     }
-    if (project === null) return; // every candidate gated-unchanged this round ⇒ no fire
+    if (project === null) return; // every candidate gated-unchanged / unseeded this round ⇒ no fire
     const cwd = cwdFor(project);
     if (!cwd || !existsSync(cwd)) { console.error(`[${agent}] project '${project}' has no usable repo cwd (${cwd ?? "none"}); skipping`); return; }
     await runAgent(opts, cfg, agent, project, cwd);
     if (gateActive && GATED_AGENTS.has(agent)) {
       const key = changeKey(opts, cfg, project);
-      if (key !== null) { gateState[gateKey(agent, project)] = key; saveGateState(opts, "team", gateState); }
+      if (key !== null) { gateRecord(gateState, gateKey(agent, project), key); saveGateState(opts, "team", gateState); }
     }
   };
 

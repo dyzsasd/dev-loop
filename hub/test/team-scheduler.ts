@@ -22,6 +22,7 @@ const runAgents = (args: string[], cwd: string, extra: Record<string, string> = 
 const planLines = (out: string) => out.split("\n").filter((l) => /^\s*\d+\s+\S+\s*→/.test(l)).map((l) => l.split("→")[1].trim());
 
 (async () => {
+const svcWs = join(tmp, "svc"); // service workspace for the pick-time seed guard (daemon stopped in finally)
 try {
   // ── fixture: workspace with alpha(w2) + beta(w1), both with a repo ──
   const ws = join(tmp, "ws");
@@ -107,6 +108,143 @@ try {
     writeFileSync(cfgPath, JSON.stringify(c, null, 2));
   }
 
+  // ── T3.2 weight:0 = maintenance mode: excluded from delivery rotation, KEPT in steward coverage ──
+  {
+    const c = JSON.parse(readFileSync(cfgPath, "utf8"));
+    c.projects.beta.weight = 0;
+    writeFileSync(cfgPath, JSON.stringify(c, null, 2));
+    ok(planLines(runAgents(["--agents", "pm", "--plan", "4"], ws).out).join(" ") === "alpha alpha alpha alpha",
+      "a weight:0 project is never picked for delivery");
+    // The steward project list rides the prompt ("enabled projects: …"), which dry-run masks — dump the
+    // real argv (the prompt is the last arg) through a stub CLI instead.
+    const promptFile = join(tmp, "steward-prompt.txt");
+    const promptDump = join(tmp, "prompt-claude.sh");
+    writeFileSync(promptDump, `#!/bin/sh\nprintf '%s\\n' "$@" > ${promptFile}\nexit 0\n`); chmodSync(promptDump, 0o755);
+    runAgents(["--agents", "sweep", "--once"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
+    ok(/enabled projects: alpha, beta/.test(readFileSync(promptFile, "utf8")),
+      "a weight:0 project STAYS in steward enumeration (delivery paused, stewards continue — T3.2)");
+    // --project narrows delivery rotation but must NOT narrow team-scope steward coverage.
+    rmSync(promptFile, { force: true });
+    runAgents(["--agents", "sweep", "--once", "--project", "alpha"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
+    ok(/enabled projects: alpha, beta/.test(readFileSync(promptFile, "utf8")),
+      "--project does not narrow steward coverage (a steward fire is team-scope)");
+    // --project targeting the weight:0 project itself: delivery-only refuses, but a steward run continues
+    // (the filter is delivery-only — weight:0 is a pause, not an error).
+    const w0 = runAgents(["--agents", "sweep", "--once", "--project", "beta"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
+    ok(w0.code === 0 && /delivery rotation paused/.test(w0.out),
+      "--project <weight:0> + a steward → run continues with delivery paused");
+    ok(runAgents(["--agents", "pm", "--plan", "2", "--project", "beta"], ws).code !== 0,
+      "--project <weight:0> + delivery-only agents → run refuses");
+    ok(runAgents(["--agents", "sweep", "--once", "--project", "nope"], ws).code !== 0,
+      "--project <unknown> still refuses (must name a real project)");
+    // all-weight:0: a delivery-only run refuses; a run with stewards continues (delivery paused).
+    c.projects.alpha.weight = 0;
+    writeFileSync(cfgPath, JSON.stringify(c, null, 2));
+    ok(runAgents(["--agents", "pm", "--plan", "2"], ws).code !== 0, "all-weight:0 + delivery-only agents → run refuses");
+    const paused = runAgents(["--agents", "pm,sweep", "--once"], ws, { DEVLOOP_CLAUDE_BIN: fakeBin });
+    ok(paused.code === 0 && /delivery rotation paused/.test(paused.out),
+      "all-weight:0 + stewards selected → run continues with delivery paused");
+    c.projects.alpha.weight = 2; c.projects.beta.weight = 1;
+    writeFileSync(cfgPath, JSON.stringify(c, null, 2));
+  }
+
+  // ── §22a digest gate re-key: a team-scope fire carries the TEAM.COMMS fact, so the digest can never
+  //    be silently suppressed by a missing per-project "communication" block (agents P5) ──
+  {
+    const promptFile = join(tmp, "comms-prompt.txt");
+    const promptDump = join(tmp, "comms-claude.sh");
+    writeFileSync(promptDump, `#!/bin/sh\nprintf '%s\\n' "$@" > ${promptFile}\nexit 0\n`); chmodSync(promptDump, 0o755);
+    // no team.comms → the fire is told the channel is missing and to surface it, not to push
+    runAgents(["--agents", "communication", "--once"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
+    let prompt = readFileSync(promptFile, "utf8");
+    ok(/team comms: not configured/.test(prompt), "a team-scope fire without team.comms carries the 'not configured' fact");
+    ok(/§22a digest gate: no team comms channel — skip the digest push/.test(prompt),
+      "a communication fire without team.comms is told to skip the digest push (and surface the gap)");
+    // team.comms present → the digest gate is THIS, not any per-project communication block (none exists here)
+    ok((team(["set", "team.comms.provider", "slack"], ws).status ?? 1) === 0, "team set wires team.comms for the digest-gate probe");
+    rmSync(promptFile, { force: true });
+    runAgents(["--agents", "communication", "--once"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
+    prompt = readFileSync(promptFile, "utf8");
+    ok(/team comms: slack \(webhook env DEVLOOP_COMMS_WEBHOOK\)/.test(prompt),
+      "a team-scope fire with team.comms carries provider + webhook env NAME (never the URL)");
+    ok(/§22a digest gate: the team comms line above IS the digest gate/.test(prompt) && /article drafting only/.test(prompt),
+      "a communication fire is told the digest keys on team.comms — a missing per-project communication block never suppresses it");
+    // a non-communication steward gets the comms fact but NOT the §22a digest directive
+    rmSync(promptFile, { force: true });
+    runAgents(["--agents", "sweep", "--once"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
+    prompt = readFileSync(promptFile, "utf8");
+    ok(/team comms: slack/.test(prompt) && !/§22a digest gate/.test(prompt),
+      "other stewards see the comms fact but no digest directive (communication-only)");
+    // drop comms again so later fixtures stay byte-identical to before this block
+    const cComms = JSON.parse(readFileSync(cfgPath, "utf8"));
+    delete cComms.team.comms;
+    writeFileSync(cfgPath, JSON.stringify(cComms, null, 2));
+  }
+
+  // ── pick-time seed guard (service): an unseeded project never fires, warned ONCE, siblings unaffected ──
+  {
+    team(["init", "--dir", svcWs, "--key", "svc-sched", "--backend", "service"], tmp);
+    mkdirSync(join(svcWs, "rg"), { recursive: true }); mkdirSync(join(svcWs, "rd"), { recursive: true });
+    team(["add-project", "gamma", "--weight", "1"], svcWs); // auto-seeds its hub row (service)
+    team(["add-repo", "rg", "--project", "gamma", "--path", "rg", "--role", "primary"], svcWs);
+    // delta: a config entry with NO hub row — add-project now AUTO-SEEDS on service, so stage the drift
+    // by hand (the shape still arrives via hand-edited configs / copied workspaces; weight 2 ⇒ delta is
+    // every agent's FIRST pick, the token-burn shape the guard closes).
+    {
+      const c2 = JSON.parse(readFileSync(join(svcWs, "dev-loop.json"), "utf8"));
+      c2.projects.delta = { weight: 2, repos: [] };
+      writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c2, null, 2));
+    }
+    team(["add-repo", "rd", "--project", "delta", "--path", "rd", "--role", "primary"], svcWs);
+    const r = runAgents(["--agents", "pm,qa", "--once"], svcWs, { DEVLOOP_CLAUDE_BIN: fakeBin });
+    ok(r.code === 0, "an unseeded sibling does not fail the run");
+    const warns = r.out.match(/project 'delta' is backend:"service" but not seeded/g) ?? [];
+    ok(warns.length === 1, `the unseeded project is warned exactly ONCE per process (got ${warns.length})`);
+    ok(/dev-loop seed delta/.test(r.out), "the warning names the exact seed command");
+    const svcRows = readFileSync(join(svcWs, ".dev-loop", "team", "fires.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    ok(svcRows.length === 2 && svcRows.every((row: { project: string }) => row.project === "gamma"),
+      "no fire launched for the unseeded project; both fires went to the seeded sibling (skip-advance)");
+
+    // ── D8/D9 in TEAM mode: a service claude fire on the default interface ("cli") gets NO hub MCP
+    //    injection, and the spawn env carries the FULL identity the dev-loop write layer needs —
+    //    the env block IS the identity transport for interface="cli" fires. Pause delta (weight 0)
+    //    so the rotation deterministically lands the probe fire on the seeded gamma. ──
+    {
+      const c2 = JSON.parse(readFileSync(join(svcWs, "dev-loop.json"), "utf8"));
+      c2.projects.delta.weight = 0;
+      writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c2, null, 2));
+    }
+    const argsFile = join(tmp, "svc-fire-args.txt");
+    const envFile = join(tmp, "svc-fire-env.txt");
+    const probeBin = join(tmp, "probe-claude.sh");
+    writeFileSync(probeBin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${argsFile}\nenv | grep '^DEVLOOP' > ${envFile}\necho 'fire ok'\nexit 0\n`); chmodSync(probeBin, 0o755);
+    const probed = runAgents(["--agents", "pm", "--once"], svcWs, { DEVLOOP_CLAUDE_BIN: probeBin });
+    ok(probed.code === 0, "service team-mode claude fire (interface=cli default) exits 0");
+    const fireArgs = readFileSync(argsFile, "utf8");
+    ok(!/--mcp-config/.test(fireArgs) && !/--strict-mcp-config/.test(fireArgs) && !/dev-loop-hub/.test(fireArgs),
+      "the team-mode claude fire carries NO hub MCP injection (D9: claude defaults to the CLI interface)");
+    const fireEnv = readFileSync(envFile, "utf8");
+    ok(/^DEVLOOP_ACTOR=pm$/m.test(fireEnv) && /^DEVLOOP_PROJECT=gamma$/m.test(fireEnv),
+      "the fire env pins DEVLOOP_ACTOR + DEVLOOP_PROJECT (the CLI's identity ladder)");
+    ok(new RegExp(`^DEVLOOP_HUB_DB=${join(svcWs, ".dev-loop", "hub.db").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m").test(fireEnv),
+      "the fire env pins DEVLOOP_HUB_DB at the workspace hub.db (the CLI's SoR path)");
+    ok(/^DEVLOOP_DEV_SPLIT=(true|false)$/m.test(fireEnv),
+      "the fire env carries DEVLOOP_DEV_SPLIT (the write layer's fire marker for its operator-write guard)");
+
+    // The rollback switch: pin claude back to "mcp" on the project → the injection returns.
+    {
+      const c3 = JSON.parse(readFileSync(join(svcWs, "dev-loop.json"), "utf8"));
+      c3.projects.gamma.hub = { agentInterface: { claude: "mcp" } };
+      writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c3, null, 2));
+      rmSync(argsFile, { force: true });
+      runAgents(["--agents", "pm", "--once"], svcWs, { DEVLOOP_CLAUDE_BIN: probeBin });
+      ok(/--mcp-config/.test(readFileSync(argsFile, "utf8")) && /dev-loop-hub/.test(readFileSync(argsFile, "utf8")),
+        "hub.agentInterface.claude=\"mcp\" restores the inline hub injection (the D8 rollback switch, team mode)");
+      delete c3.projects.gamma.hub;
+      writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c3, null, 2));
+    }
+  }
+
   // ── team run lock: a live holder blocks a second scheduler ──
   const lockPath = join(ws, ".dev-loop", "locks", "run.lock");
   mkdirSync(dirname(lockPath), { recursive: true });
@@ -138,8 +276,11 @@ try {
   ok(seq.join(",") === "A-in,A-out,B-in,B-out", `with-repo-lock serializes concurrent holders (got: ${seq.join(",")})`);
 
   console.log(fails === 0 ? "\nTEAM_SCHEDULER_OK" : `\n${fails} CHECK(S) FAILED`);
-  process.exit(fails === 0 ? 0 : 1);
 } finally {
+  // The service run auto-ensures the workspace hub daemon — always stop it so no process outlives the test.
+  // NOTE: exit via process.exitCode AFTER this block — a process.exit() inside the try would skip it entirely.
+  try { spawnSync("node", [join(hubRoot, "src", "hub.ts"), "stop"], { cwd: svcWs, env: env(), encoding: "utf8", timeout: 20000 }); } catch { /* never started */ }
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
 }
+process.exit(fails === 0 ? 0 : 1);
 })();
