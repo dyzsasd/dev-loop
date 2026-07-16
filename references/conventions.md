@@ -1494,7 +1494,9 @@ prod DB) and ship unattended. Hard rules:
 
 - **No secrets in the repo or in tickets.** Never commit passwords/tokens/keys or
   paste them into Linear comments. Reference where to obtain them (`.env.local`, a
-  vault, "ask user") — config (§11) holds none.
+  vault, "ask user") — config (§11) holds none. Secret VALUES for the env-var NAMES
+  in `dev-loop.json` (e.g. `team.comms.webhookEnv`) live in the workspace-local
+  `.dev-loop/secrets.env` or the process env (env wins) — never in config or hub.db.
 - **No PII in ticket bodies, commits, or the strategy doc.** A repro or commit
   message must summarize *around* real user data, never quote it verbatim. (The
   test env may be backed by production data — treat every record as real.)
@@ -2637,6 +2639,9 @@ per-project `communication` block (which governs article drafting only) never su
 it. Reflect (team scope) additionally writes ONE weekly
 consolidated team retrospective + the north-star delta. Numbers always come from code
 (`dev-loop metrics`) or explicit board queries — never from an agent's memory of what it did.
+The webhook VALUE behind `team.comms.webhookEnv` comes from `.dev-loop/secrets.env` or the
+process env (`dev-loop doctor` warns `W12` when it resolves to neither — an unresolvable
+webhook silently kills the digest and every reminder).
 
 **The digest contract** (defined here once; the communication SKILL cites it, never restates
 it). Numbers come from code; narrative comes from the communication agent. Compose EXACTLY
@@ -2930,7 +2935,10 @@ This section records only the rules that change agent/operator behavior; the fie
   truncates the WAL).
 - **Secrets (§16 extends).** `team.comms.webhookEnv` stores an ENV-VAR **name**, never the URL; a value
   containing `://` is rejected (`E07`). This is what keeps "copy the folder" safe — no secret ever lands
-  in `dev-loop.json`.
+  in `dev-loop.json`. The VALUE lives in `<workspace>/.dev-loop/secrets.env` (dotenv `KEY=VALUE`; loaded
+  into the process env at workspace resolution, real env wins) or the shell env — so the workspace stays
+  self-contained: copy the folder (including `.dev-loop/`) and notifications keep working with zero
+  machine-global setup.
 - **Backend is strictly team-level (I3).** linear or service, never mixed. A workspace is initialized
   with exactly one backend, and there is no cross-team collaboration.
 - **deployPolicy is a ceiling.** `team.deployPolicy.<env> = "manual"` forbids any repo auto-deploying

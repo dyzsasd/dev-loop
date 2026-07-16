@@ -15,6 +15,7 @@ import { hubDbPath } from "./paths.ts";
 import { tryResolveWorkspace, wsHubDb } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
 import { checkLessonsBudget } from "./lessons.ts";
+import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
 import * as metricsMod from "./metrics.ts";
 const require_metrics = () => metricsMod;
 
@@ -168,6 +169,7 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[]): 
   if (!deliveryProjects(ws).length) return `dev-loop team add-project <key>  (or /dev-loop:add-project in a coding CLI)`;
   if (unseeded.length) return `dev-loop seed ${unseeded[0]} "<Project Name>" <UNIQUE_PREFIX>  (config project with no hub.db row, W08)`;
   if (!Object.keys(ws.file.repos).length) return `dev-loop team add-repo <ref> --project <key> --path <rel> --detect  (or /dev-loop:add-repo)`;
+  if (t.comms?.webhookEnv && process.env[t.comms.webhookEnv] === undefined) return `put ${t.comms.webhookEnv}=<webhook-url> in ${wsSecretsPath(ws.root)} (or export it) — the whole reminder layer is silently dead without it (W12)`;
   if (t.mode === "dry-run") return `dev-loop team set team.mode live  (everything is wired; flip when ready to go live)`;
   return "dev-loop run";
 }
@@ -213,6 +215,20 @@ export function doctorWorkspace(ws: Workspace): boolean {
     const fm = fireMetrics(join(ws.root, ".dev-loop", "team", "fires.jsonl"), 7 * 86_400_000);
     if (fm.fires > 0) info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect`);
   } catch { /* metrics are informational */ }
+
+  // W12 — comms webhook resolvability (the silent-failure killer). team.comms stores an env-var NAME
+  // (§16); when NEITHER the process env NOR .dev-loop/secrets.env supplies the VALUE, the entire
+  // notification layer silently no-ops: `notify` cannot send, the daemon Human-Blocked reminder never
+  // fires, the §22a digest never delivers — and nothing else surfaces it. Never prints the value.
+  const comms = ws.file.team.comms;
+  if (comms?.webhookEnv) {
+    loadWorkspaceSecrets(ws.root); // idempotent; makes this check self-contained for library callers
+    if (process.env[comms.webhookEnv] !== undefined) {
+      pass(`comms webhook ${comms.webhookEnv} resolvable (${secretsInjectedKeys(ws.root).has(comms.webhookEnv) ? "secrets.env" : "env"})`);
+    } else {
+      warn(`[W12] comms env ${comms.webhookEnv} unresolvable — notifications (notify / Human-Blocked reminder / §22a digest) will silently no-op; put ${comms.webhookEnv}=<url> in ${wsSecretsPath(ws.root)} or export it`);
+    }
+  }
 
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
   if (isGitWorkTree(ws.root)) {

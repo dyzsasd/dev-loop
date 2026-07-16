@@ -43,7 +43,7 @@ machine, export the same env vars, run `dev-loop team repair`, then `dev-loop do
 
     "comms": {
       "provider": "lark",                    // "lark" | "slack"
-      "webhookEnv": "DEVLOOP_COMMS_WEBHOOK"  // env var NAME, never the URL
+      "webhookEnv": "DEVLOOP_COMMS_WEBHOOK"  // env var NAME, never the URL (value: .dev-loop/secrets.env or the env)
     },
 
     "mode": "live",                          // "live" | "dry-run"
@@ -185,7 +185,7 @@ single-field mutator; see [Operator-tunable fields](#operator-tunable-fields-dev
 | `linearTeam` / `linearTeamId` | Linear team name/id for `backend:"linear"`. | ✓ `team.linearTeam` |
 | `deployPolicy` | Per-environment ceiling. `manual` means no repo may auto-deploy that environment. | — |
 | `docSystem` / `docs` | Where team/product docs live. | — |
-| `comms` | Slack/Lark channel config (`dev-loop notify`). Store env var names only. Its presence is also the **§22a team-digest gate**: with `team.comms` set, the team-scope communication fire composes and pushes the daily director digest — a per-project `communication` block never gates the digest. | ✓ `team.comms.provider`, `team.comms.webhookEnv` |
+| `comms` | Slack/Lark channel config (`dev-loop notify`). Store env var names only — the values live in `<workspace>/.dev-loop/secrets.env` or the process env (env wins; loaded automatically at workspace resolution). Its presence is also the **§22a team-digest gate**: with `team.comms` set, the team-scope communication fire composes and pushes the daily director digest — a per-project `communication` block never gates the digest. `dev-loop doctor` checks resolvability (`W12`). | ✓ `team.comms.provider`, `team.comms.webhookEnv` |
 | `mode` | Default `"live"` / `"dry-run"` for projects that do not override. | ✓ `team.mode` |
 | `autonomy` | Default autonomy posture for projects that do not override. | — |
 | `intake` | Team-wide default intake block (`mode`, `todoDepthCap`); seeded by `team init --intake-mode`. Projects override **field-wise** (nearest wins per field), so a project tuning only `todoDepthCap` keeps a team-level `"passive"`. | ✓ `team.intake.mode`, `team.intake.todoDepthCap` |
@@ -282,7 +282,7 @@ bootstraps the block with `webhookEnv` defaulted to `DEVLOOP_COMMS_WEBHOOK`).
 | Field | Type / values | Meaning |
 |---|---|---|
 | `type` | `"slack"` \| `"lark"` | Provider (required). |
-| `webhookEnv` | env-var NAME | Where the webhook URL lives at runtime (required). **Never a URL** — inline `webhook`/`secret` literals are rejected (`E15`, §16). |
+| `webhookEnv` | env-var NAME | Where the webhook URL lives at runtime (required). **Never a URL** — inline `webhook`/`secret` literals are rejected (`E15`, §16). The value itself goes in `<workspace>/.dev-loop/secrets.env` or the process env (env wins). |
 | `secretEnv` | env-var NAME | Optional Lark sign-secret env name. |
 | `events` | string array | Optional event scope (e.g. `["human-parked"]`); omitting an event name opts it out. |
 
@@ -403,6 +403,7 @@ Common warnings:
 | `W09` | Service workspace with `interface:"cli"` agents: `dev-loop` is not runnable on PATH — those fires have no board access. Install it: `npm i -g @dyzsasd/dev-loop`. |
 | `W10` | The PATH-installed `dev-loop` predates the CLI write layer (needs >= 1.2.0) — `interface:"cli"` fires cannot write the board. Upgrade the global install. |
 | `W11` | Identity smoke failed: `dev-loop project` exited non-zero under a fire-shaped env (`DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`) — the CLI fails closed, so every `interface:"cli"` fire would boot with no board access. |
+| `W12` | `team.comms.webhookEnv` resolves to nothing in the process env **and** `.dev-loop/secrets.env` — every notification (`notify`, the daemon Human-Blocked reminder, the §22a digest) silently no-ops. Put the value in `<workspace>/.dev-loop/secrets.env` or export it. |
 
 ## State Layout
 
@@ -417,6 +418,7 @@ Everything runtime-related lives under `<workspace>/.dev-loop/`:
 | `locks/` | Repo/team locks. |
 | `hub.db` | Service backend system of record. |
 | `daemon.json` | Service hub daemon runfile. |
+| `secrets.env` | Optional `KEY=VALUE` file supplying the values for the env-var NAMES in `dev-loop.json` (e.g. `team.comms.webhookEnv`). Loaded into the process env at workspace resolution; a key already in the real env is never overwritten. Keep it `chmod 600`; never committed (it lives in the gitignored `.dev-loop/`). |
 
 `~/.dev-loop/` keeps only the rebuildable workspace index.
 

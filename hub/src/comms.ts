@@ -6,6 +6,7 @@
 // shape) without a network call and without ever printing the URL.
 import { fileURLToPath } from "node:url";
 import { resolveWorkspace } from "./workspace.ts";
+import { wsSecretsPath } from "./secrets.ts";
 import type { Workspace } from "./team-config.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop notify: ${msg}`); process.exit(code); }
@@ -36,7 +37,7 @@ export async function notify(ws: Workspace, n: NotifyInput): Promise<number> {
     console.log(JSON.stringify({ dryRun: true, provider, env: webhookEnv, payload }));
     return 0;
   }
-  if (!url) { console.error(`dev-loop notify: comms env ${webhookEnv} is not set — cannot send`); return 3; }
+  if (!url) { console.error(`dev-loop notify: comms env ${webhookEnv} is not set — cannot send (put ${webhookEnv}=<url> in ${wsSecretsPath(ws.root)} or export it)`); return 3; }
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 5000);
