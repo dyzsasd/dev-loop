@@ -1235,7 +1235,15 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     cfgMtime = m;
     try {
       const fresh = tryResolveWorkspace(ws.root);
-      if (fresh) { ws = fresh; const c = rotationCandidates(ws); candidates.length = 0; candidates.push(...(opts.project ? c.filter((x) => x.key === opts.project) : c)); schedState = pruneCursor(schedState, candidates.map((x) => x.key)); console.log(`dev-loop run: reloaded dev-loop.json — projects=${candidates.map((x) => x.key).join(", ")}`); }
+      if (fresh) {
+        ws = fresh; const c = rotationCandidates(ws); candidates.length = 0; candidates.push(...(opts.project ? c.filter((x) => x.key === opts.project) : c)); schedState = pruneCursor(schedState, candidates.map((x) => x.key));
+        // Providers/permission follow the reload (the teamComms fire-time-read pattern): an operator adding
+        // a registry entry + key mid-run must not need a scheduler restart. (The cfg/launch-profile projection
+        // staying stale across reloads is a pre-existing class — see the 2026-07 review notes.)
+        opts.providers = ws.file.team.providers ?? {};
+        opts.opencodePermission = ws.file.team.opencodePermission;
+        console.log(`dev-loop run: reloaded dev-loop.json — projects=${candidates.map((x) => x.key).join(", ")}`);
+      }
     } catch (e) { console.error(`dev-loop run: dev-loop.json reload failed (${(e as Error).message}); keeping the last-good config`); }
   };
 
