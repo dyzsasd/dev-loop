@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { openDb, logEvent } from "./db.ts";
 import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Creds, type Transport, type FetchImpl } from "./channel.ts";
 import { eventData } from "./views/activity.ts";
+import { fireMetrics } from "./metrics.ts";
 
 // ─── DL-59 send-target resolution, shared by every notifier tick ───────────────────────────────────
 // ONE send target: the DB `channels` row (getEnabledChannel) takes PRECEDENCE so a project with a
@@ -210,6 +211,75 @@ export async function noProgressNotifyTick(opts: {
     console.error(`[daemon] no-progress notify failed: ${scrubErr((e as Error).message)}`);
     return 0;
   }
+}
+
+// ─── P0-1c: loop fire-health self-monitor ──────────────────────────────────────────────────────────
+// The field incident's missing wire: fires.jsonl carried 407 identical failures for two days while ops
+// watched PROD and nobody watched the LOOP. This tick reads the fire ledger's rolling window; success
+// below the threshold on a REAL sample (≥ minFires) alerts ONCE per degradation episode, and the first
+// HEALTHY window after an alert sends one recovery line. Episode state lives in marker events
+// (fire_health.notified / fire_health.recovered) — stateless across daemon restarts, the no-progress
+// detector's philosophy. An insufficient sample (e.g. the P0-1a breaker probing hourly) is NEITHER
+// degraded NOR healthy: the episode stays open and silent until real cadence resumes.
+export async function fireHealthNotifyTick(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  ledgerPath: string; windowMs: number; minFires: number; threshold: number; nowMs: number;
+  fetchImpl?: FetchImpl; notify?: unknown;
+}): Promise<number> {
+  const { writeDb, projectId, projectKey, baseUrl, ledgerPath, windowMs, minFires, threshold, nowMs } = opts;
+  const target = resolveTarget(writeDb, projectId, opts.notify);
+  if (!target) return 0;
+  const fm = fireMetrics(ledgerPath, windowMs, nowMs);
+  const sampled = fm.fires >= minFires && fm.successRate !== null;
+  const degraded = sampled && (fm.successRate as number) < threshold;
+  const healthy = sampled && (fm.successRate as number) >= threshold;
+  const lastNotified = (writeDb.prepare("SELECT MAX(created_at) m FROM events WHERE project_id=? AND kind='fire_health.notified'").get(projectId) as { m: string | null }).m;
+  const lastRecovered = (writeDb.prepare("SELECT MAX(created_at) m FROM events WHERE project_id=? AND kind='fire_health.recovered'").get(projectId) as { m: string | null }).m;
+  const openEpisode = !!lastNotified && (!lastRecovered || lastRecovered < lastNotified);
+  const windowH = +(windowMs / 3_600_000).toFixed(2);
+  const pct = fm.successRate === null ? "—" : `${Math.round(fm.successRate * 100)}%`;
+  // §16 closed-allow-list one-liner: projectKey + window metrics + errorClass tallies + the localhost link.
+  if (degraded && !openEpisode) {
+    const top = Object.entries(fm.byErrorClass).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k}×${n}`).join(", ");
+    const line = cleanLine(`[${projectKey}] loop health: fire success ${pct} over the last ${windowH}h (${fm.fires} fires${top ? ` — ${top}` : ""}) — check \`dev-loop metrics\` / runner logs · ${baseUrl}/activity`, 200);
+    try {
+      if (CHANNEL_DRYRUN) { console.error(`[daemon] [dry-run] would notify fire-health via ${target.label}: ${line}`); }
+      else {
+        await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+        logEvent(writeDb, { project_id: projectId, ticket_id: null, actor: "daemon", kind: "fire_health.notified", data: { successRate: fm.successRate, fires: fm.fires, windowMs } });
+      }
+      return 1;
+    } catch (e) { console.error(`[daemon] fire-health notify failed: ${scrubErr((e as Error).message)}`); return 0; }
+  }
+  if (healthy && openEpisode) {
+    const line = cleanLine(`[${projectKey}] loop health recovered: fire success ${pct} over the last ${windowH}h (${fm.fires} fires) · ${baseUrl}/activity`, 200);
+    try {
+      if (CHANNEL_DRYRUN) { console.error(`[daemon] [dry-run] would notify fire-health recovery via ${target.label}: ${line}`); }
+      else {
+        await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+        logEvent(writeDb, { project_id: projectId, ticket_id: null, actor: "daemon", kind: "fire_health.recovered", data: { successRate: fm.successRate, fires: fm.fires, windowMs } });
+      }
+      return 1;
+    } catch (e) { console.error(`[daemon] fire-health recovery notify failed: ${scrubErr((e as Error).message)}`); return 0; }
+  }
+  return 0;
+}
+
+export function startFireHealthNotifier(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  ledgerPath: string; windowHours: number; minFires: number; threshold: number; tickMs?: number; notify?: unknown;
+}): ReturnType<typeof setInterval> | null {
+  if (!(opts.windowHours > 0) || !opts.ledgerPath) return null;         // opted out / no team fires ledger (legacy daemon)
+  if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null;
+  const windowMs = opts.windowHours * 3_600_000;
+  // Re-check every ~10min by default: fast enough to catch a spend-limit-style collapse within one
+  // window, cheap enough that a tick is just one bounded JSONL read. Env-overridable for tests.
+  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_FIREHEALTH_TICK_MS) || 600_000);
+  const run = () => { fireHealthNotifyTick({ ...opts, windowMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] fire-health tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
+  const timer = setInterval(run, tickMs);
+  timer.unref?.();
+  run();
+  return timer;
 }
 
 export function startNoProgressNotifier(opts: {
