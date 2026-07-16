@@ -117,10 +117,11 @@ ok(normalizedRel("../x") === null && normalizedRel("/x") === null, "normalizedRe
 { const f = base(); f.team.hub = { docs: true }; ok(codes(f).length === 0, "E13: a hub block with only passthrough fields (docs) validates clean"); }
 
 // ── agentInterfaceFor: the D9 defaults + the config override (the D8 rollback switch) ──
-ok(DEFAULT_AGENT_INTERFACE.claude === "cli" && DEFAULT_AGENT_INTERFACE.codex === "cli" && DEFAULT_AGENT_INTERFACE.opencode === "mcp",
-  "D9 defaults: claude→cli, codex→cli (P8 certified 2026-07-11), opencode→mcp");
+ok(DEFAULT_AGENT_INTERFACE.claude === "cli" && DEFAULT_AGENT_INTERFACE.codex === "cli" && DEFAULT_AGENT_INTERFACE.opencode === "cli",
+  "D9 defaults: claude→cli, codex→cli (P8 certified 2026-07-11), opencode→cli (P8-style certified 2026-07-16, PORTABILITY §5)");
 ok(agentInterfaceFor(undefined, "claude") === "cli", "agentInterfaceFor: no hub block → claude defaults to cli");
-ok(agentInterfaceFor(undefined, "codex") === "cli" && agentInterfaceFor(undefined, "opencode") === "mcp", "agentInterfaceFor: codex defaults to cli (post-P8 cert); opencode stays mcp");
+ok(agentInterfaceFor(undefined, "codex") === "cli" && agentInterfaceFor(undefined, "opencode") === "cli", "agentInterfaceFor: codex and opencode default to cli (post-cert); mcp stays the rollback setting");
+ok(agentInterfaceFor({ agentInterface: { opencode: "mcp" } }, "opencode") === "mcp", "agentInterfaceFor: opencode can be rolled back to mcp by config (the D8 rollback switch)");
 ok(agentInterfaceFor(undefined, "future-cli") === "mcp", "agentInterfaceFor: an unknown coding agent defaults to mcp (today's behavior)");
 ok(agentInterfaceFor({ agentInterface: { claude: "mcp" } }, "claude") === "mcp", "agentInterfaceFor: an explicit override beats the default (rollback switch)");
 ok(agentInterfaceFor({ agentInterface: { codex: "mcp" } }, "codex") === "mcp", "agentInterfaceFor: codex can be rolled back to mcp by config (the D8 rollback switch)");
