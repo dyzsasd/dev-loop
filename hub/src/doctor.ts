@@ -16,6 +16,7 @@ import { tryResolveWorkspace, wsHubDb } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
 import { checkLessonsBudget } from "./lessons.ts";
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
+import { opencodeSyncDrift } from "./opencode-sync.ts";
 import * as metricsMod from "./metrics.ts";
 const require_metrics = () => metricsMod;
 
@@ -228,6 +229,26 @@ export function doctorWorkspace(ws: Workspace): boolean {
     } else {
       warn(`[W12] comms env ${comms.webhookEnv} unresolvable — notifications (notify / Human-Blocked reminder / §22a digest) will silently no-op; put ${comms.webhookEnv}=<url> in ${wsSecretsPath(ws.root)} or export it`);
     }
+  }
+
+  // W13 — provider-registry auth resolvability (the W12 pattern; model-provider-routing). An entry whose
+  // auth env resolves neither from the process env nor .dev-loop/secrets.env makes every opencode fire on
+  // that provider fail pre-spawn (run-agents `provider-env-missing`) — surface it BEFORE the loop runs.
+  // Never prints the value.
+  const provs = ws.file.team.providers ?? {};
+  for (const [id, p] of Object.entries(provs)) {
+    loadWorkspaceSecrets(ws.root); // idempotent (same self-containment as W12)
+    if (process.env[p.authTokenEnv] !== undefined) {
+      pass(`provider '${id}' auth ${p.authTokenEnv} resolvable (${secretsInjectedKeys(ws.root).has(p.authTokenEnv) ? "secrets.env" : "env"})`);
+    } else {
+      warn(`[W13] provider '${id}' auth env ${p.authTokenEnv} unresolvable — its opencode fires fail pre-spawn (fireError: provider-env-missing); put ${p.authTokenEnv}=<key> in ${wsSecretsPath(ws.root)} or export it`);
+    }
+  }
+  // W14 — workspace opencode.json carries the registry (sync drift). Read-only; the fix is operator-run.
+  if (Object.keys(provs).length) {
+    const drift = opencodeSyncDrift(ws.root, provs);
+    if (drift === null) pass(`opencode.json carries the ${Object.keys(provs).length} registry provider(s)`);
+    else warn(`[W14] ${drift} — run: dev-loop team sync-opencode`);
   }
 
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).

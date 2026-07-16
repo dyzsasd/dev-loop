@@ -9,7 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
-import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, type Workspace, type HubBlock, type AgentInterface } from "./team-config.ts";
+import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
@@ -194,7 +194,42 @@ type Options = {
   staggerMs: number;    // boot stagger between the initial slot fires (0 = all at once)
   mcpConfig?: string;   // claude: explicit MCP config; defaults to <cwd>/.mcp.json if present
   extraArgs: string[];
+  // Model-provider routing (team mode only; teamMain fills these from team.providers /
+  // team.opencodePermission — the legacy fixed-project path has no registry and leaves them unset).
+  providers?: Record<string, ProviderEntry>;
+  opencodePermission?: Record<string, unknown>;
 };
+
+// The certified unattended permission policy for opencode fires (PORTABILITY §5, 2026-07-16 on 1.2.24):
+// deny-by-default is LOAD-BEARING — operator-installed global extensions add exec-capable tools the
+// scheduler has never heard of (an `interactive_bash` tmux tool escaped a narrow bash-only deny AND
+// dropped the fire's identity env). Explicit allows cover the standard fire toolset; everything else —
+// known interactive/web tools and unknown custom tools alike — is closed. Operators replace the whole
+// object via team.opencodePermission (E16). Injected per fire as OPENCODE_PERMISSION (after the
+// process.env spread, so the fire policy beats any operator export).
+const DEFAULT_OPENCODE_PERMISSION: Record<string, unknown> = {
+  "*": "deny",
+  read: "allow", edit: "allow", glob: "allow", grep: "allow",
+  bash: "allow", task: "allow", skill: "allow", lsp: "allow",
+  question: "deny", webfetch: "deny", websearch: "deny", external_directory: "deny", doom_loop: "deny",
+};
+
+// On opencode the model-string prefix IS the provider selection (`provider/model-id`); a registry entry
+// exists only for CUSTOM endpoints (team.providers), so a miss simply means a built-in opencode provider.
+function opencodeProviderEntry(opts: Options, model: string | undefined): ProviderEntry | undefined {
+  const prefix = model?.split("/")[0];
+  return prefix && prefix !== model ? opts.providers?.[prefix] : undefined;
+}
+
+// The fire-ledger provider dimension (metrics cost attribution): opencode fires carry their model-string
+// prefix; claude/codex fires run their native endpoints until the Appendix-A route ships.
+function providerOf(profile: LaunchProfile): string | null {
+  if (profile.codingAgent === "opencode") {
+    const m = profile.model;
+    return m && m.includes("/") ? m.split("/")[0] : null;
+  }
+  return profile.codingAgent === "claude" ? "anthropic" : "openai";
+}
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (build)
 const EXT = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts"; // server sibling: .ts source / .js published
@@ -613,14 +648,16 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
     args.push(prompt);
     return { command: opts.codexBin, args };
   }
-  // opencode (best-effort; docs/PORTABILITY.md). opencode registers MCP via the operator's MERGED
-  // config (config/mcp.opencode.json.example), not inline like claude/codex — so the scheduler only
-  // passes the model and relies on the spawn env (set in runAgent) for per-pane identity. opencode's
-  // reasoning/effort flag is version-specific, so effort is NOT auto-passed; use --cli-arg if needed.
-  // The runtime split switch still rides the env (DEVLOOP_DEV_SPLIT), same as the env identity.
+  // opencode (certified 2026-07-16 on 1.2.24; docs/PORTABILITY.md §5). Default interface is "cli"
+  // (identity rides the spawn env into the bash tool); on the "mcp" rollback opencode registers MCP via
+  // the operator's MERGED config (config/mcp.opencode.json.example), not inline like claude/codex.
+  // Effort rides `--variant` (opencode's reasoning-effort flag, values model-specific, passed raw) —
+  // a registry provider opts out via effortMode:"strip". The split switch rides the env (DEVLOOP_DEV_SPLIT).
+  const passEffort = profile.effort && opencodeProviderEntry(opts, profile.model)?.effortMode !== "strip";
   const args = [
     "run",
     ...(profile.model ? ["--model", profile.model] : []),
+    ...(passEffort ? ["--variant", profile.effort as string] : []),
     ...opts.extraArgs,
     prompt,
   ];
@@ -638,13 +675,14 @@ function displayCommand(command: string, args: string[], prompt: string): string
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean,
-  extra?: { suspectError?: boolean; outputTail?: string }): void {
+  extra?: { suspectError?: boolean; outputTail?: string; fireError?: string }): void {
+  const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
   // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
   if (fireLedgerPath) {
     try {
       mkdirSync(dirname(fireLedgerPath), { recursive: true });
-      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra ?? {}) };
+      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra ?? {}) };
       appendFileSync(fireLedgerPath, JSON.stringify(row) + "\n");
     } catch { /* ledger is best-effort */ }
   }
@@ -654,7 +692,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}) } });
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.fireError ? { fireError: extra.fireError } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -760,12 +798,35 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   // OVERRIDE every agent's configured effort, flattening them all to one level. Strip it so the per-agent
   // config is authoritative. (--model already outranks ANTHROPIC_MODEL, so the model needs no such strip.)
   delete env.CLAUDE_CODE_EFFORT_LEVEL;
+  // Model-provider routing (opencode fires): resolve the registry entry once. The auth guard itself
+  // runs AFTER the dry-run branch — a dry-run must render the command and note the gap, never write
+  // the fire ledger. Built-in providers (no registry entry) are opencode's own auth concern.
+  const providerEntry = profile.codingAgent === "opencode" ? opencodeProviderEntry(opts, profile.model) : undefined;
+  const providerEnvMissing = providerEntry && process.env[providerEntry.authTokenEnv] === undefined ? providerEntry.authTokenEnv : null;
+  if (profile.codingAgent === "opencode") {
+    // Certified permission injection (PORTABILITY §5): wildcard-deny is what closes operator-installed
+    // custom exec tools (they escape narrow patterns AND can drop the identity env — the tmux finding).
+    // Assigned AFTER the process.env spread so the fire policy beats any operator export.
+    env.OPENCODE_PERMISSION = JSON.stringify(opts.opencodePermission ?? DEFAULT_OPENCODE_PERMISSION);
+  }
   const rendered = displayCommand(command, args, prompt);
   if (opts.dryRun) {
     const intakeMode = (cfg?.projects?.[project] as { intake?: { mode?: string } } | undefined)?.intake?.mode;
-    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""}`);
+    const dryProvider = providerOf(profile);
+    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${dryProvider ? ` provider=${dryProvider}` : ""}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
+    if (providerEnvMissing) console.log(`[dry-run] ${agent}: NOTE provider auth env ${providerEnvMissing} unresolvable — a real fire fails pre-spawn (doctor W13)`);
     return 0;
+  }
+
+  // Pre-spawn auth guard (model-provider-routing): a registry-provider fire whose auth env is
+  // unresolvable would burn a whole turn on 401s — fail it BEFORE spawning, visibly in the fire
+  // ledger (`fireError: "provider-env-missing"`), zero tokens.
+  if (providerEnvMissing) {
+    const prefix = profile.model?.split("/")[0];
+    console.error(`[${agent}] provider '${prefix}' auth env ${providerEnvMissing} unresolvable — put ${providerEnvMissing}=<key> in <workspace>/.dev-loop/secrets.env or export it; failing this fire pre-spawn (doctor W13 surfaces this before the loop)`);
+    recordFire(opts.hubDb, project, agent, profile, 0, 4, false, { fireError: "provider-env-missing", outputTail: `provider '${prefix}' auth env ${providerEnvMissing} unresolvable` });
+    return 4;
   }
 
   const logDir = opts.logDir || join(opts.dataDir, project, "runner-logs");
@@ -1024,6 +1085,10 @@ async function main(): Promise<void> {
 async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
   const backend = ws.file.team.backend;
+  // Model-provider routing: the TEAM-level registry + permission override ride the run options into
+  // commandFor/runAgent (never the legacy per-project view — providers are team infrastructure).
+  opts.providers = ws.file.team.providers ?? {};
+  opts.opencodePermission = ws.file.team.opencodePermission;
 
   // `--project` filter: restrict DELIVERY rotation to a single named project. It must exist + be enabled;
   // a weight:0 target is NOT an error — that just pauses delivery (the block below decides), and stewards
