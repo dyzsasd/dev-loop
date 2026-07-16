@@ -11,6 +11,7 @@ import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
 import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
+import { notify } from "./comms.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
@@ -301,6 +302,9 @@ Options:
   --fire-timeout <dur>        kill a fire that outlives this (SIGTERM, then SIGKILL after 10s; default 1h; 0 = none)
   --stagger <dur>             delay between the initial slot fires so a cold boot doesn't launch every agent at once (default 20s; 0 = simultaneous)
   --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
+  --breaker <n>               failure-streak circuit breaker: N consecutive identical failures of one agent
+                              trip its slot to the probe cadence until a fire succeeds (default 5; 0 = off)
+  --breaker-probe <dur>       probe cadence while a breaker is open (default 1h; never faster than the slot)
   --cli-arg <arg>             pass an extra arg to the selected CLI before the prompt; may repeat
                               (CLI binaries: set DEVLOOP_CLAUDE_BIN / DEVLOOP_CODEX_BIN / DEVLOOP_OPENCODE_BIN to override)
 
@@ -423,6 +427,8 @@ function parseArgs(argv: string[]): Options {
     else if (a === "--stagger") { const v = next(); opts.staggerMs = v.trim() === "0" ? 0 : parseDuration(v); }
     else if (a === "--codex-safe") opts.codexSafe = true;
     else if (a === "--cli-arg") extraArgs.push(next());
+    else if (a === "--breaker") { breaker.threshold = Number(next()); if (!Number.isInteger(breaker.threshold) || breaker.threshold < 0) die("--breaker must be a non-negative integer (0 = off)"); }
+    else if (a === "--breaker-probe") breaker.probeMs = parseDuration(next());
     else die(`unknown option '${a}'`);
   }
 
@@ -686,6 +692,40 @@ function displayCommand(command: string, args: string[], prompt: string): string
   return [command, ...args.map((a) => a === prompt ? `<prompt:${prompt.length} chars>` : a).map(shellQuote)].join(" ");
 }
 
+// ─── P0-1a failure-streak circuit breaker ────────────────────────────────────────────────────────────
+// The field incident: a spent subscription turned every fire into the same ~2s failure for 48 hours while
+// the scheduler kept full cadence — zero backoff, zero signal, two days of zero throughput discovered by
+// reading metrics after the fact. The breaker watches recordFire: N consecutive fires of ONE agent failing
+// with the SAME key (errorClass, else the last output line) trip that agent's slot down to a probe cadence;
+// each probe fire IS the recovery check — the first success closes the breaker and restores normal cadence.
+// Trip and recovery notify ONCE each (team comms when configured; console always). In-memory by design:
+// a scheduler restart re-probes at full cadence, which is itself a fresh signal. Heterogeneous task
+// failures never trip it — the key must repeat identically.
+type BreakerEntry = { key: string | null; streak: number; open: boolean };
+const breaker = {
+  threshold: 5,          // --breaker <n>; 0 disables
+  probeMs: 60 * 60_000,  // --breaker-probe <dur>
+  byAgent: new Map<Agent, BreakerEntry>(),
+  onEvent: undefined as ((agent: Agent, ev: "open" | "close", key: string, streak: number) => void) | undefined,
+  record(agent: Agent, exitCode: number, errorClass: string | null | undefined, tail: string | undefined): void {
+    if (!this.threshold) return;
+    const e = this.byAgent.get(agent) ?? { key: null, streak: 0, open: false };
+    if (exitCode === 0) {
+      if (e.open) this.onEvent?.(agent, "close", e.key ?? "", e.streak);
+      this.byAgent.set(agent, { key: null, streak: 0, open: false });
+      return;
+    }
+    const lastLine = (tail ?? "").trimEnd().split("\n").pop()?.trim().slice(0, 160) ?? "";
+    const key = errorClass ?? (lastLine || "(no-output)");
+    if (key === e.key) e.streak++; else { e.key = key; e.streak = 1; }
+    if (!e.open && e.streak >= this.threshold) { e.open = true; this.onEvent?.(agent, "open", key, e.streak); }
+    this.byAgent.set(agent, e);
+  },
+  isOpen(agent: Agent): boolean { return !!this.byAgent.get(agent)?.open; },
+  // The one seam every slot-rescheduling site goes through: open ⇒ the probe cadence (never faster).
+  intervalFor(agent: Agent, baseMs: number): number { return this.isOpen(agent) ? Math.max(baseMs, this.probeMs) : baseMs; },
+};
+
 // P1 per-fire telemetry: write a `fire.completed` event to the hub so the operator gets a queryable cost/
 // outcome ledger (durationMs, exitCode, model/effort) — the precursor the STRATEGY.md budget-ceiling work
 // was banked on. Best-effort + lazy: opened once, skipped silently on a non-hub (linear/local) project, and
@@ -694,6 +734,7 @@ let fireDb: DatabaseSync | null | undefined;                         // undefine
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean,
   extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string }): void {
+  breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail); // P0-1a — every completed fire feeds the streak
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
   // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
@@ -939,7 +980,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       }
       const errorClass = classifyFireError(exitCode, timedOut, outTail); // P0-1b taxonomy
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut,
-        suspectError || errorClass
+        suspectError || errorClass || exitCode !== 0 // every failure carries its tail — the breaker keys on it
           ? { ...(suspectError ? { suspectError: true } : {}), ...(errorClass ? { errorClass } : {}), outputTail: outTail.slice(-400) }
           : undefined);
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
@@ -976,6 +1017,18 @@ function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string 
   }
 }
 
+// P0-1a: trip/recovery each surface ONCE — always on the console, and to the team comms channel when a
+// workspace with team.comms exists (a comms-less workspace just prints notify's own miss-config line).
+function wireBreakerEvents(ws: Workspace | null): void {
+  breaker.onEvent = (agent, ev, key, streak) => {
+    const msg = ev === "open"
+      ? `breaker OPEN: ${agent} → probe cadence ${formatDuration(breaker.probeMs)} after ${streak}× identical failures (${key})`
+      : `breaker CLOSED: ${agent} recovered — normal cadence resumed`;
+    console.error(`[breaker] ${msg}`);
+    if (ws) void notify(ws, { title: "dev-loop scheduler", level: ev === "open" ? "error" : "info", text: msg }).catch(() => { /* best-effort */ });
+  };
+}
+
 // Schema v2: a discoverable workspace is authoritative for BOTH config and state paths (hub db, data dir,
 // gate/lock/log roots). A workspace found-but-invalid is a hard stop (fix it, don't run stale).
 function resolveWs(opts: Options): Workspace | null {
@@ -994,6 +1047,7 @@ async function main(): Promise<void> {
   // across the enabled projects (weighted round-robin). No workspace → the legacy fixed-project path below.
   const ws = resolveWs(opts);
   if (ws) return teamMain(opts, ws);
+  wireBreakerEvents(null); // legacy fixed-project path: console-only breaker notices
 
   const cfg = readProjects(opts);
   const project = resolveProject(opts, cfg);
@@ -1091,7 +1145,7 @@ async function main(): Promise<void> {
       if (gateActive && GATED_AGENTS.has(slot.agent)) {
         const key = changeKey(opts, cfg, project);
         if (gateSkips(opts, gateState, slot.agent, slot.agent, key)) {
-          slot.nextAt = now + opts.intervals[slot.agent];
+          slot.nextAt = now + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]);
           continue; // no change since last fire ⇒ don't pay for a no-op turn
         }
       }
@@ -1101,7 +1155,7 @@ async function main(): Promise<void> {
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); return 1; })
         .finally(() => {
           slot.running = false;
-          slot.nextAt = Date.now() + opts.intervals[slot.agent];
+          slot.nextAt = Date.now() + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
           // Record the POST-fire change-key (+ the fire time, the R1a TTL anchor) so the next tick compares
           // against the state this fire left behind (an agent's own writes bump the key once, then it
           // settles → skips until the NEXT external change or, for pm/qa, the TTL).
@@ -1133,6 +1187,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   // commandFor/runAgent (never the legacy per-project view — providers are team infrastructure).
   opts.providers = ws.file.team.providers ?? {};
   opts.opencodePermission = ws.file.team.opencodePermission;
+  wireBreakerEvents(ws); // P0-1a notices ride team comms when configured
 
   // `--project` filter: restrict DELIVERY rotation to a single named project. It must exist + be enabled;
   // a weight:0 target is NOT an error — that just pauses delivery (the block below decides), and stewards
@@ -1310,7 +1365,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); })
         .finally(() => {
           slot.running = false;
-          slot.nextAt = Date.now() + opts.intervals[slot.agent];
+          slot.nextAt = Date.now() + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
           if (stopping && activeChildren.size === 0) process.exit(0);
         });
       if (opts.maxFires && fired >= opts.maxFires) { console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining then exiting`); drain(); break; }
