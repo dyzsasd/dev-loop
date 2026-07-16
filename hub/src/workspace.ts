@@ -9,7 +9,7 @@
 import { realpathSync, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join, isAbsolute } from "node:path";
 import { loadWorkspace, normalizedRel, type Workspace } from "./team-config.ts";
-import { devloopHome } from "./paths.ts";
+import { devloopHome, hubDbPath } from "./paths.ts";
 import { loadWorkspaceSecrets } from "./secrets.ts";
 
 export class WsNotFound extends Error {
@@ -74,6 +74,15 @@ export function wsLessonsDir(ws: Workspace): string { return join(wsStateRoot(ws
 export function wsWorktree(ws: Workspace, ticket: string, ref: string): string { return join(wsStateRoot(ws), "wt", ticket, ref); }
 export function wsLockPath(ws: Workspace, name: string): string { return join(wsStateRoot(ws), "locks", `${name}.lock`); }
 export function wsHubDb(ws: Workspace): string { return join(wsStateRoot(ws), "hub.db"); }
+// The operator-CLI hub-DB ladder (field report P2 #1/#2): explicit DEVLOOP_HUB_DB > the discovered
+// workspace's .dev-loop/hub.db > the machine-global default. op/tickets/seed/doctor used to jump
+// straight to the global default (seed even to ./hub.db in cwd), silently reading or CREATING a
+// different board than the workspace the operator was standing in — the day-1 double-db split.
+export function resolveHubDbPath(startDir = process.cwd()): string {
+  if (process.env.DEVLOOP_HUB_DB?.trim()) return hubDbPath();
+  const ws = tryResolveWorkspace(startDir);
+  return ws ? wsHubDb(ws) : hubDbPath();
+}
 export function wsDaemonRunfile(ws: Workspace): string { return join(wsStateRoot(ws), "daemon.json"); }
 export function wsFireLedger(ws: Workspace): string { return join(wsTeamDir(ws), "fires.jsonl"); }
 export function wsScheduler(ws: Workspace): string { return join(wsTeamDir(ws), "scheduler.json"); }
