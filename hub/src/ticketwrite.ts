@@ -85,6 +85,20 @@ function verifyGateRejection(fromState: string, next: TicketUpdateFields): strin
   return null; // every other transition is the caller's concern
 }
 
+// Field-report P1-1 terminal-state guard (MP-275). A fire's stale queue snapshot let agents lift tickets
+// OUT of terminal states — a ticket the operator had just Canceled was re-implemented, rode a batched push,
+// and DEPLOYED; a Done ticket was re-opened to In Review. Prompt/pick discipline cannot hold this line;
+// the shared write path does: only the OPERATOR exits Done/Canceled — agents file a NEW ticket and link it
+// via relatedTo instead (§3). Same single-choke-point placement as the two gates above, so the MCP
+// save_issue, the CLI write verbs, and the daemon board-move are all covered. State-PRESERVING updates on
+// a closed ticket (label/relatedTo hygiene, comments) stay legal, and Duplicate deliberately stays
+// un-gated (its resolution lives on the duplicateOf target; Sweep re-routes mislabeled ones).
+const TERMINAL_STATES = new Set<string>(["Done", "Canceled"]);
+function terminalExitRejection(actor: string, fromState: string, next: TicketUpdateFields): string | null {
+  if (next.state === fromState || !TERMINAL_STATES.has(fromState) || actor === "operator") return null;
+  return `terminal-state guard: '${fromState}' → '${next.state}' — only the operator reopens a ${fromState} ticket (P1-1); file a NEW ticket for the follow-up and link it with relatedTo`;
+}
+
 // ─── the raw mechanics: the ONLY tickets/comments writers in the hub ──────────
 
 // THE ticket INSERT. Allocates the id, writes all 14 columns, logs issue.create. `createEventData` is passed
@@ -110,7 +124,9 @@ export function insertTicket(
 export function updateTicketRow(
   db: DatabaseSync, projectId: string, actor: string, id: string, fromState: string, next: TicketUpdateFields,
 ): WriteResult {
-  const gate = stagingDeployRejection(db, projectId, fromState, next) ?? verifyGateRejection(fromState, next);
+  const gate = terminalExitRejection(actor, fromState, next)
+    ?? stagingDeployRejection(db, projectId, fromState, next)
+    ?? verifyGateRejection(fromState, next);
   if (gate) return { ok: false, status: 400, error: gate };
   const t = nowIso();
   db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
