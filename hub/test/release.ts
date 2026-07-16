@@ -185,6 +185,24 @@ const vmRej = moveTicket(wdb, projectId, "operator", v5, "Done");
 ok(!vmRej.ok && /In Review/.test((vmRej as { error?: string }).error ?? ""), "DL-77: the daemon move primitive also rejects In Progress → Done (shared path)");
 ok((await call(dev, "get_issue", { id: v5 })).state === "In Progress", "DL-77: the rejected daemon move did NOT move the ticket");
 
+// ════ Field P1-1: the terminal-state guard — only the operator exits Done/Canceled ════
+// MP-275: a fire's stale queue snapshot let an agent lift a just-Canceled ticket back to In Progress; the
+// re-implemented work rode a batched push into prod. Same shared-write-path placement as DL-38/DL-77.
+// v1 is Done (verified above), v4 is Canceled — reuse them as the terminal subjects.
+const tRej1 = await callRaw(dev, "save_issue", { id: v1, state: "In Review" });
+ok(tRej1.isError && /terminal-state guard/.test(tRej1.data.error ?? ""), "P1-1: agent Done → In Review REJECTED (the MP-216 re-open shape)");
+ok((await call(dev, "get_issue", { id: v1 })).state === "Done", "P1-1: the rejected re-open did NOT move the ticket");
+const tRej2 = await callRaw(dev, "save_issue", { id: v4, state: "In Progress" });
+ok(tRej2.isError && /only the operator/.test(tRej2.data.error ?? ""), "P1-1: agent Canceled → In Progress REJECTED (the MP-275 prod-incident shape)");
+const tHyg = await callRaw(dev, "save_issue", { id: v1, labels: [...FULL, "swept"] });
+ok(!tHyg.isError, "P1-1: a state-PRESERVING update on a Done ticket stays legal (Sweep hygiene)");
+const tDup = await callRaw(dev, "save_issue", { id: v4b, state: "Todo" });
+ok(!tDup.isError, "P1-1: Duplicate is deliberately NOT terminal-gated (Sweep re-routes mislabels)");
+const tOp = moveTicket(wdb, projectId, "operator", v4, "Todo");
+ok(tOp.ok === true, "P1-1: the OPERATOR reopens a Canceled ticket (daemon move as operator)");
+ok((await call(dev, "save_issue", { id: v4, state: "In Progress", assignee: "me" })).state === "In Progress",
+  "P1-1: after the operator reopen, agents work the ticket normally again");
+
 wdb.close();
 
 for (const c of [dev, op, pm]) await c.close();
