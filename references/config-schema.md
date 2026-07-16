@@ -409,6 +409,7 @@ Common warnings:
 | `W12` | `team.comms.webhookEnv` resolves to nothing in the process env **and** `.dev-loop/secrets.env` — every notification (`notify`, the daemon Human-Blocked reminder, the §22a digest) silently no-ops. Put the value in `<workspace>/.dev-loop/secrets.env` or export it. |
 | `W13` | A `team.providers` entry's `authTokenEnv` resolves to nothing in the process env **and** `.dev-loop/secrets.env` — every opencode fire on that provider fails pre-spawn (`fireError: provider-env-missing`, zero tokens). Put the key in `secrets.env` or export it. |
 | `W14` | The workspace `opencode.json` is missing/stale relative to `team.providers` — run `dev-loop team sync-opencode` (create-or-merge; hand-written providers survive). |
+| `W15` | The config targets opencode but the binary is missing from PATH or predates the certified `1.2.24` — `--variant` / the injected `OPENCODE_PERMISSION` are unverified there (an older binary may silently ignore the policy). Install/upgrade opencode (PORTABILITY §5). |
 
 ## State Layout
 

@@ -176,6 +176,9 @@ try {
   const doc2 = cli(["doctor"], ws);
   ok(/provider 'synth' auth DLTEST_SYNTH_KEY resolvable \(secrets\.env\)/.test(`${doc2.stdout}${doc2.stderr}`), "doctor: W13 passes via secrets.env");
   ok(/opencode\.json carries the 1 registry provider/.test(`${doc2.stdout}${doc2.stderr}`), "doctor: W14 passes after sync-opencode");
+  // W15 fires either way (pass with a version, or warn when the machine lacks opencode) — the GATE is what
+  // this asserts, machine-agnostically: the config targets opencode, so doctor must say something about it.
+  ok(/opencode .* on PATH \(certified|\[W15\]/.test(`${doc2.stdout}${doc2.stderr}`), "doctor: W15 opencode preflight engages when the config targets opencode");
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
