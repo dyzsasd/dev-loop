@@ -283,8 +283,11 @@ historical storage rationale.
 
 ## 8. Moving a Workspace
 
-Secrets are not stored in the workspace. `dev-loop.json` stores environment variable names, not
-secret values.
+`dev-loop.json` stores environment variable names, not secret values. The values live in
+`.dev-loop/secrets.env` — which travels **with** the folder (that is the point: notifications keep
+working on the new machine with no shell setup). Be deliberate about it: the copy below carries your
+webhook URLs, so keep the transfer channel private, or exclude the file
+(`rsync --exclude .dev-loop/secrets.env`) and recreate it on the new machine.
 
 ```bash
 dev-loop hub stop                 # service teams only; checkpoints the WAL
@@ -297,8 +300,9 @@ dev-loop doctor
 dev-loop run
 ```
 
-Also install your coding CLI, authenticate `gh`, configure Linear MCP if using Linear, and export the
-same environment variables referenced by `dev-loop.json`.
+Also install your coding CLI, authenticate `gh`, configure Linear MCP if using Linear, and export any
+environment variables referenced by `dev-loop.json` that you keep outside `secrets.env` (`doctor`
+warns `W12` if the comms webhook resolves to neither).
 
 ## 9. Logs and Reports
 
