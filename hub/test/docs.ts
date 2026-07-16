@@ -176,6 +176,9 @@ ok(!restore.isError && restore.data.archived === false && (await call(dArch, "do
   const { nonProgressChanges } = await import("../src/docstore.ts");
   ok(nonProgressChanges("intro\n## Current state\na", "intro2\n## Current state\na").includes("(preamble)"), "P2-5A: a preamble change is not PM's lane");
   ok(nonProgressChanges(BODY1, BODY2).length === 0, "P2-5A: the progress-only delta parses as exactly that");
+  const FENCED = "## Goals (north star)\ng\n```\n## Current state\nfake heading in a fence\n```\ntail\n";
+  ok(nonProgressChanges(FENCED, FENCED.replace("tail", "tail EDITED")).some((s) => s.includes("goals")),
+    "P2-5A: a heading inside a code fence is CONTENT — the edit below it still belongs to Goals (fails closed)");
   db.close();
 }
 
