@@ -351,7 +351,17 @@ function opDocSave(db: DatabaseSync, projectId: string, actor: string, a: Partia
   if (typeof a.body !== "string") return errR(400, "body required (a string)");
   if (a.title !== undefined && typeof a.title !== "string") return errR(400, "title must be a string"); // server.ts zod: title/summary optional strings — a non-string would bind into the INSERT → a 500
   if (a.summary !== undefined && typeof a.summary !== "string") return errR(400, "summary must be a string");
+  // P2-3b: the snake_case slip used to fall through to the generic baseVersion error — name the fix precisely.
+  if (a.baseVersion === undefined && (a as Record<string, unknown>)["base_version"] !== undefined)
+    return errR(400, "did you mean baseVersion? op args are camelCase — 'base_version' is not read");
   if (!Number.isInteger(a.baseVersion) || (a.baseVersion as number) < 0) return errR(400, "baseVersion must be a non-negative integer");
+  // P2-3a (CLI-path sugar; the stdio zod schema stays strict): kind is immutable identity (DL-9), so an
+  // EXISTING slug infers it — only a CREATE genuinely needs it. The shared core still enforces DL-9.
+  if (a.kind === undefined) {
+    const existing = db.prepare("SELECT kind FROM documents WHERE project_id=? AND slug=?").get(projectId, a.slug) as { kind?: string } | undefined;
+    if (existing?.kind) a.kind = existing.kind as DocSaveArgs["kind"];
+    else return errR(400, `kind required to CREATE doc '${a.slug}' (one of ${DOC_KINDS.join(", ")}); an existing slug infers its kind`);
+  }
   if (!(DOC_KINDS as readonly string[]).includes(a.kind as string)) return errR(400, `invalid kind '${a.kind}'; one of ${DOC_KINDS.join(", ")}`);
   const r = docSave(db, projectId, actor, a as DocSaveArgs);
   return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error, r.conflict); // a CAS CONFLICT carries {latestVersion,latestAuthor,hint} for a mechanical retry
@@ -361,6 +371,15 @@ function opDocSave(db: DatabaseSync, projectId: string, actor: string, a: Partia
 // OPERATOR-only gate lives inside docPublish (shared with server.ts) — cooperative role-attribution, not
 // anti-spoof on one host (§18): only the actor the daemon resolved from X-Devloop-Actor as "operator" passes.
 function opDocPublish(db: DatabaseSync, projectId: string, actor: string, a: Partial<DocPublishArgs>): OpResult {
+  // P2-3c (CLI-path sugar; stdio zod stays strict): version omitted or "latest" publishes the NEWEST
+  // draft — the field's 63-draft pile made "which number?" a lookup nobody did. This only RESOLVES the
+  // number; the operator gate + every core semantic stay inside docPublish, explicit versions unchanged.
+  if ((a.version === undefined || (a.version as unknown) === "latest") && typeof a.slug === "string" && a.slug) {
+    const doc = db.prepare("SELECT id FROM documents WHERE project_id=? AND slug=?").get(projectId, a.slug) as { id?: string } | undefined;
+    if (!doc?.id) return errR(404, `no doc '${a.slug}' in this project`);
+    const v = (db.prepare("SELECT MAX(version) v FROM document_versions WHERE doc_id=?").get(doc.id) as { v: number | null }).v;
+    if (v) (a as { version?: number }).version = v;
+  }
   if (!Number.isInteger(a.version) || (a.version as number) <= 0) return errR(400, "version must be a positive integer");
   const r = docPublish(db, projectId, actor, a as DocPublishArgs);
   return r.ok ? okR(r.data) : errR(statusForDocErr(r.error), r.error);

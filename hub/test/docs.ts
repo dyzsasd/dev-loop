@@ -117,6 +117,36 @@ const restore = await call(dArch, "doc.archive", { slug: "auth", archived: false
 ok(!restore.isError && restore.data.archived === false && (await call(dArch, "doc.list", { kind: "design" })).data[0].archived === 0,
   "D6: archived:false RESTORES the doc (the flip is reversible)");
 
+// ── P2-3: op-layer UX affordances (the CLI path; stdio zod stays strict; shared core untouched) ──
+{
+  const { openDb } = await import("../src/db.ts");
+  const { agentOp } = await import("../src/agentops.ts");
+  const P = "/tmp/dl-docs-ux.db";
+  for (const s of ["", "-wal", "-shm"]) { try { rmSync(P + s); } catch { /* */ } }
+  const db = openDb(P);
+  db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','k','n','t')").run();
+  const op = async (name: string, actor: string, args: Record<string, unknown>) =>
+    await agentOp(name as Parameters<typeof agentOp>[0], db, "p", "k", actor, args);
+  const errOf = (r: { body: unknown }) => String((r.body as { error?: string }).error ?? "");
+
+  const c1 = await op("doc.save", "pm", { slug: "s1", body: "b", baseVersion: 0 });
+  ok(c1.status === 400 && /kind required to CREATE/.test(errOf(c1)), "P2-3a: CREATE without kind → the precise create-time error");
+  ok((await op("doc.save", "pm", { slug: "s1", kind: "strategy", body: "b", baseVersion: 0 })).status === 200, "P2-3a: create with kind works");
+  const s2 = await op("doc.save", "pm", { slug: "s1", body: "b2", baseVersion: 1 });
+  ok(s2.status === 200 && (s2.body as { version: number }).version === 2, "P2-3a: an EXISTING slug infers its kind (no kind arg)");
+  const bv = await op("doc.save", "pm", { slug: "s1", kind: "strategy", body: "x", base_version: 2 });
+  ok(bv.status === 400 && /did you mean baseVersion/.test(errOf(bv)), "P2-3b: snake_case base_version → the precise camelCase hint");
+  const pub = await op("doc.publish", "operator", { slug: "s1" });
+  ok(pub.status === 200 && (pub.body as { current_version: number }).current_version === 2, "P2-3c: publish with NO version resolves the latest draft");
+  const pubLatest = await op("doc.publish", "operator", { slug: "s1", version: "latest" });
+  ok(pubLatest.status === 200, "P2-3c: version:'latest' works too (idempotent re-publish of v2)");
+  const pubGhost = await op("doc.publish", "operator", { slug: "ghost-none" });
+  ok(pubGhost.status === 404, "P2-3c: publish-latest on a missing slug → 404, never a generic version error");
+  const pubAgent = await op("doc.publish", "pm", { slug: "s1" });
+  ok(pubAgent.status >= 400 && /operator/i.test(errOf(pubAgent)), "P2-3c: the operator-only gate is untouched by the sugar");
+  db.close();
+}
+
 for (const c of [pm, reflect, operator, beta, dq, pmR, reflectR, operatorR, dArch]) await c.close();
 console.log(fails === 0 ? "\nHUB_DOCS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
