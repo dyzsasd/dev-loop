@@ -2117,9 +2117,14 @@ landing — so PM's write policy splits **by section**:
 - **Direction sections — propose first.** `Vision`, `Goals (north star)`, `Non-goals` —
   plus any `Appetite` / `No-gos` headings a doc carries: changing WHAT the product pursues
   requires the §9a **investigation protocol** (findings + the unified diff on a
-  `needs-pm`+`investigation` ticket → operator approval → only then the commit). Hub-doc
-  backends don't need this split — the operator-publish gate already holds the direction
-  line (§18).
+  `needs-pm`+`investigation` ticket → operator approval → only then the commit).
+  **Hub-doc backends share the SAME split (P2-5A, operator decision 2026-07-17), enforced in
+  `docPublish` itself:** after a progress-only save, PM publishes the draft in the same fire
+  (`dev-loop doc publish --slug <strategy-slug>` — version defaults to the latest draft), so
+  consumers never read a stale published north star while drafts pile up. A FIRST publish,
+  any direction-section change, an UNKNOWN heading, or a preamble change is refused with the
+  section names — those keep the §9a operator route; the refusal itself is the signal to file
+  the investigation ticket.
 
 **Sweep is the backstop (report-only):** each fire it audits recent doc-only commits
 touching the strategy doc; a diff that changes a direction section with no linked approval
