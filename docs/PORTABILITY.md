@@ -157,15 +157,56 @@ for approval. Use `--codex-safe` only for attended runs where you want to approv
 
 ## 5. opencode
 
-opencode follows the same contract, but its exact MCP schema and environment propagation should be
-verified on the installed version before unattended use:
+opencode is supported through `dev-loop run --cli opencode`. On `backend:"service"` its fires run the
+`"cli"` interface (certified below; 1.3.0 flips `hub.agentInterface.opencode` from the pre-certification
+`"mcp"` default): the scheduler injects no MCP and exports the identity env per fire, and the agent
+reaches the board through the `dev-loop` write verbs.
+
+### opencode CLI interface — CERTIFIED (2026-07-16, P8-style)
+
+Run end-to-end against a scratch service workspace on `opencode 1.2.24`. **Result: certified for the
+`"cli"` interface, with one mandatory condition — wildcard-deny permission injection (below).**
+
+| Check | Result |
+|---|---|
+| Launcher-side gate: `dev-loop identity-check --expect pm/certproj` under the exact fire env | ✅ exit 0, `pass:true` |
+| Fire-shaped `opencode run` (identity env exported, prompt = run the same `identity-check` via the bash tool) | ✅ the probe ran inside opencode's spawned shell and printed `{"actor":"pm","project":"certproj",…,"pass":true}`, exit 0 |
+| `OPENCODE_PERMISSION` honored | ✅ `{"bash":{"*":"deny"}}` blocked the bash tool |
+| Certified unattended shape `{"*":"deny","bash":"allow"}` | ✅ identity probe `pass:true`, side-door tools closed |
+| Read-only board call (`dev-loop tickets --json` through the fire shape) | ✅ `[]`, exit 0 |
+| `--variant high` (reasoning-effort flag) | ✅ accepted, exit 0 |
+| Scheduler render: `dev-loop run --cli opencode --agents qa --once --dry-run` | ✅ `opencode run '<prompt>'` |
+
+**What was proven:** `opencode run` propagates the launching process env (`DEVLOOP_ACTOR` /
+`DEVLOOP_PROJECT` / `DEVLOOP_HUB_DB`) into its **bash tool** — the identity transport every
+interface=`"cli"` fire depends on.
+
+**What was also found (load-bearing):** operator-installed global extensions (the certifying machine runs
+oh-my-opencode) add custom agents and custom exec tools. An `interactive_bash` (tmux) tool **escaped a
+narrow `{"bash":…}` deny** and — because tmux sessions do not inherit the fire's process env — **silently
+dropped the identity** (actor fell back to `operator`, db to the global path). Two consequences:
+
+1. Unattended fires MUST inject `OPENCODE_PERMISSION` with a **wildcard-deny baseline** —
+   `{"*":"deny", "bash":{…allows}, "read":"allow", "edit":"allow", …}` — never a bare `{"bash":…}`
+   overlay. Deny-by-default is what closes exec tools the scheduler has never heard of.
+2. Neither `OPENCODE_CONFIG` nor `--agent build` isolates a fire from global agent overlays on 1.2.24
+   (the default agent itself is overridden), so the *prompt* surface may still carry operator
+   customizations. The inlined SKILL prompt dominates behavior and identity/tools are secured by (1),
+   but keep fire hosts' global opencode config benign.
+
+Certified manual shape:
 
 ```bash
-dev-loop run --cli opencode --agents qa --once --dry-run
+OPENCODE_PERMISSION='{"*":"deny","bash":"allow"}' \
+DEVLOOP_ACTOR=qa DEVLOOP_PROJECT=<project> DEVLOOP_HUB_DB=<db> \
+  opencode run -m <provider/model> --variant <effort> "$PROMPT"
 ```
 
-Then run the identity gate above. If opencode does not pass per-pane environment variables into MCP,
-use its config override mechanism, mirroring the Codex pattern.
+Use manual `opencode run` only for attended tests or one-off debugging. For the loop, use:
+
+```bash
+dev-loop run --cli opencode --agents core
+```
 
 ## 6. What Stays the Same
 
