@@ -119,6 +119,16 @@ function parseWindow(s: string): number {
   return Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000);
 }
 
+// P1-3: the operator's decision queue as ONE queryable set — Human-Blocked ∪ In Review assigned to the
+// operator. The daemon reminder pings it; the §22a digest carries it; this is the shared read.
+export interface DecisionItem { id: string; title: string; state: string; updatedAt: string }
+export function decisionQueue(db: import("node:sqlite").DatabaseSync, projectId: string): DecisionItem[] {
+  return (db.prepare(
+    "SELECT id,title,state,updated_at FROM tickets WHERE project_id=? AND (state='Human-Blocked' OR (state='In Review' AND assignee='operator')) ORDER BY updated_at",
+  ).all(projectId) as { id: string; title: string; state: string; updated_at: string }[])
+    .map((t) => ({ id: t.id, title: t.title, state: t.state, updatedAt: t.updated_at }));
+}
+
 export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
   let windowMs = 7 * 86_400_000;
   let asJson = false;
@@ -150,6 +160,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     try {
       const board: Record<string, BoardMetrics> = {};
       const roll = { throughput: 0, verifyFails: 0, blockedNow: 0, bugsFiled: 0, escaped: 0 };
+      const queue: Array<DecisionItem & { project: string }> = [];
       for (const key of deliveryProjects(ws)) {
         const pid = findProject(db, key);
         if (!pid) continue;
@@ -157,9 +168,11 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
         board[key] = m;
         roll.throughput += m.throughput; roll.verifyFails += m.verifyFails; roll.blockedNow += m.blockedNow;
         roll.bugsFiled += m.qa.bugsFiled; roll.escaped += m.qa.escaped;
+        queue.push(...decisionQueue(db, pid).map((t) => ({ ...t, project: key }))); // P1-3
       }
       out.board = board;
       out.teamRollup = { ...roll, acceptRate: roll.throughput + roll.verifyFails ? roll.throughput / (roll.throughput + roll.verifyFails) : null };
+      out.decisionQueue = queue;
     } finally { db.close(); }
   } else {
     out.boardNote = "linear backend: board KPIs are computed by the digest agent via MCP queries (§22 digest contract); this CLI reports fire metrics only.";
@@ -176,6 +189,8 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   if (out.teamRollup) {
     const r = out.teamRollup as { throughput: number; verifyFails: number; acceptRate: number | null; blockedNow: number; bugsFiled: number; escaped: number };
     console.log(`board: ${r.throughput} shipped, accept ${pct(r.acceptRate)} (${r.verifyFails} verify-fail), ${r.blockedNow} blocked open, QA bugs ${r.bugsFiled} (${r.escaped} escaped to prod)`);
+    const dq = (out.decisionQueue ?? []) as Array<{ id: string; state: string; project: string }>;
+    if (dq.length) console.log(`decision queue (yours): ${dq.length} — ${dq.slice(0, 6).map((t) => `${t.id}[${t.state === "Human-Blocked" ? "blocked" : "approve"}]`).join(", ")}${dq.length > 6 ? ", …" : ""}`);
   } else console.log(String(out.boardNote));
   return 0;
 }
