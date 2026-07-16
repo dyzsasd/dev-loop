@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.3.0
 
 - **feat(secrets): workspace-scoped secrets file — `.dev-loop/secrets.env`.** Live-loop failure
   (citronetic): the operator never exported `DEVLOOP_COMMS_WEBHOOK`, so every notification silently
