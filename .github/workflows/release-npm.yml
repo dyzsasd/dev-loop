@@ -1,11 +1,26 @@
 name: Release npm package
 
+# Publish from the GitHub UI: Actions → "Release npm package" → Run workflow → pick a bump type.
+# The workflow computes the next version from hub/package.json, requires a matching CHANGELOG
+# section (renaming "## Unreleased" into the version if present), stamps the four manifests,
+# tests, tags, and publishes. Bump conventions + auth setup live in docs/RELEASING.md.
+
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version to release, without the leading v"
+      bump:
+        description: "patch = fixes/docs · minor = new features/config · major = breaking · explicit = use `version` (e.g. resume a half-finished release)"
         required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - explicit
+      version:
+        description: "Bare semver, only with bump: explicit (e.g. 1.2.1)"
+        required: false
         type: string
       npm_tag:
         description: "npm dist-tag"
@@ -27,7 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PACKAGE_NAME: "@dyzsasd/dev-loop"
-      VERSION: ${{ inputs.version }}
+      BUMP: ${{ inputs.bump }}
+      INPUT_VERSION: ${{ inputs.version }}
       NPM_TAG: ${{ inputs.npm_tag }}
     steps:
       - name: Check out repository
@@ -41,6 +57,34 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Resolve version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CURRENT="$(node -p "require('./hub/package.json').version")"
+          if [[ ! "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "hub/package.json version '$CURRENT' is not bare semver — reconcile manually."
+            exit 1
+          fi
+          IFS=. read -r MA MI PA <<< "$CURRENT"
+
+          case "$BUMP" in
+            patch)    VERSION="$MA.$MI.$((PA + 1))" ;;
+            minor)    VERSION="$MA.$((MI + 1)).0" ;;
+            major)    VERSION="$((MA + 1)).0.0" ;;
+            explicit)
+              if [[ ! "${INPUT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+                echo "bump: explicit needs a bare-semver \`version\` input, for example 1.2.1. Got: '${INPUT_VERSION}'"
+                exit 1
+              fi
+              VERSION="${INPUT_VERSION}"
+              ;;
+          esac
+
+          echo "Releasing: $CURRENT → $VERSION (bump: $BUMP)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Validate release target
         shell: bash
         run: |
@@ -48,11 +92,6 @@ jobs:
 
           if [ "${GITHUB_REF_TYPE}" != "branch" ]; then
             echo "Run this workflow from a branch, not ${GITHUB_REF_TYPE}."
-            exit 1
-          fi
-
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Version must be bare semver, for example 0.23.1. Got: $VERSION"
             exit 1
           fi
 
@@ -66,10 +105,28 @@ jobs:
               echo "v$VERSION is already fully released (tag + npm)."
               exit 1
             fi
-            # Tag was pushed but a later step failed: re-running resumes the publish.
+            # Tag was pushed but a later step failed: re-running (bump: explicit) resumes the publish.
             echo "Tag v$VERSION exists but $PACKAGE_NAME@$VERSION is not on npm — resuming publish."
           elif [ "$NPM_EXISTS" = "1" ]; then
             echo "$PACKAGE_NAME@$VERSION is on npm but tag v$VERSION is missing — reconcile manually."
+            exit 1
+          fi
+
+      # The changelog IS the release gate: every release ships a "## <version>" section. Accumulate
+      # entries under "## Unreleased" between releases — this step stamps it into the version being
+      # cut (the rename rides the release commit). A release with NO changelog section is refused.
+      - name: Stamp the changelog section
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -qxF "## $VERSION" CHANGELOG.md; then
+            echo "CHANGELOG.md already carries '## $VERSION'."
+          elif grep -qxF "## Unreleased" CHANGELOG.md; then
+            sed -i "s/^## Unreleased$/## $VERSION/" CHANGELOG.md
+            echo "Renamed '## Unreleased' → '## $VERSION'."
+          else
+            echo "CHANGELOG.md has neither '## $VERSION' nor '## Unreleased' — add the release notes first (docs/RELEASING.md)."
             exit 1
           fi
 
@@ -99,7 +156,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json hub/package.json hub/package-lock.json
+          git add CHANGELOG.md .claude-plugin/plugin.json .claude-plugin/marketplace.json hub/package.json hub/package-lock.json
           if git diff --cached --quiet; then
             echo "Version files already match $VERSION; no release commit needed."
           else
@@ -113,15 +170,26 @@ jobs:
           fi
 
       # Push BEFORE publish: npm versions are irrevocable, git pushes are recoverable.
-      # A failed publish leaves a pushed tag; re-running the workflow resumes from it.
+      # A failed publish leaves a pushed tag; re-running with bump: explicit resumes from it.
       - name: Push release commit and tag
         shell: bash
         run: |
           set -euo pipefail
           git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "v$VERSION"
 
+      # Auth, either of (docs/RELEASING.md):
+      #   1. NPM_TOKEN repo secret (npm automation/granular token with publish access), or
+      #   2. npm trusted publishing (OIDC) — configure this repo + workflow file as a Trusted
+      #      Publisher for the package on npmjs.com; no secret needed (npm >= 11.5.1 exchanges
+      #      the Actions id-token automatically when no token is present).
       - name: Publish to npm
         working-directory: hub
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --tag "$NPM_TAG" --provenance
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "No NPM_TOKEN secret — relying on npm trusted publishing (OIDC)."
+            npm install -g "npm@>=11.5.1" >/dev/null
+          fi
+          npm publish --access public --tag "$NPM_TAG" --provenance
