@@ -53,10 +53,10 @@ npm i -g @dyzsasd/dev-loop
 ```
 
 For `backend:"service"`, how a fire reaches the hub depends on the configured agent interface
-(`hub.agentInterface`, D8): coding agents on `"cli"` (the default for Claude Code and — since the
-2026-07-11 P8 certification below — Codex) get **no** MCP injection — they call the PATH-installed
-`dev-loop` write verbs, with identity exported in the fire env — while agents on `"mcp"` (the
-default for opencode; the rollback setting for claude/codex) reach the hub over MCP: `dev-loop run`
+(`hub.agentInterface`, D8): coding agents on `"cli"` (the default for Claude Code, for Codex since
+the 2026-07-11 P8 certification, and for opencode since the 2026-07-16 certification in §5) get
+**no** MCP injection — they call the PATH-installed `dev-loop` write verbs, with identity exported
+in the fire env — while agents on `"mcp"` (the rollback setting for all three) reach the hub over MCP: `dev-loop run`
 injects the configuration inline per fire for claude/codex, while opencode registers it through the
 operator's merged config (its template below), the scheduler passing only the identity env. Manual
 MCP setup is needed when you bypass the scheduler for an `"mcp"`-interface claude/codex fire, or
