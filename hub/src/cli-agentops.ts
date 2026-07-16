@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 import { openDb, actorExists, listActorHandles } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { ensureActors, findProject } from "./seed.ts";
-import { hubDbPath } from "./paths.ts";
+import { resolveHubDbPath } from "./workspace.ts";
 import { agentOp, isAgentOp, AGENT_OPS, AGENT_WRITE_OPS, type AgentOp, type OpResult } from "./agentops.ts";
 import { opRunfilePath, resolveOpPort, postOp } from "./op-client.ts";
 
@@ -142,7 +142,7 @@ function openHub(): Hub {
   }
   let db: DatabaseSync;
   try {
-    db = openDb(hubDbPath());
+    db = openDb(resolveHubDbPath()); // workspace-aware ladder (P2 #1) — a bare `dev-loop op` at the workspace root must hit ITS board, not the global default
     ensureActors(db); // idempotent (server.ts does the same) — the G1 guard below needs the roster present; INSERTs, so it belongs inside the busy mapping (codex #3)
   } catch (e) {
     if (isBusy(e)) { console.error(`dev-loop: hub db is busy past the 5s busy_timeout: ${(e as Error).message}`); process.exit(5); }

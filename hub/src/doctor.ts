@@ -11,8 +11,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
-import { hubDbPath } from "./paths.ts";
-import { tryResolveWorkspace, wsHubDb } from "./workspace.ts";
+import { tryResolveWorkspace, wsHubDb, resolveHubDbPath } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
 import { checkLessonsBudget } from "./lessons.ts";
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
@@ -459,5 +458,5 @@ function reconcileAutostart(pass: (m: string) => void, warn: (m: string) => void
 
 // CLI: node src/doctor.ts  (or `dev-loop-hub doctor` via server.ts dispatch / `npm run doctor`)
 if (import.meta.url === `file://${process.argv[1]}`) {
-  process.exit((await runDoctor(hubDbPath(), { reconcile: true })) ? 0 : 1);
+  process.exit((await runDoctor(resolveHubDbPath(), { reconcile: true })) ? 0 : 1); // workspace-aware ladder (P2 #1)
 }
