@@ -142,10 +142,14 @@ export interface DocPublishArgs { slug?: string; kind?: string; version: number;
 const PROGRESS_HEADINGS = [/^current state\b/i, /^decisions\b/i, /^candidate ideas\b/i, /^personas\b/i, /^glossary\b/i];
 export function sectionsOf(body: string): Map<string, string> {
   const out = new Map<string, string>();
-  let name = ""; let buf: string[] = [];
+  let name = ""; let buf: string[] = []; let inFence = false;
   const flush = () => { out.set(name, (out.get(name) ?? "") + buf.join("\n")); buf = []; };
   for (const line of body.split(/\r?\n/)) {
-    const m = line.match(/^#{1,6}\s+(.+?)\s*$/);
+    // A `# heading` line INSIDE a code fence is content, not a section boundary — without this, a
+    // fenced example could open a phantom progress-named section and misattribute the direction text
+    // below it (the one parse shape that would have failed OPEN instead of closed).
+    if (/^(```|~~~)/.test(line)) { inFence = !inFence; buf.push(line); continue; }
+    const m = !inFence && line.match(/^#{1,6}\s+(.+?)\s*$/);
     if (m) { flush(); name = m[1].trim().toLowerCase(); } else buf.push(line);
   }
   flush();
