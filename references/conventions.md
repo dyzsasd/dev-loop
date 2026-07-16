@@ -656,6 +656,12 @@ How a worktree LANDS depends on `git.landing`:
      final `push` when `git.autoPush` is false. `--ff-only` is load-bearing: if the merge
      refuses, the base advanced under you — go back to step 1 and retry (cap ~2 cycles →
      `fix-exhausted` block, §9); never create a merge knot on `defaultBranch`.
+     **Pre-push ride-along gate (P1-2):** `autoPush:false` makes every later push a BATCH —
+     it carries every unpushed commit before yours, including work the operator has since
+     Canceled (the MP-275 prod incident). Immediately before any `git push` on
+     `defaultBranch`, run `dev-loop push-guard --repo <dir> --strict`; exit 1 ⇒ STOP — do
+     not push; comment the finding on your ticket and park it `needs-operator` (the
+     canceled commit is the operator's to drop/keep; §21 you never rewrite history).
   3. **Clean up** (under the same lock, or a second invocation): `git worktree remove` the
      ticket's worktree, then `git branch -d dev-loop/<ticket-id>`. Deploy (`git.autoDeploy`,
      dev-agent Step 6/6.5) runs from the base clone AFTER the merge-back — the Step-6 flag
