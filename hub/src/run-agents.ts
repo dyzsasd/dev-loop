@@ -839,7 +839,22 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const log = createWriteStream(logPath, { flags: "a" });
   // A stream 'error' with no listener is an uncaught exception that kills the WHOLE scheduler —
   // one ENOSPC/EACCES on a log file must degrade logging, not take down the loop.
-  log.on("error", (e) => console.error(`[${agent}] runner-log write failed (${e.message}); continuing without file log`));
+  let logDead = false; // 'error' fired — degrade logging, and NEVER let a fire block on the log below
+  log.on("error", (e) => { logDead = true; console.error(`[${agent}] runner-log write failed (${e.message}); continuing without file log`); });
+  // Single-owner stream lifecycle: finalize() ends the log AFTER its last write and resolves the fire
+  // only once the flush completes. Two field failures live here (report P2-4): the close handler used to
+  // end the stream first, so finalize's footer/suspect writes died as "write after end" (×103); and
+  // --once's process.exit() truncated the un-flushed tail even when the writes succeeded. logOpen gates
+  // late pipe chunks on the 150ms grace path (finalize-before-close), where data may trickle after end.
+  let logOpen = true;
+  const endLog = (done?: () => void) => {
+    if (!logOpen || logDead) { done?.(); return; }
+    logOpen = false;
+    let called = false;
+    const fin = () => { if (!called) { called = true; done?.(); } };
+    log.once("error", fin); // a flush-time error must not hang the fire
+    log.end(fin);
+  };
   log.write(`\n\n===== ${new Date().toISOString()} ${rendered} cwd=${cwd} =====\n`);
   console.log(`[${new Date().toISOString()}] ${agent}: start (${profile.codingAgent}); log ${logPath}`);
 
@@ -852,8 +867,8 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   let outTail = "";
   let outBytes = 0;
   const keepTail = (d: Buffer | string) => { const s = d.toString(); outBytes += s.length; outTail = (outTail + s).slice(-2048); };
-  child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); log.write(d); });
-  child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); log.write(d); });
+  child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
+  child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
 
   return await new Promise((resolveExit) => {
     // Fire timeout: without it a wedged CLI child holds its slot's non-reentrancy flag forever —
@@ -870,7 +885,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       killTimer.unref?.();
     }, opts.fireTimeoutMs) : undefined;
     fireTimer?.unref?.();
-    child.on("error", (e) => { log.write(`\nERROR: ${e.message}\n`); console.error(`[${agent}] failed to start: ${e.message}`); clearTimeout(fireTimer); resolveExit(1); });
+    child.on("error", (e) => { if (logOpen && !logDead) log.write(`\nERROR: ${e.message}\n`); console.error(`[${agent}] failed to start: ${e.message}`); clearTimeout(fireTimer); endLog(() => resolveExit(1)); });
     // Resolve on 'exit', not 'close': 'close' additionally waits for the stdio pipes, which a grandchild
     // the CLI spawned can hold open long after the CLI itself died — exactly the wedged case the fire
     // timeout exists for. The log stream stays open until 'close' so late pipe output is still captured.
@@ -900,7 +915,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       }
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut,
         suspectError ? { suspectError: true, outputTail: outTail.slice(-400) } : undefined);
-      resolveExit(exitCode);
+      endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
     child.on("exit", (code, signal) => {
       clearTimeout(fireTimer);
@@ -911,7 +926,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       grace.unref?.();
       child.once("close", () => { clearTimeout(grace); finalize(code, signal); });
     });
-    child.on("close", () => { closed = true; log.end(); });
+    child.on("close", () => { closed = true; }); // stream end belongs to finalize (single owner)
   });
 }
 
