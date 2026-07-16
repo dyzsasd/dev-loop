@@ -166,7 +166,7 @@ export function docPublish(db: DatabaseSync, projectId: string, actor: string, a
   if (!d) return { ok: false, error: `no document ${a.slug ?? a.kind}` };
   if (actor !== "operator") {
     if (d.kind !== "strategy") return { ok: false, error: "FORBIDDEN: only the operator may publish a doc draft→current" };
-    if (!d.current_version) return { ok: false, error: "FORBIDDEN: the FIRST publish of a strategy doc is the operator's — nothing is published yet to diff against (§20/P2-5A)" };
+    if (!d.current_version) return { ok: false, error: "FORBIDDEN: only the operator may publish the FIRST version of a strategy doc — nothing is published yet to diff against (§20/P2-5A)" };
     const pub = db.prepare("SELECT body FROM document_versions WHERE doc_id=? AND version=?").get(d.id, d.current_version) as { body?: string } | undefined;
     const cand = db.prepare("SELECT body FROM document_versions WHERE doc_id=? AND version=?").get(d.id, a.version) as { body?: string } | undefined;
     if (!cand) return { ok: false, error: `no version ${a.version} of ${d.slug} to publish` };

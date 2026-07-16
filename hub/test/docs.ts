@@ -172,7 +172,7 @@ ok(!restore.isError && restore.data.archived === false && (await call(dArch, "do
     await agentOp2(name as Parameters<typeof agentOp2>[0], db, "p2", "k2", actor, args);
   ok((await op2("doc.save", "pm", { slug: "fresh", kind: "strategy", body: BODY1, baseVersion: 0 })).status === 200, "setup: a NEVER-published strategy in project 2");
   const pmFirst = await op2("doc.publish", "pm", { slug: "fresh" });
-  ok(pmFirst.status >= 400 && /FIRST publish/.test(errOf(pmFirst)), "P2-5A: the FIRST publish stays the operator's (fail closed)");
+  ok(pmFirst.status >= 400 && /FIRST version/.test(errOf(pmFirst)), "P2-5A: the FIRST publish stays the operator's (fail closed)");
   const { nonProgressChanges } = await import("../src/docstore.ts");
   ok(nonProgressChanges("intro\n## Current state\na", "intro2\n## Current state\na").includes("(preamble)"), "P2-5A: a preamble change is not PM's lane");
   ok(nonProgressChanges(BODY1, BODY2).length === 0, "P2-5A: the progress-only delta parses as exactly that");

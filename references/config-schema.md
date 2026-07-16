@@ -194,7 +194,7 @@ single-field mutator; see [Operator-tunable fields](#operator-tunable-fields-dev
 | `providers` | Registry of **custom OpenAI-compatible model endpoints** for the opencode lane (E16; `docs/design/model-provider-routing.md`). Entry: `{ kind:"openai-compatible", baseUrl, authTokenEnv, models[], extraOptions?, effortMode? }` — the id doubles as the opencode provider key and the `agents{}.model` prefix (`<id>/<model-id>`). Rendered into `<workspace>/opencode.json` by `dev-loop team sync-opencode` with `{env:VAR}` auth indirection (§16 — value in `secrets.env`). Built-in opencode providers (openrouter, zhipuai, …) need **no** entry: auth + the model string suffice (`opencode models` lists the launchable ids). | — |
 | `opencodePermission` | Whole-object override of the per-fire `OPENCODE_PERMISSION` injection (E16). Default is the certified wildcard-deny policy (PORTABILITY §5) — deny-by-default closes operator-installed custom exec tools; replace only with another deny-based shape. | — |
 | `hub.agentInterface` | `backend:"service"` only: per coding agent, how a fire reaches the hub board — `"cli"` (the PATH-installed `dev-loop` write verbs; identity rides the fire env) or `"mcp"` (the scheduler-injected `dev-loop-hub` MCP server). Defaults: `claude`/`codex` → `"cli"` (codex since its 2026-07-11 P8 env-propagation certification, docs/PORTABILITY.md §4), `opencode` → `"mcp"`. This is also the rollback switch: set `"claude": "mcp"` / `"codex": "mcp"` to restore the injected-MCP behavior. Projects override per coding agent. | — |
-| `agents` | Team-scope agent launch config, mainly cadence for Sweep/Ops/Reflect/Communication. | — |
+| `agents` | Team-scope agent launch config, mainly cadence for Sweep/Ops/Reflect/Communication. `agents.<h>.manual:true` (P1-4) declares a role the operator runs BY HAND — owner-liveness (doctor `W16`, the Sweep digest) reports its stranded tickets as "awaiting a human" instead of warning. | — |
 
 ## `repos`
 
@@ -296,8 +296,9 @@ The hub daemon's background notifiers read two per-project knobs from the hub DB
 
 | Field | Meaning |
 |---|---|
-| `humanBlockedReminderHours` | Cadence (hours) of the daemon's Human-Blocked reminder — the first ping when a ticket is parked plus the periodic repeats (conventions §9a). **Default: `24` whenever a comms channel is configured (`team.comms` present — it is bridged to the daemon as the §9 `notify` webhook), else `0` (off).** An explicit `0` stays the opt-out even with comms configured; an explicit positive value always wins over the default. |
+| `humanBlockedReminderHours` | Cadence (hours) of the daemon's **decision-queue** reminder — Human-Blocked tickets ∪ `In Review` assigned to the operator (P1-3, each shape with its own marker/wording): the first ping when an item is parked plus the periodic repeats (conventions §9a). **Default: `24` whenever a comms channel is configured (`team.comms` present — it is bridged to the daemon as the §9 `notify` webhook), else `0` (off).** An explicit `0` stays the opt-out even with comms configured; an explicit positive value always wins over the default. |
 | `noProgressWindowHours` | Rolling window (hours) for the loop no-progress circuit-breaker; `0`/absent ⇒ off (no default flip). |
+| `fireHealth` | The loop fire-health self-monitor (P0-1c): `{ windowHours, minFires, threshold }`. **Default ON** — `<50%` fire success over `2h` with `≥6` fires alerts once per degradation episode (with the errorClass tallies) and the first healthy window sends one recovery line, whenever a send target + the team fires ledger exist. `windowHours: 0` opts out. |
 
 The passive-intake doc-edit notifier keys off the project's effective `intake.mode`
 (`"passive"` only) and the drafts-pending notifier runs whenever a send target exists —
@@ -410,6 +411,7 @@ Common warnings:
 | `W13` | A `team.providers` entry's `authTokenEnv` resolves to nothing in the process env **and** `.dev-loop/secrets.env` — every opencode fire on that provider fails pre-spawn (`fireError: provider-env-missing`, zero tokens). Put the key in `secrets.env` or export it. |
 | `W14` | The workspace `opencode.json` is missing/stale relative to `team.providers` — run `dev-loop team sync-opencode` (create-or-merge; hand-written providers survive). |
 | `W15` | The config targets opencode but the binary is missing from PATH or predates the certified `1.2.24` — `--variant` / the injected `OPENCODE_PERMISSION` are unverified there (an older binary may silently ignore the policy). Install/upgrade opencode (PORTABILITY §5). |
+| `W16` | Owner-liveness (P1-4): an owner label with open Todo/In Review tickets whose actor has NO fire in 7d — the tickets are stranded (nobody will ever verify/work them). Re-owner them, or declare the role human-run: `agents.<h>.manual:true` (the finding then downgrades to an "awaiting a human" info line). |
 
 ## State Layout
 
