@@ -2662,6 +2662,10 @@ these sections, then push via `dev-loop notify --title "Daily <team> <date>"`:
    trackers); an empty section is a good day. Compose it from these lines, each omitted when zero:
    · **Human-Blocked**: count + the oldest park's age (workflows P3 —
    from the board, never memory; the same numbers the daemon reminder carries).
+   · **Awaiting your approval** (P1-3): In Review tickets assigned to `operator` (the §9a
+   board-approval stops), count + the oldest's age. `dev-loop metrics --json` carries the whole
+   decision queue verbatim as `.decisionQueue` (Human-Blocked ∪ In Review@operator, oldest
+   first) — quote it, never re-derive; the daemon pings the same set (`operator_review.notified`).
    · **Investigation proposals pending**: each open §9a `investigation`
    ticket parked for operator approval, with its doc + version (the ticket's
    `Proposes: doc:<slug> vN (published vM)` line).
