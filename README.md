@@ -84,7 +84,9 @@ recreate it there.
 
 ## Requirements
 
-- **Node ≥ 23.6** and a coding CLI on `PATH`: `claude` (Claude Code) and/or `codex`.
+- **Node ≥ 23.6** and a coding CLI on `PATH`: `claude` (Claude Code), `codex`, and/or `opencode`
+  (opencode reaches any of its 75+ model providers via `provider/model-id` launch strings — see
+  `docs/RUNNING.md`).
 - A backend: nothing — the bundled **service hub** (local sqlite + web UI, the default)
   needs no external service — or **Linear** (the Linear MCP configured in Claude Code
   user scope).
@@ -109,7 +111,7 @@ and the validated mutators — you rarely hand-edit it. The edit path is
   `comms` (Slack/Lark channel as an env-var *name*; its presence is also what turns the
   daily director digest on), team-wide `intake` defaults (projects override field-wise),
   `hub.agentInterface` (service backend: how fires reach the hub board — `"cli"` for
-  Claude Code and Codex by default; `"mcp"` is the rollback switch), per-agent cadences.
+  Claude Code, Codex, and opencode by default; `"mcp"` is the rollback switch), per-agent cadences.
 - `repos` — the physical registry: path, build/typecheck commands, PR merge checks,
   deploy shape, health probes.
 - `projects` — virtual delivery units referencing repos: strategy doc, test env, `weight`
