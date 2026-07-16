@@ -3,6 +3,32 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 1.3.0 (unreleased)
+
+- **feat(providers): any model provider via the opencode lane — registry, sync, certification.**
+  Origin: the 2026-07-16 ZCode/GLM research (`docs/design/model-provider-routing.md`) — the operator
+  wants agents on arbitrary model providers (GLM, OpenRouter, …), with **opencode as the vehicle**
+  (its `provider/model-id` strings already carry the provider, so per-agent launch config needed no
+  new selection field). What shipped: (a) a **P8-style certification of opencode 1.2.24**
+  (PORTABILITY §5) — identity propagates into the bash tool, so `hub.agentInterface.opencode` flips
+  to `"cli"` (mcp = rollback); the ceremony also caught that operator-installed global extensions
+  (oh-my-opencode) add exec tools that escape narrow permission patterns AND drop the fire env via
+  tmux, so (b) every opencode fire now injects a **certified wildcard-deny `OPENCODE_PERMISSION`**
+  (deny-by-default; `team.opencodePermission` overrides wholesale, E16) and passes effort as
+  `--variant` (closing the 1.2-era "effort is not auto-passed" gap; per-provider
+  `effortMode:"strip"` opts out). (c) **`team.providers{}`** (E16, §16 env-NAME-only auth) registers
+  custom OpenAI-compatible endpoints; **`dev-loop team sync-opencode`** renders them into the
+  workspace `opencode.json` with `{env:VAR}` indirection — create-or-merge, never clobbers, never
+  touches `~/.config/opencode/`. (d) A registry fire whose auth env is unresolvable **fails
+  pre-spawn** (`fireError: "provider-env-missing"`, exit 4, zero tokens — and never inside
+  `--dry-run`, which renders the command plus a NOTE instead). (e) `fires.jsonl` + `fire.completed`
+  gain a **`provider`** dimension (opencode = model-string prefix; claude/codex = native) for the
+  cost bill. (f) Doctor gains **W13** (provider auth resolvability, the W12 pattern) and **W14**
+  (registry↔`opencode.json` drift). `test/provider-routing.ts` (54 checks: E16, render/sync
+  idempotence + never-clobber, fake-bin fire assembly incl. permission/identity/variant, pre-spawn,
+  claude-lane parity, doctor); suite green at 2,596. The claude-runner Anthropic-compatible
+  env-injection route (Z.ai/OpenRouter presets) stays deferred as design Appendix A.
+
 ## 1.2.1
 
 - **feat(secrets): workspace-scoped secrets file — `.dev-loop/secrets.env`.** Live-loop failure

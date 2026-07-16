@@ -191,6 +191,8 @@ single-field mutator; see [Operator-tunable fields](#operator-tunable-fields-dev
 | `intake` | Team-wide default intake block (`mode`, `todoDepthCap`); seeded by `team init --intake-mode`. Projects override **field-wise** (nearest wins per field), so a project tuning only `todoDepthCap` keeps a team-level `"passive"`. | ✓ `team.intake.mode`, `team.intake.todoDepthCap` |
 | `defaultCodingAgent` | Default executor CLI (`claude`, `codex`, or `opencode`) when an agent does not override. | — |
 | `codingAgentDefaults` | Default `{ model, effort }` per executor CLI. | — |
+| `providers` | Registry of **custom OpenAI-compatible model endpoints** for the opencode lane (E16; `docs/design/model-provider-routing.md`). Entry: `{ kind:"openai-compatible", baseUrl, authTokenEnv, models[], extraOptions?, effortMode? }` — the id doubles as the opencode provider key and the `agents{}.model` prefix (`<id>/<model-id>`). Rendered into `<workspace>/opencode.json` by `dev-loop team sync-opencode` with `{env:VAR}` auth indirection (§16 — value in `secrets.env`). Built-in opencode providers (openrouter, zhipuai, …) need **no** entry: auth + the model string suffice (`opencode models` lists the launchable ids). | — |
+| `opencodePermission` | Whole-object override of the per-fire `OPENCODE_PERMISSION` injection (E16). Default is the certified wildcard-deny policy (PORTABILITY §5) — deny-by-default closes operator-installed custom exec tools; replace only with another deny-based shape. | — |
 | `hub.agentInterface` | `backend:"service"` only: per coding agent, how a fire reaches the hub board — `"cli"` (the PATH-installed `dev-loop` write verbs; identity rides the fire env) or `"mcp"` (the scheduler-injected `dev-loop-hub` MCP server). Defaults: `claude`/`codex` → `"cli"` (codex since its 2026-07-11 P8 env-propagation certification, docs/PORTABILITY.md §4), `opencode` → `"mcp"`. This is also the rollback switch: set `"claude": "mcp"` / `"codex": "mcp"` to restore the injected-MCP behavior. Projects override per coding agent. | — |
 | `agents` | Team-scope agent launch config, mainly cadence for Sweep/Ops/Reflect/Communication. | — |
 
@@ -386,6 +388,7 @@ workspace-fingerprint mismatch check against every mapped Linear project.
 | `E13` | Bad `hub` block: `agentInterface` key not a known coding agent (`claude`/`codex`/`opencode` — typos would silently not apply), or a value other than `"cli"`/`"mcp"`. |
 | `E14` | Bad `projects.<key>.communication` block: an unknown key (strict — a typo would silently change what a communication fire does), a wrong type, or `output` not `"data"`/`"repo"`. |
 | `E15` | Bad `projects.<key>.notify` block: an unknown key, missing/bad `type` or `webhookEnv`, an env name that looks like a URL, or an **inline `webhook`/`secret` literal** (§16 — export the value in an env var and store its NAME). |
+| `E16` | Bad `team.providers` entry (an unknown key, `kind` other than `"openai-compatible"`, a non-URL `baseUrl`, an `authTokenEnv` that is not an env-var NAME, an empty `models` list) or a non-object `team.opencodePermission`. Strict — a typo'd entry renders a dead opencode provider block. |
 
 Common warnings:
 
@@ -404,6 +407,9 @@ Common warnings:
 | `W10` | The PATH-installed `dev-loop` predates the CLI write layer (needs >= 1.2.0) — `interface:"cli"` fires cannot write the board. Upgrade the global install. |
 | `W11` | Identity smoke failed: `dev-loop project` exited non-zero under a fire-shaped env (`DEVLOOP_ACTOR`/`DEVLOOP_PROJECT`/`DEVLOOP_HUB_DB`) — the CLI fails closed, so every `interface:"cli"` fire would boot with no board access. |
 | `W12` | `team.comms.webhookEnv` resolves to nothing in the process env **and** `.dev-loop/secrets.env` — every notification (`notify`, the daemon Human-Blocked reminder, the §22a digest) silently no-ops. Put the value in `<workspace>/.dev-loop/secrets.env` or export it. |
+| `W13` | A `team.providers` entry's `authTokenEnv` resolves to nothing in the process env **and** `.dev-loop/secrets.env` — every opencode fire on that provider fails pre-spawn (`fireError: provider-env-missing`, zero tokens). Put the key in `secrets.env` or export it. |
+| `W14` | The workspace `opencode.json` is missing/stale relative to `team.providers` — run `dev-loop team sync-opencode` (create-or-merge; hand-written providers survive). |
+| `W15` | The config targets opencode but the binary is missing from PATH or predates the certified `1.2.24` — `--variant` / the injected `OPENCODE_PERMISSION` are unverified there (an older binary may silently ignore the policy). Install/upgrade opencode (PORTABILITY §5). |
 
 ## State Layout
 
