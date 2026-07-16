@@ -258,6 +258,39 @@ Resolution order:
 | Model/effort | `projects.<key>.agents.<agent>` → team/default maps → built-in role default |
 | Cadence | `--interval` → `projects.<key>.agents.<agent>.cadence` → `team.agents.<agent>.cadence` → built-in default |
 
+### Any model provider via opencode
+
+On `codingAgent:"opencode"` the **model string carries the provider** — `agents{}.model` takes
+opencode's native `provider/model-id` form, so any of its 75+ providers (OpenRouter, Zhipu/GLM
+Coding Plan, DeepSeek, Moonshot, local Ollama, …) is one config line. Effort rides `--variant`
+(certified on opencode 1.2.24; see `docs/PORTABILITY.md` §5 — the scheduler also injects the
+certified deny-by-default `OPENCODE_PERMISSION` per fire).
+
+Picking a provider and model:
+
+- **[models.dev](https://models.dev)** — the catalog opencode resolves ids from (providers, models,
+  context windows, pricing). Start here.
+- **[opencode.ai/docs/providers](https://opencode.ai/docs/providers/)** — per-provider setup/auth;
+  **[opencode.ai/docs/models](https://opencode.ai/docs/models/)** — model-selection mechanics.
+- Locally: `opencode models` prints every id launchable with your current auth/config — exactly the
+  strings `agents{}.model` accepts; `opencode auth list` shows which providers have credentials.
+
+```jsonc
+{
+  "projects": { "web": { "agents": {
+    "senior-dev": { "codingAgent": "opencode", "model": "zhipuai/glm-5.2", "effort": "max" },
+    "junior-dev": { "codingAgent": "opencode", "model": "openrouter/moonshotai/kimi-k2.5" }
+  } } }
+}
+```
+
+Built-in opencode providers need auth only (key in `<workspace>/.dev-loop/secrets.env` or
+`opencode auth login`). A **custom** OpenAI-compatible endpoint (LiteLLM, a self-hosted gateway)
+gets a `team.providers` registry entry instead, rendered into the workspace `opencode.json` by
+`dev-loop team sync-opencode` — see `references/config-schema.md` (team table + E16) and
+`docs/design/model-provider-routing.md`. Doctor surfaces an unresolvable provider key (W13) and
+registry↔file drift (W14); a fire on an unresolvable key fails pre-spawn at zero token cost.
+
 ## 7. The Service Hub
 
 With `backend:"service"`, `dev-loop run` automatically ensures the local hub is available. You can
