@@ -16,6 +16,7 @@ import { tryResolveWorkspace, wsHubDb } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
 import { checkLessonsBudget } from "./lessons.ts";
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
+import { opencodeSyncDrift } from "./opencode-sync.ts";
 import * as metricsMod from "./metrics.ts";
 const require_metrics = () => metricsMod;
 
@@ -228,6 +229,41 @@ export function doctorWorkspace(ws: Workspace): boolean {
     } else {
       warn(`[W12] comms env ${comms.webhookEnv} unresolvable — notifications (notify / Human-Blocked reminder / §22a digest) will silently no-op; put ${comms.webhookEnv}=<url> in ${wsSecretsPath(ws.root)} or export it`);
     }
+  }
+
+  // W13 — provider-registry auth resolvability (the W12 pattern; model-provider-routing). An entry whose
+  // auth env resolves neither from the process env nor .dev-loop/secrets.env makes every opencode fire on
+  // that provider fail pre-spawn (run-agents `provider-env-missing`) — surface it BEFORE the loop runs.
+  // Never prints the value.
+  const provs = ws.file.team.providers ?? {};
+  for (const [id, p] of Object.entries(provs)) {
+    loadWorkspaceSecrets(ws.root); // idempotent (same self-containment as W12)
+    if (process.env[p.authTokenEnv] !== undefined) {
+      pass(`provider '${id}' auth ${p.authTokenEnv} resolvable (${secretsInjectedKeys(ws.root).has(p.authTokenEnv) ? "secrets.env" : "env"})`);
+    } else {
+      warn(`[W13] provider '${id}' auth env ${p.authTokenEnv} unresolvable — its opencode fires fail pre-spawn (fireError: provider-env-missing); put ${p.authTokenEnv}=<key> in ${wsSecretsPath(ws.root)} or export it`);
+    }
+  }
+  // W14 — workspace opencode.json carries the registry (sync drift). Read-only; the fix is operator-run.
+  if (Object.keys(provs).length) {
+    const drift = opencodeSyncDrift(ws.root, provs);
+    if (drift === null) pass(`opencode.json carries the ${Object.keys(provs).length} registry provider(s)`);
+    else warn(`[W14] ${drift} — run: dev-loop team sync-opencode`);
+  }
+
+  // W15 — opencode preflight (model-provider-routing; PORTABILITY §5): the certified lane needs
+  // opencode >= 1.2.24 (`--variant`; OPENCODE_PERMISSION honored — an older binary may silently IGNORE
+  // the injected policy, the worst failure shape). Only when the config actually targets opencode.
+  const OPENCODE_MIN_VERSION = "1.2.24";
+  const targetsOpencode = Object.keys(provs).length > 0
+    || ws.file.team.defaultCodingAgent === "opencode"
+    || Object.values(ws.file.team.agents ?? {}).some((a) => a?.codingAgent === "opencode")
+    || Object.values(ws.file.projects).some((p) => projectCodingAgents(p).includes("opencode"));
+  if (targetsOpencode) {
+    const v = (() => { try { return execFileSync("opencode", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; } })();
+    if (!v) warn(`[W15] the config targets opencode but it is not runnable on PATH — those fires cannot launch; install opencode (certified ${OPENCODE_MIN_VERSION}, PORTABILITY §5)`);
+    else if (semverBefore(v, OPENCODE_MIN_VERSION)) warn(`[W15] opencode ${v} predates the certified ${OPENCODE_MIN_VERSION} — --variant/OPENCODE_PERMISSION behavior is unverified there (PORTABILITY §5); upgrade opencode`);
+    else pass(`opencode ${v} on PATH (certified ${OPENCODE_MIN_VERSION})`);
   }
 
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).

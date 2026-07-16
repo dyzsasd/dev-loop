@@ -477,16 +477,17 @@ human-visibility only — never disaster recovery.**
 Status of each target (web-verified; the blocker is flagged):
 - **Claude Code [HOST, v1]** — stdio shim via `.mcp.json`; prompts = the existing plugin skills; headless `claude -p`. **Identity rides env, not an HTTP header, specifically because headless `claude -p` drops the Authorization header on tool calls (#50464/#48514/#39271)** — this is the load-bearing reason for the stdio+env design (§6).
 - **Codex CLI [HOST, P8]** — HTTP MCP (`type="http"`, `bearer_token_env_var`/`http_headers`); `codex exec`; skills under `.agents/skills/`. On firmer header ground than Claude Code, but still gated by the test below.
-- **opencode [HOST, P8]** — remote MCP with `headers`; `opencode run`; commands/agents/skills files.
+- **opencode [HOST, P8 — CERTIFIED 2026-07-16 on opencode 1.2.24]** — `opencode run` propagates the fire env into its bash tool, so it hosts on the `"cli"` interface (the default since 1.3.0, with a wildcard-deny `OPENCODE_PERMISSION` injected per fire — PORTABILITY §5). The remote-MCP-with-`headers` path remains the `"mcp"` rollback.
 - **zcode (Z.AI) [CONSUMER ONLY — scoped OUT]** — MCP-capable but a **GUI ADE with no documented headless run mode and no file-based command packaging**. It can consume the hub interactively; it **cannot** be a scheduled-fire loop host. Not targeted. (If Z.AI later ships a headless CLI, revisit.)
 
 **The P8 gate (SHIPPED v0.19.0):** before any CLI is declared a host, a **per-CLI headless test asserts the per-agent identity lands on a TOOL CALL** (not merely on `mcp list`/connect) under that CLI's headless mode (`claude -p` / `codex exec` / `opencode run`). The probe is the hub's **`whoami`** tool (it echoes the resolved `actor`): set `DEVLOOP_ACTOR=dev`, call `whoami` through the CLI, expect `dev` — `operator`/anything-else ⇒ FAIL, do not onboard (fail closed). `dev-loop-hub identity-check` is the launcher-side sanity check; the full procedure + per-CLI config templates are in **`docs/PORTABILITY.md`** (conventions §26). A CLI/version exhibiting the header-drop class of bug is **unsupported for the header path** and must use the stdio shim (which the whole hub design already mandates).
 
-*(Status 2026-07, D8: the default interface on `service` is now the `dev-loop` **CLI** for both
-claude and codex — codex certified 2026-07-11 on codex-cli 0.130.0, where `codex exec` was proven
-to propagate the fire env into its spawned shell. On `interface:"cli"` the identity gate probes
-`dev-loop identity-check` inside the CLI's own shell instead of `whoami` over MCP; the MCP path
-above remains the certified `"mcp"`-interface rollback. Full ceremony: `docs/PORTABILITY.md` §3–4.)*
+*(Status 2026-07, D8: the default interface on `service` is now the `dev-loop` **CLI** for
+claude, codex, and opencode — codex certified 2026-07-11 on codex-cli 0.130.0, opencode certified
+2026-07-16 on opencode 1.2.24, each proven to propagate the fire env into its spawned shell. On
+`interface:"cli"` the identity gate probes `dev-loop identity-check` inside the CLI's own shell
+instead of `whoami` over MCP; the MCP path above remains the certified `"mcp"`-interface rollback.
+Full ceremony: `docs/PORTABILITY.md` §3–5.)*
 
 ---
 

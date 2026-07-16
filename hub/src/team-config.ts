@@ -22,15 +22,32 @@ export interface HubBlock { agentInterface?: Record<string, AgentInterface>; doc
 
 // D9 (direct full rollout): claude flips to the CLI interface everywhere immediately; codex flipped
 // too once the P8 env-propagation certification PASSED (2026-07-11, codex-cli 0.130.0 — codex exec
-// propagates the fire env into shell subprocesses; docs/PORTABILITY.md §4); opencode registers MCP via
-// the operator's merged config and stays "mcp". An unknown coding agent defaults to "mcp" (today's behavior).
-export const DEFAULT_AGENT_INTERFACE: Record<string, AgentInterface> = { claude: "cli", codex: "cli", opencode: "mcp" };
+// propagates the fire env into shell subprocesses; docs/PORTABILITY.md §4); opencode flipped 2026-07-16
+// once ITS P8-style certification passed (opencode 1.2.24 — `opencode run` propagates the fire env into
+// its bash tool; docs/PORTABILITY.md §5; "mcp" stays the rollback setting). An unknown coding agent
+// defaults to "mcp" (the conservative transport).
+export const DEFAULT_AGENT_INTERFACE: Record<string, AgentInterface> = { claude: "cli", codex: "cli", opencode: "cli" };
 
 // The ONE resolver every consumer (scheduler, doctor) reads the interface through: an explicit
 // hub.agentInterface.<codingAgent> wins (the D8 rollback switch), else the D9 default.
 export function agentInterfaceFor(hub: HubBlock | undefined, codingAgent: string): AgentInterface {
   const v = hub?.agentInterface?.[codingAgent];
   return v === "cli" || v === "mcp" ? v : (DEFAULT_AGENT_INTERFACE[codingAgent] ?? "mcp");
+}
+
+// E16 — the team provider registry (docs/design/model-provider-routing.md): CUSTOM OpenAI-compatible
+// model endpoints, rendered into the WORKSPACE opencode.json by `dev-loop team sync-opencode`. Built-in
+// opencode providers (openrouter, zhipuai, deepseek, …) need NO entry — auth + a `provider/model-id`
+// launch string suffice. The entry id doubles as the opencode provider key AND the model-string prefix.
+// §16: authTokenEnv is an env-var NAME (value lives in .dev-loop/secrets.env or the process env), never
+// a secret. kind:"anthropic" (the claude-runner env-injection route) is deferred — design Appendix A.
+export interface ProviderEntry {
+  kind: "openai-compatible";
+  baseUrl: string;
+  authTokenEnv: string;
+  models: string[];
+  extraOptions?: Record<string, unknown>;
+  effortMode?: "passthrough" | "strip";
 }
 
 export interface TeamBlock {
@@ -50,6 +67,10 @@ export interface TeamBlock {
   defaultCodingAgent?: string;
   codingAgentDefaults?: Record<string, { model?: string; effort?: string }>;
   hub?: HubBlock;
+  providers?: Record<string, ProviderEntry>;
+  // Per-fire OPENCODE_PERMISSION override (whole-object replacement of the scheduler's certified
+  // wildcard-deny default — run-agents.ts DEFAULT_OPENCODE_PERMISSION; PORTABILITY §5).
+  opencodePermission?: Record<string, unknown>;
 }
 
 export interface RepoEntry {
@@ -258,6 +279,42 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
     if (c.provider !== "slack" && c.provider !== "lark") E("E07", "team.comms.provider", "comms.provider must be \"slack\" or \"lark\"");
     if (typeof c.webhookEnv !== "string" || !ENV_NAME_RE.test(c.webhookEnv) || /:\/\//.test(c.webhookEnv))
       E("E07", "team.comms.webhookEnv", "comms.webhookEnv must be an ENV-VAR NAME (e.g. DEVLOOP_COMMS_WEBHOOK), not a URL/secret (§16)");
+  }
+
+  // E16 — team.providers (the custom-endpoint registry) + team.opencodePermission. Strictly validated:
+  // a typo'd entry renders a DEAD opencode provider block (fires on it would 404/401 a whole turn), and
+  // authTokenEnv is name-only (§16 — a copied workspace folder must never carry a credential).
+  const PROVIDER_KEYS = "kind, baseUrl, authTokenEnv, models, extraOptions, effortMode";
+  if (team.providers !== undefined) {
+    const ps = team.providers as Record<string, unknown> | null;
+    if (ps === null || typeof ps !== "object" || Array.isArray(ps)) E("E16", "team.providers", "providers must be an object mapping provider-id → entry");
+    else for (const [id, raw] of Object.entries(ps)) {
+      const path = `team.providers.${id}`;
+      if (!KEY_RE.test(id)) E("E16", path, `provider id '${id}' must match ${KEY_RE} (it becomes the opencode provider key and the model-string prefix)`);
+      const e = raw as Record<string, unknown> | null;
+      if (e === null || typeof e !== "object" || Array.isArray(e)) { E("E16", path, "provider entry must be an object"); continue; }
+      for (const k of Object.keys(e)) {
+        if (!["kind", "baseUrl", "authTokenEnv", "models", "extraOptions", "effortMode"].includes(k))
+          E("E16", `${path}.${k}`, `unknown provider key '${k}' (expected ${PROVIDER_KEYS})`);
+      }
+      if (e.kind !== "openai-compatible")
+        E("E16", `${path}.kind`, `provider.kind must be "openai-compatible" (got ${JSON.stringify(e.kind)}) — the "anthropic" claude-runner route is deferred (model-provider-routing Appendix A)`);
+      if (typeof e.baseUrl !== "string" || !/^https?:\/\//.test(e.baseUrl))
+        E("E16", `${path}.baseUrl`, `provider.baseUrl must be an http(s) URL (got ${JSON.stringify(e.baseUrl)})`);
+      if (typeof e.authTokenEnv !== "string" || !ENV_NAME_RE.test(e.authTokenEnv) || /:\/\//.test(e.authTokenEnv))
+        E("E16", `${path}.authTokenEnv`, `provider.authTokenEnv must be an ENV-VAR NAME (e.g. SYNTHETIC_KEY), not a URL/secret (§16)`);
+      if (!Array.isArray(e.models) || !e.models.length || e.models.some((m) => typeof m !== "string" || !m.trim()))
+        E("E16", `${path}.models`, "provider.models must be a non-empty array of model-id strings (rendered into the opencode provider block)");
+      if (e.extraOptions !== undefined && (e.extraOptions === null || typeof e.extraOptions !== "object" || Array.isArray(e.extraOptions)))
+        E("E16", `${path}.extraOptions`, "provider.extraOptions must be an object (opencode provider-options passthrough)");
+      if (e.effortMode !== undefined && e.effortMode !== "passthrough" && e.effortMode !== "strip")
+        E("E16", `${path}.effortMode`, `provider.effortMode must be "passthrough" or "strip" (got ${JSON.stringify(e.effortMode)})`);
+    }
+  }
+  if (team.opencodePermission !== undefined) {
+    const op = team.opencodePermission as unknown;
+    if (op === null || typeof op !== "object" || Array.isArray(op))
+      E("E16", "team.opencodePermission", "opencodePermission must be a JSON object (opencode permission config, injected per fire — replaces the certified wildcard-deny default wholesale)");
   }
 
   const repos = (file.repos ?? {}) as Record<string, RepoEntry>;
