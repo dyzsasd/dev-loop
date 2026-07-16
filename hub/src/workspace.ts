@@ -10,6 +10,7 @@ import { realpathSync, existsSync, readFileSync, writeFileSync, mkdirSync, renam
 import { dirname, join, isAbsolute } from "node:path";
 import { loadWorkspace, normalizedRel, type Workspace } from "./team-config.ts";
 import { devloopHome } from "./paths.ts";
+import { loadWorkspaceSecrets } from "./secrets.ts";
 
 export class WsNotFound extends Error {
   constructor(msg: string) { super(msg); this.name = "WsNotFound"; }
@@ -49,6 +50,11 @@ export function findWorkspaceRoot(cwd = process.cwd()): string | null {
 export function resolveWorkspace(cwd = process.cwd()): Workspace {
   const root = findWorkspaceRoot(cwd);
   if (!root) throw new WsNotFound(`no dev-loop.json found from ${cwd} upward. ${guidance}`);
+  // §16 secrets: hydrate `<root>/.dev-loop/secrets.env` into process.env (real env ALWAYS wins) the
+  // moment the root is known — cli/daemon/run-agents all resolve through here, and the agent fires
+  // they spawn inherit process.env, so this ONE hook makes every env-var NAME in dev-loop.json
+  // resolvable with zero machine-global shell setup (I4 self-containment).
+  loadWorkspaceSecrets(root);
   const ws = loadWorkspace(root);
   upsertWorkspaceIndex(ws.file.team.key, root);
   return ws;
