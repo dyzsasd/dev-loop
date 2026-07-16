@@ -81,7 +81,9 @@ cd ~/work/my-team && dev-loop team repair && dev-loop doctor && dev-loop run
 
 ## 环境要求
 
-- **Node ≥ 23.6**，并且 `PATH` 上有 coding CLI：`claude`（Claude Code）和/或 `codex`。
+- **Node ≥ 23.6**，并且 `PATH` 上有 coding CLI：`claude`（Claude Code）、`codex` 和/或
+  `opencode`（opencode 通过 `provider/model-id` 启动串可接入它的 75+ 模型 provider——见
+  `docs/RUNNING.md`）。
 - 一个 backend：什么都不用装——内置的 **service hub**（本地 sqlite + web UI，默认值）
   不依赖任何外部服务；或者使用 **Linear**（Linear MCP 配在 Claude Code user scope）。
 - **仅 Linear backend 需要**（或者你想在 Claude Code 里使用 `/dev-loop:*` slash
@@ -104,8 +106,8 @@ mutator 写入，通常不需要手动编辑。修改配置的入口是
 - `team` — backend、deploy policy 上限（`prod` 默认保持 manual，除非你明确允许自动化）、
   `comms`（Slack/Lark channel，对应环境变量的**名字**；它的存在与否同时也是 daily
   director digest 的开关）、team 级 `intake` 默认值（project 可按字段覆盖）、
-  `hub.agentInterface`（service backend：fire 访问 hub 看板的方式——Claude Code 和
-  Codex 默认都是 `"cli"`；`"mcp"` 是回滚开关），以及各 agent 的 cadence。
+  `hub.agentInterface`（service backend：fire 访问 hub 看板的方式——Claude Code、
+  Codex 和 opencode 默认都是 `"cli"`；`"mcp"` 是回滚开关），以及各 agent 的 cadence。
 - `repos` — 物理 repo 注册表：路径、build/typecheck 命令、PR merge check、deploy 形态、
   health probe。
 - `projects` — 引用 repo 的虚拟交付单元：strategy doc、test environment、`weight`

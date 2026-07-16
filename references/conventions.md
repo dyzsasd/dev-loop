@@ -1766,8 +1766,8 @@ per-agent attribution**, structural per-project scoping, and a native event feed
     exists or will be built for Linear).
   - `backend:"service"` + `interface:"mcp"` → the **identically-named hub MCP tool**
     (unchanged — the scheduler injects `dev-loop-hub` into the fire).
-  - `backend:"service"` + `interface:"cli"` (the D9 default for claude AND codex fires —
-    codex certified 2026-07-11; opencode stays `"mcp"` — **no hub MCP is injected**) → the
+  - `backend:"service"` + `interface:"cli"` (the D9 default for claude, codex, AND opencode fires —
+    codex certified 2026-07-11, opencode 2026-07-16 (PORTABILITY §5) — **no hub MCP is injected**) → the
     matching **`dev-loop` CLI command** (`save_issue` →
     `dev-loop ticket create|update`, `doc.save` → `dev-loop doc save`, any op by name →
     `dev-loop op <op-name>`), identity riding the fire env. Each agent SKILL ends with a
