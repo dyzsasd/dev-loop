@@ -121,7 +121,10 @@ PM's autonomous lane (§20) — never flag those.
 One screen of systemic drift for the operator: `[coverage]` tickets outstanding in `Todo`
 (Dev behind on the regression net, §15); blocked tickets grouped by bail-shape (§9 — a
 stack of `external-prereq` = the loop is waiting on the operator); oldest `In Review` age
-(verification lag); design docs still ACTIVE for retired/superseded modules (no open ticket
+(verification lag); owner-liveness strandings (P1-4 — quote doctor's `W16` findings /
+`manual owner` info lines verbatim: an owner label whose actor never fires strands its
+Todo/In Review tickets; suggest re-owner, or `agents.<h>.manual:true` when a human runs
+that role); design docs still ACTIVE for retired/superseded modules (no open ticket
 carries their `Design:` pointer and the module is gone) — flag as `doc archive` candidates
 for senior-dev (D6; you never archive a doc yourself — an archived doc is hidden from the
 registry and notifiers, never deleted); the Job 3b/3c counts and flags; everything you
