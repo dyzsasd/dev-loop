@@ -12,9 +12,10 @@ import { resolveWorkspace, wsFireLedger, wsHubDb } from "./workspace.ts";
 import { deliveryProjects, type Workspace } from "./team-config.ts";
 
 // ─── fires.jsonl ──────────────────────────────────────────────────────────────
-export interface FireRow { ts: string; agent: string; project: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean }
+export interface FireRow { ts: string; agent: string; project: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; errorClass?: string }
 export interface FireMetrics {
   windowMs: number; fires: number; failures: number; timeouts: number; suspectErrors: number;
+  byErrorClass: Record<string, number>;            // P0-1b taxonomy (spend-limit/rate-limit/auth/network/timeout/…); infra failures split from task failures
   successRate: number | null;                      // (fires - failures - suspect) / fires; null when no fires
   byAgent: Record<string, { fires: number; failures: number; medianMs: number | null }>;
   byProject: Record<string, { fires: number; failures: number }>;
@@ -43,11 +44,13 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
   const byAgent: FireMetrics["byAgent"] = {};
   const byProject: FireMetrics["byProject"] = {};
   let failures = 0, timeouts = 0, suspect = 0;
+  const byErrorClass: Record<string, number> = {};
   for (const r of rows) {
     const failed = (r.exitCode ?? 0) !== 0;
     if (failed) failures++;
     if (r.timedOut) timeouts++;
     if (r.suspectError) suspect++;
+    if (r.errorClass) byErrorClass[r.errorClass] = (byErrorClass[r.errorClass] ?? 0) + 1;
     const a = (byAgent[r.agent] ??= { fires: 0, failures: 0, medianMs: null });
     a.fires++; if (failed) a.failures++;
     const p = (byProject[r.project || "(team)"] ??= { fires: 0, failures: 0 });
@@ -58,7 +61,7 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
   }
   const fires = rows.length;
   const successRate = fires ? (fires - failures - suspect) / fires : null;
-  return { windowMs, fires, failures, timeouts, suspectErrors: suspect, successRate, byAgent, byProject };
+  return { windowMs, fires, failures, timeouts, suspectErrors: suspect, byErrorClass, successRate, byAgent, byProject };
 }
 
 // Rotation: keep the last `keepMs` of rows (default 90d). Called at scheduler start — unbounded
@@ -166,6 +169,8 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   const pct = (x: number | null) => x === null ? "—" : `${Math.round(x * 100)}%`;
   console.log(`team '${ws.file.team.key}' — last ${windowMs / 86_400_000}d`);
   console.log(`fires: ${fires.fires} (success ${pct(fires.successRate)}, ${fires.failures} failed, ${fires.timeouts} timeout, ${fires.suspectErrors} suspect)`);
+  if (Object.keys(fires.byErrorClass).length) // P0-1b: infra failure classes split from task failures
+    console.log(`errors: ${Object.entries(fires.byErrorClass).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join(", ")}`);
   for (const [agent, a] of Object.entries(fires.byAgent))
     console.log(`  ${agent.padEnd(14)} ${String(a.fires).padStart(4)} fires  ${String(a.failures).padStart(3)} failed  median ${a.medianMs === null ? "—" : Math.round(a.medianMs / 1000) + "s"}`);
   if (out.teamRollup) {

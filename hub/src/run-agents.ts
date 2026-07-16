@@ -221,6 +221,22 @@ function opencodeProviderEntry(opts: Options, model: string | undefined): Provid
   return prefix && prefix !== model ? opts.providers?.[prefix] : undefined;
 }
 
+// P0-1b — coarse failure taxonomy for the fire ledger. Matched over the bounded output tail, most
+// specific first. "spend-limit" is the field report's 48h-blind-retry class: 407 consecutive ~2s
+// failures, every one the same stderr line, indistinguishable in the ledger from real task failures.
+// The breaker (P0-1a) keys on repeated identical classes; metrics/doctor split them out. exit-0 shapes
+// stay the suspectError flag's job; a non-zero exit with no pattern match is a plain task failure (null).
+function classifyFireError(exitCode: number, timedOut: boolean, tail: string): string | null {
+  if (timedOut) return "timeout";
+  if (exitCode === 0) return null;
+  const t = tail.toLowerCase();
+  if (/spend limit|usage limit|monthly limit|credit balance too low|quota exceeded/.test(t)) return "spend-limit";
+  if (/rate limit|too many requests|overloaded_error|\b429\b|\b529\b/.test(t)) return "rate-limit";
+  if (/invalid api key|authentication_error|unauthorized|not logged in|please run \/login|oauth token|\b401\b/.test(t)) return "auth";
+  if (/enotfound|econnrefused|econnreset|etimedout|eai_again|fetch failed|network error|socket hang up/.test(t)) return "network";
+  return null;
+}
+
 // The fire-ledger provider dimension (metrics cost attribution): opencode fires carry their model-string
 // prefix; claude/codex fires run their native endpoints until the Appendix-A route ships.
 function providerOf(profile: LaunchProfile): string | null {
@@ -677,7 +693,7 @@ function displayCommand(command: string, args: string[], prompt: string): string
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean,
-  extra?: { suspectError?: boolean; outputTail?: string; fireError?: string }): void {
+  extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string }): void {
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
   // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
@@ -694,7 +710,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.fireError ? { fireError: extra.fireError } : {}) } });
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -827,7 +843,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   if (providerEnvMissing) {
     const prefix = profile.model?.split("/")[0];
     console.error(`[${agent}] provider '${prefix}' auth env ${providerEnvMissing} unresolvable — put ${providerEnvMissing}=<key> in <workspace>/.dev-loop/secrets.env or export it; failing this fire pre-spawn (doctor W13 surfaces this before the loop)`);
-    recordFire(opts.hubDb, project, agent, profile, 0, 4, false, { fireError: "provider-env-missing", outputTail: `provider '${prefix}' auth env ${providerEnvMissing} unresolvable` });
+    recordFire(opts.hubDb, project, agent, profile, 0, 4, false, { errorClass: "provider-env-missing", outputTail: `provider '${prefix}' auth env ${providerEnvMissing} unresolvable` });
     return 4;
   }
 
@@ -885,7 +901,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       killTimer.unref?.();
     }, opts.fireTimeoutMs) : undefined;
     fireTimer?.unref?.();
-    child.on("error", (e) => { if (logOpen && !logDead) log.write(`\nERROR: ${e.message}\n`); console.error(`[${agent}] failed to start: ${e.message}`); clearTimeout(fireTimer); endLog(() => resolveExit(1)); });
+    child.on("error", (e) => {
+      if (logOpen && !logDead) log.write(`\nERROR: ${e.message}\n`);
+      console.error(`[${agent}] failed to start: ${e.message}`);
+      clearTimeout(fireTimer);
+      // A spawn failure (missing/broken CLI bin) never reached the ledger — invisible to metrics AND to
+      // the P0-1a breaker, whose canonical trigger (a wedged bin fast-failing identically forever) it is.
+      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, 1, false, { errorClass: "spawn-failed", outputTail: e.message.slice(-400) });
+      endLog(() => resolveExit(1));
+    });
     // Resolve on 'exit', not 'close': 'close' additionally waits for the stdio pipes, which a grandchild
     // the CLI spawned can hold open long after the CLI itself died — exactly the wedged case the fire
     // timeout exists for. The log stream stays open until 'close' so late pipe output is still captured.
@@ -913,8 +937,11 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         console.error(`[${agent}] exit 0 but the output looks like a FAILURE (${why}) — flagged suspectError in the fire ledger`);
         log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
       }
+      const errorClass = classifyFireError(exitCode, timedOut, outTail); // P0-1b taxonomy
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut,
-        suspectError ? { suspectError: true, outputTail: outTail.slice(-400) } : undefined);
+        suspectError || errorClass
+          ? { ...(suspectError ? { suspectError: true } : {}), ...(errorClass ? { errorClass } : {}), outputTail: outTail.slice(-400) }
+          : undefined);
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
     child.on("exit", (code, signal) => {
