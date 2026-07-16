@@ -44,6 +44,22 @@ dev-loop team set team.linearTeam "My Team"
 `/dev-loop:sync-project` stamp it into the Linear project description; if another workspace already
 stamped a project, dev-loop warns loudly instead of double-driving the same board.
 
+**Where secrets go.** `dev-loop.json` stores env-var *names* only (`team.comms.webhookEnv`,
+`notify.secretEnv`, …) — it is agent-ingested and shareable, so it must never hold a value. Put
+the values in `<workspace>/.dev-loop/secrets.env` (plain `KEY=VALUE` lines, `#` comments; keep it
+`chmod 600`):
+
+```bash
+echo 'DEVLOOP_COMMS_WEBHOOK=https://open.feishu.cn/…' > .dev-loop/secrets.env
+chmod 600 .dev-loop/secrets.env
+```
+
+Every entry point (the CLI, the daemon, `dev-loop run`, and the agent fires they spawn) loads it
+automatically when the workspace is resolved; a variable already exported in your shell wins over
+the file. This keeps the workspace self-contained — copy the folder and notifications keep
+working, no `~/.zshenv` exports needed. `dev-loop doctor` warns (`W12`) when a configured comms
+webhook resolves to neither source.
+
 ## 2. Add Projects and Repos
 
 `team init` creates only the workspace. It does not call an LLM and it does not touch Linear
@@ -115,7 +131,8 @@ Linear MCP reachability for steward fires, workspace layout, and — on a servic
 Its final line is `NEXT:` — the
 single most-blocking step in fix order: invalid config → the E-code fix; blank `linearTeam` → the
 `team set` fill; no projects → `add-project`; an unseeded service project → the exact `dev-loop
-seed` command; no repos → `add-repo`; everything wired but `team.mode:"dry-run"` → the
+seed` command; no repos → `add-repo`; an unresolvable comms webhook → the `secrets.env` line to
+add (`W12`); everything wired but `team.mode:"dry-run"` → the
 `dev-loop team set team.mode live` flip; all green → `dev-loop run`. `--dry-run` prints the exact
 command that would launch each agent, including its selected coding CLI, model, effort, project,
 and cadence.
@@ -266,8 +283,11 @@ historical storage rationale.
 
 ## 8. Moving a Workspace
 
-Secrets are not stored in the workspace. `dev-loop.json` stores environment variable names, not
-secret values.
+`dev-loop.json` stores environment variable names, not secret values. The values live in
+`.dev-loop/secrets.env` — which travels **with** the folder (that is the point: notifications keep
+working on the new machine with no shell setup). Be deliberate about it: the copy below carries your
+webhook URLs, so keep the transfer channel private, or exclude the file
+(`rsync --exclude .dev-loop/secrets.env`) and recreate it on the new machine.
 
 ```bash
 dev-loop hub stop                 # service teams only; checkpoints the WAL
@@ -280,8 +300,9 @@ dev-loop doctor
 dev-loop run
 ```
 
-Also install your coding CLI, authenticate `gh`, configure Linear MCP if using Linear, and export the
-same environment variables referenced by `dev-loop.json`.
+Also install your coding CLI, authenticate `gh`, configure Linear MCP if using Linear, and export any
+environment variables referenced by `dev-loop.json` that you keep outside `secrets.env` (`doctor`
+warns `W12` if the comms webhook resolves to neither).
 
 ## 9. Logs and Reports
 
