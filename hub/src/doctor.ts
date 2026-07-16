@@ -251,6 +251,21 @@ export function doctorWorkspace(ws: Workspace): boolean {
     else warn(`[W14] ${drift} — run: dev-loop team sync-opencode`);
   }
 
+  // W15 — opencode preflight (model-provider-routing; PORTABILITY §5): the certified lane needs
+  // opencode >= 1.2.24 (`--variant`; OPENCODE_PERMISSION honored — an older binary may silently IGNORE
+  // the injected policy, the worst failure shape). Only when the config actually targets opencode.
+  const OPENCODE_MIN_VERSION = "1.2.24";
+  const targetsOpencode = Object.keys(provs).length > 0
+    || ws.file.team.defaultCodingAgent === "opencode"
+    || Object.values(ws.file.team.agents ?? {}).some((a) => a?.codingAgent === "opencode")
+    || Object.values(ws.file.projects).some((p) => projectCodingAgents(p).includes("opencode"));
+  if (targetsOpencode) {
+    const v = (() => { try { return execFileSync("opencode", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; } })();
+    if (!v) warn(`[W15] the config targets opencode but it is not runnable on PATH — those fires cannot launch; install opencode (certified ${OPENCODE_MIN_VERSION}, PORTABILITY §5)`);
+    else if (semverBefore(v, OPENCODE_MIN_VERSION)) warn(`[W15] opencode ${v} predates the certified ${OPENCODE_MIN_VERSION} — --variant/OPENCODE_PERMISSION behavior is unverified there (PORTABILITY §5); upgrade opencode`);
+    else pass(`opencode ${v} on PATH (certified ${OPENCODE_MIN_VERSION})`);
+  }
+
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
   if (isGitWorkTree(ws.root)) {
     let ignored = false;
