@@ -213,7 +213,10 @@ export function doctorWorkspace(ws: Workspace): boolean {
   try {
     const { fireMetrics } = require_metrics();
     const fm = fireMetrics(join(ws.root, ".dev-loop", "team", "fires.jsonl"), 7 * 86_400_000);
-    if (fm.fires > 0) info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect`);
+    if (fm.fires > 0) {
+      const cls = Object.entries((fm.byErrorClass ?? {}) as Record<string, number>).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k}×${n}`).join(", ");
+      info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect${cls ? ` — top errors: ${cls}` : ""}`);
+    }
   } catch { /* metrics are informational */ }
 
   // W12 — comms webhook resolvability (the silent-failure killer). team.comms stores an env-var NAME
@@ -240,7 +243,7 @@ export function doctorWorkspace(ws: Workspace): boolean {
     if (process.env[p.authTokenEnv] !== undefined) {
       pass(`provider '${id}' auth ${p.authTokenEnv} resolvable (${secretsInjectedKeys(ws.root).has(p.authTokenEnv) ? "secrets.env" : "env"})`);
     } else {
-      warn(`[W13] provider '${id}' auth env ${p.authTokenEnv} unresolvable — its opencode fires fail pre-spawn (fireError: provider-env-missing); put ${p.authTokenEnv}=<key> in ${wsSecretsPath(ws.root)} or export it`);
+      warn(`[W13] provider '${id}' auth env ${p.authTokenEnv} unresolvable — its opencode fires fail pre-spawn (errorClass: provider-env-missing); put ${p.authTokenEnv}=<key> in ${wsSecretsPath(ws.root)} or export it`);
     }
   }
   // W14 — workspace opencode.json carries the registry (sync drift). Read-only; the fix is operator-run.

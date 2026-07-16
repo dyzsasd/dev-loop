@@ -131,8 +131,8 @@ try {
   ok(/provider 'synth' auth env DLTEST_SYNTH_KEY unresolvable/.test(`${miss.stdout}${miss.stderr}`), "pre-spawn: missing auth env fails the fire with the W13 pointer");
   ok(!existsSync(join(dumpDir, "args.txt")), "pre-spawn: the opencode bin was never spawned (zero tokens)");
   const missRow = ledgerRows().at(-1);
-  ok(missRow?.fireError === "provider-env-missing" && missRow?.provider === "synth" && missRow?.exitCode === 4,
-    `pre-spawn: ledger row carries fireError/provider/exit 4 (got ${JSON.stringify(missRow)})`);
+  ok(missRow?.errorClass === "provider-env-missing" && missRow?.provider === "synth" && missRow?.exitCode === 4,
+    `pre-spawn: ledger row carries errorClass/provider/exit 4 (got ${JSON.stringify(missRow)})`);
 
   // real (fake-bin) fire: --variant passed, certified wildcard-deny permission injected, identity rides env
   const fire = runSched(["--agents", "qa", "--once"], { DLTEST_SYNTH_KEY: "test-key" });

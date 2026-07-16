@@ -103,6 +103,22 @@ exit 0
   ok(d.codingAgent === "claude" && typeof d.durationMs === "number" && d.exitCode === 0 && d.timedOut === false,
     "P1: fire.completed carries codingAgent + durationMs + exitCode + timedOut");
 
+  // ── 5b. P0-1b errorClass: a spend-limit-shaped failure is classified in the ledger/event ──
+  const stubFail = join(tmp, "stub-claude-fail");
+  writeFileSync(stubFail, `#!/bin/sh
+echo "You've hit your monthly spend limit · raise it at claude.ai/settings/usage" >&2
+exit 1
+`);
+  chmodSync(stubFail, 0o755);
+  const telFail = runLive(telCommon, { DEVLOOP_CLAUDE_BIN: stubFail });
+  ok(telFail.code === 1, `spend-limit fire propagates exit 1 (got ${telFail.code})`);
+  const rows2 = execFileSync("node", ["--input-type=module", "-e",
+    `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${hubDb}'); const pid=findProject(db,'tel'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
+    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+  const datas = (JSON.parse(rows2) as { data: string }[]).map((r) => JSON.parse(r.data) as Record<string, unknown>);
+  ok(datas.some((x) => x.errorClass === "spend-limit" && x.exitCode === 1),
+    "P0-1b: the spend-limit failure carries errorClass:'spend-limit' in fire.completed");
+
   // ── 6. R1 change-gate: on a quiet board, a gated agent fires ONCE then skips (no re-spawn) ──
   const gateDb = join(tmp, "hub3.db");
   const gateData = join(tmp, "gate-data"); const gateOut = join(tmp, "gate-out");
