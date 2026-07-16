@@ -50,6 +50,13 @@ exit 0
     "the spawned CLI received DEVLOOP_ACTOR=pm + DEVLOOP_PROJECT=demo in its env");
   ok(r1.length === 1 && /COMPLETED/.test(r1[0]), "the fire ran to completion");
   ok(existsSync(join(data, "demo", "runner-logs", "pm.log")), "per-agent runner log was written");
+  // Stream-lifecycle regression (field report P2-4, ×103): the stub prints nothing + exits 0, i.e. the
+  // suspectError path — finalize's footer/suspect writes used to land on a stream the close handler had
+  // already ended, losing the file tail of every fire as "write after end".
+  ok(!/write after end/.test(once.out), "no 'runner-log write failed (write after end)' — finalize owns the stream end");
+  const pmLog = readFileSync(join(data, "demo", "runner-logs", "pm.log"), "utf8");
+  ok(/===== exit code=0/.test(pmLog), "the exit footer reaches the log file (used to be lost after end)");
+  ok(/===== suspectError:/.test(pmLog), "the suspectError marker reaches the log file (used to be lost after end)");
   clearRecs();
 
   // ── 2. --max-fires drain: the Nth fire COMPLETES (the old stop() SIGINT'd the fire it just launched) ──
