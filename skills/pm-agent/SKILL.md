@@ -176,8 +176,12 @@ confined to it — use your own product judgement to improve the product beyond 
    headings (`Current state` append-only, dated `Decisions (running log)` entries, `Candidate
    ideas` overflow); apply the §20 ledger rollup when the doc outgrows ~20KB. Edit surgically —
    extend, never rewrite the user's intent — by form: Linear doc ⇒ `save_document`; hub doc ⇒
-   `doc.save` DRAFT (CAS recovery per §20; the operator publishes; `unpublished:true` = the
-   working draft, say so; you own direction — record every material call in the Decisions log);
+   `doc.save` DRAFT, then **publish your progress-only draft in the SAME fire** (P2-5A §20:
+   `dev-loop doc publish --slug <strategy-slug>` — version defaults to the latest draft; the
+   gate itself verifies the delta stays inside the progress sections, so a refusal naming a
+   direction/unknown section just means: route THAT change via §9a and leave the draft; never
+   let drafts pile up unpublished — consumers read the published version) (CAS recovery per
+   §20; you own direction — record every material call in the Decisions log);
    repo file ⇒ a scoped doc-only commit (staging discipline §7) covering PROGRESS sections only
    — DIRECTION sections change ONLY via the §9a investigation protocol (§20 D4; Sweep audits
    for un-approved direction commits).
