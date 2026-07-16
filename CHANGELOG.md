@@ -5,6 +5,47 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## 1.3.0 (unreleased)
 
+- **The 2026-07 field-report hardening batch** — a 6-day dogfood (1,472 fires, 52% success, failures
+  almost entirely infrastructure-layer) fed a prioritized fix queue; every item below cites its incident.
+  - **fix(runner): the log stream's single owner + flush-before-resolve.** Every normal fire lost its
+    exit footer/suspect marker as `write after end` (×103), and `--once`'s `process.exit` truncated
+    the un-flushed tail besides. finalize() ends the log after its last write and the fire resolves
+    only after the flush; a dead log degrades instantly, never hangs a fire.
+  - **fix(cli): one workspace-aware hub-DB ladder** (`resolveHubDbPath`: explicit `DEVLOOP_HUB_DB` >
+    workspace `.dev-loop/hub.db` > global) for `op`/`tickets`/`seed`/`doctor` — ends the phantom
+    "project not seeded" at the workspace root and `seed`'s day-1 `./hub.db` double-board split.
+  - **feat(hub): the terminal-state guard.** Only the operator exits `Done`/`Canceled` (shared write
+    path, one choke point for MCP + CLI + daemon): MP-275's canceled-then-reimplemented-then-deployed
+    class is now a domain error; hygiene on closed tickets stays legal; `Duplicate` stays un-gated.
+  - **feat(metrics): `errorClass` fire taxonomy** (spend-limit / rate-limit / auth / network / timeout /
+    provider-env-missing / spawn-failed) stamped on every failed fire; spawn failures finally reach the
+    ledger; `dev-loop metrics` + doctor split infra failures from task failures.
+  - **feat(runner): the failure-streak circuit breaker** (`--breaker`, default 5; `--breaker-probe`,
+    default 1h). N identical consecutive failures trip the slot to a probe cadence; every probe IS the
+    recovery check; trip/recovery notify once each. The 48h blind-retry incident becomes ~5 failures +
+    one alert + hourly probes.
+  - **feat(daemon): the loop fire-health self-monitor.** Ops watches prod; THIS watches the loop:
+    success below 50% over 2h (≥6 fires; `settings_json.fireHealth` tunes/opts out) alerts once per
+    episode with the errorClass tallies, and the first healthy window sends the recovery line —
+    stateless marker-event de-dup, daemon-restart-safe.
+  - **feat(daemon+metrics): the operator decision queue is ONE set** — `In Review` assigned to the
+    operator joins the Human-Blocked reminder (own marker kind, own wording), `dev-loop metrics --json`
+    carries `.decisionQueue`, and §22a's "Needs the director" gains the awaiting-your-approval line.
+    MP-211's silent 4-day park can't recur.
+  - **feat(doctor+metrics): owner-liveness W16.** An owner label whose actor has no fires in 7d but
+    owns open Todo/In Review tickets is reported per project; `agents.<h>.manual:true` downgrades it
+    to "awaiting a human" (the operator-runs-QA-by-hand reality); Sweep quotes the findings.
+  - **feat(cli): `dev-loop push-guard`** — enumerate `origin/<branch>..<branch>` pre-push and flag
+    commits whose ticket refs are Canceled/Duplicate (`--strict` exits 1; wired into the §12 land
+    sequence). `autoPush:false`'s batched-push semantics can no longer publish canceled work silently.
+  - **feat(docs): op-layer UX** — an existing slug infers its immutable `kind`; the snake_case
+    `base_version` slip gets a precise camelCase hint; `doc.publish` with no version (or `latest`)
+    publishes the newest draft.
+  - **feat(docs): PM's autonomous publish lane (P2-5A, operator decision).** The §20 section split now
+    binds hub backends inside `docPublish`: progress-only strategy deltas publish autonomously (the
+    63-draft/6-day-stale-north-star pile ends); first publishes and direction/unknown/preamble deltas
+    refuse with section names and keep the §9a operator route.
+
 - **feat(providers): any model provider via the opencode lane — registry, sync, certification.**
   Origin: the 2026-07-16 ZCode/GLM research (`docs/design/model-provider-routing.md`) — the operator
   wants agents on arbitrary model providers (GLM, OpenRouter, …), with **opencode as the vehicle**
