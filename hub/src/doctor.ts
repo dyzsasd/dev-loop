@@ -16,6 +16,8 @@ import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, is
 import { checkLessonsBudget } from "./lessons.ts";
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
 import { opencodeSyncDrift } from "./opencode-sync.ts";
+import { openDb as openHubDbConn } from "./db.ts";
+import { findProject as findHubProject } from "./seed.ts";
 import * as metricsMod from "./metrics.ts";
 const require_metrics = () => metricsMod;
 
@@ -266,6 +268,30 @@ export function doctorWorkspace(ws: Workspace): boolean {
     if (!v) warn(`[W15] the config targets opencode but it is not runnable on PATH — those fires cannot launch; install opencode (certified ${OPENCODE_MIN_VERSION}, PORTABILITY §5)`);
     else if (semverBefore(v, OPENCODE_MIN_VERSION)) warn(`[W15] opencode ${v} predates the certified ${OPENCODE_MIN_VERSION} — --variant/OPENCODE_PERMISSION behavior is unverified there (PORTABILITY §5); upgrade opencode`);
     else pass(`opencode ${v} on PATH (certified ${OPENCODE_MIN_VERSION})`);
+  }
+
+  // W16 — owner-liveness (P1-4, the field's MP-156): an owner label whose actor never fires strands its
+  // Todo/In Review tickets forever, and nothing notices. Service-backend only (needs the local board).
+  // agents.<h>.manual:true (team or project) downgrades the finding to an info line ("awaiting a human").
+  if (ws.file.team.backend === "service" && existsSync(wsHubDb(ws))) {
+    try {
+      const { ownerLiveness } = require_metrics();
+      const db = openHubDbConn(wsHubDb(ws));
+      try {
+        const manual = new Set<string>();
+        for (const [h, a] of Object.entries(ws.file.team.agents ?? {})) if ((a as { manual?: boolean })?.manual === true) manual.add(h);
+        for (const key of deliveryProjects(ws)) {
+          for (const [h, a] of Object.entries((effectiveProject(ws, key).agents ?? {}) as Record<string, { manual?: boolean }>)) if (a?.manual === true) manual.add(h);
+          const pid = findHubProject(db, key);
+          if (!pid) continue;
+          for (const f of ownerLiveness(db, pid, join(ws.root, ".dev-loop", "team", "fires.jsonl"), { manualHandles: manual })) {
+            const age = f.lastFireTs ? `last fire ${f.lastFireTs.slice(0, 10)}` : "no fire on record";
+            if (f.manual) info(`[${key}] manual owner '${f.owner}': ${f.openTickets} open Todo/In Review ticket(s) awaiting a human (oldest ${f.oldestUpdatedAt.slice(0, 10)})`);
+            else warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open Todo/In Review ticket(s) (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.${f.owner}.manual true is a config edit)`);
+          }
+        }
+      } finally { db.close(); }
+    } catch { /* owner-liveness is best-effort — a missing ledger/db never fails doctor */ }
   }
 
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).

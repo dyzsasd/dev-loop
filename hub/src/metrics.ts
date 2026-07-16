@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "n
 import { fileURLToPath } from "node:url";
 import { resolveWorkspace, wsFireLedger, wsHubDb } from "./workspace.ts";
 import { deliveryProjects, type Workspace } from "./team-config.ts";
+import { AGENT_HANDLES } from "./seed.ts";
 
 // ─── fires.jsonl ──────────────────────────────────────────────────────────────
 export interface FireRow { ts: string; agent: string; project: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; errorClass?: string }
@@ -127,6 +128,38 @@ export function decisionQueue(db: import("node:sqlite").DatabaseSync, projectId:
     "SELECT id,title,state,updated_at FROM tickets WHERE project_id=? AND (state='Human-Blocked' OR (state='In Review' AND assignee='operator')) ORDER BY updated_at",
   ).all(projectId) as { id: string; title: string; state: string; updated_at: string }[])
     .map((t) => ({ id: t.id, title: t.title, state: t.state, updatedAt: t.updated_at }));
+}
+
+// P1-4: owner-liveness — an owner label whose actor never fires strands its tickets forever (the field's
+// MP-156: qa-owned In Review sat 4+ days because no qa agent exists in the roster and nothing noticed).
+// A finding = an agent handle that OWNS open Todo/In Review tickets (labels carry the owner handle) but
+// has NO fires.jsonl row inside the window. `manual` handles (agents.<h>.manual:true — the operator runs
+// that role by hand) still surface, flagged manual:true, so the digest can say "awaiting a human <h>"
+// instead of warning. Doctor renders these as W16; Sweep quotes them in the board-health digest.
+export interface OwnerLivenessFinding { owner: string; openTickets: number; oldestUpdatedAt: string; lastFireTs: string | null; manual: boolean }
+export function ownerLiveness(
+  db: import("node:sqlite").DatabaseSync, projectId: string, ledgerPath: string,
+  opts: { windowMs?: number; nowMs?: number; manualHandles?: Set<string>; handles?: readonly string[] },
+): OwnerLivenessFinding[] {
+  const windowMs = opts.windowMs ?? 7 * 86_400_000;
+  const nowMs = opts.nowMs ?? Date.now();
+  const handles = opts.handles ?? AGENT_HANDLES;
+  const rows = readFireRows(ledgerPath);
+  const lastFire = new Map<string, string>();
+  for (const r of rows) if (!lastFire.has(r.agent) || r.ts > (lastFire.get(r.agent) ?? "")) lastFire.set(r.agent, r.ts);
+  const out: OwnerLivenessFinding[] = [];
+  for (const h of handles) {
+    const owned = db.prepare(
+      "SELECT labels, updated_at FROM tickets WHERE project_id=? AND state IN ('Todo','In Review') ORDER BY updated_at",
+    ).all(projectId) as { labels: string; updated_at: string }[];
+    const mine = owned.filter((t) => { try { return (JSON.parse(t.labels) as string[]).includes(h); } catch { return false; } });
+    if (!mine.length) continue;
+    const last = lastFire.get(h) ?? null;
+    const alive = last !== null && nowMs - Date.parse(last) <= windowMs;
+    if (alive) continue;
+    out.push({ owner: h, openTickets: mine.length, oldestUpdatedAt: mine[0].updated_at, lastFireTs: last, manual: opts.manualHandles?.has(h) ?? false });
+  }
+  return out;
 }
 
 export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
