@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // `dev-loop run` — a small scheduler that fires agent SKILLs through a headless CLI.
 // It deliberately does NOT depend on Claude/Codex `/loop`; it owns cadence here and
-// shells out to `claude -p` or `codex exec` once per agent fire.
+// shells out to `claude -p`, `codex exec`, or `opencode run` once per agent fire.
 import { spawn, execFileSync, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync, appendFileSync } from "node:fs";
@@ -248,12 +248,14 @@ function usage(): void {
   console.log(`dev-loop run — schedule dev-loop agents with a headless CLI
 
 Usage:
-  dev-loop run --cli claude [--project <key>] [--agents core,communication]
-  dev-loop run --cli codex  [--project <key>] [--agents core,outward]
+  dev-loop run --cli claude   [--project <key>] [--agents core,communication]
+  dev-loop run --cli codex    [--project <key>] [--agents core,outward]
+  dev-loop run --cli opencode [--project <key>] [--agents core]
 
 Cadence is owned by this process, not by Claude/Codex /loop. Each fire shells out once:
   claude -p <agent skill prompt>
   codex exec ... <agent skill prompt>
+  opencode run [--variant <effort>] ... <agent skill prompt>   (certified permission policy injected via env)
 
 Options:
   --cli claude|codex|opencode run-wide DEFAULT coding agent (default: claude). Per-agent

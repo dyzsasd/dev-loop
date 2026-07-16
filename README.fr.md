@@ -89,7 +89,9 @@ configuration shell. Gardez le canal de transfert privé, ou excluez le fichier
 
 ## Prérequis
 
-- **Node ≥ 23.6** et un coding CLI dans le `PATH` : `claude` (Claude Code) et/ou `codex`.
+- **Node ≥ 23.6** et un coding CLI dans le `PATH` : `claude` (Claude Code), `codex` et/ou
+  `opencode` (opencode atteint n'importe lequel de ses 75+ fournisseurs de modèles via des
+  chaînes `provider/model-id` — voir `docs/RUNNING.md`).
 - Un backend : rien — le **service hub** intégré (sqlite local + web UI, le défaut) ne
   dépend d'aucun service externe — ou **Linear** (le Linear MCP configuré dans le user
   scope de Claude Code).
@@ -119,7 +121,7 @@ rarement à la main. Le chemin d'édition est
   est aussi ce qui active le digest quotidien du director), les défauts `intake` au niveau
   team (les projects les surchargent champ par champ), `hub.agentInterface` (backend
   service : comment les fires atteignent le board du hub — `"cli"` par défaut pour Claude
-  Code et Codex ; `"mcp"` est l'interrupteur de rollback) et la cadence par agent.
+  Code, Codex et opencode ; `"mcp"` est l'interrupteur de rollback) et la cadence par agent.
 - `repos` — registre physique : chemin, commandes build/typecheck, PR merge checks,
   forme du deploy, health probes.
 - `projects` — unités de livraison virtuelles qui référencent des repos : strategy doc,
