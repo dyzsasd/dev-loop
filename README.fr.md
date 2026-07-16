@@ -76,12 +76,16 @@ deploy et health probe). Vérifiez et lancez exactement comme ci-dessus : `dev-l
 ```bash
 dev-loop hub stop                 # seulement pour les équipes service ; effectue un checkpoint du WAL
 rsync -a ~/work/my-team/ newhost:~/work/my-team/
-# sur la nouvelle machine : installez le CLI et votre coding CLI, gh auth, exportez les env vars
+# sur la nouvelle machine : installez le CLI et votre coding CLI, gh auth
 cd ~/work/my-team && dev-loop team repair && dev-loop doctor && dev-loop run
 ```
 
-Les secrets ne sont jamais écrits dans le workspace : la configuration ne garde que les
-**noms** des variables d'environnement. Le dossier peut donc être copié sans embarquer les secrets.
+`dev-loop.json` ne garde que les **noms** des variables d'environnement — jamais une valeur
+secrète, la configuration reste donc partageable. Les valeurs vivent dans
+`.dev-loop/secrets.env` (ou dans l'environnement du shell, qui a priorité), et ce fichier
+voyage avec le dossier : les notifications fonctionnent sur la nouvelle machine sans aucune
+configuration shell. Gardez le canal de transfert privé, ou excluez le fichier
+(`rsync --exclude .dev-loop/secrets.env`) et recréez-le sur place.
 
 ## Prérequis
 

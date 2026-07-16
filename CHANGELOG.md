@@ -3,6 +3,22 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 1.3.0
+
+- **feat(secrets): workspace-scoped secrets file — `.dev-loop/secrets.env`.** Live-loop failure
+  (citronetic): the operator never exported `DEVLOOP_COMMS_WEBHOOK`, so every notification silently
+  no-oped since day one — no Human-Blocked reminders, no §22a digest, and a §9a approval ticket sat
+  unnoticed for 4 days. `dev-loop.json` keeps storing env-var NAMES only (§16); the VALUES now have a
+  workspace-local home: `<workspace>/.dev-loop/secrets.env` (dotenv subset — `KEY=VALUE`, `#` comments,
+  optional `export ` prefix, quotes stripped, no interpolation). `resolveWorkspace` hydrates it into
+  `process.env` (a key already in the real env is never overwritten — env wins), so the CLI, daemon,
+  `dev-loop run`, and every spawned agent fire inherit coverage with zero shell setup, and the workspace
+  is fully self-contained (I4: copy the folder, notifications keep working). Misconfiguration is loud:
+  doctor's new `W12` reports `comms webhook resolvable (env|secrets.env)` or warns with the exact file
+  path, wired into the `NEXT:` rail; a group/world-readable file gets a `chmod 600` stderr warning
+  (values are never logged anywhere). `test/secrets.ts` covers the parser, env>file precedence,
+  absent-file no-op, both doctor branches, and the end-to-end clean-shell `notify` delivery.
+
 ## 1.2.0
 
 The 2026-07 full-review release (decision record: `docs/design/2026-07-review-decisions.md`;

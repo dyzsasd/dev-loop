@@ -70,11 +70,14 @@ health probe）。检查和运行的方式与上面完全相同：`dev-loop doct
 ```bash
 dev-loop hub stop                 # 仅 service team 需要；会对 WAL 做 checkpoint
 rsync -a ~/work/my-team/ newhost:~/work/my-team/
-# 在新机器上：安装 CLI 和你的 coding CLI，完成 gh auth，并 export 所需环境变量
+# 在新机器上：安装 CLI 和你的 coding CLI，完成 gh auth
 cd ~/work/my-team && dev-loop team repair && dev-loop doctor && dev-loop run
 ```
 
-secret 不会写进 workspace；配置里只保存环境变量的**名字**。因此 workspace 文件夹可以安全复制。
+`dev-loop.json` 只保存环境变量的**名字**，永远不含 secret 值，所以配置可以放心分享。值本身放在
+`.dev-loop/secrets.env`（或 shell 环境变量，后者优先），这个文件会随文件夹一起迁移——新机器上
+通知开箱即用、无需任何 shell 配置。注意传输通道要私密；不想带走它就
+`rsync --exclude .dev-loop/secrets.env`，到新机器上重建。
 
 ## 环境要求
 

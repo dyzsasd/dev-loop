@@ -72,12 +72,15 @@ ops-probe interview). Verify and run exactly as above: `dev-loop doctor`,
 ```bash
 dev-loop hub stop                 # service teams only (checkpoints the WAL)
 rsync -a ~/work/my-team/ newhost:~/work/my-team/
-# on the new machine: install the CLI + your coding CLI, gh auth, export the env vars
+# on the new machine: install the CLI + your coding CLI, gh auth
 cd ~/work/my-team && dev-loop team repair && dev-loop doctor && dev-loop run
 ```
 
-Secrets never live in the workspace (config stores env-var *names*), so the folder is safe
-to copy.
+`dev-loop.json` stores env-var *names* only — never a secret value, so the config is safe to
+share. The values live in `.dev-loop/secrets.env` (or your shell env, which wins), and that
+file travels with the folder, so notifications keep working on the new machine with zero shell
+setup — keep the transfer channel private, or `rsync --exclude .dev-loop/secrets.env` and
+recreate it there.
 
 ## Requirements
 

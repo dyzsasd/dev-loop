@@ -40,8 +40,9 @@ Every agent fire needs three pieces of identity:
 The older `DEVLOOP_PROJECTS_JSON`, `DEVLOOP_DATA_DIR`, and `CLAUDE_PLUGIN_*` variables exist only for
 compatibility paths. New 1.x launchers should use the workspace contract above.
 
-Secrets stay outside the workspace. Config stores environment variable names only; the launching
-environment provides the values.
+Config stores environment variable names only; the values come from `<workspace>/.dev-loop/secrets.env`
+(loaded automatically at workspace resolution) or the launching environment — a variable already set in
+the real environment always wins over the file. `dev-loop.json` itself never holds a secret.
 
 ## 2. MCP Registration
 
