@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## 1.3.0 (unreleased)
+## 1.3.0
 
 - **The 2026-07 field-report hardening batch** — a 6-day dogfood (1,472 fires, 52% success, failures
   almost entirely infrastructure-layer) fed a prioritized fix queue; every item below cites its incident.
