@@ -15,6 +15,7 @@ services:
       dockerfile: deploy/Dockerfile
     # image: ghcr.io/dyzsasd/dev-loop:1.4.0        # release image alternative
     restart: unless-stopped
+    init: true                                     # PID-1 zombie reaping — node does not reap orphans
     environment:
       DEVLOOP_DAEMON_HOST: 0.0.0.0                 # the §1.5 pair, half 1: routable bind (probes/exposure)
       DEVLOOP_UI_TOKEN_FILE: /run/secrets/dev_loop_ui_token   # half 2: the daemon refuses the wide bind without it
