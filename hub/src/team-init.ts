@@ -9,6 +9,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateTeamFile, TEAM_INTAKE_PROJECT, type TeamFile, type Workspace } from "./team-config.ts";
 import { ensureStateDirs, upsertWorkspaceIndex, wsHubDb } from "./workspace.ts";
+import { scaffoldOperatorBriefs } from "./operator-brief.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed } from "./seed.ts";
 
@@ -101,6 +102,7 @@ export function teamInit(argv = process.argv.slice(2), opts: { next?: boolean } 
     console.log(`dev-loop.json already exists: ${filePath}`);
     console.log("Edit it directly, or rerun with --force to replace it. (init is idempotent.)");
     provisionClaudePermissions(o.dir); // idempotent repair path: pre-D8 workspaces gain the allow rule on re-init
+    scaffoldOperatorBriefs(o.dir);     // one-click §3.2: pre-brief workspaces gain CLAUDE.md/AGENTS.md the same way
     return 0;
   }
 
@@ -148,6 +150,10 @@ export function teamInit(argv = process.argv.slice(2), opts: { next?: boolean } 
   console.log(`wrote ${filePath}`);
   console.log(`scaffolded ${join(o.dir, ".dev-loop")}/ {team, lessons, wt, locks}`);
   provisionClaudePermissions(o.dir);
+  // One-click §3.2: the workspace-root operator briefs — the ONLY files a bare claude/opencode auto-reads.
+  // Create-only (an operator's own CLAUDE.md/AGENTS.md always wins); the console primer works plugin-less.
+  const briefs = scaffoldOperatorBriefs(o.dir);
+  if (briefs.length) console.log(`scaffolded ${briefs.join(" + ")} (operator console brief — a bare claude/opencode session reads these)`);
 
   if (o.backend === "service") {
     seedServiceHub(ws);
