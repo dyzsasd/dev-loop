@@ -1,0 +1,56 @@
+# dev-loop remote home — single service + workspace volume (one-click §5.2).
+#
+#   1. Locally: dev-loop bundle export --out bundle/dev-loop-bundle.age --recipients <age-pubkey> --move
+#   2. Put the age IDENTITY and a UI token where your secret store mounts them (never in git).
+#   3. docker compose -f deploy/docker-compose.yml up -d
+#
+# ONE authoritative secret channel (§4.2): secrets travel INSIDE the encrypted bundle and are decrypted
+# to the workspace volume's secrets.env. The compose `secrets:` below carry only (a) the bundle decrypt
+# key — load-time use, and the runner strips it from every fire env (Q9) — and (b) the board bearer
+# token. Do NOT also inject provider keys via `environment:` — two sources of truth for one key.
+services:
+  dev-loop:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # image: ghcr.io/dyzsasd/dev-loop:1.4.0        # release image alternative
+    restart: unless-stopped
+    environment:
+      DEVLOOP_DAEMON_HOST: 0.0.0.0                 # the §1.5 pair, half 1: routable bind (probes/exposure)
+      DEVLOOP_UI_TOKEN_FILE: /run/secrets/dev_loop_ui_token   # half 2: the daemon refuses the wide bind without it
+      AGE_IDENTITY_FILE: /run/secrets/dev_loop_age_key        # bundle decrypt at load; never reaches a fire (Q9)
+    secrets:
+      - dev_loop_ui_token
+      - dev_loop_age_key
+    ports:
+      # Host side stays loopback-only by default: reach the board via an SSH tunnel, or front this with
+      # an AUTHENTICATED reverse proxy that injects `Authorization: Bearer <token>` upstream (§6.2 —
+      # a bearer-authed request bypasses the daemon's Host guard cleanly; no Host rewriting needed).
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - devloop-workspace:/workspace               # the home: repos, hub.db, secrets.env, state
+      - ./bundle:/bundle:ro                        # the authored bundle (config+secrets+board, encrypted)
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+      interval: 30s
+      timeout: 5s                                  # lifecycle probes run sub-second; 5s is generous
+      retries: 3
+
+secrets:
+  dev_loop_ui_token:
+    external: true                                 # docker secret create dev_loop_ui_token <(openssl rand -hex 24)
+  dev_loop_age_key:
+    external: true                                 # docker secret create dev_loop_age_key ~/.config/age/dev-loop.key
+
+volumes:
+  devloop-workspace:
+
+# Optional off-host operator chat (Phase 2, §6.3 — attach is the PRIMARY remote console; this hosted
+# tmux/ttyd session is for browsers/iPads with no local dev-loop). Uncomment to enable:
+#
+#  console:
+#    image: tsl0922/ttyd:latest
+#    restart: unless-stopped
+#    command: ["ttyd", "-W", "-c", "operator:${CONSOLE_PASSWORD:?set CONSOLE_PASSWORD}", "docker", "exec", "-it", "dev-loop_dev-loop_1", "sh", "-lc", "cd /workspace && opencode"]
+#    ports: ["127.0.0.1:7681:7681"]
+#    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]

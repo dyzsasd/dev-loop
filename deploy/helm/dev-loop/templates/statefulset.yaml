@@ -1,0 +1,74 @@
+# SINGLE-replica by construction (one-click §5.3): single-writer SQLite + the scheduler run lock.
+# Three layers, none of them "replicas: 1 and hope":
+#   1. replicas hard-coded 1 (not a value — scaling is not a supported operation);
+#   2. updateStrategy OnDelete (StatefulSets have NO Recreate; OnDelete guarantees never-two-pods
+#      across a rollout — delete the pod to roll);
+#   3. required pod anti-affinity one-per-node (an RWO PVC can be co-mounted by two pods on ONE node —
+#      anti-affinity closes that co-schedule hole) + the loader's stale-lock reclamation (`team repair`)
+#      self-heals an unclean eviction.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "dev-loop.fullname" . }}
+  labels: {{- include "dev-loop.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "dev-loop.fullname" . }}
+  replicas: 1
+  updateStrategy:
+    type: OnDelete
+  selector:
+    matchLabels: {{- include "dev-loop.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "dev-loop.selectorLabels" . | nindent 8 }}
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {{- include "dev-loop.selectorLabels" . | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: dev-loop
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["dev-loop", "up", "--bundle", "/bundle/dev-loop-bundle.age", "--dir", "/workspace"]
+          env:
+            - { name: DEVLOOP_WORKSPACE, value: /workspace }
+            - { name: DEVLOOP_PROJECT, value: _team }
+            - { name: DEVLOOP_ACTOR, value: operator }
+            # The §1.5 pair — the daemon refuses the wide bind without the token (fail closed):
+            - { name: DEVLOOP_DAEMON_HOST, value: "0.0.0.0" }
+            - name: DEVLOOP_UI_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.uiTokenSecretName }}, key: token } }
+            # Bundle decrypt at load only — the runner strips it from every fire env (Q9):
+            - { name: AGE_IDENTITY_FILE, value: /run/secrets/age/age.key }
+          # NO envFrom for provider keys: secrets travel in the bundle → secrets.env → per-fire scoping.
+          ports:
+            - { name: board, containerPort: {{ .Values.daemonPort }} }
+          livenessProbe:
+            httpGet: { path: /api/health, port: board }   # token-exempt; 503 when the SoR is wedged
+            initialDelaySeconds: 30
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet: { path: /api/health, port: board }
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - { name: workspace, mountPath: /workspace }
+            - { name: bundle, mountPath: /bundle, readOnly: true }
+            - { name: age-key, mountPath: /run/secrets/age, readOnly: true }
+      volumes:
+        - name: bundle
+          secret: { secretName: {{ .Values.bundleSecretName }} }
+        - name: age-key
+          secret: { secretName: {{ .Values.ageKeySecretName }}, defaultMode: 0400 }
+  volumeClaimTemplates:
+    - metadata: { name: workspace }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.workspace.storageClassName }}
+        storageClassName: {{ .Values.workspace.storageClassName }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.workspace.storage }} } }

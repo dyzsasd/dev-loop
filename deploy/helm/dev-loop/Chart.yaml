@@ -1,0 +1,8 @@
+apiVersion: v2
+name: dev-loop
+description: >-
+  dev-loop workspace home on Kubernetes — a SINGLE-replica StatefulSet (single-writer SQLite SoR +
+  a run lock: replicas MUST stay 1) loading an age-encrypted bundle and running the agent loop.
+type: application
+version: 0.1.0
+appVersion: "1.4.0"
