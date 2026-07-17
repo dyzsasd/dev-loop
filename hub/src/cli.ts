@@ -22,7 +22,8 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   shim:             ["shim"],                      // thin stdio MCP → loopback daemon op-API (DL-55)
   daemon:           ["daemon"],                    // up | down | status | ensure (DL-41)
   init:             ["init-wizard"],               // guided onboarding wizard — composes team init + first project/repo + doctor NEXT (P1)
-  team:             ["team"],                      // init | import | repair | set | add-project | add-repo | sync-opencode — workspace (v2)
+  team:             ["team"],                      // init | import | repair | set | add-project | add-repo | add-provider | sync-opencode — workspace (v2)
+  secret:           ["secret-cli"],                // set | list | unset — workspace secret VALUES (.dev-loop/secrets.env; §16)
   hub:              ["hub"],                        // start | stop | status | ensure — the workspace hub daemon (service)
   "next-project":   ["rotation"],                  // print the next project for an agent's fire (shared WRR cursor)
   "with-repo-lock": ["with-repo-lock"],            // serialize base-clone mutations on a shared repo
@@ -70,8 +71,10 @@ Usage: dev-loop <command> [args]
                               daemon lifecycle — idempotent localhost web UI + optional login autostart
   init [--dir <path>] [--yes]  guided setup — workspace + first project/repo (interactive on a TTY;
                               --yes takes every default), ends with the doctor verdict + its NEXT line
-  team init|import|repair|set|add-project|add-repo|sync-opencode
+  team init|import|repair|set|add-project|add-repo|add-provider|sync-opencode
                               workspace (schema v2): create / migrate-from-v1 / repair / validated config writes
+  secret set|list|unset       workspace secret VALUES (.dev-loop/secrets.env, chmod 600) — set prompts on
+                              the TTY (echo off) or reads stdin; a value never rides an argument (§16)
   hub start|stop|status|ensure   workspace hub daemon lifecycle (service backend; stop checkpoints the WAL)
   metrics [--window 7d] [--json] [--context]   team KPIs — fire success from fires.jsonl (+ board KPIs
                               on service); --context = the per-agent per-fire context bill (§0a)

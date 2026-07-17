@@ -13,6 +13,7 @@ import { validateTeamFile, referencingProjects, type TeamFile, type Workspace } 
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject } from "./seed.ts";
 import { provisionClaudePermissions } from "./team-init.ts";
+import { syncOpencodeConfig } from "./opencode-sync.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop team: ${msg}`); process.exit(code); }
 
@@ -372,10 +373,56 @@ export function workflowJobNames(text: string): string[] {
   return names;
 }
 
+// ── add-provider (one-click Q1) ──────────────────────────────────────────────
+// The FIRST-CLASS provider mutator — closes the last "no CLI verb" gap so the operator-console skill's
+// "never hand-edit dev-loop.json" HARD LIMIT holds uniformly. Writes the E16-validated
+// team.providers.<id> entry through the same mutate() path as every other config write, then renders it
+// into the workspace opencode.json itself (the sync step the operator used to have to remember). §16:
+// takes the env-var NAME only; the VALUE goes in separately via `dev-loop secret set <NAME>` (TTY-
+// prompted — the key never appears on a command line, in the chat, or in shell history).
+export function addProvider(argv: string[]): number {
+  const [id, ...rest] = argv;
+  if (!id || id.startsWith("--"))
+    die("usage: dev-loop team add-provider <id> --base-url <https-url> --auth-env <ENV_NAME> --models <a,b,…> [--effort-mode passthrough|strip] [--force]");
+  const o: { baseUrl?: string; authEnv?: string; models?: string; effortMode?: string; force?: boolean } = {};
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]; const next = () => rest[++i] ?? die(`${a} requires a value`);
+    if (a === "--base-url") o.baseUrl = next();
+    else if (a === "--auth-env") o.authEnv = next();
+    else if (a === "--models") o.models = next();
+    else if (a === "--effort-mode") o.effortMode = next();
+    else if (a === "--force") o.force = true;
+    else die(`unknown option '${a}'`);
+  }
+  if (!o.baseUrl || !o.authEnv || !o.models) die("--base-url, --auth-env, and --models are all required");
+  if (o.effortMode !== undefined && o.effortMode !== "passthrough" && o.effortMode !== "strip")
+    die(`--effort-mode must be passthrough or strip (got '${o.effortMode}')`);
+  const baseUrl = o.baseUrl, authTokenEnv = o.authEnv;
+  const effortMode = o.effortMode as "passthrough" | "strip" | undefined;
+  const models = o.models.split(",").map((m) => m.trim()).filter(Boolean);
+  const ws = mutate((file) => {
+    const team = file.team as TeamFile["team"] & { providers?: Record<string, unknown> };
+    team.providers ??= {};
+    if (team.providers[id] && !o.force) die(`provider '${id}' already exists — pass --force to overwrite it`, 1);
+    team.providers[id] = {
+      kind: "openai-compatible", baseUrl, authTokenEnv, models,
+      ...(effortMode ? { effortMode } : {}),
+    };
+  });
+  const sync = syncOpencodeConfig(ws.root, (ws.file.team.providers ?? {}) as never);
+  if (!sync.ok) { console.error(`⚠️  provider saved but opencode.json sync failed: ${sync.error} — run: dev-loop team sync-opencode`); return 1; }
+  console.log(`✅ provider '${id}' registered (${models.length} model${models.length === 1 ? "" : "s"}) + opencode.json ${sync.action}`);
+  console.log(`   launch strings: ${models.map((m) => `${id}/${m}`).join(", ")}`);
+  if (process.env[o.authEnv] === undefined)
+    console.log(`   next: dev-loop secret set ${o.authEnv}   (the key VALUE — doctor W13 checks resolvability)`);
+  return 0;
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const [sub, ...rest] = process.argv.slice(2);
   if (sub === "add-project") process.exit(await addProject(rest));
   if (sub === "add-repo") process.exit(addRepo(rest));
   if (sub === "set") process.exit(await teamSet(rest));
-  console.error("usage: team-edit add-project|add-repo|set …"); process.exit(2);
+  if (sub === "add-provider") process.exit(addProvider(rest));
+  console.error("usage: team-edit add-project|add-repo|set|add-provider …"); process.exit(2);
 }
