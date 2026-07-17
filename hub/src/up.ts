@@ -135,6 +135,12 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
     return bundleLoad(o.bundle, o.dir, { forceReseed: o.forceReseed, noRun: o.dryLaunch }); // --dry-launch on this leg = load, verify, don't start the loop
   }
 
+  // Mixed-state guard (review finding): a bare `up` under an exported DEVLOOP_HUB_URL would scaffold
+  // and ensure LOCALLY while every verb the console then runs hits the REMOTE — two half-homes. Be
+  // explicit or be refused.
+  if (!o.attach && !o.bundle && process.env.DEVLOOP_HUB_URL?.trim())
+    die(`DEVLOOP_HUB_URL is set (${process.env.DEVLOOP_HUB_URL.trim()}) — run \`dev-loop up --attach <url>\` to drive that remote home, or unset DEVLOOP_HUB_URL to work locally`);
+
   // ── LOCAL / ATTACH: resolve-or-scaffold, then the interactive console ─────
   let ws: Workspace | null = null;
   if (o.attach) {

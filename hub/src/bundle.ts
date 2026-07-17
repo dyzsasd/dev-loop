@@ -307,7 +307,13 @@ export async function bundleLoad(file: string, dir: string, opts: { forceReseed:
   }
 
   // Re-materialize repos: fail-fast probe, fresh clone on absent, RESUME (fetch) on present (§4.5 step 3).
-  for (const r of manifest.repos) {
+  // SECURITY (review finding): clone targets come from the VALIDATED config (ws.file.repos — E03 pins
+  // every path inside the workspace root), NEVER from the plaintext manifest — the manifest is
+  // unauthenticated and tamperable, and age recipients are public keys, so a crafted bundle could
+  // otherwise name a traversal path and write outside the workspace. The manifest's repo list is
+  // display/preflight metadata only.
+  const repoEntries = Object.entries(ws.file.repos).map(([ref, r]) => ({ ref, path: r.path, remote: r.remote }));
+  for (const r of repoEntries) {
     const abs = join(root, r.path);
     if (!r.remote) { if (!existsSync(abs)) console.warn(`⚠️  repo '${r.ref}' has no remote and no local clone at ${r.path} — register a remote or copy it manually`); continue; }
     const probe = spawnSync("git", ["ls-remote", "--heads", r.remote], { env, encoding: "utf8", timeout: 60_000 });

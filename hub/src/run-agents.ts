@@ -880,6 +880,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     const keep = new Set<string>();
     if (providerEntry) keep.add(providerEntry.authTokenEnv);
     if (profile.codingAgent === "claude") { keep.add("ANTHROPIC_API_KEY"); keep.add("ANTHROPIC_AUTH_TOKEN"); }
+    if (profile.codingAgent === "codex") keep.add("OPENAI_API_KEY"); // its own auth lane, same rule as claude's
     for (const k of injected) if (!keep.has(k)) delete env[k];
     delete env.DEVLOOP_BUNDLE_KEY;
     delete env.AGE_IDENTITY_FILE;

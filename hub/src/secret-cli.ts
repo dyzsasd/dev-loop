@@ -120,6 +120,9 @@ Doctor W12/W13 report resolvability.`);
       value = useStdin ? (await readStdin()).replace(/\r?\n$/, "") : await promptHidden(`Value for ${name} (input hidden): `);
     } catch (e) { die((e as Error).message, 1); }
     if (!value) die("empty value — nothing stored", 1);
+    // secrets.env is a LINE-oriented format (secrets.ts parser): an embedded newline/control char would
+    // truncate the value at read time and inject stray lines — refuse rather than corrupt.
+    if (/[\r\n\0]/.test(value)) die("the value contains a newline/control character — secrets.env is line-oriented; store multi-line material as a file and reference its PATH", 1);
     mkdirSync(dirname(path), { recursive: true });
     const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
     writeFileSync(path, upsertSecretLine(existing, name, value), { mode: 0o600 });
