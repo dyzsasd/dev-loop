@@ -1,0 +1,34 @@
+# dev-loop remote home — bare-Linux supervision (one-click §8 Phase 2; fills the gap left by the
+# macOS-LaunchAgent-only autostart). Install:
+#   sudo cp deploy/systemd/dev-loop.service /etc/systemd/system/
+#   sudo systemctl edit dev-loop        # override User=, the bundle path, and the secret paths
+#   sudo systemctl enable --now dev-loop
+[Unit]
+Description=dev-loop autonomous dev team (workspace home: bundle load + scheduler + board daemon)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=devloop
+WorkingDirectory=/var/lib/dev-loop
+# The §1.5 pair: routable bind requires the token (the daemon refuses otherwise — fail closed).
+Environment=DEVLOOP_WORKSPACE=/var/lib/dev-loop
+Environment=DEVLOOP_PROJECT=_team
+Environment=DEVLOOP_ACTOR=operator
+Environment=DEVLOOP_DAEMON_HOST=0.0.0.0
+Environment=DEVLOOP_UI_TOKEN_FILE=/etc/dev-loop/ui-token
+Environment=AGE_IDENTITY_FILE=/etc/dev-loop/age.key
+ExecStart=/usr/bin/env dev-loop up --bundle /etc/dev-loop/dev-loop-bundle.age --dir /var/lib/dev-loop
+# `up --bundle` execs `dev-loop run`, which owns the board daemon (Q5) and drains fires on SIGTERM.
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=10
+# Hygiene: the workspace holds repo checkouts + the SQLite SoR — keep the unit's sandbox tight.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/dev-loop
+
+[Install]
+WantedBy=multi-user.target

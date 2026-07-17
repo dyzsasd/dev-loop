@@ -1,0 +1,33 @@
+# dev-loop Helm values (one-click §5.3). The hub is a single-writer SQLite system-of-record with a
+# scheduler run lock — REPLICAS IS NOT A KNOB. The chart hard-pins replicas: 1 (values carry no
+# replica field on purpose); scale-out is structurally meaningless and corrupting.
+image:
+  repository: ghcr.io/dyzsasd/dev-loop
+  tag: "1.4.0"
+  pullPolicy: IfNotPresent
+
+# The authored bundle (config + secrets + board, age-encrypted) and its decrypt identity + UI token.
+# Create them out-of-band — the chart never templates secret MATERIAL:
+#   kubectl create secret generic dev-loop-bundle  --from-file=dev-loop-bundle.age
+#   kubectl create secret generic dev-loop-age-key --from-file=age.key
+#   kubectl create secret generic dev-loop-ui-token --from-literal=token=$(openssl rand -hex 24)
+bundleSecretName: dev-loop-bundle
+ageKeySecretName: dev-loop-age-key
+uiTokenSecretName: dev-loop-ui-token
+
+daemonPort: 8787
+
+workspace:
+  storage: 20Gi
+  storageClassName: ""   # "" = the cluster default; the PVC is the home (repos + hub.db + state)
+
+resources:
+  requests: { cpu: 500m, memory: 1Gi }
+  limits: { memory: 4Gi }
+
+# Board exposure: the pod serves 0.0.0.0 INSIDE the pod with the bearer token enforced (§6.2 — reads
+# and writes both 401 without it; /api/health stays probe-open). Default Service is ClusterIP; reach
+# the board via `kubectl port-forward` + the token, or front with an authenticated ingress whose proxy
+# injects `Authorization: Bearer` upstream. No unauthenticated exposure exists to misconfigure.
+service:
+  type: ClusterIP
