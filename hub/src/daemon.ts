@@ -42,7 +42,9 @@ import { // A3: extracted timers; imported for the foreground boot, re-exported 
   startNoProgressNotifier, walCheckpointTick, startWalCheckpoint,
   resolveBlockedReminderHours, startDocForeignEditNotifier, startDocDraftsPendingNotifier,
   startStrategyFileEditNotifier, // docs P3b: the passive-mode repo-FILE strategy-doc watch
+  fireHealthNotifyTick, startFireHealthNotifier, // P0-1c: the loop fire-health self-monitor
 } from "./daemon-notifiers.ts";
+import { tryResolveWorkspace, wsFireLedger } from "./workspace.ts";
 
 export interface DaemonOpts {
   db: DatabaseSync;          // read connection (PRAGMA query_only=ON) — every GET route reads through this
@@ -609,6 +611,7 @@ export {
   blockedNotifyTick, startBlockedNotifier, noProgressNotifyTick,
   startNoProgressNotifier, walCheckpointTick, startWalCheckpoint,
   resolveBlockedReminderHours, startDocForeignEditNotifier, startDocDraftsPendingNotifier,
+  fireHealthNotifyTick, startFireHealthNotifier,
 };
 
 // DL-41 dispatch — a lifecycle subcommand handles itself and exits; ANY other invocation (incl. the
@@ -673,11 +676,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // (settings_json.noProgressWindowHours) from the SAME parse — operator-set, hours, 0/absent ⇒ off.
   const commsConfigured = projCfg?.comms !== undefined;
   let cadenceHours = resolveBlockedReminderHours(undefined, commsConfigured), noProgressWindowHours = 0;
+  // P0-1c defaults: ON (2h window, ≥6 fires, <50% success) whenever a send target + a team fires ledger
+  // exist; settings_json.fireHealth.windowHours=0 opts out; minFires/threshold tune from the same block.
+  let fhWindowHours = 2, fhMinFires = 6, fhThreshold = 0.5;
   try {
     const row = writeDb.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
     const settings = JSON.parse(row?.settings_json ?? "{}");
     cadenceHours = resolveBlockedReminderHours(settings, commsConfigured);
     noProgressWindowHours = Number(settings?.noProgressWindowHours) || 0;
+    const fh = (settings?.fireHealth ?? {}) as { windowHours?: unknown; minFires?: unknown; threshold?: unknown };
+    if (fh.windowHours !== undefined) fhWindowHours = Number(fh.windowHours) || 0;
+    if (fh.minFires !== undefined && Number(fh.minFires) > 0) fhMinFires = Number(fh.minFires);
+    if (fh.threshold !== undefined && Number(fh.threshold) > 0) fhThreshold = Number(fh.threshold);
   } catch { /* malformed settings_json ⇒ keep the comms-aware default + noProgress off */ }
   server.listen(PORT, HOST, () => {
     const addr = server.address();
@@ -686,11 +696,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const baseUrl = `http://${HOST}:${port}`;
     // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
     const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, cadenceHours, notify });
-    if (notifier) console.log(`[daemon] Human-Blocked notifier active (every ${cadenceHours}h via the configured channel / §9 notify webhook)`);
+    if (notifier) console.log(`[daemon] decision-queue notifier active (Human-Blocked ∪ In Review@operator, every ${cadenceHours}h via the configured channel / §9 notify webhook)`);
     // DL-76: loop no-progress / runaway circuit-breaker — alert ONCE when 0 accepted change (Done) lands in the
     // rolling window. No channel/notify OR noProgressWindowHours≤0 ⇒ no-op (mirrors the Human-Blocked notifier).
     const noProgress = startNoProgressNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, windowHours: noProgressWindowHours, notify });
     if (noProgress) console.log(`[daemon] no-progress detector active (alert on 0 accepted change in ${noProgressWindowHours}h via the configured channel / §9 notify webhook)`);
+    // P0-1c: the loop fire-health self-monitor — ops watches prod; THIS watches the loop itself.
+    const fhLedger = (() => { try { const ws = tryResolveWorkspace(); return ws ? wsFireLedger(ws) : ""; } catch { return ""; } })();
+    const fireHealth = startFireHealthNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, ledgerPath: fhLedger, windowHours: fhWindowHours, minFires: fhMinFires, threshold: fhThreshold, notify });
+    if (fireHealth) console.log(`[daemon] fire-health monitor active (alert when success <${Math.round(fhThreshold * 100)}% over ${fhWindowHours}h with ≥${fhMinFires} fires; one alert per episode)`);
     // Docs P3: passive-intake foreign-doc-edit notifier — under intake.mode:"passive" PM's doc-watch is off,
     // so an unconsumed HUMAN (non-agent) doc version emits one comms line, deduped per version. Autonomous
     // mode / no send target ⇒ no timer (PM's own doc-watch owns propagation there).

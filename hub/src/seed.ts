@@ -1,6 +1,7 @@
 // Idempotent bootstrap: a project, the agent/operator actors, and the §4 label taxonomy.
 // Run directly (`node src/seed.ts <key> <name>`) or called by the server on first run.
 import { randomUUID } from "node:crypto";
+import { resolveHubDbPath } from "./workspace.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { openDb, nowIso } from "./db.ts";
 
@@ -98,7 +99,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log("Usage: seed <key> <name> [PREFIX] [DBPATH]  — seed a project + actors + labels into the hub db");
     process.exit(0);
   }
-  const [key = "demo", name = "Demo Project", prefix = "DL", dbPath = process.env.DEVLOOP_HUB_DB ?? "./hub.db"] = args;
+  // Default via the workspace-aware ladder (P2 #2): the old `./hub.db` cwd default silently created a
+  // SECOND board next to wherever the operator happened to stand — the day-1 double-db split.
+  const [key = "demo", name = "Demo Project", prefix = "DL", dbPath = resolveHubDbPath()] = args;
   const db = openDb(dbPath);
   const id = ensureSeed(db, key, name, prefix);
   console.log(`seeded project ${key} (${id}) + actors + labels in ${dbPath}`);

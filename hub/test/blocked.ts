@@ -33,6 +33,28 @@ function seed(path: string, nTickets: number) {
 const base = (db: ReturnType<typeof openDb>) =>
   ({ writeDb: db, projectId: "p", projectKey: "k", baseUrl: "http://127.0.0.1:8787", cadenceMs: 3_600_000, fetchImpl: okFetch });
 
+// ── P1-3: the In Review@operator approval shape joins the decision queue ────
+{
+  const db = seed("/tmp/dl-blk-approval.db", 0);
+  db.prepare("INSERT INTO tickets(id,project_id,title,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('AP1','p','avatar proposal','In Review','operator',0,'[]','[]','pm','t','t')").run();
+  db.prepare("INSERT INTO tickets(id,project_id,title,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('AP2','p','agent-owned review','In Review','qa',0,'[]','[]','pm','t','t')").run();
+  const { cap, fetchImpl } = (() => {
+    const cap: { body: string }[] = [];
+    const f: FetchImpl = (async (_u, init) => { cap.push({ body: String((init as { body?: string })?.body ?? "") }); return { status: 200, json: async () => ({ ok: true }) } as unknown as Response; }) as FetchImpl;
+    return { cap, fetchImpl: f };
+  })();
+  const now = Date.now();
+  const a1 = await blockedNotifyTick({ ...base(db), fetchImpl, nowMs: now });
+  ok(a1 === 1 && cap.length === 1 && /awaiting your approval/.test(cap[0].body) && /AP1/.test(cap[0].body),
+    "P1-3: In Review@operator gets the awaiting-approval ping (MP-211 shape)");
+  ok(!cap[0].body.includes("AP2"), "P1-3: an agent-assigned In Review ticket is NOT the operator's queue");
+  const mk = (db.prepare("SELECT count(*) c FROM events WHERE kind='operator_review.notified'").get() as { c: number }).c;
+  ok(mk === 1 && evc(db) === 0, "P1-3: its own marker kind — human_blocked markers untouched");
+  const a2 = await blockedNotifyTick({ ...base(db), fetchImpl, nowMs: now + 1000 });
+  ok(a2 === 0, "P1-3: throttled within cadence like the Human-Blocked shape");
+  db.close();
+}
+
 // ── core lifecycle (live) ────────────────────────────────────────────────────
 {
   const db = seed("/tmp/dl-blk-core.db", 1);

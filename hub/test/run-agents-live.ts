@@ -50,6 +50,13 @@ exit 0
     "the spawned CLI received DEVLOOP_ACTOR=pm + DEVLOOP_PROJECT=demo in its env");
   ok(r1.length === 1 && /COMPLETED/.test(r1[0]), "the fire ran to completion");
   ok(existsSync(join(data, "demo", "runner-logs", "pm.log")), "per-agent runner log was written");
+  // Stream-lifecycle regression (field report P2-4, ×103): the stub prints nothing + exits 0, i.e. the
+  // suspectError path — finalize's footer/suspect writes used to land on a stream the close handler had
+  // already ended, losing the file tail of every fire as "write after end".
+  ok(!/write after end/.test(once.out), "no 'runner-log write failed (write after end)' — finalize owns the stream end");
+  const pmLog = readFileSync(join(data, "demo", "runner-logs", "pm.log"), "utf8");
+  ok(/===== exit code=0/.test(pmLog), "the exit footer reaches the log file (used to be lost after end)");
+  ok(/===== suspectError:/.test(pmLog), "the suspectError marker reaches the log file (used to be lost after end)");
   clearRecs();
 
   // ── 2. --max-fires drain: the Nth fire COMPLETES (the old stop() SIGINT'd the fire it just launched) ──
@@ -95,6 +102,49 @@ exit 0
   const d = events.length ? JSON.parse(events[0].data) as Record<string, unknown> : {};
   ok(d.codingAgent === "claude" && typeof d.durationMs === "number" && d.exitCode === 0 && d.timedOut === false,
     "P1: fire.completed carries codingAgent + durationMs + exitCode + timedOut");
+
+  // ── 5b. P0-1b errorClass: a spend-limit-shaped failure is classified in the ledger/event ──
+  const stubFail = join(tmp, "stub-claude-fail");
+  writeFileSync(stubFail, `#!/bin/sh
+echo "You've hit your monthly spend limit · raise it at claude.ai/settings/usage" >&2
+exit 1
+`);
+  chmodSync(stubFail, 0o755);
+  const telFail = runLive(telCommon, { DEVLOOP_CLAUDE_BIN: stubFail });
+  ok(telFail.code === 1, `spend-limit fire propagates exit 1 (got ${telFail.code})`);
+  const rows2 = execFileSync("node", ["--input-type=module", "-e",
+    `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${hubDb}'); const pid=findProject(db,'tel'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
+    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+  const datas = (JSON.parse(rows2) as { data: string }[]).map((r) => JSON.parse(r.data) as Record<string, unknown>);
+  ok(datas.some((x) => x.errorClass === "spend-limit" && x.exitCode === 1),
+    "P0-1b: the spend-limit failure carries errorClass:'spend-limit' in fire.completed");
+
+  // ── 5c. P0-1a breaker: 3 identical failures trip to probe cadence; the first success closes ──
+  // A counter stub fails with the SAME spend-limit line for runs 1-3, succeeds from run 4 — the exact
+  // field shape (identical fast failures) followed by recovery (limit reset). Timeline @1s cadence,
+  // probe 3s, max-fires 6: f1..f3 fail → OPEN → one probe wait → f4 succeeds → CLOSED → f5,f6 normal.
+  const cnt = join(tmp, "flaky-count");
+  const stubFlaky = join(tmp, "stub-claude-flaky");
+  writeFileSync(stubFlaky, `#!/bin/sh
+n=$(cat "$CNT_FILE" 2>/dev/null || echo 0); n=$((n+1)); printf '%s' "$n" > "$CNT_FILE"
+if [ "$n" -le 3 ]; then echo "You've hit your monthly spend limit · raise it at claude.ai/settings/usage" >&2; exit 1; fi
+echo "recovered run $n"
+exit 0
+`);
+  chmodSync(stubFlaky, 0o755);
+  const bt0 = Date.now();
+  const brk = runLive([
+    "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub4.db"), "--project", "demo", "--cwd", repo,
+    "--cli", "claude", "--agents", "sweep", "--interval", "sweep=1s", "--stagger", "0",
+    "--breaker", "3", "--breaker-probe", "3s", "--max-fires", "6",
+  ], { DEVLOOP_CLAUDE_BIN: stubFlaky, CNT_FILE: cnt }, 120_000);
+  const openIdx = brk.out.indexOf("breaker OPEN: sweep");
+  const closeIdx = brk.out.indexOf("breaker CLOSED: sweep");
+  ok(openIdx >= 0 && /3× identical failures \(spend-limit\)/.test(brk.out), "P0-1a: 3 identical spend-limit failures trip the breaker (keyed on errorClass)");
+  ok(closeIdx > openIdx, "P0-1a: the first successful probe fire closes the breaker (recovery notice after the open)");
+  ok(readFileSync(cnt, "utf8") === "6", `P0-1a: all 6 fires ran — the breaker paces, it never strands the slot (got ${readFileSync(cnt, "utf8")})`);
+  ok(brk.out.split("breaker OPEN").length === 2 && brk.out.split("breaker CLOSED").length === 2, "P0-1a: trip and recovery notify exactly ONCE each");
+  ok(Date.now() - bt0 >= 3_000, "P0-1a: the probe wait actually elapsed (open slot ran slower than base cadence)");
 
   // ── 6. R1 change-gate: on a quiet board, a gated agent fires ONCE then skips (no re-spawn) ──
   const gateDb = join(tmp, "hub3.db");

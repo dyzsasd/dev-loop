@@ -254,8 +254,11 @@ const p4 = (await call(sweep, "mirror.push", PUSH)).data;
 const u4 = linSent.find((s) => s.kind === "update");
 ok(p4.failed === 0 && !!u4 && u4.vars.i.stateId == null, "unmapped state → no stateId in the update, push does NOT fail (fallback)");
 
-// cancel → still mirrored as an update, NEVER deleted (no delete op exists at all)
-await call(sweep, "save_issue", { id: t2.id, state: "Canceled" });
+// cancel → still mirrored as an update, NEVER deleted (no delete op exists at all).
+// t2 is Done here, and Done → Canceled is an OPERATOR move since the P1-1 terminal-state guard
+// (agents cannot exit a terminal state) — so the cancel rides an operator client.
+const oper = await as("operator", "mirp", { prefix: "MR" });
+await call(oper, "save_issue", { id: t2.id, state: "Canceled" });
 const p5 = (await call(sweep, "mirror.push", PUSH)).data;
 ok(p5.failed === 0 && p5.updated >= 1, "a Canceled ticket → update op, NEVER a delete (no data-loss)");
 

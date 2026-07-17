@@ -117,6 +117,71 @@ const restore = await call(dArch, "doc.archive", { slug: "auth", archived: false
 ok(!restore.isError && restore.data.archived === false && (await call(dArch, "doc.list", { kind: "design" })).data[0].archived === 0,
   "D6: archived:false RESTORES the doc (the flip is reversible)");
 
+// ── P2-3: op-layer UX affordances (the CLI path; stdio zod stays strict; shared core untouched) ──
+{
+  const { openDb } = await import("../src/db.ts");
+  const { agentOp } = await import("../src/agentops.ts");
+  const P = "/tmp/dl-docs-ux.db";
+  for (const s of ["", "-wal", "-shm"]) { try { rmSync(P + s); } catch { /* */ } }
+  const db = openDb(P);
+  db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','k','n','t')").run();
+  const op = async (name: string, actor: string, args: Record<string, unknown>) =>
+    await agentOp(name as Parameters<typeof agentOp>[0], db, "p", "k", actor, args);
+  const errOf = (r: { body: unknown }) => String((r.body as { error?: string }).error ?? "");
+
+  const c1 = await op("doc.save", "pm", { slug: "s1", body: "b", baseVersion: 0 });
+  ok(c1.status === 400 && /kind required to CREATE/.test(errOf(c1)), "P2-3a: CREATE without kind → the precise create-time error");
+  ok((await op("doc.save", "pm", { slug: "s1", kind: "strategy", body: "b", baseVersion: 0 })).status === 200, "P2-3a: create with kind works");
+  const s2 = await op("doc.save", "pm", { slug: "s1", body: "b2", baseVersion: 1 });
+  ok(s2.status === 200 && (s2.body as { version: number }).version === 2, "P2-3a: an EXISTING slug infers its kind (no kind arg)");
+  const bv = await op("doc.save", "pm", { slug: "s1", kind: "strategy", body: "x", base_version: 2 });
+  ok(bv.status === 400 && /did you mean baseVersion/.test(errOf(bv)), "P2-3b: snake_case base_version → the precise camelCase hint");
+  const pub = await op("doc.publish", "operator", { slug: "s1" });
+  ok(pub.status === 200 && (pub.body as { current_version: number }).current_version === 2, "P2-3c: publish with NO version resolves the latest draft");
+  const pubLatest = await op("doc.publish", "operator", { slug: "s1", version: "latest" });
+  ok(pubLatest.status === 200, "P2-3c: version:'latest' works too (idempotent re-publish of v2)");
+  const pubGhost = await op("doc.publish", "operator", { slug: "ghost-none" });
+  ok(pubGhost.status === 404, "P2-3c: publish-latest on a missing slug → 404, never a generic version error");
+  ok((await op("doc.save", "pm", { slug: "r1", kind: "roadmap", body: "r", baseVersion: 0 })).status === 200, "setup: a roadmap doc");
+  const pubAgent = await op("doc.publish", "pm", { slug: "r1" });
+  ok(pubAgent.status >= 400 && /operator/i.test(errOf(pubAgent)), "P2-3c: the operator-only gate is untouched by the sugar (non-strategy kind)");
+
+  // ── P2-5A: PM's autonomous publish lane — strategy docs, progress-only deltas ──
+  // (documents are UNIQUE per (project, kind) — s1 IS this project's one strategy doc; the
+  //  never-published first-publish check runs in a second project.)
+  const BODY1 = "# North\n\n## Goals (north star)\ng1\n\n## Current state\nnothing yet\n\n## Decisions (running log)\n- d1\n";
+  ok((await op("doc.save", "operator", { slug: "s1", body: BODY1, baseVersion: 2 })).status === 200, "setup: structured strategy v3 saved");
+  ok((await op("doc.publish", "operator", { slug: "s1" })).status === 200, "setup: operator publishes v3 (whole-doc restructure is theirs)");
+  const BODY2 = BODY1.replace("nothing yet", "✅ shipped X").replace("- d1", "- d1\n- d2");
+  ok((await op("doc.save", "pm", { slug: "s1", body: BODY2, baseVersion: 3 })).status === 200, "setup: PM saves a progress-only v4");
+  const pmPub = await op("doc.publish", "pm", { slug: "s1" });
+  ok(pmPub.status === 200 && (pmPub.body as { current_version: number }).current_version === 4,
+    "P2-5A: PM publishes a progress-only delta autonomously (the 63-draft pile ends here)");
+  const BODY3 = BODY2.replace("g1", "g1 REVISED");
+  ok((await op("doc.save", "pm", { slug: "s1", body: BODY3, baseVersion: 4 })).status === 200, "setup: v5 touches Goals");
+  const pmDir = await op("doc.publish", "pm", { slug: "s1" });
+  ok(pmDir.status >= 400 && /goals \(north star\)/.test(errOf(pmDir)), "P2-5A: a direction delta refuses and NAMES the section");
+  ok((await op("doc.publish", "operator", { slug: "s1" })).status === 200, "P2-5A: the operator publishes the direction change as before");
+  const BODY4 = BODY3 + "\n## Roadmap Q3\nnew\n";
+  ok((await op("doc.save", "pm", { slug: "s1", body: BODY4, baseVersion: 5 })).status === 200, "setup: v6 adds an UNKNOWN heading");
+  const pmUnk = await op("doc.publish", "pm", { slug: "s1" });
+  ok(pmUnk.status >= 400 && /roadmap q3/.test(errOf(pmUnk)), "P2-5A: an unknown heading fails closed to the operator");
+  db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p2','k2','n2','t')").run();
+  const { agentOp: agentOp2 } = await import("../src/agentops.ts");
+  const op2 = async (name: string, actor: string, args: Record<string, unknown>) =>
+    await agentOp2(name as Parameters<typeof agentOp2>[0], db, "p2", "k2", actor, args);
+  ok((await op2("doc.save", "pm", { slug: "fresh", kind: "strategy", body: BODY1, baseVersion: 0 })).status === 200, "setup: a NEVER-published strategy in project 2");
+  const pmFirst = await op2("doc.publish", "pm", { slug: "fresh" });
+  ok(pmFirst.status >= 400 && /FIRST version/.test(errOf(pmFirst)), "P2-5A: the FIRST publish stays the operator's (fail closed)");
+  const { nonProgressChanges } = await import("../src/docstore.ts");
+  ok(nonProgressChanges("intro\n## Current state\na", "intro2\n## Current state\na").includes("(preamble)"), "P2-5A: a preamble change is not PM's lane");
+  ok(nonProgressChanges(BODY1, BODY2).length === 0, "P2-5A: the progress-only delta parses as exactly that");
+  const FENCED = "## Goals (north star)\ng\n```\n## Current state\nfake heading in a fence\n```\ntail\n";
+  ok(nonProgressChanges(FENCED, FENCED.replace("tail", "tail EDITED")).some((s) => s.includes("goals")),
+    "P2-5A: a heading inside a code fence is CONTENT — the edit below it still belongs to Goals (fails closed)");
+  db.close();
+}
+
 for (const c of [pm, reflect, operator, beta, dq, pmR, reflectR, operatorR, dArch]) await c.close();
 console.log(fails === 0 ? "\nHUB_DOCS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

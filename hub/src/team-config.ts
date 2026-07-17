@@ -11,7 +11,9 @@ import { isAbsolute, join } from "node:path";
 // ─── Types (impl §2.1) ───────────────────────────────────────────────────────
 export type DocRef = string | { linearDocument: string } | { hubDoc: string } | { path: string };
 
-export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string }
+// `manual:true` (P1-4): the operator runs this role by hand (no scheduled fires) — owner-liveness
+// (doctor W16 / the Sweep digest) reports its stranded tickets as "awaiting a human", never as a warn.
+export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string; manual?: boolean }
 
 // The hub block (D8): `agentInterface` maps a coding agent → how its fires reach the hub board on
 // backend:"service" — "cli" (the dev-loop write-layer verbs; identity rides the fire env) or "mcp"

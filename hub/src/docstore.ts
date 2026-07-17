@@ -131,10 +131,55 @@ export interface DocPublishArgs { slug?: string; kind?: string; version: number;
 // OPERATOR-ONLY: publish a draft version → current (the live doc). Cooperative role-gate
 // (actor === "operator"), not anti-spoof — see §18 / HUB-ARCHITECTURE §16. This single gate is the
 // human-authorization point of the §17 firewall, so it lives in exactly one place.
+// ─── P2-5A: PM's autonomous publish lane (operator decision 2026-07-17) ─────────────────────────────
+// Field reality: 63 drafts piled up while published sat at v2 for six days — every agent read a stale
+// north star, because the publish gate held EVERY section, not just direction. §20's section split now
+// applies to hub backends too, enforced HERE in the shared core: a non-operator may publish a *strategy*
+// version whose delta vs the CURRENTLY PUBLISHED body is confined to the §20 progress sections. A first
+// publish, any direction-section change, an unknown heading, or a preamble change stays the operator's
+// (fail closed). Headings are matched case-insensitively; duplicate same-name sections merge (coarse by
+// design — coarser means MORE routes to the operator, never fewer).
+const PROGRESS_HEADINGS = [/^current state\b/i, /^decisions\b/i, /^candidate ideas\b/i, /^personas\b/i, /^glossary\b/i];
+export function sectionsOf(body: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let name = ""; let buf: string[] = []; let inFence = false;
+  const flush = () => { out.set(name, (out.get(name) ?? "") + buf.join("\n")); buf = []; };
+  for (const line of body.split(/\r?\n/)) {
+    // A `# heading` line INSIDE a code fence is content, not a section boundary — without this, a
+    // fenced example could open a phantom progress-named section and misattribute the direction text
+    // below it (the one parse shape that would have failed OPEN instead of closed).
+    if (/^(```|~~~)/.test(line)) { inFence = !inFence; buf.push(line); continue; }
+    const m = !inFence && line.match(/^#{1,6}\s+(.+?)\s*$/);
+    if (m) { flush(); name = m[1].trim().toLowerCase(); } else buf.push(line);
+  }
+  flush();
+  return out;
+}
+export function nonProgressChanges(publishedBody: string, candidateBody: string): string[] {
+  const a = sectionsOf(publishedBody), b = sectionsOf(candidateBody);
+  const offending: string[] = [];
+  for (const key of new Set([...a.keys(), ...b.keys()])) {
+    if ((a.get(key) ?? null) === (b.get(key) ?? null)) continue; // unchanged (including both-absent)
+    if (key === "" || !PROGRESS_HEADINGS.some((re) => re.test(key))) offending.push(key === "" ? "(preamble)" : key);
+  }
+  return offending.sort();
+}
+
 export function docPublish(db: DatabaseSync, projectId: string, actor: string, a: DocPublishArgs): DocResult<{ doc: string; status: string; current_version: number }> {
-  if (actor !== "operator") return { ok: false, error: "FORBIDDEN: only the operator may publish a doc draft→current" };
   const d = resolveDoc(db, projectId, a.slug, a.kind);
   if (!d) return { ok: false, error: `no document ${a.slug ?? a.kind}` };
+  if (actor !== "operator") {
+    if (d.kind !== "strategy") return { ok: false, error: "FORBIDDEN: only the operator may publish a doc draft→current" };
+    if (!d.current_version) return { ok: false, error: "FORBIDDEN: only the operator may publish the FIRST version of a strategy doc — nothing is published yet to diff against (§20/P2-5A)" };
+    const pub = db.prepare("SELECT body FROM document_versions WHERE doc_id=? AND version=?").get(d.id, d.current_version) as { body?: string } | undefined;
+    const cand = db.prepare("SELECT body FROM document_versions WHERE doc_id=? AND version=?").get(d.id, a.version) as { body?: string } | undefined;
+    if (!cand) return { ok: false, error: `no version ${a.version} of ${d.slug} to publish` };
+    const offending = nonProgressChanges(pub?.body ?? "", cand.body ?? "");
+    if (offending.length) return {
+      ok: false,
+      error: `FORBIDDEN: only the operator publishes direction changes — non-progress section(s) changed: ${offending.join(", ")}. PM's autonomous lane (§20/P2-5A) covers Current state / Decisions / Candidate ideas / Personas / Glossary only; route this via the §9a investigation ticket`,
+    };
+  }
   const v = db.prepare("SELECT version FROM document_versions WHERE doc_id=? AND version=?").get(d.id, a.version);
   if (!v) return { ok: false, error: `no version ${a.version} of ${d.slug} to publish` };
   const t = nowIso();

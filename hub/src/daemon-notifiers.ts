@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { openDb, logEvent } from "./db.ts";
 import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Creds, type Transport, type FetchImpl } from "./channel.ts";
 import { eventData } from "./views/activity.ts";
+import { fireMetrics } from "./metrics.ts";
 
 // ─── DL-59 send-target resolution, shared by every notifier tick ───────────────────────────────────
 // ONE send target: the DB `channels` row (getEnabledChannel) takes PRECEDENCE so a project with a
@@ -63,19 +64,25 @@ export async function blockedNotifyTick(opts: {
   // DL-59: ONE send target (DB channel wins over the §9 notify webhook — see resolveTarget) or a true no-op.
   const target = resolveTarget(writeDb, projectId, opts.notify);
   if (!target) return 0;
+  // P1-3: the operator's DECISION QUEUE is ONE set — Human-Blocked (the loop parked on a human) ∪
+  // In Review assigned to the operator (§9a board-approval stops; the field's MP-211 sat 4 days with
+  // no wire because only Human-Blocked was covered). Human-Blocked wording + markers stay byte-identical;
+  // the approval shape carries its own marker kind (operator_review.notified) so de-dup never crosses.
   const rows = writeDb.prepare(
-    "SELECT id,title FROM tickets WHERE project_id=? AND state='Human-Blocked' ORDER BY updated_at",
-  ).all(projectId) as { id: string; title: string }[];
+    "SELECT id,title,state FROM tickets WHERE project_id=? AND (state='Human-Blocked' OR (state='In Review' AND assignee='operator')) ORDER BY updated_at",
+  ).all(projectId) as { id: string; title: string; state: string }[];
   // DL-33: PER-TICK loop-safety cap — `sent` resets every invocation, so a long-running daemon never
   // goes permanently silent (a per-PROCESS counter would become a lifetime ceiling on this persistent
   // process, unlike the MCP server's short-lived per-fire process).
   let sent = 0;
   for (const t of rows) {
     if (sent >= CHANNEL_SEND_CAP) break; // bound sends THIS tick only (resets next tick)
-    // Stateless due-ness: the last REAL human_blocked.notified event. None ⇒ first ping (due now).
+    const approval = t.state === "In Review"; // the §9a awaiting-your-approval shape (P1-3)
+    const markerKind = approval ? "operator_review.notified" : "human_blocked.notified";
+    // Stateless due-ness: the last REAL <marker>.notified event. None ⇒ first ping (due now).
     const last = writeDb.prepare(
-      "SELECT MAX(created_at) m FROM events WHERE ticket_id=? AND kind='human_blocked.notified'",
-    ).get(t.id) as { m: string | null };
+      "SELECT MAX(created_at) m FROM events WHERE ticket_id=? AND kind=?",
+    ).get(t.id, markerKind) as { m: string | null };
     const due = !last.m || (nowMs - Date.parse(last.m)) >= cadenceMs;
     if (!due) continue;
     // Age in the state (workflows P3: the reminder must say HOW LONG the loop has been parked on a human):
@@ -84,27 +91,29 @@ export async function blockedNotifyTick(opts: {
     const enteredIso = (writeDb.prepare(
       "SELECT data, created_at FROM events WHERE ticket_id=? AND kind='issue.transition' ORDER BY id DESC",
     ).all(t.id) as { data: string; created_at: string }[])
-      .find((e) => eventData(e.data).to === "Human-Blocked")?.created_at;
+      .find((e) => eventData(e.data).to === (approval ? "In Review" : "Human-Blocked"))?.created_at;
     const enteredMs = enteredIso ? Date.parse(enteredIso) : NaN;
     const age = Number.isFinite(enteredMs) ? ` for ${fmtDur(nowMs - enteredMs)}` : "";
     // §16 allow-list line: id + truncated title + age + the FIXED resume action + localhost url ONLY.
     // No description/labels/PII/secrets. The resume action is the loop's consumer side (workflows P3):
     // the operator moves the ticket back to Todo (web move form, or the named CLI verb) and the loop resumes.
-    const line = `[${projectKey}] human-blocked${age}: ${t.id} ${cleanLine(t.title, 80)} — resume: move it back to Todo (dev-loop ticket update ${t.id} --state Todo) · ${baseUrl}/ticket/${t.id}`;
+    const line = approval
+      ? `[${projectKey}] awaiting your approval${age}: ${t.id} ${cleanLine(t.title, 80)} — In Review, assigned to you (§9a); rule on it on the board · ${baseUrl}/ticket/${t.id}`
+      : `[${projectKey}] human-blocked${age}: ${t.id} ${cleanLine(t.title, 80)} — resume: move it back to Todo (dev-loop ticket update ${t.id} --state Todo) · ${baseUrl}/ticket/${t.id}`;
     try {
       if (CHANNEL_DRYRUN) {
         // DL-34: dry-run is WRITE-FREE (the DL-11 invariant) — preview only, NO marker / NO ledger
         // event — so a later LIVE tick on the same DB still fires the first real ping, and the
         // events ledger never gains a phantom "notified" that never sent. DL-52: the preview names the
         // channel type (provider/transport) + the §16-safe message line — never the webhook URL/secret.
-        console.error(`[daemon] [dry-run] would notify human-blocked ${t.id} via ${target.label}: ${line}`);
+        console.error(`[daemon] [dry-run] would notify ${approval ? "operator-review" : "human-blocked"} ${t.id} via ${target.label}: ${line}`);
       } else {
         // DL-52/DL-59: pass the resolved target's transport — a 'webhook' target (a DB webhook channel OR the
         // §9 notify webhook) pings the incoming-webhook URL (no bot app); a 'bot' DB channel ⇒ the provider-API
         // send, unchanged. blockedNotifyTick's OWN logic (due-ness, the DL-33 per-tick cap, the marker) is
         // untouched — it just threads the chosen target through (one send + one marker per due ticket).
         await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
-        logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: "human_blocked.notified", data: { provider: target.provider } }); // marker ONLY on a real send
+        logEvent(writeDb, { project_id: projectId, ticket_id: t.id, actor: "daemon", kind: markerKind, data: { provider: target.provider } }); // marker ONLY on a real send
       }
       sent++;
     } catch (e) {
@@ -210,6 +219,75 @@ export async function noProgressNotifyTick(opts: {
     console.error(`[daemon] no-progress notify failed: ${scrubErr((e as Error).message)}`);
     return 0;
   }
+}
+
+// ─── P0-1c: loop fire-health self-monitor ──────────────────────────────────────────────────────────
+// The field incident's missing wire: fires.jsonl carried 407 identical failures for two days while ops
+// watched PROD and nobody watched the LOOP. This tick reads the fire ledger's rolling window; success
+// below the threshold on a REAL sample (≥ minFires) alerts ONCE per degradation episode, and the first
+// HEALTHY window after an alert sends one recovery line. Episode state lives in marker events
+// (fire_health.notified / fire_health.recovered) — stateless across daemon restarts, the no-progress
+// detector's philosophy. An insufficient sample (e.g. the P0-1a breaker probing hourly) is NEITHER
+// degraded NOR healthy: the episode stays open and silent until real cadence resumes.
+export async function fireHealthNotifyTick(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  ledgerPath: string; windowMs: number; minFires: number; threshold: number; nowMs: number;
+  fetchImpl?: FetchImpl; notify?: unknown;
+}): Promise<number> {
+  const { writeDb, projectId, projectKey, baseUrl, ledgerPath, windowMs, minFires, threshold, nowMs } = opts;
+  const target = resolveTarget(writeDb, projectId, opts.notify);
+  if (!target) return 0;
+  const fm = fireMetrics(ledgerPath, windowMs, nowMs);
+  const sampled = fm.fires >= minFires && fm.successRate !== null;
+  const degraded = sampled && (fm.successRate as number) < threshold;
+  const healthy = sampled && (fm.successRate as number) >= threshold;
+  const lastNotified = (writeDb.prepare("SELECT MAX(created_at) m FROM events WHERE project_id=? AND kind='fire_health.notified'").get(projectId) as { m: string | null }).m;
+  const lastRecovered = (writeDb.prepare("SELECT MAX(created_at) m FROM events WHERE project_id=? AND kind='fire_health.recovered'").get(projectId) as { m: string | null }).m;
+  const openEpisode = !!lastNotified && (!lastRecovered || lastRecovered < lastNotified);
+  const windowH = +(windowMs / 3_600_000).toFixed(2);
+  const pct = fm.successRate === null ? "—" : `${Math.round(fm.successRate * 100)}%`;
+  // §16 closed-allow-list one-liner: projectKey + window metrics + errorClass tallies + the localhost link.
+  if (degraded && !openEpisode) {
+    const top = Object.entries(fm.byErrorClass).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k}×${n}`).join(", ");
+    const line = cleanLine(`[${projectKey}] loop health: fire success ${pct} over the last ${windowH}h (${fm.fires} fires${top ? ` — ${top}` : ""}) — check \`dev-loop metrics\` / runner logs · ${baseUrl}/activity`, 200);
+    try {
+      if (CHANNEL_DRYRUN) { console.error(`[daemon] [dry-run] would notify fire-health via ${target.label}: ${line}`); }
+      else {
+        await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+        logEvent(writeDb, { project_id: projectId, ticket_id: null, actor: "daemon", kind: "fire_health.notified", data: { successRate: fm.successRate, fires: fm.fires, windowMs } });
+      }
+      return 1;
+    } catch (e) { console.error(`[daemon] fire-health notify failed: ${scrubErr((e as Error).message)}`); return 0; }
+  }
+  if (healthy && openEpisode) {
+    const line = cleanLine(`[${projectKey}] loop health recovered: fire success ${pct} over the last ${windowH}h (${fm.fires} fires) · ${baseUrl}/activity`, 200);
+    try {
+      if (CHANNEL_DRYRUN) { console.error(`[daemon] [dry-run] would notify fire-health recovery via ${target.label}: ${line}`); }
+      else {
+        await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+        logEvent(writeDb, { project_id: projectId, ticket_id: null, actor: "daemon", kind: "fire_health.recovered", data: { successRate: fm.successRate, fires: fm.fires, windowMs } });
+      }
+      return 1;
+    } catch (e) { console.error(`[daemon] fire-health recovery notify failed: ${scrubErr((e as Error).message)}`); return 0; }
+  }
+  return 0;
+}
+
+export function startFireHealthNotifier(opts: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
+  ledgerPath: string; windowHours: number; minFires: number; threshold: number; tickMs?: number; notify?: unknown;
+}): ReturnType<typeof setInterval> | null {
+  if (!(opts.windowHours > 0) || !opts.ledgerPath) return null;         // opted out / no team fires ledger (legacy daemon)
+  if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null;
+  const windowMs = opts.windowHours * 3_600_000;
+  // Re-check every ~10min by default: fast enough to catch a spend-limit-style collapse within one
+  // window, cheap enough that a tick is just one bounded JSONL read. Env-overridable for tests.
+  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_FIREHEALTH_TICK_MS) || 600_000);
+  const run = () => { fireHealthNotifyTick({ ...opts, windowMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] fire-health tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
+  const timer = setInterval(run, tickMs);
+  timer.unref?.();
+  run();
+  return timer;
 }
 
 export function startNoProgressNotifier(opts: {

@@ -656,6 +656,12 @@ How a worktree LANDS depends on `git.landing`:
      final `push` when `git.autoPush` is false. `--ff-only` is load-bearing: if the merge
      refuses, the base advanced under you — go back to step 1 and retry (cap ~2 cycles →
      `fix-exhausted` block, §9); never create a merge knot on `defaultBranch`.
+     **Pre-push ride-along gate (P1-2):** `autoPush:false` makes every later push a BATCH —
+     it carries every unpushed commit before yours, including work the operator has since
+     Canceled (the MP-275 prod incident). Immediately before any `git push` on
+     `defaultBranch`, run `dev-loop push-guard --repo <dir> --strict`; exit 1 ⇒ STOP — do
+     not push; comment the finding on your ticket and park it `needs-operator` (the
+     canceled commit is the operator's to drop/keep; §21 you never rewrite history).
   3. **Clean up** (under the same lock, or a second invocation): `git worktree remove` the
      ticket's worktree, then `git branch -d dev-loop/<ticket-id>`. Deploy (`git.autoDeploy`,
      dev-agent Step 6/6.5) runs from the base clone AFTER the merge-back — the Step-6 flag
@@ -2111,9 +2117,14 @@ landing — so PM's write policy splits **by section**:
 - **Direction sections — propose first.** `Vision`, `Goals (north star)`, `Non-goals` —
   plus any `Appetite` / `No-gos` headings a doc carries: changing WHAT the product pursues
   requires the §9a **investigation protocol** (findings + the unified diff on a
-  `needs-pm`+`investigation` ticket → operator approval → only then the commit). Hub-doc
-  backends don't need this split — the operator-publish gate already holds the direction
-  line (§18).
+  `needs-pm`+`investigation` ticket → operator approval → only then the commit).
+  **Hub-doc backends share the SAME split (P2-5A, operator decision 2026-07-17), enforced in
+  `docPublish` itself:** after a progress-only save, PM publishes the draft in the same fire
+  (`dev-loop doc publish --slug <strategy-slug>` — version defaults to the latest draft), so
+  consumers never read a stale published north star while drafts pile up. A FIRST publish,
+  any direction-section change, an UNKNOWN heading, or a preamble change is refused with the
+  section names — those keep the §9a operator route; the refusal itself is the signal to file
+  the investigation ticket.
 
 **Sweep is the backstop (report-only):** each fire it audits recent doc-only commits
 touching the strategy doc; a diff that changes a direction section with no linked approval
@@ -2662,6 +2673,10 @@ these sections, then push via `dev-loop notify --title "Daily <team> <date>"`:
    trackers); an empty section is a good day. Compose it from these lines, each omitted when zero:
    · **Human-Blocked**: count + the oldest park's age (workflows P3 —
    from the board, never memory; the same numbers the daemon reminder carries).
+   · **Awaiting your approval** (P1-3): In Review tickets assigned to `operator` (the §9a
+   board-approval stops), count + the oldest's age. `dev-loop metrics --json` carries the whole
+   decision queue verbatim as `.decisionQueue` (Human-Blocked ∪ In Review@operator, oldest
+   first) — quote it, never re-derive; the daemon pings the same set (`operator_review.notified`).
    · **Investigation proposals pending**: each open §9a `investigation`
    ticket parked for operator approval, with its doc + version (the ticket's
    `Proposes: doc:<slug> vN (published vM)` line).
