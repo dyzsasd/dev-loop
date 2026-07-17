@@ -39,6 +39,7 @@ export const BUDGETS: Record<string, Budget> = {
   "add-repo":            { lines: 150, bytes: 10 * 1024 },
   "sync-project":        { lines: 150, bytes: 10 * 1024 },
   "sync-repo":           { lines: 150, bytes: 10 * 1024 },
+  "operator-console":    { lines: 160, bytes: 11 * 1024 }, // one-click §3: the conversational cockpit (operator-present, no cheat block)
 };
 // Cheat-sheet blocks are generator-owned (gen-cheatsheets.ts); growth past this = trim the
 // generator template, never the budget (sweep's block is already 91 lines).

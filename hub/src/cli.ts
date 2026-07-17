@@ -24,6 +24,8 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   init:             ["init-wizard"],               // guided onboarding wizard — composes team init + first project/repo + doctor NEXT (P1)
   team:             ["team"],                      // init | import | repair | set | add-project | add-repo | add-provider | sync-opencode — workspace (v2)
   secret:           ["secret-cli"],                // set | list | unset — workspace secret VALUES (.dev-loop/secrets.env; §16)
+  up:               ["up"],                        // one-click: local operator console / --bundle headless load / --attach remote hub
+  bundle:           ["bundle"],                    // export — the encrypted move/backup artifact (one-click §4)
   hub:              ["hub"],                        // start | stop | status | ensure — the workspace hub daemon (service)
   "next-project":   ["rotation"],                  // print the next project for an agent's fire (shared WRR cursor)
   "with-repo-lock": ["with-repo-lock"],            // serialize base-clone mutations on a shared repo
@@ -75,6 +77,10 @@ Usage: dev-loop <command> [args]
                               workspace (schema v2): create / migrate-from-v1 / repair / validated config writes
   secret set|list|unset       workspace secret VALUES (.dev-loop/secrets.env, chmod 600) — set prompts on
                               the TTY (echo off) or reads stdin; a value never rides an argument (§16)
+  up [--cli claude|opencode] [--dry-launch]   one-click: scaffold-if-needed + board daemon + EXEC an
+                              interactive operator-console chat (setup happens by talking, not shell);
+                              --bundle <f> = headless remote load → run; --attach <url> = console → remote hub
+  bundle export …             author the encrypted move/backup artifact (config+secrets+hub.db; age)
   hub start|stop|status|ensure   workspace hub daemon lifecycle (service backend; stop checkpoints the WAL)
   metrics [--window 7d] [--json] [--context]   team KPIs — fire success from fires.jsonl (+ board KPIs
                               on service); --context = the per-agent per-fire context bill (§0a)
@@ -121,7 +127,7 @@ const route = cmd === "ticket" && (rest[0] === "create" || rest[0] === "update")
   : ROUTES[cmd];
 if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); process.exit(2); }
 
-const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard",
+const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror"]); // the A1 write layer opens hub.db (direct-db transport)
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
