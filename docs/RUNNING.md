@@ -258,6 +258,26 @@ Resolution order:
 | Model/effort | `projects.<key>.agents.<agent>` → team/default maps → built-in role default |
 | Cadence | `--interval` → `projects.<key>.agents.<agent>.cadence` → `team.agents.<agent>.cadence` → built-in default |
 
+### One-click: `up`, `bundle`, `attach` (1.4.0)
+
+The three-leg deployment model (`docs/design/one-click-deployment.md`; artifacts in `deploy/`):
+
+```bash
+dev-loop up                         # LOCAL: scaffold-if-needed + board + land in the operator-console
+                                    # chat (claude by default; setup happens by talking, not shell)
+dev-loop bundle export --out b.age --recipients <age-pubkey> --move
+dev-loop up --bundle b.age          # MOVE: the encrypted config+secrets+BOARD artifact, loaded headless
+                                    # on a server/container → team repair → doctor → exec `dev-loop run`
+dev-loop attach https://host:8787   # ATTACH: this same console against the REMOTE home (needs the
+                                    # home's DEVLOOP_UI_TOKEN; home-only verbs refuse here by design)
+```
+
+Key rules: a workspace has ONE live home (the bundle moves it — `--move` retires the source via
+`.dev-loop/moved.json`, and `run` refuses there); `hub.db` travels on a move and restores only onto an
+EMPTY target (a live board is never overwritten); repos re-clone from their git remotes; secrets enter
+via `dev-loop secret set` (hidden TTY prompt — never the chat, never an argument) and reach only the
+fire that needs them.
+
 ### Runtime resilience (the 2026-07 field batch)
 
 `dev-loop run` carries a **failure-streak circuit breaker** (P0-1a): N consecutive identical failures

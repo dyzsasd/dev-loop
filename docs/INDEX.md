@@ -17,6 +17,7 @@ Start here when you are deciding which dev-loop document is current.
 - [`DAEMON.md`](DAEMON.md) — low-level localhost daemon HTTP surface. Use `dev-loop hub ...` for normal 1.x workspace lifecycle; use raw `dev-loop daemon ...` only for compatibility/debugging.
 - [`design/2026-07-review-decisions.md`](design/2026-07-review-decisions.md) — the 2026-07 full-review operator decision record (D1–D11), shipped as 1.2.0. Current policy for the agent interface (CLI-first), web UI routing, doc-change flow, and retention.
 - [`design/model-provider-routing.md`](design/model-provider-routing.md) — the 1.3.0 opencode-first model-provider routing design: decision trail (ZCode research → opencode as the vehicle), `team.providers` registry, `sync-opencode`, the certified permission posture, and the deferred claude-runner route (Appendix A).
+- [`design/one-click-deployment.md`](design/one-click-deployment.md) — the 1.4.0 three-leg deployment model (as built): `dev-loop up` lands in a chat-driven operator console; `bundle export`/`up --bundle` MOVES the home (encrypted, board included); `attach` operates the remote home from anywhere. Deploy artifacts live in [`../deploy/`](../deploy/README.md).
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — how to work on this repository locally.
 
 ## Historical Design Records

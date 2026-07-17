@@ -53,7 +53,7 @@ for (const [dir, block] of blocks) {
   ok(/0 ok · 1 domain error .*· 2 usage · 3 doc\.save CAS CONFLICT/.test(block), `${dir}: carries the exit-code contract from the CLI usage`);
   const hasProject = block.includes("--project");
   if (STEWARDS.includes(dir)) {
-    ok(spec.project === "steward" && hasProject && block.includes('stewards → any project or "_team"'),
+    ok(spec.project === "steward" && hasProject && block.includes("stewards + the operator → any project"),
       `${dir}: steward block carries the D1 matrix --project wording`);
     ok(spec.verbs.includes("op") && block.includes("dev-loop op <op-name>"),
       `${dir}: steward block carries LAYER 0 (cross-project reads need it — tickets/ticket take no --project)`);

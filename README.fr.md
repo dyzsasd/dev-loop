@@ -29,6 +29,12 @@ dev-loop init                     # setup guidé — Entrée accepte chaque déf
 dev-loop run                      # un scheduler pilote toute l'équipe ; ^C arrête tout
 ```
 
+Vous préférez tout configurer **en discutant** ? `dev-loop up` échafaude le workspace et vous place
+directement dans une console-opérateur conversationnelle (Claude Code ou opencode) qui exécute les
+verbes de setup pour vous — le même verbe déploie à distance (`up --bundle`, une archive chiffrée
+config+secrets+board) et pilote une instance distante depuis votre machine (`dev-loop attach <url>`).
+Voir `docs/RUNNING.md` → One-click et `deploy/` (Docker/Kubernetes/systemd).
+
 `init` crée le workspace et votre premier project (la ligne du board hub est auto-seedée),
 propose d'enregistrer votre premier repo (`--detect` lit les faits build/CI directement dans
 le clone), puis se termine par le verdict du doctor et une ligne `NEXT:` qui nomme l'étape la
