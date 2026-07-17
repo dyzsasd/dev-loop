@@ -12,6 +12,7 @@ import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } f
 import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { notify } from "./comms.ts";
+import { secretsInjectedKeys } from "./secrets.ts"; // Q9: the per-fire secret-scoping strip set
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
@@ -199,6 +200,7 @@ type Options = {
   // team.opencodePermission — the legacy fixed-project path has no registry and leaves them unset).
   providers?: Record<string, ProviderEntry>;
   opencodePermission?: Record<string, unknown>;
+  wsRoot?: string; // Q9 secret scoping: the workspace whose secrets.env-injected keys are stripped per fire
 };
 
 // The certified unattended permission policy for opencode fires (PORTABILITY §5, 2026-07-16 on 1.2.24):
@@ -862,6 +864,28 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   // the fire ledger. Built-in providers (no registry entry) are opencode's own auth concern.
   const providerEntry = profile.codingAgent === "opencode" ? opencodeProviderEntry(opts, profile.model) : undefined;
   const providerEnvMissing = providerEntry && process.env[providerEntry.authTokenEnv] === undefined ? providerEntry.authTokenEnv : null;
+  // ── Per-fire secret scoping (one-click Q9 / §7 boundary 5) ────────────────────────────────────────
+  // Every fire's build/test/detect grandchildren inherit the fire env, so a secrets.env hydrated into
+  // THIS scheduler's process.env would hand every key to every script an agent runs. Scope it: strip
+  // every key the WORKSPACE secrets file injected (secretsInjectedKeys — the §16 value set), then
+  // re-add only what THIS fire's own runner needs in-process:
+  //   • its registry provider's authTokenEnv (opencode resolves {env:VAR} in-process);
+  //   • the ANTHROPIC_* ambient keys on a claude fire (its own auth lane).
+  // Everything else re-sources from the FILE at use time — the `dev-loop` CLI grandchildren re-hydrate
+  // secrets.env on workspace resolution (comms webhook for `notify`, mirror tokens), and git auth rides
+  // the GIT_ASKPASS/deploy-key files (§4.1a) — so stripping loses no capability, only exposure. The
+  // decrypt key (DEVLOOP_BUNDLE_KEY / AGE_IDENTITY_FILE) and the UI token never belong in a fire.
+  {
+    const injected = secretsInjectedKeys(opts.wsRoot ?? "");
+    const keep = new Set<string>();
+    if (providerEntry) keep.add(providerEntry.authTokenEnv);
+    if (profile.codingAgent === "claude") { keep.add("ANTHROPIC_API_KEY"); keep.add("ANTHROPIC_AUTH_TOKEN"); }
+    for (const k of injected) if (!keep.has(k)) delete env[k];
+    delete env.DEVLOOP_BUNDLE_KEY;
+    delete env.AGE_IDENTITY_FILE;
+    delete env.DEVLOOP_UI_TOKEN;
+    delete env.DEVLOOP_UI_TOKEN_FILE;
+  }
   if (profile.codingAgent === "opencode") {
     // Certified permission injection (PORTABILITY §5): wildcard-deny is what closes operator-installed
     // custom exec tools (they escape narrow patterns AND can drop the identity env — the tmux finding).
@@ -1196,6 +1220,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   // commandFor/runAgent (never the legacy per-project view — providers are team infrastructure).
   opts.providers = ws.file.team.providers ?? {};
   opts.opencodePermission = ws.file.team.opencodePermission;
+  opts.wsRoot = ws.root; // Q9: fire env strips this workspace's secrets.env-injected keys
   wireBreakerEvents(ws); // P0-1a notices ride team comms when configured
 
   // `--project` filter: restrict DELIVERY rotation to a single named project. It must exist + be enabled;
