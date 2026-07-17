@@ -11,6 +11,7 @@ import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
 import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
+import { notify } from "./comms.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
@@ -221,6 +222,22 @@ function opencodeProviderEntry(opts: Options, model: string | undefined): Provid
   return prefix && prefix !== model ? opts.providers?.[prefix] : undefined;
 }
 
+// P0-1b — coarse failure taxonomy for the fire ledger. Matched over the bounded output tail, most
+// specific first. "spend-limit" is the field report's 48h-blind-retry class: 407 consecutive ~2s
+// failures, every one the same stderr line, indistinguishable in the ledger from real task failures.
+// The breaker (P0-1a) keys on repeated identical classes; metrics/doctor split them out. exit-0 shapes
+// stay the suspectError flag's job; a non-zero exit with no pattern match is a plain task failure (null).
+function classifyFireError(exitCode: number, timedOut: boolean, tail: string): string | null {
+  if (timedOut) return "timeout";
+  if (exitCode === 0) return null;
+  const t = tail.toLowerCase();
+  if (/spend limit|usage limit|monthly limit|credit balance too low|quota exceeded/.test(t)) return "spend-limit";
+  if (/rate limit|too many requests|overloaded_error|\b429\b|\b529\b/.test(t)) return "rate-limit";
+  if (/invalid api key|authentication_error|unauthorized|not logged in|please run \/login|oauth token|\b401\b/.test(t)) return "auth";
+  if (/enotfound|econnrefused|econnreset|etimedout|eai_again|fetch failed|network error|socket hang up/.test(t)) return "network";
+  return null;
+}
+
 // The fire-ledger provider dimension (metrics cost attribution): opencode fires carry their model-string
 // prefix; claude/codex fires run their native endpoints until the Appendix-A route ships.
 function providerOf(profile: LaunchProfile): string | null {
@@ -285,6 +302,9 @@ Options:
   --fire-timeout <dur>        kill a fire that outlives this (SIGTERM, then SIGKILL after 10s; default 1h; 0 = none)
   --stagger <dur>             delay between the initial slot fires so a cold boot doesn't launch every agent at once (default 20s; 0 = simultaneous)
   --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
+  --breaker <n>               failure-streak circuit breaker: N consecutive identical failures of one agent
+                              trip its slot to the probe cadence until a fire succeeds (default 5; 0 = off)
+  --breaker-probe <dur>       probe cadence while a breaker is open (default 1h; never faster than the slot)
   --cli-arg <arg>             pass an extra arg to the selected CLI before the prompt; may repeat
                               (CLI binaries: set DEVLOOP_CLAUDE_BIN / DEVLOOP_CODEX_BIN / DEVLOOP_OPENCODE_BIN to override)
 
@@ -407,6 +427,8 @@ function parseArgs(argv: string[]): Options {
     else if (a === "--stagger") { const v = next(); opts.staggerMs = v.trim() === "0" ? 0 : parseDuration(v); }
     else if (a === "--codex-safe") opts.codexSafe = true;
     else if (a === "--cli-arg") extraArgs.push(next());
+    else if (a === "--breaker") { breaker.threshold = Number(next()); if (!Number.isInteger(breaker.threshold) || breaker.threshold < 0) die("--breaker must be a non-negative integer (0 = off)"); }
+    else if (a === "--breaker-probe") breaker.probeMs = parseDuration(next());
     else die(`unknown option '${a}'`);
   }
 
@@ -670,6 +692,40 @@ function displayCommand(command: string, args: string[], prompt: string): string
   return [command, ...args.map((a) => a === prompt ? `<prompt:${prompt.length} chars>` : a).map(shellQuote)].join(" ");
 }
 
+// ─── P0-1a failure-streak circuit breaker ────────────────────────────────────────────────────────────
+// The field incident: a spent subscription turned every fire into the same ~2s failure for 48 hours while
+// the scheduler kept full cadence — zero backoff, zero signal, two days of zero throughput discovered by
+// reading metrics after the fact. The breaker watches recordFire: N consecutive fires of ONE agent failing
+// with the SAME key (errorClass, else the last output line) trip that agent's slot down to a probe cadence;
+// each probe fire IS the recovery check — the first success closes the breaker and restores normal cadence.
+// Trip and recovery notify ONCE each (team comms when configured; console always). In-memory by design:
+// a scheduler restart re-probes at full cadence, which is itself a fresh signal. Heterogeneous task
+// failures never trip it — the key must repeat identically.
+type BreakerEntry = { key: string | null; streak: number; open: boolean };
+const breaker = {
+  threshold: 5,          // --breaker <n>; 0 disables
+  probeMs: 60 * 60_000,  // --breaker-probe <dur>
+  byAgent: new Map<Agent, BreakerEntry>(),
+  onEvent: undefined as ((agent: Agent, ev: "open" | "close", key: string, streak: number) => void) | undefined,
+  record(agent: Agent, exitCode: number, errorClass: string | null | undefined, tail: string | undefined): void {
+    if (!this.threshold) return;
+    const e = this.byAgent.get(agent) ?? { key: null, streak: 0, open: false };
+    if (exitCode === 0) {
+      if (e.open) this.onEvent?.(agent, "close", e.key ?? "", e.streak);
+      this.byAgent.set(agent, { key: null, streak: 0, open: false });
+      return;
+    }
+    const lastLine = (tail ?? "").trimEnd().split("\n").pop()?.trim().slice(0, 160) ?? "";
+    const key = errorClass ?? (lastLine || "(no-output)");
+    if (key === e.key) e.streak++; else { e.key = key; e.streak = 1; }
+    if (!e.open && e.streak >= this.threshold) { e.open = true; this.onEvent?.(agent, "open", key, e.streak); }
+    this.byAgent.set(agent, e);
+  },
+  isOpen(agent: Agent): boolean { return !!this.byAgent.get(agent)?.open; },
+  // The one seam every slot-rescheduling site goes through: open ⇒ the probe cadence (never faster).
+  intervalFor(agent: Agent, baseMs: number): number { return this.isOpen(agent) ? Math.max(baseMs, this.probeMs) : baseMs; },
+};
+
 // P1 per-fire telemetry: write a `fire.completed` event to the hub so the operator gets a queryable cost/
 // outcome ledger (durationMs, exitCode, model/effort) — the precursor the STRATEGY.md budget-ceiling work
 // was banked on. Best-effort + lazy: opened once, skipped silently on a non-hub (linear/local) project, and
@@ -677,7 +733,8 @@ function displayCommand(command: string, args: string[], prompt: string): string
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean,
-  extra?: { suspectError?: boolean; outputTail?: string; fireError?: string }): void {
+  extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string }): void {
+  breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail); // P0-1a — every completed fire feeds the streak
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
   // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
@@ -694,7 +751,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.fireError ? { fireError: extra.fireError } : {}) } });
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -827,7 +884,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   if (providerEnvMissing) {
     const prefix = profile.model?.split("/")[0];
     console.error(`[${agent}] provider '${prefix}' auth env ${providerEnvMissing} unresolvable — put ${providerEnvMissing}=<key> in <workspace>/.dev-loop/secrets.env or export it; failing this fire pre-spawn (doctor W13 surfaces this before the loop)`);
-    recordFire(opts.hubDb, project, agent, profile, 0, 4, false, { fireError: "provider-env-missing", outputTail: `provider '${prefix}' auth env ${providerEnvMissing} unresolvable` });
+    recordFire(opts.hubDb, project, agent, profile, 0, 4, false, { errorClass: "provider-env-missing", outputTail: `provider '${prefix}' auth env ${providerEnvMissing} unresolvable` });
     return 4;
   }
 
@@ -839,7 +896,22 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const log = createWriteStream(logPath, { flags: "a" });
   // A stream 'error' with no listener is an uncaught exception that kills the WHOLE scheduler —
   // one ENOSPC/EACCES on a log file must degrade logging, not take down the loop.
-  log.on("error", (e) => console.error(`[${agent}] runner-log write failed (${e.message}); continuing without file log`));
+  let logDead = false; // 'error' fired — degrade logging, and NEVER let a fire block on the log below
+  log.on("error", (e) => { logDead = true; console.error(`[${agent}] runner-log write failed (${e.message}); continuing without file log`); });
+  // Single-owner stream lifecycle: finalize() ends the log AFTER its last write and resolves the fire
+  // only once the flush completes. Two field failures live here (report P2-4): the close handler used to
+  // end the stream first, so finalize's footer/suspect writes died as "write after end" (×103); and
+  // --once's process.exit() truncated the un-flushed tail even when the writes succeeded. logOpen gates
+  // late pipe chunks on the 150ms grace path (finalize-before-close), where data may trickle after end.
+  let logOpen = true;
+  const endLog = (done?: () => void) => {
+    if (!logOpen || logDead) { done?.(); return; }
+    logOpen = false;
+    let called = false;
+    const fin = () => { if (!called) { called = true; done?.(); } };
+    log.once("error", fin); // a flush-time error must not hang the fire
+    log.end(fin);
+  };
   log.write(`\n\n===== ${new Date().toISOString()} ${rendered} cwd=${cwd} =====\n`);
   console.log(`[${new Date().toISOString()}] ${agent}: start (${profile.codingAgent}); log ${logPath}`);
 
@@ -852,8 +924,8 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   let outTail = "";
   let outBytes = 0;
   const keepTail = (d: Buffer | string) => { const s = d.toString(); outBytes += s.length; outTail = (outTail + s).slice(-2048); };
-  child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); log.write(d); });
-  child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); log.write(d); });
+  child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
+  child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
 
   return await new Promise((resolveExit) => {
     // Fire timeout: without it a wedged CLI child holds its slot's non-reentrancy flag forever —
@@ -870,7 +942,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       killTimer.unref?.();
     }, opts.fireTimeoutMs) : undefined;
     fireTimer?.unref?.();
-    child.on("error", (e) => { log.write(`\nERROR: ${e.message}\n`); console.error(`[${agent}] failed to start: ${e.message}`); clearTimeout(fireTimer); resolveExit(1); });
+    child.on("error", (e) => {
+      if (logOpen && !logDead) log.write(`\nERROR: ${e.message}\n`);
+      console.error(`[${agent}] failed to start: ${e.message}`);
+      clearTimeout(fireTimer);
+      // A spawn failure (missing/broken CLI bin) never reached the ledger — invisible to metrics AND to
+      // the P0-1a breaker, whose canonical trigger (a wedged bin fast-failing identically forever) it is.
+      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, 1, false, { errorClass: "spawn-failed", outputTail: e.message.slice(-400) });
+      endLog(() => resolveExit(1));
+    });
     // Resolve on 'exit', not 'close': 'close' additionally waits for the stdio pipes, which a grandchild
     // the CLI spawned can hold open long after the CLI itself died — exactly the wedged case the fire
     // timeout exists for. The log stream stays open until 'close' so late pipe output is still captured.
@@ -898,9 +978,12 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         console.error(`[${agent}] exit 0 but the output looks like a FAILURE (${why}) — flagged suspectError in the fire ledger`);
         log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
       }
+      const errorClass = classifyFireError(exitCode, timedOut, outTail); // P0-1b taxonomy
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut,
-        suspectError ? { suspectError: true, outputTail: outTail.slice(-400) } : undefined);
-      resolveExit(exitCode);
+        suspectError || errorClass || exitCode !== 0 // every failure carries its tail — the breaker keys on it
+          ? { ...(suspectError ? { suspectError: true } : {}), ...(errorClass ? { errorClass } : {}), outputTail: outTail.slice(-400) }
+          : undefined);
+      endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
     child.on("exit", (code, signal) => {
       clearTimeout(fireTimer);
@@ -911,7 +994,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       grace.unref?.();
       child.once("close", () => { clearTimeout(grace); finalize(code, signal); });
     });
-    child.on("close", () => { closed = true; log.end(); });
+    child.on("close", () => { closed = true; }); // stream end belongs to finalize (single owner)
   });
 }
 
@@ -934,6 +1017,18 @@ function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string 
   }
 }
 
+// P0-1a: trip/recovery each surface ONCE — always on the console, and to the team comms channel when a
+// workspace with team.comms exists (a comms-less workspace just prints notify's own miss-config line).
+function wireBreakerEvents(ws: Workspace | null): void {
+  breaker.onEvent = (agent, ev, key, streak) => {
+    const msg = ev === "open"
+      ? `breaker OPEN: ${agent} → probe cadence ${formatDuration(breaker.probeMs)} after ${streak}× identical failures (${key})`
+      : `breaker CLOSED: ${agent} recovered — normal cadence resumed`;
+    console.error(`[breaker] ${msg}`);
+    if (ws) void notify(ws, { title: "dev-loop scheduler", level: ev === "open" ? "error" : "info", text: msg }).catch(() => { /* best-effort */ });
+  };
+}
+
 // Schema v2: a discoverable workspace is authoritative for BOTH config and state paths (hub db, data dir,
 // gate/lock/log roots). A workspace found-but-invalid is a hard stop (fix it, don't run stale).
 function resolveWs(opts: Options): Workspace | null {
@@ -952,6 +1047,7 @@ async function main(): Promise<void> {
   // across the enabled projects (weighted round-robin). No workspace → the legacy fixed-project path below.
   const ws = resolveWs(opts);
   if (ws) return teamMain(opts, ws);
+  wireBreakerEvents(null); // legacy fixed-project path: console-only breaker notices
 
   const cfg = readProjects(opts);
   const project = resolveProject(opts, cfg);
@@ -1049,7 +1145,7 @@ async function main(): Promise<void> {
       if (gateActive && GATED_AGENTS.has(slot.agent)) {
         const key = changeKey(opts, cfg, project);
         if (gateSkips(opts, gateState, slot.agent, slot.agent, key)) {
-          slot.nextAt = now + opts.intervals[slot.agent];
+          slot.nextAt = now + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]);
           continue; // no change since last fire ⇒ don't pay for a no-op turn
         }
       }
@@ -1059,7 +1155,7 @@ async function main(): Promise<void> {
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); return 1; })
         .finally(() => {
           slot.running = false;
-          slot.nextAt = Date.now() + opts.intervals[slot.agent];
+          slot.nextAt = Date.now() + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
           // Record the POST-fire change-key (+ the fire time, the R1a TTL anchor) so the next tick compares
           // against the state this fire left behind (an agent's own writes bump the key once, then it
           // settles → skips until the NEXT external change or, for pm/qa, the TTL).
@@ -1091,6 +1187,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   // commandFor/runAgent (never the legacy per-project view — providers are team infrastructure).
   opts.providers = ws.file.team.providers ?? {};
   opts.opencodePermission = ws.file.team.opencodePermission;
+  wireBreakerEvents(ws); // P0-1a notices ride team comms when configured
 
   // `--project` filter: restrict DELIVERY rotation to a single named project. It must exist + be enabled;
   // a weight:0 target is NOT an error — that just pauses delivery (the block below decides), and stewards
@@ -1268,7 +1365,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); })
         .finally(() => {
           slot.running = false;
-          slot.nextAt = Date.now() + opts.intervals[slot.agent];
+          slot.nextAt = Date.now() + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
           if (stopping && activeChildren.size === 0) process.exit(0);
         });
       if (opts.maxFires && fired >= opts.maxFires) { console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining then exiting`); drain(); break; }

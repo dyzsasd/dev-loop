@@ -27,6 +27,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "next-project":   ["rotation"],                  // print the next project for an agent's fire (shared WRR cursor)
   "with-repo-lock": ["with-repo-lock"],            // serialize base-clone mutations on a shared repo
   notify:           ["comms"],                     // push a message to the team's slack/lark channel
+  "push-guard":     ["push-guard"],                // P1-2: pre-push ride-along check (canceled-ticket commits)
   metrics:          ["metrics"],                   // team KPIs from fires.jsonl (+ hub board on service)
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
@@ -77,6 +78,8 @@ Usage: dev-loop <command> [args]
   notify [--level info|warn|error] [--title T] <text>   push to the team's slack/lark channel (team.comms)
   next-project --agent <a>    print the agent's next rotation pick (shared cursor with run; for /loop rows)
   with-repo-lock <ref> -- <cmd>   run a command holding a shared repo's base-clone lock
+  push-guard [--repo <dir>] [--branch <b>] [--strict]   pre-push ride-along check: flag unpushed commits
+                              whose referenced tickets are Canceled/Duplicate (P1-2; --strict exits 1 on findings)
   init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project (seed → doctor → daemon up)
   run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents by calling the selected CLI
   install-claude-plugin      register a local npm-source marketplace so /plugin install can load it
@@ -115,7 +118,7 @@ const route = cmd === "ticket" && (rest[0] === "create" || rest[0] === "update")
   : ROUTES[cmd];
 if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); process.exit(2); }
 
-const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics",
+const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard",
   "op", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror"]); // the A1 write layer opens hub.db (direct-db transport)
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.

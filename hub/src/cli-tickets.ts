@@ -11,7 +11,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { openDb } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { findProject } from "./seed.ts";
-import { hubDbPath } from "./paths.ts";
+import { resolveHubDbPath } from "./workspace.ts";
 // A1 (--json): the JSON mode dispatches the SAME list_issues/get_issue ops the MCP transports serve, so
 // `tickets --json` is byte-identical to `dev-loop op list_issues` / the stdio ok() body (the parity contract).
 // Reads stay reads: both ops only SELECT, so the query_only connection below still holds (AC5).
@@ -147,7 +147,7 @@ function main(): number {
     console.error("dev-loop: no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in ~/.dev-loop/projects.json.");
     return 1;
   }
-  const db = openDb(hubDbPath());
+  const db = openDb(resolveHubDbPath()); // workspace-aware ladder (P2 #1) — same resolver as op/seed/doctor
   db.exec("PRAGMA query_only=1"); // AC5: structurally read-only — any write/event from here on throws
   const projectId = findProject(db, projectKey);
   if (!projectId) {

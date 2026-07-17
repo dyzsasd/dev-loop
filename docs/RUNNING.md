@@ -258,6 +258,16 @@ Resolution order:
 | Model/effort | `projects.<key>.agents.<agent>` → team/default maps → built-in role default |
 | Cadence | `--interval` → `projects.<key>.agents.<agent>.cadence` → `team.agents.<agent>.cadence` → built-in default |
 
+### Runtime resilience (the 2026-07 field batch)
+
+`dev-loop run` carries a **failure-streak circuit breaker** (P0-1a): N consecutive identical failures
+of one agent (same `errorClass` — spend-limit/rate-limit/auth/network/… — else the same last output
+line) trip that slot to a probe cadence until a fire succeeds; trip/recovery notify once each via
+`team.comms`. Tune with `--breaker <n>` (default 5; `0` = off) and `--breaker-probe <dur>` (default
+1h). Failed fires carry their `errorClass` + output tail in `fires.jsonl`, so `dev-loop metrics`
+splits infrastructure failures from task failures — and the daemon's fire-health monitor
+(`docs/DAEMON.md`) alerts when the loop itself degrades.
+
 ### Any model provider via opencode
 
 On `codingAgent:"opencode"` the **model string carries the provider** — `agents{}.model` takes

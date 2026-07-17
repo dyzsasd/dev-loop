@@ -11,12 +11,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
-import { hubDbPath } from "./paths.ts";
-import { tryResolveWorkspace, wsHubDb } from "./workspace.ts";
+import { tryResolveWorkspace, wsHubDb, resolveHubDbPath } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
 import { checkLessonsBudget } from "./lessons.ts";
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
 import { opencodeSyncDrift } from "./opencode-sync.ts";
+import { openDb as openHubDbConn } from "./db.ts";
+import { findProject as findHubProject } from "./seed.ts";
 import * as metricsMod from "./metrics.ts";
 const require_metrics = () => metricsMod;
 
@@ -214,7 +215,10 @@ export function doctorWorkspace(ws: Workspace): boolean {
   try {
     const { fireMetrics } = require_metrics();
     const fm = fireMetrics(join(ws.root, ".dev-loop", "team", "fires.jsonl"), 7 * 86_400_000);
-    if (fm.fires > 0) info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect`);
+    if (fm.fires > 0) {
+      const cls = Object.entries((fm.byErrorClass ?? {}) as Record<string, number>).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k}×${n}`).join(", ");
+      info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect${cls ? ` — top errors: ${cls}` : ""}`);
+    }
   } catch { /* metrics are informational */ }
 
   // W12 — comms webhook resolvability (the silent-failure killer). team.comms stores an env-var NAME
@@ -241,7 +245,7 @@ export function doctorWorkspace(ws: Workspace): boolean {
     if (process.env[p.authTokenEnv] !== undefined) {
       pass(`provider '${id}' auth ${p.authTokenEnv} resolvable (${secretsInjectedKeys(ws.root).has(p.authTokenEnv) ? "secrets.env" : "env"})`);
     } else {
-      warn(`[W13] provider '${id}' auth env ${p.authTokenEnv} unresolvable — its opencode fires fail pre-spawn (fireError: provider-env-missing); put ${p.authTokenEnv}=<key> in ${wsSecretsPath(ws.root)} or export it`);
+      warn(`[W13] provider '${id}' auth env ${p.authTokenEnv} unresolvable — its opencode fires fail pre-spawn (errorClass: provider-env-missing); put ${p.authTokenEnv}=<key> in ${wsSecretsPath(ws.root)} or export it`);
     }
   }
   // W14 — workspace opencode.json carries the registry (sync drift). Read-only; the fix is operator-run.
@@ -264,6 +268,30 @@ export function doctorWorkspace(ws: Workspace): boolean {
     if (!v) warn(`[W15] the config targets opencode but it is not runnable on PATH — those fires cannot launch; install opencode (certified ${OPENCODE_MIN_VERSION}, PORTABILITY §5)`);
     else if (semverBefore(v, OPENCODE_MIN_VERSION)) warn(`[W15] opencode ${v} predates the certified ${OPENCODE_MIN_VERSION} — --variant/OPENCODE_PERMISSION behavior is unverified there (PORTABILITY §5); upgrade opencode`);
     else pass(`opencode ${v} on PATH (certified ${OPENCODE_MIN_VERSION})`);
+  }
+
+  // W16 — owner-liveness (P1-4, the field's MP-156): an owner label whose actor never fires strands its
+  // Todo/In Review tickets forever, and nothing notices. Service-backend only (needs the local board).
+  // agents.<h>.manual:true (team or project) downgrades the finding to an info line ("awaiting a human").
+  if (ws.file.team.backend === "service" && existsSync(wsHubDb(ws))) {
+    try {
+      const { ownerLiveness } = require_metrics();
+      const db = openHubDbConn(wsHubDb(ws));
+      try {
+        const manual = new Set<string>();
+        for (const [h, a] of Object.entries(ws.file.team.agents ?? {})) if ((a as { manual?: boolean })?.manual === true) manual.add(h);
+        for (const key of deliveryProjects(ws)) {
+          for (const [h, a] of Object.entries((effectiveProject(ws, key).agents ?? {}) as Record<string, { manual?: boolean }>)) if (a?.manual === true) manual.add(h);
+          const pid = findHubProject(db, key);
+          if (!pid) continue;
+          for (const f of ownerLiveness(db, pid, join(ws.root, ".dev-loop", "team", "fires.jsonl"), { manualHandles: manual })) {
+            const age = f.lastFireTs ? `last fire ${f.lastFireTs.slice(0, 10)}` : "no fire on record";
+            if (f.manual) info(`[${key}] manual owner '${f.owner}': ${f.openTickets} open Todo/In Review ticket(s) awaiting a human (oldest ${f.oldestUpdatedAt.slice(0, 10)})`);
+            else warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open Todo/In Review ticket(s) (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.${f.owner}.manual true is a config edit)`);
+          }
+        }
+      } finally { db.close(); }
+    } catch { /* owner-liveness is best-effort — a missing ledger/db never fails doctor */ }
   }
 
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
@@ -459,5 +487,5 @@ function reconcileAutostart(pass: (m: string) => void, warn: (m: string) => void
 
 // CLI: node src/doctor.ts  (or `dev-loop-hub doctor` via server.ts dispatch / `npm run doctor`)
 if (import.meta.url === `file://${process.argv[1]}`) {
-  process.exit((await runDoctor(hubDbPath(), { reconcile: true })) ? 0 : 1);
+  process.exit((await runDoctor(resolveHubDbPath(), { reconcile: true })) ? 0 : 1); // workspace-aware ladder (P2 #1)
 }
