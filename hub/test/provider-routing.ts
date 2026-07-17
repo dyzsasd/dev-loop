@@ -134,14 +134,23 @@ try {
   ok(missRow?.errorClass === "provider-env-missing" && missRow?.provider === "synth" && missRow?.exitCode === 4,
     `pre-spawn: ledger row carries errorClass/provider/exit 4 (got ${JSON.stringify(missRow)})`);
 
-  // real (fake-bin) fire: --variant passed, certified wildcard-deny permission injected, identity rides env
-  const fire = runSched(["--agents", "qa", "--once"], { DLTEST_SYNTH_KEY: "test-key" });
+  // real (fake-bin) fire: --variant passed, certified wildcard-deny permission injected, identity rides env.
+  // Q9 secret scoping rides the same fire: OTHER secrets.env keys are STRIPPED from the fire env while
+  // THIS fire's own provider key survives (opencode resolves {env:VAR} in-process).
+  writeFileSync(join(ws, ".dev-loop", "secrets.env"), "DLTEST_SYNTH_KEY=from-file\nDLTEST_OTHER_WEBHOOK=https://hooks.example/secret\n");
+  writeFileSync(fakeBin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(join(dumpDir, "args.txt"))}\nprintf '%s' "$OPENCODE_PERMISSION" > ${JSON.stringify(join(dumpDir, "perm.json"))}\nprintf '%s' "$DEVLOOP_ACTOR/$DEVLOOP_PROJECT" > ${JSON.stringify(join(dumpDir, "identity.txt"))}\nprintf '%s|%s|%s' "\${DLTEST_SYNTH_KEY-UNSET}" "\${DLTEST_OTHER_WEBHOOK-UNSET}" "\${DEVLOOP_UI_TOKEN-UNSET}" > ${JSON.stringify(join(dumpDir, "scope.txt"))}\nexit 0\n`);
+  chmodSync(fakeBin, 0o755);
+  const fire = runSched(["--agents", "qa", "--once"], { DLTEST_SYNTH_KEY: undefined, DLTEST_OTHER_WEBHOOK: undefined, DEVLOOP_UI_TOKEN: "tok-should-not-reach-fires" });
   ok(fire.status === 0, "fire: --once exits 0 with the fake bin");
   const args = readFileSync(join(dumpDir, "args.txt"), "utf8").split("\n");
   ok(args[0] === "run" && args.includes("--variant") && args[args.indexOf("--variant") + 1] === "high", "fire: opencode receives run + --variant high");
   const perm = JSON.parse(readFileSync(join(dumpDir, "perm.json"), "utf8"));
   ok(perm["*"] === "deny" && perm.bash === "allow" && perm.webfetch === "deny", "fire: certified wildcard-deny OPENCODE_PERMISSION injected (PORTABILITY §5)");
   ok(readFileSync(join(dumpDir, "identity.txt"), "utf8") === "qa/provproj", "fire: identity env rides into the spawned bin");
+  const scope = readFileSync(join(dumpDir, "scope.txt"), "utf8").split("|");
+  ok(scope[0] === "from-file", "Q9: THIS fire's provider key survives (its runner resolves {env:VAR} in-process)");
+  ok(scope[1] === "UNSET", "Q9: an UNRELATED secrets.env key is STRIPPED from the fire env (build/test children can't read it)");
+  ok(scope[2] === "UNSET", "Q9: DEVLOOP_UI_TOKEN never reaches a fire");
   const fireRow = ledgerRows().at(-1);
   ok(fireRow?.provider === "synth" && fireRow?.codingAgent === "opencode" && fireRow?.exitCode === 0, "fire: ledger row carries the provider dimension");
 
@@ -168,6 +177,7 @@ try {
   ok(!/OPENCODE_PERMISSION|--variant|provider=synth/.test(claudeOut.split("\n").filter((l) => l.includes("pm:")).join("\n")), "parity: no opencode artifacts on the claude lane (provider=anthropic only)");
 
   // doctor: W13 missing → warn; resolvable via secrets.env → pass; W14 drift → warn
+  writeFileSync(join(ws, ".dev-loop", "secrets.env"), ""); // reset the Q9 fixture so W13 sees an unresolvable key again
   const doc1 = cli(["doctor"], ws);
   ok(/\[W13\] provider 'synth' auth env DLTEST_SYNTH_KEY unresolvable/.test(`${doc1.stdout}${doc1.stderr}`), "doctor: W13 warns on an unresolvable provider env");
   ok(/\[W14\].*opencode\.json/.test(`${doc1.stdout}${doc1.stderr}`), "doctor: W14 reports the unsynced opencode.json");
