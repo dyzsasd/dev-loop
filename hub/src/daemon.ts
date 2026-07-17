@@ -45,6 +45,7 @@ import { // A3: extracted timers; imported for the foreground boot, re-exported 
   fireHealthNotifyTick, startFireHealthNotifier, // P0-1c: the loop fire-health self-monitor
 } from "./daemon-notifiers.ts";
 import { tryResolveWorkspace, wsFireLedger } from "./workspace.ts";
+import { resolveUiToken, bearerOk, isLoopbackHost } from "./ui-token.ts"; // one-click P1 §6.2: the bearer gate + bind knob
 
 export interface DaemonOpts {
   db: DatabaseSync;          // read connection (PRAGMA query_only=ON) — every GET route reads through this
@@ -178,9 +179,13 @@ function redirect(res: ServerResponse, location: string): void {
 // An ABSENT Origin AND Referer is allowed: a browser CSRF auto-submit always carries Origin, so absence
 // means a non-browser client (curl / the operator's own tooling / tests) — not the CSRF vector, and it
 // must keep working. Origin is preferred over Referer when present.
-// INVARIANT: this literal Host allowlist is sufficient ONLY because the server binds the v4 loopback
-// (127.0.0.1) ONLY — see the `HOST = "127.0.0.1"` bind below. If that bind ever widens (0.0.0.0, ::1,
-// a LAN address), this guard must widen with it (resolve/validate accordingly), or it silently weakens.
+// INVARIANT: this literal Host allowlist is sufficient ONLY while the server binds the v4 loopback
+// (127.0.0.1) — the default. One-click P1 (§6.2): the bind may now widen via DEVLOOP_DAEMON_HOST, and
+// the guard widens WITH it exactly as this invariant demands — a non-loopback bind REQUIRES the
+// DEVLOOP_UI_TOKEN bearer (boot refuses otherwise), every request except /api/health must then carry
+// the token, and a token-authed request bypasses this Host heuristic entirely (a bearer is strictly
+// stronger: a browser cannot attach cross-site Authorization headers, so the CSRF/rebinding vector
+// this guard exists for cannot reach a tokened surface).
 const LOCAL_HOST = /^(127\.0\.0\.1|localhost)(:\d+)?$/;
 // F2: the grammar a PATH-derived /p/<key> project key must satisfy before any DB lookup or filesystem
 // use — one safe segment, no "/", no leading dot (kills "." / ".." traversal). Slightly wider than the
@@ -328,11 +333,13 @@ function parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 // Handle POST /api/op/<op>. Identity rides X-Devloop-Actor (cooperative single-host attribution, §18 — NOT
 // anti-spoof; the real human boundary stays the operator-publish gate). Pipeline order is load-bearing: the
 // CSRF/Host wall runs BEFORE the actor/body are read, and a write is mode-gated before any mutation.
-async function handleAgentOp(op: string, req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string): Promise<void> {
+async function handleAgentOp(op: string, req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, authedByToken = false): Promise<void> {
   if (!isAgentOp(op)) return json(res, 404, { error: `unknown op '${op}'` });
   // (1) CSRF / DNS-rebinding wall FIRST — uniform over every op. A non-browser agent client (the shim, curl,
   //     tests) sends no Origin ⇒ allowed; a browser cross-origin / foreign-Host POST is refused before anything.
-  if (!writeOriginOk(req)) return json(res, 403, { error: "op refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
+  //     A bearer-authed request (attach / a reverse proxy injecting the token) bypasses the Host heuristic —
+  //     see the LOCAL_HOST invariant note (§6.2): a bearer is strictly stronger than locality.
+  if (!authedByToken && !writeOriginOk(req)) return json(res, 403, { error: "op refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
   // (2) actor from the header, validated against `actors` (the G1 phantom-actor guard — every write/comment
   //     must be attributable, exactly like the stdio server's DEVLOOP_ACTOR start guard).
   const actor = (req.headers["x-devloop-actor"] as string | undefined)?.trim();
@@ -384,11 +391,21 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
     }
     return divergenceCache.get(key);
   };
+  // One-click P1 (§6.2): the bearer gate. Resolved ONCE at createDaemon time (tests set the env before
+  // constructing). With a token configured, EVERY request except GET /api/health (the probe surface —
+  // kubelet/docker-healthcheck/lifecycle ensure cannot attach headers) must present it; without a token
+  // the surface is byte-identical to the pre-token daemon (loopback bind enforced at boot).
+  const uiToken = resolveUiToken();
   return createServer(async (req, res) => {
     const method = req.method ?? "GET";
     let url: URL;
     try { url = new URL(req.url ?? "/", "http://127.0.0.1"); } catch { return json(res, 400, { error: "bad request url" }); }
     const rawPath = url.pathname.replace(/\/+$/, "") || "/";
+    const authedByToken = uiToken !== null && bearerOk(req.headers.authorization, uiToken);
+    if (uiToken !== null && !authedByToken && rawPath !== "/api/health") {
+      res.setHeader("www-authenticate", "Bearer");
+      return json(res, 401, { error: "unauthorized: this daemon requires Authorization: Bearer <token> (DEVLOOP_UI_TOKEN)" });
+    }
     let seg = rawPath.split("/").filter(Boolean); // [] for "/"
     let projectId = bootProjectId, projectKey = bootProjectKey, prefixed = false;
 
@@ -430,7 +447,8 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
       if (method === "POST" && canWrite && (isDocWrite || isRoadmapAlias) && humanWriteEnabled(db, projectId)) {
         // DL-19: refuse a cross-origin (CSRF) or foreign-Host (DNS-rebinding) write BEFORE any docSave/
         // docPublish — the guard runs ahead of handleDocWrite, so a refused request never mutates.
-        if (!writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
+        // (bearer-authed requests bypass the Host heuristic — §6.2, see the LOCAL_HOST invariant.)
+        if (!authedByToken && !writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
         let slug: string;
         if (isDocWrite) {
           const s = decodeSeg(seg[1]);
@@ -446,7 +464,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
       // disabled (or absent), these POSTs are NOT matched and fall through to the 405 below (byte-identical
       // read-only). Origin/Host guard runs BEFORE any write, exactly like /roadmap/*.
       if (method === "POST" && canWrite && humanWriteEnabled(db, projectId) && isTicketWriteRoute(seg)) {
-        if (!writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
+        if (!authedByToken && !writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
         await handleTicketWrite(seg, req, res, db, writeDb!, projectId, projectKey, actor!);
         return;
       }
@@ -456,7 +474,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
       // mount, not the generic non-GET 405 — leaving every existing surface byte-for-byte unchanged.
       if (seg[0] === "api" && seg[1] === "op") {
         if (method === "POST" && canWrite && seg.length === 3 && agentApiEnabled(db, projectId)) {
-          await handleAgentOp(seg[2], req, res, db, writeDb!, projectId, projectKey);
+          await handleAgentOp(seg[2], req, res, db, writeDb!, projectId, projectKey, authedByToken);
           return;
         }
         return json(res, 404, { error: `not found: ${path}` });
@@ -626,8 +644,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const DB_PATH = hubDbPath();
   const PROJECT_KEY = process.env.DEVLOOP_PROJECT?.trim();
-  const HOST = "127.0.0.1"; // §16 localhost-only; NEVER 0.0.0.0
+  // One-click P1 (§1.5/§6.2): the bind knob. Default stays the v4 loopback (§16). Widening it beyond
+  // loopback (a container/pod must — probes and published ports reach the pod IP, never the container's
+  // loopback) REQUIRES the bearer token: the LOCAL_HOST write guard is only sufficient on a loopback
+  // bind (its own invariant), so a widened, token-less daemon refuses to boot — fail closed, never a
+  // silently weakened write surface.
+  const HOST = process.env.DEVLOOP_DAEMON_HOST?.trim() || "127.0.0.1";
   const PORT = Number(process.env.DEVLOOP_DAEMON_PORT ?? 8787);
+  if (!isLoopbackHost(HOST) && resolveUiToken() === null) {
+    console.error(`[daemon] refusing to bind ${HOST}: DEVLOOP_DAEMON_HOST widens the bind beyond loopback without DEVLOOP_UI_TOKEN(_FILE) — the Host-allowlist write guard would silently weaken (see daemon.ts LOCAL_HOST invariant). Set a token, or drop the bind override.`);
+    process.exit(1);
+  }
   if (!PROJECT_KEY) {
     console.error("[daemon] no project resolved. Set DEVLOOP_PROJECT=<key> for foreground daemon mode, or use `dev-loop daemon up` from inside a configured repo.");
     process.exit(1);
@@ -692,8 +719,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   server.listen(PORT, HOST, () => {
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : PORT;
-    console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${HOST}:${port}/  (reads read-only; /roadmap editable, localhost-only)`);
-    const baseUrl = `http://${HOST}:${port}`;
+    console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${HOST}:${port}/  (reads read-only; /roadmap editable${isLoopbackHost(HOST) ? ", localhost-only" : ", bearer-token required (§6.2)"})`);
+    const baseUrl = `http://${isLoopbackHost(HOST) ? HOST : "127.0.0.1"}:${port}`; // notifier links stay reachable from the host itself
     // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
     const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, cadenceHours, notify });
     if (notifier) console.log(`[daemon] decision-queue notifier active (Human-Blocked ∪ In Review@operator, every ${cadenceHours}h via the configured channel / §9 notify webhook)`);

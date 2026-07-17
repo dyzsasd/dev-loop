@@ -10,9 +10,11 @@
 // three-way discriminated outcome — a genuine op {status,body}, the DORMANT-mount 404, or a dead/absent
 // daemon — so each client renders its own surface (the shim → MCP err() prose; the CLI → exit 5).
 import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { hubDbPath } from "./paths.ts";
+import { resolveUiToken } from "./ui-token.ts"; // leaf→leaf: the §6.2 bearer rides every op call when configured
 
 // ─── DL-41 lifecycle runfile path (REPLICATES daemon.ts lcDbPath/lcRunDir/lcRunfile) ────────────────────────
 // A thin client must NOT import the 92KB daemon, so the stable runfile path convention is re-derived here —
@@ -50,20 +52,39 @@ export type OpHttpOutcome =
   | { kind: "dormant" }
   | { kind: "down"; detail: string };
 
-// POST http://127.0.0.1:<port>/api/op/<op> with X-Devloop-Actor (identity env→header, design Decision #2/#5 —
-// the only attribution the daemon trusts). Loopback only (§16) — this client only ever talks to 127.0.0.1.
-export function postOp(port: number, op: string, args: Record<string, unknown>, actor: string): Promise<OpHttpOutcome> {
+// One-click P2 (§6.0 attach): the op target is either the machine-local loopback daemon (default —
+// DEVLOOP_HUB_PORT / the DL-41 runfile, exactly the pre-attach behavior) or a REMOTE hub named by
+// DEVLOOP_HUB_URL (http(s)://host:port). Re-read per call, like the port (a profile/env change must not
+// need a process restart). A garbled URL resolves to null → the caller's clear "daemon down" surface.
+export function resolveOpBase(projectKey: string): URL | null {
+  const raw = process.env.DEVLOOP_HUB_URL?.trim();
+  if (raw) {
+    try { const u = new URL(raw); if (u.protocol === "http:" || u.protocol === "https:") return u; } catch { /* fall through */ }
+    return null;
+  }
+  const port = resolveOpPort(projectKey);
+  return port === null ? null : new URL(`http://127.0.0.1:${port}`);
+}
+
+// POST <base>/api/op/<op> with X-Devloop-Actor (identity env→header, design Decision #2/#5 — the only
+// attribution the daemon trusts) + the §6.2 bearer when a token is configured (a tokened daemon 401s
+// without it; a token-less loopback daemon ignores the header). Default base stays 127.0.0.1 (§16);
+// a non-loopback base is the ATTACH posture and only ever works against a tokened daemon.
+export function postOpUrl(base: URL, op: string, args: Record<string, unknown>, actor: string): Promise<OpHttpOutcome> {
   const body = JSON.stringify(args ?? {});
+  const token = resolveUiToken();
   return new Promise<OpHttpOutcome>((resolve) => {
     let settled = false;
     const finish = (r: OpHttpOutcome) => { if (!settled) { settled = true; resolve(r); } };
-    const req = httpRequest(
+    const req = (base.protocol === "https:" ? httpsRequest : httpRequest)(
       {
-        hostname: "127.0.0.1", port, method: "POST", path: `/api/op/${op}`,
+        hostname: base.hostname, port: base.port || (base.protocol === "https:" ? 443 : 80), method: "POST",
+        path: `${base.pathname.replace(/\/$/, "")}/api/op/${op}`,
         headers: {
           "content-type": "application/json",
           "content-length": Buffer.byteLength(body),
           "x-devloop-actor": actor,
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
       },
       (res) => {
@@ -90,4 +111,10 @@ export function postOp(port: number, op: string, args: Record<string, unknown>, 
     req.setTimeout(30000, () => { req.destroy(new Error("timeout")); }); // never a silent hang
     req.end(body);
   });
+}
+
+// Back-compat wrapper: the pre-attach signature (loopback port). Existing callers (shim, cli-agentops)
+// keep working unchanged; new callers route through resolveOpBase → postOpUrl.
+export function postOp(port: number, op: string, args: Record<string, unknown>, actor: string): Promise<OpHttpOutcome> {
+  return postOpUrl(new URL(`http://127.0.0.1:${port}`), op, args, actor);
 }
