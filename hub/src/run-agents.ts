@@ -1181,6 +1181,15 @@ async function main(): Promise<void> {
 // shared smooth-WRR cursor (rotation.ts). `--project` degrades to a filter (rotate over just that one).
 // In M3 EVERY agent still fires per-project (steward team-scoping is M4); rotation is the only new behavior.
 async function teamMain(opts: Options, ws: Workspace): Promise<void> {
+  // Q4 moved-source guard (one-click §4.3): a home that was bundle-exported --move must not keep
+  // firing — two live homes double-drive the board. Marker + refusal is the whole mechanism (operator
+  // decision); deleting .dev-loop/moved.json un-retires deliberately.
+  try {
+    const { movedMarker } = await import("./bundle.ts");
+    const moved = movedMarker(ws.root);
+    if (moved && !opts.dryRun)
+      die(`this workspace was MOVED (bundle '${moved.bundle ?? "?"}' at ${moved.movedAt ?? "?"}) — the home now runs elsewhere; use \`dev-loop up --attach <url>\` here, or delete .dev-loop/moved.json to un-retire`, 1);
+  } catch (e) { if ((e as { code?: string }).code !== "ERR_MODULE_NOT_FOUND") throw e; }
   const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
   const backend = ws.file.team.backend;
   // Model-provider routing: the TEAM-level registry + permission override ride the run options into

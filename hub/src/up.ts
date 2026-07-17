@@ -132,7 +132,7 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
   // ── MOVE: headless bundle load (design §4.5) ──────────────────────────────
   if (o.bundle) {
     const { bundleLoad } = await import("./bundle.ts");
-    return bundleLoad(o.bundle, o.dir, { forceReseed: o.forceReseed });
+    return bundleLoad(o.bundle, o.dir, { forceReseed: o.forceReseed, noRun: o.dryLaunch }); // --dry-launch on this leg = load, verify, don't start the loop
   }
 
   // ── LOCAL / ATTACH: resolve-or-scaffold, then the interactive console ─────
