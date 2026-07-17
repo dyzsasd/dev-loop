@@ -262,7 +262,7 @@ Respect `mode` (§12) yourself — the CLI has no dry-run gate: in `dry-run`, ma
 
 ```text
 --project <key>       act on that project instead of the booted one — role-gated SERVER-side (the D1 matrix:
-                      stewards → any project or "_team"; pm → "_team" only; everyone else → FORBIDDEN).
+                      stewards + the operator → any project; pm → "_team" only; every other agent → FORBIDDEN).
 ```
 
 `tickets`/`ticket <id>` take no `--project` — a cross-project read rides LAYER 0: `dev-loop op

@@ -28,6 +28,12 @@ dev-loop init                     # guided setup — Enter through the defaults 
 dev-loop run                      # ONE scheduler drives the whole team; ^C stops everything
 ```
 
+Prefer to set everything up by **talking** instead? `dev-loop up` scaffolds the workspace and lands
+you directly in an operator-console chat (Claude Code or opencode) that runs the setup verbs for you —
+and the same verb deploys remotely (`up --bundle`, an encrypted move of config+secrets+board) and
+drives a remote home from your laptop (`dev-loop attach <url>`). See `docs/RUNNING.md` → One-click and
+`deploy/` for Docker/Kubernetes/systemd.
+
 `init` creates the workspace and your first project (hub board row auto-seeded), offers to
 register your first repo (`--detect` reads build/CI facts straight from the clone), then ends
 with the doctor verdict and a `NEXT:` line naming the single most-blocking step. What you get:

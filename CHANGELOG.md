@@ -3,6 +3,57 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+- **feat(one-click): `up` / `bundle` / `attach` — a workspace home you can land in, move, and drive
+  from anywhere** (`docs/design/one-click-deployment.md`, as-built rev 3; operator decisions: age
+  encryption default, marker+refuse source retirement). The organizing idea: a workspace has exactly
+  ONE live home — deployment moves it, operation attaches to it, and state sync *dissolves* instead of
+  being solved (board = the one hub, code = git remotes, possession = scheduled backup bundles).
+  - **`dev-loop up` (LOCAL)** scaffolds-if-needed (team init with a dir-derived key), ensures the
+    board, then EXECS an interactive coding-agent chat primed as the **operator console** — setup
+    happens conversationally through the validated verbs, never by hand-typed shell. Priming rides
+    verified interactive flags (claude `--model/--effort/--append-system-prompt`; the opencode TUI
+    takes `--model` only) + create-only workspace-root `CLAUDE.md`/`AGENTS.md` briefs
+    (self-sufficient plugin-less) + the new `skills/operator-console` skill; claude's folder trust is
+    pre-seeded (`~/.claude.json` merge) so first launch lands in a chat. `--dry-launch` is the
+    inspection/test contract.
+  - **Q1 mutators:** `team add-provider` (E16-validated write + opencode.json sync in one verb) and
+    `dev-loop secret set|list|unset` — the VALUE arrives via a hidden TTY prompt or stdin, so **a key
+    never enters the chat transcript, the model context, or shell history**; line-level upsert keeps
+    the operator's `secrets.env` comments; the console skill's hard rules teach exactly this.
+  - **`dev-loop bundle export` → `up --bundle` (MOVE/BACKUP):** a single-file artifact (plaintext
+    manifest + **age**-encrypted payload) carrying config + every referenced secret VALUE + **the
+    board itself** (`hub.db`, WAL-checkpointed; the roadmap/docs/ticket history ARE the db) + an
+    optional git credential. Loading is headless (identity via `AGE_IDENTITY_FILE`/
+    `DEVLOOP_BUNDLE_KEY`, never a prompt), authoritative-once (live config diff-warns; a live board is
+    NEVER overwritten), re-clones repos from their remotes (fail-fast `ls-remote` probe;
+    `GIT_ASKPASS`-from-secrets.env or a deploy key with `accept-new`), runs `team repair` + a doctor
+    fail-fast, then execs `dev-loop run` — which owns the daemon. `--move` stamps
+    `.dev-loop/moved.json` and `run` REFUSES on a moved source; `--backup` is the live-checkpoint
+    flavor for scheduled snapshots.
+  - **`dev-loop attach <url>` / `up --attach` (ATTACH):** `DEVLOOP_HUB_URL` turns the CLI into a
+    client of the remote hub's op-API — attributed reads AND writes from a machine with no workspace
+    at all; `tickets`/`ticket` serve the op body (`--json` verbatim); a fail-closed ALLOWLIST refuses
+    every home-side verb with the home pointer. The D1 override matrix now grants the **operator**
+    free cross-project reach (agents unchanged) — the console's authority through a `_team`-booted
+    daemon.
+  - **Daemon bind+token (the container prerequisite pair):** `DEVLOOP_DAEMON_HOST` widens the bind
+    ONLY together with `DEVLOOP_UI_TOKEN(_FILE)` (boot refuses otherwise); with a token, everything
+    except `GET /api/health` requires the bearer, and a bearer-authed request bypasses the Host/CSRF
+    heuristic (what makes reverse proxies + attach clean). Token-less loopback stays byte-identical.
+  - **Per-fire secret scoping (Q9):** fires no longer inherit the whole `secrets.env` — each fire's
+    env carries only its own provider key (+ `ANTHROPIC_*` on claude fires); everything else
+    re-sources from files at use time; the decrypt key and UI token are hard-stripped from every fire.
+  - **`deploy/`:** Dockerfile (node23+git+age+opencode+dev-loop; entrypoint `up --bundle`; smoke-built
+    green), docker-compose (single service + workspace volume; secrets = decrypt key + token only),
+    Helm chart (**single-replica StatefulSet by construction**: hard-pinned replicas, `OnDelete`,
+    required one-per-node anti-affinity — single-writer SQLite + the run lock), systemd unit, and the
+    author→load→attach→bring-home README.
+  - Suites: `up` (17), `bundle` (30, real age keys + a real bare remote), `attach` (17, out-of-process
+    token-gated daemon), `ui-token` (17), `secret-provider` (20) + Q9 legs in provider-routing;
+    agent-api/cheatsheet/conventions updated for the operator-override matrix change.
+
 ## 1.3.0
 
 - **The 2026-07 field-report hardening batch** — a 6-day dogfood (1,472 fires, 52% success, failures

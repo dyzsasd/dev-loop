@@ -26,7 +26,17 @@ read connection.
 
 ## Posture (the safety envelope)
 
-- **Localhost-only.** Binds `127.0.0.1` **only** — never `0.0.0.0`, no external exposure (§16).
+- **Localhost-only by default; a widened bind REQUIRES the bearer token (one-click §1.5/§6.2).**
+  The bind is `127.0.0.1` unless `DEVLOOP_DAEMON_HOST` overrides it (a container/pod must — probes and
+  published ports reach the pod IP, never the container's loopback). A non-loopback bind with no
+  `DEVLOOP_UI_TOKEN(_FILE)` **refuses to boot** (fail closed — the Host-allowlist guard is only
+  sufficient on loopback). With a token configured, EVERY request except `GET /api/health` (the probe
+  surface) must send `Authorization: Bearer <token>` (constant-time compare; 401 +
+  `WWW-Authenticate: Bearer` otherwise), and a bearer-authed request **bypasses `writeOriginOk`** — a
+  browser cannot attach cross-site Authorization headers, so the CSRF/rebinding vector cannot reach a
+  tokened surface, which is exactly what lets a reverse proxy (injecting the header upstream) or an
+  attach client (`DEVLOOP_HUB_URL`, §6.0) use the write surface cleanly. Token-less loopback behavior
+  is byte-identical to the pre-token daemon.
 - **Read by default; writes are opt-in and guarded.** Every `GET`/`HEAD` is served by the
   `query_only=ON` read connection, which can never mutate the SoR. The only non-`GET` routes are:
   the **roadmap** write routes (DL-3, always present when a write actor is configured) and the

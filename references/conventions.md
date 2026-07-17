@@ -1832,8 +1832,9 @@ SKILL/conventions/code file). On `linear`/`local` the design doc is instead a co
   firewall (§2) is **unchanged + structural**: a hub process only ever touches its own project's rows.
   The ONE role-gated exception (D1): every hub tool except `whoami` accepts an optional `project`
   argument — stewards (`sweep`/`ops`/`reflect`/`communication`) may name any seeded project key
-  (a hub.db row, not a dev-loop.json entry) or `_team`, PM may name `_team` only (§9b), every other
-  actor is refused with `FORBIDDEN` —
+  (a hub.db row, not a dev-loop.json entry) or `_team`, PM may name `_team` only (§9b), the
+  **operator** may name any project (the attach console's cross-project authority — the human's
+  reach was never project-pinned), and every other agent is refused with `FORBIDDEN` —
   enforced server-side at the shared dispatch choke point, identically on the stdio server and the
   daemon op-API. Forbidden-first: a refused actor learns nothing about which keys exist (only an
   allowed actor's unknown key gets the not-found error). Omitting `project` is byte-identical to the

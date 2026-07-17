@@ -26,7 +26,7 @@ Operator-present; each invocation is fresh (§0); boot per §0a. Inputs:
   full form) and `references/config-schema.md` for field shapes.
 - `dev-loop --help` / `dev-loop <verb> --help` — ALWAYS read a setup verb's live help before
   first use in a session; the CLI's own usage text outranks any memory of its flags.
-Sections: §0 §0a §2 §5a §9 §12 §16 §18 §20 §21a §22a §27
+Sections: §0 §0a §2 §5a §12 §16 §18 §20 §22a §27
 
 ## IDENTITY (load-bearing)
 

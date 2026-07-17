@@ -74,7 +74,7 @@ LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; erro
 
 Every verb also accepts:
   --project <key>       act on that project instead of the booted one — role-gated SERVER-side (the D1 matrix:
-                        stewards → any project or "_team"; pm → "_team" only; everyone else → FORBIDDEN).
+                        stewards + the operator → any project; pm → "_team" only; every other agent → FORBIDDEN).
   --json                accepted for symmetry (JSON is already the default output of every verb here).
   --i-am-the-operator   bypass the operator-in-a-fire write guard (see exit 4 below).
 
