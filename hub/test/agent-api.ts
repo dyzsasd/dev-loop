@@ -377,12 +377,16 @@ const pmSib = await op("list_issues", { project: "agp2" }, PMH);
 ok(pmSib.status === 403 && /^FORBIDDEN/.test(pmSib.body.error), `D1: pm → a sibling real project → 403 FORBIDDEN (pm may pass only _team; got ${pmSib.status})`);
 const pmGhost = await op("list_issues", { project: "no-such" }, PMH);
 ok(pmGhost.status === 403 && /^FORBIDDEN/.test(pmGhost.body.error), "D1: pm → a GHOST key → the SAME 403 FORBIDDEN, never a key-revealing 404 (forbidden-first)");
-// every NON-steward actor: any project ≠ booted → 403 (read AND write refused before any row is touched).
-// architect + operator are in the bucket ON PURPOSE — the D1 matrix grants override to exactly
-// stewards + pm/_team, so a future roster drift that silently widened it must trip here.
-for (const who of ["dev", "qa", "senior-dev", "junior-dev", "architect", "operator"]) {
-  ok((await op("list_issues", { project: "agp2" }, { "x-devloop-actor": who })).status === 403, `D1: ${who} list_issues project:agp2 → 403 FORBIDDEN (non-steward actors never cross their boot pin)`);
+// every NON-steward AGENT: any project ≠ booted → 403 (read AND write refused before any row is
+// touched). architect is in the bucket ON PURPOSE — the D1 matrix grants AGENT override to exactly
+// stewards + pm/_team, so a future roster drift that silently widened it must trip here. The
+// OPERATOR overrides freely since one-click §6.0 (the attach console posts real-project ops through
+// a _team-booted daemon) — asserted separately below.
+for (const who of ["dev", "qa", "senior-dev", "junior-dev", "architect"]) {
+  ok((await op("list_issues", { project: "agp2" }, { "x-devloop-actor": who })).status === 403, `D1: ${who} list_issues project:agp2 → 403 FORBIDDEN (non-steward agents never cross their boot pin)`);
 }
+ok((await op("list_issues", { project: "agp2" }, { "x-devloop-actor": "operator" })).status === 200,
+  "D1: the OPERATOR overrides freely (one-click §6.0 — the attach console's cross-project authority)");
 ok((await op("save_comment", { project: "agp2", issueId: sib.id, body: "nope" }, DEV)).status === 403, "D1: dev save_comment project:agp2 → 403 FORBIDDEN (the write never lands)");
 ok((await call(agp2, "get_issue", { id: sib.id })).comments.every((c: any) => c.body !== "nope"), "D1: the refused cross-project comment wrote NOTHING in agp2");
 // an explicit SAME-key pass is a no-op, never an error; a non-string project is a clean 400 (raw-JSON path)

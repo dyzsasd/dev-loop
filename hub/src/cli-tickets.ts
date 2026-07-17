@@ -139,8 +139,58 @@ function showTicket(db: DatabaseSync, projectId: string, projectKey: string, act
   return 0;
 }
 
-function main(): number {
+// ── ATTACH (§6.0): the read verbs over the remote op-API. `--json` stays EXACTLY the op body (the A1
+// parity contract); the human view renders a compact table from the same body — the console's daily
+// read, not a byte-clone of the local renderer.
+async function attachMain(base: URL, sub: string, rest: string[]): Promise<number> {
+  const { postOpUrl } = await import("./op-client.ts");
+  const actor = process.env.DEVLOOP_ACTOR ?? "operator";
+  const project = process.env.DEVLOOP_PROJECT?.trim();
+  const asJson = rest.includes("--json");
+  const op = sub === "ticket" ? "get_issue" : "list_issues";
+  const args: Record<string, unknown> = {};
+  if (project) args.project = project;
+  if (sub === "ticket") {
+    const id = rest.find((a) => !a.startsWith("--"));
+    if (!id) { console.error("usage: dev-loop ticket <id> [--json]"); return 2; }
+    args.id = id;
+  } else {
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i]; const next = () => rest[++i];
+      if (a === "--state") args.state = next();
+      else if (a === "--type") args.type = next();
+      else if (a === "--label") args.label = next();
+      else if (a === "--assignee") args.assignee = next();
+      else if (a === "--q") args.q = next();
+      else if (a === "--limit") args.limit = Number(next());
+      else if (a !== "--json") { console.error(`dev-loop tickets (attach): unsupported flag '${a}' — the attach read surface is the op surface (list_issues args)`); return 2; }
+    }
+  }
+  const out = await postOpUrl(base, op, args, actor);
+  if (out.kind === "down") { console.error(`dev-loop: remote hub ${base.origin} is not reachable${out.detail}`); return 5; }
+  if (out.kind === "dormant") { console.error(`dev-loop: ${base.origin} op-API is dormant — seed settings_json.hub.transport:"daemon" at the home`); return 5; }
+  if (out.status === 401) { console.error(`dev-loop: ${base.origin} requires the bearer token — set DEVLOOP_UI_TOKEN (§6.2)`); return 5; }
+  if (out.status < 200 || out.status >= 300) { console.error(JSON.stringify(out.body)); return 1; }
+  if (asJson) { console.log(JSON.stringify(out.body)); return 0; }
+  if (sub === "ticket") {
+    const t = out.body as { id?: string; state?: string; type?: string; title?: string; assignee?: string | null; comments?: Array<{ author: string; body: string }> };
+    console.log(`${t.id}  [${t.state}] ${t.type}  ${t.title}${t.assignee ? `  @${t.assignee}` : ""}`);
+    for (const c of t.comments ?? []) console.log(`  — ${c.author}: ${c.body.split("\n")[0].slice(0, 120)}`);
+  } else {
+    for (const t of (out.body as Array<{ id: string; state: string; type: string; title: string; assignee?: string | null }>))
+      console.log(`${t.id.padEnd(10)} ${(`[${t.state}]`).padEnd(14)} ${t.type.padEnd(12)} ${t.title.slice(0, 80)}${t.assignee ? `  @${t.assignee}` : ""}`);
+  }
+  return 0;
+}
+
+async function main(): Promise<number> {
   const [sub, ...rest] = process.argv.slice(2); // sub = "tickets" | "ticket" (cli.ts passes it as argv[0])
+  const hubUrl = process.env.DEVLOOP_HUB_URL?.trim();
+  if (hubUrl) {
+    let base: URL;
+    try { base = new URL(hubUrl); } catch { console.error(`dev-loop: DEVLOOP_HUB_URL '${hubUrl}' is not a valid URL`); return 2; }
+    return attachMain(base, sub, rest);
+  }
   // a read needs no DEVLOOP_ACTOR to run; the resolved actor only parameterizes assignee:"me" + attribution-free reads
   const { actor, projectKey, projectFromCwd, projectResolved } = resolveIdentity();
   if (!projectResolved) {
@@ -158,4 +208,4 @@ function main(): number {
   return sub === "ticket" ? showTicket(db, projectId, projectKey, actor, rest) : listTickets(db, projectId, projectKey, actor, rest);
 }
 
-process.exit(main());
+process.exit(await main());
