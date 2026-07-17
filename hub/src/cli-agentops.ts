@@ -24,7 +24,7 @@ import { resolveIdentity } from "./resolve-project.ts";
 import { ensureActors, findProject } from "./seed.ts";
 import { resolveHubDbPath } from "./workspace.ts";
 import { agentOp, isAgentOp, AGENT_OPS, AGENT_WRITE_OPS, type AgentOp, type OpResult } from "./agentops.ts";
-import { opRunfilePath, resolveOpPort, postOp } from "./op-client.ts";
+import { opRunfilePath, resolveOpPort, postOp, postOpUrl } from "./op-client.ts";
 
 const TYPES = ["Bug", "Feature", "Improvement"] as const;
 
@@ -129,12 +129,24 @@ function readFileArg(flag: string, path: string): string {
 }
 
 // ─── the hub connection + the server.ts identity pipeline (G1/G2 → exit 4; a busy db → exit 5) ──────────────
-interface Hub { db: DatabaseSync; projectId: string; projectKey: string; actor: string; daemonTransport: boolean }
+// `attachBase` (one-click §6.0): DEVLOOP_HUB_URL is set — the home is REMOTE. No local db opens, no
+// local G1/G2 guards (the daemon runs its own), every op POSTs over the token-authed op-API.
+interface Hub { db?: DatabaseSync; projectId?: string; projectKey: string; actor: string; daemonTransport: boolean; attachBase?: URL }
 const isBusy = (e: unknown): boolean => {
   const err = e as { errcode?: number; message?: string };
   return err.errcode === 5 || err.errcode === 6 || /SQLITE_BUSY|database is locked/i.test(err.message ?? ""); // 5=SQLITE_BUSY 6=SQLITE_LOCKED
 };
 function openHub(): Hub {
+  // ── ATTACH (§6.0): the remote hub is the SoR — skip every local open/guard. Identity still rides
+  // DEVLOOP_ACTOR (default operator: the console's posture); the project may stay unresolved (the
+  // daemon's boot project applies, or args.project targets one — the operator override).
+  const hubUrl = process.env.DEVLOOP_HUB_URL?.trim();
+  if (hubUrl) {
+    let base: URL;
+    try { base = new URL(hubUrl); if (base.protocol !== "http:" && base.protocol !== "https:") throw new Error("bad protocol"); }
+    catch { console.error(`dev-loop: DEVLOOP_HUB_URL '${hubUrl}' is not a valid http(s) URL`); process.exit(2); }
+    return { projectKey: process.env.DEVLOOP_PROJECT?.trim() ?? "", actor: process.env.DEVLOOP_ACTOR ?? "operator", daemonTransport: true, attachBase: base };
+  }
   const { actor, projectKey, projectFromCwd, projectResolved } = resolveIdentity();
   if (!projectResolved) {
     console.error("dev-loop: no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in the workspace.");
@@ -182,6 +194,14 @@ async function runOp(hub: Hub, op: AgentOp, args: Record<string, unknown>): Prom
       process.exit(4);
     }
   }
+  if (hub.attachBase) { // §6.0: the remote hub — same op, same body, over the token-authed op-API
+    const sent = hub.projectKey && args.project === undefined ? { ...args, project: hub.projectKey } : args;
+    const out = await postOpUrl(hub.attachBase, op, sent, hub.actor);
+    if (out.kind === "down") { console.error(`dev-loop: remote hub ${hub.attachBase.origin} is not reachable${out.detail}. Check DEVLOOP_HUB_URL / the tunnel / the server.`); process.exit(5); }
+    if (out.kind === "dormant") { console.error(`dev-loop: ${hub.attachBase.origin} answers but its op-API is dormant — the home's project rows need settings_json.hub.transport:"daemon" (a bundle load seeds this; else seed it at the home).`); process.exit(5); }
+    if (out.status === 401) { console.error(`dev-loop: ${hub.attachBase.origin} requires the bearer token — set DEVLOOP_UI_TOKEN (or _FILE) to the home's token (§6.2).`); process.exit(5); }
+    return { status: out.status, body: out.body };
+  }
   if (hub.daemonTransport) { // config said daemon: POST to the loopback op-API through the shared op-client
     const port = resolveOpPort(hub.projectKey);
     if (port === null) {
@@ -193,7 +213,7 @@ async function runOp(hub: Hub, op: AgentOp, args: Record<string, unknown>): Prom
     if (out.kind === "dormant") { console.error(`dev-loop: the daemon is running but its agent op-API is dormant for '${hub.projectKey}' — the project's settings_json says hub.transport:"daemon" here but the daemon disagrees. Restart it (dev-loop daemon up) or check settings_json.`); process.exit(5); }
     return { status: out.status, body: out.body };
   }
-  try { return await agentOp(op, hub.db, hub.projectId, hub.projectKey, hub.actor, args); }
+  try { return await agentOp(op, hub.db!, hub.projectId!, hub.projectKey, hub.actor, args); }
   catch (e) {
     if (isBusy(e)) { console.error(`dev-loop: hub db is busy past the 5s busy_timeout (another writer holds the lock): ${(e as Error).message}`); process.exit(5); }
     console.error(`dev-loop: ${(e as Error).message}`);

@@ -522,8 +522,12 @@ export function resolveProjectOverride(db: DatabaseSync, bootedProjectId: string
   if (requested === undefined) return { ok: true, projectId: bootedProjectId, projectKey: bootedProjectKey };
   if (typeof requested !== "string") return { ok: false, result: errR(400, "project must be a string (a project key)") }; // the op-API parses raw JSON — mirror the stdio zod (DL-63)
   if (requested === bootedProjectKey) return { ok: true, projectId: bootedProjectId, projectKey: bootedProjectKey };
-  if (!STEWARD_ACTORS.has(actor) && !(actor === "pm" && requested === TEAM_INTAKE_PROJECT))
-    return { ok: false, result: errR(403, `FORBIDDEN: actor '${actor}' may not act on project '${requested}' (booted: '${bootedProjectKey}'). Only stewards (${STEWARD_HANDLES.join("/")}) may target another project; pm only '${TEAM_INTAKE_PROJECT}'.`) };
+  // One-click §6.0: the OPERATOR overrides freely — the attach console posts every op against the
+  // workspace-hub daemon's `_team` boot, targeting real projects via args.project. The human's
+  // authority already spans projects everywhere else (publish, terminal-state reopen); the D1 matrix
+  // gating AGENTS is untouched.
+  if (actor !== "operator" && !STEWARD_ACTORS.has(actor) && !(actor === "pm" && requested === TEAM_INTAKE_PROJECT))
+    return { ok: false, result: errR(403, `FORBIDDEN: actor '${actor}' may not act on project '${requested}' (booted: '${bootedProjectKey}'). Only stewards (${STEWARD_HANDLES.join("/")}) and the operator may target another project; pm only '${TEAM_INTAKE_PROJECT}'.`) };
   const row = db.prepare("SELECT id,key FROM projects WHERE key=?").get(requested) as { id: string; key: string } | undefined;
   if (!row) return { ok: false, result: errR(404, `no such project '${requested}'`) };
   return { ok: true, projectId: row.id, projectKey: row.key };

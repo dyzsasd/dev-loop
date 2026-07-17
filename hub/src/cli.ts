@@ -25,6 +25,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   team:             ["team"],                      // init | import | repair | set | add-project | add-repo | add-provider | sync-opencode — workspace (v2)
   secret:           ["secret-cli"],                // set | list | unset — workspace secret VALUES (.dev-loop/secrets.env; §16)
   up:               ["up"],                        // one-click: local operator console / --bundle headless load / --attach remote hub
+  attach:           ["up", "--attach"],            // sugar: `dev-loop attach <url>` ≡ `dev-loop up --attach <url>` (§6.0)
   bundle:           ["bundle"],                    // export — the encrypted move/backup artifact (one-click §4)
   hub:              ["hub"],                        // start | stop | status | ensure — the workspace hub daemon (service)
   "next-project":   ["rotation"],                  // print the next project for an agent's fire (shared WRR cursor)
@@ -126,6 +127,20 @@ const route = cmd === "ticket" && (rest[0] === "create" || rest[0] === "update")
   ? (["cli-agentops", "ticket"] as [string, ...string[]])
   : ROUTES[cmd];
 if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); process.exit(2); }
+
+// ── ATTACH gate (one-click §6.0, fail-closed ALLOWLIST) ────────────────────────────────────────────
+// With DEVLOOP_HUB_URL set the home is REMOTE: only the OP surface travels (board/doc reads+writes,
+// attributed over the token-authed op-API). Everything that touches the home's filesystem, db file,
+// scheduler, or daemon lifecycle refuses with the home pointer — a home-side verb silently running
+// against local state while the operator THINKS they're driving the remote is the failure mode this
+// gate exists to prevent.
+if (process.env.DEVLOOP_HUB_URL?.trim()) {
+  const ATTACH_OK = new Set(["tickets", "ticket", "op", "comment", "comments", "labels", "label", "project", "events", "doc", "up", "attach", "version", "help"]);
+  if (!ATTACH_OK.has(cmd)) {
+    console.error(`dev-loop ${cmd}: this verb runs at the WORKSPACE HOME, not over attach (DEVLOOP_HUB_URL is set). Run it on the home host (ssh / redeploy a bundle), or unset DEVLOOP_HUB_URL to work locally.`);
+    process.exit(2);
+  }
+}
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror"]); // the A1 write layer opens hub.db (direct-db transport)
