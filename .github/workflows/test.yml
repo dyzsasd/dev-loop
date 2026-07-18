@@ -13,6 +13,9 @@ jobs:
   test:
     name: Test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    env:
+      # Explicit npm scripts still run; their implicit pre*/post* hooks do not.
+      NPM_CONFIG_IGNORE_SCRIPTS: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +25,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Verify source integrity (pre-install)
+        run: |
+          python3 -m unittest security.test_source_integrity
+          python3 security/source_integrity.py
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -29,7 +37,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: hub
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Typecheck
         working-directory: hub
@@ -38,3 +46,7 @@ jobs:
       - name: Test
         working-directory: hub
         run: npm test
+
+      - name: Verify source integrity (post-test)
+        if: always()
+        run: python3 security/source_integrity.py --whole-tree
