@@ -45,11 +45,22 @@ jobs:
       BUMP: ${{ inputs.bump }}
       INPUT_VERSION: ${{ inputs.version }}
       NPM_TAG: ${{ inputs.npm_tag }}
+      # Explicit npm scripts still run; their implicit pre*/post* hooks do not.
+      NPM_CONFIG_IGNORE_SCRIPTS: "true"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Fetch tags for the integrity gate
+        run: git fetch --force --tags origin
+
+      - name: Verify source integrity (pre-install)
+        run: |
+          python3 -m unittest security.test_source_integrity
+          python3 security/source_integrity.py
+          python3 security/source_integrity.py --all-history
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -95,7 +106,8 @@ jobs:
             exit 1
           fi
 
-          git fetch --tags origin
+          git fetch --force --tags origin
+          python3 security/source_integrity.py --all-history
           NPM_EXISTS=0
           if npm view "$PACKAGE_NAME@$VERSION" version >/dev/null 2>&1; then
             NPM_EXISTS=1
@@ -132,7 +144,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: hub
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Stamp version files
         working-directory: hub
@@ -147,6 +159,13 @@ jobs:
       - name: Test package
         working-directory: hub
         run: npm test
+
+      - name: Build package
+        working-directory: hub
+        run: npm run build
+
+      - name: Verify source integrity (post-build)
+        run: python3 security/source_integrity.py --whole-tree
 
       - name: Commit and tag release
         shell: bash
@@ -164,10 +183,24 @@ jobs:
           fi
 
           if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            TAG_COMMIT="$(git rev-parse "refs/tags/v$VERSION^{commit}")"
+            HEAD_COMMIT="$(git rev-parse HEAD)"
+            if [ "$TAG_COMMIT" != "$HEAD_COMMIT" ]; then
+              echo "Existing tag v$VERSION points to $TAG_COMMIT, not release commit $HEAD_COMMIT."
+              exit 1
+            fi
             echo "Tag v$VERSION already exists; reusing it."
           else
             git tag -a "v$VERSION" -m "Release v$VERSION"
           fi
+
+      - name: Verify final release refs and source integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "refs/tags/v$VERSION^{commit}")" = "$(git rev-parse HEAD)"
+          python3 security/source_integrity.py --whole-tree
+          python3 security/source_integrity.py --all-history
 
       # Push BEFORE publish: npm versions are irrevocable, git pushes are recoverable.
       # A failed publish leaves a pushed tag; re-running with bump: explicit resumes from it.
@@ -176,6 +209,18 @@ jobs:
         run: |
           set -euo pipefail
           git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "v$VERSION"
+
+      - name: Verify remote release refs before publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED="$(git rev-parse HEAD)"
+          REMOTE_BRANCH="$(git ls-remote --heads origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 { print $1 }')"
+          REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/v$VERSION^{}" | awk 'NR == 1 { print $1 }')"
+          if [ "$REMOTE_BRANCH" != "$EXPECTED" ] || [ "$REMOTE_TAG" != "$EXPECTED" ]; then
+            echo "Remote branch/tag no longer match release commit $EXPECTED."
+            exit 1
+          fi
 
       # Auth, either of (docs/RELEASING.md):
       #   1. NPM_TOKEN repo secret (npm automation/granular token with publish access), or
@@ -190,6 +235,6 @@ jobs:
           set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
             echo "No NPM_TOKEN secret — relying on npm trusted publishing (OIDC)."
-            npm install -g "npm@>=11.5.1" >/dev/null
+            npm install -g --ignore-scripts "npm@11.5.1" >/dev/null
           fi
-          npm publish --access public --tag "$NPM_TAG" --provenance
+          npm publish --ignore-scripts --access public --tag "$NPM_TAG" --provenance
