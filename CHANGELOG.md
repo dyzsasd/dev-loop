@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.4.0
 
 - **feat(one-click): `up` / `bundle` / `attach` — a workspace home you can land in, move, and drive
   from anywhere** (`docs/design/one-click-deployment.md`, as-built rev 3; operator decisions: age
