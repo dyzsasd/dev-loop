@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.5.0
 
 - **feat(context): conventions-to-code phase 0 — the runner-assembled boot prefix + the first
   task-shaped verb** (`docs/design/conventions-to-code.md`; operator doctrine: a rule the tool layer
