@@ -240,6 +240,39 @@ across backends. The **surface plane** (per-agent identity, web UI) expands by
 backend. See [conventions §18](../references/conventions.md) +
 [`HUB-ARCHITECTURE.md`](HUB-ARCHITECTURE.md).
 
+### Parity in detail — and switching (operator decisions)
+
+The backends are **unified on the work plane and honestly divergent on the surface plane** —
+naming the line is what keeps "the same loop, three substrates" a real guarantee rather than a
+slogan.
+
+- **The WORK PLANE is identical** across `linear`/`local`/`service`: the state set + legal
+  transitions (§3, incl. the verify-fail close+follow-up rule), who-does-what (Dev claims/ships,
+  PM/QA verify, §5 pick order, §7 claim, §8 dedupe), the agent loop, §9a human-intake, the §4
+  label taxonomy, and reports (§22/§23 — `reports.sink` is backend-decoupled). This is the bulk
+  of the loop and it is a contract, not a coincidence.
+- **The SURFACE PLANE is a deliberate per-backend superset**, and parity there is genuinely
+  impossible (not a missing feature): real **per-agent identity** + the **web UI/observability**
+  + versioned operator-published hub docs are **`service`-only**; cloud **human-visibility** + the native
+  Linear app are **`linear`-only**; `local` is the zero-cloud floor (and the one backend with no
+  board view — steer a "no-cloud but I want a UI/identity" operator to `service`, not `local`).
+- **Operator-notification is a cross-backend floor:** the one-way webhook alert (DL-52 transport +
+  DL-59 daemon-reads-`notify`), realized on `service` via the `channel.*` tools as the §9 notify
+  transport. See §9 for the unified `{transport}` model.
+
+**Switching a team's backend is chosen at init — changing it later is a data migration, not a
+config edit (deferred).** `backend` is set once at `dev-loop team init`; flipping it on a team that
+**already has tickets** is out of scope today. The only cross-store seam is the **one-way
+hub→Linear `mirror` (a projection for human visibility, not a bridge)** — Linear is never read
+back as truth (split-brain is enforced). A future importer **cannot preserve source ticket ids as
+the primary key**: hub ids are a **global key** minted from `ticket_prefix`+`ticket_seq` and
+`seed.ts` hard-throws on a prefix clash, so e.g. a `CIT-345` reassigns to `<PREFIX>-N` and the
+source id must ride as a separate **`externalId`** — a data-fidelity loss, not just orphaning.
+**If the operator wants Linear visibility without migrating ⇒ `service` + `mirror`.**
+
+(Moved here from conventions §18 by the 2026-07 progressive-disclosure pass: choosing and
+switching backends is operator material — agents never do either.)
+
 ### Loop-governance rails are `service`-only
 
 The runaway/quality rails are built on the hub, so they exist **only** on `backend:"service"`.

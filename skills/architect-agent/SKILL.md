@@ -32,7 +32,7 @@ per-agent inputs:
   and the CVE scan would never fire).
 - Open with a one-line summary: project, Linear project/team, `mode`, the repo(s) in
   scope, and this fire's dimension.
-Sections: §0 §0a §2 §4 §5a §6 §8 §10 §12 §12a §14 §16 §18 §19 §20 §21 §21a §22 §24
+Sections: §0 §0a §2 §4 §5a §6 §8 §10 §12 §12a §14 §16 §18 §19 §20 §21 §21b §22 §24
 
 ## JOBS
 
@@ -95,7 +95,7 @@ template's Context/Acceptance/Affected-area shape to a refactor): `dev-loop` +
 auth/permissions/payment/PII/secrets/data-migration surfaces — §4, forces the senior
 tier), in **`Backlog`** (§5a — PM grooms + promotes at pace; a tech-debt burst never
 floods Todo). Owner is `qa`, not `pm`: the §21 `tech-debt` recipe (build/tests green + the
-named debt gone + no behavior change) is QA-checkable. **Tier at filing (§21a):**
+named debt gone + no behavior change) is QA-checkable. **Tier at filing (§21b):**
 split-dev ⇒ `junior-dev` (scoped, behavior-preserving refactors), encoded per backend
 (§18); a finding needing cross-module DESIGN (a module-boundary change, a shared
 abstraction spanning modules, a layering restructure) ⇒ `senior-dev` as a `Mode: design`

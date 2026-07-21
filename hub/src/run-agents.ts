@@ -3,7 +3,7 @@
 // It deliberately does NOT depend on Claude/Codex `/loop`; it owns cadence here and
 // shells out to `claude -p`, `codex exec`, or `opencode run` once per agent fire.
 import { spawn, execFileSync, type ChildProcessByStdio } from "node:child_process";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync, appendFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_I
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { notify } from "./comms.ts";
 import { secretsInjectedKeys } from "./secrets.ts"; // Q9: the per-fire secret-scoping strip set
+import { assembleBootCorpus } from "./boot-prefix.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
@@ -191,6 +192,7 @@ type Options = {
   codexSafe: boolean;
   maxFires: number;     // 0 = unlimited; else stop after N total fires (cost guard)
   changeGate: boolean;  // R1: skip spawning a gated inward agent when neither repo HEAD nor the board moved since its last fire (service backend only) — saves the full-turn cost of a fire that would just no-op
+  assembleBoot: boolean; // boot-prefix: append the deterministic §0a boot corpus (conventions union + lessons + backend contract) to the fire prompt — stable prefix for prompt caching; claude lane only (prompt rides stdin: Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB)
   changeGateTtlMs: number; // R1a: quiet-board TTL for the pm/qa REVIEW tiers — after this long without a fire, a gated pm/qa fire runs even on an unchanged key (0 = never; the pure gate for them too)
   fireTimeoutMs: number; // 0 = none; else SIGTERM (then SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
   staggerMs: number;    // boot stagger between the initial slot fires (0 = all at once)
@@ -292,6 +294,10 @@ Options:
   --cwd <path>                working directory for CLI subprocesses (default: project repoPath)
   --mcp-config <path>         claude: MCP config to load + --strict-mcp-config (default: <cwd>/.mcp.json if present)
   --max-fires <n>             stop after N total agent fires, then drain + exit (cost guard; default 0 = unlimited)
+  --assemble-boot             append the deterministic §0a boot corpus (conventions union + lessons + backend
+                              contract) to each claude fire's prompt via stdin — a byte-stable prefix so
+                              consecutive fires of one agent can hit the prompt cache; the fire skips its own
+                              boot reads (env: DEVLOOP_ASSEMBLE_BOOT=1)
   --change-gate               skip spawning a gated inward agent (pm/qa/dev/senior-dev/junior-dev/architect) when
                               neither any repo HEAD nor the hub board moved since its last fire — the biggest cost
                               saver on a quiet loop (service backend only; the agents already no-op in that case,
@@ -384,6 +390,7 @@ function parseArgs(argv: string[]): Options {
     codexSafe: false,
     maxFires: 0,
     changeGate: false,
+    assembleBoot: process.env.DEVLOOP_ASSEMBLE_BOOT === "1",
     changeGateTtlMs: 4 * 60 * 60_000,
     fireTimeoutMs: 60 * 60_000,
     staggerMs: 20_000,
@@ -424,6 +431,7 @@ function parseArgs(argv: string[]): Options {
       if (!Number.isInteger(opts.maxFires) || opts.maxFires < 0) die("--max-fires must be a non-negative integer (0 = unlimited)");
     }
     else if (a === "--change-gate") opts.changeGate = true;
+    else if (a === "--assemble-boot") opts.assembleBoot = true;
     else if (a === "--change-gate-ttl") { const v = next(); opts.changeGateTtlMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = pure gate for pm/qa too
     else if (a === "--fire-timeout") { const v = next(); opts.fireTimeoutMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = disabled (parseDuration rejects non-positive)
     else if (a === "--stagger") { const v = next(); opts.staggerMs = v.trim() === "0" ? 0 : parseDuration(v); }
@@ -623,7 +631,7 @@ const hubNode = findCompatibleNode() ?? die(`dev-loop-hub MCP needs Node >= ${MI
 const tomlString = (s: string): string => JSON.stringify(s);
 const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
 
-function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string, iface: AgentInterface): { command: string; args: string[] } {
+function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string, iface: AgentInterface, promptViaStdin = false): { command: string; args: string[]; stdinPayload?: string } {
   const devSplit = runtimeDevSplit(opts) ? "true" : "false";
   // MCP wiring is BACKEND-dependent (§18) AND interface-dependent (D8/D9). Only backend:"service" needs
   // the dev-loop-hub MCP; a linear/local project instead needs the operator's OWN MCP config to apply
@@ -648,8 +656,12 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
         ...(profile.model ? ["--model", profile.model] : []),
         ...(profile.effort ? ["--effort", profile.effort] : []),
         ...opts.extraArgs,
-        "-p", prompt,
+        // boot-prefix fires pipe the (large) prompt via stdin: Linux MAX_ARG_STRLEN caps one
+        // execve argument at 128 KiB, and an assembled corpus exceeds it. `claude -p` with no
+        // positional reads the prompt from stdin (the documented headless piping form).
+        ...(promptViaStdin ? ["-p"] : ["-p", prompt]),
       ],
+      ...(promptViaStdin ? { stdinPayload: prompt } : {}),
     };
   }
   if (profile.codingAgent === "codex") {
@@ -735,7 +747,7 @@ const breaker = {
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean,
-  extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string }): void {
+  extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number }): void {
   breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail); // P0-1a — every completed fire feeds the streak
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
@@ -753,7 +765,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}) } });
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -831,11 +843,20 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   // enabled one) since `project` is "" / "_team"; delivery fires resolve against their own project.
   const profileProject = teamScope && teamScope.enabledProjects.length ? teamScope.enabledProjects[0] : project;
   const profile = resolveLaunchProfile(opts, cfg, profileProject, agent);
-  const prompt = readPrompt(opts, agent, project, profile, teamScope);
+  const basePrompt = readPrompt(opts, agent, project, profile, teamScope);
   const backend = (cfg?.projects?.[profileProject] as { backend?: string } | undefined)?.backend ?? "linear";
+  // boot-prefix: a deterministic §0a corpus appended to the prompt (claude lane only — the prompt then
+  // rides stdin, see commandFor). Assembly failure fails OPEN: the fire boots in classic pull mode.
+  const boot = opts.assembleBoot && profile.codingAgent === "claude"
+    ? assembleBootCorpus(opts.root, opts.dataDir, agent, project, backend,
+        cfg?.projects?.[profileProject] as Record<string, unknown> | undefined) // config-aware selection: feature-off spans never ship
+    : null;
+  if (opts.assembleBoot && profile.codingAgent === "claude" && !boot)
+    console.warn(`[${agent}] --assemble-boot: corpus assembly unavailable — firing in §0a pull mode`);
+  const prompt = boot ? basePrompt + boot.text : basePrompt;
   // D8 agent interface (service only; meaningless elsewhere): "cli" fires get no hub MCP injection.
   const iface = agentInterfaceFor((cfg?.projects?.[profileProject] as { hub?: HubBlock } | undefined)?.hub, profile.codingAgent);
-  const { command, args } = commandFor(opts, agent, project, prompt, profile, backend, iface);
+  const { command, args, stdinPayload } = commandFor(opts, agent, project, prompt, profile, backend, iface, !!boot);
   // This env block IS the identity transport for interface="cli" fires (D8): the `dev-loop` write layer
   // resolves the actor from DEVLOOP_ACTOR, the project from DEVLOOP_PROJECT, the SoR from DEVLOOP_HUB_DB,
   // and treats DEVLOOP_DEV_SPLIT/DEVLOOP_TEAM_SCOPE as the fire markers behind its operator-write guard —
@@ -893,8 +914,9 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     // Assigned AFTER the process.env spread so the fire policy beats any operator export.
     env.OPENCODE_PERMISSION = JSON.stringify(opts.opencodePermission ?? DEFAULT_OPENCODE_PERMISSION);
   }
-  const rendered = displayCommand(command, args, prompt);
+  const rendered = displayCommand(command, args, prompt) + (stdinPayload ? ` <stdin:${stdinPayload.length} chars>` : "");
   if (opts.dryRun) {
+    if (boot) console.log(`[dry-run] ${agent}: boot corpus ${Math.round(boot.bytes / 1024)}KB (conventions ${Math.round(boot.conventionsBytes / 1024)}KB${boot.pruned.length ? `; config-pruned §${boot.pruned.join(" §")}` : ""}) hash=${boot.hash} — prompt via stdin`);
     const intakeMode = (cfg?.projects?.[project] as { intake?: { mode?: string } } | undefined)?.intake?.mode;
     const dryProvider = providerOf(profile);
     console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${dryProvider ? ` provider=${dryProvider}` : ""}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""}`);
@@ -941,8 +963,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   console.log(`[${new Date().toISOString()}] ${agent}: start (${profile.codingAgent}); log ${logPath}`);
 
   const startedAt = Date.now();
-  const child: RunnerChild = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(command, args, { cwd, env, stdio: [stdinPayload ? "pipe" : "ignore", "pipe", "pipe"] }) as RunnerChild;
   activeChildren.add(child);
+  if (stdinPayload && child.stdin) {
+    child.stdin.on("error", () => { /* EPIPE on an instantly-dead child must not crash the scheduler */ });
+    child.stdin.write(stdinPayload);
+    child.stdin.end();
+  }
   // Keep a rolling tail of the child's combined output. Some CLI failures exit 0 while printing an error
   // body (e.g. claude -p emitting just "Execution error") — the exit code alone masks them, poisoning the
   // fire ledger with fake successes the operator can't alert on. Bounded (2 KB) so memory is constant.
@@ -1004,10 +1031,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
       }
       const errorClass = classifyFireError(exitCode, timedOut, outTail); // P0-1b taxonomy
+      const fireExtras = {
+        ...(suspectError ? { suspectError: true } : {}),
+        ...(errorClass ? { errorClass } : {}),
+        // every failure carries its tail — the breaker keys on it
+        ...(suspectError || errorClass || exitCode !== 0 ? { outputTail: outTail.slice(-400) } : {}),
+        ...(boot ? { bootBytes: boot.bytes } : {}), // boot-prefix: the assembled-corpus size rides every ledger row
+      };
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut,
-        suspectError || errorClass || exitCode !== 0 // every failure carries its tail — the breaker keys on it
-          ? { ...(suspectError ? { suspectError: true } : {}), ...(errorClass ? { errorClass } : {}), outputTail: outTail.slice(-400) }
-          : undefined);
+        Object.keys(fireExtras).length ? fireExtras : undefined);
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
     child.on("exit", (code, signal) => {
@@ -1024,7 +1056,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
 }
 
 type Slot = { agent: Agent; nextAt: number; running: boolean };
-type RunnerChild = ChildProcessByStdio<null, Readable, Readable>; // stdio: ["ignore","pipe","pipe"]
+type RunnerChild = ChildProcessByStdio<Writable | null, Readable, Readable>; // stdio: [pipe|ignore,"pipe","pipe"] — stdin is a pipe only on boot-prefix fires
 const activeChildren = new Set<RunnerChild>();
 
 // Config-driven cadence (the `agents.<agent>.cadence` field): CLI --interval > config cadence >

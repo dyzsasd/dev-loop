@@ -8,7 +8,7 @@
 // channel/mirror/label families (which also reuse the shared ticketwrite/docstore/channelstore/
 // mirrorstore/labelstore) — has EXACTLY ONE definition. The old "edit both files" drift tripwire is RETIRED:
 // a change to any policy now lands in ONE place, and the differential-parity suite (test/shim.ts +
-// test/agent-api.ts, shim ≡ stdio for all 25 tools) is the structural guard against a future re-divergence.
+// test/agent-api.ts, shim ≡ stdio for all 26 tools) is the structural guard against a future re-divergence.
 //
 // Each function takes a hub connection + the caller's already-resolved+validated actor (server.ts resolves it
 // from DEVLOOP_ACTOR + the G1 phantom-actor guard; the daemon from the X-Devloop-Actor header) and returns an
@@ -52,7 +52,7 @@ const okR = (body: unknown): OpResult => ({ status: 200, body });
 const errR = (status: number, error: string, extra?: Record<string, unknown>): OpResult => ({ status, body: { error, ...extra } });
 
 // The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-67) the IM channel
-// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 25 server.ts tools 1:1 (the shim is a
+// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 26 server.ts tools 1:1 (the shim is a
 // 100% drop-in). The op names are the `/api/op/<op>` path segments and the MCP tool names (dotted for the
 // doc/channel/mirror families). DL-85: they are EXACTLY TOOL_NAMES minus "whoami"
 // (the only tool answered locally per-transport, never an op) — DERIVED from the one source so there is no
@@ -180,6 +180,55 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   out = out.slice(0, a.limit ?? 250);
   if (a.fields === "summary") out = out.map((t) => ({ ...t, description: "" }));
   return okR(out);
+}
+
+// ─── queue — the task-shaped per-agent read (conventions-to-code: the §5/§21b pick semantics in code) ─────
+// One call returns the caller's WORK LISTS instead of the agent composing filters and re-deriving the §5
+// ranking from prose every fire: dev tiers get their §5-ranked Todo slice (`blocked` excluded, tier slice
+// per the §21b/§18 assignee encoding) + their own In Progress (Step-0 orphan input); pm gets its verify /
+// unblock / groom lists + the §5a todoDepth cap input; qa gets its verify list + the project's blocked set
+// (Job B routes by bail-shape). Summaries only (no description bodies) — get_issue fetches the one you pick.
+const PICK_RANK = (t: Ticket): number =>
+  t.priority === 1 && t.type === "Bug" ? 0
+  : t.priority === 1 && t.type === "Feature" ? 1
+  : t.type === "Bug" && t.labels.includes("edge-case") ? 2
+  : t.type === "Bug" ? 3            // §5 rank 3.5 — defects beat features
+  : t.type === "Feature" ? 4
+  : 5;                              // Improvement and anything else
+const TERMINAL_STATES = new Set(["Done", "Canceled", "Duplicate"]);
+function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
+  const summary = (t: Ticket): Ticket => ({ ...t, description: "" });
+  const byState = (state: string): Ticket[] =>
+    (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state=? ORDER BY created_at").all(projectId, state) as unknown as TicketRow[]).map(toTicket);
+  if (actor === "dev" || actor === "senior-dev" || actor === "junior-dev") {
+    const mine = (t: Ticket): boolean => actor === "dev" ? (t.assignee === null || t.assignee === "dev") : t.assignee === actor;
+    const todo = byState("Todo")
+      .filter((t) => mine(t) && !t.labels.includes("blocked"))
+      .sort((x, y) => PICK_RANK(x) - PICK_RANK(y) || x.created_at.localeCompare(y.created_at))
+      .map(summary);
+    const inProgress = byState("In Progress").filter((t) => t.assignee === actor).map(summary);
+    return okR({ agent: actor, inProgress, todo });
+  }
+  if (actor === "pm" || actor === "qa") {
+    const verify = byState("In Review").filter((t) => t.labels.includes(actor)).map(summary);
+    const open = (db.prepare("SELECT * FROM tickets WHERE project_id=?").all(projectId) as unknown as TicketRow[])
+      .map(toTicket).filter((t) => !TERMINAL_STATES.has(t.state));
+    const blocked = open.filter((t) => t.labels.includes("blocked"));
+    if (actor === "qa") return okR({ agent: actor, verify, blocked: blocked.map(summary) });
+    const todoOpen = open.filter((t) => t.state === "Todo" && !t.labels.includes("blocked"));
+    return okR({
+      agent: actor,
+      verify,
+      unblock: blocked.filter((t) => t.labels.includes("needs-pm")).map(summary),
+      backlog: open.filter((t) => t.state === "Backlog").map(summary).slice(0, 100),
+      todoDepth: {
+        total: todoOpen.length,
+        "senior-dev": todoOpen.filter((t) => t.assignee === "senior-dev").length,
+        "junior-dev": todoOpen.filter((t) => t.assignee === "junior-dev").length,
+      },
+    });
+  }
+  return errR(400, `queue is defined for pm, qa, dev, senior-dev, junior-dev (got '${actor}')`);
 }
 
 function opGetIssue(db: DatabaseSync, projectId: string, projectKey: string, a: { id?: string }): OpResult {
@@ -570,5 +619,6 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "list_issue_labels": return opListLabels(db, projectId);
     case "create_issue_label": return opCreateLabel(db, projectId, actor, args as { name?: unknown; kind?: unknown });
     case "get_project": return opGetProject(db, projectId);
+    case "queue": return opQueue(db, projectId, actor);
   }
 }

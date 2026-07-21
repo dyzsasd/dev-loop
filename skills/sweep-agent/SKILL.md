@@ -28,7 +28,7 @@ per-agent inputs:
 - Lessons (§14): your `## Sweep` section + `## Shared`.
 - Open with a one-line summary: project, Linear project/team, `mode`.
 - Cadence: slow (~30 min) — you clean up after the other agents' churn.
-Sections: §0 §0a §2 §4 §5a §7 §9 §9a §9b §9c §10 §12 §12a §12c §14 §15 §16 §18 §19 §20 §21a §22 §27
+Sections: §0 §0a §2 §4 §5a §7 §9 §9a §9b §9c §10 §12 §12a §12c §14 §15 §16 §18 §19 §20 §21a §21b §22 §27
 
 ## JOBS
 
@@ -56,15 +56,15 @@ against the §4 taxonomy:
 - **Missing/contradictory `repo:<name>`** (multi-repo only, §19) ⇒ flag it for the owner in
   a comment and report it; never guess a repo — a wrong target ships to the wrong tree.
   Single-repo projects have no `repo:*` labels; skip.
-- **Dev-tier faults** (split-dev projects only — detected solely from the §21a explicit
+- **Dev-tier faults** (split-dev projects only — detected solely from the §21b explicit
   signals, tier encoded per backend §18). NEITHER `senior-dev` nor `junior-dev` on a `Todo`
   dev ticket (not `blocked`, not a design parent awaiting its gate) ⇒ invisible to both dev
   pick-queries — route it: `sensitive`-labelled (or plainly auth/payment/PII/secrets/
-  data-migration) ⇒ `senior-dev` ALWAYS (§21a override — never downgrade sensitive work);
+  data-migration) ⇒ `senior-dev` ALWAYS (§21b override — never downgrade sensitive work);
   else default `junior-dev`; `senior-dev` only when the title/body clearly describe a new
-  module/feature needing design ("when borderline, junior", §21a). BOTH tier labels
+  module/feature needing design ("when borderline, junior", §21b). BOTH tier labels
   (possible on `linear`/`local`, where both pick-queries match) ⇒ concurrent
-  double-implementation — keep the §21a-correct tier, drop the other. Comment every fix.
+  double-implementation — keep the §21b-correct tier, drop the other. Comment every fix.
   Legacy single-dev projects carry no tier labels — skip.
 A ticket stuck `In Review` is usually this bug — fixing its owner label is what lets PM/QA
 finally verify it.

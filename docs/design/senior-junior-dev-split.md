@@ -331,8 +331,9 @@ The legacy single `dev` pane remains available only when explicitly requested wi
 Codex `gpt-5.5`/`xhigh` unless overridden).
 Older external launchers may still carry a knob such as `DEV_SPLIT=1`; split launchers should either
 set `DEVLOOP_DEV_SPLIT=true` for every pane or persist `devSplit:true` in `dev-loop.json`. The
-existing effort tiers are unchanged: `pm=max`, `reflect/architect=xhigh`, `qa/sweep=high`, plus
-`senior-dev=max` / `junior-dev=high`.
+existing effort tiers are unchanged: `pm=max`, `reflect/architect=xhigh`,
+`qa/sweep/ops/communication=high`, plus `senior-dev=max` / `junior-dev=high`. On the Codex
+lane the scheduler normalizes `max` → `xhigh` (`model_reasoning_effort` has no `max`).
 
 ---
 

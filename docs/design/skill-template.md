@@ -7,7 +7,8 @@
 > implements the §0a boot-rule change, the budget/Sections lint, and the context-bill
 > generator. The conventions anchors the template cites were consolidated in the same
 > prep commit (new §0a; degraded-verify moved into §3; design-gate promote-first
-> ordering into §21a; strategyDoc form detection into §20).
+> ordering into §21a; strategyDoc form detection into §20 — since carved out as §20a, and
+> tier routing as §21b, by the 2026-07 progressive-disclosure pass).
 
 ## 1. Baseline (measured 2026-07-12, pre-migration)
 
@@ -163,11 +164,11 @@ anchor        = "§" 1*DIGIT [ letter ]        ; §5, §5a, §21a …
 - **Span semantics** (for the boot rule and the bill): a cited anchor covers its
   heading through the line before the next numbered heading **of the same or
   shallower level** (headings inside fenced code blocks don't count — §6's ticket
-  templates contain literal `## …` lines). A `###` lettered child (§5a, §9a–c, §22a,
-  §0a) is nested inside its `##` parent: citing the parent includes it; citing only
-  the child loads just the child. `##`-level lettered sections (§12a–d, §21a) are
-  standalone. The unnumbered **Topology at a glance** block is part of the always-read
-  preamble (below), not a citable anchor.
+  templates contain literal `## …` lines). A `###` lettered child (§5a, §9a–c, §20a,
+  §22a, §0a) is nested inside its `##` parent: citing the parent includes it; citing
+  only the child loads just the child. `##`-level lettered sections (§12a–d, §21a,
+  §21b) are standalone. The unnumbered **Topology at a glance** block is part of the
+  always-read preamble (below), not a citable anchor.
 
 ## 6. Boot rule + the context bill (budget agent implements)
 
@@ -180,9 +181,10 @@ anchor        = "§" 1*DIGIT [ letter ]        ; §5, §5a, §21a …
   prose + cheat block + Σ cited section spans (union — overlaps counted once) +
   the lessons.ts caps` in lines and bytes — the per-agent per-fire context bill,
   printed by `dev-loop metrics --context` (`--json` for machines). Per-section span
-  sizes measured today (lines): §18=333, §22=222, §21a=189, §9=142, §19=135 are the
-  heavy sections; a worker citing ~18 sections boots on ≈1,400–1,700 conventions
-  lines instead of 2,949.
+  sizes measured 2026-07-12, pre the progressive-disclosure extraction pass (lines):
+  §18=333, §22=222, §21a=189, §9=142, §19=135 were the heavy sections; a worker citing
+  ~18 sections booted on ≈1,400–1,700 conventions lines instead of 2,949. Current
+  figures: `dev-loop metrics --context`.
 - **Budget lint (shipped as `hub/test/context-budget.ts`):** enforces §7's ceilings
   (prose measured excluding the marker span) and the `Sections:` grammar +
   set-equality of §5 (prose-only — the generated cheat blocks cite anchors of their

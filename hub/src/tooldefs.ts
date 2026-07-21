@@ -20,7 +20,7 @@ export const ok = (data: unknown): McpResult => ({ content: [{ type: "text" as c
 // off), so `extra` can never clobber `message` and the two transports serialize byte-identically.
 export const err = (message: string, extra?: Record<string, unknown>): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message, ...extra }) }] });
 
-// ─── the canonical tool-name list — whoami (answered locally per transport) + the 24 op-backed tools ────────
+// ─── the canonical tool-name list — whoami (answered locally per transport) + the 25 op-backed tools ────────
 // agentops.ts derives AGENT_OPS = TOOL_NAMES minus "whoami" (the only tool that is NOT an op-API op), so this
 // is the ONE source of the tool/op names. Order matches the historical AGENT_OPS order (registration order is
 // irrelevant to MCP — tools resolve by name — but keeping it stable keeps diffs/feeds readable).
@@ -30,6 +30,7 @@ export const TOOL_NAMES = [
   "list_events", "doc.list", "doc.get", "doc.history", "doc.diff", "doc.save", "doc.publish", "doc.archive",
   "channel.register", "channel.send", "channel.poll", "channel.ack", "channel.status",
   "mirror.push", "mirror.pollComments", "mirror.status", "list_issue_labels", "create_issue_label", "get_project",
+  "queue",
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -67,6 +68,10 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
   create_issue_label: { description: "Create a label if missing (idempotent).", inputSchema: { name: z.string(), kind: z.string().optional() } },
 
   get_project: { description: "The active project.", inputSchema: {} },
+  queue: {
+    description: "Your work lists for THIS fire, pre-filtered and pre-ranked server-side (the §5/§21b pick semantics in code — no filter composition, no ranking prose). dev/senior-dev/junior-dev → { inProgress, todo } (your slice, §5-ranked, `blocked` excluded). pm → { verify, unblock, backlog, todoDepth }. qa → { verify, blocked }. Summaries only — get_issue fetches the one you pick.",
+    inputSchema: {},
+  },
   list_events: { description: "Recent attribution/audit events (who did what). Pass ticketId to get one ticket's history (transitions, comments, label changes) newest-first.", inputSchema: { ticketId: z.string().optional(), limit: z.number().int().positive().max(500).optional() } },
 
   "doc.list": { description: "List this project's documents (no bodies).", inputSchema: { kind: z.string().optional() } },

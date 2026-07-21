@@ -30,29 +30,29 @@ export const SKILLS_DIR = join(repoRoot, "skills");
 export interface CheatSpec { verbs: readonly string[]; project: "steward" | "pm" | "none"; scope: string }
 export const CHEATSHEETS: Record<string, CheatSpec> = {
   "pm-agent": {
-    verbs: ["tickets", "ticket", "ticket create", "ticket update", "comment add", "comments", "doc get", "doc save"],
+    verbs: ["queue", "tickets", "ticket", "ticket create", "ticket update", "comment add", "comments", "doc get", "doc save"],
     project: "pm",
-    scope: "Your ops: board reads for Jobs A/B/B2/C, `save_issue` create (file Features/Improvements, intake children) and update (verify/groom/promote, unblock), comments, and the hub `strategy`/`roadmap` docs — `doc save` writes a DRAFT only (`doc.publish` stays the operator's).",
+    scope: "Your ops: `queue` FIRST (verify/unblock/backlog/todoDepth pre-listed), board reads for Jobs A/B/B2/C, `save_issue` create (file Features/Improvements, intake children) and update (verify/groom/promote, unblock), comments, and the hub `strategy`/`roadmap` docs — `doc save` writes a DRAFT only (`doc.publish` stays the operator's).",
   },
   "qa-agent": {
-    verbs: ["tickets", "ticket", "ticket create", "ticket update", "comment add", "comments"],
+    verbs: ["queue", "tickets", "ticket", "ticket create", "ticket update", "comment add", "comments"],
     project: "none",
-    scope: "Your ops: board reads for Jobs A/B/C, `save_issue` update (claim, re-test → Done, close+supersede, unblock) and create (file Bugs + the verify-fail follow-ups), and comments (claims, evidence, sign-offs).",
+    scope: "Your ops: `queue` FIRST (verify + blocked pre-listed), board reads for Jobs A/B/C, `save_issue` update (claim, re-test → Done, close+supersede, unblock) and create (file Bugs + the verify-fail follow-ups), and comments (claims, evidence, sign-offs).",
   },
   "senior-dev-agent": {
-    verbs: ["tickets", "ticket", "ticket create", "ticket update", "comment add", "comments", "doc get", "doc save", "doc archive"],
+    verbs: ["queue", "tickets", "ticket", "ticket create", "ticket update", "comment add", "comments", "doc get", "doc save", "doc archive"],
     project: "none",
-    scope: "Your ops: slice reads (Steps 0–1), `save_issue` update (claim, block, hand-off) and create (spawn the staged `Backlog` children), comments, and the hub `design` doc-kind — `dev-loop doc save --kind design --slug <module>` (multi-instance, NOT publish-gated: your saved draft IS the live design, §21a); retire a module's design doc with `doc archive` (D6: hidden by default, never deleted; `--restore` brings it back).",
+    scope: "Your ops: `queue` FIRST (your ranked slice + In Progress), `save_issue` update (claim, block, hand-off) and create (spawn the staged `Backlog` children), comments, and the hub `design` doc-kind — `dev-loop doc save --kind design --slug <module>` (multi-instance, NOT publish-gated: your saved draft IS the live design, §21a); retire a module's design doc with `doc archive` (D6: hidden by default, never deleted; `--restore` brings it back).",
   },
   "junior-dev-agent": {
-    verbs: ["tickets", "ticket", "ticket create", "ticket update", "comment add", "doc get"],
+    verbs: ["queue", "tickets", "ticket", "ticket create", "ticket update", "comment add", "doc get"],
     project: "none",
-    scope: "Your ops: slice reads (Steps 0–1), `save_issue` update (claim, block, In-Review hand-off), comments, and `doc get --kind design --slug <slug>` (the `Design:` pointer read, Step 4). The ONLY tickets you create are your own same-tier split / `[coverage]` follow-ups (dev-agent Step 4) — you never spawn design children or route work.",
+    scope: "Your ops: `queue` FIRST (your ranked slice + In Progress), `save_issue` update (claim, block, In-Review hand-off), comments, and `doc get --kind design --slug <slug>` (the `Design:` pointer read, Step 4). The ONLY tickets you create are your own same-tier split / `[coverage]` follow-ups (dev-agent Step 4) — you never spawn design children or route work.",
   },
   "dev-agent": {
-    verbs: ["tickets", "ticket", "ticket create", "ticket update", "comment add", "doc get"],
+    verbs: ["queue", "tickets", "ticket", "ticket create", "ticket update", "comment add", "doc get"],
     project: "none",
-    scope: "Your ops: queue reads (Steps 0–1), `save_issue` update (claim, block, In-Review hand-off), comments, split / `[coverage]` follow-up creates (Step 4), and hub-doc reads where the project runs `hub.docs`.",
+    scope: "Your ops: `queue` FIRST (the ranked queue + In Progress), `save_issue` update (claim, block, In-Review hand-off), comments, split / `[coverage]` follow-up creates (Step 4), and hub-doc reads where the project runs `hub.docs`.",
   },
   "sweep-agent": {
     verbs: ["tickets", "ticket", "op", "ticket update", "comment add", "labels", "label create", "mirror push", "mirror poll", "mirror status"],
@@ -87,7 +87,7 @@ const OP_OF: Record<string, string> = {
   "ticket create": "save_issue (create)", "ticket update": "save_issue (update)",
   "comment add": "save_comment", "comments": "list_comments",
   "labels": "list_issue_labels", "label create": "create_issue_label",
-  "project": "get_project", "events": "list_events",
+  "project": "get_project", "events": "list_events", "queue": "queue",
   "doc list": "doc.list", "doc get": "doc.get", "doc history": "doc.history", "doc diff": "doc.diff",
   "doc save": "doc.save", "doc publish": "doc.publish", "doc archive": "doc.archive",
   "mirror push": "mirror.push", "mirror poll": "mirror.pollComments", "mirror status": "mirror.status",

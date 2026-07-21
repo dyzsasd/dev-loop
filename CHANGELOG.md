@@ -3,6 +3,101 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+- **feat(context): conventions-to-code phase 0 — the runner-assembled boot prefix + the first
+  task-shaped verb** (`docs/design/conventions-to-code.md`; operator doctrine: a rule the tool layer
+  enforces leaves agent context — prose is the weaker mechanism).
+  - **`--assemble-boot` / `DEVLOOP_ASSEMBLE_BOOT=1`** (`hub/src/boot-prefix.ts`): the scheduler
+    appends a **byte-deterministic** §0a corpus (conventions cited-span union — the exact
+    `context-bill` span math, one authority — + the §14 lessons slice + the §18 backend contract)
+    to each claude fire's prompt, wrapped in hash-stamped `devloop-boot` markers; §0a now defines
+    the contract (a marker block IS boot steps 1/3-read/4 — no re-reads). Kills two birds: the
+    selective-read honor system becomes deterministic, and consecutive fires present an identical
+    prompt prefix (prompt-cache-hittable when the fire interval ≤ the cache TTL). The prompt rides
+    **stdin** (Linux `MAX_ARG_STRLEN` caps one execve arg at 128 KiB); assembly failure fails OPEN
+    to classic pull mode; `bootBytes` rides the fire ledger + `fire.completed`. Opt-in, claude
+    lane only.
+  - **`queue` — the 26th op** (all three transports via the one `agentOp` dispatch): per-actor
+    work lists, pre-filtered + pre-ranked server-side. dev tiers → their §21b slice as
+    `{ inProgress, todo }`, `blocked` excluded, ranked by §5 EXACTLY (urgent bug → urgent feature
+    → edge-case bug → bug (rank 3.5) → feature → improvement, FIFO within rank); pm →
+    `{ verify, unblock, backlog, todoDepth (per-tier — the §5a cap input) }`; qa →
+    `{ verify, blocked }`. Summaries only; read-op. The §5/§10 prose deletions follow in the next
+    migration step once SKILLs adopt the verb (the design doc's ticket ladder).
+  - Tests: `hub/test/boot-prefix.ts` (determinism, bill consistency to the byte, lessons slicing,
+    backend selection, fail-open), `hub/test/queue.ts` (ranking exactness, slice isolation,
+    refusals), run-agents dry-run assertions (corpus report + stdin rendering + default-path
+    unchanged).
+  - **Configuration-aware selection** (captured-context review 2026-07-20): the `Sections:` line
+    stays the static pull-mode SUPERSET; the assembler subsets it per project config
+    (`CONDITIONAL_SECTIONS`): §12c ships only with auto-merge/release-pr, §12d only with a deploy,
+    §19 only multi-repo, §24 only with codex enabled — gap markers say "declared but OFF in this
+    project's config", the dry-run line and the corpus header name the pruned set, and the header
+    counts EFFECTIVE spans (distinct shipped, not lint-forced parent+child pairs). Measured on a
+    featureless service project: dev tiers −21 KB/fire, pm −13 KB/fire (junior 38.5 k → 33.3 k
+    tokens).
+
+- **feat(context): `queue` adoption — the verb becomes every board agent's first read**.
+  `dev-loop queue` lands as a Layer-1 sugar verb (usage-documented, cheat-sheet-wired into
+  pm/qa/dev/senior-dev/junior-dev and regenerated); the five SKILLs' pick/scan steps are
+  queue-first on `backend:"service"` with the self-composed §5/§10 query as the `linear`/`local`
+  fallback; and §5 joins `CONDITIONAL_SECTIONS` — an assembled service fire never ships the
+  ranking prose the op now computes (linear fires keep it). Featureless-service measurements:
+  junior 127.3 KB ≈ 31.8 k tokens, senior 131.3 KB ≈ 32.8 k, dev 121.4 KB ≈ 30.4 k complete.
+
+- **feat(context): the §21c cut, the snapshot doctrine, and the assembled ship sequence**
+  (captured-context review follow-through). `## 21c` carves the split gate + junior execution out
+  of §21a — dev/junior cite §21c (−7.4 KB/fire), senior cites both; the dev ship sequence
+  (Steps 4–6.5 + 7 + HARD LIMITS, marker-delimited) now rides split-tier boot corpora, closing the
+  ~21 KB invisible mid-fire pull the review exposed; §22's weekly/monthly roll-up mechanics move to
+  `references/report-rollups.md` behind the resident due-check. **Snapshot doctrine** (operator):
+  agent context describes the current system, never its history — DL-n/P-n provenance citations
+  stripped, "100% unchanged"/back-compat/was-removed framings rewritten present-tense, §25 is a
+  present-tense direction note (live policy IDs D1/D4/D6 stay — identifiers, not history).
+  Complete-context measurements (featureless service project): junior 132.5 KB ≈ 33.1 k tokens
+  with ZERO mid-fire boot pulls (was ~154 KB real), dev 122.5 KB ≈ 30.6 k, senior 136.5 KB ≈
+  34.1 k complete (was ~148 KB real), communication 79.8 KB ≈ 19.9 k.
+
+- **feat(context): conventions progressive disclosure — kernel, tripwires, pay-per-use references**
+  (`docs/design/conventions-progressive-disclosure.md`). conventions.md 208,678B → 166,382B (−20%,
+  back under its 200KiB warn threshold) and every loop agent's per-fire boot load drops 12–23%
+  (pm 218.6KB→191.6KB, ops 191.0KB→149.1KB, communication 134.0KB→102.7KB) — the conventions union
+  was 79–83% of every fire's context bill. Second-pass review (2 independent auditors over the
+  diff): 18 findings, all fixed — one systematic §21a→§21b cite sweep, four extraction deixis
+  breaks, the §22 carve-out's linear-sink channel restored, and the per-backend dev-tier encoding
+  block returned to resident §18 as a cross-backend contract. Four moves, none of which forks the
+  single-copy protocol:
+  - **Citation pruning:** add-project drops §21a (−15.9KB/fire, it only needed the `sensitive`
+    label's existence); ops drops §5 (kept child §5a). **§16 fix:** the audit found NO
+    code-committing agent cited the security doctrine — dev/junior/senior/pm now declare §16 with a
+    resident ship-gate sentence (regression-guarded in `hub/test/context-budget.ts`).
+  - **Granularity anchors (zero renumbering):** new `###20a` (strategyDoc form detection — dev +
+    communication cite it instead of the full §20) and new `##21b` (tier routing, promoted out of
+    §21a — the filer-side rule ops/architect cite without the 13.6KB design-and-delegate spec;
+    qa/pm/sweep cite both, dev tiers keep §21a).
+  - **Pay-per-use references, tripwires resident:** §18's per-backend implementations →
+    `references/backend-service.md` + `backend-local.md` (read at boot for YOUR backend only —
+    `linear` needs no file); §9 notify wire detail → `notify.md`; the §9a 7-step investigation flow
+    → `investigation-protocol.md`; §23 wholesale → `reports-linear-sink.md`; §6 verbatim templates →
+    `ticket-templates.md`; §13 → `first-run-setup.md`; §21a hub/launcher wiring + §24 image-gen
+    mechanics deduped into their existing design/reference docs. Every extraction leaves the heading
+    + a 1–6 line stub stating WHEN to read the file; §0a now defines the stub contract (a stub read
+    is cited material, not a `Sections:` gap).
+  - **Always-read diet:** ToC anchor-link fragments dropped (+ 9a/9b/12a/20a/21b entries added), the
+    two Topology tables merged into one, §1 compressed to its two unique rules — always-read
+    9,553B → 6,785B (×15 skills). §17's carve-out paragraph now points at §22's canonical copy;
+    §25 is a 5-line tombstone; §12c drops its ASCII operator-picture.
+  - **Contract-vs-exposition pass (operator direction):** an agent needs the INTERFACE CONTRACT
+    (what to call, what discipline binds writes, how attribution works), never the implementation
+    exposition. `backend-service.md` rewritten as a pure agent contract 10.5KB → 3.6KB — the
+    node:sqlite framing, D8/D9 interface provenance, threat model, mirror internals (triply
+    redundant: HUB-ARCHITECTURE §15 + sweep Job 5 already carry them), G1/forbidden-first design
+    notes, and MCP/env setup all live in `docs/HUB-ARCHITECTURE.md`, which was always their
+    canonical home. §18's backend-parity argument + switching/migration rules moved to
+    `docs/ARCHITECTURE.md` §Backends (agents never choose or switch backends); §18 keeps the
+    one-paragraph summary, `park-for-operator`, the dev-tier encoding, and the tripwire.
+
 ## 1.4.0
 
 - **feat(one-click): `up` / `bundle` / `attach` — a workspace home you can land in, move, and drive

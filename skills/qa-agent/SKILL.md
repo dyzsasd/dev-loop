@@ -28,11 +28,13 @@ inputs:
 - `qa-state.json` in the project state dir — bounded, atomic-rename writes only (§11).
 - Every ticket call rides the configured backend (§18). Open with a one-line summary: project,
   board, test env, `mode` (§12), `autonomy` (§12a).
-Sections: §0 §0a §2 §3 §4 §5a §6 §7 §8 §9 §9c §10 §11 §12 §12a §12b §14 §15 §16 §18 §19 §21 §21a §22
+Sections: §0 §0a §2 §3 §4 §5a §6 §7 §8 §9 §9c §10 §11 §12 §12a §12b §14 §15 §16 §18 §19 §21 §21a §21b §22
 
 ## JOBS
 
-Run them in this order.
+Run them in this order. On `backend:"service"` start with ONE call — `dev-loop queue`:
+`verify` is Job A's list, `blocked` Job B's input; on `linear`/`local` compose each job's
+§10-scoped query yourself.
 
 ### Preflight — gate the deep sweep on change
 
@@ -121,12 +123,12 @@ bail-shape tag (§9):
    non-existent id ⇒ NOT_FOUND not 500; another owner's id ⇒ denied).
 4. Dedupe first (§8), then file survivors as `Bug`s: the §6 template with a real, minimal
    repro; labels `dev-loop`+`Bug`+`qa` (+`edge-case`; +`sensitive` for
-   auth/money/PII/secrets/migration defects, §4 — it forces the senior tier, §21a); priority by
+   auth/money/PII/secrets/migration defects, §4 — it forces the senior tier, §21b); priority by
    severity (1=Urgent for broken core flows / data leaks); **`state:"Backlog"`** (§5a — PM
    grooms + promotes; your Job-A verify-fail follow-ups stay `Todo`); `project` set. Multi-repo
    (§19): a `repo:<name>` target mapping the broken surface (a bug spanning repos ⇒ per-repo
    children, `relatedTo`; undeterminable ⇒ file anyway + note the uncertainty). Split-dev tier
-   per the §21a routing rule (explicit signals only, never inference), encoded per backend
+   per the §21b routing rule (explicit signals only, never inference), encoded per backend
    (§18), full label set (§10).
 
 **Result vocabulary — file every non-pass:** `fail` (a real defect, reproduces) ⇒ `Bug`;
@@ -179,9 +181,15 @@ Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) 
 unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
 fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
 
-Your ops: board reads for Jobs A/B/C, `save_issue` update (claim, re-test → Done, close+supersede, unblock) and create (file Bugs + the verify-fail follow-ups), and comments (claims, evidence, sign-offs).
+Your ops: `queue` FIRST (verify + blocked pre-listed), board reads for Jobs A/B/C, `save_issue` update (claim, re-test → Done, close+supersede, unblock) and create (file Bugs + the verify-fail follow-ups), and comments (claims, evidence, sign-offs).
 
 ```text
+# queue
+dev-loop queue
+    Your FIRST board read: the work lists pre-ranked server-side (§5/§21b in code). dev tiers
+    { inProgress, todo — your slice, blocked excluded }; pm { verify, unblock, backlog,
+    todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
+
 # list_issues
 dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
                  [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)

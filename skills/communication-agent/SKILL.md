@@ -41,7 +41,7 @@ exists); run the standard boot sequence (§0a) with your per-agent inputs:
   90-day tail at fire start; `repo` drafts are operator-reviewed files — never delete
   them, note an over-retention tail in your report instead.
 - Lessons (§14): `## Communication` + `## Shared`.
-Sections: §0 §0a §2 §12 §12a §14 §16 §18 §20 §21 §22 §22a §23 §26 §27
+Sections: §0 §0a §2 §12 §12a §14 §16 §18 §20a §21 §22 §22a §23 §26 §27
 
 ## JOBS
 
@@ -55,7 +55,7 @@ source list, and target path — write nothing.
 
 ### Job 1 — Gather source material (public-safe, verifiable only)
 
-1. **Strategy / positioning:** read `strategyDoc` (form detection per §20); on
+1. **Strategy / positioning:** read `strategyDoc` (form detection per §20a); on
    `backend:"service"` with hub docs also the published `strategy` doc if available.
 2. **Roadmap / direction:** the published `roadmap` doc when one exists; drafts stay
    internal unless the operator explicitly asks to use them.

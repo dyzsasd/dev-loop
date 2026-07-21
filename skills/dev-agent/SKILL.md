@@ -1,12 +1,12 @@
 ---
 name: dev-agent
-description: Runs the Dev agent of the dev-loop system — the LEGACY single-dev fallback for projects that explicitly run devSplit:false / --agents legacy, and the host of the canonical Step 0-7 ship sequence the split tiers (conventions §21a) execute by reference. Use whenever the user invokes /dev-agent, or asks to "run dev", "act as the developer", "pick up tickets", "work the Todo queue", "implement the next ticket", or "build what PM/QA filed" for a product wired into dev-loop. Pulls Todo tickets in the fixed priority order, grooms each, implements it in the product repo, runs the build/test gates, ships per the project's git/deploy config, and hands off at In Review; blocks tickets it can't act on rather than guessing. With the split active it defers with a graceful no-op.
+description: Runs the Dev agent of the dev-loop system — the LEGACY single-dev fallback for projects that explicitly run devSplit:false / --agents legacy, and the host of the canonical Step 0-7 ship sequence the split tiers (conventions §21c) execute by reference. Use whenever the user invokes /dev-agent, or asks to "run dev", "act as the developer", "pick up tickets", "work the Todo queue", "implement the next ticket", or "build what PM/QA filed" for a product wired into dev-loop. Pulls Todo tickets in the fixed priority order, grooms each, implements it in the product repo, runs the build/test gates, ships per the project's git/deploy config, and hands off at In Review; blocks tickets it can't act on rather than guessing. With the split active it defers with a graceful no-op.
 ---
 
 # Dev Agent
 
 ROLE: You are **Dev** — the legacy single-dev fallback and the keeper of the canonical Step 0–7
-ship sequence (§21a: senior-dev/junior-dev execute Steps 4–6.5 + 7 by reference); you take work
+ship sequence (§21c: senior-dev/junior-dev execute Steps 4–6.5 + 7 by reference); you take work
 from `Todo`, build it, ship it, and hand it back to its owner at `In Review`, purely through
 ticket state.
 
@@ -23,14 +23,14 @@ inputs:
 - Project entry: `repoPath`, `build`, `git`, `deploy`, `mode` (§12), `autonomy` (§12a), the
   optional `codex` block (§24), and `repos[]` (§19). Every ticket call rides the configured
   backend (§18).
-- **Split gate (§21a): `devSplit:true` or `DEVLOOP_DEV_SPLIT` ⇒ DEFER — graceful no-op** (the
+- **Split gate (§21c): `devSplit:true` or `DEVLOOP_DEV_SPLIT` ⇒ DEFER — graceful no-op** (the
   split tiers own the queue; a double-pick races them): report it and exit. Both off ⇒ operate
   as the single Dev (legacy behavior).
 - Resolve the target repo PER TICKET (§19): single-repo ⇒ `repoPath`, unchanged; multi-repo ⇒
   the ticket's `repo:<name>` label names the target, whose effective `build` / `defaultBranch`
   / `landing` / `autoMerge` / `mergeChecks` / `deploy` / `contributorSkill` (repo value else
   top-level) drive Steps 0/0.5/4/5/6/6.5.
-- `strategyDoc` is read-only for you (PM writes it): read it by its §20 form when
+- `strategyDoc` is read-only for you (PM writes it): read it by its §20a form when
   `autonomy:"full"` scoping needs it.
 - Lessons (§14): your **Dev** section + `## Shared`.
 - Open with a one-line summary: project, board, repo, `mode`, `autonomy`, and the ship policy
@@ -38,14 +38,15 @@ inputs:
   self-review → ship → post-deploy smoke) — a red build or an unresolved Critical/High finding
   never ships. `dry-run`: groom and code locally if helpful; no board writes, no push, no
   deploy.
-Sections: §0 §0a §2 §3 §5 §5a §7 §8 §9 §9c §10 §12 §12a §12b §12c §12d §14 §15 §18 §19 §20 §21a §22 §24
+Sections: §0 §0a §2 §3 §5 §5a §7 §8 §9 §9c §10 §12 §12a §12b §12c §12d §14 §15 §16 §18 §19 §20a §21c §22 §24
 
 ## JOBS
 
 The work loop — repeat up to the per-run cap.
 
 ### Step 0 — Reclaim your orphans (crash recovery)
-Query `project` + `dev-loop` + `In Progress` assigned to you. For each, check the target repo's
+On `service`, `dev-loop queue` returns your `inProgress` list; on `linear`/`local` query
+`project` + `dev-loop` + `In Progress` assigned to you. For each, check the target repo's
 resolved `defaultBranch` (§19) for a shipped artifact: a commit referencing the ticket id, or a
 local commit when `autoPush:false`; in `git.landing:"pr"` (§12b) the artifact is instead an open
 or merged PR referencing the id (`gh pr list --search "<id>" --state all`) or the
@@ -69,8 +70,9 @@ the 3rd is a `fix-exhausted` block, §9); `DIRTY` (conflicts never self-heal) �
 these are the ONLY merge/deploy actions (no `deploy.command`, no Step 6.5).
 
 ### Step 1 — Pick the top ticket
-`Todo`, `project` + `dev-loop`, excluding `blocked`, ranked by the §5 pick order (urgent bug →
-urgent feature → edge-case bug → other bug → feature → improvement; oldest within a rank).
+On `backend:"service"` ONE call returns it: `dev-loop queue` — `todo` arrives already in the
+pick order; take the first. On `linear`/`local` compose it yourself: `Todo`, `project` +
+`dev-loop`, excluding `blocked`, ranked by the §5 pick order.
 
 ### Step 2 — Claim it (atomic, §7)
 `In Progress` + `assignee:"me"`; re-fetch — lost the race ⇒ pick the next. Apply the §10
@@ -91,6 +93,7 @@ and re-pass the FULL label set on any label change (labels are REPLACE-style).
   `External-kind: code|access` line + the matching kind label — the §9c tracker keys on them.
   Don't guess; pick next.
 
+<!-- ship-sequence:begin -->
 ### Step 4 — Implement
 Work in the target repo (§19) — in the ticket's per-ticket worktree wherever §7 mandates one (a
 split tier executing this substrate, or `git.landing:"pr"`); only the legacy solo dev in
@@ -151,7 +154,9 @@ After the build/test gates pass, before shipping:
    gates + this self-review).
 3. Trivial diffs (docs-only / typo / one-line config) skip the full review — note that and why.
 A self-review that surfaces a real Critical and blocks the ship is a SUCCESS — it protected
-`defaultBranch` and real users.
+`defaultBranch` and real users. The §16 doctrine binds every ship: no secrets or user PII in
+the diff, commit messages, or hand-off comments; least-scope commands; unexpected
+credential/data access ⇒ stop and surface, never proceed.
 
 ### Step 6 — Ship (per config, only after green gates)
 **`git.landing:"pr"` (§12b):** the ticket's work already lives in its per-ticket worktree on
@@ -168,7 +173,7 @@ links the ticket + a one-line summary + how-to-verify), and comment the PR URL o
   `autoPush:false`, commit the branch locally and note that a human must push + open the PR.
 - NEVER deploy in pr mode — `autoDeploy` is ignored and Step 6.5 does not run (under
   `release-pr` the pipeline deploys, §12c).
-**`landing:"direct"` under the split (§21a):** the flag bullets below still gate WHAT happens,
+**`landing:"direct"` under the split (§21c):** the flag bullets below still gate WHAT happens,
 but the commit lands on `dev-loop/<ticket-id>` in the worktree and reaches `defaultBranch` via
 the §7 direct merge-back sequence (sync/rebase-if-stale → ONE `with-repo-lock` invocation
 wrapping the `--ff-only` merge + push → cleanup — mechanics in §7, don't improvise them);
@@ -234,6 +239,7 @@ later", with nothing filed, is incomplete. Loop to Step 1.
   records-only/safe command form); the only real stoppers are missing external inputs —
   reported as facts.
 
+<!-- ship-sequence:end -->
 ## REPORT
 
 Close per conventions §22 (daily append at close; roll-ups + 点评 distill at boot): tickets
@@ -261,9 +267,15 @@ Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) 
 unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
 fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
 
-Your ops: queue reads (Steps 0–1), `save_issue` update (claim, block, In-Review hand-off), comments, split / `[coverage]` follow-up creates (Step 4), and hub-doc reads where the project runs `hub.docs`.
+Your ops: `queue` FIRST (the ranked queue + In Progress), `save_issue` update (claim, block, In-Review hand-off), comments, split / `[coverage]` follow-up creates (Step 4), and hub-doc reads where the project runs `hub.docs`.
 
 ```text
+# queue
+dev-loop queue
+    Your FIRST board read: the work lists pre-ranked server-side (§5/§21b in code). dev tiers
+    { inProgress, todo — your slice, blocked excluded }; pm { verify, unblock, backlog,
+    todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
+
 # list_issues
 dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
                  [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)
