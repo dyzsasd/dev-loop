@@ -37,6 +37,10 @@ LAYER 0 — any hub op, raw JSON:
       Ops: ${AGENT_OPS.join(", ")}
 
 LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; errors as JSON on stderr):
+  dev-loop queue
+      Your FIRST board read: the work lists pre-ranked server-side (§5/§21b in code). dev tiers
+      { inProgress, todo — your slice, blocked excluded }; pm { verify, unblock, backlog,
+      todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
   dev-loop ticket create --title T --type Bug|Feature|Improvement [--description TEXT|'-'] [--description-file F]
                          [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
       --blocked-by writes the §9c blocking-edge marker comment ('Blocked-by: <id>', one line per id) after the create.
@@ -258,6 +262,16 @@ async function main(): Promise<never> {
       const project = str(flags, "--project");
       if (project !== undefined) args.project = project; // the explicit flag wins over an args-JSON key
       emit(name, await runOp(openHub(), name, args));
+    }
+
+    // ── LAYER 1: queue — the pre-ranked per-agent work lists (§5/§21b in code) ──
+    case "queue": {
+      const { flags, pos } = parseFlags(rest, { ...COMMON });
+      iAmTheOperator = flags["--i-am-the-operator"] === true;
+      if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+      const qargs: Record<string, unknown> = {};
+      if (flags["--project"] !== undefined) qargs.project = str(flags, "--project");
+      emit("queue", await runOp(openHub(), "queue", qargs));
     }
 
     // ── LAYER 1: ticket create | ticket update ──

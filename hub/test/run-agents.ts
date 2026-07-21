@@ -61,6 +61,20 @@ try {
   ok(/dev-loop-hub/.test(claude.out), "the inline --mcp-config defines the dev-loop-hub server (no plugin / .mcp.json needed)");
   ok(/communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "communication-agent gets its own default profile and remains overrideable through --cli-arg");
 
+  // boot-prefix (conventions-to-code phase 0): --assemble-boot appends the deterministic §0a corpus and
+  // flips the claude prompt channel to stdin (Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB).
+  const boot = run(["--cli", "claude", "--once", "--dry-run", "--assemble-boot", "--agents", "pm", ...common]);
+  ok(boot.code === 0, "assemble-boot dry-run exits 0");
+  ok(/pm: boot corpus \d+KB \(conventions \d+KB(; config-pruned [^)]+)?\) hash=[0-9a-f]{12} — prompt via stdin/.test(boot.out),
+    "assemble-boot dry-run reports the corpus size + content hash");
+  ok(/pm: boot corpus .*config-pruned §5 §19 §24/.test(boot.out),
+    "the featureless service fixture prunes pm's config-gated spans (§5 queue, §19 multi-repo, §24 codex)");
+  ok(/pm: claude .* -p <stdin:\d+ chars>/.test(boot.out),
+    "assemble-boot renders -p with the prompt on stdin, never as an argv");
+  const bootOff = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
+  ok(!/boot corpus/.test(bootOff.out) && /pm: claude .* -p '?<prompt:\d+ chars>'?/.test(bootOff.out),
+    "without the flag the prompt stays an argv and no corpus is assembled (default unchanged)");
+
   // P1-6: a LINEAR (default-backend) project must NOT inject the hub or --strict-mcp-config — the
   // operator's own Claude config (incl. the Linear MCP) must apply, or the agents are starved of the board.
   const linear = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "fallback"]);

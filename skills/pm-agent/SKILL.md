@@ -30,11 +30,13 @@ inputs:
 - `pm-state.json` in the project state dir — bounded, atomic-rename writes only (§11).
 - The jobs are written in Linear terms; every ticket call rides the configured backend (§18).
 - Open with a one-line summary: project, board, `mode`, and — when passive — the `intake.mode`.
-Sections: §0 §0a §2 §3 §4 §5 §5a §6 §7 §8 §9 §9a §9b §9c §10 §11 §12 §12a §12b §14 §17 §18 §19 §20 §21a §22 §24 §27
+Sections: §0 §0a §2 §3 §4 §5 §5a §6 §7 §8 §9 §9a §9b §9c §10 §11 §12 §12a §12b §14 §16 §17 §18 §19 §20 §21a §21b §22 §24 §27
 
 ## JOBS
 
-Run them in this order.
+Run them in this order. On `backend:"service"` start with ONE call — `dev-loop queue`:
+`verify` is Job A's list, `unblock` Job B's, `backlog` + `todoDepth` Job B2's inputs; on
+`linear`/`local` compose each job's §10-scoped query yourself.
 
 ### Preflight — pick what to review this fire
 
@@ -145,7 +147,7 @@ call parks `Human-Blocked` (§9) instead of deciding for them.
 
 Run the §5a grooming & promotion pass exactly: query Backlog excluding staged design children
 (the §21a gate owns those); groom — dedupe/merge (§8), `Cancel` stale ideas with a reason,
-refine vague tickets into §6 shape (real ACs, type, owner label, dev tier per §21a, `repo:<name>`
+refine vague tickets into §6 shape (real ACs, type, owner label, dev tier per §21b, `repo:<name>`
 target in multi-repo §19); promote Backlog→Todo in §5 pick order only while the unblocked Todo
 depth is under `intake.todoDepthCap` (per-tier in split-dev); at the cap, groom only — still a
 valid fire. Full label set per move (§10). Report `promoted <n>, groomed <m>, canceled <k>,
@@ -166,7 +168,8 @@ confined to it — use your own product judgement to improve the product beyond 
 4. File survivors: `Feature` (new capability) or `Improvement` (refinement), §6 template, labels
    `dev-loop` + type + `pm`, a priority, **`state:"Backlog"`** (§5a — your own Job B2 promotes
    at pace), `project` set. Add `sensitive` at THIS step for auth/money/PII/secrets/migration
-   work (§4 — it forces the senior tier). Split-dev tier routing per §21a (explicit signals
+   work (§4 — it forces the senior tier). Ticket bodies obey §16: no secrets, summarize
+   around PII, reference log/data sources instead of pasting them. Split-dev tier routing per §21b (explicit signals
    only, never inference), encoded per backend (§18); a legacy project gets no tier marker.
    Multi-repo: one `repo:<name>` target per ticket — split cross-repo work into per-repo
    children at filing (§19). A mockup helps? Generate one via `codex.imageGen` as a spec aid,
@@ -236,9 +239,15 @@ Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) 
 unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
 fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
 
-Your ops: board reads for Jobs A/B/B2/C, `save_issue` create (file Features/Improvements, intake children) and update (verify/groom/promote, unblock), comments, and the hub `strategy`/`roadmap` docs — `doc save` writes a DRAFT only (`doc.publish` stays the operator's).
+Your ops: `queue` FIRST (verify/unblock/backlog/todoDepth pre-listed), board reads for Jobs A/B/B2/C, `save_issue` create (file Features/Improvements, intake children) and update (verify/groom/promote, unblock), comments, and the hub `strategy`/`roadmap` docs — `doc save` writes a DRAFT only (`doc.publish` stays the operator's).
 
 ```text
+# queue
+dev-loop queue
+    Your FIRST board read: the work lists pre-ranked server-side (§5/§21b in code). dev tiers
+    { inProgress, todo — your slice, blocked excluded }; pm { verify, unblock, backlog,
+    todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
+
 # list_issues
 dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
                  [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)

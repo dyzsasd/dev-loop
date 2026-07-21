@@ -21,7 +21,7 @@ walk-through.
 
 Every fire is fresh (conventions §0); run the standard boot sequence (§0a) with your per-agent
 inputs:
-- Split gate (§21a): split-dev is detected ONLY from the explicit signals (`devSplit:true`
+- Split gate (§21c): split-dev is detected ONLY from the explicit signals (`devSplit:true`
   config / `DEVLOOP_DEV_SPLIT` runtime), never inferred from history/models/tickets. Both off
   ⇒ legacy single-dev ⇒ terse no-op and exit (`dev` owns the queue). Split on with an empty
   senior slice = a normal idle fire, NOT "the split is off".
@@ -31,18 +31,21 @@ inputs:
   repo-file design doc.
 - Lessons (§14): `## senior-dev` + `## Dev` + `## Shared`. Codex (§24): direct-code uses the
   same sub-flags as `dev`; design mode may use image generation as a spec aid only.
+- The §16 doctrine binds both modes: no secrets or user PII in design docs, diffs, commits,
+  or tickets; least-scope commands; unexpected credential/data access ⇒ stop and surface.
 - Open with a one-line summary: project, backend, repo, `mode` (§12), `autonomy` (§12a), and —
   for any direct-code ticket — the ship policy (`autoCommit`/`autoPush`/`autoDeploy` +
   `deploy.command`). `dry-run`: design/groom and write code locally if helpful, but no board
   writes, no push, no deploy.
-Sections: §0 §0a §2 §5 §7 §8 §9 §9c §10 §12 §12a §12b §12c §12d §14 §17 §18 §19 §20 §21a §22 §24
+Sections: §0 §0a §2 §5 §7 §8 §9 §9c §10 §12 §12a §12b §12c §12d §14 §16 §17 §18 §19 §20 §21a §21c §22 §24
 
 ## JOBS
 
 The work loop — repeat up to the per-run cap.
 
 ### Step 0 — Reclaim your orphans (crash recovery)
-Query `In Progress` in YOUR slice (`project` + `dev-loop` + the §18 filter). For each, by mode:
+On `service`, `dev-loop queue` returns your `inProgress` list; on `linear`/`local` query
+`In Progress` in YOUR slice (`project` + `dev-loop` + the §18 filter). For each, by mode:
 - **direct-code** crash: look for a shipped artifact on the target repo's resolved
   `defaultBranch` — a commit referencing the ticket id; a local commit when `autoPush:false`;
   in `git.landing:"pr"` an open/merged PR referencing the id (`gh pr list --search "<id>"
@@ -62,8 +65,9 @@ green + mergeable `dev-loop/*` feature PRs, `auto:true` deploy PRs only, with §
 caps — exactly as dev-agent Step 0.5 spells out. Idempotent + race-safe.
 
 ### Step 1 — Pick the top senior-assigned ticket
-`Todo` in your slice (§18), `project` + `dev-loop`, excluding `blocked`, ranked by the §5 pick
-order applied to the slice. Take the top one.
+On `backend:"service"` ONE call returns it: `dev-loop queue` — `todo` IS your ranked slice;
+take the first. On `linear`/`local`: `Todo` in your slice (§18), `project` + `dev-loop`,
+excluding `blocked`, ranked by the §5 pick order applied to the slice.
 
 ### Step 2 — Claim it (atomic, §7)
 `In Progress` + claim (`assignee:"me"` on `service` — you claim your own pre-assignment, the
@@ -129,7 +133,8 @@ you: NO design, NO delegation. Before coding, read the failed ticket's `review f
 `re-test failed:` comment (and any linked design doc) so you know exactly what the junior build
 got wrong, then make the smallest change that satisfies ALL ACs.
 
-**Read `${CLAUDE_PLUGIN_ROOT}/skills/dev-agent/SKILL.md` Steps 4–6.5 and Step 7 and execute
+**Execute the inherited ship sequence (§21c) — on an assembled fire it rides your boot
+corpus; in pull mode read `${CLAUDE_PLUGIN_ROOT}/skills/dev-agent/SKILL.md` Steps 4–6.5 and Step 7 — and execute
 them VERBATIM** — implement, gate, self-review, ship, post-deploy smoke + rollback, hand off —
 with every qualifier, cap, and gate trap exactly as written THERE; this file deliberately
 carries no summary, so never work from memory of the sequence. Senior-specific deltas:
@@ -191,9 +196,15 @@ Exit `4` (identity/guard: phantom `DEVLOOP_ACTOR`, unresolved/unseeded project) 
 unavailable) ⇒ **STOP this fire**: report the failure, make NO writes, and do NOT touch the repo or
 fall back to direct file/db access — a mis-attributed write is worse than a lost fire.
 
-Your ops: slice reads (Steps 0–1), `save_issue` update (claim, block, hand-off) and create (spawn the staged `Backlog` children), comments, and the hub `design` doc-kind — `dev-loop doc save --kind design --slug <module>` (multi-instance, NOT publish-gated: your saved draft IS the live design, §21a); retire a module's design doc with `doc archive` (D6: hidden by default, never deleted; `--restore` brings it back).
+Your ops: `queue` FIRST (your ranked slice + In Progress), `save_issue` update (claim, block, hand-off) and create (spawn the staged `Backlog` children), comments, and the hub `design` doc-kind — `dev-loop doc save --kind design --slug <module>` (multi-instance, NOT publish-gated: your saved draft IS the live design, §21a); retire a module's design doc with `doc archive` (D6: hidden by default, never deleted; `--restore` brings it back).
 
 ```text
+# queue
+dev-loop queue
+    Your FIRST board read: the work lists pre-ranked server-side (§5/§21b in code). dev tiers
+    { inProgress, todo — your slice, blocked excluded }; pm { verify, unblock, backlog,
+    todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
+
 # list_issues
 dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
                  [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)

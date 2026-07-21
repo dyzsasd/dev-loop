@@ -23,7 +23,7 @@ sections cited below). Inputs:
 - The workspace `dev-loop.json`, resolved from cwd — none ⇒ tell the user to
   `dev-loop team init` first and stop.
 - `references/config-schema.md` (the field shapes the mutator writes).
-Sections: §0 §0a §2 §4 §5a §9c §20 §21a §27
+Sections: §0 §0a §2 §4 §5a §9c §20 §27
 
 ## JOBS
 
@@ -48,7 +48,7 @@ Sections: §0 §0a §2 §4 §5a §9c §20 §21a §27
 - **linear:** if this is the FIRST project in the team, reconcile the Linear team first —
   verify `team.linearTeam` exists, ensure the dev-loop label set (`dev-loop`, `needs-pm`,
   `Feature`/`Bug`/`Improvement`, `pm`/`qa`, `senior-dev`/`junior-dev`, `blocked`,
-  `external-prereq` + `external-code`/`external-access` (§9c), `sensitive` (§21a),
+  `external-prereq` + `external-code`/`external-access` (§9c), `sensitive` (forces the senior dev tier),
   `env:dev`/`env:prod`, …), and record `team.linearTeamId`. Then **find-or-create** the
   Linear project by name; record its id.
 - **service:** `dev-loop seed <key> "<name>" <UNIQUE_PREFIX>` into the workspace hub.db

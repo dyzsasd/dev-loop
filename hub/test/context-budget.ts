@@ -9,7 +9,7 @@
 // The budget authority is the BUDGETS table in hub/src/context-bill.ts (not the template doc — see
 // the note there); lessons budgets stay hub/src/lessons.ts's INDEX_MAX_*/SHARD_MAX_* (cited via
 // import by context-bill.ts, deliberately not re-stated here).
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
@@ -26,7 +26,20 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 // ── 1. Conventions span map sanity (the real file) ────────────────────────────────────────────────
 const conv = parseConventions(readFileSync(join(root, "references", "conventions.md"), "utf8"));
 ok(conv.anchors.size >= 38, `conventions.md yields the full anchor map (${conv.anchors.size} numbered sections)`);
-for (const a of ["0", "0a", "2", "9c", "21a", "27"]) ok(conv.anchors.has(a), `anchor §${a} parsed`);
+for (const a of ["0", "0a", "2", "9c", "20a", "21a", "21b", "27"]) ok(conv.anchors.has(a), `anchor §${a} parsed`);
+// Progressive disclosure (docs/design/conventions-progressive-disclosure.md): every pointer stub's
+// reference file exists and is non-empty — a stub naming a missing file is a silent protocol hole.
+for (const f of ["notify.md", "investigation-protocol.md", "backend-service.md", "backend-local.md",
+  "reports-linear-sink.md", "ticket-templates.md", "first-run-setup.md", "report-rollups.md"]) {
+  const path = join(root, "references", f);
+  ok(existsSync(path) && statSync(path).size > 200, `references/${f} exists and is non-empty (stub target)`);
+}
+// The §16 security doctrine is loaded by every code-committing agent + the heaviest filer (the
+// 2026-07 audit found NO committing agent cited it) — regression-guard the four Sections lines.
+for (const dir of ["dev-agent", "junior-dev-agent", "senior-dev-agent", "pm-agent"]) {
+  const prose16 = splitSkill(readFileSync(join(root, "skills", dir, "SKILL.md"), "utf8")).prose;
+  ok(parseSectionsLine(prose16).anchors.includes("16"), `skills/${dir}: §16 security doctrine declared`);
+}
 // Tiling: preamble + Topology + the ##-level spans cover the file exactly once (no gap, no overlap) —
 // a parser bug here silently mis-bills every agent.
 const l2 = [...conv.anchors.values()].filter((h) => h.level === 2).map((h) => h.span);

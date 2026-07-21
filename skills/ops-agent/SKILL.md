@@ -12,7 +12,7 @@ over time, deploy-independent.
 ## MISSION
 
 Each fire you poll prod health read-only and, only on a confirmed repeated degradation,
-file (or refresh) ONE `incident` Bug so Dev's Urgent-bug-first pick order (§5) grabs it —
+file (or refresh) ONE `incident` Bug so Dev's Urgent-bug-first pick order grabs it —
 QA tests the diff/board; you watch the running product as users experience it. You obey the
 §21 observe-and-file contract: never implement, ship, verify, or auto-rollback (Dev owns
 the fix and its Step-6.5 smoke/rollback); coordinate purely through ticket state.
@@ -33,7 +33,7 @@ per-agent inputs:
   `notifiedAt`) and the last-check probe record.
 - Open with a one-line summary: project, Linear project/team, `mode`, and the probe set
   (healthChecks + baseUrl + criticalRoutes count).
-Sections: §0 §0a §2 §3 §5 §5a §6 §8 §9 §10 §12 §12a §12c §14 §16 §18 §19 §21 §21a §22 §27
+Sections: §0 §0a §2 §3 §5a §6 §8 §9 §10 §12 §12a §12c §14 §16 §18 §19 §21 §21b §22 §27
 
 ## JOBS
 
@@ -70,18 +70,18 @@ Only on a Job-1 confirmed, repeated degradation:
    (§10). One exists ⇒ REFRESH it — a dated still-degraded comment (which probes fail,
    current error-signal), bump to Urgent if it escalated to down/core-flow-broken; never a
    second ticket. A label re-pass in a split-dev project keeps — or adds, if missing — the
-   `senior-dev` tier marker (§10/§21a).
+   `senior-dev` tier marker (§10/§21b).
 2. Otherwise **file ONE incident Bug** (§6 Bug template): `dev-loop` + `Bug` + `qa` +
    `incident`, in **`Todo`** — the documented §5a carve-out (a CONFIRMED prod degradation
    is the one discovery that skips Backlog; everything else you file rides §5a). Priority
-   **Urgent** when prod is down / a core flow is broken (Dev's rank-1 pick, §5); High for
+   **Urgent** when prod is down / a core flow is broken (Dev's rank-1 pick); High for
    degraded-but-up. Title `Fix prod incident: <surface> returning <symptom>`; body: the
    failing probe(s), observed vs expected status/exit, the failing window, any
    `logsCommand` signal **summarized around** secrets/PII (§16 — reference the log source,
    never paste raw user data). The acceptance criterion is the **health assertion** QA
    re-checks per the §21 `incident` recipe (e.g. "`GET <route>` returns 2xx", "5xx rate
    back under <baseline>") — never "repro no longer reproduces"; an incident has no repro.
-   **Tier at filing (§21a):** split-dev (explicit signals only) ⇒ route to senior-dev
+   **Tier at filing (§21b):** split-dev (explicit signals only) ⇒ route to senior-dev
    direct-code — a `Mode: direct-code` body line + the tier encoded per backend (§18);
    legacy ⇒ no tier marker.
 3. **Repo target** (§19): exactly one repo's healthCheck failing ⇒ set its `repo:<name>`;
