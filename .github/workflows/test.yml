@@ -27,7 +27,7 @@ jobs:
 
       - name: Verify source integrity (pre-install)
         run: |
-          python3 -m unittest security.test_source_integrity
+          python3 -m unittest security.test_source_integrity security.test_local_code_scan
           python3 security/source_integrity.py
 
       - name: Set up Node
