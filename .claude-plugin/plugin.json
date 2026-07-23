@@ -2,7 +2,7 @@
   "name": "dev-loop",
   "displayName": "dev-loop \u2014 autonomous SDLC agents",
   "description": "An autonomous dev team in a folder. Nine agents (PM, QA, senior/junior Dev, Sweep, Reflect, Ops, Architect, Communication) build, test, ship, watch, and explain software through ticket state (Linear or the bundled local hub). 1.0 workspace model: Backlog-first intake gated by PM, sensitive-work design tier, one team scheduler with per-agent model/effort, instant incident alerts, and a daily director digest. Operator skills: add-project, add-repo, sync-project, sync-repo.",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "author": {
     "name": "Shuai"
   },
