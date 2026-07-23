@@ -3,6 +3,54 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+The multi-provider hardening batch — every item below is a failure observed live during a
+2-day, 3-provider (Qwen Token Plan → Gemini/Vertex tiered), 530-fire unattended run.
+
+- **feat(runner): liveness watchdog — silent fires die in minutes, not hours** (`--stall-timeout`,
+  `hub/src/run-agents.ts`). Field incident: a provider quota-429 made opencode HANG in a silent
+  retry loop; every fire wedged for the full `--fire-timeout` hour and exited as
+  `exit 0 (fire timeout)` — a shape the P0-1a breaker never counts, so the loop idled at full
+  cadence for hours with zero signal. Now any stdout/stderr byte resets a per-fire clock; silence
+  past the threshold ⇒ SIGTERM/SIGKILL, exit 125, **`errorClass:"stalled"`** in the ledger — a
+  class the breaker CAN trip on. Default 10m on opencode fires (they stream tool lines; silence =
+  a hung provider call), off on claude/codex (`claude -p` buffers until the end); an explicit
+  `--stall-timeout` applies everywhere, `0` disables.
+- **feat(runner): workspace `opencode.json` now reaches every fire** (`OPENCODE_CONFIG` injection).
+  Field incident: `team.providers` + `sync-opencode` render the registry into the WORKSPACE
+  `opencode.json`, but a fire's cwd is a repo and opencode's config discovery stops at the repo's
+  own git root — every registry-provider fire died `ProviderModelNotFoundError` until the operator
+  hand-merged providers into the global config. The scheduler now injects
+  `OPENCODE_CONFIG=<workspace>/opencode.json` per opencode fire (operator's own export still wins),
+  making `sync-opencode` actually effective and the workspace self-contained.
+- **feat(runner): opencode model preflight at startup** (zero tokens). `opencode models` is listed
+  once with the fire's exact config view; any configured `provider/model-id` missing from it —
+  typo, un-synced registry, dead auth — is one loud warning BEFORE the first fire instead of a
+  failing fire per slot. Warn-only; never blocks the loop.
+- **feat(runner): config-integrity guard — a broken `dev-loop.json` pauses spawning instead of
+  burning no-op fires.** Field incident: an agent hand-edited `dev-loop.json` into invalid JSON;
+  every fire's CLI verbs died on workspace resolution while the scheduler kept spawning at full
+  cadence. The tick loop now re-parses the file: broken ⇒ pause + one console/comms alert;
+  parses again ⇒ auto-resume. (Pairs with the existing hot-reload last-good-config behavior.)
+- **fix(hub): tier label ⇒ assignee at create** (`hub/src/agentops.ts` `save_issue`; every
+  transport — stdio MCP / daemon op-API / CLI — shares the one implementation). Field incident
+  ×2: tickets filed with a `senior-dev`/`junior-dev` LABEL but `assignee:null` sat outside every
+  assignee-based queue slice (§18) and stranded until a human noticed. An explicit assignee still
+  wins; unlabeled tickets stay unassigned. Regression-tested in `hub/test/queue.ts`.
+- **feat(cli): `dev-loop run --background` + `dev-loop stop` — the operator-console loop lifecycle.**
+  `--background` detaches the scheduler (log → `<workspace>/.dev-loop/run.log`, run lock still
+  refuses a second scheduler); `stop` reads the team run lock, SIGTERMs the holder (in-flight fires
+  drain), escalates to SIGKILL after 20s, and never touches the hub daemon. Ends the
+  hand-`pgrep`-and-kill era that mis-killed processes during a live provider switch.
+- **docs(running): the recommended default workflow — drive dev-loop from your coding-CLI session**
+  (workspace folder → `init` wizard in-session → `run --background` → talk to the team via the
+  operator verbs from the SAME session). `seed`/`init-service` marked legacy in `dev-loop help`.
+- **docs(skill): test-gate throttling + fire pacing in the dev ship sequence** (Step 5, inherited
+  by both split tiers): affected-tests-only between edits, full suite exactly twice per ticket,
+  commit a coherent slice every ~30min, stop adding scope past ~45min. Field incident: a fire
+  re-ran a 150-test suite 70+ times and was timeout-killed mid-ticket.
+
 ## 1.5.0
 
 - **feat(context): conventions-to-code phase 0 — the runner-assembled boot prefix + the first

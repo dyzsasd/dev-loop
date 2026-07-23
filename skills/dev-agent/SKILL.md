@@ -137,6 +137,11 @@ Two traps that silently under-test — don't be fooled by a fast green:
 - Never run prod-mutating tests as a gate (suites importing the real DB client / a prod
   `DATABASE_URL` / live APIs can read or MUTATE production): run the safe subset plus your
   regression test, and report exactly which tests you skipped and why.
+**Throttle the gate: the full suite is a SHIP gate, not an edit loop.** Between edits run
+ONLY the affected test file(s); the FULL suite runs exactly twice per ticket (first commit
++ here). Field incident: 70+ full-suite reruns burned a fire to its timeout mid-ticket.
+Pace: commit a coherent green slice every ~30min (a killed fire loses uncommitted work);
+past ~45min stop adding scope — commit, hand off `In Review`, note the remainder.
 
 ### Step 5.5 — Self-review the diff (autonomous gate, not a human wait)
 After the build/test gates pass, before shipping:
