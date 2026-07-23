@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.6.0
 
 The multi-provider hardening batch — every item below is a failure observed live during a
 2-day, 3-provider (Qwen Token Plan → Gemini/Vertex tiered), 530-fire unattended run.
