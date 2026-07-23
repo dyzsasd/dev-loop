@@ -266,9 +266,18 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
     if (!a.title) return errR(400, "title required to create a ticket");
     const promoReject = prodPromotionRejection(db, projectId, actor, [], a.labels ?? []);
     if (promoReject) return errR(403, promoReject);
+    // Tier label ⇒ assignee (field finding, 2026-07-22/23 ×2): on backend:"service" the pick filter is
+    // ASSIGNEE-based (§18) — a ticket carrying a `senior-dev`/`junior-dev` tier LABEL with assignee:null
+    // sits outside every agent's queue slice and strands until a human notices (a design ticket idled
+    // through two senior fires; four hotel children shipped label-only). At create time an explicit
+    // assignee always wins; otherwise the tier label IS the routing intent — materialize it.
+    const labels = a.labels ?? [];
+    const tierAssignee = resolveAssignee(actor, a.assignee)
+      ?? (labels.includes("senior-dev") && actorExists(db, "senior-dev") ? "senior-dev"
+        : labels.includes("junior-dev") && actorExists(db, "junior-dev") ? "junior-dev" : null);
     const id = insertTicket(db, projectId, actor,
       { title: a.title, description: a.description ?? "", type: a.type ?? "Feature", state: (a.state as State) ?? "Todo",
-        assignee: resolveAssignee(actor, a.assignee), priority: a.priority ?? 0, labels: a.labels ?? [],
+        assignee: tierAssignee, priority: a.priority ?? 0, labels,
         duplicateOf: a.duplicateOf ?? null, relatedTo: a.relatedTo ?? [] },
       { title: a.title, type: a.type });
     return okR(toTicket(getRow(db, projectId, id)!));

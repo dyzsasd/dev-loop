@@ -36,6 +36,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
+  stop:             ["stop"],                      // stop the workspace's running scheduler via the run lock (pairs with `run --background`)
   "install-claude-plugin": ["install-claude-plugin"], // register a local npm-source marketplace so Claude Code loads the published plugin
   "init-service":   ["init-service"],              // turnkey bootstrap (DL-60)
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
@@ -90,11 +91,13 @@ Usage: dev-loop <command> [args]
   with-repo-lock <ref> -- <cmd>   run a command holding a shared repo's base-clone lock
   push-guard [--repo <dir>] [--branch <b>] [--strict]   pre-push ride-along check: flag unpushed commits
                               whose referenced tickets are Canceled/Duplicate (P1-2; --strict exits 1 on findings)
-  init-service <key> <name> <PREFIX>   turnkey-bootstrap a service-backend project (seed → doctor → daemon up)
-  run --cli claude|codex [--project <key>] [--agents core,outward]   schedule agents by calling the selected CLI
+  init-service <key> <name> <PREFIX>   (legacy) turnkey-bootstrap a service project — start at \`init\`/\`up\` instead
+  run [--background] [--cli claude|codex|opencode] [--agents core,outward]   schedule agents by calling the
+                              selected CLI; --background detaches (log → .dev-loop/run.log), \`stop\` ends it
+  stop                        cleanly stop this workspace's running scheduler (the hub daemon stays up)
   install-claude-plugin      register a local npm-source marketplace so /plugin install can load it
   mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers other servers)
-  seed <key> <name> [PREFIX]  seed a project + actors + labels into the hub db
+  seed <key> <name> [PREFIX]  (legacy) seed a project into the hub db — \`team add-project\` auto-seeds
   doctor                      health-check the hub system-of-record (DOCTOR_OK)
   identity-check [--expect <actor>[/<project>]]   verify this shell resolves the intended identity
   tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]

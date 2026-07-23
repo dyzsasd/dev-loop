@@ -84,5 +84,27 @@ ok(titles(qa.body.blocked).includes("pm unblock") && titles(qa.body.blocked).inc
 // ── 5. refusals ───────────────────────────────────────────────────────────────────────────────────
 ok(call("reflect").status === 400, "queue refuses actors without a pick contract (reflect)");
 
+// ── 6. tier-label ⇒ assignee derivation on create (field regression, 2026-07-22/23) ──────────────
+// A `senior-dev`/`junior-dev` LABEL with assignee:null used to strand the ticket outside every
+// assignee-based queue slice (§18). save_issue now materializes the tier label as the assignee at
+// create time — an explicit assignee still wins, and unlabeled tickets stay unassigned.
+const create = (args: Record<string, unknown>): OpResult =>
+  agentOp("save_issue", db, projectId, "qproj", "architect", args) as unknown as OpResult;
+const derived = create({ title: "design: contracts package", labels: ["dev-loop", "Improvement", "qa", "senior-dev"] });
+ok(derived.status === 200 && (derived.body as { assignee?: string }).assignee === "senior-dev",
+  "create with senior-dev LABEL and no assignee derives assignee=senior-dev");
+const derivedJr = create({ title: "refactor: hoist shared types", labels: ["dev-loop", "junior-dev"] });
+ok((derivedJr.body as { assignee?: string }).assignee === "junior-dev",
+  "create with junior-dev LABEL and no assignee derives assignee=junior-dev");
+const explicitWins = create({ title: "explicit beats label", labels: ["dev-loop", "junior-dev"], assignee: "senior-dev" });
+ok((explicitWins.body as { assignee?: string }).assignee === "senior-dev",
+  "an explicit assignee beats the tier label");
+const noTier = create({ title: "no tier label", labels: ["dev-loop"] });
+ok((noTier.body as { assignee?: string | null }).assignee === null,
+  "no tier label ⇒ assignee stays null (unchanged behavior)");
+const derivedInQueue = call("senior-dev");
+ok(titles(derivedInQueue.body.todo).includes("design: contracts package"),
+  "the derived ticket lands in the senior queue slice (the strand is gone)");
+
 console.log(fails === 0 ? "\nQUEUE_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

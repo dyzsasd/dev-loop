@@ -4,7 +4,7 @@
 // shells out to `claude -p`, `codex exec`, or `opencode run` once per agent fire.
 import { spawn, execFileSync, type ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync, appendFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync, appendFileSync, openSync, closeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
@@ -195,7 +195,9 @@ type Options = {
   assembleBoot: boolean; // boot-prefix: append the deterministic §0a boot corpus (conventions union + lessons + backend contract) to the fire prompt — stable prefix for prompt caching; claude lane only (prompt rides stdin: Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB)
   changeGateTtlMs: number; // R1a: quiet-board TTL for the pm/qa REVIEW tiers — after this long without a fire, a gated pm/qa fire runs even on an unchanged key (0 = never; the pure gate for them too)
   fireTimeoutMs: number; // 0 = none; else SIGTERM (then SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
+  stallTimeoutMs?: number; // liveness watchdog: kill a fire whose combined output has been SILENT this long (errorClass "stalled" — feeds the breaker). undefined = per-lane default: 10m on opencode (it streams tool lines; silence = a hung provider call / silent retry loop — the 2026-07 quota-429 incident wedged every fire for the full hour), 0 (off) on claude/codex (claude -p buffers output until the end, so silence is normal there)
   staggerMs: number;    // boot stagger between the initial slot fires (0 = all at once)
+  background: boolean;  // re-spawn detached (log → <workspace>/.dev-loop/run.log) and return the shell — the operator-console flow's "start the loop from my coding-CLI session" verb
   mcpConfig?: string;   // claude: explicit MCP config; defaults to <cwd>/.mcp.json if present
   extraArgs: string[];
   // Model-provider routing (team mode only; teamMain fills these from team.providers /
@@ -231,7 +233,8 @@ function opencodeProviderEntry(opts: Options, model: string | undefined): Provid
 // failures, every one the same stderr line, indistinguishable in the ledger from real task failures.
 // The breaker (P0-1a) keys on repeated identical classes; metrics/doctor split them out. exit-0 shapes
 // stay the suspectError flag's job; a non-zero exit with no pattern match is a plain task failure (null).
-function classifyFireError(exitCode: number, timedOut: boolean, tail: string): string | null {
+function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false): string | null {
+  if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
   if (timedOut) return "timeout";
   if (exitCode === 0) return null;
   const t = tail.toLowerCase();
@@ -308,6 +311,12 @@ Options:
   --change-gate-ttl <dur>     how long a quiet board may defer a gated pm/qa fire before it runs anyway
                               (default 4h; 0 = defer forever — the pure gate for pm/qa too)
   --fire-timeout <dur>        kill a fire that outlives this (SIGTERM, then SIGKILL after 10s; default 1h; 0 = none)
+  --stall-timeout <dur>       liveness watchdog: kill a fire whose output has been SILENT this long and record it
+                              as errorClass "stalled" (feeds the breaker). Default: 10m on opencode fires (they
+                              stream; silence = a hung provider call, e.g. a quota-429 retry loop), off on
+                              claude/codex (claude -p buffers until the end). 0 = off everywhere
+  --background                start the scheduler DETACHED and return the shell: output appends to
+                              <workspace>/.dev-loop/run.log; stop it with \`dev-loop stop\` (the operator-console flow)
   --stagger <dur>             delay between the initial slot fires so a cold boot doesn't launch every agent at once (default 20s; 0 = simultaneous)
   --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
   --breaker <n>               failure-streak circuit breaker: N consecutive identical failures of one agent
@@ -394,6 +403,7 @@ function parseArgs(argv: string[]): Options {
     changeGateTtlMs: 4 * 60 * 60_000,
     fireTimeoutMs: 60 * 60_000,
     staggerMs: 20_000,
+    background: false,
     extraArgs,
   };
 
@@ -434,6 +444,8 @@ function parseArgs(argv: string[]): Options {
     else if (a === "--assemble-boot") opts.assembleBoot = true;
     else if (a === "--change-gate-ttl") { const v = next(); opts.changeGateTtlMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = pure gate for pm/qa too
     else if (a === "--fire-timeout") { const v = next(); opts.fireTimeoutMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = disabled (parseDuration rejects non-positive)
+    else if (a === "--stall-timeout") { const v = next(); opts.stallTimeoutMs = v.trim() === "0" ? 0 : parseDuration(v); } // explicit value applies to EVERY lane (0 = off); unset keeps the per-lane default
+    else if (a === "--background") opts.background = true;
     else if (a === "--stagger") { const v = next(); opts.staggerMs = v.trim() === "0" ? 0 : parseDuration(v); }
     else if (a === "--codex-safe") opts.codexSafe = true;
     else if (a === "--cli-arg") extraArgs.push(next());
@@ -913,6 +925,16 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     // custom exec tools (they escape narrow patterns AND can drop the identity env — the tmux finding).
     // Assigned AFTER the process.env spread so the fire policy beats any operator export.
     env.OPENCODE_PERMISSION = JSON.stringify(opts.opencodePermission ?? DEFAULT_OPENCODE_PERMISSION);
+    // Workspace opencode.json (the sync-opencode render of team.providers) is otherwise INVISIBLE to a
+    // fire: the fire's cwd is a repo, and opencode's config discovery stops at that repo's own git root —
+    // it never walks up to the workspace file (field finding, 2026-07-22: every fire on a registry
+    // provider died ProviderModelNotFoundError until the operator hand-merged the providers into the
+    // GLOBAL config). Point the fire at the workspace file explicitly; opencode merges it with the
+    // global config. An operator's own OPENCODE_CONFIG export still wins.
+    if (opts.wsRoot && env.OPENCODE_CONFIG === undefined) {
+      const wsOpencode = join(opts.wsRoot, "opencode.json");
+      if (existsSync(wsOpencode)) env.OPENCODE_CONFIG = wsOpencode;
+    }
   }
   const rendered = displayCommand(command, args, prompt) + (stdinPayload ? ` <stdin:${stdinPayload.length} chars>` : "");
   if (opts.dryRun) {
@@ -975,7 +997,8 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   // fire ledger with fake successes the operator can't alert on. Bounded (2 KB) so memory is constant.
   let outTail = "";
   let outBytes = 0;
-  const keepTail = (d: Buffer | string) => { const s = d.toString(); outBytes += s.length; outTail = (outTail + s).slice(-2048); };
+  let lastOutputAt = Date.now(); // liveness watchdog anchor — any stdout/stderr byte resets it
+  const keepTail = (d: Buffer | string) => { const s = d.toString(); outBytes += s.length; lastOutputAt = Date.now(); outTail = (outTail + s).slice(-2048); };
   child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
   child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
 
@@ -994,10 +1017,29 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       killTimer.unref?.();
     }, opts.fireTimeoutMs) : undefined;
     fireTimer?.unref?.();
+    // Liveness watchdog (errorClass "stalled"): the fire-timeout alone let a hung provider call burn the
+    // FULL hour per fire — the 2026-07 quota-429 incident wedged every opencode fire in a silent retry
+    // loop, and the resulting `exit 0 (fire timeout)` shape never fed the breaker, so the loop idled for
+    // hours at full cadence. Silence ≠ slowness: a live opencode fire streams tool lines constantly.
+    // Reclaim a silent fire in minutes and record a class the breaker can trip on.
+    let stalled = false;
+    const stallMs = opts.stallTimeoutMs !== undefined ? opts.stallTimeoutMs
+      : (profile.codingAgent === "opencode" ? 10 * 60_000 : 0); // claude -p buffers until the end — silence is normal there
+    const stallTimer = stallMs > 0 ? setInterval(() => {
+      if (stalled || timedOut || Date.now() - lastOutputAt < stallMs) return;
+      stalled = true;
+      console.error(`[${agent}] no output for ${formatDuration(stallMs)} — fire looks WEDGED (hung provider call / silent retry loop); SIGTERM (SIGKILL in 10s)`);
+      log.write(`\n===== stalled: no output for ${formatDuration(stallMs)}: SIGTERM =====\n`);
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => { if (activeChildren.has(child)) child.kill("SIGKILL"); }, 10_000);
+      killTimer.unref?.();
+    }, 15_000) : undefined;
+    stallTimer?.unref?.();
     child.on("error", (e) => {
       if (logOpen && !logDead) log.write(`\nERROR: ${e.message}\n`);
       console.error(`[${agent}] failed to start: ${e.message}`);
       clearTimeout(fireTimer);
+      clearInterval(stallTimer);
       // A spawn failure (missing/broken CLI bin) never reached the ledger — invisible to metrics AND to
       // the P0-1a breaker, whose canonical trigger (a wedged bin fast-failing identically forever) it is.
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, 1, false, { errorClass: "spawn-failed", outputTail: e.message.slice(-400) });
@@ -1016,9 +1058,9 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     const finalize = (code: number | null, signal: NodeJS.Signals | null) => {
       if (finalized) return;
       finalized = true;
-      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""} =====\n`);
-      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}`);
-      const exitCode = timedOut ? 124 : (code ?? 1);
+      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""}${stalled ? " (stalled)" : ""} =====\n`);
+      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}${stalled ? " (stalled)" : ""}`);
+      const exitCode = timedOut ? 124 : stalled ? 125 : (code ?? 1);
       // Suspect-error detection (narrow, tail-anchored to avoid false positives on error text an agent
       // merely echoed mid-run): exit 0 but the LAST line is a known CLI failure marker, or no visible
       // output at all (whitespace-only counts as none). Bare "Error:" is deliberately NOT matched — an
@@ -1030,7 +1072,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         console.error(`[${agent}] exit 0 but the output looks like a FAILURE (${why}) — flagged suspectError in the fire ledger`);
         log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
       }
-      const errorClass = classifyFireError(exitCode, timedOut, outTail); // P0-1b taxonomy
+      const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled); // P0-1b taxonomy (+ the liveness watchdog's "stalled")
       const fireExtras = {
         ...(suspectError ? { suspectError: true } : {}),
         ...(errorClass ? { errorClass } : {}),
@@ -1044,6 +1086,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     };
     child.on("exit", (code, signal) => {
       clearTimeout(fireTimer);
+      clearInterval(stallTimer);
       clearTimeout(killTimer);
       activeChildren.delete(child);
       if (closed) { finalize(code, signal); return; }        // pipes already drained → finalize now
@@ -1100,6 +1143,24 @@ function resolveWs(opts: Options): Workspace | null {
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
+  // --background (operator-console flow): re-spawn THIS entry detached with the same args and return the
+  // shell. The child owns the run lock as usual (a second scheduler is still refused), output appends to
+  // the workspace run log, and `dev-loop stop` is the matching off switch. Deliberately BEFORE workspace
+  // resolution: the child re-resolves everything itself; the parent only needs the log path.
+  if (opts.background && !opts.dryRun && !opts.once) {
+    const bgWs = tryResolveWorkspace(opts.cwd ?? process.cwd());
+    const logPath = bgWs ? join(bgWs.root, ".dev-loop", "run.log") : join(opts.dataDir, "run.log");
+    mkdirSync(dirname(logPath), { recursive: true });
+    const fd = openSync(logPath, "a");
+    const args = process.argv.slice(2).filter((a) => a !== "--background");
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...args], { detached: true, stdio: ["ignore", fd, fd], env: process.env });
+    child.unref();
+    closeSync(fd);
+    console.log(`dev-loop run: scheduler started in background (pid ${child.pid}); log → ${logPath}`);
+    console.log(`dev-loop run: stop it with \`dev-loop stop\`${bgWs ? "" : " (or kill the pid)"}; \`dev-loop tickets\` / the hub UI show the board`);
+    return;
+  }
+  if (opts.background) console.warn("dev-loop run: --background ignored with --dry-run/--once (both are foreground by nature)");
   // Team mode: a discoverable workspace runs ONE team-level scheduler that rotates delivery/steward fires
   // across the enabled projects (weighted round-robin). No workspace → the legacy fixed-project path below.
   const ws = resolveWs(opts);
@@ -1233,6 +1294,37 @@ async function main(): Promise<void> {
   tick();
 }
 
+// Opencode model preflight: `opencode models` prints every id launchable with the CURRENT auth+config —
+// a configured model missing from that list fails EVERY fire (ModelNotFound / dead provider) at full
+// spawn+slot cost until someone reads the logs. One cheap zero-token listing at startup catches the
+// whole class (typo'd model string, un-synced workspace opencode.json, missing provider auth) before
+// the first fire. Warn-only: `opencode models` availability differs by version, so a preflight failure
+// must never block the loop (the fire itself still surfaces the real error).
+function preflightOpencodeModels(opts: Options, cfg: ProjectsConfig | null, wsRoot: string, projects: string[]): void {
+  // Persistent-scheduler guard only: a --once/--dry-run invocation is an interactive one-shot whose
+  // fire surfaces any model/auth error immediately — spawning the opencode bin there would also break
+  // the pre-spawn zero-token contract (provider-routing tests assert the bin is never touched).
+  if (opts.once || opts.dryRun) return;
+  const models = new Set<string>();
+  for (const agent of opts.agents)
+    for (const p of projects.length ? projects : [""]) {
+      const prof = resolveLaunchProfile(opts, cfg, p, agent);
+      if (prof.codingAgent === "opencode" && prof.model) models.add(prof.model);
+    }
+  if (!models.size) return;
+  try {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    const wsOpencode = join(wsRoot, "opencode.json");
+    if (existsSync(wsOpencode) && env.OPENCODE_CONFIG === undefined) env.OPENCODE_CONFIG = wsOpencode; // same view a fire gets
+    const out = execFileSync(opts.opencodeBin, ["models"], { encoding: "utf8", timeout: 30_000, env, stdio: ["ignore", "pipe", "pipe"] });
+    const known = new Set(out.split("\n").map((l) => l.trim()).filter(Boolean));
+    const missing = [...models].filter((m) => !known.has(m));
+    if (missing.length)
+      console.warn(`dev-loop run: WARNING opencode cannot resolve configured model(s): ${missing.join(", ")} — every fire on them will fail. Check the model string, provider auth, and \`dev-loop team sync-opencode\` (the workspace opencode.json rides OPENCODE_CONFIG into fires).`);
+    else console.log(`dev-loop run: opencode model preflight ok (${models.size} model${models.size > 1 ? "s" : ""})`);
+  } catch (e) { console.warn(`dev-loop run: opencode model preflight skipped (${(e as Error).message.split("\n")[0]})`); }
+}
+
 // ─── Team mode: one scheduler, weighted round-robin across the enabled projects ─────────────────────────
 // Each agent has its own cadence slot (unchanged); when a slot fires, the target project is chosen by the
 // shared smooth-WRR cursor (rotation.ts). `--project` degrades to a filter (rotate over just that one).
@@ -1277,6 +1369,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
   applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence);
+  preflightOpencodeModels(opts, cfg, ws.root, candidates.map((c) => c.key)); // zero-token: catch dead models/providers before the first fire
   // Prod-monitoring guard: a team with health probes but no scheduled ops agent runs blind.
   const hasProbes = Object.values(ws.file.repos).some((r) => !!(r.ops?.checks?.length) || !!r.deploy?.healthCheck || Object.values(r.deploy?.environments ?? {}).some((e) => !!e?.healthCheck));
   if (hasProbes && !opts.agents.includes("ops")) console.warn(`dev-loop run: WARNING health probes are configured but 'ops' is not scheduled — prod incidents will go unnoticed. Launch with --agents core,ops (or all).`);
@@ -1421,8 +1514,33 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
 
+  // Config-integrity guard (field incident, 2026-07-23): an agent hand-edited dev-loop.json into invalid
+  // JSON and every subsequent fire became an expensive no-op — the fire's own `dev-loop` CLI verbs die on
+  // workspace resolution (exit 5), but the SCHEDULER kept spawning them at full cadence with no signal.
+  // hotReload already keeps the last-good in-memory config; this guard additionally PAUSES spawning and
+  // says so loudly (console always, comms once) until the file parses again. Fires resume by themselves.
+  let cfgBroken = false;
+  const configParses = (): boolean => {
+    try { JSON.parse(readFileSync(ws.filePath, "utf8")); } catch (e) {
+      if (!cfgBroken) {
+        cfgBroken = true;
+        const msg = `dev-loop.json is INVALID JSON (${(e as Error).message.split("\n")[0]}) — PAUSING all fires until it parses again. Did an agent hand-edit it? Config writes go through \`dev-loop team\`; restore the file (git checkout / .bak) to resume.`;
+        console.error(`dev-loop run: ${msg}`);
+        void notify(ws, { title: "dev-loop scheduler", level: "error", text: msg }).catch(() => { /* best-effort */ });
+      }
+      return false;
+    }
+    if (cfgBroken) {
+      cfgBroken = false;
+      console.log("dev-loop run: dev-loop.json parses again — resuming fires");
+      void notify(ws, { title: "dev-loop scheduler", level: "info", text: "dev-loop.json restored — fires resumed" }).catch(() => { /* best-effort */ });
+    }
+    return true;
+  };
+
   const tick = () => {
     hotReload();
+    if (!configParses()) return; // broken config ⇒ no new fires (in-flight fires finish; recovery is automatic)
     const now = Date.now();
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
