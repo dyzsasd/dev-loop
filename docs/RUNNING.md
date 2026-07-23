@@ -139,7 +139,35 @@ and cadence.
 
 ## 4. Run the Team
 
-The scheduler is the normal 1.x launch path:
+### The recommended default: drive it from your coding-CLI session (operator console)
+
+The workflow the whole surface is designed around — every step happens inside ONE interactive
+coding-agent session (Claude Code, Codex, opencode, …), which doubles as your operator console:
+
+```text
+mkdir ~/work/my-team && cd ~/work/my-team     # 1. a folder IS the workspace
+claude                                        # 2. open your coding CLI in it, then say:
+                                              #    "run dev-loop init"  (or /dev-loop:add-project
+                                              #    after install-claude-plugin) — the wizard builds
+                                              #    the team; add existing repos or create new ones
+dev-loop run --background --change-gate       # 3. the session starts the loop DETACHED —
+                                              #    log → .dev-loop/run.log; `dev-loop stop` ends it
+                                              #    (tmux pane / separate shell work too — the run
+                                              #    lock refuses a second scheduler either way)
+dev-loop tickets / ticket create / queue …    # 4. talk to the team from the SAME session
+```
+
+Step 4 is the point: the session you onboarded in stays your control plane. From it you (or the
+coding agent acting for you) file work (`dev-loop ticket create … --labels needs-pm` under passive
+intake), read the board (`tickets`, `ticket <id>`, `queue`), steer docs (`doc get/save`), check
+health (`doctor`, `metrics`, `hub status`), and stop/restart the loop (`stop`, `run --background`).
+The scaffolded `CLAUDE.md`/`AGENTS.md` brief a bare session on exactly this surface, so "ask the
+team to X" is a sentence, not a runbook. `dev-loop up` is the same idea from a BARE shell — it
+scaffolds if needed and EXECs an interactive console chat for you.
+
+### Foreground and variants
+
+The scheduler is the normal 1.x launch path; foreground works the same (Ctrl-C stops it):
 
 ```bash
 dev-loop run
@@ -169,9 +197,21 @@ dev-loop run --project devplatform --agents pm,qa
 dev-loop run --plan 8 --agents pm
 dev-loop run --interval pm=2m --max-fires 50
 dev-loop run --change-gate --fire-timeout 45m
+dev-loop run --stall-timeout 5m          # liveness watchdog: kill a SILENT fire early (default 10m on
+                                         # opencode — a hung provider call must not burn the whole hour)
+dev-loop run --background                # detach; log → .dev-loop/run.log; `dev-loop stop` ends it
 dev-loop run --stagger 30s
 dev-loop run --once --dry-run
 ```
+
+At startup the scheduler also **preflights opencode models** (`opencode models` — zero tokens): every
+configured `provider/model-id` must be resolvable with the current auth+config, so a typo'd model, an
+un-synced `opencode.json`, or missing provider auth is one loud warning instead of a failing fire per
+slot. Fires on the opencode lane get `OPENCODE_CONFIG=<workspace>/opencode.json` injected automatically
+— the `team.providers` registry rendered by `sync-opencode` reaches every fire even though the fire's
+cwd is a repo (opencode's own config discovery stops at the repo's git root). If `dev-loop.json` ever
+stops parsing mid-run (e.g. a stray hand edit), the scheduler **pauses spawning, alerts once on the
+comms channel, and resumes by itself** when the file is valid again.
 
 Agent groups:
 
