@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.8.0
 
 The 1.8 batch: drain the top of the quality-gauntlet refactor queue (behavior-preserving,
 byte-parity-guarded), plus the two operator features the multi-provider field week asked for.
