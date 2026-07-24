@@ -37,6 +37,13 @@ export function dead(a: number, b: number): number {
   if (a && b) return a - b;
   return a + b;
 }
+export class Calc {
+  private base: number;
+  constructor(base: number) { this.base = base > 0 ? base : 0; }
+  scale(n: number): number { return n < 0 ? 0 : n * this.base; }
+}
+export const twice = (n: number): number => n > 0 ? n * 2 : 0;
+export const helpers = { neg: (n: number): number => n < 0 ? -n : n };
 `);
   writeFileSync(join(dir, "tests", "calc.test.ts"), `import test from "node:test";
 import assert from "node:assert/strict";
@@ -48,13 +55,27 @@ test("grade", () => {
   assert.equal(grade(11), "big");
 });
 `);
+  // The naming-branch helpers exist for fnName coverage, not as CRAP targets — exercise them so
+  // `dead` stays the unambiguous worst row and --sample 2 still reaches grade.
+  writeFileSync(join(dir, "tests", "extra.test.ts"), `import test from "node:test";
+import assert from "node:assert/strict";
+import { Calc, twice, helpers } from "../src/calc.ts";
+test("naming helpers", () => {
+  assert.equal(new Calc(3).scale(2), 6);
+  assert.equal(new Calc(-1).scale(-5), 0);
+  assert.equal(twice(4), 8);
+  assert.equal(twice(-1), 0);
+  assert.equal(helpers.neg(-3), 3);
+  assert.equal(helpers.neg(3), 3);
+});
+`);
   execFileSync("git", ["init", "-qb", "main"], { cwd: dir });
   execFileSync("git", ["add", "-A"], { cwd: dir });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
   return dir;
 }
 
-const TEST_CMD = "node --test tests/calc.test.ts";
+const TEST_CMD = "node --test tests/calc.test.ts tests/extra.test.ts";
 function runQuality(cwd: string, args: string[]): { status: number; out: Out | null; raw: string } {
   const r = spawnSync(process.execPath, [QUALITY, ...args], { cwd, encoding: "utf8" });
   let out: Out | null = null;
@@ -73,6 +94,12 @@ const grade = rows.find((r) => r.name === "grade");
 const dead = rows.find((r) => r.name === "dead");
 ok(grade?.cc === 4, `grade CC = 4 (1 + if + if + ternary; got ${grade?.cc})`);
 ok(dead?.cc === 3, `dead CC = 3 (1 + if + &&; got ${dead?.cc})`);
+// fnName's naming branches (its own CRAP row on the 1.7.0 self-audit): class prefix,
+// constructor, const-arrow inference, property-assignment inference.
+const names = new Set(rows.map((r) => r.name));
+ok(names.has("Calc.scale") && names.has("Calc.constructor"), `class members render Class.member (got ${[...names].filter((n) => n.startsWith("Calc")).join(", ")})`);
+ok(names.has("twice"), "a const-assigned arrow borrows the variable name");
+ok(names.has("neg"), "a property-assigned arrow borrows the property name");
 ok((grade?.coverage ?? 0) > 90, `grade is covered by the suite (got ${grade?.coverage?.toFixed(1)}%)`);
 ok((dead?.coverage ?? 100) < 10, `dead is uncovered (got ${dead?.coverage?.toFixed(1)}%)`);
 // The formula itself, verified against the row's own inputs (V8 counts the declaration line as

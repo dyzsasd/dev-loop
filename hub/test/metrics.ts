@@ -87,6 +87,16 @@ try {
   ok(olManual.some((f) => f.owner === "qa" && f.manual), "ownerLiveness: agents.qa.manual:true flags the finding manual (awaiting a human)");
   const olStale = ownerLiveness(db, "p", olLedger, { nowMs: NOW + 10 * DAY });
   ok(olStale.some((f) => f.owner === "pm" && f.lastFireTs !== null), "ownerLiveness: a fire OLDER than the window counts as stranded too");
+  // Mutation-killer (quality --mutate survivor, 1.7.1): the last-fire scan keys on
+  // `!has(agent) || ts > max` — flipped to `&&`, a SECOND newer row never updates the max, so an
+  // agent whose latest fire is inside the window (but whose FIRST row is stale) gets flagged.
+  // Two rows, old-then-new, window covering only the new one: must stay un-flagged.
+  const olTwo = join(tmp, "ol-two-fires.jsonl");
+  writeFileSync(olTwo,
+    JSON.stringify({ ts: iso(NOW - 9 * DAY), agent: "pm", project: "web", durationMs: 1, exitCode: 0, timedOut: false }) + "\n" +
+    JSON.stringify({ ts: iso(NOW - DAY), agent: "pm", project: "web", durationMs: 1, exitCode: 0, timedOut: false }) + "\n");
+  ok(!ownerLiveness(db, "p", olTwo, { nowMs: NOW }).some((f) => f.owner === "pm"),
+    "ownerLiveness: the LATEST of several fires decides liveness (old row first must not stick)");
   db.close();
 
   // ── CLI e2e on a real workspace (linear → fire metrics + boardNote) ──
@@ -99,6 +109,13 @@ try {
   const out = JSON.parse((r.stdout ?? "").trim());
   ok(r.status === 0 && out.team === "met-team" && out.fires.fires === 1, "CLI --json reports team + fire metrics from the workspace ledger");
   ok(typeof out.boardNote === "string" && /linear/.test(out.boardNote), "linear backend: boardNote says the digest agent owns board KPIs (no guessing)");
+  // Mutation-killer (quality --mutate survivor, 1.7.1): `let asJson = false` flipped to true made
+  // every run emit JSON and nothing asserted the HUMAN default. Without --json the output must be
+  // the human render, not a parsable JSON object.
+  const rh = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d"], { cwd: ws, env: { ...process.env, DEVLOOP_HOME: HOME }, encoding: "utf8" });
+  const humanOut = (rh.stdout ?? "").trim();
+  const parsesAsJson = (() => { try { JSON.parse(humanOut); return true; } catch { return false; } })();
+  ok(rh.status === 0 && !parsesAsJson && /met-team/.test(humanOut), "CLI without --json renders the HUMAN report (not JSON)");
 
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);

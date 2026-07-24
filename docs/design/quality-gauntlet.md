@@ -72,6 +72,27 @@ context-budget test file — the tool paid for itself before it shipped.
    hashes in `.dev-loop/<project>/quality-state.json` (NOT in source files — we have a
    state dir; Bob doesn't), diff at probe time, mutate changed scopes only.
 
+## The 1.7.0 self-audit → the 1.8 refactor queue
+
+First full run on dev-loop's own hub (1,178 functions): 84% under crap4java's 8.0 gate,
+median function coverage 100% — but the debt is concentrated. The CI ratchet (test.yml,
+threshold 380) freezes the ceiling; this queue drains it. REFACTOR class (complex even
+though tested — split, don't just test):
+
+| CRAP | CC | fn | shape of the split |
+|---|---|---|---|
+| 374 | 162 | `cli-agentops.main` | the 26-verb dispatcher → per-verb handlers table |
+| 141 | 81 | `teamImport` | phase functions (read → map → validate → write) |
+| 137 | 38 | `teamMain` | extract preflight/gate/slot-loop (partly done in 1.7.1 tests) |
+| 128/92 | 61/50 | `bundleExport`/`bundleLoad` | shared manifest walk |
+| 105 | 105 | `validateTeamFile` | per-section validators |
+| 100 | 46 | `addRepo` | detect vs mutate halves |
+| 87 | 86 | `daemon.ts:399` anon | named route handlers |
+
+ADD-TESTS class landed in 1.7.1 (stop.ts, the tick guard, metricsCli human render,
+ownerLiveness multi-row, channelSend no-channel — all probe-driven: each new test was
+written to KILL a specific surviving mutant, then verified KILLED by re-probing).
+
 ## Known limits (honest edges)
 
 - Repos whose tests run COMPILED output (`dist/`) get coverage on dist paths, not src —
