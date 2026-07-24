@@ -79,15 +79,20 @@ median function coverage 100% — but the debt is concentrated. The CI ratchet (
 threshold 380) freezes the ceiling; this queue drains it. REFACTOR class (complex even
 though tested — split, don't just test):
 
-| CRAP | CC | fn | shape of the split |
-|---|---|---|---|
-| 374 | 162 | `cli-agentops.main` | the 26-verb dispatcher → per-verb handlers table |
-| 141 | 81 | `teamImport` | phase functions (read → map → validate → write) |
-| 137 | 38 | `teamMain` | extract preflight/gate/slot-loop (partly done in 1.7.1 tests) |
-| 128/92 | 61/50 | `bundleExport`/`bundleLoad` | shared manifest walk |
-| 105 | 105 | `validateTeamFile` | per-section validators |
-| 100 | 46 | `addRepo` | detect vs mutate halves |
-| 87 | 86 | `daemon.ts:399` anon | named route handlers |
+Status after the 1.8 batch (rescan: max CRAP 374 → 156; >100 club 8 → 4 functions):
+
+| CRAP (1.7.0 → 1.8) | fn | disposition |
+|---|---|---|
+| 374 → **6.0** | `cli-agentops.main` | ✅ split into the per-verb handlers table (1.8) |
+| 105 → **12.1** | `validateTeamFile` | ✅ split into per-section validators (1.8) |
+| 156 → 77.9 | `metricsCli` | halved by the 1.7.1 mutation-killer tests; split still queued |
+| 156 | `daemon.ts:719` anon | **the new ceiling** — 0% covered notifier arm; name + test it |
+| 141 | `teamImport` | queued: phase functions (read → map → validate → write) |
+| 128/92 | `bundleExport`/`bundleLoad` | queued: shared manifest walk |
+| 100 | `addRepo` | queued: detect vs mutate halves |
+| 87 | `daemon.ts:399` anon | queued: named route handlers |
+
+CI ratchet accordingly tightened 380 → **160**.
 
 ADD-TESTS class landed in 1.7.1 (stop.ts, the tick guard, metricsCli human render,
 ownerLiveness multi-row, channelSend no-channel — all probe-driven: each new test was

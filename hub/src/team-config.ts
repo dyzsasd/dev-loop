@@ -166,18 +166,101 @@ export function normalizedRel(p: string | undefined): string | null {
 }
 
 // ─── Validation (E01–E12 + W01–W04) ───────────────────────────────────────────
-export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: WsWarning[] } {
-  const errors: WsError[] = [];
-  const warnings: WsWarning[] = [];
-  const E = (code: string, path: string, message: string) => errors.push({ code, path, message });
-  const W = (code: string, path: string, message: string) => warnings.push({ code, path, message });
+// ─── validateTeamFile (1.8 quality-gauntlet split) ────────────────────────────────────────────────
+// Was ONE CC-105 function (97.5% covered and still CRAP 105 — complexity alone kept it on the
+// self-audit's worst list). Now: one module-scope validator per config section, an orchestrator that
+// calls them in the ORIGINAL emission order (the E/W sequence is observable via WsValidationError
+// messages — order preservation is part of behavior), and the same closures hoisted with an Emit param.
+type Emit = (code: string, path: string, message: string) => void;
 
-  const file = raw as Partial<TeamFile> | null;
-  if (!file || typeof file !== "object") { E("E01", "", "config is not a JSON object"); return { errors, warnings }; }
-  if (file.schemaVersion !== 2) E("E01", "schemaVersion", `expected schemaVersion:2 (got ${JSON.stringify((file as { schemaVersion?: unknown }).schemaVersion)})`);
+// E12 — an intake block (team default or per project): mode governs PM origination (§5a).
+function checkIntake(raw: unknown, path: string, E: Emit): void {
+  const it = raw as { mode?: unknown; todoDepthCap?: unknown };
+  if (it === null || typeof it !== "object" || Array.isArray(it)) { E("E12", path, "intake must be an object"); return; }
+  if (it.mode !== undefined && it.mode !== "autonomous" && it.mode !== "passive")
+    E("E12", `${path}.mode`, `intake.mode must be "autonomous" or "passive" (got ${JSON.stringify(it.mode)})`);
+  if (it.todoDepthCap !== undefined && (typeof it.todoDepthCap !== "number" || !Number.isInteger(it.todoDepthCap) || it.todoDepthCap < 1))
+    E("E12", `${path}.todoDepthCap`, `intake.todoDepthCap must be an integer >= 1 (got ${JSON.stringify(it.todoDepthCap)})`);
+}
 
-  const team = file.team as TeamBlock | undefined;
-  if (!team || typeof team !== "object") { E("E02", "team", "missing team block"); return { errors, warnings }; }
+// E13 — a hub block (team default or per project): agentInterface maps coding agent → "cli"|"mcp" (D8).
+// Keys are validated STRICTLY (mirror run-agents.ts CODING_AGENTS — the drift tripwire): a typo'd key
+// would otherwise silently not apply and the fire would launch on the default interface.
+const CODING_AGENT_KEYS = new Set(["claude", "codex", "opencode"]);
+function checkHub(raw: unknown, path: string, E: Emit): void {
+  const h = raw as { agentInterface?: unknown };
+  if (h === null || typeof h !== "object" || Array.isArray(h)) { E("E13", path, "hub must be an object"); return; }
+  if (h.agentInterface === undefined) return;
+  const ai = h.agentInterface as Record<string, unknown> | null;
+  if (ai === null || typeof ai !== "object" || Array.isArray(ai)) { E("E13", `${path}.agentInterface`, "hub.agentInterface must be an object mapping coding agent → \"cli\"|\"mcp\""); return; }
+  for (const [ca, v] of Object.entries(ai)) {
+    if (!CODING_AGENT_KEYS.has(ca)) E("E13", `${path}.agentInterface.${ca}`, `unknown coding agent '${ca}' (expected claude, codex, or opencode)`);
+    else if (v !== "cli" && v !== "mcp") E("E13", `${path}.agentInterface.${ca}`, `agent interface must be "cli" or "mcp" (got ${JSON.stringify(v)})`);
+  }
+}
+
+// E14 — a per-project `communication` block: the communication agent's ARTICLE config (cadence,
+// language, output shape — read by skills/communication-agent §0). Keys are validated STRICTLY:
+// presence of this block decides whether the agent drafts at all, so a typo'd key must fail loudly
+// instead of silently changing what a fire does. NOTE it is deliberately NOT the §22a team-digest
+// gate — the digest keys on team.comms presence (the channel), never on this block.
+const COMMUNICATION_KEYS = "cadence, language, audience, tone, maxWords, sourceWindowDays, output, outputDir, repoOutputDir, includeUnreleased";
+function checkCommunication(raw: unknown, path: string, E: Emit): void {
+  const c = raw as Record<string, unknown>;
+  if (c === null || typeof c !== "object" || Array.isArray(c)) { E("E14", path, "communication must be an object"); return; }
+  for (const [k, v] of Object.entries(c)) {
+    switch (k) {
+      case "cadence": case "language": case "audience": case "tone": case "outputDir": case "repoOutputDir":
+        if (typeof v !== "string" || !v.trim()) E("E14", `${path}.${k}`, `communication.${k} must be a non-empty string`);
+        break;
+      case "maxWords": case "sourceWindowDays":
+        if (typeof v !== "number" || !Number.isInteger(v) || v < 1) E("E14", `${path}.${k}`, `communication.${k} must be an integer >= 1`);
+        break;
+      case "output":
+        if (v !== "data" && v !== "repo") E("E14", `${path}.output`, `communication.output must be "data" or "repo" (got ${JSON.stringify(v)})`);
+        break;
+      case "includeUnreleased":
+        if (typeof v !== "boolean") E("E14", `${path}.includeUnreleased`, "communication.includeUnreleased must be a boolean");
+        break;
+      default:
+        E("E14", `${path}.${k}`, `unknown communication key '${k}' (expected ${COMMUNICATION_KEYS})`);
+    }
+  }
+}
+
+// E15 — a per-project `notify` block: the §9 one-way webhook the daemon's human-park pings ride.
+// On v2 team.comms is canonical (toLegacyView bridges it into notify), so a project-level block is an
+// explicit OVERRIDE — validated strictly for the same silent-suppression reason as E14. §16/I5: env-var
+// NAMES only; an inline webhook/secret literal is rejected outright (a copied workspace folder must
+// never carry a credential).
+function checkNotify(raw: unknown, path: string, E: Emit): void {
+  const n = raw as Record<string, unknown>;
+  if (n === null || typeof n !== "object" || Array.isArray(n)) { E("E15", path, "notify must be an object"); return; }
+  for (const [k, v] of Object.entries(n)) {
+    switch (k) {
+      case "type":
+        if (v !== "slack" && v !== "lark") E("E15", `${path}.type`, `notify.type must be "slack" or "lark" (got ${JSON.stringify(v)})`);
+        break;
+      case "webhookEnv": case "secretEnv":
+        if (typeof v !== "string" || !ENV_NAME_RE.test(v) || /:\/\//.test(v))
+          E("E15", `${path}.${k}`, `notify.${k} must be an ENV-VAR NAME (e.g. DEVLOOP_COMMS_WEBHOOK), not a URL/secret (§16)`);
+        break;
+      case "webhook": case "secret":
+        E("E15", `${path}.${k}`, `inline notify.${k} literals never live in dev-loop.json (§16/I5) — export the value in an env var and set notify.${k}Env to its NAME`);
+        break;
+      case "events":
+        if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) E("E15", `${path}.events`, "notify.events must be an array of event-name strings");
+        break;
+      default:
+        E("E15", `${path}.${k}`, `unknown notify key '${k}' (expected type, webhookEnv, secretEnv, events)`);
+    }
+  }
+  if (!("type" in n)) E("E15", `${path}.type`, `notify.type is required ("slack" or "lark")`);
+  if (!("webhookEnv" in n)) E("E15", `${path}.webhookEnv`, "notify.webhookEnv (an ENV-VAR NAME) is required — without it the block is a dead send target");
+}
+
+// team.key/backend/E09 + E12/E13 (team level) + E07 comms + E16 providers/opencodePermission.
+function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   if (typeof team.key !== "string" || !TEAM_KEY_RE.test(team.key)) E("E02", "team.key", `team.key must match ${TEAM_KEY_RE}`);
   if (team.backend !== "linear" && team.backend !== "service") E("E02", "team.backend", `team.backend must be "linear" or "service" (got ${JSON.stringify(team.backend)})`);
   // E09 is a load-time WARNING, not an error: `team init --backend linear --yes` legitimately writes a
@@ -186,94 +269,8 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   // fire would actually launch on the blank value: toLegacyView (the runtime projection) throws E09.
   if (team.backend === "linear" && (typeof team.linearTeam !== "string" || !team.linearTeam.trim()))
     W("E09", "team.linearTeam", `backend:"linear" has a blank team.linearTeam — fires cannot target a Linear team until it is filled: dev-loop team set team.linearTeam "<Team Name>"`);
-
-  // E12 — an intake block (team default or per project): mode governs PM origination (§5a).
-  const checkIntake = (raw: unknown, path: string) => {
-    const it = raw as { mode?: unknown; todoDepthCap?: unknown };
-    if (it === null || typeof it !== "object" || Array.isArray(it)) { E("E12", path, "intake must be an object"); return; }
-    if (it.mode !== undefined && it.mode !== "autonomous" && it.mode !== "passive")
-      E("E12", `${path}.mode`, `intake.mode must be "autonomous" or "passive" (got ${JSON.stringify(it.mode)})`);
-    if (it.todoDepthCap !== undefined && (typeof it.todoDepthCap !== "number" || !Number.isInteger(it.todoDepthCap) || it.todoDepthCap < 1))
-      E("E12", `${path}.todoDepthCap`, `intake.todoDepthCap must be an integer >= 1 (got ${JSON.stringify(it.todoDepthCap)})`);
-  };
-  if (team.intake !== undefined) checkIntake(team.intake, "team.intake");
-
-  // E13 — a hub block (team default or per project): agentInterface maps coding agent → "cli"|"mcp" (D8).
-  // Keys are validated STRICTLY (mirror run-agents.ts CODING_AGENTS — the drift tripwire): a typo'd key
-  // would otherwise silently not apply and the fire would launch on the default interface.
-  const CODING_AGENT_KEYS = new Set(["claude", "codex", "opencode"]);
-  const checkHub = (raw: unknown, path: string) => {
-    const h = raw as { agentInterface?: unknown };
-    if (h === null || typeof h !== "object" || Array.isArray(h)) { E("E13", path, "hub must be an object"); return; }
-    if (h.agentInterface === undefined) return;
-    const ai = h.agentInterface as Record<string, unknown> | null;
-    if (ai === null || typeof ai !== "object" || Array.isArray(ai)) { E("E13", `${path}.agentInterface`, "hub.agentInterface must be an object mapping coding agent → \"cli\"|\"mcp\""); return; }
-    for (const [ca, v] of Object.entries(ai)) {
-      if (!CODING_AGENT_KEYS.has(ca)) E("E13", `${path}.agentInterface.${ca}`, `unknown coding agent '${ca}' (expected claude, codex, or opencode)`);
-      else if (v !== "cli" && v !== "mcp") E("E13", `${path}.agentInterface.${ca}`, `agent interface must be "cli" or "mcp" (got ${JSON.stringify(v)})`);
-    }
-  };
-  if (team.hub !== undefined) checkHub(team.hub, "team.hub");
-
-  // E14 — a per-project `communication` block: the communication agent's ARTICLE config (cadence,
-  // language, output shape — read by skills/communication-agent §0). Keys are validated STRICTLY:
-  // presence of this block decides whether the agent drafts at all, so a typo'd key must fail loudly
-  // instead of silently changing what a fire does. NOTE it is deliberately NOT the §22a team-digest
-  // gate — the digest keys on team.comms presence (the channel), never on this block.
-  const COMMUNICATION_KEYS = "cadence, language, audience, tone, maxWords, sourceWindowDays, output, outputDir, repoOutputDir, includeUnreleased";
-  const checkCommunication = (raw: unknown, path: string) => {
-    const c = raw as Record<string, unknown>;
-    if (c === null || typeof c !== "object" || Array.isArray(c)) { E("E14", path, "communication must be an object"); return; }
-    for (const [k, v] of Object.entries(c)) {
-      switch (k) {
-        case "cadence": case "language": case "audience": case "tone": case "outputDir": case "repoOutputDir":
-          if (typeof v !== "string" || !v.trim()) E("E14", `${path}.${k}`, `communication.${k} must be a non-empty string`);
-          break;
-        case "maxWords": case "sourceWindowDays":
-          if (typeof v !== "number" || !Number.isInteger(v) || v < 1) E("E14", `${path}.${k}`, `communication.${k} must be an integer >= 1`);
-          break;
-        case "output":
-          if (v !== "data" && v !== "repo") E("E14", `${path}.output`, `communication.output must be "data" or "repo" (got ${JSON.stringify(v)})`);
-          break;
-        case "includeUnreleased":
-          if (typeof v !== "boolean") E("E14", `${path}.includeUnreleased`, "communication.includeUnreleased must be a boolean");
-          break;
-        default:
-          E("E14", `${path}.${k}`, `unknown communication key '${k}' (expected ${COMMUNICATION_KEYS})`);
-      }
-    }
-  };
-
-  // E15 — a per-project `notify` block: the §9 one-way webhook the daemon's human-park pings ride.
-  // On v2 team.comms is canonical (toLegacyView bridges it into notify), so a project-level block is an
-  // explicit OVERRIDE — validated strictly for the same silent-suppression reason as E14. §16/I5: env-var
-  // NAMES only; an inline webhook/secret literal is rejected outright (a copied workspace folder must
-  // never carry a credential).
-  const checkNotify = (raw: unknown, path: string) => {
-    const n = raw as Record<string, unknown>;
-    if (n === null || typeof n !== "object" || Array.isArray(n)) { E("E15", path, "notify must be an object"); return; }
-    for (const [k, v] of Object.entries(n)) {
-      switch (k) {
-        case "type":
-          if (v !== "slack" && v !== "lark") E("E15", `${path}.type`, `notify.type must be "slack" or "lark" (got ${JSON.stringify(v)})`);
-          break;
-        case "webhookEnv": case "secretEnv":
-          if (typeof v !== "string" || !ENV_NAME_RE.test(v) || /:\/\//.test(v))
-            E("E15", `${path}.${k}`, `notify.${k} must be an ENV-VAR NAME (e.g. DEVLOOP_COMMS_WEBHOOK), not a URL/secret (§16)`);
-          break;
-        case "webhook": case "secret":
-          E("E15", `${path}.${k}`, `inline notify.${k} literals never live in dev-loop.json (§16/I5) — export the value in an env var and set notify.${k}Env to its NAME`);
-          break;
-        case "events":
-          if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) E("E15", `${path}.events`, "notify.events must be an array of event-name strings");
-          break;
-        default:
-          E("E15", `${path}.${k}`, `unknown notify key '${k}' (expected type, webhookEnv, secretEnv, events)`);
-      }
-    }
-    if (!("type" in n)) E("E15", `${path}.type`, `notify.type is required ("slack" or "lark")`);
-    if (!("webhookEnv" in n)) E("E15", `${path}.webhookEnv`, "notify.webhookEnv (an ENV-VAR NAME) is required — without it the block is a dead send target");
-  };
+  if (team.intake !== undefined) checkIntake(team.intake, "team.intake", E);
+  if (team.hub !== undefined) checkHub(team.hub, "team.hub", E);
 
   // E07 — comms: provider ∈ {slack,lark}; webhookEnv is an ENV-VAR NAME, never a URL literal (I5).
   if (team.comms !== undefined) {
@@ -286,45 +283,44 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
   // E16 — team.providers (the custom-endpoint registry) + team.opencodePermission. Strictly validated:
   // a typo'd entry renders a DEAD opencode provider block (fires on it would 404/401 a whole turn), and
   // authTokenEnv is name-only (§16 — a copied workspace folder must never carry a credential).
-  const PROVIDER_KEYS = "kind, baseUrl, authTokenEnv, models, extraOptions, effortMode";
-  if (team.providers !== undefined) {
-    const ps = team.providers as Record<string, unknown> | null;
-    if (ps === null || typeof ps !== "object" || Array.isArray(ps)) E("E16", "team.providers", "providers must be an object mapping provider-id → entry");
-    else for (const [id, raw] of Object.entries(ps)) {
-      const path = `team.providers.${id}`;
-      if (!KEY_RE.test(id)) E("E16", path, `provider id '${id}' must match ${KEY_RE} (it becomes the opencode provider key and the model-string prefix)`);
-      const e = raw as Record<string, unknown> | null;
-      if (e === null || typeof e !== "object" || Array.isArray(e)) { E("E16", path, "provider entry must be an object"); continue; }
-      for (const k of Object.keys(e)) {
-        if (!["kind", "baseUrl", "authTokenEnv", "models", "extraOptions", "effortMode"].includes(k))
-          E("E16", `${path}.${k}`, `unknown provider key '${k}' (expected ${PROVIDER_KEYS})`);
-      }
-      if (e.kind !== "openai-compatible")
-        E("E16", `${path}.kind`, `provider.kind must be "openai-compatible" (got ${JSON.stringify(e.kind)}) — the "anthropic" claude-runner route is deferred (model-provider-routing Appendix A)`);
-      if (typeof e.baseUrl !== "string" || !/^https?:\/\//.test(e.baseUrl))
-        E("E16", `${path}.baseUrl`, `provider.baseUrl must be an http(s) URL (got ${JSON.stringify(e.baseUrl)})`);
-      if (typeof e.authTokenEnv !== "string" || !ENV_NAME_RE.test(e.authTokenEnv) || /:\/\//.test(e.authTokenEnv))
-        E("E16", `${path}.authTokenEnv`, `provider.authTokenEnv must be an ENV-VAR NAME (e.g. SYNTHETIC_KEY), not a URL/secret (§16)`);
-      if (!Array.isArray(e.models) || !e.models.length || e.models.some((m) => typeof m !== "string" || !m.trim()))
-        E("E16", `${path}.models`, "provider.models must be a non-empty array of model-id strings (rendered into the opencode provider block)");
-      if (e.extraOptions !== undefined && (e.extraOptions === null || typeof e.extraOptions !== "object" || Array.isArray(e.extraOptions)))
-        E("E16", `${path}.extraOptions`, "provider.extraOptions must be an object (opencode provider-options passthrough)");
-      if (e.effortMode !== undefined && e.effortMode !== "passthrough" && e.effortMode !== "strip")
-        E("E16", `${path}.effortMode`, `provider.effortMode must be "passthrough" or "strip" (got ${JSON.stringify(e.effortMode)})`);
-    }
-  }
+  if (team.providers !== undefined) validateProviders(team.providers, E);
   if (team.opencodePermission !== undefined) {
     const op = team.opencodePermission as unknown;
     if (op === null || typeof op !== "object" || Array.isArray(op))
       E("E16", "team.opencodePermission", "opencodePermission must be a JSON object (opencode permission config, injected per fire — replaces the certified wildcard-deny default wholesale)");
   }
+}
 
-  const repos = (file.repos ?? {}) as Record<string, RepoEntry>;
-  const projects = (file.projects ?? {}) as Record<string, ProjectEntry>;
-  if (!file.repos || typeof file.repos !== "object") E("E02", "repos", "missing repos registry (may be empty {})");
-  if (!file.projects || typeof file.projects !== "object") E("E02", "projects", "missing projects map (may be empty {})");
+const PROVIDER_KEYS = "kind, baseUrl, authTokenEnv, models, extraOptions, effortMode";
+function validateProviders(providers: unknown, E: Emit): void {
+  const ps = providers as Record<string, unknown> | null;
+  if (ps === null || typeof ps !== "object" || Array.isArray(ps)) { E("E16", "team.providers", "providers must be an object mapping provider-id → entry"); return; }
+  for (const [id, raw] of Object.entries(ps)) {
+    const path = `team.providers.${id}`;
+    if (!KEY_RE.test(id)) E("E16", path, `provider id '${id}' must match ${KEY_RE} (it becomes the opencode provider key and the model-string prefix)`);
+    const e = raw as Record<string, unknown> | null;
+    if (e === null || typeof e !== "object" || Array.isArray(e)) { E("E16", path, "provider entry must be an object"); continue; }
+    for (const k of Object.keys(e)) {
+      if (!["kind", "baseUrl", "authTokenEnv", "models", "extraOptions", "effortMode"].includes(k))
+        E("E16", `${path}.${k}`, `unknown provider key '${k}' (expected ${PROVIDER_KEYS})`);
+    }
+    if (e.kind !== "openai-compatible")
+      E("E16", `${path}.kind`, `provider.kind must be "openai-compatible" (got ${JSON.stringify(e.kind)}) — the "anthropic" claude-runner route is deferred (model-provider-routing Appendix A)`);
+    if (typeof e.baseUrl !== "string" || !/^https?:\/\//.test(e.baseUrl))
+      E("E16", `${path}.baseUrl`, `provider.baseUrl must be an http(s) URL (got ${JSON.stringify(e.baseUrl)})`);
+    if (typeof e.authTokenEnv !== "string" || !ENV_NAME_RE.test(e.authTokenEnv) || /:\/\//.test(e.authTokenEnv))
+      E("E16", `${path}.authTokenEnv`, `provider.authTokenEnv must be an ENV-VAR NAME (e.g. SYNTHETIC_KEY), not a URL/secret (§16)`);
+    if (!Array.isArray(e.models) || !e.models.length || e.models.some((m) => typeof m !== "string" || !m.trim()))
+      E("E16", `${path}.models`, "provider.models must be a non-empty array of model-id strings (rendered into the opencode provider block)");
+    if (e.extraOptions !== undefined && (e.extraOptions === null || typeof e.extraOptions !== "object" || Array.isArray(e.extraOptions)))
+      E("E16", `${path}.extraOptions`, "provider.extraOptions must be an object (opencode provider-options passthrough)");
+    if (e.effortMode !== undefined && e.effortMode !== "passthrough" && e.effortMode !== "strip")
+      E("E16", `${path}.effortMode`, `provider.effortMode must be "passthrough" or "strip" (got ${JSON.stringify(e.effortMode)})`);
+  }
+}
 
-  // Name validation (E11) for repo refs.
+// Repo registry: name validation (E11), path shape (E03), duplicate canonical paths (E10).
+function validateRepoRegistry(repos: Record<string, RepoEntry>, E: Emit): void {
   const canonPaths = new Map<string, string>(); // normalizedRel → first ref (E10)
   for (const [ref, r] of Object.entries(repos)) {
     validateName(ref, `repos.${ref}`, E);
@@ -336,8 +332,11 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       else canonPaths.set(rel, ref);
     }
   }
+}
 
-  // Projects: name (E11), repo refs (E04), enabled/weight (E08), linearProjectId dup (E10).
+// Projects: name (E11), repo refs (E04), enabled/weight (E08), linearProjectId dup (E10), per-project
+// blocks (E12/E13/E14/E15). Returns ref → referencing project keys for the shared-ownership pass.
+function validateProjects(projects: Record<string, ProjectEntry>, repos: Record<string, RepoEntry>, E: Emit, W: Emit): Map<string, string[]> {
   const seenLinearProjectId = new Map<string, string>();
   const refCount = new Map<string, string[]>(); // ref → [project keys referencing it]
   for (const [key, p] of Object.entries(projects)) {
@@ -350,10 +349,10 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       if (prev) E("E10", `projects.${key}.linearProjectId`, `linearProjectId '${p.linearProjectId}' is claimed by both ${prev} and ${key}`);
       else seenLinearProjectId.set(p.linearProjectId, key);
     }
-    if (p?.intake !== undefined) checkIntake(p.intake, `projects.${key}.intake`);
-    if (p?.hub !== undefined) checkHub(p.hub, `projects.${key}.hub`);
-    if (p?.communication !== undefined) checkCommunication(p.communication, `projects.${key}.communication`);
-    if (p?.notify !== undefined) checkNotify(p.notify, `projects.${key}.notify`);
+    if (p?.intake !== undefined) checkIntake(p.intake, `projects.${key}.intake`, E);
+    if (p?.hub !== undefined) checkHub(p.hub, `projects.${key}.hub`, E);
+    if (p?.communication !== undefined) checkCommunication(p.communication, `projects.${key}.communication`, E);
+    if (p?.notify !== undefined) checkNotify(p.notify, `projects.${key}.notify`, E);
     const refs = Array.isArray(p?.repos) ? p.repos : [];
     if (!refs.length) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);
     for (const rr of refs) {
@@ -362,10 +361,13 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       (refCount.get(ref) ?? refCount.set(ref, []).get(ref)!).push(key);
     }
   }
+  return refCount;
+}
 
-  // E05 — a repo referenced by >1 project needs an `owner` that is one of its referrers. NOTE: this
-  // deliberately counts ALL referrers, not just enabled ones — validation must not flip when a project is
-  // toggled (invariant I2). W02 — a registered repo referenced by nobody.
+// E05 — a repo referenced by >1 project needs an `owner` that is one of its referrers. NOTE: this
+// deliberately counts ALL referrers, not just enabled ones — validation must not flip when a project is
+// toggled (invariant I2). W02 — a registered repo referenced by nobody.
+function validateSharedOwnership(repos: Record<string, RepoEntry>, refCount: Map<string, string[]>, E: Emit, W: Emit): void {
   for (const [ref, r] of Object.entries(repos)) {
     const referrers = refCount.get(ref) ?? [];
     if (referrers.length === 0) { W("W02", `repos.${ref}`, `repo '${ref}' is registered but referenced by no project`); continue; }
@@ -375,9 +377,11 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       else if (!referrers.includes(owner)) E("E05", `repos.${ref}.owner`, `repo '${ref}' owner '${owner}' is not among its referrers (${referrers.join(", ")})`);
     }
   }
+}
 
-  // W07 — a DEPLOYED repo with no health probe leaves ops blind: referenced by an enabled project,
-  // carries a deploy block, but has neither a healthCheck (top-level or per-environment) nor ops.checks.
+// W07 — a DEPLOYED repo with no health probe leaves ops blind. E06 — deployPolicy is a CEILING:
+// policy[env]="manual" forbids any repo auto-deploying that env (§4.3).
+function validateProbesAndPolicy(team: TeamBlock, repos: Record<string, RepoEntry>, projects: Record<string, ProjectEntry>, refCount: Map<string, string[]>, E: Emit, W: Emit): void {
   for (const [ref, r] of Object.entries(repos)) {
     if (!r?.deploy) continue;
     const referrers = refCount.get(ref) ?? [];
@@ -388,8 +392,6 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
       || !!(r.ops?.checks?.length);
     if (!hasProbe) W("W07", `repos.${ref}`, `repo '${ref}' deploys but has NO health probe (no deploy healthCheck, no ops.checks) — ops-agent is blind to it; add one via /dev-loop:add-repo --ops-check`);
   }
-
-  // E06 — deployPolicy is a CEILING: policy[env]="manual" forbids any repo auto-deploying that env (§4.3).
   const policy = team.deployPolicy ?? {};
   for (const [env, level] of Object.entries(policy)) {
     if (level !== "auto" && level !== "manual") E("E02", `team.deployPolicy.${env}`, `deployPolicy.${env} must be "auto" or "manual"`);
@@ -401,6 +403,31 @@ export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: W
         E("E06", `repos.${ref}.deploy.environments.${env}.auto`, `deployPolicy.${env}="manual" forbids auto-deploy, but repo '${ref}' sets auto:true`);
     }
   }
+}
+
+export function validateTeamFile(raw: unknown): { errors: WsError[]; warnings: WsWarning[] } {
+  const errors: WsError[] = [];
+  const warnings: WsWarning[] = [];
+  const E: Emit = (code, path, message) => errors.push({ code, path, message });
+  const W: Emit = (code, path, message) => warnings.push({ code, path, message });
+
+  const file = raw as Partial<TeamFile> | null;
+  if (!file || typeof file !== "object") { E("E01", "", "config is not a JSON object"); return { errors, warnings }; }
+  if (file.schemaVersion !== 2) E("E01", "schemaVersion", `expected schemaVersion:2 (got ${JSON.stringify((file as { schemaVersion?: unknown }).schemaVersion)})`);
+
+  const team = file.team as TeamBlock | undefined;
+  if (!team || typeof team !== "object") { E("E02", "team", "missing team block"); return { errors, warnings }; }
+  validateTeamBlock(team, E, W);
+
+  const repos = (file.repos ?? {}) as Record<string, RepoEntry>;
+  const projects = (file.projects ?? {}) as Record<string, ProjectEntry>;
+  if (!file.repos || typeof file.repos !== "object") E("E02", "repos", "missing repos registry (may be empty {})");
+  if (!file.projects || typeof file.projects !== "object") E("E02", "projects", "missing projects map (may be empty {})");
+
+  validateRepoRegistry(repos, E);
+  const refCount = validateProjects(projects, repos, E, W);
+  validateSharedOwnership(repos, refCount, E, W);
+  validateProbesAndPolicy(team, repos, projects, refCount, E, W);
 
   return { errors, warnings };
 }

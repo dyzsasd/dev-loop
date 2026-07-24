@@ -295,9 +295,31 @@ try {
   const dBad = run("server", ["doctor"], { cwd: nx });
   ok(/DOCTOR_FAILED/.test(dBad.out) && /NEXT: fix dev-loop\.json — \[E04\]/.test(dBad.out), "NEXT(0): an invalid config → the E-code fix");
 
+  // ── set-model (1.8): the one-command model switch ────────────────────────────────────────────
+  {
+    const sm1 = run("team", ["set-model", "junior-dev", "google-vertex/gemini-3.6-flash", "--project", "web"], { cwd: lin });
+    ok(sm1.code === 0 && /agents\.junior-dev\.model = google-vertex\/gemini-3\.6-flash/.test(sm1.out),
+      `set-model writes the per-agent model (got ${sm1.code}: ${sm1.out.trim().split("\n")[0]})`);
+    const smCfg = readJson(join(lin, "dev-loop.json"));
+    ok(smCfg.projects.web.agents?.["junior-dev"]?.model === "google-vertex/gemini-3.6-flash",
+      "the model lands in projects.<key>.agents.<agent>.model");
+    const sm2 = run("team", ["set-model", "pm", "m2", "--project", "web", "--effort", "max"], { cwd: lin });
+    const smCfg2 = readJson(join(lin, "dev-loop.json"));
+    ok(sm2.code === 0 && smCfg2.projects.web.agents?.pm?.model === "m2" && smCfg2.projects.web.agents?.pm?.effort === "max",
+      "--effort rides along");
+    ok(/restart the scheduler/.test(sm1.out), "the restart pointer is printed (stop && run --background)");
+    const sm3 = run("team", ["set-model", "nobody", "m", "--project", "web"], { cwd: lin });
+    ok(sm3.code !== 0 && /unknown agent 'nobody'/.test(sm3.out), "an unknown agent handle is refused");
+    const sm4 = run("team", ["set-model", "ignored", "opus", "--team-default", "--coding-agent", "claude"], { cwd: lin });
+    const smCfg4 = readJson(join(lin, "dev-loop.json"));
+    ok(sm4.code === 0 && smCfg4.team.codingAgentDefaults?.claude?.model === "opus",
+      "--team-default writes team.codingAgentDefaults.<cli>.model");
+  }
+
   console.log(fails === 0 ? "\nTEAM_EDIT_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   mockLinear.close();
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
 }
+
