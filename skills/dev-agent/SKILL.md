@@ -127,7 +127,7 @@ change that satisfies ALL acceptance criteria.
 and let the repo's own PR-validation checks build+test it, merging only on green at Step 0.5
 and iterating on a red check. Step 5.5 (read-only) still runs. **In `landing:"direct"` /
 `deploy.style:"command"` the local gate is the only pre-land gate:** run the target repo's
-resolved `build` commands (`typecheck`, `build`, `test` — §19) in order; a failure you can't
+resolved `build` commands (`typecheck`, `build`, `test`, `quality` — §19) in order; one you can't
 fix ⇒ revert your change and block the ticket with the failure output (§9). NEVER push or
 deploy a red build — a broken `defaultBranch` blocks every other agent.
 Two traps that silently under-test — don't be fooled by a fast green:

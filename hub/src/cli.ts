@@ -33,6 +33,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   notify:           ["comms"],                     // push a message to the team's slack/lark channel
   "push-guard":     ["push-guard"],                // P1-2: pre-push ride-along check (canceled-ticket commits)
   metrics:          ["metrics"],                   // team KPIs from fires.jsonl (+ hub board on service)
+  quality:          ["quality"],                   // per-function CRAP report/gate + mutation probe (quality-gauntlet)
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire

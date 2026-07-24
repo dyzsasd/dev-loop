@@ -65,6 +65,13 @@ dimension gets its turn. The set:
   validation, naming, config access) across modules.
 - **missing-abstractions** — repeated ad-hoc patterns that want a shared
   helper/type/boundary.
+- **test-strength** — tests that don't bite: run `dev-loop quality` (per-function
+  CRAP = complex ∧ untested, worst first), then the mutation probe
+  `dev-loop quality --mutate --sample 5` on the worst rows. A SURVIVING mutant =
+  a behavior change no test noticed — file it (the fix is a test, so owner `qa` +
+  `coverage` fits). READ-ONLY note: the probe self-restores byte-identically and
+  refuses dirty files, so it counts as read-equivalent — the ONE sanctioned
+  exception to "never mutate a working tree"; never hand-edit code yourself.
 EXCEPTION: run the dependency-staleness + CVE scan EVERY fire regardless of cursor or
 `swept` — it's a cheap read-only shell command, and the one dimension where a missed day
 has security consequences. Multi-repo (§19): audit each repo on the chosen dimension AND

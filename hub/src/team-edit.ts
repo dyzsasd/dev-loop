@@ -237,7 +237,7 @@ function derivePrefix(db: DatabaseSync, key: string): string {
 // ── add-repo ──────────────────────────────────────────────────────────────────
 export function addRepo(argv: string[]): number {
   const [ref, ...rest] = argv;
-  if (!ref || ref.startsWith("--")) die("usage: dev-loop team add-repo <ref> --project <key> [--path <rel>] [--detect] [--role primary|docs] [--remote <url>] [--owner <proj>] [--landing pr|direct] [--auto-merge] [--merge-check <name>]... [--typecheck-cmd <c>] [--build-cmd <c>] [--deploy-style <s>] [--ops-check <url>]...");
+  if (!ref || ref.startsWith("--")) die("usage: dev-loop team add-repo <ref> --project <key> [--path <rel>] [--detect] [--role primary|docs] [--remote <url>] [--owner <proj>] [--landing pr|direct] [--auto-merge] [--merge-check <name>]... [--typecheck-cmd <c>] [--build-cmd <c>] [--test-cmd <c>] [--quality-cmd <c>] [--deploy-style <s>] [--ops-check <url>]...");
   const o: Record<string, unknown> = { mergeChecks: [] as string[], opsChecks: [] as string[], criticalRoutes: [] as string[] };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]; const next = () => rest[++i] ?? die(`${a} requires a value`);
@@ -252,6 +252,8 @@ export function addRepo(argv: string[]): number {
     else if (a === "--merge-check") (o.mergeChecks as string[]).push(next());
     else if (a === "--typecheck-cmd") o.typecheck = next();
     else if (a === "--build-cmd") o.build = next();
+    else if (a === "--test-cmd") o.test = next();
+    else if (a === "--quality-cmd") o.quality = next(); // the CRAP/mutation gate (quality-gauntlet)
     else if (a === "--deploy-style") o.deployStyle = next();
     else if (a === "--ops-check") (o.opsChecks as string[]).push(next());
     else if (a === "--critical-route") (o.criticalRoutes as string[]).push(next());
@@ -280,6 +282,8 @@ export function addRepo(argv: string[]): number {
     const facts = detectRepoFacts(abs);
     if (!o.typecheck && facts.build?.typecheck) o.typecheck = facts.build.typecheck;
     if (!o.build && facts.build?.build) o.build = facts.build.build;
+    if (!o.test && facts.build?.test) o.test = facts.build.test;
+    if (!o.quality && facts.build?.quality) o.quality = facts.build.quality;
     if (!(o.mergeChecks as string[]).length && facts.mergeChecks?.length) o.mergeChecks = facts.mergeChecks;
     if (!o.landing) o.landing = "pr";
     console.log("detected (deterministic, no LLM):");
@@ -298,7 +302,9 @@ export function addRepo(argv: string[]): number {
       if (o.landing) entry.landing = o.landing as "pr" | "direct";
       if (o.autoMerge) entry.autoMerge = true;
       if ((o.mergeChecks as string[]).length) entry.mergeChecks = o.mergeChecks as string[];
-      if (o.typecheck || o.build) entry.build = { ...(o.typecheck ? { typecheck: o.typecheck as string } : {}), ...(o.build ? { build: o.build as string } : {}) };
+      if (o.typecheck || o.build || o.test || o.quality) entry.build = {
+        ...(o.typecheck ? { typecheck: o.typecheck as string } : {}), ...(o.build ? { build: o.build as string } : {}),
+        ...(o.test ? { test: o.test as string } : {}), ...(o.quality ? { quality: o.quality as string } : {}) };
       if (o.deployStyle) entry.deploy = { style: o.deployStyle as string, environments: {} };
       if ((o.opsChecks as string[]).length || (o.criticalRoutes as string[]).length || o.logsCommand)
         entry.ops = { ...((o.opsChecks as string[]).length ? { checks: o.opsChecks as string[] } : {}),
@@ -318,7 +324,7 @@ export function addRepo(argv: string[]): number {
 }
 
 // ── deterministic repo-fact detection (`add-repo --detect`) ───────────────────
-export interface DetectedRepoFacts { build?: { typecheck?: string; build?: string }; mergeChecks?: string[] }
+export interface DetectedRepoFacts { build?: { typecheck?: string; build?: string; test?: string; quality?: string }; mergeChecks?: string[] }
 
 // package.json scripts named `typecheck`/`build` become build gates (runner chosen by lockfile:
 // pnpm-lock.yaml → pnpm, yarn.lock → yarn, else npm); .github/workflows job names become CANDIDATE
@@ -329,9 +335,11 @@ export function detectRepoFacts(absPath: string): DetectedRepoFacts {
     const pkg = JSON.parse(readFileSync(join(absPath, "package.json"), "utf8")) as { scripts?: Record<string, string> };
     const pm = existsSync(join(absPath, "pnpm-lock.yaml")) ? "pnpm" : existsSync(join(absPath, "yarn.lock")) ? "yarn" : "npm";
     const runCmd = (name: string) => `${pm} run ${name}`;
-    const build: { typecheck?: string; build?: string } = {};
+    const build: { typecheck?: string; build?: string; test?: string; quality?: string } = {};
     if (typeof pkg.scripts?.typecheck === "string") build.typecheck = runCmd("typecheck");
     if (typeof pkg.scripts?.build === "string") build.build = runCmd("build");
+    if (typeof pkg.scripts?.test === "string") build.test = runCmd("test");
+    if (typeof pkg.scripts?.quality === "string") build.quality = runCmd("quality"); // the CRAP/mutation gate (quality-gauntlet)
     if (build.typecheck || build.build) out.build = build;
   } catch { /* no package.json (or unparseable) → no build facts */ }
   const checks: string[] = [];

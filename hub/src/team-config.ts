@@ -82,7 +82,7 @@ export interface RepoEntry {
   landing?: "pr" | "direct";
   autoMerge?: boolean;
   mergeChecks?: string[];
-  build?: { typecheck?: string; build?: string };
+  build?: { typecheck?: string; build?: string; test?: string; quality?: string }; // Step-5 gate order: typecheck → build → test → quality (quality = the optional CRAP/mutation gate, quality-gauntlet design)
   deploy?: { style?: string; healthCheck?: string; environments?: Record<string, { auto?: boolean; deployPrPrefix?: string; command?: string; healthCheck?: string }> };
   ops?: { checks?: string[]; criticalRoutes?: string[]; logsCommand?: string };
 }
