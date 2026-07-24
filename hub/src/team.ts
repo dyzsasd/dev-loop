@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { teamInit } from "./team-init.ts";
 import { teamImport } from "./team-import.ts";
 import { teamRepair } from "./team-repair.ts";
-import { addProject, addRepo, teamSet, addProvider } from "./team-edit.ts";
+import { addProject, addRepo, teamSet, addProvider, setModel } from "./team-edit.ts";
 import { syncOpencodeCmd } from "./opencode-sync.ts";
 import { WsValidationError } from "./team-config.ts";
 import { WsNotFound } from "./workspace.ts";
@@ -23,6 +23,8 @@ function usage(): void {
                 (create-or-merge, never clobbers; doctor W14 reports drift)
   add-provider  register a custom model endpoint: <id> --base-url U --auth-env NAME --models a,b
                 (E16-validated write + opencode.json sync; store the key VALUE via \`dev-loop secret set\`)
+  set-model     one-command model switch: <agent> <model> [--project k] [--effort e] [--team-default]
+                (validated write + opencode.json re-sync for registry providers + restart pointer)
 
 Run \`dev-loop team <sub> --help\` for each.`);
 }
@@ -39,6 +41,7 @@ export async function team(argv = process.argv.slice(2)): Promise<number> {
       case "set": return await teamSet(rest);
       case "sync-opencode": return syncOpencodeCmd(rest);
       case "add-provider": return addProvider(rest);
+      case "set-model": return await setModel(rest);
       case undefined: case "help": case "--help": case "-h": usage(); return 0;
       default: console.error(`dev-loop team: unknown subcommand '${sub}'\n`); usage(); return 2;
     }

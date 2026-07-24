@@ -11,7 +11,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb } from "./workspace.ts";
 import { validateTeamFile, referencingProjects, type TeamFile, type Workspace } from "./team-config.ts";
 import { openDb } from "./db.ts";
-import { ensureSeed, findProject } from "./seed.ts";
+import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
 import { provisionClaudePermissions } from "./team-init.ts";
 import { syncOpencodeConfig } from "./opencode-sync.ts";
 
@@ -433,4 +433,64 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (sub === "set") process.exit(await teamSet(rest));
   if (sub === "add-provider") process.exit(addProvider(rest));
   console.error("usage: team-edit add-project|add-repo|set|add-provider …"); process.exit(2);
+}
+
+// ── set-model ─────────────────────────────────────────────────────────────────
+// `dev-loop team set-model <agent> <model> [--project <key>] [--coding-agent c] [--effort e] [--team-default]`
+// The one-command model switch (1.8; field origin: the 2026-07 Qwen→Gemini hot-swap was five hand
+// edits + a sync + a restart, and the operator mis-killed processes in between). Writes the validated
+// config (projects.<key>.agents.<agent> — or codingAgentDefaults with --team-default), re-syncs
+// opencode.json when the model's provider prefix is a team.providers entry, and prints the restart
+// pointer. Model strings are the launch values run-agents resolves (opencode: provider/model-id).
+export async function setModel(argv: string[]): Promise<number> {
+  const HANDLES = new Set<string>(AGENT_HANDLES);
+  let project: string | undefined; let codingAgent: string | undefined; let effort: string | undefined;
+  let teamDefault = false;
+  const pos: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]; const next = () => argv[++i] ?? die(`${a} requires a value`);
+    if (a === "--project") project = next();
+    else if (a === "--coding-agent") codingAgent = next();
+    else if (a === "--effort") effort = next();
+    else if (a === "--team-default") teamDefault = true;
+    else if (a === "--help" || a === "-h") { console.log("usage: dev-loop team set-model <agent> <model> [--project <key>] [--coding-agent claude|codex|opencode] [--effort E] [--team-default]"); return 0; }
+    else if (a.startsWith("--")) die(`unknown option '${a}'`);
+    else pos.push(a);
+  }
+  const [agent, model] = pos;
+  if (!agent || !model || pos.length > 2) die("usage: dev-loop team set-model <agent> <model> [--project <key>] [--coding-agent c] [--effort e] [--team-default]");
+  if (!teamDefault && !HANDLES.has(agent)) die(`unknown agent '${agent}' — one of ${AGENT_HANDLES.join(", ")} (or use --team-default with a coding agent)`);
+  if (codingAgent !== undefined && !["claude", "codex", "opencode"].includes(codingAgent)) die("--coding-agent must be claude, codex, or opencode");
+
+  const ws = mutate((file) => {
+    if (teamDefault) {
+      const ca = codingAgent ?? "opencode";
+      const t = file.team as TeamFile["team"] & { codingAgentDefaults?: Record<string, { model?: string; effort?: string }> };
+      t.codingAgentDefaults = t.codingAgentDefaults ?? {};
+      t.codingAgentDefaults[ca] = { ...t.codingAgentDefaults[ca], model, ...(effort !== undefined ? { effort } : {}) };
+      return;
+    }
+    const keys = Object.keys(file.projects);
+    const key = project ?? (keys.length === 1 ? keys[0] : undefined);
+    if (!key) die(`--project <key> is required (workspace has ${keys.length} projects: ${keys.join(", ")})`);
+    const p = file.projects[key] as (typeof file.projects)[string] & { agents?: Record<string, { codingAgent?: string; model?: string; effort?: string }> };
+    if (!p) die(`project '${key}' does not exist`);
+    p.agents = p.agents ?? {};
+    p.agents[agent] = { ...p.agents[agent], model,
+      ...(codingAgent !== undefined ? { codingAgent } : {}), ...(effort !== undefined ? { effort } : {}) };
+  });
+
+  const target = teamDefault ? `team.codingAgentDefaults.${codingAgent ?? "opencode"}` : `projects.*.agents.${agent}`;
+  console.log(`set ${target}.model = ${model}${effort !== undefined ? ` (effort ${effort})` : ""}`);
+  // A registry-provider model prefix means opencode.json must carry the provider — re-render it here
+  // so the operator never ships a model the fires cannot resolve (the OPENCODE_CONFIG injection makes
+  // the workspace file authoritative for fires since 1.6.0).
+  const prefix = model.includes("/") ? model.split("/")[0] : null;
+  if (prefix && ws.file.team.providers && ws.file.team.providers[prefix]) {
+    const { syncOpencodeCmd } = await import("./opencode-sync.ts");
+    const rc = syncOpencodeCmd([]);
+    if (rc !== 0) console.error("warning: opencode.json sync failed — run `dev-loop team sync-opencode` by hand");
+  }
+  console.log("restart the scheduler to pick it up: `dev-loop stop && dev-loop run --background …` (the startup model preflight will verify it resolves)");
+  return 0;
 }

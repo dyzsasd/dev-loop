@@ -50,12 +50,12 @@ jobs:
           NODE_V8_COVERAGE: ${{ github.workspace }}/hub/.v8cov
 
       # The quality ratchet (quality-gauntlet design): reuse the coverage the test step just
-      # collected (zero extra test time) and gate the per-function CRAP maximum. Threshold 380
-      # sits just above the 1.7.0 self-audit's worst row (cli-agentops.main, 374 — the recorded
-      # 1.8 refactor queue): nothing may get WORSE than today's worst; tighten as the queue drains.
+      # collected (zero extra test time) and gate the per-function CRAP maximum. 1.7.0 started at
+      # 380 (just above cli-agentops.main's 374); the 1.8 refactors dropped the ceiling to 156
+      # (daemon.ts:719 anon, 0% covered) — threshold 160 freezes THAT. Tighten as the queue drains.
       - name: Quality gate (CRAP ratchet)
         working-directory: hub
-        run: node src/quality.ts --coverage-dir .v8cov --threshold 380 --top 15
+        run: node src/quality.ts --coverage-dir .v8cov --threshold 160 --top 15
 
       - name: Verify source integrity (post-test)
         if: always()

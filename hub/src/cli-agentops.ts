@@ -233,306 +233,337 @@ function emit(op: AgentOp, r: OpResult): never {
   process.exit(op === "doc.save" && r.status === 409 ? 3 : 1); // 3 = the doc CAS CONFLICT contract ({latestVersion,…} on stderr)
 }
 
+// ─── verb handlers (1.8 quality-gauntlet split) ─────────────────────────────────────────────────────────
+// This used to be ONE switch inside main() — CC 162, CRAP 374, the worst row of the 1.7.0 self-audit.
+// Now: one small function per verb (sub-verbs get their own), a flat dispatch table, and main() is a
+// lookup. Bodies moved VERBATIM — the stdout parity contract (sugar ≡ op dispatcher ≡ stdio, asserted
+// byte-exact by the cli-agentops test) is the refactor's regression net.
+type VerbHandler = (rest: string[]) => Promise<never>;
+
+async function verbOp(rest: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(rest, { "--args-json": "v", ...COMMON });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  const name = pos[0];
+  if (!name) fail("usage: dev-loop op <op-name> [--args-json '<JSON>'] (or pipe the JSON args on stdin)");
+  if (!isAgentOp(name)) fail(`unknown op '${name}'. Ops: ${AGENT_OPS.join(", ")}`);
+  if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
+  let raw = str(flags, "--args-json");
+  if (raw === undefined && !process.stdin.isTTY) { const s = readStdinAll().trim(); if (s) raw = s; } // stdin JSON when piped
+  let args: Record<string, unknown> = {};
+  if (raw !== undefined) {
+    let v: unknown;
+    try { v = JSON.parse(raw); } catch { fail("--args-json / stdin is not valid JSON"); }
+    if (!v || typeof v !== "object" || Array.isArray(v)) fail("op args must be a JSON object");
+    args = v as Record<string, unknown>;
+  }
+  const project = str(flags, "--project");
+  if (project !== undefined) args.project = project; // the explicit flag wins over an args-JSON key
+  emit(name, await runOp(openHub(), name, args));
+}
+
+async function verbQueue(rest: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(rest, { ...COMMON });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const qargs: Record<string, unknown> = {};
+  if (flags["--project"] !== undefined) qargs.project = str(flags, "--project");
+  emit("queue", await runOp(openHub(), "queue", qargs));
+}
+
+async function ticketCreate(targs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(targs, {
+    "--title": "v", "--type": "v", "--description": "v", "--description-file": "v", "--labels": "v",
+    "--priority": "v", "--assignee": "v", "--blocked-by": "v", "--related-to": "v", ...COMMON,
+  });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const title = str(flags, "--title"); if (!title) fail("ticket create needs --title");
+  const type = str(flags, "--type");
+  if (!type || !(TYPES as readonly string[]).includes(type)) fail(`ticket create needs --type ${TYPES.join("|")}`);
+  if (flags["--description"] !== undefined && flags["--description-file"] !== undefined) fail("pass --description OR --description-file, not both");
+  const descFlag = str(flags, "--description");
+  const description = descFlag !== undefined ? (descFlag === "-" ? readStdinAll() : descFlag)
+    : flags["--description-file"] !== undefined ? readFileArg("--description-file", str(flags, "--description-file")!) : undefined;
+  const args: Record<string, unknown> = { title, type };
+  if (description !== undefined) args.description = description;
+  if (flags["--labels"] !== undefined) args.labels = csv(str(flags, "--labels")!);
+  if (flags["--priority"] !== undefined) args.priority = intFlag("--priority", str(flags, "--priority")!, 0, 4);
+  if (flags["--assignee"] !== undefined) args.assignee = str(flags, "--assignee");
+  if (flags["--related-to"] !== undefined) args.relatedTo = csv(str(flags, "--related-to")!);
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  const blockedBy = flags["--blocked-by"] !== undefined ? csv(str(flags, "--blocked-by")!) : [];
+  const hub = openHub();
+  const r = await runOp(hub, "save_issue", args);
+  if (!(r.status >= 200 && r.status < 300) || blockedBy.length === 0) emit("save_issue", r);
+  // §9c blocking edges: on service there is no native relation — the machine-parseable marker comment
+  // ('Blocked-by: <id>' on its own line, conventions §9c step 2) IS the edge. Print the create body
+  // first (stdout carries the ticket either way), then write the marker; a failed marker → exit 1.
+  console.log(JSON.stringify(r.body));
+  const id = (r.body as { id: string }).id;
+  const c = await runOp(hub, "save_comment", {
+    issueId: id, body: blockedBy.map((b) => `Blocked-by: ${b}`).join("\n"),
+    ...(flags["--project"] !== undefined ? { project: str(flags, "--project") } : {}),
+  });
+  if (c.status < 200 || c.status >= 300) { console.error(JSON.stringify(c.body)); process.exit(1); }
+  process.exit(0);
+}
+
+async function ticketUpdate(targs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(targs, {
+    "--state": "v", "--title": "v", "--labels": "v", "--assignee": "v", "--priority": "v",
+    "--related-to": "v", "--duplicate-of": "v", ...COMMON,
+  });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  const id = pos[0];
+  if (!id) fail("usage: dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A] [--priority N] [--related-to +ids] [--duplicate-of ID]");
+  if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
+  const args: Record<string, unknown> = { id };
+  if (flags["--state"] !== undefined) args.state = str(flags, "--state");
+  if (flags["--title"] !== undefined) args.title = str(flags, "--title");
+  if (flags["--labels"] !== undefined) args.labels = csv(str(flags, "--labels")!); // HAZARD: labels REPLACE the full set (re-pass all)
+  if (flags["--assignee"] !== undefined) args.assignee = str(flags, "--assignee"); // '' clears, 'me' = you (the op resolves both)
+  if (flags["--priority"] !== undefined) args.priority = intFlag("--priority", str(flags, "--priority")!, 0, 4);
+  if (flags["--related-to"] !== undefined) args.relatedTo = csv(str(flags, "--related-to")!); // HAZARD: APPEND-ONLY union (§18) — adds, never removes
+  if (flags["--duplicate-of"] !== undefined) { const d = str(flags, "--duplicate-of")!; args.duplicateOf = d === "" ? null : d; }
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  if (Object.keys(args).length === 1 + (args.project !== undefined ? 1 : 0))
+    fail("nothing to update — pass at least one of --state/--title/--labels/--assignee/--priority/--related-to/--duplicate-of");
+  emit("save_issue", await runOp(openHub(), "save_issue", args));
+}
+
+async function verbTicket(rest: string[]): Promise<never> {
+  const [verb, ...targs] = rest;
+  if (verb === "create") return ticketCreate(targs);
+  if (verb === "update") return ticketUpdate(targs);
+  fail(`usage: dev-loop ticket create|update … (reads stay \`dev-loop ticket <id>\`)`);
+}
+
+async function verbComment(rest: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(rest, { "--body": "v", "--body-file": "v", ...COMMON });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  if (pos[0] !== "add") fail("usage: dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)");
+  const id = pos[1];
+  if (!id || id === "-") fail("comment add needs a ticket id");
+  const bodyFlag = str(flags, "--body");
+  const body = bodyFlag !== undefined ? (bodyFlag === "-" ? readStdinAll() : bodyFlag)
+    : flags["--body-file"] !== undefined ? readFileArg("--body-file", str(flags, "--body-file")!)
+    : pos[2] === "-" ? readStdinAll() : undefined;
+  if (body === undefined) fail("comment add needs --body TEXT, --body-file F, or '-' (stdin)");
+  const args: Record<string, unknown> = { issueId: id, body };
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("save_comment", await runOp(openHub(), "save_comment", args));
+}
+
+async function verbComments(rest: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(rest, COMMON);
+  const id = pos[0];
+  if (!id) fail("usage: dev-loop comments <id>");
+  if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
+  const args: Record<string, unknown> = { issueId: id };
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("list_comments", await runOp(openHub(), "list_comments", args));
+}
+
+async function verbLabels(rest: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(rest, COMMON);
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const args: Record<string, unknown> = {};
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("list_issue_labels", await runOp(openHub(), "list_issue_labels", args));
+}
+
+async function verbLabelCreate(rest: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(rest, { "--kind": "v", ...COMMON });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  if (pos[0] !== "create" || !pos[1]) fail("usage: dev-loop label create <name> [--kind K]");
+  if (pos.length > 2) fail(`unexpected argument '${pos[2]}'`);
+  const args: Record<string, unknown> = { name: pos[1] };
+  if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("create_issue_label", await runOp(openHub(), "create_issue_label", args));
+}
+
+async function verbProject(rest: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(rest, COMMON);
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const args: Record<string, unknown> = {};
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("get_project", await runOp(openHub(), "get_project", args));
+}
+
+async function verbEvents(rest: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(rest, { "--ticket": "v", "--since": "v", "--limit": "v", ...COMMON });
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const args: Record<string, unknown> = {};
+  if (flags["--ticket"] !== undefined) args.ticketId = str(flags, "--ticket");
+  if (flags["--limit"] !== undefined) args.limit = intFlag("--limit", str(flags, "--limit")!, 1, 500);
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  const since = str(flags, "--since");
+  const r = await runOp(openHub(), "list_events", args);
+  // --since is CLIENT-side (the op has no since arg): filter the returned rows by created_at. Applied only
+  // on success — an error body passes through emit untouched.
+  if (since !== undefined && r.status === 200 && Array.isArray(r.body))
+    r.body = (r.body as { created_at: string }[]).filter((e) => e.created_at >= since);
+  emit("list_events", r);
+}
+
+async function docList(dargs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(dargs, { "--kind": "v", ...COMMON });
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const args: Record<string, unknown> = {};
+  if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("doc.list", await runOp(openHub(), "doc.list", args));
+}
+
+async function docGetOrHistory(verb: "get" | "history", dargs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", ...(verb === "get" ? { "--version": "v" } : {}), ...COMMON });
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  if (flags["--slug"] === undefined && flags["--kind"] === undefined) fail(`doc ${verb} needs --slug S or --kind K`);
+  const args: Record<string, unknown> = {};
+  if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
+  if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
+  const ver = str(flags, "--version");
+  if (ver !== undefined) args.version = ver === "latest" ? "latest" : intFlag("--version", ver, 1);
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  const op: AgentOp = verb === "get" ? "doc.get" : "doc.history";
+  emit(op, await runOp(openHub(), op, args));
+}
+
+async function docDiff(dargs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", "--from": "v", "--to": "v", ...COMMON });
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  if (flags["--slug"] === undefined && flags["--kind"] === undefined) fail("doc diff needs --slug S or --kind K"); // a selector-less diff is a usage error (exit 2), not a 404 (codex #5)
+  if (flags["--from"] === undefined || flags["--to"] === undefined) fail("doc diff needs --from N and --to N");
+  const args: Record<string, unknown> = { from: intFlag("--from", str(flags, "--from")!, 1), to: intFlag("--to", str(flags, "--to")!, 1) };
+  if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
+  if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("doc.diff", await runOp(openHub(), "doc.diff", args));
+}
+
+async function docSave(dargs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", "--base-version": "v", "--file": "v", "--title": "v", "--summary": "v", ...COMMON });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const slug = str(flags, "--slug"); if (!slug) fail("doc save needs --slug S");
+  const kind = str(flags, "--kind"); if (!kind) fail("doc save needs --kind K");
+  if (flags["--base-version"] === undefined) fail("doc save needs --base-version N (the optimistic-CAS key: the doc's LATEST version, drafts included; 0 creates)");
+  const baseVersion = intFlag("--base-version", str(flags, "--base-version")!, 0);
+  const body = flags["--file"] !== undefined ? readFileArg("--file", str(flags, "--file")!)
+    : !process.stdin.isTTY ? readStdinAll() : fail("doc save needs --file F or a piped stdin body");
+  const args: Record<string, unknown> = { slug, kind, body, baseVersion };
+  if (flags["--title"] !== undefined) args.title = str(flags, "--title");
+  if (flags["--summary"] !== undefined) args.summary = str(flags, "--summary");
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("doc.save", await runOp(openHub(), "doc.save", args)); // a 409 CAS CONFLICT → exit 3, payload on stderr
+}
+
+async function docPublish(dargs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", "--version": "v", ...COMMON });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  if (flags["--slug"] === undefined && flags["--kind"] === undefined) fail("doc publish needs --slug S or --kind K"); // usage (exit 2), not a 404 (codex #5)
+  if (flags["--version"] === undefined) fail("doc publish needs --version N");
+  const args: Record<string, unknown> = { version: intFlag("--version", str(flags, "--version")!, 1) };
+  if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
+  if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("doc.publish", await runOp(openHub(), "doc.publish", args));
+}
+
+async function docArchive(dargs: string[]): Promise<never> {
+  // D6: a metadata flip on a retired DESIGN doc (slug-only — design is multi-instance; the op
+  // refuses singleton kinds server-side). --restore maps to archived:false; the default archives.
+  const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--restore": "b", ...COMMON });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const slug = str(flags, "--slug"); if (!slug) fail("doc archive needs --slug S");
+  const args: Record<string, unknown> = { slug };
+  if (flags["--restore"] === true) args.archived = false;
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("doc.archive", await runOp(openHub(), "doc.archive", args));
+}
+
+async function verbDoc(rest: string[]): Promise<never> {
+  const [verb, ...dargs] = rest;
+  if (verb === "list") return docList(dargs);
+  if (verb === "get" || verb === "history") return docGetOrHistory(verb, dargs);
+  if (verb === "diff") return docDiff(dargs);
+  if (verb === "save") return docSave(dargs);
+  if (verb === "publish") return docPublish(dargs);
+  if (verb === "archive") return docArchive(dargs);
+  fail("usage: dev-loop doc list|get|history|diff|save|publish|archive …");
+}
+
+async function mirrorPush(margs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(margs, { "--team-id": "v", "--token-env": "v", "--project-id": "v", "--state-map": "v", "--limit": "v", ...COMMON });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const teamId = str(flags, "--team-id"); if (!teamId) fail("mirror push needs --team-id T");
+  const tokenEnv = str(flags, "--token-env"); if (!tokenEnv) fail("mirror push needs --token-env NAME (the env-var NAME, never the secret)");
+  const args: Record<string, unknown> = { teamId, tokenEnv };
+  if (flags["--project-id"] !== undefined) args.projectId = str(flags, "--project-id");
+  if (flags["--state-map"] !== undefined) {
+    let m: unknown;
+    try { m = JSON.parse(str(flags, "--state-map")!); } catch { fail("--state-map is not valid JSON"); }
+    if (!m || typeof m !== "object" || Array.isArray(m)) fail("--state-map must be a JSON object (hub State → Linear state id)");
+    args.stateMap = m;
+  }
+  if (flags["--limit"] !== undefined) args.limit = intFlag("--limit", str(flags, "--limit")!, 1, 500);
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("mirror.push", await runOp(openHub(), "mirror.push", args));
+}
+
+async function mirrorPoll(margs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(margs, { "--token-env": "v", ...COMMON });
+  iAmTheOperator = flags["--i-am-the-operator"] === true;
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const tokenEnv = str(flags, "--token-env"); if (!tokenEnv) fail("mirror poll needs --token-env NAME (the env-var NAME, never the secret)");
+  const args: Record<string, unknown> = { tokenEnv };
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("mirror.pollComments", await runOp(openHub(), "mirror.pollComments", args));
+}
+
+async function mirrorStatus(margs: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(margs, COMMON);
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const args: Record<string, unknown> = {};
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  emit("mirror.status", await runOp(openHub(), "mirror.status", args));
+}
+
+async function verbMirror(rest: string[]): Promise<never> {
+  const [verb, ...margs] = rest;
+  if (verb === "push") return mirrorPush(margs);
+  if (verb === "poll") return mirrorPoll(margs);
+  if (verb === "status") return mirrorStatus(margs);
+  fail("usage: dev-loop mirror push|poll|status …");
+}
+
+const VERBS: Record<string, VerbHandler> = {
+  op: verbOp,            // LAYER 0: the generic dispatcher
+  queue: verbQueue,      // LAYER 1: the pre-ranked per-agent work lists (§5/§21b in code)
+  ticket: verbTicket,    // create | update (reads stay cli-tickets)
+  comment: verbComment,
+  comments: verbComments,
+  labels: verbLabels,
+  label: verbLabelCreate,
+  project: verbProject,
+  events: verbEvents,
+  doc: verbDoc,          // list|get|history|diff|save|publish|archive — doc.* 1:1
+  mirror: verbMirror,    // push|poll|status
+};
+
 // ─── main ───────────────────────────────────────────────────────────────────────────────────────────────────
 async function main(): Promise<never> {
   const [sub, ...rest] = process.argv.slice(2); // cli.ts passes the verb as argv[0] (the cli-tickets routing shape)
   // leading --help/-h (e.g. `dev-loop op --help`, `dev-loop doc save --help`) prints the full write-layer
   // usage; checked on the LEADING positions only so a later flag VALUE that happens to be '-h' isn't swallowed.
   if (!sub || sub === "help" || rest.slice(0, 2).some((a) => a === "--help" || a === "-h")) { usage(); process.exit(sub ? 0 : 2); }
-
-  // Every verb parses first (usage errors need no db), then opens the hub once and funnels through runOp.
-  switch (sub) {
-    // ── LAYER 0: the generic dispatcher ──
-    case "op": {
-      const { flags, pos } = parseFlags(rest, { "--args-json": "v", ...COMMON });
-      iAmTheOperator = flags["--i-am-the-operator"] === true;
-      const name = pos[0];
-      if (!name) fail("usage: dev-loop op <op-name> [--args-json '<JSON>'] (or pipe the JSON args on stdin)");
-      if (!isAgentOp(name)) fail(`unknown op '${name}'. Ops: ${AGENT_OPS.join(", ")}`);
-      if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
-      let raw = str(flags, "--args-json");
-      if (raw === undefined && !process.stdin.isTTY) { const s = readStdinAll().trim(); if (s) raw = s; } // stdin JSON when piped
-      let args: Record<string, unknown> = {};
-      if (raw !== undefined) {
-        let v: unknown;
-        try { v = JSON.parse(raw); } catch { fail("--args-json / stdin is not valid JSON"); }
-        if (!v || typeof v !== "object" || Array.isArray(v)) fail("op args must be a JSON object");
-        args = v as Record<string, unknown>;
-      }
-      const project = str(flags, "--project");
-      if (project !== undefined) args.project = project; // the explicit flag wins over an args-JSON key
-      emit(name, await runOp(openHub(), name, args));
-    }
-
-    // ── LAYER 1: queue — the pre-ranked per-agent work lists (§5/§21b in code) ──
-    case "queue": {
-      const { flags, pos } = parseFlags(rest, { ...COMMON });
-      iAmTheOperator = flags["--i-am-the-operator"] === true;
-      if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-      const qargs: Record<string, unknown> = {};
-      if (flags["--project"] !== undefined) qargs.project = str(flags, "--project");
-      emit("queue", await runOp(openHub(), "queue", qargs));
-    }
-
-    // ── LAYER 1: ticket create | ticket update ──
-    case "ticket": {
-      const [verb, ...targs] = rest;
-      if (verb === "create") {
-        const { flags, pos } = parseFlags(targs, {
-          "--title": "v", "--type": "v", "--description": "v", "--description-file": "v", "--labels": "v",
-          "--priority": "v", "--assignee": "v", "--blocked-by": "v", "--related-to": "v", ...COMMON,
-        });
-        iAmTheOperator = flags["--i-am-the-operator"] === true;
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        const title = str(flags, "--title"); if (!title) fail("ticket create needs --title");
-        const type = str(flags, "--type");
-        if (!type || !(TYPES as readonly string[]).includes(type)) fail(`ticket create needs --type ${TYPES.join("|")}`);
-        if (flags["--description"] !== undefined && flags["--description-file"] !== undefined) fail("pass --description OR --description-file, not both");
-        const descFlag = str(flags, "--description");
-        const description = descFlag !== undefined ? (descFlag === "-" ? readStdinAll() : descFlag)
-          : flags["--description-file"] !== undefined ? readFileArg("--description-file", str(flags, "--description-file")!) : undefined;
-        const args: Record<string, unknown> = { title, type };
-        if (description !== undefined) args.description = description;
-        if (flags["--labels"] !== undefined) args.labels = csv(str(flags, "--labels")!);
-        if (flags["--priority"] !== undefined) args.priority = intFlag("--priority", str(flags, "--priority")!, 0, 4);
-        if (flags["--assignee"] !== undefined) args.assignee = str(flags, "--assignee");
-        if (flags["--related-to"] !== undefined) args.relatedTo = csv(str(flags, "--related-to")!);
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        const blockedBy = flags["--blocked-by"] !== undefined ? csv(str(flags, "--blocked-by")!) : [];
-        const hub = openHub();
-        const r = await runOp(hub, "save_issue", args);
-        if (!(r.status >= 200 && r.status < 300) || blockedBy.length === 0) emit("save_issue", r);
-        // §9c blocking edges: on service there is no native relation — the machine-parseable marker comment
-        // ('Blocked-by: <id>' on its own line, conventions §9c step 2) IS the edge. Print the create body
-        // first (stdout carries the ticket either way), then write the marker; a failed marker → exit 1.
-        console.log(JSON.stringify(r.body));
-        const id = (r.body as { id: string }).id;
-        const c = await runOp(hub, "save_comment", {
-          issueId: id, body: blockedBy.map((b) => `Blocked-by: ${b}`).join("\n"),
-          ...(flags["--project"] !== undefined ? { project: str(flags, "--project") } : {}),
-        });
-        if (c.status < 200 || c.status >= 300) { console.error(JSON.stringify(c.body)); process.exit(1); }
-        process.exit(0);
-      }
-      if (verb === "update") {
-        const { flags, pos } = parseFlags(targs, {
-          "--state": "v", "--title": "v", "--labels": "v", "--assignee": "v", "--priority": "v",
-          "--related-to": "v", "--duplicate-of": "v", ...COMMON,
-        });
-        iAmTheOperator = flags["--i-am-the-operator"] === true;
-        const id = pos[0];
-        if (!id) fail("usage: dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A] [--priority N] [--related-to +ids] [--duplicate-of ID]");
-        if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
-        const args: Record<string, unknown> = { id };
-        if (flags["--state"] !== undefined) args.state = str(flags, "--state");
-        if (flags["--title"] !== undefined) args.title = str(flags, "--title");
-        if (flags["--labels"] !== undefined) args.labels = csv(str(flags, "--labels")!); // HAZARD: labels REPLACE the full set (re-pass all)
-        if (flags["--assignee"] !== undefined) args.assignee = str(flags, "--assignee"); // '' clears, 'me' = you (the op resolves both)
-        if (flags["--priority"] !== undefined) args.priority = intFlag("--priority", str(flags, "--priority")!, 0, 4);
-        if (flags["--related-to"] !== undefined) args.relatedTo = csv(str(flags, "--related-to")!); // HAZARD: APPEND-ONLY union (§18) — adds, never removes
-        if (flags["--duplicate-of"] !== undefined) { const d = str(flags, "--duplicate-of")!; args.duplicateOf = d === "" ? null : d; }
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        if (Object.keys(args).length === 1 + (args.project !== undefined ? 1 : 0))
-          fail("nothing to update — pass at least one of --state/--title/--labels/--assignee/--priority/--related-to/--duplicate-of");
-        emit("save_issue", await runOp(openHub(), "save_issue", args));
-      }
-      fail(`usage: dev-loop ticket create|update … (reads stay \`dev-loop ticket <id>\`)`);
-    }
-
-    // ── comment add <id> ──
-    case "comment": {
-      const { flags, pos } = parseFlags(rest, { "--body": "v", "--body-file": "v", ...COMMON });
-      iAmTheOperator = flags["--i-am-the-operator"] === true;
-      if (pos[0] !== "add") fail("usage: dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)");
-      const id = pos[1];
-      if (!id || id === "-") fail("comment add needs a ticket id");
-      const bodyFlag = str(flags, "--body");
-      const body = bodyFlag !== undefined ? (bodyFlag === "-" ? readStdinAll() : bodyFlag)
-        : flags["--body-file"] !== undefined ? readFileArg("--body-file", str(flags, "--body-file")!)
-        : pos[2] === "-" ? readStdinAll() : undefined;
-      if (body === undefined) fail("comment add needs --body TEXT, --body-file F, or '-' (stdin)");
-      const args: Record<string, unknown> = { issueId: id, body };
-      if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-      emit("save_comment", await runOp(openHub(), "save_comment", args));
-    }
-
-    // ── comments <id> ──
-    case "comments": {
-      const { flags, pos } = parseFlags(rest, COMMON);
-      const id = pos[0];
-      if (!id) fail("usage: dev-loop comments <id>");
-      if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
-      const args: Record<string, unknown> = { issueId: id };
-      if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-      emit("list_comments", await runOp(openHub(), "list_comments", args));
-    }
-
-    // ── labels | label create <name> ──
-    case "labels": {
-      const { flags, pos } = parseFlags(rest, COMMON);
-      if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-      const args: Record<string, unknown> = {};
-      if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-      emit("list_issue_labels", await runOp(openHub(), "list_issue_labels", args));
-    }
-    case "label": {
-      const { flags, pos } = parseFlags(rest, { "--kind": "v", ...COMMON });
-      iAmTheOperator = flags["--i-am-the-operator"] === true;
-      if (pos[0] !== "create" || !pos[1]) fail("usage: dev-loop label create <name> [--kind K]");
-      if (pos.length > 2) fail(`unexpected argument '${pos[2]}'`);
-      const args: Record<string, unknown> = { name: pos[1] };
-      if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
-      if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-      emit("create_issue_label", await runOp(openHub(), "create_issue_label", args));
-    }
-
-    // ── project ──
-    case "project": {
-      const { flags, pos } = parseFlags(rest, COMMON);
-      if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-      const args: Record<string, unknown> = {};
-      if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-      emit("get_project", await runOp(openHub(), "get_project", args));
-    }
-
-    // ── events [--ticket ID] [--since ISO] [--limit N] ──
-    case "events": {
-      const { flags, pos } = parseFlags(rest, { "--ticket": "v", "--since": "v", "--limit": "v", ...COMMON });
-      if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-      const args: Record<string, unknown> = {};
-      if (flags["--ticket"] !== undefined) args.ticketId = str(flags, "--ticket");
-      if (flags["--limit"] !== undefined) args.limit = intFlag("--limit", str(flags, "--limit")!, 1, 500);
-      if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-      const since = str(flags, "--since");
-      const r = await runOp(openHub(), "list_events", args);
-      // --since is CLIENT-side (the op has no since arg): filter the returned rows by created_at. Applied only
-      // on success — an error body passes through emit untouched.
-      if (since !== undefined && r.status === 200 && Array.isArray(r.body))
-        r.body = (r.body as { created_at: string }[]).filter((e) => e.created_at >= since);
-      emit("list_events", r);
-    }
-
-    // ── doc list|get|history|diff|save|publish — doc.* 1:1 ──
-    case "doc": {
-      const [verb, ...dargs] = rest;
-      if (verb === "list") {
-        const { flags, pos } = parseFlags(dargs, { "--kind": "v", ...COMMON });
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        const args: Record<string, unknown> = {};
-        if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        emit("doc.list", await runOp(openHub(), "doc.list", args));
-      }
-      if (verb === "get" || verb === "history") {
-        const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", ...(verb === "get" ? { "--version": "v" } : {}), ...COMMON });
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        if (flags["--slug"] === undefined && flags["--kind"] === undefined) fail(`doc ${verb} needs --slug S or --kind K`);
-        const args: Record<string, unknown> = {};
-        if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
-        if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
-        const ver = str(flags, "--version");
-        if (ver !== undefined) args.version = ver === "latest" ? "latest" : intFlag("--version", ver, 1);
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        const op: AgentOp = verb === "get" ? "doc.get" : "doc.history";
-        emit(op, await runOp(openHub(), op, args));
-      }
-      if (verb === "diff") {
-        const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", "--from": "v", "--to": "v", ...COMMON });
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        if (flags["--slug"] === undefined && flags["--kind"] === undefined) fail("doc diff needs --slug S or --kind K"); // a selector-less diff is a usage error (exit 2), not a 404 (codex #5)
-        if (flags["--from"] === undefined || flags["--to"] === undefined) fail("doc diff needs --from N and --to N");
-        const args: Record<string, unknown> = { from: intFlag("--from", str(flags, "--from")!, 1), to: intFlag("--to", str(flags, "--to")!, 1) };
-        if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
-        if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        emit("doc.diff", await runOp(openHub(), "doc.diff", args));
-      }
-      if (verb === "save") {
-        const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", "--base-version": "v", "--file": "v", "--title": "v", "--summary": "v", ...COMMON });
-        iAmTheOperator = flags["--i-am-the-operator"] === true;
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        const slug = str(flags, "--slug"); if (!slug) fail("doc save needs --slug S");
-        const kind = str(flags, "--kind"); if (!kind) fail("doc save needs --kind K");
-        if (flags["--base-version"] === undefined) fail("doc save needs --base-version N (the optimistic-CAS key: the doc's LATEST version, drafts included; 0 creates)");
-        const baseVersion = intFlag("--base-version", str(flags, "--base-version")!, 0);
-        const body = flags["--file"] !== undefined ? readFileArg("--file", str(flags, "--file")!)
-          : !process.stdin.isTTY ? readStdinAll() : fail("doc save needs --file F or a piped stdin body");
-        const args: Record<string, unknown> = { slug, kind, body, baseVersion };
-        if (flags["--title"] !== undefined) args.title = str(flags, "--title");
-        if (flags["--summary"] !== undefined) args.summary = str(flags, "--summary");
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        emit("doc.save", await runOp(openHub(), "doc.save", args)); // a 409 CAS CONFLICT → exit 3, payload on stderr
-      }
-      if (verb === "publish") {
-        const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", "--version": "v", ...COMMON });
-        iAmTheOperator = flags["--i-am-the-operator"] === true;
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        if (flags["--slug"] === undefined && flags["--kind"] === undefined) fail("doc publish needs --slug S or --kind K"); // usage (exit 2), not a 404 (codex #5)
-        if (flags["--version"] === undefined) fail("doc publish needs --version N");
-        const args: Record<string, unknown> = { version: intFlag("--version", str(flags, "--version")!, 1) };
-        if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
-        if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        emit("doc.publish", await runOp(openHub(), "doc.publish", args));
-      }
-      if (verb === "archive") {
-        // D6: a metadata flip on a retired DESIGN doc (slug-only — design is multi-instance; the op
-        // refuses singleton kinds server-side). --restore maps to archived:false; the default archives.
-        const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--restore": "b", ...COMMON });
-        iAmTheOperator = flags["--i-am-the-operator"] === true;
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        const slug = str(flags, "--slug"); if (!slug) fail("doc archive needs --slug S");
-        const args: Record<string, unknown> = { slug };
-        if (flags["--restore"] === true) args.archived = false;
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        emit("doc.archive", await runOp(openHub(), "doc.archive", args));
-      }
-      fail("usage: dev-loop doc list|get|history|diff|save|publish|archive …");
-    }
-
-    // ── mirror push|poll|status ──
-    case "mirror": {
-      const [verb, ...margs] = rest;
-      if (verb === "push") {
-        const { flags, pos } = parseFlags(margs, { "--team-id": "v", "--token-env": "v", "--project-id": "v", "--state-map": "v", "--limit": "v", ...COMMON });
-        iAmTheOperator = flags["--i-am-the-operator"] === true;
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        const teamId = str(flags, "--team-id"); if (!teamId) fail("mirror push needs --team-id T");
-        const tokenEnv = str(flags, "--token-env"); if (!tokenEnv) fail("mirror push needs --token-env NAME (the env-var NAME, never the secret)");
-        const args: Record<string, unknown> = { teamId, tokenEnv };
-        if (flags["--project-id"] !== undefined) args.projectId = str(flags, "--project-id");
-        if (flags["--state-map"] !== undefined) {
-          let m: unknown;
-          try { m = JSON.parse(str(flags, "--state-map")!); } catch { fail("--state-map is not valid JSON"); }
-          if (!m || typeof m !== "object" || Array.isArray(m)) fail("--state-map must be a JSON object (hub State → Linear state id)");
-          args.stateMap = m;
-        }
-        if (flags["--limit"] !== undefined) args.limit = intFlag("--limit", str(flags, "--limit")!, 1, 500);
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        emit("mirror.push", await runOp(openHub(), "mirror.push", args));
-      }
-      if (verb === "poll") {
-        const { flags, pos } = parseFlags(margs, { "--token-env": "v", ...COMMON });
-        iAmTheOperator = flags["--i-am-the-operator"] === true;
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        const tokenEnv = str(flags, "--token-env"); if (!tokenEnv) fail("mirror poll needs --token-env NAME (the env-var NAME, never the secret)");
-        const args: Record<string, unknown> = { tokenEnv };
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        emit("mirror.pollComments", await runOp(openHub(), "mirror.pollComments", args));
-      }
-      if (verb === "status") {
-        const { flags, pos } = parseFlags(margs, COMMON);
-        if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-        const args: Record<string, unknown> = {};
-        if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-        emit("mirror.status", await runOp(openHub(), "mirror.status", args));
-      }
-      fail("usage: dev-loop mirror push|poll|status …");
-    }
-
-    default:
-      fail(`unknown verb '${sub}'`);
-  }
+  const handler = VERBS[sub];
+  if (!handler) fail(`unknown verb '${sub}'`);
+  return handler(rest);
 }
 
 await main();

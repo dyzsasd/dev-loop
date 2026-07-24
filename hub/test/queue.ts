@@ -106,5 +106,18 @@ const derivedInQueue = call("senior-dev");
 ok(titles(derivedInQueue.body.todo).includes("design: contracts package"),
   "the derived ticket lands in the senior queue slice (the strand is gone)");
 
+// ── 7. §8 exact-title dedupe on create (1.8 — field regression MEETPOIN-98/103) ──────────────────
+const dupHit = create({ title: "design: contracts package", labels: ["dev-loop"] });
+ok(dupHit.status === 409 && /already exists/.test(String((dupHit.body as { error?: string }).error ?? JSON.stringify(dupHit.body))),
+  `an exact-title duplicate of a NON-TERMINAL ticket is refused 409 (got ${dupHit.status})`);
+const dupSpaced = create({ title: "  DESIGN: Contracts Package  ", labels: ["dev-loop"] });
+ok(dupSpaced.status === 409, "dedupe normalizes trim+case (spaced/uppercased variant also 409)");
+const dupForced = create({ title: "design: contracts package", labels: ["dev-loop"], allowDuplicate: true });
+ok(dupForced.status === 200, "allowDuplicate:true is the deliberate-refile escape hatch");
+const doneId = create({ title: "was done once", labels: ["dev-loop"] });
+agentOp("save_issue", db, projectId, "qproj", "pm", { id: (doneId.body as { id: string }).id, state: "Done" });
+ok(create({ title: "was done once", labels: ["dev-loop"] }).status === 200,
+  "a TERMINAL (Done) ticket's title is free to reuse (dedupe is non-terminal only)");
+
 console.log(fails === 0 ? "\nQUEUE_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

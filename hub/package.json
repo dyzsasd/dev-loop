@@ -118,7 +118,7 @@
     "bundle": "node test/bundle.ts",
     "attach": "node test/attach.ts",
     "paths": "node test/paths.ts",
-    "quality": "node src/quality.ts --threshold 380 --top 15"
+    "quality": "node src/quality.ts --threshold 160 --top 15"
   },
   "engines": {
     "node": ">=23.6"

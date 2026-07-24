@@ -248,6 +248,7 @@ function opGetIssue(db: DatabaseSync, projectId: string, projectKey: string, a: 
 export interface SaveIssueArgs {
   id?: string; title?: string; description?: string; type?: string; state?: string;
   assignee?: string | null; priority?: number; labels?: string[]; duplicateOf?: string | null; relatedTo?: string[];
+  allowDuplicate?: boolean; // §8 escape hatch: skip the exact-title non-terminal dedupe on create (deliberate refile)
 }
 // MIRRORS server.ts save_issue exactly: validate → create (insertTicket) OR update (atomic read-merge-write
 // under BEGIN IMMEDIATE: REPLACE labels, APPEND-only relatedTo union, DL-24 assignTo, DL-32 promo gate, the
@@ -264,6 +265,18 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
   if (a.assignee && a.assignee !== "me" && !actorExists(db, a.assignee)) return errR(400, `unknown assignee '${a.assignee}'; one of ${listActorHandles(db).join(", ")} (or "me"/null)`); // DL-69: the message is byte-identical to server.ts's (the single source) — agent-api.ts asserts only status 400
   if (!a.id) {
     if (!a.title) return errR(400, "title required to create a ticket");
+    // §8 dedupe, enforced at the write (1.8): an EXACT-title duplicate of a non-terminal ticket is
+    // refused with the existing ticket in the body — the §8 rule is "comment the new observation,
+    // don't refile", and the loop kept generating byte-identical duplicate titles the sweep had to
+    // Cancel after the fact (field: MEETPOIN-98/103). Exact match only (trim+casefold) — legitimate
+    // near-titles (per-repo children, dated retros, "[coverage] … for <id>") all differ textually.
+    // `allowDuplicate:true` is the deliberate-refile escape hatch (op arg; no CLI sugar on purpose).
+    if (a.allowDuplicate !== true) {
+      const norm = a.title.trim().toLowerCase();
+      const open = db.prepare("SELECT id, title, state FROM tickets WHERE project_id=? AND state NOT IN ('Done','Canceled','Duplicate')").all(projectId) as { id: string; title: string; state: string }[];
+      const dup = open.find((t) => t.title.trim().toLowerCase() === norm);
+      if (dup) return errR(409, `a non-terminal ticket with this exact title already exists: ${dup.id} [${dup.state}] — comment the new observation on it (§8) instead of refiling; pass allowDuplicate:true only for a deliberate refile`);
+    }
     const promoReject = prodPromotionRejection(db, projectId, actor, [], a.labels ?? []);
     if (promoReject) return errR(403, promoReject);
     // Tier label ⇒ assignee (field finding, 2026-07-22/23 ×2): on backend:"service" the pick filter is
