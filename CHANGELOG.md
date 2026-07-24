@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.8.1
 
 Quality-gauntlet queue drained (behavior-preserving refactors + the missing coverage; every
 change guarded by the existing suite — bundle/migrate/team-edit/metrics/daemon tests):
