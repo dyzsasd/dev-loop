@@ -105,6 +105,23 @@ ADD-TESTS class landed in 1.7.1 (stop.ts, the tick guard, metricsCli human rende
 ownerLiveness multi-row, channelSend no-channel — all probe-driven: each new test was
 written to KILL a specific surviving mutant, then verified KILLED by re-probing).
 
+## Language backends (1.9.0)
+
+The formula, report, gate, ratchet, and probe are language-agnostic; the LANGUAGE is picked per
+FILE by extension:
+
+- **TS/JS** — typescript AST (the target repo's own compiler) + native `NODE_V8_COVERAGE`.
+- **Go** — a comment/string-stripping token scanner (every Go function starts with `func` at
+  brace depth 0 — an AST buys little; closures count toward their host) + `go test -coverpkg=./...
+  -coverprofile` (block-level with line.col ranges — cleaner than V8). **Claimed-bytes
+  denominator**: the profile covers statement blocks only, so signatures/braces don't dilute —
+  an untested Go function scores a TRUE 0% (no V8-style declaration-line floor). `--go-test-cmd`
+  overrides the coverage command (`{profile}` placeholder). Mutation flips are channel-aware
+  (`<-`, `++`, `--` never mutated).
+- Mixed repos get ONE merged worst-first report; each language runs its own coverage pipeline.
+
+A Go repo's gate is the same one-liner: `"quality": "dev-loop quality --changed --threshold 30"`.
+
 ## Known limits (honest edges)
 
 - Repos whose tests run COMPILED output (`dist/`) get coverage on dist paths, not src —

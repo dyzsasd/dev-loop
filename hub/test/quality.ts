@@ -137,5 +137,72 @@ const chg = runQuality(repo, ["--json", "--changed", "--test-cmd", TEST_CMD]);
 const chgFiles = new Set((chg.out?.rows ?? []).map((r) => r.file));
 ok(chgFiles.has("src/extra.ts") && !chgFiles.has("src/calc.ts"), `--changed analyzes only git-changed files (got ${[...chgFiles].join(", ")})`);
 
+// ── 6. the Go backend (skipped cleanly when no go toolchain) ─────────────────────────────────────
+const goOk = spawnSync("go", ["version"], { encoding: "utf8" }).status === 0;
+if (!goOk) {
+  console.log("⏭  go toolchain not found — Go backend checks skipped (CI runners carry go; local dev may not)");
+} else {
+  const gdir = mkdtempSync(join(tmpdir(), "devloop-quality-go-fix-"));
+  writeFileSync(join(gdir, "go.mod"), "module qfixgo\n\ngo 1.21\n");
+  // Grade: CC 4 (1 + 3 if) — fully tested incl. the n<0 boundary (the probe's < → <= flip must be
+  // KILLED by TestGrade(0)). Dead: CC 3 (1 + if + &&) — untested ⇒ CRAP = 3²·1³+3 = 12 EXACTLY,
+  // because the claimed-bytes denominator means an untested Go fn is a true 0% (no V8-style
+  // declaration-line floor).
+  writeFileSync(join(gdir, "calc.go"), `package qfixgo
+
+func Grade(n int) string {
+	if n < 0 {
+		return "bad"
+	}
+	if n > 10 {
+		return "big"
+	}
+	if n > 5 {
+		return "hi"
+	}
+	return "lo"
+}
+
+func Dead(a, b int) int {
+	if a > 0 && b > 0 {
+		return a - b
+	}
+	return a + b
+}
+`);
+  writeFileSync(join(gdir, "calc_test.go"), `package qfixgo
+
+import "testing"
+
+func TestGrade(t *testing.T) {
+	if Grade(-1) != "bad" || Grade(0) != "lo" || Grade(7) != "hi" || Grade(11) != "big" {
+		t.Fatal("grade wrong")
+	}
+}
+`);
+  execFileSync("git", ["init", "-qb", "main"], { cwd: gdir });
+  execFileSync("git", ["add", "-A"], { cwd: gdir });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: gdir });
+  const gorig = readFileSync(join(gdir, "calc.go"), "utf8");
+
+  const grep = runQuality(gdir, ["--json", "."]);
+  const grows = grep.out?.rows ?? [];
+  const gGrade = grows.find((r) => r.name === "Grade");
+  const gDead = grows.find((r) => r.name === "Dead");
+  ok(gGrade?.cc === 4 && gDead?.cc === 3, `Go CC via the token scanner (Grade 4, Dead 3; got ${gGrade?.cc}/${gDead?.cc})`);
+  ok(gGrade?.coverage === 100, `Go coverage from -coverprofile blocks (Grade 100%; got ${gGrade?.coverage})`);
+  ok(gDead?.coverage === 0 && gDead?.crap === 12,
+    `claimed-bytes denominator: an untested Go fn is a TRUE 0% ⇒ CRAP exactly 12 (got ${gDead?.coverage}% / ${gDead?.crap})`);
+  ok(grows[0]?.name === "Dead", "Go rows sort into the same worst-first report");
+  ok(runQuality(gdir, [".", "--threshold", "10"]).status === 2, "the same --threshold gate semantics apply to Go (exit 2)");
+
+  const gmut = runQuality(gdir, ["--json", ".", "--mutate", "--sample", "2"]);
+  const mDead = gmut.out?.mutants?.find((m) => m.fn === "Dead");
+  const mGrade = gmut.out?.mutants?.find((m) => m.fn === "Grade");
+  ok(mDead?.killed === false, `Go mutation probe: the untested fn SURVIVES (got ${JSON.stringify(mDead)})`);
+  ok(mGrade?.killed === true, `Go mutation probe: the boundary flip on the tested fn is KILLED (got ${JSON.stringify(mGrade)})`);
+  ok(readFileSync(join(gdir, "calc.go"), "utf8") === gorig, "Go file restored byte-identically after the probe");
+}
+
 console.log(fails === 0 ? "\nQUALITY_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

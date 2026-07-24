@@ -3,6 +3,21 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+- **feat(quality): Go language backend** — `dev-loop quality` now covers `.go` files with the
+  SAME formula, report, `--threshold` gate, ratchet, and mutation probe (field origin: a Go
+  workspace — platform-api/backoffice — couldn't adopt the TS/JS-only gauntlet). Language is
+  picked per FILE: complexity from a comment/string-stripping token scanner (Go's `func`-at-
+  depth-0 grammar; closures count toward their host), coverage from `go test -coverpkg=./...
+  -coverprofile` — block-level line.col ranges with a **claimed-bytes denominator**, so an
+  untested Go function is a TRUE 0% (CRAP = CC²+CC exactly; no V8-style declaration floor).
+  Mutation flips are channel-aware (`<-`/`++`/`--` never mutated); Go mutants default to
+  `go test ./...`. Mixed repos merge into one worst-first report; `--go-test-cmd` (with a
+  `{profile}` placeholder) overrides the coverage command. A Go repo's Step-5 gate is the same
+  one-liner: `"quality": "dev-loop quality --changed --threshold 30"`. Regression: the Go
+  fixture section in `hub/test/quality.ts` (9 checks, cleanly skipped where no go toolchain).
+
 ## 1.8.1
 
 Quality-gauntlet queue drained (behavior-preserving refactors + the missing coverage; every
