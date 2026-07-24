@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.7.0
 
 - **feat(quality): the quality gauntlet — `dev-loop quality`, the CRAP gate + mutation probe**
   (`hub/src/quality.ts`; `docs/design/quality-gauntlet.md`; modeled on `unclebob/crap4java`).
