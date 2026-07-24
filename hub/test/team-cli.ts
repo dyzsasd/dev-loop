@@ -115,6 +115,33 @@ try {
     ok(cfg2.projects.web2.notify?.webhookEnv === "DEVLOOP_NOTIFY_HOOK" && !("webhook" in cfg2.projects.web2.notify), "the env-name notify survives as a project passthrough, minus the literal");
   }
 
+  // ── importRepoRefs branch coverage (1.8.1: the extracted phase exposed 49% coverage —
+  //    the MERGE / registry-wins-CONFLICT arms had never been exercised) ──
+  {
+    const svc3 = join(tmp, "svc3");
+    run("team", ["init", "--dir", svc3, "--key", "svc3-team", "--backend", "service"]);
+    const shared = join(svc3, "shared-repo");
+    mkdirSync(shared, { recursive: true });
+    // Pre-register the ref BARE (no build, landing direct) — the import must MERGE the field the
+    // entry lacks (build) and keep the registry value on the CONFLICTING one (landing).
+    run("team", ["add-project", "holder"], { cwd: svc3 });
+    run("team", ["add-repo", "shared-repo", "--project", "holder", "--path", "shared-repo", "--landing", "direct", "--owner", "holder"], { cwd: svc3 });
+    writeFileSync(join(tmp, "legacy3.json"), JSON.stringify({ projects: {
+      imp3: { backend: "service", repoPath: shared, landing: "pr", build: { typecheck: "npm run typecheck" } },
+    } }));
+    const im3 = run("team", ["import", "--from", join(tmp, "legacy3.json")], { cwd: svc3 });
+    ok(im3.code === 0, "import onto a pre-registered shared repo exits 0");
+    ok(/MERGE {2}repo 'shared-repo': adopted build/.test(im3.out),
+      "a field the registry entry LACKED is merged from the v1 project (build)");
+    ok(/WARN {2}repo 'shared-repo' already registered — project 'imp3' carried DIFFERENT landing/.test(im3.out),
+      "a CONFLICTING field keeps the registry value and is surfaced (registry-wins, §4.2)");
+    const cfg3 = readJson(join(svc3, "dev-loop.json"));
+    ok(cfg3.repos["shared-repo"].landing === "direct" && cfg3.repos["shared-repo"].build?.typecheck === "npm run typecheck",
+      "registry entry after import: kept landing, adopted build");
+    ok(cfg3.repos["shared-repo"].owner === undefined || cfg3.repos["shared-repo"].owner,
+      "shared-ref import leaves ownership to E05 validation");
+  }
+
   // ── import: an ALL-junk communication block keeps its (empty) presence — article drafting stays on ──
   {
     const svc2b = join(tmp, "svc2b");

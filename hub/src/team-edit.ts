@@ -235,6 +235,34 @@ function derivePrefix(db: DatabaseSync, key: string): string {
 }
 
 // ── add-repo ──────────────────────────────────────────────────────────────────
+// The --detect half of add-repo (1.8.1 quality-gauntlet drain: addRepo CC 46 → detect vs mutate
+// halves): clone if needed, read package.json scripts + CI workflow names, fill only the flags the
+// operator did not pass. Mutates `o` in place (explicit flags always beat detection).
+function detectHalf(ref: string, o: Record<string, unknown>): void {
+  if (o.detect) {
+    const ws0 = resolveWorkspace();
+    const rel = (o.path as string | undefined) ?? ws0.file.repos[ref]?.path;
+    if (!rel) die(`--detect needs a repo path: pass --path <workspace-relative-path> (ref '${ref}' is not registered yet)`);
+    const abs = join(ws0.root, rel);
+    if (!existsSync(abs)) {
+      if (!o.remote) die(`repo path ${abs} does not exist — pass --remote <url> to clone it, or clone it yourself first`);
+      console.log(`cloning ${o.remote} → ${abs}`);
+      const r = spawnSync("git", ["clone", o.remote as string, abs], { stdio: "inherit" });
+      if (r.status !== 0) die(`git clone failed (exit ${r.status ?? "?"})`, 1);
+    }
+    const facts = detectRepoFacts(abs);
+    if (!o.typecheck && facts.build?.typecheck) o.typecheck = facts.build.typecheck;
+    if (!o.build && facts.build?.build) o.build = facts.build.build;
+    if (!o.test && facts.build?.test) o.test = facts.build.test;
+    if (!o.quality && facts.build?.quality) o.quality = facts.build.quality;
+    if (!(o.mergeChecks as string[]).length && facts.mergeChecks?.length) o.mergeChecks = facts.mergeChecks;
+    if (!o.landing) o.landing = "pr";
+    console.log("detected (deterministic, no LLM):");
+    console.log(JSON.stringify({ ...(facts.build ? { build: facts.build } : {}), ...(facts.mergeChecks?.length ? { mergeChecks: facts.mergeChecks } : {}), landing: o.landing }, null, 2));
+    console.log(`NOTE: interview-only fields left unset (deploy, ops health checks${o.owner ? "" : ", owner"}) — \`dev-loop doctor\` surfaces the gaps (repo info line; W07 once the repo deploys).`);
+  }
+}
+
 export function addRepo(argv: string[]): number {
   const [ref, ...rest] = argv;
   if (!ref || ref.startsWith("--")) die("usage: dev-loop team add-repo <ref> --project <key> [--path <rel>] [--detect] [--role primary|docs] [--remote <url>] [--owner <proj>] [--landing pr|direct] [--auto-merge] [--merge-check <name>]... [--typecheck-cmd <c>] [--build-cmd <c>] [--test-cmd <c>] [--quality-cmd <c>] [--deploy-style <s>] [--ops-check <url>]...");
@@ -268,28 +296,7 @@ export function addRepo(argv: string[]): number {
   // merge checks, then register with the sensible defaults (landing:"pr", NO auto-merge). Explicit flags
   // always beat detection. Interview-only fields (deploy, ops probes, owner) stay unset — doctor surfaces
   // the gaps (repo info line; W07 once the repo deploys).
-  if (o.detect) {
-    const ws0 = resolveWorkspace();
-    const rel = (o.path as string | undefined) ?? ws0.file.repos[ref]?.path;
-    if (!rel) die(`--detect needs a repo path: pass --path <workspace-relative-path> (ref '${ref}' is not registered yet)`);
-    const abs = join(ws0.root, rel);
-    if (!existsSync(abs)) {
-      if (!o.remote) die(`repo path ${abs} does not exist — pass --remote <url> to clone it, or clone it yourself first`);
-      console.log(`cloning ${o.remote} → ${abs}`);
-      const r = spawnSync("git", ["clone", o.remote as string, abs], { stdio: "inherit" });
-      if (r.status !== 0) die(`git clone failed (exit ${r.status ?? "?"})`, 1);
-    }
-    const facts = detectRepoFacts(abs);
-    if (!o.typecheck && facts.build?.typecheck) o.typecheck = facts.build.typecheck;
-    if (!o.build && facts.build?.build) o.build = facts.build.build;
-    if (!o.test && facts.build?.test) o.test = facts.build.test;
-    if (!o.quality && facts.build?.quality) o.quality = facts.build.quality;
-    if (!(o.mergeChecks as string[]).length && facts.mergeChecks?.length) o.mergeChecks = facts.mergeChecks;
-    if (!o.landing) o.landing = "pr";
-    console.log("detected (deterministic, no LLM):");
-    console.log(JSON.stringify({ ...(facts.build ? { build: facts.build } : {}), ...(facts.mergeChecks?.length ? { mergeChecks: facts.mergeChecks } : {}), landing: o.landing }, null, 2));
-    console.log(`NOTE: interview-only fields left unset (deploy, ops health checks${o.owner ? "" : ", owner"}) — \`dev-loop doctor\` surfaces the gaps (repo info line; W07 once the repo deploys).`);
-  }
+  if (o.detect) detectHalf(ref, o);
 
   const ws = mutate((file) => {
     if (!file.projects[project]) die(`project '${project}' does not exist — add it first with \`dev-loop team add-project ${project}\``);
