@@ -146,7 +146,10 @@ state, §9). Eligibility = the `dev-loop` label (§2); owner = the `pm`/`qa` lab
   (§9). Cancel = invalid/obsolete, terminal.
 - **Defect ≠ capability gap.** A defect is a `Bug` (QA's). A missing capability is
   a `Feature` (PM's). Stay in your lane (PM/QA guardrails).
-- **Verify against the running product / the diff — not the claim.** Owners verify
+- **Verify against the running product / the diff — not the claim.** A ticket
+  carrying an `AC-exec:` block (§6 — an executable acceptance probe) is verified by
+  RUNNING it: exit 0 passes, nonzero fails — executable ACs beat prose
+  interpretation. Owners verify
   by exercising the product (PM/QA Job A); Dev self-reviews against its own diff
   (Dev Step 5.5). Never trust a hand-off comment's claim of what was done.
 - **Inward ≠ outward.** The five inward agents build the product
@@ -1298,7 +1301,11 @@ fix or a `Feature`, it MUST do exactly one of:
 
 - **(A) Same run** — add/extend a test in the repo's test harness
   (`build.test` / the `testEnv` suite) that fails before the fix and passes after,
-  and run it as part of the Step-5 gate; **or**
+  and run it as part of the Step-5 gate. Where the repo carries a quality gate
+  (`build.quality`, §19), the STRONG form of "the test bites" is the mutation
+  probe: `dev-loop quality --mutate <file>` on the touched file — your new test
+  should kill at least one mutant in the changed function (a surviving mutant is
+  a test that doesn't bite); **or**
 - **(B) Default for the loop** — file ONE follow-up ticket titled
   `[coverage] add regression test for <ticket-id>: <one line>`, labeled `dev-loop`
   + `Improvement` + `qa` + `coverage`, priority Low, `relatedTo` the original, in
@@ -1474,7 +1481,7 @@ the repo's own value **if present**, else the **top-level** value.
 
 | Setting | Per-repo override | Falls back to |
 |---|---|---|
-| `build` (typecheck/build/test) | `repos[].build` | top-level `build` |
+| `build` (typecheck/build/test/quality — run in that order at Step 5; `quality` is the optional CRAP/mutation gate, e.g. `dev-loop quality --changed --threshold 30`) | `repos[].build` | top-level `build` |
 | `defaultBranch` | `repos[].defaultBranch` | `git.defaultBranch` |
 | `landing` (direct/pr, §12b) | `repos[].landing` | `git.landing` |
 | `autoMerge` (§12c) | `repos[].autoMerge` | `git.autoMerge` |

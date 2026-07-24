@@ -203,6 +203,9 @@ export function doctorWorkspace(ws: Workspace): boolean {
     else pass(`repo '${ref}' → ${dir}`);
     // The add-repo --detect contract: interview-only fields stay unset, doctor makes the gap visible.
     if (!r.deploy && !r.ops) info(`repo '${ref}' has no deploy/ops config (interview-only fields) — fill via /dev-loop:add-repo, or team set repos.${ref}.deploy.* once it deploys`);
+    // Quality-gauntlet nudge: a repo with a test gate but no quality gate ships on binary green alone —
+    // the CRAP/mutation gate is what catches "complex ∧ untested" and tests that don't bite. Info, not a W-code.
+    if (r.build?.test && !r.build?.quality) info(`repo '${ref}' has a test gate but no quality gate — consider build.quality (e.g. "dev-loop quality --changed --threshold 30"; see references/config-schema.md)`);
   }
 
   // W05 — a linear team's steward fires run at the workspace ROOT (cwd), where a repo-level .mcp.json can't

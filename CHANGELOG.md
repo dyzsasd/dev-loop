@@ -3,6 +3,33 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+- **feat(quality): the quality gauntlet — `dev-loop quality`, the CRAP gate + mutation probe**
+  (`hub/src/quality.ts`; `docs/design/quality-gauntlet.md`; modeled on `unclebob/crap4java`).
+  Per-FUNCTION `CRAP = CC² × (1−cov)³ + CC` — complexity from the target repo's own
+  `typescript` AST, coverage from native `NODE_V8_COVERAGE` (zero deps; on the zero-build
+  stack TS offsets are preserved, so V8 ranges map 1:1 onto source). Worst-first report,
+  `--changed` (the cheap per-fire form), `--threshold N` gate (exit 2), `--json`. The
+  `--mutate` probe flips one operator/boolean per sampled function, re-runs the tests, and
+  restores byte-identically (sha-verified, crash-trapped, dirty-file-refusing): SURVIVED =
+  a test that doesn't bite (the MEETPOIN-29 fake-green class coverage can't catch); exit 3
+  with `--fail-on-survivors`. First self-run found two real boundary-test gaps in
+  `context-bill` before the tool ever shipped. Regression suite: `hub/test/quality.ts`.
+- **feat(config): `build.quality` — the fourth Step-5 ship gate** (typecheck → build → test
+  → quality; conventions §19 + config-schema). `team add-repo --detect` now maps package.json
+  `test`/`quality` scripts (and plumbs them into the registry entry — `--test-cmd`/
+  `--quality-cmd` for the explicit path); doctor nudges when a repo has a test gate but no
+  quality gate.
+- **feat(skills): architect dimension `test-strength`** — CRAP report + mutation probe on the
+  worst rows, survivors filed as `qa`+`coverage`; the self-restoring probe is the one
+  sanctioned exception to architect's never-mutate rule. §15 gains the strong form of "the
+  regression test bites" (kill ≥1 mutant in the changed function).
+- **feat(conventions): executable ACs** — the ticket templates' optional `AC-exec:` block
+  (one command, exit 0 = accepted); §7's verify gate RUNS it instead of interpreting prose.
+- Backlog (recorded, not shipped): method-level semantic hashes for incremental mutation
+  (`quality-gauntlet.md` G5).
+
 ## 1.6.0
 
 The multi-provider hardening batch — every item below is a failure observed live during a

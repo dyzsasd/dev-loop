@@ -12,6 +12,15 @@ Why this matters / which strategy-doc goal it serves.
 - [ ] Observable, testable outcome 1
 - [ ] Observable, testable outcome 2
 
+## AC-exec (optional — executable acceptance)
+```
+AC-exec: <one command; exit 0 = accepted, nonzero = verify-fail>
+# e.g.  AC-exec: curl -fsS http://localhost:3001/api/meetup/suggest -d @fixtures/two-cities.json | jq -e '.destinations | length >= 3'
+```
+When present, the verifier RUNS this instead of interpreting the prose ACs (§7 verify
+gate — executable beats interpretation). Keep it self-contained (fixtures in-repo,
+testEnv URLs only); the prose ACs above stay as the human-readable intent.
+
 ## Affected area
 Route / module / surface (e.g. `/checkout`, `productRouter.addByUrl`).
 
