@@ -162,30 +162,9 @@ export function ownerLiveness(
   return out;
 }
 
-export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
-  let windowMs = 7 * 86_400_000;
-  let asJson = false;
-  let context = false;
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--window") windowMs = parseWindow(argv[++i] ?? "7d");
-    else if (argv[i] === "--json") asJson = true;
-    else if (argv[i] === "--context") context = true;
-    else if (argv[i] === "--help" || argv[i] === "-h") { console.log("usage: dev-loop metrics [--window 7d|24h|30d] [--json] [--context]  — team KPIs from fires.jsonl (+ hub board on service); --context = the per-agent per-fire context bill (plugin-static, needs no workspace)"); return 0; }
-  }
-  // --context: the per-agent context bill (task #8 — SKILL prose + cheat sheet + the conventions
-  // §-spans its Sections line cites + lessons caps). It lives under `metrics`, not `doctor`: the
-  // bill is a director-view NUMBER over the plugin's static sources (skills/ + conventions.md) that
-  // needs no workspace, hub db, or backend, while doctor's DOCTOR_OK contract stays a boolean health
-  // gate over a workspace's system-of-record. Handled BEFORE resolveWorkspace() for exactly that
-  // reason — the bill must print anywhere, including a machine with no team at all.
-  if (context) {
-    const { printContextBill } = await import("./context-bill.ts");
-    return printContextBill(asJson);
-  }
-  const ws: Workspace = resolveWorkspace();
-  const fires = fireMetrics(wsFireLedger(ws), windowMs);
-  const out: Record<string, unknown> = { team: ws.file.team.key, windowDays: windowMs / 86_400_000, fires };
-
+// Service-backend board rollup: per-project board KPIs + the operator decision queue folded into
+// `out` (1.8.1 quality-gauntlet drain: metricsCli CC 22 → collect/render phases).
+async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>): Promise<void> {
   if (ws.file.team.backend === "service" && existsSync(wsHubDb(ws))) {
     const { openDb } = await import("./db.ts");
     const { findProject } = await import("./seed.ts");
@@ -210,8 +189,10 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   } else {
     out.boardNote = "linear backend: board KPIs are computed by the digest agent via MCP queries (§22 digest contract); this CLI reports fire metrics only.";
   }
+}
 
-  if (asJson) { console.log(JSON.stringify(out, null, 2)); return 0; }
+// The default human render (asserted non-JSON by the 1.7.1 mutation-killer test).
+function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<typeof fireMetrics>, out: Record<string, unknown>): void {
   const pct = (x: number | null) => x === null ? "—" : `${Math.round(x * 100)}%`;
   console.log(`team '${ws.file.team.key}' — last ${windowMs / 86_400_000}d`);
   console.log(`fires: ${fires.fires} (success ${pct(fires.successRate)}, ${fires.failures} failed, ${fires.timeouts} timeout, ${fires.suspectErrors} suspect)`);
@@ -225,6 +206,36 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     const dq = (out.decisionQueue ?? []) as Array<{ id: string; state: string; project: string }>;
     if (dq.length) console.log(`decision queue (yours): ${dq.length} — ${dq.slice(0, 6).map((t) => `${t.id}[${t.state === "Human-Blocked" ? "blocked" : "approve"}]`).join(", ")}${dq.length > 6 ? ", …" : ""}`);
   } else console.log(String(out.boardNote));
+}
+
+export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
+  let windowMs = 7 * 86_400_000;
+  let asJson = false;
+  let context = false;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--window") windowMs = parseWindow(argv[++i] ?? "7d");
+    else if (argv[i] === "--json") asJson = true;
+    else if (argv[i] === "--context") context = true;
+    else if (argv[i] === "--help" || argv[i] === "-h") { console.log("usage: dev-loop metrics [--window 7d|24h|30d] [--json] [--context]  — team KPIs from fires.jsonl (+ hub board on service); --context = the per-agent per-fire context bill (plugin-static, needs no workspace)"); return 0; }
+  }
+  // --context: the per-agent context bill (task #8 — SKILL prose + cheat sheet + the conventions
+  // §-spans its Sections line cites + lessons caps). It lives under `metrics`, not `doctor`: the
+  // bill is a director-view NUMBER over the plugin's static sources (skills/ + conventions.md) that
+  // needs no workspace, hub db, or backend, while doctor's DOCTOR_OK contract stays a boolean health
+  // gate over a workspace's system-of-record. Handled BEFORE resolveWorkspace() for exactly that
+  // reason — the bill must print anywhere, including a machine with no team at all.
+  if (context) {
+    const { printContextBill } = await import("./context-bill.ts");
+    return printContextBill(asJson);
+  }
+  const ws: Workspace = resolveWorkspace();
+  const fires = fireMetrics(wsFireLedger(ws), windowMs);
+  const out: Record<string, unknown> = { team: ws.file.team.key, windowDays: windowMs / 86_400_000, fires };
+
+  await collectBoardMetrics(ws, windowMs, out);
+
+  if (asJson) { console.log(JSON.stringify(out, null, 2)); return 0; }
+  renderHuman(ws, windowMs, fires, out);
   return 0;
 }
 

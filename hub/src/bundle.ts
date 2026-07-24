@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tryResolveWorkspace, wsHubDb, wsLockPath } from "./workspace.ts";
-import type { TeamFile } from "./team-config.ts";
+import type { TeamFile, Workspace } from "./team-config.ts";
 import { doctorWorkspace } from "./doctor.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed } from "./seed.ts";
@@ -99,10 +99,14 @@ function ageDecrypt(data: Buffer): Buffer {
 const movedMarkerPath = (root: string): string => join(root, ".dev-loop", "moved.json");
 
 // ── export ──────────────────────────────────────────────────────────────────
-export async function bundleExport(argv: string[]): Promise<number> {
-  const [sub, ...rest] = argv;
-  if (!sub || sub === "--help" || sub === "-h" || sub === "help") { exportUsage(); return 0; }
-  if (sub !== "export") { console.error(`dev-loop bundle: unknown subcommand '${sub}' (only: export)`); return 2; }
+type ExportOpts = {
+  out: string; recipients: string[]; recipientFiles: string[]; plaintext: boolean;
+  noHubDb: boolean; backup: boolean; move: boolean; disposition: "migrate" | "fork";
+  gitTokenEnv: string | undefined; sshKey: string | undefined;
+  includeEnv: string[]; runAgents: string; force: boolean; dir: string;
+};
+// bundle-export arg surface (1.8.1 quality-gauntlet drain: bundleExport CC 61 → phases).
+function parseExportArgs(rest: string[]): ExportOpts {
   const o = {
     out: "", recipients: [] as string[], recipientFiles: [] as string[], plaintext: false,
     noHubDb: false, backup: false, move: false, disposition: "migrate" as "migrate" | "fork",
@@ -131,23 +135,12 @@ export async function bundleExport(argv: string[]): Promise<number> {
   if (!o.plaintext && !o.recipients.length && !o.recipientFiles.length)
     die("no encryption target: pass --recipients <age-pubkey> (repeatable) / --recipients-file <path>, or --insecure-plaintext (dev/test ONLY)");
   if (o.move && o.backup) die("--move and --backup are exclusive (a backup never retires the source)");
+  return o;
+}
 
-  const ws = tryResolveWorkspace(o.dir) ?? die(`no workspace at ${o.dir}`);
-  console.log(`bundle export — workspace '${ws.file.team.key}' @ ${ws.root}${o.backup ? " (backup: live checkpoint)" : ""}`);
-
-  // Doctor refusal (design §4.4 step 1): a workspace that fails its own health gate does not ship.
-  if (!doctorWorkspace(ws) && !o.force) die("doctor reports hard failures — fix them (or pass --force) before exporting", 1);
-
-  // Consistency gate: a MOVE exports a stopped home. Live run-lock / daemon runfiles refuse (not for --backup).
-  if (!o.backup) {
-    const liveHolders: string[] = [];
-    const runLock = wsLockPath(ws, "run");
-    if (existsSync(runLock)) {
-      try { const pid = (JSON.parse(readFileSync(runLock, "utf8")) as { pid?: number }).pid; if (pid) { process.kill(pid, 0); liveHolders.push(`run lock (pid ${pid})`); } } catch { /* dead/garbled = not live */ }
-    }
-    if (liveHolders.length) die(`the loop is LIVE (${liveHolders.join(", ")}) — stop it before a move export, or use --backup for a live snapshot`, 1);
-  }
-
+// Assemble the bundle payload: hub.db bytes (checkpointed), config files, every referenced secret
+// VALUE, and the optional git credential (§16: config carries NAMES; the payload IS the value carrier).
+function buildExportPayload(ws: Workspace, o: ExportOpts): { payload: Payload; hubDb: BundleManifest["hubDb"]; envNames: Set<string>; gitAuth: BundleManifest["gitAuth"] } {
   // hub.db (Q6: default ON when present) — WAL-checkpoint into the main file, then copy the bytes.
   const payload: Payload = { files: {} };
   const hubDbPath = wsHubDb(ws);
@@ -185,6 +178,32 @@ export async function bundleExport(argv: string[]): Promise<number> {
   const privateRemotes = Object.values(ws.file.repos).some((r) => !!r.remote);
   if (privateRemotes && gitAuth === "none")
     console.warn("⚠️  repos carry git remotes but the bundle has NO git credential (--git-token-env / --ssh-key) — a headless load of private repos will fail its clone probe");
+  return { payload, hubDb, envNames, gitAuth };
+}
+
+export async function bundleExport(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  if (!sub || sub === "--help" || sub === "-h" || sub === "help") { exportUsage(); return 0; }
+  if (sub !== "export") { console.error(`dev-loop bundle: unknown subcommand '${sub}' (only: export)`); return 2; }
+  const o = parseExportArgs(rest);
+
+  const ws = tryResolveWorkspace(o.dir) ?? die(`no workspace at ${o.dir}`);
+  console.log(`bundle export — workspace '${ws.file.team.key}' @ ${ws.root}${o.backup ? " (backup: live checkpoint)" : ""}`);
+
+  // Doctor refusal (design §4.4 step 1): a workspace that fails its own health gate does not ship.
+  if (!doctorWorkspace(ws) && !o.force) die("doctor reports hard failures — fix them (or pass --force) before exporting", 1);
+
+  // Consistency gate: a MOVE exports a stopped home. Live run-lock / daemon runfiles refuse (not for --backup).
+  if (!o.backup) {
+    const liveHolders: string[] = [];
+    const runLock = wsLockPath(ws, "run");
+    if (existsSync(runLock)) {
+      try { const pid = (JSON.parse(readFileSync(runLock, "utf8")) as { pid?: number }).pid; if (pid) { process.kill(pid, 0); liveHolders.push(`run lock (pid ${pid})`); } } catch { /* dead/garbled = not live */ }
+    }
+    if (liveHolders.length) die(`the loop is LIVE (${liveHolders.join(", ")}) — stop it before a move export, or use --backup for a live snapshot`, 1);
+  }
+
+  const { payload, hubDb, envNames, gitAuth } = buildExportPayload(ws, o);
 
   const manifest: BundleManifest = {
     bundleSchema: 1, devLoopVersion: pkgVersion(), authoredAt: new Date().toISOString(),
@@ -230,7 +249,9 @@ Load with: dev-loop up --bundle <file>   (identity via AGE_IDENTITY_FILE or DEVL
 }
 
 // ── load (`dev-loop up --bundle`) ───────────────────────────────────────────
-export async function bundleLoad(file: string, dir: string, opts: { forceReseed: boolean; noRun?: boolean }): Promise<number> {
+// Read + verify a bundle: MAGIC header, schema-1 manifest, (age-)decrypted payload
+// (1.8.1 quality-gauntlet drain: bundleLoad CC 50 → read/materialize phases).
+function readBundle(file: string): { manifest: BundleManifest; payload: Payload } {
   if (!existsSync(file)) die(`no bundle at ${file}`);
   const raw = readFileSync(file);
   const nl1 = raw.indexOf(0x0a);
@@ -244,6 +265,11 @@ export async function bundleLoad(file: string, dir: string, opts: { forceReseed:
 
   const payloadRaw = raw.subarray(nl2 + 1);
   const payload = JSON.parse((manifest.secretsEncryption === "age" ? ageDecrypt(Buffer.from(payloadRaw)) : Buffer.from(payloadRaw)).toString()) as Payload;
+  return { manifest, payload };
+}
+
+export async function bundleLoad(file: string, dir: string, opts: { forceReseed: boolean; noRun?: boolean }): Promise<number> {
+  const { manifest, payload } = readBundle(file);
 
   const root = resolve(dir);
   mkdirSync(join(root, ".dev-loop"), { recursive: true });

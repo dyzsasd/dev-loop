@@ -8,7 +8,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, cpSync,
 import { join, resolve, basename, isAbsolute, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveWorkspace, wsProjectDir, wsLessonsDir, wsHubDb, ensureStateDirs } from "./workspace.ts";
-import { normalizedRel, validateTeamFile, type TeamFile, type RepoEntry, type ProjectEntry } from "./team-config.ts";
+import { normalizedRel, validateTeamFile, type TeamFile, type RepoEntry, type ProjectEntry, type Workspace } from "./team-config.ts";
 import { projectConfigCandidates, devloopDataDir } from "./paths.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop team import: ${msg}`); process.exit(code); }
@@ -62,35 +62,17 @@ function readV1(from: string | undefined): { path: string; cfg: { projects?: Rec
   die(`no legacy projects.json found (looked at: ${candidates.join(", ")})`, 1);
 }
 
-export function teamImport(argv = process.argv.slice(2)): number {
-  const o = parseArgs(argv);
-  const ws = resolveWorkspace(); // throws WsNotFound if there is no workspace here — the operator must `team init` first
-  const { path: v1Path, cfg: v1 } = readV1(o.from);
-  const allKeys = Object.keys(v1.projects ?? {});
-  const selected = o.projects.length ? o.projects : allKeys;
-  for (const k of selected) if (!(k in (v1.projects ?? {}))) die(`--project '${k}' not found in ${v1Path} (has: ${allKeys.join(", ")})`);
-
-  const teamBackend = ws.file.team.backend;
-  const plan: string[] = [];
-  const file: TeamFile = JSON.parse(JSON.stringify(ws.file)); // mutate a copy; write once at the end
-  const refFor = new Map<string, string>();
-
-  for (const srcKey of selected) {
-    const key = o.renames[srcKey] ?? srcKey;
-    const v1p = v1.projects![srcKey];
-    if (v1p.backend && v1p.backend !== teamBackend)
-      die(`project '${srcKey}' is backend:'${v1p.backend}' but the team backend is '${teamBackend}' — one team, one backend (I3). Import it into a separate ${v1p.backend} workspace.`);
-    // linearTeam is re-homed to the TEAM level — a mismatch would silently re-target every ticket to the
-    // workspace's team, so it is a hard stop (same shape as the backend-mismatch guard above).
-    const v1Team = (v1p as { linearTeam?: string }).linearTeam;
-    if (teamBackend === "linear" && v1Team && ws.file.team.linearTeam && v1Team !== ws.file.team.linearTeam)
-      die(`project '${srcKey}' is linearTeam:'${v1Team}' but this workspace is team '${ws.file.team.linearTeam}' — import it into a workspace for that Linear team instead.`);
-    if (file.projects[key]) die(`project '${key}' already exists in the workspace dev-loop.json; use --rename`);
-
-    // Registry entries from repoPath / repos[].
-    const rawRepos = v1p.repos?.length ? v1p.repos : (v1p.repoPath ? [{ path: v1p.repoPath, role: "primary" }] : []);
-    const refs: Array<{ ref: string; role?: string }> = [];
-    for (const r of rawRepos) {
+// One v1 project's repo list → registry entries (register new refs; MERGE fields an existing entry
+// lacks — registry-wins on conflict, §4.2) + the project's ref list. Extracted from the teamImport
+// main loop (1.8.1 quality-gauntlet drain: CC 81 → phase functions).
+function importRepoRefs(
+  v1p: Record<string, unknown> & { repos?: Array<{ path?: string; name?: string; role?: string }>; repoPath?: string },
+  srcKey: string, key: string, ws: Workspace, file: TeamFile,
+  refFor: Map<string, string>, plan: string[],
+): Array<{ ref: string; role?: string }> {
+  const rawRepos = v1p.repos?.length ? v1p.repos : (v1p.repoPath ? [{ path: v1p.repoPath, role: "primary" }] : []);
+  const refs: Array<{ ref: string; role?: string }> = [];
+  for (const r of rawRepos) {
       const absOrRel = r.path ?? "";
       // Canonicalize so a /tmp vs /private/tmp (or any symlink) mismatch doesn't misflag an in-workspace
       // repo as "outside". ws.root is already realpath-canonical (resolveWorkspace).
@@ -126,16 +108,15 @@ export function teamImport(argv = process.argv.slice(2)): number {
       }
       refs.push({ ref, role: r.role });
     }
+  return refs;
+}
 
-    const proj: ProjectEntry = { repos: refs };
-    const projBag = proj as unknown as Record<string, unknown>;
-    // Generic passthrough: EVERY v1 project field survives except the ones this import re-homes (physical
-    // repo facts → the registry; backend/linearTeam → team; notify → handled below). A whitelist here
-    // silently dropped operator config (blockedStateName, communication, …) — never again.
-    const REHOMED = new Set(["repoPath", "repos", "backend", "linearTeam", "notify", "landing", "autoMerge", "mergeChecks", "build", "deploy", "ops"]);
-    for (const [f, v] of Object.entries(v1p as Record<string, unknown>)) {
-      if (!REHOMED.has(f) && v !== undefined) projBag[f] = v;
-    }
+// Sanitize the v1 communication/notify blocks onto the v2 project (E14/E15 strict keys; §16 inline
+// secrets never copied) and lift a usable env-name notify into team.comms when comms is unset.
+function importCommsBlocks(
+  v1p: Record<string, unknown>, srcKey: string, projBag: Record<string, unknown>,
+  file: TeamFile, plan: string[],
+): void {
     // communication: v1 blocks may carry keys the v2 schema doesn't model (E14 validates the block
     // STRICTLY — the silent-suppression guard). Keep the known article fields and drop the rest with a
     // plan line; the block itself is kept even when emptied — its PRESENCE is what opts article drafting
@@ -177,6 +158,46 @@ export function teamImport(argv = process.argv.slice(2)): number {
         plan.push(`COMMS  team.comms ← project '${srcKey}' notify (${notify.type}, env ${envName})`);
       }
     }
+}
+
+export function teamImport(argv = process.argv.slice(2)): number {
+  const o = parseArgs(argv);
+  const ws = resolveWorkspace(); // throws WsNotFound if there is no workspace here — the operator must `team init` first
+  const { path: v1Path, cfg: v1 } = readV1(o.from);
+  const allKeys = Object.keys(v1.projects ?? {});
+  const selected = o.projects.length ? o.projects : allKeys;
+  for (const k of selected) if (!(k in (v1.projects ?? {}))) die(`--project '${k}' not found in ${v1Path} (has: ${allKeys.join(", ")})`);
+
+  const teamBackend = ws.file.team.backend;
+  const plan: string[] = [];
+  const file: TeamFile = JSON.parse(JSON.stringify(ws.file)); // mutate a copy; write once at the end
+  const refFor = new Map<string, string>();
+
+  for (const srcKey of selected) {
+    const key = o.renames[srcKey] ?? srcKey;
+    const v1p = v1.projects![srcKey];
+    if (v1p.backend && v1p.backend !== teamBackend)
+      die(`project '${srcKey}' is backend:'${v1p.backend}' but the team backend is '${teamBackend}' — one team, one backend (I3). Import it into a separate ${v1p.backend} workspace.`);
+    // linearTeam is re-homed to the TEAM level — a mismatch would silently re-target every ticket to the
+    // workspace's team, so it is a hard stop (same shape as the backend-mismatch guard above).
+    const v1Team = (v1p as { linearTeam?: string }).linearTeam;
+    if (teamBackend === "linear" && v1Team && ws.file.team.linearTeam && v1Team !== ws.file.team.linearTeam)
+      die(`project '${srcKey}' is linearTeam:'${v1Team}' but this workspace is team '${ws.file.team.linearTeam}' — import it into a workspace for that Linear team instead.`);
+    if (file.projects[key]) die(`project '${key}' already exists in the workspace dev-loop.json; use --rename`);
+
+    const refs = importRepoRefs(v1p as never, srcKey, key, ws, file, refFor, plan);
+
+    const proj: ProjectEntry = { repos: refs };
+    const projBag = proj as unknown as Record<string, unknown>;
+    // Generic passthrough: EVERY v1 project field survives except the ones this import re-homes (physical
+    // repo facts → the registry; backend/linearTeam → team; notify → handled below). A whitelist here
+    // silently dropped operator config (blockedStateName, communication, …) — never again.
+    const REHOMED = new Set(["repoPath", "repos", "backend", "linearTeam", "notify", "landing", "autoMerge", "mergeChecks", "build", "deploy", "ops"]);
+    for (const [f, v] of Object.entries(v1p as Record<string, unknown>)) {
+      if (!REHOMED.has(f) && v !== undefined) projBag[f] = v;
+    }
+    importCommsBlocks(v1p as Record<string, unknown>, srcKey, projBag, file, plan);
+
     file.projects[key] = proj;
     plan.push(`CONFIG project '${srcKey}'${key !== srcKey ? ` → '${key}'` : ""}: ${refs.length} repo ref(s) [${refs.map((r) => r.ref).join(", ")}]`);
 

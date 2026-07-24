@@ -92,7 +92,14 @@ Status after the 1.8 batch (rescan: max CRAP 374 → 156; >100 club 8 → 4 func
 | 100 | `addRepo` | queued: detect vs mutate halves |
 | 87 | `daemon.ts:399` anon | queued: named route handlers |
 
-CI ratchet accordingly tightened 380 → **160**.
+After the 1.8.1 drain (max 107.5→ the daemon router's 86.7 once importRepoRefs got its
+missing MERGE/CONFLICT coverage — 49%→90%, CRAP 107.5→25.6): `teamImport`/`bundleExport`/
+`bundleLoad`/`addRepo`/`metricsCli` all phase-split; the daemon notifier wiring is a named,
+exported, socket-free-tested `startProjectNotifiers` (was the 0%-covered listen anon).
+Remaining queue: the daemon request router (86.7, CC 86, 95% covered — split into named
+route handlers), `upCli` 79.7, `secretCli` 76.4, `channelSend` 67.7, `doctorWorkspace` 67.5.
+
+CI ratchet trajectory: 380 (1.7.0) → 160 (1.8.0) → **90** (1.8.1).
 
 ADD-TESTS class landed in 1.7.1 (stop.ts, the tick guard, metricsCli human render,
 ownerLiveness multi-row, channelSend no-channel — all probe-driven: each new test was

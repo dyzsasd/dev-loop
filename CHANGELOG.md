@@ -3,6 +3,34 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+Quality-gauntlet queue drained (behavior-preserving refactors + the missing coverage; every
+change guarded by the existing suite — bundle/migrate/team-edit/metrics/daemon tests):
+
+- **refactor(daemon): the notifier wiring is a named, exported, unit-tested function.** The
+  `server.listen` callback anon was the post-1.8 CRAP ceiling (156) purely for lack of
+  coverage — spawned daemons die by SIGKILL before V8 flushes, so the listen path never
+  registered as covered. `startProjectNotifiers()` now wires all six per-project notifiers +
+  the WAL checkpoint, returns `{active, timers}`, takes an injectable `ledgerPath`, and
+  `hub/test/notifier-wiring.ts` asserts the no-op/armed/opt-out contracts socket-free.
+- **refactor(import): `teamImport` phase split** (CC 81 → 35) — `importRepoRefs` (registry
+  register/merge, §4.2 registry-wins) and `importCommsBlocks` (E14/E15 sanitize + the
+  team.comms lift) extracted from the main loop.
+- **refactor(bundle): `bundleExport`/`bundleLoad` phase split** (CC 61/50 → orchestrators) —
+  `parseExportArgs`, `buildExportPayload` (hub.db checkpoint + secrets + git auth), and
+  `readBundle` (MAGIC/manifest/decrypt) extracted.
+- **refactor(team-edit): `addRepo` detect-vs-mutate halves** (CC 46) — the `--detect` block
+  is `detectHalf()`.
+- **refactor(metrics): `metricsCli` collect/render phases** — `collectBoardMetrics` +
+  `renderHuman` extracted.
+- **test(import): the extracted `importRepoRefs` exposed its own gap** — 49% coverage (the
+  MERGE / registry-wins-CONFLICT arms had never been exercised; CRAP 107.5, briefly the new
+  ceiling). A shared-repo import scenario in `hub/test/team-cli.ts` covers both arms:
+  49%→90%, 107.5→25.6. Extraction as a coverage X-ray, working as intended.
+- **ci(ratchet): 160 → 90.** Rescan after the batch: max CRAP 156→86.7 (the daemon request
+  router, 95% covered — the recorded next target), >100 club 4→0.
+
 ## 1.8.0
 
 The 1.8 batch: drain the top of the quality-gauntlet refactor queue (behavior-preserving,

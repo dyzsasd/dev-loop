@@ -375,6 +375,51 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
 // F2 (D2): one daemon serves EVERY hub project — /p/<key>/… re-resolves the project per request, bare
 // paths fall back to the boot project, and bare GET / is the hub project index (or the single-real-
 // project redirect), so the workspace hub is never a dead `_team` landing again.
+// All per-project background notifiers, wired in one place (1.8.1 quality-gauntlet drain: the
+// listen-callback anon was the post-1.8 ceiling — CRAP 156 purely because NO test ever reached the
+// listen path: spawned daemons die by SIGKILL before V8 flushes coverage. Extracted + exported so the
+// wiring is unit-testable without a socket; test/notifier-wiring.ts holds the regression.)
+export function startProjectNotifiers(deps: {
+  writeDb: DatabaseSync; projectId: string; projectKey: string; actorLabel?: string; baseUrl: string;
+  dbPath: string; cadenceHours: number; noProgressWindowHours: number;
+  fhWindowHours: number; fhMinFires: number; fhThreshold: number; ledgerPath?: string;
+  projCfg: Record<string, unknown> | undefined; notify: unknown; log?: (line: string) => void;
+}): { active: string[]; timers: Array<ReturnType<typeof setInterval>> } {
+  const { writeDb, projectId, projectKey, baseUrl, notify } = deps;
+  const log = deps.log ?? ((l: string) => console.log(l));
+  const active: string[] = [];
+  const timers: Array<ReturnType<typeof setInterval>> = [];
+  const track = (name: string, t: unknown, line: string) => { if (t) { active.push(name); timers.push(t as ReturnType<typeof setInterval>); log(line); } };
+  // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
+  track("blocked", startBlockedNotifier({ writeDb, projectId, projectKey, baseUrl, cadenceHours: deps.cadenceHours, notify }),
+    `[daemon] decision-queue notifier active (Human-Blocked ∪ In Review@operator, every ${deps.cadenceHours}h via the configured channel / §9 notify webhook)`);
+  // DL-76: loop no-progress / runaway circuit-breaker — alert ONCE when 0 accepted change (Done) lands in the
+  // rolling window. No channel/notify OR noProgressWindowHours≤0 ⇒ no-op (mirrors the Human-Blocked notifier).
+  track("no-progress", startNoProgressNotifier({ writeDb, projectId, projectKey, baseUrl, windowHours: deps.noProgressWindowHours, notify }),
+    `[daemon] no-progress detector active (alert on 0 accepted change in ${deps.noProgressWindowHours}h via the configured channel / §9 notify webhook)`);
+  // P0-1c: the loop fire-health self-monitor — ops watches prod; THIS watches the loop itself.
+  const fhLedger = deps.ledgerPath ?? (() => { try { const ws = tryResolveWorkspace(); return ws ? wsFireLedger(ws) : ""; } catch { return ""; } })();
+  track("fire-health", startFireHealthNotifier({ writeDb, projectId, projectKey, baseUrl, ledgerPath: fhLedger, windowHours: deps.fhWindowHours, minFires: deps.fhMinFires, threshold: deps.fhThreshold, notify }),
+    `[daemon] fire-health monitor active (alert when success <${Math.round(deps.fhThreshold * 100)}% over ${deps.fhWindowHours}h with ≥${deps.fhMinFires} fires; one alert per episode)`);
+  // Docs P3: passive-intake foreign-doc-edit notifier — under intake.mode:"passive" PM's doc-watch is off,
+  // so an unconsumed HUMAN (non-agent) doc version emits one comms line, deduped per version.
+  const intakeMode = (deps.projCfg?.intake as { mode?: string } | undefined)?.mode;
+  track("foreign-docs", startDocForeignEditNotifier({ writeDb, projectId, projectKey, baseUrl, intakeMode, notify }),
+    `[daemon] passive-intake doc-edit notifier active (operator/web doc edits → one comms line per version)`);
+  // Docs P3b: the repo-FILE twin — watch the strategy file's content hash; one deduped line per settled edit.
+  const strategyFile = repoFileStrategyPath(deps.projCfg as Parameters<typeof repoFileStrategyPath>[0]);
+  track("strategy-file", startStrategyFileEditNotifier({ writeDb, projectId, projectKey, intakeMode, filePath: strategyFile?.abs, displayPath: strategyFile?.display, notify }),
+    `[daemon] passive-intake strategy-file watch active (${strategyFile?.display ?? ""} → one comms line per settled edit)`);
+  // Docs P6b: drafts-pending notifier — one DAILY line while a gated doc's drafts trail its published current.
+  track("drafts-pending", startDocDraftsPendingNotifier({ writeDb, projectId, projectKey, baseUrl, notify }),
+    `[daemon] drafts-pending notifier active (daily line while a doc draft trails its published version)`);
+  // P3b: bound the single-writer connection's WAL via a DEDICATED busy_timeout=0 maintenance connection.
+  startWalCheckpoint(deps.dbPath);
+  active.push("wal-checkpoint");
+  log(`[daemon] WAL checkpoint active (periodic TRUNCATE on a dedicated non-blocking connection)`);
+  return { active, timers };
+}
+
 export function createDaemon({ db, projectId: bootProjectId, projectKey: bootProjectKey, writeDb, actor, roadmapRepoFileStrategy }: DaemonOpts): Server {
   const canWrite = !!writeDb && !!actor;
   let streamCount = 0; const MAX_STREAMS = 16; // bound concurrent SSE connections (one operator, a few tabs)
@@ -721,37 +766,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const port = typeof addr === "object" && addr ? addr.port : PORT;
     console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${HOST}:${port}/  (reads read-only; /roadmap editable${isLoopbackHost(HOST) ? ", localhost-only" : ", bearer-token required (§6.2)"})`);
     const baseUrl = `http://${isLoopbackHost(HOST) ? HOST : "127.0.0.1"}:${port}`; // notifier links stay reachable from the host itself
-    // Human-Blocked notifier (option b): owns first-ping + reminders on service. No channel / cadence≤0 ⇒ no-op.
-    const notifier = startBlockedNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, cadenceHours, notify });
-    if (notifier) console.log(`[daemon] decision-queue notifier active (Human-Blocked ∪ In Review@operator, every ${cadenceHours}h via the configured channel / §9 notify webhook)`);
-    // DL-76: loop no-progress / runaway circuit-breaker — alert ONCE when 0 accepted change (Done) lands in the
-    // rolling window. No channel/notify OR noProgressWindowHours≤0 ⇒ no-op (mirrors the Human-Blocked notifier).
-    const noProgress = startNoProgressNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, windowHours: noProgressWindowHours, notify });
-    if (noProgress) console.log(`[daemon] no-progress detector active (alert on 0 accepted change in ${noProgressWindowHours}h via the configured channel / §9 notify webhook)`);
-    // P0-1c: the loop fire-health self-monitor — ops watches prod; THIS watches the loop itself.
-    const fhLedger = (() => { try { const ws = tryResolveWorkspace(); return ws ? wsFireLedger(ws) : ""; } catch { return ""; } })();
-    const fireHealth = startFireHealthNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, ledgerPath: fhLedger, windowHours: fhWindowHours, minFires: fhMinFires, threshold: fhThreshold, notify });
-    if (fireHealth) console.log(`[daemon] fire-health monitor active (alert when success <${Math.round(fhThreshold * 100)}% over ${fhWindowHours}h with ≥${fhMinFires} fires; one alert per episode)`);
-    // Docs P3: passive-intake foreign-doc-edit notifier — under intake.mode:"passive" PM's doc-watch is off,
-    // so an unconsumed HUMAN (non-agent) doc version emits one comms line, deduped per version. Autonomous
-    // mode / no send target ⇒ no timer (PM's own doc-watch owns propagation there).
-    const intakeMode = (projCfg?.intake as { mode?: string } | undefined)?.mode;
-    const foreignDocs = startDocForeignEditNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, intakeMode, notify });
-    if (foreignDocs) console.log(`[daemon] passive-intake doc-edit notifier active (operator/web doc edits → one comms line per version)`);
-    // Docs P3b: the repo-FILE twin — the DEFAULT config keeps the strategy doc as a repo file, which the
-    // hub-doc tick above can't see. Resolve it exactly the way PM's boot does (repoFileStrategyPath: the
-    // doc-home repo roots a relative path, §19) and watch its content hash; a settled operator edit emits
-    // one deduped comms line naming the PATH only (§16). Passive intake + a resolved file + a target only.
-    const strategyFile = repoFileStrategyPath(projCfg as Parameters<typeof repoFileStrategyPath>[0]);
-    const strategyWatch = startStrategyFileEditNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, intakeMode, filePath: strategyFile?.abs, displayPath: strategyFile?.display, notify });
-    if (strategyWatch) console.log(`[daemon] passive-intake strategy-file watch active (${strategyFile!.display} → one comms line per settled edit)`);
-    // Docs P6b: drafts-pending notifier — a gated doc whose drafts trail the published current for >24h gets
-    // one DAILY comms line (deduped per version), so agent-drafted direction can't silently stall unpublished.
-    const draftsNotifier = startDocDraftsPendingNotifier({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, notify });
-    if (draftsNotifier) console.log(`[daemon] drafts-pending notifier active (daily line while a doc draft trails its published version)`);
-    // P3b: bound the single-writer connection's WAL via a DEDICATED busy_timeout=0 maintenance connection
-    // (never blocks the synchronous event loop under a concurrent reader — Codex review 2026-06-27).
-    startWalCheckpoint(DB_PATH);
-    console.log(`[daemon] WAL checkpoint active (periodic TRUNCATE on a dedicated non-blocking connection)`);
+    startProjectNotifiers({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, dbPath: DB_PATH,
+      cadenceHours, noProgressWindowHours, fhWindowHours, fhMinFires, fhThreshold,
+      projCfg: projCfg as Record<string, unknown> | undefined, notify });
   });
 }
