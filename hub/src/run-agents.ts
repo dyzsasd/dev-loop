@@ -1117,15 +1117,25 @@ function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string 
   }
 }
 
+// Scheduler-internal comms: STRICTLY gated on team.comms existing. notify() itself die(3)s on a
+// comms-less workspace (correct for the CLI verb — the operator asked and must hear "not configured"),
+// but `die` is process.exit — a promise .catch() cannot contain it, so an ungated call from inside the
+// scheduler KILLS the whole loop the first time it tries to alert (field regression caught by
+// test/stop.ts B5: the config-guard alert on a comms-less workspace took the scheduler down with exit 3).
+function schedulerNotify(ws: Workspace | null, level: "info" | "warn" | "error", text: string): void {
+  if (!ws?.file.team.comms) return; // console output already happened at the call site; nothing to send
+  void notify(ws, { title: "dev-loop scheduler", level, text }).catch(() => { /* best-effort */ });
+}
+
 // P0-1a: trip/recovery each surface ONCE — always on the console, and to the team comms channel when a
-// workspace with team.comms exists (a comms-less workspace just prints notify's own miss-config line).
+// workspace with team.comms exists (comms-less: console only — see schedulerNotify's die(3) note).
 function wireBreakerEvents(ws: Workspace | null): void {
   breaker.onEvent = (agent, ev, key, streak) => {
     const msg = ev === "open"
       ? `breaker OPEN: ${agent} → probe cadence ${formatDuration(breaker.probeMs)} after ${streak}× identical failures (${key})`
       : `breaker CLOSED: ${agent} recovered — normal cadence resumed`;
     console.error(`[breaker] ${msg}`);
-    if (ws) void notify(ws, { title: "dev-loop scheduler", level: ev === "open" ? "error" : "info", text: msg }).catch(() => { /* best-effort */ });
+    schedulerNotify(ws, ev === "open" ? "error" : "info", msg);
   };
 }
 
@@ -1526,14 +1536,14 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
         cfgBroken = true;
         const msg = `dev-loop.json is INVALID JSON (${(e as Error).message.split("\n")[0]}) — PAUSING all fires until it parses again. Did an agent hand-edit it? Config writes go through \`dev-loop team\`; restore the file (git checkout / .bak) to resume.`;
         console.error(`dev-loop run: ${msg}`);
-        void notify(ws, { title: "dev-loop scheduler", level: "error", text: msg }).catch(() => { /* best-effort */ });
+        schedulerNotify(ws, "error", msg);
       }
       return false;
     }
     if (cfgBroken) {
       cfgBroken = false;
       console.log("dev-loop run: dev-loop.json parses again — resuming fires");
-      void notify(ws, { title: "dev-loop scheduler", level: "info", text: "dev-loop.json restored — fires resumed" }).catch(() => { /* best-effort */ });
+      schedulerNotify(ws, "info", "dev-loop.json restored — fires resumed");
     }
     return true;
   };

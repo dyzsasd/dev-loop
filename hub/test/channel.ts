@@ -181,6 +181,13 @@ const beta = await as("ops", "betap", "CB"); // second project for isolation
 // status before register
 ok((await call(director, "channel.status")).data.configured === false, "channel.status before register → configured:false");
 
+// Mutation-killer (quality --mutate survivor, 1.7.1): channelSend's no-channel return is
+// `{ ok:false, error }` — flipped to ok:true, a send into the void reported success and nothing
+// here noticed. Sending BEFORE register must surface as an error, never a silent success.
+const preReg = await call(director, "channel.send", { kind: "notify", ticketId: "X-1", bailShape: "info-needed" });
+ok(preReg.isError === true && /no enabled channel/.test(JSON.stringify(preReg)),
+  "channel.send before register → error 'no enabled channel' (ok:false is load-bearing)");
+
 // register (env-var NAME only, never a secret)
 const reg = (await call(director, "channel.register", { provider: "slack", configRef: "DEVLOOP_CHANNEL_TOKEN", channelRef: "C777" })).data;
 ok(reg.provider === "slack" && reg.channelRef === "C777", "channel.register → stored provider + room id");

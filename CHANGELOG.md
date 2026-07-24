@@ -3,6 +3,34 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+The 1.7.0 quality self-audit, acted on — every item below is probe-driven: a surviving
+mutant or a 0%-coverage row from `dev-loop quality` on our own hub, turned into a fix,
+then verified KILLED by re-probing (5/5).
+
+- **fix(runner): an ungated comms alert could KILL the scheduler.** `notify()` die(3)s on a
+  comms-less workspace (right for the CLI verb; fatal from inside the loop — `process.exit`
+  escapes any promise `.catch`). Both scheduler-internal callers — the **P0-1a breaker**
+  trip/close notice (latent since 1.3.0: on a comms-less workspace the breaker's FIRST trip
+  took the whole scheduler down with it) and the 1.6.0 config-guard alert — now route through
+  a strictly comms-gated `schedulerNotify()`. Caught by the new `test/stop.ts` B5.
+- **test(stop/guard): the 1.6.0 surfaces the self-audit found at 0% coverage.**
+  `hub/test/stop.ts`: the full `dev-loop stop` lifecycle (no workspace / idle / stale-lock
+  takeover / live SIGTERM against a real persistent scheduler) plus the config-integrity
+  guard's PAUSE → no-spawn → auto-resume arc, exercised against a genuinely corrupted
+  `dev-loop.json` mid-run.
+- **test(mutation-killers):** metricsCli's human render (a `--json`-flag flip survived),
+  `ownerLiveness` with multiple fire rows (the last-fire max scan's `||`→`&&` flip survived),
+  `channelSend` before register (`ok:false` flip survived) — each assertion written to kill
+  its specific mutant. quality's own `fnName` naming branches (class prefix / constructor /
+  const-arrow / property inference) covered via fixture.
+- **ci(quality ratchet):** the test workflow now collects `NODE_V8_COVERAGE` during `npm test`
+  and gates `dev-loop quality --threshold 380` on the reused coverage (zero extra test time).
+  380 sits just above the self-audit's worst row (`cli-agentops.main`, 374) — nothing may get
+  worse than today's worst; tighten as the recorded 1.8 refactor queue
+  (`docs/design/quality-gauntlet.md`) drains. `npm run quality` mirrors it locally.
+
 ## 1.7.0
 
 - **feat(quality): the quality gauntlet — `dev-loop quality`, the CRAP gate + mutation probe**
