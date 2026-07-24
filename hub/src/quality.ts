@@ -8,9 +8,11 @@
 // well-tested hot spots; coverage alone flags trivial glue; the product flags risk.
 //
 // Two modes, one tool:
-//   report/gate   run the repo's tests under NODE_V8_COVERAGE, map V8 function coverage
-//                 onto TS/JS source functions, print the worst-first CRAP table;
-//                 --threshold N turns the report into a GATE (exit 2 when exceeded).
+//   report/gate   run the repo's tests under NODE_V8_COVERAGE (TS/JS) and/or
+//                 \`go test -coverprofile\` (Go), map coverage onto source functions,
+//                 print the worst-first CRAP table; --threshold N turns the report
+//                 into a GATE (exit 2 when exceeded). Language is per FILE (extension),
+//                 so a mixed repo gets one unified report on one formula.
 //   --mutate      the test-strength probe: flip one operator/literal per sampled
 //                 function, re-run the tests, restore the file byte-identically. A
 //                 SURVIVING mutant = a test suite that doesn't bite (the 2026-07 field
@@ -50,6 +52,7 @@ interface Opts {
   sample: number;
   failOnSurvivors: boolean;
   mutateTestCmd: string | null;
+  goTestCmd: string | null;
   top: number;
 }
 
@@ -74,7 +77,9 @@ Options:
   --mutate              mutation probe: flip one operator/literal per sampled function,
                         re-run tests, restore byte-identically; SURVIVED = a test gap
   --sample <n>          how many worst-CRAP functions to mutate (default 5)
-  --mutate-test-cmd <c> test command for mutants (default: --test-cmd / npm test)
+  --mutate-test-cmd <c> test command for mutants (default: --test-cmd / npm test; go files: \`go test ./...\`)
+  --go-test-cmd <c>     Go coverage command; "{profile}" is replaced with the coverprofile path
+                        (default: \`go test -count=1 -coverpkg=./... -coverprofile={profile} ./...\`)
   --fail-on-survivors   exit 3 when any mutant survives
 
 Config hook: \`repos.<ref>.build.quality\` (e.g. "dev-loop quality --changed --threshold 30")
@@ -85,7 +90,7 @@ function die(msg: string, code = 1): never { console.error(`dev-loop quality: ${
 
 function parseArgs(argv: string[]): Opts {
   const o: Opts = { paths: [], changed: false, threshold: null, json: false, testCmd: null, coverageDir: null,
-    keepCoverage: false, mutate: false, sample: 5, failOnSurvivors: false, mutateTestCmd: null, top: 25 };
+    keepCoverage: false, mutate: false, sample: 5, failOnSurvivors: false, mutateTestCmd: null, goTestCmd: null, top: 25 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i] ?? die(`${a} requires a value`);
@@ -100,6 +105,7 @@ function parseArgs(argv: string[]): Opts {
     else if (a === "--sample") { o.sample = Number(next()); if (!Number.isInteger(o.sample) || o.sample <= 0) die("--sample must be a positive integer"); }
     else if (a === "--fail-on-survivors") o.failOnSurvivors = true;
     else if (a === "--mutate-test-cmd") o.mutateTestCmd = next();
+    else if (a === "--go-test-cmd") o.goTestCmd = next();
     else if (a === "--top") { o.top = Number(next()); if (!Number.isInteger(o.top) || o.top < 0) die("--top must be a non-negative integer"); }
     else if (a.startsWith("--")) die(`unknown option '${a}'`);
     else o.paths.push(a);
@@ -109,9 +115,9 @@ function parseArgs(argv: string[]): Opts {
 
 // ─── file selection (crap4java §5: default src/**, --changed via git status, explicit paths) ─────
 
-const SRC_EXT = /\.(ts|tsx|mts|cts|js|mjs|cjs|jsx)$/;
-const SKIP_DIRS = new Set(["node_modules", "dist", "build", "coverage", ".git", ".next"]);
-const isTestFile = (p: string) => /(\.test\.|\.spec\.|__tests__|(^|\/)tests?\/)/.test(p);
+const SRC_EXT = /\.(ts|tsx|mts|cts|js|mjs|cjs|jsx|go)$/;
+const SKIP_DIRS = new Set(["node_modules", "dist", "build", "coverage", ".git", ".next", "vendor"]);
+const isTestFile = (p: string) => /(\.test\.|\.spec\.|_test\.go$|__tests__|(^|\/)tests?\/)/.test(p);
 
 function walk(dir: string, out: string[]): void {
   let entries: string[] = [];
@@ -236,6 +242,138 @@ function parseFunctions(ts: TsModule | null, root: string, file: string, source:
   return out;
 }
 
+// ─── Go backend ──────────────────────────────────────────────────────────────────────────────────
+// Same formula, same report, same gate — a second language backend picked per FILE extension.
+// Complexity: a token-level scan over comment/string-stripped source (Go's grammar is regular
+// enough — every function starts with \`func\` at brace-depth 0 — that a real AST buys little here;
+// function literals/closures count toward their host function, unlike the TS backend's own-row
+// treatment). Coverage: \`go test -coverprofile\` — BLOCK-level with line.col ranges and hit counts,
+// an even cleaner source than V8. Claimed-byte semantics: the profile only covers statement blocks,
+// so a function's denominator is its CLAIMED bytes (signature/braces don't dilute the score).
+
+// Blank out comments and string/rune literals, preserving byte offsets (same trick the type
+// stripper uses): positions found on the stripped text apply 1:1 to the original.
+function stripGo(src: string): string {
+  const out = src.split("");
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") { out[i] = " "; i++; } continue; }
+    if (c === "/" && src[i + 1] === "*") { out[i] = out[i + 1] = " "; i += 2; while (i < n && !(src[i] === "*" && src[i + 1] === "/")) { if (src[i] !== "\n") out[i] = " "; i++; } if (i < n) { out[i] = out[i + 1] = " "; i += 2; } continue; }
+    if (c === '"' || c === "'") { const q = c; out[i] = " "; i++; while (i < n && src[i] !== q) { if (src[i] === "\\") { out[i] = " "; i++; } if (i < n && src[i] !== "\n") out[i] = " "; i++; } if (i < n) { out[i] = " "; i++; } continue; }
+    if (c === "\`") { out[i] = " "; i++; while (i < n && src[i] !== "\`") { if (src[i] !== "\n") out[i] = " "; i++; } if (i < n) { out[i] = " "; i++; } continue; }
+    i++;
+  }
+  return out.join("");
+}
+
+function goCcOf(body: string): number {
+  let cc = 1;
+  for (const m of body.matchAll(/\b(if|for|case)\b|&&|\|\|/g)) { void m; cc++; }
+  return cc;
+}
+
+function parseGoFunctions(root: string, file: string, source: string): FnSpan[] {
+  const rel = relative(root, file);
+  const stripped = stripGo(source);
+  const out: FnSpan[] = [];
+  const re = /(^|\n)func(\s*\(([^)]*)\))?\s+([A-Za-z_][A-Za-z0-9_]*)/g;
+  for (const m of stripped.matchAll(re)) {
+    const start = m.index! + m[1].length;
+    const receiver = m[3];
+    let name = m[4];
+    if (receiver) {
+      const t = receiver.trim().split(/\s+/).pop()?.replace(/[*\[\]]/g, "") ?? "";
+      if (t) name = `${t}.${name}`;
+    }
+    // Find the body: the first '{' at paren-depth 0 after the signature start (a struct{} return
+    // type can fool this — accepted, rare); then match braces to the function's end.
+    let i = m.index! + m[0].length;
+    let paren = 0;
+    while (i < stripped.length && !(stripped[i] === "{" && paren === 0)) {
+      if (stripped[i] === "(" || stripped[i] === "[") paren++;
+      else if (stripped[i] === ")" || stripped[i] === "]") paren--;
+      i++;
+    }
+    if (i >= stripped.length) continue; // declaration without a body (assembly stub) — skip
+    let depth = 0;
+    let j = i;
+    for (; j < stripped.length; j++) {
+      if (stripped[j] === "{") depth++;
+      else if (stripped[j] === "}") { depth--; if (depth === 0) { j++; break; } }
+    }
+    out.push({ name, file: rel, start, end: j, line: source.slice(0, start).split("\n").length,
+      cc: goCcOf(stripped.slice(i, j)) });
+  }
+  return out;
+}
+
+// Run \`go test -coverprofile\` and paint per-file covered/claimed byte maps from the block ranges.
+function collectGoCoverage(root: string, wanted: Map<string, string>, goTestCmd: string | null):
+  { painted: Map<string, Uint8Array>; claimed: Map<string, Uint8Array> } {
+  const painted = new Map<string, Uint8Array>();
+  const claimed = new Map<string, Uint8Array>();
+  let moduleName = "";
+  try { moduleName = (readFileSync(join(root, "go.mod"), "utf8").match(/^module\s+(\S+)/m)?.[1]) ?? ""; }
+  catch { console.error("quality: no go.mod at the root — Go coverage skipped (rows go N/A)"); return { painted, claimed }; }
+  const profile = join(mkdtempSync(join(tmpdir(), "devloop-quality-go-")), "cover.out");
+  const cmd = goTestCmd ? goTestCmd.replaceAll("{profile}", profile)
+    : `go test -count=1 -coverpkg=./... -coverprofile=${JSON.stringify(profile)} ./...`;
+  console.error(`quality: running Go tests for coverage — ${cmd}`);
+  const r = spawnSync("bash", ["-c", cmd], { cwd: root, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", env: process.env });
+  if (r.stdout) process.stderr.write(r.stdout);
+  if (r.stderr) process.stderr.write(r.stderr);
+  if (r.status !== 0) console.error(`quality: go test exited ${r.status ?? "?"} — coverage may be partial (rows still computed)`);
+  let prof = "";
+  try { prof = readFileSync(profile, "utf8"); } catch { console.error("quality: no coverprofile produced — Go rows go N/A"); return { painted, claimed }; }
+  // line format: <module>/<rel>.go:<sl>.<sc>,<el>.<ec> <numStmt> <count>
+  const lineStartsCache = new Map<string, number[]>();
+  const lineStarts = (src: string): number[] => {
+    const st = [0];
+    for (let i = 0; i < src.length; i++) if (src[i] === "\n") st.push(i + 1);
+    return st;
+  };
+  for (const line of prof.split("\n")) {
+    const m = line.match(/^(.*\.go):(\d+)\.(\d+),(\d+)\.(\d+)\s+\d+\s+(\d+)$/);
+    if (!m) continue;
+    let p = m[1];
+    if (moduleName && p.startsWith(moduleName + "/")) p = p.slice(moduleName.length + 1);
+    const abs = resolve(root, p);
+    const src = wanted.get(abs);
+    if (src === undefined) continue;
+    let st = lineStartsCache.get(abs);
+    if (!st) { st = lineStarts(src); lineStartsCache.set(abs, st); }
+    const s0 = (st[Number(m[2]) - 1] ?? src.length) + Number(m[3]) - 1;
+    const e0 = (st[Number(m[4]) - 1] ?? src.length) + Number(m[5]) - 1;
+    const hit = Number(m[6]) > 0 ? 1 : 0;
+    const paint = painted.get(abs) ?? (() => { const a = new Uint8Array(src.length); painted.set(abs, a); return a; })();
+    const claim = claimed.get(abs) ?? (() => { const a = new Uint8Array(src.length); claimed.set(abs, a); return a; })();
+    const s1 = Math.min(Math.max(s0, 0), src.length), e1 = Math.min(Math.max(e0, 0), src.length);
+    for (let i = s1; i < e1; i++) { claim[i] = 1; if (hit) paint[i] = 1; } // OR across packages (coverpkg re-lists blocks)
+  }
+  return { painted, claimed };
+}
+
+// One flip inside a Go function span, comment/string-aware (positions from the stripped text apply
+// to the original — stripGo preserves offsets). \`<-\` (channel), \`++\`/\`--\` are never mutated.
+function findGoMutationSite(source: string, span: FnSpan): { pos: number; from: string; to: string } | null {
+  const t = stripGo(source);
+  const TWO: Record<string, string> = { "==": "!=", "!=": "==", "<=": "<", ">=": ">", "&&": "||", "||": "&&" };
+  for (let i = span.start; i < span.end - 1; i++) {
+    const two = t.slice(i, i + 2);
+    if (TWO[two]) return { pos: i, from: two, to: TWO[two] };
+    const c = t[i];
+    if (c === "<" && two !== "<-" && two !== "<<" && two !== "<=") return { pos: i, from: "<", to: "<=" };
+    if (c === ">" && two !== ">>" && two !== ">=") return { pos: i, from: ">", to: ">=" };
+  }
+  const word = /\b(true|false)\b/g;
+  word.lastIndex = span.start;
+  const w = word.exec(t);
+  if (w && w.index < span.end) return { pos: w.index, from: w[1], to: w[1] === "true" ? "false" : "true" };
+  return null;
+}
+
 // ─── coverage: native V8 (NODE_V8_COVERAGE), painted per file, OR-merged across processes ────────
 
 function runTests(root: string, cmd: string, covDir: string): void {
@@ -286,8 +424,16 @@ function collectCoverage(root: string, covDir: string, wanted: Map<string, strin
   return merged;
 }
 
-function coverageOf(paint: Uint8Array | undefined, start: number, end: number): number | null {
+function coverageOf(paint: Uint8Array | undefined, claimed: Uint8Array | undefined, start: number, end: number): number | null {
   if (!paint || end <= start) return paint ? 100 : null;
+  // With a claimed map (Go: the profile covers statement BLOCKS only), the denominator is the
+  // span's claimed bytes — signatures/braces must not dilute the score. No claimed map (V8: the
+  // whole loaded script is claimed) keeps the full-span denominator.
+  if (claimed) {
+    let hit = 0, claim = 0;
+    for (let i = start; i < end && i < paint.length; i++) { if (claimed[i]) { claim++; hit += paint[i]; } }
+    return claim === 0 ? null : (hit / claim) * 100; // a span with no claimed bytes has no measurable statements
+  }
   let hit = 0;
   for (let i = start; i < end && i < paint.length; i++) hit += paint[i];
   return (hit / (end - start)) * 100;
@@ -347,9 +493,11 @@ function findMutationSite(ts: TsModule, source: string, file: string, span: FnSp
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
-function runMutation(ts: TsModule, root: string, rows: Row[], o: Opts): Mutant[] {
-  const testCmd = o.mutateTestCmd ?? o.testCmd ?? "npm test";
+function runMutation(ts: TsModule | null, root: string, rows: Row[], o: Opts): Mutant[] {
   const pool = rows.filter((r) => r.name !== "<file>").slice(0, o.sample);
+  const testCmdFor = (row: Row): string => row.file.endsWith(".go")
+    ? (o.mutateTestCmd ?? "go test -count=1 ./...")
+    : (o.mutateTestCmd ?? o.testCmd ?? "npm test");
   const mutants: Mutant[] = [];
   const restores: { path: string; bytes: string }[] = [];
   const restoreAll = () => { for (const r of restores.splice(0)) { try { writeFileSync(r.path, r.bytes); } catch { console.error(`quality: FAILED to restore ${r.path} — original saved at ${r.path}.quality-orig`); try { writeFileSync(`${r.path}.quality-orig`, r.bytes); } catch { /* double fault */ } } } };
@@ -365,14 +513,15 @@ function runMutation(ts: TsModule, root: string, rows: Row[], o: Opts): Mutant[]
     try { dirty = execFileSync("git", ["status", "--porcelain", "--", row.file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* not a git repo */ }
     if (dirty) { mutants.push({ file: row.file, line: row.line, from: "", to: "", fn: row.name, killed: null, note: "skipped: file has uncommitted changes" }); continue; }
     const source = readFileSync(abs, "utf8");
-    const site = findMutationSite(ts, source, abs, row);
+    const site = row.file.endsWith(".go") ? findGoMutationSite(source, { ...row, start: row.start, end: row.end })
+      : ts ? findMutationSite(ts, source, abs, row) : null;
     if (!site) { mutants.push({ file: row.file, line: row.line, from: "", to: "", fn: row.name, killed: null, note: "skipped: no mutable operator/literal in span" }); continue; }
     const before = sha(source);
     const mutated = source.slice(0, site.pos) + site.to + source.slice(site.pos + site.from.length);
     restores.push({ path: abs, bytes: source });
     writeFileSync(abs, mutated);
     console.error(`quality: mutant ${row.file}:${row.line} ${row.name}  ${site.from} → ${site.to}  … running tests`);
-    const r = spawnSync("bash", ["-c", testCmd], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env }, encoding: "utf8" });
+    const r = spawnSync("bash", ["-c", testCmdFor(row)], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env }, encoding: "utf8" });
     writeFileSync(abs, source);
     restores.pop();
     if (sha(readFileSync(abs, "utf8")) !== before) die(`restore verification FAILED for ${row.file} — check the working tree`, 1);
@@ -391,30 +540,45 @@ function main(): void {
   const files = selectFiles(root, o);
   if (!files.length) { console.log("No source files to analyze."); return; }
 
-  const ts = loadTypescript(root);
-  if (!ts) console.error("quality: no `typescript` resolvable (repo or dev-loop) — falling back to per-FILE complexity rows");
+  const goFiles = files.filter((f) => f.endsWith(".go"));
+  const tsjsFiles = files.filter((f) => !f.endsWith(".go"));
+  const ts = tsjsFiles.length ? loadTypescript(root) : null;
+  if (tsjsFiles.length && !ts) console.error("quality: no `typescript` resolvable (repo or dev-loop) — falling back to per-FILE complexity rows");
 
   const sources = new Map<string, string>();
   for (const f of files) sources.set(f, readFileSync(f, "utf8"));
+  const tsjsSources = new Map([...sources].filter(([f]) => !f.endsWith(".go")));
+  const goSources = new Map([...sources].filter(([f]) => f.endsWith(".go")));
 
-  // coverage
+  // coverage — per language pipeline, one merged row set
   let covDir = o.coverageDir;
   let ephemeral = false;
-  if (!covDir) {
-    covDir = mkdtempSync(join(tmpdir(), "devloop-quality-"));
-    ephemeral = true;
-    runTests(root, o.testCmd ?? "npm test", covDir);
+  const painted = new Map<string, Uint8Array>();
+  const claimed = new Map<string, Uint8Array>(); // Go only — V8 claims the whole loaded script
+  if (tsjsFiles.length) {
+    if (!covDir) {
+      covDir = mkdtempSync(join(tmpdir(), "devloop-quality-"));
+      ephemeral = true;
+      runTests(root, o.testCmd ?? "npm test", covDir);
+    }
+    for (const [f, p] of collectCoverage(root, covDir, tsjsSources)) painted.set(f, p);
+    if (![...painted.keys()].some((f) => !f.endsWith(".go")))
+      console.error(`quality: no V8 coverage matched the analyzed TS/JS files (dir: ${covDir}) — those rows go N/A. If tests run COMPILED output (dist/), point paths at what actually runs, or run tests directly on source (zero-build).`);
   }
-  const painted = collectCoverage(root, covDir, sources);
-  if (!painted.size) console.error(`quality: no V8 coverage matched the analyzed files (dir: ${covDir}) — all rows N/A. If tests run COMPILED output (dist/), point paths at what actually runs, or run tests directly on source (zero-build).`);
+  if (goFiles.length) {
+    const g = collectGoCoverage(root, goSources, o.goTestCmd);
+    for (const [f, p] of g.painted) painted.set(f, p);
+    for (const [f, c] of g.claimed) claimed.set(f, c);
+  }
 
   // rows
   const rows: Row[] = [];
   for (const f of files) {
     const src = sources.get(f)!;
     const paint = painted.get(f);
-    for (const span of parseFunctions(ts, root, f, src)) {
-      const cov = coverageOf(paint, span.start, span.end);
+    const spans = f.endsWith(".go") ? parseGoFunctions(root, f, src) : parseFunctions(ts, root, f, src);
+    for (const span of spans) {
+      const cov = coverageOf(paint, claimed.get(f), span.start, span.end);
       rows.push({ ...span, coverage: cov, crap: crapScore(span.cc, cov) });
     }
   }
@@ -424,7 +588,8 @@ function main(): void {
   // mutation probe
   let mutants: Mutant[] = [];
   if (o.mutate) {
-    if (!ts) die("--mutate needs a resolvable `typescript` (AST-precise flips only — no blind regex edits)");
+    if (rows.some((r) => !r.file.endsWith(".go")) && !ts)
+      die("--mutate on TS/JS needs a resolvable `typescript` (AST-precise flips only — no blind regex edits)");
     mutants = runMutation(ts, root, rows, o);
   }
 
