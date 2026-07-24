@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.9.0
 
 - **feat(quality): Go language backend** — `dev-loop quality` now covers `.go` files with the
   SAME formula, report, `--threshold` gate, ratchet, and mutation probe (field origin: a Go
