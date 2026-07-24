@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.7.1
 
 The 1.7.0 quality self-audit, acted on — every item below is probe-driven: a surviving
 mutant or a 0%-coverage row from `dev-loop quality` on our own hub, turned into a fix,
