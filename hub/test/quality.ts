@@ -137,6 +137,18 @@ const chg = runQuality(repo, ["--json", "--changed", "--test-cmd", TEST_CMD]);
 const chgFiles = new Set((chg.out?.rows ?? []).map((r) => r.file));
 ok(chgFiles.has("src/extra.ts") && !chgFiles.has("src/calc.ts"), `--changed analyzes only git-changed files (got ${[...chgFiles].join(", ")})`);
 
+// ── 5b. --diff-base selection (the PR gate — CI checkouts are clean, --changed sees nothing) ─────
+execFileSync("git", ["add", "-A"], { cwd: repo });
+execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "extra"], { cwd: repo });
+execFileSync("git", ["checkout", "-qb", "feature"], { cwd: repo });
+writeFileSync(join(repo, "src", "featonly.ts"), "export function seven(): number { return 7; }\n");
+execFileSync("git", ["add", "-A"], { cwd: repo });
+execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "feat"], { cwd: repo });
+const dif = runQuality(repo, ["--json", "--diff-base", "main", "--test-cmd", TEST_CMD]);
+const difFiles = new Set((dif.out?.rows ?? []).map((r) => r.file));
+ok(difFiles.has("src/featonly.ts") && !difFiles.has("src/calc.ts"),
+  `--diff-base main analyzes only the branch's changed files (got ${[...difFiles].join(", ")})`);
+
 // ── 6. the Go backend (skipped cleanly when no go toolchain) ─────────────────────────────────────
 const goOk = spawnSync("go", ["version"], { encoding: "utf8" }).status === 0;
 if (!goOk) {

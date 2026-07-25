@@ -3,6 +3,19 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+- **feat(quality): `--diff-base <ref>` — the PR gate.** `--changed` reads `git status`, which
+  is EMPTY on a clean CI checkout; the PR gate wants "files changed vs the base branch":
+  `git diff <ref>...HEAD` (three-dot merge-base semantics — the same set the PR view shows).
+  This is the legacy-repo adoption path: gate what the PR touches, no big-bang cleanup.
+- **feat(ci): reusable quality workflow** (`.github/workflows/quality-reusable.yml`) — any
+  repo adopts the gauntlet with three lines (`uses: dyzsasd/dev-loop/.github/workflows/
+  quality-reusable.yml@vX` + `threshold`). Modes: `pr` (diff-base gate, default) / `full`
+  (ratchet). Auto: Go toolchain when `*.go` exists, `npm ci` when package.json exists, the
+  tool itself via `npx @dyzsasd/dev-loop` — zero per-repo install. Optional `mutate` +
+  `fail-on-survivors`.
+
 ## 1.9.0
 
 - **feat(quality): Go language backend** — `dev-loop quality` now covers `.go` files with the

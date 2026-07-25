@@ -43,6 +43,7 @@ interface Mutant { file: string; line: number; from: string; to: string; fn: str
 interface Opts {
   paths: string[];
   changed: boolean;
+  diffBase: string | null;
   threshold: number | null;
   json: boolean;
   testCmd: string | null;
@@ -64,6 +65,8 @@ function usage(): void {
 Usage:
   dev-loop quality                     analyze every source file under src/
   dev-loop quality --changed           analyze files changed per \`git status\` (the cheap per-fire gate)
+  dev-loop quality --diff-base <ref>   analyze files changed vs a ref (\`git diff ref...HEAD\` — the PR
+                                       gate: CI checkouts are clean, so --changed sees nothing there)
   dev-loop quality <path ...>          analyze these files / directories
   dev-loop quality --mutate            + mutation probe on the worst-CRAP functions
 
@@ -89,13 +92,14 @@ runs as the fourth Step-5 ship gate after typecheck/build/test (conventions §19
 function die(msg: string, code = 1): never { console.error(`dev-loop quality: ${msg}`); process.exit(code); }
 
 function parseArgs(argv: string[]): Opts {
-  const o: Opts = { paths: [], changed: false, threshold: null, json: false, testCmd: null, coverageDir: null,
+  const o: Opts = { paths: [], changed: false, diffBase: null, threshold: null, json: false, testCmd: null, coverageDir: null,
     keepCoverage: false, mutate: false, sample: 5, failOnSurvivors: false, mutateTestCmd: null, goTestCmd: null, top: 25 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i] ?? die(`${a} requires a value`);
     if (a === "--help" || a === "-h") { usage(); process.exit(0); }
     else if (a === "--changed") o.changed = true;
+    else if (a === "--diff-base") o.diffBase = next();
     else if (a === "--threshold") { o.threshold = Number(next()); if (!Number.isFinite(o.threshold)) die("--threshold must be a number"); }
     else if (a === "--json") o.json = true;
     else if (a === "--test-cmd") o.testCmd = next();
@@ -133,7 +137,14 @@ function walk(dir: string, out: string[]): void {
 
 function selectFiles(root: string, o: Opts): string[] {
   const out: string[] = [];
-  if (o.changed) {
+  if (o.diffBase) {
+    // The PR gate: everything that changed vs the base ref (three-dot = merge-base semantics, the
+    // same set the PR view shows). Deleted files drop out via the existsSync filter.
+    const diff = execFileSync("git", ["diff", "--name-only", `${o.diffBase}...HEAD`], { cwd: root, encoding: "utf8" });
+    for (const p of diff.split("\n").map((l) => l.trim())) {
+      if (p && SRC_EXT.test(p) && !p.endsWith(".d.ts") && !isTestFile(p) && existsSync(join(root, p))) out.push(resolve(root, p));
+    }
+  } else if (o.changed) {
     const st = execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" });
     for (const line of st.split("\n")) {
       const p = line.slice(3).trim();
