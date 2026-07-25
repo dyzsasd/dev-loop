@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.10.0
 
 - **feat(quality): `--diff-base <ref>` — the PR gate.** `--changed` reads `git status`, which
   is EMPTY on a clean CI checkout; the PR gate wants "files changed vs the base branch":
