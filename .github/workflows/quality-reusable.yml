@@ -1,0 +1,125 @@
+# Reusable CRAP quality gate (quality-gauntlet design) — call from ANY repo's workflow:
+#
+#   jobs:
+#     quality:
+#       uses: dyzsasd/dev-loop/.github/workflows/quality-reusable.yml@v1.10.0
+#       with:
+#         threshold: 30          # per-PR gate: no changed file may carry a fn over this
+#
+# Two modes:
+#   PR (default)   --diff-base <base branch>: only the PR's changed files are gated — adoptable
+#                  on ANY legacy repo day one ("what you touch must be clean"), no big-bang.
+#   full           full-repo scan with a RATCHET threshold (set it just above today's worst,
+#                  tighten as the debt drains — the dev-loop repo runs this shape on itself).
+#
+# Language is per FILE (the tool dispatches by extension): .ts/.js need the repo's own
+# `typescript` (npm ci provides it); .go needs only the go toolchain. Mixed repos just work.
+# A docs-only PR selects no source files and passes ("No source files to analyze.").
+name: Quality (CRAP gate)
+
+on:
+  workflow_call:
+    inputs:
+      threshold:
+        description: "Gate: fail when any analyzed function's CRAP exceeds this"
+        type: number
+        required: true
+      mode:
+        description: "pr (diff vs base branch) | full (whole repo — ratchet style)"
+        type: string
+        default: pr
+      test-cmd:
+        description: "TS/JS coverage command (runs under NODE_V8_COVERAGE)"
+        type: string
+        default: "npm test"
+      go-test-cmd:
+        description: "Go coverage command override ({profile} placeholder); empty = tool default"
+        type: string
+        default: ""
+      setup:
+        description: "Dependency install command before the scan (empty = auto: npm ci when package.json exists)"
+        type: string
+        default: ""
+      mutate:
+        description: "Also run the mutation probe on the worst rows (report-only unless fail-on-survivors)"
+        type: boolean
+        default: false
+      fail-on-survivors:
+        description: "Exit 3 when a mutant survives (requires mutate)"
+        type: boolean
+        default: false
+      tool-version:
+        description: "npm version of @dyzsasd/dev-loop to run (pin for reproducible gates)"
+        type: string
+        default: "latest"
+      node-version:
+        type: string
+        default: "24"
+      go-version:
+        type: string
+        default: "stable"
+      working-directory:
+        description: "Repo subdirectory to scan (monorepos)"
+        type: string
+        default: "."
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # --diff-base diffs three-dot vs the base ref — the merge-base must exist locally
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Set up Go (skipped when the repo has no Go files)
+        if: ${{ hashFiles(format('{0}/**/*.go', inputs.working-directory)) != '' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          SETUP: ${{ inputs.setup }}
+        run: |
+          if [ -n "$SETUP" ]; then
+            eval "$SETUP"
+          elif [ -f package.json ]; then
+            npm ci --ignore-scripts
+          else
+            echo "no package.json — skipping npm install (Go-only repo)"
+          fi
+
+      - name: CRAP gate
+        working-directory: ${{ inputs.working-directory }}
+        # Inputs cross into the shell via env (never inline ${{ }} inside run:) and the command is
+        # built as a bash ARRAY — quotes inside a scalar string are NOT re-parsed on expansion, so
+        # a scalar would split `--go-test-cmd "go test ..."` into broken words.
+        env:
+          BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
+          MODE: ${{ inputs.mode }}
+          THRESHOLD: ${{ inputs.threshold }}
+          TEST_CMD: ${{ inputs.test-cmd }}
+          GO_TEST_CMD: ${{ inputs.go-test-cmd }}
+          MUTATE: ${{ inputs.mutate }}
+          FAIL_ON_SURVIVORS: ${{ inputs.fail-on-survivors }}
+          TOOL_VERSION: ${{ inputs.tool-version }}
+        run: |
+          ARGS=(quality --threshold "$THRESHOLD" --test-cmd "$TEST_CMD" --top 20)
+          if [ "$MODE" = "pr" ]; then
+            ARGS+=(--diff-base "origin/$BASE_REF")
+          fi
+          if [ -n "$GO_TEST_CMD" ]; then
+            ARGS+=(--go-test-cmd "$GO_TEST_CMD")
+          fi
+          if [ "$MUTATE" = "true" ]; then
+            ARGS+=(--mutate)
+            if [ "$FAIL_ON_SURVIVORS" = "true" ]; then
+              ARGS+=(--fail-on-survivors)
+            fi
+          fi
+          npx -y "@dyzsasd/dev-loop@$TOOL_VERSION" "${ARGS[@]}"

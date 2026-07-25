@@ -122,6 +122,34 @@ FILE by extension:
 
 A Go repo's gate is the same one-liner: `"quality": "dev-loop quality --changed --threshold 30"`.
 
+## CI adoption — every repo, three lines (1.10.0)
+
+Two modes, one reusable workflow (`.github/workflows/quality-reusable.yml`, callable from any
+repo — the tool rides `npx @dyzsasd/dev-loop`, zero install):
+
+- **PR gate (`mode: pr`, the default)** — `--diff-base origin/<base>`: only the PR's changed
+  files are gated. This is the LEGACY-REPO adoption path: "whatever you touch must be under
+  the threshold" works day one on any codebase, no big-bang cleanup required. (`--changed`
+  reads `git status` and sees nothing on a clean CI checkout — that's why `--diff-base`
+  exists.)
+- **Full ratchet (`mode: full`)** — the whole-repo scan with a threshold pinned just above
+  today's worst row; tighten as the debt drains (the shape dev-loop's own CI runs: 380 → 160
+  → 90).
+
+Caller shape (any repo, TS or Go or mixed):
+
+```yaml
+jobs:
+  quality:
+    uses: dyzsasd/dev-loop/.github/workflows/quality-reusable.yml@v1.10.0
+    with:
+      threshold: 30
+```
+
+Go repos need nothing else (the workflow sets up the toolchain when `*.go` exists); TS repos
+get their own `typescript` via `npm ci`. `mutate: true` adds the probe; `mode: full` +
+`fail-on-survivors` is the strictest shape.
+
 ## Known limits (honest edges)
 
 - Repos whose tests run COMPILED output (`dist/`) get coverage on dist paths, not src —
