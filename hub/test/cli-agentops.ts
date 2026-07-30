@@ -127,13 +127,15 @@ ok(dup.status === 0 && j(dup.stdout).duplicateOf === "CW-2" && j(dup.stdout).sta
 const noop = cli(["ticket", "update", "CW-2"]);
 ok(noop.status === 2 && /nothing to update/.test(noop.stderr), `ticket update with no field flags → usage exit 2 (status ${noop.status})`);
 
-// comment add — --body, then stdin '-'
+// comment add — --body, then stdin '-', then --body-file -
 const cmt = cli(["comment", "add", "CW-2", "--body", "from --body"]);
 ok(cmt.status === 0 && j(cmt.stdout).author === "pm" && j(cmt.stdout).body === "from --body", "comment add --body → authored as the resolved actor");
 const cmtStdin = cli(["comment", "add", "CW-2", "-"], {}, "from stdin\nline 2");
 ok(cmtStdin.status === 0 && j(cmtStdin.stdout).body === "from stdin\nline 2", "comment add <id> - → body from stdin");
+const cmtBodyFile = cli(["comment", "add", "CW-2", "--body-file", "-"], {}, "from --body-file stdin");
+ok(cmtBodyFile.status === 0 && j(cmtBodyFile.stdout).body === "from --body-file stdin", "comment add --body-file - → body from stdin (regression: was ENOENT on literal '-')");
 const cmts = cli(["comments", "CW-2"]);
-ok(cmts.status === 0 && j(cmts.stdout).length === 2 && j(cmts.stdout)[0].body === "from --body",
+ok(cmts.status === 0 && j(cmts.stdout).length === 3 && j(cmts.stdout)[0].body === "from --body",
   "comments <id> → the chronological comment list as JSON");
 
 // labels / label create / project / events
