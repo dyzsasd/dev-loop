@@ -359,6 +359,27 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   has **frozen the north star's direction half** while PM appended to the progress half all day — the
   doc records reality and intent at different rates, and no surface reports that as a condition.
 
+- **✅ The ship blocker cleared and the loop shipped its own work — v1.11.0 (2026-07-30 17:06Z).**
+  Supersedes the "⚠️ Nothing has landed since v1.10.0 / the loop can build but cannot ship" entry
+  above. LOOP-22 landed (`cec3598`, `stripGo` CRAP 113.8 → <15), the merge checks went green, and
+  eight loop-built commits reached `origin/main` — LOOP-5, LOOP-20, LOOP-21, LOOP-22, LOOP-23,
+  LOOP-25, LOOP-29, LOOP-33. The operator then cut **v1.11.0** (minor: the batch carries
+  `feat(runner)` process-group kill + the retry-loop watchdog + errorClass `retry-loop`) and
+  upgraded the global install. **`origin/main` == installed == v1.11.0, drift zero** — verified by
+  PM this fire, not taken on report: `dev-loop --version` → `1.11.0`, `git rev-parse origin/main` →
+  `685fee3` (the v1.11.0 release commit), and `grep -c queue …/dist/cli.js` → **4**, up from `0` at
+  LOOP-38's filing. `dev-loop queue` — the boot call every agent skill documents, broken for ~10
+  fires — now returns the ranked slice. **This is the first end-to-end proof that the loop can
+  build, merge, release and run its own output.**
+
+- **The publish→install skew is fixed as an instance, not as a mechanism (2026-07-30).** The
+  reconcile above was manual. Nothing detects the next divergence, so LOOP-38 stays open behind
+  **LOOP-46** (`doctor` W18) rather than closing on a green repro — its own AC says a "Done,
+  verified merged" that isn't reflected in the installed tool is worse than a flagged pending state.
+  Three sibling detectors now bound the same pipeline: **W17** (LOOP-41) *merged?* · **W18**
+  (LOOP-46) *published?* · **W19** (LOOP-51) *pushed at all?*. None has shipped; the pipeline stays
+  observable only by an agent noticing.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -907,6 +928,59 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   tickets that carry no `blocked` label at all. LOOP-16 was invisible to the W5 query
   (`blocked`+`external-prereq`) for its entire held life and cleared only because a PM fire happened
   to notice its blocker had landed.
+
+- **(pm, 2026-07-30) 📝 RULING — a fixed *instance* does not close a *visibility* bug; re-sequence
+  it behind its own detector.** The operator resolved LOOP-38 out of band (released v1.11.0,
+  upgraded the global install, drift → 0) and un-parked it to `Todo` for PM verify. I confirmed AC4
+  independently and still did **not** close it `Done`: AC2/AC3/AC5 — *make the skew visible* — are
+  carried entirely by LOOP-46, unshipped. Drift is zero only because a human re-published by hand;
+  the next merge re-creates it silently, which is the defect. Closing would have re-asserted exactly
+  the silent inheritance the ticket exists to kill. **Standing rule:** when a ticket's ACs split into
+  *this instance is fixed* and *this class is now detectable*, the instance being green is not a
+  close condition — block the parent on the detector (`Blocked-by: LOOP-46`) and let it auto-unpark.
+  Second half of the ruling: it un-parks to **`In Review` for PM verify, not back to a dev `Todo`**,
+  because the residual is verification, not code — a design parent whose children carry the build
+  should never re-enter a dev pick queue.
+
+- **(pm, 2026-07-30) 📝 RULING — the reconcile the operator proposed for the diverged doc-home clone
+  does not work, and the two "parallel" git defects are one entangled defect.** LOOP-50 (operator
+  intake) asked for `git pull --rebase … then push`, on the stated assumption that *"doc commits
+  rebase cleanly over code PRs"*. Tested in a throwaway worktree: it **conflicts on commit 1 of 11**
+  in `docs/STRATEGY.md`. Cause confirmed via `git log origin/main -S<line>` → **`7c43c06`** — PR #28
+  already carried `b278db8`'s content onto `origin/main` as a passenger, so replaying it
+  double-applies. **Therefore: passenger smuggling (LOOP-48) is not a parallel harm to the
+  divergence (LOOP-36) — it is what makes the divergence unrecoverable by rebase.** Every smuggled
+  PR that merges adds another conflict to the eventual reconciliation. Recorded so neither design
+  lands assuming a clean replay. PM did **not** perform the reconcile: it conflicts, `push` to a
+  shared `origin/main` is outward-facing and hard to reverse in an unattended fire, senior owns both
+  designs in that repo, and `docs/strategy-archive/2026-07.md` exists only locally.
+
+- **(pm, 2026-07-30) 📝 RULING — a groomed intake parent whose AC is an *outcome* stays open.** §9a
+  closes an intake parent once its asks are routed to children. LOOP-50's AC is *"origin/main's
+  STRATEGY.md history is linear and current"* — a state of the world, not a routing step. Closing it
+  on routing alone would be **phantom-`Done`**, the precise failure the ticket was filed to name. So
+  it stays open as an umbrella, `Blocked-by: LOOP-36 LOOP-48 LOOP-51`, and PM verifies the outcome
+  directly at unpark. **Generalised:** route-and-close applies to asks; asks whose acceptance is an
+  observable end-state get an umbrella with real blocker edges instead.
+
+- **(pm, 2026-07-30) ux-flows lens — the operator's front door does not point at their own house.**
+  `http://127.0.0.1:8787` is published as *the* board URL in all three READMEs, `docs/DAEMON.md`,
+  `docs/HUB-ARCHITECTURE.md` and every `deploy/` manifest. On the dogfooding machine it currently
+  serves a **13-day-old v1.2.1 daemon from a different workspace**, answering `{"ok":true}` and
+  rendering a normal board for a project called `certproj`; this project's real board is on `:8840`,
+  53 ports up the probe. The board page names the *project* but never the workspace, the `hub.db`,
+  or the daemon version — and project keys are not unique across workspaces (`_team` exists in all
+  of them), so a wrong board is indistinguishable from the right one. The discovery verb disagrees
+  with itself too: `daemon status` honours `DEVLOOP_PROJECT`, `hub status` — the verb first-run setup
+  teaches — is pinned to `_team`. Filed **LOOP-52** (identity + discoverability). **Root cause filed
+  separately as LOOP-53:** the hub test suite starts detached daemons and never stops them — **58
+  listening on 8787→8844, oldest 13d 21h, 53 of them holding throwaway `$TMPDIR` fixture databases**,
+  several already deleted from disk and therefore unreachable by `daemon down` (its runfile went with
+  the fixture). Scoped honestly: they hold *fixture* DBs, so there is **no** contention on any real
+  `hub.db` — the harm is port/process/handle exhaustion and a documented URL that lies. Routed to
+  senior `Mode: design` because the cleanup rule, not the teardown, is the hard part: three unrelated
+  *legitimate* workspaces are listening on this machine right now (one 8 days old), so **age is not a
+  liveness signal** and a naive reaper kills someone's live board.
 
 ## Candidate ideas
 
