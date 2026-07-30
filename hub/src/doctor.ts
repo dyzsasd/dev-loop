@@ -18,6 +18,7 @@ import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secr
 import { opencodeSyncDrift } from "./opencode-sync.ts";
 import { openDb as openHubDbConn } from "./db.ts";
 import { findProject as findHubProject } from "./seed.ts";
+import { detectRepoFacts } from "./team-edit.ts";
 import * as metricsMod from "./metrics.ts";
 const require_metrics = () => metricsMod;
 
@@ -203,6 +204,17 @@ export function doctorWorkspace(ws: Workspace): boolean {
     else pass(`repo '${ref}' → ${dir}`);
     // The add-repo --detect contract: interview-only fields stay unset, doctor makes the gap visible.
     if (!r.deploy && !r.ops) info(`repo '${ref}' has no deploy/ops config (interview-only fields) — fill via /dev-loop:add-repo, or team set repos.${ref}.deploy.* once it deploys`);
+    // No-build-block nudge: if no build block is configured but detection finds gates in the tree,
+    // surface the gap. Info only — unwired gates are a recommendation, not a failure.
+    if (!r.build) {
+      try {
+        const detected = detectRepoFacts(dir);
+        if (detected.build && Object.keys(detected.build).length) {
+          const gates = Object.keys(detected.build).join("/");
+          info(`repo '${ref}' has no build gates configured, but detection finds ${gates} — wire them via 'dev-loop team add-repo ${ref} --detect' or 'dev-loop team set repos.${ref}.build.<gate> "<cmd>"'`);
+        }
+      } catch { /* detectRepoFacts is best-effort in doctor */ }
+    }
     // Quality-gauntlet nudge: a repo with a test gate but no quality gate ships on binary green alone —
     // the CRAP/mutation gate is what catches "complex ∧ untested" and tests that don't bite. Info, not a W-code.
     if (r.build?.test && !r.build?.quality) info(`repo '${ref}' has a test gate but no quality gate — consider build.quality (e.g. "dev-loop quality --changed --threshold 30"; see references/config-schema.md)`);
