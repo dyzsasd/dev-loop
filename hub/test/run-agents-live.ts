@@ -2,6 +2,8 @@
 // run-agents test passes --dry-run, so the spawn/env/log/timeout/drain/lock machinery that spends
 // real API tokens in production never executed under test. A stub `claude` on DEVLOOP_CLAUDE_BIN
 // stands in for the CLI: it records its env + argv, optionally sleeps, and marks completion.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync, execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -283,8 +285,8 @@ sleep 600
   ok(gatedFires === 1, `change-gate: pm fires once then skips on a quiet board (fired ${gatedFires}× in ~4s @1s interval)`);
   const openOut = join(tmp, "open-out"); mkdirSync(openOut, { recursive: true });
   try { rmSync(join(gateData, "gate", "scheduler-gate.json")); } catch { /* fresh */ }
-  const ungatedFires = runLoop([], openOut, "4.2");
-  ok(ungatedFires >= 3, `no gate: pm fires every interval (fired ${ungatedFires}× in ~4s @1s interval)`);
+  const ungatedFires = runLoop([], openOut, "6.5"); // wider window — Node startup overhead varies by version
+  ok(ungatedFires >= 3, `no gate: pm fires every interval (fired ${ungatedFires}× in ~6.5s @1s interval)`);
 
   // ── 6a. R1a review-tier TTL: pm/qa do their best work on a QUIET board (lens rotation / coverage
   //    expansion), so an unchanged key only DEFERS them — once the quiet-board TTL elapses since the

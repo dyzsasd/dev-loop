@@ -3,6 +3,8 @@
 // "cheat-sheet defects hit all agents at once"). Any change to cli-agentops.ts/cli.ts usage text, to
 // the generator's agent→verbs table, or a hand-edit inside the markers fails here until the operator
 // re-runs `node hub/src/gen-cheatsheets.ts`. Root skills/ only — hub/skills is build output.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {

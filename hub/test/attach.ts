@@ -3,6 +3,8 @@
 // DEVLOOP_HUB_URL + DEVLOOP_UI_TOKEN + an actor — reads AND attributed writes land on the remote
 // board; the operator's D1 override reaches real projects through a `_team`-booted daemon; home-only
 // verbs refuse with the home pointer; and a missing/wrong token maps to the clear exit-5 message.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";

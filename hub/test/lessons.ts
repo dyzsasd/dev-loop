@@ -1,4 +1,6 @@
 // lessons.ts — library paths, per-fire load composition, and the W03 budget check.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdirSync, mkdtempSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,4 +51,4 @@ try {
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

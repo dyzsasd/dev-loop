@@ -4,6 +4,8 @@
 // (the marketplace-cache class of bug: a bumped plugin.json with a stale marketplace.json serves the old
 // cached SKILLs): hub/package.json, .claude-plugin/plugin.json, .claude-plugin/marketplace.json
 // (plugins[0].version). Surgical single-line text replace per file ⇒ a 1-line diff, formatting preserved.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -3,6 +3,8 @@
 // PAUSING/resume path never exercised because every scheduler test runs --once).
 // One persistent scheduler serves both: Part B corrupts dev-loop.json mid-run (expect PAUSE),
 // restores it (expect resume), then Part C stops that live scheduler through the real verb.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -110,4 +112,4 @@ exit 0
 } finally {
   try { if (box.sched && box.sched.exitCode === null) box.sched.kill("SIGKILL"); } catch { /* gone */ }
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

@@ -2,6 +2,8 @@
 // topology). Proves a process pinned to project A returns ONLY A's rows and cannot read /
 // mutate / comment B's tickets by id — the §2 firewall, now structural + regression-locked.
 // Plus negative guards: a phantom actor and an unknown (uncreated) project are REFUSED at connect.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execFileSync, spawn } from "node:child_process";

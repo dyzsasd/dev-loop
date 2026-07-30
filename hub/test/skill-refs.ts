@@ -5,6 +5,8 @@
 // heading that actually exists in references/conventions.md, and (b) the corruption pattern
 // ('…glance" table' fused to a word character) never reappears. Root skills/ only — hub/skills/
 // is build output copied from it (see hub/package.json `build`).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

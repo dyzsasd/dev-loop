@@ -3,6 +3,8 @@
 // SIGKILL before V8 flushes, so the listen path never registered as covered. Contracts: (1) with no
 // send target every notifier is a no-op and only the WAL checkpoint arms; (2) with a §9 notify config
 // the timer-backed notifiers arm and return stoppable timers; (3) the active list names what armed.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,4 +55,4 @@ try {
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

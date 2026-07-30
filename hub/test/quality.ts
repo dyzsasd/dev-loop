@@ -4,6 +4,8 @@
 // (4) the mutation probe flips ONE site, detects KILLED vs SURVIVED, restores the file
 // byte-identically, and exit 3 rides --fail-on-survivors; (5) --changed file selection.
 // All through the CLI (quality.ts is an entry that runs main() on import).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -3,6 +3,8 @@
 // per-SKILL roster copies frozen at authorship-time loop size; a stale skills/ build copy published to npm).
 // Each check is cheap text analysis over the repo — the point is that these failures land in CI, not in
 // the next audit.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

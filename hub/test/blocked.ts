@@ -4,6 +4,8 @@
 // write-free; a later live tick on the same DB still fires the first ping — the DL-11 invariant).
 // The live cases inject a stub fetchImpl (no network); the dry-run case runs in a CHILD process
 // because DEVLOOP_CHANNEL_DRYRUN is read once at channel.ts import time.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { openDb } from "../src/db.ts";
 import { blockedNotifyTick, startBlockedNotifier } from "../src/daemon.ts";
 import { resolveBlockedReminderHours, DEFAULT_BLOCKED_REMINDER_HOURS } from "../src/daemon-notifiers.ts";

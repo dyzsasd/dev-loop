@@ -4,6 +4,8 @@
 // their own In Progress; (2) pm gets verify/unblock/backlog + the §5a todoDepth cap input;
 // (3) qa gets verify + the project's blocked set; (4) other actors are refused 400;
 // (5) summaries only — no description bodies ride the lists.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

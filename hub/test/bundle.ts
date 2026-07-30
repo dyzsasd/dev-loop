@@ -4,6 +4,8 @@
 // AGE_IDENTITY_FILE, materialize config+secrets 600, restore-onto-empty hub.db, clone from the remote
 // with fail-fast probe, op-API gate seeded, doctor preflight), idempotency (live config wins,
 // live hub.db NEVER overwritten), and the --no-hub-db clean-board path.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

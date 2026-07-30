@@ -4,6 +4,8 @@
 // when it degrades AGAIN after recovery, (e) an insufficient sample (breaker probing) is neither
 // degraded nor healthy — the open episode stays silent, (f) healthy-with-no-episode is a no-op,
 // (g) the no-target true no-op and the start guards (windowHours 0 / no ledger ⇒ null).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { openDb } from "../src/db.ts";
 import { fireHealthNotifyTick, startFireHealthNotifier } from "../src/daemon.ts";
 import { rmSync, writeFileSync, mkdirSync } from "node:fs";

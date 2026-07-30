@@ -1,5 +1,7 @@
 // P2-12: `dev-loop export-desktop-skill <agent> --project <key>` renders a SELF-CONTAINED SKILL.md
 // (no ${CLAUDE_PLUGIN_ROOT} ref, config + conventions inlined) so an agent can run in Claude Desktop.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

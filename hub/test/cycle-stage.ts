@@ -6,6 +6,8 @@
 // (c) a malformed-row skip + the empty-window "—" — plus the median across multiple tickets (even-n average).
 // Deterministic: events placed at controlled created_at relative to a fixed nowMs anchor, inserted chronologically
 // (the per-ticket hist query is ORDER BY id = insertion order).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { openDb } from "../src/db.ts";
 import { activityPage } from "../src/daemonviews.ts";
 import { rmSync } from "node:fs";

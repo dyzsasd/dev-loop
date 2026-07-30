@@ -1,5 +1,7 @@
 // run-agents team mode + locks: WRR plan, --project filter, enabled/weight exclusion, fires.jsonl ledger,
 // the team run lock, and with-repo-lock serialization.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";

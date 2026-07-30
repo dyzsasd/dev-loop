@@ -1,6 +1,8 @@
 // install-claude-plugin: the marketplace it writes must PIN the plugin version to this CLI's own version
 // (default), so `/plugin install` never resolves the floating npm `latest` and silently installs an older
 // plugin than the CLI (the add-project-missing bug). --version overrides; --version latest opts out.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdtempSync, readFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,4 +41,4 @@ try {
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

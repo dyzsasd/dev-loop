@@ -4,6 +4,8 @@
 // EXACTLY what context-bill's conventionsLoad bills (one span authority, two consumers);
 // (3) the §0a lessons slice (own + Shared, + Dev for split tiers); (4) per-backend
 // contract-file selection; (5) fail-open on a malformed/missing SKILL.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -4,6 +4,8 @@
 // `undefined/hub.db` (0 projects, 0 actors) in whatever cwd the command ran from, and probes like
 // `daemon up` even exited 0. The guard must refuse the value LOUDLY, naming the env var at fault,
 // BEFORE any directory is created.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, readdirSync, realpathSync } from "node:fs";
 import { devloopHome, devloopDataDir, devloopProjectsPath, projectConfigCandidates, hubDbPath } from "../src/paths.ts";

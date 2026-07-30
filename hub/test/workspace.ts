@@ -1,6 +1,8 @@
 // workspace.ts — discovery precedence, the .dev-loop path API, index self-heal, cwd→repo matching.
 // devloopHome() reads DEVLOOP_HOME at CALL time (not cached), so setting it before we invoke any ws.* is
 // enough to isolate the convenience index from the real ~/.dev-loop.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync, realpathSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,4 +85,4 @@ try {
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

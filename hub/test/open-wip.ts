@@ -5,6 +5,8 @@
 // a temp SoR db, call the renderer with an injected nowMs (no daemon, no network), assert the rendered HTML per AC.
 // Unlike the backward-looking "Time in stage" (cycle-stage.ts, events-only), this reads the tickets table for the
 // open set — so each scenario seeds both a tickets row and its event history.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { openDb } from "../src/db.ts";
 import { activityPage } from "../src/daemonviews.ts";
 import { rmSync } from "node:fs";

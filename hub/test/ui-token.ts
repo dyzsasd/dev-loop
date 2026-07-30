@@ -3,6 +3,8 @@
 // the LOCAL_HOST write guard (the reverse-proxy/attach posture); a token-LESS daemon is byte-identical
 // to the pre-token surface (foreign-Host op still 403s, reads still open); and the boot fail-closed
 // refusal — a widened bind without a token must not start.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { rmSync } from "node:fs";

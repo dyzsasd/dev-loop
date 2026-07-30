@@ -1,5 +1,7 @@
 // End-to-end smoke: pm files → dev claims+ships → qa verifies, each a DISTINCT actor
 // (its own server process) sharing ONE WAL hub.db. Proves attribution + multi-process concurrency.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync } from "node:fs";

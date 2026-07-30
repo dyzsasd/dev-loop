@@ -4,6 +4,8 @@
 // WAL hub.db (like smoke.ts), flips settings_json.workflow.release via a direct conn (like daemon.ts's
 // setHumanWrite), then starts a read-only daemon in-process to assert the /activity render. The
 // requireDeployBeforeReview staging-deploy gate is a deferred follow-up (see the parent's handoff).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync } from "node:fs";
