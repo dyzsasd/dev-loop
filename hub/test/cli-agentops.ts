@@ -111,6 +111,31 @@ const parkedComments = cli(["comments", parkedId]);
 ok(parkedComments.status === 0 && j(parkedComments.stdout).some((c: any) => c.body === "Blocked-by: CW-1\nBlocked-by: CW-2" && c.author === "pm"),
   "ticket create --blocked-by → writes the machine-parseable 'Blocked-by: <id>' marker comment (one line per id, §9c)");
 
+// LOOP-11: ticket create --state default (Backlog) and explicit override
+const noState = cli(["ticket", "create", "--title", "Default state test", "--type", "Improvement"]);
+ok(noState.status === 0 && j(noState.stdout).state === "Backlog",
+  "LOOP-11: ticket create with no --state lands Backlog (§5a funnel default)");
+const withTodo = cli(["ticket", "create", "--title", "Explicit Todo test", "--type", "Improvement", "--state", "Todo"]);
+ok(withTodo.status === 0 && j(withTodo.stdout).state === "Todo",
+  "LOOP-11: ticket create --state Todo lands Todo (§3 carve-out)");
+const badState = cli(["ticket", "create", "--title", "Bad state test", "--type", "Improvement", "--state", "NotAState"]);
+ok(badState.status === 2 && /--state must be one of/.test(badState.stderr),
+  `LOOP-11: ticket create --state <invalid> → usage exit 2 (status ${badState.status})`);
+
+// LOOP-11: ticket update --description / --description-file
+const descUpdateId = withTodo.status === 0 ? j(withTodo.stdout).id : "";
+const descFile2 = join(ROOT, "update-desc.md");
+writeFileSync(descFile2, "Updated body\nline 2\n");
+const descUpd = cli(["ticket", "update", descUpdateId, "--description-file", descFile2]);
+ok(descUpd.status === 0 && j(descUpd.stdout).description === "Updated body\nline 2\n",
+  "LOOP-11: ticket update --description-file patches description");
+const priorLabels = j(descUpd.stdout).labels; const priorState = j(descUpd.stdout).state;
+ok(JSON.stringify(priorLabels) === JSON.stringify([]) && priorState === "Todo",
+  "LOOP-11: ticket update --description-file leaves other fields untouched (labels and state unchanged)");
+const descAndFile = cli(["ticket", "update", descUpdateId, "--description", "x", "--description-file", descFile2]);
+ok(descAndFile.status === 2 && /not both/.test(descAndFile.stderr),
+  `LOOP-11: ticket update --description + --description-file → usage exit 2 (status ${descAndFile.status})`);
+
 // ticket update — state transition + the labels-REPLACE hazard + the relatedTo APPEND-only union
 const upd = cli(["ticket", "update", "CW-2", "--state", "In Progress"]);
 ok(upd.status === 0 && j(upd.stdout).state === "In Progress", "ticket update --state → transitions the ticket");
