@@ -97,8 +97,27 @@ export interface BoardMetrics {
   throughput: number;         // transitions → Done in the window
   verifyFails: number;        // In Review → Canceled (the §3 verify-fail close edge)
   acceptRate: number | null;  // Done ÷ (Done + verifyFails); null when both are 0
-  blockedNow: number;         // open tickets currently carrying the `blocked` label
+  blockedNow: number;         // open `blocked` tickets that are parked (need human attention)
+  sequencedNow: number;       // open `blocked` tickets with a live Blocked-by edge (will self-unpark)
   qa: { bugsFiled: number; escaped: number; escapeRatio: number | null }; // escaped = incident/signal-labelled Bugs
+}
+
+const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
+
+// True if the ticket has at least one Blocked-by: marker comment referencing a ticket still open.
+// Fail-safe: no Blocked-by comment → false (counts as parked, the dangerous under-report direction).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function hasLiveBlockerEdge(db: any, ticketId: string): boolean {
+  const comments = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at").all(ticketId) as { body: string }[];
+  const blockerIds = new Set<string>();
+  for (const { body } of comments)
+    for (const m of (body as string).matchAll(/^Blocked-by:\s*(\S+)/gm)) blockerIds.add(m[1]);
+  if (blockerIds.size === 0) return false;
+  for (const id of blockerIds) {
+    const row = db.prepare("SELECT state FROM tickets WHERE id=?").get(id) as { state: string } | undefined;
+    if (row && !TERMINAL.has(row.state)) return true; // at least one live edge
+  }
+  return false; // all referenced tickets are in terminal states → parked
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -115,16 +134,21 @@ export function boardMetrics(db: any, projectId: string, windowMs: number, nowMs
       if (d.from === "In Review" && d.to === "Canceled") verifyFails++;
     } catch { /* skip */ }
   }
-  const blockedNow = (db.prepare(
-    "SELECT COUNT(*) c FROM tickets WHERE project_id=? AND state NOT IN ('Done','Canceled','Duplicate') AND labels LIKE '%\"blocked\"%'",
-  ).get(projectId) as { c: number }).c;
+  // Split blocked tickets into parked (attention-needed) vs sequenced (live dependency edge).
+  const blockedTickets = db.prepare(
+    "SELECT id FROM tickets WHERE project_id=? AND state NOT IN ('Done','Canceled','Duplicate') AND labels LIKE '%\"blocked\"%'",
+  ).all(projectId) as { id: string }[];
+  let blockedNow = 0, sequencedNow = 0;
+  for (const { id } of blockedTickets) {
+    if (hasLiveBlockerEdge(db, id)) sequencedNow++; else blockedNow++;
+  }
   const bugs = db.prepare(
     "SELECT labels FROM tickets WHERE project_id=? AND type='Bug' AND created_at>=?",
   ).all(projectId, cutoffIso) as { labels: string }[];
   let escaped = 0;
   for (const b of bugs) if (/"incident"|"signal"/.test(b.labels)) escaped++;
   const qa = { bugsFiled: bugs.length, escaped, escapeRatio: bugs.length ? escaped / bugs.length : null };
-  return { throughput: done, verifyFails, acceptRate: done + verifyFails ? done / (done + verifyFails) : null, blockedNow, qa };
+  return { throughput: done, verifyFails, acceptRate: done + verifyFails ? done / (done + verifyFails) : null, blockedNow, sequencedNow, qa };
 }
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
@@ -185,14 +209,14 @@ async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<
     const db = openDb(wsHubDb(ws));
     try {
       const board: Record<string, BoardMetrics> = {};
-      const roll = { throughput: 0, verifyFails: 0, blockedNow: 0, bugsFiled: 0, escaped: 0 };
+      const roll = { throughput: 0, verifyFails: 0, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
       const queue: Array<DecisionItem & { project: string }> = [];
       for (const key of deliveryProjects(ws)) {
         const pid = findProject(db, key);
         if (!pid) continue;
         const m = boardMetrics(db, pid, windowMs);
         board[key] = m;
-        roll.throughput += m.throughput; roll.verifyFails += m.verifyFails; roll.blockedNow += m.blockedNow;
+        roll.throughput += m.throughput; roll.verifyFails += m.verifyFails; roll.blockedNow += m.blockedNow; roll.sequencedNow += m.sequencedNow;
         roll.bugsFiled += m.qa.bugsFiled; roll.escaped += m.qa.escaped;
         queue.push(...decisionQueue(db, pid).map((t) => ({ ...t, project: key }))); // P1-3
       }
@@ -215,8 +239,8 @@ function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<typeof f
   for (const [agent, a] of Object.entries(fires.byAgent))
     console.log(`  ${agent.padEnd(14)} ${String(a.fires).padStart(4)} fires  ${String(a.failures).padStart(3)} failed  median ${a.medianMs === null ? "—" : Math.round(a.medianMs / 1000) + "s"}`);
   if (out.teamRollup) {
-    const r = out.teamRollup as { throughput: number; verifyFails: number; acceptRate: number | null; blockedNow: number; bugsFiled: number; escaped: number };
-    console.log(`board: ${r.throughput} shipped, accept ${pct(r.acceptRate)} (${r.verifyFails} verify-fail), ${r.blockedNow} blocked open, QA bugs ${r.bugsFiled} (${r.escaped} escaped to prod)`);
+    const r = out.teamRollup as { throughput: number; verifyFails: number; acceptRate: number | null; blockedNow: number; sequencedNow: number; bugsFiled: number; escaped: number };
+    console.log(`board: ${r.throughput} shipped, accept ${pct(r.acceptRate)} (${r.verifyFails} verify-fail), ${r.blockedNow} parked, ${r.sequencedNow} sequenced, QA bugs ${r.bugsFiled} (${r.escaped} escaped to prod)`);
     const dq = (out.decisionQueue ?? []) as Array<{ id: string; state: string; project: string }>;
     if (dq.length) console.log(`decision queue (yours): ${dq.length} — ${dq.slice(0, 6).map((t) => `${t.id}[${t.state === "Human-Blocked" ? "blocked" : "approve"}]`).join(", ")}${dq.length > 6 ? ", …" : ""}`);
   } else console.log(String(out.boardNote));
