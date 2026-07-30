@@ -2,13 +2,16 @@
 // Contracts under test: (1) per-function CC via real AST + the crap4java formula over native
 // V8 coverage; (2) worst-first report ordering, N/A handling; (3) --threshold gate exit 2;
 // (4) the mutation probe flips ONE site, detects KILLED vs SURVIVED, restores the file
-// byte-identically, and exit 3 rides --fail-on-survivors; (5) --changed file selection.
-// All through the CLI (quality.ts is an entry that runs main() on import).
+// byte-identically, and exit 3 rides --fail-on-survivors; (5) --changed file selection;
+// (6) stripGo's comment/literal blanking on the nested/adjacent cases that drive its CC.
+// (1)-(5) drive the CLI (node quality.ts …); (6) imports stripGo directly — main() is now
+// guarded, so importing this module is side-effect-free.
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripGo } from "../src/quality.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -214,6 +217,36 @@ func TestGrade(t *testing.T) {
   ok(mDead?.killed === false, `Go mutation probe: the untested fn SURVIVES (got ${JSON.stringify(mDead)})`);
   ok(mGrade?.killed === true, `Go mutation probe: the boundary flip on the tested fn is KILLED (got ${JSON.stringify(mGrade)})`);
   ok(readFileSync(join(gdir, "calc.go"), "utf8") === gorig, "Go file restored byte-identically after the probe");
+}
+
+// ── 7. stripGo: byte-offset-preserving comment/literal blanking (LOOP-33 / LOOP-22 regression) ────
+// PR #32 (LOOP-22) extracted stripGo's inline branches into blankLineComment / blankBlockComment /
+// blankQuoted / blankBacktick, with the AC of a test PROVING the scan loop stayed behavior-preserving
+// on the nested/adjacent delimiter cases that drive its CC. That test was never added (PR #32's diff
+// carried none), and the Go fixture above has no comments or literals, so nothing else exercises these
+// branches. stripGo blanks every consumed byte to a space, preserving `\n` and total length — the
+// hand-computed expected values below double as the byte-offset check (parseGoFunctions maps regex
+// offsets on the stripped text 1:1 back onto the original, which is the entire point of the pass).
+{
+  const strip = (label: string, input: string, expected: string) => {
+    const got = stripGo(input);
+    ok(got === expected, `stripGo — ${label}: ${JSON.stringify(got)} === ${JSON.stringify(expected)}`);
+    ok(got.length === input.length, `stripGo — ${label}: byte length preserved (${got.length} === ${input.length})`);
+  };
+  // (a) `//` inside a string is string content, not a comment — the trailing `x` must survive.
+  strip("string containing //", '"a//b" x', " ".repeat(7) + "x");
+  // (b) a quote inside a line comment is comment content, not a string open: a mis-dispatch would
+  //     open a string at the `"` and blank THROUGH the newline into line 2 — assert line 2 survives.
+  strip("line comment containing a quote", 'a // "b\nc := 1', "a" + " ".repeat(6) + "\nc := 1");
+  // (c) a block comment glued to a string (no gap): both delimiters must end on their own bytes —
+  //     the trailing `+z` survives only if neither `*/` nor the string over-runs into the other.
+  strip("block comment adjacent to a string", '/*c*/"s"+z', " ".repeat(8) + "+z");
+  // (d) a `"` inside a backtick raw string stays raw content — it must NOT open a "-string that would
+  //     run past the closing backtick and blank `+q`.
+  strip("backtick string containing a double-quote", '`a"b`+q', " ".repeat(5) + "+q");
+  // (e) an escaped `\"` is not the close — the real close is the last `"`. The escape branch drives
+  //     blankQuoted's CC, so pin it: `+z` survives only if the `\"` is skipped, not closed on.
+  strip("escaped quote inside a string", '"a\\"b"+z', " ".repeat(6) + "+z");
 }
 
 console.log(fails === 0 ? "\nQUALITY_OK" : `\n${fails} CHECK(S) FAILED`);
