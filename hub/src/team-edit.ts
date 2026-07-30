@@ -354,38 +354,151 @@ export function detectRepoFacts(absPath: string): DetectedRepoFacts {
     const wfDir = join(absPath, ".github", "workflows");
     for (const f of readdirSync(wfDir).sort()) {
       if (!/\.ya?ml$/.test(f)) continue;
-      try { checks.push(...workflowJobNames(readFileSync(join(wfDir, f), "utf8"))); } catch { /* unreadable workflow */ }
+      try { checks.push(...workflowJobNames(readFileSync(join(wfDir, f), "utf8"), f)); } catch { /* unreadable workflow */ }
     }
   } catch { /* no workflows dir */ }
   if (checks.length) out.mergeChecks = [...new Set(checks)];
   return out;
 }
 
+// Triggers whose presence in a workflow's `on:` block means it CAN produce a PR check context.
+const PR_TRIGGERS = new Set(["push", "pull_request", "pull_request_target"]);
+
+// Extract the set of top-level `on:` triggers from a workflow YAML text (line-oriented heuristic).
+function workflowTriggers(text: string): Set<string> {
+  const out = new Set<string>();
+  let inOn = false, onIndent = -1;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*#/.test(line) || !line.trim()) continue;
+    const top = line.match(/^([A-Za-z0-9_-]+):\s*(.*)/);
+    if (top) {
+      if (top[1] === "on") {
+        inOn = true; onIndent = -1;
+        const rest = top[2].trim();
+        if (rest) {
+          // Inline form: "on: push" or "on: [push, pull_request]"
+          const segs = rest.startsWith("[") ? rest.slice(1, rest.lastIndexOf("]")).split(",") : [rest];
+          for (const s of segs) out.add(s.trim().replace(/^["']|["']$/g, ""));
+          inOn = false;
+        }
+      } else { inOn = false; onIndent = -1; }
+      continue;
+    }
+    if (!inOn) continue;
+    const m = line.match(/^([ \t]+)([A-Za-z0-9_-]+):/);
+    if (!m) continue;
+    const d = m[1].length;
+    if (onIndent < 0) onIndent = d;
+    if (d === onIndent) out.add(m[2]);
+  }
+  return out;
+}
+
+// Scan lines[start..end) for strategy.matrix entries within a job at jobIndent.
+// Returns a map of matrix variable name → list of static string values.
+function scanJobMatrix(lines: string[], start: number, end: number, jobIndent: number): Record<string, string[]> {
+  const matrix: Record<string, string[]> = {};
+  let inMatrix = false, matrixIndent = -1, varIndent = -1, curVar = "", blockSeq = false;
+  for (let i = start; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    if (blockSeq && curVar) {
+      const seq = line.match(/^([ \t]+)-\s+(.+?)\s*$/);
+      if (seq && seq[1].length > matrixIndent) { (matrix[curVar] ??= []).push(seq[2].replace(/^["']|["']$/g, "")); continue; }
+      blockSeq = false;
+    }
+    const m = line.match(/^([ \t]+)([A-Za-z0-9_-]+):\s*(.*)/);
+    if (!m) continue;
+    const [, ind, key, rest] = m;
+    const depth = ind.length;
+    if (depth <= jobIndent) break; // left this job
+    if (!inMatrix) { if (key === "matrix") { inMatrix = true; matrixIndent = depth; } continue; }
+    if (depth <= matrixIndent) { inMatrix = false; break; } // exited matrix block
+    if (varIndent < 0) varIndent = depth;
+    if (depth !== varIndent) continue; // nested keys (include/exclude/etc.)
+    curVar = key; blockSeq = false;
+    const v = rest.trim();
+    if (v.startsWith("[") && v.includes("]")) {
+      // Inline flow sequence: ["23.6.0", "24"] or [23.6.0, 24]
+      const inner = v.slice(v.indexOf("[") + 1, v.lastIndexOf("]"));
+      matrix[curVar] = inner.split(",").map(s => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+    } else if (!v) { blockSeq = true; }
+  }
+  return matrix;
+}
+
+// Expand ${{ matrix.xxx }} expressions in a name template using the given matrix.
+// Returns the expanded names list, or null if any referenced variable is absent from the matrix.
+function expandMatrix(template: string, matrix: Record<string, string[]>): string[] | null {
+  const refs = [...template.matchAll(/\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}/g)];
+  if (!refs.length) return [template];
+  let results = [template];
+  for (const ref of refs) {
+    const values = matrix[ref[1]];
+    if (!values?.length) return null;
+    results = results.flatMap(r => values.map(v => r.replace(ref[0], v)));
+  }
+  return results;
+}
+
 // Line-oriented extraction of the job names under a workflow's top-level `jobs:` key — a job's display
 // `name:` (one nesting level below the job key) wins over the key. NOT a YAML parser: a deterministic
 // heuristic good enough for candidate merge checks (step-level `name:` lines start with `- ` and are
 // deeper than the accepted indent window, so they never match).
-export function workflowJobNames(text: string): string[] {
-  const names: string[] = [];
-  let inJobs = false;
-  let jobIndent = -1;
-  let openJobIdx = -1; // the job still awaiting a display name (−1 once named / none)
-  for (const line of text.split(/\r?\n/)) {
+// Trigger-aware: workflows not triggered by push/pull_request/pull_request_target are silently skipped —
+// they never produce PR check contexts so their job names would be phantom mergeChecks.
+// Matrix-aware: a job name containing ${{ matrix.xxx }} is expanded from the job's static matrix values;
+// if the values cannot be read statically, the name is omitted and a warning is printed (filename arg).
+export function workflowJobNames(text: string, filename = ""): string[] {
+  // Only emit check names from workflows that can produce PR-visible check contexts (LOOP-5).
+  if (![...workflowTriggers(text)].some(t => PR_TRIGGERS.has(t))) return [];
+
+  const lines = text.split(/\r?\n/);
+  const jobs: Array<{ name: string; key: string; start: number; end: number }> = [];
+  let inJobs = false, jobIndent = -1;
+  let cur: { name: string; key: string; start: number } | null = null;
+  let curNamed = false;
+
+  const closeJob = (end: number) => { if (cur) { jobs.push({ ...cur, end }); cur = null; curNamed = false; } };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (/^\s*#/.test(line)) continue;
     const top = line.match(/^([A-Za-z0-9_-]+):/); // any new top-level key ends the jobs block
-    if (top) { inJobs = top[1] === "jobs"; jobIndent = -1; openJobIdx = -1; continue; }
+    if (top) { closeJob(i); inJobs = top[1] === "jobs"; jobIndent = -1; continue; }
     if (!inJobs || !line.trim()) continue;
     const m = line.match(/^([ \t]+)([A-Za-z0-9_-]+):\s*(.*)$/);
     if (!m) continue;
-    const indent = m[1].length;
-    if (jobIndent === -1) jobIndent = indent; // the first key under jobs: fixes the job indent level
-    if (indent === jobIndent) { names.push(m[2]); openJobIdx = names.length - 1; }
-    else if (openJobIdx >= 0 && m[2] === "name" && indent > jobIndent && indent <= jobIndent + 4 && m[3].trim()) {
-      names[openJobIdx] = m[3].trim().replace(/^["']|["']$/g, "");
-      openJobIdx = -1;
+    const [, ind, key, val] = m;
+    const indent = ind.length;
+    if (jobIndent < 0) jobIndent = indent; // the first key under jobs: fixes the job indent level
+    if (indent === jobIndent) {
+      closeJob(i);
+      cur = { name: key, key, start: i + 1 };
+      curNamed = false;
+    } else if (cur && !curNamed && key === "name" && indent > jobIndent && indent <= jobIndent + 4 && val.trim()) {
+      cur.name = val.trim().replace(/^["']|["']$/g, "");
+      curNamed = true;
     }
   }
-  return names;
+  closeJob(lines.length);
+
+  const result: string[] = [];
+  for (const { name, key, start, end } of jobs) {
+    if (/\$\{\{/.test(name)) {
+      const mat = scanJobMatrix(lines, start, end, jobIndent);
+      const expanded = expandMatrix(name, mat);
+      if (!expanded) {
+        // Cannot expand statically — warn so the operator knows to set mergeChecks by hand.
+        if (filename) console.warn(`dev-loop detect: ${filename}: job '${key}' name '${name}' has unexpandable matrix expression — add mergeChecks manually`);
+      } else {
+        result.push(...expanded);
+      }
+    } else {
+      result.push(name);
+    }
+  }
+  return result;
 }
 
 // ── add-provider (one-click Q1) ──────────────────────────────────────────────
