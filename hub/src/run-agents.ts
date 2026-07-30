@@ -18,6 +18,7 @@ import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
+import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -1007,21 +1008,23 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   let outBytes = 0;
   let lastOutputAt = Date.now(); // liveness watchdog anchor — any stdout/stderr byte resets it
   let lastNewContentAt = Date.now(); // retry-loop watchdog: last time output introduced a genuinely new line
-  const seenLines = new Set<string>(); // bounded rolling set of recently-seen non-empty lines (retry-loop detection)
+  // Bounded, ROLLING window of recently-seen lines (seen-lines.ts). It evicts the oldest line on
+  // overflow instead of freezing on the first N — the LOOP-23 fix for a detector that went inert
+  // after ~200 distinct lines (a saturated Set treated every later line, including a genuine retry
+  // loop's repeating line, as new content, so `looping` below never tripped).
+  const seenLines = makeSeenLineWindow();
   const keepTail = (d: Buffer | string) => {
     const s = d.toString();
     outBytes += s.length;
     lastOutputAt = Date.now();
     outTail = (outTail + s).slice(-2048);
-    // Update lastNewContentAt only when a line is genuinely new (not seen before in seenLines).
-    // Truncate each line to 200 chars so one huge line cannot eat the whole set budget.
+    // Refresh lastNewContentAt only when a line is genuinely new. Truncate each line to 200 chars so
+    // one huge line cannot dominate the window (and trivial suffix churn on a long repeated line
+    // still counts as a repeat).
     for (const raw of s.split("\n")) {
       const l = raw.trim().slice(0, 200);
       if (l.length === 0) continue;
-      if (!seenLines.has(l)) {
-        lastNewContentAt = Date.now();
-        if (seenLines.size < 200) seenLines.add(l);
-      }
+      if (seenLines.markNew(l)) lastNewContentAt = Date.now();
     }
   };
   child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
@@ -1292,11 +1295,20 @@ async function main(): Promise<void> {
     clearInterval(timer);
     if (activeChildren.size === 0) process.exit(0);
   };
+  // LOOP-23 decision — the scheduler interrupt path is deliberately NOT routed through the fire's
+  // process-group kill. A forwarded SIGINT is the GRACEFUL stop (LOOP-10): it lets the agent CLI
+  // catch it and wind down its OWN subtree cleanly (finish/checkpoint the fire). Signalling the whole
+  // group (`-child.pid`) would deliver SIGINT to every grandchild at once — the git/tsx/npm helpers
+  // the agent spawns to checkpoint — turning a graceful drain into a forced reap and defeating the
+  // checkpoint intent LOOP-10 made an explicit non-goal for auto-release. Forced group reaping stays
+  // confined to the fire-timeout / stall watchdog (killGroup, per fire), which fire precisely when the
+  // agent is presumed wedged and its cleanup is moot. (A zombie descendant that outlives a graceful
+  // stop is LOOP-19's concern — runner-side ticket release — not a reason to make this signal forceful.)
   const interrupt = () => {
     const first = !stopping;
     drain();
     if (first) console.log("dev-loop run: stopping; forwarding SIGINT to active agent processes");
-    for (const child of activeChildren) child.kill("SIGINT");
+    for (const child of activeChildren) child.kill("SIGINT"); // direct child only — see the LOOP-23 decision above
   };
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
@@ -1558,6 +1570,8 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   let stopping = false;
   let fired = 0;
   const drain = () => { if (stopping) return; stopping = true; clearInterval(timer); if (activeChildren.size === 0) process.exit(0); };
+  // Graceful stop: forward SIGINT to the DIRECT child only (not the process group) — see the LOOP-23
+  // decision at the other scheduler entrypoint above for why the graceful path stays non-forceful.
   const interrupt = () => { const first = !stopping; drain(); if (first) console.log("dev-loop run: stopping; forwarding SIGINT to active agent processes"); for (const child of activeChildren) child.kill("SIGINT"); };
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
