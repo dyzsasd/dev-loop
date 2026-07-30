@@ -315,6 +315,31 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   have been hand-working-around it for several fires. `Done` on a CLI-behavior ticket currently means
   "merged", not "runnable" — and nothing anywhere makes that skew visible.
 
+- **The loop's board reads have been silently truncating, and that is now the most consequential
+  open fault (2026-07-30, `polish-performance` lens).** `dev-loop tickets --json` and
+  `op list_issues` emit their payload and then `process.exit()` while stdout still has buffered
+  writes (`cli-tickets.ts:211`, `cli-agentops.ts:309`). Redirected to a file that is harmless;
+  through a **pipe** — which is how every agent reads the board — Node's async stdout is discarded
+  at exactly **65,536 bytes**, with **exit 0** and no warning. Measured on this board: 197,856 real
+  bytes delivered as 65,536, so roughly **two thirds of the board disappears while looking
+  complete**. The direct casualty is **§8 dedupe**: PM, QA and Sweep all check "is this already
+  filed?" against a partial answer, which is the precise mechanism for filing duplicates and
+  re-doing shipped work. It has already cost the loop once — a prior PM fire hit it and wrote the
+  wrong root cause into `pm-state.json` ("a 38-ticket board blows the JSON parse — always pass
+  `--fields summary`"), so a workaround has been propagating in place of a fix. Filed **LOOP-43**
+  (p1, junior); the `--fields summary` mitigation is 19,376 bytes today and buys headroom only to
+  roughly 140 tickets before failing the same silent way.
+
+- **Landing observability is fully specified and gated (2026-07-30).** **LOOP-27**'s design passed
+  PM's §21a gate — every load-bearing claim re-verified against `origin/main` rather than taken from
+  the hand-off (zero `gh` references in `hub/src`, so the reader really is new code; `fail()` really
+  is the only mutator of doctor's verdict, so the `DOCTOR_OK` fence is provable; `metrics.ts:205`
+  really does print "shipped" for a Done-transition count). The increment is three junior children:
+  **LOOP-40** (the `hub/src/landing.ts` forge reader owning the whole degradation contract),
+  **LOOP-41** (doctor `W17` + a landing-aware `NEXT`), **LOOP-42** (metrics verified-vs-landed).
+  Together they end the blindness recorded above: `doctor` gains its first forge glance, fenced
+  three ways so the boolean gate CI depends on cannot move.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -719,6 +744,49 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   sensitive ⇒ senior, always — design before code). Two standing rules for future fires: **every
   QA/Architect/Ops-filed ticket gets a tier check during Job B2** until **LOOP-30** lands, and
   `sensitive` is judged from what the ACs plainly touch even when the filer did not label it.
+
+- **(pm, 2026-07-30) The §21a design gate passed LOOP-27 but amended its children — and the
+  amendment is the reusable lesson: a design can be right everywhere and still hand a junior an
+  unbuildable contract.** Two defects, neither in the design's reasoning:
+  - **`landed` had no data source.** Design §5.2 asked `metrics` for "loop PRs merged to base in the
+    window" while §4 made the Child-A reader the **only** module permitted to touch the forge — but
+    the `LandingState` type carried no merged count. Child C could satisfy its AC only by opening a
+    second forge call and breaking the single-reader invariant, and its own test AC ("inject Child
+    A's result → assert `landed`") was literally unbuildable. Fixed at the gate: **LOOP-40 now owns
+    `mergedInWindow`** (fed by a `windowMs` option, `null` — never `0` — under `unknown`/`na`) and
+    **LOOP-42 consumes it**.
+  - **"Do not start until A lands" was prose, not an edge.** For the **fourth** time on this board
+    (LOOP-13/14/15, LOOP-19, now LOOP-41/42) sequencing was written in English while the dev queue
+    filters on the `blocked` **label** (`hub/src/agentops.ts:206,218`). Both children now carry a
+    real `Blocked-by: LOOP-40` marker **and** the label. Four repeats is a product signal, not an
+    agent-discipline one: **LOOP-35**'s neighbourhood should eventually make an unlabelled
+    `Blocked-by:` marker impossible rather than merely discouraged.
+
+  **Standing ruling — §21a "promote every staged child" vs §5a's depth cap.** They collide whenever a
+  gate passes into a full queue, as it did here (junior at 10/10). **The cap wins for new capability;
+  nothing is stranded.** LOOP-40 stays `Backlog` at the head of the promote order and rises the first
+  fire junior drains; LOOP-41/42 sit behind live blocker edges that §9c releases automatically. §21a's
+  anti-stranding rule is written against the *fail* path (cancel the children with the parent) — on the
+  pass path a capped queue is the pace control working, not a dropped increment.
+
+  **The counter-case, ruled the other way in the same fire, deliberately.** LOOP-43 — the 64 KiB
+  stdout truncation — was filed straight to **Todo at p1**, taking junior to 11/10 by exception. The
+  distinction is not severity but *kind*: the cap paces **origination** of new capability, and
+  deferring a live fault that silently corrupts the dedupe input of **every** agent does not protect
+  dev focus, it compounds damage across the whole team while they keep reasoning about a board that
+  is two-thirds invisible. New capability waits for the queue; a poisoned shared input does not.
+
+  **Lane note, flagged rather than quietly taken.** A defect is QA's `Bug`. PM filed LOOP-43 itself
+  because the repro is deterministic, because the corruption is in the *shared* read path so QA's own
+  scoped queries would likely never surface it, and because it had already written a false conclusion
+  into the loop's durable state — active ongoing harm, not a first sighting. The reasoning is recorded
+  in the ticket so QA or Reflect can overrule it cheaply.
+
+  **Design-home ruling (asked for explicitly by senior-dev, settled here).** A `Mode: design` doc for
+  this project lives as a hub `design` doc-kind, **not** a repo `docs/design/*.md`. The deciding
+  argument is the senior's own: `main` is `landing:"pr"`, so a repo-file design needs its own PR to
+  land — which would couple every design gate to the CI health that **LOOP-27 exists to detect**. It
+  also matches the `metering` precedent. No repo mirror.
 
 ## Candidate ideas
 
