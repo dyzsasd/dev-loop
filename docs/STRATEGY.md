@@ -125,6 +125,20 @@ Supporting goals (all in scope this milestone):
   (read v0.15.0 while git was 0.19.2 when this was recorded), examples, and error messages.
 - **Broaden portability** — more CLIs / backends / integrations (Linear mirror, Lark/Slack
   channel, Codex) certified and documented.
+- **The code-quality gauntlet as an adoptable surface** (added 2026-07-30; PM-proposed, operator-approved).
+  `dev-loop quality` — the per-function CRAP gate (`CC² × (1−cov)³ + CC`) plus the mutation
+  probe — is a **deliberate second surface**: it is useful to a repo that never runs the loop,
+  and 1.7.0→1.10.0 was spent making it so (TS/JS + Go language backends, the `--diff-base` PR
+  gate, and a reusable CI workflow any repo adopts in three lines). Pursue it on two fronts:
+  (a) **inward** — it stays the fourth Step-5 ship gate and the Architect `test-strength`
+  dimension, so the loop's own output is held to it; (b) **outward** — a legacy repo can adopt
+  the gate on changed files alone, with no big-bang cleanup and no coordination substrate.
+  **Boundary:** the gauntlet is a *gate and a report*, not a linter, a formatter, or a
+  refactoring engine — it measures risk and test strength, and dev-loop does not grow a general
+  static-analysis product around it.
+  *Sequencing (operator, 2026-07-30): a mandate, not a pivot — the active program stays
+  resilience (shipped, v1.11.0) → observability/metering (LOOP-12..15 → LOOP-3 → LOOP-4);
+  sequence quality-line filings behind it.*
 
 ## Non-goals
 
