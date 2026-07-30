@@ -54,6 +54,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   events:           ["cli-agentops", "events"],    // attribution events as JSON (list_events; --since filters client-side)
   doc:              ["cli-agentops", "doc"],       // doc list|get|history|diff|save|publish|archive — doc.* 1:1 (save: CAS, CONFLICT → exit 3)
   mirror:           ["cli-agentops", "mirror"],    // mirror push|poll|status — the one-way Linear mirror + comment→intake poll
+  queue:            ["cli-agentops", "queue"],     // LAYER 1: the pre-ranked per-agent work lists (§5/§21b) — every agent's mandated first board read
   "export-desktop-skill": ["export-desktop-skill"],// render a self-contained Claude Desktop skill for an agent + project (P2-12)
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
@@ -104,6 +105,7 @@ Usage: dev-loop <command> [args]
   tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
           [--updated-since ISO] [--fields summary] [--limit N] [--json]   read-only: list the resolved project's board (no daemon)
   ticket <id> [--json]        read-only: show one ticket — detail + comments
+  queue                       the pre-ranked per-agent work list (agent's mandated first board read; same JSON as \`op queue\`)
   op <op-name> [--args-json '<JSON>']   dispatch ANY hub op as the acting agent (raw JSON in/out; stdin ok)
   ticket create|update …      create / update a ticket (labels REPLACE the full set; relatedTo is APPEND-only)
   comment add <id> (--body TEXT | --body-file F | '-')   comment on a ticket (authored as DEVLOOP_ACTOR)
@@ -139,7 +141,7 @@ if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); pr
 // against local state while the operator THINKS they're driving the remote is the failure mode this
 // gate exists to prevent.
 if (process.env.DEVLOOP_HUB_URL?.trim()) {
-  const ATTACH_OK = new Set(["tickets", "ticket", "op", "comment", "comments", "labels", "label", "project", "events", "doc", "up", "attach", "version", "help"]);
+  const ATTACH_OK = new Set(["tickets", "ticket", "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "up", "attach", "version", "help"]);
   if (!ATTACH_OK.has(cmd)) {
     console.error(`dev-loop ${cmd}: this verb runs at the WORKSPACE HOME, not over attach (DEVLOOP_HUB_URL is set). Run it on the home host (ssh / redeploy a bundle), or unset DEVLOOP_HUB_URL to work locally.`);
     process.exit(2);
@@ -147,7 +149,7 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 }
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
-  "op", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror"]); // the A1 write layer opens hub.db (direct-db transport)
+  "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror"]); // the A1 write layer opens hub.db (direct-db transport)
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {

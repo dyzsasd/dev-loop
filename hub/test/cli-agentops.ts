@@ -314,5 +314,21 @@ ok(noDaemon.status === 5 && /daemon/.test(noDaemon.stderr), `daemon transport wi
   server.close(); rdb.close(); wdb.close();
 }
 
+// ═══ 8. queue routing regression (LOOP-20) — bare `dev-loop queue` must be routable ════════════════
+// The `queue` verb was absent from cli.ts's ROUTES table: `dev-loop queue` exited 2 with "unknown
+// command 'queue'" while `dev-loop op queue` worked. Driving the REAL router ensures any future
+// ROUTES omission fails here immediately.
+const bareQueue = cli(["queue"]);
+ok(bareQueue.status === 0,
+  `bare 'dev-loop queue' routes correctly — exit 0 (was: exit 2 "unknown command 'queue'") (got ${bareQueue.status}; stderr: ${bareQueue.stderr.trim()})`);
+const bareQueueBody = bareQueue.status === 0 ? j(bareQueue.stdout) : {};
+ok("agent" in bareQueueBody,
+  `bare queue returns the {agent,…} shape (got keys: ${Object.keys(bareQueueBody).join(",")})`);
+// parity: the bare ROUTES form must be byte-equal to the Layer-0 op form (same DB state, same actor)
+const opQueueBare = cli(["op", "queue"]);
+ok(opQueueBare.status === 0, `op queue baseline returns exit 0 (got ${opQueueBare.status})`);
+ok(bareQueue.stdout.trim() === opQueueBare.stdout.trim(),
+  "PARITY: bare 'dev-loop queue' ≡ 'dev-loop op queue' (byte-equal output)");
+
 console.log(fails === 0 ? "\nCLI_AGENTOPS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
