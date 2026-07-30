@@ -597,6 +597,49 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   governing-file edit. Named here because it has now outlived five fires and is the loop's real
   throughput ceiling.
 
+- **✅ Daemon-lifecycle hygiene designed and gated; the gate's finding was in the coordination, not
+  the crux (2026-07-31).** LOOP-53 — 58 leaked test daemons on one laptop, 53 holding deleted fixture
+  DBs, the oldest up 13 days, collectively owning the documented board port `:8787` — passed the §21a
+  design gate; **LOOP-94** (test teardown harness) and **LOOP-95** (`dev-loop daemon reap` +
+  `/api/health` identity + probe warning) are promoted to `Todo`. The design's hard part is right and
+  I re-derived every load-bearing code fact rather than trusting the hand-off: reap **iff** the
+  listener self-identifies as `service:"dev-loop-hub"` **and** reports `dbPresent:false` — never age,
+  port, or fixture name. That rule exists because **SQLite keeps the open fd valid after the DB path
+  is unlinked**, so `/api/health` answers `ok:true` forever against a deleted database — liveness is
+  not a reap signal, DB-presence is — and a real workspace's DB always exists, so a live board
+  (including a foreign one) is provably never reaped. What the gate actually caught was one rung
+  down: the design asserted the two children were file-disjoint and could *"land in either order"*,
+  but child B's own file scope writes into `hub/test/*`, and child A's guard is a **wildcard source
+  scan** over `hub/test/*.ts` — so B-then-A turns A's guard red on files A was never told about.
+  Fixed by amending both children rather than failing a sound design. **The generalisable shape: a
+  decomposition can be correct in every child and still wrong in the seam between them — check the
+  ordering claim separately from the ACs, because nothing in the AC mapping can surface it.**
+
+- **📋 The board's read paths were bounded for agents and never for humans (2026-07-31).** The
+  polish-performance lens: the daemon has **four** board-list read paths and only the two agent-facing
+  ones are bounded. `list_issues` carries an explicit default cap of 250 plus a `fields:"summary"`
+  mode (`agentops.ts:176-180`), and `list_events` validates `limit` and pushes `LIMIT` into SQL
+  (`:353-357`) — while **`GET /api/tickets`** (`daemon.ts:618-627`) and **`GET /`**, the operator's own
+  web board (`views/board.ts:160`), both `SELECT *` every row with full descriptions, filter in JS
+  afterwards, and have no cap and no pagination. Measured live: 95 tickets ⇒ **433.6 KiB** of JSON, 92%
+  of it description text; `?limit=1` still reads all 95 rows; and **`?fields=summary` is silently
+  ignored** — the caller asks for a summary and gets 68× the bytes with no error. Nothing is slow today
+  (4 ms on loopback) and the ticket says so plainly; what earns the filing is that the growth is linear
+  and unbounded forever, and that the silent-param-drop is a **correctness** bug already fixed once in
+  this exact handler (`daemon.ts:625` — *"DL-31: honor `?assignee` (was silently ignored)"*). Filed as
+  **LOOP-96** (p3, junior). `hub/src/db.ts:94` already names the three ticket paths as one family —
+  the codebase knew they were siblings; only one of them got the bound.
+
+- **📋 The throughput ceiling tightened, and the loop's own gate mechanics tightened it (2026-07-31).**
+  Sixth consecutive fire over cap, now **junior 15 unblocked `Todo` / cap 10, senior 7 / cap 10, and
+  still zero unblocked senior-tier tickets in a 22-deep `Backlog`.** Two of this fire's three writes
+  pushed the same direction and both were correct: the §21a design gate promoted its two children
+  past the cap **by design** (a gate promotion is not a §5a promotion), and §21b routed this fire's
+  new filing to junior on its explicit signals. So the imbalance is not drift to be corrected — it is
+  what the rules produce when a design-gate tier and a discovery-lens tier are the same tier. Senior's
+  three idle slots cannot be filled without either an operator ruling or work that genuinely needs
+  design. **This is the loop's binding constraint; no single ticket on the board is.**
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1486,6 +1529,25 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   it?" but **"which code path reads it, and over what set does that path iterate?"** LOOP-70 was a
   field with no code, LOOP-77 was a field read at the wrong scope, and this is a field read over the
   wrong set.
+
+- **(pm, 2026-07-31) 🚫 DECLINED — daemon self-exit when its `hub.db` path vanishes.** The
+  `daemon-lifecycle-hygiene` design (§6) surfaced this as the most robust, port-agnostic prevention
+  for the leaked-daemon problem — the daemon would `process.exit(0)` once its backing DB has been
+  absent for K consecutive periodic checks, reusing the existing WAL-checkpoint timer — and
+  explicitly routed the call to PM/operator rather than building it. **Decided here rather than
+  parked, because it is answerable on the merits:** it is the **only** one of the four candidate
+  layers that changes **live-daemon runtime behaviour**, and its failure mode is exiting a *real*
+  operator's board on a transient `existsSync=false` (an atomic DB rename, a backup, an FS hiccup).
+  The three layers actually built — test teardown (LOOP-94), the `reap` verb and `/api/health`
+  identity, and the port-probe warning (LOOP-95) — add risk only to test-only and
+  operator-invoked-attended paths, and they already close the problem. Trading a bounded janitor for
+  a mechanism that can kill a live board is a bad trade at any leak volume. **Deliberately not filed
+  as a fast-follow either** — a ticket nobody should build is backlog noise, and an unfiled decision
+  gets re-derived every rotation, which is why it is recorded here and on LOOP-53. Reopen only with
+  evidence that the three shipped layers leave a real leak. **The rule worth keeping: prefer the
+  layer whose blast radius is confined to test and attended paths over the one that is more elegant
+  but reaches production runtime — and when a design surfaces that tradeoff instead of silently
+  taking it, that is the design working.**
 
 ## Candidate ideas
 
