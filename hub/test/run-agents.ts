@@ -9,6 +9,7 @@ import { openDb, logEvent } from "../src/db.ts";
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
 import { breaker } from "../src/breaker.ts";
+import { claudeAdapter } from "../src/fire-usage.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -100,9 +101,9 @@ try {
   const claude = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm,communication", "--interval", "pm=2m", "--cli-arg", "--model", "--cli-arg", "opus", ...common]);
   ok(claude.code === 0, "claude dry-run scheduler exits 0");
   ok(/agents=pm@2m, communication@1d/.test(claude.out), "claude dry-run shows resolved agents + interval override");
-  ok(/pm: claude --mcp-config .* --strict-mcp-config --model opus --effort max --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "claude dry-run injects model/effort defaults, keeps extra CLI args last, and renders without dumping the prompt");
+  ok(/pm: claude --mcp-config .* --strict-mcp-config --model opus --effort max --output-format json --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "claude dry-run injects model/effort defaults, --output-format json, keeps extra CLI args last, and renders without dumping the prompt");
   ok(/dev-loop-hub/.test(claude.out), "the inline --mcp-config defines the dev-loop-hub server (no plugin / .mcp.json needed)");
-  ok(/communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "communication-agent gets its own default profile and remains overrideable through --cli-arg");
+  ok(/communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --output-format json --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "communication-agent gets its own default profile and remains overrideable through --cli-arg");
 
   // boot-prefix (conventions-to-code phase 0): --assemble-boot appends the deterministic §0a corpus and
   // flips the claude prompt channel to stdin (Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB).
@@ -481,6 +482,79 @@ try {
 
 } finally {
   rmSync(tmp, { recursive: true, force: true });
+}
+
+// ── LOOP-13: claude UsageAdapter — parse, isError, §16 ───────────────────────────────────────────────
+{
+  // Recorded fixture: a real `claude -p --output-format json` terminal object shape.
+  const FIXTURE_SUCCESS = JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: "Hello from the agent",
+    usage: {
+      input_tokens: 512,
+      output_tokens: 128,
+      cache_creation_input_tokens: 64,
+      cache_read_input_tokens: 32,
+    },
+    total_cost_usd: 0.0045,
+  });
+
+  // AC1: real fixture → populated usage row with inputTokens > 0, cache fields, costUsd + currency.
+  const usage = claudeAdapter.parse(FIXTURE_SUCCESS);
+  ok(usage !== null, "LOOP-13 AC1: claudeAdapter.parse returns non-null for a well-formed fixture");
+  ok((usage?.inputTokens ?? 0) > 0, `LOOP-13 AC1: inputTokens > 0 (got ${usage?.inputTokens})`);
+  ok((usage?.outputTokens ?? 0) > 0, `LOOP-13 AC1: outputTokens > 0 (got ${usage?.outputTokens})`);
+  ok((usage?.cacheWriteTokens ?? -1) >= 0, `LOOP-13 AC1: cacheWriteTokens is a non-negative number (got ${usage?.cacheWriteTokens})`);
+  ok((usage?.cacheReadTokens ?? -1) >= 0, `LOOP-13 AC1: cacheReadTokens is a non-negative number (got ${usage?.cacheReadTokens})`);
+  ok(typeof usage?.costUsd === "number" && (usage.costUsd ?? 0) > 0, `LOOP-13 AC1: costUsd present and > 0 (got ${usage?.costUsd})`);
+  ok(usage?.currency === "USD", `LOOP-13 AC1: currency is "USD" (got ${usage?.currency})`);
+  ok(usage?.source === "provider", `LOOP-13 AC1: source is "provider" (got ${usage?.source})`);
+
+  // AC2: malformed/absent result → null usage; fire path continues normally (does not throw).
+  ok(claudeAdapter.parse("") === null, "LOOP-13 AC2: empty stdout → null usage (no throw)");
+  ok(claudeAdapter.parse("not json") === null, "LOOP-13 AC2: non-JSON stdout → null usage (no throw)");
+  ok(claudeAdapter.parse('{"type":"result"}') === null, "LOOP-13 AC2: JSON missing usage field → null usage");
+
+  // isError: success fixture → false; error fixture → true.
+  ok(claudeAdapter.isError!(FIXTURE_SUCCESS) === false, "LOOP-13: isError returns false for a success fixture");
+  ok(claudeAdapter.isError!(JSON.stringify({ type: "result", subtype: "error_max_turns", is_error: true })) === true,
+    "LOOP-13: isError returns true when is_error=true");
+  ok(claudeAdapter.isError!(JSON.stringify({ type: "result", subtype: "error_max_tokens", is_error: false })) === true,
+    "LOOP-13: isError returns true when subtype is not 'success'");
+  ok(claudeAdapter.isError!("") === false, "LOOP-13: isError returns false for unparseable stdout (non-fatal fallback)");
+
+  // AC3 — §16: the parsed usage object contains ONLY numeric usage fields + source/currency; no message text.
+  if (usage) {
+    const keys = Object.keys(usage).sort();
+    const allowed = ["cacheReadTokens", "cacheWriteTokens", "costUsd", "currency", "inputTokens", "outputTokens", "source"].sort();
+    ok(JSON.stringify(keys) === JSON.stringify(allowed),
+      `LOOP-13 AC3 §16: usage row contains exactly the allowed keys (got ${JSON.stringify(keys)})`);
+    ok(!JSON.stringify(usage).includes("Hello"), "LOOP-13 AC3 §16: usage row contains no result/message text");
+  }
+
+  // dry-run: verify --output-format json appears in the claude lane command.
+  {
+    const tmp2 = mkdtempSync(join(tmpdir(), "dl-loop13-"));
+    try {
+      const data2 = join(tmp2, "data");
+      mkdirSync(data2, { recursive: true });
+      writeFileSync(join(data2, "projects.json"), JSON.stringify({
+        defaultProject: "fallback",
+        projects: { fallback: { repoPath: tmp2 } },
+      }));
+      const hubRoot2 = join(dirname(fileURLToPath(import.meta.url)), "..");
+      const repoRoot2 = resolve(hubRoot2, "..");
+      const dryRun = spawnSync("node", ["src/run-agents.ts", "--cli", "claude", "--once", "--dry-run",
+        "--agents", "pm", "--root", repoRoot2, "--data", data2, "--hub-db", join(tmp2, "hub.db"), "--project", "fallback"],
+        { cwd: hubRoot2, encoding: "utf8" });
+      ok(/--output-format json/.test(`${dryRun.stdout ?? ""}${dryRun.stderr ?? ""}`),
+        "LOOP-13: --output-format json appears in the claude dry-run command");
+    } finally {
+      rmSync(tmp2, { recursive: true, force: true });
+    }
+  }
 }
 
 console.log(fails === 0 ? "\nRUN_AGENTS_OK" : `\n${fails} CHECK(S) FAILED`);

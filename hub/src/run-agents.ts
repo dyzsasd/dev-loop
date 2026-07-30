@@ -21,6 +21,8 @@ import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker } from "./breaker.ts";
+import { resolveAdapter, extractResultText, MAX_FULL_STDOUT_BYTES } from "./fire-usage.ts";
+import type { FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -674,6 +676,7 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
         ...(mcpArg ? ["--mcp-config", mcpArg, "--strict-mcp-config"] : []),
         ...(profile.model ? ["--model", profile.model] : []),
         ...(profile.effort ? ["--effort", profile.effort] : []),
+        "--output-format", "json",
         ...opts.extraArgs,
         // boot-prefix fires pipe the (large) prompt via stdin: Linux MAX_ARG_STRLEN caps one
         // execve argument at 128 KiB, and an assembled corpus exceeds it. `claude -p` with no
@@ -736,7 +739,7 @@ let fireLedgerPath: string | null = null;                            // team mod
 // scheduler. recordFire's ledger + event writes are covered by real-fire subprocess harnesses instead —
 // the fires.jsonl row in test/team-scheduler.ts and the fire.completed event in test/run-agents-live.ts.
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
-  extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number }): void {
+  extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number; usage?: FireUsage }): void {
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail, provider); // P0-1a/P0-1b — every completed fire feeds the streak
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
@@ -754,7 +757,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}) } });
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}), ...(extra?.usage ? { usage: extra.usage } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -1010,7 +1013,22 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       if (seenLines.markNew(l)) lastNewContentAt = Date.now();
     }
   };
-  child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
+  // Structured output: accumulate full stdout (capped at MAX_FULL_STDOUT_BYTES) for usage/error parsing.
+  // The adapter is null for text-mode lanes (opencode, codex in text mode) — they use the tail-regex path.
+  const adapter = resolveAdapter(profile.codingAgent);
+  let fullStdout = "";
+  child.stdout.on("data", (d) => {
+    keepTail(d);
+    if (adapter) {
+      // Structured lane: buffer for usage/isError parsing; suppress raw JSON echo to console/log.
+      // finalize() emits the parsed result text instead, keeping run.log human-readable.
+      const s = d.toString();
+      if (fullStdout.length < MAX_FULL_STDOUT_BYTES) fullStdout += s.slice(0, MAX_FULL_STDOUT_BYTES - fullStdout.length);
+    } else {
+      process.stdout.write(`[${agent}] ${d}`);
+      if (logOpen) log.write(d);
+    }
+  });
   child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
 
   return await new Promise((resolveExit) => {
@@ -1090,11 +1108,23 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       // output at all (whitespace-only counts as none). Bare "Error:" is deliberately NOT matched — an
       // agent's own prose can legitimately end that way. Telemetry only; the exit code stays untouched.
       const lastLine = outTail.trimEnd().split("\n").pop()?.trim() ?? "";
-      const suspectError = exitCode === 0 && !timedOut && (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine));
+      // Structured lanes (claude --output-format json): use the adapter's isError signal instead of the
+      // tail-regex. The tail-regex remains the fallback for text-mode lanes where it's the only signal.
+      const suspectError = exitCode === 0 && !timedOut && (adapter
+        ? (adapter.isError ? adapter.isError(fullStdout) : false)
+        : (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine)));
       if (suspectError) {
-        const why = outTail.trim() === "" ? `no visible output (${outBytes} bytes)` : `last line: ${JSON.stringify(lastLine.slice(0, 120))}`;
+        const why = adapter ? "structured error signal (is_error/subtype)" : (outTail.trim() === "" ? `no visible output (${outBytes} bytes)` : `last line: ${JSON.stringify(lastLine.slice(0, 120))}`);
         console.error(`[${agent}] exit 0 but the output looks like a FAILURE (${why}) — flagged suspectError in the fire ledger`);
         log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
+      }
+      // Structured lane: parse token/cost usage (§16: numeric fields + source/currency only, never message
+      // content) and echo the agent's result text to console/log (raw JSON was suppressed in the handler).
+      let usage: FireUsage | null = null;
+      if (adapter) {
+        try { usage = adapter.parse(fullStdout); } catch { /* parse failure degrades to null — non-fatal */ }
+        const resultText = extractResultText(fullStdout);
+        if (resultText) { process.stdout.write(`[${agent}] ${resultText}\n`); if (logOpen) log.write(resultText + "\n"); }
       }
       const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop); // P0-1b taxonomy (+ the liveness watchdog's "stalled"/"retry-loop")
       const fireExtras = {
@@ -1103,6 +1133,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         // every failure carries its tail — the breaker keys on it
         ...(suspectError || errorClass || exitCode !== 0 ? { outputTail: outTail.slice(-400) } : {}),
         ...(boot ? { bootBytes: boot.bytes } : {}), // boot-prefix: the assembled-corpus size rides every ledger row
+        ...(usage ? { usage } : {}), // present only when a lane captured measured usage; absent otherwise (honest null)
       };
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
