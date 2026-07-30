@@ -314,6 +314,35 @@ try {
     && readJson(join(lin, "dev-loop.json")).repos.det2.landing === "direct",
     "explicit --typecheck-cmd/--landing beat the detected values");
 
+  // LOOP-17 regressions: doctor nudge for repos with no configured build gates
+  // (state 1) no build block + detectable gates → nudge appears, DOCTOR_OK maintained
+  const ungatedDir = join(lin, "ungated-repo");
+  mkdirSync(ungatedDir);
+  writeFileSync(join(ungatedDir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc --noEmit", test: "node --test" } }));
+  run("team", ["add-repo", "ungated", "--project", "web", "--path", "ungated-repo", "--landing", "pr"], { cwd: lin });
+  const dUngated = run("server", ["doctor"], { cwd: lin });
+  ok(/repo 'ungated' has no build gates configured/.test(dUngated.out) && /typecheck\/test/.test(dUngated.out),
+    "LOOP-17: no-build-block + detectable gates → doctor nudge names the detected gates");
+  ok(/dev-loop team add-repo ungated --detect/.test(dUngated.out),
+    "LOOP-17: nudge names the add-repo --detect fix");
+  ok(/DOCTOR_OK/.test(dUngated.out),
+    "LOOP-17: nudge is informational — DOCTOR_OK is still printed");
+
+  // (state 2) no build block + no detectable scripts → doctor stays silent (no noise for docs-only repos)
+  const emptyDir = join(lin, "empty-repo");
+  mkdirSync(emptyDir);
+  run("team", ["add-repo", "nogate", "--project", "web", "--path", "empty-repo", "--landing", "pr"], { cwd: lin });
+  const dNoGate = run("server", ["doctor"], { cwd: lin });
+  ok(!/repo 'nogate' has no build gates/.test(dNoGate.out),
+    "LOOP-17: no-build-block + nothing detectable → doctor stays silent (no false-positive nudge)");
+
+  // (state 3) the pre-existing quality-gauntlet nudge (build.test but no build.quality) keeps working
+  // The 'det' repo has build.test (via --detect on fix) but no build.quality — the existing nudge fires.
+  ok(/repo 'det' has a test gate but no quality gate/.test(dNoGate.out),
+    "LOOP-17: pre-existing quality-gauntlet nudge still fires for repo with test but no quality gate");
+  ok(!/repo 'det' has no build gates/.test(dNoGate.out),
+    "LOOP-17: no-build-block nudge does NOT fire for 'det' (it has a build block — two nudges are mutually exclusive)");
+
   // clone-if-needed: a local git repo as the remote
   const src = join(tmp, "clone-src");
   mkdirSync(src, { recursive: true });
