@@ -19,7 +19,7 @@
 //   (daemon down or dormant; hub.db busy past the 5s busy_timeout).
 import type { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import { openDb, actorExists, listActorHandles } from "./db.ts";
+import { openDb, actorExists, listActorHandles, STATES } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { ensureActors, findProject } from "./seed.ts";
 import { resolveHubDbPath } from "./workspace.ts";
@@ -41,11 +41,11 @@ LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; erro
       Your FIRST board read: the work lists pre-ranked server-side (§5/§21b in code). dev tiers
       { inProgress, todo — your slice, blocked excluded }; pm { verify, unblock, backlog,
       todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
-  dev-loop ticket create --title T --type Bug|Feature|Improvement [--description TEXT|'-'] [--description-file F]
+  dev-loop ticket create --title T --type Bug|Feature|Improvement [--state S] [--description TEXT|'-'] [--description-file F]
                          [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
-      --blocked-by writes the §9c blocking-edge marker comment ('Blocked-by: <id>', one line per id) after the create.
+      --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes §9c marker comment ('Blocked-by: <id>') after create.
   dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                         [--related-to +ids] [--duplicate-of ID|'']
+                         [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|'']
       HAZARD: labels REPLACE the full set (re-pass all).
       HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
   dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)
@@ -273,7 +273,7 @@ async function verbQueue(rest: string[]): Promise<never> {
 
 async function ticketCreate(targs: string[]): Promise<never> {
   const { flags, pos } = parseFlags(targs, {
-    "--title": "v", "--type": "v", "--description": "v", "--description-file": "v", "--labels": "v",
+    "--title": "v", "--type": "v", "--state": "v", "--description": "v", "--description-file": "v", "--labels": "v",
     "--priority": "v", "--assignee": "v", "--blocked-by": "v", "--related-to": "v", ...COMMON,
   });
   iAmTheOperator = flags["--i-am-the-operator"] === true;
@@ -281,11 +281,14 @@ async function ticketCreate(targs: string[]): Promise<never> {
   const title = str(flags, "--title"); if (!title) fail("ticket create needs --title");
   const type = str(flags, "--type");
   if (!type || !(TYPES as readonly string[]).includes(type)) fail(`ticket create needs --type ${TYPES.join("|")}`);
+  const stateFlag = str(flags, "--state");
+  if (stateFlag !== undefined && !(STATES as readonly string[]).includes(stateFlag))
+    fail(`--state must be one of: ${STATES.join(", ")}`);
   if (flags["--description"] !== undefined && flags["--description-file"] !== undefined) fail("pass --description OR --description-file, not both");
   const descFlag = str(flags, "--description");
   const description = descFlag !== undefined ? (descFlag === "-" ? readStdinAll() : descFlag)
     : flags["--description-file"] !== undefined ? readFileArg("--description-file", str(flags, "--description-file")!) : undefined;
-  const args: Record<string, unknown> = { title, type };
+  const args: Record<string, unknown> = { title, type, state: stateFlag ?? "Backlog" };
   if (description !== undefined) args.description = description;
   if (flags["--labels"] !== undefined) args.labels = csv(str(flags, "--labels")!);
   if (flags["--priority"] !== undefined) args.priority = intFlag("--priority", str(flags, "--priority")!, 0, 4);
@@ -311,16 +314,22 @@ async function ticketCreate(targs: string[]): Promise<never> {
 
 async function ticketUpdate(targs: string[]): Promise<never> {
   const { flags, pos } = parseFlags(targs, {
-    "--state": "v", "--title": "v", "--labels": "v", "--assignee": "v", "--priority": "v",
+    "--state": "v", "--title": "v", "--description": "v", "--description-file": "v",
+    "--labels": "v", "--assignee": "v", "--priority": "v",
     "--related-to": "v", "--duplicate-of": "v", ...COMMON,
   });
   iAmTheOperator = flags["--i-am-the-operator"] === true;
   const id = pos[0];
-  if (!id) fail("usage: dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A] [--priority N] [--related-to +ids] [--duplicate-of ID]");
+  if (!id) fail("usage: dev-loop ticket update <id> [--state S] [--title T] [--description TEXT|'-'] [--description-file F] [--labels FULL,SET] [--assignee A] [--priority N] [--related-to +ids] [--duplicate-of ID]");
   if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
+  if (flags["--description"] !== undefined && flags["--description-file"] !== undefined) fail("pass --description OR --description-file, not both");
+  const descFlag = str(flags, "--description");
+  const description = descFlag !== undefined ? (descFlag === "-" ? readStdinAll() : descFlag)
+    : flags["--description-file"] !== undefined ? readFileArg("--description-file", str(flags, "--description-file")!) : undefined;
   const args: Record<string, unknown> = { id };
   if (flags["--state"] !== undefined) args.state = str(flags, "--state");
   if (flags["--title"] !== undefined) args.title = str(flags, "--title");
+  if (description !== undefined) args.description = description;
   if (flags["--labels"] !== undefined) args.labels = csv(str(flags, "--labels")!); // HAZARD: labels REPLACE the full set (re-pass all)
   if (flags["--assignee"] !== undefined) args.assignee = str(flags, "--assignee"); // '' clears, 'me' = you (the op resolves both)
   if (flags["--priority"] !== undefined) args.priority = intFlag("--priority", str(flags, "--priority")!, 0, 4);
@@ -328,7 +337,7 @@ async function ticketUpdate(targs: string[]): Promise<never> {
   if (flags["--duplicate-of"] !== undefined) { const d = str(flags, "--duplicate-of")!; args.duplicateOf = d === "" ? null : d; }
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
   if (Object.keys(args).length === 1 + (args.project !== undefined ? 1 : 0))
-    fail("nothing to update — pass at least one of --state/--title/--labels/--assignee/--priority/--related-to/--duplicate-of");
+    fail("nothing to update — pass at least one of --state/--title/--description/--description-file/--labels/--assignee/--priority/--related-to/--duplicate-of");
   emit("save_issue", await runOp(openHub(), "save_issue", args));
 }
 

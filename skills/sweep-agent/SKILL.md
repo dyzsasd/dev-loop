@@ -227,7 +227,7 @@ dev-loop op <op-name> [--args-json '<JSON>']
 
 # save_issue (update)
 dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                       [--related-to +ids] [--duplicate-of ID|'']
+                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|'']
     HAZARD: labels REPLACE the full set (re-pass all).
     HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
 
