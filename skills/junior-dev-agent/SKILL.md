@@ -211,13 +211,11 @@ dev-loop ticket <id> [--json]        read-only: show one ticket — detail + com
 # save_issue (create)
 dev-loop ticket create --title T --type Bug|Feature|Improvement [--state S] [--description TEXT|'-'] [--description-file F]
                        [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
-    --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs (verify-fail follow-up, un-block re-queue).
-    --blocked-by writes the §9c blocking-edge marker comment ('Blocked-by: <id>', one line per id) after the create.
+    --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes §9c marker comment ('Blocked-by: <id>') after create.
 
 # save_issue (update)
-dev-loop ticket update <id> [--state S] [--title T] [--description TEXT|'-'] [--description-file F]
-                       [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                       [--related-to +ids] [--duplicate-of ID|'']
+dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
+                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|'']
     HAZARD: labels REPLACE the full set (re-pass all).
     HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
 
