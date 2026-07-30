@@ -33,6 +33,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, w
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 // ─── types ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -291,7 +292,7 @@ function blankBacktick(out: string[], src: string, i: number, n: number): number
   if (i < n) { out[i] = " "; i++; }
   return i;
 }
-function stripGo(src: string): string {
+export function stripGo(src: string): string {
   const out = src.split("");
   let i = 0;
   const n = src.length;
@@ -657,4 +658,7 @@ function main(): void {
   if (o.failOnSurvivors && survivors) process.exit(3);
 }
 
-main();
+// Entry-only: running `node quality.ts …` invokes the tool, but importing this module (the
+// stripGo unit test in test/quality.ts) must stay side-effect-free — same guard the other
+// hub entry points use (bundle.ts, daemon.ts, mcp-merge.ts).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
