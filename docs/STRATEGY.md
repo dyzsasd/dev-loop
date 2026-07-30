@@ -446,6 +446,23 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   not a closed-ticket one — `FireRow.fireId?`, `FireUsage` and `UsageAdapter` are live in
   `metrics.ts`. **LOOP-4** stays parked: it aggregates over lanes that have not yet emitted anything.
 
+- **⚠️ Landing discipline shipped two verbs, and both are `main`-only (2026-07-30).** `origin/main`
+  advanced `4a4b4b7` → **`2888dd8`** (LOOP-54: `dev-loop worktree add`, which cuts dev branches at
+  `origin/<defaultBranch>` instead of local main) → **`35479b9`** (LOOP-55: `push-guard` passenger
+  detection, flagging commits that branched off local main). Together they close the LOOP-48/LOOP-50
+  divergence class **for this repo**. They do not close it for anyone else: **`repos[].defaultBranch`
+  is documented in the §19 resolution table (`conventions.md:1485`, with a `git.defaultBranch`
+  fallback) and exists nowhere in the code** — `grep -n "defaultBranch" hub/src/team-config.ts`
+  returns nothing, `team add-repo` has no flag for it, and `--detect` does not infer it. Both new
+  verbs substitute a hardcoded `"main"` (`worktree.ts:35` says so in a comment; `push-guard.ts:27,88`
+  has a `--default-branch` escape hatch **no caller passes**). Measured against a real
+  `master`-default repo: `worktree add` **cannot create a worktree at all** (`fatal: couldn't find
+  remote ref main` → fallback → `fatal: invalid reference: main`), and `push-guard --strict`
+  **fails silently open** — its passenger block is gated on `rev-parse --verify origin/main`, which
+  exits 1, so the guard reports clean. A safety gate that lies is the worse of the two. Filed
+  **LOOP-70** (senior, p2, `Mode: design`); **LOOP-56** and **LOOP-57** are queued consumers warned
+  not to add copies three and four.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1216,6 +1233,51 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
     (p2), which is what unparks the p1 **LOOP-38**. Senior has capacity (6/10 after LOOP-63) but its
     entire Backlog (LOOP-4, LOOP-38) is blocked, so senior-shaped lens findings remain the only way
     to feed it. LOOP-46 is first in the junior promote order the moment depth drops below the cap.
+
+- **(pm, 2026-07-30) The LOOP-39 design gate PASSED, and the strategy-gaps lens found a documented
+  config field with no implementation.** Product SHA `35479b9`; the lens rotation was reset by the
+  two new commits.
+  - **§21a design gate — LOOP-39 (`merge-review-guard`) passed on the merits.** The 22 KB design is
+    coherent, cites its strategy parents (Goals → *agent skill robustness* + *harden the hub*;
+    Vision → *steered by operator review (点评)*), and its four staged children decompose it 1:1 with
+    no parent AC orphaned (AC1/AC2/AC5 → LOOP-64, AC3 → LOOP-65, AC4 → LOOP-66, PM's board-state
+    fold-in → LOOP-67). Its load-bearing claims were **checked, not accepted**: `hub/src/landing.ts`
+    genuinely does not exist on `origin/main`, so the `Blocked-by: LOOP-40` edges are real; the
+    `push-guard` precedent it cites is real (`TICKET_RE`, the `resolveHubDbPath` + `SELECT state` DB
+    pattern); all five `cli.ts` registration points exist and `ATTACH_OK` genuinely excludes
+    `push-guard`. Promoted all four children `Backlog → Todo` **before** closing the parent (the
+    §21a crash-safe order). **One correction recorded on LOOP-64 rather than failing the gate:** §6
+    prescribed the entry guard `fileURLToPath(import.meta.url) === process.argv[1]` — the best form
+    in the tree, and the exact form **LOOP-63** measured as symlink-unsafe. Shipping it would have
+    made `merge-guard.ts` the 26th instance of a guard LOOP-63 exists to convert. Cancelling a sound
+    design and four children over one line would have been wildly disproportionate; catching it
+    before the code is written is what the gate is for.
+  - **The §17 wiring now has a ticket instead of a report line — LOOP-69.** The guard ships
+    *enforceable but unwired*: calling it from the fire-start merge pass means editing
+    `conventions.md` §12c and `skills/dev-agent/SKILL.md`, which no agent may touch. That is now a
+    pm-owned carrier, `blocked` on LOOP-64 + LOOP-65, which re-parks `Human-Blocked` to the operator
+    the moment the mechanism it would wire in actually exists. The operator is **not** pinged yet, by
+    design — the same posture as LOOP-60's §4.7 hand-off.
+  - **The strategy-gaps finding: `defaultBranch` is prose all the way down.** Detail in **Current
+    state** above. What makes it a *strategy* gap rather than a bug: the Goals section commits to
+    **"Broaden portability"** and to outward adoption by legacy repos, and legacy repos are exactly
+    the population still on `master`. The loop's own landing machinery — 15 references to
+    `defaultBranch` across the §7 merge-back, §12b landing modes, and the §12c merge pass — is
+    specified against a value the config layer cannot express, so every implementation reaches for a
+    literal instead. Filed **LOOP-70** as `Mode: design` (§21b: one config field, one resolution
+    function, two shipped call sites to clean up, two queued consumers) rather than as a two-line
+    patch, because patching the call sites without landing the seam first just relocates the
+    duplication.
+  - **Method note, four fires running:** *find a value that crosses two paths and diff how each path
+    treats it* — `fireId` → `outputTail` → the entrypoint path → now `defaultBranch`. The new move
+    that made it pay this time: **read the governing docs as a specification and grep the code for
+    every field they promise.** The §19 resolution table has eight rows; seven are implemented on
+    `RepoEntry` and one is not, and that asymmetry was visible in a single grep.
+  - **Board bottleneck, unchanged and worth repeating:** junior is at **14 unblocked Todo against a
+    cap of 10**, so B2 promoted nothing to it for a second consecutive fire — including LOOP-46 (p2),
+    which is what unparks the p1 LOOP-38. Senior had room and now holds LOOP-70 (7/10). **LOOP-40 is
+    the highest-leverage ticket on the board:** LOOP-41, 42, 64, 66 and transitively 65 all wait on
+    it, and it is p2, `Todo`, junior-assigned and unblocked.
 
 ## Candidate ideas
 
