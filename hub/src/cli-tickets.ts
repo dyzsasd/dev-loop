@@ -208,4 +208,5 @@ async function main(): Promise<number> {
   return sub === "ticket" ? showTicket(db, projectId, projectKey, actor, rest) : listTickets(db, projectId, projectKey, actor, rest);
 }
 
-process.exit(await main());
+process.exitCode = await main();
+// Natural exit (no process.exit()) lets the event loop drain stdout before the process terminates.

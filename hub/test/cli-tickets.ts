@@ -146,5 +146,45 @@ const ecount = (after.prepare("SELECT count(*) AS c FROM events WHERE project_id
 after.close();
 ok(tcount === 6 && ecount === 0, `read-only: tickets unchanged (6) + zero events emitted (got ${tcount} tickets, ${ecount} events)`);
 
+// ── 9. pipe-flush regression (LOOP-43): stdout > 64 KiB must not be silently truncated ──
+// Seed a separate DB with 10 tickets each carrying an 8 KiB description so the --json payload
+// comfortably exceeds one OS pipe buffer (65536 bytes). The cli() helper uses spawnSync with stdout
+// captured as a string (a pipe, not a file) — if process.exit() fires before the async write buffer
+// drains, the JSON is truncated and JSON.parse will throw.
+{
+  const bigRoot = "/tmp/hub-cli-tickets-flush-test";
+  rmSync(bigRoot, { recursive: true, force: true });
+  mkdirSync(bigRoot, { recursive: true });
+  const bigDb = join(bigRoot, "hub.db");
+  const bdb = openDb(bigDb);
+  const bigProjId = ensureSeed(bdb, "flushtest", "Flush Test", "FT");
+  const bigInsT = bdb.prepare(
+    "INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'[]',?,?,?)",
+  );
+  const PAD = "x".repeat(8000); // ~8 KB per ticket × 10 = ~80 KB total — well above the 65536-byte pipe buffer
+  for (let i = 1; i <= 10; i++) {
+    bigInsT.run(
+      `FT-${i}`, bigProjId, `Flush ticket ${i}`, PAD, "Feature", "Todo", null, 3,
+      JSON.stringify(["dev-loop", "pm"]), "pm", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z",
+    );
+  }
+  bdb.close();
+
+  function bigCli(args: string[]): { status: number | null; stdout: string } {
+    const r = spawnSync("node", ["src/cli-tickets.ts", ...args], {
+      encoding: "utf8", timeout: 30000,
+      env: { ...process.env, DEVLOOP_HUB_DB: bigDb, DEVLOOP_PROJECT: "flushtest" },
+    });
+    return { status: r.status, stdout: r.stdout ?? "" };
+  }
+
+  const big = bigCli(["tickets", "--json", "--limit", "250"]);
+  ok(big.status === 0, `tickets --json (>64 KiB payload) → exit 0 (got ${big.status})`);
+  let bigParsed: unknown[] | null = null;
+  try { bigParsed = JSON.parse(big.stdout) as unknown[]; } catch { /* diagnosed below */ }
+  ok(bigParsed !== null, `tickets --json (>64 KiB payload) → stdout parses as valid JSON without truncation (byte length: ${big.stdout.length})`);
+  ok(bigParsed !== null && bigParsed.length === 10, `tickets --json (>64 KiB payload) → all 10 seeded tickets present in the piped output (got ${bigParsed?.length ?? "null"})`);
+}
+
 console.log(fails === 0 ? "\nCLI_TICKETS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
