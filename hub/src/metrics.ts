@@ -188,9 +188,18 @@ export function ownerLiveness(
   const out: OwnerLivenessFinding[] = [];
   for (const h of handles) {
     const owned = db.prepare(
-      "SELECT labels, updated_at FROM tickets WHERE project_id=? AND state IN ('Todo','In Review') ORDER BY updated_at",
-    ).all(projectId) as { labels: string; updated_at: string }[];
-    const mine = owned.filter((t) => { try { return (JSON.parse(t.labels) as string[]).includes(h); } catch { return false; } });
+      "SELECT assignee, labels, state, updated_at FROM tickets WHERE project_id=? AND state IN ('Todo','In Review') ORDER BY updated_at",
+    ).all(projectId) as { assignee: string | null; labels: string; state: string; updated_at: string }[];
+    // Ownership rule: In Review → label only (the label names the verifier, not the implementer whose
+    // assignee field still points at the dev who shipped it); Todo → union(assignee, label) so tickets
+    // routed by assignee alone (no tier label) are not invisible to the liveness detector (LOOP-30).
+    const mine = owned.filter((t) => {
+      if (t.state === "In Review") {
+        try { return (JSON.parse(t.labels) as string[]).includes(h); } catch { return false; }
+      }
+      if (t.assignee === h) return true;
+      try { return (JSON.parse(t.labels) as string[]).includes(h); } catch { return false; }
+    });
     if (!mine.length) continue;
     const last = lastFire.get(h) ?? null;
     const alive = last !== null && nowMs - Date.parse(last) <= windowMs;
