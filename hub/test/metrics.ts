@@ -97,6 +97,27 @@ try {
     JSON.stringify({ ts: iso(NOW - DAY), agent: "pm", project: "web", durationMs: 1, exitCode: 0, timedOut: false }) + "\n");
   ok(!ownerLiveness(db, "p", olTwo, { nowMs: NOW }).some((f) => f.owner === "pm"),
     "ownerLiveness: the LATEST of several fires decides liveness (old row first must not stick)");
+
+  // LOOP-30: assignee-only ticket (no tier label) must not create a silent-zero (AC1+AC2)
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-6','p','assignee-only','d','Feature','Todo','junior-dev',2,?,  '[]','pm',?,?)")
+    .run(JSON.stringify(["dev-loop", "pm"]), iso(NOW - DAY), iso(NOW - DAY));
+  const olEmptyLedger = join(tmp, "ol-empty.jsonl");
+  writeFileSync(olEmptyLedger, "");
+  const olAssigneeOnly = ownerLiveness(db, "p", olEmptyLedger, { nowMs: NOW, handles: ["junior-dev"] });
+  ok(olAssigneeOnly.some((f) => f.owner === "junior-dev"),
+    "LOOP-30 AC1+AC2: Todo with assignee='junior-dev' but no tier label yields a finding — silent-zero path closed");
+  // AC3: In Review's assignee is the implementer, NOT the verifier — label wins for In Review.
+  // Capture count BEFORE inserting T-7 so the assertion is robust when other fixtures (e.g. LOOP-26
+  // T-SEQ with label "junior-dev") are also in the DB on the merged branch.
+  const jdCountBeforeT7 = olAssigneeOnly.find((f) => f.owner === "junior-dev")?.openTickets ?? 0;
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-7','p','in-review-shipped','d','Bug','In Review','junior-dev',2,?,  '[]','pm',?,?)")
+    .run(JSON.stringify(["dev-loop", "qa"]), iso(NOW - DAY), iso(NOW - DAY));
+  const olInReview = ownerLiveness(db, "p", olEmptyLedger, { nowMs: NOW, handles: ["junior-dev", "qa"] });
+  const jdFinding = olInReview.find((f) => f.owner === "junior-dev");
+  ok(jdFinding !== undefined && jdFinding.openTickets === jdCountBeforeT7,
+    `LOOP-30 AC3: In Review with assignee=junior-dev and label=qa is NOT counted toward junior-dev — openTickets stays ${jdCountBeforeT7} (same as before T-7 insert, not +1)`);
+  ok(olInReview.some((f) => f.owner === "qa" && f.openTickets >= 1),
+    "LOOP-30 AC3: In Review ticket with label=qa IS owned by qa (verifier ownership via label)");
   db.close();
 
   // ── LOOP-12: FireRow with fireId parses; legacy row without fireId also parses ──
