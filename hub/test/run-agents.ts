@@ -1,12 +1,13 @@
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, cpSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
 import { openDb, logEvent } from "../src/db.ts";
-import { recordFire } from "../src/run-agents.ts";
-import { readFireRows } from "../src/metrics.ts";
+// NB: run-agents.ts must NOT be imported here — its main() runs unconditionally (LOOP-58), so an import
+// would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
+// harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -34,6 +35,24 @@ const run = (args: string[]) => {
   ok(w.markNew("distinct setup line 0") === true, "a line evicted during saturation reads as NEW again — the window ROLLED forward, it never froze");
   ok(w.markNew("rate limit exceeded, retrying in 2s...") === true && w.markNew("rate limit exceeded, retrying in 2s...") === false,
     "post-saturation a repeating line is new once then seen — exactly what the frozen-200 detector missed");
+}
+
+// ── LOOP-58: `dev-loop run` must still fire when the checkout path contains a URL-escaped char ──
+// LOOP-12 guarded the entry with `import.meta.url === \`file://${process.argv[1]}\`` — but import.meta.url
+// is percent-ENCODED while process.argv[1] is a RAW path, so on any path with a space (macOS Google Drive /
+// iCloud Drive checkouts) the guard silently failed: main() never ran and `dev-loop run` exited 0 having
+// fired, logged, and reported nothing. Copy the source into a directory whose name contains a space and
+// assert the entry still prints its usage — this FAILS against the guarded form (0-byte stdout) and PASSES
+// with the unconditional main(). realpathSync isolates the defect to the space (not a /tmp symlink).
+{
+  const spaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl run agents ")));       // last segment holds spaces
+  cpSync(join(hubRoot, "src"), join(spaceRoot, "src"), { recursive: true });
+  writeFileSync(join(spaceRoot, "package.json"), JSON.stringify({ type: "module" }));  // ESM for the copied .ts
+  const spaced = spawnSync("node", [join(spaceRoot, "src", "run-agents.ts"), "--help"], { encoding: "utf8" });
+  const spacedOut = spaced.stdout ?? "";
+  ok(spacedOut.length > 0 && /--dry-run/.test(spacedOut),
+    `LOOP-58: run-agents.ts --help fires from a path containing a space (${spacedOut.length}B stdout, exit ${spaced.status})`);
+  rmSync(spaceRoot, { recursive: true, force: true });
 }
 
 const tmp = mkdtempSync(join(tmpdir(), "dl-run-agents-"));
@@ -329,27 +348,11 @@ try {
     if (savedFire !== undefined) process.env.DEVLOOP_FIRE_ID = savedFire;
   }
 
-  // LOOP-12 AC: recordFire writes fireId to both the hub event and the JSONL ledger.
-  {
-    const testDb2 = join(tmp, "fireid-record.db");
-    const ledger = join(tmp, "fireid-ledger.jsonl");
-    const db2 = openDb(testDb2);
-    execFileSync("node", ["src/seed.ts", "test2", "Test2", "TS2", testDb2], { cwd: hubRoot, encoding: "utf8" });
-    const projectId2 = (db2.prepare("SELECT id FROM projects WHERE key='test2'").get() as { id: string }).id;
-    // Point the module-level fireLedgerPath and fireDb to our test artifacts via recordFire's hubDb param.
-    const fakeProfile = { codingAgent: "claude" as const };
-    const testId = "aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee";
-    // Temporarily set fireLedgerPath by running recordFire — it checks the hubDb param for the hub event,
-    // but the JSONL ledger path is module-level (fireLedgerPath). We test the hub event directly.
-    recordFire(testDb2, "test2", "pm", fakeProfile, 100, 0, false, testId);
-    const evRow = db2.prepare("SELECT data FROM events WHERE kind='fire.completed' ORDER BY id DESC LIMIT 1").get() as { data: string } | undefined;
-    ok(!!evRow, "LOOP-12: recordFire writes a fire.completed event to the hub DB");
-    if (evRow) {
-      const evData = JSON.parse(evRow.data) as Record<string, unknown>;
-      ok(evData.fireId === testId, `LOOP-12: fire.completed event data carries fireId (got ${JSON.stringify(evData.fireId)})`);
-    }
-    void projectId2; // used above for project seeding
-  }
+  // LOOP-12 AC: recordFire writes fireId to both the hub event and the JSONL ledger. This used to be a
+  // direct `import { recordFire }` + call here — impossible now that main() is unconditional (LOOP-58), and
+  // it could only ever reach the hub event, never the module-level `fireLedgerPath` ledger. Both writes are
+  // now asserted on REAL fires: the fires.jsonl row in test/team-scheduler.ts, the fire.completed event's
+  // fireId in test/run-agents-live.ts §5. Read-side FireRow.fireId? parsing stays in test/metrics.ts.
 
   // LOOP-12 AC: a linear/local (no-hub) fire does not crash.
   const linearFire = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "fallback"]);
