@@ -1,9 +1,12 @@
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
+import { openDb, logEvent } from "../src/db.ts";
+import { recordFire } from "../src/run-agents.ts";
+import { readFireRows } from "../src/metrics.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -280,6 +283,78 @@ try {
   ok(!existsSync(junkDir), "LOOP-29: --hub-db undefined/x.db → no junk undefined/ directory created");
   const dataJunk = run(["--cli", "claude", "--once", "--dry-run", "--hub-db", join(tmp, "hub.db"), "--root", repoRoot, "--data", "undefined/data", "--project", "demo"]);
   ok(dataJunk.code !== 0 && /--data/.test(dataJunk.out), "LOOP-29: --data undefined/data → non-zero exit naming the flag");
+  // ── LOOP-12: fireId minting + carrier + logEvent env-merge ──────────────────────────────────────────
+  // Restore a clean projects.json for the fireId injection tests (need interface="mcp" to see the env).
+  writeFileSync(join(data, "projects.json"), JSON.stringify({
+    defaultProject: "fallback",
+    projects: {
+      demo: { repoPath: repo, backend: "service", hub: { agentInterface: { claude: "mcp", codex: "mcp" } } },
+      fallback: { repoPath: otherRepo },
+    },
+  }));
+
+  // LOOP-12 AC: DEVLOOP_FIRE_ID is injected into the claude MCP env (UUID format).
+  const fireIdClaude = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
+  ok(/DEVLOOP_FIRE_ID":"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"/.test(fireIdClaude.out),
+    "LOOP-12: DEVLOOP_FIRE_ID is injected into the claude MCP env as a UUID");
+
+  // LOOP-12 AC: DEVLOOP_FIRE_ID is injected into the codex -c overrides (UUID format).
+  const fireIdCodex = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "pm", ...common]);
+  ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_FIRE_ID="[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"/.test(fireIdCodex.out),
+    "LOOP-12: DEVLOOP_FIRE_ID is injected into the codex -c MCP overrides as a UUID");
+
+  // LOOP-12 AC: logEvent merges DEVLOOP_FIRE_ID from env when set; omits it when unset.
+  {
+    const testDb = join(tmp, "fireid-test.db");
+    const db = openDb(testDb);
+    execFileSync("node", ["src/seed.ts", "test", "Test", "TST", testDb], { cwd: hubRoot, encoding: "utf8" });
+    const projectId = (db.prepare("SELECT id FROM projects WHERE key='test'").get() as { id: string }).id;
+
+    // with DEVLOOP_FIRE_ID set: event data should include fireId
+    const savedFire = process.env.DEVLOOP_FIRE_ID;
+    const testFireId = "test-fire-uuid-1234";
+    process.env.DEVLOOP_FIRE_ID = testFireId;
+    logEvent(db, { project_id: projectId, actor: "pm", kind: "issue.transition", data: { from: "Todo", to: "In Progress" } });
+    delete process.env.DEVLOOP_FIRE_ID;
+    const withFire = db.prepare("SELECT data FROM events WHERE kind='issue.transition' ORDER BY id DESC LIMIT 1").get() as { data: string };
+    const parsedWith = JSON.parse(withFire.data) as Record<string, unknown>;
+    ok(parsedWith.fireId === testFireId, `LOOP-12: logEvent stamps fireId from env (got ${JSON.stringify(parsedWith.fireId)})`);
+
+    // without DEVLOOP_FIRE_ID: event data should NOT include fireId
+    logEvent(db, { project_id: projectId, actor: "pm", kind: "comment.add", data: { body: "hello" } });
+    const noFire = db.prepare("SELECT data FROM events WHERE kind='comment.add' ORDER BY id DESC LIMIT 1").get() as { data: string };
+    const parsedNo = JSON.parse(noFire.data) as Record<string, unknown>;
+    ok(!("fireId" in parsedNo), `LOOP-12: logEvent omits fireId when DEVLOOP_FIRE_ID is unset (got ${JSON.stringify(parsedNo)})`);
+
+    if (savedFire !== undefined) process.env.DEVLOOP_FIRE_ID = savedFire;
+  }
+
+  // LOOP-12 AC: recordFire writes fireId to both the hub event and the JSONL ledger.
+  {
+    const testDb2 = join(tmp, "fireid-record.db");
+    const ledger = join(tmp, "fireid-ledger.jsonl");
+    const db2 = openDb(testDb2);
+    execFileSync("node", ["src/seed.ts", "test2", "Test2", "TS2", testDb2], { cwd: hubRoot, encoding: "utf8" });
+    const projectId2 = (db2.prepare("SELECT id FROM projects WHERE key='test2'").get() as { id: string }).id;
+    // Point the module-level fireLedgerPath and fireDb to our test artifacts via recordFire's hubDb param.
+    const fakeProfile = { codingAgent: "claude" as const };
+    const testId = "aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee";
+    // Temporarily set fireLedgerPath by running recordFire — it checks the hubDb param for the hub event,
+    // but the JSONL ledger path is module-level (fireLedgerPath). We test the hub event directly.
+    recordFire(testDb2, "test2", "pm", fakeProfile, 100, 0, false, testId);
+    const evRow = db2.prepare("SELECT data FROM events WHERE kind='fire.completed' ORDER BY id DESC LIMIT 1").get() as { data: string } | undefined;
+    ok(!!evRow, "LOOP-12: recordFire writes a fire.completed event to the hub DB");
+    if (evRow) {
+      const evData = JSON.parse(evRow.data) as Record<string, unknown>;
+      ok(evData.fireId === testId, `LOOP-12: fire.completed event data carries fireId (got ${JSON.stringify(evData.fireId)})`);
+    }
+    void projectId2; // used above for project seeding
+  }
+
+  // LOOP-12 AC: a linear/local (no-hub) fire does not crash.
+  const linearFire = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "fallback"]);
+  ok(linearFire.code === 0, "LOOP-12: linear-backend fire (no hub) exits 0 — no fireId crash");
+
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

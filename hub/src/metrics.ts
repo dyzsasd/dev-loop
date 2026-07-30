@@ -13,7 +13,21 @@ import { deliveryProjects, type Workspace } from "./team-config.ts";
 import { AGENT_HANDLES } from "./seed.ts";
 
 // ─── fires.jsonl ──────────────────────────────────────────────────────────────
-export interface FireRow { ts: string; agent: string; project: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; errorClass?: string; bootBytes?: number }
+export interface FireUsage {
+  source: "provider";
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  costUsd: number | null;
+  currency: string | null;
+}
+export interface UsageAdapter {
+  extraArgs: string[];
+  parse(stdout: string): FireUsage | null;
+  isError?(stdout: string): boolean;
+}
+export interface FireRow { ts: string; agent: string; project: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; errorClass?: string; bootBytes?: number; fireId?: string; usage?: FireUsage }
 export interface FireMetrics {
   windowMs: number; fires: number; failures: number; timeouts: number; suspectErrors: number;
   byErrorClass: Record<string, number>;            // P0-1b taxonomy (spend-limit/rate-limit/auth/network/timeout/…); infra failures split from task failures

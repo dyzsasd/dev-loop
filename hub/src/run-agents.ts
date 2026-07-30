@@ -6,6 +6,7 @@ import { spawn, execFileSync, type ChildProcessByStdio } from "node:child_proces
 import type { Readable, Writable } from "node:stream";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync, appendFileSync, openSync, closeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
@@ -646,7 +647,7 @@ const hubNode = findCompatibleNode() ?? die(`dev-loop-hub MCP needs Node >= ${MI
 const tomlString = (s: string): string => JSON.stringify(s);
 const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
 
-function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string, iface: AgentInterface, promptViaStdin = false): { command: string; args: string[]; stdinPayload?: string } {
+function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string, iface: AgentInterface, fireId: string, promptViaStdin = false): { command: string; args: string[]; stdinPayload?: string } {
   const devSplit = runtimeDevSplit(opts) ? "true" : "false";
   // MCP wiring is BACKEND-dependent (§18) AND interface-dependent (D8/D9). Only backend:"service" needs
   // the dev-loop-hub MCP; a linear/local project instead needs the operator's OWN MCP config to apply
@@ -662,7 +663,7 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
     // project needs no .mcp.json); else (linear/local, or service on the D9 "cli" interface) pass
     // NOTHING — claude's normal config applies and a "cli" fire talks to the hub via `dev-loop`.
     const mcpArg = opts.mcpConfig ?? (hubInject ? JSON.stringify({
-      mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb, DEVLOOP_DEV_SPLIT: devSplit } } },
+      mcpServers: { "dev-loop-hub": { command: hubNode, args: [serverEntry], env: { DEVLOOP_ACTOR: agent, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: opts.hubDb, DEVLOOP_DEV_SPLIT: devSplit, DEVLOOP_FIRE_ID: fireId } } },
     }) : undefined);
     return {
       command: opts.claudeBin,
@@ -689,6 +690,7 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
       "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_PROJECT=${tomlString(project)}`,
       "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_HUB_DB=${tomlString(opts.hubDb)}`,
       "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_DEV_SPLIT=${tomlString(devSplit)}`,
+      "-c", `mcp_servers.dev-loop-hub.env.DEVLOOP_FIRE_ID=${tomlString(fireId)}`,
     ] : [];
     const args = [
       "exec",
@@ -761,7 +763,7 @@ const breaker = {
 // never allowed to crash a fire. One writable connection reused across fires (the scheduler is single-writer).
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
-function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean,
+export function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
   extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number }): void {
   breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail); // P0-1a — every completed fire feeds the streak
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
@@ -770,7 +772,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
   if (fireLedgerPath) {
     try {
       mkdirSync(dirname(fireLedgerPath), { recursive: true });
-      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra ?? {}) };
+      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra ?? {}) };
       appendFileSync(fireLedgerPath, JSON.stringify(row) + "\n");
     } catch { /* ledger is best-effort */ }
   }
@@ -780,7 +782,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}) } });
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -871,7 +873,8 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const prompt = boot ? basePrompt + boot.text : basePrompt;
   // D8 agent interface (service only; meaningless elsewhere): "cli" fires get no hub MCP injection.
   const iface = agentInterfaceFor((cfg?.projects?.[profileProject] as { hub?: HubBlock } | undefined)?.hub, profile.codingAgent);
-  const { command, args, stdinPayload } = commandFor(opts, agent, project, prompt, profile, backend, iface, !!boot);
+  const fireId = randomUUID();
+  const { command, args, stdinPayload } = commandFor(opts, agent, project, prompt, profile, backend, iface, fireId, !!boot);
   // This env block IS the identity transport for interface="cli" fires (D8): the `dev-loop` write layer
   // resolves the actor from DEVLOOP_ACTOR, the project from DEVLOOP_PROJECT, the SoR from DEVLOOP_HUB_DB,
   // and treats DEVLOOP_DEV_SPLIT/DEVLOOP_TEAM_SCOPE as the fire markers behind its operator-write guard —
@@ -882,6 +885,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     DEVLOOP_PROJECT: project,
     DEVLOOP_HUB_DB: opts.hubDb,
     DEVLOOP_DEV_SPLIT: runtimeDevSplit(opts) ? "true" : "false",
+    DEVLOOP_FIRE_ID: fireId,
     DEVLOOP_DATA_DIR: opts.dataDir,
     DEVLOOP_PROJECTS_JSON: projectsPath(opts.dataDir),
     DEVLOOP_PLUGIN_ROOT: opts.root,
@@ -956,7 +960,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   if (providerEnvMissing) {
     const prefix = profile.model?.split("/")[0];
     console.error(`[${agent}] provider '${prefix}' auth env ${providerEnvMissing} unresolvable — put ${providerEnvMissing}=<key> in <workspace>/.dev-loop/secrets.env or export it; failing this fire pre-spawn (doctor W13 surfaces this before the loop)`);
-    recordFire(opts.hubDb, project, agent, profile, 0, 4, false, { errorClass: "provider-env-missing", outputTail: `provider '${prefix}' auth env ${providerEnvMissing} unresolvable` });
+    recordFire(opts.hubDb, project, agent, profile, 0, 4, false, fireId, { errorClass: "provider-env-missing", outputTail: `provider '${prefix}' auth env ${providerEnvMissing} unresolvable` });
     return 4;
   }
 
@@ -1082,7 +1086,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       clearInterval(stallTimer);
       // A spawn failure (missing/broken CLI bin) never reached the ledger — invisible to metrics AND to
       // the P0-1a breaker, whose canonical trigger (a wedged bin fast-failing identically forever) it is.
-      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, 1, false, { errorClass: "spawn-failed", outputTail: e.message.slice(-400) });
+      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, 1, false, fireId, { errorClass: "spawn-failed", outputTail: e.message.slice(-400) });
       endLog(() => resolveExit(1));
     });
     // Resolve on 'exit', not 'close': 'close' additionally waits for the stdio pipes, which a grandchild
@@ -1121,7 +1125,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         ...(suspectError || errorClass || exitCode !== 0 ? { outputTail: outTail.slice(-400) } : {}),
         ...(boot ? { bootBytes: boot.bytes } : {}), // boot-prefix: the assembled-corpus size rides every ledger row
       };
-      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut,
+      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
@@ -1644,4 +1648,6 @@ function acquireRunLock(lockPath: string, teamKey: string): void {
   process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
 }
 
-main().catch((e) => die(e instanceof Error ? e.message : String(e), 1));
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => die(e instanceof Error ? e.message : String(e), 1));
+}
