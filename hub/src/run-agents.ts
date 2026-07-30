@@ -763,7 +763,10 @@ const breaker = {
 // never allowed to crash a fire. One writable connection reused across fires (the scheduler is single-writer).
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
-export function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
+// Internal (not exported): main() is unconditional, so nothing may import this module without running the
+// scheduler. recordFire's ledger + event writes are covered by real-fire subprocess harnesses instead —
+// the fires.jsonl row in test/team-scheduler.ts and the fire.completed event in test/run-agents-live.ts.
+function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
   extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number }): void {
   breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail); // P0-1a — every completed fire feeds the streak
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
@@ -1648,6 +1651,11 @@ function acquireRunLock(lockPath: string, teamKey: string): void {
   process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => die(e instanceof Error ? e.message : String(e), 1));
-}
+// main() runs unconditionally — this file is only ever the entry point (nothing imports it; recordFire
+// is covered by the real-fire test harnesses, not a direct import). LOOP-58: LOOP-12 had guarded this
+// with `import.meta.url === \`file://${process.argv[1]}\`` so the test could import recordFire without
+// running main(). But `import.meta.url` is a percent-ENCODED file URL while `process.argv[1]` is a RAW
+// path, so the guard silently failed on any checkout path holding a URL-escaped char (a space, `#`, `?`,
+// non-ASCII) — `dev-loop run` then became an exit-0 no-op that fired, logged, and reported nothing (macOS
+// `Google Drive` / `iCloud Drive` paths trip it). Deleting the guard deletes the whole failure class.
+main().catch((e) => die(e instanceof Error ? e.message : String(e), 1));
