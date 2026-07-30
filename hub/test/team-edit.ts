@@ -200,6 +200,37 @@ try {
   ].join("\n");
   ok(JSON.stringify(workflowJobNames(wf)) === '["Lint & Test","build"]', "workflowJobNames: display name wins; step/with `name:` lines are ignored");
 
+  // Regression (LOOP-5): trigger filtering — workflow_call/workflow_dispatch-only workflows must produce [] (no PR check context)
+  const wfCall = [
+    "name: Reusable", "on:", "  workflow_call:", "    inputs:", "      tag: { type: string }", "jobs:",
+    "  quality:", "    name: Quality Gate", "    runs-on: ubuntu-latest", "    steps:", "      - run: npm run quality",
+  ].join("\n");
+  ok(JSON.stringify(workflowJobNames(wfCall)) === "[]", "workflowJobNames: workflow_call-only workflow is excluded (no PR check context)");
+  const wfDispatch = [
+    "name: Release", "on:", "  workflow_dispatch:", "    inputs:", "      dry_run: { type: boolean }", "jobs:",
+    "  release:", '    name: "Tag and publish"', "    runs-on: ubuntu-latest", "    steps:", "      - run: npm publish",
+  ].join("\n");
+  ok(JSON.stringify(workflowJobNames(wfDispatch)) === "[]", "workflowJobNames: workflow_dispatch-only workflow is excluded (no PR check context)");
+
+  // Regression (LOOP-5): matrix expansion — ${{ matrix.node }} expands to static values from the job's matrix
+  const wfMatrix = [
+    "name: Test", "on:", "  push:", "    branches: [main]", "  pull_request:", "jobs:",
+    "  test:",
+    '    name: "Test (Node ${{ matrix.node }})"',
+    "    runs-on: ubuntu-latest",
+    "    strategy:",
+    "      fail-fast: false",
+    "      matrix:",
+    '        node: ["23.6.0", "24"]',
+    "    steps:",
+    "      - uses: actions/checkout@v4",
+    "      - run: node --version",
+  ].join("\n");
+  const matrixNames = workflowJobNames(wfMatrix);
+  ok(JSON.stringify(matrixNames) === '["Test (Node 23.6.0)","Test (Node 24)"]', "workflowJobNames: matrix job name is expanded to its static values");
+  ok(!matrixNames.some(n => n.includes("${{")) , "workflowJobNames: no unexpanded ${{ }} expressions survive in the output");
+  ok(!matrixNames.some(n => n === "test"), "workflowJobNames: the raw job key does not appear when a display name is set");
+
   const fix = join(tmp, "fixture-repo");
   mkdirSync(join(fix, ".github", "workflows"), { recursive: true });
   writeFileSync(join(fix, "package.json"), JSON.stringify({ name: "fix", scripts: { typecheck: "tsc --noEmit", build: "vite build", test: "vitest" } }));
