@@ -61,7 +61,37 @@ try {
   ok(bm.throughput === 3, `throughput = 3 Done in window (got ${bm.throughput})`);
   ok(bm.verifyFails === 1 && bm.acceptRate !== null && Math.abs(bm.acceptRate - 0.75) < 1e-9, "accept rate = 3/(3+1) = 75%; ordinary Cancel excluded");
   ok(bm.blockedNow === 1, "blocked-open count from the labels column");
+  ok(bm.sequencedNow === 0, "LOOP-26: no live Blocked-by edges initially → sequencedNow = 0");
   ok(bm.qa.bugsFiled === 2 && bm.qa.escaped === 1 && bm.qa.escapeRatio === 0.5, "QA escape ratio = incident/signal Bugs ÷ all Bugs");
+
+  // ── LOOP-26: blockedNow/sequencedNow split ─────────────────────────────────
+  // T-SEQ: a ticket with `blocked` + live Blocked-by edge → sequenced (not parked)
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-DEP','p','blocker','d','Feature','Todo',2,'[]','[]','pm',?,?)")
+    .run(iso(NOW - DAY), iso(NOW - DAY));
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-SEQ','p','sequenced','d','Feature','Todo',2,?,'[]','pm',?,?)")
+    .run(JSON.stringify(["dev-loop", "junior-dev", "blocked"]), iso(NOW - DAY), iso(NOW - DAY));
+  db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES('c-seq','T-SEQ','pm',?,?)")
+    .run("Blocked-by: T-DEP", iso(NOW - DAY));  // T-DEP is Todo (open) → live edge
+
+  // T-DONE-DEP: a ticket with `blocked` + Blocked-by pointing to a Done ticket → parked (AC2)
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-DONE-DEP','p','done blocker','d','Feature','Done',2,'[]','[]','pm',?,?)")
+    .run(iso(NOW - DAY), iso(NOW - DAY));
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-PAR2','p','parked2','d','Feature','Todo',2,?,'[]','pm',?,?)")
+    .run(JSON.stringify(["dev-loop", "blocked"]), iso(NOW - DAY), iso(NOW - DAY));
+  db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES('c-par2','T-PAR2','pm',?,?)")
+    .run("Blocked-by: T-DONE-DEP", iso(NOW - DAY));  // T-DONE-DEP is Done → satisfied edge → parked
+
+  const bm2 = boardMetrics(db, "p", 7 * DAY, NOW);
+  // Now: T-1 (parked, no Blocked-by), T-PAR2 (parked, all Blocked-by done) → blockedNow=2
+  //      T-SEQ (sequenced, live Blocked-by) → sequencedNow=1
+  ok(bm2.blockedNow === 2, `LOOP-26: blockedNow counts only parked (attention-needed) tickets (got ${bm2.blockedNow})`);
+  ok(bm2.sequencedNow === 1, `LOOP-26: sequencedNow counts tickets with live Blocked-by edges (got ${bm2.sequencedNow})`);
+  ok(bm2.blockedNow + bm2.sequencedNow === 3, "LOOP-26: blockedNow + sequencedNow = total blocked-labelled open tickets");
+
+  // AC6: a ticket with `blocked` but no Blocked-by comment at all → parked (fail-safe)
+  // (T-1 covers this: it has `blocked` label, no comments at all)
+  ok((() => { const bmChk = boardMetrics(db, "p", 7 * DAY, NOW); return bmChk.blockedNow >= 1; })(),
+    "LOOP-26 AC6: blocked+no-Blocked-by-comment counts as parked (fail-safe toward needs-attention)");
 
   // ── P1-3: decisionQueue = Human-Blocked ∪ In Review@operator, oldest first ──
   db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-3','p','approve me','d','Feature','In Review','operator',0,'[]','[]','pm',?,?)")
@@ -128,6 +158,32 @@ try {
   const humanOut = (rh.stdout ?? "").trim();
   const parsesAsJson = (() => { try { JSON.parse(humanOut); return true; } catch { return false; } })();
   ok(rh.status === 0 && !parsesAsJson && /met-team/.test(humanOut), "CLI without --json renders the HUMAN report (not JSON)");
+
+  // ── LOOP-26: AC3 + AC4 — service-backend CLI emits sequencedNow in JSON and human render ──
+  const ws2 = join(tmp, "ws-svc");
+  // The CLI's collectBoardMetrics checks existsSync(wsHubDb(ws)) = ws2/.dev-loop/hub.db,
+  // so we must seed the DB at that exact path, not at an arbitrary svcHubDb path.
+  const svcStateDir = join(ws2, ".dev-loop");
+  const svcHubDb = join(svcStateDir, "hub.db");
+  mkdirSync(svcStateDir, { recursive: true });
+  writeFileSync(join(ws2, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2, workspaceId: "test-ws-svc",
+    team: { key: "svc-team", backend: "service", mode: "live", autonomy: "guarded" },
+    repos: {}, projects: { "svc-team": { repos: [] } },
+  }));
+  spawnSync("node", [join(hubRoot, "src", "seed.ts"), "svc-team", "Svc Team", "SVC", svcHubDb], { cwd: hubRoot, encoding: "utf8" });
+  const rSvc = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d", "--json"], { cwd: ws2, env: { ...process.env }, encoding: "utf8" });
+  const svcOut = (() => { try { return JSON.parse((rSvc.stdout ?? "").trim()); } catch { return {}; } })();
+  ok(rSvc.status === 0, `LOOP-26 AC3: service metrics CLI exits 0 (stderr: ${(rSvc.stderr ?? "").replace(/\(node:.*?\)\n/g, "").slice(0, 200)})`);
+  const svcBoard = svcOut.board?.["svc-team"] as Record<string, unknown> | undefined;
+  ok(!!(svcBoard && typeof svcBoard.blockedNow === "number" && typeof svcBoard.sequencedNow === "number"),
+    `LOOP-26 AC3: board JSON includes both blockedNow and sequencedNow (got ${JSON.stringify(svcBoard)})`);
+  ok(!!(svcOut.teamRollup && typeof (svcOut.teamRollup as Record<string, unknown>).sequencedNow === "number"),
+    "LOOP-26 AC3: teamRollup includes sequencedNow");
+  const rSvcHuman = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d"], { cwd: ws2, env: { ...process.env }, encoding: "utf8" });
+  const svcHumanOut = (rSvcHuman.stdout ?? "").trim();
+  ok(/parked/.test(svcHumanOut) && /sequenced/.test(svcHumanOut),
+    `LOOP-26 AC4: human render contains both 'parked' and 'sequenced' (got: ${svcHumanOut.slice(0, 300)})`);
 
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
