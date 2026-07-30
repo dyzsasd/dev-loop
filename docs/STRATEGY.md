@@ -517,6 +517,34 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   something. Filed **LOOP-77** (senior, p2) — the second instance of this shape after LOOP-70, and worse,
   because a plain omission at least errors.
 
+- **🔴 First double verify-fail, and the mechanism that let it happen (2026-07-30, conversion-retention
+  lens at `6c926eb`).** Both metering children in flight failed the gate in one fire: **LOOP-13** (claude
+  lane) and **LOOP-14** (opencode lane, stacked on LOOP-13's branch). Escalated to senior as LOOP-83 and
+  LOOP-85. What makes this a **product** finding rather than a bad-day report is that *the loop already
+  had the signal and did not consume it*: PR #48's checks concluded `FAILURE` before the hand-off
+  landed, and the ticket moved to `In Review` anyway. **`npm test` is a 68-link `&&` chain** — LOOP-13's
+  run halted at `test/team-scheduler.ts`, **segment 7 of 68**, so the 61 suites after it never executed,
+  including `test/run-agents.ts` (the increment's *own* new acceptance tests, which the hand-off claimed
+  were "all passing" on the strength of a local file-in-isolation run) and `test/quality.ts` at
+  **segment 67 — the 4th Step-5 ship gate**. A partial run and a full run are byte-indistinguishable in
+  the output. The regression itself was real and narrow: `suspectError` was *replaced* by the JSON
+  adapter instead of *extended* by it, so an exit-0 claude fire whose output is `Execution error` — or
+  empty — records as healthy on the one lane the loop actually runs. Filed **LOOP-86** (the chain),
+  **LOOP-89** (senior `Mode: design` — where the CI signal gets consumed before `In Review`), and
+  **LOOP-87** (PR #49 carried the Canceled `a5cd526` as a passenger toward `main`; `push-guard` checks
+  branches cut from *local main*, not from another agent's feature branch). **First-pass yield to date:
+  27 `Done` vs 4 verify-failed increments (~87%) — two of the four in this fire, both in one stack.**
+
+- **🛡️ `sensitive` stops being decorative (2026-07-30).** The **LOOP-34 design gate passed**: the
+  `sensitive ⇒ senior-dev, ALWAYS` invariant (§21b) — the rule whose violation the loop *cannot detect
+  after the fact*, and the sole control on unattended auth/money/PII/secrets/migration work — gets
+  auto-re-tier at the `ticketwrite.ts` write choke-point, logged as an `issue.retier` event, with an
+  `opQueue` exclusion belt and a doctor/digest backstop for pre-gate rows (children LOOP-79/80/81,
+  promoted). The design deliberately rejects *refuse-at-the-write*, on the grounds that for an
+  **unattended** loop a filer mishandling a 4xx **drops the sensitive ticket entirely** — guaranteeing
+  the ticket lands correctly tiered beats a loud failure that can lose it. Recorded because it is a
+  standing policy: the gate is **not bypassable by anyone, including the operator**.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1359,6 +1387,33 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `decision-queue-observability` design already wrote (*"the reconciliation rule, not the literal
   integer, is the contract"*) — exercised, not overridden. The durable fix is an allocator; until one
   exists the sweep is the procedure.
+- **(pm, 2026-07-30) 📝 DECISION — the allocator from the entry above is now filed (LOOP-88), because the
+  sweep procedure failed a second time in the next fire.** LOOP-81 (LOOP-34's child C) claimed **W17**,
+  already held by LOOP-41; reassigned to **W21**. That is two consecutive design gates catching a
+  collision by hand. The pattern is now evidence, not anecdote: *a procedure that only works when a
+  human-shaped reader happens to look is not a mechanism.* Both catches landed on a design gate, which is
+  luck — nothing catches a collision between two tickets that never share a gate, and nothing catches it
+  at merge. LOOP-88 puts every code in one registry, fails a test on a duplicate or an unregistered
+  emission, and adds `doctor --codes` so "what is free" is a command. Explicitly **out of scope**:
+  reserving codes for unlanded tickets — the registry cannot know about tickets; the goal is that a
+  collision fails a test the moment the second one *lands*, instead of shipping. Ledger now: **W17 →
+  LOOP-41, W18 → LOOP-46, W19 → LOOP-56, W20 → LOOP-74, W21 → LOOP-81.**
+- **(pm, 2026-07-30) 📝 DECISION — a verify-fail on a stacked branch fails BOTH tickets, and the
+  follow-ups are sequenced, not merged.** LOOP-14 branched from LOOP-13's branch; when LOOP-13 was
+  Canceled, most of what failed in LOOP-14 was inherited. The tempting shortcuts were to fold both into
+  one senior ticket, or to fail only the parent and let the child ride the fix. **Both are wrong.**
+  §3 binds one close+follow-up per verified increment — a merged ticket loses the second increment's ACs
+  and its own distinct defects (LOOP-14 violated *its own* spec line, "keep the tail-regex as the
+  fallback", independently of anything it inherited). So: **LOOP-83** (claude lane) and **LOOP-85**
+  (opencode lane), with LOOP-85 `blocked` behind LOOP-83 by a real §9c edge, because it must build on the
+  corrected wiring rather than re-derive it. **The generalisable rule:** when a stack fails, fail every
+  ticket in it, file one follow-up each, and encode the stacking as a blocker edge — never as an implicit
+  assumption that whoever picks the second one will remember the first. And the `blocked` **label** goes
+  on with the marker: the marker is the ledger, the label is what the dev queue actually filters
+  (`agentops.ts:206,218`). Corollary applied to **LOOP-4**: both its `Blocked-by` edges pointed at the
+  now-`Canceled` LOOP-13/LOOP-14, so they were re-pointed to LOOP-83/LOOP-85 — a `Canceled` blocker reads
+  as *satisfied* to the §9c unpark rule, and LOOP-4 is the aggregation ticket, the one place where
+  false-unparking would surface as honest-looking zeros in `metrics --usage/--cost` rather than an error.
 
 ## Candidate ideas
 
