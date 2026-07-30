@@ -56,6 +56,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   mirror:           ["cli-agentops", "mirror"],    // mirror push|poll|status — the one-way Linear mirror + comment→intake poll
   queue:            ["cli-agentops", "queue"],     // LAYER 1: the pre-ranked per-agent work lists (§5/§21b) — every agent's mandated first board read
   "export-desktop-skill": ["export-desktop-skill"],// render a self-contained Claude Desktop skill for an agent + project (P2-12)
+  worktree:         ["worktree"],                  // add <id> [--repo <ref>] — create dev worktree off origin/<defaultBranch> (LOOP-54; LOOP-37 adds path + reaper)
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
   // via `node hub/src/release-version.ts <semver>` (Codex review 2026-06-27).
@@ -93,6 +94,8 @@ Usage: dev-loop <command> [args]
   with-repo-lock <ref> -- <cmd>   run a command holding a shared repo's base-clone lock
   push-guard [--repo <dir>] [--branch <b>] [--strict]   pre-push ride-along check: flag unpushed commits
                               whose referenced tickets are Canceled/Duplicate (P1-2; --strict exits 1 on findings)
+  worktree add <id> [--repo <ref>]   create a dev worktree on branch dev-loop/<id> based at origin/<defaultBranch>
+                              (never local main — prevents passenger commits; LOOP-54)
   init-service <key> <name> <PREFIX>   (legacy) turnkey-bootstrap a service project — start at \`init\`/\`up\` instead
   run [--background] [--cli claude|codex|opencode] [--agents core,outward]   schedule agents by calling the
                               selected CLI; --background detaches (log → .dev-loop/run.log), \`stop\` ends it
