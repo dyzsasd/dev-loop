@@ -10,6 +10,8 @@ import { openDb, logEvent } from "../src/db.ts";
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
 import { breaker } from "../src/breaker.ts";
 import { codexUsageAdapter } from "../src/fire-usage.ts";
+import { releaseClaimedTickets } from "../src/ticket-release.ts";
+import { insertTicket } from "../src/ticketwrite.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -478,6 +480,71 @@ try {
     breaker.threshold = savedThreshold;
     breaker.byAgent.clear(); breaker.byProvider.clear(); breaker._agentProvider.clear();
     breaker.onEvent = savedOnEvent;
+  }
+
+  // ── LOOP-19: releaseClaimedTickets — runner-side infra-kill release ──────────────────────────────────
+  // Tests exercise the function directly via hub/src/ticket-release.ts (safe to import — no unconditional
+  // main()) to cover all four ACs without needing a real hanging CLI binary.
+  {
+    const testDb19 = join(tmp, "loop19-release.db");
+    const db19 = openDb(testDb19);
+    execFileSync("node", ["src/seed.ts", "rlt", "Release Test", "RLT", testDb19], { cwd: hubRoot, encoding: "utf8" });
+    const projectId19 = (db19.prepare("SELECT id FROM projects WHERE key='rlt'").get() as { id: string }).id;
+    const testFireId19 = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+    // AC1 — a ticket claimed by the fire is released to Todo with tier assignee preserved and attribution comment
+    const claimedId = insertTicket(db19, projectId19, "junior-dev",
+      { title: "claimed ticket", description: "", type: "Feature", state: "In Progress",
+        assignee: "junior-dev", priority: 2, labels: ["dev-loop", "junior-dev"], duplicateOf: null, relatedTo: [] },
+      { title: "claimed ticket", type: "Feature" });
+    // Stamp the claim event (issue.transition → In Progress with this fire's fireId)
+    db19.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES (?,?,?,?,?,?)")
+      .run(projectId19, claimedId, "junior-dev", "issue.transition",
+        JSON.stringify({ from: "Todo", to: "In Progress", assignee: "junior-dev", fireId: testFireId19 }),
+        new Date().toISOString());
+
+    releaseClaimedTickets(db19, "rlt", "junior-dev", testFireId19, "timeout");
+
+    const after19 = db19.prepare("SELECT state,assignee FROM tickets WHERE id=?").get(claimedId) as { state: string; assignee: string | null } | undefined;
+    ok(after19?.state === "Todo", "LOOP-19 AC1: infra-killed ticket is released back to Todo");
+    ok(after19?.assignee === "junior-dev", "LOOP-19 AC1: tier assignee is preserved on release (not unassigned)");
+    const comment19 = db19.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at DESC LIMIT 1").get(claimedId) as { body: string } | undefined;
+    ok(!!(comment19?.body?.includes("infrastructure")), "LOOP-19 AC1: attribution comment names the kill class");
+    ok(!!(comment19?.body?.includes("runner-side automatic")), "LOOP-19 AC1: attribution comment distinguishes runner-side from agent judgment");
+
+    // AC2 — a claim the fire legitimately advanced (In Progress → In Review) before the kill is NOT released
+    const advancedId = insertTicket(db19, projectId19, "junior-dev",
+      { title: "advanced ticket", description: "", type: "Feature", state: "In Review",
+        assignee: "junior-dev", priority: 2, labels: ["dev-loop", "junior-dev"], duplicateOf: null, relatedTo: [] },
+      { title: "advanced ticket", type: "Feature" });
+    db19.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES (?,?,?,?,?,?)")
+      .run(projectId19, advancedId, "junior-dev", "issue.transition",
+        JSON.stringify({ from: "Todo", to: "In Progress", assignee: "junior-dev", fireId: testFireId19 }),
+        new Date().toISOString());
+
+    releaseClaimedTickets(db19, "rlt", "junior-dev", testFireId19, "timeout");
+
+    const after19b = db19.prepare("SELECT state FROM tickets WHERE id=?").get(advancedId) as { state: string } | undefined;
+    ok(after19b?.state === "In Review", "LOOP-19 AC2: a legitimately-advanced claim (In Review) is NOT touched by release");
+
+    // AC3 — null/undefined db (linear/local — no hub events ledger) does not crash and releases nothing
+    let ac3Threw = false;
+    try { releaseClaimedTickets(null, "rlt", "junior-dev", testFireId19); }
+    catch { ac3Threw = true; }
+    ok(!ac3Threw, "LOOP-19 AC3: null db (linear/local no-hub) does not throw — degrades gracefully");
+
+    let ac3bThrew = false;
+    try { releaseClaimedTickets(undefined, "rlt", "junior-dev", testFireId19); }
+    catch { ac3bThrew = true; }
+    ok(!ac3bThrew, "LOOP-19 AC3: undefined db also does not throw");
+
+    // AC4 — best-effort: a write failure (non-existent project) does not crash teardown
+    let ac4Threw = false;
+    try { releaseClaimedTickets(db19, "nonexistent-project", "junior-dev", testFireId19); }
+    catch { ac4Threw = true; }
+    ok(!ac4Threw, "LOOP-19 AC4: release with unknown project is a silent no-op — best-effort, never crashes teardown");
+
+    db19.close();
   }
 
 } finally {

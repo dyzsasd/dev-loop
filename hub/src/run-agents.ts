@@ -20,9 +20,11 @@ import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
+import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker } from "./breaker.ts";
 import { codexUsageAdapter } from "./fire-usage.ts";
+import { releaseClaimedTickets } from "./ticket-release.ts";
 import type { FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -1161,6 +1163,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       };
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
+      if (timedOut || stalled) releaseClaimedTickets(fireDb, project, agent, fireId, timedOut ? "timeout" : "stall");
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
     child.on("exit", (code, signal) => {
