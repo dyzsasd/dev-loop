@@ -21,14 +21,24 @@ export function pkgVersion(): string {
 // (schema-only hub.db, zero projects) in whatever cwd the command ran from. Refuse LOUDLY here — the one
 // module every db/data path is composed through — naming the env var at fault. A present-but-EMPTY value
 // stays falsy and falls through to the default (the established empty≡unset convention, resolve-project.ts).
+function checkPathSegments(label: string, value: string): void {
+  for (const seg of value.split(/[/\\]/)) {
+    if (seg === "undefined" || seg === "null") {
+      throw new Error(`${label}='${value}' contains the literal path segment '${seg}' — the caller interpolated an unset variable into it.`);
+    }
+  }
+}
+
 function pathEnv(name: string): string | undefined {
   const value = process.env[name];
   if (!value) return value;
-  for (const seg of value.split(/[/\\]/)) {
-    if (seg === "undefined" || seg === "null") {
-      throw new Error(`${name}='${value}' contains the literal path segment '${seg}' — the caller interpolated an unset variable into it. Fix or unset ${name}.`);
-    }
-  }
+  checkPathSegments(`${name}`, value);
+  return value;
+}
+
+// Same guard as pathEnv(), but for an explicit CLI flag value rather than an env var.
+export function guardCliPath(flag: string, value: string): string {
+  checkPathSegments(flag, value);
   return value;
 }
 

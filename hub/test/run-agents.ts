@@ -1,5 +1,5 @@
 import { spawnSync, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -268,6 +268,18 @@ try {
   const svcSeeded = run(["--cli", "claude", "--once", "--dry-run", "--agents", "sweep", ...svcCommon]);
   ok(svcSeeded.code === 0 && !/WARNING: project 'svc'/.test(svcSeeded.out),
     "seeded service project → preflight passes silently");
+
+  // LOOP-29 regression: explicit CLI flags --hub-db/--data/--root/--cwd/--mcp-config must reject a
+  // literal 'undefined'/'null' path segment just like the env-var path does (paths.ts pathEnv guard).
+  // Before the fix, resolve(next()) accepted the value verbatim and a later openDb()+mkdirSync
+  // silently planted a junk `undefined/` directory in the cwd.
+  const junkDir = join(hubRoot, "undefined");
+  const hubDbJunk = run(["--cli", "claude", "--once", "--dry-run", "--hub-db", "undefined/x.db", "--root", repoRoot, "--data", data, "--project", "demo"]);
+  ok(hubDbJunk.code !== 0, "LOOP-29: --hub-db undefined/x.db → non-zero exit");
+  ok(/--hub-db/.test(hubDbJunk.out), "LOOP-29: --hub-db error message names the flag");
+  ok(!existsSync(junkDir), "LOOP-29: --hub-db undefined/x.db → no junk undefined/ directory created");
+  const dataJunk = run(["--cli", "claude", "--once", "--dry-run", "--hub-db", join(tmp, "hub.db"), "--root", repoRoot, "--data", "undefined/data", "--project", "demo"]);
+  ok(dataJunk.code !== 0 && /--data/.test(dataJunk.out), "LOOP-29: --data undefined/data → non-zero exit naming the flag");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
