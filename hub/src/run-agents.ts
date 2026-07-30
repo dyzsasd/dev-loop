@@ -233,7 +233,8 @@ function opencodeProviderEntry(opts: Options, model: string | undefined): Provid
 // failures, every one the same stderr line, indistinguishable in the ledger from real task failures.
 // The breaker (P0-1a) keys on repeated identical classes; metrics/doctor split them out. exit-0 shapes
 // stay the suspectError flag's job; a non-zero exit with no pattern match is a plain task failure (null).
-function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false): string | null {
+function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false): string | null {
+  if (retryLoop) return "retry-loop"; // liveness watchdog kill — visible retry loop (output arriving but no new content)
   if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
   if (timedOut) return "timeout";
   if (exitCode === 0) return null;
@@ -311,10 +312,11 @@ Options:
   --change-gate-ttl <dur>     how long a quiet board may defer a gated pm/qa fire before it runs anyway
                               (default 4h; 0 = defer forever — the pure gate for pm/qa too)
   --fire-timeout <dur>        kill a fire that outlives this (SIGTERM, then SIGKILL after 10s; default 1h; 0 = none)
-  --stall-timeout <dur>       liveness watchdog: kill a fire whose output has been SILENT this long and record it
-                              as errorClass "stalled" (feeds the breaker). Default: 10m on opencode fires (they
-                              stream; silence = a hung provider call, e.g. a quota-429 retry loop), off on
-                              claude/codex (claude -p buffers until the end). 0 = off everywhere
+  --stall-timeout <dur>       liveness watchdog: kill a fire whose output has been SILENT this long (errorClass
+                              "stalled") OR whose output keeps arriving but introduces no NEW content for this long
+                              (errorClass "retry-loop"), and record it — both feed the breaker. Default: 10m on
+                              opencode fires (they stream; silence = a hung provider call, e.g. a quota-429 retry
+                              loop), off on claude/codex (claude -p buffers until the end). 0 = off everywhere
   --background                start the scheduler DETACHED and return the shell: output appends to
                               <workspace>/.dev-loop/run.log; stop it with \`dev-loop stop\` (the operator-console flow)
   --stagger <dur>             delay between the initial slot fires so a cold boot doesn't launch every agent at once (default 20s; 0 = simultaneous)
@@ -985,7 +987,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   console.log(`[${new Date().toISOString()}] ${agent}: start (${profile.codingAgent}); log ${logPath}`);
 
   const startedAt = Date.now();
-  const child = spawn(command, args, { cwd, env, stdio: [stdinPayload ? "pipe" : "ignore", "pipe", "pipe"] }) as RunnerChild;
+  // detached: true puts the fire in its own process group (pgid = child.pid) so watchdog kills reach
+  // every descendant — the scheduler itself is NOT in this group and is safe from the group signal.
+  const child = spawn(command, args, { cwd, env, stdio: [stdinPayload ? "pipe" : "ignore", "pipe", "pipe"], detached: true }) as RunnerChild;
+  // Send a signal to the entire process group (negative pid = every process with pgid = child.pid).
+  const killGroup = (sig: NodeJS.Signals) => {
+    if (child.pid) try { process.kill(-child.pid, sig); } catch { /* group already gone */ }
+  };
   activeChildren.add(child);
   if (stdinPayload && child.stdin) {
     child.stdin.on("error", () => { /* EPIPE on an instantly-dead child must not crash the scheduler */ });
@@ -998,7 +1006,24 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   let outTail = "";
   let outBytes = 0;
   let lastOutputAt = Date.now(); // liveness watchdog anchor — any stdout/stderr byte resets it
-  const keepTail = (d: Buffer | string) => { const s = d.toString(); outBytes += s.length; lastOutputAt = Date.now(); outTail = (outTail + s).slice(-2048); };
+  let lastNewContentAt = Date.now(); // retry-loop watchdog: last time output introduced a genuinely new line
+  const seenLines = new Set<string>(); // bounded rolling set of recently-seen non-empty lines (retry-loop detection)
+  const keepTail = (d: Buffer | string) => {
+    const s = d.toString();
+    outBytes += s.length;
+    lastOutputAt = Date.now();
+    outTail = (outTail + s).slice(-2048);
+    // Update lastNewContentAt only when a line is genuinely new (not seen before in seenLines).
+    // Truncate each line to 200 chars so one huge line cannot eat the whole set budget.
+    for (const raw of s.split("\n")) {
+      const l = raw.trim().slice(0, 200);
+      if (l.length === 0) continue;
+      if (!seenLines.has(l)) {
+        lastNewContentAt = Date.now();
+        if (seenLines.size < 200) seenLines.add(l);
+      }
+    }
+  };
   child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
   child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
 
@@ -1012,26 +1037,38 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       timedOut = true;
       console.error(`[${agent}] fire exceeded ${formatDuration(opts.fireTimeoutMs)} — SIGTERM (SIGKILL in 10s)`);
       log.write(`\n===== fire timeout after ${formatDuration(opts.fireTimeoutMs)}: SIGTERM =====\n`);
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => { if (activeChildren.has(child)) child.kill("SIGKILL"); }, 10_000);
+      killGroup("SIGTERM");
+      killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
       killTimer.unref?.();
     }, opts.fireTimeoutMs) : undefined;
     fireTimer?.unref?.();
-    // Liveness watchdog (errorClass "stalled"): the fire-timeout alone let a hung provider call burn the
-    // FULL hour per fire — the 2026-07 quota-429 incident wedged every opencode fire in a silent retry
-    // loop, and the resulting `exit 0 (fire timeout)` shape never fed the breaker, so the loop idled for
-    // hours at full cadence. Silence ≠ slowness: a live opencode fire streams tool lines constantly.
-    // Reclaim a silent fire in minutes and record a class the breaker can trip on.
+    // Liveness watchdog (errorClass "stalled" / "retry-loop"): the fire-timeout alone let a hung provider
+    // call burn the FULL hour per fire — the 2026-07 quota-429 incident wedged every opencode fire in a
+    // silent retry loop, and the resulting `exit 0 (fire timeout)` shape never fed the breaker, so the
+    // loop idled for hours at full cadence. Silence ≠ slowness: a live opencode fire streams tool lines
+    // constantly. Reclaim a stuck fire in minutes and record a class the breaker can trip on.
+    // Two shapes detected: (a) SILENCE — no output bytes at all; (b) RETRY-LOOP — bytes keep arriving
+    // but every line is a verbatim repeat of content already seen (the 429 shape: "retrying in 2s…" ×∞).
     let stalled = false;
+    let retryLoop = false;
     const stallMs = opts.stallTimeoutMs !== undefined ? opts.stallTimeoutMs
       : (profile.codingAgent === "opencode" ? 10 * 60_000 : 0); // claude -p buffers until the end — silence is normal there
     const stallTimer = stallMs > 0 ? setInterval(() => {
-      if (stalled || timedOut || Date.now() - lastOutputAt < stallMs) return;
+      if (stalled || timedOut) return;
+      const silent = Date.now() - lastOutputAt >= stallMs;
+      const looping = !silent && Date.now() - lastNewContentAt >= stallMs;
+      if (!silent && !looping) return;
       stalled = true;
-      console.error(`[${agent}] no output for ${formatDuration(stallMs)} — fire looks WEDGED (hung provider call / silent retry loop); SIGTERM (SIGKILL in 10s)`);
-      log.write(`\n===== stalled: no output for ${formatDuration(stallMs)}: SIGTERM =====\n`);
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => { if (activeChildren.has(child)) child.kill("SIGKILL"); }, 10_000);
+      retryLoop = looping;
+      if (retryLoop) {
+        console.error(`[${agent}] output arriving but no NEW content for ${formatDuration(stallMs)} — fire looks STUCK in a retry loop; SIGTERM (SIGKILL in 10s)`);
+        log.write(`\n===== retry-loop: output arriving but no new content for ${formatDuration(stallMs)}: SIGTERM =====\n`);
+      } else {
+        console.error(`[${agent}] no output for ${formatDuration(stallMs)} — fire looks WEDGED (hung provider call / silent retry loop); SIGTERM (SIGKILL in 10s)`);
+        log.write(`\n===== stalled: no output for ${formatDuration(stallMs)}: SIGTERM =====\n`);
+      }
+      killGroup("SIGTERM");
+      killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
       killTimer.unref?.();
     }, 15_000) : undefined;
     stallTimer?.unref?.();
@@ -1058,8 +1095,9 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     const finalize = (code: number | null, signal: NodeJS.Signals | null) => {
       if (finalized) return;
       finalized = true;
-      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""}${stalled ? " (stalled)" : ""} =====\n`);
-      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}${stalled ? " (stalled)" : ""}`);
+      const stalledLabel = stalled ? (retryLoop ? " (retry-loop)" : " (stalled)") : "";
+      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""}${stalledLabel} =====\n`);
+      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}${stalledLabel}`);
       const exitCode = timedOut ? 124 : stalled ? 125 : (code ?? 1);
       // Suspect-error detection (narrow, tail-anchored to avoid false positives on error text an agent
       // merely echoed mid-run): exit 0 but the LAST line is a known CLI failure marker, or no visible
@@ -1072,7 +1110,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         console.error(`[${agent}] exit 0 but the output looks like a FAILURE (${why}) — flagged suspectError in the fire ledger`);
         log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
       }
-      const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled); // P0-1b taxonomy (+ the liveness watchdog's "stalled")
+      const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop); // P0-1b taxonomy (+ the liveness watchdog's "stalled"/"retry-loop")
       const fireExtras = {
         ...(suspectError ? { suspectError: true } : {}),
         ...(errorClass ? { errorClass } : {}),
