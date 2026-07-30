@@ -3,7 +3,6 @@
 // lock for a registered repo, so two projects sharing that repo serialize their base-clone mutations
 // (git fetch / worktree add / worktree prune). Worktree-internal work does NOT need this. (design §6.4)
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { resolveWorkspace, wsLockPath } from "./workspace.ts";
 import { effectiveRepo } from "./team-config.ts";
 import { acquireLock } from "./locks.ts";
@@ -43,6 +42,6 @@ export async function withRepoLock(argv: string[]): Promise<number> {
   } finally { release(); }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  withRepoLock(process.argv.slice(2)).then((c) => process.exit(c));
-}
+// Terminal entry — only ever spawned (`dev-loop with-repo-lock …`), never imported (LOOP-63: no ESM
+// importer), so it runs unconditionally; a deleted guard cannot silently no-op on a spaced/symlinked path.
+withRepoLock(process.argv.slice(2)).then((c) => process.exit(c));

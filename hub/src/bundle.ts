@@ -18,7 +18,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { dirname, join, resolve, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { tryResolveWorkspace, wsHubDb, wsLockPath } from "./workspace.ts";
 import type { TeamFile, Workspace } from "./team-config.ts";
 import { doctorWorkspace } from "./doctor.ts";
@@ -400,6 +401,6 @@ export function movedMarker(root: string): { movedAt?: string; bundle?: string }
   catch { return null; }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainEntry(import.meta.url)) {
   process.exit(await bundleExport(process.argv.slice(2)));
 }

@@ -8,7 +8,7 @@
 // source only (env-wins vs file), never a value.
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace } from "./workspace.ts";
 import { wsSecretsPath, parseSecretsEnv } from "./secrets.ts";
 
@@ -146,6 +146,6 @@ Doctor W12/W13 report resolvability.`);
   die(`unknown subcommand '${sub}' (set|list|unset)`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   process.exit(await secretCli());
 }

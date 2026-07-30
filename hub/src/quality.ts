@@ -33,7 +33,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, w
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 
 // ─── types ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -661,4 +661,4 @@ function main(): void {
 // Entry-only: running `node quality.ts …` invokes the tool, but importing this module (the
 // stripGo unit test in test/quality.ts) must stay side-effect-free — same guard the other
 // hub entry points use (bundle.ts, daemon.ts, mcp-merge.ts).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (isMainEntry(import.meta.url)) main();

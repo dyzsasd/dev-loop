@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // `dev-loop team <sub>` dispatcher — init | import | repair (design impl §9.2). A thin router so cli.ts has
 // one `team` route; each subcommand keeps its own arg parsing.
-import { fileURLToPath } from "node:url";
 import { teamInit } from "./team-init.ts";
 import { teamImport } from "./team-import.ts";
 import { teamRepair } from "./team-repair.ts";
@@ -53,6 +52,6 @@ export async function team(argv = process.argv.slice(2)): Promise<number> {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  process.exit(await team());
-}
+// Terminal entry — only ever spawned (`dev-loop team …` / `node src/team.ts`), never imported (LOOP-63:
+// no ESM importer), so it runs unconditionally; a deleted guard cannot no-op on a spaced/symlinked path.
+process.exit(await team());

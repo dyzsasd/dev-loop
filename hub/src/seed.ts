@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { resolveHubDbPath } from "./workspace.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { openDb, nowIso } from "./db.ts";
+import { isMainEntry } from "./is-entry.ts";
 
 // The live dev-loop agents + the human operator.
 // DL split (senior/junior dev): `senior-dev` + `junior-dev` join as ACTIVE actors; the legacy single
@@ -91,7 +92,7 @@ export function ensureSeed(db: DatabaseSync, key: string, name: string, prefix =
 }
 
 // CLI: node src/seed.ts <key> <name> [prefix] [dbpath]
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainEntry(import.meta.url)) {
   const args = process.argv.slice(2);
   // --help/-h is the near-universal convention; guard it BEFORE binding argv[0] to `key`, or it
   // silently seeds a junk project literally keyed `--help` + its actors + labels (DL-88).

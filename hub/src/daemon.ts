@@ -14,7 +14,7 @@
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
-import { pathToFileURL } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists } from "./db.ts";
 import { findProject } from "./seed.ts";
@@ -679,14 +679,14 @@ export {
 
 // DL-41 dispatch — a lifecycle subcommand handles itself and exits; ANY other invocation (incl. the
 // bare `npm run daemon`) falls through to today's foreground boot below, byte-for-byte unchanged.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (isMainEntry(import.meta.url)
     && LIFECYCLE_SUBS.includes(process.argv[2] as LifecycleSub)) {
   await daemonLifecycle(process.argv[2] as LifecycleSub); // calls process.exit — never returns
 }
 
 // ─── CLI entry: `npm run daemon` — open db, resolve project (same guard as the MCP server), listen ──
 // Only runs when executed directly (not on import — the test imports createDaemon and starts it itself).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainEntry(import.meta.url)) {
   const DB_PATH = hubDbPath();
   const PROJECT_KEY = process.env.DEVLOOP_PROJECT?.trim();
   // One-click P1 (§1.5/§6.2): the bind knob. Default stays the v4 loopback (§16). Widening it beyond
