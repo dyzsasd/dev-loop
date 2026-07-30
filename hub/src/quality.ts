@@ -264,16 +264,43 @@ function parseFunctions(ts: TsModule | null, root: string, file: string, source:
 
 // Blank out comments and string/rune literals, preserving byte offsets (same trick the type
 // stripper uses): positions found on the stripped text apply 1:1 to the original.
+// Helpers keep the CC of each scan loop small; the dispatcher (stripGo) is the call site.
+function blankLineComment(out: string[], src: string, i: number, n: number): number {
+  while (i < n && src[i] !== "\n") { out[i] = " "; i++; }
+  return i;
+}
+function blankBlockComment(out: string[], src: string, i: number, n: number): number {
+  out[i] = out[i + 1] = " "; i += 2;
+  while (i < n && !(src[i] === "*" && src[i + 1] === "/")) { if (src[i] !== "\n") out[i] = " "; i++; }
+  if (i < n) { out[i] = out[i + 1] = " "; i += 2; }
+  return i;
+}
+function blankQuoted(out: string[], src: string, i: number, n: number, q: string): number {
+  out[i] = " "; i++;
+  while (i < n && src[i] !== q) {
+    if (src[i] === "\\") { out[i] = " "; i++; }
+    if (i < n && src[i] !== "\n") out[i] = " ";
+    i++;
+  }
+  if (i < n) { out[i] = " "; i++; }
+  return i;
+}
+function blankBacktick(out: string[], src: string, i: number, n: number): number {
+  out[i] = " "; i++;
+  while (i < n && src[i] !== "\`") { if (src[i] !== "\n") out[i] = " "; i++; }
+  if (i < n) { out[i] = " "; i++; }
+  return i;
+}
 function stripGo(src: string): string {
   const out = src.split("");
   let i = 0;
   const n = src.length;
   while (i < n) {
     const c = src[i];
-    if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") { out[i] = " "; i++; } continue; }
-    if (c === "/" && src[i + 1] === "*") { out[i] = out[i + 1] = " "; i += 2; while (i < n && !(src[i] === "*" && src[i + 1] === "/")) { if (src[i] !== "\n") out[i] = " "; i++; } if (i < n) { out[i] = out[i + 1] = " "; i += 2; } continue; }
-    if (c === '"' || c === "'") { const q = c; out[i] = " "; i++; while (i < n && src[i] !== q) { if (src[i] === "\\") { out[i] = " "; i++; } if (i < n && src[i] !== "\n") out[i] = " "; i++; } if (i < n) { out[i] = " "; i++; } continue; }
-    if (c === "\`") { out[i] = " "; i++; while (i < n && src[i] !== "\`") { if (src[i] !== "\n") out[i] = " "; i++; } if (i < n) { out[i] = " "; i++; } continue; }
+    if (c === "/" && src[i + 1] === "/") { i = blankLineComment(out, src, i, n); continue; }
+    if (c === "/" && src[i + 1] === "*") { i = blankBlockComment(out, src, i, n); continue; }
+    if (c === '"' || c === "'") { i = blankQuoted(out, src, i, n, c); continue; }
+    if (c === "\`") { i = blankBacktick(out, src, i, n); continue; }
     i++;
   }
   return out.join("");

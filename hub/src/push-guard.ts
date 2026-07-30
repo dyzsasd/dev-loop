@@ -21,11 +21,18 @@ export function pushGuard(repoDir: string, branch?: string, dbPath?: string): Pu
   const br = branch ?? git(["rev-parse", "--abbrev-ref", "HEAD"]);
   try { git(["rev-parse", "--verify", "--quiet", `origin/${br}`]); }
   catch { return { branch: br, ahead: 0, unknownRefs: [], findings: [], note: `no upstream origin/${br} — nothing to compare (first push of this branch)` }; }
-  const out = git(["log", "--pretty=%H\t%s", `origin/${br}..${br}`]);
-  const commits = out ? out.split("\n").map((l) => { const i = l.indexOf("\t"); return { sha: l.slice(0, i), subject: l.slice(i + 1) }; }) : [];
+  // -z NUL-terminates each record so newlines in the body don't split records; %B is the full commit
+  // message (subject + body), which allows ticket refs in trailers/footers to be detected (LOOP-25).
+  const out = git(["log", "-z", "--pretty=format:%H%n%B", `origin/${br}..${br}`]);
+  const commits = out ? out.split("\0").filter(Boolean).map((r) => {
+    const nl = r.indexOf("\n");
+    const sha = r.slice(0, nl);
+    const msg = r.slice(nl + 1);
+    return { sha, subject: msg.split("\n")[0], msg };
+  }) : [];
   const refs = new Map<string, { sha: string; subject: string }[]>();
   for (const c of commits) {
-    for (const id of c.subject.match(TICKET_RE) ?? []) (refs.get(id) ?? refs.set(id, []).get(id)!).push(c);
+    for (const id of c.msg.match(TICKET_RE) ?? []) (refs.get(id) ?? refs.set(id, []).get(id)!).push(c);
   }
   const findings: PushGuardFinding[] = [];
   const unknownRefs: string[] = [];
