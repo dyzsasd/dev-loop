@@ -103,6 +103,10 @@ exit 0
   const d = events.length ? JSON.parse(events[0].data) as Record<string, unknown> : {};
   ok(d.codingAgent === "claude" && typeof d.durationMs === "number" && d.exitCode === 0 && d.timedOut === false,
     "P1: fire.completed carries codingAgent + durationMs + exitCode + timedOut");
+  // LOOP-58 (was covered by run-agents.ts's now-removed recordFire import): the fire.completed event carries
+  // the per-fire UUID fireId, asserted here on a REAL fire rather than a direct recordFire() call.
+  ok(typeof d.fireId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(d.fireId as string),
+    `LOOP-58: fire.completed event carries the per-fire UUID fireId (got ${JSON.stringify(d.fireId)})`);
 
   // ── 5b. P0-1b errorClass: a spend-limit-shaped failure is classified in the ledger/event ──
   const stubFail = join(tmp, "stub-claude-fail");

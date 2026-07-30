@@ -68,6 +68,10 @@ try {
   ok(once.code === 0 && existsSync(ledger), "--once with a fake CLI fires and writes the fires.jsonl ledger");
   const rows = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   ok(rows.length >= 1 && rows[0].agent === "pm" && ["alpha", "beta"].includes(rows[0].project) && rows[0].exitCode === 0, "ledger row carries agent/project/exitCode (backend-agnostic soak metric)");
+  // LOOP-58 (closes the LOOP-12 gap): recordFire stamps the per-fire UUID onto the fires.jsonl row, not just
+  // the hub event. LOOP-12's test asserted only the event (and said so); the ledger write went untested.
+  ok(typeof rows[0].fireId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(rows[0].fireId),
+    `LOOP-58: the fires.jsonl row carries the per-fire UUID fireId (got ${JSON.stringify(rows[0].fireId)})`);
 
   // ── suspectError: a CLI that prints "Execution error" and exits 0 must be flagged in the ledger ──
   {
