@@ -8,6 +8,7 @@ import { openDb, logEvent } from "../src/db.ts";
 // NB: run-agents.ts must NOT be imported here — its main() runs unconditionally (LOOP-58), so an import
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
+import { breaker } from "../src/breaker.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -357,6 +358,59 @@ try {
   // LOOP-12 AC: a linear/local (no-hub) fire does not crash.
   const linearFire = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "fallback"]);
   ok(linearFire.code === 0, "LOOP-12: linear-backend fire (no hub) exits 0 — no fireId crash");
+
+  // ── P0-1b: provider-scoped circuit breaker (LOOP-8) ─────────────────────────────────────────────────
+  // 5 same-class failures spread across 3 agents on one provider trips it; a 4th agent on that provider
+  // is immediately probe-capped without accumulating its own streak; an agent on a different provider is
+  // not affected; one success on the provider closes all provider breakers.
+  {
+    breaker.byAgent.clear(); breaker.byProvider.clear(); breaker._agentProvider.clear();
+    const savedThreshold = breaker.threshold;
+    breaker.threshold = 5;
+    const events: Array<{ ev: string; agent: string; key: string }> = [];
+    const savedOnEvent = breaker.onEvent;
+    breaker.onEvent = (agent, ev, key) => events.push({ ev, agent, key });
+
+    // Pre-register providers — simulates the steady-state where each agent has fired at least once.
+    for (const a of ["pm", "qa", "senior-dev", "junior-dev"] as const) breaker._agentProvider.set(a, "anthropic");
+    breaker._agentProvider.set("sweep", "openai");
+
+    // 5 spend-limit failures spread across 3 agents on "anthropic" → trips the provider breaker.
+    breaker.record("pm",         1, "spend-limit", "spend limit exceeded", "anthropic");
+    breaker.record("qa",         1, "spend-limit", "spend limit exceeded", "anthropic");
+    breaker.record("senior-dev", 1, "spend-limit", "spend limit exceeded", "anthropic");
+    breaker.record("pm",         1, "spend-limit", "spend limit exceeded", "anthropic");
+    ok(!breaker.isOpen("junior-dev"), "P0-1b: 4 of 5 failures — provider breaker not yet open");
+    breaker.record("qa",         1, "spend-limit", "spend limit exceeded", "anthropic"); // 5th → trips
+
+    ok(events.some(e => e.ev === "open" && e.key.includes("anthropic") && e.key.includes("spend-limit")),
+      "P0-1b: provider breaker OPEN event names the provider and error class");
+    ok(breaker.isOpen("pm"),         "P0-1b: pm (anthropic) is probe-capped after provider breaker opens");
+    ok(breaker.isOpen("qa"),         "P0-1b: qa (anthropic) is probe-capped after provider breaker opens");
+    ok(breaker.isOpen("junior-dev"), "P0-1b: junior-dev (4th agent, same provider) immediately probe-capped without re-accumulation");
+    ok(!breaker.isOpen("sweep"),     "P0-1b: sweep (openai) NOT capped by the anthropic provider breaker");
+    ok(breaker.intervalFor("junior-dev", 10_000) >= breaker.probeMs, "P0-1b: intervalFor caps junior-dev at probe cadence");
+    ok(breaker.intervalFor("sweep", 10_000) === 10_000,              "P0-1b: intervalFor leaves sweep at normal cadence");
+
+    // Non-provider-scoped class (null) accumulates in byAgent, not byProvider.
+    breaker.record("pm", 1, null, "task error", "anthropic");
+    ok(!breaker.byProvider.has("anthropic:null"), "P0-1b: null errorClass does NOT accumulate in byProvider");
+    ok((breaker.byAgent.get("pm")?.streak ?? 0) > 0, "P0-1b: null errorClass DOES accumulate in byAgent for pm");
+
+    // One success on the provider closes all provider breakers for that provider.
+    events.length = 0;
+    breaker.record("pm", 0, null, undefined, "anthropic");
+    ok(events.some(e => e.ev === "close" && e.key.includes("anthropic")),
+      "P0-1b: provider breaker CLOSE event fires after a success on the provider");
+    ok(!breaker.isOpen("pm"),         "P0-1b: pm back to normal cadence after provider success");
+    ok(!breaker.isOpen("qa"),         "P0-1b: qa back to normal cadence after provider success");
+    ok(!breaker.isOpen("junior-dev"), "P0-1b: junior-dev back to normal cadence after provider success");
+    ok(!breaker.isOpen("sweep"),      "P0-1b: sweep (openai) still not open after anthropic success");
+
+    breaker.threshold = savedThreshold;
+    breaker.byAgent.clear(); breaker.byProvider.clear(); breaker._agentProvider.clear();
+    breaker.onEvent = savedOnEvent;
+  }
 
 } finally {
   rmSync(tmp, { recursive: true, force: true });
