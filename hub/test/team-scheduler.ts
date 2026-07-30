@@ -1,8 +1,8 @@
 // run-agents team mode + locks: WRR plan, --project filter, enabled/weight exclusion, fires.jsonl ledger,
 // the team run lock, and with-repo-lock serialization.
 import { spawnSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, chmodSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, chmodSync, statSync } from "node:fs";
+import { tmpdir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock } from "../src/locks.ts";
@@ -66,6 +66,10 @@ try {
   const once = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: fakeBin });
   const ledger = join(ws, ".dev-loop", "team", "fires.jsonl");
   ok(once.code === 0 && existsSync(ledger), "--once with a fake CLI fires and writes the fires.jsonl ledger");
+  // LOOP-62 (AC3): the ledger the fire just CREATED is owner-only (0600) — the §16 perms posture the sibling
+  // secrets.env already gets. (win32 has no POSIX mode bits — skipped there, as the src code is.)
+  if (platform() !== "win32") ok((statSync(ledger).mode & 0o077) === 0,
+    `LOOP-62: fires.jsonl is created owner-only 0600 (got ${(statSync(ledger).mode & 0o777).toString(8)})`);
   const rows = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   ok(rows.length >= 1 && rows[0].agent === "pm" && ["alpha", "beta"].includes(rows[0].project) && rows[0].exitCode === 0, "ledger row carries agent/project/exitCode (backend-agnostic soak metric)");
   // LOOP-58 (closes the LOOP-12 gap): recordFire stamps the per-fire UUID onto the fires.jsonl row, not just
@@ -73,16 +77,24 @@ try {
   ok(typeof rows[0].fireId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(rows[0].fireId),
     `LOOP-58: the fires.jsonl row carries the per-fire UUID fireId (got ${JSON.stringify(rows[0].fireId)})`);
 
-  // ── suspectError: a CLI that prints "Execution error" and exits 0 must be flagged in the ledger ──
+  // ── LOOP-62 + suspectError: a failing fire is still FLAGGED, but the raw output tail — which can carry a
+  //    credential the coding CLI echoed in its auth error — must NOT be persisted to fires.jsonl (§16). ──
   {
+    const secret = "sk-LOOP62SEEDEDSECRET-must-not-persist";     // a credential-shaped token in the failing output
     const crashBin = join(tmp, "crash-claude.sh");
-    writeFileSync(crashBin, "#!/bin/sh\necho 'Execution error'\nexit 0\n"); chmodSync(crashBin, 0o755);
+    writeFileSync(crashBin, `#!/bin/sh\necho 'Execution error: ${secret}'\nexit 0\n`); chmodSync(crashBin, 0o755);
     const r = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: crashBin });
     ok(/suspectError/.test(r.out), "the scheduler warns on an exit-0 fire whose output is a failure marker");
-    const rows2 = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const rawLines = readFileSync(ledger, "utf8").trim().split("\n");
+    const rows2 = rawLines.map((l) => JSON.parse(l));
     const last = rows2[rows2.length - 1];
-    ok(last.exitCode === 0 && last.suspectError === true && /Execution error/.test(last.outputTail ?? ""),
-      "the ledger row carries suspectError + the output tail (fake success no longer masked)");
+    // The failure is still CLASSIFIED (suspectError survives — the breaker/telemetry keep working) …
+    ok(last.exitCode === 0 && last.suspectError === true,
+      "LOOP-62: the ledger row still flags suspectError (classification survives the redaction)");
+    // … but the raw CLI stream (outputTail) is GONE from disk, so a seeded credential never lands there.
+    ok(!("outputTail" in last), "LOOP-62: the raw outputTail is no longer persisted to fires.jsonl (AC1)");
+    ok(!rawLines.some((l) => l.includes(secret)),
+      "LOOP-62: a secret echoed in a failing fire's output does not reach fires.jsonl (AC2/AC4)");
     const healthy = rows2.find((row: { suspectError?: boolean }) => row.suspectError === undefined);
     ok(!!healthy, "healthy fires carry NO suspectError flag (narrow detection, no false positives)");
   }
