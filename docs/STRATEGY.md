@@ -545,6 +545,58 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   the ticket lands correctly tiered beats a loud failure that can lose it. Recorded because it is a
   standing policy: the gate is **not bypassable by anyone, including the operator**.
 
+- **🔴 The loop has been running five of its nine agents, and the config file says eight
+  (`strategy-gaps`, 2026-07-31, `8cc84c5`).** The lens closed on the gap between the product's own
+  roster and what actually fires. `team init` seeds **four** agent cadences into every new workspace
+  (`team-init.ts:132`: sweep 30m, ops 10m, reflect 1d, communication 1d); the default run set is
+  `DEFAULT_AGENTS = GROUPS.core` (`run-agents.ts:87`), which contains **one** of them. The other
+  three live in the `outward` group and are never scheduled — and `applyConfigCadence` iterates
+  **`for (const agent of opts.agents)`** (`:1154`), the *selected* set, so their cadences are never
+  read. **The output asymmetry is the whole defect:** an applied cadence prints a confirmation line,
+  a malformed one warns, and one for an unselected agent produces *complete silence*. The single
+  existing backstop (`:1439`) covers `ops` only, and only when health probes exist — this workspace
+  has none. **Measured:** 120 fires over 9h; ops 0, reflect 0, communication 0, architect 0. The
+  consequence is not cosmetic: **`reflect` is the only writer of the team lessons library**
+  (`lessons.ts:2`), which `lessonsForFire()` injects into *every fire of every agent* —
+  `.dev-loop/lessons/` is empty, so that injection has been the empty string 120 times and the loop
+  has no cross-fire memory at all. The blindness is doubly guarded: `checkLessonsBudget` warns only
+  when a file is **over budget**, and `budgetOf` returns `null` for a missing file — so absent and
+  healthy are the same output; and W16 owner-liveness keys on **owner labels found on tickets**,
+  while these four agents own no tickets by design, so they fall outside its input set entirely.
+  `dev-loop doctor` prints `DOCTOR_OK` one line after listing `architect, communication, ops,
+  reflect` as valid actors; `dev-loop metrics` renders a tidy 5-row table because a zero-fire agent
+  is simply *absent* from it. Filed **LOOP-90** (the silent drop) and **LOOP-91** (the liveness
+  blindness); the run-set ruling is **LOOP-92**, parked for the operator. This is the third member of
+  the `validate-then-drop` family after LOOP-70 and LOOP-77, and the worst-behaved: the config is
+  well-formed, correctly spelled, semantically meaningful, *and written by the product's own `init`*.
+
+- **✅ The fire ledger stops writing what `secrets.ts` promises never to log (2026-07-31).**
+  `origin/main` advanced `8cc84c5` → **`a0afe6e`** (LOOP-62). **Verified `Done` against the merged
+  tree**, all six ACs, from a throwaway worktree — `recordFire` no longer spreads `extra` whole into
+  `fires.jsonl` but enumerates the safe telemetry fields exactly as the `logEvent` sibling always
+  did, so the raw 400-byte CLI tail never reaches disk; the ledger is created `0600` and its dir
+  `0700`, while a **pre-existing** loose file is warned-once and *never* chmod'd behind the operator.
+  All three perms branches were exercised directly, and **AC4 was proven in both directions**: the
+  new test passes at `a0afe6e` and fails at `8cc84c5` with 3 checks red, including the seeded
+  credential reaching the ledger. The breaker still receives the tail as an in-memory argument, so
+  classification is untouched — `outputTail` now has writers, one in-memory consumer, and no
+  persisted reader. **Residual filed as LOOP-93** (senior, p2, `sensitive`): `run.log` (196 KB) and
+  every `runner-logs/*.log` are mode `644` and carry the *full* unredacted stream — the same §16
+  defect with a larger blast radius, and there the fix is perms only, because unlike `outputTail`
+  those files have real consumers. Recorded because the shape recurs: **one sink in a function was
+  written with the discipline and its sibling three lines away was not.**
+
+- **📋 The tier-routing rule and the discovery process now pull against each other (2026-07-31).**
+  Fifth consecutive fire with junior over its depth cap: **junior 14 unblocked `Todo` / cap 10,
+  senior 7 / cap 10 — and all 16 unblocked `Backlog` tickets are junior-tier, so senior's three free
+  slots have nothing eligible to fill them.** This is structural, not a scheduling accident: §21b
+  routes "scoped improvement / bug-fix" to junior and says *"when borderline, junior"*, while the
+  rotating-lens discovery process produces almost exclusively scoped fixes. The queue can therefore
+  only drain through the tier that is already over cap. Recorded, not acted on — re-tiering to
+  balance load would be exactly the inference §21b forbids, and changing the rule is a §17
+  governing-file edit. Named here because it has now outlived five fires and is the loop's real
+  throughput ceiling.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1414,6 +1466,26 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   now-`Canceled` LOOP-13/LOOP-14, so they were re-pointed to LOOP-83/LOOP-85 — a `Canceled` blocker reads
   as *satisfied* to the §9c unpark rule, and LOOP-4 is the aggregation ticket, the one place where
   false-unparking would surface as honest-looking zeros in `metrics --usage/--cost` rather than an error.
+
+- **(pm, 2026-07-31) 📝 DECISION — the run set is the operator's call, but the config must stop
+  claiming agents that never fire.** Having found that `ops`/`reflect`/`communication` carry seeded
+  cadences and have never fired, the tempting move was to decide the fix myself. Two reasons not to:
+  the launch invocation (`dev-loop run --agents …`) is the operator's, and turning agents on changes
+  ongoing model spend. So the fire splits cleanly: **the product bugs are mine to file** — LOOP-90
+  (never silently drop a configured cadence) and LOOP-91 (a never-written lessons library and a
+  zero-fire agent must be visible) — and **the ruling is the operator's**, parked as LOOP-92 with the
+  per-agent cost read. My recommendation on that ticket is deliberately narrow: schedule **`reflect`
+  only** (`--agents core,reflect`), because it is the one whose absence has a *correctness* cost —
+  it is the sole writer of the lessons library every fire reads. `ops` is genuinely skippable while
+  this repo has no deploy or health probes (the product already warns about probes-without-ops), and
+  `communication` has no channel configured. **Dropping the three unused cadences from
+  `dev-loop.json` is an equally honest answer** and is offered as option 3 — what is *not* acceptable
+  is the config asserting one thing while the loop does another. **The generalisable rule this
+  fire adds to the `validate-then-drop` family:** a config field can be well-formed, correctly
+  spelled, semantically meaningful *and still inert* — so the test is never "does the schema accept
+  it?" but **"which code path reads it, and over what set does that path iterate?"** LOOP-70 was a
+  field with no code, LOOP-77 was a field read at the wrong scope, and this is a field read over the
+  wrong set.
 
 ## Candidate ideas
 
