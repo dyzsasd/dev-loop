@@ -220,6 +220,33 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **LOOP-27**. Related: 7 of 21 fires in the last 7d left no report file at all (junior-dev 4,
   sweep 3) with nothing detecting the gap — **LOOP-28**.
 
+- **The observability layer measures the board with fields the board does not route on
+  (2026-07-30, `data-analytics` lens).** Three operator-facing reads each answer a board question
+  from a different column than the router uses, so all three can be wrong while every one of them
+  looks healthy:
+  - **Ownership.** `ownerLiveness` (`hub/src/metrics.ts:140`, rendered as doctor **W16** and quoted
+    in the Sweep digest) resolves "who owns this ticket" from **labels**; `opQueue`
+    (`hub/src/agentops.ts:203`) serves dev work by **assignee**. Measured on this board:
+    junior-dev owns **12** open tickets by assignee and **9** by label. Worse than the undercount,
+    the `if (!mine.length) continue` guard means a handle whose open work is *entirely*
+    assignee-only emits **no finding at all** — the precise stranding W16 was built for (MP-156).
+    Filed as **LOOP-30** (High).
+  - **Blocked.** `dev-loop metrics` reports `blockedNow: 4` (the `blocked` **label**) while
+    `/activity` renders `0 blocked now` (the `Human-Blocked` **state**, `views/activity.ts:207`) —
+    two contradictory figures under one name, on the same db, at the same moment. The dashboard's
+    blind spot is the serious half: a Dev bail (`blocked`+`needs-pm`, never escalated to the
+    operator) renders as a clean board. Filed as **LOOP-31**, sequenced behind **LOOP-26**, which
+    owns the taxonomy itself.
+  - Together with LOOP-27 (landing) and LOOP-28 (reports), this is one pattern rather than four
+    bugs: **every health surface reports on a proxy, and no surface reports on the thing itself.**
+
+- **`ticket create` cannot comply with §5a (2026-07-30).** The CLI has no `--state`, so every
+  create lands in **`Todo`** — the commitment queue — while §5a requires `Backlog`. Hit twice this
+  fire (LOOP-30, LOOP-31 both needed a corrective `update --state Backlog`), and independently by
+  QA moments earlier (`qa moved LOOP-29 Todo → Backlog`). It also walks straight through
+  `intake.todoDepthCap`: two creates took junior from a deliberate 10/10 to 12/10 with no surface
+  reporting an over-cap board. Already owned by **LOOP-11** (Todo); evidence recorded there.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -454,6 +481,38 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   - **Still with the operator: LOOP-18** — no verdict yet on the `Goals`/quality-gauntlet direction
     proposal. `Goals` remains untouched and the quality line stays out-of-mandate for Job C filings;
     neither ticket filed this fire depends on that ruling.
+
+- **(pm, 2026-07-30) `data-analytics` lens — the health surfaces are auditing the wrong columns,
+  and one blocker edge was about to lie.** Fourth lens at the unchanged product HEAD (`3cfc250` /
+  v1.10.0; the three commits on top are PM doc-only edits and correctly did **not** reset the lens
+  rotation). No foreign edit to this doc since last fire.
+  - **The finding, and why it is one finding.** LOOP-30 (ownership read from labels, routing done
+    by assignee) and LOOP-31 (`blockedNow` label-based in the CLI, `Human-Blocked` state-based on
+    `/activity`) are the same mistake in two places, and LOOP-27/LOOP-28 are it in two more:
+    **the loop measures proxies for the thing it wants to know.** Verified against the live db
+    rather than inferred — the 12-vs-9 ownership split and the 4-vs-0 blocked contradiction are
+    both reproducible today. LOOP-31 is deliberately sequenced behind LOOP-26 (`Blocked-by:`)
+    because LOOP-26 defines the taxonomy this one applies; filing them merged would have hidden
+    that ordering. Neither is a `Bug`: both surfaces behave exactly as their own header comments
+    document — the documented *assumption* is what broke.
+  - **A false unpark caught before it fired (§9c).** LOOP-4's blocker edge read `Blocked-by:
+    LOOP-2`, and **LOOP-2 is now `Done`** — so the next §9c pass would have unparked LOOP-4 and
+    handed senior-dev three cost dashboards over an empty column, the exact outcome the hold
+    existed to prevent. A design parent going `Done` means the plan is agreed, not that the data
+    exists. Edge retired and re-pointed at the implementation children (LOOP-12…15). Second
+    instance of this shape after LOOP-19 (`Canceled` LOOP-7 would have counted as satisfied):
+    **a blocker edge must name the ticket that produces the artifact, never its design parent.**
+  - **Promotion pace (Job B2).** Promoted four in §5 pick order — LOOP-21 and LOOP-29 (both
+    `Bug`+`edge-case`, rank 2, oldest first) ahead of LOOP-17 and LOOP-26 (rank 5). Junior
+    unblocked-Todo **6 → 10 of 10, now at cap**; senior stays 1. Promoting into a landing-blocked
+    board was deliberate: the wedge is on **merge**, not on work — junior is demonstrably
+    productive (PRs #30/#31 opened this hour) and every finished PR flushes the moment LOOP-22
+    goes green. Tier labels were re-passed on LOOP-17/21/29 for consistency, which is a workaround
+    for LOOP-30, not a fix.
+  - **Landing: still red, and the pile is growing.** Five `dev-loop/*` PRs now open and
+    unmergeable (#27/#28/#29/#30/#31), up from three last fire. Every one fails *only* the CRAP
+    ratchet on `stripGo` (113.8 > 90); their own tests pass on both Node lanes. **LOOP-22 remains
+    the single gate on the entire loop's output.**
 
 ## Candidate ideas
 
