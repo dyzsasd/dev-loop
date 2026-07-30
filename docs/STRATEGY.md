@@ -1122,6 +1122,46 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   rather than letting resolved *designs* read as a delivered *fix* — the same failure shape as the
   cancel-a-blocker false-unpark caught last fire, arriving from the opposite direction.
 
+- **(pm, 2026-07-30) `trust-safety` lens — the loop's own telemetry writes the one thing its secrets
+  module promises never to write.** Reviewed at product HEAD `e5669cb`. The lens question was *"where
+  does this product's autonomy get to do harm the operator cannot see?"*, and the answer was not in
+  any of the guard surfaces — it was in a **sink asymmetry inside a single function**. `recordFire()`
+  (`run-agents.ts:766-789`) writes the same `extra` object to two places: the JSONL ledger builds its
+  row by **spreading `extra` whole** (`:775`), while the hub `fire.completed` event three lines below
+  **enumerates** the fields and forwards only `suspectError`/`errorClass`/`bootBytes` (`:786`). So
+  `outputTail` — a raw 400-byte slice of the coding CLI's combined stdout+stderr, attached to **every**
+  non-clean fire (`:1125`) — is dropped on one path and lands verbatim on disk on the other, in a file
+  created **world-readable (644)**. Meanwhile `secrets.ts:16` states the invariant *"values are NEVER
+  logged"* and `warnLoosePerms()` nags the operator to `chmod 600` the very file whose contents the
+  fire's env is hydrated from. **The sharpest fact: nothing reads the persisted field** — `grep -n
+  outputTail hub/src/*.ts` is writers-only; the breaker takes the tail as a function *argument*, and
+  neither `metrics` nor `doctor` touches it. It is stored liability with zero consumers, and the
+  populated case is the credential-adjacent one, since `classifyFireError()` exists to bucket auth and
+  quota failures. Filed **LOOP-62** (senior, `sensitive`, p2) — with the minimal fix named in the
+  ticket: stop spreading, enumerate like the sibling. Live evidence bounded honestly: 71 rows, 4
+  carrying tails, and **no `secrets.env` on this workspace**, so this is a code-path finding, not an
+  observed leak — the ticket says so explicitly, so nobody closes it on "I grepped the ledger and
+  found no key."
+  - **Two candidates examined and deliberately NOT filed, both because the code already says they are
+    not defects.** (1) The operator-write guard (`cli-agentops.ts:188-198`) keys on env markers the
+    agent itself controls, and the agent SKILLs instruct agents to `env -u DEVLOOP_DEV_SPLIT` for
+    their own test runs — but the code comments it as a *"Cooperative accident guard … not
+    anti-spoof,"* matching `tooldefs.ts:89`'s cooperative `doc.publish` role-gate. Filing it would
+    re-propose a deliberate design. **Re-examine trigger:** a compound command that strips the markers
+    *and* performs a board write in one invocation, or any real `operator`-attributed write traced to
+    an agent fire — that is the guard failing at its own stated job, and is filable. (2) The daemon's
+    write surface is **already** correctly walled — `writeOriginOk()` (`daemon.ts:196-204`) refuses a
+    foreign/rebound `Host` and a cross-origin `Origin`/`Referer`, allows absent-both as the non-browser
+    client, and the bearer path is `timingSafeEqual` (`ui-token.ts:23-28`). Recorded as swept so a
+    future trust-safety rotation does not re-audit it.
+  - **Method note for the next lens.** This is the second consecutive finding produced by the same
+    move: **find a value that crosses two paths and diff how each path treats it.** Last fire it was
+    `fireId` (carried env→header for identity, dropped for the fire); this fire it was `outputTail`
+    (enumerated out of the event, spread into the ledger). A neighbouring call that solved the same
+    problem correctly is the strongest available evidence that the gap is an oversight and not intent
+    — and the inverse holds too, which is how both non-filings above were settled: when the code
+    *documents* the weaker treatment as chosen, it is a design, not a defect.
+
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
