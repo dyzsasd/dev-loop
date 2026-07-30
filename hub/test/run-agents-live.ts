@@ -270,28 +270,39 @@ sleep 600
   mkdirSync(gateData, { recursive: true }); mkdirSync(gateOut, { recursive: true });
   writeFileSync(join(gateData, "projects.json"), JSON.stringify({ projects: { gate: { repoPath: repo, backend: "service" } } }));
   execFileSync("node", ["src/seed.ts", "gate", "Gate Project", "GATEX", gateDb], { cwd: hubRoot, encoding: "utf8" });
-  const runLoop = (extra: string[], outDir: string, sleepSec: string, agent = "pm"): number => {
-    const child = spawn("node", ["src/run-agents.ts", "--root", repoRoot, "--data", gateData, "--hub-db", gateDb, "--project", "gate", "--cwd", repo, "--cli", "claude", "--agents", agent, "--interval", `${agent}=1s`, "--stagger", "0", ...extra],
-      { cwd: hubRoot, stdio: "ignore", env: { ...process.env, DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: outDir, DEVLOOP_RUN_DIR: tmp } });
+  // LOOP-32: the interval is now a parameter (default 1s) so gated tests can use 3s to eliminate the
+  // startup-race: with 1s interval, if Node startup exceeds 1s the 2nd tick fires before the gate state
+  // is written from fire 1 (intermittent on loaded CI / Node 23.6.0). At 3s there is >2s margin.
+  // LOOP-32: DEVLOOP_PROJECTS_JSON is explicitly pinned to the test's projects.json so a dev-loop session
+  // environment (where DEVLOOP_PROJECTS_JSON points to the real workspace) can't override readProjects().
+  // Without this, backend comes back undefined (gate project not in real config) → gateActive=false.
+  const runLoop = (extra: string[], outDir: string, sleepSec: string, agent = "pm", interval = "1s"): number => {
+    const child = spawn("node", ["src/run-agents.ts", "--root", repoRoot, "--data", gateData, "--hub-db", gateDb, "--project", "gate", "--cwd", repo, "--cli", "claude", "--agents", agent, "--interval", `${agent}=${interval}`, "--stagger", "0", ...extra],
+      { cwd: hubRoot, stdio: "ignore", env: { ...process.env, DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: outDir, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECTS_JSON: join(gateData, "projects.json") } });
     spawnSync("sleep", [sleepSec]);          // let it tick for the window
     child.kill("SIGTERM");
     spawnSync("sleep", ["1"]);               // let it drain/exit
     try { child.kill("SIGKILL"); } catch { /* already gone */ }
     return readdirSync(outDir).filter((f) => f.startsWith("rec-")).length;
   };
-  const gatedFires = runLoop(["--change-gate"], gateOut, "4.2");
-  ok(gatedFires === 1, `change-gate: pm fires once then skips on a quiet board (fired ${gatedFires}× in ~4s @1s interval)`);
+  const gatedFires = runLoop(["--change-gate"], gateOut, "4.2", "pm", "3s");
+  ok(gatedFires === 1, `change-gate: pm fires once then skips on a quiet board (fired ${gatedFires}× @3s interval)`);
   const openOut = join(tmp, "open-out"); mkdirSync(openOut, { recursive: true });
   try { rmSync(join(gateData, "gate", "scheduler-gate.json")); } catch { /* fresh */ }
-  const ungatedFires = runLoop([], openOut, "6.5"); // wider window — Node startup overhead varies by version
-  ok(ungatedFires >= 3, `no gate: pm fires every interval (fired ${ungatedFires}× in ~6.5s @1s interval)`);
+  // LOOP-32: use --max-fires 3 so the loop exits after exactly 3 fires (deterministic); the old
+  // wall-clock window ("6.5s") was fragile on loaded CI — startup overhead on Node 23.6.0 caused
+  // only 2 fires to fit, failing the >= 3 assertion intermittently.
+  spawnSync("node", ["src/run-agents.ts", "--root", repoRoot, "--data", gateData, "--hub-db", gateDb, "--project", "gate", "--cwd", repo, "--cli", "claude", "--agents", "pm", "--interval", "pm=1s", "--stagger", "0", "--max-fires", "3"],
+    { cwd: hubRoot, stdio: "ignore", timeout: 30_000, env: { ...process.env, DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: openOut, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECTS_JSON: join(gateData, "projects.json") } });
+  const ungatedFires = readdirSync(openOut).filter((f) => f.startsWith("rec-")).length;
+  ok(ungatedFires === 3, `no gate: pm fires on every tick (exactly ${ungatedFires}/3 with --max-fires 3)`);
 
   // ── 6a. R1a review-tier TTL: pm/qa do their best work on a QUIET board (lens rotation / coverage
   //    expansion), so an unchanged key only DEFERS them — once the quiet-board TTL elapses since the
   //    last fire, the gate lets ONE through, which re-arms it. dev tier keeps the pure gate. ──
   const gateFile = join(gateData, "gate", "scheduler-gate.json");
   const seedOut = join(tmp, "seed-out"); mkdirSync(seedOut, { recursive: true });
-  runLoop(["--change-gate"], seedOut, "2.2");                    // re-seed pm gate state (deleted above)
+  runLoop(["--change-gate"], seedOut, "4.2", "pm", "3s");        // re-seed pm gate state (deleted above); 4.2s window ensures the 3s-interval tick fires and writes the gate file
   {
     const st = JSON.parse(readFileSync(gateFile, "utf8")) as Record<string, { key: string; firedAt: number }>;
     ok(typeof st.pm === "object" && typeof st.pm.key === "string" && typeof st.pm.firedAt === "number",
@@ -300,7 +311,7 @@ sleep 600
     writeFileSync(gateFile, JSON.stringify(st));
   }
   const ttlOut = join(tmp, "ttl-out"); mkdirSync(ttlOut, { recursive: true });
-  const ttlFires = runLoop(["--change-gate"], ttlOut, "4.2");
+  const ttlFires = runLoop(["--change-gate"], ttlOut, "4.2", "pm", "3s");
   ok(ttlFires === 1, `change-gate TTL: a pm past the quiet-board TTL fires ONCE then re-arms (fired ${ttlFires}×)`);
 
   // ── 6b. legacy state (pre-TTL bare key string) reads as firedAt:0 ⇒ the next pm review fire runs ──
@@ -309,7 +320,7 @@ sleep 600
     writeFileSync(gateFile, JSON.stringify({ pm: st.pm.key }));  // the pre-TTL on-disk shape
   }
   const legacyOut = join(tmp, "legacy-out"); mkdirSync(legacyOut, { recursive: true });
-  const legacyFires = runLoop(["--change-gate"], legacyOut, "4.2");
+  const legacyFires = runLoop(["--change-gate"], legacyOut, "4.2", "pm", "3s");
   ok(legacyFires === 1, `change-gate TTL: a pre-TTL bare-string gate state lets the next pm fire run (fired ${legacyFires}×)`);
 
   // ── 6c. --change-gate-ttl 0 = defer forever: the pure gate applies to pm too ──
@@ -319,12 +330,12 @@ sleep 600
     writeFileSync(gateFile, JSON.stringify(st));
   }
   const ttl0Out = join(tmp, "ttl0-out"); mkdirSync(ttl0Out, { recursive: true });
-  const ttl0Fires = runLoop(["--change-gate", "--change-gate-ttl", "0"], ttl0Out, "4.2");
+  const ttl0Fires = runLoop(["--change-gate", "--change-gate-ttl", "0"], ttl0Out, "4.2", "pm", "3s");
   ok(ttl0Fires === 0, `--change-gate-ttl 0 keeps the pure gate for pm (fired ${ttl0Fires}×, expected 0)`);
 
   // ── 6d. the dev tier keeps the PURE gate: an aged senior-dev entry still skips ──
   const sdSeedOut = join(tmp, "sd-seed-out"); mkdirSync(sdSeedOut, { recursive: true });
-  const sdSeed = runLoop(["--change-gate"], sdSeedOut, "2.2", "senior-dev");
+  const sdSeed = runLoop(["--change-gate"], sdSeedOut, "4.2", "senior-dev", "3s");
   ok(sdSeed === 1, `senior-dev under the gate fires once on first run (fired ${sdSeed}×)`);
   {
     const st = JSON.parse(readFileSync(gateFile, "utf8")) as Record<string, { key: string; firedAt: number }>;
@@ -332,7 +343,7 @@ sleep 600
     writeFileSync(gateFile, JSON.stringify(st));
   }
   const sdOut = join(tmp, "sd-out"); mkdirSync(sdOut, { recursive: true });
-  const sdFires = runLoop(["--change-gate"], sdOut, "4.2", "senior-dev");
+  const sdFires = runLoop(["--change-gate"], sdOut, "4.2", "senior-dev", "3s");
   ok(sdFires === 0, `the dev tier keeps the PURE gate — an aged senior-dev entry still skips (fired ${sdFires}×, expected 0)`);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
