@@ -65,6 +65,25 @@ try {
   git(work, ["push", "-q", "origin", "main"]); // flush everything
   const strictClean = cli(["--repo", work, "--branch", "main", "--strict"]);
   ok(strictClean.status === 0 && /clean/.test(strictClean.stdout), "CLI --strict on a clean branch ⇒ exit 0");
+
+  // ── LOOP-25 regression: body/trailer ticket refs must be found, not just subject-line refs ──────────
+  // Add a Canceled ticket (CERT-5) and commit with its ref only in the body/trailer (MP-275 failure class).
+  {
+    const conn2 = openDb(db);
+    conn2.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,?,0,'[]','[]','pm','t','t')").run("CERT-5", "p", "t-CERT-5", "Canceled");
+    conn2.close();
+  }
+  // Commit with CERT-5 ref only in the body/trailer (the exact dev-agent co-author trailer shape).
+  git(work, ["commit", "--allow-empty", "-qm", "fix(y): patch other behavior\n\nTicket-Id: CERT-5\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"]);
+  const bodyRef = pushGuard(work, "main", db);
+  ok(bodyRef.ahead === 1, `body-ref commit: 1 ahead (got ${bodyRef.ahead})`);
+  ok(bodyRef.findings.some((f) => f.ticket === "CERT-5" && f.state === "Canceled"),
+    "LOOP-25: a Canceled ref in the commit BODY (trailer) is flagged — not silently invisible");
+  ok(bodyRef.findings[0]?.subject === "fix(y): patch other behavior",
+    "the finding's subject field is still the subject line (display is correct)");
+  // --strict must exit 1 for body-only refs
+  const bodyStrict = cli(["--repo", work, "--branch", "main", "--strict"]);
+  ok(bodyStrict.status === 1, "LOOP-25 CLI --strict: body-only ref to Canceled ticket ⇒ exit 1");
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
