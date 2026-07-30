@@ -6,7 +6,7 @@
 // BEFORE any directory is created.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, readdirSync, realpathSync } from "node:fs";
-import { devloopHome, devloopDataDir, devloopProjectsPath, projectConfigCandidates, hubDbPath } from "../src/paths.ts";
+import { devloopHome, devloopDataDir, devloopProjectsPath, projectConfigCandidates, hubDbPath, guardCliPath } from "../src/paths.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -31,6 +31,14 @@ ok(throwsNaming(devloopDataDir, "DEVLOOP_DATA_DIR"), "DEVLOOP_DATA_DIR with a 'n
 reset(); process.env.DEVLOOP_PROJECTS_JSON = "undefined/projects.json";
 ok(throwsNaming(() => devloopProjectsPath("/tmp"), "DEVLOOP_PROJECTS_JSON"), "junk DEVLOOP_PROJECTS_JSON → devloopProjectsPath throws");
 ok(throwsNaming(() => projectConfigCandidates("/tmp"), "DEVLOOP_PROJECTS_JSON"), "junk DEVLOOP_PROJECTS_JSON → projectConfigCandidates throws");
+
+// ── unit: guardCliPath — same segment guard for explicit CLI flags (LOOP-29) ──
+ok(throwsNaming(() => guardCliPath("--hub-db", "undefined/x.db"), "--hub-db"), "guardCliPath rejects 'undefined' segment, names the flag");
+ok(throwsNaming(() => guardCliPath("--data", "/tmp/null/data"), "--data"), "guardCliPath rejects 'null' segment in --data");
+ok(throwsNaming(() => guardCliPath("--root", "undefined"), "--root"), "guardCliPath rejects literal 'undefined' in --root");
+ok(!throwsNaming(() => guardCliPath("--hub-db", "/tmp/valid/hub.db"), "--hub-db"), "guardCliPath passes a valid path");
+ok(guardCliPath("--hub-db", "/tmp/undefined-behavior/hub.db") === "/tmp/undefined-behavior/hub.db",
+  "guardCliPath: 'undefined-behavior' as a segment is NOT junk (exact-segment match only)");
 
 // ── unit: sane values still pass through; empty ≡ unset falls back to the default ──
 reset(); process.env.DEVLOOP_HUB_DB = "/tmp/hub-paths/ok/hub.db";

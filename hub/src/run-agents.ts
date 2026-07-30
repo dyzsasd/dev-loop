@@ -15,7 +15,7 @@ import { notify } from "./comms.ts";
 import { secretsInjectedKeys } from "./secrets.ts"; // Q9: the per-fire secret-scoping strip set
 import { assembleBootCorpus } from "./boot-prefix.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
-import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates } from "./paths.ts";
+import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
@@ -434,11 +434,11 @@ function parseArgs(argv: string[]): Options {
     } else if (a === "--once") opts.once = true;
     else if (a === "--plan") { opts.plan = Number(next()); if (!Number.isInteger(opts.plan) || opts.plan <= 0) die("--plan must be a positive integer"); }
     else if (a === "--dry-run") opts.dryRun = true;
-    else if (a === "--root") opts.root = resolve(next());
-    else if (a === "--data") { opts.dataDir = resolve(next()); opts.dataDirExplicit = true; }
-    else if (a === "--hub-db") { opts.hubDb = resolve(next()); opts.hubDbExplicit = true; }
-    else if (a === "--cwd") opts.cwd = resolve(next());
-    else if (a === "--mcp-config") opts.mcpConfig = resolve(next());
+    else if (a === "--root") opts.root = guardCliPath("--root", resolve(next()));
+    else if (a === "--data") { opts.dataDir = guardCliPath("--data", resolve(next())); opts.dataDirExplicit = true; }
+    else if (a === "--hub-db") { opts.hubDb = guardCliPath("--hub-db", resolve(next())); opts.hubDbExplicit = true; }
+    else if (a === "--cwd") opts.cwd = guardCliPath("--cwd", resolve(next()));
+    else if (a === "--mcp-config") opts.mcpConfig = guardCliPath("--mcp-config", resolve(next()));
     else if (a === "--max-fires") {
       opts.maxFires = Number(next());
       if (!Number.isInteger(opts.maxFires) || opts.maxFires < 0) die("--max-fires must be a non-negative integer (0 = unlimited)");
