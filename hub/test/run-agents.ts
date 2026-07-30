@@ -9,6 +9,7 @@ import { openDb, logEvent } from "../src/db.ts";
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
 import { breaker } from "../src/breaker.ts";
+import { codexUsageAdapter } from "../src/fire-usage.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -128,7 +129,7 @@ try {
   const codex = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "communication", ...common]);
   ok(codex.code === 0, "codex dry-run scheduler exits 0");
   ok(/codex exec/.test(codex.out), "codex dry-run uses codex exec");
-  ok(/codex exec --model gpt-5\.5 -c 'model_reasoning_effort="high"'/.test(codex.out), "codex dry-run injects model + reasoning effort defaults");
+  ok(/codex exec --json --model gpt-5\.5 -c 'model_reasoning_effort="high"'/.test(codex.out), "codex dry-run injects --json (structured output) + model + reasoning effort defaults");
   ok(/mcp_servers\.dev-loop-hub\.command="[^"]*node[^"]*"/.test(codex.out), "codex dry-run DEFINES the hub server via -c (no pre-existing config.toml block needed)");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_ACTOR="communication"/.test(codex.out), "codex dry-run injects per-agent actor with -c");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_PROJECT="demo"/.test(codex.out), "codex dry-run injects project with -c");
@@ -203,7 +204,7 @@ try {
   const overrideCodex = run(["--cli", "codex", "--once", "--dry-run", "--codex-safe", "--agents", "pm", ...common]);
   ok(overrideCodex.code === 0, "codex model/effort override exits 0");
   ok(/launch=pm:codex:gpt-5\.5-mini\/xhigh/.test(overrideCodex.out), "codex model/effort override is reflected in launch summary");
-  ok(/pm: codex exec --model gpt-5\.5-mini -c 'model_reasoning_effort="xhigh"'/.test(overrideCodex.out), "codex command applies project model/effort override");
+  ok(/pm: codex exec --json --model gpt-5\.5-mini -c 'model_reasoning_effort="xhigh"'/.test(overrideCodex.out), "codex command applies project model/effort override");
 
   // --- Two-level launch config: agents{}.codingAgent (L1) + model/effort (L2),
   //     codingAgentDefaults{} per-coding-agent defaults, defaultCodingAgent, mixed-CLI runs. ---
@@ -229,7 +230,7 @@ try {
   const twoLevel = run(["--cli", "claude", "--once", "--dry-run", "--codex-safe", "--agents", "pm,qa,senior-dev,junior-dev,sweep", ...common]);
   ok(twoLevel.code === 0, "two-level config dry-run exits 0");
   ok(/junior-dev:codex:gpt-5\.5\/high/.test(twoLevel.out), "junior-dev resolves to its own codingAgent=codex, overriding --cli claude");
-  ok(/junior-dev: codex exec --model gpt-5\.5 -c 'model_reasoning_effort="high"'/.test(twoLevel.out), "junior-dev renders a codex command inside a claude run (mixed-CLI)");
+  ok(/junior-dev: codex exec --json --model gpt-5\.5 -c 'model_reasoning_effort="high"'/.test(twoLevel.out), "junior-dev renders a codex command inside a claude run (mixed-CLI)");
   ok(/senior-dev:claude:claude-opus-4-8\/max/.test(twoLevel.out), "senior-dev inherits the run CLI (claude) with its agents{} model/effort");
   ok(/senior-dev: claude .*--model claude-opus-4-8 --effort max /.test(twoLevel.out), "senior-dev renders a claude command with its pinned model/effort");
   ok(/pm:opencode:anthropic\/claude-opus-4-8\//.test(twoLevel.out), "pm resolves to codingAgent=opencode with its model");
@@ -481,6 +482,47 @@ try {
 
 } finally {
   rmSync(tmp, { recursive: true, force: true });
+}
+
+// ── LOOP-15: codex UsageAdapter (fire-usage.ts) ─────────────────────────────────────────────────────
+// AC1: a recorded `codex exec --json` fixture → populated token fields (costUsd:null acceptable)
+{
+  const fixture = [
+    '{"type":"session_started","session_id":"test-sess-1"}',
+    '{"type":"agent_message","role":"assistant","content":"Done."}',
+    '{"type":"response","usage":{"input_tokens":150,"output_tokens":42}}',
+    '{"type":"session_stopped","reason":"completed"}',
+  ].join("\n");
+  const result = codexUsageAdapter.parse(fixture);
+  ok(result !== null, "LOOP-15 AC1: codex fixture → non-null FireUsage");
+  ok(result?.source === "provider", "LOOP-15 AC1: source = 'provider'");
+  ok(result?.inputTokens === 150, "LOOP-15 AC1: inputTokens = 150");
+  ok(result?.outputTokens === 42, "LOOP-15 AC1: outputTokens = 42");
+  ok(result?.costUsd === null, "LOOP-15 AC1: costUsd = null (codex tokens-only)");
+  ok(result?.currency === null, "LOOP-15 AC1: currency = null when no cost");
+  // also works with nested response.done shape
+  const nestedFixture = '{"type":"response.done","response":{"id":"resp_x","usage":{"input_tokens":77,"output_tokens":11}}}';
+  const nested = codexUsageAdapter.parse(nestedFixture);
+  ok(nested !== null && nested.inputTokens === 77, "LOOP-15 AC1: nested response.usage shape also parsed");
+}
+// AC2: live shape mismatch / broken binary (spawn error) → usage:null, fire still runs
+{
+  ok(codexUsageAdapter.parse("") === null, "LOOP-15 AC2: empty stdout → usage null");
+  ok(codexUsageAdapter.parse("not json\nnope") === null, "LOOP-15 AC2: non-JSON stdout → usage null");
+  ok(codexUsageAdapter.parse('{"type":"session_stopped"}') === null, "LOOP-15 AC2: event with no usage → null");
+  ok(codexUsageAdapter.parse('{"type":"response","usage":{"total_tokens":10}}') === null, "LOOP-15 AC2: usage without input_tokens/output_tokens → null");
+  ok(codexUsageAdapter.parse('{"type":"error","message":"binary not found"}') === null, "LOOP-15 AC2: error event alone → usage null (isError handles suspectError separately)");
+}
+// AC3: §16 — FireUsage result contains ONLY numeric fields + source/currency, no content/PII
+{
+  const richFixture = '{"type":"response","usage":{"input_tokens":10,"output_tokens":5},"result":"secret agent output here","tool_calls":[{"id":"call_1","args":"rm -rf /"}]}';
+  const result = codexUsageAdapter.parse(richFixture);
+  ok(result !== null, "LOOP-15 AC3: parses usage from event with extra fields");
+  const allowed = new Set(["source", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costUsd", "currency"]);
+  const keys = Object.keys(result ?? {});
+  ok(keys.every(k => allowed.has(k)), `LOOP-15 AC3 §16: FireUsage has only allowed keys (${keys.join(",")}) — no content/PII`);
+  ok(!JSON.stringify(result).includes("secret") && !JSON.stringify(result).includes("rm -rf"),
+    "LOOP-15 AC3 §16: no content strings in parsed FireUsage");
 }
 
 console.log(fails === 0 ? "\nRUN_AGENTS_OK" : `\n${fails} CHECK(S) FAILED`);
