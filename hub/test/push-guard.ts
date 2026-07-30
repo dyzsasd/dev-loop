@@ -84,6 +84,54 @@ try {
   // --strict must exit 1 for body-only refs
   const bodyStrict = cli(["--repo", work, "--branch", "main", "--strict"]);
   ok(bodyStrict.status === 1, "LOOP-25 CLI --strict: body-only ref to Canceled ticket ⇒ exit 1");
+
+  // ── LOOP-55: passenger detection ─────────────────────────────────────────────────
+  // A dev-loop/<id> branch cut off local main that is AHEAD of origin carries passengers.
+  // Set up: push local main's existing commits to origin (sync), then add one more LOCAL-ONLY commit.
+  git(work, ["push", "-q", "origin", "main"]); // flush the CERT-* and LOOP-25 commits
+  git(work, ["commit", "--allow-empty", "-qm", "docs(strategy): local-only PM commit"]);
+  const localOnlySha = git(work, ["rev-parse", "HEAD"]);
+
+  // Cut a dev branch off local main (the LOOP-48 bug shape)
+  git(work, ["checkout", "-qb", "dev-loop/CERT-10"]);
+  // Add this ticket's own commit
+  git(work, ["commit", "--allow-empty", "-qm", "fix(x): CERT-10 the real fix"]);
+
+  // AC: true positive — the local-only commit is a passenger (not referenced by CERT-10)
+  const pg = pushGuard(work, "dev-loop/CERT-10", db, "main");
+  ok(pg.passengers.length === 1, `LOOP-55: one passenger found (got ${pg.passengers.length})`);
+  ok(pg.passengers[0]?.sha.length === 7, "passenger sha is a 7-char short sha");
+  ok(/local-only PM commit/.test(pg.passengers[0]?.subject ?? ""), "passenger subject matches the leaked commit");
+
+  // AC: the own-ticket commit is NOT a passenger
+  ok(!pg.passengers.some((p) => /CERT-10/.test(p.subject)), "CERT-10 commit is NOT flagged as passenger");
+
+  // AC: existing findings are not affected (no Canceled/Duplicate tickets in CERT-10 commits)
+  ok(pg.findings.length === 0, "passenger branch: no ride-along findings (separate concern)");
+
+  // AC: --strict exits 1 on a passenger
+  const pgStrict = cli(["--repo", work, "--branch", "dev-loop/CERT-10", "--strict", "--default-branch", "main"]);
+  ok(pgStrict.status === 1, "LOOP-55 --strict: passenger ⇒ exit 1");
+  ok(/passenger/.test(pgStrict.stdout), "CLI output mentions 'passenger'");
+  ok(/re-cut via `dev-loop worktree add`/.test(pgStrict.stdout), "CLI output mentions worktree add remedy");
+
+  // AC: no false positive on a clean branch off origin/main (rebase)
+  git(work, ["rebase", "--onto", "origin/main", "main", "dev-loop/CERT-10"]);
+  const pgClean = pushGuard(work, "dev-loop/CERT-10", db, "main");
+  ok(pgClean.passengers.length === 0, "LOOP-55: after rebase onto origin/main, no passengers (rebased commits are NOT ancestors of local main)");
+
+  // AC: no false positive on non-dev-loop branch (non-LOOP-55 detection branch shape)
+  const pgOther = pushGuard(work, "main", db, "main");
+  ok(pgOther.passengers.length === 0, "LOOP-55: non-dev-loop branch shape → no passenger detection");
+
+  // AC: no false positive on a stacked branch: parent commits reference a DIFFERENT ticket id
+  git(work, ["checkout", "-qb", "dev-loop/CERT-11"]);
+  git(work, ["commit", "--allow-empty", "-qm", "fix(y): CERT-11 stacked on CERT-10"]);
+  // The CERT-10 commit is in origin/main..dev-loop/CERT-11, references CERT-10, is NOT an ancestor of local main
+  const pgStacked = pushGuard(work, "dev-loop/CERT-11", db, "main");
+  ok(pgStacked.passengers.length === 0, "LOOP-55: stacked branch — CERT-10's commit is not an ancestor of local main → no false positive");
+
+  git(work, ["checkout", "-q", "main"]);
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
