@@ -47,9 +47,60 @@ export const claudeAdapter: UsageAdapter = {
   },
 };
 
+// Opencode `--format json` adapter.
+// opencode with `--format json` emits JSONL: one JSON object per line. The session/summary event
+// carries `tokens.{input,output,cache.{read,write}}` + optionally `cost` (USD). All other event
+// lines are tool invocations, messages, etc. — scanned past without extraction.
+// Shape: { type:"session"|..., tokens:{input:N,output:N,cache:{read:N,write:N}}, cost?:N }
+export const opencodeAdapter: UsageAdapter = {
+  extraArgs: ["--format", "json"],
+
+  parse(stdout: string): FireUsage | null {
+    try {
+      for (const line of stdout.split("\n")) {
+        if (!line.trim()) continue;
+        const obj = JSON.parse(line) as Record<string, unknown>;
+        if (typeof obj !== "object" || obj === null) continue;
+        const t = obj.tokens as Record<string, unknown> | undefined;
+        if (typeof t !== "object" || t === null) continue;
+        const cache = t.cache as Record<string, unknown> | undefined;
+        const costUsd = typeof obj.cost === "number" ? obj.cost : null;
+        return {
+          source: "provider",
+          inputTokens: typeof t.input === "number" ? t.input : null,
+          outputTokens: typeof t.output === "number" ? t.output : null,
+          cacheReadTokens: (typeof cache?.read === "number" ? cache.read as number : null),
+          cacheWriteTokens: (typeof cache?.write === "number" ? cache.write as number : null),
+          costUsd,
+          currency: costUsd !== null ? "USD" : null,
+        };
+      }
+      return null;
+    } catch {
+      return null; // any parse error or shape mismatch → null (best-effort, non-fatal)
+    }
+  },
+
+  isError(stdout: string): boolean {
+    try {
+      for (const line of stdout.split("\n")) {
+        if (!line.trim()) continue;
+        const obj = JSON.parse(line) as Record<string, unknown>;
+        if (typeof obj !== "object" || obj === null) continue;
+        if (obj.type === "error" || obj.type === "system.error") return true;
+      }
+      return false;
+    } catch {
+      // Non-JSON or truncated buffer — cannot determine structured error; fall through to exit-code.
+      return false;
+    }
+  },
+};
+
 // Select the adapter for a given coding agent. Returns null for unstructured (text-mode) lanes.
 export function resolveAdapter(codingAgent: string): UsageAdapter | null {
   if (codingAgent === "claude") return claudeAdapter;
+  if (codingAgent === "opencode") return opencodeAdapter;
   return null;
 }
 

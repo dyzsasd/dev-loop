@@ -719,6 +719,7 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
     "run",
     ...(profile.model ? ["--model", profile.model] : []),
     ...(passEffort ? ["--variant", profile.effort as string] : []),
+    "--format", "json",
     ...opts.extraArgs,
     prompt,
   ];
