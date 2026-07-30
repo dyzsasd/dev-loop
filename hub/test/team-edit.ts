@@ -241,6 +241,55 @@ try {
   ok(detectRepoFacts(fix).build?.build === "pnpm run build", "detectRepoFacts picks the runner from the lockfile (pnpm)");
   rmSync(join(fix, "pnpm-lock.yaml"));
 
+  // LOOP-16 regressions: emit guard + subdirectory scan
+  // (a) test+quality-only — the :350 guard no longer requires typecheck/build to be present
+  const fixTQ = join(tmp, "tq-only");
+  mkdirSync(fixTQ);
+  writeFileSync(join(fixTQ, "package.json"), JSON.stringify({ scripts: { test: "node --test", quality: "node src/quality.ts" } }));
+  const factsTQ = detectRepoFacts(fixTQ);
+  ok(factsTQ.build?.test === "npm run test" && factsTQ.build?.quality === "npm run quality"
+    && factsTQ.build?.typecheck === undefined && factsTQ.build?.build === undefined,
+    "detectRepoFacts: test+quality-only package.json emits build block (guard no longer requires typecheck/build)");
+
+  // (a) no matching scripts at all → out.build stays absent
+  const fixNoGates = join(tmp, "no-gates");
+  mkdirSync(fixNoGates);
+  writeFileSync(join(fixNoGates, "package.json"), JSON.stringify({ scripts: { start: "node dist/index.js" } }));
+  ok(detectRepoFacts(fixNoGates).build === undefined,
+    "detectRepoFacts: no matching scripts → out.build stays absent");
+
+  // (b) nested-single-package: no root package.json, exactly one subdir with scripts
+  const fixNested = join(tmp, "nested-single");
+  const fixNestedHub = join(fixNested, "hub");
+  mkdirSync(fixNestedHub, { recursive: true });
+  writeFileSync(join(fixNestedHub, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc --noEmit", build: "vite build", quality: "node quality.ts" } }));
+  const factsNested = detectRepoFacts(fixNested);
+  ok(factsNested.build?.typecheck === "cd hub && npm run typecheck" && factsNested.build?.build === "cd hub && npm run build",
+    "detectRepoFacts: no root package.json + single nested candidate → gates prefixed with cd <subdir>");
+  // runner chosen from lockfile beside the nested package.json
+  writeFileSync(join(fixNestedHub, "pnpm-lock.yaml"), "lockfileVersion: 9\n");
+  ok(detectRepoFacts(fixNested).build?.typecheck === "cd hub && pnpm run typecheck",
+    "detectRepoFacts: nested candidate — runner from lockfile beside nested package.json (pnpm)");
+  rmSync(join(fixNestedHub, "pnpm-lock.yaml"));
+
+  // (b) nested-ambiguous: two subdirs with scripts → emit nothing
+  const fixAmb = join(tmp, "nested-ambiguous");
+  mkdirSync(join(fixAmb, "pkg-a"), { recursive: true });
+  mkdirSync(join(fixAmb, "pkg-b"), { recursive: true });
+  writeFileSync(join(fixAmb, "pkg-a", "package.json"), JSON.stringify({ scripts: { build: "tsc -b" } }));
+  writeFileSync(join(fixAmb, "pkg-b", "package.json"), JSON.stringify({ scripts: { test: "jest" } }));
+  ok(detectRepoFacts(fixAmb).build === undefined,
+    "detectRepoFacts: two nested candidates → ambiguous, no build block emitted");
+
+  // (b) root-wins-over-nested: root package.json present → subdirs not consulted
+  const fixRootWins = join(tmp, "root-wins");
+  mkdirSync(join(fixRootWins, "sub"), { recursive: true });
+  writeFileSync(join(fixRootWins, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc" } }));
+  writeFileSync(join(fixRootWins, "sub", "package.json"), JSON.stringify({ scripts: { build: "webpack" } }));
+  const factsRootWins = detectRepoFacts(fixRootWins);
+  ok(factsRootWins.build?.typecheck === "npm run typecheck" && factsRootWins.build?.build === undefined,
+    "detectRepoFacts: root package.json wins — subdir package.json not consulted");
+
   // CLI: register with detection inside the lin workspace
   cpSync(fix, join(lin, "detected-repo"), { recursive: true });
   const det = run("team", ["add-repo", "det", "--project", "web", "--path", "detected-repo", "--detect"], { cwd: lin });
