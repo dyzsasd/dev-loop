@@ -3,6 +3,38 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+The first batch built BY the loop ON the loop (workspace `loop`, 2026-07-30): every entry
+below was filed, groomed, implemented, and PR-merged by the agents themselves.
+
+- **feat(runner): process-group fire kill + visible-retry-loop watchdog** (LOOP-7 → LOOP-23).
+  Fires spawn detached (own process group) and a timeout/stall kill now SIGTERMs the whole
+  group — no more zombie coding-CLI children surviving their fire (the 2026-07-22 qwen
+  incident's manual cleanup). The liveness watchdog gains a second mode: output that keeps
+  ARRIVING but introduces no NEW content for the stall window is killed as errorClass
+  `"retry-loop"` (a printing retry loop defeated the silence-only check and burned the full
+  fire-timeout). Both classes feed the breaker; the detector window is bounded and rolling.
+- **fix(cli): `dev-loop queue` routes at the top level** (LOOP-20). The documented FIRST call
+  of every agent fire exited 2 (`unknown command 'queue'`) — the verb existed in the op layer
+  and every cheat-sheet, but was never wired into the CLI ROUTES. Field origin: this repo's
+  own loop hit it on every boot.
+- **fix(hub): ambient-fire env leak** (LOOP-6). `wireEnv` always overrides `DEVLOOP_PROJECT`,
+  so operator `hub start/status/stop` can no longer silently target another workspace's
+  hub.db through env inherited from a fire.
+- **fix(cli): flag paths get the junk-segment guard** (LOOP-29). `--hub-db` / `--data` /
+  `--root` / `--cwd` / `--mcp-config` now reject `undefined`/`null` path segments like their
+  env-var twins (a stray `./undefined/test-hub.db` was found planted in this repo's own tree).
+- **fix(push-guard): scan the full commit message for ticket refs** (LOOP-25). Refs living in
+  the commit BODY (the MP-275 failure class) no longer read as "no ticket".
+- **fix(cli): `comment add --body-file -` reads stdin** (LOOP-21).
+- **fix(detect): mergeChecks are real PR contexts** (LOOP-5). Workflow trigger-filter
+  (`pull_request` only) + matrix-name expansion — `workflow_call` / release-only jobs are no
+  longer emitted as merge gates that never materialize on a PR (an autoMerge repo would have
+  waited forever).
+- **refactor(quality): `stripGo` decomposed** (LOOP-22; regression test LOOP-33). CRAP
+  113.8 → <15 — this repo's own ratchet had gone red on it and wedged every loop PR merge.
+
 ## 1.10.0
 
 - **feat(quality): `--diff-base <ref>` — the PR gate.** `--changed` reads `git status`, which
