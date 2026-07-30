@@ -292,6 +292,29 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   would discard all of it silently. Filed as **LOOP-36** (senior `Mode: design` — choosing the
   landing path is a real decision, and the same gap applies to senior-dev's `docs/design/*.md`).
 
+- **✅ Runner resilience is now complete and PM-verified (2026-07-30, `4917db6`).** **LOOP-23** —
+  the LOOP-7 follow-up — landed and passed verify, closing the arc LOOP-1 opened: fires are killed
+  by **process group** (no surviving descendants burning quota) and the retry-loop detector actually
+  **rolls**. The original detector froze on its first 200 distinct lines and then read every
+  subsequent line as new content, so a real fire that streamed thousands of tool lines before hitting
+  a 429 loop could never trip the watchdog — it burned the full 1h timeout producing nothing. It is
+  now a bounded FIFO window (`hub/src/seen-lines.ts`); `errorClass:"retry-loop"` reaches both ledgers
+  and `byErrorClass`. Verified by re-running the suites against the merged commit **and** by
+  reverting the module to the frozen semantics to confirm the new regression test genuinely fails
+  against it. The scheduler's own SIGINT/SIGTERM path was **deliberately left a direct-child graceful
+  signal** (documented at `run-agents.ts:1298-1306`): group-signalling would forcibly reap the
+  helpers an agent spawns to checkpoint, which LOOP-10 made an explicit non-goal. A descendant that
+  outlives a *graceful* stop stays **LOOP-19**'s job.
+
+- **Two "merged ≠ what is actually running" gaps are now on the board together (2026-07-30).**
+  LOOP-36 above is the doc side. The code side is **LOOP-38** (QA-filed, re-tiered by PM to
+  senior + `sensitive`): the globally-installed `dev-loop` binary — the exact one every fire, the
+  scheduler, and the operator invoke — is still **1.10.0**, five commits behind `origin/main`, because
+  `release-npm.yml` is `workflow_dispatch`-only and nobody re-triggered it. So LOOP-20/21/25, all
+  marked `Done`, are **not live**: `dev-loop queue` still fails from the installed binary, and PM/QA
+  have been hand-working-around it for several fires. `Done` on a CLI-behavior ticket currently means
+  "merged", not "runnable" — and nothing anywhere makes that skew visible.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -659,6 +682,43 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
     set with no invariant test between them, so the next verb repeats LOOP-20 exactly. A
     test-strength gap is QA's call, and LOOP-37's first AC already forces the new verb through all
     three lists.
+
+- **(pm, 2026-07-30) Competitive-parity lens — the loop can merge over a human's "Request changes",
+  and the 2026-07-02 "do not re-propose" list correctly stopped everything else.** Filed **LOOP-39**
+  (Feature, senior `Mode: design`, `relatedTo` LOOP-27/LOOP-35) on the one finding that survived.
+  - **The finding.** §12c's fire-start merge pass merges on `mergeChecks` green **AND** `MERGEABLE`,
+    and never reads `reviewDecision`. That is not an isolated oversight: §12c deliberately avoids
+    GitHub branch protection (required-check gating deadlocks PRs whose checks never report, e.g.
+    `GITHUB_TOKEN`-created deploy PRs) — a decision that should stand. But **without protection a
+    `CHANGES_REQUESTED` review cannot make a PR non-mergeable**, so nothing stops the next dev fire
+    from squash-merging over it. Verified: `gh api …/branches/main/protection` → **404 Branch not
+    protected**. Separately, `grep -rn "gh pr\|pull_request\|prNumber" hub/src/` → **0 hits**: the hub
+    has no forge concept, so review comments reach no agent and ticket→PR exists only as pasted prose.
+  - **Why it is worth a ticket though it has never fired** (`reviewDecision: ""` on every loop PR,
+    #30–#36): the Vision sells operator **点评** as the steering mechanism, and today that steering
+    cannot reach the diff — the surface a reviewer actually uses. The failure mode is a human's most
+    deliberate act of steering being discarded silently, with the change already on `main`.
+  - **Checked against the standing non-goal, and it holds.** *"No default human step-by-step
+    gating"* forbids requiring approval; it does not require ignoring refusal. LOOP-39 adds no wait:
+    an unreviewed PR merges exactly as today.
+  - **The 2026-07-02 Linear-parity skip list did its job.** Re-read before filing, as that entry
+    instructs. Cycles/estimates, due dates, milestones, saved views, reactions, attachments, and SLAs
+    were all considered and **not** re-proposed — no new concrete need. LOOP-39 is forge/review
+    integration, which that entry never covered, so it is not a re-proposal.
+  - **§17 split, deliberate.** LOOP-39 scopes only the *enforceable* half (a `push-guard`-style verb
+    + board-visible review state + a structured ticket↔PR link). Wiring the guard into the merge rule
+    edits `conventions.md` §12c and `skills/dev-agent/SKILL.md`, so it rides a `[pm-proposal]` for the
+    operator — the same prose-not-code weakness **LOOP-35** is filed against.
+
+- **(pm, 2026-07-30) Routing correction worth keeping: an un-tiered ticket is invisible, and
+  `sensitive` is decided from the ACs, not the label.** LOOP-38 arrived p1 with `assignee: null` and
+  no tier, so it was in **neither** dev pick-query (`opQueue`, `hub/src/agentops.ts:205`, filters the
+  dev queues on assignee) — a p1 bug parked where nobody could see it. PM re-tiered it by hand at
+  grooming, to **senior + `sensitive`**: its leading option turns `release-npm.yml` into a
+  push-triggered publish, which changes when a credential publishes a public package (§4 → §21b:
+  sensitive ⇒ senior, always — design before code). Two standing rules for future fires: **every
+  QA/Architect/Ops-filed ticket gets a tier check during Job B2** until **LOOP-30** lands, and
+  `sensitive` is judged from what the ACs plainly touch even when the filer did not label it.
 
 ## Candidate ideas
 
