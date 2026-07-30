@@ -270,6 +270,28 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `conventions.md`. Filed as **LOOP-34** (senior `Mode: design`) and **LOOP-35** (junior). Neither
   has been violated yet; both are tripwires, filed while they are still cheap.
 
+- **✅ The landing stall is over — supersedes the "⚠️ Nothing has landed since v1.10.0" bullet
+  above (2026-07-30, consistency lens).** Four PRs merged to `origin/main` in one window:
+  `cec3598` (#32, LOOP-22 — the CRAP ratchet unblocked), `baa756f` (#30, LOOP-20 — `dev-loop queue`
+  routable at the top level), `a5c1533` (#31, LOOP-25 — push-guard scans the full commit message),
+  `6b4b1e5` (#34, LOOP-21 — `comment add --body-file -` reads stdin). `origin/main` moved
+  `3cfc250 → 6b4b1e5`; QA verified LOOP-20/21/25 to `Done` during this fire. Three of the four
+  fixed CLI gotchas the PM state file had been carrying as standing workarounds — the loop is now
+  visibly repairing its own agent-facing surface. **The installed CLI still reports `1.10.0`**, so
+  these fixes reach an operator only at the next release cut.
+
+- **But the strategy doc itself does not land (2026-07-30, consistency lens).** PM writes
+  `docs/STRATEGY.md` by committing to the local `main`; this repo is configured
+  `landing:"pr"` + `autoMerge:true`, and every dev worktree is branched off
+  `origin/<defaultBranch>`. So PM's six doc commits (`b278db8`…`bfb9f47`, **+385/−45** lines) and
+  the whole `docs/strategy-archive/2026-07.md` rollup exist **only in the doc-home checkout**.
+  Measured this fire: PM reads a **60,523**-byte strategy doc while the live `LOOP-32` dev worktree
+  reads a **41,004**-byte one — the dev tiers cannot see today's `Decisions` log, the re-worked
+  `Candidate ideas`, or the `Current state` re-sync. The branches have **diverged 4 ↔ 6**, growing
+  one commit per PM fire, and the reflexive operator recovery (`git reset --hard origin/main`)
+  would discard all of it silently. Filed as **LOOP-36** (senior `Mode: design` — choosing the
+  landing path is a real decision, and the same gap applies to senior-dev's `docs/design/*.md`).
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -586,6 +608,57 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   - **Still with the operator: LOOP-18**, fourth fire with no verdict. `Goals` stays untouched and
     the quality-gauntlet line stays out-of-mandate for Job C filings; neither ticket filed this
     fire depends on that ruling.
+
+- **(pm, 2026-07-30) Consistency lens — the loop's own artifacts disagree about where they live,
+  and the strategy doc is the worst case.** Product moved for real this fire (`3cfc250 → 6b4b1e5`,
+  four merges), so the swept-lens list reset and `consistency` ran first. Both findings are the
+  same shape: **a contract stated in prose, with two or three implementations of it on disk.**
+  - **The doc-landing gap (LOOP-36) is the sequencing call of the fire.** §20 D4 says PM lands a
+    repo-file strategy doc *by committing*; §12b says nothing reaches `defaultBranch` except
+    through a PR, and §7 branches every dev worktree off `origin/<defaultBranch>`. Both rules are
+    individually right; together they mean **PM is the only writer in the workspace with no
+    landing path at all**. This is not a projection — the 60,523 vs 41,004-byte split between PM's
+    checkout and the `LOOP-32` worktree is on disk right now (recorded in `Current state`). Routed
+    **senior `Mode: design`** rather than "just push": the four candidate fixes (PM pushes
+    doc-only / PM opens a doc PR / move to the hub `doc` kind / detect-and-report) have genuinely
+    different blast radii, and the cheapest one makes PM the single actor that bypasses this
+    repo's stated human gate. The design must also rule on senior-dev's `docs/design/*.md`, which
+    is autonomously committed through the identical gap, and on recovering the existing
+    divergence without a destructive reset.
+  - **Worktrees under two roots (LOOP-37), neither the documented one.** `wsWorktree()`
+    (`workspace.ts:74`) builds `<ws>/.dev-loop/wt/<ticket>/<ref>` and four live worktrees sit
+    there; three more sit at `<ws>/worktrees/<ticket>`, a shape that appears **nowhere** in
+    `hub/src/`; conventions §7 documents a **third** shape again. The cause is the same as the
+    LOOP-20 class: `wsWorktree()` is correct but **not reachable from the CLI surface**, so an
+    agent implementing §7 hand-builds a path and three fires built three. Consequence already on
+    disk: **LOOP-7 is `Canceled` and its worktree + branch are still live** — land-time cleanup
+    never fires for a ticket that never lands, and `prune` only drops entries whose directory is
+    already gone. Routed junior; the reaper must enumerate from `git worktree list` rather than
+    from a computed root, or it inherits the blind spot it is fixing.
+  - **The §17 boundary bit twice, and both tickets say so in-body.** LOOP-36's real fix may imply
+    a §20 D4 prose change and LOOP-37's certainly implies a §7 one — neither of which an agent may
+    make. Both carry an explicit `Out of scope (§17)` section routing the prose delta to the
+    operator as a proposal. This is the third fire in a row where the correct code change sits
+    next to a governing-prose change the loop cannot apply; **LOOP-34/LOOP-35 exist because that
+    boundary is enforced by prose too.**
+  - **Job A / Job B — nothing to do, verified rather than assumed.** LOOP-18 is now on its
+    **fifth** fire with no operator verdict (still correctly parked `In Review`/`investigation`,
+    not re-commented). No `needs-pm` intake, no team (`_team`) intake. Every §9c edge re-resolved
+    from its markers rather than from the state file: LOOP-4 (LOOP-12/13/14/15), LOOP-13/14/15
+    (LOOP-12), LOOP-19 (LOOP-12 + LOOP-23), LOOP-31 (LOOP-26) — **every blocker still open, so
+    zero unparks**, which is the correct outcome and not a stall.
+  - **Job B2 — promoted strictly by priority within rank, no exception this time.** Junior had one
+    free slot and took **LOOP-30** (p2) ahead of three p3 siblings; senior had eight and took
+    **LOOP-34** (p2). **LOOP-4 and LOOP-31 were deliberately NOT promoted** despite free senior /
+    junior capacity — both carry live blocker edges, and promoting a blocked ticket into `Todo`
+    just to fill a slot is how a depth cap starts lying about ready work.
+  - **Noted for QA, not filed (staying in lane).** LOOP-20's regression test
+    (`hub/test/cli-agentops.ts:319-333`) asserts that **`queue` specifically** routes, while its
+    comment claims *"any future ROUTES omission fails here immediately."* It does not — `ROUTES`,
+    `ATTACH_OK`, and `NEEDS_NODE_SQLITE` remain three hand-maintained parallel lists over one verb
+    set with no invariant test between them, so the next verb repeats LOOP-20 exactly. A
+    test-strength gap is QA's call, and LOOP-37's first AC already forces the new verb through all
+    three lists.
 
 ## Candidate ideas
 
