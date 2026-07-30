@@ -181,8 +181,9 @@ dev-loop ticket <id> [--json]        read-only: show one ticket — detail + com
     --json = EXACTLY the op get_issue body (the ticket + its comments + referencedBy).
 
 # save_issue (create)
-dev-loop ticket create --title T --type Bug|Feature|Improvement [--description TEXT|'-'] [--description-file F]
+dev-loop ticket create --title T --type Bug|Feature|Improvement [--state S] [--description TEXT|'-'] [--description-file F]
                        [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
+    --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs (verify-fail follow-up, un-block re-queue).
     --blocked-by writes the §9c blocking-edge marker comment ('Blocked-by: <id>', one line per id) after the create.
 
 # save_comment
