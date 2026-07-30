@@ -205,6 +205,13 @@ append-only — so here is what shipped after the 1.2.0 line above, per `CHANGEL
 Recorded as shipped reality only. Whether the quality line is product *direction* is the open
 question, parked for the operator on **LOOP-18** — `Goals` is unchanged pending that ruling.)
 
+- **⚠️ Nothing has landed since v1.10.0 — the loop can build but cannot ship (2026-07-30).** The
+  repo's required merge checks (`Test (Node 23.6.0)` / `Test (Node 24)`) have been RED on `main`
+  since `7f18a62` (1.9.0, 2026-07-24): the full-repo CRAP ratchet fails on `stripGo`
+  (`hub/src/quality.ts:267`, CRAP 113.8 > the 90 threshold). `autoMerge` therefore cannot fire for
+  any `dev-loop/*` PR. The first PR the loop itself produced (#27) passes typecheck and its own
+  tests on both Node lanes and is still unmergeable. Tracked as **LOOP-22** (P1, Todo).
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -316,6 +323,75 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
     `hub/package.json`. Immediate fix, if wanted:
     `dev-loop team set repos.dev-loop.build.quality "cd hub && npm run quality"` (likewise
     `typecheck` / `build` / `test`).
+
+- **(pm, 2026-07-30, fire 3) Both design gates PASSED, one increment sent back, and the loop's
+  landing path found blocked.** The `ux-flows` lens ran; HEAD had not moved on product code (the
+  only commit since the last review was PM's own doc commit), so this fire was Job-A-heavy by
+  design.
+  - **LOOP-2 (metering core) — design gate PASS**, children LOOP-12/13/14/15 promoted, parent
+    `Done`. **Deliberately NOT parked for §21a big-module operator sign-off**, and the reasoning is
+    the precedent worth keeping: cross-cutting scope alone does not make a design "big-module" —
+    it is additive-only (every field optional), needs no schema migration, touches no
+    auth/money/PII/secret surface, and carries an explicit best-effort/non-fatal posture. The one
+    property that *would* have forced the park (an irreversible or migrating change) is a named
+    non-goal in the design itself. Parking it would have stalled the whole cost-governance line
+    behind a human for no safety gain.
+  - **LOOP-10 (infra-kill ticket release) — design gate PASS**, child LOOP-19 promoted, parent
+    `Done`. The design's sharpest point is now precedent: the runner release **preserves the
+    assignee**, because on `service` the split-dev pick filter IS the assignee — Sweep's generic
+    unassign-on-reset would make a released ticket invisible to BOTH dev queues.
+  - **📌 Mechanism discovered, and it changes how PM promotes design children: a `Blocked-by:`
+    marker comment does NOT gate anything.** The dev queue filters on the **`blocked` LABEL**
+    (`hub/src/agentops.ts:206,218`); `Blocked-by:` is convention consumed by humans, PM and Sweep.
+    So a staged child promoted `Backlog → Todo` on nothing but its marker comment is served to
+    junior-dev as pickable work immediately, out of order. **Rule going forward:** when the §21a
+    gate promotes children, any child with an unmet dependency gets the `blocked` label too — that
+    is what actually implements the senior's stated sequencing — and PM drops the label as the
+    blockers land (§9c). Applied to LOOP-13/14/15/19 this fire.
+  - **⚠️ A false-unpark trap, caught and fixed — worth remembering.** LOOP-19 carried
+    `Blocked-by: LOOP-7`. LOOP-7 failed verify this fire and became `Canceled` — and §9c unparks a
+    ticket once **every** blocker edge is `Done`/`Canceled`. A Canceled blocker reads as
+    *satisfied*, so the edge would have released LOOP-19 while its real prerequisite (the
+    process-group kill) had not landed at all. **Whenever a verify-fail Cancels a ticket, re-point
+    every inbound `Blocked-by:` edge to the follow-up in the same fire.** Re-pointed to LOOP-23.
+  - **LOOP-7 (process-group kill + retry-loop detection) — verify FAIL, routed UP to senior-dev as
+    LOOP-23 (`Mode: direct-code`, §3).** ACs 1–4 (the process-group half) are genuinely met and
+    PR #27 is explicitly kept as the base. AC 5 is not: `seenLines` is capped at 200 entries and
+    **never evicts**, so after the first ~200 distinct lines every line fails the `has()` check,
+    counts as new content, and the retry-loop watchdog can never trip. A real fire saturates that
+    set in seconds, so the detector is inert in exactly the 429-retry-loop scenario the ticket was
+    written to fix. Its live test passes only because the stub repeats from the very first byte —
+    **the test proved the mechanism, not the requirement.** Worth generalizing: a bounded cache
+    that is described as "rolling" but only freezes is a shape to look for.
+  - **CI red on `main` — the whole board is undeliverable until it clears.** Found independently
+    during the LOOP-7 verify; senior-dev filed it concurrently as **LOOP-22** while this fire was
+    running. LOOP-22 is the better ticket (it proves `stripGo` is the *only* function over the
+    ratchet, next-worst 86.7, so the fix is bounded to one function) — PM's duplicate LOOP-24 was
+    `Canceled` into it, LOOP-22 groomed to junior-dev and promoted P1 ahead of everything.
+    Reinforced its third AC with a route: **do not raise the threshold to go green** — the 90
+    ratchet is a deliberate commitment (`2e18244` tightened 160 → 90) and relaxing it to unblock a
+    merge would quietly retire the product's own headline gate; if the threshold must move, that
+    is a direction call routed to PM, not an edit.
+  - **Process note carried from LOOP-22, deliberately NOT filed as Dev work:** the *Release npm
+    package* workflow does not depend on *Test*, which is why 1.9.0 and 1.10.0 both shipped over a
+    red gate and the breach went unnoticed for ~6 days. That is CI topology / process, for the
+    operator and reflect/architect — not a product ticket.
+  - **PM also observed a second, distinct failure** on `main` (run 30149735763): the `Test` step
+    itself fails on **Node 23.6.0 only** — it does not reproduce on PR #27's branch, so it is
+    already fixed or intermittent. Recorded on LOOP-22, since a green quality gate alone will not
+    turn that check green if it is still live.
+  - **Filed on the `ux-flows` lens: LOOP-26 (Backlog).** `blockedNow` (`hub/src/metrics.ts:104`)
+    counts the `blocked` label without distinguishing *parked-needs-attention* from
+    *sequenced-behind-a-dependency*. This fire proved the cost: labelling four design children for
+    sequencing drove the operator's board KPI to `blockedNow: 4` when **none** of them needs a
+    human. The metric reads worst exactly when the loop is doing dependency management well.
+    Scoped to split the count from data that already exists (`Blocked-by:` edges + `needs-*`), with
+    an explicit instruction **not** to add a label — the taxonomy lives behind the §17 boundary.
+  - **Still with the operator: LOOP-18** (the `Goals`/quality-gauntlet direction proposal) has had
+    no verdict. `Goals` stays untouched; the diff is applied and committed on approval.
+  - **Housekeeping due next fire:** this doc is ~53KB, well past the §20 ~20KB rollup threshold.
+    The 2026-07 Decisions tail should be rolled to `docs/strategy-archive/2026-07.md` the way
+    2026-06 already was. Deliberately deferred rather than done half-way at the end of a long fire.
 
 ## Candidate ideas
 
