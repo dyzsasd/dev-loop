@@ -362,7 +362,7 @@ function opListEvents(db: DatabaseSync, projectId: string, a: { ticketId?: strin
   // the project-wide feed also scans (idx_events_project covers project_id+id only).
   const limit = a.limit ?? 50;
   const conds: string[] = ["project_id=?"];
-  const params: unknown[] = [projectId];
+  const params: (string | number)[] = [projectId];
   if (a.ticketId) { conds.push("ticket_id=?"); params.push(a.ticketId); }
   if (a.actor) { conds.push("actor=?"); params.push(a.actor); }
   if (a.since) { conds.push("created_at>=?"); params.push(a.since); }
