@@ -162,7 +162,7 @@ Supporting goals (all in scope this milestone):
   New installs start from `dev-loop team init`; `dev-loop.json` is the source of truth.
 - **Main surfaces / modules:** `skills/` agent and operator skills; `references/` shared specs
   (`conventions.md`, `config-schema.md`, `codex-integration.md`); `hub/` — the `node:sqlite`
-  service backend + `dev-loop` CLI, **1.2.0 line** (see `CHANGELOG.md`), with the full npm test
+  service backend + `dev-loop` CLI, **v1.11.0 line** (see `CHANGELOG.md`), with the full npm test
   suite; `docs/`
   for architecture, running, portability, daemon, design records, and reviews; `config/` for
   MCP templates and example workspace config.
@@ -995,6 +995,53 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   senior `Mode: design` because the cleanup rule, not the teardown, is the hard part: three unrelated
   *legitimate* workspaces are listening on this machine right now (one 8 days old), so **age is not a
   liveness signal** and a naive reaper kills someone's live board.
+
+- **(pm, 2026-07-30) conversion-retention lens — `main` is shipping a silent kill-switch, and the
+  verify gate that caught it had no power to stop it.** Verifying LOOP-12 (metering increment A) found
+  all five ACs passing and both suites green, but one **EXTRA delta** in the diff: to let the test
+  `import { recordFire }`, the tail of `hub/src/run-agents.ts` became
+  ``if (import.meta.url === `file://${process.argv[1]}`)``. That is naive string concatenation —
+  `import.meta.url` is percent-encoded, `process.argv[1]` is a raw path — so on any checkout path
+  containing a space, `#`, `?`, or non-ASCII the comparison fails, `main()` never runs, and
+  **`dev-loop run` becomes a silent no-op that exits 0**. Proven, same file and command, only the
+  directory differing: `"/tmp/pm space test"` → 0 bytes of output; `/tmp/pm-l12` → the normal 5587-byte
+  help. macOS `Google Drive` / `iCloud Drive` checkouts make this an ordinary install shape, and its
+  failure mode — a loop that looks healthy and does nothing — is the worst class this product can ship.
+  Verify-failed and Canceled (LOOP-12); **fix-forward is LOOP-58** (senior, p1).
+  - **The governing finding is not the bug, it is what happened next.** `autoMerge` merged PR #40 to
+    `origin/main` as `e5669cb` **while the ticket sat In Review awaiting this very gate** — green CI
+    was treated as sufficient authority to land. The gate produced the correct verdict and could not
+    act on it: remediation became a fix-forward on `main` instead of a branch that never lands. The
+    merge pass reads `gh pr checks` + `mergeable` and reads **neither `reviewDecision` nor the board**,
+    so a human's "Request changes" and an owning agent's pending verify gate are the same blind spot.
+    Evidence routed to **LOOP-39**, which already owns the merge-policy axis, with a suggested scope
+    addition: gate the merge on **ticket state**, not only on review state — the board is already the
+    system of record and needs no new forge concept to read.
+  - **The lens's own answer.** Asked "does a new operator convert and stay?", the honest reading of
+    this fire is that **every severe finding today was invisible to the operator until an agent
+    happened to look**: `dev-loop doctor` printed `DOCTOR_OK` and `NEXT: dev-loop run` against a
+    `main` that had just acquired the kill-switch. Retention risk here is not a missing feature, it is
+    a health surface that is confidently wrong. That theme already has owners (LOOP-46/56 skew and
+    divergence W-codes, LOOP-49 decision-queue ageing, LOOP-31/26 blocked-now contradictions), so it
+    is recorded here rather than re-filed — **zero new tickets from this lens beyond LOOP-58.**
+  - **Two design gates cleared (§21a).** `landing-discipline` v1 verified against the repo, not the
+    hand-off. **LOOP-48 (Part A) PASSED → `Done`**, children LOOP-54/LOOP-55 promoted; its claims hold
+    live — PRs #38 and #39 each carry **7 passenger `docs(strategy)` commits** and are conflicted,
+    while #41 (cut after the base reconciliation) carries only its own work, which is exactly the
+    behaviour the `worktree add` verb makes structural. One caveat recorded for the build: the design
+    rests on *"`autoMerge` cannot fire on a `DIRTY` PR"*, which is true today but is a coincidence, not
+    a rule — #40 proved how fast a clean PR lands. **LOOP-36 (Part B) design verified but parked
+    `Human-Blocked`**: Option 1 makes PM the one actor pushing to `origin/main` outside the repo's PR
+    gate, which is the operator's call, not senior's and not mine. Its AC3 (rescue the 12-commit
+    divergence) and AC6 (PM and dev read the same doc) are **already satisfied** — `strategy-archive/
+    2026-07.md` is on `origin/main` and both copies now hash identically — but by a manual one-time act
+    with a recurrence interval of *one PM fire*, which is the whole argument for the mechanism.
+  - **Board hygiene:** LOOP-51 and LOOP-56 were the same W19 detector filed 15 minutes apart by PM and
+    senior; merged toward the design child (LOOP-56) with the loser's unique content ported, not
+    dropped. And LOOP-48's design gate never reached PM's `queue` at all — its labels predated its
+    `Mode: design` conversion, so a pure-label filter served it to QA and hid it from its §21a owner
+    (QA caught it and filed **LOOP-59**). Cancelling LOOP-12 would have false-unparked five tickets
+    behind a Canceled blocker; all five edges were re-pointed to LOOP-58 in the same fire.
 
 ## Candidate ideas
 
