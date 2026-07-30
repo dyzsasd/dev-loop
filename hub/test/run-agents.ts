@@ -9,7 +9,7 @@ import { openDb, logEvent } from "../src/db.ts";
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
 import { breaker } from "../src/breaker.ts";
-import { claudeAdapter } from "../src/fire-usage.ts";
+import { claudeAdapter, opencodeAdapter } from "../src/fire-usage.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -234,7 +234,7 @@ try {
   ok(/senior-dev:claude:claude-opus-4-8\/max/.test(twoLevel.out), "senior-dev inherits the run CLI (claude) with its agents{} model/effort");
   ok(/senior-dev: claude .*--model claude-opus-4-8 --effort max /.test(twoLevel.out), "senior-dev renders a claude command with its pinned model/effort");
   ok(/pm:opencode:anthropic\/claude-opus-4-8\//.test(twoLevel.out), "pm resolves to codingAgent=opencode with its model");
-  ok(/pm: opencode run --model anthropic\/claude-opus-4-8 /.test(twoLevel.out), "pm renders an opencode run command");
+  ok(/pm: opencode run --model anthropic\/claude-opus-4-8 --format json /.test(twoLevel.out), "pm renders an opencode run command with --format json");
   ok(/sweep:claude:haiku\/low/.test(twoLevel.out), "sweep takes the per-coding-agent default (claude haiku/low) from codingAgentDefaults");
   ok(/qa:claude:sonnet\/low/.test(twoLevel.out), "qa uses back-compat models{} for model + codingAgentDefaults for effort");
 
@@ -553,6 +553,91 @@ try {
         "LOOP-13: --output-format json appears in the claude dry-run command");
     } finally {
       rmSync(tmp2, { recursive: true, force: true });
+    }
+  }
+}
+
+// ── LOOP-14: opencode UsageAdapter — parse, isError, §16 ─────────────────────────────────────────
+{
+  // Recorded fixture: opencode `--format json` JSONL output. The session event carries token totals
+  // and cost; other events (message, tool_call) are scanned past without extraction.
+  const SESSION_LINE = JSON.stringify({
+    type: "session",
+    session_id: "sess_abc",
+    tokens: { input: 2048, output: 512, cache: { read: 128, write: 64 } },
+    cost: 0.0089,
+  });
+  const FIXTURE_SUCCESS = [
+    JSON.stringify({ type: "message", role: "assistant", content: "I'll run the tests now.", session_id: "sess_abc" }),
+    JSON.stringify({ type: "tool_call", name: "bash", input: { command: "npm test" }, id: "call_1" }),
+    JSON.stringify({ type: "tool_result", id: "call_1", output: "PASS" }),
+    SESSION_LINE,
+  ].join("\n");
+
+  const FIXTURE_NO_COST = [
+    JSON.stringify({ type: "session", tokens: { input: 100, output: 50 } }),
+  ].join("\n");
+
+  // AC1: real fixture → populated usage row with token fields + costUsd + currency.
+  const usage = opencodeAdapter.parse(FIXTURE_SUCCESS);
+  ok(usage !== null, "LOOP-14 AC1: opencodeAdapter.parse returns non-null for a well-formed JSONL fixture");
+  ok((usage?.inputTokens ?? 0) > 0, `LOOP-14 AC1: inputTokens > 0 (got ${usage?.inputTokens})`);
+  ok((usage?.outputTokens ?? 0) > 0, `LOOP-14 AC1: outputTokens > 0 (got ${usage?.outputTokens})`);
+  ok((usage?.cacheReadTokens ?? -1) >= 0, `LOOP-14 AC1: cacheReadTokens is a non-negative number (got ${usage?.cacheReadTokens})`);
+  ok((usage?.cacheWriteTokens ?? -1) >= 0, `LOOP-14 AC1: cacheWriteTokens is a non-negative number (got ${usage?.cacheWriteTokens})`);
+  ok(typeof usage?.costUsd === "number" && (usage.costUsd ?? 0) > 0, `LOOP-14 AC1: costUsd present and > 0 (got ${usage?.costUsd})`);
+  ok(usage?.currency === "USD", `LOOP-14 AC1: currency is "USD" (got ${usage?.currency})`);
+  ok(usage?.source === "provider", `LOOP-14 AC1: source is "provider" (got ${usage?.source})`);
+
+  // AC1 variant: when cost is absent → costUsd null, currency null (honest null posture).
+  const usageNoCost = opencodeAdapter.parse(FIXTURE_NO_COST);
+  ok(usageNoCost !== null, "LOOP-14 AC1: session event without cost still parses token fields");
+  ok(usageNoCost?.costUsd === null, "LOOP-14 AC1: costUsd is null when the event has no cost field");
+  ok(usageNoCost?.currency === null, "LOOP-14 AC1: currency is null when costUsd is null");
+
+  // AC2: malformed/absent JSONL → null usage; fire path continues normally (does not throw).
+  ok(opencodeAdapter.parse("") === null, "LOOP-14 AC2: empty stdout → null usage (no throw)");
+  ok(opencodeAdapter.parse("not json\nalso not json") === null, "LOOP-14 AC2: non-JSON JSONL → null usage (no throw)");
+  ok(opencodeAdapter.parse('{"type":"message","content":"hi"}') === null, "LOOP-14 AC2: JSON event with no tokens field → null usage");
+
+  // isError: no error events → false; error event → true; unparseable → false (safe fallback).
+  ok(opencodeAdapter.isError!(FIXTURE_SUCCESS) === false, "LOOP-14: isError returns false when no error event in stream");
+  ok(opencodeAdapter.isError!([
+    JSON.stringify({ type: "message", content: "Working..." }),
+    JSON.stringify({ type: "error", message: "Rate limit exceeded" }),
+  ].join("\n")) === true, "LOOP-14: isError returns true when stream contains a type=error event");
+  ok(opencodeAdapter.isError!("") === false, "LOOP-14: isError returns false for empty stdout (safe fallback)");
+  ok(opencodeAdapter.isError!("not json") === false, "LOOP-14: isError returns false for unparseable stdout (safe fallback)");
+
+  // AC3 — §16: the parsed usage object contains ONLY numeric usage fields + source/currency; no message text.
+  if (usage) {
+    const keys = Object.keys(usage).sort();
+    const allowed = ["cacheReadTokens", "cacheWriteTokens", "costUsd", "currency", "inputTokens", "outputTokens", "source"].sort();
+    ok(JSON.stringify(keys) === JSON.stringify(allowed),
+      `LOOP-14 AC3 §16: usage row contains exactly the allowed keys (got ${JSON.stringify(keys)})`);
+    ok(!JSON.stringify(usage).includes("I'll run"), "LOOP-14 AC3 §16: usage row contains no message/tool content");
+    ok(!JSON.stringify(usage).includes("sess_abc"), "LOOP-14 AC3 §16: usage row contains no session_id or other non-metric strings");
+  }
+
+  // dry-run: verify --format json appears in the opencode lane command.
+  {
+    const tmp3 = mkdtempSync(join(tmpdir(), "dl-loop14-"));
+    try {
+      const data3 = join(tmp3, "data");
+      mkdirSync(data3, { recursive: true });
+      writeFileSync(join(data3, "projects.json"), JSON.stringify({
+        defaultProject: "fallback",
+        projects: { fallback: { repoPath: tmp3 } },
+      }));
+      const hubRoot3 = join(dirname(fileURLToPath(import.meta.url)), "..");
+      const repoRoot3 = resolve(hubRoot3, "..");
+      const dryRun = spawnSync("node", ["src/run-agents.ts", "--cli", "opencode", "--once", "--dry-run",
+        "--agents", "pm", "--root", repoRoot3, "--data", data3, "--hub-db", join(tmp3, "hub.db"), "--project", "fallback"],
+        { cwd: hubRoot3, encoding: "utf8" });
+      ok(/--format json/.test(`${dryRun.stdout ?? ""}${dryRun.stderr ?? ""}`),
+        "LOOP-14: --format json appears in the opencode dry-run command");
+    } finally {
+      rmSync(tmp3, { recursive: true, force: true });
     }
   }
 }
