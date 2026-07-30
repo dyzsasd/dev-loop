@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -12,6 +13,25 @@ const run = (args: string[]) => {
   const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8" });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 };
+
+// ── retry-loop detector memory: the seen-line window is BOUNDED and ROLLING (LOOP-23) ──
+// The old detector used a plain Set that froze at 200 entries: bounded, but it stopped ROLLING, so a
+// loop starting after saturation read as new content forever and the watchdog went inert. This
+// asserts the property directly on the extracted window: it never exceeds the cap [bounded memory],
+// yet it keeps recognising the most-recent lines while EVICTING the oldest [rolling — so a loop after
+// saturation is still caught]. A frozen prefix passes the bound but fails the roll.
+{
+  const cap = RETRY_LOOP_LINE_WINDOW;
+  const w = makeSeenLineWindow();
+  let allNew = true;
+  for (let i = 0; i < cap * 3 + 50; i++) if (!w.markNew(`distinct setup line ${i}`)) allNew = false;
+  ok(allNew, "every genuinely-distinct line reads as NEW while streaming 3×+ the window bound");
+  ok(w.size === cap, `seen-line window stays BOUNDED at the cap under unbounded output: ${cap * 3 + 50} distinct → size ${w.size} (cap ${cap})`);
+  ok(w.markNew(`distinct setup line ${cap * 3 + 49}`) === false, "the most-recent line is still recognised as seen (the window kept it)");
+  ok(w.markNew("distinct setup line 0") === true, "a line evicted during saturation reads as NEW again — the window ROLLED forward, it never froze");
+  ok(w.markNew("rate limit exceeded, retrying in 2s...") === true && w.markNew("rate limit exceeded, retrying in 2s...") === false,
+    "post-saturation a repeating line is new once then seen — exactly what the frozen-200 detector missed");
+}
 
 const tmp = mkdtempSync(join(tmpdir(), "dl-run-agents-"));
 try {
