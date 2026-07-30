@@ -174,6 +174,37 @@ UI + docs system (D2/D3), role-gated hub `project` override (D1), PM investigati
 Linear doc mirror (D4/D5), doc archiving (D6), and the uniform SKILL template with enforced
 context budgets.)
 
+(pm, 2026-07-30: **`Current state` re-synced 1.2.0 → v1.10.0.** The previous PM fire flagged this
+section as eight releases stale but did not take it over, reading the two prior re-syncs as
+operator-owned. §20 settles it — `Current state` is a PROGRESS section PM commits directly,
+append-only — so here is what shipped after the 1.2.0 line above, per `CHANGELOG.md`:
+- **1.3.0** — the 2026-07 field-report hardening batch (a 6-day dogfood, 1,472 fires); **any
+  OpenAI-compatible model provider** through the opencode lane: provider registry,
+  `team sync-opencode`, certification.
+- **1.4.0** — **one-click workspace lifecycle**: `dev-loop up` / `bundle` / `attach` — a workspace
+  home you can land in, move (an encrypted `age` bundle carrying config + secrets + `hub.db`), and
+  drive against a remote hub.
+- **1.5.0** — **the per-fire context program**: conventions progressive disclosure (kernel +
+  tripwires + pay-per-use references), the runner-assembled boot prefix, the §21c cut and the
+  snapshot doctrine, and `queue` as every board agent's first read. Plus the local
+  **developer-code security scanner** + its CI wiring (`security/`).
+- **1.6.0** — **multi-provider runner hardening**: the liveness/stall watchdog (a silent fire dies
+  in minutes, not hours), `OPENCODE_CONFIG` injection, opencode model preflight, a config-integrity
+  guard, tier-label⇒assignee at create, and `run --background` + `stop` (the operator-console loop
+  lifecycle).
+- **1.7.0–1.8.1** — **the quality gauntlet**: `dev-loop quality` (per-function
+  `CRAP = CC² × (1−cov)³ + CC` over native V8 coverage) plus the mutation probe; `build.quality` as
+  the fourth Step-5 ship gate; the Architect `test-strength` dimension; executable ACs; §8
+  exact-title dedupe at the write; `team set-model`; and the gauntlet turned on its own codebase
+  (CRAP ratchet 160 → 90).
+- **1.9.0** — a **Go language backend** for the gauntlet: same formula, report, gate, ratchet and
+  mutation probe, with the language picked per FILE.
+- **1.10.0** — **`--diff-base` PR gate + a reusable CI workflow**: the legacy-repo adoption path —
+  gate only what a PR touches, no big-bang cleanup, adoptable in three lines.
+
+Recorded as shipped reality only. Whether the quality line is product *direction* is the open
+question, parked for the operator on **LOOP-18** — `Goals` is unchanged pending that ruling.)
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -209,6 +240,38 @@ context budgets.)
 - **(operator, 2026-07-02) DL-78 reconcile.** The 2026-06-27 decline of model-tiering (DL-78) was superseded by the operator-directed per-agent codingAgent/model/effort config shipped in a11f9e5 (2026-07-01). Recorded retroactively so the ledger and the shipped scheduler agree.
 - **(operator, 2026-07-02) DL-2 amendment — the daemon web UI may carry a tiny inline script.** The original "no client JS, no bundler" doctrine (DL-2, 2026-06-23) is relaxed to permit a single ~15-line inline progressive-enhancement script for SSE live updates (`GET /api/stream`): the board/activity pages now refresh themselves as agents mutate the ledger, degrading to a static page when JS is off. Still no bundler, no dependency, no external script; a CSP (`connect-src 'self'`) bounds it. The UI's whole point is watching an autonomous loop — a dead page that needs manual F5 defeated that.
 - **(operator, 2026-07-02) Linear-parity scope — what we build, and what we deliberately skip.** BUILT (the features that serve agents-coordinating + an operator-reviewing): relation-aware querying (`list_issues relatedTo:<id>` + `get_issue.referencedBy`), per-ticket history (`list_events ticketId:`), incremental reads (`updatedSince`), and native Linear priority on the mirror. DELIBERATELY SKIPPED (a queryable data model, not a project-management app) — do NOT re-propose these on the rotating competitive-parity lens without a new concrete need: **cycles/sprints + estimates** (agents fire on cadence, not sprint economics; `/activity` accept-rate + cycle-time are the value metrics), **due dates** (the DL-89 WIP-aging flags supersede), **milestones/initiatives** (the roadmap doc-kind covers), **saved views** (URL filters suffice), **reactions/threads** (agents coordinate via flat comments), **attachments** (the §22 reports tree is the artifact store), **SLAs** (Ops cadence + the DL-76 no-progress breaker). DEFERRED (real value, not yet built): a default `list_issues` limit + summary-field mode (a behavior change needing SKILL/§10 coordination), and comment-body search.
+- **(pm, 2026-07-30) Fresh workspace, first PM fire — the five operator intake asks groomed against
+  the code, not against their titles.** The loop was restarted on a **new workspace** (`loop` team,
+  `LOOP-*` prefix, `devSplit:true`, backend `service`, single repo `dev-loop`); every `DL-*` id
+  earlier in this log belongs to the previous workspace's board and no longer resolves. The
+  operator seeded five title-only intake tickets (LOOP-1…LOOP-5); PM verified each sub-item against
+  HEAD `3cfc250` (v1.10.0) before filing anything, and the checking paid for itself:
+  - **`quota errorClass` was already shipped** — `classifyFireError` already emits
+    `spend-limit`/`rate-limit`/`auth`/`network`. Reported, not refiled (§8 dedupe-against-reality).
+  - **LOOP-2 (metering core) is exactly the precursor the `Candidate ideas`
+    "Loop-cost-governance — Phase 2" entry was banked on.** `LOOP-4` (the aggregation surfaces) is
+    therefore **deliberately held in `Backlog` behind a `Blocked-by: LOOP-2` edge** — three
+    dashboards over an empty column is not work. This is the sequencing call of the fire.
+  - **LOOP-1 was a six-item bundle** → one already-shipped, three scoped junior tickets
+    (LOOP-7/8/9), and one that needed design (LOOP-10, `Mode: design`: the runner has no
+    claimed-ticket release path at all, and which mechanism is right depends on the Sweep boundary,
+    tier-assignment preservation, and race safety).
+  - **Scoping ruling (so Dev does not block on it):** `references/config-schema.md` is a
+    config-field reference documenting code behavior — **not** a §17 governing file, so it is in
+    scope for a Dev ticket that changes the config surface. `conventions.md` and `skills/**/SKILL.md`
+    prose remain out of scope; generated cheat-sheet blocks are regenerated, never hand-edited.
+  - **Funnel defect found and filed (LOOP-11):** §5a's Backlog-first intake is **unenforceable
+    through the documented CLI** — `dev-loop ticket create` has no `--state` and defaults to `Todo`
+    (so QA/Architect/Ops discoveries land straight in the commitment queue, bypassing PM's gate),
+    and `dev-loop ticket update` has no `--description` (so PM's §5a "refine vague tickets into §6
+    shape" duty cannot be done through the CLI at all). The `save_issue` op supports both; only the
+    wrapper is thin.
+  - **⚠️ `Current state` below is stale and PM did NOT rewrite it:** it describes the **1.2.0** line
+    while the repo is at **v1.10.0** — eight releases of unrecorded shipped work (quality gauntlet +
+    CRAP/mutation gate, the Go language backend, `--diff-base` PR gate + reusable CI, multi-provider
+    hardening, the per-fire context program, the developer-code security scanner, one-click
+    deployment). Both prior re-syncs of that section were operator-authored (2026-07-05, 2026-07-12),
+    so PM is flagging it here rather than taking the section over unprompted.
 - **(operator, 2026-07-10) The 2026-07 full review → 1.2.0.** Six-dimension design review; every
   decision recorded as **D1–D11 in `docs/design/2026-07-review-decisions.md`** (the durable
   record — this line is a pointer, not the ledger). Shipped as **1.2.0** (PR #21): CLI-first
@@ -216,6 +279,43 @@ context budgets.)
   hub `project` override (D1), investigation protocol + doc mirror (D4/D5), retention/archive
   (D6), SKILL template + context budgets. Repo hygiene (D11): `examples/` + `evaluation.xlsx`
   moved out to `~/workspace/jinko/writing-loop/`.
+- **(pm, 2026-07-30, fire 2) `strategy-gaps` lens — the north star had not noticed where the
+  product's center of gravity moved.** The board was quiet (nothing `In Review`, nothing
+  `blocked`/`needs-pm`, the Backlog drained to the dependency-held LOOP-4), so the whole fire went
+  to the lens.
+  - **The finding: four consecutive releases are absent from `Goals`.** 1.7.0→1.10.0 went almost
+    entirely into `dev-loop quality`, yet the strings `quality` / `CRAP` / `mutation` appear
+    **nowhere** in `Vision`, `Goals`, `Non-goals` or `Current state` — the doc still describes
+    dev-loop as exactly one thing, a coordination daemon with interchangeable CLI clients. The
+    1.10.0 reusable CI workflow ("adopt in three lines") implies a second audience the doc does not
+    admit exists: a repo with no daemon, no agents and no board.
+  - **Proposed, not edited.** `Goals` is a §20 D4 DIRECTION section, so PM opened **LOOP-18** on
+    itself per the investigation protocol: findings + a mechanically generated unified diff (one
+    12-line insert adding the gauntlet as a fifth supporting goal, with an explicit "gate and
+    report, not a linter/formatter/refactoring engine" boundary), parked `In Review` assigned to the
+    operator, with two alternatives spelled out (promote to a first-class goal / reject it as a
+    private ship-gate detail). **PM has not committed that diff, and continues to treat the quality
+    line as out-of-mandate for Job C filings until the operator rules.**
+  - **`Current state` re-synced 1.2.0 → v1.10.0** — the progress half of the same gap, which is
+    PM's own lane per §20, closing what the previous fire flagged but left.
+  - **Filed 2, both held in `Backlog`:** **LOOP-16** (`--detect` build-fact gaps — the `:350` emit
+    guard silently discards detected `test`/`quality`, and the `package.json` read is
+    repo-root-only) and **LOOP-17** (doctor cannot nudge a repo with **no** `build` block at all,
+    because the existing `doctor.ts:208` nudge requires a test gate to fire).
+  - **Two sequencing calls, both deliberate.** LOOP-16 sits behind a `Blocked-by: LOOP-5` edge —
+    both tickets edit `detectRepoFacts` in one file, and two concurrent junior fires in one function
+    is a collision, not throughput. LOOP-17 is held even though junior depth is 6/10 and the §5a
+    rule would permit promoting it: the junior queue already carries an unstarted P1 (LOOP-6) and
+    three P2s, and 6 of 7 open Todo items are junior-tier, so Dev is the pace setter and the cap is
+    a ceiling rather than a target.
+  - **Dogfood gap → operator, not a ticket** (PM cannot write `dev-loop.json`, and a Dev ticket
+    cannot either): this workspace has **no `build` block** for its own repo, so the loop's own
+    Step-5 gates are entirely unconfigured and the quality ratchet it ships (`hub/package.json` →
+    `"quality": "node src/quality.ts --threshold 90 --top 15"`) is wired to nothing. Root cause is
+    exactly LOOP-16(b) — `--detect` reads the repo ROOT, and this repo's package is
+    `hub/package.json`. Immediate fix, if wanted:
+    `dev-loop team set repos.dev-loop.build.quality "cd hub && npm run quality"` (likewise
+    `typecheck` / `build` / `test`).
 
 ## Candidate ideas
 
@@ -299,7 +399,28 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   Cosmetic parity polish with no observe/steer payoff — fold into a future nav pass alongside the
   `/activity` nav link DL-17 adds, rather than its own ticket. (The "labeled board item" half was
   redundant with the existing wordmark-as-home at `daemon.ts:127`.)
-- **Loop-cost-governance — Phase 2 (sequenced after a cost-signal precursor; PM 2026-06-27, banked from the DL-73 groom).** The DL-73 intake's two cost-*quantifying* asks are **not buildable until the hub has a per-fire cost signal** (agents don't report token/$ spend to the SoR today): **(a)** a loop-level **token/$ budget ceiling** (the hard circuit-breaker complementing DL-76's no-progress detector), and **(b)** a **cost-per-accepted-change** metric + a cost column on `/activity` (complementing DL-79's accept-rate). The likely precursor is a **§17 [pm-proposal]** for the operator-owned launcher to emit per-fire cost into the hub (a new `events` kind), then a buildable hub cap + the cost surfacing. File the precursor proposal when the operator signals appetite, or when an adopter hits a real runaway-cost incident. **(c)** Surfacing DL-79's accept-rate in the **Reflect daily digest** is a Reflect SKILL change → a §17 [reflect-proposal], not a code ticket; fold into the next Reflect-curation pass rather than filing Dev work.
+- **Loop-cost-governance — Phase 2 (sequenced after a cost-signal precursor; PM 2026-06-27, banked from the DL-73 groom).** The DL-73 intake's two cost-*quantifying* asks are **not buildable until the hub has a per-fire cost signal** (agents don't report token/$ spend to the SoR today): **(a)** a loop-level **token/$ budget ceiling** (the hard circuit-breaker complementing DL-76's no-progress detector), and **(b)** a **cost-per-accepted-change** metric + a cost column on `/activity` (complementing DL-79's accept-rate). The likely precursor is a **§17 [pm-proposal]** for the operator-owned launcher to emit per-fire cost into the hub (a new `events` kind), then a buildable hub cap + the cost surfacing. File the precursor proposal when the operator signals appetite, or when an adopter hits a real runaway-cost incident. **(c)** Surfacing DL-79's accept-rate in the **Reflect daily digest** is a Reflect SKILL change → a §17 [reflect-proposal], not a code ticket; fold into the next Reflect-curation pass rather than filing Dev work. **UPDATE 2026-07-30 (pm): ✅ (a)+(b) UNBANKED — the operator asked for the whole arc directly, and the precursor is now FILED as `LOOP-2` (metering core: `fireId` + per-fire token/cache/cost across all three CLI lanes, senior `Mode: design`), with the read surfaces as `LOOP-4` (held in `Backlog` behind `Blocked-by: LOOP-2`).** Confirmed still not built before filing: `recordFire` writes duration/exit/model/effort/`bootBytes` only, and `context-bill.ts` is a *static* 4-bytes-per-token estimator of the boot corpus — there is no measured provider usage anywhere in the hub. Note the shape changed from what was banked here: this is **operator-directed work through the normal intake path, NOT a §17 `[pm-proposal]`** — the launcher already writes the per-fire ledger (`fire.completed`), so extending it is ordinary Dev work on hub code, with no SKILL/conventions edit required. **Enforcement (a budget ceiling that stops fires) is still NOT filed** — it is a separate ticket built ON this signal once LOOP-2 lands; do not fold it into LOOP-4's read surfaces.
+- **⚠️ QA-lane note, NOT a PM ticket — `dev-loop queue` is unrouted, so every agent's documented
+  FIRST read fails (strategy-gaps lens, PM 2026-07-30).** Recorded here for QA rather than filed:
+  a defect is QA's `Bug` per the PM hard limits, and the carve-out (file it myself when a confirmed
+  repro sits unfiled across fires while the loop is stalled) does not apply — the loop is not
+  stalled (7 Todo, 2 In Progress) and this is first observation. Same cross-lane hand-off that
+  worked for DL-88. **Confirmed by repro this fire, not inferred:** `dev-loop queue` exits with
+  ``unknown command 'queue'`` on v1.10.0 because the `ROUTES` table in `hub/src/cli.ts:28-57` has no
+  `queue` entry (it is likewise absent from `usage()` and from `NEEDS_NODE_SQLITE`). Everything
+  behind that one missing line is present and tested: the op exists (`agentops.ts:644` →
+  `opQueue`), the CLI handler exists and is registered in `cli-agentops.ts`'s own `VERBS` table
+  (`:545` → `verbQueue` at `:264`), and `hub/test/queue.ts` covers the **op** — which is precisely
+  why the suite is blind to it. **Impact:** 1.5.0 shipped this verb as "the verb becomes every board
+  agent's first read", and `gen-cheatsheets.ts:33-53` emits `dev-loop queue` as the FIRST verb in
+  the generated cheat-sheet of every agent SKILL (pm/qa/dev/…), so on every CLI-interface fire (the
+  D8 default on `service`) each agent's first command fails and it must fall back to composing §10
+  queries by hand — losing the server-side §5/§21b pick ranking that the verb exists to provide.
+  This PM fire hit it and fell back. **Working workaround today:** `dev-loop op queue --args-json
+  '{}'` (LAYER 0) returns the correct payload. **Fix shape:** add
+  `queue: ["cli-agentops", "queue"]` to `ROUTES`, add it to `usage()` and `NEEDS_NODE_SQLITE`, and
+  add a routing test asserting that **every verb the generated cheat-sheets advertise actually
+  dispatches** — that missing assertion class is what let this ship, and it would catch the next one.
 - **[❌ RETIRED 2026-06-28 — Director + §25 board removed; moot, see running log.]** **Web read-view for the discussion board + non-roadmap hub docs (ux-flows lens, PM 2026-06-27 — director-config-gated, banked).** The daemon web UI surfaces the roadmap (`/roadmap`) but **not** the deliberation that produces it: the hub's discussion board (`topic.*` / `post.add` / `topic.synthesize` / `topic.close` — the §25 plane the Director chairs) and non-roadmap hub docs (`kind:"strategy"`) have **no web read-view** (only the JSON `/api/docs`). An operator on a **director-configured** project can see the roadmap OUTPUT but not the topics / posts / decisions that drove it — an observe-and-steer gap for that persona. **Deliberately banked, not filed:** `dev-loop` itself has **no `director` config** (board OFF) and `hub.docs:false`, so a ticket here would be speculative, config-gated-off Dev work (§8 dedupe-against-reality — don't file a surface this instance never exercises). **File when** a `director`-configured project comes online (or an adopter asks): a read-only `/topics` (list → topic detail with posts + the closing decision) + `/docs/<kind>` view, reusing the `roadmapPage` / `renderMarkdown` precedent; localhost-only, no write path, §17-clean. Pairs with the parked "Multi-stakeholder roadmap auth" + "Reports + 点评 review in the web UI" observe/steer items.
 - **Open-WIP aging on `/activity` — forward-looking sibling of DL-84's per-stage breakdown (data-analytics lens, PM 2026-06-27 — banked).** DL-84 surfaces where *completed* tickets spent their time (backward-looking medians); the complement is surfacing the *aging of currently-open* WIP — the oldest open ticket per active state (In Progress / In Review), flagging stale WIP: e.g. In Review > N days = an owner agent (PM/QA) isn't verifying; In Progress > N days = a possible orphan beyond Sweep's reclaim. Actionable *now* (the operator acts on the named stale ticket), vs DL-84's trend. Read-only over current tickets + their latest transition event; §17-clean. **Banked, not filed** — to avoid flooding the queue (DL-84 filed this fire) and because it lightly overlaps Sweep's lane (Sweep *acts* on orphaned In Progress; this *surfaces* aging — incl. In-Review verify-lag, which Sweep doesn't touch — to the operator). **File when** DL-84 lands or an operator asks. **UPDATE 2026-06-27: ✅ FILED as DL-89** (Improvement/pm/Low) — condition MET (DL-84 verified Done this milestone). Confirmed not built (`activityPage` is backward-looking only — medians over recently-Done; daemonviews.ts:461-540), §17-clean (read-only `openWipSection` over the events ledger, no new route/table), deduped vs DL-84/DL-79 and the full Done/Canceled history. Scoped to the new section + a regression test asserting age-from-latest-into-state-transition.
 - **ux-flows overflow — banked nits from the `65e7ae7` web-UI + onboarding sweep (PM 2026-06-27).** Low-value or gated items found alongside DL-86/DL-87, parked to keep the queue signal-rich: **(a)** the web **"New ticket" form collects only title + type** (`daemonviews.ts:204-209`) — no description/priority field, so an operator-created ticket lands description-less (and renders an empty `<div class="doc">` under "Description", `daemonviews.ts:250`). Debatable whether this is a gap or deliberate quick-capture minimalism (DL-29 shipped it lean; PM grooms W3 intake anyway) — **file a "richer create form + (no description) placeholder" Improvement only if an operator actually uses web-create and hits the thinness.** **(b)** RUNNING.md §4a teaches the manual `service` setup before noting `init` automates it (doc-ordering polish; fold into the next docs reconcile). **(c)** init's readiness verdict (`skills/init/SKILL.md`) could point a `service` operator at their board URL / "Observe the loop" — but that's a **§17 SKILL edit** (`[pm-proposal]`, operator-applied), not a Dev ticket; fold into a future init-prose proposal. **(d) considered + REJECTED (do NOT re-file):** a persistent "read-only" banner on the board (read-only IS the default mode → chrome-noise, unlike `/roadmap` where write is a headline feature) and a throughput "— no data" empty-state (a count's `0` is a real value, unlike acceptance-rate's undefined `0/0`). **(e) QA-lane (noted for QA, not a PM Feature):** `seed --help` is parsed as the project key → seeds a junk-named project instead of printing usage (`hub/src/seed.ts` CLI dispatch) — a minor footgun on an internal/init-driven command. **UPDATE 2026-06-27: ✅ QA picked it up — filed as DL-88 (Bug, qa-owned). Cross-lane hand-off worked; no PM action.**

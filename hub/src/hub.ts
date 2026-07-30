@@ -14,10 +14,13 @@ import { openDb } from "./db.ts";
 function die(msg: string, code = 2): never { console.error(`dev-loop hub: ${msg}`); process.exit(code); }
 
 // Point the daemon lifecycle at THIS workspace's hub db + runfile dir, keyed to the _team project.
+// DEVLOOP_PROJECT is always overwritten (not just when unset): an inherited ambient value from a parent
+// fire names a DIFFERENT workspace's project, which the cwd-resolved hub.db doesn't know about and
+// causes start/status to silently report "not seeded" for the wrong project key (LOOP-6).
 function wireEnv(ws: Workspace): void {
   process.env.DEVLOOP_HUB_DB = wsHubDb(ws);
   process.env.DEVLOOP_RUN_DIR = wsStateRoot(ws);
-  if (!process.env.DEVLOOP_PROJECT?.trim()) process.env.DEVLOOP_PROJECT = TEAM_INTAKE_PROJECT;
+  process.env.DEVLOOP_PROJECT = TEAM_INTAKE_PROJECT;
 }
 
 function walCheckpoint(dbPath: string): void {

@@ -11,7 +11,12 @@ let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-hublc-")));
 const HOME = join(tmp, "home");
-const env = { ...process.env, DEVLOOP_HOME: HOME };
+// Scrub workspace-specific vars that an ambient dev-loop fire exports: inheriting them causes hub
+// start/stop/status to resolve the wrong project or hub.db (LOOP-6 regression guard).
+const env: Record<string, string | undefined> = { ...process.env, DEVLOOP_HOME: HOME };
+delete env.DEVLOOP_HUB_DB;
+delete env.DEVLOOP_PROJECT;
+delete env.DEVLOOP_DEV_SPLIT;
 const team = (args: string[], cwd = tmp) => spawnSync("node", [join(hubRoot, "src", "team.ts"), ...args], { cwd, env, encoding: "utf8" });
 const hub = (sub: string, cwd: string) => { const r = spawnSync("node", [join(hubRoot, "src", "hub.ts"), sub], { cwd, env, encoding: "utf8", timeout: 20000 }); return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` }; };
 
@@ -45,6 +50,22 @@ try {
   team(["init", "--dir", lin, "--key", "hublc-lin", "--backend", "linear", "--linear-team", "L"]);
   const refused = hub("status", lin);
   ok(refused.code !== 0 && /service-backend teams only/.test(refused.out), "hub refuses on a linear team (no hub.db)");
+
+  // Regression (LOOP-6): a DEVLOOP_HUB_DB leaked from an ambient fire (pointing at a DIFFERENT workspace)
+  // must never silently redirect hub commands — wireEnv always overrides from the cwd-resolved workspace.
+  const wsB = join(tmp, "wsB");
+  team(["init", "--dir", wsB, "--key", "hublc-other", "--backend", "service"]);
+  const foreignHubDb = join(wsB, ".dev-loop", "hub.db");
+  const hubForeign = (sub: string, cwd: string) => {
+    const r = spawnSync("node", [join(hubRoot, "src", "hub.ts"), sub], {
+      cwd, encoding: "utf8", timeout: 20000,
+      env: { ...env, DEVLOOP_HUB_DB: foreignHubDb, DEVLOOP_PROJECT: "hublc-other" },
+    });
+    return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+  const startForeign = hubForeign("start", ws);
+  ok(startForeign.code === 0 && /up:.*RUNNING|up: started|RUNNING/.test(startForeign.out), "hub start with a foreign DEVLOOP_HUB_DB still resolves the cwd workspace");
+  hubForeign("stop", ws);
 
   console.log(fails === 0 ? "\nHUB_LIFECYCLE_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
