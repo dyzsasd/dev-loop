@@ -150,6 +150,11 @@ ok(tp.includes("<strong>fine</strong>"), "ticket timeline: comment markdown rend
 ok(!identityDot('x" onmouseover="alert(1)').includes('" onmouseover='), "identityDot: the handle is esc()'d inside the title attribute (no attribute breakout)");
 ok(identityDot("pm") === identityDot("pm"), "identityDot: deterministic (same handle → same hue)");
 
+// empty-timeline: a ticket with no events or comments shows the "No activity yet." fallback
+tdb.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES ('WUI-2','p1','No events ticket','','Feature','Todo',null,3,'[]','[]','pm',?,?)").run(T_CREATE, T_CREATE);
+const tpEmpty = ticketPage(tdb, "p1", "wui", "WUI-2", false, { nowMs: NOW_MS })!;
+ok(tpEmpty.includes("No activity yet.") && !tpEmpty.includes('class="timeline"'), "ticket timeline: a ticket with no events or comments degrades to the empty-state paragraph");
+
 // write forms ride the humanWrite gate: absent read-only, present (all three + comment box) when on
 ok(!tp.includes("<form"), "ticket page: NO write forms when canWrite=false (read-only render)");
 const tpW = ticketPage(tdb, "p1", "wui", "WUI-1", true, { nowMs: NOW_MS })!;
