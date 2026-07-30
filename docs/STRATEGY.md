@@ -340,6 +340,25 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   Together they end the blindness recorded above: `doctor` gains its first forge glance, fenced
   three ways so the boolean gate CI depends on cannot move.
 
+- **The health surfaces measure everything except the operator (2026-07-30, `strategy-gaps` lens).**
+  `Current state` above already names the pattern — *"every health surface reports on a proxy, and no
+  surface reports on the thing itself"* — and the board now carries a ticket for each proxy: landing
+  (LOOP-27/40/41/42), ownership (LOOP-30), blocked (LOOP-26/31), reports (LOOP-28). The member that
+  was missing is the one resource the loop cannot scale: **the operator's own latency.**
+  `decisionQueue` (`hub/src/metrics.ts:126`) already selects the right population — `Human-Blocked` ∪
+  `In Review`+assignee `operator` — and already returns `updated_at`. **Every surface downstream
+  discards it:** `metrics` renders id + state with no age (`:206-207`); `doctor` never reads the
+  queue at all (W05–W16, none of them this); and the daemon reminder is comms-gated — with no
+  `team.comms` (the default shape, and this workspace's real config) `resolveBlockedReminderHours`
+  returns **0, no timer, true no-op** (`daemon-notifiers.ts:46-51`), while W12 only warns when comms
+  *is* configured but unresolvable. Measured this fire with two decisions pending: `doctor` printed
+  `DOCTOR_OK` and `NEXT: dev-loop run` — *go fire more agents* — and reminders emitted were zero.
+  Filed as **LOOP-49** (senior `Mode: design`; it lands in `doctor.ts` beside LOOP-41's W17 and the
+  `DOCTOR_OK` policy call is a real one). The sharp edge is **LOOP-18**: under §20 D4 the doc's
+  direction sections move only through the §9a investigation protocol, so one un-actioned approval
+  has **frozen the north star's direction half** while PM appended to the progress half all day — the
+  doc records reality and intent at different rates, and no surface reports that as a condition.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -858,6 +877,36 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   writing one without the other is a no-op.** LOOP-26 (the blocked taxonomy) and LOOP-31 (its web
   surface) are the durable fix; until they land this is a per-fire manual audit, and it has caught
   something in five of five fires.
+
+- **(pm, 2026-07-30) `strategy-gaps` lens — the loop schedules every resource except the human, and
+  the audit's sixth hit was the mirror image of the first five.** Two calls this fire.
+
+  **(1) The gap is the operator's latency, and it is filed as senior design work.** Reading `Goals`
+  against the board: of the four supporting goals, three are densely covered and **"broaden
+  portability" has zero tickets** — deliberately left that way, because filing portability work while
+  the loop still cannot reliably ship itself would be padding, and this lens is not a quota. The real
+  gap was elsewhere. Every proxy in the "no surface reports the thing itself" pattern now has an
+  owner; the operator's own response time had none, even though `decisionQueue` already computes it
+  with timestamps. Filed **LOOP-49** as senior `Mode: design` — not junior — for a reason worth
+  recording, because the borderline default is junior (§21b): it edits `doctor.ts` in the same
+  function as LOOP-41's W17, and the open question (may a *board* condition move `DOCTOR_OK`, when
+  LOOP-27's gate fenced a landing stall to warn-only?) is a policy call with a CI blast radius. That
+  is design work by the §21b test — "needs a design," not "is large." Scope was fenced explicitly to
+  the `decisionQueue` population so it cannot drift into LOOP-26's `blocked` taxonomy.
+
+  **(2) §9c, sixth instance — and this time the marker was there and the label was not needed.** The
+  five prior fires all found the same shape: a correct `Blocked-by:` marker with no `blocked` label
+  (ledger without enforcement). This fire's audit found the inverse on **LOOP-16** — a live
+  `Blocked-by: LOOP-5` edge on a ticket sitting correctly unblocked in `Todo`, because LOOP-5 landed,
+  a later fire promoted the ticket, and **nobody wrote the `Unblocked-by:` retirement line.** Also
+  retired a resolved `LOOP-23` edge on LOOP-19 (which stays blocked behind LOOP-12). Neither was
+  causing harm *yet*, which is the point: §9c warns that an un-retired edge set is one re-park away
+  from resolving `{all Done}` and self-unparking instantly. **Standing correction to how this audit
+  is run:** checking "does every `blocked` ticket have a marker?" only catches five of the six
+  shapes. Walk it in **both** directions — every marker needs a live-or-retired verdict, including on
+  tickets that carry no `blocked` label at all. LOOP-16 was invisible to the W5 query
+  (`blocked`+`external-prereq`) for its entire held life and cleared only because a PM fire happened
+  to notice its blocker had landed.
 
 ## Candidate ideas
 
