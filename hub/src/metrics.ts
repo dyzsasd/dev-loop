@@ -7,7 +7,7 @@
 //     On linear there is no local board mirror — the digest agent computes board numbers via MCP queries
 //     at fire time, per the §22 digest contract; this CLI never guesses them.
 import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsFireLedger, wsHubDb } from "./workspace.ts";
 import { deliveryProjects, type Workspace } from "./team-config.ts";
 import { AGENT_HANDLES } from "./seed.ts";
@@ -253,7 +253,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   // exitCode (not process.exit): stdout to a PIPE is async on POSIX — a hard exit truncates a large
   // --context --json payload mid-flush. Nothing here holds the event loop open (the db is closed in
   // metricsCli's finally), so Node exits as soon as stdout drains.

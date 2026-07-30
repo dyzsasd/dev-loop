@@ -5,7 +5,7 @@
 // lifecycle: it points DEVLOOP_HUB_DB / DEVLOOP_RUN_DIR at the workspace and drives the daemon for the
 // `_team` project. `stop` additionally checkpoints + truncates the WAL (required before a machine move).
 import { existsSync, statSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import { TEAM_INTAKE_PROJECT, type Workspace } from "./team-config.ts";
 import { daemonLifecycleCode } from "./daemon-lifecycle.ts";
@@ -59,6 +59,6 @@ export async function hubCmd(argv = process.argv.slice(2)): Promise<number> {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   hubCmd().then((c) => process.exit(c));
 }

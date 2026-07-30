@@ -8,7 +8,7 @@
 // (ties → lexicographically-least key); cur[pick] -= sum(weights). Weight 2:1 → A A B A A B …
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsScheduler } from "./workspace.ts";
 import { deliveryProjects, isTeamProject, type Workspace } from "./team-config.ts";
 
@@ -89,6 +89,6 @@ function nextProjectCli(argv: string[]): number {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   process.exit(nextProjectCli(process.argv.slice(2)));
 }

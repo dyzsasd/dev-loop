@@ -2,8 +2,9 @@
 // `--help` was bound to the positional `key` (no flag guard), creating a project literally keyed `--help`
 // + its actors + labels. Drives the REAL `node src/seed.ts` against ISOLATED temp DBs (never ~/.dev-loop).
 import { spawnSync } from "node:child_process";
-import { rmSync, mkdirSync, existsSync } from "node:fs";
+import { rmSync, mkdirSync, existsSync, mkdtempSync, cpSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { openDb } from "../src/db.ts";
 
 const ROOT = "/tmp/hub-seed-test";
@@ -61,6 +62,27 @@ ok(bare.status === 0 && projectCount(bare.db) === 1, "bare `seed` still seeds th
   ensureSeed(db, "bf", "BF", "BF");                                                          // re-seed hits the EXISTING branch
   ok(count("external-prereq") === 1, "re-running seed BACKFILLS a missing label on an existing project (no early-return skip)");
   db.close();
+}
+
+// ── 6. LOOP-63: `node src/seed.ts` must SEED from a checkout path containing a SPACE ──
+// seed.ts:94 guarded main() with `import.meta.url === \`file://${process.argv[1]}\``. import.meta.url is a
+// percent-ENCODED file URL while process.argv[1] is a RAW path, so on a spaced checkout the two diverged
+// and the guard silently no-op'd: `node src/seed.ts` seeded NOTHING (0 B stdout, no db) and its 23 test
+// spawn sites failed downstream far from the cause. Copy src into a dir whose name holds spaces (realpath'd,
+// so the space is the ONLY variable — not a /tmp symlink) and assert a real seed still writes + prints.
+// FAILS against the guarded form (0 B stdout, 0 projects); PASSES with the realpath isMainEntry() form.
+{
+  const spaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl seed 63 ")));         // last segment holds spaces
+  cpSync("src", join(spaceRoot, "src"), { recursive: true });                        // cwd is hub/ (as for `src/seed.ts` above)
+  writeFileSync(join(spaceRoot, "package.json"), JSON.stringify({ type: "module" })); // ESM for the copied .ts
+  const db = join(ROOT, "spaced.db");
+  const r = spawnSync("node", [join(spaceRoot, "src", "seed.ts"), "sp", "Spaced Project", "SP"], {
+    encoding: "utf8", timeout: 30000, env: { ...process.env, DEVLOOP_HUB_DB: db },
+  });
+  const out = r.stdout ?? "";
+  ok(out.length > 0 && projectCount(db) === 1,
+    `LOOP-63: seed.ts seeds from a spaced checkout path (${out.length}B stdout, ${projectCount(db)} project, exit ${r.status})`);
+  rmSync(spaceRoot, { recursive: true, force: true });
 }
 
 rmSync(ROOT, { recursive: true, force: true });

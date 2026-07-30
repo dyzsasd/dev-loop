@@ -6,7 +6,7 @@
 import { writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb } from "./workspace.ts";
 import { validateTeamFile, referencingProjects, type TeamFile, type Workspace } from "./team-config.ts";
@@ -571,7 +571,7 @@ export function addProvider(argv: string[]): number {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   const [sub, ...rest] = process.argv.slice(2);
   if (sub === "add-project") process.exit(await addProject(rest));
   if (sub === "add-repo") process.exit(addRepo(rest));
