@@ -20,6 +20,7 @@ import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
+import { breaker } from "./breaker.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -723,40 +724,6 @@ function displayCommand(command: string, args: string[], prompt: string): string
   return [command, ...args.map((a) => a === prompt ? `<prompt:${prompt.length} chars>` : a).map(shellQuote)].join(" ");
 }
 
-// ─── P0-1a failure-streak circuit breaker ────────────────────────────────────────────────────────────
-// The field incident: a spent subscription turned every fire into the same ~2s failure for 48 hours while
-// the scheduler kept full cadence — zero backoff, zero signal, two days of zero throughput discovered by
-// reading metrics after the fact. The breaker watches recordFire: N consecutive fires of ONE agent failing
-// with the SAME key (errorClass, else the last output line) trip that agent's slot down to a probe cadence;
-// each probe fire IS the recovery check — the first success closes the breaker and restores normal cadence.
-// Trip and recovery notify ONCE each (team comms when configured; console always). In-memory by design:
-// a scheduler restart re-probes at full cadence, which is itself a fresh signal. Heterogeneous task
-// failures never trip it — the key must repeat identically.
-type BreakerEntry = { key: string | null; streak: number; open: boolean };
-const breaker = {
-  threshold: 5,          // --breaker <n>; 0 disables
-  probeMs: 60 * 60_000,  // --breaker-probe <dur>
-  byAgent: new Map<Agent, BreakerEntry>(),
-  onEvent: undefined as ((agent: Agent, ev: "open" | "close", key: string, streak: number) => void) | undefined,
-  record(agent: Agent, exitCode: number, errorClass: string | null | undefined, tail: string | undefined): void {
-    if (!this.threshold) return;
-    const e = this.byAgent.get(agent) ?? { key: null, streak: 0, open: false };
-    if (exitCode === 0) {
-      if (e.open) this.onEvent?.(agent, "close", e.key ?? "", e.streak);
-      this.byAgent.set(agent, { key: null, streak: 0, open: false });
-      return;
-    }
-    const lastLine = (tail ?? "").trimEnd().split("\n").pop()?.trim().slice(0, 160) ?? "";
-    const key = errorClass ?? (lastLine || "(no-output)");
-    if (key === e.key) e.streak++; else { e.key = key; e.streak = 1; }
-    if (!e.open && e.streak >= this.threshold) { e.open = true; this.onEvent?.(agent, "open", key, e.streak); }
-    this.byAgent.set(agent, e);
-  },
-  isOpen(agent: Agent): boolean { return !!this.byAgent.get(agent)?.open; },
-  // The one seam every slot-rescheduling site goes through: open ⇒ the probe cadence (never faster).
-  intervalFor(agent: Agent, baseMs: number): number { return this.isOpen(agent) ? Math.max(baseMs, this.probeMs) : baseMs; },
-};
-
 // P1 per-fire telemetry: write a `fire.completed` event to the hub so the operator gets a queryable cost/
 // outcome ledger (durationMs, exitCode, model/effort) — the precursor the STRATEGY.md budget-ceiling work
 // was banked on. Best-effort + lazy: opened once, skipped silently on a non-hub (linear/local) project, and
@@ -768,8 +735,8 @@ let fireLedgerPath: string | null = null;                            // team mod
 // the fires.jsonl row in test/team-scheduler.ts and the fire.completed event in test/run-agents-live.ts.
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
   extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number }): void {
-  breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail); // P0-1a — every completed fire feeds the streak
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
+  breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail, provider); // P0-1a/P0-1b — every completed fire feeds the streak
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
   // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
   if (fireLedgerPath) {
@@ -1181,7 +1148,7 @@ function wireBreakerEvents(ws: Workspace | null): void {
   breaker.onEvent = (agent, ev, key, streak) => {
     const msg = ev === "open"
       ? `breaker OPEN: ${agent} → probe cadence ${formatDuration(breaker.probeMs)} after ${streak}× identical failures (${key})`
-      : `breaker CLOSED: ${agent} recovered — normal cadence resumed`;
+      : `breaker CLOSED: ${agent} recovered (${key}) — normal cadence resumed`;
     console.error(`[breaker] ${msg}`);
     schedulerNotify(ws, ev === "open" ? "error" : "info", msg);
   };
