@@ -247,6 +247,29 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `intake.todoDepthCap`: two creates took junior from a deliberate 10/10 to 12/10 with no surface
   reporting an over-cap board. Already owned by **LOOP-11** (Todo); evidence recorded there.
 
+- **✅ THE LANDING WEDGE CLEARED (2026-07-30, `cec3598` / PR #32).** The CRAP-ratchet block that
+  held the loop's entire output for three PM fires is gone: **LOOP-22** extracted four helpers out
+  of `stripGo` (`hub/src/quality.ts`), taking it from CRAP 113.8 to under the 90 gate, and merged.
+  The PR pile flushed **five → three** in the same hour (#27/#30/#31 merged; #28/#29/#33 remain,
+  now failing on a stale pre-`cec3598` base rather than on the ratchet). Two honest qualifiers:
+  QA verify-failed the shipped increment on coverage — the claimed nested/adjacent regression test
+  was not in the diff — and filed **LOOP-33** (senior `direct-code`, §3 escalation) rather than
+  accepting it; and CI fragility has simply moved down the stack to **LOOP-32**'s wall-clock race
+  in `hub/test/run-agents-live.ts` §6, promoted to `Todo` this fire. The wedge was never a Dev
+  productivity problem — junior shipped throughout — and the board proved that the moment merge
+  worked again.
+
+- **The two invariants the strategy doc calls "hard" are the two with the least machinery behind
+  them (trust-safety lens, 2026-07-30).** `Goals` names the §17 firewall and §21b's sensitive
+  routing as hard invariants of the autonomous model. For **documents** §17 is genuinely
+  structural — `docstore.ts` / `db.ts:125` give doc tools no filesystem path at all, so a SKILL
+  file is unreachable by construction, which is the right shape. Outside that one seam both rules
+  are prose: `sensitive` occurs in `hub/src/` only as a seeded label (`seed.ts:44`) and a board
+  colour (`views/board.ts:35`) — `opQueue`, `save_issue`, `doctor`, and the Sweep digest all
+  ignore it — and no check anywhere looks at whether a commit touched `skills/**` or
+  `conventions.md`. Filed as **LOOP-34** (senior `Mode: design`) and **LOOP-35** (junior). Neither
+  has been violated yet; both are tripwires, filed while they are still cheap.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -513,6 +536,56 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
     unmergeable (#27/#28/#29/#30/#31), up from three last fire. Every one fails *only* the CRAP
     ratchet on `stripGo` (113.8 > 90); their own tests pass on both Node lanes. **LOOP-22 remains
     the single gate on the entire loop's output.**
+
+- **(pm, 2026-07-30) `trust-safety` lens — the loop's two named hard invariants are enforced by
+  prose, and the landing wedge cleared mid-fire.** Fifth lens at the same product line; product
+  HEAD moved `3cfc250` → **`cec3598`** during this fire (LOOP-22 merging), the first product
+  movement in five fires. No foreign edit to this doc since last fire.
+  - **The finding, and why the two tickets are one shape.** `Goals` lists the §17 firewall and
+    §21b's *"SENSITIVE ⇒ senior-dev, **ALWAYS**"* as hard invariants — and §21b is explicit that
+    for sensitive work *"the protection is the mandatory design step + the owner's independent
+    verification, not a pause,"* which is the entire safety argument for letting an unattended loop
+    ship auth, money, PII, and migration code. **Neither invariant has an enforcement point.**
+    `sensitive` exists in `hub/src/` only at `seed.ts:44` (seeded into the taxonomy) and
+    `views/board.ts:35` (painted red); `opQueue` (`agentops.ts:205`) filters the dev slice on
+    `assignee` and `blocked` and consults nothing else, so a `sensitive` ticket assigned junior is
+    served to junior in normal pick order and **no surface — board, `queue`, `doctor`, digest —
+    reports that it happened.** The §17 file surface is the same story: `push-guard` never looks at
+    a changed path, Sweep's D4 audit covers only this doc's direction sections, and
+    `cli-cheatsheet.ts` byte-checks that the *generated* block is fresh, not that the prose around
+    it is untouched. Filed as **LOOP-34** (senior `Mode: design` — choosing the enforcement point
+    is a real decision across `ticketwrite`/`agentops`/`doctor`, and the wrong choice is worse than
+    the gap) and **LOOP-35** (junior — extend `push-guard`, which already walks the pre-push commit
+    list under `--strict`).
+  - **What makes it more than theory.** `gen-cheatsheets.ts:286` *writes into* all ten
+    `skills/*/SKILL.md` files by design, and two junior tickets in flight (LOOP-11, LOOP-20) both
+    require running it. The only thing separating that legitimate regeneration from an
+    out-of-bounds prose edit is a sentence LOOP-11's author hand-wrote into the ticket body
+    (*"Out of scope: … every `skills/**/SKILL.md` prose section (§17)"*). **The invariant is
+    currently enforced by asking the agent nicely, per ticket.** Checked before filing: all 40 most
+    recent commits touching `skills/` or `conventions.md` are operator-authored, and no ticket on
+    this board carries `sensitive` — both rules hold today. Filed as tripwires while cheap, not as
+    incidents.
+  - **The docs seam is the counter-example worth keeping.** `docstore.ts:6` / `db.ts:125` make §17
+    structural for documents by giving doc tools no filesystem path at all. That is the pattern the
+    other two gates should be judged against: *make the violation unrepresentable*, not detected.
+  - **Job B — two blocker edges retired, no unpark.** LOOP-4 still carried a live `Blocked-by:
+    LOOP-2` (Done) alongside last fire's corrected edges — the re-point added markers but never
+    retired the old one, and §9c only clears an edge on an explicit `Unblocked-by:`. LOOP-19
+    carried `Blocked-by: LOOP-7` (Canceled). Both retired; both tickets stay parked on their live
+    edges (LOOP-12…15 / LOOP-12 + LOOP-23). Third fire running with this shape: **correcting an
+    edge means retiring the old one, not just adding the right one.**
+  - **Job B2 — one promotion, and a ticket that was invisible to the entire Dev tier.** LOOP-32
+    (QA's flaky-CI filing) had **no dev-tier marker at all** — `assignee=null`, so `opQueue` served
+    it to neither tier and it would have sat until Sweep's slow repair. Tiered junior and promoted
+    into the single free slot **ahead of the strict rank-5 FIFO** (LOOP-28/LOOP-30 keep their
+    position): with the ratchet gone, that wall-clock race is the remaining source of red CI on the
+    landing path, and §5's own tiebreak is *defects beat features*. Junior unblocked-`Todo`
+    **10/10, at cap**; senior 1 → 2 (QA's LOOP-33 landed there mid-fire). LOOP-34/LOOP-35 filed to
+    `Backlog` for the next fire's B2, per §5a.
+  - **Still with the operator: LOOP-18**, fourth fire with no verdict. `Goals` stays untouched and
+    the quality-gauntlet line stays out-of-mandate for Job C filings; neither ticket filed this
+    fire depends on that ruling.
 
 ## Candidate ideas
 
