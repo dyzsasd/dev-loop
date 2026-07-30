@@ -338,5 +338,38 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   ok(Array.isArray(p.repos) && (p.repos as { path?: string }[])[0].path === "/ws/jinko-dev-platform", "hostile passthrough: the legacy repos[] shape beats the v2 ref array");
 }
 
+// ── E17 per-agent timeout fields (fireTimeout / stallTimeout) ──
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "30m" } }; ok(codes(f).length === 0, "E17: fireTimeout '30m' is a valid duration"); }
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "0" } }; ok(codes(f).length === 0, "E17: fireTimeout '0' (disable) is valid"); }
+{ const f = base(); f.team.agents = { pm: { stallTimeout: "1h" } }; ok(codes(f).length === 0, "E17: stallTimeout '1h' is valid"); }
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "1.5h" } }; ok(codes(f).length === 0, "E17: fireTimeout '1.5h' (decimal) is valid"); }
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "30m", stallTimeout: "5m" } }; ok(codes(f).length === 0, "E17: both fields valid on the same agent"); }
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "30 min" } }; ok(has(f, "E17"), "E17: '30 min' (space) is rejected"); }
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "1hour" } }; ok(has(f, "E17"), "E17: '1hour' (no unit space) is rejected"); }
+{ const f = base(); f.team.agents = { pm: { stallTimeout: "abc" } }; ok(has(f, "E17"), "E17: non-duration string is rejected"); }
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "" } }; ok(has(f, "E17"), "E17: empty string is rejected (not a duration, not '0')"); }
+{ const f = base(); (f.team as { agents?: unknown }).agents = { pm: { fireTimeout: 30 } }; ok(has(f, "E17"), "E17: a numeric fireTimeout is rejected (must be a string)"); }
+{ const f = base(); (f.team as { agents?: unknown }).agents = "sweep"; ok(has(f, "E17"), "E17: a non-object agents block is rejected"); }
+{ const f = base(); (f.team as { agents?: unknown }).agents = { pm: "fast" }; ok(has(f, "E17"), "E17: a non-object agent config entry is rejected"); }
+// error path must name the agent + field (WsError.path carries the dotted location)
+{
+  const f = base(); f.team.agents = { sweep: { fireTimeout: "bad" } };
+  const paths = validateTeamFile(f).errors.filter((e) => e.code === "E17").map((e) => e.path);
+  ok(paths.some((p) => /team\.agents\.sweep\.fireTimeout/.test(p)), "E17: error path names team.agents.<agent>.fireTimeout");
+}
+{
+  const f = base(); f.team.agents = { "senior-dev": { stallTimeout: "nope" } };
+  const paths = validateTeamFile(f).errors.filter((e) => e.code === "E17").map((e) => e.path);
+  ok(paths.some((p) => /team\.agents\.senior-dev\.stallTimeout/.test(p)), "E17: error path names team.agents.<agent>.stallTimeout");
+}
+// project-level agents also validated
+{ const f = base(); f.projects.devplatform.agents = { pm: { fireTimeout: "15m" } }; ok(codes(f).length === 0, "E17: project-level agents.pm.fireTimeout '15m' is valid"); }
+{ const f = base(); f.projects.devplatform.agents = { pm: { fireTimeout: "bad" } }; ok(has(f, "E17"), "E17: project-level agents.pm.fireTimeout 'bad' is rejected"); }
+{
+  const f = base(); f.projects.devplatform.agents = { dev: { stallTimeout: "bad" } };
+  const paths = validateTeamFile(f).errors.filter((e) => e.code === "E17").map((e) => e.path);
+  ok(paths.some((p) => /projects\.devplatform\.agents\.dev\.stallTimeout/.test(p)), "E17: project-level error path names projects.<key>.agents.<agent>.stallTimeout");
+}
+
 console.log(fails === 0 ? "\nTEAM_CONFIG_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

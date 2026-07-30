@@ -359,6 +359,73 @@ try {
   const linearFire = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "fallback"]);
   ok(linearFire.code === 0, "LOOP-12: linear-backend fire (no hub) exits 0 — no fireId crash");
 
+  // ── LOOP-9: per-agent fireTimeout/stallTimeout config (resolution order + application) ─────────────
+  // The resolution order is: per-agent config > explicit --fire-timeout/--stall-timeout CLI flag >
+  // per-lane/global default (1h fire, 10m stall for opencode, off for claude/codex).
+  //
+  // runL9: like run() but overrides DEVLOOP_WORKSPACE to a missing path so tryResolveWorkspace()
+  // returns null and the scheduler falls through to the legacy fixed-project path (legacy projects.json).
+  // Without this, nested worktrees find the parent workspace and enter teamMain() — which rejects
+  // "demo" because that project doesn't exist in the real workspace config.
+  const runL9 = (args: string[]) => {
+    // Clear workspace-discovery env vars so the subprocess uses the --data flag (not the operator env).
+    const { DEVLOOP_WORKSPACE: _ws, DEVLOOP_PROJECTS_JSON: _pj, DEVLOOP_HUB_DB: _hdb, DEVLOOP_TEAM: _dt, ...inheritedEnv } = process.env;
+    const r = spawnSync("node", ["src/run-agents.ts", ...args], {
+      cwd: hubRoot, encoding: "utf8",
+      env: { ...inheritedEnv, DEVLOOP_WORKSPACE: "/dev/null/no-workspace" },
+    });
+    return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+
+  writeFileSync(join(data, "projects.json"), JSON.stringify({
+    defaultProject: "fallback",
+    projects: {
+      demo: {
+        repoPath: repo,
+        backend: "service",
+        hub: { agentInterface: { claude: "mcp", codex: "mcp" } },
+        agents: {
+          pm:    { fireTimeout: "30m" },       // per-agent override; beats CLI default
+          sweep: { stallTimeout: "0" },         // explicit "0" = disable stall for sweep
+          qa:    { fireTimeout: "0", stallTimeout: "5m" },  // both disabled fire + explicit stall
+        },
+      },
+      fallback: { repoPath: otherRepo },
+    },
+  }));
+
+  const timeoutPm = runL9(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
+  ok(timeoutPm.code === 0, "LOOP-9: per-agent fireTimeout config dry-run exits 0");
+  ok(/\[dry-run\] pm:.*fireTimeout=30m/.test(timeoutPm.out),
+    "LOOP-9: per-agent agents.pm.fireTimeout='30m' overrides the 1h default — dry-run shows 30m");
+  ok(/\[dry-run\] pm:.*stallTimeout=off/.test(timeoutPm.out),
+    "LOOP-9: stallTimeout stays off for claude (no per-agent override, no --stall-timeout flag)");
+
+  const timeoutSweep = runL9(["--cli", "claude", "--once", "--dry-run", "--agents", "sweep", ...common]);
+  ok(/\[dry-run\] sweep:.*stallTimeout=off/.test(timeoutSweep.out),
+    "LOOP-9: agents.sweep.stallTimeout='0' renders as stallTimeout=off");
+  ok(/\[dry-run\] sweep:.*fireTimeout=1h/.test(timeoutSweep.out),
+    "LOOP-9: sweep.fireTimeout not configured — default 1h applies");
+
+  const timeoutQa = runL9(["--cli", "claude", "--once", "--dry-run", "--agents", "qa", ...common]);
+  ok(/\[dry-run\] qa:.*fireTimeout=off/.test(timeoutQa.out),
+    "LOOP-9: agents.qa.fireTimeout='0' renders as fireTimeout=off");
+  ok(/\[dry-run\] qa:.*stallTimeout=5m/.test(timeoutQa.out),
+    "LOOP-9: agents.qa.stallTimeout='5m' overrides the per-lane default");
+
+  // Per-agent config beats an explicit CLI flag.
+  const timeoutPmVsCli = runL9(["--cli", "claude", "--once", "--dry-run", "--agents", "pm",
+    "--fire-timeout", "2h", ...common]);
+  ok(/\[dry-run\] pm:.*fireTimeout=30m/.test(timeoutPmVsCli.out),
+    "LOOP-9: per-agent config (30m) beats explicit --fire-timeout 2h (resolution order: config > CLI > default)");
+
+  // Default (no agent config, no CLI flag): 1h fire timeout, off stall for claude.
+  const timeoutJunior = runL9(["--cli", "claude", "--once", "--dry-run", "--agents", "junior-dev", ...common]);
+  ok(/\[dry-run\] junior-dev:.*fireTimeout=1h/.test(timeoutJunior.out),
+    "LOOP-9: junior-dev has no per-agent config — default 1h fire timeout applies");
+  ok(/\[dry-run\] junior-dev:.*stallTimeout=off/.test(timeoutJunior.out),
+    "LOOP-9: claude/codex stall default is off when neither config nor --stall-timeout is set");
+
   // ── P0-1b: provider-scoped circuit breaker (LOOP-8) ─────────────────────────────────────────────────
   // 5 same-class failures spread across 3 agents on one provider trips it; a 4th agent on that provider
   // is immediately probe-capped without accumulating its own streak; an agent on a different provider is
