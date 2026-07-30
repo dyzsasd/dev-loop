@@ -212,6 +212,14 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   any `dev-loop/*` PR. The first PR the loop itself produced (#27) passes typecheck and its own
   tests on both Node lanes and is still unmergeable. Tracked as **LOOP-22** (P1, Todo).
 
+- **The health surfaces do not model landing at all (2026-07-30).** `doctor` prints `DOCTOR_OK` and
+  `metrics` prints `3 shipped, accept 75%` in exactly the state above: `throughput` counts board
+  `In Review → Done` transitions (a verification), and no hub code reads the git forge for any repo,
+  including ones configured `landing:"pr"` + `autoMerge:true`. So "shipped" currently means
+  "verified", and a six-day landing stall is invisible to every operator-facing read. Filed as
+  **LOOP-27**. Related: 7 of 21 fires in the last 7d left no report file at all (junior-dev 4,
+  sweep 3) with nothing detecting the gap — **LOOP-28**.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -393,39 +401,76 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
     The 2026-07 Decisions tail should be rolled to `docs/strategy-archive/2026-07.md` the way
     2026-06 already was. Deliberately deferred rather than done half-way at the end of a long fire.
 
+- **(pm, 2026-07-30) `conversion-retention` lens — the loop's health surfaces cannot see its own
+  ship pipeline; plus the doc rollup, done where the bloat actually was.**
+  - **Filed LOOP-27 (Feature, High, senior `Mode: design`) — landing observability.** The finding:
+    at this fire `dev-loop doctor` printed `DOCTOR_OK` + `NEXT: dev-loop run` and `dev-loop metrics`
+    printed `21 fires, 100% success · 3 shipped, accept 75%` — while **three loop PRs (#27/#28/#29)
+    sat unmergeable on a base branch whose required checks have been red since `7f18a62` (1.9.0,
+    2026-07-24), six days.** Two concrete causes, both verified in code: `boardMetrics`
+    (`hub/src/metrics.ts:96-101`) increments `throughput` on the `issue.transition` `to === "Done"`
+    event, so **"shipped" means "a PM/QA verify passed", not "the branch landed"**; and
+    `grep -rn "gh pr\|pull_request\|prNumber" hub/src/*.ts` returns **zero hits** — the hub has no
+    forge concept at all, even for repos configured `landing:"pr"` + `autoMerge:true`. This is the
+    retention failure mode for an autonomous loop: every dial reads green while the output goes
+    nowhere, and the operator finds out by accident. Routed senior/`Mode: design` because the hard
+    parts are posture calls, not code — whether offline-and-fast `doctor` may make a network call at
+    all, what the degradation contract is with no `gh`/no auth/no network/a non-GitHub remote, and
+    which signal is worth trusting. Explicitly **detect-and-report only**: it never merges, re-runs
+    or mutates a PR. Related-not-duplicate to LOOP-22 (this instance's *fix*), LOOP-5 (one *cause*
+    class), LOOP-26 (a different metric).
+  - **Filed LOOP-28 (Improvement, Medium, junior) — an agent that fires but writes no report.**
+    `.dev-loop/team/fires.jsonl` records **junior-dev 4 fires and sweep 3** in 7d; the reports tree
+    holds files for `pm-agent`, `qa-agent` and `senior-dev-agent` **only**. So 7 of 21 fires left no
+    durable trail — including the tier doing most of the implementation — against a §22 contract
+    that says every agent leaves one, and a README that sells the trail as a core value prop.
+    Nothing notices. **The §17 line matters here:** whether an agent *should* have written a report
+    is SKILL behavior and not PM's to fix; what is squarely a product gap is that the loop cannot
+    tell the operator its own record has holes. Scoped as the exact mirror of the existing **W16
+    owner-liveness** check (`hub/src/metrics.ts:140-163` → `hub/src/doctor.ts:276-296`) over the same
+    ledger — deterministic, read-only, no new data source.
+  - **§20 rollup — done on `Candidate ideas`, and deliberately NOT on the Decisions log.** The prior
+    fire banked "roll the 2026-07 Decisions tail." Measuring first changed the answer: `Candidate
+    ideas` was **23.7 KB — the doc's largest section**, bigger than the 16.5 KB Decisions log. Ten
+    entries there were already `✅ FILED` / `VERIFIED DONE` / `COMPLETE` / `RETIRED` DL-era
+    provenance, i.e. not candidates at all; they rolled to
+    `docs/strategy-archive/2026-07.md` (**59.5 KB → 43.5 KB**, nothing lost). The Decisions log
+    **stays** because §20 rolls *completed/superseded* decisions, not merely *dated* ones, and its
+    2026-07 entries are live standing direction — the operator's Linear-parity "**do NOT re-propose**
+    these on the competitive-parity lens" list and the DL-2 inline-script amendment are guard rails a
+    date-based roll would have silently deleted. **Next fire: do not re-attempt the Decisions roll as
+    a mechanical chore.** One live remainder was lifted out of an archived bullet rather than buried
+    with it: the deferred cross-store ticket-migration (linear↔service) epic.
+  - **Tier encoding, settled by reading the code — do not "fix" it.** `opQueue`
+    (`hub/src/agentops.ts:199-210`) filters the dev queues on **`assignee`**, never on a
+    `senior-dev`/`junior-dev` **label**. LOOP-16/LOOP-17/LOOP-4 carry the assignee without the label
+    and are fully routable; the label is decorative on the `service` backend. (The `blocked` **label**
+    *is* load-bearing in the same function — that asymmetry is the trap.)
+  - **Promotion pace (Job B2).** Promoted **LOOP-16** (High, junior) and **LOOP-27** (senior). Junior
+    unblocked-Todo depth 7 → 8 of 10: held LOOP-17 (sequenced behind LOOP-16's `detectRepoFacts`
+    change), LOOP-26 (Medium behind a deep queue) and LOOP-4 (correctly parked behind the LOOP-12…15
+    metering children). Senior depth was **0** — the expensive tier was idle with LOOP-23 its only
+    live work — so LOOP-27 went straight to `Todo` rather than waiting a full cycle in `Backlog`.
+  - **Still with the operator: LOOP-18** — no verdict yet on the `Goals`/quality-gauntlet direction
+    proposal. `Goals` remains untouched and the quality line stays out-of-mandate for Job C filings;
+    neither ticket filed this fire depends on that ruling.
+
 ## Candidate ideas
 
-_(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL-1…DL-5 on
-2026-06-23 per the resolved decision above; this list is the remaining overflow parking lot.)_
+_(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
+filed / shipped / retired DL-era entries (16 KB) moved to
+[`docs/strategy-archive/2026-07.md`](strategy-archive/2026-07.md); this list now holds only
+candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bridge ideas were filed
+2026-06-23.)_
 
-- **`/roadmap` editor on a repo-file-strategy project — a silent-divergence affordance (ux-flows lens, PM 2026-06-25 — marginal, parked).** This `dev-loop` project is `hub.docs:false` + has no `director` config, so the agents' north-star is the **repo file** `docs/STRATEGY.md`, not the hub `roadmap` doc. Yet the daemon `/roadmap` page offers an editable "Roadmap (empty) — saves a DRAFT" surface that writes the hub `roadmap` doc **no agent reads** for this config — an operator who edits it there could believe they're steering the loop while the real north-star (the repo file) stays untouched. No false claim is made (the page just says "Roadmap"), so it's a discoverability/expectation gap, not a bug. **Cheap fix when filed:** an informational banner on `/roadmap` when `hub.docs` is false / `strategyDoc` is a repo file (e.g. "this project's north-star is a repo file; this hub roadmap is not read by the agents"). Read-only daemon change, localhost-only. **Deliberately parked, not filed** — niche config + low value, and the Todo queue is Dev-bottlenecked; file if the queue drains or a non-operator adopter hits it. **UPDATE 2026-06-27: ✅ FILED as DL-83** (Improvement/pm/Low) — release gate MET (Todo drained to 2 Low items DL-81/DL-82 + Dev active on DL-79, flipping the Dev-bottleneck rationale); confirmed not built (`roadmapPage` renders no such banner), §17-clean; scoped to the `roadmapPage` banner + the daemon route threading the config boolean + a regression test.
-- **Backend-choice-at-init — sequenced follow-ups to the DL-56 groom (operator 2026-06-25, design `docs/design/backend-choice-unification.md`).** Filed this milestone: DL-59 (U0 notifier), DL-60 (U1 init service bootstrap), DL-61 (U2 `.mcp.json` merge), DL-53-extended (the §17 prose). **U4 — ✅ VERIFIED DONE 2026-06-27 as DL-81** (filed when the Todo drained to 2; gate had been MET since DL-60 + DL-61 verified Done 2026-06-25; closes the DL-56 turnkey milestone end-to-end): an optional init "backend-doctor" reconcile on re-run (extend `hub/src/doctor.ts` to verify daemon-up / `.mcp.json` actor wiring / `/api/health` / the DL-42 hook present, reported in the Step-8 readiness checklist; read-only/idempotent, Low). Its dependency (DL-60 + DL-61) shipped 2026-06-25; banked until the Todo drained, then **filed as DL-81** scoped to the `hub/src/doctor.ts` extension + its test — init already runs doctor (DL-60) so its Step-8 checklist inherits the new lines with **no §17 SKILL edit**. **DEFERRED epic (operator decision — NOT a ticket until prioritized):** cross-store ticket **migration** (linear↔service). The blocker is real: hub ids are a global PK minted from prefix+seq (`db.ts:286-292`) and `ensureProject` hard-throws on a prefix clash (`seed.ts:46-47`), so an importer cannot preserve source ids as the PK — source ids must ride a separate `externalId`. The only cross-store seam today is the one-way hub→Linear `mirror` (a projection, not a bridge); Linear visibility without migrating = `service` + `mirror`. Its own epic (exporter/importer per direction + `externalId` carry + id-remap + a freeze→import→verify→cutover runbook) when the operator prioritizes it.
-- **MCP↔daemon unification — sequenced follow-ups to DL-43 (thread 2, operator 2026-06-24).** _(Now
-  formalized as the design doc's **P2–P5** phase plan — `docs/design/daemon-multicli-repositioning.md`;
-  reconciled `8857c0a`.)_ Once
-  DL-43 (the opt-in loopback **`POST /api/op/*`** for the core ticket tools, gated `hub.transport:"daemon"`) lands + is verified Done: **(2/n = P2)**
-  an opt-in stdio-`server.ts` **thin-client** mode that proxies tool calls to the loopback daemon when
-  configured — extract the shared tool-dispatch so both transports reuse it; the default
-  stdio-owns-its-own-db path stays 100% working. *This* is what makes "agents act through one running
-  service" real (the Vision's "daemon owns coordination"). **(3/n)** widen the loopback surface beyond
-  ticket tools to `doc.*` / `topic.*` / `channel.*`. Each additive + default-off + localhost-only;
-  file the next increment as the prior verifies (never one unscoped mega-ticket — Dev would block it).
-  **UPDATE 2026-06-25: (2/n=P2) SHIPPED as DL-55 (verified Done). (3/n) docs+events (`list_events` + `doc.*`,
-  `doc.publish` cooperatively operator-gated per folded-critique #85) SHIPPED as **DL-62 — verified Done this fire**
-  (the shim now proxies 13/29 `server.ts` tools). The operator's "(4/n) bucket" (`topic.*`/`post.add` + `channel.*`
-  + `mirror.*` + labels) is being delivered **family-by-family** — the DL-55/DL-62 "one coherent family per
-  increment, never an unscoped mega-ticket Dev would block" discipline — because, unlike docs/tickets, the
-  topic/channel/mirror write logic is **inline in `server.ts`** (no `topicstore`/`channelstore` yet), so each
-  family first needs its own extract-to-shared-module step (the `docstore.ts` precedent). Sequenced: **(4/n)**
-  discussion-board (`topic.*`+`post.add`, extract `topicstore.ts`) = **DL-64 (filed this fire)**; **(5/n)** `channel.*`;
-  **(6/n)** `mirror.push/status` + `list_issue_labels`/`create_issue_label` + `get_project`. The full drop-in
-  (through (6/n)) is the precondition for P3 (single-writer + the `server.ts`↔`agentops.ts` dispatch convergence).**
-  **✅ COMPLETE (reconciled 2026-06-27):** **(5/n) = DL-67** and **(6/n) = DL-68** are both verified **Done** → the
-  100% 29/29 `server.ts` drop-in shipped; **P3** (DL-69 dispatch-convergence + DL-70 daemon single-writer), **P4**
-  (DL-71 npm package) and **P5** (DL-72 Codex 2nd-CLI) likewise shipped (v0.21.0, `4bb96af`). The entire
-  MCP↔daemon-unification + portability arc is done — see the **P2** summary above and `Current state`. **Nothing in this
-  bullet remains to file** (noted because a prior throttle mis-read the lagging `(5/n) channel.*` line as an unfiled
-  candidate "ready to file"; per §8 dedupe-against-reality it was already DL-67/Done).
+- **Cross-store ticket migration (linear↔service) — DEFERRED epic, operator decision; not a ticket
+  until prioritized.** (Live remainder of the archived backend-choice-at-init bullet.) The blocker
+  is structural, not effort: hub ids are a global PK minted from prefix+seq (`hub/src/db.ts:286-292`)
+  and `ensureProject` hard-throws on a prefix clash (`hub/src/seed.ts:46-47`), so an importer cannot
+  preserve source ids as the PK — source ids must ride a separate `externalId`. The only cross-store
+  seam today is the one-way hub→Linear `mirror` (a projection, not a bridge); Linear visibility
+  without migrating = `service` + `mirror`. Scope as its own epic when prioritized: exporter/importer
+  per direction + `externalId` carry + id-remap + a freeze→import→verify→cutover runbook.
 - **Inter-agent discussion daemon (deferred).** The Vision also names the daemon "owning
   inter-agent communication and discussion." Today that plane is the **poll-based, no-daemon**
   §25 board + P6 channel. Moving it into a persistent process is a larger architectural step
@@ -453,13 +498,6 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   CSRF/same-origin-guarded since it's a write). Scope it like the cwd feature (DL-12 proposal +
   DL-13/15 buildable) — i.e. a small design pass, not a one-shot ticket. Awaiting operator
   prioritization vs. the supporting goals (hub hardening + portability) now that the milestone is done.
-- **Web-UI fidelity polish (ux-flows lens, PM 2026-06-23).** **UPDATE 2026-06-23: filed as DL-16** (items a+b: render markdown ticket/comment bodies via the existing renderMarkdown + show created/updated timestamps), now that the milestone backlog drained. **UPDATE 2026-06-24: item (c) confirmed live + filed as DL-36** (ux-flows sweep at `dfa5f9b`: `/totally/bogus` → JSON 404 while `/ticket/<missing>` → HTML 404; serve the friendly HTML 404 for non-API paths, keep `/api/*` JSON). All three sub-items now filed. Lower-value read-view
-  refinements found alongside DL-8, parked to keep the Dev-bottlenecked Todo signal-rich: (a)
-  ticket/comment bodies render as **raw markdown** inside a `<pre>` block — a tiny inline
-  markdown→HTML renderer (no native deps, hub doctrine) would match the "Linear-like" Vision; (b)
-  the detail view omits **created/updated timestamps**; (c) an unknown **non-API** path returns
-  JSON (`{"error":"not found"}`) instead of the friendly HTML 404 the ghost-ticket route already
-  serves. File as the daemon backlog drains.
 - **Board summary band (data-analytics lens, PM 2026-06-23 — P4 polish, parked from the 6-lens sweep).**
   `boardPage()` renders one section per state with only a per-column count; no at-a-glance composition
   by **type / owner / priority** above the columns. Pure read-only aggregate over the existing
@@ -476,31 +514,4 @@ _(The daemon/web-UI/roadmap-bridge and README-drift ideas below were filed as DL
   `/activity` nav link DL-17 adds, rather than its own ticket. (The "labeled board item" half was
   redundant with the existing wordmark-as-home at `daemon.ts:127`.)
 - **Loop-cost-governance — Phase 2 (sequenced after a cost-signal precursor; PM 2026-06-27, banked from the DL-73 groom).** The DL-73 intake's two cost-*quantifying* asks are **not buildable until the hub has a per-fire cost signal** (agents don't report token/$ spend to the SoR today): **(a)** a loop-level **token/$ budget ceiling** (the hard circuit-breaker complementing DL-76's no-progress detector), and **(b)** a **cost-per-accepted-change** metric + a cost column on `/activity` (complementing DL-79's accept-rate). The likely precursor is a **§17 [pm-proposal]** for the operator-owned launcher to emit per-fire cost into the hub (a new `events` kind), then a buildable hub cap + the cost surfacing. File the precursor proposal when the operator signals appetite, or when an adopter hits a real runaway-cost incident. **(c)** Surfacing DL-79's accept-rate in the **Reflect daily digest** is a Reflect SKILL change → a §17 [reflect-proposal], not a code ticket; fold into the next Reflect-curation pass rather than filing Dev work. **UPDATE 2026-07-30 (pm): ✅ (a)+(b) UNBANKED — the operator asked for the whole arc directly, and the precursor is now FILED as `LOOP-2` (metering core: `fireId` + per-fire token/cache/cost across all three CLI lanes, senior `Mode: design`), with the read surfaces as `LOOP-4` (held in `Backlog` behind `Blocked-by: LOOP-2`).** Confirmed still not built before filing: `recordFire` writes duration/exit/model/effort/`bootBytes` only, and `context-bill.ts` is a *static* 4-bytes-per-token estimator of the boot corpus — there is no measured provider usage anywhere in the hub. Note the shape changed from what was banked here: this is **operator-directed work through the normal intake path, NOT a §17 `[pm-proposal]`** — the launcher already writes the per-fire ledger (`fire.completed`), so extending it is ordinary Dev work on hub code, with no SKILL/conventions edit required. **Enforcement (a budget ceiling that stops fires) is still NOT filed** — it is a separate ticket built ON this signal once LOOP-2 lands; do not fold it into LOOP-4's read surfaces.
-- **⚠️ QA-lane note, NOT a PM ticket — `dev-loop queue` is unrouted, so every agent's documented
-  FIRST read fails (strategy-gaps lens, PM 2026-07-30).** Recorded here for QA rather than filed:
-  a defect is QA's `Bug` per the PM hard limits, and the carve-out (file it myself when a confirmed
-  repro sits unfiled across fires while the loop is stalled) does not apply — the loop is not
-  stalled (7 Todo, 2 In Progress) and this is first observation. Same cross-lane hand-off that
-  worked for DL-88. **Confirmed by repro this fire, not inferred:** `dev-loop queue` exits with
-  ``unknown command 'queue'`` on v1.10.0 because the `ROUTES` table in `hub/src/cli.ts:28-57` has no
-  `queue` entry (it is likewise absent from `usage()` and from `NEEDS_NODE_SQLITE`). Everything
-  behind that one missing line is present and tested: the op exists (`agentops.ts:644` →
-  `opQueue`), the CLI handler exists and is registered in `cli-agentops.ts`'s own `VERBS` table
-  (`:545` → `verbQueue` at `:264`), and `hub/test/queue.ts` covers the **op** — which is precisely
-  why the suite is blind to it. **Impact:** 1.5.0 shipped this verb as "the verb becomes every board
-  agent's first read", and `gen-cheatsheets.ts:33-53` emits `dev-loop queue` as the FIRST verb in
-  the generated cheat-sheet of every agent SKILL (pm/qa/dev/…), so on every CLI-interface fire (the
-  D8 default on `service`) each agent's first command fails and it must fall back to composing §10
-  queries by hand — losing the server-side §5/§21b pick ranking that the verb exists to provide.
-  This PM fire hit it and fell back. **Working workaround today:** `dev-loop op queue --args-json
-  '{}'` (LAYER 0) returns the correct payload. **Fix shape:** add
-  `queue: ["cli-agentops", "queue"]` to `ROUTES`, add it to `usage()` and `NEEDS_NODE_SQLITE`, and
-  add a routing test asserting that **every verb the generated cheat-sheets advertise actually
-  dispatches** — that missing assertion class is what let this ship, and it would catch the next one.
-- **[❌ RETIRED 2026-06-28 — Director + §25 board removed; moot, see running log.]** **Web read-view for the discussion board + non-roadmap hub docs (ux-flows lens, PM 2026-06-27 — director-config-gated, banked).** The daemon web UI surfaces the roadmap (`/roadmap`) but **not** the deliberation that produces it: the hub's discussion board (`topic.*` / `post.add` / `topic.synthesize` / `topic.close` — the §25 plane the Director chairs) and non-roadmap hub docs (`kind:"strategy"`) have **no web read-view** (only the JSON `/api/docs`). An operator on a **director-configured** project can see the roadmap OUTPUT but not the topics / posts / decisions that drove it — an observe-and-steer gap for that persona. **Deliberately banked, not filed:** `dev-loop` itself has **no `director` config** (board OFF) and `hub.docs:false`, so a ticket here would be speculative, config-gated-off Dev work (§8 dedupe-against-reality — don't file a surface this instance never exercises). **File when** a `director`-configured project comes online (or an adopter asks): a read-only `/topics` (list → topic detail with posts + the closing decision) + `/docs/<kind>` view, reusing the `roadmapPage` / `renderMarkdown` precedent; localhost-only, no write path, §17-clean. Pairs with the parked "Multi-stakeholder roadmap auth" + "Reports + 点评 review in the web UI" observe/steer items.
-- **Open-WIP aging on `/activity` — forward-looking sibling of DL-84's per-stage breakdown (data-analytics lens, PM 2026-06-27 — banked).** DL-84 surfaces where *completed* tickets spent their time (backward-looking medians); the complement is surfacing the *aging of currently-open* WIP — the oldest open ticket per active state (In Progress / In Review), flagging stale WIP: e.g. In Review > N days = an owner agent (PM/QA) isn't verifying; In Progress > N days = a possible orphan beyond Sweep's reclaim. Actionable *now* (the operator acts on the named stale ticket), vs DL-84's trend. Read-only over current tickets + their latest transition event; §17-clean. **Banked, not filed** — to avoid flooding the queue (DL-84 filed this fire) and because it lightly overlaps Sweep's lane (Sweep *acts* on orphaned In Progress; this *surfaces* aging — incl. In-Review verify-lag, which Sweep doesn't touch — to the operator). **File when** DL-84 lands or an operator asks. **UPDATE 2026-06-27: ✅ FILED as DL-89** (Improvement/pm/Low) — condition MET (DL-84 verified Done this milestone). Confirmed not built (`activityPage` is backward-looking only — medians over recently-Done; daemonviews.ts:461-540), §17-clean (read-only `openWipSection` over the events ledger, no new route/table), deduped vs DL-84/DL-79 and the full Done/Canceled history. Scoped to the new section + a regression test asserting age-from-latest-into-state-transition.
-- **ux-flows overflow — banked nits from the `65e7ae7` web-UI + onboarding sweep (PM 2026-06-27).** Low-value or gated items found alongside DL-86/DL-87, parked to keep the queue signal-rich: **(a)** the web **"New ticket" form collects only title + type** (`daemonviews.ts:204-209`) — no description/priority field, so an operator-created ticket lands description-less (and renders an empty `<div class="doc">` under "Description", `daemonviews.ts:250`). Debatable whether this is a gap or deliberate quick-capture minimalism (DL-29 shipped it lean; PM grooms W3 intake anyway) — **file a "richer create form + (no description) placeholder" Improvement only if an operator actually uses web-create and hits the thinness.** **(b)** RUNNING.md §4a teaches the manual `service` setup before noting `init` automates it (doc-ordering polish; fold into the next docs reconcile). **(c)** init's readiness verdict (`skills/init/SKILL.md`) could point a `service` operator at their board URL / "Observe the loop" — but that's a **§17 SKILL edit** (`[pm-proposal]`, operator-applied), not a Dev ticket; fold into a future init-prose proposal. **(d) considered + REJECTED (do NOT re-file):** a persistent "read-only" banner on the board (read-only IS the default mode → chrome-noise, unlike `/roadmap` where write is a headline feature) and a throughput "— no data" empty-state (a count's `0` is a real value, unlike acceptance-rate's undefined `0/0`). **(e) QA-lane (noted for QA, not a PM Feature):** `seed --help` is parsed as the project key → seeds a junk-named project instead of printing usage (`hub/src/seed.ts` CLI dispatch) — a minor footgun on an internal/init-driven command. **UPDATE 2026-06-27: ✅ QA picked it up — filed as DL-88 (Bug, qa-owned). Cross-lane hand-off worked; no PM action.**
 - **Daemon serves stale VIEW code until restarted — observe-surface lag after a Dev ship (ux-flows/ops lens, PM 2026-06-27 — banked).** The long-lived daemon (DL-41) loads `daemonviews.ts` + routes at boot, and `daemon ensure` is idempotent (never restarts a live process), so after a Dev commit that changes the web-UI rendering (e.g. DL-84's new `/activity` section, or DL-83's banner) the running daemon keeps serving the OLD view code until manually `down`+`up`'d — the operator sees fresh DATA (read per-request from the SoR) with **stale RENDERING**. Standard server behavior, but a real papercut for THIS dogfooding loop where Dev ships ~every 20min and the daemon IS the operator's observe surface (a new feature looks un-shipped until restart). **Options when filed:** a `dev-loop daemon restart` subcommand + a post-ship hint; OR a lightweight **served-commit-vs-HEAD banner** on the web UI so staleness is *visible* (the DL-83 surface-don't-prevent pattern); OR file-watch auto-reload (heavier — touches the lifecycle + the stateless contract). **Banked, not filed** — expected daemon behavior, low-severity (data is correct, only new view code lags); file if the operator finds the lag misleading or asks.
-- **`dev-loop tickets` richer filters — the follow-up DL-90 explicitly deferred (competitive-parity lens, PM 2026-06-27 — banked).** DL-90 shipped the first `dev-loop tickets` filter pass with `--state` + free-text `--q` and stated "richer filters are a follow-up." The `gh issue list` / linear-cli parity extras are `--type` (Feature/Bug/Improvement), `--owner` (pm/qa), and `--label` (arbitrary label membership) — each a one-line in-process `rows.filter` over the already-loaded board (no new query, read-only, §17-clean). **Banked, not filed** — marginal at the current ~90-ticket scale where `--q` + `--state` cover most needs, and the relations gap (DL-92) is the stronger DL-90 follow-up this fire. **File when** the board grows materially, an operator asks, or the Todo queue empties and this is the best remaining candidate. **UPDATE 2026-06-27: ✅ FILED as DL-93** (Improvement/pm/Low) — trigger MET (Todo drained to 1: DL-92, with DL-89 picked up → In Progress). Confirmed-not-built + deduped: `cli-tickets.ts:30-45` parses only `--all`/`--state`/`--q` and silently swallows an unknown flag's value as positional `--q` (DL-93 fixes that footgun too); §17-clean (read-only CLI, no new query/route), relatedTo DL-90/DL-92, regression test extends the existing `test/cli-tickets.ts`.
-
-- **2026-06-28 — REMOVED the Director agent + the §25 discussion board (operator decision).** The Director was enabled on **zero** projects (including this dogfood — `dev-loop` has no `director` config; the north-star is this repo-file `strategyDoc`), off by default, and an audit found its headline "multi-agent deliberation" was single-model role-play on the default roadmap path, while its one genuinely-unique mechanism (the async board) was unused and its other "unique" value (operator-publish gate; two-way channel) duplicated existing surfaces (PM's strategy draft uses the same `docPublish` gate; the §9 notify webhook already pushes to Lark/Slack). **Direction now flows entirely through PM** — the no-`director` default the system already documented: the operator files a `Todo` to PM (§9a W3 intake, **widened** to cover **research/direction** asks → PM researches and updates the docs, not only grooms Dev children), and a genuinely human-only call is parked **`Human-Blocked`** (§9) and auto-pinged out-of-band (on `service` the **daemon** reminds on the state; on `linear`/`local` PM emits the §9 `notify` once). **Deleted:** the `director-agent` SKILL, the `topic.*` board subsystem (hub `topicstore.ts` + the `topics`/`posts` tables + `board.ts` test), and all `director` roster/seed/install/config-schema/plugin-manifest/doc wiring; the sibling skills' dead board-participation blocks; conventions §25 collapsed to a tombstone. **Kept:** the `channel.*` IM module — it's the transport behind the §9 human-park notify; its two-way *inbound* half (`channel.poll`/`ack`) is now agent-unused (a fiddly follow-up to trim, not worth disturbing the notify path). **Retired as obsolete:** the board-gated Candidate ideas (web read-view for the discussion board; multi-stakeholder roadmap auth) — there is no board to surface.
