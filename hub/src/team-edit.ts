@@ -338,17 +338,42 @@ export interface DetectedRepoFacts { build?: { typecheck?: string; build?: strin
 // merge checks (a job's `name:` when set, else its key). Pure fs reads — deterministic and LLM-free.
 export function detectRepoFacts(absPath: string): DetectedRepoFacts {
   const out: DetectedRepoFacts = {};
-  try {
-    const pkg = JSON.parse(readFileSync(join(absPath, "package.json"), "utf8")) as { scripts?: Record<string, string> };
-    const pm = existsSync(join(absPath, "pnpm-lock.yaml")) ? "pnpm" : existsSync(join(absPath, "yarn.lock")) ? "yarn" : "npm";
-    const runCmd = (name: string) => `${pm} run ${name}`;
+  const parsePkg = (dir: string): { scripts?: Record<string, string> } | null => {
+    try { return JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { scripts?: Record<string, string> }; }
+    catch { return null; }
+  };
+  const GATES = ["typecheck", "build", "test", "quality"] as const;
+  const buildFromPkg = (pkg: { scripts?: Record<string, string> }, dir: string, subdir?: string) => {
+    const pm = existsSync(join(dir, "pnpm-lock.yaml")) ? "pnpm" : existsSync(join(dir, "yarn.lock")) ? "yarn" : "npm";
+    const prefix = subdir ? `cd ${subdir} && ` : "";
+    const runCmd = (n: string) => `${prefix}${pm} run ${n}`;
     const build: { typecheck?: string; build?: string; test?: string; quality?: string } = {};
     if (typeof pkg.scripts?.typecheck === "string") build.typecheck = runCmd("typecheck");
     if (typeof pkg.scripts?.build === "string") build.build = runCmd("build");
     if (typeof pkg.scripts?.test === "string") build.test = runCmd("test");
     if (typeof pkg.scripts?.quality === "string") build.quality = runCmd("quality"); // the CRAP/mutation gate (quality-gauntlet)
-    if (build.typecheck || build.build) out.build = build;
-  } catch { /* no package.json (or unparseable) → no build facts */ }
+    return Object.keys(build).length ? build : null;
+  };
+  const rootPkg = parsePkg(absPath);
+  if (rootPkg !== null) {
+    const build = buildFromPkg(rootPkg, absPath);
+    if (build) out.build = build;
+  } else {
+    // root has no package.json — scan one level of subdirectories; emit only when exactly one candidate matches
+    try {
+      const candidates: Array<{ name: string; pkg: { scripts?: Record<string, string> } }> = [];
+      for (const entry of readdirSync(absPath, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const sub = join(absPath, entry.name);
+        const pkg = parsePkg(sub);
+        if (pkg && GATES.some(s => typeof pkg.scripts?.[s] === "string")) candidates.push({ name: entry.name, pkg });
+      }
+      if (candidates.length === 1) {
+        const build = buildFromPkg(candidates[0].pkg, join(absPath, candidates[0].name), candidates[0].name);
+        if (build) out.build = build;
+      }
+    } catch { /* unreadable dir */ }
+  }
   const checks: string[] = [];
   try {
     const wfDir = join(absPath, ".github", "workflows");
