@@ -4,7 +4,8 @@
 // shells out to `claude -p`, `codex exec`, or `opencode run` once per agent fire.
 import { spawn, execFileSync, type ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync, appendFileSync, openSync, closeSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync, appendFileSync, chmodSync, openSync, closeSync } from "node:fs";
+import { platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -735,6 +736,24 @@ let fireLedgerPath: string | null = null;                            // team mod
 // Internal (not exported): main() is unconditional, so nothing may import this module without running the
 // scheduler. recordFire's ledger + event writes are covered by real-fire subprocess harnesses instead —
 // the fires.jsonl row in test/team-scheduler.ts and the fire.completed event in test/run-agents-live.ts.
+
+// §16 perms posture for the fire ledger (secrets.ts warnLoosePerms sibling): the ledger sits in the same
+// .dev-loop data home as secrets.env and can capture credential-adjacent fire output, so keep it owner-only.
+// chmod ONLY a file/dir WE just created; a PRE-EXISTING loose one is warned once — never chmod'd behind the
+// operator's back, never a failure, never on win32.
+const ledgerPermsWarned = new Set<string>();
+function hardenLedgerPerms(p: string, existedBefore: boolean, mode: number, chmodHint: string): void {
+  if (platform() === "win32") return;                                   // never touch perms on win32
+  if (!existedBefore) { try { chmodSync(p, mode); } catch { /* best-effort */ } return; } // we created it → owner-only
+  if (ledgerPermsWarned.has(p)) return;                                 // pre-existing loose → warn once, never chmod
+  try {
+    const cur = statSync(p).mode;
+    if (cur & 0o077) {
+      ledgerPermsWarned.add(p);
+      console.error(`[dev-loop] ${p} is readable by group/others (mode ${(cur & 0o777).toString(8)}) — the fire ledger can hold fire output; tighten it: chmod ${chmodHint} ${p}`);
+    }
+  } catch { /* raced away between the write and the stat — nothing to warn about */ }
+}
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
   extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number }): void {
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
@@ -743,9 +762,22 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
   // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
   if (fireLedgerPath) {
     try {
-      mkdirSync(dirname(fireLedgerPath), { recursive: true });
-      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra ?? {}) };
+      const dir = dirname(fireLedgerPath);
+      const dirExisted = existsSync(dir);
+      mkdirSync(dir, { recursive: true });
+      // §16 (LOOP-62): ENUMERATE the safe telemetry fields — mirror the logEvent sibling below — instead of
+      // spreading `extra` whole. The raw `outputTail` is a credential-adjacent CLI stream with ZERO ledger
+      // consumers (metrics/doctor never read it); the breaker + the suspectError/errorClass buckets already
+      // consumed it in-memory, so it must NEVER reach disk.
+      const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, provider,
+        model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId,
+        ...(extra?.suspectError ? { suspectError: true } : {}),
+        ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}),
+        ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}) };
+      const fileExisted = existsSync(fireLedgerPath);
       appendFileSync(fireLedgerPath, JSON.stringify(row) + "\n");
+      hardenLedgerPerms(dir, dirExisted, 0o700, "700");                 // .dev-loop/team/ → owner-only
+      hardenLedgerPerms(fireLedgerPath, fileExisted, 0o600, "600");     // fires.jsonl → owner-only
     } catch { /* ledger is best-effort */ }
   }
   try {
