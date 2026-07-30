@@ -442,6 +442,10 @@ export function logEvent(
   db: DatabaseSync,
   e: { project_id: string; ticket_id?: string | null; actor: string; kind: string; data?: unknown },
 ): void {
+  const fireId = process.env.DEVLOOP_FIRE_ID;
+  const data = fireId
+    ? { ...(e.data as Record<string, unknown> | undefined ?? {}), fireId }
+    : (e.data ?? {});
   db.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES (?,?,?,?,?,?)")
-    .run(e.project_id, e.ticket_id ?? null, e.actor, e.kind, JSON.stringify(e.data ?? {}), nowIso());
+    .run(e.project_id, e.ticket_id ?? null, e.actor, e.kind, JSON.stringify(data), nowIso());
 }

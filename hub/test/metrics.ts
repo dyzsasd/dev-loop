@@ -99,6 +99,18 @@ try {
     "ownerLiveness: the LATEST of several fires decides liveness (old row first must not stick)");
   db.close();
 
+  // ── LOOP-12: FireRow with fireId parses; legacy row without fireId also parses ──
+  const fireIdLedger = join(tmp, "fireid.jsonl");
+  writeFileSync(fireIdLedger, [
+    JSON.stringify({ ts: iso(NOW - DAY), agent: "pm", project: "web", durationMs: 100, exitCode: 0, fireId: "aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee" }),
+    JSON.stringify({ ts: iso(NOW - 2 * DAY), agent: "qa", project: "web", durationMs: 200, exitCode: 0 }), // legacy: no fireId
+  ].join("\n") + "\n");
+  const fiRows = readFireRows(fireIdLedger);
+  ok(fiRows.length === 2, `LOOP-12: both rows parse (got ${fiRows.length})`);
+  ok(fiRows[0].fireId === "aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee",
+    `LOOP-12: FireRow with fireId parses correctly (got ${fiRows[0].fireId})`);
+  ok(fiRows[1].fireId === undefined, `LOOP-12: legacy FireRow without fireId parses without error (fireId=${fiRows[1].fireId})`);
+
   // ── CLI e2e on a real workspace (linear → fire metrics + boardNote) ──
   const HOME = join(tmp, "home");
   const ws = join(tmp, "ws");
