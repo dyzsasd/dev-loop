@@ -674,6 +674,46 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   that the two diverged. Filed as **LOOP-97** (p2, junior); a third silently-ignored param on
   `/api/tickets` (`?q=`, joining `?fields=summary`) folded into **LOOP-96** rather than filed.
 
+- **✅ The landing wedge cleared: all three handed-back increments came back green and verified Done
+  (2026-07-31).** `origin/main` moved `6e02a8f → 2594f9c` **mid-fire**, carrying **LOOP-63** (#56,
+  `9ff4abd`), **LOOP-26** (#55, `7823c59`) and **LOOP-19** (#54, `2594f9c`) — every one with both
+  required checks SUCCESS. Two of the three (LOOP-19, LOOP-26) are exactly the tickets the previous
+  fire returned to `In Progress` as unlandable, which **closes the loop on the §12c hand-back
+  ruling**: the state-error path did what a verify-fail would not have — the increments were rebased
+  and landed rather than Canceled and re-specified. Verify queue went **0 at boot → 3 at pre-report**;
+  had this fire trusted its boot snapshot it would have shipped nothing. **The pre-report board
+  re-read has now paid on four fires out of five.** All three verified against a detached worktree at
+  `origin/main`, never the installed binary (still 1.11.0, still 12+ commits stale — LOOP-38).
+- **⚠️ A full local `npm test` cannot reach the end of its own chain on this machine, in either
+  env.** Measured while verifying: inside a fire, **33** `run-agents` assertions fail on ambient
+  `DEVLOOP_*` (**LOOP-45**); with the env stripped, `test/lifecycle.ts` dies of an uncaught ENOENT
+  against the foreign v1.2.1 daemon still squatting **:8787** (**LOOP-84** p1 · **LOOP-52**, both
+  still reproducible). The abort lands at **chain link 27 of 68**, so `seed`, `consistency`,
+  `accept-rate`, `quality` and 30+ others never execute — and `seed`/`consistency` are precisely the
+  two suites **LOOP-63's own ACs name**. This is **LOOP-86** demonstrated on a live verification
+  rather than argued: the ship gate silently under-ran the evidence a senior increment needed, and
+  only running the suites directly surfaced it. CI, on a clean runner, was green throughout.
+- **📉 The loop's headline quality KPI overstates itself by 11.5 points, in both implementations
+  (2026-07-31).** The data-analytics lens: `acceptRate = done/(done+verifyFails)` builds a ratio from
+  **two different populations** — the numerator counts *every* transition into `Done` board-wide
+  (`metrics.ts:131`), the denominator only `In Review → Canceled` (`:132`). Measured on the live
+  board: **86.5% reported vs 75.0% true**. Two independent errors that push the **same** way —
+  2 of the 32 Dones never entered `In Review`, and **5 of 40 `In Review` exits (12.5%) are counted
+  nowhere**: `In Review → In Progress` (3, the §12c hand-back this very fire vindicated) and
+  `In Review → Human-Blocked` (2). The web `/activity` metric (`views/activity.ts:140,199`) has the
+  **identical** defect (86% vs 75%), so there is no correct sibling to copy. `test/accept-rate.ts`
+  covers that surface with 30 assertions and passes anyway, because its fixture helper is
+  `trans(db,"In Review","Done",ms)` — **every Done it seeds is already an In-Review Done**, so the
+  numerator's scope is invisible to it. Filed **LOOP-98** (p2, junior, both sites + both test gaps).
+- **🔕 The split shipped in LOOP-26 turned a noisy number into a confident wrong one.** `blockedNow`
+  keys on the `blocked` **label**, but on `backend:"service"` the operator park is the
+  **`Human-Blocked` STATE**. **LOOP-92** — awaiting an operator ruling for four fires — carries no
+  `blocked` label, so `dev-loop metrics` now renders **`0 parked`** on the field whose own source
+  comment reads *"need human attention"*. Before the split it read `13 blocked open`: noisy, but
+  non-zero, so it forced a look. `metrics --json` now **contradicts itself** — `.decisionQueue` sees
+  LOOP-92, `.blockedNow` does not. Outside LOOP-26's ACs (all label-scoped) so explicitly **not** a
+  verify-fail; routed to **LOOP-31** as a binding added AC, which the same fire also unparked.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1649,6 +1689,45 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   behaviour is defensible in isolation and only the diff is the defect. It is invisible to any review
   that reads one call site, which is why the method that finds it is *run the same input through both
   paths and compare the outputs*, never *read the code and reason about it*.
+
+- **(pm, 2026-07-31) 📝 DECISION — the acceptance-rate contract: numerator and denominator are drawn
+  from ONE population, the set of `In Review` exits in the window.** A ticket that reaches `Done`
+  without an `In Review → Done` transition contributes to **throughput** and not to **acceptRate**;
+  every exit edge out of `In Review` is in the denominator, derived as `from === "In Review"` rather
+  than a hard-coded destination list, so a future state cannot silently shrink it. `throughput` keeps
+  its name and value — it is a board-wide Done count and correct as such (this also **corrects
+  LOOP-42's stated premise** that `throughput` "is the verify count"; evidence added there). Encoded
+  into LOOP-98's ACs rather than left open: it is answerable, and the two failing surfaces are the
+  CLI and the web view of the *same* number. **Scope boundaries drawn deliberately so three live
+  tickets can share two files without colliding:** LOOP-98 owns the ratio arithmetic (both sites) and
+  is barred from the human `board:` render line; **LOOP-42** owns that line plus `landed`;
+  **LOOP-31** owns the `blocked now` tile and, as of this fire, the *parked population* on the CLI
+  side too — LOOP-26 shipped the split but not the population, so it fell back into LOOP-31's scope.
+- **(pm, 2026-07-31) 📝 The `validate-then-drop` family gains its sixth shape — and the first one a
+  test suite actively conceals.** The family so far: *a config field nothing reads* (LOOP-70), *read
+  at the wrong scope* (LOOP-77), *read over the wrong set* (LOOP-90), *a param accepted and ignored*
+  (LOOP-96), *two paths, one concept, different corpora* (LOOP-97). The sixth is **a correct-looking
+  metric whose test fixture encodes the same wrong assumption as the code**. `test/accept-rate.ts`
+  is not thin — 30 assertions, boundary cases, empty-state, malformed-event, and it *correctly*
+  asserts the mirror case on the denominator (`Todo/Backlog → Canceled` excluded). It cannot see the
+  numerator bug because its only Done-emitting helper hard-codes `In Review → Done`. **The rule:
+  coverage counts assertions, never the input space they range over — so when two independent
+  implementations of one number agree, that is not corroboration, it is a shared assumption, and the
+  thing to audit is the FIXTURE, not the code.** The cheap detector, which is what found this: take
+  the metric's own definition, recompute it from the raw event ledger with a five-line script, and
+  diff. Do not read either implementation first.
+- **(pm, 2026-07-31) 📝 RULING — a `governing-file-edit` prerequisite parks for the human, and PM is
+  bound by the same §17 firewall it enforces on Dev.** senior-dev filed **LOOP-101** asking that
+  `references/config-schema.md` document the three `defaultBranch` surfaces LOOP-70 designs
+  (`repos[].defaultBranch`, `team.git.defaultBranch`, `add-repo --default-branch`) — verified absent:
+  `grep -n defaultBranch references/config-schema.md` → nothing, while `conventions.md:1478` already
+  states the resolution chain. Classification `external-prereq` **upheld, not downgraded to
+  `decision-needed`**: the blocker is a human commit to a governing file, not a decision PM is
+  withholding, and PM may no more edit `config-schema.md` than Dev may. Parked `Human-Blocked`, owner
+  `pm`, `blocked` kept as defence-in-depth, `needs-pm` dropped so it stops re-entering the unblock
+  queue. **No `Blocked-by:` edge written, deliberately** — §9c edges name tickets, this prerequisite
+  names a person, and a zero-edge ticket correctly never auto-unparks. It unparks when the operator
+  commits. This is the working precedent for the whole `governing-file-edit` kind.
 
 ## Candidate ideas
 
