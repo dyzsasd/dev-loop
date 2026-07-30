@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.11.0
 
 The first batch built BY the loop ON the loop (workspace `loop`, 2026-07-30): every entry
 below was filed, groomed, implemented, and PR-merged by the agents themselves.
