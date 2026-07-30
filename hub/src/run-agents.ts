@@ -22,6 +22,8 @@ import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker } from "./breaker.ts";
+import { codexUsageAdapter } from "./fire-usage.ts";
+import type { FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -698,6 +700,7 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
     ] : [];
     const args = [
       "exec",
+      ...codexUsageAdapter.extraArgs, // "--json" — structured JSONL output for usage capture
       ...(profile.model ? ["--model", profile.model] : []),
       ...(profile.effort ? ["-c", `model_reasoning_effort=${tomlString(profile.effort)}`] : []),
       ...opts.extraArgs,
@@ -755,7 +758,7 @@ function hardenLedgerPerms(p: string, existedBefore: boolean, mode: number, chmo
   } catch { /* raced away between the write and the stat — nothing to warn about */ }
 }
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
-  extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number }): void {
+  extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number; usage?: FireUsage }): void {
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail, provider); // P0-1a/P0-1b — every completed fire feeds the streak
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
@@ -786,7 +789,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}) } });
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}), ...(extra?.usage ? { usage: extra.usage } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -1023,6 +1026,9 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   let outBytes = 0;
   let lastOutputAt = Date.now(); // liveness watchdog anchor — any stdout/stderr byte resets it
   let lastNewContentAt = Date.now(); // retry-loop watchdog: last time output introduced a genuinely new line
+  const isStructuredLane = profile.codingAgent === "codex";
+  const MAX_FULL_STDOUT = 4 * 1024 * 1024; // 4 MiB cap — overflow degrades to usage:null, never OOM
+  let fullStdout = "";
   // Bounded, ROLLING window of recently-seen lines (seen-lines.ts). It evicts the oldest line on
   // overflow instead of freezing on the first N — the LOOP-23 fix for a detector that went inert
   // after ~200 distinct lines (a saturated Set treated every later line, including a genuine retry
@@ -1042,7 +1048,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       if (seenLines.markNew(l)) lastNewContentAt = Date.now();
     }
   };
-  child.stdout.on("data", (d) => { keepTail(d); process.stdout.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
+  child.stdout.on("data", (d) => {
+    keepTail(d);
+    process.stdout.write(`[${agent}] ${d}`);
+    if (logOpen) log.write(d);
+    if (isStructuredLane && fullStdout.length < MAX_FULL_STDOUT) {
+      const s = d.toString();
+      fullStdout += s.slice(0, MAX_FULL_STDOUT - fullStdout.length);
+    }
+  });
   child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
 
   return await new Promise((resolveExit) => {
@@ -1122,11 +1136,19 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       // output at all (whitespace-only counts as none). Bare "Error:" is deliberately NOT matched — an
       // agent's own prose can legitimately end that way. Telemetry only; the exit code stays untouched.
       const lastLine = outTail.trimEnd().split("\n").pop()?.trim() ?? "";
-      const suspectError = exitCode === 0 && !timedOut && (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine));
+      let suspectError = exitCode === 0 && !timedOut && (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine));
+      // For structured lanes, also check the adapter's isError signal (replaces the tail-regex where available)
+      if (!suspectError && isStructuredLane && exitCode === 0 && !timedOut) {
+        try { if (codexUsageAdapter.isError?.(fullStdout)) suspectError = true; } catch { /* isError is best-effort */ }
+      }
       if (suspectError) {
         const why = outTail.trim() === "" ? `no visible output (${outBytes} bytes)` : `last line: ${JSON.stringify(lastLine.slice(0, 120))}`;
         console.error(`[${agent}] exit 0 but the output looks like a FAILURE (${why}) — flagged suspectError in the fire ledger`);
         log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
+      }
+      let usage: FireUsage | undefined;
+      if (isStructuredLane) {
+        try { const parsed = codexUsageAdapter.parse(fullStdout); if (parsed) usage = parsed; } catch { /* usage is best-effort */ }
       }
       const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop); // P0-1b taxonomy (+ the liveness watchdog's "stalled"/"retry-loop")
       const fireExtras = {
@@ -1135,6 +1157,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         // every failure carries its tail — the breaker keys on it
         ...(suspectError || errorClass || exitCode !== 0 ? { outputTail: outTail.slice(-400) } : {}),
         ...(boot ? { bootBytes: boot.bytes } : {}), // boot-prefix: the assembled-corpus size rides every ledger row
+        ...(usage ? { usage } : {}),
       };
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
