@@ -53,7 +53,7 @@ LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; erro
   dev-loop labels
   dev-loop label create <name> [--kind K]
   dev-loop project
-  dev-loop events [--ticket ID] [--since ISO] [--limit N]
+  dev-loop events [--ticket ID] [--actor A] [--since ISO] [--limit N]
   dev-loop doc list [--kind K]
   dev-loop doc get (--slug S | --kind K) [--version N|latest]
   dev-loop doc history (--slug S | --kind K)
@@ -393,19 +393,15 @@ async function verbProject(rest: string[]): Promise<never> {
 }
 
 async function verbEvents(rest: string[]): Promise<never> {
-  const { flags, pos } = parseFlags(rest, { "--ticket": "v", "--since": "v", "--limit": "v", ...COMMON });
+  const { flags, pos } = parseFlags(rest, { "--ticket": "v", "--actor": "v", "--since": "v", "--limit": "v", ...COMMON });
   if (pos.length) fail(`unexpected argument '${pos[0]}'`);
   const args: Record<string, unknown> = {};
   if (flags["--ticket"] !== undefined) args.ticketId = str(flags, "--ticket");
+  if (flags["--actor"] !== undefined) args.actor = str(flags, "--actor");
+  if (flags["--since"] !== undefined) args.since = str(flags, "--since");
   if (flags["--limit"] !== undefined) args.limit = intFlag("--limit", str(flags, "--limit")!, 1, 500);
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  const since = str(flags, "--since");
-  const r = await runOp(openHub(), "list_events", args);
-  // --since is CLIENT-side (the op has no since arg): filter the returned rows by created_at. Applied only
-  // on success — an error body passes through emit untouched.
-  if (since !== undefined && r.status === 200 && Array.isArray(r.body))
-    r.body = (r.body as { created_at: string }[]).filter((e) => e.created_at >= since);
-  emit("list_events", r);
+  emit("list_events", await runOp(openHub(), "list_events", args));
 }
 
 async function docList(dargs: string[]): Promise<never> {

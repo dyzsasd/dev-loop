@@ -152,7 +152,18 @@ ok(evTicket.status === 0 && j(evTicket.stdout).length > 0 && j(evTicket.stdout).
 const evLim = cli(["events", "--limit", "3"]);
 ok(evLim.status === 0 && j(evLim.stdout).length === 3, "events --limit 3 → capped at 3 rows");
 const evSince = cli(["events", "--since", "9999-01-01T00:00:00Z"]);
-ok(evSince.status === 0 && j(evSince.stdout).length === 0, "events --since <future> → the client-side ISO filter empties the list");
+ok(evSince.status === 0 && j(evSince.stdout).length === 0, "events --since <future> → the server-side ISO filter empties the list");
+// --actor: exact handle filter (server-side)
+const evActor = cli(["events", "--actor", "pm"]);
+ok(evActor.status === 0 && j(evActor.stdout).every((e: any) => e.actor === "pm"), "events --actor pm → only pm's rows");
+// composed: --ticket + --actor + --since all applied server-side
+const evComposed = cli(["events", "--ticket", "CW-2", "--actor", "pm", "--since", "2000-01-01T00:00:00Z"]);
+ok(evComposed.status === 0 && j(evComposed.stdout).every((e: any) => e.ticket_id === "CW-2" && e.actor === "pm"), "events composed (--ticket + --actor + --since) → rows satisfy all filters");
+// 400 bad input: non-string actor and unparseable since
+const evBadActor = cli(["op", "list_events", "--args-json", '{"actor":42}']);
+ok(evBadActor.status === 1 && /actor must be a string/.test(evBadActor.stderr), "events bad actor → 400 with message");
+const evBadSince = cli(["op", "list_events", "--args-json", '{"since":"not-a-date"}']);
+ok(evBadSince.status === 1 && /since must be a valid ISO 8601 timestamp/.test(evBadSince.stderr), "events bad since → 400 with message");
 
 // ═══ 3. doc family — 1:1 + the CAS CONFLICT → exit 3 contract ══════════════════════════════════════════════
 const dSave = cli(["doc", "save", "--slug", "notes", "--kind", "notes", "--base-version", "0"], {}, "hello");

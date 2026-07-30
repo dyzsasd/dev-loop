@@ -347,14 +347,27 @@ function opListComments(db: DatabaseSync, projectId: string, projectKey: string,
 // to the stdio ok() body — the differential-parity tripwire). The doc WRITES delegate to the shared
 // docstore (docSave/docPublish), so the CAS + the single operator-publish gate live in ONE place.
 
-function opListEvents(db: DatabaseSync, projectId: string, a: { ticketId?: string; limit?: number }): OpResult {
+function opListEvents(db: DatabaseSync, projectId: string, a: { ticketId?: string; actor?: string; since?: string; limit?: number }): OpResult {
   // mirror server.ts's zod (limit: int 1..500) — the op-API parses raw JSON, so a bad limit must be a clean
   // 400 here, never bound into LIMIT (a non-int bind throws in node:sqlite → a 500; an uncapped limit drifts).
   if (a.limit !== undefined && (!Number.isInteger(a.limit) || (a.limit as number) <= 0 || (a.limit as number) > 500)) return errR(400, "limit must be an integer 1..500");
   if (a.ticketId !== undefined && typeof a.ticketId !== "string") return errR(400, "ticketId must be a string");
-  // L4: a ticketId scopes to one ticket's history (rides idx_events_ticket); else the project-wide feed.
-  if (a.ticketId) return okR(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? AND ticket_id=? ORDER BY id DESC LIMIT ?").all(projectId, a.ticketId, a.limit ?? 50));
-  return okR(db.prepare("SELECT actor,kind,ticket_id,data,created_at FROM events WHERE project_id=? ORDER BY id DESC LIMIT ?").all(projectId, a.limit ?? 50));
+  if (a.actor !== undefined && typeof a.actor !== "string") return errR(400, "actor must be a string");
+  if (a.since !== undefined) {
+    if (typeof a.since !== "string") return errR(400, "since must be a string");
+    if (isNaN(Date.parse(a.since))) return errR(400, "since must be a valid ISO 8601 timestamp");
+  }
+  // Build the WHERE clause from the active filters. idx_events_ticket(ticket_id,kind,created_at)
+  // serves the ticketId path; actor is a scan within the filtered set (no actor index); since on
+  // the project-wide feed also scans (idx_events_project covers project_id+id only).
+  const limit = a.limit ?? 50;
+  const conds: string[] = ["project_id=?"];
+  const params: (string | number)[] = [projectId];
+  if (a.ticketId) { conds.push("ticket_id=?"); params.push(a.ticketId); }
+  if (a.actor) { conds.push("actor=?"); params.push(a.actor); }
+  if (a.since) { conds.push("created_at>=?"); params.push(a.since); }
+  params.push(limit);
+  return okR(db.prepare(`SELECT actor,kind,ticket_id,data,created_at FROM events WHERE ${conds.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params));
 }
 
 // Mirror server.ts's zod (the doc tools' `slug`/`kind` are OPTIONAL STRINGS). The op-API parses raw JSON
@@ -622,7 +635,7 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "save_issue": return opSaveIssue(db, projectId, projectKey, actor, args as SaveIssueArgs);
     case "save_comment": return opSaveComment(db, projectId, actor, args as { issueId?: string; body?: string });
     case "list_comments": return opListComments(db, projectId, projectKey, args as { issueId?: string });
-    case "list_events": return opListEvents(db, projectId, args as { limit?: number });
+    case "list_events": return opListEvents(db, projectId, args as { ticketId?: string; actor?: string; since?: string; limit?: number });
     case "doc.list": return opDocList(db, projectId, args as { kind?: string });
     case "doc.get": return opDocGet(db, projectId, projectKey, args as { slug?: string; kind?: string; version?: number | "latest" });
     case "doc.history": return opDocHistory(db, projectId, args as { slug?: string; kind?: string });
