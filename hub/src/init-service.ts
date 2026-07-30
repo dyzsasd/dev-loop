@@ -24,7 +24,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { openDb } from "./db.ts";
 import { ensureSeed } from "./seed.ts";
 import { runDoctor } from "./doctor.ts";
@@ -182,8 +182,9 @@ export async function runInitService(opts: InitServiceOpts): Promise<number> {
 // CLI: `node src/init-service.ts <key> "<name>" <PREFIX> [--dry-run]` (also `npm run init-service -- …`).
 // A standalone entry, deliberately NOT wired into the `dev-loop-hub` (server.ts) subcommand surface — the
 // ticket fences server.ts off, and the init SKILL (DL-53) invokes the mechanics generically, so this needs
-// no server.ts dispatch. Importing this module is side-effect-free — the guard keys on argv[1].
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// no server.ts dispatch. Terminal entry — only ever spawned, never imported (LOOP-63: no ESM importer), so
+// main runs unconditionally; a deleted guard cannot silently no-op on a spaced/symlinked checkout path.
+{
   const rest = process.argv.slice(2);
   const dryRun = rest.includes("--dry-run");
   const [key, name, prefix] = rest.filter((a) => a !== "--dry-run");

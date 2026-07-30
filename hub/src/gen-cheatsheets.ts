@@ -15,7 +15,8 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (published — the generator is a source-tree tool; the test only runs in-repo)
 const repoRoot = join(here, "..", "..");
@@ -273,7 +274,7 @@ export function splice(body: string, dir: string, block: string): string {
   return (body.endsWith("\n") ? body : body + "\n") + "\n---\n\n" + block + "\n";
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainEntry(import.meta.url)) {
   const check = process.argv.includes("--check");
   let drifted = 0;
   for (const [dir, block] of renderBlocks()) {

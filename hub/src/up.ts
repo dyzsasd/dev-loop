@@ -13,7 +13,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { tryResolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import type { Workspace } from "./team-config.ts";
 import { teamInit } from "./team-init.ts";
@@ -220,6 +221,6 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
   return r.status ?? 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainEntry(import.meta.url)) {
   process.exit(await upCli());
 }

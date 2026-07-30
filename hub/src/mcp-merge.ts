@@ -8,7 +8,8 @@
 // data-file utility — it can only ever write the product `.mcp.json`, never a SKILL/conventions/code file.
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 
 const SERVER_NAME = "dev-loop-hub";
 
@@ -122,7 +123,7 @@ export function mergeMcpServer(opts: McpMergeOpts): McpMergeResult {
 }
 
 // CLI: `node src/mcp-merge.ts <.mcp.json path> <abs hub/src/server.ts> <project-key> [template]`
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainEntry(import.meta.url)) {
   const [mcpJsonPath, hubServerPath, projectKey, templatePath] = process.argv.slice(2);
   if (!mcpJsonPath || !hubServerPath || !projectKey) {
     console.error(`[hub] usage: node src/mcp-merge.ts <.mcp.json path> <abs hub/src/server.ts> <project-key> [template]`);

@@ -4,7 +4,7 @@
 // The webhook URL is read from process.env[webhookEnv] at call time — it NEVER lives in dev-loop.json (I5),
 // so "copy the workspace folder" carries no secret. DEVLOOP_COMMS_DRYRUN=1 prints the payload (env NAME +
 // shape) without a network call and without ever printing the URL.
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace } from "./workspace.ts";
 import { wsSecretsPath } from "./secrets.ts";
 import type { Workspace } from "./team-config.ts";
@@ -63,7 +63,7 @@ function parseArgs(argv: string[]): NotifyInput {
   return { title, level, text };
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   const input = parseArgs(process.argv.slice(2));
   const ws = resolveWorkspace();
   notify(ws, input).then((c) => process.exit(c));

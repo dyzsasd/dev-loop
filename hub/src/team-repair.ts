@@ -4,7 +4,7 @@
 // prunes stale worktrees, re-registers the convenience index, and (service) truncates the hub WAL.
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsHubDb, upsertWorkspaceIndex } from "./workspace.ts";
 import { effectiveRepo } from "./team-config.ts";
 import { openDb } from "./db.ts";
@@ -66,6 +66,6 @@ export function teamRepair(argv = process.argv.slice(2)): number {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   process.exit(teamRepair());
 }

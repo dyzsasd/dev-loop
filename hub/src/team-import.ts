@@ -6,7 +6,7 @@
 // (with --hub-db) copies each project's hub rows — re-keying AUTOINCREMENT events so ids never collide.
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, cpSync, realpathSync } from "node:fs";
 import { join, resolve, basename, isAbsolute, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsProjectDir, wsLessonsDir, wsHubDb, ensureStateDirs } from "./workspace.ts";
 import { normalizedRel, validateTeamFile, type TeamFile, type RepoEntry, type ProjectEntry, type Workspace } from "./team-config.ts";
 import { projectConfigCandidates, devloopDataDir } from "./paths.ts";
@@ -276,6 +276,6 @@ const canon = (p: string): string | null => { try { return realpathSync(p); } ca
 
 import * as dbmod from "./db.ts";
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   process.exit(teamImport());
 }

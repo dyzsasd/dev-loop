@@ -6,7 +6,7 @@
 // reports commits whose referenced tickets are Canceled/Duplicate. Read-only on git AND the hub; the
 // dev-agent ship sequence runs it `--strict` before `git push` (§12) and Sweep may quote it per repo.
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { existsSync } from "node:fs";
 import { openDb } from "./db.ts";
 import { resolveHubDbPath } from "./workspace.ts";
@@ -83,7 +83,7 @@ export function pushGuard(repoDir: string, branch?: string, dbPath?: string, def
 
 // CLI: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] [--strict] [--json]
 // Exit codes (the write-layer contract): 0 clean/advisory · 1 findings under --strict · 2 usage.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   const argv = process.argv.slice(2);
   let repo = process.cwd(); let branch: string | undefined; let strict = false; let asJson = false; let defaultBranch = "main";
   for (let i = 0; i < argv.length; i++) {

@@ -110,5 +110,35 @@ ok(/docs\/INDEX\.md, docs\/RUNNING\.md, docs\/PORTABILITY\.md, docs\/DAEMON\.md/
 ok(!/Docs:[^\n]*docs\/HUB-ARCHITECTURE\.md/.test(cliSource),
   "CLI help does not promote HUB-ARCHITECTURE.md as a first-run guide");
 
+// ── 8. Entry-guard idiom parity: hub/src has exactly ONE entry-point guard shape (LOOP-63) ─────────
+// Three ad-hoc idioms shipped across 24 files: `import.meta.url === \`file://…\``, `=== pathToFileURL(
+// argv[1]).href`, and `fileURLToPath(import.meta.url) === argv[1]`. Each silently no-ops on a spaced /
+// `#` / non-ASCII or symlinked checkout path — main() never runs (LOOP-58 hit this class twice). The one
+// correct form realpath-resolves BOTH sides (src/is-entry.ts → isMainEntry). This fails CI if any hub/src
+// file reintroduces a banned idiom (comment lines are excluded — they may quote the very bug they fixed).
+const BANNED_ENTRY_GUARDS: Array<[RegExp, string]> = [
+  [/import\.meta\.url\s*===\s*`file:\/\//, "import.meta.url === `file://${…}`"],
+  [/import\.meta\.url\s*===\s*pathToFileURL\s*\(/, "import.meta.url === pathToFileURL(argv[1]).href"],
+  [/===\s*process\.argv\[1\]|process\.argv\[1\]\s*===/, "… === process.argv[1]"],
+];
+const scanEntryGuards = (text: string): string[] => {
+  const code = text.split("\n").filter((l) => { const t = l.trim(); return t !== "" && !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*"); }).join("\n");
+  return BANNED_ENTRY_GUARDS.filter(([re]) => re.test(code)).map(([, label]) => label);
+};
+const guardOffenders: string[] = [];
+for (const n of readdirSync(join(hubRoot, "src")).filter((n) => n.endsWith(".ts"))) {
+  for (const label of scanEntryGuards(read(join(hubRoot, "src", n)))) guardOffenders.push(`src/${n}: ${label}`);
+}
+ok(guardOffenders.length === 0,
+  `hub/src uses only isMainEntry() for entry guards${guardOffenders.length ? ` — offenders: ${guardOffenders.slice(0, 4).join("; ")}${guardOffenders.length > 4 ? ` +${guardOffenders.length - 4}` : ""}` : ""}`);
+// AC3 self-test: the scanner must actually CATCH a reintroduced idiom, and must NOT flag the correct form.
+const BAD_SAMPLES = [
+  "if (import.meta.url === `file://${process.argv[1]}`) {",
+  "if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {",
+  "if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {",
+];
+ok(BAD_SAMPLES.every((s) => scanEntryGuards(s).length > 0) && scanEntryGuards("if (isMainEntry(import.meta.url)) {").length === 0,
+  "the entry-guard scanner catches all three legacy idioms and accepts isMainEntry() (self-test)");
+
 console.log(fails === 0 ? "\nCONSISTENCY_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

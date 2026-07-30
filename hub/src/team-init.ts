@@ -6,7 +6,7 @@
 import { existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { validateTeamFile, TEAM_INTAKE_PROJECT, type TeamFile, type Workspace } from "./team-config.ts";
 import { ensureStateDirs, upsertWorkspaceIndex, wsHubDb } from "./workspace.ts";
 import { scaffoldOperatorBriefs } from "./operator-brief.ts";
@@ -209,6 +209,6 @@ export function provisionClaudePermissions(root: string): void {
   console.log(`provisioned ${file}: permissions.allow += ${JSON.stringify(DEVLOOP_PERMISSION)} (agents call the dev-loop CLI, D8)`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   process.exit(teamInit());
 }

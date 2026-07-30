@@ -7,6 +7,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -501,6 +502,6 @@ function reconcileAutostart(pass: (m: string) => void, warn: (m: string) => void
 }
 
 // CLI: node src/doctor.ts  (or `dev-loop-hub doctor` via server.ts dispatch / `npm run doctor`)
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainEntry(import.meta.url)) {
   process.exit((await runDoctor(resolveHubDbPath(), { reconcile: true })) ? 0 : 1); // workspace-aware ladder (P2 #1)
 }

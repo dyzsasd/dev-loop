@@ -11,7 +11,6 @@
 // prompts over a pipe; a real terminal never needs it).
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline/promises";
 import { teamInit, provisionClaudePermissions } from "./team-init.ts";
 import { addProject, addRepo } from "./team-edit.ts";
@@ -217,6 +216,6 @@ function boardUrl(dir: string): string {
   return "http://127.0.0.1:8787 (default port; `hub start` prints the exact URL)";
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  process.exit(await initWizard());
-}
+// Terminal entry — only ever spawned (`node src/init-wizard.ts`), never imported (LOOP-63: no ESM
+// importer), so it runs unconditionally; a deleted guard cannot no-op on a spaced/symlinked path.
+process.exit(await initWizard());

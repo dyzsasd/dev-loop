@@ -6,7 +6,6 @@
 // LOOP-37 will extend this file with `worktree path` and the terminal-state reaper.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { resolveWorkspace, wsWorktree, wsLockPath } from "./workspace.ts";
 import { effectiveRepo } from "./team-config.ts";
 import { withLock } from "./locks.ts";
@@ -101,7 +100,9 @@ Usage: dev-loop worktree <verb> [args]
       Run under the §7 repo lock to serialize fetch + worktree-add with other base-clone mutations.`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+// Terminal entry — only ever spawned (`dev-loop worktree …`), never imported (LOOP-63: no ESM importer),
+// so it runs unconditionally; a deleted guard cannot silently no-op on a spaced/symlinked path.
+{
   const [verb, ...rest] = process.argv.slice(2);
   if (!verb || verb === "--help" || verb === "-h" || verb === "help") { usage(); process.exit(0); }
   if (verb === "add") {

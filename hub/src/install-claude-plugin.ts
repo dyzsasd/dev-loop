@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isMainEntry } from "./is-entry.ts";
 import { pkgVersion } from "./paths.ts";
 
 const MARKETPLACE = "dev-loop-npm";
@@ -77,6 +77,6 @@ export function installClaudePlugin(argv = process.argv.slice(2)): number {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainEntry(import.meta.url)) {
   process.exit(installClaudePlugin());
 }
