@@ -226,10 +226,15 @@ async function runOp(hub: Hub, op: AgentOp, args: Record<string, unknown>): Prom
   }
 }
 
+// process.exit() discards the async stdout buffer when piped; await the drain callback before exiting.
+function flushStdout(): Promise<void> {
+  return new Promise<void>(resolve => process.stdout.write("", () => resolve()));
+}
+
 // stdout = JSON.stringify(body), the SAME bytes ok() puts in the MCP text — the parity contract the
 // cli-agentops test asserts (sugar ≡ op dispatcher ≡ stdio). Errors go to stderr as the raw op body.
-function emit(op: AgentOp, r: OpResult): never {
-  if (r.status >= 200 && r.status < 300) { console.log(JSON.stringify(r.body)); process.exit(0); }
+async function emit(op: AgentOp, r: OpResult): Promise<never> {
+  if (r.status >= 200 && r.status < 300) { console.log(JSON.stringify(r.body)); await flushStdout(); process.exit(0); }
   console.error(JSON.stringify(r.body));
   process.exit(op === "doc.save" && r.status === 409 ? 3 : 1); // 3 = the doc CAS CONFLICT contract ({latestVersion,…} on stderr)
 }
@@ -259,7 +264,7 @@ async function verbOp(rest: string[]): Promise<never> {
   }
   const project = str(flags, "--project");
   if (project !== undefined) args.project = project; // the explicit flag wins over an args-JSON key
-  emit(name, await runOp(openHub(), name, args));
+  return emit(name, await runOp(openHub(), name, args));
 }
 
 async function verbQueue(rest: string[]): Promise<never> {
@@ -268,7 +273,7 @@ async function verbQueue(rest: string[]): Promise<never> {
   if (pos.length) fail(`unexpected argument '${pos[0]}'`);
   const qargs: Record<string, unknown> = {};
   if (flags["--project"] !== undefined) qargs.project = str(flags, "--project");
-  emit("queue", await runOp(openHub(), "queue", qargs));
+  return emit("queue", await runOp(openHub(), "queue", qargs));
 }
 
 async function ticketCreate(targs: string[]): Promise<never> {
@@ -298,7 +303,7 @@ async function ticketCreate(targs: string[]): Promise<never> {
   const blockedBy = flags["--blocked-by"] !== undefined ? csv(str(flags, "--blocked-by")!) : [];
   const hub = openHub();
   const r = await runOp(hub, "save_issue", args);
-  if (!(r.status >= 200 && r.status < 300) || blockedBy.length === 0) emit("save_issue", r);
+  if (!(r.status >= 200 && r.status < 300) || blockedBy.length === 0) return emit("save_issue", r);
   // §9c blocking edges: on service there is no native relation — the machine-parseable marker comment
   // ('Blocked-by: <id>' on its own line, conventions §9c step 2) IS the edge. Print the create body
   // first (stdout carries the ticket either way), then write the marker; a failed marker → exit 1.
@@ -309,6 +314,7 @@ async function ticketCreate(targs: string[]): Promise<never> {
     ...(flags["--project"] !== undefined ? { project: str(flags, "--project") } : {}),
   });
   if (c.status < 200 || c.status >= 300) { console.error(JSON.stringify(c.body)); process.exit(1); }
+  await flushStdout();
   process.exit(0);
 }
 
@@ -338,7 +344,7 @@ async function ticketUpdate(targs: string[]): Promise<never> {
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
   if (Object.keys(args).length === 1 + (args.project !== undefined ? 1 : 0))
     fail("nothing to update — pass at least one of --state/--title/--description/--description-file/--labels/--assignee/--priority/--related-to/--duplicate-of");
-  emit("save_issue", await runOp(openHub(), "save_issue", args));
+  return emit("save_issue", await runOp(openHub(), "save_issue", args));
 }
 
 async function verbTicket(rest: string[]): Promise<never> {
@@ -361,7 +367,7 @@ async function verbComment(rest: string[]): Promise<never> {
   if (body === undefined) fail("comment add needs --body TEXT, --body-file F, or '-' (stdin)");
   const args: Record<string, unknown> = { issueId: id, body };
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("save_comment", await runOp(openHub(), "save_comment", args));
+  return emit("save_comment", await runOp(openHub(), "save_comment", args));
 }
 
 async function verbComments(rest: string[]): Promise<never> {
@@ -371,7 +377,7 @@ async function verbComments(rest: string[]): Promise<never> {
   if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
   const args: Record<string, unknown> = { issueId: id };
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("list_comments", await runOp(openHub(), "list_comments", args));
+  return emit("list_comments", await runOp(openHub(), "list_comments", args));
 }
 
 async function verbLabels(rest: string[]): Promise<never> {
@@ -379,7 +385,7 @@ async function verbLabels(rest: string[]): Promise<never> {
   if (pos.length) fail(`unexpected argument '${pos[0]}'`);
   const args: Record<string, unknown> = {};
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("list_issue_labels", await runOp(openHub(), "list_issue_labels", args));
+  return emit("list_issue_labels", await runOp(openHub(), "list_issue_labels", args));
 }
 
 async function verbLabelCreate(rest: string[]): Promise<never> {
@@ -390,7 +396,7 @@ async function verbLabelCreate(rest: string[]): Promise<never> {
   const args: Record<string, unknown> = { name: pos[1] };
   if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("create_issue_label", await runOp(openHub(), "create_issue_label", args));
+  return emit("create_issue_label", await runOp(openHub(), "create_issue_label", args));
 }
 
 async function verbProject(rest: string[]): Promise<never> {
@@ -398,7 +404,7 @@ async function verbProject(rest: string[]): Promise<never> {
   if (pos.length) fail(`unexpected argument '${pos[0]}'`);
   const args: Record<string, unknown> = {};
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("get_project", await runOp(openHub(), "get_project", args));
+  return emit("get_project", await runOp(openHub(), "get_project", args));
 }
 
 async function verbEvents(rest: string[]): Promise<never> {
@@ -410,7 +416,7 @@ async function verbEvents(rest: string[]): Promise<never> {
   if (flags["--since"] !== undefined) args.since = str(flags, "--since");
   if (flags["--limit"] !== undefined) args.limit = intFlag("--limit", str(flags, "--limit")!, 1, 500);
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("list_events", await runOp(openHub(), "list_events", args));
+  return emit("list_events", await runOp(openHub(), "list_events", args));
 }
 
 async function docList(dargs: string[]): Promise<never> {
@@ -419,7 +425,7 @@ async function docList(dargs: string[]): Promise<never> {
   const args: Record<string, unknown> = {};
   if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("doc.list", await runOp(openHub(), "doc.list", args));
+  return emit("doc.list", await runOp(openHub(), "doc.list", args));
 }
 
 async function docGetOrHistory(verb: "get" | "history", dargs: string[]): Promise<never> {
@@ -433,7 +439,7 @@ async function docGetOrHistory(verb: "get" | "history", dargs: string[]): Promis
   if (ver !== undefined) args.version = ver === "latest" ? "latest" : intFlag("--version", ver, 1);
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
   const op: AgentOp = verb === "get" ? "doc.get" : "doc.history";
-  emit(op, await runOp(openHub(), op, args));
+  return emit(op, await runOp(openHub(), op, args));
 }
 
 async function docDiff(dargs: string[]): Promise<never> {
@@ -445,7 +451,7 @@ async function docDiff(dargs: string[]): Promise<never> {
   if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
   if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("doc.diff", await runOp(openHub(), "doc.diff", args));
+  return emit("doc.diff", await runOp(openHub(), "doc.diff", args));
 }
 
 async function docSave(dargs: string[]): Promise<never> {
@@ -462,7 +468,7 @@ async function docSave(dargs: string[]): Promise<never> {
   if (flags["--title"] !== undefined) args.title = str(flags, "--title");
   if (flags["--summary"] !== undefined) args.summary = str(flags, "--summary");
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("doc.save", await runOp(openHub(), "doc.save", args)); // a 409 CAS CONFLICT → exit 3, payload on stderr
+  return emit("doc.save", await runOp(openHub(), "doc.save", args)); // a 409 CAS CONFLICT → exit 3, payload on stderr
 }
 
 async function docPublish(dargs: string[]): Promise<never> {
@@ -475,7 +481,7 @@ async function docPublish(dargs: string[]): Promise<never> {
   if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
   if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("doc.publish", await runOp(openHub(), "doc.publish", args));
+  return emit("doc.publish", await runOp(openHub(), "doc.publish", args));
 }
 
 async function docArchive(dargs: string[]): Promise<never> {
@@ -488,7 +494,7 @@ async function docArchive(dargs: string[]): Promise<never> {
   const args: Record<string, unknown> = { slug };
   if (flags["--restore"] === true) args.archived = false;
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("doc.archive", await runOp(openHub(), "doc.archive", args));
+  return emit("doc.archive", await runOp(openHub(), "doc.archive", args));
 }
 
 async function verbDoc(rest: string[]): Promise<never> {
@@ -518,7 +524,7 @@ async function mirrorPush(margs: string[]): Promise<never> {
   }
   if (flags["--limit"] !== undefined) args.limit = intFlag("--limit", str(flags, "--limit")!, 1, 500);
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("mirror.push", await runOp(openHub(), "mirror.push", args));
+  return emit("mirror.push", await runOp(openHub(), "mirror.push", args));
 }
 
 async function mirrorPoll(margs: string[]): Promise<never> {
@@ -528,7 +534,7 @@ async function mirrorPoll(margs: string[]): Promise<never> {
   const tokenEnv = str(flags, "--token-env"); if (!tokenEnv) fail("mirror poll needs --token-env NAME (the env-var NAME, never the secret)");
   const args: Record<string, unknown> = { tokenEnv };
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("mirror.pollComments", await runOp(openHub(), "mirror.pollComments", args));
+  return emit("mirror.pollComments", await runOp(openHub(), "mirror.pollComments", args));
 }
 
 async function mirrorStatus(margs: string[]): Promise<never> {
@@ -536,7 +542,7 @@ async function mirrorStatus(margs: string[]): Promise<never> {
   if (pos.length) fail(`unexpected argument '${pos[0]}'`);
   const args: Record<string, unknown> = {};
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  emit("mirror.status", await runOp(openHub(), "mirror.status", args));
+  return emit("mirror.status", await runOp(openHub(), "mirror.status", args));
 }
 
 async function verbMirror(rest: string[]): Promise<never> {
@@ -566,7 +572,7 @@ async function main(): Promise<never> {
   const [sub, ...rest] = process.argv.slice(2); // cli.ts passes the verb as argv[0] (the cli-tickets routing shape)
   // leading --help/-h (e.g. `dev-loop op --help`, `dev-loop doc save --help`) prints the full write-layer
   // usage; checked on the LEADING positions only so a later flag VALUE that happens to be '-h' isn't swallowed.
-  if (!sub || sub === "help" || rest.slice(0, 2).some((a) => a === "--help" || a === "-h")) { usage(); process.exit(sub ? 0 : 2); }
+  if (!sub || sub === "help" || rest.slice(0, 2).some((a) => a === "--help" || a === "-h")) { usage(); await flushStdout(); process.exit(sub ? 0 : 2); }
   const handler = VERBS[sub];
   if (!handler) fail(`unknown verb '${sub}'`);
   return handler(rest);
