@@ -7,6 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, w
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -205,6 +206,63 @@ done
   const metricsJson = JSON.parse(metricsOut) as { byErrorClass?: Record<string, number> };
   ok(typeof metricsJson.byErrorClass?.["retry-loop"] === "number",
     "retry-loop appears under byErrorClass in fireMetrics (free-form dimension — dev-loop metrics --json still parses)");
+
+  // ── 10. Retry-loop detection survives a SATURATED line set (LOOP-23 regression) ──
+  // Test 9 proves the mechanism from the first byte (the seen-set never fills). This proves the
+  // REQUIREMENT: a fire that first streams far more distinct lines than the detector's window bound,
+  // THEN enters a repeating loop, is STILL killed with errorClass "retry-loop". Against PR #27's
+  // frozen-at-200 Set the loop's line is never in the frozen prefix, so every repeat counts as new
+  // content and the fire is never killed — it hits the fire-timeout instead — so this test FAILS on
+  // #27 (the regression proof); against the rolling window it trips at the first stall check (~15s).
+  const satDb = join(tmp, "hub-saturated.db");
+  writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { sat: { repoPath: repo, backend: "service" } } }));
+  execFileSync("node", ["src/seed.ts", "sat", "Saturated Project", "SATX", satDb], { cwd: hubRoot, encoding: "utf8" });
+  const distinctBeforeLoop = RETRY_LOOP_LINE_WINDOW * 3 + 50; // ≥ 3× the window bound, per the AC
+  const stubSaturate = join(tmp, "stub-saturated-loop");
+  writeFileSync(stubSaturate, `#!/bin/sh
+i=0
+while [ $i -lt ${distinctBeforeLoop} ]; do echo "distinct startup tool line $i saturating the window"; i=$((i+1)); done
+while true; do
+  echo "rate limit exceeded, retrying in 2s..."
+  sleep 0.5
+done
+`);
+  chmodSync(stubSaturate, 0o755);
+  const satCommon = ["--root", repoRoot, "--data", data, "--hub-db", satDb, "--project", "sat", "--cwd", repo, "--cli", "claude", "--agents", "sweep", "--once"];
+  // --fire-timeout caps the #27 regression case so it exits at 30s instead of hanging; the rolling
+  // window trips the retry-loop watchdog well before that (first stall check ~15s).
+  const satRun = runLive([...satCommon, "--stall-timeout", "3s", "--fire-timeout", "30s"], { DEVLOOP_CLAUDE_BIN: stubSaturate }, 60_000);
+  ok(/retry-loop/.test(satRun.out), "retry-loop is detected AFTER the seen-line window saturated (the frozen-200 detector missed this)");
+  const satRows = execFileSync("node", ["--input-type=module", "-e",
+    `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${satDb}'); const pid=findProject(db,'sat'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
+    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+  const satData = (JSON.parse(satRows) as { data: string }[]).map((r) => JSON.parse(r.data) as Record<string, unknown>);
+  ok(satData.some((x) => x.errorClass === "retry-loop"), "the saturated-then-looping fire records errorClass \"retry-loop\" in the ledger");
+
+  // ── 11. No false positive: genuinely-new content then quiet trips "stalled", never "retry-loop" ──
+  // The rolling window must never turn slow-but-healthy output into a false loop. A fire that emits
+  // genuinely-new distinct lines and then goes silent must classify as "stalled" (silence), never
+  // "retry-loop": `looping` requires !silent, so once output stops the watchdog sees silence, not a loop.
+  const slowDb = join(tmp, "hub-slow.db");
+  writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { slow: { repoPath: repo, backend: "service" } } }));
+  execFileSync("node", ["src/seed.ts", "slow", "Slow Project", "SLOWX", slowDb], { cwd: hubRoot, encoding: "utf8" });
+  const stubSlow = join(tmp, "stub-slow-healthy");
+  writeFileSync(stubSlow, `#!/bin/sh
+i=0
+while [ $i -lt 5 ]; do echo "healthy progress step $i (genuinely new content)"; i=$((i+1)); sleep 0.3; done
+sleep 600
+`);
+  chmodSync(stubSlow, 0o755);
+  const slowCommon = ["--root", repoRoot, "--data", data, "--hub-db", slowDb, "--project", "slow", "--cwd", repo, "--cli", "claude", "--agents", "sweep", "--once"];
+  const slowRun = runLive([...slowCommon, "--stall-timeout", "3s"], { DEVLOOP_CLAUDE_BIN: stubSlow }, 60_000);
+  ok(/stalled/.test(slowRun.out) && !/retry-loop/.test(slowRun.out.replace(/silent retry loop/g, "")),
+    "genuinely-new-then-quiet fire classifies as stalled, never retry-loop");
+  const slowRows = execFileSync("node", ["--input-type=module", "-e",
+    `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${slowDb}'); const pid=findProject(db,'slow'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
+    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+  const slowData = (JSON.parse(slowRows) as { data: string }[]).map((r) => JSON.parse(r.data) as Record<string, unknown>);
+  ok(slowData.some((x) => x.errorClass === "stalled") && !slowData.some((x) => x.errorClass === "retry-loop"),
+    "the slow-but-healthy fire records \"stalled\", never \"retry-loop\"");
 
   // ── 6. R1 change-gate: on a quiet board, a gated agent fires ONCE then skips (no re-spawn) ──
   const gateDb = join(tmp, "hub3.db");
