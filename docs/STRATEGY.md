@@ -393,6 +393,42 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   Three sibling detectors now bound the same pipeline: **W17** (LOOP-41) *merged?* · **W18**
   (LOOP-46) *published?* · **W19** (LOOP-51) *pushed at all?*. None has shipped; the pipeline stays
   observable only by an agent noticing.
+  > **Correction (2026-07-30, later fire):** W19 is **LOOP-56**, not LOOP-51 — the two were the same
+  > detector filed 15 minutes apart, merged toward the design child. LOOP-51 is `Canceled`. W19 is
+  > now `Todo`.
+
+- **✅ The two-north-stars condition is cleared, and PM has an approved landing path — but not yet a
+  mechanism (2026-07-30).** Supersedes the entry above on both counts. **LOOP-36's §21a design gate
+  is `Done`**: the operator signed off the Part-B policy — *PM may push doc-only **progress** commits
+  directly to `origin/<defaultBranch>` on this `landing:"pr"` repo, **exclusively via the `dev-loop
+  doc-land` verb once it ships***. The fence that made it signable is the docs-only path assertion,
+  and the operator flagged that widening that allowlist requires a **new sign-off, not a
+  follow-up**. The operator then executed the one-time reconcile: `origin/main` == local `main` ==
+  `e1177cd`, zero ahead / zero behind, `docs/strategy-archive/2026-07.md` on origin. For the first
+  time since the divergence was found, PM and every dev worktree read the same `docs/STRATEGY.md`.
+  **The honest residual:** the policy is approved and its only sanctioned mechanism does not exist —
+  **LOOP-57** (`doc-land`) and **LOOP-56** (W19) are `Todo`, so this fire's doc commit is local-only
+  again and `main` goes one ahead at close. The recurrence interval is still one PM fire; what
+  changed is that it now has a dated ruling and four promoted tickets behind it (LOOP-54/55/56/57)
+  instead of an open question. **LOOP-50** stays parked on exactly those four — its cleanup ACs are
+  met, its prevention ACs are not, and unparking it on a resolved *design gate* would have been a
+  false unpark.
+
+- **The metering foundation landed with its join key uncarried (2026-07-30, `data-analytics` lens).**
+  `e5669cb` (LOOP-12's merged work) mints a per-fire `fireId` and stamps it into `fires.jsonl` and
+  the `fire.completed` event — the fire side of the ledger is complete. The work side is not.
+  `db.ts:445` reads `process.env.DEVLOOP_FIRE_ID` **at the moment of the INSERT**, so the stamp
+  survives only where the agent writes the database itself (MCP fires via `server.ts`, plain CLI —
+  this workspace's path today). On every **daemon** transport the write executes in the daemon
+  process, which has no such env: `op-client.ts` forwards `x-devloop-actor` and nothing else, and
+  `daemon.ts` has never heard of `DEVLOOP_FIRE_ID`. Identity was deliberately carried env→header
+  across that hop; the fire was not. The drop is **silent** — `fireId ? {...} : {...}` is a clean
+  no-op — so a cost-per-change query returns *empty* rather than failing, which is indistinguishable
+  from a loop that did no work. The affected list is P3b **"daemon as canonical single writer"**
+  (a COMPLETE milestone) plus the `--attach` posture Phase B extends: the direction of travel is
+  *toward* the transport that loses the key, while **LOOP-3** (per-ticket/actor/**fire** history) is
+  In Progress and **LOOP-13/14/15 → LOOP-4** all join on it. Filed **LOOP-61** (senior, p2). Baseline
+  to re-measure against: 477 events, **0** carrying a fireId.
 
 ## Personas
 
@@ -1042,6 +1078,49 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
     `Mode: design` conversion, so a pure-label filter served it to QA and hid it from its §21a owner
     (QA caught it and filed **LOOP-59**). Cancelling LOOP-12 would have false-unparked five tickets
     behind a Canceled blocker; all five edges were re-pointed to LOOP-58 in the same fire.
+
+- **(operator, 2026-07-30) 📝 RULING — PM may land doc-only PROGRESS commits on `origin/main`, via
+  `doc-land` only.** The Part-B question LOOP-36 was parked on is answered: **APPROVED (Option 1 +
+  Option 4).** Verbatim scope — *"PM MAY push doc-only progress commits directly to
+  `origin/<defaultBranch>` on this `landing:"pr"` repo, **exclusively via the B2 `dev-loop doc-land`
+  verb once it ships**."* The operator's stated rationale, which bounds any future reading of this:
+  direction-section content is already human-gated at the CONTENT level (§9a), progress sections are
+  PM's pen by design, and the doc-PR alternative was **empirically refuted in this workspace** —
+  docs queued behind six-days-red merge checks land *less* often. So this is not a review bypass; it
+  is the §20 D4-autonomous write finally reaching the branch everyone reads. **Two fences are part of
+  the ruling, not commentary:** (1) the pushed range must touch ONLY the configured `strategyDoc` +
+  `strategy-archive/` — *"that assertion is load-bearing; treat any future widening of that allowlist
+  as a NEW operator sign-off, not a follow-up"*; (2) until `doc-land` exists there is **no** manual
+  push — PM commits and leaves it local. **Consequence recorded for the next fire that reads only
+  this entry:** the pm-agent SKILL and §20 D4 still describe the commit-only shape, so a fresh PM
+  boot re-derives the old behaviour from the SKILL rather than from this ruling. That prose is the
+  operator's to apply (§17) and is deliberately deferred until `doc-land` merges — carried as
+  **LOOP-60**, blocked on LOOP-57, to be re-parked `Human-Blocked` when it lands.
+
+- **(pm, 2026-07-30) `data-analytics` lens — the metering arc's join key does not survive its own
+  canonical write path.** Reviewed at product HEAD `e5669cb`, the just-merged metering foundation.
+  The lens question was *"will the data this arc collects answer the operator's question?"* and the
+  answer is: on the direct-db transports yes, on the daemon transports no — silently. `fireId` is
+  read from ambient `process.env` **at the INSERT**, so it is stamped by whichever process performs
+  the write; identity, by contrast, was deliberately carried env→header→daemon (`op-client.ts` sends
+  `x-devloop-actor`, `daemon.ts:345` reads it back, commented as *"the only attribution the daemon
+  trusts"*). The fire is present one hop from the write and dropped at exactly the hop already
+  solved for identity. Filed **LOOP-61** (senior, p2) to carry it the same way, with the explicit
+  constraint that it is **attribution, never authorization** — it must not touch the G1 phantom-actor
+  guard — and a concurrency AC, since a module-global would let one request's fire id leak onto
+  another's write. **Deliberately NOT filed:** `events` keeps `fireId` in a JSON blob with no column
+  or index and is never pruned (`db.ts:117`) — at **477 rows** that is not a problem, and filing it
+  would be padding. Re-examine when the LOOP-4 join is measurably slow. Method note for the next
+  lens: the empirical `0 of 477 events carry a fireId` on this hub is **confounded** by the
+  LOOP-38/W18 skew (installed 1.11.0 predates `e5669cb`, so this workspace has not started stamping
+  at all) — it is recorded as a baseline, and the finding rests on the code path, not on that count.
+
+- **(pm, 2026-07-30) Board note — a design gate's close is not a delivery.** Three tickets resolved
+  this fire without anything shipping: LOOP-36 `Done` (gate + sign-off), LOOP-48 `Done`, LOOP-51
+  `Canceled`. By §9c's letter that unparks LOOP-50, whose remaining AC none of them satisfies. The
+  edges were re-pointed to the four tickets that actually deliver prevention (LOOP-54/55/56/57)
+  rather than letting resolved *designs* read as a delivered *fix* — the same failure shape as the
+  cancel-a-blocker false-unpark caught last fire, arriving from the opposite direction.
 
 ## Candidate ideas
 
