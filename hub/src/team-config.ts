@@ -13,7 +13,7 @@ export type DocRef = string | { linearDocument: string } | { hubDoc: string } | 
 
 // `manual:true` (P1-4): the operator runs this role by hand (no scheduled fires) — owner-liveness
 // (doctor W16 / the Sweep digest) reports its stranded tickets as "awaiting a human", never as a warn.
-export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string; manual?: boolean }
+export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string; manual?: boolean; fireTimeout?: string; stallTimeout?: string }
 
 // The hub block (D8): `agentInterface` maps a coding agent → how its fires reach the hub board on
 // backend:"service" — "cli" (the dev-loop write-layer verbs; identity rides the fire env) or "mcp"
@@ -259,6 +259,26 @@ function checkNotify(raw: unknown, path: string, E: Emit): void {
   if (!("webhookEnv" in n)) E("E15", `${path}.webhookEnv`, "notify.webhookEnv (an ENV-VAR NAME) is required — without it the block is a dead send target");
 }
 
+// E17 — per-agent timeout fields (fireTimeout / stallTimeout): a duration string (same format as the CLI
+// --fire-timeout/--stall-timeout flags) or "0" to disable. Validated at load time so a typo surfaces as a
+// clear schema error naming the agent+field, never a silent runtime ignore.
+const TIMEOUT_DUR_RE = /^\d+(?:\.\d+)?(ms|s|m|h|d)?$/;
+function validateAgentConfigs(agents: unknown, path: string, E: Emit): void {
+  if (agents === null || typeof agents !== "object" || Array.isArray(agents)) { E("E17", path, "agents must be an object"); return; }
+  for (const [agent, cfg] of Object.entries(agents as Record<string, unknown>)) {
+    const apath = `${path}.${agent}`;
+    if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) { E("E17", apath, "agent config must be an object"); continue; }
+    const a = cfg as Record<string, unknown>;
+    for (const field of ["fireTimeout", "stallTimeout"] as const) {
+      if (a[field] !== undefined) {
+        const v = a[field];
+        if (typeof v !== "string" || (v.trim() !== "0" && !TIMEOUT_DUR_RE.test(v.trim())))
+          E("E17", `${apath}.${field}`, `agents.${agent}.${field} must be a duration string (e.g. "30m", "1h") or "0" to disable (got ${JSON.stringify(v)})`);
+      }
+    }
+  }
+}
+
 // team.key/backend/E09 + E12/E13 (team level) + E07 comms + E16 providers/opencodePermission.
 function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   if (typeof team.key !== "string" || !TEAM_KEY_RE.test(team.key)) E("E02", "team.key", `team.key must match ${TEAM_KEY_RE}`);
@@ -283,6 +303,7 @@ function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   // E16 — team.providers (the custom-endpoint registry) + team.opencodePermission. Strictly validated:
   // a typo'd entry renders a DEAD opencode provider block (fires on it would 404/401 a whole turn), and
   // authTokenEnv is name-only (§16 — a copied workspace folder must never carry a credential).
+  if (team.agents !== undefined) validateAgentConfigs(team.agents, "team.agents", E);
   if (team.providers !== undefined) validateProviders(team.providers, E);
   if (team.opencodePermission !== undefined) {
     const op = team.opencodePermission as unknown;
@@ -353,6 +374,7 @@ function validateProjects(projects: Record<string, ProjectEntry>, repos: Record<
     if (p?.hub !== undefined) checkHub(p.hub, `projects.${key}.hub`, E);
     if (p?.communication !== undefined) checkCommunication(p.communication, `projects.${key}.communication`, E);
     if (p?.notify !== undefined) checkNotify(p.notify, `projects.${key}.notify`, E);
+    if (p?.agents !== undefined) validateAgentConfigs(p.agents, `projects.${key}.agents`, E);
     const refs = Array.isArray(p?.repos) ? p.repos : [];
     if (!refs.length) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);
     for (const rr of refs) {

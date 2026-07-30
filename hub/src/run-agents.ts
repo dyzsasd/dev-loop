@@ -51,7 +51,7 @@ type CodingAgentDefault = { model?: string; effort?: string };
 
 // The two-level per-agent config — projects.json `agents.<agent>`: level 1 = codingAgent,
 // level 2 = model + effort. Strings are validated/normalized at resolve time.
-type AgentLaunchConfig = { codingAgent?: string; model?: string; effort?: string };
+type AgentLaunchConfig = { codingAgent?: string; model?: string; effort?: string; fireTimeout?: string; stallTimeout?: string };
 
 // Back-compat per-agent maps (pre-two-level). String ⇒ same value for every coding agent;
 // object ⇒ per-coding-agent. Still honored as a fallback BELOW agents{} and ABOVE codingAgentDefaults.
@@ -208,6 +208,8 @@ type Options = {
   providers?: Record<string, ProviderEntry>;
   opencodePermission?: Record<string, unknown>;
   wsRoot?: string; // Q9 secret scoping: the workspace whose secrets.env-injected keys are stripped per fire
+  perAgentFireTimeoutMs?: Partial<Record<Agent, number>>;   // per-agent override; beats opts.fireTimeoutMs
+  perAgentStallTimeoutMs?: Partial<Record<Agent, number>>;  // per-agent override; beats opts.stallTimeoutMs
 };
 
 // The certified unattended permission policy for opencode fires (PORTABILITY §5, 2026-07-16 on 1.2.24):
@@ -913,12 +915,19 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       if (existsSync(wsOpencode)) env.OPENCODE_CONFIG = wsOpencode;
     }
   }
+  // Resolve per-agent timeouts here so the dry-run log can report them (same values used below at fire time).
+  const effectiveFireTimeoutMs = opts.perAgentFireTimeoutMs?.[agent] ?? opts.fireTimeoutMs;
+  const stallConfigOverride = opts.perAgentStallTimeoutMs?.[agent] ?? opts.stallTimeoutMs;
+  const effectiveStallMs = stallConfigOverride !== undefined ? stallConfigOverride
+    : (profile.codingAgent === "opencode" ? 10 * 60_000 : 0);
   const rendered = displayCommand(command, args, prompt) + (stdinPayload ? ` <stdin:${stdinPayload.length} chars>` : "");
   if (opts.dryRun) {
     if (boot) console.log(`[dry-run] ${agent}: boot corpus ${Math.round(boot.bytes / 1024)}KB (conventions ${Math.round(boot.conventionsBytes / 1024)}KB${boot.pruned.length ? `; config-pruned §${boot.pruned.join(" §")}` : ""}) hash=${boot.hash} — prompt via stdin`);
     const intakeMode = (cfg?.projects?.[project] as { intake?: { mode?: string } } | undefined)?.intake?.mode;
     const dryProvider = providerOf(profile);
-    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${dryProvider ? ` provider=${dryProvider}` : ""}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""}`);
+    const fireStr = effectiveFireTimeoutMs > 0 ? formatDuration(effectiveFireTimeoutMs) : "off";
+    const stallStr = effectiveStallMs > 0 ? formatDuration(effectiveStallMs) : "off";
+    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${dryProvider ? ` provider=${dryProvider}` : ""}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""} fireTimeout=${fireStr} stallTimeout=${stallStr}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
     if (providerEnvMissing) console.log(`[dry-run] ${agent}: NOTE provider auth env ${providerEnvMissing} unresolvable — a real fire fails pre-spawn (doctor W13)`);
     return 0;
@@ -1010,14 +1019,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     // (same escalation shape as the daemon lifecycle's lcStop).
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
-    const fireTimer = opts.fireTimeoutMs > 0 ? setTimeout(() => {
+    // effectiveFireTimeoutMs / effectiveStallMs resolved above (before the dry-run branch) — same values here.
+    const fireTimer = effectiveFireTimeoutMs > 0 ? setTimeout(() => {
       timedOut = true;
-      console.error(`[${agent}] fire exceeded ${formatDuration(opts.fireTimeoutMs)} — SIGTERM (SIGKILL in 10s)`);
-      log.write(`\n===== fire timeout after ${formatDuration(opts.fireTimeoutMs)}: SIGTERM =====\n`);
+      console.error(`[${agent}] fire exceeded ${formatDuration(effectiveFireTimeoutMs)} — SIGTERM (SIGKILL in 10s)`);
+      log.write(`\n===== fire timeout after ${formatDuration(effectiveFireTimeoutMs)}: SIGTERM =====\n`);
       killGroup("SIGTERM");
       killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
       killTimer.unref?.();
-    }, opts.fireTimeoutMs) : undefined;
+    }, effectiveFireTimeoutMs) : undefined;
     fireTimer?.unref?.();
     // Liveness watchdog (errorClass "stalled" / "retry-loop"): the fire-timeout alone let a hung provider
     // call burn the FULL hour per fire — the 2026-07 quota-429 incident wedged every opencode fire in a
@@ -1028,8 +1038,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     // but every line is a verbatim repeat of content already seen (the 429 shape: "retrying in 2s…" ×∞).
     let stalled = false;
     let retryLoop = false;
-    const stallMs = opts.stallTimeoutMs !== undefined ? opts.stallTimeoutMs
-      : (profile.codingAgent === "opencode" ? 10 * 60_000 : 0); // claude -p buffers until the end — silence is normal there
+    const stallMs = effectiveStallMs; // claude -p buffers until the end — silence is normal there
     const stallTimer = stallMs > 0 ? setInterval(() => {
       if (stalled || timedOut) return;
       const silent = Date.now() - lastOutputAt >= stallMs;
@@ -1132,6 +1141,26 @@ function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string 
   }
 }
 
+// Config-driven per-agent fire/stall timeouts: per-agent config > explicit CLI flag > per-lane default.
+// Schema validation in team-config.ts (E17) guarantees values are well-formed; parseDuration is safe here.
+function applyConfigTimeouts(opts: Options, timeoutFor: (agent: Agent) => { fireTimeout?: string; stallTimeout?: string } | undefined): void {
+  if (!opts.perAgentFireTimeoutMs) opts.perAgentFireTimeoutMs = {};
+  if (!opts.perAgentStallTimeoutMs) opts.perAgentStallTimeoutMs = {};
+  for (const agent of opts.agents) {
+    const t = timeoutFor(agent);
+    if (t?.fireTimeout !== undefined) {
+      const v = t.fireTimeout.trim();
+      opts.perAgentFireTimeoutMs[agent] = v === "0" ? 0 : parseDuration(v);
+      console.log(`dev-loop run: fireTimeout ${agent}=${v === "0" ? "off" : formatDuration(opts.perAgentFireTimeoutMs[agent]!)} (from config)`);
+    }
+    if (t?.stallTimeout !== undefined) {
+      const v = t.stallTimeout.trim();
+      opts.perAgentStallTimeoutMs[agent] = v === "0" ? 0 : parseDuration(v);
+      console.log(`dev-loop run: stallTimeout ${agent}=${v === "0" ? "off" : formatDuration(opts.perAgentStallTimeoutMs[agent]!)} (from config)`);
+    }
+  }
+}
+
 // Scheduler-internal comms: STRICTLY gated on team.comms existing. notify() itself die(3)s on a
 // comms-less workspace (correct for the CLI verb — the operator asked and must hear "not configured"),
 // but `die` is process.exit — a promise .catch() cannot contain it, so an ungated call from inside the
@@ -1195,6 +1224,7 @@ async function main(): Promise<void> {
   const cfg = readProjects(opts);
   const project = resolveProject(opts, cfg);
   applyConfigCadence(opts, (agent) => (cfg?.projects?.[project] as { agents?: Record<string, { cadence?: string }> } | undefined)?.agents?.[agent]?.cadence);
+  applyConfigTimeouts(opts, (agent) => (cfg?.projects?.[project] as { agents?: Record<string, AgentLaunchConfig> } | undefined)?.agents?.[agent]);
   const cwd = resolveCwd(opts, cfg, project);
   if (!existsSync(cwd)) die(`cwd does not exist: ${cwd}`, 1);
   // Service-backend preflight: an unseeded project means every fire boots the hub MCP straight into its
@@ -1403,6 +1433,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
   applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence);
+  applyConfigTimeouts(opts, (agent) => ws.file.team.agents?.[agent]);
   preflightOpencodeModels(opts, cfg, ws.root, candidates.map((c) => c.key)); // zero-token: catch dead models/providers before the first fire
   // Prod-monitoring guard: a team with health probes but no scheduled ops agent runs blind.
   const hasProbes = Object.values(ws.file.repos).some((r) => !!(r.ops?.checks?.length) || !!r.deploy?.healthCheck || Object.values(r.deploy?.environments ?? {}).some((e) => !!e?.healthCheck));
