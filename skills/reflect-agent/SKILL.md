@@ -192,7 +192,7 @@ dev-loop op <op-name> [--args-json '<JSON>']
     Dispatch any hub op; args ride --args-json, or stdin when --args-json is absent and stdin is piped.
 
 # list_events
-dev-loop events [--ticket ID] [--since ISO] [--limit N]
+dev-loop events [--ticket ID] [--actor A] [--since ISO] [--limit N]
 
 # doc.get
 dev-loop doc get (--slug S | --kind K) [--version N|latest]

@@ -51,7 +51,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   labels:           ["cli-agentops", "labels"],    // the project's labels as JSON (list_issue_labels)
   label:            ["cli-agentops", "label"],     // label create <name> [--kind K] (create_issue_label)
   project:          ["cli-agentops", "project"],   // the active project as JSON (get_project)
-  events:           ["cli-agentops", "events"],    // attribution events as JSON (list_events; --since filters client-side)
+  events:           ["cli-agentops", "events"],    // attribution events as JSON (list_events; --actor/--since filter server-side)
   doc:              ["cli-agentops", "doc"],       // doc list|get|history|diff|save|publish|archive — doc.* 1:1 (save: CAS, CONFLICT → exit 3)
   mirror:           ["cli-agentops", "mirror"],    // mirror push|poll|status — the one-way Linear mirror + comment→intake poll
   queue:            ["cli-agentops", "queue"],     // LAYER 1: the pre-ranked per-agent work lists (§5/§21b) — every agent's mandated first board read
@@ -112,7 +112,7 @@ Usage: dev-loop <command> [args]
   comments <id>               a ticket's comments as JSON
   labels | label create <name> [--kind K]   list / create labels
   project                     the active project as JSON
-  events [--ticket ID] [--since ISO] [--limit N]   attribution events as JSON
+  events [--ticket ID] [--actor A] [--since ISO] [--limit N]   attribution events as JSON
   doc list|get|history|diff|save|publish|archive …   the doc family 1:1 (save: --base-version CAS; CONFLICT → exit 3)
   mirror push|poll|status     one-way Linear mirror; poll = comment→needs-pm intake
                               (run \`dev-loop op --help\` for the write layer's full flag surface + exit codes)
