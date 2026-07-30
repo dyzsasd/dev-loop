@@ -788,6 +788,77 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   land — which would couple every design gate to the CI health that **LOOP-27 exists to detect**. It
   also matches the `metering` precedent. No repo mirror.
 
+- **(pm, 2026-07-30) A merged PR carried nine commits nobody reviewed — dev branches are cut from
+  local `main`, and a passenger commit is invisible to every gate we have.** Found on the preflight
+  SHA sweep (`24d974f` → `d2e0732`), from an anomaly rather than a lens: `docs/STRATEGY.md` appeared
+  in the *product* diff. PR **#28** — titled `fix(hub): wireEnv always overrides DEVLOOP_PROJECT` —
+  merged **123 insertions of strategy prose** alongside its five lines of hub code, because the
+  worktree was cut from local `main` and inherited two unpushed PM doc commits. This is live, not
+  historical: the in-flight `dev-loop/LOOP-43` branch already carries **all nine** of PM's local-only
+  doc commits and will ship them with a CLI truncation fix. Filed as **LOOP-48** (senior, `Mode:
+  design`).
+
+  **Why it earns a Decisions entry rather than just a ticket.** Every governance gate this project
+  has built guards an actor's *own* commit path — §20 D4 routes PM's direction edits through the §9a
+  investigation flow, §17 keeps SKILL/conventions files human-gated, and LOOP-35 proposes to enforce
+  that firewall mechanically. **None of them inspects what a PR is merely carrying.** Any local-only
+  commit, from any actor, lands on `origin/main` as a passenger with `autoMerge:true` and test-only
+  merge checks. The gates are load-bearing on an assumption — that a branch contains only its own
+  work — which nothing establishes, because §7's "branch off the up-to-date `origin/<defaultBranch>`"
+  is prose with **no implementation anywhere in `hub/src/`**: `wsWorktree()` has no caller, so every
+  fire hand-builds its own `git worktree add`. This is the same root as **LOOP-37** (worktree *paths*)
+  seen on a second axis, and the inverse of **LOOP-36** (PM's doc commits never land *at all*).
+  LOOP-36's fix does not close it — a correct PM landing path still leaves every other unpushed
+  commit free to ride. Recorded because the conclusion generalises past the bug: **a convention that
+  no code implements is not a control, and building further gates on top of it compounds the error.**
+
+- **(pm, 2026-07-30) The §21a design gate passed LOOP-38's design and still refused to close the
+  ticket — "the design is sound" and "the bug is fixed" are different claims.** LOOP-38 (installed
+  `dev-loop` binary stale vs `origin/main`) came to the gate with a genuinely good design:
+  `landing-observability` §9 extends the living module doc rather than duplicating it, rejects
+  auto-publish-on-merge on *mechanism* (`release-npm.yml` computes a version per run and refuses
+  without an `## Unreleased` section, so a `push:` trigger either churns public releases or
+  fail-refuses), and stages one faithful child (**LOOP-46**, doctor W18). Gate: **passed**.
+
+  It went **`Human-Blocked`**, not `Done`. Its AC4 is *"re-run this ticket's repro"* — and the repro
+  fired during this very fire's boot (`dev-loop: unknown command 'queue'` from the installed
+  `1.10.0`, while `origin/main` reached `d2e0732`). Marking it `Done` would have produced precisely
+  the false-`Done` this ticket was filed to expose: a verified verdict invisible in the tool every
+  agent runs. **A design gate certifies a plan, not an outcome; when a ticket's own acceptance test
+  still reproduces, the honest terminal state is the human park, not `Done`.** What remains is
+  genuinely operator-only — the A-vs-B sync-mechanism call, and the publish-or-pin action. PM concurs
+  with senior-dev's **Option B** (pin agents to a local build): under A the public npm registry
+  becomes a log of an internal loop's every green merge — an outward, irreversible side effect
+  adopted for internal convenience, where B is contained and reversible.
+
+- **(pm, 2026-07-30) Two agents filed the same bug eleven minutes apart; the dedupe rule that
+  resolved it was "whose root cause is better", not "who was first".** QA filed **LOOP-45** and PM
+  filed **LOOP-47** for the same defect (`hub/test/run-agents.ts` inherits the fire's `DEVLOOP_*`
+  env). §8 dedupe cannot prevent this class — both agents deduped against a board snapshot taken
+  before the other's write. PM's snapshot was simply older.
+
+  Kept **LOOP-45** and canceled its own ticket, because QA's bisect was the stronger artifact
+  (`DEVLOOP_PROJECTS_JSON` alone proven necessary *and* sufficient). PM's evidence was ported into
+  it: the consequence is **not** 32 noisy assertions but that `npm test` is one `&&` chain of ~60
+  suites with `run-agents.ts` ~21st — inside a fire it short-circuits there, so **~40 later suites
+  including `test/quality.ts`, the fourth Step-5 ship gate, never execute at all.** Also corrected
+  one wrong turn in LOOP-45's fix-shape reasoning: it assumed the assertions run in-process, but
+  both sites `spawnSync` a child (`:13`, `:247`), so the fix is the plain `env:` scrub that
+  `7c43c06` already landed for `hub-lifecycle.ts` — not a scrub-and-restore around resolution calls.
+  **The general rule: when two filings collide, merge toward the better diagnosis and port the rest;
+  seniority of timestamp decides nothing.** Routing was also repaired — LOOP-45 sat at P1 with
+  `assignee: null`, invisible to both dev tiers (`agentops.ts:205`), the third instance of the
+  LOOP-30 class this week.
+
+- **(pm, 2026-07-30) Fifth instance: a blocker written as prose blocks nothing.** LOOP-4 and LOOP-31
+  both carried correct `Blocked-by:` marker comments and correct prose, and **neither carried the
+  `blocked` label** — so both would have read as promotable to a grooming pass that trusted the
+  board over the ledger. Repaired this fire. The lesson is now old enough to state as an invariant
+  rather than a reminder: **the marker comment is the ledger, the label is the enforcement, and
+  writing one without the other is a no-op.** LOOP-26 (the blocked taxonomy) and LOOP-31 (its web
+  surface) are the durable fix; until they land this is a per-fire manual audit, and it has caught
+  something in five of five fires.
+
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
