@@ -463,6 +463,60 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **LOOP-70** (senior, p2, `Mode: design`); **LOOP-56** and **LOOP-57** are queued consumers warned
   not to add copies three and four.
 
+- **⚠️ The loop writes a dependency graph and never reads it (`ux-flows`, 2026-07-30, `6c926eb`).**
+  The rotating lens closed on the mechanism a quarter of the board depends on. `Blocked-by:` has a
+  **first-class writer and no reader**: `grep -rn "Blocked-by|Unblocked-by" hub/src/` returns exactly
+  three hits, all in `cli-agentops.ts` — the `--blocked-by` help string (`:46`), a comment saying the
+  marker *is* the edge (`:300`), and the writer itself (`:305`). What the code actually consumes is the
+  flat `blocked` **label**: `metrics.ts:118` counts it (`blockedNow`, a scalar) and `agentops.ts:206,218`
+  filters on it to gate the dev pick-queue. So the loop maintains a real dependency graph in comment
+  markers, enforces a boolean shadow of it, and never reads the graph. **Measured now:** `dev-loop
+  metrics` says `12 blocked open` — 27% of the 44 live tickets — and cannot say that **eight of them
+  trace to LOOP-40**, which is `p2`, `Todo`, junior-assigned and *unblocked and pickable this minute*.
+  The one fact that would change what the operator does next is the one no surface computes; `doctor`
+  meanwhile prints `DOCTOR_OK` / `NEXT: dev-loop run`, correctly under its rules and uselessly here.
+  Downstream: stale edges (a blocker already `Done`, the ticket still parked) are invisible and **have
+  already occurred here**; dangling and cyclic edges are undetectable; and the §9c pass is a **manual
+  re-derivation every PM fire** — this one cost 12 `dev-loop comments` calls plus a hand-written
+  resolver to answer a question the database owns. Filed **LOOP-78** (senior, p2), scoped disjoint from
+  LOOP-26 (*classifying* the count) and LOOP-31 (*reconciling* the count): both are about the number,
+  this is about there being no graph underneath it. This is the `Current state` pattern's newest member
+  — the proxy is a count, the thing itself is a graph.
+
+- **✅ Two design gates and one verify gate passed; the fire ledger is now measurably in motion
+  (2026-07-30).** `origin/main` advanced `4488894` → **`6c926eb`** (LOOP-9: per-agent
+  `fireTimeout`/`stallTimeout`, resolution order *config > CLI flag > per-lane default*, `E17`
+  validation naming the offending agent+field). Verified against the merged tree: AC-exec green, full
+  suite **1373 pass / 2 fail**, and the two failures **proven not the increment's** — `test/lifecycle.ts`
+  hardcodes `127.0.0.1:8787`, a live daemon holds that port here, and both failures reproduce
+  identically at `4488894`, the commit before. Two §21a gates also passed: **LOOP-49** (decision-queue
+  observability → LOOP-73 metrics-age + LOOP-74 doctor decision-stall, both promoted `Todo`) and
+  **LOOP-61** (the `fireId` daemon-transport carrier → LOOP-75, promoted `Todo`). On LOOP-49 all seven
+  load-bearing `file:line` citations were re-checked against `origin/main` and held. On LOOP-61 the gate
+  **caught a fourth state the design did not name**: `AsyncLocalStorage` scopes the op dispatch, but the
+  daemon's *own* eight `logEvent` sites in `daemon-notifiers.ts` run outside any scope and fall back to
+  ambient env — and `daemon-lifecycle.ts:246` spawns the daemon with `{...process.env}`, whose own
+  comment (`:240-244`) says *"`up` is often invoked from an agent fire's env"*, which is why
+  `DEVLOOP_ACTOR` is pinned there. The fire id is not. **It is D5's bug one field over, in the same
+  `env:` object** — so the daemon could stamp its entire notification history with one inherited stale
+  fireId. A silently-*wrong* analytics key is worse than a silently-absent one: absent fails visibly
+  under scrutiny, wrong returns a confident number. Written into LOOP-75 as required scope, not deferred.
+
+- **📋 Two process gaps the fires themselves surfaced (2026-07-30).** (1) **W-code allocation has no
+  allocator.** Three open tickets independently claimed **W19** — LOOP-56 (17:36Z), LOOP-74 (19:33Z),
+  and my own gate ratified the third after verifying against `doctor.ts`, which emits only W05–W16
+  because *none of the claimants have landed*. Checking shipped code is the wrong question when the
+  namespace is allocated by unlanded tickets. Resolved by first-claim-wins on `created_at` (W19 stays
+  LOOP-56; LOOP-74 → **W20**) and a ledger written onto both tickets: **W17 → LOOP-41, W18 → LOOP-46,
+  W19 → LOOP-56, W20 → LOOP-74**. (2) **`validate-then-drop` is the sharper cousin of
+  `documented-but-absent`.** LOOP-9 shipped `projects.<key>.agents.<a>.fireTimeout/stallTimeout`
+  documented in the project-override table *and validated by E17* — and never applied on the v2 team
+  path, the only path a v2 workspace takes. Reproduced with two identical workspaces differing only in
+  declaration site; within one config object at project scope, `model` applies while `cadence` and both
+  timeouts are dropped, and nothing says which. A schema that accepts a field is a promise it does
+  something. Filed **LOOP-77** (senior, p2) — the second instance of this shape after LOOP-70, and worse,
+  because a plain omission at least errors.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1278,6 +1332,33 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
     which is what unparks the p1 LOOP-38. Senior had room and now holds LOOP-70 (7/10). **LOOP-40 is
     the highest-leverage ticket on the board:** LOOP-41, 42, 64, 66 and transitively 65 all wait on
     it, and it is p2, `Todo`, junior-assigned and unblocked.
+
+- **(pm, 2026-07-30) 📝 DECISION — §3's "any triage hit ⇒ verify-fail" is read against the contract the
+  ticket actually set, not against every gap the increment leaves.** Ruled on **LOOP-9**. The shipped
+  increment left a real hole (`projects.<key>.agents` timeouts validated, documented and never applied),
+  and I passed it anyway. **The reasoning, recorded because it is a precedent:** LOOP-9's own Context
+  scoped itself as *"the per-agent config plumbing already exists for `codingAgent`/`model`/`effort`/
+  `cadence` … this extends that same shape rather than inventing one"*, and the shipped code has exactly
+  `cadence`'s reach — it **inherited** the hole, it did not introduce one. Against the contract the
+  ticket set there is no MISSING/EXTRA/MISUNDERSTANDING in the *behaviour*. Cancelling a correct, tested,
+  CI-green, already-merged increment over an inherited gap trades a real increment for a bookkeeping
+  purity that helps nobody. **What the rule still binds:** the two deltas that *over-reached* the scope —
+  a docs sentence asserting a false resolution order, and `E17` validating the unsupported form — got
+  their own ticket (**LOOP-77**), routed senior because the fix requires ruling whether a per-project
+  *cadence* is even coherent with one scheduler over N projects. **The general form:** when a triage hit
+  falls inside a gap the ticket's own scoping paragraph pre-authorised, pass and file; when it falls
+  outside, fail and supersede. Verdicts that pass on a hit must say so in the open, with the reasoning,
+  so the operator can overrule cheaply — LOOP-9's does.
+- **(pm, 2026-07-30) 📝 DECISION — W-code allocation is first-claim-wins by `created_at`, resolved
+  against the BOARD, never against `doctor.ts`.** Three tickets held a live claim on **W19** while
+  `doctor.ts` still emitted only W05–W16, because a claimed code is invisible in shipped code until its
+  ticket lands — my own LOOP-49 gate ratified a duplicate on exactly that mistake and this entry
+  corrects it. Rule going forward: **sweep open tickets for the code, oldest claim keeps it**, later
+  claimants take the next genuinely unused code and say so in their handoff. Current ledger: **W17 →
+  LOOP-41, W18 → LOOP-46, W19 → LOOP-56, W20 → LOOP-74.** This is the escape hatch the
+  `decision-queue-observability` design already wrote (*"the reconciliation rule, not the literal
+  integer, is the contract"*) — exercised, not overridden. The durable fix is an allocator; until one
+  exists the sweep is the procedure.
 
 ## Candidate ideas
 
