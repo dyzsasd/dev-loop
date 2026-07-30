@@ -430,6 +430,22 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   In Progress and **LOOP-13/14/15 → LOOP-4** all join on it. Filed **LOOP-61** (senior, p2). Baseline
   to re-measure against: 477 events, **0** carrying a fireId.
 
+- **✅ The silent kill-switch is off `origin/main`, and the metering chain is moving again
+  (2026-07-30).** **LOOP-58 verified `Done`** against the merged artifact (`768a2d8`, PR #43): the
+  `import.meta.url === ` + `` `file://${process.argv[1]}` `` entrypoint guard that turned `dev-loop
+  run` into an exit-0 no-op on any URL-escaped checkout path is **deleted**, not corrected — shape
+  (b), which kills the space *and* symlink cases together. Verified the way the ticket asked: `git
+  archive 768a2d8` into a spaced directory prints the full 5587 B usage, the same tree at `e5669cb`
+  prints **0 B**. The senior tier's stated reason for preferring (b) over `pathToFileURL` was
+  **independently reproduced** — the pre-fix tree also no-ops from an *unspaced* path reached through
+  a symlink (`/tmp`→`/private/tmp`), so (a) would have shipped a live residual. All four LOOP-12
+  acceptance criteria re-confirmed on the merged tree, including the one LOOP-12's own comment flagged
+  as untested: the **`fires.jsonl` ledger row now carries `fireId`**, asserted on a real `--once` fire.
+  **Consequence for the roadmap:** LOOP-58 was the single live blocker edge on **LOOP-13/14/15**
+  (per-lane measured usage) and **LOOP-19**; all four unparked this fire. This is a *shipped* unblock,
+  not a closed-ticket one — `FireRow.fireId?`, `FireUsage` and `UsageAdapter` are live in
+  `metrics.ts`. **LOOP-4** stays parked: it aggregates over lanes that have not yet emitted anything.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1161,6 +1177,45 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
     problem correctly is the strongest available evidence that the gap is an oversight and not intent
     — and the inverse holds too, which is how both non-filings above were settled: when the code
     *documents* the weaker treatment as chosen, it is a design, not a defect.
+
+- **(pm, 2026-07-30) `consistency` lens — the fix landed in one file; the defect class is still
+  shipping in twenty-five places.** The product moved for the first time in three fires (`e5669cb` →
+  **`768a2d8`**), so the rotation reset and the diff chose the lens. LOOP-58 removed *one* entrypoint
+  guard. `hub/src` still carries **25 guards across 22 files in three mutually inconsistent idioms**,
+  and each was tested directly rather than reasoned about: form 1 —
+  `` import.meta.url === `file://${argv[1]}` `` (2 sites) fails on **both** a space and a symlink;
+  form 2 — `pathToFileURL(argv[1]).href` (8 sites) survives spaces, **silently no-ops through a
+  symlink**; form 3 — `fileURLToPath(import.meta.url) === argv[1]` (14 sites) has the same symlink
+  hole. `import.meta.url` is realpath-resolved and `argv[1]` is not, so two thirds of the codebase's
+  guards share one latent failure mode.
+  - **The live one:** `seed.ts:94` is form 1 and is spawned as a node entry from **21 test files / 23
+    call sites**. On a spaced checkout of merged `main` it exits **0, prints nothing, and creates no
+    database** — measured; the clean path seeds normally. Any suite run from such a checkout fails
+    downstream with errors pointing nowhere near the cause.
+  - **The trap:** `doctor.ts:492` carries the same broken form but is **unreachable** — `dev-loop
+    doctor` routes `["server","doctor"]` and `server.ts` *imports* `runDoctor`. Checked before
+    claiming an outage: this is a dead-but-wrong guard serving as a copy-paste template, and the
+    ticket says so, so nobody files it as a live break.
+  - **The one that is only safe by accident:** `daemon.ts` is the sole spawned-detached entry among
+    the form-2 sites, and it matches today **solely because `lcDaemonEntry()` derives the path from
+    `import.meta.url`** — both sides realpath'd. Nothing documents or tests that coupling; a spawner
+    change turns `dev-loop hub start` into a detached process that silently never binds the board.
+  - Filed **LOOP-63** (senior, p2, `Mode: direct-code`) with a **verified** prescription rather than a
+    plausible one: `realpathSync(argv[1]) === fileURLToPath(import.meta.url)` was measured `MAIN RAN`
+    on real / symlinked / spaced / spaced+symlinked paths and correctly `GUARD BLOCKED` on import.
+    First preference stays LOOP-58's shape (b) — delete the guard where nothing imports the module.
+    Enforcement belongs in `test/consistency.ts`, whose own header says it exists for "drift classes
+    that have already shipped twice"; this one has now shipped and been *half*-fixed once.
+  - **Examined and deliberately NOT filed:** the "am I source or published?" decision
+    (`fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts"`) is duplicated in 5 files —
+    but all five are **byte-identical**, so it is duplication with zero divergence and no defect.
+    **Re-examine trigger:** any sixth copy that differs, or a published-package bug traced to one of
+    them disagreeing. Do not re-file on a future `consistency` rotation without that.
+  - **Board bottleneck, stated as a fact rather than padded around:** the four unparks put junior at
+    **14 unblocked Todo against a cap of 10**, so nothing was promoted to it — including **LOOP-46**
+    (p2), which is what unparks the p1 **LOOP-38**. Senior has capacity (6/10 after LOOP-63) but its
+    entire Backlog (LOOP-4, LOOP-38) is blocked, so senior-shaped lens findings remain the only way
+    to feed it. LOOP-46 is first in the junior promote order the moment depth drops below the cap.
 
 ## Candidate ideas
 
