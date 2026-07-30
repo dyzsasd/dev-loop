@@ -640,6 +640,40 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   three idle slots cannot be filled without either an operator ruling or work that genuinely needs
   design. **This is the loop's binding constraint; no single ticket on the board is.**
 
+- **📋 Five increments reached `In Review` without landing — and the rule they broke was already
+  written down (2026-07-31).** Both tickets in PM's verify queue this fire had **open, unlandable
+  PRs**: LOOP-19 (#54, `mergeable: CONFLICTING` — required checks never even ran) and LOOP-26 (#55,
+  both required checks `FAILURE` on a `TS2345` in the ticket's own new test). Repo `dev-loop` runs
+  `landing:"pr"` **+ `autoMerge:true`**, where §12c / dev-agent Step 6 is explicit: *the ticket stays
+  `In Progress` from PR-open until Step 0.5 merges the **green** PR — only then `In Review`.* A sweep
+  of every open PR found the same shape on **LOOP-45** (#39, CONFLICTING, QA-owned), and LOOP-89
+  already records **LOOP-13 + LOOP-14**. That is **five increments across three fires**, hitting
+  **both** verification owners and **both** dev tiers' output — which rules out "one agent's SKILL
+  needs better prose" as a sufficient fix. Counter-case that must keep working: LOOP-43 (#38) is
+  merged and legitimately `In Review`. Evidence routed to **LOOP-89** (senior, `Mode: design`, Todo)
+  rather than a new ticket; both PM-owned tickets returned to `In Progress` with the exact fix named.
+  **The mechanism worth naming: `npm test` green is not the ship gate under `landing:"pr"` — the PR's
+  `mergeChecks` are.** LOOP-26's author ran `npm test` (green) and never ran `npm run typecheck`,
+  which is a *separate script* that CI runs as its own step. A local gate that is not the CI job's
+  step list is a gate that reports success on unlandable work.
+
+- **📋 "Search the board" is two searches, and neither is a superset of the other (2026-07-31).**
+  The competitive-parity lens, measured against the live daemon: the human's web `?q=`
+  (`views/board.ts:156-159`) matches **id + title + the first 5,000 chars of description** and
+  **no comment at all**; the agent's `list_issues query` (`agentops.ts:165-172`) matches **title +
+  full description + comment bodies** with whitespace-AND-ed terms and **never the ticket id**. Both
+  fail silently — an empty result reads as "no such ticket", never as "this surface doesn't index
+  that". `dev-loop tickets --q LOOP-96` returns **zero rows** for a live open ticket; a web search
+  for a term living only in comments returns **zero cards**. What the human's search cannot reach:
+  **188,374 bytes across 156 comments on 57 of 96 tickets — 31.6% of all board text**, including
+  every §9c `Blocked-by:` edge, every verify ruling, and designs authored as comments (LOOP-10's
+  design is one). Plus **8.1% of description text** past the 5,000-char scan cap, on the 31% of
+  tickets whose descriptions exceed it. The agent path's comment clause is documented as deliberate
+  — *"so the §8 dedup query catches a reworded duplicate whose only match is in a comment"* — so the
+  value was already established here; the human surface simply never got it, and nothing recorded
+  that the two diverged. Filed as **LOOP-97** (p2, junior); a third silently-ignored param on
+  `/api/tickets` (`?q=`, joining `?fields=summary`) folded into **LOOP-96** rather than filed.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1548,6 +1582,73 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   layer whose blast radius is confined to test and attended paths over the one that is more elegant
   but reaches production runtime — and when a design surfaces that tradeoff instead of silently
   taking it, that is the design working.**
+
+- **(pm, 2026-07-31) 📝 RULING — an unlanded PR under `autoMerge:true` is a STATE error, not a
+  verify-fail. Do not `Cancel`, do not escalate; return it to `In Progress`.** Both tickets in this
+  fire's verify queue arrived `In Review` with open PRs (LOOP-19 CONFLICTING, LOOP-26 CI-red on its
+  own delta). The tempting move is §3's Cancel + supersede + route-up-to-senior. **That is the wrong
+  reading.** §3's close-and-supersede machinery exists for increments that actually *shipped* and
+  then failed their ACs — one verified increment per ticket, a failed one superseded rather than
+  silently reopened. Nothing shipped here: §12b gates verification on *what is observable on the
+  running env*, and nothing merged, so there was nothing to verify. Meanwhile §12c states exactly
+  where such a ticket belongs and what happens next — *stays `In Progress`; a FAILED check ⇒ Dev
+  reads the CI failure, fixes it, re-pushes (cap ~2 cycles → `fix-exhausted`)*. Canceling LOOP-26 and
+  spending a senior-tier ticket on a one-line `boolean | undefined` fix would have destroyed a sound
+  increment to satisfy the letter of a rule aimed at a different situation. **The generalisable
+  test: before applying a fail path, ask whether the thing it is designed to close actually
+  happened.** A verify queue is not a claim that work landed — under `autoMerge` it is only a claim
+  that some agent moved a state. Corollary for the verifier: **`In Review` is an assertion to be
+  checked, not a precondition to be trusted** — check the PR before checking the ACs, because a
+  wait-state, a red state, and a landed state need three different responses and only one of them is
+  a verdict.
+
+- **(pm, 2026-07-31) 📝 RULING — doctor W-code collisions resolve FIFO by `created_at`; W20 and W21
+  reassigned.** Grooming found **two live collisions on four `Todo` tickets**: LOOP-41 and LOOP-81
+  both claimed **W17**; LOOP-56 and LOOP-74 both claimed **W19**. Neither was gate-caught — both
+  pairs were sitting in the commitment queue waiting to collide at implementation time. Cause is
+  exactly what LOOP-88 predicted: shipped `doctor.ts` on `origin/main` tops out at **W16**, so every
+  filer who correctly computes "next free" against the source gets the same answer, and the source
+  structurally cannot see codes claimed by unlanded tickets. LOOP-81's body literally reads *"next
+  free number, **W17**"*; LOOP-74's hand-rolls a workaround in prose — *"take the next unused code if
+  they shifted"*. **Allocation, by `created_at` — the same FIFO tiebreak §5 already uses for the pick
+  order, so it needs no judgement and cannot be re-litigated:** W17→LOOP-41, W18→LOOP-46,
+  W19→LOOP-56, **W20→LOOP-74** (from W19), **W21→LOOP-81** (from W17). Ties broken toward whoever
+  already has ACs and test assertions bound to the literal string, since moving them means editing
+  test expectations for no product reason. That is **4 collisions on 6 claimed codes** — the number
+  that belongs in LOOP-88's justification, along with a hazard learned applying the fix: the CLI can
+  retitle a ticket but cannot rewrite its description, so the two reassigned tickets now carry the
+  new code in the title and the old one in their AC text, reconciled only by a comment. **A registry
+  that allocates codes but leaves the body stale has moved the collision, not removed it.**
+
+- **(pm, 2026-07-31) ✅ SHIPPED — the "comment-body search" item DEFERRED in the (operator,
+  2026-07-02) Linear-parity scope entry is built; the surviving gap is corpus parity, not the
+  feature.** That entry listed two deferred-but-real items. Both have now landed: the default
+  `list_issues` limit + summary-field mode (`agentops.ts:176-181`, confirmed last fire) and
+  **comment-body search** — verified empirically, not from the code: `dev-loop tickets --q
+  METRICS_OK` returns LOOP-26, where that string exists only in a comment written this fire.
+  Recorded as a new dated entry rather than an edit to the operator's own entry. **What replaces it
+  on the parity lens is narrower and sharper:** the feature shipped on the *agent* path only, so the
+  gap is no longer "can the board search comments" but "**the two search surfaces disagree, in both
+  directions, and neither documents its corpus**" — LOOP-97. The standing DO-NOT-RE-PROPOSE list in
+  that entry (cycles/estimates, due dates, milestones, saved views, reactions/threads, attachments,
+  SLAs) is untouched and still stands.
+
+- **(pm, 2026-07-31) 📝 DECISION — the board's search contract: one shared predicate, corpus =
+  id + title + description + comments, terms whitespace-AND-ed.** Encoded directly into LOOP-97's
+  ACs rather than left open, because it is answerable and leaving it open would make the ticket a
+  design ticket for no reason. Any per-row scan cap becomes a **parameter of the shared helper**,
+  applied identically on both paths and named in one place — which settles the `Q_DESC_CAP=5000`
+  question without pre-judging the performance tradeoff LOOP-96 owns. **The scope boundary between
+  the two tickets, drawn deliberately:** LOOP-97 owns *what `q` matches*; LOOP-96 owns *how many rows
+  come back and which fields*. LOOP-96's own non-goals already reserved filter semantics for a
+  separate ticket — this is that ticket, and each names the other. **The rule this adds to the
+  `validate-then-drop` family:** the family so far has been *a config field nothing reads*
+  (LOOP-70), *a field read at the wrong scope* (LOOP-77), *a field read over the wrong set*
+  (LOOP-90), and *a param accepted and ignored* (LOOP-96). This is the fifth shape — **two code
+  paths implementing the same user-facing concept against different corpora**, where each one's
+  behaviour is defensible in isolation and only the diff is the defect. It is invisible to any review
+  that reads one call site, which is why the method that finds it is *run the same input through both
+  paths and compare the outputs*, never *read the code and reason about it*.
 
 ## Candidate ideas
 
