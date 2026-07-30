@@ -129,6 +129,7 @@ function intFlag(name: string, v: string, min: number, max?: number): number {
 }
 const readStdinAll = (): string => readFileSync(0, "utf8"); // fd 0 — sync full-drain (a one-shot CLI, no stream ceremony)
 function readFileArg(flag: string, path: string): string {
+  if (path === "-") return readStdinAll();
   try { return readFileSync(path, "utf8"); } catch (e) { fail(`${flag} ${path}: ${(e as Error).message}`); }
 }
 
