@@ -1082,6 +1082,14 @@ job), so a ticket can be merged-to-`main` yet not yet live on the test env. So:
 - **Change observable on the env but wrong** → failed review: close + follow-up (§3).
 - **PR closed-unmerged** (human rejected) → rejection: `Canceled` + follow-up (§3), noting it.
 
+**On a repo that ships as a published artifact (e.g. an npm package), "merged" and "running"
+are DIFFERENT states, and a verifier must say which one it established.** Verifying an
+increment against the merged tree is a valid `Done`. Claiming it is *live* requires checking
+the artifact the fires actually run (`dev-loop doctor` W18 names the merged-vs-installed
+skew). **Never write "verified live" for a change that is only merged** — record it as
+"merged; not yet published" and let the release-readiness surface carry it. (Publishing
+stays an operator act; a `Done` never waits on it.)
+
 This keeps the loop autonomous **up to the PR**, puts the human gate at **merge** (→ the
 env the branch merges into) and again at **release** (→ prod, via the downstream pipeline's
 own PR), and never pushes to `defaultBranch`. `pr` is the fit when a repo wants human review
