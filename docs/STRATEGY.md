@@ -10,6 +10,18 @@
 
 ## Vision
 
+**The product is named Kaizen Factory. The engine is named dev-loop.** (Operator decision,
+2026-07-31, recorded under the §9a pre-authorization on LOOP-174 — see the dated Decisions entry
+for the full rationale and the verbatim-identifier list.) Two Toyota-lineage words that are the
+product thesis verbatim: **改善 kaizen** — a system that improves itself in small, evidence-cited
+steps, daily — and the **lights-out factory (黑灯工厂)** — a plant so automated it runs with the
+lights off. This loop is literally both: reflect / lessons / §17 IS a kaizen routine, and the
+operator reads one digest a day while the team ships. **Brand ↔ engine, like Code ↔ `code`:**
+every technical identifier below keeps the `dev-loop` name, and the CLI command becomes `kaizen`
+in a two-release phased rename (`dev-loop` remaining a permanent alias). Names in the rest of this
+document that refer to the engine, the config, the state dir, or the label are therefore correct
+as written and must not be brand-swept.
+
 dev-loop is a **standalone, long-lived coordination daemon** with **interchangeable AI-CLI
 clients**. The daemon is the system of record (the `node:sqlite` hub), the coordination
 service, the local web UI, and the agent-facing API — one persistent localhost process per
@@ -564,6 +576,14 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
 - **§17 boundary** — agents may edit `lessons.md` autonomously but must NOT auto-rewrite
   SKILL files / `conventions.md`; those are drafted as proposals for the operator.
 - **Owner label** — `pm` (Features) / `qa` (Bugs); the owner files and verifies.
+- **Kaizen Factory** — the product's commercial name (prose, title case; slug
+  `kaizen-factory`). Use it when speaking about the PRODUCT.
+- **dev-loop** — the engine name, and the name of every technical identifier: npm
+  `@dyzsasd/dev-loop`, `dev-loop.json`, `DEVLOOP_*` env, `.dev-loop/` state dir, `dev-loop/<id>`
+  branch prefix, `/dev-loop:*` slash commands, and the `dev-loop` §2 safety label. Use it when
+  speaking about a COMMAND, CONFIG KEY, PATH, or LABEL. These are VERBATIM — never brand-swept.
+- **`kaizen`** — the CLI command, from the phased rename (LOOP-181 Phase A ships the bin,
+  LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
 
@@ -1175,6 +1195,43 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   filed, because §12b routes **every verifier** through W18 to tell merged from live — so the number
   they are now sent to read is the one that is wrong. LOOP-151 was promoted to `Todo` this fire on
   that argument, ahead of its FIFO position among p2 bugs being the only thing that recommended it.
+
+- **(pm, 2026-07-31) 📝 DECISION recorded: the product is named Kaizen Factory; the engine keeps
+  the dev-loop name; the CLI command becomes `kaizen` over two releases.** Operator decision
+  (LOOP-174, W3 intake), superseding an earlier "Dark Factory" candidate that collided with an
+  active same-space npm product. **Name facts verified 2026-07-31:** npm `kaizen-factory` and
+  `kaizenfactory` are both free; bare `kaizen` is a dead 0.1.5 stub declaring **no bin**, so
+  nothing else claims `kaizen` on a developer's PATH. Domains/trademark are operator-side, out of
+  loop scope. **The two-layer rule:** brand = Kaizen Factory, engine = dev-loop; the npm package
+  name, `dev-loop.json`, `DEVLOOP_*`, `.dev-loop/`, `dev-loop/<id>`, `/dev-loop:*`, and the §2
+  safety label stay VERBATIM — each of those is a separate future decision and none is user-visible
+  typing. **This edit is a Vision (direction) change made WITHOUT an investigation round-trip
+  because LOOP-174 carries the operator's explicit §9a pre-authorization for exactly this edit,
+  citing that ticket** (§20 D4 — the standing rule is unchanged; this is an authorized instance of
+  it, and the D4 audit trail is the ticket).
+
+  **Why the CLI rename is phased, which is the load-bearing part of the decision.** A workspace's
+  `.claude/settings.json` carries `Bash(dev-loop *)`, written once at init and never updated by an
+  npm upgrade, while fires read their prose from the INSTALLED package. A single-release rename
+  therefore breaks every already-initialized workspace the moment it upgrades: the prose says
+  `kaizen queue`, the shell has the bin, the permission allow-list does not — denied, and the agent
+  cannot reach the board at all. That is the LOOP-69 wedge and the LOOP-38 installed-vs-source class
+  in one. **Phase A** (LOOP-181) ships the `kaizen`/`kaizen-hub` bins, provisions BOTH permissions
+  at init, tops up existing workspaces through the existing `team repair` verb, and adds a warn-only
+  doctor check — prose unchanged. **Phase B** (LOOP-182) flips the prose one release later, gated on
+  `kaizen --version` actually resolving in a fire's environment here — published and installed, not
+  merely merged (§12b).
+
+  **Two consequences worth recording as direction, not just as tickets.** (a) Phase A was tiered
+  **senior + `sensitive`** against the intake's junior estimate, because its ACs write into a
+  permissions allow-list and §21b routes permissions work to senior unconditionally. (b) Phase B is
+  **mostly not agent-appliable**: ~175 of its occurrences live in `references/` + `skills/`, and
+  §17 forbids an agent auto-rewriting `conventions.md` or a SKILL file — so it splits into an
+  agent-applied generator/test change and an operator-applied prose diff, on the same
+  propose→operator-applies→agent-verifies path LOOP-161 / LOOP-164 / LOOP-170 already ran. The
+  brand's load-bearing claim — "improves itself" — gets its evidence surface in the `/kaizen` panel
+  (LOOP-180, senior design-gated), rendered from the board and ledger only, with honest empty
+  states. **Nothing is built yet; `Current state` is deliberately untouched.**
 
 ## Candidate ideas
 
