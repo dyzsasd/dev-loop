@@ -438,6 +438,47 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   is why LOOP-153's `Human-Blocked` park was recorded as board-visible only. It can ping now. The
   underlying lifecycle defects (LOOP-152, LOOP-137) are unchanged — this is the daemon running, not
   the daemon being fixed.
+- **2026-07-31 (later) — reflect has been writing lessons into a file with no reader, and unlike
+  everything else this week it is NOT install skew.** Operator intake **LOOP-160** (P1, filed on
+  reflect's behalf — reflect found it but §17's one-ticket quota had already been spent, see
+  LOOP-161 below). Three claims, all re-verified here against the installed build *and* against
+  source: `boot-prefix.js` assembles the §0a corpus from `join(dataDir, project, "lessons.md")` →
+  `~/.dev-loop/loop/lessons.md`, which does not exist; `lessonsForFire()` — which already implements
+  the §14 contract and is tested — resolves to exactly one file in `dist/` (its own) and, **critically,
+  to exactly one file in `hub/src/` as well**; and `conventions.md:114` (§0a step 4) names a different
+  lessons home than `:1225` (§14 1.0), with the code implementing §0a. The operator verified against
+  the installed v1.12.0, which on this workspace is the LOOP-38 skew surface; grepping current source
+  too is what upgrades this from "stale package" to "**live on `origin/main`, no fix in flight**" —
+  re-publishing would change nothing. Split into **LOOP-163** (code, retyped to a rank-1 urgent Bug,
+  promoted) and **LOOP-164** (the §17 prose, operator-parked). The nuance kept in the ACs: an agent
+  whose SKILL names the library can still read it by hand — this PM fire did — so the regression must
+  assert delivery **into the assembled corpus**, not that the file is findable. A presence check
+  passes today; that is exactly how the gap shipped.
+- **2026-07-31 (later) — trust-safety lens: two read surfaces answer a question they structurally
+  cannot answer, and in both cases the correct implementation already exists next door.**
+  **LOOP-166** — `dev-loop secret list`'s source column is a *constant*: `names` comes from
+  `Object.keys(file)`, so the `"env"` branch's `!hasOwnProperty(file, n)` guard is permanently false,
+  and `loadWorkspaceSecrets` has already injected every file key into `process.env` so the `"EMPTY"`
+  branch cannot fire either. A key shadowed by a real env var — the value that actually wins at
+  runtime — prints byte-identically to one that is not. Measured both ways in a disposable workspace.
+  `doctor` W12/W13 compute the same fact **correctly** via the exported `secretsInjectedKeys()` memo
+  and have a two-branch test; `secret-cli.ts` imports two other helpers from that same module but not
+  that one, and `grep secretCli hub/test/` returns nothing. The divergence sits exactly where the
+  coverage stops. **LOOP-165** — `op list_issues` silently ignores an argument it does not implement
+  and returns the whole board, exit 0. Found by walking into it: this fire's own §8 dedupe passed
+  `{"q": …}` (the op's arg is `query`; `q` is only the *CLI flag* name) and got all 159 rows back for
+  four different search terms, including an impossible one. The CLI layer one call up rejects unknown
+  flags deliberately (`DL-93`); the op beneath it validates the *types* of six known args and never
+  rejects an unknown *key*. This is LOOP-143's own prescribed rule ("reject unknown args") on the
+  surface LOOP-143's ACs do not reach — and the consequence is heavier there: the silent output is a
+  duplicate ticket, which is the one thing §8 exists to prevent.
+- **2026-07-31 (later) — the senior tier ran with six idle slots and no work it was allowed to take.**
+  At this fire's Job B2 the Backlog was 36 rows, **all 36 junior-tier**, while senior sat 4/10 and
+  junior was at cap. §21b forbids re-tiering to balance load, so the only legal lever is filing-time
+  tiering — and it filled the same hour, from both directions: QA filed **LOOP-162** (an
+  unauthenticated RCE in `bundle load`, `sensitive`+`senior-dev`, correctly tiered at source) and
+  PM filed LOOP-166 into the same slice. Both promoted; senior closed at 6/10. Recorded because the
+  fix keeps being the same one and it is not PM's to apply alone.
 
 ## Personas
 
@@ -990,6 +1031,37 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   lever, per §21b. Worth saying plainly since it keeps recurring: the fix for a lopsided tier mix is
   upstream, at the moment of filing, and the agents that file most (QA, Ops, Architect, the operator)
   are the ones who set it. Depth at close: senior **4/10**, junior **10/10** (at cap).
+- **(pm, 2026-07-31) 🧭 LOOP-161 ruling — reflect's one-ticket-per-fire quota becomes
+  severity-ORDERED and loss-PROOF; the quota itself stands, and option (a) is declined.** The
+  operator observed the quota mis-firing: reflect produced a P4 and a P1 in one fire, spent its
+  ticket on the P4 by discovery order, and the P1 survived only because a human read a comment
+  thread. They offered three forms and asked PM to recommend one. **Ruling: (b) and (c) are not
+  alternatives — they fix different halves and both are required.** (c) "spend the ticket on the
+  highest-severity finding" fixes the *ordering*; (b) "the hand-off ticket carries a
+  `## Deferred findings` section" fixes the *loss channel*; adopting either alone leaves a live half
+  (c alone still discards finding #2; b alone would still have filed the P4 first). **One addition
+  without which (b) decays into the comment thread it replaces:** a fixed greppable heading, each
+  entry carrying reflect's own severity assessment — which also makes (c) *auditable* rather than
+  trusted — and an explicit obligation that PM triage every entry in the fire that reads it, into
+  either a filed ticket or a stated "not worth filing, because …". Deferred must not be a state a
+  finding can rest in. **(a) declined** (a carve-out letting reflect file a second ticket when it
+  self-classifies a finding as a structurally-dead mechanism): it re-opens precisely the thrash the
+  quota exists to prevent, and the classification will drift toward "everything important is
+  structural". With (b)+(c) a suppressed P1 already reaches PM's queue the same fire, so (a) buys
+  speed, not safety — revisit only if the pattern recurs *after* they land, when the evidence will be
+  concrete. §17 wording ⇒ operator-applied; parked `Human-Blocked` with the recommendation made
+  rather than pending.
+- **(pm, 2026-07-31) A P1 `Improvement` is not a prioritised ticket — type, not priority, decides the
+  dev pick order.** Filed LOOP-160's code child as an `Improvement` at P1, then caught that §5 ranks
+  Improvements **last regardless of priority** (priority only elevates at rank 1 = `priority=1` +
+  `Bug`), so the highest-priority item on the junior slice would have sorted below every rank-3.5
+  bug. Retyped to `Bug` — which is also the honest type (a shipped mechanism with no reader is a
+  defect, not a refinement) and the type its own operator-filed parent already carried — moving it
+  from rank 5 to **rank 1**. Two things worth keeping: `dev-loop ticket update` has **no `--type`
+  flag**, so the label and the `type` column silently disagreed until `op save_issue` fixed the
+  column (the label alone changes nothing the pick order reads); and this is the same defect class as
+  LOOP-161 filed the same hour — findings ordered by the wrong key. Check the *type* when a priority
+  is meant to mean something.
 
 ## Candidate ideas
 
