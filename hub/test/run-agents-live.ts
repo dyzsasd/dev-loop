@@ -349,6 +349,78 @@ sleep 600
   const sdOut = join(tmp, "sd-out"); mkdirSync(sdOut, { recursive: true });
   const sdFires = runLoop(["--change-gate"], sdOut, "4.2", "senior-dev", "3s");
   ok(sdFires === 0, `the dev tier keeps the PURE gate — an aged senior-dev entry still skips (fired ${sdFires}×, expected 0)`);
+
+  // ── 7. LOOP-85: the opencode lane END-TO-END on a REAL fire (a stub `opencode` streaming JSONL). The two
+  //    defects the ticket escalated are structural, so only a real fire proves them: (a) operator-visible
+  //    output SURVIVES — opencode STREAMS its --format json events, and because opencodeAdapter has no
+  //    resultText the runner never defers the echo, so the readable lines reach console + run.log as they
+  //    arrive (LOOP-14 routed opencode into the structured branch and suppressed the whole stream); (b) the
+  //    tail-regex suspectError fallback is KEPT, additive to the adapter's structured isError. ──
+  const ocStub = join(tmp, "stub-opencode");
+  const ocDb = join(tmp, "hub-oc.db");
+  writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { oc: { repoPath: repo, backend: "service" } } }));
+  execFileSync("node", ["src/seed.ts", "oc", "OC Project", "OCX", ocDb], { cwd: hubRoot, encoding: "utf8" });
+  const ocCommon = ["--root", repoRoot, "--data", data, "--hub-db", ocDb, "--project", "oc", "--cwd", repo, "--cli", "opencode", "--agents", "sweep", "--once"];
+  const ocSweepLog = join(data, "oc", "runner-logs", "sweep.log");
+  const latestFireData = (): Record<string, unknown> => {
+    const rows = execFileSync("node", ["--input-type=module", "-e",
+      `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${ocDb}'); const pid=findProject(db,'oc'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed' ORDER BY rowid DESC LIMIT 1").all(pid); process.stdout.write(JSON.stringify(r));`],
+      { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+    const arr = JSON.parse(rows) as { data: string }[];
+    return arr.length ? (JSON.parse(arr[0].data) as Record<string, unknown>) : {};
+  };
+  const ocFire = (body: string) => {
+    writeFileSync(ocStub, `#!/bin/sh\n${body}\n`);
+    chmodSync(ocStub, 0o755);
+    rmSync(ocSweepLog, { force: true }); // fresh log per fire — the output-survival assertion reads only THIS fire
+    const run = runLive(ocCommon, { DEVLOOP_OPENCODE_BIN: ocStub });
+    return { run, data: latestFireData(), log: existsSync(ocSweepLog) ? readFileSync(ocSweepLog, "utf8") : "" };
+  };
+
+  // 7a. happy multi-line JSONL fire: output survives (console + run.log) AND usage is captured from part.tokens.
+  const happy = ocFire([
+    `echo '{"type":"step_start","part":{"type":"step-start"}}'`,
+    `echo '{"type":"text","part":{"type":"text","text":"hello from opencode."}}'`,
+    `echo '{"type":"step_finish","part":{"type":"step-finish","cost":0,"tokens":{"total":123,"input":111,"output":12,"cache":{"read":4,"write":2}}}}'`,
+    `exit 0`,
+  ].join("\n"));
+  ok(happy.run.code === 0, `LOOP-85: opencode --format json fire exits 0 (got ${happy.run.code})`);
+  ok(/hello from opencode\./.test(happy.run.out), "LOOP-85 AC: the readable line activity reaches the CONSOLE echo live (stream not suppressed)");
+  ok(/hello from opencode\./.test(happy.log) && /step_finish/.test(happy.log), "LOOP-85 AC: the JSONL line activity reaches run.log (multi-line buffer) — output survives on the JSONL lane");
+  ok(happy.data.codingAgent === "opencode", "LOOP-85: fire.completed attributes the opencode lane");
+  {
+    const u = happy.data.usage as Record<string, unknown> | undefined;
+    ok(!!u && u.source === "provider" && u.inputTokens === 111 && u.outputTokens === 12, "LOOP-85 AC: fire.completed.usage captured end-to-end from the real JSONL stream (input 111 / output 12)");
+    ok(!!u && u.cacheReadTokens === 4 && u.cacheWriteTokens === 2 && u.costUsd === 0 && u.currency === "USD", "LOOP-85 AC: cache split + cost captured from part.tokens.cache / part.cost");
+    ok(!happy.data.suspectError, "LOOP-85: a healthy opencode fire is NOT flagged suspectError (no false positive)");
+  }
+
+  // 7b. TRUNCATED stream: the final usage line is cut mid-JSON. Earlier readable output STILL survives in
+  //     run.log, usage degrades to null (honest miss, never a partial row), and the fire does not crash.
+  const truncated = ocFire([
+    `echo '{"type":"text","part":{"type":"text","text":"line one visible"}}'`,
+    `printf '{"type":"step_finish","part":{"tokens":{"inp'`,
+    `exit 0`,
+  ].join("\n"));
+  ok(truncated.run.code === 0, "LOOP-85 AC: a truncated-stream fire still exits normally (parse is best-effort, non-fatal)");
+  ok(/line one visible/.test(truncated.log), "LOOP-85 AC: on a TRUNCATED buffer the earlier readable lines still survive in run.log");
+  ok(truncated.data.usage === undefined, "LOOP-85 AC: a truncated usage line → NO usage field (honest miss, not a partial/wrong row)");
+
+  // 7c. suspectError fallback KEPT: exit-0 opencode fire printing "Execution error" → flagged via the
+  //     tail-regex (NOT the adapter's isError — that owns only the structured signal). This is the exact
+  //     regression the ticket escalated: LOOP-14's wiring replaced the tail-regex, so this recorded healthy.
+  const execErr = ocFire(`echo 'Execution error'\nexit 0`);
+  ok(execErr.data.suspectError === true, "LOOP-85 AC: exit-0 opencode fire emitting 'Execution error' → suspectError (tail-regex fallback kept)");
+  // 7d. empty output (exit 0) → suspectError via the empty-output arm.
+  const empty = ocFire(`exit 0`);
+  ok(empty.data.suspectError === true, "LOOP-85 AC: exit-0 opencode fire with NO output → suspectError (empty-output arm)");
+  // 7e. a structured type:"error" event (exit 0) → suspectError via the adapter's isError, additively.
+  const structErr = ocFire([
+    `echo '{"type":"step_start","part":{"type":"step-start"}}'`,
+    `echo '{"type":"error","part":{"message":"provider 429 quota"}}'`,
+    `exit 0`,
+  ].join("\n"));
+  ok(structErr.data.suspectError === true, "LOOP-85 AC: exit-0 opencode fire streaming a type:'error' event → suspectError (adapter isError, on top of the tail-regex)");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
