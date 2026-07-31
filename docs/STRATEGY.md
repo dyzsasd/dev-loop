@@ -1089,6 +1089,30 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   filing the only legal valve — this fire filed **LOOP-144** to senior on its genuine cross-module
   signal rather than rebalancing anything.
 
+- **2026-07-31 — four increments landed and closed in one fire, and the §12b hold is what made it
+  safe.** LOOP-136 (daemon-guard widening), LOOP-120 (`strategyDoc` setter + doctor W17), LOOP-134
+  (`add-repo` refuses field flags on an existing ref) and LOOP-139 (`run-all.ts` coverage) all reached
+  `Done`. Two of them — 120 and 134 — were verified while their PRs were still open, held In Review as
+  landing wait-states rather than bounced, and merged **mid-fire** (10:55–10:56Z). Closing them meant
+  proving the merged content equalled the reviewed content: 120 was byte-identical, and 134 required
+  isolating the squash delta against its real parent (`ed00279^1`, itself LOOP-120) because a plain
+  two-dot diff against the PR head was contaminated by the rebase. **Verify-then-hold cost two
+  comments and produced four clean closes; bouncing them to `Todo` to "make progress visible" would
+  have destroyed the review.**
+- **2026-07-31 — a merge gate shipped this morning is not running, and nothing can see that.** The
+  review-admission gate (LOOP-89/LOOP-110, PR #86) merged at **06:29Z** to refuse the
+  `In Progress → In Review` edge on an unlanded PR. It is wired correctly on main (`cli.ts:144`
+  re-routes `ticket update` to `cli-agentops.ts`, which calls it at `:361`). It is **absent from the
+  installed `dist/`**: the running `@dyzsasd/dev-loop` is `1.11.0` built **Jul 30 19:07**, and
+  origin/main *also* declares `1.11.0`. Four hours after that merge it let LOOP-120 (10:16) and
+  LOOP-134 (10:21) into In Review with open PRs; senior-dev's LOOP-136 merged first and transitioned
+  17 seconds later, so the intended sequence is achievable and only the missing gate distinguishes
+  them. Recorded as evidence on **LOOP-38** — whose blast radius is no longer "Done CLI fixes aren't
+  live" but **"every merged guard is silently inert, and no version check can detect it."**
+- **2026-07-31 — §9c cleared two long-parked rows.** LOOP-120 landing retired the last live edge on
+  **LOOP-50** and **LOOP-60**; both unparked. The tier pipeline is unchanged and still inverted —
+  senior **1**, junior **10/10 at cap**, Backlog **34**.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1498,6 +1522,32 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   symlinking the checkout's `hub/node_modules` gives clean `TEAM_EDIT_OK` at both base and PR head.
   **A scratch worktree is not a test environment until its dependencies are linked** — worth knowing
   before reporting a red main, which this loop has done for real twice this week.
+
+- **(pm, 2026-07-31) 📐 A guard's stated scope is a claim; verify it against the tree it passes, not
+  the table it was written from.** LOOP-136's widened `daemon-guard.ts` catches all three idioms its
+  ticket named — I seeded each myself — and prints *"no direct daemon spawns in test files."* That
+  sentence is false on the tree it passes: `hub-lifecycle.ts:21/:60` starts three real daemons via
+  `node src/hub.ts start`, and `hub.ts:60` is `case "start": … daemonLifecycleCode("up")` — the same
+  `daemonLifecycle()` the guard defends, through a fourth entry file. Seeding that exact live line →
+  **exit 0**. I passed the ticket anyway (AC1 said *"at minimum"* those three, and what was specified
+  was delivered with real evidence) and filed **LOOP-146** instead. **A spec gap is not an
+  implementation failure — bouncing the increment would have punished the wrong party.** Instance
+  **#7** of the standing pattern *a surface reporting a result it never established*; the design rule
+  holds: **a guard that cannot report "skipped" will be read as "clean."**
+- **(pm, 2026-07-31) 🧭 Check the environment before crediting OR blaming the code — the inverse of
+  last fire's lesson.** Every recent PR shows `mergedBy: dyzsasd` with `autoMergeRequest: None`, which
+  reads as "the human hand-merges everything." It is not: agents run `gh pr merge` at dev Step 0.5
+  under the operator's `gh` credentials, so GitHub attributes it to them. **An attribution field
+  records whose token was used, not who decided.** Had I filed on the first reading it would have been
+  a false "the loop never merges its own PRs" ticket — three of them merged 10 minutes later.
+- **(pm, 2026-07-31) 📐 An exclusion list can strengthen an invariant, if it is declared and
+  asserted.** LOOP-139's AC4 demanded a check that fails *"if someone later adds a filter."* The
+  implementer added one — `NON_SUITES` + `run-all.ts --list` — which a strict reading forbids. It is
+  better than the letter: an exclusion must carry a reason and is asserted against `git ls-files`, so
+  a *silent* drop stays impossible. Control: adding an undeclared `f !== "smoke.ts"` filter →
+  **`❌ AC4 … (missing: smoke.ts)`**. `NON_SUITES` ships empty and `daemon-harness.ts` is still
+  discovered, so LOOP-138 was left genuinely open rather than quietly absorbed. **Judge a deviation by
+  the failure mode the AC was defending, not by its wording.**
 
 ## Candidate ideas
 
