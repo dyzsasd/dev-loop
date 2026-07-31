@@ -411,6 +411,21 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **10/10 (at cap)**, senior **8/10**, total 18, Backlog **46**, label integrity **0 of 47
   malformed**. The tier split is no longer 100% junior: **LOOP-208 is the senior Backlog's first
   entry in days**, filed senior on the `sensitive` override, not to balance load.
+- **2026-07-31 (late, +3) — shipped since the last fire; both reviewed this fire.** Two code commits
+  landed on `origin/main`: **`d81666b`** (LOOP-187 — `export-desktop-skill` redirects its artifact to
+  a temp dir when `--out` is omitted inside a git tree) and **`b554d68`** (LOOP-188 — W19/W22/landing
+  routed through the §19 `defaultBranch` chain). `main` CI is **green at `1806e17`**. LOOP-188's
+  enumeration was checked rather than trusted: a full `hub/src` sweep for hardcoded `main`/`master`
+  found exactly one residual literal, `doctor.ts:526`'s `matchBranch = "main"` initialiser, which is
+  unconditionally overwritten before use — **the three sites it named were the complete set**, so the
+  default-branch-resolution surface stays closed.
+- **2026-07-31 (late, +3) — board state.** Verify **0** (In Review is LOOP-183 + LOOP-167 + LOOP-166
+  + LOOP-185, all four `qa`-owned and correctly not mine), unblock 0, `needs-pm` 0, `Human-Blocked`
+  0, `_team` carrier 0 — **ninth consecutive fire with nothing waiting on the human**. §9c: the same
+  **4 edges** (LOOP-206←LOOP-205, LOOP-186←LOOP-185, LOOP-137←LOOP-95, LOOP-105←LOOP-104), **0
+  unparked, 4 held** — every blocker still non-terminal. Depth at close: junior **10/10 (at cap)**,
+  senior **9/10**, total 19, Backlog **44**. Doc-watch: the content hash matched the stored cursor
+  exactly — **thirty-four fires with no operator doc edit**.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -487,8 +502,12 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
      and it outranks the missing capability next to it.
   7. **Before filing "X is undocumented / unwired", check whether the SIBLING surface is right,
      then check whether the FIXTURE is.** Two tickets came from that pair of questions alone.
-  8. **A guard can go green by moving the code out of its own field of view** — and the diff that
-     builds the guard is the one most likely to do it. Verify a guard against the tree it passes.
+  8. **A guard can go green by measuring less than it reports** — either by the code moving out of
+     its own field of view (the diff that builds the guard is the one most likely to do it), or by
+     checking ONE member of a class while its clean line speaks for the class: W06 measures
+     `.dev-loop/`, and its pass line certifies "the workspace root is inside a git repo but…"
+     (LOOP-210). Verify a guard against the tree it passes, and check that its clean line names
+     exactly what it measured.
   9. **Tier at FILING time; never re-tier to balance load (§21b).** Assigning a tier to a ticket
      that arrived `assignee: null` is not a re-tier — it is the filer's job left undone.
   10. **§9c: prose is not a marker.** An edge is retired by a machine-parseable `Unblocked-by:`
@@ -861,6 +880,36 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `INSERT INTO tickets` and `UPDATE tickets` each appear exactly once in `src/`, and that
   `moveTicket`/`createTicket`/the mirror's `fileIntake` all route through them; only the predicate is
   wrong, so no new plumbing is needed.
+- **(pm, 2026-07-31) 🔐 LOOP-210 — the command that carries every secret got none of the protection
+  the command that carries none of them got three commits earlier.** LOOP-187 (`d81666b`) gave
+  `export-desktop-skill` — which writes a *generated skill* — a cwd-inside-git-tree detector, a
+  mkdtemp redirect, a stderr notice, and a `.gitignore` entry whose own comment reads "belt-and-
+  suspenders so a generated skill is never committable". `bundle export`, which writes **every
+  referenced secret VALUE, the SSH deploy key, and the whole `hub.db`**, has none of the four: `--out`
+  accepts any path unchecked. A/B with exactly one variable moving — the same workspace, the same
+  export, `.dev-loop/` gitignored or not: **gitignored ⇒ doctor's tree verdict is two reassuring
+  lines and zero warnings** (`• workspace root is inside a git repo but .dev-loop/ is gitignored`)
+  while `?? ws-backup.age` sits untracked in that tree with the webhook secret and the deploy-key
+  bytes greppable inside it; **not gitignored ⇒ W06 warns, one line after `✅ bundle written`, about
+  a different path.** `bundle export` itself calls `doctorWorkspace(ws)` in that same invocation, so
+  it holds the answer and does not use it. Encryption does not retire it: the manifest header is
+  cleartext by construction (`MAGIC\n<manifest>\n` precedes the ciphertext), carrying workspaceId,
+  teamKey, every repo ref/path/remote, and the `secretEnvNames` list. **The standing form: W06's
+  predicate asks "is `.dev-loop/` ignored?" while its position — doctor's only "am I inside a git
+  tree" check — and its pass line make it read as the tree-safety answer.** Filed `sensitive` (§4
+  secrets) ⇒ senior by the §21b override, not to fill the senior lane. Fences written into the
+  ticket: LOOP-187 is done and correct, `--insecure-plaintext` stays, W06's existing `.dev-loop/`
+  warn is EXTENDED and never redefined, and LOOP-200/LOOP-184/LOOP-132 are not to be folded in.
+- **(pm, 2026-07-31) ⚖️ LOOP-209 — an operator filing arrived `assignee: null`; tiering it is standing
+  rule 9's second clause, not a re-tier.** Routed **senior-dev, `Mode: design`** on substance, and the
+  reasoning is recorded so it is auditable against the load-balancing prohibition: the body offers
+  three composable mechanisms (prevent / mark / reap) and explicitly leaves the choice open — the
+  ambiguity §21c tells a junior to BLOCK on rather than guess, so a junior fire would have spent
+  itself and routed straight back — and its AC3 builds a path that **deletes projects from a live
+  `dev-loop.json` + `hub.db`**, gated on LOOP-207 reaching terminal first. A deletion path with a
+  sequencing precondition earns the design step. Its ACs were already §6-shaped (four testable, one
+  discriminating regression), so grooming added only the tier, the missing `Bug` type label, and the
+  mode marker; the `qa` owner and the operator's `needs-qa` routing label are untouched.
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
