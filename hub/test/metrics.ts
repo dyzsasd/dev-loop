@@ -1,6 +1,6 @@
 // metrics.ts — fire metrics from fires.jsonl (window, success, suspect, medians), the 90d prune,
 // board KPIs from issue.transition events (accept rate = Done ÷ (Done + In Review→Canceled)), and the CLI.
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync, chmodSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync, chmodSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -485,6 +485,74 @@ try {
       "LOOP-125: provider/model shaped from event data");
     ok(evPm?.usage?.costUsd === 0.005, "LOOP-125: usage.costUsd shapes correctly from event");
     ok(evDev !== undefined && evDev.usage === undefined, "LOOP-125: row without usage key → usage:undefined");
+  }
+
+  // ── LOOP-199: DEVLOOP_HUB_DB ladder — W16/W21 + metrics board figures from the selected db ──
+  // Build two dbs: A (workspace, clean) and B (scratch, one W21 row + one Done ticket).
+  // Before the fix: both fixtures produce identical doctor/metrics output (reads wsHubDb regardless).
+  {
+    // Workspace A: clean hub.db at the standard workspace path
+    const wsA = join(tmp, "ws-l199");
+    const dbA = join(wsA, ".dev-loop", "hub.db");
+    mkdirSync(join(wsA, ".dev-loop"), { recursive: true });
+    writeFileSync(join(wsA, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2, workspaceId: "l199-ws",
+      team: { key: "l199-team", backend: "service", mode: "live", autonomy: "guarded" },
+      repos: {}, projects: { "l199-team": { repos: [] } },
+    }));
+    spawnSync("node", [join(hubRoot, "src", "seed.ts"), "l199-team", "L199 Team", "L199", dbA], { cwd: hubRoot, encoding: "utf8" });
+
+    // Db B: scratch db with one W21 row (sensitive+junior-dev, non-terminal) + one Done transition
+    const dbBPath = join(tmp, "l199-B.db");
+    const bDb = openDb(dbBPath);
+    bDb.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('l199-p','l199-team','L199 Team',?)").run(iso(NOW));
+    bDb.prepare("INSERT INTO actors(id,handle,kind,display_name,active,created_at) VALUES('a-sd','senior-dev','agent','Senior Dev',1,?)").run(iso(NOW));
+    bDb.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('L199-S1','l199-p','sensitive ticket','desc','Bug','Todo',2,?,?,'senior-dev',?,?)").run(
+      JSON.stringify(["dev-loop","Bug","senior-dev","sensitive","junior-dev"]), JSON.stringify([]), iso(NOW - DAY), iso(NOW - DAY),
+    );
+    bDb.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('l199-p','L199-X','dev','issue.transition',?,?)").run(JSON.stringify({ from: "In Review", to: "Done" }), iso(NOW - DAY));
+    bDb.close();
+
+    const envNoHubDb = Object.fromEntries(Object.entries(process.env as Record<string, string>).filter(([k]) => k !== "DEVLOOP_HUB_DB"));
+
+    // AC1: DEVLOOP_HUB_DB=B → doctor emits [W21] AND B's path in header
+    const docB = spawnSync("node", [join(hubRoot, "src", "server.ts"), "doctor"], {
+      cwd: wsA, encoding: "utf8",
+      env: { ...process.env, DEVLOOP_HUB_DB: dbBPath },
+    });
+    const docBOut = (docB.stdout ?? "") + (docB.stderr ?? "");
+    ok(/\[W21\]/.test(docBOut), "LOOP-199 AC1: DEVLOOP_HUB_DB=B → W21 fires (selected db has the row)");
+    ok(docBOut.includes(dbBPath), "LOOP-199 AC1: doctor header names B when DEVLOOP_HUB_DB=B");
+
+    // AC3a: DEVLOOP_HUB_DB unset → reads workspace db A (clean) → no W21
+    const docA = spawnSync("node", [join(hubRoot, "src", "server.ts"), "doctor"], {
+      cwd: wsA, encoding: "utf8", env: envNoHubDb,
+    });
+    const docAOut = (docA.stdout ?? "") + (docA.stderr ?? "");
+    ok(!/\[W21\]/.test(docAOut), "LOOP-199 AC3a: no DEVLOOP_HUB_DB → workspace db A → no W21 (clean)");
+    ok(docAOut.includes(dbA), "LOOP-199 AC3a: header names workspace db A when DEVLOOP_HUB_DB unset");
+
+    // AC3b: metrics --json throughput differs between B (1) and A (0)
+    const metB = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "365d", "--json"], {
+      cwd: wsA, encoding: "utf8",
+      env: { ...process.env, DEVLOOP_HUB_DB: dbBPath },
+    });
+    const metBOut = (() => { try { return JSON.parse((metB.stdout ?? "").trim()); } catch { return {}; } })() as Record<string, unknown>;
+    ok((metBOut.teamRollup as Record<string, unknown> | undefined)?.throughput === 1, "LOOP-199 AC3b: DEVLOOP_HUB_DB=B → metrics throughput=1 (Done ticket in B)");
+
+    const metA = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "365d", "--json"], {
+      cwd: wsA, encoding: "utf8", env: envNoHubDb,
+    });
+    const metAOut = (() => { try { return JSON.parse((metA.stdout ?? "").trim()); } catch { return {}; } })() as Record<string, unknown>;
+    ok((metAOut.teamRollup as Record<string, unknown> | undefined)?.throughput === 0, "LOOP-199 AC3b: no DEVLOOP_HUB_DB → workspace db A → metrics throughput=0 (different from B)");
+
+    // AC5 anti-blanket-swap: team init with DEVLOOP_HUB_DB set still creates hub.db at workspace path
+    const wsNew = join(tmp, "ws-l199-new");
+    spawnSync("node", [join(hubRoot, "src", "team.ts"), "init", "--dir", wsNew, "--key", "l199-new", "--backend", "service"], {
+      cwd: hubRoot, encoding: "utf8",
+      env: { ...process.env, DEVLOOP_HUB_DB: dbBPath, DEVLOOP_HOME: join(tmp, "home-l199") },
+    });
+    ok(existsSync(join(wsNew, ".dev-loop", "hub.db")), "LOOP-199 AC5: team init creates hub.db at workspace path even when DEVLOOP_HUB_DB points elsewhere");
   }
 
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
