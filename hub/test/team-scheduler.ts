@@ -77,6 +77,20 @@ try {
   ok(typeof rows[0].fireId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(rows[0].fireId),
     `LOOP-58: the fires.jsonl row carries the per-fire UUID fireId (got ${JSON.stringify(rows[0].fireId)})`);
 
+  // LOOP-93 (AC1): the SAME --once fire also created the operator runner logs — which hold the FULL stdout+stderr
+  // stream, a strictly larger credential-adjacent surface than the ledger row above (same .dev-loop data home as
+  // secrets.env). They get the identical §16 owner-only posture LOOP-62 gave the ledger: runner-logs/ is 0700 and
+  // <agent>.log is 0600 on create. On a0afe6e both were world-readable 0644 — this is the LOOP-93 regression.
+  // (win32 has no POSIX mode bits — skipped there, as the src is; the fuller warn/rotation/run.log cases: test/log-perms.ts.)
+  if (platform() !== "win32") {
+    const rlDir = join(ws, ".dev-loop", rows[0].project, "runner-logs");
+    const rlLog = join(rlDir, "pm.log");
+    ok(existsSync(rlLog) && (statSync(rlLog).mode & 0o077) === 0,
+      `LOOP-93: runner-logs/<agent>.log is created owner-only 0600 (got ${existsSync(rlLog) ? (statSync(rlLog).mode & 0o777).toString(8) : "absent"})`);
+    ok((statSync(rlDir).mode & 0o077) === 0,
+      `LOOP-93: runner-logs/ is created owner-only 0700 (got ${(statSync(rlDir).mode & 0o777).toString(8)})`);
+  }
+
   // ── LOOP-62 + suspectError: a failing fire is still FLAGGED, but the raw output tail — which can carry a
   //    credential the coding CLI echoed in its auth error — must NOT be persisted to fires.jsonl (§16). ──
   {
