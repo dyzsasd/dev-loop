@@ -374,6 +374,26 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   senior Backlog**, so Job B2 promoted 0 and groomed only. The daemons on this workspace still
   serve **v1.12.0** code under a v1.13.0 CLI (`daemon status` says so, `doctor` does not — that gap
   is LOOP-195, still Backlog); the 10-second fix remains `dev-loop daemon up` for `loop` + `_team`.
+- **2026-07-31 (late, +1) — the product moved, and the operator's one action line was found blind
+  to the operator's own verdict.** `78584f5` (LOOP-167) landed on `origin/main` — doctor now promotes
+  W18's shipped-code skew into the `NEXT:` line. Reviewing that surface on the **ux-flows** lens
+  produced two reproduced defects in the same release-readiness flow, both filed: **LOOP-202** —
+  `dev-loop doctor` prints `NEXT: dev-loop run` one line under `DOCTOR_FAILED`, because `nextStep()`
+  never receives `ok`; a failed run and a healthy run emit a byte-identical NEXT line (reproduced on
+  two independent ❌ classes — a missing repo path, and the §17 guard for a hub DB about to be
+  committed). **LOOP-203** — W18 prints a green `✅ … matches origin/main — no skew` off a
+  remote-tracking ref it never refreshed; A/B on one workspace at one instant, ref at the release
+  commit vs fetched, flips `no skew` to `3 code commits behind` and silences LOOP-167's new
+  `cut a release` hint. Third filing, **LOOP-204**, discharges a §20 parking-lot entry: **64 of 82
+  failed fires (78%) carry no `errorClass`**, so the LOOP-8 provider breaker is inert for four
+  failures in five while the window meters **$338.71**.
+- **2026-07-31 (late, +1) — board state.** Verify 0 (In Review is LOOP-167 + LOOP-166 + LOOP-185, all
+  three `qa`-owned and correctly not mine), unblock 0, `needs-pm` 0, `Human-Blocked` 0, `_team`
+  carrier 0 — **seventh consecutive fire with nothing waiting on the human**. §9c: 3 edges,
+  **0 unparked, 3 held**, unchanged. Depth junior **12/10 (over)**, senior **7/10** against an
+  **empty senior Backlog**, so Job B2 promoted 0 and groomed only. Backlog label integrity swept
+  clean (0 of 44 malformed) and the tier split is **44/44 junior — now 47/47** with this fire's three;
+  §21b forbids re-tiering to balance load, so it is filed honestly and reported, not rebalanced.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -732,6 +752,41 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   retiring all day. **File (b)+(c) in the first PM fire after LOOP-98 goes `Done`.** The method is
   the reusable part: **grooming the parking lot means re-testing each entry's stated precondition
   against today's board, not re-reading the idea.**
+- **(pm, 2026-07-31) 🧭 When a priority ladder's fall-through is its success case, "nothing
+  matched" renders as "all clear".** `doctor`'s `NEXT:` line is documented as *"the single
+  most-blocking next step, in fix order"*; its terminal `return "dev-loop run"` is the all-green
+  action, and `nextStep()` is never passed the `ok` it sits one line below. So `DOCTOR_FAILED` and
+  `DOCTOR_OK` emit the same NEXT — while the ❌ immediately above already carried its own
+  remediation (*"clone it, or /dev-loop:sync-repo"*), which the ladder discards. Filed as
+  **LOOP-202**. **The general form, and it is a cheap grep: whenever a ladder, `switch`, or guard
+  chain ends in the success branch, check that failure reaches a rung — a default that means "fine"
+  will be reached by every case nobody enumerated.** This is the 21st instance of the board's
+  standing defect (*a surface reporting a result it never established*), and LOOP-167 made it
+  costlier the same day by moving release-readiness onto that line.
+- **(pm, 2026-07-31) 🧭 A cached local mirror of a remote fact, read as the fact — and it fails
+  GREEN.** W18 claims *"installed vN matches `origin/main` — no skew"* while measuring
+  `origin/main` **as of the last `git fetch`**; nothing in doctor's call path fetches (`bundle.ts`,
+  `doc-land.ts`, `worktree.ts` do — `doctor.ts` does not). A/B on one workspace at one instant:
+  tracking ref at the v1.13.0 release commit ⇒ `✅ no skew` + `NEXT: dev-loop run`; ref advanced ⇒
+  `⚠️ 3 code commits behind` + `NEXT: cut a release`. Filed as **LOOP-203**. Two things make this
+  sharper than an ordinary stale read: the author **already guarded the ref's total absence**
+  (*"run git fetch to check"*) and not its staleness — the rare case, not the common one; and the
+  stale outcome is a **✅**, which is strictly worse than silence. **Rule: a check named against a
+  remote must either establish freshness or say what it actually measured — and `doctor` may not
+  buy freshness with a fetch, because "never writes, never repairs" is its contract and offline
+  runs must keep working.** Sibling already on the board at the same priority: **LOOP-195** (a green
+  check for a daemon measured as running pre-upgrade code).
+- **(pm, 2026-07-31) 🧭 The parking-lot re-test paid on its second consecutive fire — retiring one
+  entry into a real ticket.** The `Candidate ideas` entry *"Unclassified-failure-rate health
+  warning — banked, blocked on a refactor"* had a header contradicting its own body: the body
+  already recorded the correction (`doctorWorkspace` re-measured at CRAP **82.9**, not the stale
+  90.4 it was banked on) and stated *"so this is filable now"* — and it stayed banked anyway. Filed
+  as **LOOP-204** (claims **W24**; W20 is reserved by LOOP-74, In Progress) and **removed from the
+  parking lot**. **The lesson is narrower than last fire's and worth keeping separate: an entry
+  whose HEADER states a blocker its own BODY has already retracted is the parking lot's most
+  expensive shape — it reads as blocked at a glance and nobody re-opens it. Re-read each entry's
+  verdict line, not just its title.** Measured value at filing time: 64 of 82 failure-ish rows
+  unclassified (78%), so LOOP-8's breaker cannot engage on four failures in five.
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
@@ -766,20 +821,6 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   it, and when the ambiguity is in PM's own AC, passing is mandatory. Pick this up wherever the reap
   is next touched.
 
-- **Unclassified-failure-rate health warning — banked 2026-07-31, blocked on a refactor, not on value.**
-  LOOP-114 fixes the one classifier pattern this workspace needed, but the taxonomy will always lag the
-  next provider's wording: the failure mode is silent, and the whole point is that nobody notices a
-  `null` class. The durable defense is a doctor line that fires when the unclassified share of failures
-  crosses a threshold ("25 of 26 failures carry no class — the taxonomy is blind here"), which turns an
-  invisible gap into a health warning. **Not filed deliberately:** it belongs in `doctorWorkspace`
-  (`doctor.ts:185`), which carries ten W-code blocks. **⚠️ CORRECTED 2026-07-31: the 90.4 figure this
-  bullet was banked on is stale and was blocking more than it should.** Re-measured on `origin/main` @
-  `2dc6c7b`, `doctorWorkspace` is CRAP **82.9** (CC 64, 83.4% covered) and is **not** the ratchet's #1
-  entry — LOOP-56 landing is what fixed it. An eleventh W-code block lands at ~84.3 **provided it ships
-  with a covering test** (coverage is cubed; the same block at 80% coverage is 98.8 and red). So this
-  is filable now, and so were LOOP-46 (W18 — promoted to `Todo` this fire), LOOP-74 (W20) and LOOP-81
-  (W21). The real zero-margin entries are elsewhere: LOOP-115 (`fire-usage.ts:48`, CRAP 90.0) and
-  LOOP-116 (`daemon.ts:449`, CC-floored at 86).
 - **Cross-store ticket migration (linear↔service) — DEFERRED epic, operator decision; not a ticket
   until prioritized.** (Live remainder of the archived backend-choice-at-init bullet.) The blocker
   is structural, not effort: hub ids are a global PK minted from prefix+seq (`hub/src/db.ts:286-292`)
@@ -843,7 +884,7 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   class this board is retiring. **(c) Accept-rate in the Reflect daily digest** — not filed, same
   reason, same divisor. **REVERSAL CONDITION for both: `LOOP-98` reaches `Done`.** File (b) and (c)
   together in the first PM fire after that, and cite this entry.
-- **Daemon serves stale VIEW code until restarted — observe-surface lag after a Dev ship (ux-flows/ops lens, PM 2026-06-27 — banked).** The long-lived daemon (DL-41) loads `daemonviews.ts` + routes at boot, and `daemon ensure` is idempotent (never restarts a live process), so after a Dev commit that changes the web-UI rendering (e.g. DL-84's new `/activity` section, or DL-83's banner) the running daemon keeps serving the OLD view code until manually `down`+`up`'d — the operator sees fresh DATA (read per-request from the SoR) with **stale RENDERING**. Standard server behavior, but a real papercut for THIS dogfooding loop where Dev ships ~every 20min and the daemon IS the operator's observe surface (a new feature looks un-shipped until restart). **Options when filed:** a `dev-loop daemon restart` subcommand + a post-ship hint; OR a lightweight **served-commit-vs-HEAD banner** on the web UI so staleness is *visible* (the DL-83 surface-don't-prevent pattern); OR file-watch auto-reload (heavier — touches the lifecycle + the stateless contract). **Banked, not filed** — expected daemon behavior, low-severity (data is correct, only new view code lags); file if the operator finds the lag misleading or asks.
+- **Daemon serves stale VIEW code until restarted — observe-surface lag after a Dev ship (ux-flows/ops lens, PM 2026-06-27 — banked).** The long-lived daemon (DL-41) loads `daemonviews.ts` + routes at boot, and `daemon ensure` is idempotent (never restarts a live process), so after a Dev commit that changes the web-UI rendering (e.g. DL-84's new `/activity` section, or DL-83's banner) the running daemon keeps serving the OLD view code until manually `down`+`up`'d — the operator sees fresh DATA (read per-request from the SoR) with **stale RENDERING**. Standard server behavior, but a real papercut for THIS dogfooding loop where Dev ships ~every 20min and the daemon IS the operator's observe surface (a new feature looks un-shipped until restart). **Options when filed:** a `dev-loop daemon restart` subcommand + a post-ship hint; OR a lightweight **served-commit-vs-HEAD banner** on the web UI so staleness is *visible* (the DL-83 surface-don't-prevent pattern); OR file-watch auto-reload (heavier — touches the lifecycle + the stateless contract). **Banked, not filed** — expected daemon behavior, low-severity (data is correct, only new view code lags); file if the operator finds the lag misleading or asks. **Re-tested 2026-07-31 (late): still banked, and the reversal condition is now NAMED rather than left to taste — the DETECTION half is already ticketed as LOOP-195 (doctor is blind to a daemon running pre-upgrade code), so file the REMEDIATION half (`daemon restart` verb / served-commit banner) only if LOOP-195 ships and the operator still has to be told by hand. Until then a second ticket would duplicate LOOP-195's surface.**
 - **A verify-fail should be reachable from a green suite — the "which case does the fixture dodge?"
   check, banked 2026-07-31.** LOOP-57 shipped 22/22 green and was still unusable, because its case (c)
   chose a *doc* file for the divergence it was testing and thereby made the only distinction that
