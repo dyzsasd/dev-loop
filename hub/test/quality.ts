@@ -268,5 +268,40 @@ func TestGrade(t *testing.T) {
     "LOOP-158: nonexistent coverage dir without --threshold → exit 0 (report-only unchanged)");
 }
 
+// ── 9. LOOP-192: Go + --threshold + absent coverage → exit 1 (gate cannot run) ──────────────────
+// Regression for quality.ts:612 — the LOOP-158 hard-fail sat inside the tsjsFiles branch so Go-only
+// repos exited 0 when coverage collection produced nothing (go.mod absent, or no coverprofile).
+// Report-only mode (no --threshold) must remain unchanged: exit 0 with N/A rows.
+if (goOk) {
+  // Build a minimal Go repo to drive the Go pipeline.
+  const gndir = mkdtempSync(join(tmpdir(), "devloop-quality-go-192-"));
+  writeFileSync(join(gndir, "go.mod"), "module example.com/gate192\n\ngo 1.22\n");
+  writeFileSync(join(gndir, "main.go"), "package main\n\nfunc Risky(n int) string { if n < 0 { return \"a\" }\nreturn \"z\"\n}\n\nfunc main() {}\n");
+  execFileSync("git", ["init", "-qb", "main"], { cwd: gndir });
+  execFileSync("git", ["add", "-A"], { cwd: gndir });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: gndir });
+
+  // Case A: go-test-cmd runs but writes no coverprofile → gate cannot run → exit 1
+  ok(runQuality(gndir, [".", "--threshold", "90", "--go-test-cmd", "true"]).status === 1,
+    "LOOP-192: Go + --threshold + no coverprofile written → exit 1 (gate cannot run)");
+
+  // Case B: same repo, no --threshold → report-only path must stay exit 0 with N/A rows
+  ok(runQuality(gndir, [".", "--go-test-cmd", "true"]).status === 0,
+    "LOOP-192: Go + no --threshold + no coverprofile → exit 0 (report-only unchanged)");
+
+  // Case C: no go.mod at root → gate cannot run → exit 1 when threshold set
+  const nomodDir = mkdtempSync(join(tmpdir(), "devloop-quality-nomod-192-"));
+  writeFileSync(join(nomodDir, "main.go"), "package main\nfunc Risky() {}\n");
+  execFileSync("git", ["init", "-qb", "main"], { cwd: nomodDir });
+  execFileSync("git", ["add", "-A"], { cwd: nomodDir });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: nomodDir });
+  ok(runQuality(nomodDir, [".", "--threshold", "90"]).status === 1,
+    "LOOP-192: Go + --threshold + no go.mod → exit 1 (gate cannot run)");
+
+  // Case D: no go.mod + no --threshold → exit 0 (report-only unchanged)
+  ok(runQuality(nomodDir, ["."]).status === 0,
+    "LOOP-192: Go + no --threshold + no go.mod → exit 0 (report-only unchanged)");
+}
+
 console.log(fails === 0 ? "\nQUALITY_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
