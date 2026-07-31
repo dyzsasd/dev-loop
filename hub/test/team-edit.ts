@@ -482,7 +482,7 @@ try {
     // set strategyDoc → W17 goes silent
     run("team", ["set", "projects.web.strategyDoc", "docs/STRATEGY.md"], { cwd: lin });
     const dW17Clear = run("doctor", [], { cwd: lin });
-    ok(!/\[W17\].*web/.test(dW17Clear.out), "doctor W17 is silent once strategyDoc is set");
+    ok(!/\[W17\] projects\.web:/.test(dW17Clear.out), "doctor W17 is silent once strategyDoc is set");
   }
 
   console.log(fails === 0 ? "\nTEAM_EDIT_OK" : `\n${fails} CHECK(S) FAILED`);

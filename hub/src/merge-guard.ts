@@ -21,7 +21,7 @@ export interface MergeGuardBoardStateResult {
   ticketId: string | null;
   ticketState: string | null;
   trip: boolean;
-  skipped: boolean; // true when no hub DB — axis not evaluated (no false trip)
+  skipped: boolean; // true when no hub DB or no ticket resolved — axis not evaluated (no false trip)
 }
 
 export interface ForgeReviewResult {
@@ -157,7 +157,24 @@ export function mergeGuard(
   // Degrades silently (skipped) when the hub DB is absent (linear/local backend).
   let ticketId = opts.ticketId ?? null;
 
-  // If no explicit ticket, try to infer from the HEAD branch of the repo.
+  // If --pr given and no explicit ticket, resolve from the PR's head branch first.
+  // This must run before local HEAD inference so the PR's ticket takes priority over
+  // whatever branch happens to be checked out in the invoking worktree (LOOP-142).
+  if (!ticketId && opts.pr !== undefined) {
+    try {
+      const exec = opts.exec ?? defaultGhExec;
+      const ghRepo = opts.ghRepo ?? resolveGhRepo(repoDir);
+      if (ghRepo) {
+        const r = exec(["pr", "view", String(opts.pr), "--repo", ghRepo, "--json", "headRefName"]);
+        if (r.ok) {
+          const parsed = JSON.parse(r.stdout) as { headRefName?: string };
+          if (parsed.headRefName) ticketId = ticketFromBranch(parsed.headRefName);
+        }
+      }
+    } catch { /* gh unavailable — degrade to local branch inference */ }
+  }
+
+  // If still no ticket, try to infer from the HEAD branch of the repo.
   // This allows `merge-guard --repo .` to work on a dev-loop/<id> branch without --ticket.
   if (!ticketId) {
     try {
@@ -169,7 +186,9 @@ export function mergeGuard(
 
   let boardState: MergeGuardBoardStateResult;
   if (!ticketId) {
-    boardState = { ticketId: null, ticketState: null, trip: false, skipped: false };
+    // No ticket resolved — axis not evaluated; report as skipped so callers can
+    // distinguish "no input" from "checked and clean" (LOOP-142, AC5).
+    boardState = { ticketId: null, ticketState: null, trip: false, skipped: true };
   } else {
     // Resolve dbPath: explicit > DEVLOOP_HUB_DB env > workspace-inferred
     const dbPath = opts.dbPath ?? process.env.DEVLOOP_HUB_DB ?? resolveHubDbPath(repoDir);
@@ -291,10 +310,10 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.`);
     console.log(JSON.stringify(result, null, 2));
   } else {
     // Board-state axis output
-    if (bs.skipped) {
+    if (bs.skipped && !bs.ticketId) {
+      console.log(`merge-guard: board-state axis skipped — no ticket resolved; pass --ticket <id>, use --pr with a dev-loop/<id> head, or run from a dev-loop/<id> branch`);
+    } else if (bs.skipped) {
       console.log(`merge-guard: board-state axis skipped — no hub DB available (linear/local backend)`);
-    } else if (!bs.ticketId) {
-      console.log(`merge-guard: no ticket resolved — pass --ticket <id> or run from a dev-loop/<id> branch`);
     } else if (bs.trip) {
       console.error(`merge-guard: ⛔ TRIP — ticket ${bs.ticketId} is ${bs.ticketState} (not merge-eligible); do not merge until the gate clears`);
     } else {
