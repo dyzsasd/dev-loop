@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
 import { startTestDaemon } from "./daemon-harness.ts";
+import { scrubFireEnv } from "./env-scrub.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -37,7 +38,7 @@ try {
   const cli = (args: string[], env: Record<string, string | undefined> = {}) =>
     spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), ...args], {
       cwd: laptop, encoding: "utf8",
-      env: { ...process.env, DEVLOOP_HUB_URL: HUB, DEVLOOP_UI_TOKEN: "attach-tok-1", DEVLOOP_HUB_DB: undefined, DEVLOOP_ACTOR: undefined, DEVLOOP_PROJECT: "shop", ...env } as NodeJS.ProcessEnv,
+      env: { ...scrubFireEnv(), DEVLOOP_HUB_URL: HUB, DEVLOOP_UI_TOKEN: "attach-tok-1", DEVLOOP_PROJECT: "shop", ...env } as NodeJS.ProcessEnv,
     });
 
   // write: create a ticket ON THE REMOTE as the operator (the D1 operator override through the _team boot)

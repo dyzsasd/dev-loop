@@ -5,6 +5,7 @@
 // with fail-fast probe, op-API gate seeded, doctor preflight), idempotency (live config wins,
 // live hub.db NEVER overwritten), and the --no-hub-db clean-board path.
 import { execFileSync, spawnSync } from "node:child_process";
+import { scrubFireEnv } from "./env-scrub.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -26,7 +27,7 @@ if (!hasAge) {
 const ROOT = mkdtempSync(join(tmpdir(), "dl-bundle-"));
 try {
   const cli = (args: string[], cwd: string, env: Record<string, string | undefined> = {}) =>
-    spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } as NodeJS.ProcessEnv });
+    spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), ...args], { cwd, encoding: "utf8", env: { ...scrubFireEnv(), ...env } as NodeJS.ProcessEnv });
 
   // ── source workspace: team + project + repo(with bare remote) + provider + secret + a ticket ──
   const src = join(ROOT, "src-ws"); mkdirSync(src, { recursive: true });
