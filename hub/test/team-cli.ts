@@ -472,6 +472,111 @@ try {
     ok(/DOCTOR_OK/.test(w18notag.out), "DOCTOR_OK holds when v-commit unresolvable (info-only path)");
   }
 
+  // ── W22: landing stall detection; DOCTOR_OK stays; NEXT flips only on stall ──
+  // Linear backend: doctorWorkspace IS the whole verdict (no hub.db check follows).
+  {
+    const nodeDir = dirname(process.execPath); // run() spawns `node` via PATH, so keep node's own dir on it
+    const basePath = `${nodeDir}:/usr/bin:/bin`;
+    const ghBinDir = join(tmp, "w22-gh-bin");
+    mkdirSync(ghBinDir, { recursive: true });
+
+    // Write and overwrite the fake gh binary for each case
+    const writeGh = (body: string) => {
+      writeFileSync(join(ghBinDir, "gh"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    };
+
+    // Workspace: linear backend with one qualifying repo (landing:"pr" + autoMerge)
+    const w22Root = join(tmp, "w22");
+    run("team", ["init", "--dir", w22Root, "--key", "w22-team", "--backend", "linear", "--linear-team", "W22T"]);
+    run("team", ["add-project", "core"], { cwd: w22Root });
+    // Repo path must exist on disk and be a git work-tree (or doctor fails on E02/W-repo-missing)
+    const w22Repo = join(w22Root, "git-repo");
+    mkdirSync(w22Repo, { recursive: true });
+    spawnSync("git", ["init", "-q", "-b", "main", w22Repo], { stdio: "ignore" });
+    spawnSync("git", ["-C", w22Repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init"], { stdio: "ignore" });
+    // --remote provides the github.com URL; readLandingState extracts "fake-org/fake-repo" from it
+    run("team", ["add-repo", "testrepo", "--project", "core", "--path", "git-repo",
+      "--landing", "pr", "--auto-merge",
+      "--remote", "https://github.com/fake-org/fake-repo.git"], { cwd: w22Root });
+    // Set mode=live so nextStep reaches the stalledRepo check (dry-run check is higher priority)
+    run("team", ["set", "team.mode", "live"], { cwd: w22Root });
+
+    // Case A: stalled — open loop PR older than LANDING_STALL_DAYS, base checks unknown → threshold stall
+    writeGh(`
+case "$*" in
+  *"--state open"*)
+    echo '[{"number":1,"headRefName":"dev-loop/LOOP-X","createdAt":"2020-01-01T00:00:00Z","mergeableState":"BLOCKED"}]'
+    ;;
+  *"--state merged"*)
+    echo '[]'
+    ;;
+  *)
+    echo '[]'
+    ;;
+esac`);
+    const w22stall = run("server", ["doctor"], { cwd: w22Root, extra: { PATH: `${ghBinDir}:${basePath}` } });
+    ok(/\[W22\]/.test(w22stall.out), "W22 fires when a landing stall is detected");
+    ok(/DOCTOR_OK/.test(w22stall.out), "W22 is warn-only — DOCTOR_OK still holds under a stall");
+    ok(/NEXT:.*clear the landing stall.*fake-org\/fake-repo/.test(w22stall.out),
+      "NEXT flips to clear-the-stall advice naming the stalled repo when W22 fires");
+
+    // Case B: healthy — no open loop PRs
+    writeGh(`
+case "$*" in
+  *"--state open"*)
+    echo '[]'
+    ;;
+  *"--state merged"*)
+    echo '[{"headRefName":"dev-loop/LOOP-Y","mergedAt":"2026-07-01T00:00:00Z"}]'
+    ;;
+  *)
+    echo '[]'
+    ;;
+esac`);
+    const w22healthy = run("server", ["doctor"], { cwd: w22Root, extra: { PATH: `${ghBinDir}:${basePath}` } });
+    ok(!/\[W22\]/.test(w22healthy.out), "no W22 when landing is healthy (no open loop PRs)");
+    ok(/DOCTOR_OK/.test(w22healthy.out), "DOCTOR_OK holds when landing is healthy");
+    ok(!/clear the landing stall/.test(w22healthy.out), "NEXT does not flip to stall advice when landing is healthy");
+
+    // Case C: unknown — gh auth failure → info line only, no W22 warn, DOCTOR_OK holds
+    writeGh(`echo "gh: Not logged in. Use 'gh auth login' to authenticate." >&2\nexit 1`);
+    const w22unknown = run("server", ["doctor"], { cwd: w22Root, extra: { PATH: `${ghBinDir}:${basePath}` } });
+    ok(!/\[W22\]/.test(w22unknown.out), "no W22 warn when gh is unreachable (unknown state)");
+    ok(/DOCTOR_OK/.test(w22unknown.out), "DOCTOR_OK holds under unknown landing state (gh auth failure)");
+    ok(/landing:.*not a failure/.test(w22unknown.out), "unknown state emits an info line tagged 'not a failure'");
+
+    // Case D: DEVLOOP_DOCTOR_NO_FORGE=1 — forge glance skipped, fake gh is NOT invoked
+    // We use a gh that exits 1 with a sentinel; if doctor invokes it, the sentinel would appear.
+    writeGh(`echo 'UNEXPECTED_GH_CALL' >&2\nexit 1`);
+    const w22noForge = run("server", ["doctor"], { cwd: w22Root, extra: {
+      PATH: `${ghBinDir}:${basePath}`,
+      DEVLOOP_DOCTOR_NO_FORGE: "1",
+    }});
+    ok(!/UNEXPECTED_GH_CALL/.test(w22noForge.out),
+      "DEVLOOP_DOCTOR_NO_FORGE=1: fake gh is NOT invoked — forge glance skipped entirely");
+    ok(/DOCTOR_OK/.test(w22noForge.out), "DOCTOR_OK holds when forge glance is skipped via DEVLOOP_DOCTOR_NO_FORGE=1");
+    ok(/landing check skipped/.test(w22noForge.out),
+      "DEVLOOP_DOCTOR_NO_FORGE=1 emits an info line confirming the skip");
+
+    // Case E: no qualifying repo — forge glance skipped, fake gh is NOT invoked
+    const w22NoQual = join(tmp, "w22-noqual");
+    run("team", ["init", "--dir", w22NoQual, "--key", "w22-nq", "--backend", "linear", "--linear-team", "NQ"]);
+    run("team", ["add-project", "core"], { cwd: w22NoQual });
+    const w22NoQualRepo = join(w22NoQual, "git-repo");
+    mkdirSync(w22NoQualRepo, { recursive: true });
+    spawnSync("git", ["init", "-q", "-b", "main", w22NoQualRepo], { stdio: "ignore" });
+    spawnSync("git", ["-C", w22NoQualRepo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init"], { stdio: "ignore" });
+    // NO --auto-merge → not a qualifying repo → W22 block skips entirely
+    run("team", ["add-repo", "repo", "--project", "core", "--path", "git-repo",
+      "--landing", "pr",
+      "--remote", "https://github.com/fake-org/fake-repo.git"], { cwd: w22NoQual });
+    writeGh(`echo 'UNEXPECTED_GH_CALL' >&2\nexit 1`);
+    const w22NoQualDoc = run("server", ["doctor"], { cwd: w22NoQual, extra: { PATH: `${ghBinDir}:${basePath}` } });
+    ok(!/UNEXPECTED_GH_CALL/.test(w22NoQualDoc.out),
+      "no qualifying repo (no autoMerge): forge glance skipped, fake gh is NOT invoked");
+    ok(/DOCTOR_OK/.test(w22NoQualDoc.out), "DOCTOR_OK holds with no qualifying repo");
+  }
+
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
