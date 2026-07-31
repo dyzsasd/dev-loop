@@ -178,35 +178,96 @@ function seedServiceHub(ws: Workspace): void {
 }
 
 // ── D8: workspace Claude-settings permission for the CLI interface ───────────────────────────────
-// Agents on interface="cli" call `dev-loop …` from inside a Claude Code fire, so `team init` (and
-// `team add-project`, idempotently) provision the workspace-level allow rule once. CREATE-OR-MERGE,
-// never clobber: every unknown key/entry in .claude/settings.json is preserved; a malformed or
-// unexpected-shape file is left untouched with a note (the operator adds the rule by hand).
+// Agents on interface="cli" call the dev-loop CLI from inside a Claude Code fire, so `team init` (and
+// `team add-project` / `team repair` / bundle-load, idempotently) provision the workspace-level allow
+// rules once. CREATE-OR-MERGE, never clobber: every unknown key/entry in .claude/settings.json is
+// preserved; a malformed or unexpected-shape file is left untouched with a note (fix it by hand).
+//
+// TWO rules, not one (LOOP-181 / CLI rename Phase A): the CLI ships both a `dev-loop` bin (the
+// permanent, never-removed alias) and a `kaizen` bin (the rename target). A fire may invoke either, so
+// BOTH must be on the allow-list. Order is dev-loop FIRST (the historical entry) then kaizen — a
+// workspace provisioned before the rename tops up with only the missing `Bash(kaizen *)` rule.
 export const DEVLOOP_PERMISSION = "Bash(dev-loop *)";
-export function provisionClaudePermissions(root: string): void {
-  const file = join(root, ".claude", "settings.json");
-  const manual = (why: string) =>
-    console.log(`NOTE: ${file} ${why} — left untouched; add ${JSON.stringify(DEVLOOP_PERMISSION)} to permissions.allow yourself`);
+export const KAIZEN_PERMISSION = "Bash(kaizen *)";
+export const CLI_PERMISSIONS: readonly string[] = [DEVLOOP_PERMISSION, KAIZEN_PERMISSION];
+
+// Parse .claude/settings.json into its mutable pieces, or report the shape reason it must be left
+// untouched. An ABSENT file is ok (empty settings — a fresh provision creates it); only a present-but-
+// malformed / unexpected-shape file is ok:false. Shared by the provision (mutating) and doctor
+// (read-only W23) paths so both judge the file identically.
+type LoadedSettings =
+  | { ok: true; settings: Record<string, unknown>; permissions: Record<string, unknown>; allow: unknown[] }
+  | { ok: false; reason: string };
+function loadClaudeSettings(file: string): LoadedSettings {
   let settings: Record<string, unknown> = {};
   if (existsSync(file)) {
     let parsed: unknown;
     try { parsed = JSON.parse(readFileSync(file, "utf8")); }
-    catch { manual("is not valid JSON"); return; }
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) { manual("is not a JSON object"); return; }
+    catch { return { ok: false, reason: "is not valid JSON" }; }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, reason: "is not a JSON object" };
     settings = parsed as Record<string, unknown>;
   }
   const rawPerm = settings.permissions;
-  if (rawPerm !== undefined && (rawPerm === null || typeof rawPerm !== "object" || Array.isArray(rawPerm))) { manual("has a non-object `permissions` key"); return; }
+  if (rawPerm !== undefined && (rawPerm === null || typeof rawPerm !== "object" || Array.isArray(rawPerm))) return { ok: false, reason: "has a non-object `permissions` key" };
   const permissions = (rawPerm ?? {}) as Record<string, unknown>;
   const rawAllow = permissions.allow;
-  if (rawAllow !== undefined && !Array.isArray(rawAllow)) { manual("has a non-array `permissions.allow`"); return; }
-  const allow = (rawAllow ?? []) as unknown[];
-  if (allow.includes(DEVLOOP_PERMISSION)) { console.log(`${file} already allows ${DEVLOOP_PERMISSION} (unchanged)`); return; }
-  permissions.allow = [...allow, DEVLOOP_PERMISSION];
-  settings.permissions = permissions;
-  mkdirSync(join(root, ".claude"), { recursive: true });
-  writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
-  console.log(`provisioned ${file}: permissions.allow += ${JSON.stringify(DEVLOOP_PERMISSION)} (agents call the dev-loop CLI, D8)`);
+  if (rawAllow !== undefined && !Array.isArray(rawAllow)) return { ok: false, reason: "has a non-array `permissions.allow`" };
+  return { ok: true, settings, permissions, allow: (rawAllow ?? []) as unknown[] };
+}
+
+export type CliPermissionOutcome = "provisioned" | "present" | "untouched";
+export interface CliPermissionResult {
+  outcome: CliPermissionOutcome;
+  file: string;
+  added: string[];          // rules added (or, under dryRun, that WOULD be added)
+  created: boolean;         // the settings.json did not exist and was (or would be) created
+  dryRun: boolean;
+  untouchedReason?: string; // set only when outcome === "untouched"
+}
+
+// Ensure the workspace's .claude/settings.json grants every CLI_PERMISSIONS rule, appending any that
+// are missing (idempotent + non-destructive). dryRun computes the same verdict without writing — the
+// `team repair --dry-run` report path. The single source of truth for BOTH init provisioning and the
+// repair top-up (LOOP-181).
+export function ensureCliPermissions(root: string, opts: { dryRun?: boolean } = {}): CliPermissionResult {
+  const dryRun = opts.dryRun === true;
+  const file = join(root, ".claude", "settings.json");
+  const base = { file, added: [] as string[], created: false, dryRun };
+  const existed = existsSync(file);
+  const loaded = loadClaudeSettings(file);
+  if (!loaded.ok) return { ...base, outcome: "untouched", untouchedReason: loaded.reason };
+  const missing = CLI_PERMISSIONS.filter((p) => !loaded.allow.includes(p));
+  if (missing.length === 0) return { ...base, outcome: "present" };
+  if (!dryRun) {
+    loaded.permissions.allow = [...loaded.allow, ...missing];
+    loaded.settings.permissions = loaded.permissions;
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(file, JSON.stringify(loaded.settings, null, 2) + "\n");
+  }
+  return { ...base, outcome: "provisioned", added: [...missing], created: !existed };
+}
+
+// Which CLI rules the workspace's settings.json currently grants — read-only, for doctor's W23 drift
+// check. null when the file is absent or malformed (nothing reliable to report; a malformed file is a
+// separate concern, not a rename-drift warning).
+export function claudeCliPermissions(root: string): { devloop: boolean; kaizen: boolean } | null {
+  const file = join(root, ".claude", "settings.json");
+  if (!existsSync(file)) return null;
+  const loaded = loadClaudeSettings(file);
+  if (!loaded.ok) return null;
+  return { devloop: loaded.allow.includes(DEVLOOP_PERMISSION), kaizen: loaded.allow.includes(KAIZEN_PERMISSION) };
+}
+
+// The init/add-project/bundle provisioning wrapper — writes both rules and prints the human line.
+// (team repair prints in its own ✅/• style; it calls ensureCliPermissions directly.)
+export function provisionClaudePermissions(root: string): void {
+  const r = ensureCliPermissions(root, { dryRun: false });
+  if (r.outcome === "untouched")
+    console.log(`NOTE: ${r.file} ${r.untouchedReason} — left untouched; add ${CLI_PERMISSIONS.map((p) => JSON.stringify(p)).join(" + ")} to permissions.allow yourself`);
+  else if (r.outcome === "present")
+    console.log(`${r.file} already allows ${CLI_PERMISSIONS.join(" + ")} (unchanged)`);
+  else
+    console.log(`provisioned ${r.file}: permissions.allow += ${r.added.map((p) => JSON.stringify(p)).join(" + ")} (agents call the dev-loop/kaizen CLI, D8)`);
 }
 
 if (isMainEntry(import.meta.url)) {

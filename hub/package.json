@@ -31,7 +31,9 @@
   },
   "bin": {
     "dev-loop": "dist/cli.js",
-    "dev-loop-hub": "dist/server.js"
+    "dev-loop-hub": "dist/server.js",
+    "kaizen": "dist/cli.js",
+    "kaizen-hub": "dist/server.js"
   },
   "files": [
     "dist/",
@@ -102,6 +104,7 @@
     "cli-cheatsheet": "node test/cli-cheatsheet.ts",
     "context-budget": "node test/context-budget.ts",
     "build-artifact": "node test/build-artifact.ts",
+    "cli-rename": "node test/cli-rename.ts",
     "accept-rate": "node test/accept-rate.ts",
     "cycle-stage": "node test/cycle-stage.ts",
     "blocked": "node test/blocked.ts",
