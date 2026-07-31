@@ -106,22 +106,28 @@ export function resolveIdentity(): { actor: string; projectKey: string; projectF
 
 // Config resolution (1.0): a discoverable workspace (dev-loop.json, schema v2) is THE config —
 // loaded, validated, and projected to the legacy ProjectsConfig shape via toLegacyView so every
-// consumer reads one shape. A workspace FOUND but INVALID is a loud error (never run stale). The ONLY
-// non-workspace source is an EXPLICIT DEVLOOP_PROJECTS_JSON injection (tests/CI); the implicit v1
-// fallback (~/.dev-loop/projects.json + the legacy plugin dir) was REMOVED at 1.0 — migrate once with
-// `dev-loop team init && dev-loop team import`.
+// consumer reads one shape. A workspace FOUND but INVALID is a loud error (never run stale).
+// Priority: (1) EXPLICIT DEVLOOP_PROJECTS_JSON injection (tests/CI — must beat workspace discovery so
+// a test running inside a live workspace tree is isolated from the operator's config); (2) the
+// workspace found by walking cwd upward. The implicit v1 fallback (~/.dev-loop/projects.json + the
+// legacy plugin dir) was REMOVED at 1.0 — migrate once with `dev-loop team init && dev-loop team import`.
 export function loadProjectsConfig(): ProjectsConfig | null {
+  // EXPLICIT DEVLOOP_PROJECTS_JSON takes priority — tests/CI inject this to isolate themselves from
+  // any live workspace in the parent directory tree; if set, never fall through to workspace discovery.
+  if (process.env.DEVLOOP_PROJECTS_JSON) {
+    for (const p of projectConfigCandidates()) {
+      if (!existsSync(p)) continue;
+      try { return JSON.parse(readFileSync(p, "utf8")) as ProjectsConfig; }
+      catch (e) { console.error(`[dev-loop] projects.json at ${p} is malformed JSON (${(e as Error).message}); ignoring it`); }
+    }
+    return null;
+  }
   try {
     const ws = tryResolveWorkspace();
     if (ws) return toLegacyView(ws) as unknown as ProjectsConfig;
   } catch (e) {
     if (e instanceof WsValidationError) { console.error(`[dev-loop] ${e.message}`); return null; }
     throw e; // WsNotFound is already swallowed by tryResolveWorkspace; anything else is unexpected
-  }
-  for (const p of projectConfigCandidates()) {
-    if (!existsSync(p)) continue;
-    try { return JSON.parse(readFileSync(p, "utf8")) as ProjectsConfig; }
-    catch (e) { console.error(`[dev-loop] projects.json at ${p} is malformed JSON (${(e as Error).message}); ignoring it`); }
   }
   return null;
 }

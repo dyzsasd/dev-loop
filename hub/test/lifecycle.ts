@@ -5,6 +5,7 @@
 // does NOT read as running and `up` cleanly restarts on the SAME recorded port; `down` stops + clears;
 // and a non-service / unknown / unresolved project is a clean no-op + exit 0 (never an error).
 import { spawnSync, execFileSync } from "node:child_process";
+import { createServer as netCreateServer } from "node:net";
 import { registerDaemonPid } from "./daemon-harness.ts";
 import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -16,6 +17,18 @@ const PROJ = "lcyc";
 const NODE = process.env.DEVLOOP_NODE || process.execPath;
 rmSync(ROOT, { recursive: true, force: true });
 mkdirSync(RUN, { recursive: true });
+
+// Obtain a free port outside the 8787-band so the test daemon never collides with a live workspace
+// daemon. We bind :0 (OS-assigns a high ephemeral port), capture it, then close before the daemon
+// binds. DEVLOOP_DAEMON_PORT is injected into every daemon spawn so lc() never walks the 8787 band.
+const TEST_PORT = await new Promise<number>((res, rej) => {
+  const s = netCreateServer();
+  s.on("error", rej);
+  s.listen(0, "127.0.0.1", () => {
+    const { port } = s.address() as import("node:net").AddressInfo;
+    s.close(() => res(port));
+  });
+});
 
 let fails = 0;
 const ok = (cond: boolean, m: string) => { console.log((cond ? "✅ " : "❌ ") + m); if (!cond) fails++; };
@@ -31,7 +44,7 @@ execFileSync(NODE, ["src/seed.ts", PROJ, "Lifecycle Project", "LC", DB], { encod
 function lc(sub: string, extra: Record<string, string> = {}) {
   return spawnSync(NODE, ["src/server.ts", "daemon", sub], {
     encoding: "utf8", timeout: 25000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator", ...extra },
+    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: String(TEST_PORT), ...extra },
   });
 }
 
@@ -41,7 +54,7 @@ try {
   ok(up1.status === 0, `up (cold) → exit 0 (got ${up1.status})${up1.stderr ? "\n   stderr: " + up1.stderr : ""}`);
   ok(existsSync(runfile()), "up writes the per-project runfile");
   const r1 = readRun(); registerDaemonPid(r1.pid);
-  ok(r1.project === PROJ && r1.pid > 0 && r1.port >= 8787, "runfile records project + pid + the fixed-default/probed port");
+  ok(r1.project === PROJ && r1.pid > 0 && r1.port > 0, "runfile records project + pid + a valid port");
   ok(r1.host === "127.0.0.1" && r1.url.startsWith("http://127.0.0.1:"), "daemon binds 127.0.0.1 ONLY — never 0.0.0.0 (§16)");
   ok(isAlive(r1.pid), "the spawned daemon process is alive (detached, survives the `up` command)");
   const h1 = await fetch(`${r1.url}/api/health`).then((x) => x.json()).catch(() => null) as { ok?: boolean; project?: string } | null;
@@ -101,7 +114,7 @@ try {
   // ── the `dev-loop-hub daemon <sub>` form (via server.ts, the bin) delegates to the SAME lifecycle ──
   const via = (args: string[]) => spawnSync(NODE, ["src/server.ts", ...args], {
     encoding: "utf8", timeout: 25000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator" },
+    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: String(TEST_PORT) },
   });
   const viaUp = via(["daemon", "up"]);
   ok(viaUp.status === 0 && existsSync(runfile()), "`server.ts daemon up` (the bin form) delegates to the lifecycle → starts");
@@ -115,7 +128,7 @@ try {
   writeFileSync(serviceCfg, JSON.stringify({ projects: { [PROJ]: { backend: "service", repoPath: ROOT }, other: { backend: "linear", repoPath: ROOT } } }));
   const upAll = spawnSync(NODE, ["src/server.ts", "daemon", "up-all"], {
     encoding: "utf8", timeout: 25000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: serviceCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator" },
+    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: serviceCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: String(TEST_PORT) },
   });
   ok(upAll.status === 0 && existsSync(runfile()) && /started|already running/.test(upAll.stdout),
     "`daemon up-all` starts configured backend:\"service\" projects without DEVLOOP_PROJECT");
@@ -144,6 +157,26 @@ try {
   });
   ok(statusUnresolved.status === 0 && /no project resolved/.test(statusUnresolved.stdout) && /DEVLOOP_PROJECT|inside a configured repo/.test(statusUnresolved.stdout),
     "status with no resolvable project → exit 0 + a fix hint (set DEVLOOP_PROJECT / run from a repo) (DL-87)");
+
+  // ── AC2 regression: daemon up succeeds even when 127.0.0.1:8787 is already occupied ──
+  // Bind a decoy on the default daemon port (8787). If the live workspace daemon already holds
+  // it, the bind fails and we're in an even stronger collision — lc() must succeed either way
+  // because it routes to TEST_PORT (an OS-assigned ephemeral port), never the 8787 band.
+  const decoy = netCreateServer();
+  await new Promise<void>((r) => decoy.listen(8787, "127.0.0.1", () => r()).on("error", () => r()));
+  try {
+    const collisionUp = lc("up");
+    ok(collisionUp.status === 0, `AC2: daemon up exits 0 with 8787 occupied (uses port ${TEST_PORT})`);
+    if (existsSync(runfile())) {
+      const cr = readRun(); registerDaemonPid(cr.pid);
+      ok(cr.port === TEST_PORT, `AC2: daemon bound to TEST_PORT (${TEST_PORT}), not 8787`);
+      lc("down");
+    } else {
+      ok(false, "AC2: daemon failed to write runfile after up with 8787 occupied");
+    }
+  } finally {
+    await new Promise<void>((r) => decoy.close(() => r()));
+  }
 } finally {
   // never leak a detached daemon: kill anything still recorded, then drop the temp tree
   for (const key of [PROJ, "ghostproj"]) { try { if (existsSync(runfile(key))) { const p = readRun(key).pid; if (isAlive(p)) process.kill(p, "SIGKILL"); } } catch { /* best-effort */ } }
