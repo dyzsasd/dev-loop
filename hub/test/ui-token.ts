@@ -70,6 +70,13 @@ const op = (base: string, name: string, headers: Record<string, string> = {}, ho
   ok((await op(d.base, "list_issues")).status === 401, "tokened: op POST without bearer → 401");
   const authed = await op(d.base, "list_issues", { authorization: "Bearer tok-123" }, "board.example.com");
   ok(authed.status === 200, `tokened: bearer + FOREIGN Host op → 200 (bearer bypasses the Host guard; got ${authed.status})`);
+  // LOOP-116: the bearer gate runs BEFORE /p/<key> project resolution — an unknown key without a token
+  // must 401 (auth), NOT 404, so an unauthenticated caller can't probe which projects exist. WITH the
+  // token the same path resolves and 404s (proving project resolution runs only after the auth gate passes).
+  ok((await get(d.base, "/p/no-such-project/board")).status === 401,
+    "tokened: /p/<unknown>/… without token → 401 (auth precedes project resolution; no 404 key-existence leak)");
+  ok((await get(d.base, "/p/no-such-project/board", { authorization: "Bearer tok-123" })).status === 404,
+    "tokened: /p/<unknown>/… WITH bearer → 404 (project resolution runs after the auth gate)");
   d.close();
 }
 
