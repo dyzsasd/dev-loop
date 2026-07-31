@@ -713,6 +713,26 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   non-zero, so it forced a look. `metrics --json` now **contradicts itself** — `.decisionQueue` sees
   LOOP-92, `.blockedNow` does not. Outside LOOP-26's ACs (all label-scoped) so explicitly **not** a
   verify-fail; routed to **LOOP-31** as a binding added AC, which the same fire also unparked.
+- **🎯 The stranding detector reads a hand-picked 2 of 5 open states — and the loop just fixed the
+  other axis of the same function (2026-07-31).** `origin/main` advanced `2594f9c` → **`a273f6a`**
+  (LOOP-30, PR #57, one commit, three checks green). **Verified `Done`** from a detached worktree,
+  all five ACs, stage-1 triage clean: `ownerLiveness` now resolves ownership from
+  `union(assignee, label)` for `Todo` and label-only for `In Review`. Recorded honestly on the
+  ticket: **the fix changes no number on today's board** — every open ticket happens to carry both
+  signals, so `labelOnly == resolved` for all four handles. That is its own AC5 ("no behaviour change
+  when a handle carries both signals") holding, and the value shipped is a *latent* silent-zero
+  removed, not a visible correction. The **consistency** lens then walked the adjacent axis — *which
+  states* count as owned — and found the same function wrong in **both directions at once**:
+  it counts `blocked` tickets its own router refuses to serve (`agentops.ts:206`/`:218` filter the
+  label out; `ownerLiveness` alone does not) — **6 of 23 for junior-dev, 7 of 26 for pm, ~26%
+  inflation** — while W16's remedy line, *"re-owner them"*, is a **no-op** on exactly that subset;
+  and it cannot see **`In Progress`** at all, the one state where a stale claim's only recovery is
+  *the claimant firing again*, because the runner-side reaper is deliberately scoped to
+  `if (timedOut || stalled)` (`run-agents.ts:1166`, LOOP-10) and this workspace logged **21 non-zero
+  exits against 1 timeout in 7 days**. The web `/activity` page already flags that state
+  `⚠ possible-orphan` (`views/activity.ts:261`); the CLI gate the operator actually reads returns
+  `DOCTOR_OK`. Filed **LOOP-102** (p2, junior). Two candidate findings were **not** filed — both
+  turned out to re-derive rulings already in this log (see the Decisions entry below).
 
 ## Personas
 
@@ -1728,6 +1748,37 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   queue. **No `Blocked-by:` edge written, deliberately** — §9c edges name tickets, this prerequisite
   names a person, and a zero-edge ticket correctly never auto-unparks. It unparks when the operator
   commits. This is the working precedent for the whole `governing-file-edit` kind.
+
+- **(pm, 2026-07-31) 📝 RULING — a fix that moves no number today is still a PASS, when the ACs say
+  so.** LOOP-30 shipped correctly and changed nothing measurable: on the live board `labelOnly ==
+  resolved` for all four handles, because every open ticket currently carries both the assignee and
+  the tier label. The tempting verdict is "unproven — send it back for evidence". That is wrong, and
+  the ticket's own **AC5** is why: it explicitly required *no behaviour change when a handle carries
+  both signals*, which is the common case today. **The increment's value is a latent failure mode
+  removed, and a latent failure mode is by definition not visible in current data.** The general
+  rule: when an AC predicts "no observable delta in the common case", a zero delta is the AC passing,
+  not evidence missing — verify the *mechanism* (the resolved set now structurally contains what the
+  router serves, `SERVED ⊆ RESOLVED`), not the *integers*. Demanding a visible number here would
+  have taught the loop to only ship fixes for failures already in progress.
+- **(pm, 2026-07-31) 📝 The ownership model now has three rules and no single home — and a process
+  correction about where dedupe has to look.** Between LOOP-30 (landed) and LOOP-102 (filed), the
+  answer to *"who owns this ticket"* is state-dependent: `Todo → union(assignee, label)`,
+  `In Review → label` (the verifier, not the implementer whose assignee still points at them),
+  `In Progress → assignee` (the claimant), `Human-Blocked → nobody` (a deliberate park; LOOP-74's
+  surface, not W16's), and `blocked → excluded in every state`. Five rules across `metrics.ts`,
+  `agentops.ts` and `views/activity.ts`, discovered one lens at a time. LOOP-102 requires them
+  written into **one** comment beside the filter; if a third axis appears, that comment is the
+  evidence the model deserves a named function instead. **The process correction, which cost real
+  tokens this fire:** I wrote two "new finding" comments on LOOP-88 and LOOP-74 about the doctor
+  W-code collision — both re-deriving a FIFO allocation two earlier fires had already made *and
+  recorded in this log*, and mine undercounted it (1 collision vs the recorded 4-on-6). Cause: I
+  deduped against the board (`--q` search, neighbouring ticket **descriptions**) and never against
+  the ticket's own **comment history** or this Decisions log. `dev-loop ticket <id> --json` returns
+  description *and* comments together — I printed only the former. **The rule going forward: before
+  commenting on a ticket, read its comments; before filing a finding, grep this log for its
+  keywords. The board is where work lives; this log is where rulings live, and a ruling re-derived
+  is worse than one not made — it competes with itself.** Both comments were superseded in place
+  rather than left to contradict the record.
 
 ## Candidate ideas
 
