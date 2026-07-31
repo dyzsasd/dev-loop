@@ -35,7 +35,11 @@ let fails = 0;
 const ok = (cond: boolean, m: string) => { console.log((cond ? "✅ " : "❌ ") + m); if (!cond) fails++; };
 const isAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } };
 const runfile = (key: string): string => join(RUN, `daemon-${key}.json`);
-const readRun = (key: string): { pid: number; url: string } => JSON.parse(readFileSync(runfile(key), "utf8"));
+const readRun = (key: string): { pid: number; url: string } | null => {
+  const f = runfile(key);
+  if (!existsSync(f)) return null;
+  return JSON.parse(readFileSync(f, "utf8"));
+};
 
 // write the isolated projects.json for a case (controls backend + mode resolution)
 function cfg(projects: Record<string, { backend?: string; mode?: string; repoPath?: string }>): void {
@@ -50,6 +54,9 @@ function is(args: string[], pluginRoot = PLUGIN_PRESENT): SpawnSyncReturns<strin
 }
 
 try {
+  // ── 0. readRun regression (LOOP-145): a missing runfile must return null, never crash ──
+  ok(readRun("loop145-regression") === null, "readRun returns null for a missing runfile (LOOP-145: no uncaught ENOENT)");
+
   // ── 1. back-compat: a non-"service" backend → exit-0 no-op; the hub DB is never created ──
   cfg({ iscv: { backend: "local", mode: "live" } });
   const noop = is(["iscv", "Isc Project", "ISV"]);
@@ -80,15 +87,21 @@ try {
   ok(/install-autostart/.test(perform.stdout), "perform printed standalone daemon autostart guidance");
   ok(/Claude SessionStart hook present/.test(perform.stdout), "perform reported the optional Claude SessionStart compatibility hook");
   ok(existsSync(runfile("iscv")), "perform brought the per-project daemon up (runfile written)");
-  const r4 = readRun("iscv"); registerDaemonPid(r4.pid);
-  const h4 = await fetch(`${r4.url}/api/health`).then((x) => x.json()).catch(() => null) as { ok?: boolean; project?: string } | null;
-  ok(!!h4 && h4.ok === true && h4.project === "iscv", "the bootstrapped daemon serves /api/health {ok:true} for the project");
+  const r4 = readRun("iscv");
+  if (r4 != null) {
+    registerDaemonPid(r4.pid);
+    const h4 = await fetch(`${r4.url}/api/health`).then((x) => x.json()).catch(() => null) as { ok?: boolean; project?: string } | null;
+    ok(!!h4 && h4.ok === true && h4.project === "iscv", "the bootstrapped daemon serves /api/health {ok:true} for the project");
+  } else {
+    ok(false, "runfile missing after perform — daemon failed to start (e.g. port-band full); health check skipped");
+  }
 
   // ── 5. idempotent re-run → clean no-op (daemon already running, same pid, no seed error) ──
   const rerun = is(["iscv", "Isc Project", "ISV"]);
   ok(rerun.status === 0 && /already running/.test(rerun.stdout), "re-run → exit 0, daemon 'already running' (idempotent)");
   ok(!/seed failed/.test(rerun.stdout), "re-run did not error on the idempotent re-seed");
-  ok(readRun("iscv").pid === r4.pid, "re-run did NOT spawn a second daemon — same pid (idempotent lifecycle)");
+  const r5 = readRun("iscv");
+  ok(r4 != null && r5 != null && r5.pid === r4.pid, "re-run did NOT spawn a second daemon — same pid (idempotent lifecycle)");
 
   // ── 6. a duplicate PREFIX → exit 1 with a clear 'pick a unique prefix' error (clash surfaced) ──
   cfg({ iscv: { backend: "service" }, clashy: { backend: "service" } });
@@ -101,7 +114,7 @@ try {
   cfg({ hookless: { backend: "service", mode: "live" } });
   const hookless = is(["hookless", "Hookless", "HKL"], PLUGIN_ABSENT);
   ok(hookless.status === 0, `hook absent → still exit 0 (bootstrap succeeds; got ${hookless.status})`);
-  if (existsSync(runfile("hookless"))) registerDaemonPid(readRun("hookless").pid);
+  const rHookless = readRun("hookless"); if (rHookless != null) registerDaemonPid(rHookless.pid);
   ok(/Claude SessionStart hook not found/.test(hookless.stdout), "absent hook → informational only (standalone/scheduler installs do not need it)");
   ok(/Board: http:\/\/127\.0\.0\.1:/.test(hookless.stdout), "absent hook did NOT block the bootstrap (board still reported)");
 
@@ -119,7 +132,7 @@ try {
   writeFileSync(join(PRODUCT, ".mcp.json"), JSON.stringify({ mcpServers: { "other-srv": { type: "stdio", command: "x", args: ["y"] } } }, null, 2));
   cfg({ mergeproj: { backend: "service", mode: "live", repoPath: PRODUCT } });
   const merged = is(["mergeproj", "Merge Project", "MRG"]);
-  if (existsSync(runfile("mergeproj"))) registerDaemonPid(readRun("mergeproj").pid);
+  const rMerge = readRun("mergeproj"); if (rMerge != null) registerDaemonPid(rMerge.pid);
   ok(merged.status === 0, `perform with repoPath → exit 0 (got ${merged.status})${merged.stderr ? "\n   " + merged.stderr : ""}`);
   ok(/\.mcp\.json (merged|created|updated): dev-loop-hub registered/.test(merged.stdout), "the bootstrap registered dev-loop-hub in the product .mcp.json");
   const pm = JSON.parse(readFileSync(join(PRODUCT, ".mcp.json"), "utf8"));
@@ -137,7 +150,7 @@ try {
 } finally {
   // never leak a detached daemon: kill any we started, then drop the temp tree
   for (const key of ["iscv", "hookless", "clashy", "mergeproj"]) {
-    try { if (existsSync(runfile(key))) { const p = readRun(key).pid; if (isAlive(p)) process.kill(p, "SIGKILL"); } } catch { /* best-effort */ }
+    try { const rk = readRun(key); if (rk != null && isAlive(rk.pid)) process.kill(rk.pid, "SIGKILL"); } catch { /* best-effort */ }
   }
   try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* ignore */ }
 }
