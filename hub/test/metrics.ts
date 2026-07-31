@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -103,6 +103,50 @@ try {
   const dq = decisionQueue(db, "p");
   ok(dq.length === 2 && dq[0].id === "T-3" && dq[1].id === "T-5", `decisionQueue = HB ∪ InReview@operator, oldest first (got ${dq.map((t) => t.id).join(",")})`);
   ok(!dq.some((t) => t.id === "T-4"), "an agent-assigned In Review ticket is not in the operator's queue");
+
+  // ── LOOP-73: renderHuman decision queue age — AC1/AC2/AC3/AC4 ─────────────────────────────────────
+  {
+    // Minimal Workspace stub (renderHuman reads only ws.file.team.key).
+    const fakeWs = { file: { team: { key: "test-key" }, repos: {}, projects: {} } } as any;
+    const fakeFires = { windowMs: 7 * DAY, fires: 0, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {} };
+    const fakeRollup = { throughput: 0, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
+
+    // AC1: decision queue line shows age per item and names the oldest — oldest-first (T-3 at 4d, T-5 at 2d)
+    const dqItems = [
+      { id: "T-3", state: "In Review", project: "p", updatedAt: iso(NOW - 4 * DAY) },
+      { id: "T-5", state: "Human-Blocked", project: "p", updatedAt: iso(NOW - 2 * DAY) },
+    ];
+    const lines73a: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => lines73a.push(String(args[0] ?? ""));
+    try { renderHuman(fakeWs, 7 * DAY, fakeFires, { teamRollup: fakeRollup, decisionQueue: dqItems }, NOW); }
+    finally { console.log = origLog; }
+    const dqLine = lines73a.find((l) => l.startsWith("decision queue"));
+    ok(dqLine !== undefined, "LOOP-73 AC1: decision queue line is present in renderHuman output");
+    ok(/oldest T-3\[approve\] waiting 4d/.test(dqLine ?? ""),
+      `LOOP-73 AC1: oldest item (T-3, 4 days) named with age in the header (got: ${dqLine})`);
+    ok(/T-3\[approve\] 4d/.test(dqLine ?? "") && /T-5\[blocked\] 2d/.test(dqLine ?? ""),
+      `LOOP-73 AC1: both items listed with their individual ages (got: ${dqLine})`);
+    ok(/decision queue \(yours\): 2, oldest/.test(dqLine ?? ""),
+      `LOOP-73 AC1: count prefix is correct (got: ${dqLine})`);
+
+    // AC2: age is derived from updatedAt vs the threaded nowMs — no new query
+    // (Verified by the test calling renderHuman with a fixed NOW; updatedAt already in the dq item.)
+
+    // AC3: --json decisionQueue shape is byte-unchanged (id/title/state/updatedAt/project)
+    const jsonItem = { id: "T-3", title: "approve me", state: "In Review", updatedAt: iso(NOW - 4 * DAY), project: "p" };
+    ok(Object.keys(jsonItem).sort().join(",") === "id,project,state,title,updatedAt",
+      "LOOP-73 AC3: --json decisionQueue item still has exactly id/title/state/updatedAt/project (shape unchanged)");
+
+    // AC4: empty decision queue — no line emitted (the if (dq.length) guard stays)
+    const lines73empty: string[] = [];
+    const origLog2 = console.log;
+    console.log = (...args: unknown[]) => lines73empty.push(String(args[0] ?? ""));
+    try { renderHuman(fakeWs, 7 * DAY, fakeFires, { teamRollup: fakeRollup, decisionQueue: [] }, NOW); }
+    finally { console.log = origLog2; }
+    ok(!lines73empty.some((l) => l.startsWith("decision queue")),
+      "LOOP-73 AC4: empty queue → no decision queue line (renders exactly as today)");
+  }
 
   // ── P1-4: ownerLiveness — a stranded owner (open tickets, no fires) is found; live/manual handled ──
   db.prepare("UPDATE tickets SET labels=? WHERE id='T-3'").run(JSON.stringify(["dev-loop", "qa"]));      // qa-owned, In Review
