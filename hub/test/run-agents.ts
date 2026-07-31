@@ -9,7 +9,7 @@ import { openDb, logEvent } from "../src/db.ts";
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
 import { breaker } from "../src/breaker.ts";
-import { codexUsageAdapter } from "../src/fire-usage.ts";
+import { codexUsageAdapter, claudeAdapter, resolveAdapter } from "../src/fire-usage.ts";
 import { releaseClaimedTickets } from "../src/ticket-release.ts";
 import { insertTicket } from "../src/ticketwrite.ts";
 
@@ -103,9 +103,9 @@ try {
   const claude = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm,communication", "--interval", "pm=2m", "--cli-arg", "--model", "--cli-arg", "opus", ...common]);
   ok(claude.code === 0, "claude dry-run scheduler exits 0");
   ok(/agents=pm@2m, communication@1d/.test(claude.out), "claude dry-run shows resolved agents + interval override");
-  ok(/pm: claude --mcp-config .* --strict-mcp-config --model opus --effort max --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "claude dry-run injects model/effort defaults, keeps extra CLI args last, and renders without dumping the prompt");
+  ok(/pm: claude --mcp-config .* --strict-mcp-config --model opus --effort max --output-format json --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "claude dry-run injects model/effort defaults + --output-format json (usage capture), keeps extra CLI args last, and renders without dumping the prompt");
   ok(/dev-loop-hub/.test(claude.out), "the inline --mcp-config defines the dev-loop-hub server (no plugin / .mcp.json needed)");
-  ok(/communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "communication-agent gets its own default profile and remains overrideable through --cli-arg");
+  ok(/communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --output-format json --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "communication-agent gets its own default profile (+ --output-format json) and remains overrideable through --cli-arg");
 
   // boot-prefix (conventions-to-code phase 0): --assemble-boot appends the deterministic §0a corpus and
   // flips the claude prompt channel to stdin (Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB).
@@ -145,8 +145,8 @@ try {
   const svcCliCommon = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "svccli"];
   const cliDefault = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...svcCliCommon]);
   ok(cliDefault.code === 0, "service + claude on the D9 default (interface=cli) exits 0");
-  ok(/pm: claude --model opus --effort max -p '?<prompt:\d+ chars>'?/.test(cliDefault.out),
-    "interface=cli claude command drops the hub injection entirely (model/effort/prompt only)");
+  ok(/pm: claude --model opus --effort max --output-format json -p '?<prompt:\d+ chars>'?/.test(cliDefault.out),
+    "interface=cli claude command drops the hub injection entirely (model/effort + --output-format json + prompt) — D9 default, the lane LOOP-13 regressed");
   ok(!/--mcp-config/.test(cliDefault.out) && !/--strict-mcp-config/.test(cliDefault.out) && !/dev-loop-hub/.test(cliDefault.out),
     "interface=cli passes no --mcp-config / --strict-mcp-config and defines no dev-loop-hub server");
   ok(/pm: cwd=\S+ cli=claude .*interface=cli/.test(cliDefault.out), "the dry-run info line names the resolved interface on a service project");
@@ -590,6 +590,61 @@ try {
   ok(keys.every(k => allowed.has(k)), `LOOP-15 AC3 §16: FireUsage has only allowed keys (${keys.join(",")}) — no content/PII`);
   ok(!JSON.stringify(result).includes("secret") && !JSON.stringify(result).includes("rm -rf"),
     "LOOP-15 AC3 §16: no content strings in parsed FireUsage");
+}
+
+// ── LOOP-83: claude UsageAdapter (fire-usage.ts) — mirrors codex, but ONE terminal JSON object (not JSONL) ──
+// Measured-usage AC: a well-formed `claude -p --output-format json` terminal object → populated token + cost fields.
+{
+  const fixture = JSON.stringify({
+    type: "result", subtype: "success", is_error: false,
+    result: "All acceptance criteria satisfied.",
+    usage: { input_tokens: 1200, output_tokens: 340, cache_creation_input_tokens: 88, cache_read_input_tokens: 512 },
+    total_cost_usd: 0.0187,
+  });
+  const u = claudeAdapter.parse(fixture);
+  ok(u !== null && u.source === "provider", "LOOP-83: claude fixture → non-null FireUsage, source='provider'");
+  ok((u?.inputTokens ?? 0) > 0 && u?.inputTokens === 1200, "LOOP-83: inputTokens mapped (>0, =1200)");
+  ok((u?.outputTokens ?? 0) > 0 && u?.outputTokens === 340, "LOOP-83: outputTokens mapped (>0, =340)");
+  ok(u?.cacheWriteTokens === 88 && u?.cacheReadTokens === 512, "LOOP-83: cache_creation/read_input_tokens → cacheWrite/cacheRead");
+  ok(u?.costUsd === 0.0187 && u?.currency === "USD", "LOOP-83: total_cost_usd → costUsd + currency 'USD'");
+  // isError is a SEPARATE signal (additive to the tail-regex): success is healthy, is_error / non-success subtype is not.
+  ok(claudeAdapter.isError?.(fixture) === false, "LOOP-83: a subtype:'success' object is NOT a structured error");
+  ok(claudeAdapter.isError?.('{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}') === true,
+    "LOOP-83: is_error:true terminal object → structured error");
+  ok(claudeAdapter.isError?.('{"type":"result","subtype":"error_max_turns","is_error":false,"result":""}') === true,
+    "LOOP-83: subtype!=='success' → structured error even when is_error is false");
+  // resultText: the operator echo pulls ONLY the result string (never the raw blob / usage numbers).
+  ok(claudeAdapter.resultText?.(fixture) === "All acceptance criteria satisfied.", "LOOP-83: resultText extracts the result string for the operator echo");
+}
+// Malformed / truncated → usage null (honest miss), and isError falls through to the tail-regex arm.
+{
+  ok(claudeAdapter.parse("") === null, "LOOP-83: empty stdout → usage null");
+  ok(claudeAdapter.parse("Execution error") === null, "LOOP-83: non-JSON stdout → usage null");
+  ok(claudeAdapter.parse('{"type":"result","subtype":"success","result":"hi"') === null, "LOOP-83: truncated JSON (no closing brace) → usage null");
+  ok(claudeAdapter.parse('{"type":"result","usage":{"output_tokens":5}}') === null, "LOOP-83: usage missing input_tokens → null (never a partial/wrong row)");
+  ok(claudeAdapter.resultText?.('{"type":"result","result":"partial') === null, "LOOP-83: truncated buffer → resultText null (caller falls back to the raw buffer, never nothing)");
+  ok(claudeAdapter.isError?.("Execution error") === false, "LOOP-83: non-JSON → isError false — the runAgent tail-regex owns that case, additively (LOOP-13's regression was replacing it)");
+}
+// §16: the recorded FireUsage carries ONLY numeric fields + source/currency — never result text, session id, or tool args.
+{
+  const rich = JSON.stringify({
+    type: "result", subtype: "success", is_error: false,
+    result: "secret agent output sk-SEEDED", session_id: "sess-must-not-persist",
+    usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 1, cache_read_input_tokens: 2 },
+    total_cost_usd: 0.001,
+  });
+  const u = claudeAdapter.parse(rich);
+  const allowed = new Set(["source", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costUsd", "currency"]);
+  const keys = Object.keys(u ?? {});
+  ok(u !== null && keys.every(k => allowed.has(k)), `LOOP-83 §16: FireUsage has only allowed keys (${keys.join(",")}) — no content/PII`);
+  ok(!JSON.stringify(u).includes("secret") && !JSON.stringify(u).includes("sess-must-not-persist"),
+    "LOOP-83 §16: no result text / session id in the parsed FireUsage");
+}
+// resolveAdapter: claude + codex resolve to their adapters; text-mode lanes (opencode) resolve to null (usage:null).
+{
+  ok(resolveAdapter("claude") === claudeAdapter, "LOOP-83: resolveAdapter('claude') → claudeAdapter");
+  ok(resolveAdapter("codex") === codexUsageAdapter, "LOOP-83: resolveAdapter('codex') → codexUsageAdapter (untouched)");
+  ok(resolveAdapter("opencode") === null, "LOOP-83: resolveAdapter('opencode') → null (text-mode lane keeps the tail-regex, records usage:null)");
 }
 
 console.log(fails === 0 ? "\nRUN_AGENTS_OK" : `\n${fails} CHECK(S) FAILED`);

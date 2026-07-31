@@ -291,6 +291,56 @@ try {
   const seq = readFileSync(marker, "utf8").trim().split("\n").map((l) => l.trim()).filter(Boolean);
   ok(seq.join(",") === "A-in,A-out,B-in,B-out", `with-repo-lock serializes concurrent holders (got: ${seq.join(",")})`);
 
+  // ── LOOP-83: claude --output-format json lane — a REAL fire (fake `claude` bin emitting canned terminal
+  //    JSON, read back from fires.jsonl) proves the end-to-end legs the adapter unit tests can't: usage on the
+  //    recorded row, additive suspectError (silent + is_error, on top of the surviving text/empty arm), and
+  //    operator-visible result text on every exit path incl. a truncated buffer. AC1-evidence choice: the
+  //    canned-object route (a fake CLI emits the object, the fires.jsonl row is read back) — no live claude. ──
+  {
+    // (a) well-formed terminal object → usage recorded on the row; the operator sees the RESULT TEXT, not the blob.
+    const okJson = '{"type":"result","subtype":"success","is_error":false,"result":"LOOP-83 fire complete.","usage":{"input_tokens":1234,"output_tokens":210,"cache_creation_input_tokens":12,"cache_read_input_tokens":99},"total_cost_usd":0.0212}';
+    const goodBin = join(tmp, "usage-claude.sh");
+    writeFileSync(goodBin, `#!/bin/sh\nprintf '%s\\n' '${okJson}'\nexit 0\n`); chmodSync(goodBin, 0o755);
+    const g = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: goodBin });
+    const gLast = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l)).pop();
+    ok(gLast.usage && gLast.usage.source === "provider" && gLast.usage.inputTokens === 1234 && gLast.usage.outputTokens === 210
+      && gLast.usage.costUsd === 0.0212 && gLast.usage.currency === "USD" && gLast.usage.cacheWriteTokens === 12 && gLast.usage.cacheReadTokens === 99,
+      `LOOP-83: a well-formed claude fire records usage (tokens + cost + currency) on the fires.jsonl row (got ${JSON.stringify(gLast.usage)})`);
+    ok(gLast.usage && !("suspectError" in gLast), "LOOP-83: a well-formed claude result is NOT flagged suspectError");
+    const usageKeys = Object.keys(gLast.usage);
+    ok(usageKeys.every((k) => ["source", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costUsd", "currency"].includes(k)),
+      `LOOP-83 §16: the recorded usage row carries ONLY numeric usage fields (${usageKeys.join(",")})`);
+    ok(/LOOP-83 fire complete\./.test(g.out) && !/input_tokens/.test(g.out),
+      "LOOP-83: the operator sees the agent's RESULT TEXT, not the raw JSON blob (deferred echo + extraction)");
+
+    // (b) exit-0 fire whose terminal JSON reports is_error:true → flagged suspectError (the structured signal).
+    const errJson = '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}';
+    const errBin = join(tmp, "iserr-claude.sh");
+    writeFileSync(errBin, `#!/bin/sh\nprintf '%s\\n' '${errJson}'\nexit 0\n`); chmodSync(errBin, 0o755);
+    const e = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: errBin });
+    const eLast = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l)).pop();
+    ok(/suspectError/.test(e.out) && eLast.exitCode === 0 && eLast.suspectError === true,
+      "LOOP-83: an exit-0 claude fire whose terminal JSON is_error:true is flagged suspectError (structured signal, additive)");
+
+    // (c) SILENT exit-0 fire (no output at all) → flagged suspectError — the empty-output arm survives the migration.
+    const silentBin = join(tmp, "silent-claude.sh");
+    writeFileSync(silentBin, "#!/bin/sh\nexit 0\n"); chmodSync(silentBin, 0o755);
+    const s = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: silentBin });
+    const sLast = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l)).pop();
+    ok(/suspectError/.test(s.out) && sLast.exitCode === 0 && sLast.suspectError === true,
+      "LOOP-83: a SILENT exit-0 claude fire is flagged suspectError (empty-output arm preserved, not replaced by the JSON signal)");
+
+    // (d) TRUNCATED terminal object (killed/timed-out mid-emit) → no usage row, but the operator still sees the
+    //     partial output (never nothing) — the deferred echo falls back to the raw buffer when it can't parse.
+    const truncBin = join(tmp, "trunc-claude.sh");
+    writeFileSync(truncBin, `#!/bin/sh\nprintf '%s' '{"type":"result","subtype":"success","result":"partial work before the kill'\nexit 0\n`); chmodSync(truncBin, 0o755);
+    const t = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: truncBin });
+    const tLast = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l)).pop();
+    ok(!tLast.usage, "LOOP-83: a truncated terminal object records NO usage (honest miss, never a wrong/partial row)");
+    ok(/partial work before the kill/.test(t.out),
+      "LOOP-83: operator-visible output survives a truncated buffer — the raw partial is echoed, never nothing (not only a JSON blob)");
+  }
+
   console.log(fails === 0 ? "\nTEAM_SCHEDULER_OK" : `\n${fails} CHECK(S) FAILED`);
 } finally {
   // The service run auto-ensures the workspace hub daemon — always stop it so no process outlives the test.
