@@ -106,6 +106,8 @@ header{display:flex;align-items:baseline;gap:.6rem;padding:.7rem 1rem;border-bot
 header .home{font-weight:var(--fw-bold);text-decoration:none;color:var(--ink)}header .proj{color:var(--mut)}
 header a.proj{text-decoration:none}header a.proj:hover{color:var(--ink)}
 main{padding:1rem}
+.ws-bar{padding:.15rem 1rem .2rem;font-size:.7rem;color:var(--mut);border-bottom:1px solid var(--line);background:var(--bg)}
+.ws-bar-warn{color:var(--c-warn);background:color-mix(in srgb,var(--c-warn) 8%,var(--bg))}
 .projects{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--sp-4);max-width:900px}
 .pcard{display:block;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:var(--sp-4);text-decoration:none;color:inherit;box-shadow:var(--shadow-1)}
 .pcard:hover{border-color:var(--line-strong);box-shadow:var(--shadow-2)}
@@ -297,6 +299,9 @@ export interface PageOpts {
   active?: (typeof NAV)[number]; // which nav item is the current page (absent ⇒ none marked)
   hub?: boolean;                 // a HUB-level page (project index / unknown-project 404): no project nav, all-projects SSE scope
   drafts?: number;               // docs P6a: gated docs with a draft ahead of published — >0 renders the header "N drafts pending" chip → /docs
+  workspaceId?: string;          // hub.db path — board identity affordance (authenticated surface, §16 ok — LOOP-52)
+  daemonVersion?: string;        // daemon's startup version for identity display + stale detection
+  cliVersion?: string;           // installed CLI version when different from daemonVersion (triggers stale warning)
 }
 export function page(title: string, project: string, inner: string, opts: PageOpts = {}): string {
   // Inline SVG favicon (a small "dl" mark) — data-URI, so no static-asset route and no /favicon.ico 404 noise.
@@ -314,6 +319,18 @@ export function page(title: string, project: string, inner: string, opts: PageOp
   const drafts = !opts.hub && (opts.drafts ?? 0) > 0
     ? `<a class="chip-drafts" href="${esc(href(project, "/docs"))}" title="doc drafts awaiting operator publish">${opts.drafts} draft${opts.drafts === 1 ? "" : "s"} pending</a>`
     : "";
+  // Board identity affordance (LOOP-52): workspace hub.db path + daemon version, so two workspaces'
+  // _team boards are distinguishable on sight. cliVersion is set only when the daemon is running old
+  // code — reuses the daemon-lifecycle.ts:311 wording verbatim.
+  const wsBar = opts.workspaceId
+    ? (() => {
+        const stale = opts.cliVersion
+          ? ` — running OLD code v${esc(opts.daemonVersion ?? "?")}, CLI is v${esc(opts.cliVersion)}; run \`dev-loop daemon up\` to restart`
+          : "";
+        const cls = opts.cliVersion ? "ws-bar ws-bar-warn" : "ws-bar";
+        return `<div class="${cls}">${esc(opts.workspaceId)} · v${esc(opts.daemonVersion ?? "?")}${stale}</div>`;
+      })()
+    : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">`
     + `<meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>`
     + `<link rel="icon" href="${favicon}">`
@@ -321,6 +338,7 @@ export function page(title: string, project: string, inner: string, opts: PageOp
     + `<header><a class="home" href="/">dev-loop</a>${crumb}${drafts}`
     + `<span class="live-dot" id="live" title="live — updates when agents change the board"></span>`
     + `${nav}</header>`
+    + wsBar
     + `<main>${inner}</main>`
     + liveScript(opts.hub ? "/api/stream?all=1" : href(project, "/api/stream"))
     + `</body></html>`;

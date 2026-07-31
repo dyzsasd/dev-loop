@@ -36,9 +36,10 @@ dev-loop run                      # 一个 scheduler 驱动整支团队；按 ^C
 repo（`--detect` 直接从 clone 里读取 build/CI 事实），最后打印 doctor 结论和一行 `NEXT:`，
 指出当前最需要做的一步。你会得到：
 
-- 一个**多 project 的 web UI**：`dev-loop hub start` → `http://127.0.0.1:8787`——`/` 是
-  project 索引页，每个 project 的看板、ticket 详情、activity 和 docs 页面都在
-  `/p/<key>/` 下（`dev-loop run` 也会自动启动它；用 `dev-loop hub status` 查看状态）；
+- 一个**多 project 的 web UI**：`dev-loop hub start` 后运行 `dev-loop hub status` 查找看板
+  URL——`/` 是 project 索引页，每个 project 的看板、ticket 详情、activity 和 docs 页面都在
+  `/p/<key>/` 下（`dev-loop run` 也会自动启动它）。探测从端口 8787 开始，被占用时自动往上
+  走，所以实际 URL 可能不同；`hub status` 始终显示真实 URL；
 - agent 直接通过 `dev-loop` CLI 访问看板——在 service backend 上配合 Claude Code 或
   Codex，不需要再安装任何东西（`hub.agentInterface` 是按 coding agent 区分的开关；
   `"mcp"` 可恢复注入式 MCP 的接线方式）；

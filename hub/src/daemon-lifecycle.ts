@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { createServer as netCreateServer } from "node:net";
 import { platform } from "node:os";
 import { fileURLToPath } from "node:url";
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, openSync, closeSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, openSync, closeSync, renameSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { openDb } from "./db.ts";
 import { findProject } from "./seed.ts";
@@ -403,4 +403,37 @@ export async function daemonLifecycleCode(sub: LifecycleSub): Promise<number> {
 }
 export async function daemonLifecycle(sub: LifecycleSub): Promise<void> {
   process.exit(await daemonLifecycleCode(sub));
+}
+
+// Lists all daemon-*.json runfiles in the workspace run dir and prints each one's status.
+// Used by `dev-loop hub status` to show every project daemon in the workspace (not just _team).
+export async function daemonStatusAll(): Promise<number> {
+  const runDir = lcRunDir();
+  let files: string[];
+  try { files = readdirSync(runDir).filter((f) => /^daemon-.+\.json$/.test(f)).sort(); }
+  catch { files = []; }
+  if (!files.length) {
+    console.log("[daemon] status: no daemon runfiles in this workspace — no daemons started yet.");
+    return 0;
+  }
+  for (const f of files) {
+    const key = f.slice("daemon-".length, -".json".length);
+    const info = lcReadRun(key);
+    if (info && lcIsAlive(info.pid)) {
+      const live = await lcHealthInfo(info.url, key);
+      if (live) {
+        const ver = live.version || info.version || "?";
+        const stale = ver !== "?" && ver !== pkgVersion() ? ` — running OLD code v${ver}, CLI is v${pkgVersion()}; run \`dev-loop daemon up\` to restart` : "";
+        const actor = live.actor || info.actor;
+        const misId = actor && actor !== "operator" ? ` — WARNING actor='${actor}' (not operator; publish/attribution may be mis-gated)` : "";
+        console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid}, v${ver}, actor=${actor ?? "?"})${stale}${misId}`);
+      } else {
+        console.log(`[daemon] status: '${key}' RUNNING (pid ${info.pid}) → ${info.url} — probe failed; run \`dev-loop daemon up\` to restart`);
+      }
+    } else {
+      if (info && !lcIsAlive(info.pid)) lcRemoveRun(key);
+      console.log(`[daemon] status: '${key}' stopped. Start it with \`dev-loop daemon up\`.`);
+    }
+  }
+  return 0;
 }

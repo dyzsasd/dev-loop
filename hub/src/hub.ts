@@ -8,7 +8,7 @@ import { existsSync, statSync } from "node:fs";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import { TEAM_INTAKE_PROJECT, type Workspace } from "./team-config.ts";
-import { daemonLifecycleCode } from "./daemon-lifecycle.ts";
+import { daemonLifecycleCode, daemonStatusAll } from "./daemon-lifecycle.ts";
 import { openDb } from "./db.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop hub: ${msg}`); process.exit(code); }
@@ -21,6 +21,13 @@ function wireEnv(ws: Workspace): void {
   process.env.DEVLOOP_HUB_DB = wsHubDb(ws);
   process.env.DEVLOOP_RUN_DIR = wsStateRoot(ws);
   process.env.DEVLOOP_PROJECT = TEAM_INTAKE_PROJECT;
+}
+
+// For `hub status` only: wire HUB_DB + RUN_DIR without pinning DEVLOOP_PROJECT to _team,
+// so daemonStatusAll() can enumerate every daemon-*.json in the workspace run dir (LOOP-52).
+function wireEnvForStatus(ws: Workspace): void {
+  process.env.DEVLOOP_HUB_DB = wsHubDb(ws);
+  process.env.DEVLOOP_RUN_DIR = wsStateRoot(ws);
 }
 
 function walCheckpoint(dbPath: string): void {
@@ -44,17 +51,16 @@ export async function ensureHub(ws: Workspace): Promise<number> {
 export async function hubCmd(argv = process.argv.slice(2)): Promise<number> {
   const sub = argv[0] ?? "status";
   if (sub === "--help" || sub === "-h" || sub === "help") {
-    console.log("usage: dev-loop hub start|stop|status|ensure  — manage the workspace hub daemon (service backend)");
+    console.log("usage: dev-loop hub start|stop|status|ensure  — manage the workspace hub daemon (service backend)\n\n`hub status` lists every project daemon in the workspace. Run `dev-loop hub status` to find the board URL.");
     return 0;
   }
   const ws = resolveWorkspace();
   if (ws.file.team.backend !== "service") die(`team '${ws.file.team.key}' is backend:'${ws.file.team.backend}' — hub commands are for service-backend teams only (a linear team has no hub.db)`, 2);
-  wireEnv(ws);
   switch (sub) {
-    case "start": return daemonLifecycleCode("up");
-    case "ensure": return daemonLifecycleCode("ensure");
-    case "stop": { const c = await daemonLifecycleCode("down"); walCheckpoint(wsHubDb(ws)); return c; }
-    case "status": { const c = await daemonLifecycleCode("status"); reportSize(wsHubDb(ws)); return c; }
+    case "start": wireEnv(ws); return daemonLifecycleCode("up");
+    case "ensure": wireEnv(ws); return daemonLifecycleCode("ensure");
+    case "stop": { wireEnv(ws); const c = await daemonLifecycleCode("down"); walCheckpoint(wsHubDb(ws)); return c; }
+    case "status": { wireEnvForStatus(ws); const c = await daemonStatusAll(); reportSize(wsHubDb(ws)); return c; }
     default: die(`unknown subcommand '${sub}' (start|stop|status|ensure)`, 2);
   }
 }
