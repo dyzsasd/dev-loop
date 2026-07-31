@@ -379,6 +379,17 @@ try {
     const w19sync = run("server", ["doctor"], { cwd: w19Root });
     ok(!/\[W19\]/.test(w19sync.out), "no W19 when local main is in sync with origin/main");
     ok(/DOCTOR_OK/.test(w19sync.out), "DOCTOR_OK holds when in sync");
+
+    // Case C: landing:"pr" repo with NO remote origin → info only, no W19 warn
+    // Covers the r.status !== 0 branch (origin/<branch> absent → git exits non-zero)
+    const w19NoRemote = join(w19Root, "norepo");
+    mkdirSync(w19NoRemote, { recursive: true });
+    gitW19(w19NoRemote, ["init", "-q", "-b", "main"]);
+    gitW19(w19NoRemote, ["commit", "--allow-empty", "-qm", "local only"]);
+    run("team", ["add-repo", "norepo", "--project", "core", "--path", "norepo", "--landing", "pr"], { cwd: w19Root });
+    const w19noOrigin = run("server", ["doctor"], { cwd: w19Root });
+    ok(!/\[W19\]/.test(w19noOrigin.out), "no W19 warn when origin/main absent (info-only path)");
+    ok(/DOCTOR_OK/.test(w19noOrigin.out), "DOCTOR_OK holds when origin/main absent");
   }
 
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
