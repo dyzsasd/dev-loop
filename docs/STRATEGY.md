@@ -1167,6 +1167,73 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   standing lesson: a dirty shared `main` is not a PM inconvenience, it is a supply route into
   `origin/main`** — and there is no mechanical guard, because LOOP-69 (wiring merge-guard into the
   fire-start merge pass) is still parked.
+- **✅ LOOP-87's recurrence closed in twelve minutes, and the guard chain is now complete but unwired
+  (2026-07-31).** LOOP-65 was routed back to `Todo` at 05:40Z with a force-push instruction;
+  junior-dev cherry-picked its own commit onto `origin/main`, force-pushed, and merged at 05:52Z.
+  The landed commit `4d1beb6` touches **exactly two files** (`hub/src/merge-guard.ts` +100/-4,
+  `hub/test/merge-guard.ts` +108) — the seven passengers are gone, not squashed in. ACs re-run at the
+  *merged* sha, not the PR head: suite exit 0, typecheck exit 0. **Route-back beat close-and-refile by
+  a wide margin** — a `Canceled` + follow-up would have discarded a branch whose every AC passed.
+  With LOOP-64, LOOP-67 and LOOP-65 all `Done`, the merge-guard mechanism is **complete and calls
+  nothing**: LOOP-69 (the §17 wiring hand-off) unparked this fire to the operator, both of its edges
+  retired.
+- **🔴 The pipeline is 12.5:1 skewed toward the tier that is at cap, and the two tiers deliver nearly
+  the same output (2026-07-31).** Measured across all 129 board rows: non-terminal work is **50
+  junior / 4 senior**, and the Backlog is **30 junior / 1 senior** (that one, LOOP-38, blocked).
+  Delivered work is **junior 31 `Done` / senior 26 `Done`** — near parity from a 12.5:1 queue. So
+  senior is not slower; it is *starved*, and junior has been over its depth cap for twelve
+  consecutive fires (11/10 at close after two verified increments were routed back to land).
+  **The mechanism is §21b working exactly as written, not drift:** only 6 of 129 tickets ever carried
+  `sensitive` (4.7%), and "when borderline, junior" sends everything else down. senior-dev's own
+  design-and-delegate mode then *manufactures* junior work — it created **37 junior-tier tickets and
+  zero senior-tier ones**. Only PM/QA/operator file senior work (24/3/1). Re-tiering to balance load
+  remains the inference §21b forbids; §21b is governing prose no agent may edit (§17). **This is an
+  operator lever, and it is now quantified rather than merely observed.**
+- **✅ §21b's own justification tested and upheld — no ticket filed.** The rule justifies "when
+  borderline, junior" by asserting *"escalation (§21a) is the cheap safety net, so over-routing to the
+  expensive tier is the costlier mistake."* That is a testable claim, and the obvious hypothesis was
+  that the net never fires. It fires: **8 `Mode: direct-code` senior escalations exist (LOOP-23, 33,
+  58, 63, 83, 85, 107, 119) and all 8 are `Done`** — a 100% completion rate. The imbalance above is
+  therefore a capacity-allocation question, *not* a safety question.
+- **⛔ The 68-link test chain took its second landing, and it is now the expected case, not bad luck.**
+  PR #78 (LOOP-79) and PR #79 (LOOP-80) are each `MERGEABLE`/`CLEAN` with every check green, and are
+  **mutually unmergeable**: `git merge-tree --write-tree pr78 pr79` reports a conflict in
+  `hub/package.json` and nothing else. One inserts `test/ticketwrite.ts`, the other
+  `test/queue-sensitive.ts`, into the same single ~4.5 KB `"test"` line; their source changes touch
+  disjoint files. First instance was LOOP-37 × LOOP-40 (PR #59). **What changed is that it is no
+  longer accidental:** LOOP-128's source-integrity gate makes registering a new suite in that line
+  *mandatory* for CI to pass, and the two dev tiers run concurrently by design — so any two
+  test-adding increments in flight collide. **LOOP-86 raised to P1**, with a binding shape on the fix:
+  a partial run must stay distinguishable from a full one *and* two increments must be able to
+  register a suite without editing a shared line.
+- **🔴 `In Review` stranded two verified increments, and only a hand-route freed them.** LOOP-79 and
+  LOOP-80 sat `In Review` with green, mergeable, **unmerged** PRs. `agentops.ts:205-210` serves a dev
+  tier only `Todo` + its *own* `In Progress`, so neither ticket was reachable by the one agent allowed
+  to land it (**LOOP-112**, Backlog). Both were verified in full — including running LOOP-79's new
+  suite against `cec3598` with only the test file dropped in, which returned **exit 1 / 4 failures**,
+  proving a real regression test rather than a tautology — then routed to `Todo` to be landed.
+  **LOOP-110** (the review-admission gate) is the mechanism and sits in `Todo`; until it lands, PM
+  hand-routing is the only egress, and it is exactly why the `In Review` axis of merge-guard must stay
+  out of the enforcing set (recorded on LOOP-69).
+- **✅ The developer incident scanner does what its docstring claims — controlled, not assumed.**
+  `security/local_code_scan.py` is the largest unreviewed file in the repo (98,869 bytes) and no lens
+  had ever swept it. Two hypotheses died on contact. **(a) "CI never runs it" is true and correct by
+  design** — CI runs its *tests* but never the scanner, because it scans a *developer host*
+  (`~/workspace`, npm caches, VS Code extensions, git object DBs), not the repo; it is an
+  incident-response tool meant to be run from a trusted copy against a suspect machine. **(b) Its
+  docstring's safety claim — *"Findings never include source snippets or environment values"* — holds
+  under test.** A fixture carrying a fake AWS key, a fake `sk-ant-` token, a malicious `postinstall`,
+  an `eval(atob(...))` and a `curl | sh` was scanned with `--format json`: **all six planted canaries
+  are absent from the output**, while the scanner still correctly reported
+  `suspicious-lifecycle-script (postinstall combines: decode, dynamic-exec)` and two
+  `dynamic-decoder-review` findings, exiting 1. Findings carry rule IDs, paths and digests — never
+  bytes. **The output is safe to attach to a ticket, which is the property that matters for a tool
+  shipped to users.**
+- **✅ The worktree base fix is holding — the doc payload is contained.** PR #83 opened at 05:52Z
+  while local `main` carried **24 unpushed PM commits**, and it carries **one commit, three files, no
+  passengers**. Local `main`'s 24-commit lead touches only `docs/STRATEGY.md` and
+  `docs/strategy-archive/2026-07.md`. So the PR #82 incident was a stale branch base, not a live leak
+  (LOOP-48 landed), though LOOP-120 still keeps local `main` permanently dirty.
 
 ## Personas
 
@@ -1805,6 +1872,39 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   different tiers, on different urgencies: LOOP-128 is why two PRs are red *right now*; LOOP-129 is
   defence-in-depth on the published artifact. Folding them would let the urgent one drag the
   careful one, or the careful one delay the urgent one.
+- **(pm, 2026-07-31) ⚖️ RULING: an increment whose ACs pass but whose PR has not merged goes back to
+  `Todo`, not `Done` and not `Canceled` — and the route-back is now evidence-backed.** LOOP-79 and
+  LOOP-80 were verified in full (every AC observed, §3 triage clean, LOOP-79's regression test proven
+  RED against `cec3598`) and still moved to `Todo`, because an unmerged PR has not landed and
+  `In Review` is unreachable by the tier that must land it (LOOP-112). The precedent is now measured
+  rather than argued: **the same treatment on LOOP-65 produced a clean landing in twelve minutes**,
+  where §3's close-and-follow-up would have discarded a branch that passed every AC. **The boundary
+  holds at wrongness.** `Canceled` + follow-up is for an increment that is *wrong*; `Todo` is for one
+  that is *right and unfinished*. A green-but-unlanded PR is unfinished ship-work owned by the
+  implementer, and the ticket state should say so out loud rather than parking it where nobody can
+  act. Cost to name: this pushes junior to 11/10, over cap — accepted, because false `Done` and
+  silent stranding are both worse than a visibly over-full queue. **A route-back is not a §5a
+  promotion and is not depth-capped.**
+- **(pm, 2026-07-31) 📝 Three hypotheses died this fire and none became a ticket — the count is the
+  point.** (1) *"senior idles because §21b's escalation safety net never fires"* — it fired 8 times,
+  all 8 `Done`. (2) *"`local_code_scan.py` is 98 KB of shipped code CI never invokes"* — true and
+  correct by design; it scans a developer host, not a repo. (3) *"its no-source-snippets claim is
+  unenforced prose — there is no redaction code anywhere in the file"* — the claim is structural and
+  **holds under a six-canary control**. Each was a plausible P1/P2 that would have cost an implementer
+  a fire to disprove. **The method that killed all three is the same one that found LOOP-129: treat
+  the stated claim as an assertion and go run it.** The difference between "I read the code and it
+  looks wrong" and "I ran a control and it is wrong" is an entire wasted increment, and this fire it
+  went the other way three times. Filing **zero** with a 34-deep backlog and junior over cap is the
+  correct outcome, not an unproductive one.
+- **(pm, 2026-07-31) 📝 The merge-guard chain is complete and enforces nothing — wire it in two
+  stages.** LOOP-64 (review axis), LOOP-67 (board-state axis) and LOOP-65 (`--apply`) are all `Done`;
+  LOOP-69, the §17 hand-off that calls the verb from the fire-start merge pass, unparked to the
+  operator this fire with both edges retired. The staged recommendation is recorded on the ticket and
+  is unchanged, but its premise was **re-confirmed against live state rather than assumed**: enforce
+  `Canceled`/`Duplicate` now (unambiguous, and PR #61 already needed it), and hold `In Review` out of
+  the enforcing set until **LOOP-110** lands — because LOOP-79 and LOOP-80 sat `In Review` with green
+  unmerged PRs at 06:00Z today, and an `In Review`-enforcing guard would have made both permanently
+  unmergeable with no state either ticket could reach to clear the refusal.
 
 ## Candidate ideas
 
