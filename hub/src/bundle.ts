@@ -374,7 +374,10 @@ export async function bundleLoad(file: string, dir: string, opts: { forceReseed:
     } catch (e) { console.warn(`op-API gate seeding failed (${(e as Error).message}) — attach writes stay dormant until seeded`); }
   }
 
-  // Boot reclamation + preflight (§4.5 steps 4-5): repair stale locks/worktrees, then doctor fail-fast.
+  // Boot reclamation + preflight (§4.5 steps 4-5): repair stale locks/worktrees (NON-destructive — the
+  // terminal-worktree reap is opt-in via `team repair --reap` / `dev-loop worktree reap`, deliberately NOT
+  // run on this unattended, pre-doctor path where an irreversible deletion would be silent, LOOP-106),
+  // then doctor fail-fast.
   const cliEntry = join(here, "cli.ts").replace(/\.ts$/, existsSync(join(here, "cli.ts")) ? ".ts" : ".js");
   const runCli = (args: string[], io: "inherit" | "pipe" = "inherit") => spawnSync(process.execPath, [cliEntry, ...args], { cwd: ws.root, env, stdio: io });
   runCli(["team", "repair"]);
