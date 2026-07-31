@@ -536,7 +536,11 @@ try {
 
     // Case G (LOOP-167 §9.8 AC-1): code-behind > 0 → NEXT has release-readiness hint naming N
     // State after Case F: tag v1.2.3 at headF; origin/main has 1 code + 2 doc commits ahead → codeBehind=1
-    const w18nextBehind = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgJson } });
+    // Set live mode so nextStep reaches the skewResult clause (dry-run check is higher priority)
+    // Scrub DEVLOOP_HUB_DB so the doctor uses wsHubDb(ws), not the ambient fire hub.db (LOOP-167 hermeticity)
+    const w18HubDbScrub = { DEVLOOP_W18_PKG_JSON: w18PkgJson, DEVLOOP_HUB_DB: "" };
+    run("team", ["set", "team.mode", "live"], { cwd: w18Root });
+    const w18nextBehind = run("server", ["doctor"], { cwd: w18Root, extra: w18HubDbScrub });
     ok(/NEXT:.*cut a release/.test(w18nextBehind.out), "NEXT carries release-readiness hint when code-behind > 0 (LOOP-167)");
     ok(/1 shipped-code commit/.test(w18nextBehind.out), "NEXT names the honest count N=1 (LOOP-167)");
     ok(/release-npm\.yml/.test(w18nextBehind.out), "NEXT names the dispatch action (LOOP-167)");
@@ -555,14 +559,14 @@ try {
       gitW18(w18Clone, ["add", "docs/LOOP167-B.md"]);
       gitW18(w18Clone, ["commit", "-qm", "docs: LOOP-167 test doc B"]);
       gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
-      const w18nextDocOnly = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgJson } });
+      const w18nextDocOnly = run("server", ["doctor"], { cwd: w18Root, extra: w18HubDbScrub });
       ok(!/cut a release/.test(w18nextDocOnly.out), "no release-readiness NEXT when docs-only delta (codeBehind=0) (LOOP-167)");
       ok(/DOCTOR_OK/.test(w18nextDocOnly.out), "DOCTOR_OK holds for docs-only delta NEXT check (LOOP-167)");
     }
 
     // Case I (LOOP-167 §9.8 AC-3): unresolvable installed version → no NEXT hint, no added git calls
     // Reuses w18PkgNoTag (version "9.9.9") — no tag/release commit → vCommit null → skewResult null
-    const w18nextNoVer = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgNoTag } });
+    const w18nextNoVer = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgNoTag, DEVLOOP_HUB_DB: "" } });
     ok(!/cut a release/.test(w18nextNoVer.out), "no release-readiness NEXT when version unresolvable (LOOP-167)");
     ok(/DOCTOR_OK/.test(w18nextNoVer.out), "DOCTOR_OK holds when version unresolvable — NEXT check adds no git calls (LOOP-167)");
   }
