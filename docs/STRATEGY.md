@@ -1018,6 +1018,59 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   runner with no test at all. That invariant is LOOP-128's and LOOP-110 is what happens without it.
   *When a change makes a guard obsolete, ask where the guard's invariant went — "obsolete" and
   "unenforced" look identical in a green diff.*
+- **2026-07-31 — the release path is hard-red, and the loop cannot ship anything at all
+  (LOOP-140).** The operator dispatched `bump=minor` off `f9d9ab2` at 09:42Z; it died at *Verify
+  source integrity (pre-install)* — `source-integrity: FAILED (221 findings, 2260 blobs)`.
+  Reproduced locally and **root-caused to LOOP-86 (`c02ba33`), not LOOP-129** as first filed:
+  `--all-history` at `9932337` (LOOP-129 landed, LOOP-86 not yet) is **OK across all 2274 blobs**;
+  at `c02ba33` the *same corpus* yields 222 findings. Only the checked-out scanner differs.
+  The mechanism is the previous entry's lesson running in reverse: `_scan_release_manifest`
+  used to open `if path != hub/package.json or expected_test_paths is None: return []`, and that
+  second clause was the **history-scope gate** — the byte-exact script pins never saw a historical
+  blob. LOOP-86 deleted the parameter because it fed the rule it was retiring, and the same line
+  silently widened the audit from *the current tree* to *all of history*. **A parameter can be
+  load-bearing for something other than what it is named after.**
+  The structural finding is larger than the bug: `test.yml` never passes `--all-history`;
+  `release-npm.yml` is the only caller and it is `workflow_dispatch`-only. **Every PR and every
+  push to main stayed green while the publish path was dead** — the break is undetectable until a
+  human tries to release. *A guard's coverage stops where its own CI's observability stops.*
+  Consequence: v1.12.0 — the whole overnight batch plus the operator's §17 merge-guard wiring —
+  is stranded on main, and **LOOP-38** (installed-binary skew) is now correctly `Blocked-by:
+  LOOP-140`, since only a release can close it.
+- **2026-07-31 — the merge guard shipped wired and half-inert; the defective spec was PM's own
+  (LOOP-69 → Canceled, → LOOP-142).** The operator committed the §12c + three-SKILL wiring at
+  `f9d9ab2`, exactly as this ticket specified. Every claim in the contract paragraph is **true** —
+  exit 0/1/2 and degrade-to-pass on a missing `gh`/hub DB all verified by running the verb six
+  ways. But all four governing files prescribe `merge-guard --pr <pr> --strict --apply`, and
+  `mergeGuard()` resolves the ticket only from `--ticket` or the **local** `HEAD` branch — never
+  from the PR, though `--pr` is in hand. Measured, one flag apart on the same PR: from the repo
+  root on `main` (the real fire-start context) `--pr 90 --strict` → **exit 0, "no ticket
+  resolved"**; with `--ticket LOOP-87` → **exit 1, TRIP**. From a worktree it is worse than silent:
+  on branch `dev-loop/LOOP-140` it printed *"ticket LOOP-140 is Todo — merge-eligible"* while
+  gating **LOOP-87**'s PR. So LOOP-67's axis — the one that already fired in anger on LOOP-12/PR
+  #40 — is unwired in practice. The command line came from **LOOP-69's own body, recorded by PM as
+  "re-verified"**; it was re-verified by reading. *A prescribed command line is a testable
+  artifact — run it in the context it will actually run in.* The fix is code, not another §17
+  commit: a `gh pr view <n> --json headRefName` rung above local-branch inference makes the
+  already-committed prose correct as written.
+- **2026-07-31 — verified Done: LOOP-87 (stacked-branch passengers) and LOOP-101 (`defaultBranch`
+  config reference).** LOOP-87 at the merge commit `58ef4eb`, all five ACs, with the §15 control
+  clean (the new tests exit 1 against `f9d9ab2`, red on exactly the LOOP-87 assertions). Its
+  rule-12 check passed too: replacing SHA-ancestry with ticket-id attribution kept LOOP-55's block
+  intact and removed exactly one assertion — the one that *encoded the bug*. The PM correction that
+  push-guard was blind to a rebase is carried as its own test, and is one of the assertions that
+  goes red pre-fix. LOOP-101 documents all four `defaultBranch` surfaces; its `team set`-settable
+  claim was re-checked against the live `SETTABLE` table (`team-edit.ts:40`) rather than taken on
+  the commit message's word — the LOOP-134/135 class makes that check mandatory now.
+- **2026-07-31 — the recurring defect of the week has a name: a surface reporting a result it never
+  established.** Five instances now, filed independently: doctor prints `DOCTOR_OK` with all 64
+  daemon ports occupied (**LOOP-137**); metrics reports "0 escaped to prod" on a loop that cannot
+  measure it (**LOOP-122**); merge-guard reports a clean board axis when it resolved no ticket at
+  all (**LOOP-142**); `list_events` returns a full 500 rows with no envelope, so a window 64%
+  missing is byte-identical to a complete one (**LOOP-143**); and source-integrity stays green on
+  every PR while the publish path is dead (**LOOP-140**). The shared shape is not a wrong answer —
+  it is **a confident answer where there should have been "I had no input."** Worth treating as a
+  design rule for every new check: *a guard that cannot report "skipped" will be read as "clean."*
 
 ## Personas
 
@@ -1378,6 +1431,28 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   the fire's discretionary output went into two **binding spec corrections on unbuilt tickets**
   (LOOP-95, and LOOP-84's build guidance) instead of new rows. Correcting a spec before it is built
   is worth more than filing the ticket that would have caught it afterwards.
+- **(pm, 2026-07-31) 📝 DECISION: the release gate is the loop's single blocking constraint — every
+  other sequencing question is subordinate to LOOP-140 until it lands.** Nothing the loop has built
+  since `89244e7` (2026-07-30 17:01Z) can reach a user; the npm publish path has been dead since
+  `c02ba33` and no CI signal says so. Consequences recorded so no fire re-derives them: (a)
+  **LOOP-38 is `Blocked-by: LOOP-140`** — the installed-binary skew it describes *grows* with every
+  merge and cannot be closed by anything but a release, so re-measuring it now just re-derives the
+  same fact; (b) **LOOP-142 should ship in the same v1.12.0** as the merge-guard wiring it repairs,
+  because that wiring goes live the moment the package publishes and half of it is a no-op until
+  then; (c) the operator's "head of the queue" instruction on LOOP-140 **is** mechanically enforced
+  — `PICK_RANK` puts P1+`Bug` at rank 0 and LOOP-140 is the oldest such row, so the two older P1s
+  (LOOP-128, LOOP-134) rank behind it as `Improvement`s. Checked rather than assumed; a prose
+  instruction that the router happens to disagree with would be invisible.
+- **(pm, 2026-07-31) 🧭 Filed two tickets, both routed rather than ideated — no Job-C lens sweep
+  this fire, deliberately.** HEAD moved (`c02ba33` → `58ef4eb`) so the lens list reset and Job C was
+  formally due. Skipped it anyway: junior sits at **14 Todo / 11 unblocked** over a 34-row Backlog,
+  *and* the release gate means nothing that tier builds can ship. Adding a lens-driven idea to a
+  saturated queue behind a closed shipping path is worth ~0. The fire's output went to what the
+  product actually produced on its own: two **binding spec corrections** (LOOP-140's attribution +
+  restoration reference; LOOP-142's proven repro) and two routed files (LOOP-142 from a verify-fail,
+  LOOP-143 from reflect's proposal). *Reviewing the product through Jobs A and B is still reviewing
+  the product* — this fire's two sharpest findings both came out of verifying someone else's work,
+  not out of looking for something new.
 
 ## Candidate ideas
 
