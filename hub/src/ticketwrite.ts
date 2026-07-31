@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
+import { isDevTierActor } from "./servable.ts"; // LOOP-157: the canonical builder-tier predicate (servable.ts §21b) — reused so the verify gate can't drift from the queue/scheduler on "who is a dev tier"
 
 export type WriteResult = { ok: true; id: string } | { ok: false; status: number; error: string };
 
@@ -72,16 +73,33 @@ function stagingDeployRejection(db: DatabaseSync, projectId: string, fromState: 
   return `staging-deploy gate: In Progress → In Review requires env:dev (this repo deploys and requireDeployBeforeReview is on)`;
 }
 
-// DL-77 verify gate (the Ralph-Wiggum guard). Enforced in updateTicketRow below — the SAME single-choke-point
-// placement as stagingDeployRejection — so it covers BOTH the MCP save_issue transition AND the daemon board-move
-// automatically. The maker-self-accept edge In Progress → Done is REJECTED: Done is the OWNER's verdict and must
-// be reached via In Review (owner verification). Every OTHER path to Done stays legal — In Review → Done (the
-// verified close), Todo → Done / Backlog → Done (the §9a intake parent-close, which MUST stay legal or it breaks
-// PM's grooming), and In Progress → Canceled/Duplicate (terminal, NOT Done). Unlike the DL-38 gate this is
-// UNCONDITIONAL (no opt-in config): "Done means verified" is a §3 loop invariant, not an operator preference.
-function verifyGateRejection(fromState: string, next: TicketUpdateFields): string | null {
+// DL-77 verify gate (the Ralph-Wiggum guard) + LOOP-157 two-hop close. Enforced in updateTicketRow below — the
+// SAME single-choke-point placement as stagingDeployRejection — so it covers BOTH the MCP save_issue transition
+// AND the daemon board-move automatically. Two edges to Done are gated:
+//   • In Progress → Done — the naive maker-self-accept shortcut — is REJECTED for everyone (Done is the OWNER's
+//     verdict, reached via In Review).
+//   • In Review → Done — LOOP-157: the single-hop check above was defeated by splitting the self-accept into two
+//     legal calls (In Progress → In Review → Done, both driven by the ticket's own builder, zero owner
+//     verification between). Enforce the PROPERTY the gate defends, NOT a spelling of the sequence (a sequence
+//     rule is beaten by the next sequence, exactly as the direct edge was beaten by two calls): a DEV-TIER actor
+//     (dev/senior-dev/junior-dev — the builder tiers, servable.ts) may NEVER close a ticket carrying a qa/pm
+//     VERIFIER-OWNER label. Only that owner (qa/pm) or the operator closes it. Keys on the actor's immutable tier
+//     + the ticket's owner label — never the mutable assignee — so no unassign / re-order / split-call trick
+//     evades it, and the refusal is greppable + names the actor and owner label (observability).
+// Every OTHER path to Done stays legal — In Review → Done by the qa/pm owner or the operator (the verified close),
+// a dev tier's In Review → Done on a ticket with NO qa/pm owner label (a §9a self-verified intake item), Todo →
+// Done / Backlog → Done (the §9a intake parent-close, which MUST stay legal or it breaks PM's grooming), and
+// In Progress → Canceled/Duplicate (terminal, NOT Done). Unlike the DL-38 gate this is UNCONDITIONAL (no opt-in
+// config): "Done means verified" is a §3 loop invariant, not an operator preference.
+function verifyGateRejection(actor: string, fromState: string, next: TicketUpdateFields): string | null {
   if (fromState === "In Progress" && next.state === "Done")
     return `verify gate: In Progress → Done is not allowed — Done must be reached via In Review (owner verification); move to In Review first`;
+  // LOOP-157: the two-hop self-accept — a builder tier cannot self-verify its own owner-owned work at the close edge.
+  if (fromState === "In Review" && next.state === "Done" && isDevTierActor(actor)) {
+    const owners = (JSON.parse(next.labels) as string[]).filter((l) => l === "qa" || l === "pm");
+    if (owners.length > 0)
+      return `verify gate: In Review → Done blocked — '${actor}' is a builder tier and cannot self-verify its own ${owners.join("/")}-owned work; the ${owners.join("/")} verifier-owner or the operator must close it`;
+  }
   return null; // every other transition is the caller's concern
 }
 
@@ -155,7 +173,7 @@ export function updateTicketRow(
 
   const gate = terminalExitRejection(actor, fromState, resolved)
     ?? stagingDeployRejection(db, projectId, fromState, resolved)
-    ?? verifyGateRejection(fromState, resolved);
+    ?? verifyGateRejection(actor, fromState, resolved);
   if (gate) return { ok: false, status: 400, error: gate };
   const t = nowIso();
   db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)

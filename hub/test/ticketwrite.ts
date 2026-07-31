@@ -23,8 +23,10 @@ try {
       .run(handle, handle, kind, handle, "2024-01-01T00:00:00Z");
   };
   actor("pm", "human");
+  actor("qa");
   actor("junior-dev");
   actor("senior-dev");
+  actor("operator", "human");
   db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES(?,?,?,?)")
     .run("p", "TW", "test", "2024-01-01T00:00:00Z");
 
@@ -126,6 +128,44 @@ try {
   ok(/verify gate/.test(gateRes.ok ? "" : gateRes.error), "update: error mentions verify gate");
   const rU3 = row(idU3);
   ok(rU3.assignee === null, "update: gate rejection writes nothing (row unchanged after gate trip)");
+
+  // ── LOOP-157: the two-hop self-accept — a builder tier cannot self-verify its own qa/pm-owned work ──────────
+  // The DL-77 direct-edge check (In Progress → Done) was defeated by splitting the self-accept into two legal
+  // calls (In Progress → In Review → Done, both from the ticket's own builder). The gate now also rejects the
+  // In Review → Done close when the acting actor is a dev tier AND the ticket carries a qa/pm verifier-owner label.
+  const stateOf = (id: string): string =>
+    (db.prepare("SELECT state FROM tickets WHERE id=?").get(id) as { state: string }).state;
+  const QA_BUG = ["dev-loop", "Bug", "qa", "junior-dev"];
+
+  // (a) junior-dev drives In Progress → In Review (the legal hand-off) …
+  const idSA = insertTicket(db, "p", "junior-dev", newFields({ state: "In Progress", assignee: "junior-dev", labels: QA_BUG }), {});
+  const saH1 = updateTicketRow(db, "p", "junior-dev", idSA, "In Progress",
+    updateFields({ state: "In Review", assignee: "junior-dev", labels: JSON.stringify(QA_BUG) }));
+  ok(saH1.ok, "LOOP-157: In Progress → In Review by the builder stays legal (the hand-off)");
+  // … then In Review → Done by the SAME dev-tier builder → REJECTED (the two-hop self-accept)
+  const saH2 = updateTicketRow(db, "p", "junior-dev", idSA, "In Review",
+    updateFields({ state: "Done", assignee: "junior-dev", labels: JSON.stringify(QA_BUG) }));
+  ok(!saH2.ok, "LOOP-157: In Review → Done by the dev-tier builder is REJECTED (no owner self-verify)");
+  ok(/verify gate/.test(saH2.ok ? "" : saH2.error), "LOOP-157: the refusal names the verify gate");
+  ok(!saH2.ok && /junior-dev/.test(saH2.error) && /qa/.test(saH2.error), "LOOP-157: the refusal names the actor + owner label (observability)");
+  ok(stateOf(idSA) === "In Review", "LOOP-157: the rejected self-close did NOT move the ticket (rollback)");
+
+  // (b) the qa OWNER (a DIFFERENT actor) closes In Review → Done → LEGAL — Job A's mechanism must not regress (AC3)
+  const saOwner = updateTicketRow(db, "p", "qa", idSA, "In Review",
+    updateFields({ state: "Done", assignee: "junior-dev", labels: JSON.stringify(QA_BUG) }));
+  ok(saOwner.ok && stateOf(idSA) === "Done", "LOOP-157: In Review → Done by the qa verifier-owner (different actor) stays legal");
+
+  // (c) no over-block — a dev tier's In Review → Done is legal when the ticket has NO qa/pm owner label (§9a self-verified)
+  const idNoOwner = insertTicket(db, "p", "senior-dev", newFields({ state: "In Review", assignee: "senior-dev", labels: ["dev-loop"] }), {});
+  const saNoOwner = updateTicketRow(db, "p", "senior-dev", idNoOwner, "In Review",
+    updateFields({ state: "Done", assignee: "senior-dev", labels: JSON.stringify(["dev-loop"]) }));
+  ok(saNoOwner.ok && stateOf(idNoOwner) === "Done", "LOOP-157: dev-tier In Review → Done stays legal with NO qa/pm owner label (no over-block)");
+
+  // (d) operator carve-out — the operator may always close a verifier-owned ticket (parity with the terminal-exit gate)
+  const idOp = insertTicket(db, "p", "junior-dev", newFields({ state: "In Review", assignee: "junior-dev", labels: QA_BUG }), {});
+  const saOp = updateTicketRow(db, "p", "operator", idOp, "In Review",
+    updateFields({ state: "Done", assignee: "junior-dev", labels: JSON.stringify(QA_BUG) }));
+  ok(saOp.ok && stateOf(idOp) === "Done", "LOOP-157: operator In Review → Done on a verifier-owned ticket stays legal (carve-out)");
 
   db.close();
 } finally {
