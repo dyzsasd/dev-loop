@@ -1,6 +1,6 @@
 // metrics.ts — fire metrics from fires.jsonl (window, success, suspect, medians), the 90d prune,
 // board KPIs from issue.transition events (accept rate = Done ÷ (Done + In Review→Canceled)), and the CLI.
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync, chmodSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -249,6 +249,65 @@ try {
   const svcHumanOut = (rSvcHuman.stdout ?? "").trim();
   ok(/parked/.test(svcHumanOut) && /sequenced/.test(svcHumanOut),
     `LOOP-26 AC4: human render contains both 'parked' and 'sequenced' (got: ${svcHumanOut.slice(0, 300)})`);
+
+  // Assert that svcOut (ws2, repos:{}) gives landed:null and landing:[] — AC3 baseline
+  ok(svcOut.landed === null, `LOOP-42 AC3: no qualifying repos → landed: null not 0 (got ${JSON.stringify(svcOut.landed)})`);
+  ok(Array.isArray(svcOut.landing), "LOOP-42 AC3: landing is always an array even with no qualifying repos");
+
+  // ── LOOP-42: landed (number) + landing[] shape + human render "done"/"landed" with fake gh ──
+  const ghBin = join(tmp, "fake-gh-bin");
+  mkdirSync(ghBin, { recursive: true });
+  const fakeGhPath = join(ghBin, "gh");
+  writeFileSync(fakeGhPath, [
+    "#!/usr/bin/env node",
+    "const a = process.argv.slice(2).join(' ');",
+    "const recent = new Date(Date.now() - 86400000).toISOString();",
+    "if (/--state[= ]merged/.test(a)) process.stdout.write(JSON.stringify([{headRefName:'dev-loop/LOOP-1',mergedAt:recent}]));",
+    "else if (/--state[= ]open/.test(a)) process.stdout.write(JSON.stringify([]));",
+    "else if (/check-runs/.test(a)) process.stdout.write(JSON.stringify({check_runs:[]}));",
+  ].join("\n"));
+  chmodSync(fakeGhPath, 0o755);
+
+  const wsLand = join(tmp, "ws-land");
+  mkdirSync(join(wsLand, ".dev-loop"), { recursive: true });
+  writeFileSync(join(wsLand, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2, workspaceId: "test-ws-land",
+    team: { key: "land-team", backend: "service", mode: "live", autonomy: "guarded" },
+    repos: { myrepo: { path: "myrepo", remote: "https://github.com/test-org/my-repo.git", landing: "pr", autoMerge: true } },
+    projects: { "land-team": { repos: [{ ref: "myrepo" }] } },
+  }));
+  spawnSync("node", [join(hubRoot, "src", "seed.ts"), "land-team", "Land Team", "LAND", join(wsLand, ".dev-loop", "hub.db")], { cwd: hubRoot, encoding: "utf8" });
+
+  const pathWithFakeGh = `${ghBin}:${process.env.PATH ?? ""}`;
+  const rLand = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d", "--json"], {
+    cwd: wsLand, env: { ...process.env, PATH: pathWithFakeGh }, encoding: "utf8",
+  });
+  const landOut = (() => { try { return JSON.parse((rLand.stdout ?? "").trim()); } catch { return {}; } })() as Record<string, unknown>;
+  ok(rLand.status === 0, `LOOP-42 AC1: metrics CLI with landing repo exits 0 (stderr: ${(rLand.stderr ?? "").replace(/\(node:.*?\)\n/g, "").slice(0, 200)})`);
+
+  // AC1: landed is a number (sum of mergedInWindow for known repos)
+  ok(typeof landOut.landed === "number", `LOOP-42 AC1: landed is a number (got ${JSON.stringify(landOut.landed)})`);
+  ok(landOut.landed === 1, `LOOP-42 AC1: landed === 1 (one merged dev-loop PR in window, got ${landOut.landed})`);
+
+  // AC1: landing[] has the expected shape
+  ok(Array.isArray(landOut.landing), "LOOP-42 AC1: landing[] is an array");
+  ok((landOut.landing as unknown[]).length === 1, `LOOP-42 AC1: landing[] has 1 entry (got ${(landOut.landing as unknown[]).length})`);
+  const ls = (landOut.landing as Record<string, unknown>[])[0]!;
+  ok(ls.repo === "myrepo", `LOOP-42 AC1: landing[0].repo = "myrepo" (got ${ls.repo})`);
+  ok(ls.state === "healthy", `LOOP-42 AC1: landing[0].state = "healthy" (no open PRs → healthy, got ${ls.state})`);
+  ok(ls.mergedInWindow === 1, `LOOP-42 AC1: landing[0].mergedInWindow === 1 (got ${ls.mergedInWindow})`);
+
+  // AC2: throughput key byte-unchanged — landing addition must not rename or remove it
+  ok(typeof (landOut.teamRollup as Record<string, unknown> | undefined)?.throughput === "number",
+    "LOOP-42 AC2: teamRollup.throughput still present and a number after landing addition");
+
+  // AC4: human render board line contains "done" and "landed"
+  const rLandHuman = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d"], {
+    cwd: wsLand, env: { ...process.env, PATH: pathWithFakeGh }, encoding: "utf8",
+  });
+  const landHumanOut = (rLandHuman.stdout ?? "").trim();
+  ok(/\bdone\b/.test(landHumanOut), `LOOP-42 AC4: human board line contains "done" (got: ${landHumanOut.slice(0, 300)})`);
+  ok(/\blanded\b/.test(landHumanOut), `LOOP-42 AC4: human board line contains "landed" (got: ${landHumanOut.slice(0, 300)})`);
 
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
