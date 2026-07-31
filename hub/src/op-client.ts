@@ -84,6 +84,9 @@ export function postOpUrl(base: URL, op: string, args: Record<string, unknown>, 
           "content-type": "application/json",
           "content-length": Buffer.byteLength(body),
           "x-devloop-actor": actor,
+          // Carry fireId for event attribution on the daemon side (LOOP-75). Omit when not in a fire
+          // so an operator's manual CLI call is never mis-stamped with a stale or ambient fire id.
+          ...(process.env.DEVLOOP_FIRE_ID ? { "x-devloop-fire-id": process.env.DEVLOOP_FIRE_ID } : {}),
           ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
       },
