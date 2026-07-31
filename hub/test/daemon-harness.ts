@@ -88,18 +88,21 @@ function daemonCliArgv(entry: DaemonCliEntry, sub: string): string[] {
     : [join(hubRoot, "src", "daemon.ts"), sub];
 }
 
-/** Blocking lifecycle-CLI invocation — the `spawnSync` form lifecycle.ts uses. */
+/** Blocking lifecycle-CLI invocation — the `spawnSync` form lifecycle.ts uses.
+ *  `cwd` overrides the default `hubRoot` (useful when testing workspace ascent from outside the repo).
+ *  `rawEnv` skips the `{ ...process.env, ...env }` merge — use when the caller has already built a
+ *  fully-scrubbed env (e.g. via scrubFireEnv()) and must not re-introduce ambient fire markers. */
 export function runDaemonCli(
   entry: DaemonCliEntry,
   sub: string,
-  env: Record<string, string>,
-  opts?: { timeout?: number },
+  env: Record<string, string | undefined>,
+  opts?: { timeout?: number; cwd?: string; rawEnv?: boolean },
 ): SpawnSyncReturns<string> {
   return spawnSync(NODE, daemonCliArgv(entry, sub), {
-    cwd: hubRoot,
+    cwd: opts?.cwd ?? hubRoot,
     encoding: "utf8",
     timeout: opts?.timeout ?? 25_000,
-    env: { ...process.env, ...env },
+    env: (opts?.rawEnv ? env : { ...process.env, ...env }) as NodeJS.ProcessEnv,
   });
 }
 
