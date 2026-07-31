@@ -3,7 +3,10 @@
 
 This checker intentionally uses only the Python standard library and Git. CI runs
 it before Node is configured or npm is invoked, so an injected lifecycle script
-cannot execute before the repository is inspected.
+cannot execute before the repository is inspected. The manifest's own auto-run
+lifecycle scripts (postinstall, prepack, ...) are audited byte-exact and
+deny-by-default, so a poisoned script string that ships to users in the tarball
+is caught here even though CI itself never executes it (--ignore-scripts).
 """
 
 from __future__ import annotations
@@ -72,13 +75,37 @@ TEST_SEGMENT_RE = re.compile(
     r"(?:DEVLOOP_CHANNEL_DRYRUN=1 DEVLOOP_CHANNEL_TOKEN=xoxb-DRYRUNSECRET "
     r"DEVLOOP_MIRROR_DRYRUN=1 )?node (test/[a-z0-9-]+\.ts)\Z"
 )
-IMPLICIT_RELEASE_HOOKS = {
-    "prebuild",
-    "postbuild",
-    "pretest",
-    "posttest",
-    "pretypecheck",
-    "posttypecheck",
+# npm auto-runs a fixed set of "lifecycle" scripts *without* an explicit
+# `npm run <name>`: on install (preinstall/install/postinstall — postinstall runs
+# on every `npm i -g` on the end user's machine), on pack/publish
+# (prepare/prepack/postpack/prepublish*/publish/postpublish — these build the
+# tarball), on version/uninstall/shrinkwrap, and via the pre/post wrappers of the
+# scripts CI itself invokes (build/test/typecheck). Those — and only those — are
+# the install/pack/publish-time injection surface this audit must not let through
+# unaudited. Every OTHER script in hub/package.json (start, daemon, the per-suite
+# test runners, quality, ...) is reached only through an explicit `npm run`, so
+# npm never auto-executes it at install/pack/publish time; those are deliberately
+# NOT pinned. Deny-by-default over this set (not a hand-maintained allow-list of
+# names) is what keeps a future lifecycle script from silently re-opening the hole.
+NPM_LIFECYCLE_SCRIPTS = frozenset(
+    {
+        "preinstall", "install", "postinstall",
+        "preprepare", "prepare", "postprepare",
+        "prepublish", "prepublishOnly", "prepack", "postpack", "publish", "postpublish",
+        "preversion", "version", "postversion",
+        "preuninstall", "uninstall", "postuninstall",
+        "preshrinkwrap", "shrinkwrap", "postshrinkwrap",
+        "dependencies",
+        # pre/post wrappers of the scripts CI runs explicitly (build/test/typecheck)
+        "prebuild", "postbuild", "pretest", "posttest", "pretypecheck", "posttypecheck",
+    }
+)
+# The only npm lifecycle scripts hub/package.json is permitted to declare, pinned
+# byte-exact. A lifecycle script (above) that is present but absent from this map,
+# or present with a different value, is an unsafe-package-script finding.
+RELEASE_LIFECYCLE_EXACT = {
+    "postinstall": "node postinstall.cjs",
+    "prepack": "npm run build",
 }
 
 
@@ -174,11 +201,20 @@ def _scan_release_manifest(
             findings.append(
                 _finding(path, data, "unsafe-package-script", 0, f"{script_name!r} is not the audited command")
             )
-    present_hooks = sorted(IMPLICIT_RELEASE_HOOKS.intersection(scripts))
-    if present_hooks:
-        findings.append(
-            _finding(path, data, "unsafe-package-script", 0, f"implicit release hooks present: {', '.join(present_hooks)}")
-        )
+    # Deny-by-default over npm's auto-run lifecycle set: a lifecycle script may
+    # appear only if it is pinned byte-exact in RELEASE_LIFECYCLE_EXACT. Anything
+    # else present (an unpinned name, or a pinned name whose bytes changed) is an
+    # unaudited install/pack/publish-time injection surface.
+    for script_name in sorted(NPM_LIFECYCLE_SCRIPTS.intersection(scripts)):
+        pinned = RELEASE_LIFECYCLE_EXACT.get(script_name)
+        if pinned is None:
+            findings.append(
+                _finding(path, data, "unsafe-package-script", 0, f"unpinned npm lifecycle script: {script_name!r}")
+            )
+        elif scripts[script_name] != pinned:
+            findings.append(
+                _finding(path, data, "unsafe-package-script", 0, f"{script_name!r} is not the audited command")
+            )
 
     test_script = scripts.get("test")
     test_paths: list[str] = []
