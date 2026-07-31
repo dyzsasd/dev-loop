@@ -136,7 +136,7 @@ function resolveAgentReviewers(repoDir: string): string[] {
   try {
     const ws = tryResolveWorkspace(repoDir);
     if (!ws) return [];
-    return (ws.file.team as unknown as { agentReviewers?: string[] }).agentReviewers ?? [];
+    return ws.file.team.agentReviewers ?? [];
   } catch { return []; }
 }
 

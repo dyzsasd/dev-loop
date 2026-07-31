@@ -190,6 +190,7 @@ single-field mutator; see [Operator-tunable fields](#operator-tunable-fields-dev
 | `git.defaultBranch` | Team-wide integration branch for repos that do not set their own. Resolution: `repos.<ref>.defaultBranch ?? team.git.defaultBranch ?? "main"` (§19). | ✓ `team.git.defaultBranch` |
 | `autonomy` | Default autonomy posture for projects that do not override. | — |
 | `intake` | Team-wide default intake block (`mode`, `todoDepthCap`); seeded by `team init --intake-mode`. Projects override **field-wise** (nearest wins per field), so a project tuning only `todoDepthCap` keeps a team-level `"passive"`. | ✓ `team.intake.mode`, `team.intake.todoDepthCap` |
+| `agentReviewers` | Comma-separated list of GitHub login names that belong to bots/agents and should be **excluded** from merge-guard's forge-review axis (§3.2). A reviewer in this list whose `CHANGES_REQUESTED` review or unresolved thread would otherwise block a merge is silently ignored — only human objections halt the guard. Example: `"github-actions[bot],renovate[bot]"`. Set with `dev-loop team set team.agentReviewers "login1,login2"`; stored as a JSON string array in `dev-loop.json`. | ✓ `team.agentReviewers` |
 | `defaultCodingAgent` | Default executor CLI (`claude`, `codex`, or `opencode`) when an agent does not override. | — |
 | `codingAgentDefaults` | Default `{ model, effort }` per executor CLI. | — |
 | `providers` | Registry of **custom OpenAI-compatible model endpoints** for the opencode lane (E16; `docs/design/model-provider-routing.md`). Entry: `{ kind:"openai-compatible", baseUrl, authTokenEnv, models[], extraOptions?, effortMode? }` — the id doubles as the opencode provider key and the `agents{}.model` prefix (`<id>/<model-id>`). Rendered into `<workspace>/opencode.json` by `dev-loop team sync-opencode` with `{env:VAR}` auth indirection (§16 — value in `secrets.env`). Built-in opencode providers (openrouter, zhipuai, …) need **no** entry: auth + the model string suffice (`opencode models` lists the launchable ids). | — |
@@ -358,7 +359,8 @@ leave `dev-loop.json` invalid. Only the whitelisted paths above (`team set` ✓ 
 
 - `team.mode` (`dry-run`|`live`) · `team.linearTeam` · `team.git.defaultBranch` ·
   `team.comms.provider` (`slack`|`lark`) ·
-  `team.comms.webhookEnv` · `team.intake.mode` (`autonomous`|`passive`) · `team.intake.todoDepthCap`
+  `team.comms.webhookEnv` · `team.intake.mode` (`autonomous`|`passive`) · `team.intake.todoDepthCap` ·
+  `team.agentReviewers` (comma-separated logins; stored as string array)
 - `projects.<key>.enabled` · `.weight` · `.devSplit` · `.testEnv.baseUrl` · `.testEnv.authConstraint` ·
   `.intake.mode` · `.intake.todoDepthCap`
 - `projects.<key>.communication.{cadence,language,audience,tone,outputDir,repoOutputDir}` (strings) ·

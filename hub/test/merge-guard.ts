@@ -4,7 +4,7 @@
 // LOOP-65 regression: merge-guard --apply path writes objection comment + routes ticket on trip;
 // read path (no --apply) writes nothing; no-DB degrades silently; idempotent on re-run.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -440,6 +440,50 @@ try {
   const mg10RowSecond = readTicket("MG-10");
   ok(mg10RowSecond?.state === "Todo", `LOOP-130: second --apply re-routed to Todo (got: ${mg10RowSecond?.state})`);
   ok(mg10RowSecond?.labels.includes("blocked") ?? false, "LOOP-130: second --apply re-added 'blocked' label");
+
+  // ── LOOP-123 regression: agentReviewers read from workspace config (not just injected opts) ─────
+  // Verify the full path: `team set team.agentReviewers` writes config → merge-guard reads it without
+  // any opts.agentReviewers injection → the agent reviewer's CHANGES_REQUESTED is excluded.
+  const wsDir = mkdtempSync(join(tmpdir(), "dl-mg-ws-"));
+  try {
+    // 1. Minimal valid service workspace (hand-created for setup; agentReviewers written by mutator below)
+    writeFileSync(join(wsDir, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "mgtest", backend: "service" },
+      repos: {}, projects: {},
+    }, null, 2) + "\n");
+    const wsRepo = join(wsDir, "repo");
+    mkdirSync(wsRepo);
+    writeFileSync(join(wsRepo, ".git"), "");  // stub so merge-guard resolveGhRepo won't error
+
+    // 2. Use the team set MUTATOR to write agentReviewers (the real write path, not injected opts)
+    const setR = spawnSync(process.execPath, [join(hubRoot, "src", "team.ts"), "set", "team.agentReviewers", "alice-bot,renovate[bot]"],
+      { cwd: wsDir, encoding: "utf8", env: { ...process.env } });
+    ok(setR.status === 0, `LOOP-123 setup: team set team.agentReviewers exits 0 (got ${setR.status}: ${(setR.stderr ?? "").trim().slice(0, 120)})`);
+    const cfgAfter = JSON.parse(readFileSync(join(wsDir, "dev-loop.json"), "utf8"));
+    ok(Array.isArray(cfgAfter.team.agentReviewers) && cfgAfter.team.agentReviewers.includes("alice-bot"),
+      "LOOP-123: team set wrote agentReviewers to dev-loop.json");
+
+    // 3. merge-guard WITHOUT opts.agentReviewers — must read from workspace config
+    //    CHANGES_REQUESTED from "alice-bot" (in config) → should NOT trip
+    const prBotCR = { number: 1, reviewDecision: "CHANGES_REQUESTED", url: "https://github.com/x/y/pull/1", latestReviews: [{ author: { login: "alice-bot" }, state: "CHANGES_REQUESTED" }] };
+    const rConfigBot = mergeGuard(wsRepo, {
+      pr: 1, ghRepo: "x/y",
+      exec: makePrExec(prBotCR, gqlNoThreads),
+    });
+    ok(!rConfigBot.trip, "LOOP-123: alice-bot CR excluded via workspace config (no opts.agentReviewers injected)");
+    ok(rConfigBot.forgeReview.changeRequesters.length === 0, "LOOP-123: changeRequesters empty after config-exclusion");
+
+    // 4. A non-agent reviewer's CHANGES_REQUESTED STILL trips (config exclusion is additive, not blanket)
+    const prHumanCR = { number: 1, reviewDecision: "CHANGES_REQUESTED", url: "https://github.com/x/y/pull/1", latestReviews: [{ author: { login: "bob-human" }, state: "CHANGES_REQUESTED" }] };
+    const rHumanCR = mergeGuard(wsRepo, {
+      pr: 1, ghRepo: "x/y",
+      exec: makePrExec(prHumanCR, gqlNoThreads),
+    });
+    ok(rHumanCR.trip, "LOOP-123: bob-human (not in agentReviewers) CR still trips");
+  } finally {
+    rmSync(wsDir, { recursive: true, force: true });
+  }
 
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
