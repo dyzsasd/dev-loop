@@ -3,7 +3,7 @@ import {
   validateTeamFile, effectiveProject, effectiveRepo, reposOfProject, primaryRepo,
   referencingProjects, inferProjectForRepo, ownerOf, toLegacyView, normalizedRel,
   parseWorkspaceFile, WsValidationError, isTeamProject, deliveryProjects,
-  agentInterfaceFor, DEFAULT_AGENT_INTERFACE,
+  agentInterfaceFor, DEFAULT_AGENT_INTERFACE, resolveDefaultBranchForPath,
   type TeamFile, type Workspace, type HubBlock,
 } from "../src/team-config.ts";
 
@@ -369,6 +369,52 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   const f = base(); f.projects.devplatform.agents = { dev: { stallTimeout: "bad" } };
   const paths = validateTeamFile(f).errors.filter((e) => e.code === "E17").map((e) => e.path);
   ok(paths.some((p) => /projects\.devplatform\.agents\.dev\.stallTimeout/.test(p)), "E17: project-level error path names projects.<key>.agents.<agent>.stallTimeout");
+}
+
+// ── AC1: defaultBranch resolution — effectiveRepo fallback chain + resolveDefaultBranchForPath ──
+{
+  const mkWsDb = (overrides: Partial<ReturnType<typeof base>["team"]>, repoOverrides?: Record<string, unknown>): Workspace => {
+    const f = base();
+    Object.assign(f.team, overrides);
+    if (repoOverrides) Object.assign(f.repos.portal, repoOverrides);
+    return mkWs(f);
+  };
+
+  // per-repo override wins
+  ok(effectiveRepo(mkWsDb({}, { defaultBranch: "master" }), "portal").defaultBranch === "master",
+    "AC1: repos[].defaultBranch 'master' → resolved to 'master'");
+
+  // top-level git.defaultBranch fallback
+  {
+    const f = base();
+    (f.team as { git?: { defaultBranch?: string } }).git = { defaultBranch: "trunk" };
+    ok(effectiveRepo(mkWs(f), "portal").defaultBranch === "trunk",
+      "AC1: team.git.defaultBranch 'trunk' → resolved when no per-repo override");
+  }
+
+  // per-repo wins over team-level
+  {
+    const f = base();
+    (f.team as { git?: { defaultBranch?: string } }).git = { defaultBranch: "trunk" };
+    f.repos.portal.defaultBranch = "master";
+    ok(effectiveRepo(mkWs(f), "portal").defaultBranch === "master",
+      "AC1: per-repo 'master' beats team.git.defaultBranch 'trunk'");
+  }
+
+  // neither present → "main" (backward compat, AC7)
+  ok(effectiveRepo(mkWsDb({}), "portal").defaultBranch === "main",
+    "AC1/AC7: no defaultBranch anywhere → falls back to 'main' (backward compat)");
+
+  // resolveDefaultBranchForPath: by absPath
+  {
+    const f = base();
+    f.repos.portal.defaultBranch = "release";
+    const ws = mkWs(f);
+    ok(resolveDefaultBranchForPath(ws, "/ws/jinko-dev-platform") === "release",
+      "resolveDefaultBranchForPath: returns the branch for a registered absPath");
+    ok(resolveDefaultBranchForPath(ws, "/ws/unregistered-dir") === undefined,
+      "resolveDefaultBranchForPath: returns undefined for an unregistered dir (caller must fail loud)");
+  }
 }
 
 console.log(fails === 0 ? "\nTEAM_CONFIG_OK" : `\n${fails} CHECK(S) FAILED`);

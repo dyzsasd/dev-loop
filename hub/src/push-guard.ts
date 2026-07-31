@@ -6,14 +6,16 @@
 // reports commits whose referenced tickets are Canceled/Duplicate. Read-only on git AND the hub; the
 // dev-agent ship sequence runs it `--strict` before `git push` (§12) and Sweep may quote it per repo.
 import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import { existsSync } from "node:fs";
 import { openDb } from "./db.ts";
-import { resolveHubDbPath } from "./workspace.ts";
+import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
+import { resolveDefaultBranchForPath } from "./team-config.ts";
 
 export interface PushGuardFinding { sha: string; subject: string; ticket: string; state: string }
 export interface PushGuardPassenger { sha: string; subject: string }
-export interface PushGuardResult { branch: string; ahead: number; unknownRefs: string[]; findings: PushGuardFinding[]; passengers: PushGuardPassenger[]; note?: string }
+export interface PushGuardResult { branch: string; ahead: number; unknownRefs: string[]; findings: PushGuardFinding[]; passengers: PushGuardPassenger[]; unresolvedDefaultBranch?: string; note?: string }
 
 const TICKET_RE = /\b[A-Z][A-Z0-9]{1,9}-\d+\b/g; // the <PREFIX>-<n> id shape (§3 ticketPrefix)
 
@@ -24,7 +26,7 @@ const branchTicketId = (br: string): string | undefined => {
   return m[1].match(TICKET_RE)?.[0]; // "LOOP-54" from "dev-loop/LOOP-54"
 };
 
-export function pushGuard(repoDir: string, branch?: string, dbPath?: string, defaultBranch = "main"): PushGuardResult {
+export function pushGuard(repoDir: string, branch: string | undefined, dbPath: string | undefined, defaultBranch: string): PushGuardResult {
   const git = (args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const gitOk = (args: string[]): boolean => { try { git(args); return true; } catch { return false; } };
   const parseLog = (raw: string) => raw ? raw.split("\0").filter(Boolean).map((r) => {
@@ -37,22 +39,28 @@ export function pushGuard(repoDir: string, branch?: string, dbPath?: string, def
   // Runs BEFORE the upstream check so a fresh (never-pushed) feature branch is still caught.
   // Uses origin/<defaultBranch>..branch — the commits that would ride a first push of this branch.
   const passengers: PushGuardPassenger[] = [];
+  let unresolvedDefaultBranch: string | undefined;
   const ownId = branchTicketId(br);
-  if (ownId && gitOk(["rev-parse", "--verify", "--quiet", `origin/${defaultBranch}`])) {
-    const pCommits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `origin/${defaultBranch}..${br}`]));
-    for (const c of pCommits) {
-      // Clause 1: commit references this branch's own ticket → this ticket's work, not a passenger.
-      if (c.msg.match(TICKET_RE)?.includes(ownId)) continue;
-      // Clause 2: commit is an ancestor of local <defaultBranch> → leaked from local main.
-      // A legitimately rebased commit is NOT an ancestor of local main; stacked-branch commits
-      // live on a sibling feature branch, also not local main ancestors → both pass (no false positive).
-      if (!gitOk(["merge-base", "--is-ancestor", c.sha, defaultBranch])) continue;
-      passengers.push({ sha: c.sha.slice(0, 7), subject: c.subject });
+  if (ownId) {
+    if (gitOk(["rev-parse", "--verify", "--quiet", `origin/${defaultBranch}`])) {
+      const pCommits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `origin/${defaultBranch}..${br}`]));
+      for (const c of pCommits) {
+        // Clause 1: commit references this branch's own ticket → this ticket's work, not a passenger.
+        if (c.msg.match(TICKET_RE)?.includes(ownId)) continue;
+        // Clause 2: commit is an ancestor of local <defaultBranch> → leaked from local main.
+        // A legitimately rebased commit is NOT an ancestor of local main; stacked-branch commits
+        // live on a sibling feature branch, also not local main ancestors → both pass (no false positive).
+        if (!gitOk(["merge-base", "--is-ancestor", c.sha, defaultBranch])) continue;
+        passengers.push({ sha: c.sha.slice(0, 7), subject: c.subject });
+      }
+    } else {
+      // origin/<defaultBranch> doesn't resolve — record it; the caller must fail loud (AC4: never silent).
+      unresolvedDefaultBranch = defaultBranch;
     }
   }
 
   try { git(["rev-parse", "--verify", "--quiet", `origin/${br}`]); }
-  catch { return { branch: br, ahead: 0, unknownRefs: [], findings: [], passengers, note: `no upstream origin/${br} — nothing to compare (first push of this branch)` }; }
+  catch { return { branch: br, ahead: 0, unknownRefs: [], findings: [], passengers, unresolvedDefaultBranch, note: `no upstream origin/${br} — nothing to compare (first push of this branch)` }; }
   // -z NUL-terminates each record so newlines in the body don't split records; %B is the full commit
   // message (subject + body), which allows ticket refs in trailers/footers to be detected (LOOP-25).
   const commits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `origin/${br}..${br}`]));
@@ -78,19 +86,20 @@ export function pushGuard(repoDir: string, branch?: string, dbPath?: string, def
     unknownRefs.push(...refs.keys()); // no local hub (linear/local backend) — states unverifiable here
   }
 
-  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers };
+  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, unresolvedDefaultBranch };
 }
 
 // CLI: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] [--strict] [--json]
 // Exit codes (the write-layer contract): 0 clean/advisory · 1 findings under --strict · 2 usage.
 if (isMainEntry(import.meta.url)) {
   const argv = process.argv.slice(2);
-  let repo = process.cwd(); let branch: string | undefined; let strict = false; let asJson = false; let defaultBranch = "main";
+  let repo = process.cwd(); let branch: string | undefined; let strict = false; let asJson = false;
+  let explicitDefaultBranch: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--repo") repo = argv[++i] ?? "";
     else if (a === "--branch") branch = argv[++i];
-    else if (a === "--default-branch") defaultBranch = argv[++i] ?? "main";
+    else if (a === "--default-branch") explicitDefaultBranch = argv[++i];
     else if (a === "--strict") strict = true;
     else if (a === "--json") asJson = true;
     else if (a === "--help" || a === "-h") {
@@ -99,12 +108,27 @@ whose referenced tickets are Canceled/Duplicate (the MP-275 ride-along class), a
 commits that branched off local main instead of origin/<defaultBranch> (LOOP-55). Read-only.
 
 Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] [--strict] [--json]
-  --strict           exit 1 when any finding or passenger is present (the dev-agent §12 pre-push gate)
-  --default-branch   the branch to check for passenger ancestry (default: main)`);
+  --strict           exit 1 when any finding, passenger, or unresolvable default branch is present
+  --default-branch   the default branch name (resolved from workspace config when omitted)`);
       process.exit(0);
     } else { console.error(`push-guard: unknown option '${a}'`); process.exit(2); }
   }
   if (!repo) { console.error("push-guard: --repo needs a path"); process.exit(2); }
+
+  let defaultBranch: string;
+  if (explicitDefaultBranch) {
+    defaultBranch = explicitDefaultBranch;
+  } else {
+    const absRepo = resolve(repo);
+    const ws = tryResolveWorkspace(absRepo);
+    const fromConfig = ws ? resolveDefaultBranchForPath(ws, absRepo) : undefined;
+    if (!fromConfig) {
+      console.error(`push-guard: cannot resolve the default branch for '${repo}' — not a registered repo; pass --default-branch <name>`);
+      process.exit(strict ? 1 : 0);
+    }
+    defaultBranch = fromConfig;
+  }
+
   let r: PushGuardResult;
   try { r = pushGuard(repo, branch, undefined, defaultBranch); }
   catch (e) { console.error(`push-guard: ${(e as Error).message.split("\n")[0]}`); process.exit(2); }
@@ -114,8 +138,9 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
     else console.log(`push-guard: ${r.ahead} commit(s) ahead of origin/${r.branch}`);
     for (const f of r.findings) console.log(`⛔ ride-along: ${f.sha} "${f.subject}" references ${f.ticket} (${f.state}) — a push would publish canceled work; drop/park it (needs-operator) before pushing`);
     for (const p of r.passengers) console.log(`⛔ passenger: ${p.sha} "${p.subject}" — branched off local ${defaultBranch}, not origin/${defaultBranch} — re-cut via \`dev-loop worktree add\``);
+    if (r.unresolvedDefaultBranch) console.log(`⛔ push-guard: origin/${r.unresolvedDefaultBranch} does not exist — passenger detection did NOT run (a safety gate must not pass silently)`);
     if (r.unknownRefs.length) console.log(`note: ${r.unknownRefs.length} ticket ref(s) not verifiable here (${r.unknownRefs.slice(0, 5).join(", ")}${r.unknownRefs.length > 5 ? ", …" : ""}) — no matching row in the local hub`);
-    if (!r.findings.length && !r.passengers.length && !r.note) console.log("clean: no canceled/duplicate ticket refs or passengers aboard");
+    if (!r.findings.length && !r.passengers.length && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs or passengers aboard");
   }
-  process.exit(strict && (r.findings.length || r.passengers.length) ? 1 : 0);
+  process.exit(strict && (r.findings.length || r.passengers.length || !!r.unresolvedDefaultBranch) ? 1 : 0);
 }
