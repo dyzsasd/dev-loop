@@ -5,7 +5,7 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
-87 commits in one overnight run of the loop on itself. The headline: **dev-loop can now
+98 commits in one overnight run of the loop on itself. The headline: **dev-loop can now
 measure and explain its own operation** — the metering program shipped end to end across all
 three CLI lanes, and the landing path grew real machine gates.
 
@@ -37,22 +37,34 @@ three CLI lanes, and the landing path grew real machine gates.
   terminal-state worktree reaping.
 - **`dev-loop doc-land`** — PM's doc-only strategy-doc progress commits land ff-only on
   `origin/<defaultBranch>`, docs-path-asserted and push-guard-gated, so the north star the dev
-  tiers read is the one PM writes.
-- **push-guard** also flags passenger commits branched off local `main`.
+  tiers read is the one PM writes. **Wired into pm-agent Job C step 5 + §20 D4**: under
+  `landing:"pr"` the commit alone is not the landing, because every dev worktree branches off
+  `origin/<defaultBranch>` and never sees an unpushed doc commit.
+- **push-guard** also flags passenger commits branched off local `main`, and stacked-branch
+  passengers via ticket attribution.
+- **Reflect's evidence model corrected** — `list_events` is a bounded recent slice (500 rows,
+  newest first, no backward paging, truncation unmarked), not a retrospective window; whole-window
+  facts come from the fire ledger, reports, and `git log`, and every retro now states the oldest
+  timestamp its feed actually reached.
 
-**New doctor codes:** `W18` (installed CLI vs `origin/main` skew), `W19` (local default branch
-ahead of origin), `W21` (sensitive mis-tier backstop), plus a nudge when a repo has no build
-gates configured but detection finds some.
+**New doctor codes:** `W17` (`strategyDoc` unset), `W18` (installed CLI vs `origin/main` skew),
+`W19` (local default branch ahead of origin), `W21` (sensitive mis-tier backstop), plus a nudge
+when a repo has no build gates configured but detection finds some.
 
 **Config surface.** `repos.<ref>.defaultBranch` + `team.git.defaultBranch` (resolution
-`repo ?? team ?? "main"`), `team add-repo --default-branch`, and per-agent
-`fireTimeout`/`stallTimeout` — all now documented in `references/config-schema.md`.
+`repo ?? team ?? "main"`), `team add-repo --default-branch`, `projects.<key>.strategyDoc` (now
+`team set`-settable — it was schema-declared and read by four consumers with no way to write it),
+and per-agent `fireTimeout`/`stallTimeout` — all now documented in `references/config-schema.md`.
+`team add-repo` also refuses field flags on an already-registered ref instead of silently
+discarding them and exiting 0.
 
 **Safety & robustness.** Sensitive tickets re-tier to senior-dev and can never be served into
 the junior slice; a provider-scoped circuit breaker trips on spend-limit/rate-limit/auth across
 lanes; claimed tickets are released when infrastructure kills their fire; the raw fire
 `outputTail` is no longer persisted and ledger/log files are owner-only; a deny-by-default
-audit of npm lifecycle scripts; `dev-loop run` no longer no-ops on any path containing a space.
+audit of npm lifecycle scripts (scoped to worktree scans — auditing historical blobs against
+today's byte-exact pins made every release permanently unpublishable); `dev-loop run` no longer
+no-ops on any path containing a space.
 
 ## 1.11.0
 
