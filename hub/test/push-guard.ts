@@ -1,7 +1,7 @@
 // P1-2 push-guard — regression tests for the ride-along class (MP-275: a Canceled ticket's commit rode a
 // batched push into a prod deploy). Real git repos (bare origin + clone), real hub rows.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -33,7 +33,7 @@ try {
   conn.close();
 
   // clean: nothing ahead
-  const clean = pushGuard(work, "main", db);
+  const clean = pushGuard(work, "main", db, "main");
   ok(clean.ahead === 0 && clean.findings.length === 0, "clean branch → 0 ahead, no findings");
 
   // the MP-275 shape: a canceled ticket's commit is aboard, plus legal work and a ghost ref
@@ -42,7 +42,7 @@ try {
   git(work, ["commit", "--allow-empty", "-qm", "CERT-3: superseded duplicate"]);
   git(work, ["commit", "--allow-empty", "-qm", "CERT-9: ghost ref"]);
   git(work, ["commit", "--allow-empty", "-qm", "docs: no ticket ref"]);
-  const r = pushGuard(work, "main", db);
+  const r = pushGuard(work, "main", db, "main");
   ok(r.ahead === 5, `5 commits ahead (got ${r.ahead})`);
   ok(r.findings.some((f) => f.ticket === "CERT-1" && f.state === "Canceled"), "Canceled ref flagged (the MP-275 shape)");
   ok(r.findings.some((f) => f.ticket === "CERT-3" && f.state === "Duplicate"), "Duplicate ref flagged too");
@@ -51,7 +51,7 @@ try {
 
   // no upstream → advisory note, never a crash
   git(work, ["checkout", "-qb", "feature/x"]);
-  const nb = pushGuard(work, "feature/x", db);
+  const nb = pushGuard(work, "feature/x", db, "main");
   ok(nb.ahead === 0 && /no upstream/.test(nb.note ?? ""), "a branch with no upstream → note (first push)");
   git(work, ["checkout", "-qm", "main"]);
 
@@ -76,7 +76,7 @@ try {
   }
   // Commit with CERT-5 ref only in the body/trailer (the exact dev-agent co-author trailer shape).
   git(work, ["commit", "--allow-empty", "-qm", "fix(y): patch other behavior\n\nTicket-Id: CERT-5\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"]);
-  const bodyRef = pushGuard(work, "main", db);
+  const bodyRef = pushGuard(work, "main", db, "main");
   ok(bodyRef.ahead === 1, `body-ref commit: 1 ahead (got ${bodyRef.ahead})`);
   ok(bodyRef.findings.some((f) => f.ticket === "CERT-5" && f.state === "Canceled"),
     "LOOP-25: a Canceled ref in the commit BODY (trailer) is flagged — not silently invisible");
@@ -179,6 +179,23 @@ try {
     ok(/does not exist/.test(pg4bStrict.stdout), "AC4 CLI: output names the missing origin/<branch>");
 
     git(work, ["checkout", "-q", "main"]);
+  }
+
+  // ── AC2 (design `default-branch-resolution` §5 line 187 / LOOP-107): no `"main"` string-literal
+  //    survives as a branch default in EITHER source file. This is the regression LOOP-99 shipped
+  //    without — the very assertion that would have caught the residual `defaultBranch = "main"` default
+  //    at push-guard.ts:29 (Delta 1). Self-maintaining: the single terminal fallback lives only in
+  //    effectiveRepo (team-config.ts), so neither file should carry the literal. Line-comments are
+  //    stripped first so prose mentioning main can never trip it, and `origin/${defaultBranch}`
+  //    interpolation carries no literal — a plain literal-presence check over the two files is enough.
+  {
+    const carriesMainLiteral = (rel: string): boolean =>
+      readFileSync(join(hubRoot, "src", rel), "utf8")
+        .split("\n")
+        .map((l: string) => l.replace(/\/\/.*$/, "")) // drop line-comments: a branch default is code, not prose
+        .some((l) => l.includes('"main"'));
+    ok(!carriesMainLiteral("push-guard.ts"), "AC2: hub/src/push-guard.ts carries no \"main\" branch-default literal (design §5)");
+    ok(!carriesMainLiteral("worktree.ts"), "AC2: hub/src/worktree.ts carries no \"main\" branch-default literal (design §5)");
   }
 
 } finally {
