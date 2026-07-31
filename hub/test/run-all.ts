@@ -22,9 +22,25 @@ const SUITE_ENV: Record<string, Record<string, string>> = {
   },
 };
 
+// Files matching hub/test/*.ts that are NOT standalone suites (shared helpers imported by real
+// suites). Without this, glob-discovery runs them as phantom "passing" tests. Each entry carries a
+// one-line reason, so "this file is not a suite" is a visible, reviewable decision — not a silent
+// glob miss. LOOP-139 introduced the constant + the filter/--list mechanism below; entries are added
+// as helpers are identified (e.g. daemon-harness.ts under LOOP-138).
+const NON_SUITES: Record<string, string> = {};
+
 const suites = readdirSync(here)
-  .filter((f) => f.endsWith(".ts") && f !== "run-all.ts")
+  .filter((f) => f.endsWith(".ts") && f !== "run-all.ts" && !Object.hasOwn(NON_SUITES, f))
   .sort();
+
+// `--list`: print the discovered suites + the NON_SUITES exclusions as JSON and exit WITHOUT running
+// anything — the machine-readable discovery surface run-all-runner.ts (LOOP-139) asserts against
+// `git ls-files 'hub/test/*.ts'`, so a future filter/extension change can't silently drop a suite
+// from the ship gate.
+if (process.argv.includes("--list")) {
+  console.log(JSON.stringify({ discovered: suites, nonSuites: NON_SUITES }));
+  process.exit(0);
+}
 
 type Status = "pass" | "fail" | "crash";
 const results: { file: string; status: Status }[] = [];
