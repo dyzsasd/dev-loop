@@ -9,9 +9,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSecretsEnv, loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "../src/secrets.ts";
-import { resolveWorkspace } from "../src/workspace.ts";
+import { resolveWorkspace, wsHubDb } from "../src/workspace.ts";
 import { doctorWorkspace } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -131,6 +132,43 @@ try {
     const nowhere = mkWs("doc-none-ws", "DL_SECTEST_DOC_NONE");
     const outNone = capture(() => doctorWorkspace(loadWorkspace(nowhere)));
     ok(/⚠️.*\[W12\] comms env DL_SECTEST_DOC_NONE unresolvable/.test(outNone) && outNone.includes(wsSecretsPath(nowhere)), "doctor: unresolvable → W12 warn naming the exact secrets.env path");
+  }
+
+  // ── doctor W21: sensitive mis-tier backstop — service backend with hub.db (new in LOOP-81) ──
+  {
+    const mkWsSvc = (name: string, projKey: string): string => {
+      const root = join(tmp, name);
+      mkdirSync(join(root, ".dev-loop"), { recursive: true });
+      writeFileSync(join(root, "dev-loop.json"), JSON.stringify({
+        schemaVersion: 2,
+        team: { key: name, backend: "service" },
+        repos: {},
+        projects: { [projKey]: { prefix: "W21" } },
+      }));
+      return root;
+    };
+
+    const root = mkWsSvc("w21-ws", "w21proj");
+    const ws = loadWorkspace(root);
+    const nowIso = new Date().toISOString();
+
+    const db = openDb(wsHubDb(ws));
+    db.prepare("INSERT INTO projects(id,key,name,ticket_prefix,ticket_seq,created_at) VALUES(?,?,?,?,0,?)").run("pid-w21", "w21proj", "W21 Proj", "W21", nowIso);
+    db.close();
+
+    const outSilent = capture(() => doctorWorkspace(loadWorkspace(root)));
+    ok(!outSilent.includes("[W21]"), "doctor W21: no sensitive+junior-dev tickets → W21 silent");
+
+    const db2 = openDb(wsHubDb(ws));
+    db2.prepare("INSERT INTO actors(id,handle,kind,display_name,active,created_at) VALUES(?,?,?,?,1,?)").run("a-sr", "senior-dev", "agent", "Senior Dev", nowIso);
+    db2.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      "W21-1", "pid-w21", "sensitive feature", "", "Feature", "Todo", "junior-dev", 2,
+      JSON.stringify(["dev-loop", "pm", "sensitive", "junior-dev"]), "[]", "pm", nowIso, nowIso
+    );
+    db2.close();
+
+    const outWarn = capture(() => doctorWorkspace(loadWorkspace(root)));
+    ok(/\[W21\]/.test(outWarn) && outWarn.includes("W21-1"), "doctor W21: sensitive+junior-dev ticket → W21 warn with ticket id");
   }
 
   // ── acceptance: webhook ONLY in secrets.env, clean shell ⇒ `dev-loop notify` delivers ──
