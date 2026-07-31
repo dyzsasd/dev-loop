@@ -602,6 +602,44 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   something that does not exist and the failure reads as "nothing to report"** — which is why the
   fix is specified as a test that a red non-`main` base *does* warn, not merely as a rename.
 
+- **2026-07-31 (late) — the release-skew guard learned to ignore documentation, and in the same
+  stroke went blind to the files that ARE this product's behavior (LOOP-151 shipped, `45d8d9e`,
+  PR #110; the limit filed the same hour as LOOP-191).** W18 — the warning that tells the operator
+  the installed npm package is behind `origin/main`, and therefore the alarm on the release cadence
+  that four shipped-but-dark fixes are already waiting on — had no pathspec, so **81% of the lag it
+  reported was `docs/**`**, most of it PM's own doc-lands. A guard that fires on every routine
+  commit is a guard that is off, and this one had been off for days. LOOP-151 gave it a code-only
+  count via `:(exclude)docs/ :(exclude)*.md`, silent when a window is doc-only, and warning with a
+  `(+N doc-only)` note otherwise. That much is right and verified.
+  **The exclusion overshot, and the overshoot is this codebase's own recurring defect wearing a new
+  hat.** `hub/package.json` `files` publishes **`skills/` and `references/`** — so
+  `references/conventions.md` and `skills/*/SKILL.md` are *installed artifacts*: they are what every
+  agent loads at boot, and changing them changes agent behavior with no TypeScript involved. Excluding
+  `*.md` everywhere drops exactly those. Measured against the live window: **43 commits since
+  v1.12.0, W18 reports 13, and 3 `docs(governing)` commits are scored 0** — one of which rewrote the
+  governing rules for **pm** and **reflect** (`4e591b0`), and one of which is **§12b itself**
+  (`13bbc89`), the convention instructing verifiers that *merged is not running*. The rule that
+  merged ≠ live is invisible to the guard that measures whether merged is live. Proof it goes silent
+  rather than merely low: the window containing only `4e591b0` counts `1` total and `0` code.
+  **The generalizable form — worth more than the fix:** an exclusion filter is a claim about what
+  does not matter, and this product's markdown is not decoration in two directories. The specified
+  fix therefore derives the counted set from `hub/package.json` `files` (the existing single source
+  of truth for what ships) rather than hand-maintaining a second list that can drift — the same
+  single-source discipline that keeps `isDevTierActor` from re-spelling itself across four callers.
+
+- **2026-07-31 (late) — `hub`/`daemon` resolution-seam decomposition passed the design gate
+  (LOOP-152 `Done`; children LOOP-185/LOOP-186 promoted).** The operator hit this first-hand during
+  the v1.12.0 restart: `hub status` lists a per-project daemon, tells you to run `daemon up`, and
+  **no verb in either family can act on it** — `hub stop` silently stopped `_team` (the board UI)
+  instead, `daemon down` denied the daemon `hub status` had just listed, and `daemon up` called the
+  project "not seeded". 51 live daemons from that one path, 49 killed by hand. The design's value was
+  in *disproving the obvious diagnosis*: the ticket reads as two record stores, and there is only one
+  — both callers reach `lcReadRun(key)`. The divergence is upstream, in how each surface resolves the
+  `(runDir, hubDb, key)` triple **before** reading it: the `hub *` verbs self-wire the workspace, the
+  bare `daemon *` verbs trust the ambient shell. One root cause, all three reported defects.
+  **Still merged-only in the sense that matters: nothing here has landed** — these are two staged
+  children, and the three defects remain live in `main` at `cf708e4`.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1303,6 +1341,46 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `team.comms` channel for it to deliver to, and brand voice is PM's lane) — LOOP-90, a
   configured-but-unscheduled agent's tickets being unpickable, stands on its own merits rather than
   being papered over by adding the agent.
+
+- **(pm, 2026-07-31) A design gate's fail path is for broken designs, not for under-specified
+  sentences — the amendment ruling (LOOP-152).** §21a gives PM two verdicts at the design gate, and
+  the fail path is heavy on purpose: `Cancel` the parent, `Cancel` every staged child, file a fresh
+  design ticket. LOOP-152's design was sound in root cause, model decision and decomposition, but one
+  sentence of Child A said to wire the workspace context "the SAME way `hub.ts` does", and
+  `hub.ts:wireEnv` assigns **unconditionally** — so implemented literally it would overwrite an
+  *explicit* `DEVLOOP_RUN_DIR`/`DEVLOOP_HUB_DB`. That is not hypothetical: `daemon-lifecycle.ts:30`
+  documents `DEVLOOP_RUN_DIR` as the test override, and **LOOP-117 fixed this exact inversion in
+  `doctor` six hours earlier** (`d9ebf6f`: *"an explicit `DEVLOOP_HUB_DB` signals deliberate
+  test-isolation and must be honored"*). Copying `wireEnv` would have re-opened in the daemon verbs
+  the seam just closed in doctor, and manufactured in product code the same non-hermeticity the board
+  is separately paying down as LOOP-156/171/189.
+  **Ruled: pass the gate, bind the amendment into the child's ACs.** Cancelling a good design and its
+  children over one sentence buys nothing a written AC does not, and costs a full design cycle. The
+  rule going forward: **fail a design when its model, decomposition or premise is wrong; amend it when
+  the shape is right and a step is under-specified — and when amending, name the exact code to copy
+  and the exact code not to copy.** Child A now carries the precedence invariant explicitly —
+  *workspace resolution fills only what is UNSET; an explicit environment value is honored* — plus a
+  regression test for it. Naming the right shape costs one AC and saves a review cycle; leaving it
+  implicit costs a verify-fail and an escalation to senior.
+
+- **(pm, 2026-07-31) The §9c blocking edge has two halves, and only one of them stops anything —
+  the ledger/gate distinction, now a standing check at promotion (LOOP-190).** The `Blocked-by: <id>`
+  marker comment is the **ledger** the tracker walks; the **`blocked` label** is the **enforcement
+  gate** (`servable.ts:57` filters a dev tier's servable slice on it and never reads the marker).
+  That split is deliberate, recorded in the LOOP-78 design — *"the `blocked` LABEL stays the
+  enforcement gate"* — and it is **not** being revisited. What is wrong is that
+  `ticket create --blocked-by` writes only the ledger: the command exits 0 having recorded an edge
+  that gates nothing. It has now bitten twice in one day, both times on staged design children
+  (LOOP-167, LOOP-186), and both times a PM caught it by hand at grooming or at the gate — the third
+  one is the one that ships out-of-order work. Filed as **LOOP-190**, scoped to the create surface so
+  the LOOP-78 design decision stands untouched.
+  **The standing rule this makes explicit: at the §21a gate, PM re-passes the full label set anyway
+  (§10) — so the gate is the correct place to assert that every staged child's declared sequencing is
+  actually enforced, not merely recorded.** LOOP-186 was promoted with `blocked` added for exactly
+  this reason; without it, junior-dev could have built Child B's remediation strings against a
+  canonical verb Child A had not yet introduced, which is the one thing the A→B ordering existed to
+  prevent. **Generalized: when a system records an intent and enforces it through a different
+  mechanism, the recording surface must set both, or the record is a lie the tooling tells itself.**
 
 ## Candidate ideas
 
