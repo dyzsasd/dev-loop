@@ -31,7 +31,10 @@ const ok = (cond: boolean, m: string) => { console.log((cond ? "✅ " : "❌ ") 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const isAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } };
 const runfile = join(RUN, `daemon-${PROJ}.json`);
-const readRun = () => JSON.parse(readFileSync(runfile, "utf8")) as { project: string; pid: number; port: number; host: string; url: string };
+const readRun = (): { project: string; pid: number; port: number; host: string; url: string } | null => {
+  if (!existsSync(runfile)) return null;
+  return JSON.parse(readFileSync(runfile, "utf8"));
+};
 const health = (url: string) => fetch(`${url}/api/health`).then((x) => x.ok).catch(() => false);
 const touchedPorts = new Set<number>();
 
@@ -56,6 +59,10 @@ async function waitGone(url: string, totalMs = 4000): Promise<boolean> {
   return false;
 }
 
+// ── readRun regression (LOOP-145): a missing runfile must return null, never crash ──
+// No daemon has started yet so the runfile doesn't exist — confirms the null-safe path.
+ok(readRun() === null, "readRun returns null for a missing runfile (LOOP-145: no uncaught ENOENT)");
+
 const TRIALS = 8;
 try {
   for (let i = 0; i < TRIALS; i++) {
@@ -67,17 +74,22 @@ try {
     const tag = `trial ${i}${seedStale ? " (stale-lock seeded)" : ""}`;
     ok(a.status === 0 && b.status === 0, `${tag}: both \`up\` exit 0 (got ${a.status},${b.status})`);
     ok(existsSync(runfile), `${tag}: a runfile exists`);
-    const r = readRun(); if (existsSync(runfile)) registerDaemonPid(r.pid);
-    touchedPorts.add(r.port);
-    // the recorded pid must be a LIVE daemon that actually answers health — not an orphaned-loser dead pid
-    const trackedHealthy = await health(r.url);
-    ok(isAlive(r.pid) && trackedHealthy, `${tag}: runfile pid ${r.pid} is alive AND serving ${r.url}/api/health (no orphan)`);
+    const r = readRun();
+    if (r != null) {
+      registerDaemonPid(r.pid);
+      touchedPorts.add(r.port);
+      // the recorded pid must be a LIVE daemon that actually answers health — not an orphaned-loser dead pid
+      const trackedHealthy = await health(r.url);
+      ok(isAlive(r.pid) && trackedHealthy, `${tag}: runfile pid ${r.pid} is alive AND serving ${r.url}/api/health (no orphan)`);
 
-    // `down` must stop the REAL daemon → nothing still listens (0 untracked leak)
-    const down = await lcAsync("down");
-    ok(down.status === 0, `${tag}: down exit 0`);
-    const gone = await waitGone(r.url);
-    ok(gone && !isAlive(r.pid), `${tag}: after down, no daemon answers on ${r.url} — down stopped the live one, 0 leak`);
+      // `down` must stop the REAL daemon → nothing still listens (0 untracked leak)
+      const down = await lcAsync("down");
+      ok(down.status === 0, `${tag}: down exit 0`);
+      const gone = await waitGone(r.url);
+      ok(gone && !isAlive(r.pid), `${tag}: after down, no daemon answers on ${r.url} — down stopped the live one, 0 leak`);
+    } else {
+      ok(false, `${tag}: runfile missing after up — daemon failed to start; trial aborted`);
+    }
   }
   ok(fails === 0, `all ${TRIALS} concurrent-up trials race-free (single tracked live daemon, down-stoppable, 0 untracked)`);
 } finally {
