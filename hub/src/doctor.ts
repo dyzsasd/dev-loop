@@ -21,6 +21,7 @@ import { openDb as openHubDbConn } from "./db.ts";
 import { findProject as findHubProject } from "./seed.ts";
 import { detectRepoFacts } from "./team-edit.ts";
 import * as metricsMod from "./metrics.ts";
+import { readLandingState, type LandingState } from "./landing.ts";
 const require_metrics = () => metricsMod;
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
@@ -40,6 +41,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   // below at the workspace hub.db. Library callers (init-service) pass an explicit dbPath and skip this.
   let ws: Workspace | null = null;
   const unseeded: string[] = []; // W08 hits, collected for the NEXT line
+  let stalledRepo: string | undefined;
   if (opts.reconcile) {
     try { ws = tryResolveWorkspace(); }
     catch (e) {
@@ -49,11 +51,13 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
       return false;
     }
     if (ws) {
-      ok = doctorWorkspace(ws) && ok;
+      const wsResult = await doctorWorkspace(ws);
+      ok = wsResult.ok && ok;
+      stalledRepo = wsResult.stalledRepo;
       if (ws.file.team.backend === "linear") {
         // A linear team has no hub.db; the workspace checks ARE the whole verdict.
         console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
-        console.log(`NEXT: ${nextStep(ws, [], [])}`);
+        console.log(`NEXT: ${nextStep(ws, [], [], stalledRepo)}`);
         return ok;
       }
       if (!process.env.DEVLOOP_HUB_DB || opts.preferWorkspace) dbPath = wsHubDb(ws); // prefer workspace hub.db; honor explicit DEVLOOP_HUB_DB (test isolation)
@@ -159,7 +163,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   if (opts.reconcile) await serviceReconcile(projects.map((p) => p.key), dbPath);
 
   console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
-  if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded)}`);
+  if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded, stalledRepo)}`);
   return ok;
 }
 
@@ -168,7 +172,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
 // an invalid config blocks everything → a blank linearTeam blocks every fire → no projects/repos blocks
 // scheduling → an unseeded service project silently starves its fires → dry-run is the last gate before
 // live. All green ⇒ run the team.
-function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[]): string {
+function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string): string {
   if (errors.length) { const e = errors[0]; return `fix dev-loop.json — [${e.code}] ${e.path ? e.path + ": " : ""}${e.message}`; }
   if (!ws) return "dev-loop run";
   const t = ws.file.team;
@@ -178,6 +182,8 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[]): 
   if (!Object.keys(ws.file.repos).length) return `dev-loop team add-repo <ref> --project <key> --path <rel> --detect  (or /dev-loop:add-repo)`;
   if (t.comms?.webhookEnv && process.env[t.comms.webhookEnv] === undefined) return `put ${t.comms.webhookEnv}=<webhook-url> in ${wsSecretsPath(ws.root)} (or export it) — the whole reminder layer is silently dead without it (W12)`;
   if (t.mode === "dry-run") return `dev-loop team set team.mode live  (everything is wired; flip when ready to go live)`;
+  // W22 NEXT flip: a landing stall is the most-blocking state when everything else is green
+  if (stalledRepo) return `clear the landing stall: fix the red base / land the wedged PRs — gh pr list --repo ${stalledRepo}`;
   return "dev-loop run";
 }
 
@@ -185,8 +191,9 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[]): 
 // Reports the E-code/W-code verdict for a dev-loop.json, that every registered repo exists and is a git
 // repo, and the two migration/leak warnings (W05 user-scope MCP for linear steward fires; W06 workspace
 // inside a git work-tree). Never writes, never repairs.
-export function doctorWorkspace(ws: Workspace): boolean {
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn } = {}): Promise<{ ok: boolean; stalledRepo?: string }> {
   let ok = true;
+  let stalledRepo: string | undefined;
   const pass = (m: string) => console.log("✅ " + m);
   const fail = (m: string) => { console.log("❌ " + m); ok = false; };
   const warn = (m: string) => console.log("⚠️  " + m);
@@ -342,6 +349,40 @@ export function doctorWorkspace(ws: Workspace): boolean {
     } catch { /* W21 is best-effort — never fails doctor */ }
   }
 
+  // W22 — landing stall: best-effort forge glance, warn/info only, never flips DOCTOR_OK (LOOP-41 Child B, design §5.1)
+  // Fires only when ≥1 qualifying repo (landing:"pr" + autoMerge). DEVLOOP_DOCTOR_NO_FORGE=1 → skip.
+  {
+    const qualifyingRepos = Object.keys(ws.file.repos).filter((ref) => {
+      const r = ws.file.repos[ref]!;
+      return r.landing === "pr" && r.autoMerge;
+    });
+    if (qualifyingRepos.length > 0) {
+      if (process.env.DEVLOOP_DOCTOR_NO_FORGE === "1") {
+        info("landing check skipped (DEVLOOP_DOCTOR_NO_FORGE=1)");
+      } else {
+        try {
+          const states = await readLandingState(ws, opts.exec ? { exec: opts.exec } : {});
+          for (const s of states) {
+            if (s.state === "stalled") {
+              const age = s.oldestAgeDays !== null ? `${Math.round(s.oldestAgeDays)}d` : "?d";
+              const base = s.baseChecks ?? "unknown";
+              const remote = ws.file.repos[s.repo]?.remote ?? "";
+              const m = remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
+              const ghRepo = m ? m[1]! : s.repo;
+              warn(`[W22] [${s.repo}] landing stalled: ${s.openLoopPRs} open dev-loop/* PR(s), oldest ${age}; base 'main' required checks ${base} — autoMerge cannot fire. Clear it: gh pr list --repo ${ghRepo} --state open --head dev-loop/`);
+              if (!stalledRepo) stalledRepo = ghRepo;
+            } else if (s.state === "unknown") {
+              info(`landing: ${s.reason ?? "forge unreachable"} (best-effort; not a failure)`);
+            } else if (s.state === "healthy" && (s.openLoopPRs ?? 0) > 0) {
+              pass(`landing: ${s.openLoopPRs} open loop PR(s), base green — nothing wedged`);
+            }
+            // na: silent; healthy with 0 PRs: silent
+          }
+        } catch { /* W22 is best-effort — never fails doctor */ }
+      }
+    }
+  }
+
   // W19 — unpushed strategy/doc commits: local <defaultBranch> is ahead of origin (LOOP-56).
   // A landing:"pr" repo where PM commits docs to local main but never pushes means every dev
   // worktree (which branches off origin) silently misses those docs, and they land as passengers
@@ -382,7 +423,7 @@ export function doctorWorkspace(ws: Workspace): boolean {
     else info("workspace root is inside a git repo but .dev-loop/ is gitignored");
   }
 
-  return ok;
+  return { ok, stalledRepo };
 }
 
 function isGitWorkTree(dir: string): boolean {
