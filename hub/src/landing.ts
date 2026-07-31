@@ -17,6 +17,72 @@ export interface LandingState {
 
 export type ExecFn = (args: string[]) => { stdout: string; stderr: string; ok: boolean };
 
+// ── Per-PR review state (design merge-review-guard §4 / LOOP-64 Child 1) ──────
+
+export interface PrReviewState {
+  pr: number;
+  reviewDecision: "" | "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED";
+  changeRequesters: string[];        // logins with an active CHANGES_REQUESTED in latestReviews
+  unresolvedThreadAuthors: string[]; // logins with ≥1 unresolved review thread (best-effort GraphQL)
+  url: string;
+}
+
+// Returns null on any unreadable/na case — never throws.
+export function readPrReviewState(
+  ghRepo: string,
+  prOrBranch: number | string,
+  opts?: { exec?: ExecFn },
+): PrReviewState | null {
+  const exec = opts?.exec ?? defaultGhExec;
+  try {
+    // 1. PR view — reviewDecision + latestReviews
+    let prResult: { stdout: string; stderr: string; ok: boolean };
+    try {
+      prResult = exec(["pr", "view", String(prOrBranch), "--repo", ghRepo, "--json", "number,reviewDecision,url,latestReviews"]);
+    } catch {
+      return null; // gh not on PATH, ENOENT, or network failure
+    }
+    if (!prResult.ok) return null;
+
+    let prData: { number: number; reviewDecision: string; url: string; latestReviews: Array<{ author: { login: string }; state: string }> };
+    try { prData = JSON.parse(prResult.stdout); } catch { return null; }
+
+    const changeRequesters = (prData.latestReviews ?? [])
+      .filter((r) => r.state === "CHANGES_REQUESTED")
+      .map((r) => r.author?.login)
+      .filter(Boolean) as string[];
+
+    // 2. Unresolved threads — best-effort GraphQL; failure degrades to empty (still honours reviewDecision)
+    const [owner, repo] = ghRepo.split("/");
+    const prNumber = prData.number;
+    const unresolvedThreadAuthors: string[] = [];
+    try {
+      const query = "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved,comments(first:1){nodes{author{login}}}}}}}}";
+      const gqlResult = exec(["api", "graphql", "-f", `query=${query}`, "-F", `owner=${owner}`, "-F", `repo=${repo}`, "-F", `number=${prNumber}`]);
+      if (gqlResult.ok) {
+        const gqlData = JSON.parse(gqlResult.stdout) as { data?: { repository?: { pullRequest?: { reviewThreads?: { nodes: Array<{ isResolved: boolean; comments: { nodes: Array<{ author: { login: string } }> } }> } } } } };
+        const threads = gqlData?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+        for (const t of threads) {
+          if (!t.isResolved) {
+            const login = t.comments.nodes[0]?.author?.login;
+            if (login && !unresolvedThreadAuthors.includes(login)) unresolvedThreadAuthors.push(login);
+          }
+        }
+      }
+    } catch { /* graphql failure → empty unresolvedThreadAuthors */ }
+
+    return {
+      pr: prData.number,
+      reviewDecision: (prData.reviewDecision ?? "") as PrReviewState["reviewDecision"],
+      changeRequesters,
+      unresolvedThreadAuthors,
+      url: prData.url ?? "",
+    };
+  } catch {
+    return null;
+  }
+}
+
 const LANDING_STALL_DAYS = 2;
 const DEFAULT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const GH_TIMEOUT_MS = 5_000;
