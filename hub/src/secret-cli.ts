@@ -10,7 +10,7 @@ import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from "n
 import { dirname } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace } from "./workspace.ts";
-import { wsSecretsPath, parseSecretsEnv } from "./secrets.ts";
+import { wsSecretsPath, parseSecretsEnv, secretsInjectedKeys } from "./secrets.ts";
 
 const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
@@ -103,10 +103,16 @@ Doctor W12/W13 report resolvability.`);
     const file = existsSync(path) ? parseSecretsEnv(readFileSync(path, "utf8")) : {};
     const names = Object.keys(file).sort();
     if (!names.length) { console.log(`(no secrets stored in ${path})`); return 0; }
+    // Which source actually WINS at runtime is the loader's own memo (secrets.ts / doctor W12/W13's
+    // exported helper): a file key absent from `secretsInjectedKeys` was NOT injected — the real
+    // environment already held it, so the ENV value wins ("env"); otherwise the file value is in
+    // effect ("secrets.env"). Resolvability reflects the value ACTUALLY in effect — `process.env[n]`
+    // is that value (env-wins applied at load), resolvable iff non-empty. The value is NEVER printed (§16).
+    const injected = secretsInjectedKeys(ws.root);
     for (const n of names) {
-      // env-wins semantics (secrets.ts): a real-environment value shadows the file's
-      const source = process.env[n] !== undefined && !Object.prototype.hasOwnProperty.call(file, n) ? "env" : "secrets.env";
-      console.log(`${n}  (${source}${process.env[n] !== undefined ? ", resolvable" : file[n] ? ", resolvable" : ", EMPTY"})`);
+      const source = injected.has(n) ? "secrets.env" : "env";
+      const resolvable = (process.env[n] ?? "") !== "";
+      console.log(`${n}  (${source}, ${resolvable ? "resolvable" : "EMPTY"})`);
     }
     return 0;
   }
