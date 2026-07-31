@@ -29,6 +29,20 @@ function strategyDocRelPath(strategyDoc: unknown): string | null {
   return null;
 }
 
+// Pull git's real diagnostics out of an execFileSync failure. git writes the actual reason
+// (conflict paths, rejection hints) to stderr/stdout; the thrown Error.message is only
+// "Command failed: <cmd>". A swallowed error is indistinguishable from a factual answer
+// (LOOP-118 inherited scope), so surface the captured streams, not just message's first line.
+function gitErrText(e: unknown): { summary: string; detail: string } {
+  const err = e as { message?: string; stderr?: unknown; stdout?: unknown };
+  const streams = [err.stderr, err.stdout]
+    .map((s) => (s == null ? "" : String(s).trim()))
+    .filter(Boolean);
+  const detail = (streams.join("\n") || err.message || String(e)).trim();
+  const summary = detail.split("\n")[0] || (err.message ?? "").split("\n")[0];
+  return { summary, detail };
+}
+
 export async function docLand(argv: string[]): Promise<number> {
   let repoRef: string | undefined;
   let dryRun = false;
@@ -67,9 +81,11 @@ Design: landing-discipline §4.6 (LOOP-57).`);
     ref = inferred;
   }
 
-  const repoDir = effectiveRepo(ws, ref).absPath;
-  // RepoEntry has no defaultBranch field yet; "main" is the universal fallback (LOOP-70 owns the field)
-  const defaultBranch = "main";
+  const repo = effectiveRepo(ws, ref);
+  const repoDir = repo.absPath;
+  // §19 fallback chain (repos.<ref>.defaultBranch → team.git.defaultBranch → "main"), resolved onto
+  // the ResolvedRepo by LOOP-70/LOOP-107 (team-config.ts:494,503). No hardcoded branch here (LOOP-119).
+  const defaultBranch = repo.defaultBranch;
 
   // ── Resolve strategyDoc path from the project that owns this repo ───────────────
   const infer = inferProjectForRepo(ws, ref);
@@ -98,7 +114,13 @@ Design: landing-discipline §4.6 (LOOP-57).`);
 
   // ── Step 1: docs-only path assertion (load-bearing; do not widen the allowlist) ─
   // Runs BEFORE the lock — we fail fast on non-doc content without taking shared resources.
-  const diffOutput = git(["diff", "--name-only", `origin/${defaultBranch}`, defaultBranch]);
+  // Three-dot (merge-base..HEAD) = exactly the paths OUR commits touch. Two-dot is a tree compare
+  // that ALSO names files from origin's own commits we don't have — so any CODE commit landing on
+  // origin/<defaultBranch> (the normal state of this repo: the loop lands dev PRs continuously) made
+  // step-1 name another agent's file as PM's offender and refuse a legitimate doc-only landing before
+  // the rebase could align the trees (LOOP-119). The load-bearing fence below is UNCHANGED: a non-doc
+  // commit authored locally is still inside merge-base..HEAD and is still caught.
+  const diffOutput = git(["diff", "--name-only", `origin/${defaultBranch}...${defaultBranch}`]);
   const changedFiles = diffOutput ? diffOutput.split("\n").filter(Boolean) : [];
 
   if (changedFiles.length === 0) {
@@ -123,24 +145,46 @@ Design: landing-discipline §4.6 (LOOP-57).`);
     const attempt = async (): Promise<{ ok: boolean; blockedMsg?: string; isRejection?: boolean }> => {
       // Step 2: fetch + rebase if origin has moved ahead
       try { git(["fetch", "origin", defaultBranch]); }
-      catch (e) { process.stderr.write(`doc-land: fetch warning: ${(e as Error).message.split("\n")[0]}\n`); }
+      catch (e) { process.stderr.write(`doc-land: fetch warning: ${gitErrText(e).summary}\n`); }
 
+      // Narrow the fault boundary (LOOP-118): rev-list (cheap, read-only) is separated from the rebase
+      // so a rev-list failure is never mislabelled "rebase failed".
+      let behind = 0;
       try {
         const counts = git(["rev-list", "--left-right", "--count", `origin/${defaultBranch}...${defaultBranch}`]);
-        const [behind] = (counts || "0\t0").split("\t").map(Number);
-        if (behind > 0) {
-          if (dryRun) {
-            console.log(`doc-land (dry-run): would rebase ${behind} commit(s) from origin/${defaultBranch}`);
-          } else {
+        behind = (counts || "0\t0").split("\t").map(Number)[0] || 0;
+      } catch (e) {
+        return { ok: false, blockedMsg: `could not compare with origin/${defaultBranch}: ${gitErrText(e).summary}` };
+      }
+      if (behind > 0) {
+        if (dryRun) {
+          console.log(`doc-land (dry-run): would rebase ${behind} commit(s) from origin/${defaultBranch}`);
+        } else {
+          try {
             git([...gitIdArgs, "rebase", `origin/${defaultBranch}`]);
+          } catch (e) {
+            // A real prose conflict in the strategy doc cannot be auto-merged (there is no merge
+            // strategy for free-form text). Critically, `git rebase` leaves .git/rebase-merge/ in place
+            // on failure — and this checkout is SHARED (PM/QA/Sweep/Ops all run git here), so a
+            // left-behind rebase wedges every later git op until a human aborts. Abort now to restore
+            // the checkout to its pre-rebase HEAD; swallow the abort's own error so it never masks the
+            // real conflict (LOOP-118). A conflict is not a push rejection ⇒ no retry.
+            try { git(["rebase", "--abort"]); } catch { /* best-effort restore; "no rebase in progress" is fine */ }
+            const { summary, detail } = gitErrText(e);
+            const extra = detail && detail !== summary ? `\n  ${detail.replace(/\n/g, "\n  ")}` : "";
+            return {
+              ok: false,
+              blockedMsg:
+                `doc content conflicts with origin/${defaultBranch} and cannot be auto-merged — ` +
+                `'${docRel}' must be reconciled by hand (a human/PM prose merge) against origin, then re-run. ` +
+                `The rebase was aborted and the checkout restored to its pre-rebase state.\n  git says: ${summary}${extra}`,
+            };
           }
         }
-      } catch (e) {
-        return { ok: false, blockedMsg: `rebase failed: ${(e as Error).message.split("\n")[0]}` };
       }
 
       // Step 3: push-guard with doc-land finding split
-      // doc-land works on the branch itself (defaultBranch = "main"), not a dev-loop/<id> branch,
+      // doc-land works on the defaultBranch itself, not a dev-loop/<id> branch,
       // so passenger detection (which keys on the dev-loop/<id> branch shape) naturally returns [].
       // We still check passengers for future-safety: if A2 or another caller extends detection here,
       // the hard-stop gate is in place.
@@ -174,7 +218,7 @@ Design: landing-discipline §4.6 (LOOP-57).`);
         git(["push", "origin", `${defaultBranch}:${defaultBranch}`]);
         return { ok: true };
       } catch (e) {
-        return { ok: false, blockedMsg: `push rejected: ${(e as Error).message.split("\n")[0]}`, isRejection: true };
+        return { ok: false, blockedMsg: `push rejected: ${gitErrText(e).summary}`, isRejection: true };
       }
     };
 
