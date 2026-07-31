@@ -20,6 +20,7 @@ import { opencodeSyncDrift } from "./opencode-sync.ts";
 import { openDb as openHubDbConn } from "./db.ts";
 import { findProject as findHubProject } from "./seed.ts";
 import { detectRepoFacts } from "./team-edit.ts";
+import { claudeCliPermissions, DEVLOOP_PERMISSION, KAIZEN_PERMISSION } from "./team-init.ts";
 import * as metricsMod from "./metrics.ts";
 import { readLandingState } from "./landing.ts";
 const require_metrics = () => metricsMod;
@@ -383,6 +384,17 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // W18 — installed CLI vs origin/main skew (LOOP-46 / design landing-observability §9.3).
   // Extracted to helper to keep doctorWorkspace CC in budget. Best-effort; never flips DOCTOR_OK.
   try { checkInstalledCliSkew(ws, { warn, info, pass }); } catch { /* W18 is best-effort */ }
+
+  // W23 — CLI-rename permission drift (LOOP-181 / Phase A): a workspace whose .claude/settings.json was
+  // provisioned before the `kaizen` bin landed allows Bash(dev-loop *) but not Bash(kaizen *). Harmless
+  // today (prose still types `dev-loop`), but the instant prose flips to `kaizen` (Phase B) that
+  // workspace's fires are denied board access. Pre-emptive + warn-only (never flips DOCTOR_OK); the
+  // top-up is one command. Best-effort — a missing/malformed settings.json is not a drift finding.
+  try {
+    const perms = claudeCliPermissions(ws.root);
+    if (perms && perms.devloop && !perms.kaizen)
+      warn(`[W23] ${join(ws.root, ".claude", "settings.json")} allows ${DEVLOOP_PERMISSION} but not ${KAIZEN_PERMISSION} — the CLI is gaining a \`kaizen\` alias (LOOP-181); top up the allow-list so fires keep board access when prose flips: dev-loop team repair`);
+  } catch { /* W23 is best-effort — never fails doctor */ }
 
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
   if (isGitWorkTree(ws.root)) {

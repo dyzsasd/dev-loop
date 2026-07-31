@@ -233,8 +233,8 @@ try {
   {
     const st = join(em, ".claude", "settings.json");
     const stJson = readJson(st);
-    ok(Array.isArray(stJson.permissions?.allow) && stJson.permissions.allow.includes("Bash(dev-loop *)"),
-      "team init provisions .claude/settings.json permissions.allow: Bash(dev-loop *)");
+    ok(Array.isArray(stJson.permissions?.allow) && stJson.permissions.allow.includes("Bash(dev-loop *)") && stJson.permissions.allow.includes("Bash(kaizen *)"),
+      "team init provisions .claude/settings.json permissions.allow: Bash(dev-loop *) + Bash(kaizen *) (LOOP-181)");
     ok(stJson.permissions.allow.filter((x: string) => x === "Bash(dev-loop *)").length === 1,
       "repeated add-project calls do not duplicate the allow entry (idempotent)");
     // pre-existing file with other keys → MERGE, preserving everything
@@ -246,8 +246,8 @@ try {
     const merged = readJson(join(custom, ".claude", "settings.json"));
     ok(merged.theme === "dark" && merged.hooks?.note === 1 && JSON.stringify(merged.permissions.deny) === '["Bash(rm *)"]',
       "provisioning preserves unknown keys + deny rules (create-or-merge, never clobber)");
-    ok(JSON.stringify(merged.permissions.allow) === '["Bash(git *)","Bash(dev-loop *)"]',
-      "the dev-loop rule is APPENDED to the existing allow list");
+    ok(JSON.stringify(merged.permissions.allow) === '["Bash(git *)","Bash(dev-loop *)","Bash(kaizen *)"]',
+      "both CLI rules are APPENDED to the existing allow list, in order, preserving Bash(git *) (LOOP-181)");
     // already present → note + byte-stable file (the idempotent re-init repair path)
     const before = readFileSync(join(custom, ".claude", "settings.json"), "utf8");
     const again = run("team", ["init", "--dir", custom, "--key", "merge-team", "--backend", "linear", "--linear-team", "L"]);
@@ -260,6 +260,21 @@ try {
     const badRun = run("team", ["init", "--dir", badWs, "--key", "badset-team", "--backend", "linear", "--linear-team", "L"]);
     ok(badRun.code === 0 && /left untouched/.test(badRun.out) && readFileSync(join(badWs, ".claude", "settings.json"), "utf8") === "{not json",
       "a malformed settings.json is NEVER clobbered (note printed; init still succeeds)");
+
+    // ── W23 (LOOP-181): a workspace provisioned before the `kaizen` bin — allows Bash(dev-loop *) but not
+    //    Bash(kaizen *) — draws a warn-only doctor finding that NAMES the repair verb; DOCTOR_OK stays intact.
+    const w23st = join(custom, ".claude", "settings.json");
+    const rewind = readJson(w23st);
+    rewind.permissions.allow = ["Bash(git *)", "Bash(dev-loop *)"]; // drop Bash(kaizen *): the pre-rename state
+    writeFileSync(w23st, JSON.stringify(rewind, null, 2) + "\n");
+    const w23 = run("server", ["doctor"], { cwd: custom });
+    ok(/\[W23\]/.test(w23.out), "doctor warns W23 when settings.json allows dev-loop * but not kaizen *");
+    ok(/team repair/.test(w23.out), "the W23 message names the `team repair` top-up verb");
+    ok(/DOCTOR_OK/.test(w23.out) && !/DOCTOR_FAILED/.test(w23.out), "W23 is warn-only — the doctor verdict stays OK");
+    // the inverse: once both rules are present, W23 is silent (no false positive)
+    rewind.permissions.allow = ["Bash(git *)", "Bash(dev-loop *)", "Bash(kaizen *)"];
+    writeFileSync(w23st, JSON.stringify(rewind, null, 2) + "\n");
+    ok(!/\[W23\]/.test(run("server", ["doctor"], { cwd: custom }).out), "W23 is silent once Bash(kaizen *) is present (no false positive)");
   }
 
   // ── team repair re-registers the index ──
