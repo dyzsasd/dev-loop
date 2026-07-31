@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, fireIdStore } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, repoFileStrategyPath } from "./resolve-project.ts"; // + docs P3b: the ONE strategyDoc→repo-file rule (doc-home, §19)
-import { hubDbPath, pkgVersion } from "./paths.ts";
+import { hubDbPath, pkgVersion, pkgVersionFresh } from "./paths.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr, type DocKind } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp, resolveProjectOverride } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
@@ -44,7 +44,7 @@ import { // A3: extracted timers; imported for the foreground boot, re-exported 
   startStrategyFileEditNotifier, // docs P3b: the passive-mode repo-FILE strategy-doc watch
   fireHealthNotifyTick, startFireHealthNotifier, // P0-1c: the loop fire-health self-monitor
 } from "./daemon-notifiers.ts";
-import { tryResolveWorkspace, wsFireLedger } from "./workspace.ts";
+import { tryResolveWorkspace, wsFireLedger, wsHubDb } from "./workspace.ts";
 import { resolveUiToken, bearerOk, isLoopbackHost } from "./ui-token.ts"; // one-click P1 §6.2: the bearer gate + bind knob
 
 export interface DaemonOpts {
@@ -59,6 +59,9 @@ export interface DaemonOpts {
   // DL-83: the repo-file strategyDoc PATH when the hub roadmap is NOT this project's north-star (no agent
   // reads it). Set ⇒ /roadmap shows a divergence banner; absent ⇒ no banner (hub-doc/director, or unknown).
   roadmapRepoFileStrategy?: string;
+  // LOOP-52: the version the daemon was started with (defaults to pkgVersion(); override in tests to
+  // simulate a stale daemon without modifying package.json on disk).
+  daemonVersion?: string;
 }
 
 // DL-83: does THIS project's resolved config make the hub roadmap doc its north-star, or is a repo-file
@@ -226,7 +229,7 @@ async function handleDocWrite(action: "save" | "publish", slug: string, req: Inc
   const rerender = (msg: string, submittedBody?: string) => {
     const inner = docPage(db, projectId, projectKey, slug, { canEdit: true, canPublish: actor === "operator", notice: { kind: "error", msg }, submittedBody, roadmapRepoFileStrategy });
     return typeof inner === "string"
-      ? htmlOut(res, statusForDocErr(msg), page(`${slug} · ${projectKey}`, projectKey, inner, { active: "docs", drafts: draftsPendingCount(db, projectId) }))
+      ? htmlOut(res, statusForDocErr(msg), pg(`${slug} · ${projectKey}`, projectKey, inner, { active: "docs", drafts: draftsPendingCount(db, projectId) }))
       : json(res, statusForDocErr(msg), { error: msg }); // doc vanished mid-flight — no page to re-render
   };
   const done = href(projectKey, successPath ?? `/doc/${encodeURIComponent(slug)}`); // PRG target (the legacy alias keeps /roadmap → its 302)
@@ -273,7 +276,7 @@ async function handleTicketWrite(seg: string[], req: IncomingMessage, res: Serve
     if (r.ok) return redirect(res, href(projectKey, `/ticket/${encodeURIComponent(r.id)}`));
     // DL-86: a rejected create re-renders the BOARD as HTML with the error inline + the typed title preserved
     // (mirrors the /roadmap/save rerender), instead of dead-ending the operator on a raw-JSON {error} page.
-    return htmlOut(res, r.status, page(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, {}, true, undefined, { notice: { kind: "error", msg: r.error }, submittedTitle: form.get("title") ?? "" }), { active: "board" }));
+    return htmlOut(res, r.status, pg(`${projectKey} · board`, projectKey, boardPage(db, projectId, projectKey, {}, true, undefined, { notice: { kind: "error", msg: r.error }, submittedTitle: form.get("title") ?? "" }), { active: "board" }));
   }
   const id = decodeSeg(seg[1]);
   if (id === null) return json(res, 400, { error: "malformed percent-escape in path" });
@@ -287,7 +290,7 @@ async function handleTicketWrite(seg: string[], req: IncomingMessage, res: Serve
   // null) fall back to the JSON error — there is no page to re-render.
   const inner = ticketPage(db, projectId, projectKey, id, true, { notice: { kind: "error", msg: r.error }, submittedComment: verb === "comment" ? (form.get("body") ?? "") : undefined });
   if (!inner) return json(res, r.status, { error: r.error });
-  return htmlOut(res, r.status, page(`${id} · ${projectKey}`, projectKey, inner, { active: "board" }));
+  return htmlOut(res, r.status, pg(`${id} · ${projectKey}`, projectKey, inner, { active: "board" }));
 }
 
 // ─── DL-43: opt-in daemon agent op-API (/api/op/*) — the MCP↔daemon unification foundation (P1) ───────────
@@ -425,9 +428,22 @@ export function startProjectNotifiers(deps: {
   return { active, timers };
 }
 
-export function createDaemon({ db, projectId: bootProjectId, projectKey: bootProjectKey, writeDb, actor, roadmapRepoFileStrategy }: DaemonOpts): Server {
+export function createDaemon({ db, projectId: bootProjectId, projectKey: bootProjectKey, writeDb, actor, roadmapRepoFileStrategy, daemonVersion: daemonVersionOpt }: DaemonOpts): Server {
   const canWrite = !!writeDb && !!actor;
   let streamCount = 0; const MAX_STREAMS = 16; // bound concurrent SSE connections (one operator, a few tabs)
+  // LOOP-52 board identity: record daemon's startup version + resolve the workspace hub.db path.
+  // WS_ID is the authenticated surface's identity affordance — shows which workspace's board you're on.
+  const DAEMON_VER = daemonVersionOpt ?? pkgVersion();
+  const WS_ID = (() => {
+    try { const ws = tryResolveWorkspace(); return ws ? wsHubDb(ws) : hubDbPath(); } catch { return hubDbPath(); }
+  })();
+  // Per-request: compare DAEMON_VER with the on-disk version to detect an upgrade while the daemon runs.
+  const getBasePageOpts = (): { workspaceId: string; daemonVersion: string; cliVersion?: string } => {
+    const freshVer = pkgVersionFresh();
+    return { workspaceId: WS_ID, daemonVersion: DAEMON_VER, ...(DAEMON_VER !== freshVer ? { cliVersion: freshVer } : {}) };
+  };
+  const pg = (title: string, project: string, inner: string, opts: Parameters<typeof page>[3] = {}): string =>
+    page(title, project, inner, { ...getBasePageOpts(), ...opts });
   // F2: the DL-83 divergence flag is per-PROJECT config, and opts carry only the BOOT project's
   // boot-resolved value — a /p/<key>/roadmap request for a SIBLING must not inherit it. Resolve a
   // sibling's flag from the same config source the boot path uses, cached per key (config resolution
@@ -474,7 +490,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
         const row = SAFE_KEY.test(key)
           ? db.prepare("SELECT id,key FROM projects WHERE key=?").get(key) as { id: string; key: string } | undefined
           : undefined;
-        if (!row) return htmlOut(res, 404, page("Not found", "", `<a class="back" href="/">← projects</a><p class="empty">No project <code>${esc(key)}</code> on this hub.</p>`, { hub: true }));
+        if (!row) return htmlOut(res, 404, pg("Not found", "", `<a class="back" href="/">← projects</a><p class="empty">No project <code>${esc(key)}</code> on this hub.</p>`, { hub: true }));
         prefixed = true; projectId = row.id; projectKey = row.key; seg = seg.slice(2);
       }
       const path = "/" + seg.join("/"); // the project-local path (prefix stripped; equals rawPath when bare)
@@ -545,7 +561,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
           res.end();
           return;
         }
-        return htmlOut(res, 200, page("projects · dev-loop hub", "", projectIndexPage(db, Date.now()), { hub: true }));
+        return htmlOut(res, 200, pg("projects · dev-loop hub", "", projectIndexPage(db, Date.now()), { hub: true }));
       }
 
       // ── The HTML view routes (board / roadmap / activity / reports / ticket) — F1: dispatched off
@@ -563,6 +579,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
           canPublish: canWrite && actor === "operator",
           roadmapRepoFileStrategy: divergenceFor(projectKey),
           draftsPending: () => draftsPendingCount(db, projectId), // docs P6a header chip — LAZY, resolved-project scope
+          basePageOpts: getBasePageOpts(), // LOOP-52 board identity
         });
         if (out.kind === "redirect") { // D3: /roadmap → the roadmap doc page; /doc/<kind> → its canonical slug
           res.writeHead(out.status, { location: out.location, "content-length": 0 });
@@ -666,7 +683,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
       // of a raw-JSON dead-end. Read-only; query_only preserved. rawPath in the message so a prefixed miss
       // names the URL the client actually requested.
       if (seg[0] === "api") return json(res, 404, { error: `not found: ${rawPath}` });
-      return htmlOut(res, 404, page("Not found", projectKey, `<a class="back" href="${esc(href(projectKey, "/"))}">← board</a><p class="empty">No page <code>${esc(rawPath)}</code> in ${esc(projectKey)}.</p>`));
+      return htmlOut(res, 404, pg("Not found", projectKey, `<a class="back" href="${esc(href(projectKey, "/"))}">← board</a><p class="empty">No page <code>${esc(rawPath)}</code> in ${esc(projectKey)}.</p>`));
     } catch (e) {
       return json(res, 500, { error: (e as Error).message });
     }

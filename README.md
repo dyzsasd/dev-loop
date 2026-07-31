@@ -38,9 +38,10 @@ drives a remote home from your laptop (`dev-loop attach <url>`). See `docs/RUNNI
 register your first repo (`--detect` reads build/CI facts straight from the clone), then ends
 with the doctor verdict and a `NEXT:` line naming the single most-blocking step. What you get:
 
-- a **multi-project web UI**: `dev-loop hub start` → `http://127.0.0.1:8787` — a project
-  index at `/`, each project's board, ticket detail, activity, and docs pages under
-  `/p/<key>/` (`dev-loop run` also auto-starts it; `dev-loop hub status` to inspect);
+- a **multi-project web UI**: `dev-loop hub start` then `dev-loop hub status` to find the
+  board URL — a project index at `/`, each project's board, ticket detail, activity, and docs
+  pages under `/p/<key>/` (`dev-loop run` also auto-starts it). The probe starts at port 8787
+  and walks up if occupied, so the actual URL may differ; `hub status` always shows the real one.
 - agents that reach the board through the `dev-loop` CLI directly — with Claude Code or
   Codex on the service backend there is nothing else to install (`hub.agentInterface` is
   the per-coding-agent switch; `"mcp"` restores the injected-MCP wiring);
