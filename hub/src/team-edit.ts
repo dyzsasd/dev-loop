@@ -5,7 +5,7 @@
 // so a config is NEVER hand-edited into an invalid state — every write re-validates the whole file first.
 import { writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb } from "./workspace.ts";
@@ -59,6 +59,9 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   // Env-var NAMES only — E15 re-validation rejects URL/secret literals on write (§16/I5).
   { re: /^projects\.[^.]+\.notify\.type$/, kind: ["slack", "lark"] as const },
   { re: /^projects\.[^.]+\.notify\.(webhookEnv|secretEnv)$/, kind: "string" },
+  // strategyDoc: the repo-relative file path pointer consumed by doc-land / roadmap-banner / file-watcher.
+  // Stored as a plain string; absolute paths and Linear doc URLs are rejected at the set gate (not schema-level).
+  { re: /^projects\.[^.]+\.strategyDoc$/, kind: "string" },
   { re: /^repos\.[^.]+\.deploy\.style$/, kind: "string" },
   { re: /^repos\.[^.]+\.deploy\.healthCheck$/, kind: "string" },
   { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.auto$/, kind: "boolean" },
@@ -71,7 +74,8 @@ const SETTABLE_SUMMARY =
   "projects.<key>.{enabled,weight,devSplit,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
-  "repos.<ref>.deploy.{style,healthCheck,environments.<env>.{auto,deployPrPrefix,command,healthCheck}}";
+  "repos.<ref>.deploy.{style,healthCheck,environments.<env>.{auto,deployPrPrefix,command,healthCheck}}, " +
+  "projects.<key>.strategyDoc";
 
 function coerce(kind: SetKind, raw: string, path: string): unknown {
   if (Array.isArray(kind)) { if (!kind.includes(raw)) die(`${path} must be one of ${kind.join("|")} (got '${raw}')`); return raw; }
@@ -105,6 +109,12 @@ export async function teamSet(argv: string[]): Promise<number> {
     // tunes fields, it never creates projects/repos (that is add-project/add-repo's job).
     if (segs[0] === "projects" && !Object.hasOwn(file.projects, segs[1])) die(`unknown project '${segs[1]}' — add it first: dev-loop team add-project ${segs[1]}`);
     if (segs[0] === "repos" && !Object.hasOwn(file.repos, segs[1])) die(`unknown repo ref '${segs[1]}' — register it first: dev-loop team add-repo ${segs[1]} --project <key> --path <rel>`);
+    // strategyDoc validation: must be a repo-relative path (no absolute paths, no Linear document URLs).
+    if (segs[0] === "projects" && segs[2] === "strategyDoc") {
+      const v = coerced as string;
+      if (isAbsolute(v)) die(`projects.<key>.strategyDoc must be a repo-relative path, not an absolute path (got '${v}') — see references/config-schema.md`);
+      if (/linear\.app\/.*\/document\//.test(v)) die(`projects.<key>.strategyDoc must be a repo-relative file path; Linear document URLs are not accepted here`);
+    }
     // team.comms is created whole on first touch: a lone provider gets the standard env NAME default
     // (matching `team init --comms`), and a lone webhookEnv has no provider to guess — set provider first.
     if (path === "team.comms.provider" && !file.team.comms) {
@@ -171,7 +181,7 @@ async function stampFingerprint(ws: Workspace, projectKey: string, linearProject
 // ── add-project ───────────────────────────────────────────────────────────────
 export async function addProject(argv: string[]): Promise<number> {
   const [key, ...rest] = argv;
-  if (!key || key.startsWith("--")) die("usage: dev-loop team add-project <key> [--linear-project <name>] [--linear-project-id <id>] [--test-url <url>] [--dev-split] [--weight <n>] [--enabled true|false] [--intake-mode autonomous|passive] [--name <hub name>] [--prefix <TICKET_PREFIX>]");
+  if (!key || key.startsWith("--")) die("usage: dev-loop team add-project <key> [--linear-project <name>] [--linear-project-id <id>] [--test-url <url>] [--dev-split] [--weight <n>] [--enabled true|false] [--intake-mode autonomous|passive] [--name <hub name>] [--prefix <TICKET_PREFIX>] [--strategy-doc <rel-path>]");
   const o: Record<string, string | boolean> = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]; const next = () => rest[++i] ?? die(`${a} requires a value`);
@@ -184,7 +194,13 @@ export async function addProject(argv: string[]): Promise<number> {
     else if (a === "--intake-mode") o.intakeMode = next();
     else if (a === "--name") o.name = next();
     else if (a === "--prefix") o.prefix = next();
+    else if (a === "--strategy-doc") o.strategyDoc = next();
     else die(`unknown option '${a}'`);
+  }
+  if (o.strategyDoc !== undefined) {
+    const sd = o.strategyDoc as string;
+    if (isAbsolute(sd)) die(`--strategy-doc must be a repo-relative path, not an absolute path (got '${sd}')`);
+    if (/linear\.app\/.*\/document\//.test(sd)) die(`--strategy-doc must be a repo-relative file path; Linear document URLs are not accepted here`);
   }
   const ws = mutate((file) => {
     if (file.projects[key]) die(`project '${key}' already exists — tune it with \`dev-loop team set projects.${key}.<field> <value>\` or edit dev-loop.json`);
@@ -196,6 +212,7 @@ export async function addProject(argv: string[]): Promise<number> {
     if (o.weight !== undefined) p.weight = Number(o.weight);
     if (o.enabled !== undefined) p.enabled = o.enabled === "true" || o.enabled === true;
     if (o.intakeMode !== undefined) p.intake = { mode: o.intakeMode as "autonomous" | "passive" }; // E12 validates the value
+    if (o.strategyDoc !== undefined) p.strategyDoc = o.strategyDoc as string;
 
     file.projects[key] = p;
   });
