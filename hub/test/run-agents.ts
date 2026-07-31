@@ -9,7 +9,7 @@ import { openDb, logEvent } from "../src/db.ts";
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
 import { breaker } from "../src/breaker.ts";
-import { codexUsageAdapter, claudeAdapter, resolveAdapter } from "../src/fire-usage.ts";
+import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "../src/fire-usage.ts";
 import { releaseClaimedTickets } from "../src/ticket-release.ts";
 import { insertTicket } from "../src/ticketwrite.ts";
 
@@ -240,7 +240,7 @@ try {
   ok(/senior-dev:claude:claude-opus-4-8\/max/.test(twoLevel.out), "senior-dev inherits the run CLI (claude) with its agents{} model/effort");
   ok(/senior-dev: claude .*--model claude-opus-4-8 --effort max /.test(twoLevel.out), "senior-dev renders a claude command with its pinned model/effort");
   ok(/pm:opencode:anthropic\/claude-opus-4-8\//.test(twoLevel.out), "pm resolves to codingAgent=opencode with its model");
-  ok(/pm: opencode run --model anthropic\/claude-opus-4-8 /.test(twoLevel.out), "pm renders an opencode run command");
+  ok(/pm: opencode run --model anthropic\/claude-opus-4-8 --format json /.test(twoLevel.out), "pm renders an opencode run command with --format json (LOOP-85 usage capture), extra CLI args last");
   ok(/sweep:claude:haiku\/low/.test(twoLevel.out), "sweep takes the per-coding-agent default (claude haiku/low) from codingAgentDefaults");
   ok(/qa:claude:sonnet\/low/.test(twoLevel.out), "qa uses back-compat models{} for model + codingAgentDefaults for effort");
 
@@ -257,6 +257,7 @@ try {
   ok(/sweep:claude:/.test(explicitBeatsDefault.out), "an explicit --cli claude beats project defaultCodingAgent=codex");
   const cliOpencode = run(["--cli", "opencode", "--once", "--dry-run", "--agents", "sweep", ...common]);
   ok(cliOpencode.code === 0 && /sweep:opencode:/.test(cliOpencode.out), "--cli opencode is accepted as a run-wide coding agent");
+  ok(/sweep: opencode run --format json /.test(cliOpencode.out), "LOOP-85: the model-less opencode command also carries --format json (usage capture on every opencode fire)");
 
   const bad = run(["--cli", "claude", "--once", "--dry-run", "--agents", "nope", ...common]);
   ok(bad.code === 2 && /unknown agent\/group 'nope'/.test(bad.out), "unknown agent fails with a usage error");
@@ -648,11 +649,87 @@ try {
   ok(!JSON.stringify(u).includes("secret") && !JSON.stringify(u).includes("sess-must-not-persist"),
     "LOOP-83 §16: no result text / session id in the parsed FireUsage");
 }
-// resolveAdapter: claude + codex resolve to their adapters; text-mode lanes (opencode) resolve to null (usage:null).
+// ── LOOP-85: opencode UsageAdapter (fire-usage.ts) — JSONL like codex, but tokens/cost nest under `part` ──
+// AC1: a RECORDED `opencode run --format json` fixture → populated usage. These three lines are captured
+// VERBATIM from a real opencode 1.2.24 fire (Vertex/Anthropic) — NOT hand-authored (the LOOP-14 gap): the
+// usage-bearing event is `step_finish`, and tokens/cost live under `part`, not top-level as LOOP-14 assumed.
+{
+  const fixture = [
+    '{"type":"step_start","timestamp":1785467806735,"sessionID":"ses_049d37440ffex05VV18wLW13E4","part":{"id":"prt_fb62ca40","sessionID":"ses_049d37440ffex05VV18wLW13E4","messageID":"msg_fb62c8cd","type":"step-start"}}',
+    '{"type":"text","timestamp":1785467810709,"sessionID":"ses_049d37440ffex05VV18wLW13E4","part":{"id":"prt_fb62cb33","type":"text","text":"hello from opencode."}}',
+    '{"type":"step_finish","timestamp":1785467810731,"sessionID":"ses_049d37440ffex05VV18wLW13E4","part":{"id":"prt_fb62cb39","type":"step-finish","reason":"stop","cost":0,"tokens":{"total":107882,"input":107862,"output":20,"reasoning":14,"cache":{"read":0,"write":0}}}}',
+  ].join("\n");
+  const u = opencodeAdapter.parse(fixture);
+  ok(u !== null && u.source === "provider", "LOOP-85 AC1: real opencode fixture → non-null FireUsage, source='provider'");
+  ok(u?.inputTokens === 107862 && u?.outputTokens === 20, "LOOP-85 AC1: token totals read from part.tokens.{input,output} (nested, not top-level)");
+  ok(u?.cacheReadTokens === 0 && u?.cacheWriteTokens === 0, "LOOP-85 AC1: cache split read from part.tokens.cache.{read,write}");
+  ok(u?.costUsd === 0 && u?.currency === "USD", "LOOP-85 AC1: part.cost → costUsd (0 on a free model is a real measurement) + currency 'USD'");
+}
+// AC (PM constraint from the LOOP-15 verify): opencode emits one step_finish PER model turn — take the LAST,
+// never the first, so a multi-turn fire records the final turn's real numbers, not the opening turn as the total.
+{
+  const multiTurn = [
+    '{"type":"step_finish","part":{"type":"step-finish","cost":0.001,"tokens":{"input":10,"output":2,"cache":{"read":0,"write":0}}}}',
+    '{"type":"text","part":{"type":"text","text":"...thinking..."}}',
+    '{"type":"step_finish","part":{"type":"step-finish","cost":0.05,"tokens":{"input":900,"output":80,"cache":{"read":100,"write":50}}}}',
+  ].join("\n");
+  const u = opencodeAdapter.parse(multiTurn);
+  ok(u?.inputTokens === 900 && u?.outputTokens === 80 && u?.costUsd === 0.05, "LOOP-85: multi-step fire → LAST step_finish wins (900/80/$0.05), NOT the first (10/2) — no plausible-but-partial wrong row");
+  ok(u?.cacheReadTokens === 100 && u?.cacheWriteTokens === 50, "LOOP-85: last-match carries the final turn's cache split too");
+  // Version-drift robustness: a flattened (top-level tokens/cost, no `part`) shape still parses.
+  const flat = '{"type":"summary","tokens":{"input":5,"output":1},"cost":0.002}';
+  ok(opencodeAdapter.parse(flat)?.inputTokens === 5, "LOOP-85: a top-level tokens/cost shape (no `part`) also parses — resilient to a version that flattens the events");
+}
+// AC2: absent / changed shape → usage:null, no crash (honest miss, never a zero-filled or partial row).
+{
+  ok(opencodeAdapter.parse("") === null, "LOOP-85 AC2: empty stdout → usage null");
+  ok(opencodeAdapter.parse("not json\nnope") === null, "LOOP-85 AC2: non-JSON stdout → usage null (no crash)");
+  ok(opencodeAdapter.parse('{"type":"step_finish","part":{"type":"step-finish"}}') === null, "LOOP-85 AC2: step_finish with no tokens object → null");
+  ok(opencodeAdapter.parse('{"type":"step_finish","part":{"tokens":{"output":5}}}') === null, "LOOP-85 AC2: tokens missing `input` → null (never a partial row)");
+  ok(opencodeAdapter.parse('{"type":"step_finish","part":{"tokens":{"input":"NaN","output":5}}}') === null, "LOOP-85 AC2: non-numeric input → null");
+}
+// AC (§16): the recorded FireUsage carries ONLY numeric fields + source/currency — never the message text
+// ("hello from opencode."), session id, or any string payload the raw events also stream.
+{
+  const rich = [
+    '{"type":"text","part":{"type":"text","text":"secret sk-SEEDED do not persist"}}',
+    '{"type":"step_finish","sessionID":"ses_must_not_persist","part":{"type":"step-finish","cost":0.01,"tokens":{"input":10,"output":5,"cache":{"read":1,"write":2}}}}',
+  ].join("\n");
+  const u = opencodeAdapter.parse(rich);
+  const allowed = new Set(["source", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costUsd", "currency"]);
+  const keys = Object.keys(u ?? {});
+  ok(u !== null && keys.every((k) => allowed.has(k)), `LOOP-85 §16: FireUsage has only allowed keys (${keys.join(",")}) — no content/PII`);
+  ok(!JSON.stringify(u).includes("secret") && !JSON.stringify(u).includes("ses_must_not_persist"), "LOOP-85 §16: no message text / session id in the parsed FireUsage");
+}
+// AC (suspectError — the adapter's HALF: a structured error signal, additive to run-agents' tail-regex).
+// A `type:"error"` event → true; a healthy stream → false. The bare-text arms ("Execution error", empty)
+// are DELIBERATELY false here — run-agents' tail-regex/empty check owns them (§ "keep the tail-regex as the
+// fallback"); duplicating them in isError would be the LOOP-13 replace-not-add regression in reverse.
+{
+  ok(opencodeAdapter.isError?.('{"type":"error","part":{"message":"provider 429"}}') === true, "LOOP-85: a structured type:'error' event → isError true (flags suspectError on an exit-0 fire)");
+  ok(opencodeAdapter.isError?.('{"type":"step_finish","part":{"tokens":{"input":1,"output":1}}}') === false, "LOOP-85: a healthy step_finish stream → isError false");
+  ok(opencodeAdapter.isError?.("Execution error") === false, "LOOP-85: bare 'Execution error' → isError false BY DESIGN — run-agents' tail-regex owns it (fallback kept, not replaced)");
+  ok(opencodeAdapter.isError?.("") === false, "LOOP-85: empty output → isError false — run-agents' empty-output arm owns it");
+}
+// AC (operator-visible output survives): opencode STREAMS its JSONL, so the adapter must NOT define resultText
+// — that is the exact bit run-agents keys `deferEcho` on. resultText === undefined ⇒ deferEcho false ⇒ every
+// chunk is echoed live to console + run.log (LOOP-14 defined it via the structured branch and suppressed the
+// whole stream). The end-to-end proof (a real fire's run.log carries the lines) lives in run-agents-live.ts.
+{
+  ok(opencodeAdapter.resultText === undefined, "LOOP-85: opencodeAdapter has NO resultText → deferEcho stays false → the JSONL stream echoes live (output is never suppressed)");
+  // and it still parses a multi-line + a truncated buffer without throwing (the buffer run-agents accumulates).
+  const multi = '{"type":"step_start","part":{"type":"step-start"}}\n{"type":"step_finish","part":{"tokens":{"input":3,"output":1}}}';
+  ok(opencodeAdapter.parse(multi)?.inputTokens === 3, "LOOP-85: multi-line JSONL buffer parses (usage from the step_finish line)");
+  const truncated = '{"type":"step_finish","part":{"tokens":{"input":3,"output":1}}}\n{"type":"step_fin';
+  ok(opencodeAdapter.parse(truncated)?.inputTokens === 3, "LOOP-85: a TRUNCATED trailing line is skipped, the earlier usage still recovered (never a throw, never nothing)");
+}
+
+// resolveAdapter: claude + codex + opencode resolve to their adapters (all three lanes now structured).
 {
   ok(resolveAdapter("claude") === claudeAdapter, "LOOP-83: resolveAdapter('claude') → claudeAdapter");
   ok(resolveAdapter("codex") === codexUsageAdapter, "LOOP-83: resolveAdapter('codex') → codexUsageAdapter (untouched)");
-  ok(resolveAdapter("opencode") === null, "LOOP-83: resolveAdapter('opencode') → null (text-mode lane keeps the tail-regex, records usage:null)");
+  ok(resolveAdapter("opencode") === opencodeAdapter, "LOOP-85: resolveAdapter('opencode') → opencodeAdapter (was null — now the structured lane, still keeps the tail-regex fallback)");
+  ok(resolveAdapter("mystery") === null, "resolveAdapter(unknown lane) → null (text-mode, usage:null)");
 }
 
 console.log(fails === 0 ? "\nRUN_AGENTS_OK" : `\n${fails} CHECK(S) FAILED`);
