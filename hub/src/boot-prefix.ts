@@ -21,6 +21,7 @@ export interface BootCorpus {
   bytes: number;       // Buffer.byteLength(text)
   hash: string;        // sha256 of the corpus body (12 hex chars) — riding in the marker
   conventionsBytes: number; // the union slice alone (bill cross-check)
+  lessonsBytes: number; // actual lessons bytes injected (delivery count, not cap — 0 when no lessons)
   pruned: string[];    // config-gated anchors dropped for THIS project (feature off)
 }
 
@@ -148,10 +149,24 @@ export function assembleBootCorpus(
       conv.text,
     );
 
-    const lessonsPath = join(dataDir, project, "lessons.md");
-    if (project && existsSync(lessonsPath)) {
-      const slice = lessonsSlice(readFileSync(lessonsPath, "utf8"), agent);
-      if (slice.trim()) parts.push(`### lessons.md — your section + ## Shared (§0a step 4, pre-read)`, slice);
+    // Lessons: read from the workspace lessons dir (INDEX + project shard) plus the legacy v1 path.
+    // All three sources contribute when present; absent files are not errors (fail open per convention).
+    const lessonsDir = join(dataDir, "lessons");
+    const lessonsParts: string[] = [];
+    const indexPath = join(lessonsDir, "INDEX.md");
+    if (existsSync(indexPath)) lessonsParts.push(readFileSync(indexPath, "utf8"));
+    if (project) {
+      const shardPath = join(lessonsDir, `${project}.md`);
+      if (existsSync(shardPath)) lessonsParts.push(readFileSync(shardPath, "utf8"));
+      const legacyPath = join(dataDir, project, "lessons.md");
+      if (existsSync(legacyPath)) lessonsParts.push(readFileSync(legacyPath, "utf8"));
+    }
+    const lessonsCombined = lessonsParts.join("\n\n");
+    const lessonsSliced = lessonsCombined.trim() ? lessonsSlice(lessonsCombined, agent) : "";
+    let lessonsBytes = 0;
+    if (lessonsSliced.trim()) {
+      parts.push(`### lessons — your section + ## Shared (§0a step 4, pre-read)`, lessonsSliced);
+      lessonsBytes = Buffer.byteLength(lessonsSliced, "utf8");
     }
 
     const backendFile = backend === "service" ? "backend-service.md" : backend === "local" ? "backend-local.md" : null;
@@ -192,7 +207,7 @@ export function assembleBootCorpus(
       `<!-- devloop-boot:end hash=${hash} -->`,
       "",
     ].join("\n");
-    return { text, bytes: Buffer.byteLength(text, "utf8"), hash, conventionsBytes: conv.contentBytes, pruned };
+    return { text, bytes: Buffer.byteLength(text, "utf8"), hash, conventionsBytes: conv.contentBytes, lessonsBytes, pruned };
   } catch {
     return null; // fail open — the fire boots in classic pull mode
   }

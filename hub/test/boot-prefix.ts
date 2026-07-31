@@ -4,7 +4,7 @@
 // EXACTLY what context-bill's conventionsLoad bills (one span authority, two consumers);
 // (3) the §0a lessons slice (own + Shared, + Dev for split tiers); (4) per-backend
 // contract-file selection; (5) fail-open on a malformed/missing SKILL.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assembleBootCorpus, conventionsUnionText, lessonsSlice } from "../src/boot-prefix.ts";
@@ -107,6 +107,71 @@ ok(!!jrFull && jrFull.text.includes("your inherited ship sequence, §21c, pre-re
 ok(!!jrFull && !jrFull.text.includes("### Step 0 — Reclaim your orphans (crash recovery)"),
   "the slice excludes dev's Steps 0–3 (junior has its own pick/claim/groom)");
 if (a) ok(!a.text.includes("inherited ship sequence"), "non-dev-tier corpora (pm) carry no ship sequence");
+
+// ── 4d. LOOP-163 regression: new-path lessons delivery (INDEX + project shard) ───────────────────
+// The legacy dataDir puts a lessons.md at join(dataDir, "proj1", "lessons.md") — that's the v1
+// path. The new path is join(dataDir, "lessons", "INDEX.md") + join(dataDir, "lessons", "proj1.md").
+// Verify the assembler reads from the new path and delivers sentinel rules into the corpus.
+{
+  const wsDir = mkdtempSync(join(tmpdir(), "dl-bp-ws-"));
+  try {
+    // Create the new-path lessons structure (workspace-style: .dev-loop/lessons/)
+    mkdirSync(join(wsDir, "lessons"), { recursive: true });
+    writeFileSync(join(wsDir, "lessons", "INDEX.md"), [
+      "# Team lessons — INDEX", "",
+      "## Shared", "- SENTINEL_INDEX_SHARED shared rule", "",
+      "## PM", "- SENTINEL_INDEX_PM pm rule", "",
+    ].join("\n") + "\n");
+    writeFileSync(join(wsDir, "lessons", "proj1.md"), [
+      "# Lessons — project `proj1`", "",
+      "## Shared", "- SENTINEL_SHARD_SHARED shard shared rule", "",
+      "## PM", "- SENTINEL_SHARD_PM shard pm rule", "",
+      "## QA", "- SENTINEL_SHARD_QA shard qa rule (different-agent — must not appear in pm slice)", "",
+    ].join("\n") + "\n");
+    // Different project shard — must NOT appear in a proj1 fire
+    writeFileSync(join(wsDir, "lessons", "other-proj.md"), [
+      "# Lessons — project `other-proj`", "",
+      "## Shared", "- SENTINEL_OTHER_PROJ different project rule", "",
+    ].join("\n") + "\n");
+
+    // AC1: INDEX.md + project shard both appear in the assembled corpus for proj1/pm
+    const c1 = assembleBootCorpus(root, wsDir, "pm", "proj1", "service");
+    ok(!!c1, "LOOP-163 AC1: corpus assembles with new-path lessons (wsDir has no legacy path)");
+    ok(!!c1 && c1.text.includes("SENTINEL_INDEX_SHARED"), "LOOP-163 AC1: INDEX ## Shared rule delivered into corpus");
+    ok(!!c1 && c1.text.includes("SENTINEL_SHARD_SHARED"), "LOOP-163 AC1: project shard ## Shared rule delivered into corpus");
+    ok(!!c1 && c1.text.includes("SENTINEL_INDEX_PM"), "LOOP-163 AC1: INDEX ## PM rule delivered into corpus");
+    ok(!!c1 && c1.text.includes("SENTINEL_SHARD_PM"), "LOOP-163 AC1: project shard ## PM rule delivered into corpus");
+
+    // AC2: a different project's shard DOES NOT appear in a proj1 fire
+    ok(!!c1 && !c1.text.includes("SENTINEL_OTHER_PROJ"), "LOOP-163 AC2: other project shard excluded from proj1 fire");
+
+    // AC2b: QA rules are excluded from the PM slice (lessonsSlice still filters correctly)
+    ok(!!c1 && !c1.text.includes("SENTINEL_SHARD_QA"), "LOOP-163 AC2b: different-role section excluded by lessonsSlice");
+
+    // AC4: lessonsBytes is a non-zero delivery count when lessons are present
+    ok(!!c1 && c1.lessonsBytes > 0, `LOOP-163 AC4: lessonsBytes is a delivery count > 0 (got ${c1?.lessonsBytes})`);
+
+    // AC3: absent INDEX (no lessons at all) is not an error — assembles cleanly, lessonsBytes=0
+    const emptyWs = mkdtempSync(join(tmpdir(), "dl-bp-empty-"));
+    const cEmpty = assembleBootCorpus(root, emptyWs, "pm", "proj1", "service");
+    ok(!!cEmpty, "LOOP-163 AC3: no lessons dir at all — assembles cleanly (fail open)");
+    ok(!!cEmpty && cEmpty.lessonsBytes === 0, "LOOP-163 AC3: lessonsBytes=0 when no lessons files present");
+    rmSync(emptyWs, { recursive: true, force: true });
+
+    // AC3b: legacy path <dataDir>/<project>/lessons.md still contributes when present
+    const legacyWs = mkdtempSync(join(tmpdir(), "dl-bp-legacy-"));
+    mkdirSync(join(legacyWs, "proj1"), { recursive: true });
+    writeFileSync(join(legacyWs, "proj1", "lessons.md"), [
+      "# lessons", "",
+      "## Shared", "- SENTINEL_LEGACY_SHARED v1 legacy rule", "",
+    ].join("\n") + "\n");
+    const cLegacy = assembleBootCorpus(root, legacyWs, "pm", "proj1", "service");
+    ok(!!cLegacy && cLegacy.text.includes("SENTINEL_LEGACY_SHARED"), "LOOP-163 AC3b: legacy lessons.md still contributes (v1 compat)");
+    rmSync(legacyWs, { recursive: true, force: true });
+  } finally {
+    rmSync(wsDir, { recursive: true, force: true });
+  }
+}
 
 // ── 5. fail-open ──────────────────────────────────────────────────────────────────────────────────
 ok(assembleBootCorpus(root, dataDir, "no-such-agent", "proj1", "service") === null,
