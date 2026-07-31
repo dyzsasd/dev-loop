@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// dev-loop worktree add <id> [--repo <ref>] — create a dev worktree off origin/<defaultBranch>
-// (LOOP-54: root fix for LOOP-48 — worktrees previously branched off local main, silently
-// carrying operator's unpushed commits as passengers into every dev PR).
-//
-// LOOP-37 will extend this file with `worktree path` and the terminal-state reaper.
+// dev-loop worktree — dev worktree lifecycle management (LOOP-54, LOOP-37).
+//   add  <id> [--repo <ref>]            create a dev worktree off origin/<defaultBranch>
+//   path <id> [--repo <ref>]            print the canonical wsWorktree() path (LOOP-37: single path-builder)
+//   reap [--repo <ref>] [--dry-run]     remove worktrees for terminal-state tickets + delete their branches
+// Importable: exports worktreeReap() so team-repair.ts can call it as part of its pass (isMainEntry guard).
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolveWorkspace, wsWorktree, wsLockPath } from "./workspace.ts";
-import { effectiveRepo } from "./team-config.ts";
+import { resolveWorkspace, wsWorktree, wsLockPath, wsHubDb } from "./workspace.ts";
+import { effectiveRepo, type Workspace } from "./team-config.ts";
 import { withLock } from "./locks.ts";
+import { openDb } from "./db.ts";
+import { isMainEntry } from "./is-entry.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop worktree: ${msg}`); process.exit(code); }
 
@@ -89,6 +91,149 @@ async function worktreeAdd(argv: string[]): Promise<number> {
   return 0;
 }
 
+// ─── worktree path ────────────────────────────────────────────────────────────
+function worktreePath(argv: string[]): number {
+  const ticketIdx = argv.findIndex((a) => !a.startsWith("-"));
+  if (ticketIdx === -1) { console.error("dev-loop worktree path: missing <ticket-id>"); return 2; }
+  const ticket = argv[ticketIdx]!;
+
+  const repoFlagIdx = argv.indexOf("--repo");
+  let repoRef: string | null = repoFlagIdx >= 0 ? (argv[repoFlagIdx + 1] ?? null) : null;
+  if (repoFlagIdx >= 0 && !repoRef) { console.error("dev-loop worktree path: --repo requires a value"); return 2; }
+
+  const ws = resolveWorkspace();
+  if (!repoRef) {
+    const refs = Object.keys(ws.file.repos);
+    if (refs.length === 1) repoRef = refs[0]!;
+    else { console.error("dev-loop worktree path: multiple repos exist — pass --repo <ref>"); return 2; }
+  }
+  if (!ws.file.repos[repoRef]) { console.error(`dev-loop worktree path: unknown repo ref '${repoRef}'`); return 1; }
+  console.log(wsWorktree(ws, ticket, repoRef));
+  return 0;
+}
+
+// ─── worktree reap ────────────────────────────────────────────────────────────
+
+const TERMINAL_STATES = new Set(["Done", "Canceled", "Duplicate"]);
+
+interface ReapEntry { path: string; branch: string; ticketId: string; state: string }
+
+function parsePorcelain(out: string): Array<{ path: string; branch: string | null }> {
+  return out.split("\n\n").filter(Boolean).map((block) => {
+    const lines = block.split("\n");
+    const pathLine = lines.find((l) => l.startsWith("worktree "));
+    const branchLine = lines.find((l) => l.startsWith("branch "));
+    return {
+      path: pathLine?.slice("worktree ".length) ?? "",
+      branch: branchLine ? branchLine.replace("branch refs/heads/", "") : null,
+    };
+  }).filter((e) => e.path !== "");
+}
+
+function isMergedIntoOrigin(repoDir: string, branch: string, defaultBranch: string): boolean {
+  const r = spawnSync("git", ["-C", repoDir, "merge-base", "--is-ancestor", branch, `origin/${defaultBranch}`], { stdio: "ignore" });
+  return (r.status ?? 1) === 0;
+}
+
+// Exported so team-repair can call it as part of its pass.
+export async function worktreeReap(
+  ws: Workspace,
+  repoRef: string,
+  opts: { dryRun?: boolean; print?: (m: string) => void } = {}
+): Promise<{ reaped: ReapEntry[]; kept: ReapEntry[] }> {
+  const print = opts.print ?? ((m: string) => console.log(m));
+  const dryRun = opts.dryRun ?? false;
+  const repoDir = effectiveRepo(ws, repoRef).absPath;
+  const lockPath = wsLockPath(ws, `repo-${repoRef}`);
+
+  // Query terminal-state tickets from hub DB (service backend only).
+  const dbPath = ws.file.team.backend === "service" ? wsHubDb(ws) : null;
+  if (!dbPath || !existsSync(dbPath)) {
+    print(`[reap] skipped: no hub.db available for repo '${repoRef}' (backend: ${ws.file.team.backend})`);
+    return { reaped: [], kept: [] };
+  }
+
+  const db = openDb(dbPath);
+  const queryState = db.prepare("SELECT state FROM tickets WHERE id = ?");
+  const getTicketState = (id: string): string | null => {
+    const row = queryState.get(id) as { state: string } | undefined;
+    return row?.state ?? null;
+  };
+
+  // Enumerate all worktrees from the registered repo (covers all roots, incl. legacy /tmp paths).
+  const list = git(repoDir, ["worktree", "list", "--porcelain"]);
+  if (!list.ok && !list.out) { db.close(); return { reaped: [], kept: [] }; }
+
+  const entries = parsePorcelain(list.out);
+  const [, ...nonPrimary] = entries; // skip the main worktree (first entry)
+
+  const toReap: ReapEntry[] = [];
+  const toKeep: ReapEntry[] = [];
+
+  for (const entry of nonPrimary) {
+    const { path, branch } = entry;
+    const m = branch?.match(/^dev-loop\/(.+)$/);
+    if (!m) continue; // not a dev-loop ticket branch — leave it alone
+
+    const ticketId = m[1]!;
+    const state = getTicketState(ticketId);
+    if (!state) continue; // no hub row (ghost ref or different project) — leave it alone
+    if (!TERMINAL_STATES.has(state)) { toKeep.push({ path, branch: branch!, ticketId, state }); continue; }
+
+    toReap.push({ path, branch: branch!, ticketId, state });
+  }
+  db.close();
+
+  if (dryRun) {
+    for (const e of toReap) print(`[reap] would remove worktree '${e.path}' (${e.ticketId} is ${e.state})`);
+    if (toReap.length === 0) print("[reap] nothing to reap");
+    return { reaped: toReap, kept: toKeep };
+  }
+
+  await withLock(lockPath, {}, async () => {
+    const defaultBranch = "main";
+    for (const e of toReap) {
+      // Remove the worktree (--force handles uncommitted or missing-on-disk directories).
+      if (existsSync(e.path)) {
+        const rm = git(repoDir, ["worktree", "remove", "--force", e.path]);
+        if (!rm.ok) {
+          // Fall back to prune if remove fails (already gone or can't lock)
+          git(repoDir, ["worktree", "prune"]);
+        }
+      } else {
+        git(repoDir, ["worktree", "prune"]);
+      }
+      print(`[reap] removed worktree '${e.path}' (${e.ticketId} is ${e.state})`);
+
+      // Delete the local branch: always for Canceled; only if merged for Done/Duplicate.
+      const deleteBranch = e.state === "Canceled" || isMergedIntoOrigin(repoDir, e.branch, defaultBranch);
+      if (deleteBranch) {
+        const flag = e.state === "Canceled" ? "-D" : "-d";
+        const del = git(repoDir, ["branch", flag, e.branch]);
+        if (del.ok) print(`[reap] deleted branch '${e.branch}'`);
+      } else {
+        print(`[reap] kept branch '${e.branch}' (unmerged; non-Canceled ticket)`);
+      }
+    }
+  });
+
+  return { reaped: toReap, kept: toKeep };
+}
+
+async function worktreeReapCli(argv: string[]): Promise<number> {
+  const dryRun = argv.includes("--dry-run");
+  const repoFlagIdx = argv.indexOf("--repo");
+  const repoRef = repoFlagIdx >= 0 ? (argv[repoFlagIdx + 1] ?? null) : null;
+
+  const ws = resolveWorkspace();
+  const refs = repoRef ? [repoRef] : Object.keys(ws.file.repos);
+  for (const ref of refs) {
+    if (!ws.file.repos[ref]) { console.error(`dev-loop worktree reap: unknown repo ref '${ref}'`); return 1; }
+    await worktreeReap(ws, ref, { dryRun });
+  }
+  return 0;
+}
+
 function usage(): void {
   console.log(`dev-loop worktree — dev worktree lifecycle management
 
@@ -97,16 +242,28 @@ Usage: dev-loop worktree <verb> [args]
   add <id> [--repo <ref>]
       Create a dev worktree on branch dev-loop/<id> based at origin/<defaultBranch> (never
       local main). Prints the path. Idempotent: same path+branch → succeeds; different base → refuses.
-      Run under the §7 repo lock to serialize fetch + worktree-add with other base-clone mutations.`);
+      Run under the §7 repo lock to serialize fetch + worktree-add with other base-clone mutations.
+
+  path <id> [--repo <ref>]
+      Print the canonical wsWorktree() path for <id>+<ref> — the single source of truth for
+      worktree paths. Agent fires should call this instead of constructing the path themselves.
+
+  reap [--repo <ref>] [--dry-run]
+      Remove worktrees whose ticket is in a terminal state (Done / Canceled / Duplicate) and
+      delete their local branches (force-delete for Canceled; safe-delete for merged Done/Duplicate).
+      Enumerates via \`git worktree list\` so it covers all roots, including legacy paths.
+      --dry-run: print what would be reaped without removing anything.`);
 }
 
-// Terminal entry — only ever spawned (`dev-loop worktree …`), never imported (LOOP-63: no ESM importer),
-// so it runs unconditionally; a deleted guard cannot silently no-op on a spaced/symlinked path.
-{
+if (isMainEntry(import.meta.url)) {
   const [verb, ...rest] = process.argv.slice(2);
   if (!verb || verb === "--help" || verb === "-h" || verb === "help") { usage(); process.exit(0); }
   if (verb === "add") {
     worktreeAdd(rest).then((c) => process.exit(c)).catch((e) => { console.error(`dev-loop worktree: ${(e as Error).message}`); process.exit(1); });
+  } else if (verb === "path") {
+    process.exit(worktreePath(rest));
+  } else if (verb === "reap") {
+    worktreeReapCli(rest).then((c) => process.exit(c)).catch((e) => { console.error(`dev-loop worktree reap: ${(e as Error).message}`); process.exit(1); });
   } else {
     console.error(`dev-loop worktree: unknown verb '${verb}'\n`);
     usage();
