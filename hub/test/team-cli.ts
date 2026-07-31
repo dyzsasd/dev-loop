@@ -347,6 +347,40 @@ try {
     }
   }
 
+  // ── W19: doctor warns when local defaultBranch is ahead of origin (LOOP-56) ──
+  {
+    const w19Root = join(tmp, "w19");
+    const w19Origin = join(tmp, "w19-origin.git");
+    mkdirSync(w19Origin, { recursive: true });
+
+    const gitW19 = (dir: string, args: string[]) =>
+      spawnSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+    // Bare origin + clone inside workspace
+    gitW19(tmp, ["init", "--bare", "-q", "-b", "main", w19Origin]);
+    run("team", ["init", "--dir", w19Root, "--key", "w19-team", "--backend", "service"]);
+    run("team", ["add-project", "core"], { cwd: w19Root });
+    const w19Clone = join(w19Root, "clone");
+    spawnSync("git", ["clone", "-q", w19Origin, w19Clone], { stdio: ["ignore", "pipe", "pipe"] });
+    gitW19(w19Clone, ["commit", "--allow-empty", "-qm", "baseline"]);
+    gitW19(w19Clone, ["push", "-qu", "origin", "main"]);
+    run("team", ["add-repo", "repo", "--project", "core", "--path", "clone", "--landing", "pr", "--auto-merge"], { cwd: w19Root });
+
+    // Case A: local main 1 commit ahead → W19 fires, DOCTOR_OK holds
+    gitW19(w19Clone, ["commit", "--allow-empty", "-qm", "unpushed strategy doc"]);
+    const w19ahead = run("server", ["doctor"], { cwd: w19Root });
+    ok(/\[W19\]/.test(w19ahead.out), "W19 fires when local main is ahead of origin/main");
+    ok(/DOCTOR_OK/.test(w19ahead.out), "W19 is warn-only — DOCTOR_OK still holds when local main is ahead");
+    ok(/1 commit/.test(w19ahead.out), "W19 names the commit count");
+
+    // Case B: in sync after push → no W19
+    gitW19(w19Clone, ["push", "-qu", "origin", "main"]);
+    const w19sync = run("server", ["doctor"], { cwd: w19Root });
+    ok(!/\[W19\]/.test(w19sync.out), "no W19 when local main is in sync with origin/main");
+    ok(/DOCTOR_OK/.test(w19sync.out), "DOCTOR_OK holds when in sync");
+  }
+
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {

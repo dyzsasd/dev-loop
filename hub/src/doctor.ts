@@ -310,6 +310,34 @@ export function doctorWorkspace(ws: Workspace): boolean {
     } catch { /* owner-liveness is best-effort — a missing ledger/db never fails doctor */ }
   }
 
+  // W19 — unpushed strategy/doc commits: local <defaultBranch> is ahead of origin (LOOP-56).
+  // A landing:"pr" repo where PM commits docs to local main but never pushes means every dev
+  // worktree (which branches off origin) silently misses those docs, and they land as passengers
+  // in dev PRs. Best-effort, warn/info only — NEVER flips DOCTOR_OK.
+  try {
+    const defaultBranch = "main";
+    for (const [ref, entry] of Object.entries(ws.file.repos)) {
+      if (entry.landing !== "pr") continue;
+      const dir = effectiveRepo(ws, ref).absPath;
+      if (!existsSync(dir) || !isGitWorkTree(dir)) continue;
+      try {
+        const r = spawnSync("git", ["-C", dir, "rev-list", "--count", `origin/${defaultBranch}..${defaultBranch}`],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        if (r.status !== 0 || r.error) {
+          // origin/<branch> ref absent or git error — unknown, never warn (§LOOP-56 AC)
+          info(`[${ref}] W19: cannot check ahead-of-origin (origin/${defaultBranch} not resolved; best-effort)`);
+          continue;
+        }
+        const ahead = parseInt(r.stdout.trim(), 10);
+        if (isNaN(ahead)) { info(`[${ref}] W19: rev-list output unexpected — skipping`); continue; }
+        if (ahead > 0) {
+          warn(`[W19] [${ref}] local ${defaultBranch} is ${ahead} commit(s) ahead of origin/${defaultBranch} — unpushed strategy/doc commits are invisible to every dev worktree (they branch off origin). Land them: dev-loop doc-land (design landing-discipline §4), or the operator runbook §4.3. Do NOT 'git reset --hard origin/${defaultBranch}' — it destroys them.`);
+        }
+        // ahead === 0: in sync, silent
+      } catch { info(`[${ref}] W19: git check skipped (best-effort)`); }
+    }
+  } catch { /* W19 is best-effort — never fails doctor */ }
+
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
   if (isGitWorkTree(ws.root)) {
     let ignored = false;
