@@ -799,6 +799,35 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `1.11.0` → 8,115 bytes unparseable, `origin/main` source → 517,936 bytes, 107 tickets. So this is
   **purely LOOP-38's deploy gap**, whose severity it raises from *partial reads* to *silent dependency-
   graph corruption*. Routed as evidence (LOOP-38, LOOP-43) and one binding read-integrity AC (LOOP-104).
+- **🚢 The loop shipped again after three frozen fires — and what unstuck it was a ticket STATE, not
+  code (2026-07-31).** `origin/main` moved **`49644f8` → `bf890d3`** (LOOP-73, PR #62), the first
+  landing in three PM fires. It was not waiting on a build: the PR had been `MERGEABLE`/`CLEAN` with all
+  three checks green for ~35 minutes. **It was parked in a state no agent could act on.**
+  `agentops.ts:205-210` builds a dev tier's queue as `todo` + its **own `In Progress`** — `In Review` is
+  in neither — while §12c says that under `landing:"pr"` + `autoMerge:true` a ticket **stays
+  `In Progress` until its green PR merges**, because the Dev tier owns landing it. Junior-dev has been
+  moving tickets to `In Review` at PR-open (the §12b *human*-merge flow) instead, so five increments sat
+  in a state where the only agent permitted to land or fix them could not see them. Returning LOOP-73 to
+  `In Progress` at 01:25 put it back in view; Step 0.5 merged it at **01:29:05Z**, four minutes later.
+- **📉 The measured cost of that gap, because it is not theoretical.** PR #60 (LOOP-56) failed CI on the
+  CRAP ratchet; head `f3e7a9ed` committed **00:26:08Z**; PM's diagnosis posted **00:37:52Z**; junior's
+  next fire ran **00:54:35Z** and correctly worked its actual queue. The head never moved — the
+  instruction was written to a ticket the recipient structurally could not read. Same shape on LOOP-40
+  (PR #59, one-file `hub/package.json` conflict, all checks green, **gates seven tickets**), LOOP-57
+  (PR #64, doc-land) and LOOP-67 (PR #65). All five corrected to `In Progress` this fire with the exact
+  remaining action named. The running tally of increments handed off unlandable is now **nine** — routed
+  as evidence to **LOOP-89**, which owns the mechanism, and broadened there from *admission* (don't let
+  a red increment in) to **admission + egress** (an increment that gets in must stay reachable by the
+  tier that owns landing it).
+- **⚠️ Two guards that are correct and would deadlock if wired today.** **LOOP-67** (built, verified,
+  PR #65 green) adds a merge-guard axis tripping on `In Review`/`Canceled`/`Duplicate`. Its premise is
+  exactly the §12c invariant above — which is the thing not currently holding — so wiring it `--strict`
+  into Step 0.5 (**LOOP-69**) before the state discipline lands would make **every** junior PR
+  permanently unmergeable. Sequencing recorded on both tickets: land §12c discipline → advisory for one
+  cycle → `--strict`; or enforce only `Canceled`/`Duplicate`, which has no downside today and would
+  already be earning its keep — **#48, #49 and #61 are open PRs on Canceled tickets right now, and #61
+  is green and mergeable.** §12c's merge pass keys on *"green AND mergeable"*, reading the PR and never
+  the board, so cancelling a ticket does not stop its work from shipping.
 
 ## Personas
 
@@ -1922,6 +1951,42 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   keeping is narrower than *"verify before filing"*: **when a diagnostic returns an empty result, prove
   the read succeeded before believing the emptiness** — my resolver's `catch {}` turned three failed
   reads into three confident wrong answers, which is the same defect I then bound onto LOOP-104.
+- **(pm, 2026-07-31) ⚖️ There is a THIRD verify outcome, and last fire's ruling was one case of it.**
+  Last fire recorded the boundary as *verify-fail vs send-back*, turning on whether the ACs had been
+  evaluated. That is right but incomplete. This fire produced a case that is neither: **the increment is
+  correct, the ACs pass, and the ticket is simply in the wrong STATE.** LOOP-73 was green, mergeable and
+  verified; nothing was wrong with it except that it sat in `In Review` under a config (`autoMerge:true`)
+  whose §12c contract says it should have been `In Progress`. Cancel + follow-up would have destroyed a
+  finished increment; holding it `In Review` — what I did for two fires — kept it invisible to the only
+  tier that could land it. **The correct move was to restore the state the convention specifies and say
+  why.** So the trichotomy is: *wrong* ⇒ §3 verify-fail (Cancel + follow-up); *unfinished ship-work*
+  ⇒ send back to the owning tier with the failure named; *mis-stated* ⇒ restore the invariant, banking
+  the verify so nothing is rebuilt. The evidence that this is a real category and not a rationalisation
+  is that it worked in four minutes after two fires of holding. Not filed as a conventions change (§17
+  governing file, two operator decisions already stalled) — recorded here and applied.
+- **(pm, 2026-07-31) 🧪 Method note: three hypotheses, two killed by measurement, one survived and
+  became a ticket.** The fire's centre of gravity was *"why has nothing merged in three fires."*
+  **(1) Killed:** *"the fire-start merge pass never runs because §12c is gated on `git.autoMerge`, a key
+  no mutator writes."* The runner logs refuted it outright — Step 0.5 has landed PRs #51, #52, #56, #58
+  and logs `git.autoMerge:true` explicitly. **(2) Killed:** *"junior-dev is hung"* — a fire had been
+  silent for ~19 minutes, but the ledger's own distribution says junior's **median** fire is 1375 s and
+  its max 3037 s, so the run was entirely normal. Reporting that as a stall would have been a false
+  alarm to the operator. **(3) Survived, with receipts:** running the shipped predicate against the real
+  config returned `§12c: active=false` while the registry literally reads `"autoMerge": true` — two
+  independent shape bugs (`o.git.autoMerge` vs the flat `RepoEntry.autoMerge` every mutator writes; and
+  `repoList()` inspecting `{ref}` pointers that carry no repo facts). Latent, because `--assemble-boot`
+  is off here — stated as such on the ticket rather than dressed up. Filed as **LOOP-109**. The reusable
+  part: **two of the three fell to a cheap measurement taken before writing anything down**, and the
+  survivor is the one where I ran the real code against the real config instead of reading it.
+- **(pm, 2026-07-31) 🔗 A coordination comment loses to the pick order; an edge beats it.** Twice now a
+  landing-order hazard was recorded as a comment and twice the ranking overrode it. LOOP-84 (p1) edits
+  the same call site as LOOP-94 (p2), so §5 would hand junior the *later* ticket first — the exact order
+  the comment warned against. LOOP-46 (W18) adds an eleventh W-code block to `doctorWorkspace`, already
+  CC 64 / CRAP 90.4 against a threshold of 90 — no longer a prediction, since LOOP-56 added exactly one
+  such block and both required checks failed on `max 90.4 > 90`. Both converted to real `Blocked-by:`
+  edges this fire (LOOP-84→LOOP-94, LOOP-46→LOOP-56), which the §9c pass retires automatically on `Done`.
+  **The rule: if a sequencing note would be wrong to ignore, it belongs in the graph, not in prose** —
+  prose is advisory to a ranked queue, an edge is not.
 
 ## Candidate ideas
 
