@@ -8,7 +8,7 @@
 //     at fire time, per the §22 digest contract; this CLI never guesses them.
 import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { isMainEntry } from "./is-entry.ts";
-import { resolveWorkspace, wsFireLedger, wsHubDb } from "./workspace.ts";
+import { resolveWorkspace, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
 import { deliveryProjects, type Workspace } from "./team-config.ts";
 import { AGENT_HANDLES } from "./seed.ts";
 
@@ -344,11 +344,11 @@ export function sensitiveMistier(db: any, projectId: string): SensitiveMistierFi
 
 // Service-backend board rollup: per-project board KPIs + the operator decision queue folded into
 // `out` (1.8.1 quality-gauntlet drain: metricsCli CC 22 → collect/render phases).
-async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>): Promise<void> {
-  if (ws.file.team.backend === "service" && existsSync(wsHubDb(ws))) {
+async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>, boardDb: string): Promise<void> {
+  if (ws.file.team.backend === "service" && existsSync(boardDb)) {
     const { openDb } = await import("./db.ts");
     const { findProject } = await import("./seed.ts");
-    const db = openDb(wsHubDb(ws));
+    const db = openDb(boardDb);
     try {
       const board: Record<string, BoardMetrics> = {};
       const roll = { throughput: 0, verifyFails: 0, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
@@ -520,6 +520,10 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     return printContextBill(asJson);
   }
   const ws: Workspace = resolveWorkspace();
+  // Route board reads through the DEVLOOP_HUB_DB ladder (LOOP-199). Own-db callers (hub.ts:21,29
+  // wires DEVLOOP_HUB_DB=wsHubDb; team-init.ts:176 creates; bundle.ts:153 exports;
+  // team-import.ts:230 writes) must NOT follow ambient env — they call wsHubDb(ws) directly.
+  const boardDb = resolveHubDbPath(ws.root);
 
   // ── usage/cost/flow path (LOOP-125) ──────────────────────────────────────────
   if (showUsage || showCost || showFlow) {
@@ -529,10 +533,10 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     let throughput: number | null = null;
     let flowBoardNote: string | null = null;
     if (showFlow) {
-      if (ws.file.team.backend === "service" && existsSync(wsHubDb(ws))) {
+      if (ws.file.team.backend === "service" && existsSync(boardDb)) {
         const { openDb } = await import("./db.ts");
         const { findProject } = await import("./seed.ts");
-        const db = openDb(wsHubDb(ws));
+        const db = openDb(boardDb);
         try {
           let tp = 0;
           for (const key of deliveryProjects(ws)) {
@@ -572,7 +576,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   const fires = fireMetrics(wsFireLedger(ws), windowMs);
   const out: Record<string, unknown> = { team: ws.file.team.key, windowDays: windowMs / 86_400_000, fires };
 
-  await collectBoardMetrics(ws, windowMs, out);
+  await collectBoardMetrics(ws, windowMs, out, boardDb);
 
   if (asJson) { console.log(JSON.stringify(out, null, 2)); return 0; }
   renderHuman(ws, windowMs, fires, out, Date.now());
