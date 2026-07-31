@@ -6,7 +6,7 @@ import { createServer as netCreateServer } from "node:net";
 import { existsSync, readFileSync, mkdirSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { registerDaemonPid } from "./daemon-harness.ts";
+import { registerDaemonPid, runDaemonCli } from "./daemon-harness.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -35,12 +35,10 @@ const TEST_PORT = await new Promise<number>((res, rej) => {
 
 // lc(): invoke `node src/daemon.ts <sub>` with a fire-marker-scrubbed env + caller-supplied overrides.
 // Caller controls exactly which DEVLOOP_* vars are present — no ambient leakage.
+// rawEnv:true prevents runDaemonCli from re-merging process.env (which would reintroduce fire markers).
 function lc(sub: string, extra: Record<string, string | undefined> = {}) {
   const env = { ...scrubFireEnv(), DEVLOOP_ACTOR: "operator", ...extra };
-  return spawnSync(NODE, [join(hubRoot, "src", "daemon.ts"), sub], {
-    cwd: hubRoot, encoding: "utf8", timeout: 30_000,
-    env: env as NodeJS.ProcessEnv,
-  });
+  return runDaemonCli("daemon", sub, env, { timeout: 30_000, rawEnv: true });
 }
 
 rmSync(ROOT, { recursive: true, force: true });
@@ -123,10 +121,11 @@ try {
   // ── AC4: no workspace resolves → fallback to ambient behavior, no throw ───────
   // cwd is /tmp (no dev-loop.json), no DEVLOOP_WORKSPACE → tryResolveWorkspace returns null →
   // resolveDaemonContext returns cleanly → ambient env used (daemon not found → 'stopped').
-  const noWsFallback = spawnSync(NODE, [join(hubRoot, "src", "daemon.ts"), "status"], {
-    cwd: "/tmp", encoding: "utf8", timeout: 10_000,
-    env: { ...scrubFireEnv(), DEVLOOP_ACTOR: "operator", DEVLOOP_PROJECT: PROJ } as NodeJS.ProcessEnv,
-  });
+  // cwd:/tmp avoids resolving the loop workspace when running inside the checkout locally.
+  const noWsFallback = runDaemonCli("daemon", "status",
+    { ...scrubFireEnv(), DEVLOOP_ACTOR: "operator", DEVLOOP_PROJECT: PROJ },
+    { timeout: 10_000, cwd: "/tmp", rawEnv: true },
+  );
   ok(noWsFallback.status === 0, "AC4: no workspace → daemon status exits 0 (no crash, today's behavior)");
   ok(/stopped|no project/.test(noWsFallback.stdout), "AC4: daemon not found in machine-default run dir → 'stopped' (graceful fallback)");
 
