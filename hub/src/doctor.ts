@@ -358,13 +358,16 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     else pass(`opencode ${v} on PATH (certified ${OPENCODE_MIN_VERSION})`);
   }
 
+  // W16 + W21 share the same db path; compute once to avoid repeated ?? (CC budget, LOOP-199).
+  const boardDb = opts.boardDb ?? wsHubDb(ws);
+
   // W16 — owner-liveness (P1-4, the field's MP-156): an owner label whose actor never fires strands its
   // Todo/In Review tickets forever, and nothing notices. Service-backend only (needs the local board).
   // agents.<h>.manual:true (team or project) downgrades the finding to an info line ("awaiting a human").
-  if (ws.file.team.backend === "service" && existsSync(opts.boardDb ?? wsHubDb(ws))) {
+  if (ws.file.team.backend === "service" && existsSync(boardDb)) {
     try {
       const { ownerLiveness } = require_metrics();
-      const db = openHubDbConn(opts.boardDb ?? wsHubDb(ws));
+      const db = openHubDbConn(boardDb);
       try {
         const manual = new Set<string>();
         for (const [h, a] of Object.entries(ws.file.team.agents ?? {})) if ((a as { manual?: boolean })?.manual === true) manual.add(h);
@@ -391,10 +394,10 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // W21 — sensitive mis-tier backstop (design sensitive-routing §§3-4): non-terminal tickets whose
   // labels include `sensitive` AND are routed to the junior-dev tier (assignee or label). Layer-1/2
   // enforce at write/queue time; this layer surfaces pre-gate or raw-path rows. Service-backend only.
-  if (ws.file.team.backend === "service" && existsSync(opts.boardDb ?? wsHubDb(ws))) {
+  if (ws.file.team.backend === "service" && existsSync(boardDb)) {
     try {
       const { sensitiveMistier } = require_metrics();
-      const db = openHubDbConn(opts.boardDb ?? wsHubDb(ws));
+      const db = openHubDbConn(boardDb);
       try {
         for (const key of deliveryProjects(ws)) {
           const pid = findHubProject(db, key);
