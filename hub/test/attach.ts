@@ -3,20 +3,20 @@
 // DEVLOOP_HUB_URL + DEVLOOP_UI_TOKEN + an actor — reads AND attributed writes land on the remote
 // board; the operator's D1 override reaches real projects through a `_team`-booted daemon; home-only
 // verbs refuse with the home pointer; and a missing/wrong token maps to the clear exit-5 message.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
+import { startTestDaemon } from "./daemon-harness.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 const ROOT = mkdtempSync(join(tmpdir(), "dl-attach-"));
-let daemon: ReturnType<typeof spawn> | null = null;
 try {
   // ── the "remote home": a seeded hub + a token-gated daemon booted on _team, in its OWN process —
   // the CLI legs below use spawnSync, which blocks THIS event loop; an in-process daemon would starve.
@@ -27,20 +27,9 @@ try {
   for (const id of [teamId, shopId])
     seed.prepare("UPDATE projects SET settings_json=? WHERE id=?").run(JSON.stringify({ hub: { transport: "daemon" } }), id);
   seed.close();
-  daemon = spawn(process.execPath, [join(hubRoot, "src", "daemon.ts")], {
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "_team", DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: "0", DEVLOOP_UI_TOKEN: "attach-tok-1" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const HUB = await new Promise<string>((resolve, reject) => {
-    let out = "";
-    const timer = setTimeout(() => reject(new Error(`daemon never announced its port:\n${out}`)), 15_000);
-    daemon!.stdout!.on("data", (d) => {
-      out += d;
-      const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)\//);
-      if (m) { clearTimeout(timer); resolve(`http://127.0.0.1:${m[1]}`); }
-    });
-    daemon!.stderr!.on("data", (d) => { out += d; });
-    daemon!.on("exit", (c) => { clearTimeout(timer); reject(new Error(`daemon exited ${c}:\n${out}`)); });
+  const { url: HUB } = await startTestDaemon({
+    DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "_team", DEVLOOP_ACTOR: "operator",
+    DEVLOOP_DAEMON_PORT: "0", DEVLOOP_UI_TOKEN: "attach-tok-1",
   });
 
   // ── the "laptop": an empty dir, no workspace, no local db lever ──
@@ -98,7 +87,6 @@ try {
   ok(badTok.status === 5 && /bearer token/.test(badTok.stderr),
     `attach: wrong token → same clear refusal (got ${badTok.status}; err: ${(badTok.stderr ?? "").split("\n").filter((l) => !/Experimental|trace-/.test(l)).slice(0, 2).join(" | ")})`);
 } finally {
-  daemon?.kill("SIGTERM");
   rmSync(ROOT, { recursive: true, force: true });
 }
 
