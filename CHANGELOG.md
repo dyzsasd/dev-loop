@@ -3,6 +3,57 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+87 commits in one overnight run of the loop on itself. The headline: **dev-loop can now
+measure and explain its own operation** — the metering program shipped end to end across all
+three CLI lanes, and the landing path grew real machine gates.
+
+**Metering & cost (the observability program).**
+
+- **Per-fire token/cache/cost capture on every lane** — claude (`--output-format json`),
+  codex (`--json` events), and opencode (`--format json`) each report measured usage into the
+  fire ledger; a lane that cannot report stays fully recorded and is disclosed as *unmetered*
+  rather than silently counted as zero.
+- **`fireId` end to end** — minted per fire, carried into hub writes via an
+  `x-devloop-fire-id` header + `AsyncLocalStorage`, and stamped on ledger events. This is the
+  correlation key: what a ticket cost is now a join, never an agent's self-report.
+- **`dev-loop metrics --usage / --cost / --flow`** over a shared `usageReport` core, plus
+  `landed`/`landing[]` in the JSON output and age per decision-queue item.
+- **A `/usage` dashboard** on the board — read-only usage & cost over the fire ledger.
+
+**Landing gates — green checks are no longer sufficient to merge.**
+
+- **`dev-loop merge-guard`** refuses a merge on two axes: a **human's** unresolved
+  `CHANGES_REQUESTED`/review thread (agent reviewers excluded), and a ticket that is not
+  merge-eligible on the board. `--apply` records the objection on the ticket; `--strict` exits
+  non-zero. Both axes degrade to a pass when their evidence is unreachable, so the guard blocks
+  on objections, never on infrastructure. **Wired into the §12c fire-start merge pass and every
+  dev tier's Step 0.5** — the loop can no longer merge over a person's objection.
+- **Review-admission gate** — a `pr`+`autoMerge` ticket may not move `In Progress → In Review`
+  unless its PR actually MERGED (the shape that once marked shipped-but-unlanded work Done).
+- **`dev-loop worktree add|path|reap`** — dev branches are cut from `origin/<defaultBranch>`,
+  never local `main` (which silently smuggled unpushed commits into unrelated PRs), plus
+  terminal-state worktree reaping.
+- **`dev-loop doc-land`** — PM's doc-only strategy-doc progress commits land ff-only on
+  `origin/<defaultBranch>`, docs-path-asserted and push-guard-gated, so the north star the dev
+  tiers read is the one PM writes.
+- **push-guard** also flags passenger commits branched off local `main`.
+
+**New doctor codes:** `W18` (installed CLI vs `origin/main` skew), `W19` (local default branch
+ahead of origin), `W21` (sensitive mis-tier backstop), plus a nudge when a repo has no build
+gates configured but detection finds some.
+
+**Config surface.** `repos.<ref>.defaultBranch` + `team.git.defaultBranch` (resolution
+`repo ?? team ?? "main"`), `team add-repo --default-branch`, and per-agent
+`fireTimeout`/`stallTimeout` — all now documented in `references/config-schema.md`.
+
+**Safety & robustness.** Sensitive tickets re-tier to senior-dev and can never be served into
+the junior slice; a provider-scoped circuit breaker trips on spend-limit/rate-limit/auth across
+lanes; claimed tickets are released when infrastructure kills their fire; the raw fire
+`outputTail` is no longer persisted and ledger/log files are owner-only; a deny-by-default
+audit of npm lifecycle scripts; `dev-loop run` no longer no-ops on any path containing a space.
+
 ## 1.11.0
 
 The first batch built BY the loop ON the loop (workspace `loop`, 2026-07-30): every entry

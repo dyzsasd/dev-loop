@@ -58,16 +58,16 @@ grep a guessed tree; leave it for Step 3 (§19).
 
 ### Step 0.5 — Merge eligible loop PRs (feature + deploy, §12c)
 When `git.autoMerge` and/or `deploy.style:"release-pr"` are set (absent ⇒ no-op), run the §12c
-fire-start pass exactly. `git worktree prune` first (a base-clone mutation — under the §7 lock).
-**Feature PRs** (`autoMerge`): every `git.mergeChecks` context green AND mergeable ⇒
-`gh pr merge --squash --delete-branch`, remove the ticket's worktree, move the ticket to
+fire-start pass exactly. `git worktree prune` first (under the §7 lock).
+**Feature PRs** (`autoMerge`): green + mergeable ⇒ **`dev-loop merge-guard --pr <pr> --strict
+--apply` FIRST; non-zero HOLDS that merge** (leave the PR open — the objection is already on the
+ticket), else `gh pr merge --squash --delete-branch`, remove the ticket's worktree, move it to
 `In Review`; a FAILED check ⇒ read the CI failure, fix in the worktree, re-push (cap ~2 cycles;
-the 3rd is a `fix-exhausted` block, §9); `DIRTY` (conflicts never self-heal) ⇒ rebase onto
-`origin/<defaultBranch>` + `--force-with-lease` (unresolvable ⇒ block); pending ⇒ next fire.
+the 3rd is a `fix-exhausted` block, §9); `DIRTY` ⇒ rebase onto `origin/<defaultBranch>` +
+`--force-with-lease` (unresolvable ⇒ block); pending ⇒ next fire.
 **Deploy PRs** (`release-pr`): merge only `auto:true` envs' NEWEST open deploy PR (never
-`--delete-branch` — the pipeline owns those branches; run the env's `healthCheck` after);
-`auto:false` (prod) is the operator's gate, untouched. Idempotent + race-safe; under this model
-these are the ONLY merge/deploy actions (no `deploy.command`, no Step 6.5).
+`--delete-branch`; run the env's `healthCheck` after); `auto:false` (prod) is the operator's gate.
+Idempotent + race-safe; these are the ONLY merge/deploy actions (no `deploy.command`, no Step 6.5).
 
 ### Step 1 — Pick the top ticket
 On `backend:"service"` ONE call returns it: `dev-loop queue` — `todo` arrives already in the

@@ -64,7 +64,9 @@ run; re-queued.`, verify the move (§10). An unresolvable repo target ⇒ leave 
 ### Step 0.5 — Merge eligible loop PRs
 When `git.autoMerge` and/or `deploy.style:"release-pr"` (§12c): run the §12c fire-start pass —
 green + mergeable `dev-loop/*` feature PRs, `auto:true` deploy PRs only, with §12c's fix/rebase
-caps — exactly as dev-agent Step 0.5 spells out. Idempotent + race-safe.
+caps — exactly as dev-agent Step 0.5 spells out. **Green is not sufficient: run
+`dev-loop merge-guard --pr <pr> --strict --apply` before every feature-PR squash; a non-zero exit
+HOLDS that merge.** Idempotent + race-safe.
 
 ### Step 1 — Pick the top JUNIOR ticket
 On `backend:"service"` ONE call returns it: `dev-loop queue` — `todo` IS your ranked slice

@@ -187,6 +187,7 @@ single-field mutator; see [Operator-tunable fields](#operator-tunable-fields-dev
 | `docSystem` / `docs` | Where team/product docs live. | — |
 | `comms` | Slack/Lark channel config (`dev-loop notify`). Store env var names only — the values live in `<workspace>/.dev-loop/secrets.env` or the process env (env wins; loaded automatically at workspace resolution). Its presence is also the **§22a team-digest gate**: with `team.comms` set, the team-scope communication fire composes and pushes the daily director digest — a per-project `communication` block never gates the digest. `dev-loop doctor` checks resolvability (`W12`). | ✓ `team.comms.provider`, `team.comms.webhookEnv` |
 | `mode` | Default `"live"` / `"dry-run"` for projects that do not override. | ✓ `team.mode` |
+| `git.defaultBranch` | Team-wide integration branch for repos that do not set their own. Resolution: `repos.<ref>.defaultBranch ?? team.git.defaultBranch ?? "main"` (§19). | ✓ `team.git.defaultBranch` |
 | `autonomy` | Default autonomy posture for projects that do not override. | — |
 | `intake` | Team-wide default intake block (`mode`, `todoDepthCap`); seeded by `team init --intake-mode`. Projects override **field-wise** (nearest wins per field), so a project tuning only `todoDepthCap` keeps a team-level `"passive"`. | ✓ `team.intake.mode`, `team.intake.todoDepthCap` |
 | `defaultCodingAgent` | Default executor CLI (`claude`, `codex`, or `opencode`) when an agent does not override. | — |
@@ -209,16 +210,19 @@ project, so a shared repo has one build/deploy truth.
 | `landing` | `"direct"` or `"pr"`. | — |
 | `autoMerge` | In PR mode, whether Dev may merge its own green PR. | — |
 | `mergeChecks` | Required PR check contexts/job names. | — |
+| `defaultBranch` | This repo's integration branch — what dev worktrees branch off, what PRs target, and what a rebase-on-`DIRTY` rebases onto. Per-repo override; resolves `repos.<ref>.defaultBranch ?? team.git.defaultBranch ?? "main"` (the §19 resolution rule). Set it when a repo integrates on something other than `main` (e.g. `master`, `develop`). | — |
 | `build` | Step-5 ship gates, run in order: `typecheck` → `build` → `test` → `quality`. `quality` is the optional CRAP/mutation gate (quality-gauntlet design): e.g. `"quality": "dev-loop quality --changed --threshold 30"` — per-function `CRAP = CC² × (1−cov)³ + CC` over native V8 coverage, exit 2 over threshold; `--mutate` adds the test-strength probe (self-restoring operator flips; a SURVIVED mutant = a test that doesn't bite). **Language is per FILE**: `.ts/.js` ride the typescript AST + V8 coverage; `.go` rides a token scanner + `go test -coverprofile` (block-level claimed-bytes — an untested Go fn is a true 0%), same formula/report/gate; a Go repo needs only `"quality": "dev-loop quality --changed --threshold 30"` like any other. `add-repo --detect` maps package.json scripts named `typecheck`/`build`/`test`/`quality`. | — |
 | `deploy` | Command or release-PR deploy shape. | ✓ `repos.<ref>.deploy.style`, `.deploy.healthCheck`, `.deploy.environments.<env>.{auto,deployPrPrefix,command,healthCheck}` |
 | `ops` | Health checks, critical routes, and read-only logs command for Ops. | — |
 
 `dev-loop team add-repo <ref> --project <key> --path <rel> --detect` fills the detectable fields
 deterministically (no LLM): it clones from `--remote` when the path is missing, maps `package.json`
-scripts named `typecheck`/`build` to runner commands (runner chosen by lockfile: pnpm/yarn/npm), and
-lists `.github/workflows` job names as candidate `mergeChecks`. It registers with `landing:"pr"` and
+scripts named `typecheck`/`build` to runner commands (runner chosen by lockfile: pnpm/yarn/npm),
+lists `.github/workflows` job names as candidate `mergeChecks`, and infers `defaultBranch` from
+`git symbolic-ref refs/remotes/origin/HEAD`. It registers with `landing:"pr"` and
 no auto-merge; interview-only fields (`deploy`, `ops`, `owner`) stay unset and `dev-loop doctor`
-surfaces the gap. Explicit flags always beat detection.
+surfaces the gap. Explicit flags always beat detection — `--default-branch <name>` sets
+`repos.<ref>.defaultBranch` directly, skipping inference.
 
 ## `projects`
 
@@ -352,7 +356,8 @@ A validated single-field update: the value is type-checked (enum/boolean/number/
 edit is applied to a copy, and the WHOLE file is re-validated before writing — `team set` can never
 leave `dev-loop.json` invalid. Only the whitelisted paths above (`team set` ✓ columns) are accepted:
 
-- `team.mode` (`dry-run`|`live`) · `team.linearTeam` · `team.comms.provider` (`slack`|`lark`) ·
+- `team.mode` (`dry-run`|`live`) · `team.linearTeam` · `team.git.defaultBranch` ·
+  `team.comms.provider` (`slack`|`lark`) ·
   `team.comms.webhookEnv` · `team.intake.mode` (`autonomous`|`passive`) · `team.intake.todoDepthCap`
 - `projects.<key>.enabled` · `.weight` · `.devSplit` · `.testEnv.baseUrl` · `.testEnv.authConstraint` ·
   `.intake.mode` · `.intake.todoDepthCap`
