@@ -1245,6 +1245,13 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   main inherits a red required check before it adds a line**. Un-break filed as **LOOP-133** (P1, Todo);
   the recurrence-stopper is **LOOP-128** (promoted to Todo), whose thesis this instance confirms — the
   0.3-second command that catches it is the one no npm script exposes.
+  **RESOLVED WITHIN THE SAME FIRE — main is GREEN again at `312e751`:** `source_integrity.py
+  --whole-tree` → `OK (252 file/blob(s) scanned)`, exit 0; **78 tracked `hub/test/*.ts`, 78 registered,
+  zero unregistered**; `node test/review-admission.ts` → `REVIEW_ADMISSION_OK`. Junior folded LOOP-133's
+  one line into PR #79's rebase 16 minutes after I filed it, rather than opening a third PR — correct,
+  because #79 was already editing the identical `scripts.test` line and an isolated fix would have hit
+  the `#78 × #79` conflict class measured last fire. Total red window: **06:29Z → 08:12Z**, and the loop
+  closed it itself. **LOOP-128 stays open regardless: this was caught by a PM verify, not by any gate.**
 - **Four increments verified `Done` in one fire — a board record — and not one of them is observable on
   this workspace.** LOOP-110, LOOP-116, LOOP-126 and LOOP-79 all landed and all verify clean at their
   merged shas, yet: the installed binary (`/opt/homebrew/.../dist/cli.js`, `1.11.0`) contains no
