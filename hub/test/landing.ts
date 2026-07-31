@@ -9,6 +9,20 @@ import { loadWorkspace } from "../src/team-config.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
+// Allow-list sourced from `gh pr list --json bogus` — offline, no network, CI-safe.
+const GH_PR_LIST_FIELDS = new Set([
+  "additions", "assignees", "author", "autoMergeRequest", "baseRefName",
+  "baseRefOid", "body", "changedFiles", "closed", "closedAt",
+  "closingIssuesReferences", "comments", "commits", "createdAt", "deletions",
+  "files", "fullDatabaseId", "headRefName", "headRefOid", "headRepository",
+  "headRepositoryOwner", "id", "isCrossRepository", "isDraft", "labels",
+  "latestReviews", "maintainerCanModify", "mergeCommit", "mergeStateStatus",
+  "mergeable", "mergedAt", "mergedBy", "milestone", "number",
+  "potentialMergeCommit", "projectCards", "projectItems", "reactionGroups",
+  "reviewDecision", "reviewRequests", "reviews", "state", "statusCheckRollup",
+  "title", "updatedAt", "url",
+]);
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = Date.parse("2026-07-31T12:00:00Z");
 
@@ -41,9 +55,21 @@ function qualifyingRepo(extra: object = {}): Record<string, object> {
   };
 }
 
-/** Build an exec stub from a route map: key is a regexp matching the args join, value is the result. */
+/** Build an exec stub from a route map: key is a regexp matching the args join, value is the result.
+ *  Validates gh pr list --json field names against GH_PR_LIST_FIELDS on every call. */
 function makeExec(routes: Array<[RegExp, { stdout?: string; stderr?: string; ok?: boolean }]>): ExecFn {
   return (args) => {
+    if (args[0] === "pr" && args[1] === "list") {
+      const jsonIdx = args.indexOf("--json");
+      if (jsonIdx !== -1) {
+        const fields = (args[jsonIdx + 1] ?? "").split(",").filter(Boolean);
+        for (const field of fields) {
+          if (!GH_PR_LIST_FIELDS.has(field)) {
+            throw new Error(`test-double: unknown gh pr list --json field "${field}" (not in GH_PR_LIST_FIELDS)`);
+          }
+        }
+      }
+    }
     const key = args.join(" ");
     for (const [re, res] of routes) {
       if (re.test(key)) return { stdout: res.stdout ?? "[]", stderr: res.stderr ?? "", ok: res.ok ?? true };
@@ -52,12 +78,12 @@ function makeExec(routes: Array<[RegExp, { stdout?: string; stderr?: string; ok?
   };
 }
 
-function prJson(prs: Array<{ headRefName: string; createdAt: string; mergeableState?: string; number?: number; mergedAt?: string }>): string {
+function prJson(prs: Array<{ headRefName: string; createdAt: string; mergeable?: string; number?: number; mergedAt?: string }>): string {
   return JSON.stringify(prs.map((p) => ({
     number: p.number ?? 1,
     headRefName: p.headRefName,
     createdAt: p.createdAt ?? new Date(NOW - 1 * DAY_MS).toISOString(),
-    mergeableState: p.mergeableState ?? "MERGEABLE",
+    mergeable: p.mergeable ?? "MERGEABLE",
     mergedAt: p.mergedAt,
   })));
 }
@@ -88,7 +114,7 @@ function checkRunsJson(runs: Array<{ name: string; conclusion: string | null }>)
   const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["CI / test"] }));
   const oldDate = new Date(NOW - 3 * DAY_MS).toISOString(); // 3d old > threshold 2d
   const exec = makeExec([
-    [/pr list.*--state open/, { stdout: prJson([{ headRefName: "dev-loop/LOOP-2", createdAt: oldDate, mergeableState: "CONFLICTING" }]) }],
+    [/pr list.*--state open/, { stdout: prJson([{ headRefName: "dev-loop/LOOP-2", createdAt: oldDate, mergeable: "CONFLICTING" }]) }],
     [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI / test", conclusion: "success" }]) }],
     [/pr list.*--state merged/, { stdout: "[]" }],
   ]);
@@ -101,7 +127,7 @@ function checkRunsJson(runs: Array<{ name: string; conclusion: string | null }>)
 {
   const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["CI / test"] }));
   const exec = makeExec([
-    [/pr list.*--state open/, { stdout: prJson([{ headRefName: "dev-loop/LOOP-3", createdAt: new Date(NOW - 1 * DAY_MS).toISOString(), mergeableState: "MERGEABLE" }]) }],
+    [/pr list.*--state open/, { stdout: prJson([{ headRefName: "dev-loop/LOOP-3", createdAt: new Date(NOW - 1 * DAY_MS).toISOString(), mergeable: "MERGEABLE" }]) }],
     [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI / test", conclusion: "success" }]) }],
     [/pr list.*--state merged/, { stdout: "[]" }],
   ]);
@@ -217,6 +243,42 @@ function checkRunsJson(runs: Array<{ name: string; conclusion: string | null }>)
   const elapsed = Date.now() - start;
   ok(elapsed < 500, `timeout honored — injected exec completes well under any timeout bound (${elapsed}ms)`);
   ok(result!.state === "healthy", "fast exec: healthy (no open PRs)");
+}
+
+// Case 13: gh rejected arguments → reason distinguishes our bug from a network outage (AC2)
+{
+  const ws = makeWorkspace(qualifyingRepo());
+  const execRejectArgs: ExecFn = () => ({
+    stdout: "",
+    stderr: 'Unknown JSON field: "mergeableState"\nAvailable fields:\n  mergeable',
+    ok: false,
+  });
+  const [result] = await readLandingState(ws, { exec: execRejectArgs, now: NOW });
+  ok(result!.state === "unknown", "gh rejected args → state=unknown");
+  ok(result!.reason?.startsWith("gh rejected arguments:") === true, "gh rejected args → reason starts with 'gh rejected arguments:'");
+  ok(result!.reason?.includes("forge unreachable") !== true, "gh rejected args → NOT 'forge unreachable'");
+  ok(result!.reason?.includes("mergeableState") === true, "gh rejected args → reason echoes the first stderr line");
+}
+
+// Case 14: argv validation — makeExec double rejects any unknown gh pr list --json field (AC3)
+{
+  let caughtUnknownField = false;
+  try {
+    const badExec = makeExec([[/.*/, {}]]);
+    badExec(["pr", "list", "--repo", "test/repo", "--state", "open", "--json", "mergeableState"]);
+  } catch (e) {
+    caughtUnknownField = (e as Error).message.includes('unknown gh pr list --json field "mergeableState"');
+  }
+  ok(caughtUnknownField, "makeExec double rejects unknown --json field 'mergeableState' (the field this bug used)");
+
+  let acceptsValid = true;
+  try {
+    const goodExec = makeExec([[/.*/, { stdout: "[]" }]]);
+    goodExec(["pr", "list", "--repo", "test/repo", "--state", "open", "--json", "number,headRefName,createdAt,mergeable"]);
+  } catch {
+    acceptsValid = false;
+  }
+  ok(acceptsValid, "makeExec double accepts all valid --json fields used by readLandingState");
 }
 
 console.log(fails === 0 ? "\nLANDING_OK" : `\n${fails} CHECK(S) FAILED`);
