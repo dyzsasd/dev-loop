@@ -23,6 +23,7 @@ import { TOOL_NAMES, type ToolName } from "./tooldefs.ts"; // DL-85: the ONE too
 import { STEWARD_HANDLES } from "./seed.ts"; // D1: the steward roster (ONE definition, next to AGENT_HANDLES) the override matrix grants cross-project access to
 import { TEAM_INTAKE_PROJECT } from "./team-config.ts"; // D1: the reserved "_team" intake key — the only override pm may pass
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
+import { isDevTierActor, servableSlice } from "./servable.ts"; // LOOP-144: the shared dev-tier servable predicate (a lean, zod-free leaf so run-agents can consume it too)
 import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
 // gate) + the docstore-error→HTTP-status map are reused VERBATIM from the shared, side-effect-free docstore
@@ -188,28 +189,14 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
 // per the §21b/§18 assignee encoding) + their own In Progress (Step-0 orphan input); pm gets its verify /
 // unblock / groom lists + the §5a todoDepth cap input; qa gets its verify list + the project's blocked set
 // (Job B routes by bail-shape). Summaries only (no description bodies) — get_issue fetches the one you pick.
-const PICK_RANK = (t: Ticket): number =>
-  t.priority === 1 && t.type === "Bug" ? 0
-  : t.priority === 1 && t.type === "Feature" ? 1
-  : t.type === "Bug" && t.labels.includes("edge-case") ? 2
-  : t.type === "Bug" ? 3            // §5 rank 3.5 — defects beat features
-  : t.type === "Feature" ? 4
-  : 5;                              // Improvement and anything else
 const TERMINAL_STATES = new Set(["Done", "Canceled", "Duplicate"]);
 function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
   const summary = (t: Ticket): Ticket => ({ ...t, description: "" });
   const byState = (state: string): Ticket[] =>
     (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state=? ORDER BY created_at").all(projectId, state) as unknown as TicketRow[]).map(toTicket);
-  if (actor === "dev" || actor === "senior-dev" || actor === "junior-dev") {
-    const mine = (t: Ticket): boolean => actor === "dev" ? (t.assignee === null || t.assignee === "dev") : t.assignee === actor;
-    // Layer-2 queue defense (design sensitive-routing §2 / LOOP-80 Child B): a residual sensitive+junior
-    // row (written before the Layer-1 write gate or via a raw path) must never be served to junior-dev.
-    const notSensitiveForJunior = (t: Ticket): boolean => actor !== "junior-dev" || !t.labels.includes("sensitive");
-    const todo = byState("Todo")
-      .filter((t) => mine(t) && !t.labels.includes("blocked") && notSensitiveForJunior(t))
-      .sort((x, y) => PICK_RANK(x) - PICK_RANK(y) || x.created_at.localeCompare(y.created_at))
-      .map(summary);
-    const inProgress = byState("In Progress").filter((t) => t.assignee === actor && notSensitiveForJunior(t)).map(summary);
+  if (isDevTierActor(actor)) {
+    // The dev-tier slice is the SHARED servable predicate — never a second copy (LOOP-144 AC1).
+    const { todo, inProgress } = servableSlice(db, projectId, actor);
     return okR({ agent: actor, inProgress, todo });
   }
   if (actor === "pm" || actor === "qa") {

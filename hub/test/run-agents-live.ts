@@ -3,11 +3,14 @@
 // real API tokens in production never executed under test. A stub `claude` on DEVLOOP_CLAUDE_BIN
 // stands in for the CLI: it records its env + argv, optionally sleeps, and marks completion.
 import { spawnSync, execFileSync, spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, openSync, closeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
+import { openDb } from "../src/db.ts";                 // LOOP-144: seed servable rows to drive the queue-depth gate
+import { findProject } from "../src/seed.ts";
+import { insertTicket } from "../src/ticketwrite.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -338,6 +341,13 @@ sleep 600
   ok(ttl0Fires === 0, `--change-gate-ttl 0 keeps the pure gate for pm (fired ${ttl0Fires}×, expected 0)`);
 
   // ── 6d. the dev tier keeps the PURE gate: an aged senior-dev entry still skips ──
+  // LOOP-144: the dev-tier queue-depth gate now skips a senior-dev fire whose servable slice is empty, so this
+  // change-gate test must give senior-dev real work first — otherwise it never fires and never seeds the gate
+  // entry the aging assertion below depends on. (The queue-gate itself is exercised in §6e.)
+  { const gdb = openDb(gateDb); const gpid = findProject(gdb, "gate");
+    insertTicket(gdb, gpid as string, "pm", { title: "sd change-gate work", description: "", type: "Improvement",
+      state: "Todo" as never, assignee: "senior-dev", priority: 3, labels: ["dev-loop", "senior-dev"],
+      duplicateOf: null, relatedTo: [] }, { title: "sd change-gate work", type: "Improvement" }); gdb.close(); }
   const sdSeedOut = join(tmp, "sd-seed-out"); mkdirSync(sdSeedOut, { recursive: true });
   const sdSeed = runLoop(["--change-gate"], sdSeedOut, "4.2", "senior-dev", "3s");
   ok(sdSeed === 1, `senior-dev under the gate fires once on first run (fired ${sdSeed}×)`);
@@ -349,6 +359,39 @@ sleep 600
   const sdOut = join(tmp, "sd-out"); mkdirSync(sdOut, { recursive: true });
   const sdFires = runLoop(["--change-gate"], sdOut, "4.2", "senior-dev", "3s");
   ok(sdFires === 0, `the dev tier keeps the PURE gate — an aged senior-dev entry still skips (fired ${sdFires}×, expected 0)`);
+
+  // ── 6e. LOOP-144 dev-tier queue-depth gate: an EMPTY servable slice skips the launch (distinct reason logged,
+  //    never a silent skip); an own In Progress row STILL fires (the Step-0 orphan-resume path — the assertion
+  //    that stops this optimisation from becoming a starvation bug). Fresh project so the empty-slice case is
+  //    deterministic, independent of §6's gate-project state. ──────────────────────────────────────────────────
+  const qgDb = join(tmp, "qgate.db"); const qgData = join(tmp, "qgate-data"); mkdirSync(qgData, { recursive: true });
+  writeFileSync(join(qgData, "projects.json"), JSON.stringify({ projects: { qg: { repoPath: repo, backend: "service" } } }));
+  execFileSync("node", ["src/seed.ts", "qg", "Queue Gate", "QGATE", qgDb], { cwd: hubRoot, encoding: "utf8" });
+  const runQg = (outDir: string): { fires: number; out: string } => {
+    mkdirSync(outDir, { recursive: true });
+    // Redirect the scheduler's stdout/stderr to a FILE, not a pipe: this test blocks the event loop on
+    // spawnSync("sleep"), so async pipe "data" callbacks would never fire — a file descriptor is written by the
+    // kernel regardless of the parent's event loop, exactly like the rec-* fire files this harness already reads.
+    const logFile = join(outDir, "sched.log"); const fd = openSync(logFile, "w");
+    const child = spawn("node", ["src/run-agents.ts", "--root", repoRoot, "--data", qgData, "--hub-db", qgDb, "--project", "qg", "--cwd", repo, "--cli", "claude", "--agents", "senior-dev", "--interval", "senior-dev=3s", "--stagger", "0", "--change-gate"],
+      { cwd: hubRoot, stdio: ["ignore", fd, fd], env: { ...process.env, DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: outDir, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECTS_JSON: join(qgData, "projects.json") } });
+    spawnSync("sleep", ["4.2"]);
+    child.kill("SIGTERM"); spawnSync("sleep", ["1"]); try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    closeSync(fd);
+    return { fires: readdirSync(outDir).filter((f) => f.startsWith("rec-")).length, out: readFileSync(logFile, "utf8") };
+  };
+  // (a) empty servable slice ⇒ NO fire, and a DISTINCT reason logged (a silent skip is indistinguishable from a crash)
+  const qgEmpty = runQg(join(tmp, "qg-empty"));
+  ok(qgEmpty.fires === 0, `LOOP-144: senior-dev with an empty servable slice does NOT fire (fired ${qgEmpty.fires}×, expected 0)`);
+  ok(/\[senior-dev\] skipped: queue empty \(0 servable Todo, 0 In Progress\)/.test(qgEmpty.out),
+    "LOOP-144: the queue-empty skip logs a distinct, non-silent reason (not a change-gate skip)");
+  // (b) own In Progress ⇒ STILL fires — orphan-resume preserved (the load-bearing anti-starvation assertion)
+  { const qdb = openDb(qgDb); const qpid = findProject(qdb, "qg");
+    insertTicket(qdb, qpid as string, "pm", { title: "sd wip", description: "", type: "Improvement",
+      state: "In Progress" as never, assignee: "senior-dev", priority: 3, labels: ["dev-loop", "senior-dev"],
+      duplicateOf: null, relatedTo: [] }, { title: "sd wip", type: "Improvement" }); qdb.close(); }
+  const qgWip = runQg(join(tmp, "qg-wip"));
+  ok(qgWip.fires >= 1, `LOOP-144: senior-dev with an own In Progress row STILL fires — orphan-resume preserved (fired ${qgWip.fires}×, expected ≥1)`);
 
   // ── 7. LOOP-85: the opencode lane END-TO-END on a REAL fire (a stub `opencode` streaming JSONL). The two
   //    defects the ticket escalated are structural, so only a real fire proves them: (a) operator-visible
