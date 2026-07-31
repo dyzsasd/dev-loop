@@ -22,8 +22,10 @@ import { readFileSync } from "node:fs";
 import { openDb, actorExists, listActorHandles, STATES } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { ensureActors, findProject } from "./seed.ts";
-import { resolveHubDbPath } from "./workspace.ts";
+import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
 import { agentOp, isAgentOp, AGENT_OPS, AGENT_WRITE_OPS, type AgentOp, type OpResult } from "./agentops.ts";
+import { defaultGhExec } from "./landing.ts";
+import { checkReviewAdmission } from "./review-admission.ts";
 import { opRunfilePath, resolveOpPort, postOp, postOpUrl } from "./op-client.ts";
 
 const TYPES = ["Bug", "Feature", "Improvement"] as const;
@@ -344,7 +346,25 @@ async function ticketUpdate(targs: string[]): Promise<never> {
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
   if (Object.keys(args).length === 1 + (args.project !== undefined ? 1 : 0))
     fail("nothing to update — pass at least one of --state/--title/--description/--description-file/--labels/--assignee/--priority/--related-to/--duplicate-of");
-  return emit("save_issue", await runOp(openHub(), "save_issue", args));
+  const hub = openHub();
+  // Review-admission gate (LOOP-110): refuse In Progress→In Review for pr+autoMerge tickets
+  // whose PR is not MERGED. Fail-open on every error path — never a false refusal.
+  if (args.state === "In Review") {
+    const issueFetch = await runOp(hub, "get_issue", { id });
+    let currentState = "", currentLabels: string[] = [];
+    if (issueFetch.status === 200) {
+      const b = issueFetch.body as { state?: string; labels?: unknown };
+      if (typeof b.state === "string") currentState = b.state;
+      if (Array.isArray(b.labels)) currentLabels = b.labels as string[];
+    }
+    const ws = tryResolveWorkspace();
+    const result = checkReviewAdmission({
+      ticketId: id, currentState, labels: currentLabels,
+      workspace: ws, projectKey: hub.projectKey, exec: defaultGhExec,
+    });
+    if (!result.admitted) { console.error(result.message!); process.exit(1); }
+  }
+  return emit("save_issue", await runOp(hub, "save_issue", args));
 }
 
 async function verbTicket(rest: string[]): Promise<never> {
