@@ -172,6 +172,38 @@ try {
     ok(/\[W21\]/.test(outWarn) && outWarn.includes("W21-1"), "doctor W21: sensitive+junior-dev ticket → W21 warn with ticket id");
   }
 
+  // ── doctor W16/W21 opts.boardDb override: exercises the non-wsHubDb branch (LOOP-199) ──
+  {
+    const nowIso2 = new Date().toISOString();
+    const bdRoot = join(tmp, "w21-boarddb-ws");
+    mkdirSync(join(bdRoot, ".dev-loop"), { recursive: true });
+    writeFileSync(join(bdRoot, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "w21-boarddb-ws", backend: "service" },
+      repos: {},
+      projects: { bdproj: { prefix: "BD" } },
+    }));
+    const bdWs = loadWorkspace(bdRoot);
+
+    const boardDbPath = join(tmp, "l199-boarddb.db");
+    const bDb = openDb(boardDbPath);
+    bDb.prepare("INSERT INTO projects(id,key,name,ticket_prefix,ticket_seq,created_at) VALUES(?,?,?,?,0,?)").run("pid-bd", "bdproj", "BD Proj", "BD", nowIso2);
+    bDb.prepare("INSERT INTO actors(id,handle,kind,display_name,active,created_at) VALUES(?,?,?,?,1,?)").run("a-sd-bd", "senior-dev", "agent", "Senior Dev", nowIso2);
+    bDb.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      "BD-1", "pid-bd", "sensitive feature bd", "", "Feature", "Todo", "junior-dev", 2,
+      JSON.stringify(["dev-loop", "pm", "sensitive", "junior-dev"]), "[]", "pm", nowIso2, nowIso2,
+    );
+    bDb.close();
+
+    // opts.boardDb set: W21 (and W16) read from the supplied db instead of wsHubDb (which is absent here)
+    const outBoardDb = capture(() => doctorWorkspace(bdWs, { boardDb: boardDbPath }));
+    ok(/\[W21\]/.test(outBoardDb) && outBoardDb.includes("BD-1"), "doctor W21 boardDb: opts.boardDb fires W21 from the supplied db (exercises the opts.boardDb ?? wsHubDb branch)");
+
+    // opts.boardDb absent + no wsHubDb: existsSync false → W16/W21 silently skipped
+    const outNoDb = capture(() => doctorWorkspace(bdWs));
+    ok(!outNoDb.includes("[W21]"), "doctor W21 boardDb: no boardDb + no wsHubDb → W21 silently skipped");
+  }
+
   // ── secret list: source column reflects env-wins + EMPTY, never a value (LOOP-166) ──
   // The `list` path had NO test before this run; its correct twin (doctor W12/W13, above) did. Assert
   // all three source/resolvability states AND that no stored/env value ever reaches stdout/stderr (§16).

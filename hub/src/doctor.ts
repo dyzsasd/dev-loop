@@ -54,7 +54,12 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
       return false;
     }
     if (ws) {
-      const wsResult = await doctorWorkspace(ws);
+      // Finalize boardDb before doctorWorkspace so header + W16/W21 always name the same db (AC6, LOOP-199).
+      // Prefer workspace hub.db unless DEVLOOP_HUB_DB is explicitly set (test isolation, LOOP-117).
+      // Own-db callers (hub.ts:21,29 wires DEVLOOP_HUB_DB=wsHubDb; team-init.ts:176 creates; bundle.ts:153
+      // exports; team-import.ts:230 writes) must NOT follow ambient env — they call wsHubDb(ws) directly.
+      if (!process.env.DEVLOOP_HUB_DB || opts.preferWorkspace) dbPath = wsHubDb(ws);
+      const wsResult = await doctorWorkspace(ws, { ...opts, boardDb: dbPath });
       ok = wsResult.ok && ok;
       stalledRepo = wsResult.stalledRepo;
       skewResult = wsResult.skewResult;
@@ -65,7 +70,6 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
         console.log(`NEXT: ${nextStep(ws, [], [], stalledRepo, decisionStall, skewResult)}`);
         return ok;
       }
-      if (!process.env.DEVLOOP_HUB_DB || opts.preferWorkspace) dbPath = wsHubDb(ws); // prefer workspace hub.db; honor explicit DEVLOOP_HUB_DB (test isolation)
     }
   }
 
@@ -240,7 +244,7 @@ function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { ol
 // Reports the E-code/W-code verdict for a dev-loop.json, that every registered repo exists and is a git
 // repo, and the two migration/leak warnings (W05 user-scope MCP for linear steward fires; W06 workspace
 // inside a git work-tree). Never writes, never repairs.
-export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null }> {
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null }> {
   let ok = true;
   let stalledRepo: string | undefined;
   let decisionStall: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null = null;
@@ -354,13 +358,16 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     else pass(`opencode ${v} on PATH (certified ${OPENCODE_MIN_VERSION})`);
   }
 
+  // W16 + W21 share the same db path; compute once to avoid repeated ?? (CC budget, LOOP-199).
+  const boardDb = opts.boardDb ?? wsHubDb(ws);
+
   // W16 — owner-liveness (P1-4, the field's MP-156): an owner label whose actor never fires strands its
   // Todo/In Review tickets forever, and nothing notices. Service-backend only (needs the local board).
   // agents.<h>.manual:true (team or project) downgrades the finding to an info line ("awaiting a human").
-  if (ws.file.team.backend === "service" && existsSync(wsHubDb(ws))) {
+  if (ws.file.team.backend === "service" && existsSync(boardDb)) {
     try {
       const { ownerLiveness } = require_metrics();
-      const db = openHubDbConn(wsHubDb(ws));
+      const db = openHubDbConn(boardDb);
       try {
         const manual = new Set<string>();
         for (const [h, a] of Object.entries(ws.file.team.agents ?? {})) if ((a as { manual?: boolean })?.manual === true) manual.add(h);
@@ -387,10 +394,10 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // W21 — sensitive mis-tier backstop (design sensitive-routing §§3-4): non-terminal tickets whose
   // labels include `sensitive` AND are routed to the junior-dev tier (assignee or label). Layer-1/2
   // enforce at write/queue time; this layer surfaces pre-gate or raw-path rows. Service-backend only.
-  if (ws.file.team.backend === "service" && existsSync(wsHubDb(ws))) {
+  if (ws.file.team.backend === "service" && existsSync(boardDb)) {
     try {
       const { sensitiveMistier } = require_metrics();
-      const db = openHubDbConn(wsHubDb(ws));
+      const db = openHubDbConn(boardDb);
       try {
         for (const key of deliveryProjects(ws)) {
           const pid = findHubProject(db, key);
