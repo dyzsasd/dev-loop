@@ -27,7 +27,9 @@ const SUITE_ENV: Record<string, Record<string, string>> = {
 // one-line reason, so "this file is not a suite" is a visible, reviewable decision — not a silent
 // glob miss. LOOP-139 introduced the constant + the filter/--list mechanism below; entries are added
 // as helpers are identified (e.g. daemon-harness.ts under LOOP-138).
-const NON_SUITES: Record<string, string> = {};
+const NON_SUITES: Record<string, string> = {
+  "daemon-harness.ts": "shared helper — exports startTestDaemon/registerDaemonPid/runDaemonCli/launchDaemonCli; no assertions, not a standalone suite (LOOP-138)",
+};
 
 const suites = readdirSync(here)
   .filter((f) => f.endsWith(".ts") && f !== "run-all.ts" && !Object.hasOwn(NON_SUITES, f))

@@ -70,6 +70,19 @@ function runSynthetic(files: Record<string, string>): { status: number | null; s
   ok(/SUITES: 2 passed, 0 failed, 0 crashed \(2 total\)/.test(r.stdout), "AC3: all-green summary = 2 passed, 0 failed, 0 crashed (passed === total)");
 }
 
+// ── AC-LOOP138 — a file listed in NON_SUITES is excluded from discovery and not counted in the total ──
+{
+  const r = runSynthetic({
+    "a-ok.ts": "process.exit(0);\n",
+    "daemon-harness.ts": "export function startTestDaemon() {};\n",  // NON_SUITES entry
+  });
+  ok(r.status === 0, `AC-LOOP138: NON_SUITES helper excluded → runner exits 0 (got ${r.status})`);
+  ok(/SUITES: 1 passed, 0 failed, 0 crashed \(1 total\)/.test(r.stdout),
+    "AC-LOOP138: daemon-harness.ts excluded from suite count by NON_SUITES (1 total, not 2)");
+  ok(!/daemon-harness\.ts/.test(r.stdout),
+    "AC-LOOP138: daemon-harness.ts does not appear in any output line (not run, not listed)");
+}
+
 // ── AC5 — the SUITE_ENV carve-outs survive: agent-api.ts + shim.ts receive the 3 env vars; others do not ──
 {
   const probe = "const n = import.meta.url.split('/').pop();"
