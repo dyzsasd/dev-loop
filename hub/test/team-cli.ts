@@ -571,6 +571,72 @@ try {
     ok(/DOCTOR_OK/.test(w18nextNoVer.out), "DOCTOR_OK holds when version unresolvable — NEXT check adds no git calls (LOOP-167)");
   }
 
+  // ── W20: operator decision-queue stall; DOCTOR_OK stays; NEXT flips to decision (LOOP-74) ──
+  // Service backend + hub.db required. Best-effort; never flips DOCTOR_OK.
+  {
+    // Workspace: service backend, no comms (so no-comms note fires), one project + one repo so NEXT reaches W20
+    const w20Root = join(tmp, "w20");
+    run("team", ["init", "--dir", w20Root, "--key", "w20-team", "--backend", "service"]);
+    run("team", ["add-project", "w20proj"], { cwd: w20Root }); // auto-seeds hub.db row on service backend
+    const w20Repo = join(w20Root, "git-repo");
+    mkdirSync(w20Repo, { recursive: true });
+    spawnSync("git", ["init", "-q", "-b", "main", w20Repo], { stdio: "ignore" });
+    spawnSync("git", ["-C", w20Repo, "-c", "user.email=t@t", "-c", "user.name=t",
+      "commit", "--allow-empty", "-qm", "init"], { stdio: "ignore" });
+    run("team", ["add-repo", "w20repo", "--project", "w20proj", "--path", "git-repo"], { cwd: w20Root });
+    run("team", ["set", "team.mode", "live"], { cwd: w20Root });
+    const w20Db = join(w20Root, ".dev-loop", "hub.db");
+
+    // Insert two decision-queue items: W20-HB (Human-Blocked, older) + W20-IR (In Review+operator, newer)
+    spawnSync("node", ["-e",
+      `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const pid=db.prepare('SELECT id FROM projects WHERE key=?').get('w20proj').id;db.prepare("INSERT INTO tickets(id,project_id,title,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,?,null,0,'[]','[]','pm','2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z')").run('W20-HB',pid,'Needs human unblock','Human-Blocked');db.prepare("INSERT INTO tickets(id,project_id,title,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,?,'operator',0,'[]','[]','pm','2021-01-01T00:00:00.000Z','2021-01-01T00:00:00.000Z')").run('W20-IR',pid,'PR waiting approval','In Review');db.close()})`,
+      w20Db
+    ], { cwd: hubRoot, env: env(), encoding: "utf8" });
+
+    // Case A (LOOP-74 test-a): non-empty queue, no team.comms → W20 fires + no-comms note, DOCTOR_OK holds, NEXT flips
+    const w20a = run("server", ["doctor"], { cwd: w20Root });
+    ok(/\[W20\]/.test(w20a.out), "W20 fires when operator decision queue is non-empty (LOOP-74)");
+    ok(/2 waiting on you/.test(w20a.out), "W20 names the full queue count (LOOP-74)");
+    ok(/W20-HB/.test(w20a.out), "W20 names the oldest item by ID — the Human-Blocked one (LOOP-74)");
+    ok(/\(blocked\)/.test(w20a.out), "W20 labels a Human-Blocked ticket as 'blocked' (LOOP-74)");
+    ok(/no out-of-band escalation path/.test(w20a.out), "W20 carries no-comms note when team.comms absent (LOOP-74)");
+    ok(/DOCTOR_OK/.test(w20a.out), "W20 is warn-only — DOCTOR_OK still holds (LOOP-74)");
+    ok(/NEXT:.*rule on the oldest decision.*W20-HB/.test(w20a.out), "NEXT flips to decision hint when queue non-empty (LOOP-74)");
+
+    // Case B (LOOP-74 test-b): empty queue → no W20, DOCTOR_OK holds, NEXT does not mention decision
+    spawnSync("node", ["-e",
+      `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);db.prepare('DELETE FROM tickets').run();db.close()})`,
+      w20Db
+    ], { cwd: hubRoot, env: env(), encoding: "utf8" });
+    const w20b = run("server", ["doctor"], { cwd: w20Root });
+    ok(!/\[W20\]/.test(w20b.out), "no W20 when decision queue is empty (LOOP-74)");
+    ok(/DOCTOR_OK/.test(w20b.out), "DOCTOR_OK holds when queue is empty (LOOP-74)");
+    ok(!/rule on the oldest decision/.test(w20b.out), "NEXT does not flip to decision hint when queue is empty (LOOP-74)");
+
+    // Case C (LOOP-74 test-c): non-empty queue WITH team.comms → W20 fires WITHOUT no-comms note
+    {
+      const w20c = join(tmp, "w20c");
+      run("team", ["init", "--dir", w20c, "--key", "w20c-team", "--backend", "service", "--comms", "lark"]);
+      run("team", ["add-project", "w20proj"], { cwd: w20c });
+      const w20cRepo = join(w20c, "git-repo");
+      mkdirSync(w20cRepo, { recursive: true });
+      spawnSync("git", ["init", "-q", "-b", "main", w20cRepo], { stdio: "ignore" });
+      spawnSync("git", ["-C", w20cRepo, "-c", "user.email=t@t", "-c", "user.name=t",
+        "commit", "--allow-empty", "-qm", "init"], { stdio: "ignore" });
+      run("team", ["add-repo", "w20repo", "--project", "w20proj", "--path", "git-repo"], { cwd: w20c });
+      run("team", ["set", "team.mode", "live"], { cwd: w20c });
+      const w20cDb = join(w20c, ".dev-loop", "hub.db");
+      spawnSync("node", ["-e",
+        `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const pid=db.prepare('SELECT id FROM projects WHERE key=?').get('w20proj').id;db.prepare("INSERT INTO tickets(id,project_id,title,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,?,null,0,'[]','[]','pm','2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z')").run('W20-C1',pid,'Blocked with comms','Human-Blocked');db.close()})`,
+        w20cDb
+      ], { cwd: hubRoot, env: env(), encoding: "utf8" });
+      const w20c_out = run("server", ["doctor"], { cwd: w20c });
+      ok(/\[W20\]/.test(w20c_out.out), "W20 fires when queue non-empty with comms configured (LOOP-74)");
+      ok(!/no out-of-band escalation path/.test(w20c_out.out), "no-comms note absent when team.comms IS configured (LOOP-74)");
+      ok(/DOCTOR_OK/.test(w20c_out.out), "DOCTOR_OK holds with comms configured (LOOP-74)");
+    }
+  }
+
   // ── W22: landing stall detection; DOCTOR_OK stays; NEXT flips only on stall ──
   // Linear backend: doctorWorkspace IS the whole verdict (no hub.db check follows).
   {
