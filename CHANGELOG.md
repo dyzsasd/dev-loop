@@ -22,6 +22,46 @@ already-initialized workspace the moment it upgraded (LOOP-181 / LOOP-174).
 - **doctor W23** — warns (warn-only; never flips `DOCTOR_OK`) when a workspace allows
   `Bash(dev-loop *)` but not `Bash(kaizen *)`, naming `dev-loop team repair` as the fix.
 
+**Governing-rule batch (operator-applied §17 edits — these become live for the agents with this
+release, not when they were committed).**
+
+- **The lessons library finally has a reader.** `§0a step 4` named `<data>/<project-key>/lessons.md`
+  while `§14` named `<workspace>/.dev-loop/lessons/`; the code implemented the losing side, so every
+  rule reflect curated reached zero agents. Step 4 now names the library (`INDEX.md` + the project
+  shard), the legacy per-project file still contributes when present, and `boot-prefix` wires
+  `lessonsForFire()` into the assembled context (LOOP-160 / LOOP-163 / LOOP-164).
+- **Merged is not running.** On a repo that ships as a published artifact, `§12b` now makes a
+  verifier state which of the two it established; "verified live" is forbidden for a change that is
+  only merged. Publishing stays an operator act and a `Done` never waits on it (LOOP-170).
+- **Reflect's one-ticket-per-fire quota is severity-aware.** The cap stays (anti-thrash) but the
+  ticket goes to the *highest-severity* finding, and everything else rides a literal
+  `## Deferred findings` heading with reflect's own severity assessment — which PM must triage
+  entry-by-entry in the fire that reads it. `Deferred` is not a state a finding may rest in
+  (LOOP-161).
+- **The merge guard is wired, not just built.** `§12c` + every dev tier's Step 0.5 now call
+  `dev-loop merge-guard --pr <n> --strict --apply` before a feature-PR squash; a non-zero exit HOLDS
+  the merge. Green checks alone can no longer merge over a human's `CHANGES_REQUESTED` (LOOP-69).
+- **Operator stops are not agent failures.** Reflect clusters SIGINT-killed fires (same second,
+  covering the agents in flight, confirmed by `run.log`) and excludes them from failure counts —
+  10 of 10 `suspectError` rows on the dogfood board were restarts, and a phantom "failure pattern"
+  had already reached a retro (LOOP-153).
+- **`defaultBranch` is documented** — `repos.<ref>.defaultBranch`, `team.git.defaultBranch`
+  (`team set`-settable), `add-repo --default-branch`, and `origin/HEAD` inference (LOOP-101).
+
+**Security.** `bundle` load validates `gitCredentialEnvName` before building the `GIT_ASKPASS`
+helper — an unauthenticated plaintext manifest field previously shell-injected into it, an RCE on
+`dev-loop up --bundle` (LOOP-162).
+
+**Verification gates.** A builder tier can no longer self-accept its own `pm`/`qa`-owned work
+through the two-hop `In Review → Done` path (LOOP-157). doctor gains **W22** (landing stall, with a
+`NEXT` flip) and **W18 counts code-bearing commits only** — a doc-only landing no longer reads as
+install skew, which had made the real-skew signal permanent noise (LOOP-41 / LOOP-151).
+
+**Loop economics.** The dev-tier fire gate skips a launch whose servable queue is empty
+(LOOP-144); the daemon retries the next port on an `EADDRINUSE` cold-start bind race (LOOP-76);
+`npm run source-integrity` gives local parity with the CI gate (LOOP-128); the quality gate fails
+loudly when `--threshold` is set with no coverage present instead of passing vacuously (LOOP-158).
+
 ## 1.12.0
 
 98 commits in one overnight run of the loop on itself. The headline: **dev-loop can now
