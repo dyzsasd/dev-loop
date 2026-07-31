@@ -428,9 +428,239 @@ export function startProjectNotifiers(deps: {
   return { active, timers };
 }
 
+// ── LOOP-116: the HTTP request handler is decomposed per-seam so no single function trips the CC/CRAP
+//    merge gate as new daemon routes land (precedent: LOOP-22/24 red ratchet blocked ALL merges →
+//    LOOP-33 stripGo split). The createDaemon callback below is a THIN orchestrator that calls these
+//    helpers IN THE SAME ORDER, each returning a `handled` signal, so the dispatch sequence and every
+//    response byte stay byte-identical to the pre-split handler (hub/test asserts every route).
+//    SECURITY INVARIANT: enforceBearer() runs BEFORE resolvePathProject() in the orchestrator — an
+//    unauthenticated /p/<unknown>/… must 401 (auth), never 404 (a key-existence leak). Locked by the
+//    auth-before-resolution assertion in hub/test/ui-token.ts.
+
+// Per-request dispatch context: the resolved request + the daemon-lifetime deps the route groups read.
+interface RouteCtx {
+  req: IncomingMessage;
+  res: ServerResponse;
+  method: string;
+  url: URL;
+  rawPath: string;
+  seg: string[];
+  path: string;
+  projectId: string;
+  projectKey: string;
+  prefixed: boolean;
+  authedByToken: boolean;
+  db: DatabaseSync;
+  writeDb?: DatabaseSync;
+  canWrite: boolean;
+  actor?: string;
+  pg: (title: string, project: string, inner: string, opts?: Parameters<typeof page>[3]) => string;
+  divergenceFor: (key: string) => string | undefined;
+  getBasePageOpts: () => { workspaceId: string; daemonVersion: string; cliVersion?: string };
+  stream: { count: number; max: number };
+}
+
+type ResolveResult =
+  | { done: true }
+  | { done: false; seg: string[]; path: string; projectId: string; projectKey: string; prefixed: boolean };
+
+// SEAM 1 — the bearer gate (one-click P1 §6.2). With a token configured, EVERY request except GET
+// /api/health must present it. Runs FIRST, before any project/DB work, so it can never leak whether a
+// /p/<key> exists to an unauthenticated caller. Returns true iff it wrote the 401 (caller stops).
+function enforceBearer(res: ServerResponse, uiToken: string | null, authedByToken: boolean, rawPath: string): boolean {
+  if (uiToken !== null && !authedByToken && rawPath !== "/api/health") {
+    res.setHeader("www-authenticate", "Bearer");
+    json(res, 401, { error: "unauthorized: this daemon requires Authorization: Bearer <token> (DEVLOOP_UI_TOKEN)" });
+    return true;
+  }
+  return false;
+}
+
+// SEAM 2 — F2 (D2) per-request project resolution: /p/<key>/… resolves <key> against the projects table
+// and strips the prefix; a bare path keeps the boot project. SAFE_KEY is defense-in-depth (codex
+// 2026-07-11): the resolved key later feeds filesystem joins (reportsRoot), so a path-derived key must be
+// a single safe name (no "/", no leading "." ⇒ no ".." traversal) BEFORE it is looked up. An out-of-grammar
+// key can't be a real config project, so it 404s like any unknown key. Returns {done:true} once it has
+// written a response, else the resolved routing state for the dispatch.
+function resolvePathProject(res: ServerResponse, db: DatabaseSync, seg0: string[], bootProjectId: string, bootProjectKey: string, pg: RouteCtx["pg"]): ResolveResult {
+  let seg = seg0, projectId = bootProjectId, projectKey = bootProjectKey, prefixed = false;
+  if (seg[0] === "p" && seg.length >= 2) {
+    const key = decodeSeg(seg[1]);
+    if (key === null) { json(res, 400, { error: "malformed percent-escape in path" }); return { done: true }; }
+    const row = SAFE_KEY.test(key)
+      ? db.prepare("SELECT id,key FROM projects WHERE key=?").get(key) as { id: string; key: string } | undefined
+      : undefined;
+    if (!row) { htmlOut(res, 404, pg("Not found", "", `<a class="back" href="/">← projects</a><p class="empty">No project <code>${esc(key)}</code> on this hub.</p>`, { hub: true })); return { done: true }; }
+    prefixed = true; projectId = row.id; projectKey = row.key; seg = seg.slice(2);
+  }
+  const path = "/" + seg.join("/"); // the project-local path (prefix stripped; equals rawPath when bare)
+  return { done: false, seg, path, projectId, projectKey, prefixed };
+}
+
+// SEAM 3a — the write surface: doc save/publish (+ /roadmap aliases), human ticket writes, and the DL-43
+// agent op-API. Each rides its DL-29/DL-43 gate (canWrite AND the RESOLVED project's FRESH humanWrite /
+// opt-in) and the DL-19 Origin/Host guard BEFORE any mutation; the op-API owns the whole /api/op/* path
+// (a dormant mount 404s). Bodies delegate to handleDocWrite / handleTicketWrite / handleAgentOp.
+async function handleWriteRoutes(ctx: RouteCtx): Promise<boolean> {
+  const { req, res, method, seg, path, projectId, projectKey, authedByToken, db, writeDb, canWrite, actor, pg, divergenceFor } = ctx;
+  const isDocWrite = seg.length === 3 && seg[0] === "doc" && (seg[2] === "save" || seg[2] === "publish");
+  const isRoadmapAlias = path === "/roadmap/save" || path === "/roadmap/publish";
+  if (method === "POST" && canWrite && (isDocWrite || isRoadmapAlias) && humanWriteEnabled(db, projectId)) {
+    if (!authedByToken && !writeOriginOk(req)) { json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" }); return true; }
+    let slug: string;
+    if (isDocWrite) {
+      const s = decodeSeg(seg[1]);
+      if (s === null) { json(res, 400, { error: "malformed percent-escape in path" }); return true; }
+      slug = s;
+    } else {
+      slug = roadmapDocSlug(writeDb!, projectId); // the alias hard-targets the roadmap doc — never caller input
+    }
+    await handleDocWrite(seg[seg.length - 1] as "save" | "publish", slug, req, res, db, writeDb!, projectId, projectKey, actor!, divergenceFor(projectKey), isRoadmapAlias ? "/roadmap" : undefined, pg);
+    return true;
+  }
+  if (method === "POST" && canWrite && humanWriteEnabled(db, projectId) && isTicketWriteRoute(seg)) {
+    if (!authedByToken && !writeOriginOk(req)) { json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" }); return true; }
+    await handleTicketWrite(seg, req, res, db, writeDb!, projectId, projectKey, actor!, pg);
+    return true;
+  }
+  if (seg[0] === "api" && seg[1] === "op") {
+    if (method === "POST" && canWrite && seg.length === 3 && agentApiEnabled(db, projectId)) {
+      await handleAgentOp(seg[2], req, res, db, writeDb!, projectId, projectKey, authedByToken);
+      return true;
+    }
+    json(res, 404, { error: `not found: ${path}` });
+    return true;
+  }
+  return false;
+}
+
+// SEAM 4 — the HTML views: the bare-GET-/ project index (with D2's single-real-project redirect) and the
+// F1 typed view-route registry (board / roadmap / activity / reports / ticket). View patterns never
+// overlap /api/*, so this leaves the JSON surface untouched.
+function handleViewRoutes(ctx: RouteCtx): boolean {
+  const { res, method, url, seg, path, prefixed, projectId, projectKey, db, canWrite, actor, pg, divergenceFor, getBasePageOpts } = ctx;
+  if (!prefixed && path === "/") {
+    const real = db.prepare("SELECT key FROM projects WHERE key<>? ORDER BY key").all(TEAM_INTAKE_PROJECT) as { key: string }[];
+    if (real.length === 1) {
+      res.writeHead(302, { location: href(real[0].key, `/${url.search}`), "content-length": 0 });
+      res.end();
+      return true;
+    }
+    htmlOut(res, 200, pg("projects · dev-loop hub", "", projectIndexPage(db, Date.now()), { hub: true }));
+    return true;
+  }
+  const vm = matchViewRoute(method, seg);
+  if (vm) {
+    const out = vm.route.handler({
+      db, projectId, projectKey, url, params: vm.params,
+      humanWrite: () => canWrite && humanWriteEnabled(db, projectId),
+      writable: canWrite,
+      canPublish: canWrite && actor === "operator",
+      roadmapRepoFileStrategy: divergenceFor(projectKey),
+      draftsPending: () => draftsPendingCount(db, projectId), // docs P6a header chip — LAZY, resolved-project scope
+      basePageOpts: getBasePageOpts(), // LOOP-52 board identity
+    });
+    if (out.kind === "redirect") { // D3: /roadmap → the roadmap doc page; /doc/<kind> → its canonical slug
+      res.writeHead(out.status, { location: out.location, "content-length": 0 });
+      res.end();
+      return true;
+    }
+    if (out.kind === "html") htmlOut(res, out.status, out.html);
+    else json(res, out.status, out.body);
+    return true;
+  }
+  return false;
+}
+
+// SEAM 5 — GET /api/stream: the SSE live-update channel (poll-push; an O(1) max(events.id) read that
+// emits only when it advances). Bounds concurrent connections via ctx.stream, follows the RESOLVED
+// project (?all=1 on the bare path watches the whole ledger), and tears down on close. Writes to res
+// directly (a streaming response, not a descriptor).
+function serveStream(ctx: RouteCtx): void {
+  const { req, res, url, prefixed, projectId, db, stream } = ctx;
+  if (stream.count >= stream.max) { json(res, 503, { error: "too many live connections" }); return; }
+  stream.count++;
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", "connection": "keep-alive", "x-accel-buffering": "no" });
+  const all = !prefixed && url.searchParams.get("all") === "1";
+  const maxId = all
+    ? (): number => Number((db.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events").get() as { m: number }).m)
+    : (): number => Number((db.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events WHERE project_id=?").get(projectId) as { m: number }).m);
+  let last = maxId();
+  res.write(`retry: 3000\ndata: ${last}\n\n`); // initial baseline + client reconnect hint
+  const iv = setInterval(() => {
+    try { const now = maxId(); if (now !== last) { last = now; res.write(`data: ${now}\n\n`); } else { res.write(": ping\n\n"); } }
+    catch { /* transient read error — the next tick retries; never crash the daemon */ }
+  }, 2000);
+  iv.unref?.();
+  const done = () => { clearInterval(iv); stream.count--; };
+  req.on("close", done); res.on("close", done);
+}
+
+// SEAM 3b — the JSON read surface, in the ORIGINAL order: /api index, /api/stream (→ serveStream, SEAM 5),
+// health, tickets, tickets/:id, docs, docs/:kind, then the terminal 404 fallthrough (an unknown /api/* →
+// JSON 404; a page navigation → the friendly HTML 404, DL-36). Always returns true — it owns the dispatch tail.
+function handleApiRoutes(ctx: RouteCtx): boolean {
+  const { res, url, seg, path, projectId, projectKey, db, writeDb, actor, pg, rawPath } = ctx;
+  if (path === "/api") {
+    json(res, 200, {
+      name: "dev-loop-hub daemon", project: projectKey, readOnly: true,
+      ui: "/", endpoints: ["/api/health", "/api/tickets", "/api/tickets/:id", "/api/docs", "/api/docs/:kind"],
+    });
+    return true;
+  }
+  if (path === "/api/stream") { serveStream(ctx); return true; }
+  if (path === "/api/health") {
+    const h = healthLiveness(db, writeDb);
+    json(res, h.ok ? 200 : 503, h.ok
+      ? { ok: true, project: projectKey, version: pkgVersion(), actor }
+      : { ok: false, project: projectKey, version: pkgVersion(), actor, error: h.error });
+    return true;
+  }
+  if (path === "/api/tickets") {
+    let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
+    const state = url.searchParams.get("state"); if (state) out = out.filter((t) => t.state === state);
+    const type = url.searchParams.get("type"); if (type) out = out.filter((t) => t.type === type);
+    const label = url.searchParams.get("label"); if (label) out = out.filter((t) => t.labels.includes(label));
+    const assignee = url.searchParams.get("assignee"); if (assignee) out = out.filter((t) => t.assignee === assignee);
+    const limit = Number(url.searchParams.get("limit")); if (Number.isFinite(limit) && limit > 0) out = out.slice(0, limit);
+    json(res, 200, out);
+    return true;
+  }
+  if (seg[0] === "api" && seg[1] === "tickets" && seg.length === 3) {
+    const id = decodeSeg(seg[2]);
+    if (id === null) { json(res, 400, { error: "malformed percent-escape in path" }); return true; }
+    const r = db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as Record<string, any> | undefined;
+    if (!r) { json(res, 404, { error: `no such ticket ${id} in ${projectKey}` }); return true; }
+    const comments = db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(id);
+    json(res, 200, { ...toTicket(r), comments });
+    return true;
+  }
+  if (path === "/api/docs") {
+    json(res, 200, db.prepare("SELECT kind,slug,title,status,current_version,updated_at FROM documents WHERE project_id=? ORDER BY kind").all(projectId));
+    return true;
+  }
+  if (seg[0] === "api" && seg[1] === "docs" && seg.length === 3) {
+    const key = decodeSeg(seg[2]);
+    if (key === null) { json(res, 400, { error: "malformed percent-escape in path" }); return true; }
+    const d = (db.prepare("SELECT * FROM documents WHERE project_id=? AND kind=?").get(projectId, key)
+      ?? db.prepare("SELECT * FROM documents WHERE project_id=? AND slug=?").get(projectId, key)) as Record<string, any> | undefined;
+    if (!d) { json(res, 404, { error: `no document '${key}' in ${projectKey}` }); return true; }
+    const ver = d.current_version > 0
+      ? d.current_version
+      : ((db.prepare("SELECT max(version) v FROM document_versions WHERE doc_id=?").get(d.id) as { v: number | null }).v ?? 0);
+    if (ver === 0) { json(res, 200, { kind: d.kind, slug: d.slug, title: d.title, status: d.status, version: 0, body: "", unpublished: true, empty: true }); return true; }
+    const v = db.prepare("SELECT version,body,status,summary,base_version,author,created_at FROM document_versions WHERE doc_id=? AND version=?").get(d.id, ver) as Record<string, any>;
+    json(res, 200, { kind: d.kind, slug: d.slug, title: d.title, status: d.status, current_version: d.current_version, ...v, ...(d.current_version === 0 ? { unpublished: true } : {}) });
+    return true;
+  }
+  if (seg[0] === "api") { json(res, 404, { error: `not found: ${rawPath}` }); return true; }
+  htmlOut(res, 404, pg("Not found", projectKey, `<a class="back" href="${esc(href(projectKey, "/"))}">← board</a><p class="empty">No page <code>${esc(rawPath)}</code> in ${esc(projectKey)}.</p>`));
+  return true;
+}
+
 export function createDaemon({ db, projectId: bootProjectId, projectKey: bootProjectKey, writeDb, actor, roadmapRepoFileStrategy, daemonVersion: daemonVersionOpt }: DaemonOpts): Server {
   const canWrite = !!writeDb && !!actor;
-  let streamCount = 0; const MAX_STREAMS = 16; // bound concurrent SSE connections (one operator, a few tabs)
+  const streamGate = { count: 0, max: 16 }; // bound concurrent SSE connections (one operator, a few tabs)
   // LOOP-52 board identity: record daemon's startup version + resolve the workspace hub.db path.
   // WS_ID is the authenticated surface's identity affordance — shows which workspace's board you're on.
   const DAEMON_VER = daemonVersionOpt ?? pkgVersion();
@@ -468,222 +698,37 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
     try { url = new URL(req.url ?? "/", "http://127.0.0.1"); } catch { return json(res, 400, { error: "bad request url" }); }
     const rawPath = url.pathname.replace(/\/+$/, "") || "/";
     const authedByToken = uiToken !== null && bearerOk(req.headers.authorization, uiToken);
-    if (uiToken !== null && !authedByToken && rawPath !== "/api/health") {
-      res.setHeader("www-authenticate", "Bearer");
-      return json(res, 401, { error: "unauthorized: this daemon requires Authorization: Bearer <token> (DEVLOOP_UI_TOKEN)" });
-    }
-    let seg = rawPath.split("/").filter(Boolean); // [] for "/"
-    let projectId = bootProjectId, projectKey = bootProjectKey, prefixed = false;
+    // SEAM 1 — the bearer gate runs FIRST, before any project/DB work, so it can never leak whether a
+    // /p/<key> exists to an unauthenticated caller (auth precedes resolution — ui-token.ts locks this).
+    if (enforceBearer(res, uiToken, authedByToken, rawPath)) return;
+    const seg0 = rawPath.split("/").filter(Boolean); // [] for "/"
 
     try {
-      // ── F2 (D2): per-request project resolution — /p/<key>/… resolves <key> against the hub's
-      // projects table (404 page for an unknown key) and strips the prefix, so every downstream route
-      // (views, write routes, SSE) runs against the RESOLVED project; bare paths keep the boot project
-      // (old URLs/bookmarks and the /api JSON surface are unchanged). SAFE_KEY is defense-in-depth
-      // (codex 2026-07-11): the resolved key later feeds filesystem joins (reportsRoot), and the DB
-      // doesn't enforce the config key grammar — so a path-derived key must be a single safe name
-      // (no "/", no leading "." ⇒ no ".." traversal) BEFORE it is looked up. A key outside the
-      // grammar can't be a real config project, so it 404s like any unknown key.
-      if (seg[0] === "p" && seg.length >= 2) {
-        const key = decodeSeg(seg[1]);
-        if (key === null) return json(res, 400, { error: "malformed percent-escape in path" });
-        const row = SAFE_KEY.test(key)
-          ? db.prepare("SELECT id,key FROM projects WHERE key=?").get(key) as { id: string; key: string } | undefined
-          : undefined;
-        if (!row) return htmlOut(res, 404, pg("Not found", "", `<a class="back" href="/">← projects</a><p class="empty">No project <code>${esc(key)}</code> on this hub.</p>`, { hub: true }));
-        prefixed = true; projectId = row.id; projectKey = row.key; seg = seg.slice(2);
-      }
-      const path = "/" + seg.join("/"); // the project-local path (prefix stripped; equals rawPath when bare)
+      // SEAM 2 — per-request project resolution (/p/<key> + the SAFE_KEY guard, before any fs join).
+      const rp = resolvePathProject(res, db, seg0, bootProjectId, bootProjectKey, pg);
+      if (rp.done) return;
+      const { seg, path, projectId, projectKey, prefixed } = rp;
+      const ctx: RouteCtx = {
+        req, res, method, url, rawPath, seg, path, projectId, projectKey, prefixed, authedByToken,
+        db, writeDb, canWrite, actor, pg, divergenceFor, getBasePageOpts, stream: streamGate,
+      };
 
-      // Under a /p/<key>/ prefix only the HTML views, the write routes, and the project-scoped SSE
-      // stream are mounted. The JSON /api/* surface — including the op-API and its D1 role-gated
-      // `project` override — stays boot-scoped on the bare path, so a URL prefix can never bypass the
-      // D1 override matrix.
+      // Under a /p/<key>/ prefix only the HTML views, write routes, and the project SSE stream are mounted;
+      // the JSON /api/* surface (incl. the op-API + its D1 role-gated override) stays boot-scoped on the
+      // bare path, so a URL prefix can never bypass the D1 override matrix.
       if (prefixed && seg[0] === "api" && !(seg.length === 2 && seg[1] === "stream")) {
         return json(res, 404, { error: `not found: ${rawPath}` });
       }
-      // ── F4/D3 doc write surface: POST [/p/<key>]/doc/:slug/save|publish, plus the legacy
-      //    /roadmap/save|publish aliases (slug resolved server-side). All doc writes go through
-      //    docstore (DB-doc-only — no filesystem path ⇒ §17 firewall) and ride the DL-29 DOUBLE gate:
-      //    canWrite AND the RESOLVED project's humanWrite.enabled (read FRESH per request) — gate
-      //    closed ⇒ these POSTs are NOT matched and fall through to the read-only 405, exactly like
-      //    the ticket writes. Publish is additionally operator-only (docstore's single gate).
-      const isDocWrite = seg.length === 3 && seg[0] === "doc" && (seg[2] === "save" || seg[2] === "publish");
-      const isRoadmapAlias = path === "/roadmap/save" || path === "/roadmap/publish";
-      if (method === "POST" && canWrite && (isDocWrite || isRoadmapAlias) && humanWriteEnabled(db, projectId)) {
-        // DL-19: refuse a cross-origin (CSRF) or foreign-Host (DNS-rebinding) write BEFORE any docSave/
-        // docPublish — the guard runs ahead of handleDocWrite, so a refused request never mutates.
-        // (bearer-authed requests bypass the Host heuristic — §6.2, see the LOCAL_HOST invariant.)
-        if (!authedByToken && !writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
-        let slug: string;
-        if (isDocWrite) {
-          const s = decodeSeg(seg[1]);
-          if (s === null) return json(res, 400, { error: "malformed percent-escape in path" });
-          slug = s;
-        } else {
-          slug = roadmapDocSlug(writeDb!, projectId); // the alias hard-targets the roadmap doc — never caller input
-        }
-        await handleDocWrite(seg[seg.length - 1] as "save" | "publish", slug, req, res, db, writeDb!, projectId, projectKey, actor!, divergenceFor(projectKey), isRoadmapAlias ? "/roadmap" : undefined, pg);
-        return;
-      }
-      // DL-29: opt-in human ticket-write routes — present ONLY when canWrite AND humanWrite.enabled. When
-      // disabled (or absent), these POSTs are NOT matched and fall through to the 405 below (byte-identical
-      // read-only). Origin/Host guard runs BEFORE any write, exactly like /roadmap/*.
-      if (method === "POST" && canWrite && humanWriteEnabled(db, projectId) && isTicketWriteRoute(seg)) {
-        if (!authedByToken && !writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
-        await handleTicketWrite(seg, req, res, db, writeDb!, projectId, projectKey, actor!, pg);
-        return;
-      }
-      // DL-43: opt-in agent op-API — POST /api/op/<op>, active ONLY when canWrite AND the project opted in
-      // (settings_json.hub.transport==="daemon", read FRESH). The WHOLE /api/op/* path is owned here so a
-      // DORMANT mount (flag off, or a read-only daemon, or a non-POST/garbled op path) 404s — an absent
-      // mount, not the generic non-GET 405 — leaving every existing surface byte-for-byte unchanged.
-      if (seg[0] === "api" && seg[1] === "op") {
-        if (method === "POST" && canWrite && seg.length === 3 && agentApiEnabled(db, projectId)) {
-          await handleAgentOp(seg[2], req, res, db, writeDb!, projectId, projectKey, authedByToken);
-          return;
-        }
-        return json(res, 404, { error: `not found: ${path}` });
-      }
+      // SEAM 3a — the write surface (doc / ticket / agent-op); each POST rides its gate + Origin guard.
+      if (await handleWriteRoutes(ctx)) return;
       // READ-ONLY for everything else: any other non-GET is refused — the read surface never mutates (DL-1 AC).
       if (method !== "GET" && method !== "HEAD") {
         return json(res, 405, { error: "read-only daemon: only GET is allowed" });
       }
-
-      // ── F2 (D2): bare GET / is the hub PROJECT INDEX, not a board — every board lives under
-      // /p/<key>/. With exactly ONE real (non-_team) project an index would hold a single card, so
-      // redirect straight to that board (D2's single-project allowance), preserving any filter query
-      // (an old bookmarked /?state=… board URL lands filtered, not lost).
-      if (!prefixed && path === "/") {
-        const real = db.prepare("SELECT key FROM projects WHERE key<>? ORDER BY key").all(TEAM_INTAKE_PROJECT) as { key: string }[];
-        if (real.length === 1) {
-          res.writeHead(302, { location: href(real[0].key, `/${url.search}`), "content-length": 0 });
-          res.end();
-          return;
-        }
-        return htmlOut(res, 200, pg("projects · dev-loop hub", "", projectIndexPage(db, Date.now()), { hub: true }));
-      }
-
-      // ── The HTML view routes (board / roadmap / activity / reports / ticket) — F1: dispatched off
-      // the typed view-route registry (views/registry.ts), one entry per page, behavior byte-identical
-      // to the previous inline blocks (hub/test/daemon.ts asserts every route). The ViewCtx resolves
-      // everything per request: humanWrite is a LAZY fresh read (only the routes that render write
-      // affordances pay the settings SELECT — DL-29), canPublish mirrors the DL-3 operator gate. View
-      // patterns never overlap /api/*, so dispatching here leaves the JSON surface untouched.
-      const vm = matchViewRoute(method, seg);
-      if (vm) {
-        const out = vm.route.handler({
-          db, projectId, projectKey, url, params: vm.params,
-          humanWrite: () => canWrite && humanWriteEnabled(db, projectId),
-          writable: canWrite,
-          canPublish: canWrite && actor === "operator",
-          roadmapRepoFileStrategy: divergenceFor(projectKey),
-          draftsPending: () => draftsPendingCount(db, projectId), // docs P6a header chip — LAZY, resolved-project scope
-          basePageOpts: getBasePageOpts(), // LOOP-52 board identity
-        });
-        if (out.kind === "redirect") { // D3: /roadmap → the roadmap doc page; /doc/<kind> → its canonical slug
-          res.writeHead(out.status, { location: out.location, "content-length": 0 });
-          res.end();
-          return;
-        }
-        return out.kind === "html" ? htmlOut(res, out.status, out.html) : json(res, out.status, out.body);
-      }
-
-      // GET /api — JSON API index (was GET / before DL-2 added the web UI at the root).
-      if (path === "/api") {
-        return json(res, 200, {
-          name: "dev-loop-hub daemon", project: projectKey, readOnly: true,
-          ui: "/", endpoints: ["/api/health", "/api/tickets", "/api/tickets/:id", "/api/docs", "/api/docs/:kind"],
-        });
-      }
-
-      // GET /api/stream — SSE live-update channel (the DL-2 no-JS doctrine was amended by the operator to
-      // allow a tiny inline progressive-enhancement script, 2026-07-02). Poll-push, never blocking: a timer
-      // checks max(events.id) — an O(1) read on the AUTOINCREMENT PK — and emits only when it ADVANCES, so
-      // the board/activity pages refresh themselves as agents mutate the ledger. node:sqlite is synchronous,
-      // so we poll on a setInterval (a few ms of work) rather than hold any long DB operation.
-      // F2 (D2) scoping: a /p/<key>/api/stream subscription follows ITS project (a sibling board never
-      // reloads on the boot project's churn); the bare path keeps the boot project; ?all=1 (the hub
-      // project-index page) watches the whole ledger across projects.
-      if (path === "/api/stream") {
-        if (streamCount >= MAX_STREAMS) return json(res, 503, { error: "too many live connections" });
-        streamCount++;
-        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", "connection": "keep-alive", "x-accel-buffering": "no" });
-        const all = !prefixed && url.searchParams.get("all") === "1";
-        const maxId = all
-          ? (): number => Number((db.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events").get() as { m: number }).m)
-          : (): number => Number((db.prepare("SELECT COALESCE(MAX(id),0) AS m FROM events WHERE project_id=?").get(projectId) as { m: number }).m);
-        let last = maxId();
-        res.write(`retry: 3000\ndata: ${last}\n\n`); // initial baseline + client reconnect hint
-        const iv = setInterval(() => {
-          try { const now = maxId(); if (now !== last) { last = now; res.write(`data: ${now}\n\n`); } else { res.write(": ping\n\n"); } }
-          catch { /* transient read error — the next tick retries; never crash the daemon */ }
-        }, 2000);
-        iv.unref?.();
-        const done = () => { clearInterval(iv); streamCount--; };
-        req.on("close", done); res.on("close", done);
-        return;
-      }
-
-      // GET /api/health — a REAL DB-writable liveness check (DL-41), not a static 200: a bound-but-wedged
-      // daemon (SoR unreadable/unwritable) returns 503 ok:false so the lifecycle `up`/`status` recover it.
-      if (path === "/api/health") {
-        const h = healthLiveness(db, writeDb);
-        // version: lets `daemon up` detect a daemon still running pre-upgrade code and restart it;
-        // actor: surfaces a mis-identified daemon (e.g. one cold-started from an agent fire's env).
-        return json(res, h.ok ? 200 : 503, h.ok
-          ? { ok: true, project: projectKey, version: pkgVersion(), actor }
-          : { ok: false, project: projectKey, version: pkgVersion(), actor, error: h.error });
-      }
-
-      // GET /api/tickets — board, project-scoped (§2), filter by state/type/label/assignee (+ optional limit).
-      if (path === "/api/tickets") {
-        let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
-        const state = url.searchParams.get("state"); if (state) out = out.filter((t) => t.state === state);
-        const type = url.searchParams.get("type"); if (type) out = out.filter((t) => t.type === type);
-        const label = url.searchParams.get("label"); if (label) out = out.filter((t) => t.labels.includes(label));
-        // DL-31: honor ?assignee (was silently ignored → board/API parity; the GET / board already filters it).
-        const assignee = url.searchParams.get("assignee"); if (assignee) out = out.filter((t) => t.assignee === assignee);
-        const limit = Number(url.searchParams.get("limit")); if (Number.isFinite(limit) && limit > 0) out = out.slice(0, limit);
-        return json(res, 200, out);
-      }
-
-      // GET /api/tickets/:id — one ticket with its comments.
-      if (seg[0] === "api" && seg[1] === "tickets" && seg.length === 3) {
-        const id = decodeSeg(seg[2]);
-        if (id === null) return json(res, 400, { error: "malformed percent-escape in path" });
-        const r = db.prepare("SELECT * FROM tickets WHERE id=? AND project_id=?").get(id, projectId) as Record<string, any> | undefined;
-        if (!r) return json(res, 404, { error: `no such ticket ${id} in ${projectKey}` });
-        const comments = db.prepare("SELECT id,author,body,created_at FROM comments WHERE ticket_id=? ORDER BY created_at").all(id);
-        return json(res, 200, { ...toTicket(r), comments });
-      }
-
-      // GET /api/docs — list this project's documents (no bodies).
-      if (path === "/api/docs") {
-        return json(res, 200, db.prepare("SELECT kind,slug,title,status,current_version,updated_at FROM documents WHERE project_id=? ORDER BY kind").all(projectId));
-      }
-
-      // GET /api/docs/:kind — the current roadmap/strategy doc (published version, else latest draft).
-      if (seg[0] === "api" && seg[1] === "docs" && seg.length === 3) {
-        const key = decodeSeg(seg[2]);
-        if (key === null) return json(res, 400, { error: "malformed percent-escape in path" });
-        const d = (db.prepare("SELECT * FROM documents WHERE project_id=? AND kind=?").get(projectId, key)
-          ?? db.prepare("SELECT * FROM documents WHERE project_id=? AND slug=?").get(projectId, key)) as Record<string, any> | undefined;
-        if (!d) return json(res, 404, { error: `no document '${key}' in ${projectKey}` });
-        const ver = d.current_version > 0
-          ? d.current_version
-          : ((db.prepare("SELECT max(version) v FROM document_versions WHERE doc_id=?").get(d.id) as { v: number | null }).v ?? 0);
-        if (ver === 0) return json(res, 200, { kind: d.kind, slug: d.slug, title: d.title, status: d.status, version: 0, body: "", unpublished: true, empty: true });
-        const v = db.prepare("SELECT version,body,status,summary,base_version,author,created_at FROM document_versions WHERE doc_id=? AND version=?").get(d.id, ver) as Record<string, any>;
-        return json(res, 200, { kind: d.kind, slug: d.slug, title: d.title, status: d.status, current_version: d.current_version, ...v, ...(d.current_version === 0 ? { unpublished: true } : {}) });
-      }
-
-      // DL-36: an unknown /api/* path is a machine client → JSON 404 (unchanged). An unknown NON-API path is
-      // a page navigation (a typo'd URL) → serve the friendly HTML 404, like the ghost-ticket route, instead
-      // of a raw-JSON dead-end. Read-only; query_only preserved. rawPath in the message so a prefixed miss
-      // names the URL the client actually requested.
-      if (seg[0] === "api") return json(res, 404, { error: `not found: ${rawPath}` });
-      return htmlOut(res, 404, pg("Not found", projectKey, `<a class="back" href="${esc(href(projectKey, "/"))}">← board</a><p class="empty">No page <code>${esc(rawPath)}</code> in ${esc(projectKey)}.</p>`));
+      // SEAM 4 — the HTML view routes (GET / index + the typed view registry).
+      if (handleViewRoutes(ctx)) return;
+      // SEAM 3b/5 — the JSON read surface + SSE + the terminal 404 (always handled).
+      if (handleApiRoutes(ctx)) return;
     } catch (e) {
       return json(res, 500, { error: (e as Error).message });
     }
