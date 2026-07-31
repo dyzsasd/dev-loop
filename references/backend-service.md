@@ -41,8 +41,11 @@ is `docs/HUB-ARCHITECTURE.md` and is operator/developer reading, not agent boot 
   (§21a).
 - **Mirror / events.** The optional one-way Linear mirror is **Sweep's job alone** — Job 5
   in its SKILL carries the full operational contract; no other agent touches it. Reflect
-  reconstructs its retrospective window from **`list_events`** (append-only, actor-stamped
-  transitions/comments). Neither concerns any other agent.
+  reads **`list_events`** (append-only, actor-stamped transitions/comments) for retrospective
+  detail — **bounded**: max 500 rows, newest first, no backward paging, and a truncated feed
+  returns exit 0 with no marker, so it is a recent slice rather than a window. Whole-window
+  facts come from the fire ledger / reports / `git log`; per-ticket history (`--ticket <id>`)
+  is complete. Neither concerns any other agent.
 
 Dev-tier encoding (split-dev): a cross-backend contract, defined resident in §18 — not
 re-stated here.
