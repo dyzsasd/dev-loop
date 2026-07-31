@@ -356,6 +356,63 @@ import { activityPage } from "../src/views/activity.ts";
   adb.close();
 }
 
+// ══ LOOP-126: /usage dashboard ══════════════════════════════════════════════════════════════════
+// Unit tests for usagePage() called directly against a :memory: db (the /activity precedent).
+// Tests AC1 (coverage banner), AC2 (explicit no-data state), AC3 (totals match usageReport --json),
+// and the honest-null discipline (no $0.00 / no zero-filled tables).
+import { usagePage } from "../src/views/usage.ts";
+import { fireRowsFromEvents, usageReport } from "../src/metrics.ts";
+{
+  const udb = openDb(":memory:");
+  const U_NOW = Date.parse("2026-07-31T12:00:00.000Z");
+  const U_DAY = 86_400_000;
+  const uIso = (ms: number) => new Date(ms).toISOString();
+  udb.prepare("INSERT INTO projects(id,key,name,created_at) VALUES ('up','ukey','u',?)").run(uIso(U_NOW - 30 * U_DAY));
+
+  // ── AC2: 0-metered event ledger — explicit no-data state, no $0.00, no zero-filled tables ──
+  // No fire.completed events; the page must still render (no crash) and show explicit empty states.
+  const uEmpty = usagePage(udb, "up", "ukey", U_NOW);
+  ok(uEmpty.includes("Usage"), "LOOP-126: usagePage renders (no crash) with an empty event ledger");
+  ok(uEmpty.includes("0 / 0"), "LOOP-126 AC2: coverage banner shows 0 / 0 when no fires");
+  ok(!uEmpty.includes("$0.00"), "LOOP-126 AC2: no $0.00 appears in the no-data state (null≠0)");
+  ok(!uEmpty.includes("<b>0</b>") || uEmpty.includes("— no data") || uEmpty.includes("no metered fires"),
+    "LOOP-126 AC2: no zero-filled table rows — explicit empty-state text instead");
+  ok(uEmpty.includes("— no data") || uEmpty.includes("no metered fires"),
+    "LOOP-126 AC2: explicit no-data wording present when 0 metered fires");
+
+  // ── AC1 + AC3: seeded metered events — coverage banner + totals match usageReport --json ──
+  // Insert two fire.completed events: one with usage (claude-shaped), one without (opencode text lane).
+  const fireData = (usage: Record<string, unknown> | null, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ provider: "anthropic", model: "claude-sonnet", effort: "high", durationMs: 120000, exitCode: 0, ...extra, ...(usage ? { usage } : {}) });
+  udb.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES (?,?,?,?,?,?)").run(
+    "up", null, "dev", "fire.completed",
+    fireData({ source: "provider", inputTokens: 1000, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 10, costUsd: 0.005, currency: "USD" }),
+    uIso(U_NOW - U_DAY)
+  );
+  udb.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES (?,?,?,?,?,?)").run(
+    "up", null, "qa", "fire.completed",
+    fireData(null),
+    uIso(U_NOW - U_DAY)
+  );
+
+  const uPage = usagePage(udb, "up", "ukey", U_NOW);
+  // AC1: coverage banner present and front-and-centre
+  ok(uPage.includes("fires with measured usage"), "LOOP-126 AC1: coverage banner 'fires with measured usage' present");
+  ok(uPage.includes("1 / 2"), "LOOP-126 AC1: coverage banner shows '1 / 2' (1 metered of 2 total fires)");
+  // Honest null discipline: $0.00 must never appear as a standalone displayed value (costUsd null ≠ $0.00).
+  // Use a tight regex: $0.00 followed by a non-digit (i.e. not part of $0.0050 etc.)
+  ok(!/\$0\.00[^0-9]/.test(uPage), "LOOP-126: no $0.00 as a standalone displayed value (honest-null, null≠0)");
+  // AC3: totals match usageReport directly (single-core consistency)
+  const sinceIso = new Date(U_NOW - 30 * U_DAY).toISOString();
+  const rows = fireRowsFromEvents(udb, "up", sinceIso);
+  const report = usageReport(rows, 30 * U_DAY, { nowMs: U_NOW });
+  ok(report.totalFires === 2 && report.meteredFires === 1, "LOOP-126 AC3: usageReport returns same 2 fires / 1 metered (single-core source)");
+  ok(uPage.includes("$0.0050") || uPage.includes("0.005"), "LOOP-126 AC3: cost figure from usageReport appears in the page (single-core consistency)");
+  ok(uPage.includes("ukey") && !uPage.includes("<script"), "LOOP-126: projectKey rendered + no XSS");
+
+  udb.close();
+}
+
 // ══ DOCS SYSTEM (F4/D3) — style guards for the docs increment (appended by the docs agent) ══
 // The chip/badge/diff styles must ride tokens only — the no-hex and no-literal-radius guards above
 // already sweep them; these pin that the classes exist and use the tinted-chip color-mix pattern.

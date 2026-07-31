@@ -143,6 +143,18 @@ ok(board.text.includes('href="/p/dmn/activity"'), "DL-17 AC1/AC6: the header nav
 // AC7 — non-GET is refused 405 (read-only), consistent with the other read routes
 ok((await get("/activity", "POST")).status === 405, "DL-17 AC7: POST /activity → 405 (read-only daemon)");
 
+// ─── LOOP-126: /usage dashboard (read-only usage & cost, mirrors /activity) ───
+const usg = await getHtml("/usage");
+ok(usg.status === 200 && usg.type.includes("text/html"), "LOOP-126 AC1: GET /usage → 200 text/html");
+ok(usg.text.includes("<!doctype html") && /<h1>Usage\b/.test(usg.text), "LOOP-126 AC1: /usage is an HTML page titled Usage");
+ok(usg.text.includes("fires with measured usage"), "LOOP-126 AC1: the coverage banner is present");
+// On the seed db there are no fire.completed events → explicit no-data, no $0.00
+ok(!usg.text.includes("$0.00"), "LOOP-126 AC2: no $0.00 in the no-data state (honest-null discipline)");
+// Nav link to /usage appears on the board page (F2: canonical /p/<key>/ form)
+ok(board.text.includes('href="/p/dmn/usage"'), "LOOP-126: the header nav links to the project's /usage");
+// AC4: POST /usage → 405 (read-only route)
+ok((await get("/usage", "POST")).status === 405, "LOOP-126 AC4: POST /usage → 405 (read-only)");
+
 // GET /api — the JSON API index (moved off / when DL-2 took the root for the UI)
 const root = await get("/api");
 ok(root.status === 200 && root.body.project === "dmn" && root.body.endpoints.includes("/api/tickets") && root.body.ui === "/", "GET /api → 200 JSON index naming the project, endpoints, and the UI root");
