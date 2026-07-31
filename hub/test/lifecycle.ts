@@ -1,12 +1,14 @@
 // DL-41 — idempotent per-project daemon lifecycle (`dev-loop-hub daemon up|down|status`).
-// Spawns the REAL `node src/daemon.ts <sub>` against an ISOLATED temp DB + run dir (never the operator's
-// ~/.dev-loop), and asserts: cold `up` starts a detached, healthy, 127.0.0.1-bound daemon + writes a
-// runfile; a second `up` no-ops (single process); `status` reports RUNNING; a stale (dead-pid) runfile
-// does NOT read as running and `up` cleanly restarts on the SAME recorded port; `down` stops + clears;
-// and a non-service / unknown / unresolved project is a clean no-op + exit 0 (never an error).
-import { spawnSync, execFileSync } from "node:child_process";
+// Exercises the REAL `node src/daemon.ts <sub>` dispatcher (daemon.ts:750) through the sanctioned
+// daemon-harness.ts spawn site (LOOP-136), against an ISOLATED temp DB + run dir (never the operator's
+// ~/.dev-loop); the `via()` block additionally covers the `src/server.ts daemon <sub>` bin form so both
+// dispatchers stay covered independently. Asserts: cold `up` starts a detached, healthy, 127.0.0.1-bound
+// daemon + writes a runfile; a second `up` no-ops (single process); `status` reports RUNNING; a stale
+// (dead-pid) runfile does NOT read as running and `up` cleanly restarts on the SAME recorded port; `down`
+// stops + clears; and a non-service / unknown / unresolved project is a clean no-op + exit 0 (never an error).
+import { execFileSync } from "node:child_process";
 import { createServer as netCreateServer } from "node:net";
-import { registerDaemonPid } from "./daemon-harness.ts";
+import { registerDaemonPid, runDaemonCli } from "./daemon-harness.ts";
 import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -41,11 +43,10 @@ async function untilDead(pid: number): Promise<void> { for (let i = 0; i < 40 &&
 // seed a service project into the ISOLATED temp DB (ensureActors seeds the `operator` actor the daemon needs)
 execFileSync(NODE, ["src/seed.ts", PROJ, "Lifecycle Project", "LC", DB], { encoding: "utf8" });
 
+// lc() drives the `src/daemon.ts <sub>` dispatcher (via the sanctioned harness spawn site); via() below
+// drives the `src/server.ts daemon <sub>` bin form — the two dispatchers are covered independently.
 function lc(sub: string, extra: Record<string, string> = {}) {
-  return spawnSync(NODE, ["src/server.ts", "daemon", sub], {
-    encoding: "utf8", timeout: 25000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: String(TEST_PORT), ...extra },
-  });
+  return runDaemonCli("daemon", sub, { DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: String(TEST_PORT), ...extra });
 }
 
 try {
@@ -112,24 +113,18 @@ try {
   ok(lc("status").stdout.includes("stopped"), "status after down → stopped");
 
   // ── the `dev-loop-hub daemon <sub>` form (via server.ts, the bin) delegates to the SAME lifecycle ──
-  const via = (args: string[]) => spawnSync(NODE, ["src/server.ts", ...args], {
-    encoding: "utf8", timeout: 25000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: String(TEST_PORT) },
-  });
-  const viaUp = via(["daemon", "up"]);
+  const via = (sub: string) => runDaemonCli("server", sub, { DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: String(TEST_PORT) });
+  const viaUp = via("up");
   ok(viaUp.status === 0 && existsSync(runfile()), "`server.ts daemon up` (the bin form) delegates to the lifecycle → starts");
   if (existsSync(runfile())) registerDaemonPid(readRun().pid);
-  ok(via(["daemon", "status"]).stdout.includes("RUNNING"), "`server.ts daemon status` → RUNNING (shared runfile)");
-  ok(via(["daemon", "down"]).status === 0 && !existsSync(runfile()), "`server.ts daemon down` → stops + clears");
-  ok(via(["daemon", "frobnicate"]).status === 2, "`server.ts daemon <bogus>` → usage error exit 2 (never falls through to the MCP boot)");
+  ok(via("status").stdout.includes("RUNNING"), "`server.ts daemon status` → RUNNING (shared runfile)");
+  ok(via("down").status === 0 && !existsSync(runfile()), "`server.ts daemon down` → stops + clears");
+  ok(via("frobnicate").status === 2, "`server.ts daemon <bogus>` → usage error exit 2 (never falls through to the MCP boot)");
 
   // ── machine-level autostart target: `up-all` starts configured service projects without DEVLOOP_PROJECT ──
   const serviceCfg = join(ROOT, "service-projects.json");
   writeFileSync(serviceCfg, JSON.stringify({ projects: { [PROJ]: { backend: "service", repoPath: ROOT }, other: { backend: "linear", repoPath: ROOT } } }));
-  const upAll = spawnSync(NODE, ["src/server.ts", "daemon", "up-all"], {
-    encoding: "utf8", timeout: 25000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: serviceCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: String(TEST_PORT) },
-  });
+  const upAll = runDaemonCli("daemon", "up-all", { DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: serviceCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator", DEVLOOP_DAEMON_PORT: String(TEST_PORT) });
   ok(upAll.status === 0 && existsSync(runfile()) && /started|already running/.test(upAll.stdout),
     "`daemon up-all` starts configured backend:\"service\" projects without DEVLOOP_PROJECT");
   if (existsSync(runfile())) registerDaemonPid(readRun().pid);
@@ -144,17 +139,11 @@ try {
   // ── no DEVLOOP_PROJECT + an UNRESOLVABLE cwd (empty projects.json) → no-op + exit 0 ──
   const emptyCfg = join(ROOT, "empty-projects.json");
   writeFileSync(emptyCfg, JSON.stringify({ projects: {} }));
-  const unresolved = spawnSync(NODE, ["src/server.ts", "daemon", "up"], {
-    encoding: "utf8", timeout: 25000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: emptyCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator" },
-  });
+  const unresolved = runDaemonCli("daemon", "up", { DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: emptyCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator" });
   ok(unresolved.status === 0 && /no project resolved/.test(unresolved.stdout), "up with no DEVLOOP_PROJECT and an unresolvable cwd → no-op exit 0");
 
   // ── DL-87: `status` with no resolvable project → exit 0 + the no-project line carries a fix hint ──
-  const statusUnresolved = spawnSync(NODE, ["src/server.ts", "daemon", "status"], {
-    encoding: "utf8", timeout: 25000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: emptyCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator" },
-  });
+  const statusUnresolved = runDaemonCli("daemon", "status", { DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: emptyCfg, DEVLOOP_PROJECT: "", DEVLOOP_ACTOR: "operator" });
   ok(statusUnresolved.status === 0 && /no project resolved/.test(statusUnresolved.stdout) && /DEVLOOP_PROJECT|inside a configured repo/.test(statusUnresolved.stdout),
     "status with no resolvable project → exit 0 + a fix hint (set DEVLOOP_PROJECT / run from a repo) (DL-87)");
 
