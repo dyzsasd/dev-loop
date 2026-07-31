@@ -36,6 +36,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 function die(msg: string, code = 2): never { console.error(`dev-loop bundle: ${msg}`); process.exit(code); }
 
+// SECURITY (LOOP-162): the bundle manifest is plaintext + unauthenticated (line 2 — only the payload
+// after it is age-encrypted), so any manifest field interpolated into an executed context is an
+// attacker-tamperable input. This is the same ENV-var-name gate `secret-cli.ts:15` / `team-config.ts:153`
+// apply to every other env-name input; keep it in sync (no shared export exists yet — a dedup follow-up).
+const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
+
 export interface BundleManifest {
   bundleSchema: 1;
   devLoopVersion: string;
@@ -326,6 +332,13 @@ export async function bundleLoad(file: string, dir: string, opts: { forceReseed:
   } else if (manifest.gitAuth === "https-token" && manifest.gitCredentialEnvName) {
     // The askpass helper reads the token from secrets.env AT USE TIME — the value never rides an env
     // var into every child (the Q9 posture), and the helper survives restarts.
+    // SECURITY (LOOP-162): gitCredentialEnvName is interpolated verbatim into the /bin/sh helper git
+    // executes via GIT_ASKPASS. An unvalidated value from the tamperable plaintext manifest is an
+    // unauthenticated RCE (a single quote closes the `sed` argument; `; cmd #` then runs as the
+    // operator). Gate it with ENV_NAME_RE and FAIL CLOSED before writing the helper — a credential
+    // env-name that isn't a bare [A-Z][A-Z0-9_]* name is tampering or corruption, never legitimate.
+    if (!ENV_NAME_RE.test(manifest.gitCredentialEnvName))
+      die(`bundle manifest gitCredentialEnvName ${JSON.stringify(manifest.gitCredentialEnvName)} is not a valid ENV-VAR name ([A-Z][A-Z0-9_]*) — refusing to build the git credential helper (tampered or corrupt bundle)`, 1);
     const helper = join(root, ".dev-loop", "git_askpass.sh");
     writeFileSync(helper, `#!/bin/sh\n# dev-loop bundle: git credential helper — token from secrets.env, never from argv/env\nsed -n 's/^${manifest.gitCredentialEnvName}=//p' "${wsSecretsPath(root)}"\n`, { mode: 0o700 });
     chmodSync(helper, 0o700);
