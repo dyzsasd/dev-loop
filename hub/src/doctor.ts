@@ -508,6 +508,19 @@ async function checkLandingW22Stall(
   return stalledRepo;
 }
 
+// Resolve hub/package.json 'files' to git-repo paths for the W18 code-commit pathspec.
+// dist/ is compiled from hub/src/ (not tracked in git); postinstall.cjs is under hub/;
+// README.md is packaged but doc-only. Root-relative entries (skills/, references/, etc.) pass through.
+function packagedCodePaths(files: string[]): string[] {
+  const out: string[] = [];
+  for (const f of files) {
+    if (f === "README.md" || f === "CHANGELOG.md") continue;
+    if (f === "dist/" || f === "dist") { out.push("hub/src/"); continue; }
+    out.push(f === "postinstall.cjs" ? "hub/postinstall.cjs" : f);
+  }
+  return out;
+}
+
 // W18 — installed CLI vs origin/main skew (design landing-observability §9.3).
 // Only fires when the running package's repository matches a configured landing:"pr" repo (the dogfooding
 // case). For all normal product workspaces this is a zero-cost n/a — no git calls, no output.
@@ -569,11 +582,18 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
     if (isNaN(behind)) {
       info(`[${matchRef}] W18: rev-list output unexpected — skipping (best-effort)`);
     } else if (behind > 0) {
-      // Count only commits that touch packaged paths (exclude docs/**  and *.md — doc-only
-      // commits do not change installed behavior). LOOP-151: a guard that fires on every PM
-      // doc-land is a guard that is off.
+      // Count only packaged-path commits. LOOP-151: doc-only fires are noise.
+      // LOOP-191: derive pathspec from hub/package.json so skills/**/*.md and
+      // references/**/*.md (published behavior) count; fallback to :(exclude)*.md when absent.
+      const hubPkgPath = join(matchDir, "hub", "package.json");
+      let codePathspec: string[] = [".", ":(exclude)docs/", ":(exclude)*.md"]; // LOOP-151 fallback
+      try {
+        const hubFiles = (JSON.parse(readFileSync(hubPkgPath, "utf8")).files ?? []) as string[];
+        const resolved = packagedCodePaths(hubFiles);
+        if (resolved.length > 0) codePathspec = resolved;
+      } catch { /* keep fallback when hub/package.json is absent or unreadable */ }
       const codeR = spawnSync("git", ["-C", matchDir, "rev-list", "--count", `${vCommit}..origin/${matchBranch}`,
-        "--", ".", ":(exclude)docs/", ":(exclude)*.md"],
+        "--", ...codePathspec],
         { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
       const codeRaw = (codeR.status === 0 && codeR.stdout.trim()) ? parseInt(codeR.stdout.trim(), 10) : NaN;
       const codeBehind = isNaN(codeRaw) ? behind : codeRaw; // fallback to total when pathspec fails
