@@ -1002,6 +1002,22 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   edge.** Read the reason, not the state. LOOP-84 truncates `npm test` at suite ~29 of ~60 — it is
   why `test/quality.ts` never runs on this workspace — and QA re-reproduced it on current main this
   fire.
+- **🟡 LOOP-86 landed mid-fire and the 78-link `&&` chain is gone** — `hub/package.json`'s `test` is
+  now `node test/run-all.ts`, a glob-discovery runner. Exercised the shipped runner directly: a
+  failing suite no longer halts the run, a *throwing* suite is classified `crashed` distinctly from
+  `failed` and the suite after it still executes, all-green exits 0, and every run prints its
+  denominator. Discovery is exactly faithful — the old chain and the glob resolve to the **same 80
+  files**, zero drift. This also retires the shared-line merge conflict recorded twice above
+  (LOOP-37×LOOP-40, LOOP-79×LOOP-80): two increments can now register a suite without touching one
+  line. **Verify-failed anyway** (→ **LOOP-139**, senior-dev `direct-code`): three of its five ACs
+  named a deliverable at `hub/test/…` and no test of the runner was written. The sharp edge is what
+  *else* the diff did — it deleted `source_integrity.py`'s `expected_test_paths` check (*"the test
+  script must invoke every tracked `hub/test/*.ts` once"*). Deleting it was **correct**, a manifest
+  check is meaningless under a glob — but **the invariant it held did not move somewhere safer, it
+  moved somewhere unguarded**: from an audited manifest plus a Python regression test, to a 71-line
+  runner with no test at all. That invariant is LOOP-128's and LOOP-110 is what happens without it.
+  *When a change makes a guard obsolete, ask where the guard's invariant went — "obsolete" and
+  "unenforced" look identical in a green diff.*
 
 ## Personas
 
