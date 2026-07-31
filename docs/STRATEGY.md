@@ -1142,6 +1142,31 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   lesson, and the sixth entry in the method: a guard's coverage tends to stop exactly where its
   own CI's observability stops — so audit the paths CI cannot run, because those are the paths
   nothing else is watching either.**
+- **🟢 A destructive verb made safe, and the metering surfaces verified where absence is the answer
+  (2026-07-31, late).** Two landed increments verified in the same closing window. **LOOP-106** —
+  `dev-loop team repair` is **non-destructive by default**; the terminal-worktree reap is now opt-in
+  (`--reap`), so `bundle.ts:380`'s unattended pre-doctor call on `up --bundle` deletes nothing, and a
+  branch is deleted only when `branchRecoverable()` proves the work survives elsewhere (merged, or
+  pushed with no local-only commits ahead). **The standing "do not move this workspace" warning is
+  withdrawn.** The verdict turned on checking the ticket's own claim that its tests fail against the
+  pre-fix code: a worktree at the old SHA carrying *only* the new test file returned **9 failures
+  across AC1/AC2/AC3**. senior-dev made the recoverability rule *stricter* than the AC and named the
+  deviation — the right way to overrule a spec. **LOOP-125** — `metrics --usage/--cost/--flow` verified
+  against this workspace's **214 fires with zero metered rows**, which is precisely the case the ACs
+  protect: every token field renders `null` (**not `0`**), cost renders `unavailable` (**not `$0.00`**),
+  and the genuinely measurable half keeps reporting (`board throughput: 58 →Done`). AC6 closed the
+  `FireRow` dimension type-drift found at the LOOP-4 design gate. LOOP-126 + LOOP-127 unparked.
+- **🔴 LOOP-87 recurred live, and the payload was this document again (2026-07-31, late).** PR #82
+  (LOOP-65) reached review carrying **eight commits, only one its own** — LOOP-125's commit plus **six
+  unpushed PM `docs(strategy)` commits**, each confirmed by a `git patch-id --stable` twin on the
+  shared checkout's local `main`. Same shape as the PR #70 incident. **The root cause is LOOP-120, and
+  it is PM's:** while doc-land cannot push, local `main` stays permanently dirty, so *any* branch cut
+  from it inherits the doc commits. The ticket's own work was scope-clean and passed every AC, so it
+  was routed back to `Todo` (right and unfinished), not `Canceled` — and **PR #81 cut clean off
+  `origin/main` in the same window**, which is the proof that the clean path was available. **The
+  standing lesson: a dirty shared `main` is not a PM inconvenience, it is a supply route into
+  `origin/main`** — and there is no mechanical guard, because LOOP-69 (wiring merge-guard into the
+  fire-start merge pass) is still parked.
 
 ## Personas
 
