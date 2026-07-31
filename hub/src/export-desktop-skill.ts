@@ -4,11 +4,11 @@
 // SKILL + the load-bearing conventions sections + the project's config, so a human can run e.g.
 // QA in Desktop (with the Linear connector + the Chrome extension) without the Claude Code plugin.
 // Regenerate after any conventions/config change so the Desktop copy never drifts.
-import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, rmSync } from "node:fs";
 import { dirname, join, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { tryResolveWorkspace } from "./workspace.ts";
 import { toLegacyView, deliveryProjects, WsValidationError } from "./team-config.ts";
 
@@ -25,7 +25,21 @@ if (!agentArg || !project) {
   process.exit(2);
 }
 const agent = agentArg.replace(/-agent$/, ""); // accept "qa" or "qa-agent"
-const outDir = resolve(flag("--out") ?? process.cwd());
+// LOOP-187: when --out is not given, detect whether cwd is inside a git working tree.
+// Writing into a tracked tree silently drops an artifact that a careless `git add -A` commits.
+// Fall back to a temp dir and print the path so the caller knows where to find the output.
+const outDir = (() => {
+  const explicit = flag("--out");
+  if (explicit) return resolve(explicit);
+  let insideGit = false;
+  try { execFileSync("git", ["-C", process.cwd(), "rev-parse", "--is-inside-work-tree"], { stdio: "ignore" }); insideGit = true; } catch { /* not a git tree */ }
+  if (insideGit) {
+    const safe = mkdtempSync(join(tmpdir(), "dl-export-"));
+    process.stderr.write(`export-desktop-skill: --out not given; cwd is inside a git repo — writing to ${safe} (use --out <dir> to choose)\n`);
+    return safe;
+  }
+  return process.cwd();
+})();
 
 // ---- resolve the plugin payload root (skills/ + references/) ----
 const pluginRoot = (() => {
