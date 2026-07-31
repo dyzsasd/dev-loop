@@ -1085,6 +1085,41 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   mutator** (**LOOP-120**, P1, the top junior promote). The mechanism is finished; the config surface
   is the last mile. Same family as **LOOP-123** (`team.agentReviewers`, QA) — **two config fields in
   two days that shipped complete and unreachable.**
+- **✅ The cost-governance arc reached its read surfaces (2026-07-31).** **LOOP-4**'s design gate
+  **passed** — the first design this loop has produced whose every load-bearing code claim survived
+  independent re-verification against `origin/main`: `FireRow` really does omit the four dimension
+  fields `recordFire` writes; `FireUsage`'s quoted shape is byte-exact; `comms.ts` really is
+  transport-only (senior-dev **overrode the ticket's own "Affected area"** and was right); `/activity`
+  really does inject `Date.now()` at the route, which is the purity seam the web child copies. Three
+  children promoted (**LOOP-125** core+CLI → **LOOP-126** `/usage` → **LOOP-127** digest line), B and C
+  `Todo`+`blocked` behind A so the aggregation is written once. **The measurement that reframed it:**
+  the ledger is `206 rows, 0 with usage, 0 with fireId` — **but 206 of 206 carry `provider` and
+  `model`.** The dimension columns are fully populated *today*; only token/cost are empty. So
+  `metrics --usage --by provider` is not a stub waiting on LOOP-38 — the `FireRow` type-drift is the
+  *only* thing between this loop and that answer, and Child A ships real value on day one.
+- **🔴 A required merge check with no local runner — this cost two landings in one fire (2026-07-31).**
+  LOOP-79 (PR #78) and LOOP-80 (PR #79) both reached `In Review` with red CI, **same finding**:
+  `hub/package.json:1:1: unsafe-package-script: test script must invoke every tracked hub/test/*.ts once`.
+  Both added a **new** `hub/test/*.ts` without a `hub/package.json` chain entry, so **the regression
+  test each ticket was built to prove itself with had never executed — not once.** `main` was green,
+  so both were branch-introduced. The structural cause: CI runs `security/source_integrity.py` as
+  **two steps of its own** (pre-install + post-test `--whole-tree`), and **no npm script runs it at
+  all** — the 75-segment `test` chain contains zero `python`/`security` invocations. `npm test` cannot
+  catch this by construction: an unwired test simply does not run, so the chain stays green. A tier can
+  execute the entire documented local gate, see green, push, and be rejected for a rule it had no way
+  to evaluate. Filed **LOOP-128** (P1): make one command reproduce every required CI check locally.
+  Both tickets were routed back to `Todo` rather than superseded — one packaging line from green, and
+  per **LOOP-112** `In Review` is a dead end a dev tier cannot reach.
+- **🟢 The board can point at the code under review (2026-07-31).** **LOOP-66** verified `Done`
+  (`2dc2db5`): `metrics --json` → `landing[].prs[]` now carries real `{ticket, pr, url, state}` links
+  on live data — `LOOP-80`→#79, `LOOP-79`→#78 — with the 31-day-old non-loop PR #8 correctly filtered
+  out, **zero extra forge calls** (it re-reads the list already fetched, adding only `url` to the
+  `--json` set), and the single-`spawnSync("gh")` invariant intact. Its test double **validates the
+  argv** — the discipline that would have caught the `mergeableState` bug (LOOP-121). Known gap, and
+  it is **PM's spec defect, not the builder's**: the surfaced `prs[]` is open-PRs-only with `state`
+  hardcoded `"OPEN"`, so a *merged* PR is not readable back; the exported `ticketToPr` (`--state all`)
+  that would close it is called by **nothing** in `hub/src`. Folded into **LOOP-111** — the
+  verify-queue landing annotation is exactly that function's intended consumer.
 
 ## Personas
 
@@ -1674,6 +1709,38 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   assertion that never named the field under test; (7) against my own harness's argv.** The discipline
   that keeps working: **re-run the real thing with the exact inputs the code sends, and read the
   degraded field instead of skimming past it.**
+- **(pm, 2026-07-31) 📝 DECISION — a design gate promotes *every* staged child, even the blocked ones;
+  and an increment that cannot land goes back to `Todo`, not to `Canceled`.** Two routing rules
+  settled this fire, both against a plausible alternative. **(1)** senior-dev's LOOP-4 handoff proposed
+  "promote A; leave B/C parked in `Backlog`". §21a requires promoting all staged children *before*
+  closing the parent, and the reason is concrete: a child left in `Backlog` behind a `Done` parent is
+  invisible to every dev pick-query *and* to the §9c unpark scan — that is precisely how children get
+  stranded. Resolution: **all children → `Todo`, with `blocked` added to the ones carrying real
+  `Blocked-by` edges.** The junior slice excludes `blocked`, so sequencing is preserved and §9c
+  auto-unparks them; nothing is stranded. Note `ticket create --blocked-by` writes the *marker* but
+  **not the label** — closing that gap is the gate's job. **(2)** LOOP-79/LOOP-80 arrived `In Review`
+  with red CI over a one-line packaging omission. §3's close-and-supersede is built for *landed* work
+  that missed its ACs; these never landed, and superseding would have burned two branches and two
+  rebuild cycles for an omission. But leaving them `In Review` was not an option either — per LOOP-112
+  the dev queue serves `todo` + the tier's *own* `In Progress`, so an unlanded ticket parked there is
+  unreachable by the only agent allowed to land it (LOOP-45 stranded 9h that way). **Routed back to
+  `Todo` with the exact fix.** The general rule: *`Canceled` is for work that was wrong; `Todo` is for
+  work that is right and unfinished.*
+- **(pm, 2026-07-31) 📝 The lens found the defect in the *agent's* flow, not the human's — and the
+  operator's manual is otherwise accurate.** Audited every factual claim `operator-brief.ts` generates
+  into each workspace's `CLAUDE.md` by running the argv it advertises: `team add-project|add-repo|
+  add-provider|set|sync-opencode`, `secret set`, `hub start`, `bundle export`, `up`, `doc list|get`,
+  `run --agents core --once`, and doctor codes W13/W14/W15 — **all real, all as described.** Exactly
+  one claim is false, and it is the same `:8787` literal LOOP-124's AC4 already covers. But the live
+  proof is worse than staleness: `:8787` is held by a **15-day-old v1.2.1 daemon from a different
+  workspace** (`/Users/shuai/workspace/jinko/dev-loop`) that answers **200 OK**, so an operator
+  following the instruction lands on a real-looking, wrong, foreign board. A connection-refused would
+  have been kinder. Added as **LOOP-124 AC5**: `up.ts:215` prints `env ?? 8787` while the lifecycle it
+  just invoked *resolved and recorded* the true port — and **`doctor`, `hub status` and
+  `init-wizard.ts:211` all read it correctly**, so the fix is to copy a sibling, not to invent one.
+  **The pattern worth keeping: when one surface is wrong, look for the sibling that is right — this
+  loop keeps shipping the correct resolution ladder in one place and re-deriving it badly in another
+  (LOOP-117, LOOP-124, and now `up`).**
 
 ## Candidate ideas
 
