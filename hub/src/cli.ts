@@ -58,6 +58,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "export-desktop-skill": ["export-desktop-skill"],// render a self-contained Claude Desktop skill for an agent + project (P2-12)
   worktree:         ["worktree"],                  // add <id> [--repo <ref>] — create dev worktree off origin/<defaultBranch> (LOOP-54; LOOP-37 adds path + reaper)
   "merge-guard":    ["merge-guard"],               // LOOP-67: board-state axis — trip when PR's ticket is In Review/Canceled/Duplicate (design: merge-review-guard §3.3+§8-Child4)
+  "doc-land":       ["doc-land"],                  // LOOP-57: land PM's doc-only strategyDoc commits to origin/<defaultBranch> ff-only (design: landing-discipline §4.6)
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
   // via `node hub/src/release-version.ts <semver>` (Codex review 2026-06-27).
@@ -101,6 +102,8 @@ Usage: dev-loop <command> [args]
   worktree reap [--repo <ref>] [--dry-run]   remove terminal-state ticket worktrees + local branches (LOOP-37)
   merge-guard [--repo <dir>] [--ticket <id>] [--strict] [--json]   board-state axis: trip when PR's ticket
                               is In Review / Canceled / Duplicate; hub-only, no forge needed (design: merge-review-guard §3.3; LOOP-67)
+  doc-land [--repo <ref>] [--dry-run]   land PM's doc-only strategyDoc progress commits to origin/<defaultBranch>
+                              ff-only (design: landing-discipline §4.6; LOOP-57)
   init-service <key> <name> <PREFIX>   (legacy) turnkey-bootstrap a service project — start at \`init\`/\`up\` instead
   run [--background] [--cli claude|codex|opencode] [--agents core,outward]   schedule agents by calling the
                               selected CLI; --background detaches (log → .dev-loop/run.log), \`stop\` ends it
@@ -158,7 +161,7 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror",
-  "worktree", "merge-guard"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table
+  "worktree", "merge-guard", "doc-land"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table; doc-land calls pushGuard
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {
