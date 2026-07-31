@@ -732,6 +732,55 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **LOOP-195** (`Bug`, junior tier): consume `version` and `actor` in `reconcileDaemonHealth`, warn on
   mismatch, stay silent when the field is absent — no field, no claim.
 
+- **2026-07-31 (late) — the design gate ran in the direction it is *supposed* to run: the senior
+  design corrected the filer's spec, and taking my own words literally would have shipped a
+  regression (LOOP-168 → LOOP-199, gate PASSED).** My ticket's AC4 read *"the board-read sites route
+  through a single resolver (`resolveHubDbPath()` or an explicit successor)"*. Applied literally at
+  `doctorWorkspace`, that **breaks bundle export**: the same function is called from two places with
+  opposite requirements — `doctor.ts:55` (must read the db `runDoctor` selected and announced) and
+  `bundle.ts:201` (must read the workspace's *own* db and never follow an ambient `DEVLOOP_HUB_DB`).
+  senior-dev found the dual-use, rejected the literal instruction, and substituted an optional
+  `opts.boardDb ?? wsHubDb(ws)` — caller-selected where selection is wanted, safe by default where it
+  is not. **Worth recording because the gate is usually described as PM catching a bad design; here
+  the design caught a bad spec.** Every referent the design named was opened and confirmed at HEAD
+  before the pass (the standing rule: a design that says *"do it like `<file>`"* inherits every defect
+  of `<file>`), and that is exactly how the next entry was found.
+
+- **2026-07-31 (late) — a safety gate that cannot fail: `bundle export`'s doctor refusal has been dead
+  code since 19:02Z and shipped in v1.13.0 (LOOP-200).** `bundle.ts:201` reads
+  `if (!doctorWorkspace(ws) && !o.force) die(…)`. `doctorWorkspace` became `async` in `460f5cf`
+  (LOOP-41's W22 work, 19:02Z), so the condition negates a **Promise** — always truthy — and is
+  permanently `false`: a workspace failing its own health check exports anyway, and `--force` gates
+  nothing. The refactor updated the caller it could see (`doctor.ts:55` gained both `await` and `.ok`)
+  and left the second one behind. Two faults stacked, which is what makes it durable: **adding
+  `await` alone does not fix it** — `!{ok:false}` is still `false`.
+  **Why nothing caught it, measured with the repo's own `tsc` under the same `strict: true`:**
+  `if (f())` errors **TS2801** (*"this condition will always return true…"*), but `if (!f() && !force)`
+  — the shipped form — and `if (!(await f()) && !force)` — the naive fix — both typecheck **clean**.
+  The negation that causes the bug is the negation that hides it, and the half-fix is invisible too.
+  So the regression test is not belt-and-braces here; it is the only guard, and the ticket is written
+  fail-before/pass-after against it. This is the standing pattern *a surface reporting a result it
+  never established* in its purest form yet: the gate does not report a verdict loosely, it **cannot
+  compute one**.
+
+- **2026-07-31 (late) — two clean results, recorded because a clean result is evidence too.**
+  **(a)** The general form of the LOOP-200 query — *"which other un-awaited `async` calls exist?"* —
+  was run across all **114** `async` functions declared in `hub/src`, over `src/` **and** `test/`.
+  After discarding the false positives (`.then()` process entrypoints; same-named *synchronous*
+  helpers — `docstore.ts`'s `docSave`/`docPublish`, `hub-lifecycle.ts`'s local `team()` `spawnSync`
+  arrow), **`bundle.ts:201` is the only real one**. The sync→async-refactor blast radius is one site,
+  not a class. **(b)** `ab20afe` (LOOP-185) added `hub/test/daemon-ws-resolve.ts` with **no**
+  `package.json` script — which on many repos means a test that never runs. Here it does run:
+  `run-all.ts` globs every `hub/test/*.ts` minus an explicit, reasoned `NON_SUITES` map, and LOOP-139
+  already added a `--list` surface asserted against `git ls-files`. Nothing to file.
+
+- **2026-07-31 (late) — LOOP-195 confirmed still live, against the commit that looked most likely to
+  have pre-empted it.** `ab20afe` (LOOP-185, "workspace-aware run-dir resolution for bare daemon
+  verbs") lands in exactly the daemon-lifecycle neighbourhood LOOP-195 sits next to, so it was checked
+  rather than assumed: it touches `hub/src/daemon-lifecycle.ts` + two test files and **does not touch
+  `hub/src/doctor.ts` at all**. Doctor's `reconcileDaemonHealth` still drops the `version`/`actor`
+  fields `/api/health` returns. The ticket stands as filed.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1543,6 +1592,32 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `Backlog`, unblocked, next among p2 Improvements — the junior slot this fire went to the top of the
   §5 pick order, and the §17 split inside the ticket (generator + tests agent-applied, `references/`
   and `skills/` operator-applied) is untouched and non-negotiable.
+
+- **(pm, 2026-07-31) The §21a design-gate promotion is unconditional on a pass; the §5a
+  `todoDepthCap` meters *new* commitments, not ones the gate has already made (LOOP-199 promoted to
+  junior 11/10).** The junior tier was exactly at its cap of 10 when LOOP-168's design passed. §21a is
+  explicit — pass ⇒ promote **every** staged child `Backlog → Todo` first, then close the parent — and
+  it carries no cap language, while §5a's cap governs the metered Job B2 pass. **The reasoning, so it
+  can be reversed:** the two alternatives are both worse. Marking the parent `Done` while holding the
+  child in `Backlog` produces precisely the orphan §21a's ordering exists to prevent — no gate ever
+  fires on that child again, and Sweep's slow-cadence repair is its only rescue. Leaving the parent
+  `In Review` to respect the cap discards a completed verification and re-runs the whole gate next
+  fire for nothing. A cap is a throttle on how fast the loop takes on *new* work; a passed design gate
+  is work already committed, being handed to the tier that was always going to build it. **The limit I
+  did hold:** the metered pass promoted **zero** junior tickets this fire, so the cap did its job on
+  everything it actually governs — the overshoot is one ticket, gate-driven, and self-correcting as
+  junior drains.
+
+- **(pm, 2026-07-31) Filing LOOP-200 at the junior tier while the Backlog is 42/42 junior — the
+  imbalance is surfaced, not fixed by re-tiering.** The honest §21b read is unambiguous: a two-token
+  fix plus a regression test in one file is a scoped bug-fix, it is not `sensitive`, it is not a new
+  module, and it needs no cross-module design. Tiering it senior to balance the queue is exactly what
+  §21b forbids, and the standing lesson says to set the tier deliberately at filing and surface a
+  lopsided split to the operator instead. So: **junior, and the number goes in the report.** The
+  senior queue is 8/10 with an *empty* senior Backlog — which is the healthy shape of a metered queue,
+  not starvation — while every one of the 42 Backlog rows waits on the tier whose median cycle time is
+  ~2× the senior's. The lever that would actually move this is more senior-shaped work existing, not
+  re-labelling junior-shaped work.
 
 ## Candidate ideas
 
