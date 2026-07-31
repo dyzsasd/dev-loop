@@ -193,7 +193,7 @@ export async function readLandingState(
         "--repo", ghRepo,
         "--state", "open",
         "--limit", "100",
-        "--json", "number,headRefName,createdAt,mergeableState",
+        "--json", "number,headRefName,createdAt,mergeable",
       ]);
     } catch (e) {
       const code = (e as { code?: string }).code;
@@ -203,12 +203,19 @@ export async function readLandingState(
     }
 
     if (!openResult.ok) {
-      const reason = isAuthError(openResult.stderr) ? "gh not authenticated" : "forge unreachable";
+      let reason: string;
+      if (isAuthError(openResult.stderr)) {
+        reason = "gh not authenticated";
+      } else if (/Unknown JSON field|unknown flag|accepts at most/i.test(openResult.stderr)) {
+        reason = `gh rejected arguments: ${openResult.stderr.split("\n")[0]!}`;
+      } else {
+        reason = "forge unreachable";
+      }
       results.push(mkUnknown(ref, reason));
       continue;
     }
 
-    type PRItem = { number: number; headRefName: string; createdAt: string; mergeableState: string };
+    type PRItem = { number: number; headRefName: string; createdAt: string; mergeable: string };
     let allOpen: PRItem[];
     try {
       allOpen = JSON.parse(openResult.stdout) as PRItem[];
@@ -235,7 +242,7 @@ export async function readLandingState(
     const hasThresholdStall = loopOpen.some((p) => {
       const ageDays = (now - Date.parse(p.createdAt)) / (24 * 60 * 60 * 1000);
       // stalled at threshold: old enough AND not fully unblocked (MERGEABLE + green base)
-      return ageDays > LANDING_STALL_DAYS && !(p.mergeableState === "MERGEABLE" && baseChecks === "green");
+      return ageDays > LANDING_STALL_DAYS && !(p.mergeable === "MERGEABLE" && baseChecks === "green");
     });
 
     if (hasDayZeroStall || hasThresholdStall) {
