@@ -392,6 +392,86 @@ try {
     ok(/DOCTOR_OK/.test(w19noOrigin.out), "DOCTOR_OK holds when origin/main absent");
   }
 
+  // ── W18: doctor warns when installed CLI is behind origin/main (LOOP-46) ──
+  {
+    const w18Root = join(tmp, "w18");
+    const w18BareOrigin = join(tmp, "w18-origin.git");
+    mkdirSync(w18BareOrigin, { recursive: true });
+
+    const gitW18 = (dir: string, args: string[]) =>
+      spawnSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+    // Bare origin + clone (the "source repo" for dev-loop itself)
+    gitW18(tmp, ["init", "--bare", "-q", "-b", "main", w18BareOrigin]);
+    run("team", ["init", "--dir", w18Root, "--key", "w18-team", "--backend", "service"]);
+    run("team", ["add-project", "core"], { cwd: w18Root });
+    const w18Clone = join(w18Root, "w18-repo");
+    spawnSync("git", ["clone", "-q", w18BareOrigin, w18Clone], { stdio: ["ignore", "pipe", "pipe"] });
+
+    // Seed: baseline commit + tag v1.2.3 + push
+    gitW18(w18Clone, ["commit", "--allow-empty", "-qm", "initial"]);
+    gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+    gitW18(w18Clone, ["tag", "v1.2.3"]);
+    gitW18(w18Clone, ["push", "-q", "origin", "v1.2.3"]);
+
+    // Add 2 commits to origin after the v1.2.3 tag (simulate merged-after-release work)
+    gitW18(w18Clone, ["commit", "--allow-empty", "-qm", "post-release fix 1"]);
+    gitW18(w18Clone, ["commit", "--allow-empty", "-qm", "post-release fix 2"]);
+    gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+
+    // Configure repo with remote matching the package repository.url
+    run("team", ["add-repo", "w18-repo", "--project", "core", "--path", "w18-repo", "--landing", "pr", "--remote", w18BareOrigin], { cwd: w18Root });
+
+    // Create the injected package.json (simulates the installed CLI's package.json)
+    const w18PkgJson = join(tmp, "w18-pkg.json");
+    writeFileSync(w18PkgJson, JSON.stringify({ name: "@dyzsasd/dev-loop", version: "1.2.3", repository: { url: `file://${w18BareOrigin}` } }));
+
+    // Case A: installed v1.2.3, 2 commits behind origin/main → W18 fires, DOCTOR_OK holds
+    const w18behind = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgJson } });
+    ok(/\[W18\]/.test(w18behind.out), "W18 fires when installed version is behind origin/main");
+    ok(/DOCTOR_OK/.test(w18behind.out), "W18 is warn-only — DOCTOR_OK still holds when behind");
+    ok(/2 commit/.test(w18behind.out), "W18 names the commit count (2 commits behind)");
+    ok(/1\.2\.3/.test(w18behind.out), "W18 names the installed version");
+
+    // Case B: installed == origin/main tip (no skew) → no W18, DOCTOR_OK
+    // Reset tag to origin/main HEAD (simulate a fresh publish)
+    const originHead = spawnSync("git", ["-C", w18Clone, "rev-parse", "origin/main"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+    gitW18(w18Clone, ["tag", "-f", "v1.2.3", originHead]);
+    const w18PkgJsonSync = join(tmp, "w18-pkg-sync.json");
+    writeFileSync(w18PkgJsonSync, JSON.stringify({ name: "@dyzsasd/dev-loop", version: "1.2.3", repository: { url: `file://${w18BareOrigin}` } }));
+    const w18sync = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgJsonSync } });
+    ok(!/\[W18\]/.test(w18sync.out), "no W18 when installed version matches origin/main");
+    ok(/DOCTOR_OK/.test(w18sync.out), "DOCTOR_OK holds when in sync (no W18)");
+
+    // Case C: no configured repo matching the package repository → W18 is n/a, zero git calls
+    const w18NoMatchRoot = join(tmp, "w18-nomatch");
+    run("team", ["init", "--dir", w18NoMatchRoot, "--key", "w18-nm", "--backend", "service"]);
+    run("team", ["add-project", "core"], { cwd: w18NoMatchRoot });
+    // Clone with a DIFFERENT remote (won't match the package.json's repository.url)
+    const w18DiffOrigin = join(tmp, "w18-diff-origin.git");
+    gitW18(tmp, ["init", "--bare", "-q", "-b", "main", w18DiffOrigin]);
+    const w18DiffClone = join(w18NoMatchRoot, "diff-repo");
+    spawnSync("git", ["clone", "-q", w18DiffOrigin, w18DiffClone], { stdio: ["ignore", "pipe", "pipe"] });
+    gitW18(w18DiffClone, ["commit", "--allow-empty", "-qm", "x"]);
+    gitW18(w18DiffClone, ["push", "-qu", "origin", "main"]);
+    run("team", ["add-repo", "diff-repo", "--project", "core", "--path", "diff-repo", "--landing", "pr", "--remote", w18DiffOrigin], { cwd: w18NoMatchRoot });
+    const w18PkgNoMatch = join(tmp, "w18-pkg-nomatch.json");
+    writeFileSync(w18PkgNoMatch, JSON.stringify({ name: "@dyzsasd/dev-loop", version: "1.2.3", repository: { url: `file://${w18BareOrigin}` } }));
+    const w18nomatch = run("server", ["doctor"], { cwd: w18NoMatchRoot, extra: { DEVLOOP_W18_PKG_JSON: w18PkgNoMatch } });
+    ok(!/\[W18\]/.test(w18nomatch.out), "no W18 when no configured repo matches the package repository");
+    ok(/DOCTOR_OK/.test(w18nomatch.out), "DOCTOR_OK holds when no matching repo (n/a path)");
+
+    // Case D: v-commit unresolvable (tag absent, no matching release commit) → info only, no W18 warn
+    // Use a fresh package.json with a version that has no tag in the repo
+    const w18PkgNoTag = join(tmp, "w18-pkg-notag.json");
+    writeFileSync(w18PkgNoTag, JSON.stringify({ name: "@dyzsasd/dev-loop", version: "9.9.9", repository: { url: `file://${w18BareOrigin}` } }));
+    const w18notag = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgNoTag } });
+    ok(!/\[W18\]/.test(w18notag.out), "no W18 warn when v-commit is unresolvable (only info)");
+    ok(/DOCTOR_OK/.test(w18notag.out), "DOCTOR_OK holds when v-commit unresolvable (info-only path)");
+  }
+
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {

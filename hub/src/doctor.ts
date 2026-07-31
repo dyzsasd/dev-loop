@@ -338,6 +338,10 @@ export function doctorWorkspace(ws: Workspace): boolean {
     }
   } catch { /* W19 is best-effort — never fails doctor */ }
 
+  // W18 — installed CLI vs origin/main skew (LOOP-46 / design landing-observability §9.3).
+  // Extracted to helper to keep doctorWorkspace CC in budget. Best-effort; never flips DOCTOR_OK.
+  try { checkInstalledCliSkew(ws, { warn, info, pass }); } catch { /* W18 is best-effort */ }
+
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
   if (isGitWorkTree(ws.root)) {
     let ignored = false;
@@ -352,6 +356,76 @@ export function doctorWorkspace(ws: Workspace): boolean {
 function isGitWorkTree(dir: string): boolean {
   try { return execFileSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() === "true"; }
   catch { return false; }
+}
+
+// W18 — installed CLI vs origin/main skew (design landing-observability §9.3).
+// Only fires when the running package's repository matches a configured landing:"pr" repo (the dogfooding
+// case). For all normal product workspaces this is a zero-cost n/a — no git calls, no output.
+// DEVLOOP_W18_PKG_JSON overrides the package.json path for test injection (no real reinstall needed).
+function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; info: (m: string) => void; pass: (m: string) => void }): void {
+  const { warn, info, pass } = out;
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pkgFile = process.env.DEVLOOP_W18_PKG_JSON ?? join(here, "..", "package.json");
+  let pkgData: { name?: string; version?: string; repository?: string | { url?: string } } | null = null;
+  try { pkgData = JSON.parse(readFileSync(pkgFile, "utf8")); } catch { /* unreadable — skip silently */ }
+  if (!pkgData) return;
+  const V = (pkgData.version ?? "").trim();
+  const rawUrl = typeof pkgData.repository === "string" ? pkgData.repository : (pkgData.repository?.url ?? "");
+  if (!V || !rawUrl) return;
+  const normalize = (u: string): string => {
+    const s = u.replace(/^git\+/, "").replace(/\.git$/, "");
+    const ssh = s.match(/^git@([^:]+):(.+)$/);
+    if (ssh) return `${ssh[1]}/${ssh[2]}`.toLowerCase();
+    try { const p = new URL(s); return (p.host + "/" + p.pathname.replace(/^\//, "")).toLowerCase(); } catch { return s.toLowerCase(); }
+  };
+  const pkgNorm = normalize(rawUrl);
+  let matchRef: string | null = null, matchDir = "", matchBranch = "main";
+  const pkgName = pkgData.name ?? "dev-loop";
+  for (const [ref, entry] of Object.entries(ws.file.repos)) {
+    if (entry.landing !== "pr" || !entry.remote) continue;
+    if (normalize(entry.remote) === pkgNorm) {
+      const r = effectiveRepo(ws, ref);
+      matchRef = ref; matchDir = r.absPath; matchBranch = r.defaultBranch; break;
+    }
+  }
+  if (matchRef === null) return; // n/a — no configured repo matches this package
+  if (!existsSync(matchDir) || !isGitWorkTree(matchDir)) {
+    info(`[${matchRef}] W18: repo not on disk — cannot check installed-vs-origin skew (best-effort)`);
+    return;
+  }
+  try {
+    let vCommit: string | null = null;
+    const tagR = spawnSync("git", ["-C", matchDir, "rev-parse", "-q", "--verify", `refs/tags/v${V}^{commit}`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    if (tagR.status === 0 && tagR.stdout.trim()) {
+      vCommit = tagR.stdout.trim();
+    } else {
+      const logR = spawnSync("git", ["-C", matchDir, "log", `--grep=chore(release): v${V}`, "--format=%H", "-1"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      if (logR.status === 0 && logR.stdout.trim()) vCommit = logR.stdout.trim();
+    }
+    if (!vCommit) {
+      info(`[${matchRef}] W18: v${V} commit unresolvable (no v${V} tag and no matching release commit) — skipping (best-effort)`);
+      return;
+    }
+    const behindR = spawnSync("git", ["-C", matchDir, "rev-list", "--count", `${vCommit}..origin/${matchBranch}`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    if (behindR.status !== 0 || !behindR.stdout.trim()) {
+      info(`[${matchRef}] W18: origin/${matchBranch} not resolved locally (run git fetch to check; best-effort)`);
+      return;
+    }
+    const behind = parseInt(behindR.stdout.trim(), 10);
+    if (isNaN(behind)) {
+      info(`[${matchRef}] W18: rev-list output unexpected — skipping (best-effort)`);
+    } else if (behind > 0) {
+      const shortR = spawnSync("git", ["-C", matchDir, "rev-parse", "--short", `origin/${matchBranch}`],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      const shortSha = shortR.stdout.trim() || "unknown";
+      warn(`[W18] [${matchRef}] installed ${pkgName} v${V} is ${behind} commit(s) behind origin/${matchBranch} (${shortSha}) — CLI-behavior fixes merged after v${V} are NOT live: every fire runs the published npm package, not origin/main. An operator must re-publish + agents reinstall, or pin agents to a local build (design landing-observability §9.2).`);
+    } else {
+      pass(`[${matchRef}] installed ${pkgName} v${V} matches origin/${matchBranch} — no skew`);
+    }
+  } catch { info(`[${matchRef}] W18: git check skipped (best-effort)`); }
 }
 
 // ── D8/D9: CLI-interface preflight (W09/W10/W11) ─────────────────────────────────────────────────────────
