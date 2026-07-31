@@ -124,6 +124,83 @@ try {
   ok(cliDry.status === 0 && cliDry.stdout.includes("CANCEL-2"), "worktree reap --dry-run identifies CANCEL-2");
   ok(existsSync(wtCanceled2), "worktree reap --dry-run does not remove CANCEL-2");
 
+  // ── 10. LOOP-106 — recoverability gate (AC2) + dirty-worktree safety (AC3) ───
+  //     Each case is one the pre-LOOP-106 reaper got wrong (force-remove / `-D` on ticket state
+  //     alone), so each assertion here fails against 49644f8.
+  const db3 = openDb(dbPath);
+  const mkCanceled = (id: string) => db3.prepare(
+    "INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,'Canceled',0,'[]','[]','pm','t','t')",
+  ).run(id, "p", `t-${id}`);
+
+  // (a) UNRECOVERABLE Canceled branch — a local commit, never pushed, not merged → branch must be KEPT.
+  const wtUnrec = join(wtRootA, "UNREC-1", "repo");
+  mkdirSync(dirname(wtUnrec), { recursive: true });
+  git(repoDir, ["worktree", "add", "-b", "dev-loop/UNREC-1", wtUnrec, "main"]);
+  writeFileSync(join(wtUnrec, "work.txt"), "unpushed, unmerged work");
+  git(wtUnrec, ["add", "."]);
+  git(wtUnrec, ["commit", "-qm", "unpushed unmerged work"]);
+  mkCanceled("UNREC-1");
+
+  // (b) RECOVERABLE Canceled branch — pushed to origin → the branch may be deleted.
+  const wtPushed = join(wtRootA, "PUSHED-1", "repo");
+  mkdirSync(dirname(wtPushed), { recursive: true });
+  git(repoDir, ["worktree", "add", "-b", "dev-loop/PUSHED-1", wtPushed, "main"]);
+  writeFileSync(join(wtPushed, "work.txt"), "pushed work");
+  git(wtPushed, ["add", "."]);
+  git(wtPushed, ["commit", "-qm", "pushed work"]);
+  git(repoDir, ["push", "-q", "origin", "dev-loop/PUSHED-1"]);
+  mkCanceled("PUSHED-1");
+
+  // (c) DIRTY Canceled worktree — an uncommitted change → the worktree (and its branch) must be KEPT.
+  const wtDirty = join(wtRootA, "DIRTY-1", "repo");
+  mkdirSync(dirname(wtDirty), { recursive: true });
+  git(repoDir, ["worktree", "add", "-b", "dev-loop/DIRTY-1", wtDirty, "main"]);
+  writeFileSync(join(wtDirty, "uncommitted.txt"), "work in progress, never committed");
+  mkCanceled("DIRTY-1");
+  db3.close();
+
+  const capture: string[] = [];
+  const reapRes = await worktreeReap(ws, "repo", { dryRun: false, print: (m) => capture.push(m) });
+  const branchesAfter = git(repoDir, ["branch", "--list"]);
+
+  ok(branchesAfter.includes("dev-loop/UNREC-1"), "AC2: an unrecoverable Canceled branch (no upstream, unmerged) is KEPT");
+  ok(!existsSync(wtUnrec), "AC2: the UNREC-1 worktree (clean) was still removed");
+  ok(capture.some((m) => m.includes("UNREC-1") && /UNRECOVERABLE/.test(m)), "AC2: prints an UNRECOVERABLE reason for the kept branch");
+  ok(!branchesAfter.includes("dev-loop/PUSHED-1"), "AC2: a recoverable (pushed) Canceled branch IS deleted");
+  ok(!existsSync(wtPushed), "AC2: the PUSHED-1 worktree was removed");
+  ok(existsSync(wtDirty), "AC3: a dirty terminal worktree is KEPT, never force-removed");
+  ok(branchesAfter.includes("dev-loop/DIRTY-1"), "AC3: the dirty worktree's branch is KEPT too");
+  ok(capture.some((m) => m.includes("DIRTY-1") && /KEPT worktree/.test(m)), "AC3: prints a loud KEPT-worktree line");
+  ok(!reapRes.reaped.some((e) => e.ticketId === "DIRTY-1"), "AC3: the kept dirty worktree is not counted as reaped");
+
+  // ── 11. LOOP-106 — the automatic path (team repair, no --reap) deletes NOTHING (AC1) ──
+  //     `dev-loop up --bundle` runs `team repair` unattended, before doctor. The default must not delete;
+  //     `--reap` is the explicit opt-in. Fails against 49644f8, where `team repair` reaped by default.
+  const wtOptin = join(wtRootA, "OPTIN-1", "repo");
+  mkdirSync(dirname(wtOptin), { recursive: true });
+  git(repoDir, ["worktree", "add", "-b", "dev-loop/OPTIN-1", wtOptin, "main"]);
+  git(repoDir, ["push", "-q", "origin", "dev-loop/OPTIN-1"]); // recoverable, so --reap WOULD remove it
+  const db4 = openDb(dbPath);
+  db4.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('OPTIN-1','p','t-OPTIN-1','Canceled',0,'[]','[]','pm','t','t')").run();
+  db4.close();
+
+  // Hermetic subprocess env: read the fixture db explicitly, contain the index write to a temp
+  // DEVLOOP_HOME, and drop inherited project/actor identity so a live fire can't leak in.
+  const trEnv: NodeJS.ProcessEnv = { ...process.env, DEVLOOP_WORKSPACE: wsRoot, DEVLOOP_HUB_DB: dbPath, DEVLOOP_HOME: join(ROOT, ".home") };
+  delete trEnv.DEVLOOP_DATA_DIR; delete trEnv.DEVLOOP_PROJECT; delete trEnv.DEVLOOP_ACTOR;
+  const trPath = join(hubRoot, "src", "team-repair.ts");
+
+  const repairDefault = spawnSync(process.execPath, [trPath], { encoding: "utf8", env: trEnv });
+  ok(repairDefault.status === 0, "team repair (no --reap) exits 0");
+  ok(existsSync(wtOptin), "AC1: team repair (no --reap) does NOT remove the terminal worktree");
+  ok(git(repoDir, ["branch", "--list"]).includes("dev-loop/OPTIN-1"), "AC1: team repair (no --reap) does NOT delete the branch");
+  ok(/would be reaped|would remove/.test(repairDefault.stdout), "AC1: the default pass REPORTS what --reap would remove");
+
+  const repairReap = spawnSync(process.execPath, [trPath, "--reap"], { encoding: "utf8", env: trEnv });
+  ok(repairReap.status === 0, "team repair --reap exits 0");
+  ok(!existsSync(wtOptin), "AC1: team repair --reap removes the (recoverable) terminal worktree");
+  ok(!git(repoDir, ["branch", "--list"]).includes("dev-loop/OPTIN-1"), "AC1: team repair --reap deletes the recoverable branch");
+
   console.log(fails === 0 ? "\nTEAM_REPAIR_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
