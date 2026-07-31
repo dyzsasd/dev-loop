@@ -554,6 +554,24 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   Both filed `sensitive` ⇒ senior by §21b's overriding rule, which took the senior Backlog off empty
   for the first time in three fires.
 
+- **2026-07-31 (late) — the self-accept hole in the verify gate is closed in `main`: a builder tier
+  can no longer close its own qa/pm-owned work (LOOP-157, `c74c5b2`, PR #108).** The DL-77 gate
+  blocked only the direct `In Progress → Done` edge; splitting the self-accept into two legal calls
+  (`In Progress → In Review → Done`, both driven by the ticket's own builder, no owner in between)
+  walked straight through it — and did, in production: **LOOP-76, a qa-owned Bug, self-closed 8s
+  after its own builder moved it to In Review, with no qa actor ever involved.** Every `Done` a dev
+  tier drove that way was unverifiable-by-construction. The fix keys on the **property** the gate
+  defends rather than on a spelling of the sequence: a dev-tier actor (via the canonical
+  `isDevTierActor`, reused from `servable.ts` so the gate cannot drift from the queue) may never
+  close a ticket carrying a qa/pm owner label — keyed on the actor's immutable tier and the
+  ticket's owner label, never the mutable assignee, so no unassign / re-order / split-call trick
+  evades it. That is the general form of this board's most-repeated fix shape: **a sequence rule is
+  beaten by the next sequence.** **Status is `merged`, not `published` (§12b)** — this workspace
+  still runs v1.12.0, so the gate is not yet defending the fires that most need it. Its own author
+  filed the two adjacent close-auth vectors it deliberately left open (strip the owner label in the
+  closing write; create-as-`Done` via `insertTicket`, which has no verify gate at all) as
+  **LOOP-183**, now in senior `Todo`.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1232,6 +1250,29 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   brand's load-bearing claim — "improves itself" — gets its evidence surface in the `/kaizen` panel
   (LOOP-180, senior design-gated), rendered from the board and ledger only, with honest empty
   states. **Nothing is built yet; `Current state` is deliberately untouched.**
+
+- **(operator, 2026-07-31) The Kaizen Factory tagline is chosen — _"The lights-out dev team that
+  improves itself."_ — and the runner-up is grafted rather than discarded (LOOP-179).** PM drafted
+  five candidates on five deliberately different angles; the operator picked **A** on the ground
+  that a brand-new commercial name has to explain itself, and A is the only one doing all three
+  jobs at once: it **decodes "Factory"** (lights-out), **names the category** (dev team — without
+  which "Kaizen Factory" cold-reads as manufacturing consulting), and **states the kaizen claim**
+  (improves itself). The wordmark carries the poetry; the tagline's job is clarity.
+  **Runner-up D — _"It ships software. Then it improves the shipping."_ — is grafted onto the
+  `/kaizen` panel** (LOOP-180) as its header line, where the numbers underneath make it evidence
+  rather than a boast. Recorded as a reusable rule, not a one-off: **runner-up lines are cheapest
+  to use where they are provable.** PM added the constraint that rationale implies — above an empty
+  or unmeasured panel that header *is* the boast, i.e. instance 16 of this board's "a surface
+  reporting a result it never established" class — so the design must state its no-data behaviour.
+  **Localization is not translation.** `README.zh-CN.md` and `README.fr.md` each get a NATIVE line
+  carrying the same two claims (lights-out + improves itself) with the category named; the
+  constraint is those three elements, never the wording, so a native speaker may improve either
+  line freely. Chinese uses **黑灯工厂**, already the native term, and carries **改善** — the
+  brand's own word — so the zh line states kaizen instead of transliterating it.
+  **Also settled here:** `communication` is **not** joining the running roster (there is no
+  `team.comms` channel for it to deliver to, and brand voice is PM's lane) — LOOP-90, a
+  configured-but-unscheduled agent's tickets being unpickable, stands on its own merits rather than
+  being papered over by adding the agent.
 
 ## Candidate ideas
 
