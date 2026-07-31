@@ -13,6 +13,7 @@ import { page, esc, href } from "./ui.ts";
 import { boardPage, type BoardFilters } from "./board.ts";
 import { ticketPage } from "./ticket.ts";
 import { activityPage } from "./activity.ts";
+import { usagePage } from "./usage.ts";
 import { reportsRoot, reportsIndexPage, reportPage } from "./reports.ts";
 import { docsIndexPage, docPage, docHistoryPage, docDiffPage, roadmapDocSlug } from "./docs.ts";
 
@@ -79,6 +80,12 @@ export const VIEW_ROUTES: ViewRoute[] = [
   {
     method: "GET", pattern: "/activity", handler: (c) =>
       html(200, pg(c, `activity · ${c.projectKey}`, c.projectKey, activityPage(c.db, c.projectId, c.projectKey, Date.now()), { active: "activity", drafts: c.draftsPending() })),
+  },
+  // GET /usage — read-only usage & cost dashboard over the fire.completed event ledger (LOOP-126).
+  // DL-2: GET-only, query_only db, server-rendered, no external deps. `Date.now()` injected here.
+  {
+    method: "GET", pattern: "/usage", handler: (c) =>
+      html(200, pg(c, `usage · ${c.projectKey}`, c.projectKey, usagePage(c.db, c.projectId, c.projectKey, Date.now()), { active: "usage", drafts: c.draftsPending() })),
   },
   // GET /reports — the agent reports index (DL-10, read-only filesystem view; empty state if absent).
   {
