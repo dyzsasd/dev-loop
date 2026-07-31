@@ -249,5 +249,24 @@ func TestGrade(t *testing.T) {
   strip("escaped quote inside a string", '"a\\"b"+z', " ".repeat(6) + "+z");
 }
 
+// ── 8. no-coverage guard: --threshold with absent/empty/no-match dir → exit 1 (LOOP-158) ─────────
+// Regression for quality.ts:604 short-circuit on maxCrap===null — gate was silent (exit 0) when no
+// coverage was present. Report-only mode (no --threshold) must remain unchanged.
+{
+  const noSuchDir = join(tmpdir(), "devloop-q-no-such-dir-ever");
+  ok(runQuality(repo, ["--coverage-dir", noSuchDir, "--threshold", "50"]).status === 1,
+    "LOOP-158: nonexistent coverage dir + --threshold → exit 1 (gate cannot run)");
+  const emptyDir = mkdtempSync(join(tmpdir(), "devloop-q-empty-"));
+  ok(runQuality(repo, ["--coverage-dir", emptyDir, "--threshold", "50"]).status === 1,
+    "LOOP-158: empty coverage dir + --threshold → exit 1");
+  const noMatchDir = mkdtempSync(join(tmpdir(), "devloop-q-nomatch-"));
+  writeFileSync(join(noMatchDir, "coverage-nomatch.json"),
+    JSON.stringify({ result: [{ url: "file:///no/such/analyzed/file.ts", functions: [] }] }));
+  ok(runQuality(repo, ["--coverage-dir", noMatchDir, "--threshold", "50"]).status === 1,
+    "LOOP-158: profiles matching no analyzed file + --threshold → exit 1");
+  ok(runQuality(repo, ["--coverage-dir", noSuchDir]).status === 0,
+    "LOOP-158: nonexistent coverage dir without --threshold → exit 0 (report-only unchanged)");
+}
+
 console.log(fails === 0 ? "\nQUALITY_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
