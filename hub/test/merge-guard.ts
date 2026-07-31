@@ -335,6 +335,79 @@ try {
   ok(cliNoApplyCli.status === 1, "CLI no --apply --strict: In Review → exit 1");
   ok(readComments("MG-3").length === 0, "CLI: no --apply → no comment written to hub (read path pure)");
 
+  // ── LOOP-142: Board-state axis resolved from PR head branch ──────────────────
+  // Regression: `merge-guard --pr <n> --strict` from the default branch (or any
+  // worktree whose local branch != the PR branch) must resolve the PR's ticket
+  // via `gh pr view <n> --json headRefName` and apply the board-state gate to it.
+  // Previously the PR head was never consulted — the gate was permanently inert on
+  // the fire-start merge pass (Step 0.5) invoked from the default branch.
+
+  // Fixture: PR 90 whose head branch is dev-loop/MG-3 (In Review — should trip)
+  const prInReviewHead = {
+    number: 90,
+    headRefName: "dev-loop/MG-3",
+    reviewDecision: "",
+    latestReviews: [],
+    url: "https://github.com/owner/repo/pull/90",
+  };
+
+  // AC1: from default branch (no dev-loop/* branch), --pr resolves PR's head ticket
+  // repoDir has a stub .git file → local branch inference always fails → falls to PR head
+  const rL142Ac1 = mergeGuard(repoDir, {
+    pr: 90, ghRepo: GHREPO, dbPath, agentReviewers: [],
+    exec: makePrExec(prInReviewHead, gqlNoThreads),
+  });
+  ok(rL142Ac1.boardState.ticketId === "MG-3", "LOOP-142 AC1: PR head branch resolves ticket MG-3");
+  ok(rL142Ac1.trip, "LOOP-142 AC1: MG-3 (In Review) via PR head → trip");
+  ok(!rL142Ac1.boardState.skipped, "LOOP-142 AC1: board axis was evaluated (not skipped)");
+
+  // AC2: invoked from a worktree on dev-loop/MG-1 (Todo) — PR head (MG-3, In Review) must win
+  // Without the fix: local branch resolves MG-1 → no trip. With the fix: PR head resolves MG-3 → trip.
+  const wtRepo = join(ROOT, "wt-repo");
+  mkdirSync(wtRepo);
+  spawnSync("git", ["-C", wtRepo, "init", "-q"], { encoding: "utf8" });
+  spawnSync("git", ["-C", wtRepo, "checkout", "-b", "dev-loop/MG-1"], { encoding: "utf8" });
+  const rL142Ac2 = mergeGuard(wtRepo, {
+    pr: 90, ghRepo: GHREPO, dbPath, agentReviewers: [],
+    exec: makePrExec(prInReviewHead, gqlNoThreads),
+  });
+  ok(rL142Ac2.boardState.ticketId === "MG-3", "LOOP-142 AC2: PR head (MG-3) wins over local branch (MG-1)");
+  ok(rL142Ac2.trip, "LOOP-142 AC2: MG-3 In Review via PR head → trip, not MG-1 Todo");
+
+  // AC3: explicit --ticket always wins over PR head resolution
+  const rL142Ac3 = mergeGuard(repoDir, {
+    ticketId: "MG-1", pr: 90, ghRepo: GHREPO, dbPath, agentReviewers: [],
+    exec: makePrExec(prInReviewHead, gqlNoThreads),
+  });
+  ok(rL142Ac3.boardState.ticketId === "MG-1", "LOOP-142 AC3: explicit --ticket MG-1 overrides PR head MG-3");
+  ok(!rL142Ac3.trip, "LOOP-142 AC3: explicit MG-1 (Todo) → no trip");
+  ok(!rL142Ac3.boardState.skipped, "LOOP-142 AC3: explicit ticket → axis evaluated");
+
+  // AC4: gh exec throws (ENOENT) → degrade, board axis skipped, no false trip
+  const rL142Ac4 = mergeGuard(repoDir, {
+    pr: 90, ghRepo: GHREPO, dbPath, agentReviewers: [],
+    exec: () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }); },
+  });
+  ok(!rL142Ac4.trip, "LOOP-142 AC4: gh unavailable → no trip (degrade)");
+  ok(rL142Ac4.boardState.skipped, "LOOP-142 AC4: gh unavailable → board axis skipped");
+
+  // AC5: "No ticket resolved" → boardState.skipped=true (distinguishable from "checked clean")
+  // repoDir has a stub .git → no local branch inference. No --pr → no PR head resolution.
+  const rL142Ac5None = mergeGuard(repoDir, { dbPath });
+  ok(rL142Ac5None.boardState.skipped, "LOOP-142 AC5: no ticket, no PR → skipped=true (not 'clean')");
+  ok(rL142Ac5None.boardState.ticketId === null, "LOOP-142 AC5: no ticket → ticketId=null");
+  ok(!rL142Ac5None.trip, "LOOP-142 AC5: no ticket → no trip");
+
+  // AC5: "Checked clean" → boardState.skipped=false (distinguishable from skipped)
+  const rL142Ac5Clean = mergeGuard(repoDir, { ticketId: "MG-1", dbPath });
+  ok(!rL142Ac5Clean.boardState.skipped, "LOOP-142 AC5: explicit ticket checked clean → skipped=false");
+  ok(rL142Ac5Clean.boardState.ticketId === "MG-1", "LOOP-142 AC5: clean → ticketId preserved in result");
+
+  // CLI: no --ticket, no --pr → board axis skipped, message includes 'skipped', exits 0
+  const cliL142NoInput = cli(["--repo", repoDir, "--strict"], { DEVLOOP_HUB_DB: dbPath });
+  ok(cliL142NoInput.status === 0, "LOOP-142 CLI: no --ticket no --pr --strict → exit 0 (skipped)");
+  ok(/skipped/.test(cliL142NoInput.stdout), `LOOP-142 CLI: no ticket → mentions 'skipped' (got: ${cliL142NoInput.stdout.trim().slice(0, 120)})`);
+
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
