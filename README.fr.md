@@ -40,10 +40,10 @@ propose d'enregistrer votre premier repo (`--detect` lit les faits build/CI dire
 le clone), puis se termine par le verdict du doctor et une ligne `NEXT:` qui nomme l'étape la
 plus bloquante. Ce que vous obtenez :
 
-- une **web UI multi-project** : `dev-loop hub start` → `http://127.0.0.1:8787` — un index
-  des projects à `/`, et pour chaque project les pages board, détail de ticket, activity et
-  docs sous `/p/<key>/` (`dev-loop run` le démarre aussi automatiquement ;
-  `dev-loop hub status` pour l'inspecter) ;
+- une **web UI multi-project** : `dev-loop hub start` puis `dev-loop hub status` pour trouver
+  l'URL du board — un index des projects à `/`, et pour chaque project les pages board, détail
+  de ticket, activity et docs sous `/p/<key>/` (`dev-loop run` le démarre aussi automatiquement).
+  La sonde commence au port 8787 et monte si occupé ; `hub status` affiche toujours l'URL réelle ;
 - des agents qui atteignent le board directement via le CLI `dev-loop` — avec Claude Code
   ou Codex sur le backend service, il n'y a rien d'autre à installer (`hub.agentInterface`
   est l'interrupteur par coding agent ; `"mcp"` restaure le câblage MCP injecté) ;
