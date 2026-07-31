@@ -10,6 +10,7 @@
 // COPY in an installed-like layout (no repo config/ sibling — the exact `npm i -g dev-loop` shape).
 import { spawnSync } from "node:child_process";
 import { registerDaemonPid } from "./daemon-harness.ts";
+import { scrubFireEnv } from "./env-scrub.ts";
 import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,7 +26,7 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 const run = (cmd: string, args: string[], env: Record<string, string> = {}): { code: number; out: string; stdout: string } => {
   // DEVLOOP_HOME isolates EVERY subprocess: the compiled `team init` below self-registers the workspace
   // index, and without this it wrote ba-team → a deleted tmp dir into the REAL ~/.dev-loop/workspaces.json.
-  const r = spawnSync(cmd, args, { cwd: hubRoot, encoding: "utf8", env: { ...process.env, DEVLOOP_HOME: join(tmp, "home"), ...env } });
+  const r = spawnSync(cmd, args, { cwd: hubRoot, encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_HOME: join(tmp, "home"), ...env } });
   return { code: r.status ?? 1, out: (r.stdout ?? "") + (r.stderr ?? ""), stdout: r.stdout ?? "" };
 };
 
