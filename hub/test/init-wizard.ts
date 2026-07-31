@@ -1,6 +1,8 @@
 // `dev-loop init` wizard (2026-07 review, init P1) — non-TTY --yes must be end-to-end on service
 // (valid config, hub rows seeded, permissions provisioned, doctor NEXT = add-repo), resume mode never
 // re-inits, and the linear --yes path survives via the E09 warning instead of bricking.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -134,4 +136,4 @@ try {
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

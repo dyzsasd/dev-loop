@@ -1,5 +1,7 @@
 // P1-2 push-guard — regression tests for the ride-along class (MP-275: a Canceled ticket's commit rode a
 // batched push into a prod deploy). Real git repos (bare origin + clone), real hub rows.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";

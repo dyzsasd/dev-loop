@@ -1,5 +1,7 @@
 // metrics.ts — fire metrics from fires.jsonl (window, success, suspect, medians), the 90d prune,
 // board KPIs from issue.transition events (accept rate = Done ÷ (Done + In Review→Canceled)), and the CLI.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync, chmodSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -491,4 +493,4 @@ try {
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

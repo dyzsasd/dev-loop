@@ -1,6 +1,8 @@
 // One-click Q1 — the two first-class mutators. `team add-provider` (E16-validated write + opencode.json
 // sync + the secret-set pointer) and `dev-loop secret set|list|unset` (stdin path; hidden-prompt is the
 // same write path behind a TTY read). Also the upsert/remove line-editors' comment/order preservation.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

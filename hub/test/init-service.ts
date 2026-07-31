@@ -11,6 +11,8 @@
 //   • the `npm run init-service` convenience script resolves to the same standalone entry;
 //   • with a configured repoPath, the bootstrap merges dev-loop-hub into the product .mcp.json (DL-61),
 //     preserving an existing server; dry-run previews the merge and writes nothing.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync, execFileSync, type SpawnSyncReturns } from "node:child_process";
 import { registerDaemonPid } from "./daemon-harness.ts";
 import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";

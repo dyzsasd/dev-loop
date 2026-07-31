@@ -13,6 +13,8 @@
 //
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
 import { isMainEntry } from "./is-entry.ts";
 import { DatabaseSync } from "node:sqlite";
@@ -837,4 +839,4 @@ if (isMainEntry(import.meta.url)) {
       cadenceHours, noProgressWindowHours, fhWindowHours, fhMinFires, fhThreshold,
       projCfg: projCfg as Record<string, unknown> | undefined, notify });
   });
-}
+};

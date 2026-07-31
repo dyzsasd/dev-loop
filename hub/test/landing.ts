@@ -1,5 +1,7 @@
 // landing.ts — regression test for the forge landing reader (LOOP-40, design landing-observability §6-ChildA).
 // Uses injected exec stubs so no real gh/network calls are made. Tests every degradation path from §4.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { realpathSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

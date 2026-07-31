@@ -4,6 +4,8 @@
 // fragment for each AC. A verify-fail Cancel is precisely an In Review → Canceled transition (the §3 verify-fail
 // close+follow-up always leaves that edge); an ordinary Cancel (Todo/Backlog → Canceled) must NOT count toward
 // the denominator. Deterministic: events are placed at controlled created_at relative to a fixed nowMs anchor.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { openDb } from "../src/db.ts";
 import { activityPage } from "../src/daemonviews.ts";
 import { rmSync } from "node:fs";

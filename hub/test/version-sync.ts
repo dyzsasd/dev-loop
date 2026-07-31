@@ -3,6 +3,8 @@
 // .claude-plugin/marketplace.json — MUST carry the SAME version; otherwise `/plugin update` serves a
 // stale cached SKILL set against a bumped plugin (the marketplace-cache bug class). `dev-loop
 // release-version <v>` stamps all three; this is the guard that they never silently drift again.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

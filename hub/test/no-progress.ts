@@ -8,6 +8,8 @@
 // channel.ts import. Deterministic: synthetic events are placed at controlled created_at relative to a real
 // `now` anchor (hours apart, so the ms skew between the injected nowMs and logEvent's real-now marker is
 // irrelevant); the de-dup tests insert a raw `no_progress.notified` marker to fully control episode timing.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { openDb } from "../src/db.ts";
 import { noProgressNotifyTick, startNoProgressNotifier } from "../src/daemon.ts";
 import { execFileSync } from "node:child_process";

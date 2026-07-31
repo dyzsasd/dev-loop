@@ -1,6 +1,8 @@
 // DL-1 — the read-only localhost daemon over the hub SoR. Seeds a project with tickets + a published
 // roadmap through the REAL MCP write path (distinct actors), then starts the daemon in-process against
 // the same WAL db and asserts every read endpoint, the 404s, the read-only 405, and the 127.0.0.1 bind.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync, mkdirSync, writeFileSync } from "node:fs";

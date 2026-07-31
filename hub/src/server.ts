@@ -2,6 +2,8 @@
 // dev-loop hub — stdio MCP server. The loop's system of record for ONE project.
 // Identity rides DEVLOOP_ACTOR (launcher-set per pane); project rides DEVLOOP_PROJECT; db DEVLOOP_HUB_DB.
 // Tools mirror the Linear MCP op-shapes 1:1 so the agent SKILLs port unchanged (conventions §18).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDb, actorExists, listActorHandles } from "./db.ts";

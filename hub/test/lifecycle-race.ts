@@ -12,6 +12,8 @@
 // DL-46 TOCTOU the rename-aside break re-admitted). Deterministic-pass post-fix.
 //
 // Runs against an ISOLATED temp DB + DEVLOOP_RUN_DIR (never the operator's ~/.dev-loop). cwd = hub/ (npm).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync } from "node:child_process";
 import { registerDaemonPid, launchDaemonCli } from "./daemon-harness.ts";
 import { rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";

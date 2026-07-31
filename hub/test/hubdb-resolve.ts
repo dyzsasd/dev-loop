@@ -2,6 +2,8 @@
 // explicit DEVLOOP_HUB_DB > discovered workspace .dev-loop/hub.db > machine-global default.
 // `dev-loop op`/`tickets` used to jump straight to the global default and `seed` to ./hub.db in cwd —
 // reading or CREATING a different board than the workspace the operator was standing in.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";

@@ -1,6 +1,8 @@
 // team-repair.ts — regression test for the terminal-state worktree reaper (LOOP-37).
 // Fixture: two worktrees (Canceled + In Progress) under two different roots; reaper removes exactly
 // the first. Must fail against origin/main prior to this fix (pre-LOOP-37 code has no reaper).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -243,4 +245,4 @@ try {
 } finally {
   delete process.env.DEVLOOP_WORKSPACE;
   try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

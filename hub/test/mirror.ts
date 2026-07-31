@@ -9,6 +9,8 @@
 //      D5: the doc projection (published strategy/roadmap/decisions + latest design; notes never), the
 //      [hub:doc:<slug>] marker + pinned banner, published-only re-mirroring, and mirror.pollComments
 //      (comment → needs-pm intake with provenance, body-edit divergence flag, acted-ledger dedup, DRYRUN).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync } from "node:fs";

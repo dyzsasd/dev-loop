@@ -2,6 +2,8 @@
 // hub attributes writes to is exactly what the launcher set in DEVLOOP_ACTOR. `identity-check`
 // reflects the process env (the launcher-side check); the fail-closed gate refuses an unknown actor
 // (the same G1 guard the server enforces at startup) so a mis-wired launcher can't write unattributably.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";

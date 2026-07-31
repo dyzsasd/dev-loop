@@ -15,6 +15,8 @@
 // The whole body runs under try/catch/finally so EVERY spawned MCP subprocess + the in-process daemon/db are
 // torn down even on a mid-suite failure — a leaked `node src/shim.ts` child would otherwise wedge the suites
 // that run right after this one (daemon.ts / lifecycle.ts).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync, mkdirSync, writeFileSync } from "node:fs";

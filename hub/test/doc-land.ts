@@ -2,6 +2,8 @@
 // origin/<defaultBranch> ff-only, refuse on non-doc paths, rebase when diverged, and
 // downgrade push-guard reference findings (Canceled/Duplicate refs in prose) to WARN
 // while hard-stopping on actual non-doc content. Bare-origin + clone harness (§15).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

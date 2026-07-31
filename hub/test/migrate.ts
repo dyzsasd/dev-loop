@@ -5,6 +5,8 @@
 // project, tickets across legacy states, and comment children — then runs the REAL openDb()/migrate() path
 // and asserts: v1 set, lossless rows, FK children intact, 'Human-Blocked' now insertable, a bogus state
 // still rejected, and an idempotent re-open. No network, no shared state — a temp DB under /tmp (cf. blocked.ts).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { DatabaseSync } from "node:sqlite";
 import { rmSync } from "node:fs";
 import { openDb } from "../src/db.ts";
