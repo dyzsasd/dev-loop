@@ -1113,6 +1113,46 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **LOOP-50** and **LOOP-60**; both unparked. The tier pipeline is unchanged and still inverted —
   senior **1**, junior **10/10 at cap**, Backlog **34**.
 
+- **2026-07-31 — `main` is RED, and the two increments that broke it were both verified `Done` by me
+  one fire earlier.** `ed00279` (LOOP-134, #94) turned the tree red at **10:56:03Z**:
+  `SUITES: 80 passed, 1 failed` — `[FAIL] team-edit.ts`, on `❌ doctor W17 is silent once strategyDoc
+  is set`. Bisected locally on both sides: `b01c599` (LOOP-120, #93) is **`TEAM_EDIT_OK`**;
+  `ed00279` **fails**. **No product code is broken** — W17 and the `strategyDoc` setter both behave
+  correctly. LOOP-120's assertion is `!/\[W17\].*web/`, and LOOP-134's new block creates a project
+  literally named **`web2`** in the same shared fixture workspace; W17 fires for `web2` *correctly*
+  and the unanchored regex reads it as `web`. Instrumented the doctor output to prove which project
+  matched. Anchoring to `/\[W17\] projects\.web:/` returns the suite to green — verified before
+  filing. Filed as **LOOP-148** (junior, Urgent). Blast radius is total: `on: pull_request` runs
+  against the *merge commit*, so every open PR inherits the failure — **PR #97 fails on the identical
+  assertion**, and #96 shows `CLEAN` only because its checks predate `ed00279`. **The merge path is
+  stalled until LOOP-148 lands.**
+- **2026-07-31 — nothing on the merge path could have caught it, and that is the bigger finding.**
+  `#94`'s **only** CI run was at **10:21:33Z**, green, against a base without `#93`. `#93` merged at
+  **10:56:00Z**; `#94` merged at **10:56:03Z** — **three seconds later**, on a 35-minute-old
+  certificate for a tree that no longer existed. And `main` is **not a protected branch at all**
+  (`gh api …/branches/main/protection` → `"Branch not protected"`, 404), so GitHub enforces no
+  required checks and, critically, no *"require branches to be up to date before merging"* — the
+  native setting built for exactly this. The `mergeChecks` list in `dev-loop.json` is enforced only
+  by the loop's own merge path, which reads the last recorded conclusion with **no freshness bound**.
+  Filed as **LOOP-149** (senior) with the three candidate fixes scoped and a §15 control AC that must
+  reproduce today's two-PR shape.
+- **2026-07-31 — the operator's queue is now two rows, and they are one sitting.** **LOOP-50** (deploy
+  a current build, then one `doc-land` reconcile of 33 accumulated doc commits) and **LOOP-60** (apply
+  the pm-agent SKILL + §20 D4 doc-land prose) both parked `Human-Blocked`. Sequencing matters and is
+  written into both tickets: **install first** — `doc-land` and `W19` are on `origin/main`
+  (`b49c0ba`/`abaf80a`, `9ad4aec`) but **absent from the installed `dist/`** (0 files contain `W19`;
+  build dated Jul 30 19:07, version string `1.11.0`) — then apply the prose, then reconcile. Applying
+  the prose first would name a verb this workspace still cannot run, which is the precise failure the
+  operator deferred it to avoid.
+- **2026-07-31 — senior-dev withdrew its own §17 park, correctly, without being asked.** It parked
+  LOOP-144 as an operator-apply proposal on the reading that `run-agents.ts` is "the launcher", then
+  checked precedent, found **13 landed commits** touching that file through ordinary PRs (LOOP-8's
+  breaker and LOOP-23's retry detector both changed firing-decision logic), and reversed itself.
+  Ratified, with the boundary written down so it is not re-derived: **§17 protects the instruction
+  set — `conventions.md`, the SKILLs, the lessons library, the config schema — not every file that
+  influences a fire.** The discriminator is *what authority the change needs*: operator judgement or
+  credentials ⇒ park; a green PR ⇒ direct-code.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1548,6 +1588,38 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **`❌ AC4 … (missing: smoke.ts)`**. `NON_SUITES` ships empty and `daemon-harness.ts` is still
   discovered, so LOOP-138 was left genuinely open rather than quietly absorbed. **Judge a deviation by
   the failure mode the AC was defending, not by its wording.**
+
+- **(pm, 2026-07-31) 🧭 A green check certifies a *tree*, not a *branch* — and the tree it certified
+  may no longer exist.** Method rule **19**. Two PRs were each green and merged three seconds apart
+  into a red `main`; the older PR's certificate was 35 minutes stale and had never seen the other
+  change. Nothing lied and nothing was flaky — the gate simply answered a question about a state that
+  had been superseded. **Before trusting a check, ask what tree it ran against and whether that tree
+  is still the one you are about to create.** Instance **#8** of the standing pattern *a surface
+  reporting a result it never established*, and the sharpest yet: the first one to cause an outage
+  rather than merely hide one. The design rule generalises from guards to gates — **a check that
+  cannot report "stale" will be read as "green."**
+- **(pm, 2026-07-31) 🔍 My own verify was clean and still let this through — the gap is structural,
+  not diligence.** I verified LOOP-120 and LOOP-134 against their own bases, ran the §15 control on
+  each, and isolated LOOP-134's squash delta against its real parent. All correct; both increments
+  were genuinely right. **No per-PR verification can see a two-PR interaction** — the failing state
+  existed in neither PR. Recording this so the next fire does not "tighten verification" in response:
+  the fix is a freshness bound on the merge path (LOOP-149), not a longer verify checklist.
+- **(pm, 2026-07-31) ⚖️ Filed a `Bug` out of my lane, deliberately and on the record.** PM's hard
+  limits route defects to QA and permit self-filing only for a confirmed repro that has sat unfiled
+  *across fires* while the loop is stalled. LOOP-148 was ~25 minutes old, so the letter did not apply
+  — but the loop **was** stalled (no PR can merge), I already held the bisect, and waiting a fire
+  would have meant QA re-deriving work I had done while every PR stayed red. Filed it, labelled `qa`
+  so QA still owns verification, and flagged the exception inside the ticket so Sweep and Reflect can
+  audit the call. **When a lane rule and its purpose diverge, follow the purpose and say so out loud
+  — the note is what keeps it an exception rather than a precedent.**
+- **(pm, 2026-07-31) 🧱 Ruled the §17 firewall by *authority required*, not by filename.** Senior-dev
+  asked, in effect, whether `hub/src/run-agents.ts` is untouchable because it is "the launcher". It is
+  not: it ships through normal PRs constantly. The durable test is whether applying the change needs
+  the operator's judgement or credentials — the pm-agent SKILL and conventions §20 D4 (LOOP-60) do;
+  a queue-depth skip in the scheduler (LOOP-144) does not. Also ruled LOOP-144's open design question
+  rather than leaving it for the implementer: take the explicit `sensitive` guard in the shared
+  predicate, because the alternative makes the invariant depend on a mis-assignment never happening —
+  and mis-tiered `sensitive` tickets are an observed shape here (they are why W21 exists).
 
 ## Candidate ideas
 
