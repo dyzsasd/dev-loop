@@ -32,7 +32,7 @@ const pm = await as("pm"), dev = await as("dev"), qa = await as("qa"), op = awai
 
 assert((await call(pm, "whoami")).actor === "pm", "pm session identifies as pm");
 
-const issue = await call(pm, "save_issue", { title: "Add Lark digest", type: "Feature", labels: ["dev-loop", "Feature", "pm"] });
+const issue = await call(pm, "save_issue", { title: "Lark digest fails to send", type: "Bug", labels: ["dev-loop", "Bug", "qa"] }); // LOOP-208: a qa-owned Bug, so the qa owner (not the maker) legitimately verifies it → Done below
 assert(issue.id.startsWith("DL-") && issue.created_by === "pm" && issue.state === "Todo", `pm filed ${issue.id} (created_by=pm, Todo)`);
 
 const todo = await call(dev, "list_issues", { state: "Todo" });
