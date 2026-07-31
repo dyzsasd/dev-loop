@@ -733,6 +733,40 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `⚠ possible-orphan` (`views/activity.ts:261`); the CLI gate the operator actually reads returns
   `DOCTOR_OK`. Filed **LOOP-102** (p2, junior). Two candidate findings were **not** filed — both
   turned out to re-derive rulings already in this log (see the Decisions entry below).
+- **🔥 The loop shipped a destructive verb under a non-destructive name, and four callers still hold
+  the old contract (2026-07-31).** `origin/main` advanced `a273f6a` → **`49644f8`** (LOOP-37, PR #58).
+  **Verified `Done`** against the merged tree: `dev-loop worktree path` returns the canonical
+  `wsWorktree()` path, and `worktree reap --dry-run` correctly selected **7** stale worktrees across
+  **four distinct roots** (`.dev-loop/wt/`, `<ws>/worktrees/`, `/private/tmp/dev-loop-*`,
+  `/private/tmp/worktree-*`) while keeping every open ticket, the non-standard branch name, and three
+  detached-HEAD trees. The reaper is right. What no AC covered is what it inherited: the same commit
+  turned **`dev-loop team repair`** from `git worktree repair` + `prune` — which deletes nothing — into
+  a pass that runs `git worktree remove --force` and `git branch -D`. **`bundle.ts:380` calls it with
+  no `--dry-run`, unattended, on the headless `dev-loop up --bundle` path, and *ahead of* the `doctor`
+  fail-fast gate** (`:377-382`); `config-schema.md:19` prescribes it as the machine-migration recipe;
+  `conventions.md:2370`/`:2403` and `skills/sync-repo/SKILL.md:52` all still describe a path/index
+  fixup — the last of those being an instruction an **agent** executes. And `Canceled` force-deletes a
+  branch regardless of upstream or merge state, while §3 makes `Canceled` the **verify-fail** state, so
+  the targets are exactly the increments a follow-up ticket wants. Filed **LOOP-106** (p2, senior,
+  `sensitive`), promoted the same fire — the first unblocked senior-tier work the lens has produced in
+  eleven fires, routed there by §21b's explicit *"data migration/**deletion**"* signal, not by senior's
+  idle slots.
+- **✅ The quality ratchet earned its keep, and named the next chokepoint.** LOOP-56 reached `In Review`
+  with both required checks concluding **FAILURE**: `quality: CRAP threshold exceeded — max 90.4 > 90`,
+  the offender being **`doctorWorkspace` (`doctor.ts:185`, CC 64, cov 81.4%)** — the very function its
+  W19 block extends. Self-inflicted, over by **0.4**, and structural: that one function already carries
+  **ten** W-code blocks (W05/W06/W09–W16), and **LOOP-46 (W18), LOOP-74 (W20), LOOP-81 (W21)** are all
+  in `Todo` waiting to add an eleventh. Closing the gap with coverage leaves CC at 64 and hands the
+  same wall to the next ticket, so the fix was directed at **extraction**. Deliberately **not**
+  verify-failed (see Decisions).
+- **⛔ The 68-link test chain stopped a landing, not just a measurement.** LOOP-40's PR #59 is
+  `CONFLICTING` against `49644f8` for exactly one reason: LOOP-37 and LOOP-40 both edit the single
+  ~4.5 KB `"test"` line in `hub/package.json` — one inserting `team-repair.ts` mid-chain, one appending
+  `landing.ts`. Semantically disjoint, textually unmergeable; `git merge-tree` reports that one file
+  and nothing else. Its code verified clean (25/25 assertions, typecheck green, spec triage clean), so
+  this is a pure landing tax. **LOOP-86**'s filed cost was silent partial runs; its second cost is that
+  the chain **serializes every concurrent increment that adds a suite** — with two dev tiers running,
+  the common case. Recorded there as a binding shape on the fix, not refiled.
 
 ## Personas
 
@@ -1779,6 +1813,45 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   keywords. The board is where work lives; this log is where rulings live, and a ruling re-derived
   is worse than one not made — it competes with itself.** Both comments were superseded in place
   rather than left to contradict the record.
+- **(pm, 2026-07-31) 📝 Three rulings from the LOOP-78 design gate, one of which corrected the design
+  against conventions.** Gate **PASSED**; children LOOP-104/105 promoted, parent `Done`. R1–R3 verified
+  seam-by-seam in code at `origin/main` (`metrics.ts:110-121` incl. the `/^Blocked-by:\s*(\S+)/gm`
+  regex at `:114`, `cli-agentops.ts:313`, `agentops.ts:206,218`), and `Unblocked-by:` confirmed to have
+  **no code reader or writer anywhere** — 19 such lines exist in the comment corpus and the shipped
+  parser reads none. **The correction: the design's R4 recorded *"unpark-eligible iff the live blocker
+  set is empty OR every live blocker is terminal"*, which contradicts §9c:844-847 — "A ticket with ZERO
+  blocker edges is NEVER an unpark candidate".** The shipped code already sides with §9c
+  (`metrics.ts:115` early-returns on empty → parked); R4 was the lone dissenting artefact, and
+  **LOOP-101** is the live instance — `blocked` with zero edges by design, its prerequisite being a
+  person. Left uncorrected, the deferred auto-unpark mover would have inherited the rule and released
+  it. Bound on the child, with the follow-up instructed to take the rule from §9c and amend the doc.
+  **The method that produced it:** running both parsers over all 330 comments before ruling. That also
+  showed the R2 relaxations (leading whitespace, case) add **zero** edges on the live corpus, and that
+  the refactor moves **no number** (`blockedNow=1 / sequencedNow=13` under both) while the underlying
+  sets shrink materially (LOOP-4 8→2, LOOP-50 5→2) — recorded as an explicit expectation so nobody
+  demands a delta that shouldn't exist, the LOOP-30 precedent applied a second time. Two further gaps
+  became binding ACs rather than a gate failure (proportionality): the **partial-retirement** case the
+  parent's own AC1 names but neither child tested, and the unstated behaviour of an **indented/fenced**
+  marker — the corpus holds **63 prose near-misses against 58 real markers**, so the anchoring rule R2
+  relaxes is the one doing the most work.
+- **(pm, 2026-07-31) ⚖️ RULING: a concluded-red required check on an unmerged PR is a send-back, not a
+  §3 verify-fail — when the defect is fixable on the same branch.** LOOP-56's checks failed on a CRAP
+  ratchet breach of **0.4**; the PR is `MERGEABLE`, the ACs appear implemented, and the branch is
+  correct. §3's close-and-follow-up exists for an increment that is **wrong**; applying it here would
+  discard a good branch and buy a re-implementation. So: held `In Review`, diagnosed precisely, ACs
+  explicitly **not** accepted, and the fix directed at lowering `doctorWorkspace`'s complexity rather
+  than merely raising its coverage — because three queued W-code tickets sit behind that same function.
+  **The boundary this sets:** verify-fail is for wrongness; a red gate on unlanded work is unfinished
+  ship-work owned by the implementer. Both increments handed off this fire moved to `In Review` with
+  checks unresolved and both had a landing blocker — that is now the normal case, and it is exactly
+  **LOOP-89**'s ground, so it was recorded there rather than refiled.
+- **(pm, 2026-07-31) 📝 Tier routing held against a standing temptation.** junior has been over its
+  depth cap for **eleven consecutive fires** (13/10 at close) while senior idles (2/10). LOOP-106 went
+  to **senior** because §21b's `sensitive` bullet names *"data migration/**deletion**"* and the ticket
+  is entirely about unattended irreversible deletion — the explicit signal, which happens to coincide
+  with the idle capacity. The coincidence is worth naming precisely so it is not mistaken for a
+  precedent: **re-tiering to balance load remains the inference §21b forbids**, and the imbalance is
+  still what the rules produce, not drift. Only the operator can change that.
 
 ## Candidate ideas
 
