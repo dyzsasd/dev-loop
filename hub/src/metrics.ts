@@ -33,13 +33,36 @@ export interface UsageAdapter {
   // killed fire still shows something, never zero output.
   resultText?(stdout: string): string | null;
 }
-export interface FireRow { ts: string; agent: string; project: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; errorClass?: string; bootBytes?: number; fireId?: string; usage?: FireUsage }
+export interface FireRow { ts: string; agent: string; project: string; codingAgent?: string; provider?: string; model?: string; effort?: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; errorClass?: string; bootBytes?: number; fireId?: string; usage?: FireUsage }
 export interface FireMetrics {
   windowMs: number; fires: number; failures: number; timeouts: number; suspectErrors: number;
   byErrorClass: Record<string, number>;            // P0-1b taxonomy (spend-limit/rate-limit/auth/network/timeout/…); infra failures split from task failures
   successRate: number | null;                      // (fires - failures - suspect) / fires; null when no fires
   byAgent: Record<string, { fires: number; failures: number; medianMs: number | null }>;
   byProject: Record<string, { fires: number; failures: number }>;
+  meteredFires: number;                            // fires carrying usage (coverage numerator)
+  costMeteredFires: number;                        // fires whose usage.costUsd !== null
+  costUsd: number | null;                          // summed costUsd; null when costMeteredFires===0
+}
+
+// ─── usage aggregation (LOOP-125) ─────────────────────────────────────────────
+export type UsageDimension = "agent" | "project" | "provider" | "model";
+export interface UsageCell {
+  fires: number;
+  metered: number;                // fires carrying usage (coverage numerator for this cell)
+  inputTokens: number | null;     // summed over metered; null when metered===0 or all rows omitted the field
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  costUsd: number | null;         // summed over rows whose usage.costUsd!=null; null when costMetered===0
+  costMetered: number;            // rows contributing a costUsd (money coverage)
+}
+export interface UsageReport {
+  windowMs: number;
+  totalFires: number;             // all fires in window (metered or not)
+  meteredFires: number;           // fires carrying usage (the coverage numerator "N of M")
+  overall: UsageCell;
+  byDimension?: Record<string, UsageCell>;  // present when a groupBy dimension is requested
 }
 
 export function readFireRows(ledgerPath: string): FireRow[] {
@@ -80,9 +103,16 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
   for (const [agent, a] of Object.entries(byAgent)) {
     a.medianMs = median(rows.filter((r) => r.agent === agent && typeof r.durationMs === "number").map((r) => r.durationMs as number));
   }
+  let meteredFires = 0, costMeteredFires = 0, costUsdAcc = 0, hasCost = false;
+  for (const r of rows) {
+    if (r.usage) {
+      meteredFires++;
+      if (r.usage.costUsd !== null) { costMeteredFires++; costUsdAcc += r.usage.costUsd; hasCost = true; }
+    }
+  }
   const fires = rows.length;
   const successRate = fires ? (fires - failures - suspect) / fires : null;
-  return { windowMs, fires, failures, timeouts, suspectErrors: suspect, byErrorClass, successRate, byAgent, byProject };
+  return { windowMs, fires, failures, timeouts, suspectErrors: suspect, byErrorClass, successRate, byAgent, byProject, meteredFires, costMeteredFires, costUsd: hasCost ? costUsdAcc : null };
 }
 
 // Rotation: keep the last `keepMs` of rows (default 90d). Called at scheduler start — unbounded
@@ -96,6 +126,85 @@ export function pruneFireLedger(ledgerPath: string, keepMs = 90 * 86_400_000, no
     writeFileSync(tmp, keep.map((r) => JSON.stringify(r)).join("\n") + (keep.length ? "\n" : ""));
     renameSync(tmp, ledgerPath);
   } catch { /* rotation is best-effort; never blocks the scheduler */ }
+}
+
+// usageReport — pure, deterministic aggregation over a FireRow slice. All three read surfaces
+// (CLI, web /usage, digest) call this ONE function so numbers are never computed twice.
+// Honest-null rules: a summed metric is null, NEVER 0, when metered===0 (no measurement at all).
+// bootBytes is never read into any usage/cost field — this function never touches it.
+const sumNull = (a: number | null, b: number | null): number | null =>
+  a === null && b === null ? null : (a ?? 0) + (b ?? 0);
+
+function emptyCell(): UsageCell {
+  return { fires: 0, metered: 0, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null, costMetered: 0 };
+}
+
+function addToCell(cell: UsageCell, r: FireRow): void {
+  cell.fires++;
+  if (!r.usage) return;                                              // no measurement → only fires counter touched
+  cell.metered++;
+  cell.inputTokens = sumNull(cell.inputTokens, r.usage.inputTokens);
+  cell.outputTokens = sumNull(cell.outputTokens, r.usage.outputTokens);
+  cell.cacheReadTokens = sumNull(cell.cacheReadTokens, r.usage.cacheReadTokens);
+  cell.cacheWriteTokens = sumNull(cell.cacheWriteTokens, r.usage.cacheWriteTokens);
+  if (r.usage.costUsd !== null) { cell.costUsd = (cell.costUsd ?? 0) + r.usage.costUsd; cell.costMetered++; }
+}
+
+export function usageReport(rows: FireRow[], windowMs: number, opts: { groupBy?: UsageDimension; nowMs?: number } = {}): UsageReport {
+  const cutoff = (opts.nowMs ?? Date.now()) - windowMs;
+  const inWindow = rows.filter((r) => Date.parse(r.ts) >= cutoff);
+  const overall = emptyCell();
+  const dimMap: Record<string, UsageCell> | undefined = opts.groupBy ? {} : undefined;
+  for (const r of inWindow) {
+    addToCell(overall, r);
+    if (dimMap !== undefined && opts.groupBy) {
+      const key = (r[opts.groupBy] ?? "(unknown)") as string;
+      const cell = (dimMap[key] ??= emptyCell());
+      addToCell(cell, r);
+    }
+  }
+  return {
+    windowMs,
+    totalFires: overall.fires,
+    meteredFires: overall.metered,
+    overall,
+    ...(dimMap !== undefined ? { byDimension: dimMap } : {}),
+  };
+}
+
+// fireRowsFromEvents — reconstruct FireRow[] from the project's fire.completed hub events.
+// Used by Child B (the web /usage page) which reads the query_only db, not fires.jsonl.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function fireRowsFromEvents(db: any, projectId: string, sinceIso: string): FireRow[] {
+  const projectRow = db.prepare("SELECT key FROM projects WHERE id=?").get(projectId) as { key: string } | undefined;
+  const projectKey = projectRow?.key ?? "";
+  const events = db.prepare(
+    "SELECT actor, created_at, data FROM events WHERE project_id=? AND kind='fire.completed' AND created_at>=? ORDER BY created_at",
+  ).all(projectId, sinceIso) as { actor: string; created_at: string; data: string }[];
+  const out: FireRow[] = [];
+  for (const e of events) {
+    try {
+      const d = JSON.parse(e.data) as Partial<FireRow>;
+      out.push({
+        ts: e.created_at,
+        agent: e.actor,
+        project: projectKey,
+        ...(d.codingAgent !== undefined ? { codingAgent: d.codingAgent } : {}),
+        ...(d.provider !== undefined ? { provider: d.provider } : {}),
+        ...(d.model !== undefined ? { model: d.model } : {}),
+        ...(d.effort !== undefined ? { effort: d.effort } : {}),
+        ...(d.durationMs !== undefined ? { durationMs: d.durationMs } : {}),
+        ...(d.exitCode !== undefined ? { exitCode: d.exitCode } : {}),
+        ...(d.timedOut !== undefined ? { timedOut: d.timedOut } : {}),
+        ...(d.suspectError ? { suspectError: true } : {}),
+        ...(d.errorClass !== undefined ? { errorClass: d.errorClass } : {}),
+        ...(d.bootBytes !== undefined ? { bootBytes: d.bootBytes } : {}),
+        ...(d.fireId !== undefined ? { fireId: d.fireId } : {}),
+        ...(d.usage !== undefined ? { usage: d.usage } : {}),
+      });
+    } catch { /* skip malformed event data */ }
+  }
+  return out;
 }
 
 // ─── board KPIs (service backend — from `issue.transition` events) ───────────
@@ -287,15 +396,98 @@ export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<t
   } else console.log(String(out.boardNote));
 }
 
+// ─── usage / cost / flow renderers (LOOP-125) — new flags; renderHuman left untouched ─────────────
+const dash = (x: number | null) => x === null ? "—" : String(x);
+const usd = (x: number | null) => x === null ? "unavailable" : `$${x.toFixed(4)}`;
+
+function renderCell(label: string, cell: UsageCell, indent = ""): void {
+  if (cell.metered === 0) {
+    console.log(`${indent}${label}: no metered fires (${cell.fires} total)`);
+    return;
+  }
+  const cov = `${cell.metered} of ${cell.fires} metered`;
+  console.log(`${indent}${label}: in=${dash(cell.inputTokens)} out=${dash(cell.outputTokens)} cacheR=${dash(cell.cacheReadTokens)} cacheW=${dash(cell.cacheWriteTokens)}  [${cov}]`);
+}
+
+function renderCostCell(label: string, cell: UsageCell, indent = ""): void {
+  if (cell.costMetered === 0) {
+    console.log(`${indent}${label}: cost: unavailable — 0 of ${cell.fires} fires reported cost`);
+    return;
+  }
+  console.log(`${indent}${label}: ${usd(cell.costUsd)}  [${cell.costMetered} of ${cell.fires} priced]`);
+}
+
+export function renderUsage(report: UsageReport, byDim?: UsageDimension): void {
+  const days = report.windowMs / 86_400_000;
+  console.log(`usage — last ${days}d  (${report.meteredFires} of ${report.totalFires} fires metered)`);
+  renderCell("overall", report.overall);
+  if (report.byDimension) {
+    const dim = byDim ?? "agent";
+    for (const [k, cell] of Object.entries(report.byDimension))
+      renderCell(`  ${dim}:${k}`, cell, "");
+  }
+}
+
+export function renderCost(report: UsageReport, byDim?: UsageDimension): void {
+  const days = report.windowMs / 86_400_000;
+  console.log(`cost — last ${days}d  (${report.meteredFires} of ${report.totalFires} fires metered)`);
+  renderCostCell("overall", report.overall);
+  if (report.byDimension) {
+    const dim = byDim ?? "agent";
+    for (const [k, cell] of Object.entries(report.byDimension))
+      renderCostCell(`  ${dim}:${k}`, cell, "");
+  }
+}
+
+export function renderFlow(report: UsageReport, throughput: number | null, boardNote: string | null): void {
+  const days = report.windowMs / 86_400_000;
+  const cell = report.overall;
+  const cpa = cell.costUsd !== null && throughput !== null && throughput > 0
+    ? usd(cell.costUsd / throughput) + "/accepted-change"
+    : "unavailable";
+  const perFire = cell.costUsd !== null && cell.fires > 0
+    ? usd(cell.costUsd / cell.fires) + "/fire"
+    : "unavailable";
+  console.log(`flow — last ${days}d`);
+  console.log(`cost: ${usd(cell.costUsd)}  (${cell.costMetered} of ${cell.fires} fires priced)`);
+  console.log(`cost-per-accepted-change: ${cpa}`);
+  console.log(`cost-per-fire: ${perFire}`);
+  if (throughput !== null) console.log(`board throughput: ${throughput} →Done in window`);
+  else console.log(boardNote ?? "board throughput: unavailable");
+}
+
 export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
   let windowMs = 7 * 86_400_000;
   let asJson = false;
   let context = false;
+  let showUsage = false, showCost = false, showFlow = false;
+  let byDim: UsageDimension | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--window") windowMs = parseWindow(argv[++i] ?? "7d");
     else if (argv[i] === "--json") asJson = true;
     else if (argv[i] === "--context") context = true;
-    else if (argv[i] === "--help" || argv[i] === "-h") { console.log("usage: dev-loop metrics [--window 7d|24h|30d] [--json] [--context]  — team KPIs from fires.jsonl (+ hub board on service); --context = the per-agent per-fire context bill (plugin-static, needs no workspace)"); return 0; }
+    else if (argv[i] === "--usage") showUsage = true;
+    else if (argv[i] === "--cost") showCost = true;
+    else if (argv[i] === "--flow") showFlow = true;
+    else if (argv[i] === "--by") {
+      const dim = argv[++i] as UsageDimension;
+      if (!["agent", "project", "provider", "model"].includes(dim)) {
+        console.error(`metrics: invalid --by '${dim}' (use agent|project|provider|model)`);
+        return 2;
+      }
+      byDim = dim;
+    }
+    else if (argv[i] === "--help" || argv[i] === "-h") {
+      console.log("usage: dev-loop metrics [--window 7d|24h|30d] [--json] [--context]\n" +
+        "                        [--usage] [--cost] [--flow] [--by agent|project|provider|model]\n" +
+        "  default: team KPIs from fires.jsonl (+ hub board on service)\n" +
+        "  --usage: token flow per group (metered N-of-M; null=unmeasured, never 0)\n" +
+        "  --cost:  money (provider-reported costUsd only; 'unavailable' when none priced — never $0.00)\n" +
+        "  --flow:  spend→outcome view: cost-per-accepted-change = costUsd÷throughput (service-only)\n" +
+        "  --by:    grouping dimension for --usage/--cost (default: agent)\n" +
+        "  --context: per-agent context bill (plugin-static, needs no workspace)");
+      return 0;
+    }
   }
   // --context: the per-agent context bill (task #8 — SKILL prose + cheat sheet + the conventions
   // §-spans its Sections line cites + lessons caps). It lives under `metrics`, not `doctor`: the
@@ -308,6 +500,55 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     return printContextBill(asJson);
   }
   const ws: Workspace = resolveWorkspace();
+
+  // ── usage/cost/flow path (LOOP-125) ──────────────────────────────────────────
+  if (showUsage || showCost || showFlow) {
+    const rows = readFireRows(wsFireLedger(ws));
+    const groupBy = byDim ?? "agent";
+    const report = usageReport(rows, windowMs, { groupBy, nowMs: Date.now() });
+    let throughput: number | null = null;
+    let flowBoardNote: string | null = null;
+    if (showFlow) {
+      if (ws.file.team.backend === "service" && existsSync(wsHubDb(ws))) {
+        const { openDb } = await import("./db.ts");
+        const { findProject } = await import("./seed.ts");
+        const db = openDb(wsHubDb(ws));
+        try {
+          let tp = 0;
+          for (const key of deliveryProjects(ws)) {
+            const pid = findProject(db, key);
+            if (pid) tp += boardMetrics(db, pid, windowMs).throughput;
+          }
+          throughput = tp;
+        } finally { db.close(); }
+      } else {
+        flowBoardNote = "linear backend: board throughput computed by digest agent via MCP queries";
+      }
+    }
+    if (asJson) {
+      const out: Record<string, unknown> = { windowDays: windowMs / 86_400_000 };
+      if (showUsage || showCost) out.usage = report;
+      if (showFlow) {
+        const c = report.overall;
+        out.flow = {
+          costUsd: c.costUsd,
+          tokens: { inputTokens: c.inputTokens, outputTokens: c.outputTokens, cacheReadTokens: c.cacheReadTokens, cacheWriteTokens: c.cacheWriteTokens },
+          throughput,
+          costPerAccepted: c.costUsd !== null && throughput !== null && throughput > 0 ? c.costUsd / throughput : null,
+          perFire: c.costUsd !== null && c.fires > 0 ? c.costUsd / c.fires : null,
+          boardNote: flowBoardNote,
+        };
+      }
+      console.log(JSON.stringify(out, null, 2));
+      return 0;
+    }
+    if (showUsage) renderUsage(report, groupBy);
+    if (showCost) renderCost(report, groupBy);
+    if (showFlow) renderFlow(report, throughput, flowBoardNote);
+    return 0;
+  }
+
+  // ── default team-KPI path ─────────────────────────────────────────────────────
   const fires = fireMetrics(wsFireLedger(ws), windowMs);
   const out: Record<string, unknown> = { team: ws.file.team.key, windowDays: windowMs / 86_400_000, fires };
 
