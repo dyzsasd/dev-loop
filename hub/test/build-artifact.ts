@@ -77,7 +77,7 @@ try {
   // default (claude→cli) the scheduler would inject nothing and this smoke would test less.
   writeFileSync(join(tmp, "projects.json"), JSON.stringify({ projects: { demo: { backend: "service", repoPath: tmp, hub: { agentInterface: { claude: "mcp" } } } } }));
   const runner = run(process.execPath, [distCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--root", repoRoot, "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
-  ok(runner.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high -p '?<prompt:\d+ chars>'?/.test(runner.out), "compiled cli.js run → dry-run renders a scheduled claude fire (inline --mcp-config hub)");
+  ok(runner.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --output-format json -p '?<prompt:\d+ chars>'?/.test(runner.out), "compiled cli.js run → dry-run renders a scheduled claude fire (inline --mcp-config hub)");
 
   // ── installed-like layout: a COPY of dist/ OUTSIDE the repo, with NO config/ sibling. The package root
   //    does have node_modules after npm install, so symlink the repo's installed deps while keeping config/
@@ -93,7 +93,7 @@ try {
   const instHook = join(inst, "dist", "hook-session-start.js");
   cpSync(join(hubRoot, "postinstall.cjs"), join(inst, "postinstall.cjs"));
   const instRun = run(process.execPath, [instCli, "run", "--cli", "claude", "--once", "--dry-run", "--agents", "communication", "--data", tmp, "--hub-db", db, "--project", "demo", "--cwd", tmp]);
-  ok(instRun.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high -p '?<prompt:\d+ chars>'?/.test(instRun.out),
+  ok(instRun.code === 0 && /communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --output-format json -p '?<prompt:\d+ chars>'?/.test(instRun.out),
     "installed cli.js run → finds bundled skills + injects the hub without --root");
   // 1.0: the compiled CLI must create a WORKSPACE (init-config was removed with the v1 clean break).
   const wsDir = join(tmp, "ba-ws");

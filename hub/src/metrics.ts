@@ -26,6 +26,12 @@ export interface UsageAdapter {
   extraArgs: string[];
   parse(stdout: string): FireUsage | null;
   isError?(stdout: string): boolean;
+  // Human-readable result text pulled from the structured output, for the operator echo (console + run.log).
+  // Present only on a lane whose raw stdout is a single non-streamed blob (claude --output-format json): its
+  // presence tells runAgent to DEFER the live echo and print this instead of the escaped JSON. Returns null
+  // when the buffer cannot be parsed (truncation/crash), so the caller falls back to the raw buffer — a
+  // killed fire still shows something, never zero output.
+  resultText?(stdout: string): string | null;
 }
 export interface FireRow { ts: string; agent: string; project: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; errorClass?: string; bootBytes?: number; fireId?: string; usage?: FireUsage }
 export interface FireMetrics {

@@ -23,7 +23,7 @@ import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker } from "./breaker.ts";
-import { codexUsageAdapter } from "./fire-usage.ts";
+import { codexUsageAdapter, claudeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
 import type { FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -679,6 +679,7 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
         ...(mcpArg ? ["--mcp-config", mcpArg, "--strict-mcp-config"] : []),
         ...(profile.model ? ["--model", profile.model] : []),
         ...(profile.effort ? ["--effort", profile.effort] : []),
+        ...claudeAdapter.extraArgs, // "--output-format json" — one terminal JSON object for token/cost + result-text capture
         ...opts.extraArgs,
         // boot-prefix fires pipe the (large) prompt via stdin: Linux MAX_ARG_STRLEN caps one
         // execve argument at 128 KiB, and an assembled corpus exceeds it. `claude -p` with no
@@ -778,7 +779,11 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
         model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId,
         ...(extra?.suspectError ? { suspectError: true } : {}),
         ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}),
-        ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}) };
+        ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}),
+        // usage is numeric-only (FireUsage: tokens + cost + source/currency) — §16-safe for disk, and it's the
+        // backend-agnostic soak/cost metric's ONLY source on linear (no fire.completed event there). Mirrors the
+        // logEvent sibling below; the codex wiring stamped the event but missed this row (LOOP-83).
+        ...(extra?.usage ? { usage: extra.usage } : {}) };
       const fileExisted = existsSync(fireLedgerPath);
       appendFileSync(fireLedgerPath, JSON.stringify(row) + "\n");
       hardenLedgerPerms(dir, dirExisted, 0o700, "700");                 // .dev-loop/team/ → owner-only
@@ -1028,7 +1033,12 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   let outBytes = 0;
   let lastOutputAt = Date.now(); // liveness watchdog anchor — any stdout/stderr byte resets it
   let lastNewContentAt = Date.now(); // retry-loop watchdog: last time output introduced a genuinely new line
-  const isStructuredLane = profile.codingAgent === "codex";
+  const usageAdapter = resolveAdapter(profile.codingAgent); // codex JSONL / claude --output-format json / null
+  const isStructuredLane = usageAdapter !== null;
+  // A lane that can extract result text (claude — one terminal JSON blob, NOT a live stream) DEFERS its echo:
+  // buffer silently, then print the parsed text in finalize(). Echoing the raw blob live would bury the
+  // agent's output in escaped JSON and leave a truncated fire unreadable. codex's JSONL streams — echo live.
+  const deferEcho = !!usageAdapter?.resultText;
   const MAX_FULL_STDOUT = 4 * 1024 * 1024; // 4 MiB cap — overflow degrades to usage:null, never OOM
   let fullStdout = "";
   // Bounded, ROLLING window of recently-seen lines (seen-lines.ts). It evicts the oldest line on
@@ -1052,8 +1062,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   };
   child.stdout.on("data", (d) => {
     keepTail(d);
-    process.stdout.write(`[${agent}] ${d}`);
-    if (logOpen) log.write(d);
+    if (!deferEcho) { process.stdout.write(`[${agent}] ${d}`); if (logOpen) log.write(d); } // deferred lanes echo in finalize()
     if (isStructuredLane && fullStdout.length < MAX_FULL_STDOUT) {
       const s = d.toString();
       fullStdout += s.slice(0, MAX_FULL_STDOUT - fullStdout.length);
@@ -1129,6 +1138,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     const finalize = (code: number | null, signal: NodeJS.Signals | null) => {
       if (finalized) return;
       finalized = true;
+      // Operator-visible output on a deferred-echo lane (claude): the raw JSON blob was NOT streamed live, so
+      // emit the agent's result text now — BEFORE the exit marker so it reads as this fire's output, not the
+      // next one's. Parsed text when the buffer is whole; else the raw buffer as a fallback so a truncated/
+      // killed fire still leaves SOMETHING readable in the console + run.log, never nothing. §16: result text
+      // (the agent's own prose) only — the numeric usage rides the ledger row, never this echo.
+      if (deferEcho) {
+        const shown = usageAdapter?.resultText?.(fullStdout) ?? fullStdout;
+        if (shown.trim() !== "") { process.stdout.write(`[${agent}] ${shown}\n`); if (logOpen) log.write(shown + "\n"); }
+      }
       const stalledLabel = stalled ? (retryLoop ? " (retry-loop)" : " (stalled)") : "";
       log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""}${stalledLabel} =====\n`);
       console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}${stalledLabel}`);
@@ -1139,9 +1157,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       // agent's own prose can legitimately end that way. Telemetry only; the exit code stays untouched.
       const lastLine = outTail.trimEnd().split("\n").pop()?.trim() ?? "";
       let suspectError = exitCode === 0 && !timedOut && (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine));
-      // For structured lanes, also check the adapter's isError signal (replaces the tail-regex where available)
+      // Structured lanes ADD the adapter's isError signal ON TOP of the tail-regex — never a replacement.
+      // The text/empty arm above still catches a crash/kill/timeout that leaves an UNPARSEABLE buffer (claude
+      // printing "Execution error" and exiting 0, or emitting nothing at all); the JSON signal additionally
+      // catches an exit-0 fire whose terminal object reports is_error / subtype!=="success". Replacing the
+      // text arm (LOOP-83) let a fake-success on the one lane the loop runs, and a silent fire, record healthy.
       if (!suspectError && isStructuredLane && exitCode === 0 && !timedOut) {
-        try { if (codexUsageAdapter.isError?.(fullStdout)) suspectError = true; } catch { /* isError is best-effort */ }
+        try { if (usageAdapter?.isError?.(fullStdout)) suspectError = true; } catch { /* isError is best-effort */ }
       }
       if (suspectError) {
         const why = outTail.trim() === "" ? `no visible output (${outBytes} bytes)` : `last line: ${JSON.stringify(lastLine.slice(0, 120))}`;
@@ -1149,8 +1171,8 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
       }
       let usage: FireUsage | undefined;
-      if (isStructuredLane) {
-        try { const parsed = codexUsageAdapter.parse(fullStdout); if (parsed) usage = parsed; } catch { /* usage is best-effort */ }
+      if (usageAdapter) {
+        try { const parsed = usageAdapter.parse(fullStdout); if (parsed) usage = parsed; } catch { /* usage is best-effort */ }
       }
       const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop); // P0-1b taxonomy (+ the liveness watchdog's "stalled"/"retry-loop")
       const fireExtras = {
