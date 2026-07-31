@@ -14,7 +14,6 @@ def rules_for(
     data: bytes,
     *,
     source_path: str | None = None,
-    expected_test_paths: frozenset[str] | None = None,
 ) -> set[str]:
     return {
         finding.rule
@@ -22,7 +21,6 @@ def rules_for(
             path,
             data,
             source_path=source_path,
-            expected_test_paths=expected_test_paths,
         )
     }
 
@@ -30,11 +28,11 @@ def rules_for(
 def valid_release_manifest(**overrides: str | None) -> bytes:
     """A hub/package.json body that PASSES the release-manifest audit.
 
-    build/typecheck are pinned, the two npm auto-run lifecycle scripts
-    (postinstall, prepack) are pinned byte-exact, and the test script names one
-    tracked file. Values are hard-coded here rather than imported from the
-    scanner so that a pin drifting away from the real manifest fails a test.
-    Pass ``name=value`` to mutate one script, or ``name=None`` to drop it.
+    build/typecheck/test are pinned, the two npm auto-run lifecycle scripts
+    (postinstall, prepack) are pinned byte-exact. Values are hard-coded here
+    rather than imported from the scanner so that a pin drifting away from the
+    real manifest fails a test. Pass ``name=value`` to mutate one script, or
+    ``name=None`` to drop it.
     """
     scripts: dict[str, str] = {
         "typecheck": "tsc -p tsconfig.check.json",
@@ -45,7 +43,7 @@ def valid_release_manifest(**overrides: str | None) -> bytes:
         ),
         "postinstall": "node postinstall.cjs",
         "prepack": "npm run build",
-        "test": "node test/safe.ts",
+        "test": "node test/run-all.ts",
     }
     for name, value in overrides.items():
         if value is None:
@@ -59,7 +57,6 @@ def release_manifest_rules(**overrides: str | None) -> set[str]:
     return rules_for(
         "hub/package.json",
         valid_release_manifest(**overrides),
-        expected_test_paths=frozenset({"test/safe.ts"}),
     )
 
 
@@ -250,14 +247,13 @@ class SourceIntegrityRegressionTest(unittest.TestCase):
                     "tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/server.js && "
                     "cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./"
                 ),
-                "test": "node test/safe.ts && curl https://example.invalid",
+                "test": "node test/run-all.ts && curl https://example.invalid",
                 "pretest": "node surprise.js",
             }
         }
         rules = rules_for(
             "hub/package.json",
             json.dumps(manifest).encode(),
-            expected_test_paths=frozenset({"test/safe.ts"}),
         )
         self.assertIn("unsafe-package-script", rules)
 
@@ -301,7 +297,6 @@ class SourceIntegrityRegressionTest(unittest.TestCase):
             for finding in scan_bytes(
                 "hub/package.json",
                 valid_release_manifest(build="evil"),
-                expected_test_paths=frozenset({"test/safe.ts"}),
             )
         }
         self.assertIn("'build' is not the audited command", details)
