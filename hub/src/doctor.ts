@@ -310,6 +310,27 @@ export function doctorWorkspace(ws: Workspace): boolean {
     } catch { /* owner-liveness is best-effort — a missing ledger/db never fails doctor */ }
   }
 
+  // W21 — sensitive mis-tier backstop (design sensitive-routing §§3-4): non-terminal tickets whose
+  // labels include `sensitive` AND are routed to the junior-dev tier (assignee or label). Layer-1/2
+  // enforce at write/queue time; this layer surfaces pre-gate or raw-path rows. Service-backend only.
+  if (ws.file.team.backend === "service" && existsSync(wsHubDb(ws))) {
+    try {
+      const { sensitiveMistier } = require_metrics();
+      const db = openHubDbConn(wsHubDb(ws));
+      try {
+        for (const key of deliveryProjects(ws)) {
+          const pid = findHubProject(db, key);
+          if (!pid) continue;
+          const findings = sensitiveMistier(db, pid);
+          if (findings.length) {
+            const ids = findings.map((f: { id: string }) => f.id).join(", ");
+            warn(`[W21] [${key}] ${findings.length} sensitive ticket(s) still assigned to junior-dev tier: ${ids} — re-tier: dev-loop ticket update <id> --assignee senior-dev --labels dev-loop,<other>,senior-dev`);
+          }
+        }
+      } finally { db.close(); }
+    } catch { /* W21 is best-effort — never fails doctor */ }
+  }
+
   // W19 — unpushed strategy/doc commits: local <defaultBranch> is ahead of origin (LOOP-56).
   // A landing:"pr" repo where PM commits docs to local main but never pushes means every dev
   // worktree (which branches off origin) silently misses those docs, and they land as passengers

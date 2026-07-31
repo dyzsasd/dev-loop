@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, sensitiveMistier } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -192,6 +192,37 @@ try {
     `LOOP-30 AC3: In Review with assignee=junior-dev and label=qa is NOT counted toward junior-dev — openTickets stays ${jdCountBeforeT7} (same as before T-7 insert, not +1)`);
   ok(olInReview.some((f) => f.owner === "qa" && f.openTickets >= 1),
     "LOOP-30 AC3: In Review ticket with label=qa IS owned by qa (verifier ownership via label)");
+
+  // ── LOOP-81: sensitiveMistier — backstop surfacing (design sensitive-routing Child C) ──
+  // No senior-dev actor yet → function is a no-op regardless of ticket state.
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-SM1','p','sensitive-junior','d','Feature','Todo','junior-dev',2,?,  '[]','pm',?,?)")
+    .run(JSON.stringify(["dev-loop", "pm", "sensitive", "junior-dev"]), iso(NOW - DAY), iso(NOW - DAY));
+  ok(sensitiveMistier(db, "p").length === 0,
+    "sensitiveMistier: returns [] when no senior-dev actor exists (no-op in single-dev projects)");
+
+  // Insert senior-dev actor → now the mis-tiered ticket is found.
+  db.prepare("INSERT INTO actors(id,handle,kind,display_name,active,created_at) VALUES('a-sd','senior-dev','agent','Senior Dev',1,'t')").run();
+  const smFindings = sensitiveMistier(db, "p");
+  ok(smFindings.some((f) => f.id === "T-SM1" && f.assignee === "junior-dev" && f.labels.includes("sensitive")),
+    "sensitiveMistier: finds non-terminal sensitive+junior-dev ticket when senior-dev exists");
+
+  // A ticket with sensitive label but junior-dev only in assignee (no tier label) is also found.
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-SM2','p','sensitive-assignee-only','d','Feature','In Progress','junior-dev',2,?,  '[]','pm',?,?)")
+    .run(JSON.stringify(["dev-loop", "pm", "sensitive"]), iso(NOW - DAY), iso(NOW - DAY));
+  const smFindings2 = sensitiveMistier(db, "p");
+  ok(smFindings2.some((f) => f.id === "T-SM2"),
+    "sensitiveMistier: finds sensitive+assignee='junior-dev' without the tier label");
+
+  // Terminal tickets (Done, Canceled, Duplicate) must not appear.
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-SM3','p','sensitive-done','d','Feature','Done','junior-dev',2,?,  '[]','pm',?,?)")
+    .run(JSON.stringify(["dev-loop", "pm", "sensitive", "junior-dev"]), iso(NOW - DAY), iso(NOW - DAY));
+  ok(!sensitiveMistier(db, "p").some((f) => f.id === "T-SM3"),
+    "sensitiveMistier: terminal (Done) sensitive+junior ticket is NOT surfaced");
+
+  // A non-sensitive ticket is never returned.
+  ok(!sensitiveMistier(db, "p").some((f) => f.id === "T-1"),
+    "sensitiveMistier: non-sensitive tickets are never returned");
+
   db.close();
 
   // ── LOOP-12: FireRow with fireId parses; legacy row without fireId also parses ──
