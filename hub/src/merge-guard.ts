@@ -2,6 +2,7 @@
 // dev-loop merge-guard — pre-merge guard: refuse merge when a human objects or the PR's ticket is
 // not merge-eligible. Design: hubDoc:design/merge-review-guard.
 // Child 1 (LOOP-64): human review-objection axis (§3.1/§3.2/§3.4) via the LOOP-40 landing.ts seam.
+// Child 2 (LOOP-65): --apply path — board-visible objection + deliberate routing (§5.1).
 // Child 4 (LOOP-67): board-state axis (§3.3) — hub-only, no forge access required.
 import { execFileSync } from "node:child_process";
 import { isMainEntry } from "./is-entry.ts";
@@ -9,6 +10,7 @@ import { existsSync } from "node:fs";
 import { openDb } from "./db.ts";
 import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
 import { readPrReviewState, defaultGhExec, type ExecFn } from "./landing.ts";
+import { addComment, updateTicketRow, type TicketUpdateFields } from "./ticketwrite.ts";
 
 // Board states that are NOT merge-eligible (design §3.3).
 // In Review = PR's verify gate is still open; Canceled/Duplicate = terminal reject.
@@ -29,10 +31,81 @@ export interface ForgeReviewResult {
   unresolvedThreadAuthors: string[]; // non-agent logins with ≥1 unresolved thread
 }
 
+// Result of --apply when the guard trips (§5.1 / LOOP-65).
+export interface MergeGuardApplyResult {
+  // "wrote": comment posted + ticket routed; "already_present": marker existed, no dup posted;
+  // "skipped_no_db": no hub DB available (degrade); "skipped_no_ticket": ticket not in hub.
+  action: "wrote" | "already_present" | "skipped_no_db" | "skipped_no_ticket";
+  commentBody?: string; // the comment that was (or would have been) posted
+}
+
 export interface MergeGuardResult {
   trip: boolean;
   boardState: MergeGuardBoardStateResult;
   forgeReview: ForgeReviewResult;
+  applied?: MergeGuardApplyResult; // present when --apply was set and the guard tripped
+}
+
+// Stable marker prefix used for idempotency detection across re-runs.
+const APPLY_MARKER = "⛔ merge-guard:";
+
+// Build the comment body describing the objection.
+function buildCommentBody(
+  pr: number | string | undefined,
+  forgeReview: ForgeReviewResult,
+  boardState: MergeGuardBoardStateResult,
+): string {
+  const prRef = pr !== undefined ? ` PR #${pr}` : "";
+  if (forgeReview.trip) {
+    const cr = forgeReview.changeRequesters;
+    const ut = forgeReview.unresolvedThreadAuthors;
+    if (cr.length > 0) {
+      return `${APPLY_MARKER}${prRef} carries CHANGES_REQUESTED from ${cr.map((l) => `@${l}`).join(", ")} (unresolved). Not merged.`;
+    }
+    return `${APPLY_MARKER}${prRef} has unresolved review threads from ${ut.map((l) => `@${l}`).join(", ")}. Not merged.`;
+  }
+  const state = boardState.ticketState ?? "non-merge-eligible state";
+  return `${APPLY_MARKER} ticket is ${state} (not merge-eligible). Not merged.`;
+}
+
+// Post objection comment + route the ticket (state→Todo, labels+=blocked, assignee→null).
+// Degrades silently when the hub DB is absent (no throw, returns skipped_no_db).
+// Idempotent: if a comment with the same body already exists, skips with already_present.
+function applyTrip(
+  ticketId: string,
+  dbPath: string | undefined | null,
+  pr: number | string | undefined,
+  forgeReview: ForgeReviewResult,
+  boardState: MergeGuardBoardStateResult,
+): MergeGuardApplyResult {
+  if (!dbPath || !existsSync(dbPath)) return { action: "skipped_no_db" };
+  let db;
+  try { db = openDb(dbPath); }
+  catch { return { action: "skipped_no_db" }; }
+  try {
+    const trow = db.prepare("SELECT project_id FROM tickets WHERE id=?").get(ticketId) as { project_id: string } | undefined;
+    if (!trow) return { action: "skipped_no_ticket" };
+    const projectId = trow.project_id;
+    const commentBody = buildCommentBody(pr, forgeReview, boardState);
+    // Idempotency: skip if the exact objection comment already exists on this ticket.
+    const dup = db.prepare("SELECT id FROM comments WHERE ticket_id=? AND body=?").get(ticketId, commentBody);
+    if (dup) return { action: "already_present", commentBody };
+    // Post comment (standard write layer — addComment validates ticket existence + non-empty body).
+    addComment(db, projectId, "operator", ticketId, commentBody);
+    // Board routing: state→Todo, labels+=blocked, assignee→null (§9 Dev bail / design §5.1).
+    const cur = db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?")
+      .get(ticketId, projectId) as TicketUpdateFields | undefined;
+    if (cur) {
+      const labels = JSON.parse(cur.labels) as string[];
+      if (!labels.includes("blocked")) labels.push("blocked");
+      updateTicketRow(db, projectId, "operator", ticketId, cur.state, {
+        ...cur, state: "Todo", assignee: null, labels: JSON.stringify(labels),
+      });
+    }
+    return { action: "wrote", commentBody };
+  } finally {
+    db.close();
+  }
 }
 
 // Parse a ticket id from a dev-loop/<id> branch name or a fix/<id>-… branch name.
@@ -75,6 +148,8 @@ export function mergeGuard(
     ghRepo?: string;           // owner/repo (inferred from git remote when absent)
     agentReviewers?: string[]; // agent logins to ignore (read from workspace when absent)
     exec?: ExecFn;             // injectable gh exec for tests (defaults to defaultGhExec)
+    // Board-visible objection path (Child 2 / LOOP-65):
+    apply?: boolean;           // when true + trip: post comment + route ticket (§5.1)
   } = {},
 ): MergeGuardResult {
   // ── Board-state axis (§3.3) ────────────────────────────────────────────────
@@ -156,10 +231,16 @@ export function mergeGuard(
   }
 
   const trip = boardState.trip || forgeReview.trip;
+  if (trip && opts.apply && (boardState.ticketId ?? ticketId)) {
+    const applyTicketId = boardState.ticketId ?? ticketId!;
+    const dbPath = opts.dbPath ?? process.env.DEVLOOP_HUB_DB ?? resolveHubDbPath(repoDir);
+    const applied = applyTrip(applyTicketId, dbPath, opts.pr, forgeReview, boardState);
+    return { trip, boardState, forgeReview, applied };
+  }
   return { trip, boardState, forgeReview };
 }
 
-// CLI: dev-loop merge-guard [--repo <dir>] [--pr <n>] [--ticket <id>] [--strict] [--json]
+// CLI: dev-loop merge-guard [--repo <dir>] [--pr <n>] [--ticket <id>] [--strict] [--apply] [--json]
 // Exit codes (the write-layer contract): 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.
 if (isMainEntry(import.meta.url)) {
   const argv = process.argv.slice(2);
@@ -167,6 +248,7 @@ if (isMainEntry(import.meta.url)) {
   let ticketId: string | undefined;
   let pr: number | string | undefined;
   let strict = false;
+  let apply = false;
   let asJson = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -175,21 +257,24 @@ if (isMainEntry(import.meta.url)) {
     else if (a === "--ticket") ticketId = argv[++i];
     else if (a === "--pr") pr = argv[++i];
     else if (a === "--strict") strict = true;
+    else if (a === "--apply") apply = true;
     else if (a === "--json") asJson = true;
     else if (a === "--help" || a === "-h") {
       console.log(`dev-loop merge-guard — refuse merge on a human CHANGES_REQUESTED or a non-merge-eligible ticket.
-Design: hubDoc:design/merge-review-guard §3.1/§3.2/§3.3/§3.4 (LOOP-64 Child 1 + LOOP-67 Child 4).
+Design: hubDoc:design/merge-review-guard §3.1/§3.2/§3.3/§3.4/§5.1 (LOOP-64 Child 1 + LOOP-65 Child 2 + LOOP-67 Child 4).
 
-Usage: dev-loop merge-guard [--repo <dir>] [--pr <n>] [--ticket <id>] [--strict] [--json]
+Usage: dev-loop merge-guard [--repo <dir>] [--pr <n>] [--ticket <id>] [--strict] [--apply] [--json]
   --pr <n>        PR number (enables forge review axis — §3.1: CHANGES_REQUESTED / unresolved threads)
   --ticket <id>   explicit ticket id (default: inferred from HEAD branch dev-loop/<id>)
   --strict        exit 1 when either axis trips (the merge-pass gate)
+  --apply         on a trip: post objection comment + route ticket to blocked/Todo/unassigned (§5.1)
   --json          emit result as JSON
 
 Forge review axis (--pr): trips when a non-agent reviewer has CHANGES_REQUESTED or an unresolved
   review thread. Degrades silently (exit 0) when gh is unavailable, unauth, offline, or no PR found.
 Board-state axis: trips when the ticket is In Review / Canceled / Duplicate.
   Degrades silently (exit 0) when no hub DB is available (linear/local backend).
+--apply: board writes degrade silently when no hub DB; idempotent (no duplicate comments).
 
 Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.`);
       process.exit(0);
@@ -197,7 +282,7 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.`);
   }
 
   let result: MergeGuardResult;
-  try { result = mergeGuard(repo, { ticketId, pr }); }
+  try { result = mergeGuard(repo, { ticketId, pr, apply }); }
   catch (e) { console.error(`merge-guard: ${(e as Error).message.split("\n")[0]}`); process.exit(2); }
 
   const bs = result.boardState;
@@ -223,6 +308,13 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.`);
       console.error(`merge-guard: ⛔ TRIP — PR has unresolved objection from ${who.map((l) => `@${l}`).join(", ")} (CHANGES_REQUESTED or unresolved thread); must be addressed before merging`);
     } else if (!fr.skipped && !fr.trip) {
       console.log(`merge-guard: forge review axis clean — no non-agent CHANGES_REQUESTED or unresolved threads`);
+    }
+    // --apply output
+    if (result.applied) {
+      const ap = result.applied;
+      if (ap.action === "wrote") console.log(`merge-guard: --apply wrote: ${ap.commentBody}`);
+      else if (ap.action === "already_present") console.log(`merge-guard: --apply skipped (objection already recorded on ticket)`);
+      else if (ap.action === "skipped_no_db") console.log(`merge-guard: --apply skipped — no hub DB (degrade)`);
     }
   }
 
