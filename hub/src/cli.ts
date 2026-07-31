@@ -96,6 +96,8 @@ Usage: dev-loop <command> [args]
                               whose referenced tickets are Canceled/Duplicate (P1-2; --strict exits 1 on findings)
   worktree add <id> [--repo <ref>]   create a dev worktree on branch dev-loop/<id> based at origin/<defaultBranch>
                               (never local main — prevents passenger commits; LOOP-54)
+  worktree path <id> [--repo <ref>]  print the canonical worktree path (single source of truth; LOOP-37)
+  worktree reap [--repo <ref>] [--dry-run]   remove terminal-state ticket worktrees + local branches (LOOP-37)
   init-service <key> <name> <PREFIX>   (legacy) turnkey-bootstrap a service project — start at \`init\`/\`up\` instead
   run [--background] [--cli claude|codex|opencode] [--agents core,outward]   schedule agents by calling the
                               selected CLI; --background detaches (log → .dev-loop/run.log), \`stop\` ends it
@@ -152,7 +154,8 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 }
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
-  "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror"]); // the A1 write layer opens hub.db (direct-db transport)
+  "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror",
+  "worktree"]); // the A1 write layer opens hub.db (direct-db transport); worktree reap queries hub.db for ticket states
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {
