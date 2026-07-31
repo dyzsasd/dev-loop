@@ -1,6 +1,8 @@
 // LOOP-67 regression: merge-guard board-state axis must trip when the PR's ticket is In Review,
 // Canceled, or Duplicate; pass on Todo/In Progress; and skip (no false trip) when no hub DB is present.
 // Design: merge-review-guard §3.3 + §8-Child4.
+// LOOP-65 regression: merge-guard --apply path writes objection comment + routes ticket on trip;
+// read path (no --apply) writes nothing; no-DB degrades silently; idempotent on re-run.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -27,6 +29,11 @@ try {
   tk("MG-3", "In Review");
   tk("MG-4", "Canceled");
   tk("MG-5", "Duplicate");
+  // LOOP-65 --apply fixtures: fresh tickets to avoid state pollution from other tests
+  tk("MG-6", "In Progress"); // forge review trip + --apply
+  tk("MG-7", "In Review");   // board-state trip + --apply
+  tk("MG-8", "In Progress"); // no-trip path + --apply (should NOT write)
+  tk("MG-9", "In Review");   // idempotency: second --apply must not dup comment
   conn.close();
 
   // A fake repo dir so resolveHubDbPath has something to look at (we pass dbPath explicitly)
@@ -226,6 +233,107 @@ try {
     try { fn(); } catch { noThrowOk = false; }
   }
   ok(noThrowOk, "forge: no path throws (all failures return, AC5)");
+
+  // ── LOOP-65: --apply path (§5.1 / Child 2) ───────────────────────────────────
+
+  // Helper: read current ticket row from the hub DB
+  const readTicket = (id: string): { state: string; assignee: string | null; labels: string[] } | undefined => {
+    const db = openDb(dbPath);
+    try {
+      const row = db.prepare("SELECT state,assignee,labels FROM tickets WHERE id=?").get(id) as
+        { state: string; assignee: string | null; labels: string } | undefined;
+      if (!row) return undefined;
+      return { state: row.state, assignee: row.assignee, labels: JSON.parse(row.labels) as string[] };
+    } finally { db.close(); }
+  };
+  const readComments = (id: string): string[] => {
+    const db = openDb(dbPath);
+    try {
+      return (db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at").all(id) as { body: string }[])
+        .map((r) => r.body);
+    } finally { db.close(); }
+  };
+
+  // AC: WITHOUT --apply the read path writes nothing (Child-1 default unchanged)
+  const rNoApplyForge = mergeGuard(repoDir, {
+    ticketId: "MG-6", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+  });
+  ok(rNoApplyForge.trip, "apply: forge trip detected (setup check)");
+  ok(rNoApplyForge.applied === undefined, "apply: no --apply → applied field absent (read path is pure)");
+  ok(readComments("MG-6").length === 0, "apply: no --apply → no comment written to hub");
+  const rowAfterNoApply = readTicket("MG-6");
+  ok(rowAfterNoApply?.state === "In Progress", "apply: no --apply → ticket state unchanged");
+
+  // AC: forge review trip + --apply → comment posted, ticket routed to blocked/Todo/null
+  const rApplyForge = mergeGuard(repoDir, {
+    ticketId: "MG-6", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+    apply: true,
+  });
+  ok(rApplyForge.trip, "apply: forge trip (pre-check)");
+  ok(rApplyForge.applied?.action === "wrote", `apply: forge trip + --apply → action=wrote (got: ${rApplyForge.applied?.action})`);
+  ok(rApplyForge.applied?.commentBody?.includes("⛔ merge-guard:") ?? false, "apply: comment body includes marker");
+  ok(rApplyForge.applied?.commentBody?.includes("@alice") ?? false, "apply: comment body includes reviewer login");
+  ok(rApplyForge.applied?.commentBody?.includes("CHANGES_REQUESTED") ?? false, "apply: comment body mentions CHANGES_REQUESTED");
+  ok(rApplyForge.applied?.commentBody?.includes("#42") ?? false, "apply: comment body includes PR number");
+  const mg6Comments = readComments("MG-6");
+  ok(mg6Comments.length === 1, `apply: exactly one comment written (got ${mg6Comments.length})`);
+  const mg6Row = readTicket("MG-6");
+  ok(mg6Row?.state === "Todo", `apply: ticket moved to Todo (got: ${mg6Row?.state})`);
+  ok(mg6Row?.labels.includes("blocked") ?? false, "apply: ticket labels include 'blocked'");
+  ok(mg6Row?.assignee === null, "apply: ticket unassigned (null)");
+
+  // AC: idempotent — re-running --apply with same trip does not duplicate the comment
+  const rApplyForge2 = mergeGuard(repoDir, {
+    ticketId: "MG-6", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+    apply: true,
+  });
+  ok(rApplyForge2.applied?.action === "already_present", `apply: second run → action=already_present (got: ${rApplyForge2.applied?.action})`);
+  ok(readComments("MG-6").length === 1, "apply: idempotent — still exactly one comment after second run");
+
+  // AC: board-state trip (In Review) + --apply → comment posted, ticket routed
+  const rApplyBoard = mergeGuard(repoDir, { ticketId: "MG-7", dbPath, apply: true });
+  ok(rApplyBoard.trip, "apply: board-state trip (In Review) detected");
+  ok(rApplyBoard.applied?.action === "wrote", `apply: board trip + --apply → action=wrote (got: ${rApplyBoard.applied?.action})`);
+  ok(rApplyBoard.applied?.commentBody?.includes("⛔ merge-guard:") ?? false, "apply: board trip comment includes marker");
+  ok(rApplyBoard.applied?.commentBody?.includes("In Review") ?? false, "apply: board trip comment mentions ticket state");
+  const mg7Row = readTicket("MG-7");
+  ok(mg7Row?.state === "Todo", `apply: board trip ticket moved to Todo (got: ${mg7Row?.state})`);
+  ok(mg7Row?.labels.includes("blocked") ?? false, "apply: board trip ticket labels include 'blocked'");
+
+  // AC: no trip + --apply → no board write (guard not tripped)
+  const rApplyNoTrip = mergeGuard(repoDir, { ticketId: "MG-8", dbPath, apply: true });
+  ok(!rApplyNoTrip.trip, "apply: no trip (In Progress) — setup check");
+  ok(rApplyNoTrip.applied === undefined, "apply: no trip → applied field absent (no write needed)");
+  ok(readComments("MG-8").length === 0, "apply: no trip → no comment written");
+
+  // AC: no hub DB + --apply → skipped_no_db, no throw
+  let applyNoDbOk = true;
+  let applyNoDbResult: { applied?: { action: string } } = {};
+  try {
+    applyNoDbResult = mergeGuard(repoDir, {
+      ticketId: "MG-7", dbPath: join(ROOT, "absent.db"), apply: true,
+      pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prChangesRequested, gqlNoThreads),
+    });
+  } catch { applyNoDbOk = false; }
+  ok(applyNoDbOk, "apply: no hub DB + --apply → no throw (degrade)");
+  ok(applyNoDbResult.applied?.action === "skipped_no_db", `apply: no hub DB → action=skipped_no_db (got: ${applyNoDbResult.applied?.action})`);
+
+  // AC: CLI --apply on tripped ticket writes comment and prints confirmation
+  const cliApply = cli(["--repo", repoDir, "--ticket", "MG-9", "--apply", "--strict"], { DEVLOOP_HUB_DB: dbPath });
+  ok(cliApply.status === 1, "CLI --apply --strict: In Review → exit 1");
+  ok(/--apply wrote/.test(cliApply.stdout), `CLI --apply: stdout mentions '--apply wrote' (got: ${cliApply.stdout.trim().slice(0, 200)})`);
+  ok(readComments("MG-9").length === 1, "CLI --apply: comment written to hub");
+  const mg9Row = readTicket("MG-9");
+  ok(mg9Row?.state === "Todo", `CLI --apply: ticket moved to Todo (got: ${mg9Row?.state})`);
+  ok(mg9Row?.labels.includes("blocked") ?? false, "CLI --apply: ticket labels include 'blocked'");
+
+  // AC: CLI without --apply on tripped ticket → no comment written
+  const cliNoApplyCli = cli(["--repo", repoDir, "--ticket", "MG-3", "--strict"], { DEVLOOP_HUB_DB: dbPath });
+  ok(cliNoApplyCli.status === 1, "CLI no --apply --strict: In Review → exit 1");
+  ok(readComments("MG-3").length === 0, "CLI: no --apply → no comment written to hub (read path pure)");
 
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
