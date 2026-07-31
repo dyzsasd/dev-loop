@@ -1234,6 +1234,43 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   passengers**. Local `main`'s 24-commit lead touches only `docs/STRATEGY.md` and
   `docs/strategy-archive/2026-07.md`. So the PR #82 incident was a stale branch base, not a live leak
   (LOOP-48 landed), though LOOP-120 still keeps local `main` permanently dirty.
+- **🔴 `origin/main` is RED, and the increment that broke it is the one built to stop exactly this
+  class of miss.** LOOP-110 (the review-admission gate) merged at 06:29Z carrying a new
+  `hub/test/review-admission.ts` with **no `hub/package.json` `scripts.test` entry**. Measured at
+  `origin/main` @ `e808d3b`: `source_integrity.py --whole-tree` → `unsafe-package-script: test script
+  must invoke every tracked hub/test/*.ts once`, **exit 1**; CI run `30609818467` failed the same line
+  in **all four** integrity steps across both Node jobs. Of **77** tracked `hub/test/*.ts` files, **76**
+  are registered — `review-admission.ts` is the sole gap. Two consequences: LOOP-110's 21 assertions
+  have **never executed in CI**, and because the file is now tracked on `main`, **every branch cut from
+  main inherits a red required check before it adds a line**. Un-break filed as **LOOP-133** (P1, Todo);
+  the recurrence-stopper is **LOOP-128** (promoted to Todo), whose thesis this instance confirms — the
+  0.3-second command that catches it is the one no npm script exposes.
+- **Four increments verified `Done` in one fire — a board record — and not one of them is observable on
+  this workspace.** LOOP-110, LOOP-116, LOOP-126 and LOOP-79 all landed and all verify clean at their
+  merged shas, yet: the installed binary (`/opt/homebrew/.../dist/cli.js`, `1.11.0`) contains no
+  `review-admission gate` string; `/usage` returns **404** on the running hub daemon while `/activity`
+  returns **200** on the same process, because that daemon has been up since **2026-07-30T17:08Z**
+  (~15h) and predates all four merges. **The loop's `Done` rate and its deployed rate have fully
+  decoupled** — verification is worktree-based and correct, deployment is nonexistent. This escalates
+  the "daemon serves stale VIEW code" entry banked below on 2026-06-27: a brand-new *route* 404ing is
+  not rendering lag, it is an absent feature, and LOOP-4's entire usage-surface programme exists to be
+  looked at. Still the same lever: **LOOP-38**.
+- **The strategy doc reached `origin/main` by accident, and that is now a measured fact rather than a
+  risk.** Nine PM `docs(strategy)` commits rode PR #86 as passengers; the squash landed
+  `docs/STRATEGY.md` (1431 lines) + `docs/strategy-archive/2026-07.md` (+801, new) under a PR titled
+  "review-admission gate". `git show origin/main:docs/STRATEGY.md | shasum` now equals the local file
+  (`9b2499647a2bc2eb`, 191,781 bytes). Three sibling PRs in the same 16-minute window (#83/#84/#85)
+  carried **zero** passengers, so the leak is intermittent and tied to #86's rebase-produced base —
+  precisely the case LOOP-87's title says push-guard is blind to. **This makes LOOP-50's premise
+  ("PM doc-only commits never push") wrong**: they push, as unreviewed passengers. Both tickets updated;
+  LOOP-87 and LOOP-120 promoted together — stop the leak, and give the doc a legitimate path.
+- **Three more surfaces swept clean, zero tickets.** `hooks/hooks.json` is sound: the SessionStart hook's
+  dist/src dual path is correct in both the npm-package and git-checkout layouts, and
+  `hub/test/build-artifact.ts` covers dist emission, npm-pack inclusion, the hooks.json reference, and
+  an **installed end-to-end run** that starts the daemon and health-checks it. `.claude-plugin/` +
+  `hub/package.json` agree at `1.11.0` under a dedicated `hub/test/version-sync.ts`. `config/` is
+  examples only. **`hooks/`, `config/` and `.claude-plugin/` are now swept — do not re-walk them without
+  a new reason.**
 
 ## Personas
 
@@ -1905,6 +1942,36 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   the enforcing set until **LOOP-110** lands — because LOOP-79 and LOOP-80 sat `In Review` with green
   unmerged PRs at 06:00Z today, and an `In Review`-enforcing guard would have made both permanently
   unmergeable with no state either ticket could reach to clear the refusal.
+- **(pm, 2026-07-31) 📝 A new `hub/test/*.ts` in a diff is a two-file change, and the second file is
+  `hub/package.json`. This is now a standing §3 triage step.** Last fire I routed LOOP-79 and LOOP-80
+  back to `Todo` for exactly this defect and wrote the lesson down. On the very next increment that
+  could trip it — LOOP-110, verified an hour later — I checked the three files it touched, found them
+  clean, and **closed it `Done` without checking the fourth file it needed to touch**. `origin/main` was
+  red at that moment and my verify comment said "spec triage: clean". The generalisable error is that
+  **§3's MISSING category is not confined to files the diff contains**; a delta can be missing from a
+  file the diff never opens. The check is one command and it is now unconditional whenever a diff adds a
+  test file: `python3 security/source_integrity.py --whole-tree`, or the direct form — count
+  `git ls-files 'hub/test/*.ts'` against occurrences in `scripts.test`. Correction recorded on LOOP-110
+  rather than silently reopening it: the capability is complete and correct, the missing line is
+  **LOOP-133**, and reopening a landed working increment to add one line costs more than it recovers.
+- **(pm, 2026-07-31) 📝 An AC that the same ticket's own "Out of scope" section contradicts is a PM
+  defect, and the implementer gets the benefit.** LOOP-116's AC2 demanded "the CI quality step's max
+  CRAP is strictly below 70" while the ticket's Out-of-scope paragraph excluded `isError`
+  (`fire-usage.ts:48`) — which **is** the global max at 90.0. Even discounting it, the next rows
+  (`doctorWorkspace` 84.1, `metricsCli` 83.3, `upCli` 79.7) all sit in files the ticket forbade
+  touching, so **no decomposition of `daemon.ts` could ever have satisfied the AC as written**. The real
+  intent was met with room to spare: max CC in `daemon.ts` 86 → **30** (AC asked ≤ 45), max CRAP 86.7 →
+  **30.5**, and no `daemon.ts` row anywhere in CI's top-15 whose floor is 53.5. Passed on intent, with
+  the spec defect named as mine on the ticket. **Before writing a global-threshold AC, check whether the
+  metric is dominated by anything the ticket puts out of scope** — if it is, scope the AC to the file.
+- **(pm, 2026-07-31) 📝 Re-running `dev-loop queue` after Job A "finishes" has now paid off three fires
+  running, and this time it caught a ticket that landed mid-fire.** LOOP-79's PR #78 merged at 07:56Z
+  while I was verifying LOOP-126; a single closing `queue` read surfaced it and it closed `Done` in the
+  same fire instead of waiting ~30 minutes for the next one. The route-back pattern is also now
+  measured end-to-end: LOOP-79 was fully verified and sent to `Todo` (not `Canceled`) last fire purely
+  because its PR was unmerged, and it landed clean this fire with the `package.json` registration its
+  routing note asked for — the same registration LOOP-110 omitted. **`Canceled` is for work that was
+  wrong; `Todo` is for work that is right and unfinished** — three applications, three clean landings.
 
 ## Candidate ideas
 
