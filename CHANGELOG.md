@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.12.0
 
 98 commits in one overnight run of the loop on itself. The headline: **dev-loop can now
 measure and explain its own operation** — the metering program shipped end to end across all
