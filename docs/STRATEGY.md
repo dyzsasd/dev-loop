@@ -1120,6 +1120,28 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   hardcoded `"OPEN"`, so a *merged* PR is not readable back; the exported `ticketToPr` (`--state all`)
   that would close it is called by **nothing** in `hub/src`. Folded into **LOOP-111** — the
   verify-queue landing annotation is exactly that function's intended consumer.
+- **🔴 The integrity scanner audits what CI executes — and the two scripts CI structurally
+  *cannot* execute are the two that ship to users (2026-07-31, trust-safety lens).**
+  `security/source_integrity.py` is a required merge check on every PR and gates the npm publish
+  four times over. Its docstring names the threat: *"an injected lifecycle script cannot execute
+  before the repository is inspected."* The **ordering** half holds; the **inspection** half does
+  not. `RELEASE_SCRIPT_EXACT` pins exactly two script strings — `build`, `typecheck` — and
+  `IMPLICIT_RELEASE_HOOKS` flags six `pre*`/`post*` names. `hub/package.json` ships **two explicit
+  npm lifecycle scripts, `postinstall` and `prepack`, and neither is in either set.** Measured, with
+  a control: poisoning `postinstall` → **no findings, scanner passes**; poisoning `prepack` → **no
+  findings**; poisoning `build` → `'build' is not the audited command`. **The pinning mechanism
+  works perfectly and is simply not pointed at the two scripts that need it most.** Four layers miss
+  the same bytes in the same direction: `package.json` is not an `_is_executable_source`, so the
+  eval/`Function`/IOC scans never read the strings; the pin set omits them; `_scan_lockfile`'s
+  `if package_path and …` deliberately skips the **root** entry, whose `hasInstallScript` really is
+  `True`; and both workflows run `--ignore-scripts` everywhere, so CI never executes either script
+  and gets no behavioural signal either. Consequence is concrete, not theoretical:
+  `postinstall.cjs` is in `files[]`, so `postinstall` runs on every `npm i -g @dyzsasd/dev-loop`.
+  Poisoning the *file* is partly covered (`.cjs` **is** scanned); poisoning the *script string*
+  reaches users unexamined. Filed **LOOP-129** (P2, `sensitive` → senior). **The generalisable
+  lesson, and the sixth entry in the method: a guard's coverage tends to stop exactly where its
+  own CI's observability stops — so audit the paths CI cannot run, because those are the paths
+  nothing else is watching either.**
 
 ## Personas
 
@@ -1741,6 +1763,23 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **The pattern worth keeping: when one surface is wrong, look for the sibling that is right — this
   loop keeps shipping the correct resolution ladder in one place and re-deriving it badly in another
   (LOOP-117, LOOP-124, and now `up`).**
+- **(pm, 2026-07-31) Integrity-audit doctrine: the script audit denies by default, and LOOP-129 is
+  NOT folded into LOOP-128.** Two calls, both encoded into LOOP-129's ACs:
+  **(1) Deny by default, not a longer allow-list.** The obvious fix for the `postinstall`/`prepack`
+  gap is to add those two names to `RELEASE_SCRIPT_EXACT`. That is refused as the *whole* fix,
+  because an allow-list of two only moves the hole to the third name — the next lifecycle script
+  anyone adds re-opens it silently, and nothing fails to announce that. AC3 therefore requires that
+  **any** unpinned npm lifecycle script (`preinstall`, `prepare`, `prepublishOnly`, …) is itself a
+  finding. A security guard whose coverage depends on someone remembering to extend it is a guard
+  with a maintenance-shaped hole. Constraint the implementer must respect: the scanner is
+  deliberately stdlib-and-Git-only because it runs *before* Node exists, so it cannot grow an
+  npm dependency to enumerate lifecycle names.
+  **(2) Same file, two tickets, deliberately.** LOOP-128 ("the check has no local runner" —
+  throughput/DX, P1, junior) and LOOP-129 ("the check has a hole" — coverage, P2, `sensitive` →
+  senior) both live in `security/`. They are kept apart because the fixes touch different files, at
+  different tiers, on different urgencies: LOOP-128 is why two PRs are red *right now*; LOOP-129 is
+  defence-in-depth on the published artifact. Folding them would let the urgent one drag the
+  careful one, or the careful one delay the urgent one.
 
 ## Candidate ideas
 
