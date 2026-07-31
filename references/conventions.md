@@ -1136,9 +1136,13 @@ them here, at fire-start (alongside orphan reclaim, Step 0), never inline. In on
 First `git -C <repo> worktree prune` (§7). Then:
 - **Feature PRs (when `git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"` —
   for each (`gh pr checks <pr>` + `gh pr view <pr> --json mergeable,mergeStateStatus`):
-  - **every `git.mergeChecks` green AND `MERGEABLE`** → `gh pr merge <pr> --squash --delete-branch`
-    (feature branches must not pile up), then `git worktree remove --force` the ticket's worktree,
-    then move the ticket `In Progress → In Review`.
+  - **every `git.mergeChecks` green AND `MERGEABLE`** → **first run the merge guard**
+    `dev-loop merge-guard --pr <pr> --strict --apply`. **A non-zero exit HOLDS the merge** — do not
+    squash, leave the PR open, move on to the next one. The guard has already recorded the
+    objection on the ticket, so no second notification path is needed. On exit 0 →
+    `gh pr merge <pr> --squash --delete-branch` (feature branches must not pile up), then
+    `git worktree remove --force` the ticket's worktree, then move the ticket
+    `In Progress → In Review`.
   - **a check FAILED** (CI is the build gate) → read the CI log, **fix in the worktree + re-push**;
     cap ~2 cycles → `fix-exhausted` block.
   - **`mergeStateStatus:DIRTY`** (conflicts `defaultBranch` — never self-heals) → in the worktree,
@@ -1154,6 +1158,16 @@ First `git -C <repo> worktree prune` (§7). Then:
   `healthCheck` if set. **`auto:false` envs (prod) are skipped entirely** — the operator's gate.
   (These PRs are `GITHUB_TOKEN`-created, so the PR checks don't run on them; merge on mergeable,
   don't wait for checks that will never report.)
+
+**The merge guard (`dev-loop merge-guard`) is the machine gate on this pass**, and green checks are
+not sufficient to merge. It trips on two axes: a **human's** unresolved `CHANGES_REQUESTED` or
+unresolved review thread on the PR (agent reviewers are excluded — the loop may not merge over a
+person's objection), and a ticket that is **not merge-eligible** on the board (e.g. already
+`In Review`, `Canceled`, or `Duplicate` — the shape that once merged a Canceled ticket's work).
+Exit codes: **0 = clear to merge**, **1 = tripped under `--strict`**, **2 = usage/internal error**.
+Both axes **degrade silently to a pass** when their evidence is unreachable (no `gh`, forge
+unreachable, or no hub DB on `linear`/`local`), so the guard never blocks on infrastructure — only
+on a real objection. `--apply` posts the objection to the ticket and routes it, once (idempotent).
 
 Both are **idempotent + race-safe**: a second dev fire finds the PR already merged and no-ops; the
 merge is atomic. A PR that isn't ready is left for the next fire — **never force-merged**. This is
