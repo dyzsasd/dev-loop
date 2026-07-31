@@ -114,7 +114,7 @@ try {
   const pgStrict = cli(["--repo", work, "--branch", "dev-loop/CERT-10", "--strict", "--default-branch", "main"]);
   ok(pgStrict.status === 1, "LOOP-55 --strict: passenger ⇒ exit 1");
   ok(/passenger/.test(pgStrict.stdout), "CLI output mentions 'passenger'");
-  ok(/re-cut via `dev-loop worktree add`/.test(pgStrict.stdout), "CLI output mentions worktree add remedy");
+  ok(/unattributable/.test(pgStrict.stdout), "CLI output reports unattributable for no-ticket-id commit");
 
   // AC: no false positive on a clean branch off origin/main (rebase)
   git(work, ["rebase", "--onto", "origin/main", "main", "dev-loop/CERT-10"]);
@@ -125,14 +125,73 @@ try {
   const pgOther = pushGuard(work, "main", db, "main");
   ok(pgOther.passengers.length === 0, "LOOP-55: non-dev-loop branch shape → no passenger detection");
 
-  // AC: no false positive on a stacked branch: parent commits reference a DIFFERENT ticket id
+  // LOOP-87: stacked branch — CERT-10's commit is attributed to CERT-10, not CERT-11, so it IS a passenger.
+  // The old algorithm skipped it via SHA ancestry (Clause 2); the new algorithm catches it via ticket id.
   git(work, ["checkout", "-qb", "dev-loop/CERT-11"]);
   git(work, ["commit", "--allow-empty", "-qm", "fix(y): CERT-11 stacked on CERT-10"]);
-  // The CERT-10 commit is in origin/main..dev-loop/CERT-11, references CERT-10, is NOT an ancestor of local main
   const pgStacked = pushGuard(work, "dev-loop/CERT-11", db, "main");
-  ok(pgStacked.passengers.length === 0, "LOOP-55: stacked branch — CERT-10's commit is not an ancestor of local main → no false positive");
+  ok(pgStacked.passengers.length === 1, `LOOP-87: stacked branch — CERT-10 commit is flagged as passenger (got ${pgStacked.passengers.length})`);
+  ok(pgStacked.passengers[0]?.ticketId === "CERT-10", "LOOP-87: stacked passenger names CERT-10");
+  ok(pgStacked.passengers[0]?.severity === "warning", "LOOP-87: stacked passenger is warning (CERT-10 not Canceled in hub)");
+
+  // LOOP-87 PM AC: rebased stacked branch — passenger with new SHA still detected via ticket attribution.
+  // Simulate: amend CERT-10 (new SHA), rebase CERT-11 on top of it.
+  // Old algorithm (Clause 2: SHA ancestry) misses this; new algorithm catches it via ticket id.
+  git(work, ["checkout", "-q", "dev-loop/CERT-10"]);
+  git(work, ["commit", "--amend", "--no-edit", "--allow-empty"]);
+  git(work, ["rebase", "dev-loop/CERT-10", "dev-loop/CERT-11"]);
+  const pgPostRebase = pushGuard(work, "dev-loop/CERT-11", db, "main");
+  ok(pgPostRebase.passengers.some((p) => p.ticketId === "CERT-10"), "LOOP-87 PM AC: CERT-10 passenger detected after rebase gave it a new SHA");
 
   git(work, ["checkout", "-q", "main"]);
+
+  // ── LOOP-87 AC2: Canceled passenger produces a hard flag ──────────────────────────────────────
+  {
+    git(work, ["checkout", "-qb", "dev-loop/CERT-60", "origin/main"]);
+    // First commit: references Canceled ticket CERT-1 (not ownId)
+    git(work, ["commit", "--allow-empty", "-qm", "fix(legacy): carry over CERT-1 work"]);
+    // Second commit: own work (ownId = CERT-60)
+    git(work, ["commit", "--allow-empty", "-qm", "fix(main): CERT-60 own commit"]);
+
+    const pgCanceled = pushGuard(work, "dev-loop/CERT-60", db, "main");
+    const hardPass = pgCanceled.passengers.filter((p) => p.severity === "hard");
+    ok(hardPass.length === 1, `LOOP-87 AC2: one hard passenger for Canceled ticket (got ${hardPass.length})`);
+    ok(hardPass[0]?.ticketId === "CERT-1", "LOOP-87 AC2: hard passenger names CERT-1");
+    ok(hardPass[0]?.boardState === "Canceled", "LOOP-87 AC2: hard passenger boardState is Canceled");
+    ok(!pgCanceled.passengers.some((p) => /CERT-60/.test(p.subject)), "LOOP-87 AC2: own-ticket commit not flagged");
+
+    // CLI: hard passenger still causes --strict exit 1; output distinguishes hard from warning
+    const pgCancelStrict = spawnSync(process.execPath, [join(hubRoot, "src", "push-guard.ts"), "--repo", work, "--branch", "dev-loop/CERT-60", "--strict", "--default-branch", "main"],
+      { encoding: "utf8", env: { ...process.env, DEVLOOP_HUB_DB: db } });
+    ok(pgCancelStrict.status === 1, "LOOP-87 AC2 CLI --strict: hard (Canceled) passenger ⇒ exit 1");
+    ok(/⛔/.test(pgCancelStrict.stdout), "LOOP-87 AC2 CLI: hard passenger uses ⛔ icon");
+    ok(/CERT-1 is Canceled/.test(pgCancelStrict.stdout), "LOOP-87 AC2 CLI: names the Canceled ticket and its state");
+
+    git(work, ["checkout", "-q", "main"]);
+  }
+
+  // ── LOOP-87 AC4: commit with no ticket id is reported as unattributable, not silently dropped ──
+  {
+    git(work, ["checkout", "-qb", "dev-loop/CERT-70", "origin/main"]);
+    // First commit: no ticket reference (unattributable)
+    git(work, ["commit", "--allow-empty", "-qm", "docs: no ticket reference here"]);
+    // Second commit: own work
+    git(work, ["commit", "--allow-empty", "-qm", "fix(y): CERT-70 own commit"]);
+
+    const pgUnattrib = pushGuard(work, "dev-loop/CERT-70", db, "main");
+    ok(pgUnattrib.passengers.length === 1, `LOOP-87 AC4: unattributable commit is reported, not silently dropped (got ${pgUnattrib.passengers.length})`);
+    ok(pgUnattrib.passengers[0]?.ticketId === undefined, "LOOP-87 AC4: unattributable passenger has no ticketId");
+    ok(pgUnattrib.passengers[0]?.severity === "warning", "LOOP-87 AC4: unattributable passenger is severity warning");
+
+    // CLI: output reports unattributable
+    const cli2 = (args: string[]) => spawnSync(process.execPath, [join(hubRoot, "src", "push-guard.ts"), ...args],
+      { encoding: "utf8", env: { ...process.env, DEVLOOP_HUB_DB: db } });
+    const pgUnattribCli = cli2(["--repo", work, "--branch", "dev-loop/CERT-70", "--default-branch", "main"]);
+    ok(/unattributable/.test(pgUnattribCli.stdout), "LOOP-87 AC4 CLI: output reports unattributable");
+    ok(/re-cut or re-target/.test(pgUnattribCli.stdout), "LOOP-87 AC4 CLI: output suggests remedy");
+
+    git(work, ["checkout", "-q", "main"]);
+  }
 
   // ── AC4: passenger detection on a non-main default branch + unresolvable branch ─────────────────
   // Scenario A: a repo whose default branch is "master"; a passenger is planted on local master.
