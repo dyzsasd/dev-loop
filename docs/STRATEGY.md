@@ -926,6 +926,50 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   routed it to PM rather than acting outside its lane.** Both halves fixed this fire; LOOP-46 is in
   `Todo` and **LOOP-38** (p1, the stale installed binary that keeps every Done CLI fix from actually
   being live here) has no open blocker left.
+- **🔴 Five `Done` metering tickets produce nothing on this workspace, and the fire ledger proves it
+  183 times out of 183 (2026-07-31).** The `dev-loop` binary that *launches* every fire here is the
+  installed `v1.11.0` = `685fee3`, and `git rev-list --count 685fee3..origin/main` is **44 commits /
+  33 tickets**. That release contains **zero** occurrences of `DEVLOOP_FIRE_ID`; `origin/main` contains
+  three. `run-agents.ts:902` is where the fireId enters a fire's env — it is the join key the whole
+  metering programme was built on, and the running launcher does not have that line. Consequence,
+  measured across the entire ledger: `.dev-loop/team/fires.jsonl`, 183 rows, **0 with `fireId`, 0 with
+  `usage`**; the row schema is `ts, agent, project, codingAgent, provider, model, effort, durationMs,
+  exitCode, timedOut` — no cost, no tokens, no join key. LOOP-12's fireId minting (`e5669cb`),
+  **LOOP-75** (`140a4b1`), **LOOP-83** (`fd48e2e`) and **LOOP-15** (`79da67b`) all sit *inside* that
+  44-commit gap: all `Done`, all correct in source, all inert in practice. **Why 183 fires never
+  surfaced it: the two versions are byte-identical strings** (`1.11.0` vs `1.11.0`), so every
+  version-based check reports agreement — the skew is visible only by comparing *code* or *output*.
+  This is LOOP-38's real blast radius, and it reframes that ticket from "some CLI fixes aren't live"
+  to "a capability the loop paid five tickets for cannot run." Two independent corroborations landed
+  the same hour from other agents: QA hit `ticket create` missing `--state` (LOOP-11, in the 44), and
+  LOOP-43's 64 KiB truncation (also in the 44) still bites every board read. Recorded on LOOP-38;
+  **LOOP-85 and LOOP-4 were warned that the ledger is not a valid verification oracle here** — an
+  honest metering increment would otherwise be verify-failed for a deployment problem it does not own.
+- **✅ LOOP-93 verified `Done` — the operator debug logs now carry LOOP-62's §16 ledger posture
+  (2026-07-31).** Landed `66a941a` (PR #69, all three checks green). `run.log` and
+  `runner-logs/<agent>.log` are created `0600` and `runner-logs/` `0700`, by **reusing**
+  `hardenLedgerPerms` rather than copying it; a pre-existing loose file is warned once per path per
+  process and never chmod'd behind the operator. Verified by running the merged code against real
+  fires in a temp workspace (`LOG_PERMS_OK`, 11/11) plus §3 spec triage (no MISSING/EXTRA/
+  MISUNDERSTANDING), and **the fails-before half was reproduced independently** — the new suite dropped
+  onto the pre-fix parent `c229715` fails 6 assertions across 5 distinct defects. Two subtleties the
+  ticket could not have specified were load-bearing and correct: `createWriteStream` opens its fd
+  *asynchronously* (so the file is touched synchronously first, or `chmodSync` races the open and
+  no-ops on ENOENT), and `existed` is read *after* the 50 MB rotation rename (so a rotated log
+  re-hardens instead of landing at the umask). Note for LOOP-86: `npm test` is now a **69**-link `&&`
+  chain with the new suite appended last — the exact position that made it silently not run on Node 24
+  during the ship cycle.
+- **🔎 LOOP-46's W18 spec was re-checked against the skew it exists to catch, and it holds
+  (2026-07-31).** Went looking for a spec defect — specifically whether resolving the installed version
+  to a commit could go silent (`unknown` ⇒ *info, never warn*) on today's real skew. It cannot:
+  `v1.11.0` resolves via both the tag and the `chore(release)` fallback to `685fee3`, giving
+  `behind = 44 > 0` ⇒ **W18 warns correctly today**. The finding worth folding into its test is that
+  **the installed and `origin/main` versions are EQUAL while the code differs** — the obvious
+  "simplification" of comparing version strings would stay silent on the only skew that has ever
+  happened here, while passing every other test in the suite. Also cross-linked LOOP-117 (QA, filed
+  minutes earlier: `runDoctor` discards an explicit `DEVLOOP_HUB_DB` when cwd resolves to a workspace)
+  onto LOOP-46 mid-build, because a W18 fixture test run from this checkout could assert against the
+  *ambient* workspace and go green for the wrong reason — this workspace genuinely is 44 behind.
 
 ## Personas
 
@@ -1384,6 +1428,26 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   2026-06 arc and was being read as a standing prohibition. It is not one: **the rollup is a recurring
   chore keyed on size, not a one-time migration.**
 
+- **(pm, 2026-07-31) 🧭 STANDING RULE: a `Done` capability is verified against the workspace's OUTPUT,
+  not only against its code — and filed ZERO tickets this fire, deliberately.** This fire's lens found
+  that five `Done` metering tickets produce nothing here (183/183 ledger rows carry no `fireId`, no
+  `usage`), because the *launcher* is 44 commits behind while reporting the *same version string*.
+  Every one of those tickets was correctly verified: the code was right, the tests were right, the
+  reviews were right. What nobody checked was whether the running system's output ever changed. This
+  is the third variant of one failure in three fires — "checked against the code, never the ledger"
+  (LOOP-114), "checked against the output, but an output that had since moved" (LOOP-46/CRAP 90.4),
+  and now "checked against the code of a version that isn't the one running." **The generalization:
+  every verification names an artifact, and the artifact must be the one the operator actually runs.**
+  Where an increment cannot be exercised on this workspace, say so in the verify comment instead of
+  inferring a pass — as done on LOOP-93 this fire, and warned ahead of time on LOOP-85 and LOOP-4.
+  **On filing zero:** the junior tier is at **14 unblocked Todo against a cap of 10** and the Backlog
+  stands at 30, so the binding constraint is throughput and deployment, not idea supply — padding a
+  deep backlog would have made the report look productive and the loop no faster. The strongest
+  candidate found (the `DEVLOOP_*` env-scrub idiom hand-copied across ~9 sites in 4 idioms with
+  mutually inconsistent key lists) was **tested and declined**: the suite passes under a live fire env
+  at `origin/main`, so it is a latent inconsistency with no measured failure, in a class that already
+  has three shipped fixes and one Canceled duplicate (LOOP-47). Banked, not filed.
+
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
@@ -1458,3 +1522,18 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   redundant with the existing wordmark-as-home at `daemon.ts:127`.)
 - **Loop-cost-governance — Phase 2 (sequenced after a cost-signal precursor; PM 2026-06-27, banked from the DL-73 groom).** The DL-73 intake's two cost-*quantifying* asks are **not buildable until the hub has a per-fire cost signal** (agents don't report token/$ spend to the SoR today): **(a)** a loop-level **token/$ budget ceiling** (the hard circuit-breaker complementing DL-76's no-progress detector), and **(b)** a **cost-per-accepted-change** metric + a cost column on `/activity` (complementing DL-79's accept-rate). The likely precursor is a **§17 [pm-proposal]** for the operator-owned launcher to emit per-fire cost into the hub (a new `events` kind), then a buildable hub cap + the cost surfacing. File the precursor proposal when the operator signals appetite, or when an adopter hits a real runaway-cost incident. **(c)** Surfacing DL-79's accept-rate in the **Reflect daily digest** is a Reflect SKILL change → a §17 [reflect-proposal], not a code ticket; fold into the next Reflect-curation pass rather than filing Dev work. **UPDATE 2026-07-30 (pm): ✅ (a)+(b) UNBANKED — the operator asked for the whole arc directly, and the precursor is now FILED as `LOOP-2` (metering core: `fireId` + per-fire token/cache/cost across all three CLI lanes, senior `Mode: design`), with the read surfaces as `LOOP-4` (held in `Backlog` behind `Blocked-by: LOOP-2`).** Confirmed still not built before filing: `recordFire` writes duration/exit/model/effort/`bootBytes` only, and `context-bill.ts` is a *static* 4-bytes-per-token estimator of the boot corpus — there is no measured provider usage anywhere in the hub. Note the shape changed from what was banked here: this is **operator-directed work through the normal intake path, NOT a §17 `[pm-proposal]`** — the launcher already writes the per-fire ledger (`fire.completed`), so extending it is ordinary Dev work on hub code, with no SKILL/conventions edit required. **Enforcement (a budget ceiling that stops fires) is still NOT filed** — it is a separate ticket built ON this signal once LOOP-2 lands; do not fold it into LOOP-4's read surfaces.
 - **Daemon serves stale VIEW code until restarted — observe-surface lag after a Dev ship (ux-flows/ops lens, PM 2026-06-27 — banked).** The long-lived daemon (DL-41) loads `daemonviews.ts` + routes at boot, and `daemon ensure` is idempotent (never restarts a live process), so after a Dev commit that changes the web-UI rendering (e.g. DL-84's new `/activity` section, or DL-83's banner) the running daemon keeps serving the OLD view code until manually `down`+`up`'d — the operator sees fresh DATA (read per-request from the SoR) with **stale RENDERING**. Standard server behavior, but a real papercut for THIS dogfooding loop where Dev ships ~every 20min and the daemon IS the operator's observe surface (a new feature looks un-shipped until restart). **Options when filed:** a `dev-loop daemon restart` subcommand + a post-ship hint; OR a lightweight **served-commit-vs-HEAD banner** on the web UI so staleness is *visible* (the DL-83 surface-don't-prevent pattern); OR file-watch auto-reload (heavier — touches the lifecycle + the stateless contract). **Banked, not filed** — expected daemon behavior, low-severity (data is correct, only new view code lags); file if the operator finds the lag misleading or asks.
+- **`DEVLOOP_*` test-env scrubbing is one idiom hand-copied ~9 times with mutually inconsistent key
+  lists (consistency lens, PM 2026-07-31 — TESTED AND DECLINED, banked).** The runner injects 11
+  identity vars into every fire (`run-agents.ts:896-909`). Tests that spawn a child must scrub them or
+  the fire's own env leaks in — the bug that produced **LOOP-6** (`hub-lifecycle.ts`), **LOOP-32**
+  (`run-agents-live.ts`) and **LOOP-45** (`run-agents.ts`), plus **LOOP-47** filed and Canceled as a
+  duplicate of the last. Four fixes, one class, zero shared helper. The sites now disagree: `run-agents.ts`
+  scrubs 8 keys at two spawn helpers but only 4 at a third (`runL9`, line 383, a *destructuring* idiom);
+  `hub-lifecycle.ts` scrubs 3; `cli-agentops.ts` 4 (a different 4); `init-wizard.ts` 4; `daemon-lifecycle.ts`
+  uses an array loop; `DEVLOOP_FIRE_ID` is handled by direct `process.env` mutation in a fifth idiom.
+  **Declined because it was measured, not assumed:** `node test/run-agents.ts` at `origin/main` run under
+  a full live fire env returns `RUN_AGENTS_OK` — the weak `runL9` list is a *latent* inconsistency with
+  no live failure, because those cases pass `--project` explicitly. **File it when** a fifth instance of
+  this bug appears, or when a new identity var is added (the next one will land in none of the six lists);
+  the shippable form is a single exported `scrubFireEnv()` the way **LOOP-63** replaced 25 entrypoint
+  guards in 3 idioms with one helper — precedent this loop already accepted and shipped.
