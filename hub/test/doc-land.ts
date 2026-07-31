@@ -3,7 +3,7 @@
 // downgrade push-guard reference findings (Canceled/Duplicate refs in prose) to WARN
 // while hard-stopping on actual non-doc content. Bare-origin + clone harness (§15).
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,12 @@ const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") 
 const git = (dir: string, args: string[]): string =>
   execFileSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+// True iff <ref>:<path> exists (used to prove a rebased-past commit's file survived on origin).
+const pathOnRef = (dir: string, ref: string, path: string): boolean => {
+  try { execFileSync("git", ["-C", dir, "cat-file", "-e", `${ref}:${path}`], { stdio: "ignore" }); return true; }
+  catch { return false; }
+};
 
 const run = (args: string[], wsRoot: string, extra?: Record<string, string>): { status: number; stdout: string; stderr: string } => {
   const r = spawnSync(process.execPath, [join(hubRoot, "src", "doc-land.ts"), ...args], {
@@ -195,6 +201,128 @@ try {
   ok(/dry-run/.test(resDry.stdout), `--dry-run output mentions 'dry-run'`);
   const originAfterDry = git(repoDir, ["rev-parse", "origin/main"]);
   ok(originAfterDry === originBeforeDry, `--dry-run: origin/main unchanged (nothing pushed)`);
+
+  // ── (g) origin advances with a CODE commit while local has a doc-only commit → LANDS ─────────
+  //   LOOP-119, the whole ticket: step-1's two-dot diff saw origin's own code file and named it
+  //   PM's offender, refusing before the rebase. Three-dot (merge-base..HEAD) sees only OUR doc
+  //   commit. Every prior origin-advance case (c) advanced origin with a DOC file, so the shipped
+  //   suite never exercised a CODE divergence — the bug was invisible.
+  git(repoDir, ["fetch", "origin", "main"]);
+  git(repoDir, ["reset", "--hard", "origin/main"]);
+  writeFileSync(join(repoDir, "docs", "STRATEGY.md"), "# Strategy\n\nPM progress while origin lands code.\n");
+  git(repoDir, ["add", "docs/STRATEGY.md"]);
+  git(repoDir, ["commit", "-qm", "docs(strategy): PM progress entry (g)"]);
+  // origin advances with a CODE commit pushed by another agent (clone2)
+  git(clone2, ["fetch", "-q", "origin", "main"]);
+  git(clone2, ["reset", "--hard", "origin/main"]);
+  writeFileSync(join(clone2, "agent-code.ts"), "// another agent's CODE landing on origin/main\n");
+  git(clone2, ["add", "agent-code.ts"]);
+  git(clone2, ["commit", "-qm", "feat: another agent's code change (g)"]);
+  git(clone2, ["push", "-qu", "origin", "main"]);
+  // repoDir LEARNS about the code commit before doc-land runs — the real "behind 1 (code)" state
+  // the two-dot diff mis-blames. Without this fetch the origin ref is stale and the bug is invisible.
+  git(repoDir, ["fetch", "origin", "main"]);
+
+  const resG = run(["--repo", "dev-loop"], wsRoot);
+  ok(resG.status === 0, `(g) origin ahead with CODE + local doc-only → LANDS (exit 0; stderr: ${resG.stderr.trim().slice(0, 160)})`);
+  ok(!/REFUSED|non-doc/.test(resG.stderr), `(g) does NOT refuse — no non-doc offender named (stderr: ${resG.stderr.trim().slice(0, 160)})`);
+  ok(!/agent-code\.ts/.test(resG.stderr), `(g) the other agent's code path is never named as PM's offender`);
+  git(repoDir, ["fetch", "origin", "main"]);
+  ok(/PM progress while origin lands code/.test(git(repoDir, ["show", "origin/main:docs/STRATEGY.md"])),
+    `(g) the doc commit is on origin/main (rebased + pushed)`);
+  ok(pathOnRef(repoDir, "origin/main", "agent-code.ts"),
+    `(g) the other agent's code commit is preserved on origin/main (rebased onto, not clobbered)`);
+
+  // ── (h) same shape but the non-doc commit is LOCALLY authored → still REFUSED ─────────────────
+  //   proves the three-dot change did NOT widen the fence: a locally-authored code commit is inside
+  //   merge-base..HEAD and is still caught (LOOP-119 AC — the fence must survive the range change).
+  git(repoDir, ["fetch", "origin", "main"]);
+  git(repoDir, ["reset", "--hard", "origin/main"]);
+  writeFileSync(join(repoDir, "docs", "STRATEGY.md"), "# Strategy\n\nPM progress (h).\n");
+  git(repoDir, ["add", "docs/STRATEGY.md"]);
+  git(repoDir, ["commit", "-qm", "docs(strategy): PM progress entry (h)"]);
+  writeFileSync(join(repoDir, "local-code.ts"), "// locally authored, never pushed to origin\n");
+  git(repoDir, ["add", "local-code.ts"]);
+  git(repoDir, ["commit", "-qm", "feat: locally authored code (h)"]);
+  const originBeforeH = git(repoDir, ["rev-parse", "origin/main"]);
+
+  const resH = run(["--repo", "dev-loop"], wsRoot);
+  ok(resH.status !== 0, `(h) locally-authored code commit in range → still REFUSED (exit non-zero; got ${resH.status})`);
+  ok(/REFUSED|non-doc/.test(resH.stderr), `(h) refusal message present (fence intact)`);
+  ok(/local-code\.ts/.test(resH.stderr), `(h) names the locally-authored offending path (got: ${resH.stderr.trim().slice(0, 160)})`);
+  ok(git(repoDir, ["rev-parse", "origin/main"]) === originBeforeH, `(h) origin/main unchanged after refusal`);
+
+  // ── (j) LOOP-118: a REAL prose conflict on the same strategyDoc line → the rebase fails, doc-land
+  //   ABORTS it, and leaves the SHARED checkout clean (not wedged mid-rebase) for every other agent.
+  git(repoDir, ["fetch", "origin", "main"]);
+  git(repoDir, ["reset", "--hard", "origin/main"]);
+  // a shared baseline both sides diverge from
+  writeFileSync(join(repoDir, "docs", "STRATEGY.md"), "# Strategy\n\nintro\nSHARED-LINE-base\nouttro\n");
+  git(repoDir, ["add", "docs/STRATEGY.md"]);
+  git(repoDir, ["commit", "-qm", "docs(strategy): conflict baseline (j)"]);
+  git(repoDir, ["push", "-qu", "origin", "main"]);
+  // local edits the shared line one way (unpushed)
+  writeFileSync(join(repoDir, "docs", "STRATEGY.md"), "# Strategy\n\nintro\nSHARED-LINE-local\nouttro\n");
+  git(repoDir, ["add", "docs/STRATEGY.md"]);
+  git(repoDir, ["commit", "-qm", "docs(strategy): local edit to shared line (j)"]);
+  // clone2 edits the SAME line differently and pushes FIRST
+  git(clone2, ["fetch", "-q", "origin", "main"]);
+  git(clone2, ["reset", "--hard", "origin/main"]);
+  writeFileSync(join(clone2, "docs", "STRATEGY.md"), "# Strategy\n\nintro\nSHARED-LINE-remote\nouttro\n");
+  git(clone2, ["add", "docs/STRATEGY.md"]);
+  git(clone2, ["commit", "-qm", "docs(strategy): other agent edit to shared line (j)"]);
+  git(clone2, ["push", "-qu", "origin", "main"]);
+  git(repoDir, ["fetch", "origin", "main"]);
+
+  const resJ = run(["--repo", "dev-loop"], wsRoot);
+  ok(resJ.status !== 0, `(j) genuine prose conflict → exits non-zero (got ${resJ.status})`);
+  ok(/conflict|reconcile/i.test(resJ.stderr), `(j) BLOCKED message explains the conflict + manual reconcile (got: ${resJ.stderr.trim().slice(0, 200)})`);
+  ok(!existsSync(join(repoDir, ".git", "rebase-merge")) && !existsSync(join(repoDir, ".git", "rebase-apply")),
+    `(j) no .git/rebase-merge or rebase-apply left behind — the shared checkout is NOT wedged`);
+  const branchJ = (() => { try { return git(repoDir, ["branch", "--show-current"]); } catch { return "(detached)"; } })();
+  ok(branchJ === "main", `(j) checkout restored to 'main', not left detached mid-rebase (got: '${branchJ}')`);
+  // a SECOND invocation must handle it cleanly too — not fail from an already-wedged state
+  const resJ2 = run(["--repo", "dev-loop"], wsRoot);
+  ok(!existsSync(join(repoDir, ".git", "rebase-merge")) && !existsSync(join(repoDir, ".git", "rebase-apply")),
+    `(j) a second doc-land also leaves NO rebase state — not wedged from the first (LOOP-118 outage gone)`);
+  ok(resJ2.status !== 0 && /conflict|reconcile/i.test(resJ2.stderr),
+    `(j) the second run reports the same conflict from a CLEAN state, not "rebase failed" from a broken one`);
+  git(repoDir, ["fetch", "origin", "main"]);
+  git(repoDir, ["reset", "--hard", "origin/main"]);
+
+  // ── (i) LOOP-119 Fix 2: a non-'main' defaultBranch (trunk) resolves via effectiveRepo + lands ──
+  //   proves the hardcoded "main" is gone — doc-land reads repo.defaultBranch (§19 fallback chain).
+  {
+    const originT = join(ROOT, "origin-trunk.git");
+    const wsT = join(ROOT, "ws-trunk");
+    const repoT = join(wsT, "dev-loop");
+    mkdirSync(originT, { recursive: true });
+    mkdirSync(wsT, { recursive: true });
+    execFileSync("git", ["init", "--bare", "-q", "-b", "trunk", originT]);
+    execFileSync("git", ["clone", "-q", originT, repoT]);
+    git(repoT, ["commit", "--allow-empty", "-qm", "baseline"]);
+    git(repoT, ["push", "-qu", "origin", "trunk"]);
+    writeFileSync(join(wsT, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2, workspaceId: "test-doc-land-trunk",
+      team: { key: "test", backend: "service", mode: "live", autonomy: "ask", git: { defaultBranch: "trunk" } },
+      repos: { "dev-loop": { path: "dev-loop", remote: originT, landing: "pr" } },
+      projects: { test: { repos: [{ ref: "dev-loop" }], strategyDoc: { path: "docs/STRATEGY.md" } } },
+    }, null, 2));
+    mkdirSync(join(wsT, ".dev-loop", "locks"), { recursive: true });
+    // push-guard opens the hub DB; create it (empty) so its ticket query has a schema to read.
+    const dbT = openDb(join(wsT, ".dev-loop", "hub.db"));
+    dbT.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','test','Test','t')").run();
+    dbT.close();
+    mkdirSync(join(repoT, "docs"), { recursive: true });
+    writeFileSync(join(repoT, "docs", "STRATEGY.md"), "# Strategy (trunk)\n\nprogress on a non-main default branch\n");
+    git(repoT, ["add", "docs/STRATEGY.md"]);
+    git(repoT, ["commit", "-qm", "docs(strategy): progress on trunk (i)"]);
+    const beforeI = git(repoT, ["rev-parse", "HEAD"]);
+
+    const resI = run(["--repo", "dev-loop"], wsT);
+    ok(resI.status === 0, `(i) non-main defaultBranch (trunk) → lands (exit 0; stderr: ${resI.stderr.trim().slice(0, 160)})`);
+    ok(git(repoT, ["rev-parse", "origin/trunk"]) === beforeI, `(i) origin/trunk has the commit — defaultBranch honoured, no hardcoded 'main'`);
+  }
 
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
