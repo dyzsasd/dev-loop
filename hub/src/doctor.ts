@@ -43,6 +43,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   let ws: Workspace | null = null;
   const unseeded: string[] = []; // W08 hits, collected for the NEXT line
   let stalledRepo: string | undefined;
+  let skewResult: { codeBehind: number; version: string } | null | undefined;
   if (opts.reconcile) {
     try { ws = tryResolveWorkspace(); }
     catch (e) {
@@ -55,10 +56,11 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
       const wsResult = await doctorWorkspace(ws);
       ok = wsResult.ok && ok;
       stalledRepo = wsResult.stalledRepo;
+      skewResult = wsResult.skewResult;
       if (ws.file.team.backend === "linear") {
         // A linear team has no hub.db; the workspace checks ARE the whole verdict.
         console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
-        console.log(`NEXT: ${nextStep(ws, [], [], stalledRepo)}`);
+        console.log(`NEXT: ${nextStep(ws, [], [], stalledRepo, skewResult)}`);
         return ok;
       }
       if (!process.env.DEVLOOP_HUB_DB || opts.preferWorkspace) dbPath = wsHubDb(ws); // prefer workspace hub.db; honor explicit DEVLOOP_HUB_DB (test isolation)
@@ -164,7 +166,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   if (opts.reconcile) await serviceReconcile(projects.map((p) => p.key), dbPath);
 
   console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
-  if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded, stalledRepo)}`);
+  if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded, stalledRepo, skewResult)}`);
   return ok;
 }
 
@@ -173,7 +175,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
 // an invalid config blocks everything → a blank linearTeam blocks every fire → no projects/repos blocks
 // scheduling → an unseeded service project silently starves its fires → dry-run is the last gate before
 // live. All green ⇒ run the team.
-function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string): string {
+function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, skewResult?: { codeBehind: number; version: string } | null): string {
   if (errors.length) { const e = errors[0]; return `fix dev-loop.json — [${e.code}] ${e.path ? e.path + ": " : ""}${e.message}`; }
   if (!ws) return "dev-loop run";
   const t = ws.file.team;
@@ -185,6 +187,8 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], s
   if (t.mode === "dry-run") return `dev-loop team set team.mode live  (everything is wired; flip when ready to go live)`;
   // W22 NEXT flip: a landing stall is the most-blocking state when everything else is green
   if (stalledRepo) return `clear the landing stall: fix the red base / land the wedged PRs — gh pr list --repo ${stalledRepo}`;
+  // §9.8 release-readiness hint: when shipped-code skew > 0, tell the operator to cut a release
+  if (skewResult != null && skewResult.codeBehind > 0) return `cut a release — ${skewResult.codeBehind} shipped-code commit(s) merged after v${skewResult.version} are not published; dev-loop fixes marked Done are not live. Dispatch release-npm.yml.`;
   return "dev-loop run";
 }
 
@@ -192,7 +196,7 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], s
 // Reports the E-code/W-code verdict for a dev-loop.json, that every registered repo exists and is a git
 // repo, and the two migration/leak warnings (W05 user-scope MCP for linear steward fires; W06 workspace
 // inside a git work-tree). Never writes, never repairs.
-export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn } = {}): Promise<{ ok: boolean; stalledRepo?: string }> {
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn } = {}): Promise<{ ok: boolean; stalledRepo?: string; skewResult?: { codeBehind: number; version: string } | null }> {
   let ok = true;
   let stalledRepo: string | undefined;
   const pass = (m: string) => console.log("✅ " + m);
@@ -383,7 +387,8 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
 
   // W18 — installed CLI vs origin/main skew (LOOP-46 / design landing-observability §9.3).
   // Extracted to helper to keep doctorWorkspace CC in budget. Best-effort; never flips DOCTOR_OK.
-  try { checkInstalledCliSkew(ws, { warn, info, pass }); } catch { /* W18 is best-effort */ }
+  let skewResult: { codeBehind: number; version: string } | null = null;
+  try { skewResult = checkInstalledCliSkew(ws, { warn, info, pass }) ?? null; } catch { /* W18 is best-effort */ }
 
   // W23 — CLI-rename permission drift (LOOP-181 / Phase A): a workspace whose .claude/settings.json was
   // provisioned before the `kaizen` bin landed allows Bash(dev-loop *) but not Bash(kaizen *). Harmless
@@ -404,7 +409,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     else info("workspace root is inside a git repo but .dev-loop/ is gitignored");
   }
 
-  return { ok, stalledRepo };
+  return { ok, stalledRepo, skewResult };
 }
 
 function isGitWorkTree(dir: string): boolean {
@@ -450,16 +455,17 @@ async function checkLandingW22Stall(
 // Only fires when the running package's repository matches a configured landing:"pr" repo (the dogfooding
 // case). For all normal product workspaces this is a zero-cost n/a — no git calls, no output.
 // DEVLOOP_W18_PKG_JSON overrides the package.json path for test injection (no real reinstall needed).
-function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; info: (m: string) => void; pass: (m: string) => void }): void {
+// Returns { codeBehind, version } when honest code-commit skew > 0 (for the §9.8 NEXT hint); null otherwise.
+function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; info: (m: string) => void; pass: (m: string) => void }): { codeBehind: number; version: string } | null {
   const { warn, info, pass } = out;
   const here = dirname(fileURLToPath(import.meta.url));
   const pkgFile = process.env.DEVLOOP_W18_PKG_JSON ?? join(here, "..", "package.json");
   let pkgData: { name?: string; version?: string; repository?: string | { url?: string } } | null = null;
   try { pkgData = JSON.parse(readFileSync(pkgFile, "utf8")); } catch { /* unreadable — skip silently */ }
-  if (!pkgData) return;
+  if (!pkgData) return null;
   const V = (pkgData.version ?? "").trim();
   const rawUrl = typeof pkgData.repository === "string" ? pkgData.repository : (pkgData.repository?.url ?? "");
-  if (!V || !rawUrl) return;
+  if (!V || !rawUrl) return null;
   const normalize = (u: string): string => {
     const s = u.replace(/^git\+/, "").replace(/\.git$/, "");
     const ssh = s.match(/^git@([^:]+):(.+)$/);
@@ -476,10 +482,10 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
       matchRef = ref; matchDir = r.absPath; matchBranch = r.defaultBranch; break;
     }
   }
-  if (matchRef === null) return; // n/a — no configured repo matches this package
+  if (matchRef === null) return null; // n/a — no configured repo matches this package
   if (!existsSync(matchDir) || !isGitWorkTree(matchDir)) {
     info(`[${matchRef}] W18: repo not on disk — cannot check installed-vs-origin skew (best-effort)`);
-    return;
+    return null;
   }
   try {
     let vCommit: string | null = null;
@@ -494,13 +500,13 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
     }
     if (!vCommit) {
       info(`[${matchRef}] W18: v${V} commit unresolvable (no v${V} tag and no matching release commit) — skipping (best-effort)`);
-      return;
+      return null;
     }
     const behindR = spawnSync("git", ["-C", matchDir, "rev-list", "--count", `${vCommit}..origin/${matchBranch}`],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     if (behindR.status !== 0 || !behindR.stdout.trim()) {
       info(`[${matchRef}] W18: origin/${matchBranch} not resolved locally (run git fetch to check; best-effort)`);
-      return;
+      return null;
     }
     const behind = parseInt(behindR.stdout.trim(), 10);
     if (isNaN(behind)) {
@@ -521,12 +527,14 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
         const shortSha = shortR.stdout.trim() || "unknown";
         const docNote = docBehind > 0 ? ` (+${docBehind} doc-only)` : "";
         warn(`[W18] [${matchRef}] installed ${pkgName} v${V} is ${codeBehind} code commit(s) behind origin/${matchBranch} (${shortSha})${docNote} — CLI-behavior fixes merged after v${V} are NOT live: every fire runs the published npm package, not origin/main. An operator must re-publish + agents reinstall, or pin agents to a local build (design landing-observability §9.2).`);
+        return { codeBehind, version: V };
       }
       // codeBehind === 0: all commits are doc-only — silent (no behavior skew)
     } else {
       pass(`[${matchRef}] installed ${pkgName} v${V} matches origin/${matchBranch} — no skew`);
     }
   } catch { info(`[${matchRef}] W18: git check skipped (best-effort)`); }
+  return null;
 }
 
 // ── D8/D9: CLI-interface preflight (W09/W10/W11) ─────────────────────────────────────────────────────────

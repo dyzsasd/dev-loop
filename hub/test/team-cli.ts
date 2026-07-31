@@ -533,6 +533,38 @@ try {
       ok(/\+2 doc-only/.test(w18mixed.out), "W18 mentions doc-only commits separately (+2 doc-only) (LOOP-151)");
       ok(/DOCTOR_OK/.test(w18mixed.out), "DOCTOR_OK holds for mixed commits (LOOP-151)");
     }
+
+    // Case G (LOOP-167 §9.8 AC-1): code-behind > 0 → NEXT has release-readiness hint naming N
+    // State after Case F: tag v1.2.3 at headF; origin/main has 1 code + 2 doc commits ahead → codeBehind=1
+    const w18nextBehind = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgJson } });
+    ok(/NEXT:.*cut a release/.test(w18nextBehind.out), "NEXT carries release-readiness hint when code-behind > 0 (LOOP-167)");
+    ok(/1 shipped-code commit/.test(w18nextBehind.out), "NEXT names the honest count N=1 (LOOP-167)");
+    ok(/release-npm\.yml/.test(w18nextBehind.out), "NEXT names the dispatch action (LOOP-167)");
+    ok(/DOCTOR_OK/.test(w18nextBehind.out), "DOCTOR_OK unaffected by the release-readiness NEXT hint (LOOP-167)");
+
+    // Case H (LOOP-167 §9.8 AC-2): docs-only delta (honest count 0) → NO release-readiness NEXT line
+    // Reset tag to current origin/main tip, add only doc commits → codeBehind=0
+    {
+      const headH = spawnSync("git", ["-C", w18Clone, "rev-parse", "origin/main"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+      gitW18(w18Clone, ["tag", "-f", "v1.2.3", headH]);
+      writeFileSync(join(w18Clone, "docs", "LOOP167-A.md"), "# loop167 a\n");
+      gitW18(w18Clone, ["add", "docs/LOOP167-A.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs: LOOP-167 test doc A"]);
+      writeFileSync(join(w18Clone, "docs", "LOOP167-B.md"), "# loop167 b\n");
+      gitW18(w18Clone, ["add", "docs/LOOP167-B.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs: LOOP-167 test doc B"]);
+      gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+      const w18nextDocOnly = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgJson } });
+      ok(!/cut a release/.test(w18nextDocOnly.out), "no release-readiness NEXT when docs-only delta (codeBehind=0) (LOOP-167)");
+      ok(/DOCTOR_OK/.test(w18nextDocOnly.out), "DOCTOR_OK holds for docs-only delta NEXT check (LOOP-167)");
+    }
+
+    // Case I (LOOP-167 §9.8 AC-3): unresolvable installed version → no NEXT hint, no added git calls
+    // Reuses w18PkgNoTag (version "9.9.9") — no tag/release commit → vCommit null → skewResult null
+    const w18nextNoVer = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgNoTag } });
+    ok(!/cut a release/.test(w18nextNoVer.out), "no release-readiness NEXT when version unresolvable (LOOP-167)");
+    ok(/DOCTOR_OK/.test(w18nextNoVer.out), "DOCTOR_OK holds when version unresolvable — NEXT check adds no git calls (LOOP-167)");
   }
 
   // ── W22: landing stall detection; DOCTOR_OK stays; NEXT flips only on stall ──
