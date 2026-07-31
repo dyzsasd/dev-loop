@@ -183,7 +183,7 @@ export async function initWizard(argv = process.argv.slice(2)): Promise<number> 
 // directly (D8), so the plugin is a one-line optional note.
 async function epilogue(dir: string): Promise<number> {
   console.log("");
-  const ok = await runDoctor(hubDbPath(), { reconcile: true }); // prints the full verdict + the NEXT line
+  const ok = await runDoctor(hubDbPath(), { reconcile: true, preferWorkspace: true }); // prints the full verdict + the NEXT line
   let ws: Workspace | null = null;
   try { ws = tryResolveWorkspace(); } catch { /* invalid config: doctor's NEXT already says what to fix */ }
   if (!ws) return ok ? 0 : 1;
