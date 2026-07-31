@@ -243,7 +243,11 @@ async function daemonUpForKey(key: string): Promise<number> {
       // hook, an inherited scheduler fire) where DEVLOOP_ACTOR=<agent>. Without pinning, the daemon adopts
       // that actor — silently mis-attributing human writes and mis-gating publish (operator-only). The
       // daemon is operator-owned infrastructure regardless of who happened to trigger `up`.
-      env: { ...process.env, DEVLOOP_ACTOR: "operator", DEVLOOP_NODE: node, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
+      // Pin DEVLOOP_ACTOR=operator (D5 — same class for DEVLOOP_FIRE_ID, LOOP-75):
+      // `up` is often invoked from a fire's env inheriting DEVLOOP_FIRE_ID; the daemon is operator-owned
+      // infrastructure, not a fire — it must never claim a stale fire id (silently-wrong attribution is
+      // worse than absent: analytics would attribute all daemon-internal events to one arbitrary fire).
+      env: { ...process.env, DEVLOOP_ACTOR: "operator", DEVLOOP_FIRE_ID: "", DEVLOOP_NODE: node, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
     });
     child.unref();
     closeSync(logFd);

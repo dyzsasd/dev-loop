@@ -1,8 +1,15 @@
 // dev-loop hub — the SQLite system of record (built-in node:sqlite, WAL).
 // Zero native deps. One process opens one hub.db; see ../docs/HUB-ARCHITECTURE.md §6/§7.
 import { DatabaseSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+
+// Per-request fireId carrier (LOOP-75). Three-state AsyncLocalStorage:
+//   undefined — no ALS scope active (direct-db fire process or daemon notifier tick): fall through to env
+//   string    — op-API request carrying x-devloop-fire-id header: stamp with that value
+//   null      — op-API request with no header: explicitly no fireId (never use the daemon's ambient env)
+export const fireIdStore = new AsyncLocalStorage<string | null>();
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 export type State =
@@ -442,7 +449,12 @@ export function logEvent(
   db: DatabaseSync,
   e: { project_id: string; ticket_id?: string | null; actor: string; kind: string; data?: unknown },
 ): void {
-  const fireId = process.env.DEVLOOP_FIRE_ID;
+  // Three-state fireId resolution (LOOP-75):
+  //   stored undefined (no ALS scope) → fall back to env (direct-db fire process; byte-identical to before)
+  //   stored string  (op-API with header)  → stamp the request's fireId
+  //   stored null    (op-API, no header)   → no fireId (never use the daemon's own env)
+  const stored = fireIdStore.getStore();
+  const fireId = stored === undefined ? (process.env.DEVLOOP_FIRE_ID || undefined) : (stored ?? undefined);
   const data = fireId
     ? { ...(e.data as Record<string, unknown> | undefined ?? {}), fireId }
     : (e.data ?? {});
