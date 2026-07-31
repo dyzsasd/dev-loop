@@ -81,6 +81,23 @@ ok(titles(qa.body.verify).includes("qa verify") && !titles(qa.body.verify).inclu
 ok(titles(qa.body.blocked).includes("pm unblock") && titles(qa.body.blocked).includes("blocked one") && !titles(qa.body.blocked).includes("terminal blocked"),
   "qa blocked = every non-terminal blocked ticket (Job B routes by bail-shape)");
 
+// ── 4a. Mode:design routing (LOOP-59) — design parent routes to PM regardless of label ──────────
+// Mirrors LOOP-48's shape: filed with qa label (no pm); senior-dev added Mode:design marker.
+// Queue-side guard must override the stale label: PM sees it, QA never does.
+mk({ title: "design parent stale label", state: "In Review",
+  labels: ["dev-loop", "qa", "senior-dev"],
+  description: "Mode: design\n\nTwo children: LOOP-54 / LOOP-55.\n" });
+const pmDesign = call("pm");
+ok(titles(pmDesign.body.verify).includes("design parent stale label"),
+  "LOOP-59: Mode:design parent routes into pm.verify regardless of stale qa label");
+ok(titles(pmDesign.body.verify).includes("pm verify"),
+  "LOOP-59: existing pm-labelled ticket still in pm.verify (no regression)");
+const qaDesign = call("qa");
+ok(!titles(qaDesign.body.verify).includes("design parent stale label"),
+  "LOOP-59: Mode:design parent excluded from qa.verify (QA has no design-gate authority)");
+ok(titles(qaDesign.body.verify).includes("qa verify"),
+  "LOOP-59: normal qa-labelled ticket still in qa.verify (no regression)");
+
 // ── 5. refusals ───────────────────────────────────────────────────────────────────────────────────
 ok(call("reflect").status === 400, "queue refuses actors without a pick contract (reflect)");
 
