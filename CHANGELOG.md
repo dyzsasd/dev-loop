@@ -3,6 +3,25 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+**CLI rename — Phase A (brand: Kaizen Factory; the command becomes `kaizen`).** The bin now ships
+under both names while prose still types `dev-loop`; the prose flips one release later (Phase B),
+only after every workspace has upgraded — a single-release rename would deny board access to every
+already-initialized workspace the moment it upgraded (LOOP-181 / LOOP-174).
+
+- **`kaizen` / `kaizen-hub` bins** — new aliases resolving to the SAME entrypoints as
+  `dev-loop` / `dev-loop-hub` (so `kaizen --version` and `dev-loop --version` agree). `dev-loop`
+  stays a permanent, never-removed alias; the npm package name is unchanged (`@dyzsasd/dev-loop` —
+  brand ≠ engine).
+- **Both CLI permissions provisioned** — `team init` (and `team add-project` / bundle-load) now
+  write BOTH `Bash(kaizen *)` and `Bash(dev-loop *)` into `.claude/settings.json`, and
+  **`dev-loop team repair` tops up** an existing workspace's allow-list with any missing rule of
+  the pair (idempotent, non-destructive, `--dry-run`-aware) — so a workspace created before the
+  rename is ready before prose flips.
+- **doctor W23** — warns (warn-only; never flips `DOCTOR_OK`) when a workspace allows
+  `Bash(dev-loop *)` but not `Bash(kaizen *)`, naming `dev-loop team repair` as the fix.
+
 ## 1.12.0
 
 98 commits in one overnight run of the loop on itself. The headline: **dev-loop can now
