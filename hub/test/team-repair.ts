@@ -2,7 +2,7 @@
 // Fixture: two worktrees (Canceled + In Progress) under two different roots; reaper removes exactly
 // the first. Must fail against origin/main prior to this fix (pre-LOOP-37 code has no reaper).
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,6 +200,43 @@ try {
   ok(repairReap.status === 0, "team repair --reap exits 0");
   ok(!existsSync(wtOptin), "AC1: team repair --reap removes the (recoverable) terminal worktree");
   ok(!git(repoDir, ["branch", "--list"]).includes("dev-loop/OPTIN-1"), "AC1: team repair --reap deletes the recoverable branch");
+
+  // ── 12. LOOP-181 — the CLI-rename permission top-up: `team repair` adds the missing Bash(kaizen *) rule
+  //     to a workspace's .claude/settings.json (idempotent, non-destructive, --dry-run aware). A workspace
+  //     provisioned before the `kaizen` bin carries only Bash(dev-loop *); the top-up makes it Phase-B-ready. ──
+  const stFile = join(wsRoot, ".claude", "settings.json");
+  const writeSettings = (obj: unknown) => { mkdirSync(dirname(stFile), { recursive: true }); writeFileSync(stFile, JSON.stringify(obj, null, 2) + "\n"); };
+  const repair = (extra: string[] = []) => spawnSync(process.execPath, [trPath, ...extra], { encoding: "utf8", env: trEnv });
+  const allowOf = () => (JSON.parse(readFileSync(stFile, "utf8")) as { permissions: { allow: string[] } }).permissions.allow;
+
+  // Pre-rename fixture: only the old rule, plus an UNRELATED entry that must survive untouched.
+  writeSettings({ permissions: { allow: ["Bash(other *)", "Bash(dev-loop *)"] } });
+
+  // (a) --dry-run REPORTS the top-up but writes nothing.
+  const drySt = repair(["--dry-run"]);
+  ok(drySt.status === 0 && /would gain/.test(drySt.stdout) && /Bash\(kaizen \*\)/.test(drySt.stdout),
+    "AC: team repair --dry-run reports the Bash(kaizen *) top-up");
+  ok(JSON.stringify(allowOf()) === JSON.stringify(["Bash(other *)", "Bash(dev-loop *)"]),
+    "AC: team repair --dry-run does NOT write (settings.json unchanged)");
+
+  // (b) the real run APPENDS Bash(kaizen *), preserving the unrelated entry + order.
+  const applied = repair();
+  ok(applied.status === 0 && /permissions\.allow \+= "Bash\(kaizen \*\)"/.test(applied.stdout),
+    "AC: team repair appends the missing Bash(kaizen *) rule");
+  ok(JSON.stringify(allowOf()) === JSON.stringify(["Bash(other *)", "Bash(dev-loop *)", "Bash(kaizen *)"]),
+    "AC: the top-up preserves Bash(other *) + Bash(dev-loop *) and appends kaizen last (non-destructive)");
+
+  // (c) idempotent re-run: no change, and it says so (byte-stable file).
+  const beforeIdem = readFileSync(stFile, "utf8");
+  const againSt = repair();
+  ok(againSt.status === 0 && /already allows/.test(againSt.stdout), "AC: team repair re-run reports 'already allows' (both rules present)");
+  ok(readFileSync(stFile, "utf8") === beforeIdem, "AC: team repair re-run leaves settings.json byte-stable (idempotent)");
+
+  // (d) a malformed settings.json is NEVER clobbered — left untouched with a note.
+  writeFileSync(stFile, "{ not valid json");
+  const badSt = repair();
+  ok(badSt.status === 0 && /left untouched/.test(badSt.stdout), "AC: team repair prints a 'left untouched' note for a malformed settings.json");
+  ok(readFileSync(stFile, "utf8") === "{ not valid json", "AC: team repair does NOT rewrite a malformed settings.json");
 
   console.log(fails === 0 ? "\nTEAM_REPAIR_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);

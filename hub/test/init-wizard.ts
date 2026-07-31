@@ -44,7 +44,8 @@ try {
   const keys = hubKeys(acme);
   ok(keys.includes("_team") && keys.includes("acme"), "hub rows seeded: the _team intake row + the auto-seeded project");
   const st = readJson(join(acme, ".claude", "settings.json"));
-  ok(Array.isArray(st.permissions?.allow) && st.permissions.allow.includes("Bash(dev-loop *)"), "the Claude permissions entry is provisioned (D8)");
+  ok(Array.isArray(st.permissions?.allow) && st.permissions.allow.includes("Bash(dev-loop *)") && st.permissions.allow.includes("Bash(kaizen *)"),
+    "the Claude permissions entries are provisioned — BOTH Bash(dev-loop *) and Bash(kaizen *) (D8 / LOOP-181)");
   ok(/DOCTOR_OK/.test(r1.out), "doctor verdict is OK");
   ok(/NEXT: dev-loop team add-repo/.test(r1.out), "doctor NEXT = add-repo (project exists, no repos yet)");
   ok(/hub start/.test(r1.out) && /127\.0\.0\.1:8787/.test(r1.out), "epilogue names `hub start` + the local board URL");

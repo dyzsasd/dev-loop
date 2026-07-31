@@ -10,6 +10,7 @@ import { resolveWorkspace, wsHubDb, upsertWorkspaceIndex } from "./workspace.ts"
 import { effectiveRepo } from "./team-config.ts";
 import { openDb } from "./db.ts";
 import { worktreeReap } from "./worktree.ts";
+import { ensureCliPermissions, CLI_PERMISSIONS } from "./team-init.ts";
 
 function usage(): void {
   console.log(`dev-loop team repair — fix a workspace after a move/migration (mutating; doctor is read-only)
@@ -72,6 +73,23 @@ export async function teamRepair(argv = process.argv.slice(2)): Promise<number> 
         } catch (e) { info(`hub WAL checkpoint skipped: ${(e as Error).message}`); }
       } else info("service backend but no hub.db yet (run `team init` / a first fire)");
     }
+  }
+
+  // Claude-settings CLI permission top-up (LOOP-181): .claude/settings.json is written ONCE at init and
+  // never updated by an npm upgrade, so a workspace created before the `kaizen` bin landed carries only
+  // Bash(dev-loop *). Top up any missing rule of the CLI pair — idempotent, non-destructive (create-or-
+  // merge; a malformed file is left untouched), and honoring --dry-run (report, don't write).
+  {
+    const r = ensureCliPermissions(ws.root, { dryRun });
+    const rel = ".claude/settings.json";
+    if (r.outcome === "untouched")
+      info(`${rel} ${r.untouchedReason} — left untouched (add ${CLI_PERMISSIONS.join(" + ")} to permissions.allow by hand)`);
+    else if (r.outcome === "present")
+      pass(`${rel} already allows ${CLI_PERMISSIONS.join(" + ")}`);
+    else if (dryRun)
+      info(`${rel} would gain ${r.added.map((p) => JSON.stringify(p)).join(" + ")}${r.created ? " (file would be created)" : ""} — run \`dev-loop team repair\` to apply`);
+    else
+      pass(`${rel}: permissions.allow += ${r.added.map((p) => JSON.stringify(p)).join(" + ")}${r.created ? " (created)" : ""}`);
   }
 
   // 4. Terminal-state worktrees (Done / Canceled / Duplicate). LOOP-37 enumerates them from
