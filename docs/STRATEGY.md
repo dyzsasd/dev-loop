@@ -640,6 +640,98 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **Still merged-only in the sense that matters: nothing here has landed** — these are two staged
   children, and the three defects remain live in `main` at `cf708e4`.
 
+
+- **2026-07-31 (late) — both mid-fire fixes landed and verified `Done`, and the newer of the two
+  guarded one of its two language pipelines (LOOP-156 `068b767` PR #111, LOOP-158 `2b4d6dd` PR #112;
+  the gap filed the same hour as LOOP-192).** LOOP-156 introduced `hub/test/env-scrub.ts` — one
+  exported `scrubFireEnv()` over an 11-var `FIRE_MARKER_VARS` union — and wired it into `attach.ts`,
+  `build-artifact.ts` and `bundle.ts`, ending the exit-4 false failures those three suites produced
+  inside a live fire. The helper is sound: its list is a strict superset of the two markers
+  `cli-agentops.ts:194` actually guards on, so **there is no list drift** — the checked-and-clean
+  result matters as much as a defect would.
+  LOOP-158 closed the CRAP gate's fail-open on absent coverage: with `--threshold` set and no
+  scorable TS/JS rows, the gate now exits 1 rather than short-circuiting to 0 on `maxCrap === null`.
+  **The contract is right and the guard sits inside `if (tsjsFiles.length) { … }`.** `quality.ts` runs
+  two coverage pipelines, TS/JS and Go, and only the first one got it. A controlled A/B on a single
+  Go fixture — same source, same `--threshold 90` — exits **2** with `max 156.0 > 90` when the
+  coverprofile is produced and **0** when it is not, having printed only an informational
+  `"no coverprofile produced — Go rows go N/A"`. Empty paint ⇒ `coverageOf` null ⇒ `crapScore` null ⇒
+  `maxCrap` null ⇒ the threshold comparison is skipped entirely. On a Go product repo carrying the
+  ratchet as a `mergeChecks` entry, the gate is a no-op in exactly the situation it exists for: when
+  coverage collection has broken. This repo is TS-only, so **its own merge check is unaffected** —
+  the exposure is any Go repo the loop manages. Filed as **LOOP-192** with the A/B repro as the spec.
+
+
+- **2026-07-31 (late) — CLI rename Phase A shipped, verified against a packed install, and is
+  deliberately dark everywhere (LOOP-181 `Done`; `634939c`, PR #113, main's own CI green).** The
+  `kaizen` and `kaizen-hub` bins now ship alongside `dev-loop`/`dev-loop-hub` — same entrypoints,
+  `--version` agreeing at 1.12.0, package `name` frozen at `@dyzsasd/dev-loop` (brand ≠ engine).
+  `team init` provisions **both** `Bash(dev-loop *)` and `Bash(kaizen *)`; `team repair` tops up an
+  existing workspace's allow-list with whichever rule is missing; and doctor **W23** warns, warn-only,
+  when a workspace has the old rule and not the new one. Verified by packing the merged tree and
+  installing the tarball into an isolated prefix — not against this workspace's CLI, which is still
+  the published 1.12.0 and has no `kaizen` bin at all.
+  **The phasing is the product decision, and this is what it costs and buys.** `.claude/settings.json`
+  is written once at init and never touched by an npm upgrade, so a single-release rename would deny
+  board access to every already-initialized workspace the moment it upgraded — new prose typing
+  `kaizen …` against an allow-list that only permits `dev-loop *`. Phase A therefore ships the bin
+  and the permission with **zero** prose changes (independently confirmed: the diff touches nothing
+  under `references/` or `skills/`, and a command-shaped `kaizen …` grep across both returns 0).
+  **The consequence worth recording, because it is the one thing that can go wrong from here:**
+  Phase B (LOOP-182, the prose flip) is gated on `kaizen` being *installed*, not merged — so
+  **merging Phase A cannot unblock it, only a release can.** LOOP-182 stays `blocked` by design.
+  The order that must hold is: release → every workspace upgrades and runs `team repair` (W23 tells
+  them to) → only then does prose flip. W23 exists precisely to make the middle step visible instead
+  of silent.
+
+- **2026-07-31 (late) — the release landed, and for the first time in this loop's recorded history
+  `dev-loop doctor` reports ZERO skew between the installed CLI and `origin/main` (v1.13.0,
+  `d1ceabb`).** The operator ran the `Release npm package` workflow off `1c1a2fd` at ~20:00Z; it
+  stamped the manifests, typechecked, tested and built the *stamped* tree, then committed
+  `chore(release): v1.13.0` and published. Measured here at 20:1xZ: `npm view @dyzsasd/dev-loop
+  version` → `1.13.0`, `dev-loop --version` → `1.13.0`, `kaizen --version` → `1.13.0`, doctor →
+  `✅ [dev-loop] installed @dyzsasd/dev-loop v1.13.0 matches origin/main — no skew`. **LOOP-38's
+  release gap, tracked since 2026-07-30 and re-stated as a standing operator ask in four consecutive
+  PM reports, is closed on the CLI axis.**
+  **Six verified-Done fixes stopped being dark in the same instant** — LOOP-157 (the two-hop
+  In Review→Done self-accept), LOOP-181 (the `kaizen` bin + doctor W23), LOOP-41 (W22 landing-stall
+  detection), LOOP-151 (W18 counting code-bearing commits only), LOOP-156 (`scrubFireEnv`) and
+  LOOP-158 (the CRAP gate failing loudly on absent coverage). Every one of them had been merged,
+  verified, and unable to affect a single fire on this workspace.
+  Two things were checked rather than assumed. **(a) The release commit carries no CI run of its own
+  and does not need one:** `release-npm.yml` runs `typecheck` → `npm test` → `build` *after*
+  `release-version.ts` stamps the version, so the tree that got tagged is the tree that got tested;
+  the separate `Test` run attaches to the pre-bump SHA. **(b) The "what version is this?" multiplicity
+  query came back clean** — `hub/package.json`, `hub/package-lock.json`, `.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json` and `CHANGELOG.md` all read `1.13.0`, and no source file hardcodes
+  a version at all. Four sites, one answer. That query has now found a defect three times out of five;
+  the two clean results are worth the same recording.
+
+- **2026-07-31 (late) — and the skew is not actually closed: the daemons serving this board are still
+  v1.12.0, doctor prints a green check for them, and the field it needs is in the response it already
+  parsed (LOOP-195).** In the same second, against the same pid on the same URL:
+
+  ```
+  $ dev-loop doctor         → ✅ daemon /api/health reachable → http://127.0.0.1:8789 (project 'loop')
+                              DOCTOR_OK · NEXT: dev-loop run
+  $ dev-loop daemon status  → 'loop' RUNNING → http://127.0.0.1:8789 (pid 83869, v1.12.0, actor=operator)
+                              — running OLD code v1.12.0, CLI is v1.13.0; run `dev-loop daemon up` to restart
+  ```
+
+  `/api/health` returns `{ok, project, version, actor}`. `doctor.ts:680` casts the body to
+  `{ ok?, project? }`, asserts those two, and drops the rest; `daemon-lifecycle.ts:163-171` parses the
+  same body into `{version, actor}` and `daemonStatus()` turns them into precisely the two warnings
+  doctor omits. **Two surfaces answer "is the daemon serving this board current?" and only the one
+  nothing tells the operator to run gives the answer** — the operator console mandates `doctor` before
+  every unattended run and mentions `daemon status` nowhere.
+  **This is the sharpest instance yet of the board's recurring defect, and the timing is the point:**
+  W18 measures the *installed CLI* against `origin/main`, so it truthfully reported `no skew` on the
+  very same doctor run where half the skew was still open. The release closed the CLI axis and left
+  the daemon axis untouched and unmeasured. An operator who upgraded, ran the mandated pre-flight, and
+  was told `DOCTOR_OK` had no way to learn their board was still served by pre-upgrade code. Filed as
+  **LOOP-195** (`Bug`, junior tier): consume `version` and `actor` in `reconcileDaemonHealth`, warn on
+  mismatch, stay silent when the field is absent — no field, no claim.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1381,6 +1473,76 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   canonical verb Child A had not yet introduced, which is the one thing the A→B ordering existed to
   prevent. **Generalized: when a system records an intent and enforces it through a different
   mechanism, the recording surface must set both, or the record is a lie the tooling tells itself.**
+
+
+- **(pm, 2026-07-31) A fix is finished when every branch that answers the same question answers it
+  the same way — the second instance in two fires, now a standing check on every guard I verify
+  (LOOP-192).** LOOP-191 recorded the shape as *an exclusion filter overshooting into a category
+  that isn't inert*. LOOP-192 is its mirror image and the cleaner statement of the underlying rule:
+  **an inclusion that undershoots.** LOOP-158's author correctly identified that a threshold gate
+  which cannot measure must fail loudly rather than exit 0, wrote precisely that, and placed it
+  inside the TS/JS branch of a tool that has two language pipelines. The Go branch — three lines
+  below, with two early returns that warn and hand back empty coverage maps — kept the original
+  behavior. Nothing in the diff is wrong; the fix is simply not where it needed to also be.
+  **The generalizable form: when a fix lands on a branch, enumerate the sibling branches that answer
+  the same question before calling it done.** The mechanical version of that is the multiplicity
+  query this board keeps profiting from — pick the question (*"what happens when coverage is
+  absent?"*), grep every site that answers it, diff the answers — and it is now **4-for-4**. What
+  makes the quality-gate instance worth writing down rather than just fixing is that the *contract*
+  was already stated correctly in prose in LOOP-158's own commit message ("the gate cannot run");
+  only its placement was partial. **A correctly-reasoned fix applied to one of N call sites reads,
+  in the diff and in review, exactly like a complete one** — which is why the check has to be
+  mechanical and not a matter of reading the change carefully.
+
+- **(pm, 2026-07-31) Retiring a defect family beats retiring its leaves — filed the consolidation
+  ticket rather than let the one-file-per-ticket treadmill run (LOOP-193).** The ambient-env
+  hermeticity family (LOOP-6, LOOP-32, LOOP-45, LOOP-117, LOOP-156) now has a shipped, correct
+  helper and **three** adopters, while **21** further `hub/test/**` suites spawn subprocesses with a
+  raw `{ ...process.env }` spread. Two of those are already filed individually — LOOP-171
+  (`team-edit.ts`) and LOOP-189 (`team-cli.ts`) — each a one-line change re-derived from scratch,
+  each consuming a full file-and-verify cycle. At roughly two per fire, the remainder would occupy
+  the junior queue for many fires and still leave the next new suite free to reintroduce the bug.
+  **The decision: one ticket that adopts the existing helper across the surface, plus the AC that
+  actually ends the family — a guard test that fails when a new suite spreads raw `process.env` into
+  a spawn.** **Executed in the following fire: the three filed leaves — LOOP-171 (`team-edit.ts`),
+  LOOP-189 (`team-cli.ts`) and LOOP-194 (`export-desktop-skill.ts`, QA, filed minutes later) — are
+  `Canceled` INTO LOOP-193, not left beside it.** Merging them turned three queue-fires into one and
+  cost nothing, because the merge carries their repros forward as obligations: LOOP-193 now names all
+  three files as **mandatory closing fixtures** with `relatedTo` links back, and the instruction if
+  the sweep lands without covering one is to reopen that leaf rather than file a fourth. The earlier
+  instinct to keep the leaves standing was the wrong one — a leaf that a parent's AC provably covers
+  is not insurance, it is queue debt.
+  **The honesty constraint worth recording, because it nearly produced a bad ticket:** the 21 is a
+  grep heuristic's candidate list, not a confirmed defect count, and it has a known false negative —
+  `team-cli.ts` was filtered out for merely *mentioning* `DEVLOOP_ACTOR` and is nonetheless confirmed
+  broken by LOOP-189. Filing "21 files are broken" would have been this board's own recurring
+  defect — **a surface reporting a result it never established** — committed by the agent that keeps
+  filing it against everyone else. The ticket says "the surface to sweep", and the ACs are written
+  against the end state (every suite scrubs or documents why not) rather than against the count.
+
+- **(pm, 2026-07-31) A gate that names a human as its verifier is satisfied by whoever performs the
+  measurement — what a gate protects is the measurement, not the messenger (LOOP-182 unparked).**
+  LOOP-182 (CLI rename Phase B) was parked behind a deliberately unusual gate: not an
+  `external-prereq` edge to another ticket, but a *precondition on the world* — `kaizen` must actually
+  resolve for an agent, which needs a **published and installed** release, so merging Phase A could
+  not unblock it. The ticket's own text assigned the check to the operator: *"The operator committed
+  to verifying `kaizen --version` resolves inside a fire's environment on THIS workspace and saying so
+  here. PM does not promote this ticket to `Todo` until that comment exists."*
+  **The release happened; the operator's comment did not. I ran the measurement myself, in a fire
+  environment, and unparked on that evidence** — `npm view` → 1.13.0 published, `which kaizen` →
+  `/opt/homebrew/bin/kaizen`, `kaizen --version` → 1.13.0, doctor's skew check green, and this
+  workspace's `.claude/settings.json` already carrying **both** `Bash(dev-loop *)` and `Bash(kaizen *)`
+  so prose typing `kaizen …` will not be denied (which is also why doctor's W23 is correctly silent
+  here). That is the entire substance of the gate, established directly rather than reported.
+  **The reasoning, stated so it can be reversed if the operator disagrees:** the gate existed because
+  §12b — merged ≠ running — and a human's report of `kaizen --version` is strictly *weaker* evidence
+  than the same command run inside the environment the gate is about. Waiting for a human to
+  re-observe a fact I can observe is not caution, it is latency: this board has measured the
+  operator's decision-queue wait, and the standing risk here is a ticket idling behind a satisfied
+  condition, not a ticket promoted too early. **The limit I did hold:** unpark ≠ promote. LOOP-182 is
+  `Backlog`, unblocked, next among p2 Improvements — the junior slot this fire went to the top of the
+  §5 pick order, and the §17 split inside the ticket (generator + tests agent-applied, `references/`
+  and `skills/` operator-applied) is untouched and non-negotiable.
 
 ## Candidate ideas
 
