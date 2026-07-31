@@ -4,7 +4,7 @@
 // covers every termination path: normal exit, process.exit(), and uncaught throw.
 // BRITTLENESS: a new spawn idiom (not port-from-stdout, not lifecycle-runfile) must add a
 // variant here and update daemon-guard.ts to recognise it.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams, type SpawnSyncReturns } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -70,4 +70,44 @@ export async function startTestDaemon(
     registry.delete(pid);
   }
   return { url, pid, out: capturedOut, stop };
+}
+
+// ── Sanctioned lifecycle-CLI spawn site (LOOP-136) ────────────────────────────────────────────
+// The daemon lifecycle CLI has TWO entry forms, both dispatching to the SAME daemonLifecycle():
+//   "daemon" → `node src/daemon.ts <sub>`        (the daemon.ts dispatcher, daemon.ts:750)
+//   "server" → `node src/server.ts daemon <sub>` (the dev-loop-hub bin form, server.ts:68)
+// A lifecycle `up`/`up-all`/`ensure` forks a DETACHED daemon + writes a runfile; the CLI process
+// spawned here is short-lived. Callers read the runfile and registerDaemonPid(pid) so the ONE
+// process.on("exit") sweep still covers the detached daemon. Routing EVERY daemon-starting spawn
+// through these two functions keeps daemon-harness.ts the sole spawn site daemon-guard.ts trusts.
+const NODE = process.env.DEVLOOP_NODE || process.execPath;
+export type DaemonCliEntry = "daemon" | "server";
+function daemonCliArgv(entry: DaemonCliEntry, sub: string): string[] {
+  return entry === "server"
+    ? [join(hubRoot, "src", "server.ts"), "daemon", sub]
+    : [join(hubRoot, "src", "daemon.ts"), sub];
+}
+
+/** Blocking lifecycle-CLI invocation — the `spawnSync` form lifecycle.ts uses. */
+export function runDaemonCli(
+  entry: DaemonCliEntry,
+  sub: string,
+  env: Record<string, string>,
+  opts?: { timeout?: number },
+): SpawnSyncReturns<string> {
+  return spawnSync(NODE, daemonCliArgv(entry, sub), {
+    cwd: hubRoot,
+    encoding: "utf8",
+    timeout: opts?.timeout ?? 25_000,
+    env: { ...process.env, ...env },
+  });
+}
+
+/** Async lifecycle-CLI invocation — returns the live child so overlapping `up`s can race (lifecycle-race.ts). */
+export function launchDaemonCli(
+  entry: DaemonCliEntry,
+  sub: string,
+  env: Record<string, string>,
+): ChildProcessWithoutNullStreams {
+  return spawn(NODE, daemonCliArgv(entry, sub), { cwd: hubRoot, env: { ...process.env, ...env } });
 }

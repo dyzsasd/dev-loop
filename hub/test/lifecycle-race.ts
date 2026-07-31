@@ -12,8 +12,8 @@
 // DL-46 TOCTOU the rename-aside break re-admitted). Deterministic-pass post-fix.
 //
 // Runs against an ISOLATED temp DB + DEVLOOP_RUN_DIR (never the operator's ~/.dev-loop). cwd = hub/ (npm).
-import { spawn, execFileSync } from "node:child_process";
-import { registerDaemonPid } from "./daemon-harness.ts";
+import { execFileSync } from "node:child_process";
+import { registerDaemonPid, launchDaemonCli } from "./daemon-harness.ts";
 import { rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -38,10 +38,11 @@ const touchedPorts = new Set<number>();
 // seed the isolated service project (ensureActors seeds the `operator` actor the daemon needs)
 execFileSync(NODE, ["src/seed.ts", PROJ, "Race Project", "RC", DB], { encoding: "utf8" });
 
-// run `src/daemon.ts <sub>` ASYNC so two `up`s can overlap (the existing lifecycle.ts uses blocking spawnSync)
+// run `src/daemon.ts <sub>` ASYNC (through the sanctioned harness spawn site) so two `up`s can overlap
+// (lifecycle.ts drives the same daemon.ts dispatcher with the blocking runDaemonCli).
 function lcAsync(sub: string): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((res) => {
-    const c = spawn(NODE, ["src/server.ts", "daemon", sub], { env: { ...process.env, DEVLOOP_NODE: NODE, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator" } });
+    const c = launchDaemonCli("daemon", sub, { DEVLOOP_NODE: NODE, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator" });
     let stdout = "", stderr = "";
     c.stdout.on("data", (d) => (stdout += d));
     c.stderr.on("data", (d) => (stderr += d));
