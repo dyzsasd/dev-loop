@@ -16,7 +16,7 @@
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
 import { isMainEntry } from "./is-entry.ts";
 import { DatabaseSync } from "node:sqlite";
-import { openDb, actorExists } from "./db.ts";
+import { openDb, actorExists, fireIdStore } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, repoFileStrategyPath } from "./resolve-project.ts"; // + docs P3b: the ONE strategyDoc→repo-file rule (doc-home, §19)
 import { hubDbPath, pkgVersion } from "./paths.ts";
@@ -345,6 +345,9 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
   const actor = (req.headers["x-devloop-actor"] as string | undefined)?.trim();
   if (!actor) return json(res, 400, { error: "missing X-Devloop-Actor header (the caller's actor)" });
   if (!actorExists(writeDb, actor)) return json(res, 400, { error: `unknown actor '${actor}'` });
+  // fireId is ATTRIBUTION only — never authorization; never added to the G1 phantom-actor guard (LOOP-75).
+  // null when header absent so logEvent uses the null-state (no env fallback for daemon-side requests).
+  const reqFireId = (req.headers["x-devloop-fire-id"] as string | undefined)?.trim() || null;
   const isWrite = AGENT_WRITE_OPS.has(op);
   // (3) parse the JSON args (bounded) — BEFORE the mode gate, because the D1 `project` override rides the
   //     body and the gate must judge the EFFECTIVE project. Parsing mutates nothing, so "mode-gated before
@@ -365,7 +368,9 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
   //     The effective ids go in; agentOp's own choke-point resolve degenerates to the same-key fast path.
   //     AWAIT: agentOp returns OpResult|Promise<OpResult> — the DL-67 channel.send/poll ops are async (network/
   //     dryrun build); the sync ops resolve immediately, so awaiting them is a no-op (back-compat).
-  const r = await agentOp(op, isWrite ? writeDb : db, ov.projectId, ov.projectKey, actor, args);
+  // Run the dispatch inside the fireId ALS scope so logEvent() stamps the right request's fireId.
+  // Concurrent requests each run in their own scope — no cross-talk (the AsyncLocalStorage guarantee).
+  const r = await fireIdStore.run(reqFireId, () => agentOp(op, isWrite ? writeDb : db, ov.projectId, ov.projectKey, actor, args));
   return json(res, r.status, r.body);
 }
 
