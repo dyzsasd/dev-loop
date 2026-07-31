@@ -1152,6 +1152,39 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   set — `conventions.md`, the SKILLs, the lessons library, the config schema — not every file that
   influences a fire.** The discriminator is *what authority the change needs*: operator judgement or
   credentials ⇒ park; a green PR ⇒ direct-code.
+- **2026-07-31 (late) — the install skew is closed, and eight verifications unblocked within the
+  hour.** The operator cut **v1.12.0** and installed it, ending the gap **LOOP-38** has tracked since
+  2026-07-30. Measured this fire: installed `@dyzsasd/dev-loop` **1.12.0** (`dist/` built 12:59Z),
+  tag `v1.12.0` = `efb2fce`, `origin/main` = `377f479` = `v1.12.0-18-g377f479` — and
+  `git diff --name-only efb2fce..377f479` is **`docs/STRATEGY.md` + `docs/strategy-archive/2026-07.md`
+  and nothing else**. Zero packaged paths, so installed and merged are code-identical for the first
+  time in ~20 fires. The effect was immediate and measurable: the `In Review` queue went from **9 rows
+  to 1** inside this fire (Done 78 → 86). Six separate QA fires had recorded "no action available
+  until the binary picks this up"; that constraint is gone.
+- **2026-07-31 (late) — the doc-landing path is in the running instruction set, and this fire is the
+  proof.** **LOOP-60** verified `Done`: the operator applied the §4.7 prose (`c08dc6c`, shipped in
+  v1.12.0) to the pm-agent SKILL Job C step 5 and conventions §20 D4. AC3 asked whether *"a fresh PM
+  boot reading only the SKILL would land its doc commit via `doc-land`"* — this boot's own assembled
+  prompt arrived carrying it, learned from the installed package rather than from the board. Stage-1
+  triage against `hubDoc:landing-discipline` §4.7/§4.4 was clean on all three classes. The operator's
+  sequencing (install → apply prose → reconcile) was the right call and is why it verifies.
+- **2026-07-31 (late) — `--help` is a daemon-spawn vector on the surface the docs tell operators to
+  explore.** Swept all 32 documented top-level verbs on the now-current binary: `--help` has **four**
+  behaviours — 18 print help (exit 0), 11 reject it as an unknown flag (exit 2), **one executes the
+  action** (`hub start --help` → `daemonLifecycleCode("up")`, because `hubCmd`'s help check is bound
+  to `argv[0]`), and **one starts a foreground daemon and dies on an unhandled `EADDRINUSE`**
+  (`dev-loop daemon --help`; `daemon.js:825` falls through to `server.listen` for *any* argv[2] not in
+  `LIFECYCLE_SUBS`, so the entire typo space starts a daemon, with no `server.on('error')`). Also
+  `dev-loop bundle export --help` → exit 2, a command line the shipped operator `CLAUDE.md` prescribes
+  verbatim. Filed **LOOP-154** (junior, p2). It lands on live findings: LOOP-137 (port band 64/64 full
+  while `doctor` says OK), LOOP-152 (daemons nothing can stop), LOOP-146 (`daemon-guard` blind to
+  start idioms — `--help` is a fifth).
+- **2026-07-31 (late) — the operator's decision queue emptied, then took one new row.** Both parks
+  cleared this window: LOOP-50's reconcile was landed *with `doc-land` itself* (dry-run → real run →
+  clean abort on conflict → resolve → ff push → `behind 0 / ahead 0`), and LOOP-60 was applied and
+  published. `decisionQueue` read `[]` for the first time. One new park replaces them: **LOOP-153**
+  (reflect's §17 proposal — a SKILL-side cluster heuristic), whose product half I filed as
+  **LOOP-155**.
 
 ## Personas
 
@@ -1620,6 +1653,50 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   rather than leaving it for the implementer: take the explicit `sensitive` guard in the shared
   predicate, because the alternative makes the invariant depend on a mis-assignment never happening —
   and mis-tiered `sensitive` tickets are an observed shape here (they are why W21 exists).
+- **(pm, 2026-07-31) 🎯 Instance #9 of the standing pattern, and the mechanism is now named
+  precisely: a guard written against one *spelling* of its property rather than the property.**
+  `doctor` W18 exists to catch the LOOP-38 class (a `Done` ticket whose fix is not in the running
+  binary). It measures **commit distance**; the property it defends is **code skew**. Those were
+  incidentally equal until `doc-land` shipped — and from this fire on they diverge permanently and
+  monotonically, because PM lands doc commits every fire and publishes a package rarely. Today W18
+  printed a ⚠️ about 18 commits that were 100% documentation. The operator filed it as **LOOP-151**
+  with the sharpest one-line statement of the class this board has produced: ***a guard that is
+  always on is a guard that is off.*** Ancestor: the rule already recorded as *a guard's rule must be
+  written against the property it defends, never one spelling of it.*
+- **(pm, 2026-07-31) 🧭 There is a SECOND skew axis, orthogonal to LOOP-38, and today the false
+  signal fired while the true one stayed silent.** LOOP-38 spent two days establishing
+  **merged ≠ installed**. The operator's **LOOP-152** establishes **installed ≠ running**: the
+  SessionStart hook resolves `dev-loop daemon up` against the *plugin root*, spawning
+  `node <source-checkout>/hub/src/daemon.ts` instead of the package's `dist/daemon.js` — so the board
+  can serve stale code while the installed package is perfectly current (measured: a `loop` daemon on
+  1.11.0 while the CLI was 1.12.0; **51 live daemons** from that one path). At the same moment,
+  `doctor` warned about an 18-commit gap that was pure documentation and said **nothing** about the
+  daemon serving old code. **A version check that only inspects the package cannot see this class at
+  all.** Recorded as a standing question for any future "is it live?" check: *live where — merged,
+  installed, or running?*
+- **(pm, 2026-07-31) ⚙️ Ruled LOOP-152 to the senior tier on its ACs, not on queue balance — and
+  wrote down the distinction because the temptation was real.** The board is lopsided (32 junior vs 1
+  senior in Backlog) and §21b forbids re-tiering to balance load. This was **not** a re-tier: the
+  ticket arrived with `assignee: null`, so assigning a tier is the filer's job left undone. The
+  senior signals are in the ACs, chiefly *"`daemon down`/`up` and `hub status` resolve the SAME daemon
+  record store"* — a shared-abstraction unification a junior cannot implement without unilaterally
+  picking a winner, and one that must sequence with LOOP-95's reap inside the existing
+  `daemon-lifecycle-hygiene` design. **Filing remains the only legal lever on the tier mix; the
+  discipline is to pull it on evidence and to say which evidence.**
+- **(pm, 2026-07-31) 🔗 §9c edge retirement: prose is not a marker.** Last fire I declared
+  `Blocked-by: LOOP-140` "retired ✅" inside a Markdown table cell. Re-parsing this fire from the
+  markers alone, that edge still resolved **LIVE** — the exact stale-blocker inheritance §9c warns
+  about. Wrote the real `Unblocked-by:` lines on LOOP-38 and LOOP-41. **A protocol that specifies a
+  machine-parseable form is not satisfied by a human-readable claim that it happened**, and the way
+  to catch it is to re-derive state from the markers every fire instead of from the previous fire's
+  summary.
+- **(pm, 2026-07-31) 📡 A human park on this project currently pings nobody, and that is worth
+  knowing before relying on one.** §9 makes the hub daemon the single emitter of `Human-Blocked`
+  reminders on `service`. This project's daemon is not running (`doctor`: *no lifecycle runfile*;
+  `hub status` lists only `_team`), so LOOP-153's park is board-visible and report-visible only. I
+  did not work around it with a manual notify — §9 forbids that double-ping — but the escalation
+  channel being silently disabled by an unrelated daemon-lifecycle defect (LOOP-152) is itself part
+  of that ticket's blast radius, and is recorded on it.
 
 ## Candidate ideas
 
