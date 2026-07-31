@@ -44,6 +44,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   const unseeded: string[] = []; // W08 hits, collected for the NEXT line
   let stalledRepo: string | undefined;
   let skewResult: { codeBehind: number; version: string } | null | undefined;
+  let decisionStall: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null | undefined;
   if (opts.reconcile) {
     try { ws = tryResolveWorkspace(); }
     catch (e) {
@@ -57,10 +58,11 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
       ok = wsResult.ok && ok;
       stalledRepo = wsResult.stalledRepo;
       skewResult = wsResult.skewResult;
+      decisionStall = wsResult.decisionStall;
       if (ws.file.team.backend === "linear") {
         // A linear team has no hub.db; the workspace checks ARE the whole verdict.
         console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
-        console.log(`NEXT: ${nextStep(ws, [], [], stalledRepo, skewResult)}`);
+        console.log(`NEXT: ${nextStep(ws, [], [], stalledRepo, decisionStall, skewResult)}`);
         return ok;
       }
       if (!process.env.DEVLOOP_HUB_DB || opts.preferWorkspace) dbPath = wsHubDb(ws); // prefer workspace hub.db; honor explicit DEVLOOP_HUB_DB (test isolation)
@@ -166,7 +168,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   if (opts.reconcile) await serviceReconcile(projects.map((p) => p.key), dbPath);
 
   console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
-  if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded, stalledRepo, skewResult)}`);
+  if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded, stalledRepo, decisionStall, skewResult)}`);
   return ok;
 }
 
@@ -175,7 +177,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
 // an invalid config blocks everything → a blank linearTeam blocks every fire → no projects/repos blocks
 // scheduling → an unseeded service project silently starves its fires → dry-run is the last gate before
 // live. All green ⇒ run the team.
-function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, skewResult?: { codeBehind: number; version: string } | null): string {
+function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, decisionStall?: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null, skewResult?: { codeBehind: number; version: string } | null): string {
   if (errors.length) { const e = errors[0]; return `fix dev-loop.json — [${e.code}] ${e.path ? e.path + ": " : ""}${e.message}`; }
   if (!ws) return "dev-loop run";
   const t = ws.file.team;
@@ -185,6 +187,14 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], s
   if (!Object.keys(ws.file.repos).length) return `dev-loop team add-repo <ref> --project <key> --path <rel> --detect  (or /dev-loop:add-repo)`;
   if (t.comms?.webhookEnv && process.env[t.comms.webhookEnv] === undefined) return `put ${t.comms.webhookEnv}=<webhook-url> in ${wsSecretsPath(ws.root)} (or export it) — the whole reminder layer is silently dead without it (W12)`;
   if (t.mode === "dry-run") return `dev-loop team set team.mode live  (everything is wired; flip when ready to go live)`;
+  // W20 NEXT flip: decision queue stall outranks landing stall — operator is the loop's only unscalable resource
+  if (decisionStall != null && decisionStall.count > 0) {
+    const oldest = decisionStall.oldest;
+    const ageMs = Date.now() - Date.parse(oldest.updatedAt);
+    const h = Math.floor(ageMs / 3_600_000);
+    const ageStr = h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ageMs / 60_000))}m`;
+    return `rule on the oldest decision ${oldest.id} (${ageStr}): http://127.0.0.1:8787/ticket/${oldest.id}`;
+  }
   // W22 NEXT flip: a landing stall is the most-blocking state when everything else is green
   if (stalledRepo) return `clear the landing stall: fix the red base / land the wedged PRs — gh pr list --repo ${stalledRepo}`;
   // §9.8 release-readiness hint: when shipped-code skew > 0, tell the operator to cut a release
@@ -192,13 +202,48 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], s
   return "dev-loop run";
 }
 
+// ── W20 helper — extracted to keep doctorWorkspace CC under the CRAP gate threshold ─────────────────────
+// Reads the per-project decisionQueue and emits [W20] when non-empty. Best-effort; swallows all exceptions.
+// Returns the stall descriptor (oldest + count) for NEXT-line threading, or null when clean/unavailable.
+function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { oldest: { id: string; updatedAt: string; state: string }; count: number } | null {
+  if (ws.file.team.backend !== "service" || !existsSync(wsHubDb(ws))) return null;
+  try {
+    const { decisionQueue } = require_metrics();
+    const db = openHubDbConn(wsHubDb(ws));
+    try {
+      const allItems: Array<{ id: string; title: string; state: string; updatedAt: string }> = [];
+      for (const key of deliveryProjects(ws)) {
+        const pid = findHubProject(db, key);
+        if (!pid) continue;
+        allItems.push(...(decisionQueue(db, pid) as Array<{ id: string; title: string; state: string; updatedAt: string }>));
+      }
+      if (allItems.length > 0) {
+        allItems.sort((a, b) => a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0);
+        const oldest = allItems[0];
+        const ageMs = Date.now() - Date.parse(oldest.updatedAt);
+        const h = Math.floor(ageMs / 3_600_000);
+        const ageStr = h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ageMs / 60_000))}m`;
+        const title60 = oldest.title.length > 60 ? oldest.title.slice(0, 57) + "…" : oldest.title;
+        const stateLabel = oldest.state === "In Review" ? "approve" : "blocked";
+        const noCommsNote = !ws.file.team.comms?.webhookEnv
+          ? " — no out-of-band escalation path (no team.comms): these surface only here and in `dev-loop metrics`, never as a reminder."
+          : "";
+        warn(`[W20] decision queue: ${allItems.length} waiting on you, oldest ${oldest.id} "${title60}" ${ageStr} (${stateLabel}) — rule on it: http://127.0.0.1:8787/ticket/${oldest.id}; full queue: dev-loop metrics${noCommsNote}`);
+        return { oldest, count: allItems.length };
+      }
+    } finally { db.close(); }
+  } catch { /* decision-queue is best-effort — never fails doctor */ }
+  return null;
+}
+
 // ── Schema-v2 workspace checks (READ-ONLY; R2 — mutating fixups live in `dev-loop team repair`) ──────────
 // Reports the E-code/W-code verdict for a dev-loop.json, that every registered repo exists and is a git
 // repo, and the two migration/leak warnings (W05 user-scope MCP for linear steward fires; W06 workspace
 // inside a git work-tree). Never writes, never repairs.
-export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn } = {}): Promise<{ ok: boolean; stalledRepo?: string; skewResult?: { codeBehind: number; version: string } | null }> {
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null }> {
   let ok = true;
   let stalledRepo: string | undefined;
+  let decisionStall: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null = null;
   const pass = (m: string) => console.log("✅ " + m);
   const fail = (m: string) => { console.log("❌ " + m); ok = false; };
   const warn = (m: string) => console.log("⚠️  " + m);
@@ -333,6 +378,12 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     } catch { /* owner-liveness is best-effort — a missing ledger/db never fails doctor */ }
   }
 
+  // W20 — operator decision queue stall (design decision-queue-observability §5.1): a non-empty operator
+  // decision queue means a human-gated unblock or approval is waiting, yet NEXT says "dev-loop run" — the
+  // operator is the loop's only unscalable resource; a waiting decision is more urgent than a landing stall.
+  // Extracted to helper to keep doctorWorkspace CC in budget. Best-effort; never flips DOCTOR_OK.
+  decisionStall = checkDecisionQueueStall(ws, warn);
+
   // W21 — sensitive mis-tier backstop (design sensitive-routing §§3-4): non-terminal tickets whose
   // labels include `sensitive` AND are routed to the junior-dev tier (assignee or label). Layer-1/2
   // enforce at write/queue time; this layer surfaces pre-gate or raw-path rows. Service-backend only.
@@ -409,7 +460,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     else info("workspace root is inside a git repo but .dev-loop/ is gitignored");
   }
 
-  return { ok, stalledRepo, skewResult };
+  return { ok, stalledRepo, decisionStall, skewResult };
 }
 
 function isGitWorkTree(dir: string): boolean {
