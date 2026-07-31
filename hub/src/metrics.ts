@@ -242,6 +242,18 @@ async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<
   } else {
     out.boardNote = "linear backend: board KPIs are computed by the digest agent via MCP queries (§22 digest contract); this CLI reports fire metrics only.";
   }
+  // Landing state (forge; all backends; best-effort) — LOOP-42 / design landing-observability §5.2.
+  // Single reader invariant: only landing.ts touches the forge (§4); metrics never opens its own gh call.
+  try {
+    const { readLandingState } = await import("./landing.ts");
+    const landingStates = await readLandingState(ws, { windowMs });
+    out.landing = landingStates;
+    const known = landingStates.filter((s) => s.mergedInWindow !== null).map((s) => s.mergedInWindow as number);
+    out.landed = known.length > 0 ? known.reduce((a, b) => a + b, 0) : null;
+  } catch {
+    out.landed = null;
+    out.landing = [];
+  }
 }
 
 const fmtDur = (ms: number): string => {
@@ -261,7 +273,9 @@ export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<t
     console.log(`  ${agent.padEnd(14)} ${String(a.fires).padStart(4)} fires  ${String(a.failures).padStart(3)} failed  median ${a.medianMs === null ? "—" : Math.round(a.medianMs / 1000) + "s"}`);
   if (out.teamRollup) {
     const r = out.teamRollup as { throughput: number; verifyFails: number; acceptRate: number | null; blockedNow: number; sequencedNow: number; bugsFiled: number; escaped: number };
-    console.log(`board: ${r.throughput} shipped, accept ${pct(r.acceptRate)} (${r.verifyFails} verify-fail), ${r.blockedNow} parked, ${r.sequencedNow} sequenced, QA bugs ${r.bugsFiled} (${r.escaped} escaped to prod)`);
+    const landedCount = typeof out.landed === "number" ? out.landed : null;
+    const landedStr = landedCount === null ? "unknown" : String(landedCount);
+    console.log(`board: ${r.throughput} done, landed ${landedStr}, accept ${pct(r.acceptRate)} (${r.verifyFails} verify-fail), ${r.blockedNow} parked, ${r.sequencedNow} sequenced, QA bugs ${r.bugsFiled} (${r.escaped} escaped to prod)`);
     const dq = (out.decisionQueue ?? []) as Array<{ id: string; state: string; project: string; updatedAt: string }>;
     if (dq.length) {
       const lbl = (t: { id: string; state: string }) => `${t.id}[${t.state === "Human-Blocked" ? "blocked" : "approve"}]`;
