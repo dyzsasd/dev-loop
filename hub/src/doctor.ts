@@ -221,6 +221,14 @@ export function doctorWorkspace(ws: Workspace): boolean {
     if (r.build?.test && !r.build?.quality) info(`repo '${ref}' has a test gate but no quality gate — consider build.quality (e.g. "dev-loop quality --changed --threshold 30"; see references/config-schema.md)`);
   }
 
+  // W17 — projects with repos but no strategyDoc: the four doc-land / roadmap-banner / file-watcher
+  // consumers are silently inert without a resolvable repo-file strategyDoc pointer. ONE warning names
+  // all four consumers so the operator knows the blast radius of the missing field.
+  for (const [key, p] of Object.entries(ws.file.projects)) {
+    if ((p.repos ?? []).length > 0 && !p.strategyDoc)
+      warn(`[W17] projects.${key}: has repos but no strategyDoc — doc-land, the /roadmap divergence banner, the strategy-doc file-watcher, and repoFileStrategyPath are inert; set it: dev-loop team set projects.${key}.strategyDoc docs/STRATEGY.md`);
+  }
+
   // W05 — a linear team's steward fires run at the workspace ROOT (cwd), where a repo-level .mcp.json can't
   // apply; the Linear MCP must be configured in USER scope or stewards are starved of the board.
   if (ws.file.team.backend === "linear")
