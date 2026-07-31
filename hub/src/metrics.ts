@@ -238,8 +238,14 @@ async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<
   }
 }
 
+const fmtDur = (ms: number): string => {
+  const h = Math.floor(ms / 3_600_000);
+  return h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ms / 60_000))}m`;
+};
+
 // The default human render (asserted non-JSON by the 1.7.1 mutation-killer test).
-function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<typeof fireMetrics>, out: Record<string, unknown>): void {
+// Exported so tests can call it directly with a fixed nowMs for deterministic age assertions (LOOP-73).
+export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<typeof fireMetrics>, out: Record<string, unknown>, nowMs = Date.now()): void {
   const pct = (x: number | null) => x === null ? "—" : `${Math.round(x * 100)}%`;
   console.log(`team '${ws.file.team.key}' — last ${windowMs / 86_400_000}d`);
   console.log(`fires: ${fires.fires} (success ${pct(fires.successRate)}, ${fires.failures} failed, ${fires.timeouts} timeout, ${fires.suspectErrors} suspect)`);
@@ -250,8 +256,14 @@ function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<typeof f
   if (out.teamRollup) {
     const r = out.teamRollup as { throughput: number; verifyFails: number; acceptRate: number | null; blockedNow: number; sequencedNow: number; bugsFiled: number; escaped: number };
     console.log(`board: ${r.throughput} shipped, accept ${pct(r.acceptRate)} (${r.verifyFails} verify-fail), ${r.blockedNow} parked, ${r.sequencedNow} sequenced, QA bugs ${r.bugsFiled} (${r.escaped} escaped to prod)`);
-    const dq = (out.decisionQueue ?? []) as Array<{ id: string; state: string; project: string }>;
-    if (dq.length) console.log(`decision queue (yours): ${dq.length} — ${dq.slice(0, 6).map((t) => `${t.id}[${t.state === "Human-Blocked" ? "blocked" : "approve"}]`).join(", ")}${dq.length > 6 ? ", …" : ""}`);
+    const dq = (out.decisionQueue ?? []) as Array<{ id: string; state: string; project: string; updatedAt: string }>;
+    if (dq.length) {
+      const lbl = (t: { id: string; state: string }) => `${t.id}[${t.state === "Human-Blocked" ? "blocked" : "approve"}]`;
+      const age = (t: { updatedAt: string }) => fmtDur(nowMs - Date.parse(t.updatedAt));
+      const oldest = dq[0]!;
+      const items = dq.slice(0, 6).map((t) => `${lbl(t)} ${age(t)}`).join(", ");
+      console.log(`decision queue (yours): ${dq.length}, oldest ${lbl(oldest)} waiting ${age(oldest)} — ${items}${dq.length > 6 ? ", …" : ""}`);
+    }
   } else console.log(String(out.boardNote));
 }
 
@@ -282,7 +294,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   await collectBoardMetrics(ws, windowMs, out);
 
   if (asJson) { console.log(JSON.stringify(out, null, 2)); return 0; }
-  renderHuman(ws, windowMs, fires, out);
+  renderHuman(ws, windowMs, fires, out, Date.now());
   return 0;
 }
 
