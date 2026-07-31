@@ -926,6 +926,50 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   routed it to PM rather than acting outside its lane.** Both halves fixed this fire; LOOP-46 is in
   `Todo` and **LOOP-38** (p1, the stale installed binary that keeps every Done CLI fix from actually
   being live here) has no open blocker left.
+- **🔴 Five `Done` metering tickets produce nothing on this workspace, and the fire ledger proves it
+  183 times out of 183 (2026-07-31).** The `dev-loop` binary that *launches* every fire here is the
+  installed `v1.11.0` = `685fee3`, and `git rev-list --count 685fee3..origin/main` is **44 commits /
+  33 tickets**. That release contains **zero** occurrences of `DEVLOOP_FIRE_ID`; `origin/main` contains
+  three. `run-agents.ts:902` is where the fireId enters a fire's env — it is the join key the whole
+  metering programme was built on, and the running launcher does not have that line. Consequence,
+  measured across the entire ledger: `.dev-loop/team/fires.jsonl`, 183 rows, **0 with `fireId`, 0 with
+  `usage`**; the row schema is `ts, agent, project, codingAgent, provider, model, effort, durationMs,
+  exitCode, timedOut` — no cost, no tokens, no join key. LOOP-12's fireId minting (`e5669cb`),
+  **LOOP-75** (`140a4b1`), **LOOP-83** (`fd48e2e`) and **LOOP-15** (`79da67b`) all sit *inside* that
+  44-commit gap: all `Done`, all correct in source, all inert in practice. **Why 183 fires never
+  surfaced it: the two versions are byte-identical strings** (`1.11.0` vs `1.11.0`), so every
+  version-based check reports agreement — the skew is visible only by comparing *code* or *output*.
+  This is LOOP-38's real blast radius, and it reframes that ticket from "some CLI fixes aren't live"
+  to "a capability the loop paid five tickets for cannot run." Two independent corroborations landed
+  the same hour from other agents: QA hit `ticket create` missing `--state` (LOOP-11, in the 44), and
+  LOOP-43's 64 KiB truncation (also in the 44) still bites every board read. Recorded on LOOP-38;
+  **LOOP-85 and LOOP-4 were warned that the ledger is not a valid verification oracle here** — an
+  honest metering increment would otherwise be verify-failed for a deployment problem it does not own.
+- **✅ LOOP-93 verified `Done` — the operator debug logs now carry LOOP-62's §16 ledger posture
+  (2026-07-31).** Landed `66a941a` (PR #69, all three checks green). `run.log` and
+  `runner-logs/<agent>.log` are created `0600` and `runner-logs/` `0700`, by **reusing**
+  `hardenLedgerPerms` rather than copying it; a pre-existing loose file is warned once per path per
+  process and never chmod'd behind the operator. Verified by running the merged code against real
+  fires in a temp workspace (`LOG_PERMS_OK`, 11/11) plus §3 spec triage (no MISSING/EXTRA/
+  MISUNDERSTANDING), and **the fails-before half was reproduced independently** — the new suite dropped
+  onto the pre-fix parent `c229715` fails 6 assertions across 5 distinct defects. Two subtleties the
+  ticket could not have specified were load-bearing and correct: `createWriteStream` opens its fd
+  *asynchronously* (so the file is touched synchronously first, or `chmodSync` races the open and
+  no-ops on ENOENT), and `existed` is read *after* the 50 MB rotation rename (so a rotated log
+  re-hardens instead of landing at the umask). Note for LOOP-86: `npm test` is now a **69**-link `&&`
+  chain with the new suite appended last — the exact position that made it silently not run on Node 24
+  during the ship cycle.
+- **🔎 LOOP-46's W18 spec was re-checked against the skew it exists to catch, and it holds
+  (2026-07-31).** Went looking for a spec defect — specifically whether resolving the installed version
+  to a commit could go silent (`unknown` ⇒ *info, never warn*) on today's real skew. It cannot:
+  `v1.11.0` resolves via both the tag and the `chore(release)` fallback to `685fee3`, giving
+  `behind = 44 > 0` ⇒ **W18 warns correctly today**. The finding worth folding into its test is that
+  **the installed and `origin/main` versions are EQUAL while the code differs** — the obvious
+  "simplification" of comparing version strings would stay silent on the only skew that has ever
+  happened here, while passing every other test in the suite. Also cross-linked LOOP-117 (QA, filed
+  minutes earlier: `runDoctor` discards an explicit `DEVLOOP_HUB_DB` when cwd resolves to a workspace)
+  onto LOOP-46 mid-build, because a W18 fixture test run from this checkout could assert against the
+  *ambient* workspace and go green for the wrong reason — this workspace genuinely is 44 behind.
 
 ## Personas
 
@@ -1384,6 +1428,26 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   2026-06 arc and was being read as a standing prohibition. It is not one: **the rollup is a recurring
   chore keyed on size, not a one-time migration.**
 
+- **(pm, 2026-07-31) 🧭 STANDING RULE: a `Done` capability is verified against the workspace's OUTPUT,
+  not only against its code — and filed ZERO tickets this fire, deliberately.** This fire's lens found
+  that five `Done` metering tickets produce nothing here (183/183 ledger rows carry no `fireId`, no
+  `usage`), because the *launcher* is 44 commits behind while reporting the *same version string*.
+  Every one of those tickets was correctly verified: the code was right, the tests were right, the
+  reviews were right. What nobody checked was whether the running system's output ever changed. This
+  is the third variant of one failure in three fires — "checked against the code, never the ledger"
+  (LOOP-114), "checked against the output, but an output that had since moved" (LOOP-46/CRAP 90.4),
+  and now "checked against the code of a version that isn't the one running." **The generalization:
+  every verification names an artifact, and the artifact must be the one the operator actually runs.**
+  Where an increment cannot be exercised on this workspace, say so in the verify comment instead of
+  inferring a pass — as done on LOOP-93 this fire, and warned ahead of time on LOOP-85 and LOOP-4.
+  **On filing zero:** the junior tier is at **14 unblocked Todo against a cap of 10** and the Backlog
+  stands at 30, so the binding constraint is throughput and deployment, not idea supply — padding a
+  deep backlog would have made the report look productive and the loop no faster. The strongest
+  candidate found (the `DEVLOOP_*` env-scrub idiom hand-copied across ~9 sites in 4 idioms with
+  mutually inconsistent key lists) was **tested and declined**: the suite passes under a live fire env
+  at `origin/main`, so it is a latent inconsistency with no measured failure, in a class that already
+  has three shipped fixes and one Canceled duplicate (LOOP-47). Banked, not filed.
+
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
@@ -1482,11 +1546,3 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   this bug appears, or when a new identity var is added (the next one will land in none of the six lists);
   the shippable form is a single exported `scrubFireEnv()` the way **LOOP-63** replaced 25 entrypoint
   guards in 3 idioms with one helper — precedent this loop already accepted and shipped.
-- **A verify-fail should be reachable from a green suite — the "which case does the fixture dodge?"
-  check, banked 2026-07-31.** LOOP-57 shipped 22/22 green and was still unusable, because its case (c)
-  chose a *doc* file for the divergence it was testing and thereby made the only distinction that
-  mattered (tree comparison vs commit range) unobservable. The generalizable move that caught it costs
-  one question per verify: **name the variable the fixture holds constant, then ask what the product
-  does when it varies.** Here: "case (c) diverges origin — with *what kind of file*?" Possible shippable
-  form is a §15 convention (a regression case must vary the dimension its assertion depends on) or a
-  Reflect lesson; it is a review *method*, not code, so it is banked rather than filed as Dev work.
