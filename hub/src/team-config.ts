@@ -74,6 +74,7 @@ export interface TeamBlock {
   // wildcard-deny default — run-agents.ts DEFAULT_OPENCODE_PERMISSION; PORTABILITY §5).
   opencodePermission?: Record<string, unknown>;
   git?: { defaultBranch?: string }; // top-level default (§19 fallback chain — per-repo wins, else this, else "main")
+  agentReviewers?: string[]; // GitHub logins excluded from forge-review merge-guard trips (§3.2); set via `dev-loop team set team.agentReviewers`
 }
 
 export interface RepoEntry {

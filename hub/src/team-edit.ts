@@ -33,7 +33,7 @@ function mutate(apply: (file: TeamFile, ws: Workspace) => void): Workspace {
 // operator-tunable paths (the fields references/config-schema.md marks `team set` ✓). Everything else
 // (registry paths, owners, agent launch maps, …) is either structural — add-project/add-repo territory —
 // or an interview field: edit dev-loop.json directly and let doctor validate.
-type SetKind = "string" | "boolean" | "number" | "int" | readonly string[];
+type SetKind = "string" | "boolean" | "number" | "int" | "string-list" | readonly string[];
 const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.mode$/, kind: ["dry-run", "live"] as const },
   { re: /^team\.linearTeam$/, kind: "string" },
@@ -42,6 +42,8 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.comms\.webhookEnv$/, kind: "string" },
   { re: /^team\.intake\.mode$/, kind: ["autonomous", "passive"] as const },
   { re: /^team\.intake\.todoDepthCap$/, kind: "int" },
+  // agentReviewers: comma-separated GitHub logins to exclude from forge-review trips (§3.2); stores as string[]
+  { re: /^team\.agentReviewers$/, kind: "string-list" as const },
   { re: /^projects\.[^.]+\.enabled$/, kind: "boolean" },
   { re: /^projects\.[^.]+\.weight$/, kind: "number" },
   { re: /^projects\.[^.]+\.devSplit$/, kind: "boolean" },
@@ -70,7 +72,7 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
-  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap}, " +
+  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers}, " +
   "projects.<key>.{enabled,weight,devSplit,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
@@ -85,6 +87,7 @@ function coerce(kind: SetKind, raw: string, path: string): unknown {
     if (!Number.isFinite(n) || (kind === "int" && !Number.isInteger(n))) die(`${path} expects a${kind === "int" ? "n integer" : " number"} (got '${raw}')`);
     return n;
   }
+  if (kind === "string-list") return raw.split(",").map((s) => s.trim()).filter(Boolean);
   if (!raw.trim()) die(`${path} expects a non-empty value`);
   return raw;
 }
