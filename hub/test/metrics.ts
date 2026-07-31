@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -108,7 +108,7 @@ try {
   {
     // Minimal Workspace stub (renderHuman reads only ws.file.team.key).
     const fakeWs = { file: { team: { key: "test-key" }, repos: {}, projects: {} } } as any;
-    const fakeFires = { windowMs: 7 * DAY, fires: 0, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {} };
+    const fakeFires = { windowMs: 7 * DAY, fires: 0, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null };
     const fakeRollup = { throughput: 0, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
 
     // AC1: decision queue line shows age per item and names the oldest — oldest-first (T-3 at 4d, T-5 at 2d)
@@ -308,6 +308,153 @@ try {
   const landHumanOut = (rLandHuman.stdout ?? "").trim();
   ok(/\bdone\b/.test(landHumanOut), `LOOP-42 AC4: human board line contains "done" (got: ${landHumanOut.slice(0, 300)})`);
   ok(/\blanded\b/.test(landHumanOut), `LOOP-42 AC4: human board line contains "landed" (got: ${landHumanOut.slice(0, 300)})`);
+
+  // ── LOOP-125: usageReport, fireMetrics cost fields, fireRowsFromEvents ──────
+  {
+    const usageLedger = join(tmp, "usage-fires.jsonl");
+    const claudeRow = { ts: iso(NOW - 1 * DAY), agent: "pm", project: "web",
+      codingAgent: "claude", provider: "anthropic", model: "claude-sonnet-4-5", effort: "high",
+      durationMs: 60_000, exitCode: 0, fireId: "f1",
+      usage: { source: "provider", inputTokens: 1000, outputTokens: 300, cacheReadTokens: 100, cacheWriteTokens: 50, costUsd: 0.015, currency: "USD" } };
+    const codexRow = { ts: iso(NOW - 2 * DAY), agent: "dev", project: "web",
+      codingAgent: "codex", provider: "openai", model: "gpt-4o", effort: "high",
+      durationMs: 30_000, exitCode: 0, fireId: "f2",
+      usage: { source: "provider", inputTokens: 500, outputTokens: 150, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null, currency: null } };
+    const opencodeRow = { ts: iso(NOW - 3 * DAY), agent: "qa", project: "web",
+      codingAgent: "opencode", provider: null, model: null, effort: null,
+      durationMs: 45_000, exitCode: 0, fireId: "f3" };
+    const preMeteringRow = { ts: iso(NOW - 4 * DAY), agent: "sweep", project: "web",
+      durationMs: 10_000, exitCode: 0 };
+    const bootBytesRow = { ts: iso(NOW - 1 * DAY), agent: "pm", project: "web",
+      durationMs: 5_000, exitCode: 0, bootBytes: 999_999 };
+    writeFileSync(usageLedger, [claudeRow, codexRow, opencodeRow, preMeteringRow, bootBytesRow]
+      .map((r) => JSON.stringify(r)).join("\n") + "\n");
+
+    // fireMetrics cost fields
+    const fm125 = fireMetrics(usageLedger, 7 * DAY, NOW);
+    ok(fm125.fires === 5, `LOOP-125: fireMetrics sees all 5 fires (got ${fm125.fires})`);
+    ok(fm125.meteredFires === 2, `LOOP-125: meteredFires = 2 (claude+codex; got ${fm125.meteredFires})`);
+    ok(fm125.costMeteredFires === 1, `LOOP-125: costMeteredFires = 1 (only claude has costUsd; got ${fm125.costMeteredFires})`);
+    ok(fm125.costUsd !== null && Math.abs(fm125.costUsd - 0.015) < 1e-9,
+      `LOOP-125: costUsd = 0.015 (got ${fm125.costUsd})`);
+    // bootBytes must never leak into costUsd
+    ok(fm125.costUsd !== 999_999, "LOOP-125 AC5: bootBytes never populates a cost field");
+
+    // usageReport — by provider
+    const report = usageReport(readFireRows(usageLedger), 7 * DAY, { groupBy: "provider", nowMs: NOW });
+    ok(report.totalFires === 5, `LOOP-125: usageReport totalFires=5 (got ${report.totalFires})`);
+    ok(report.meteredFires === 2, `LOOP-125: usageReport meteredFires=2 (got ${report.meteredFires})`);
+    ok(report.overall.inputTokens === 1500, `LOOP-125: overall inputTokens=1500 (got ${report.overall.inputTokens})`);
+    ok(report.overall.costUsd !== null && Math.abs(report.overall.costUsd - 0.015) < 1e-9,
+      `LOOP-125: overall costUsd=0.015 (got ${report.overall.costUsd})`);
+    ok(report.overall.costMetered === 1, `LOOP-125: overall costMetered=1`);
+
+    // by-provider cells
+    ok(report.byDimension !== undefined, "LOOP-125: byDimension present when groupBy set");
+    const byDim = report.byDimension!;
+    ok((byDim["anthropic"]?.inputTokens ?? -1) === 1000,
+      `LOOP-125 AC1: anthropic inputTokens=1000 (got ${byDim["anthropic"]?.inputTokens})`);
+    ok((byDim["openai"]?.inputTokens ?? -1) === 500,
+      `LOOP-125 AC1: openai inputTokens=500 (got ${byDim["openai"]?.inputTokens})`);
+    // openai row has costUsd:null → group costUsd must be null, not 0
+    ok(byDim["openai"]?.costUsd === null,
+      `LOOP-125 AC1: openai costUsd is null (no priced fires; got ${byDim["openai"]?.costUsd})`);
+    ok(byDim["openai"]?.costMetered === 0, `LOOP-125: openai costMetered=0`);
+    // unmetered group (null/absent provider) → all token sums null, not 0
+    const unknownCell = byDim["(unknown)"];
+    ok(unknownCell !== undefined && unknownCell.metered === 0, "LOOP-125 AC1: (unknown) group metered=0");
+    ok(unknownCell?.inputTokens === null, "LOOP-125 AC1: unmetered group inputTokens is null not 0");
+    ok(unknownCell?.costUsd === null, "LOOP-125 AC1: unmetered group costUsd is null not 0");
+
+    // renderCost: "unavailable" (never "$0.00") when the group has no priced fires
+    const costLines: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => costLines.push(String(args[0] ?? ""));
+    try { renderCost({ windowMs: 7 * DAY, totalFires: 1, meteredFires: 1, overall: byDim["openai"]!, byDimension: undefined }, "provider"); }
+    finally { console.log = origLog; }
+    ok(costLines.some((l) => /unavailable/.test(l) && !/\$0/.test(l)),
+      `LOOP-125 AC2: renderCost writes "unavailable", never "$0.00" for unpriced group (got: ${costLines.join("|")})`);
+
+    // renderUsage: prints coverage line
+    const usageLines: string[] = [];
+    console.log = (...args: unknown[]) => usageLines.push(String(args[0] ?? ""));
+    try { renderUsage(report, "provider"); }
+    finally { console.log = origLog; }
+    ok(usageLines.some((l) => /metered/.test(l)), "LOOP-125: renderUsage prints N-of-M metered coverage");
+
+    // FireRow types codingAgent/provider/model/effort — roundtrip via readFireRows
+    const claudeParsed = readFireRows(usageLedger).find((r) => r.fireId === "f1");
+    ok(claudeParsed?.codingAgent === "claude" && claudeParsed?.provider === "anthropic" && claudeParsed?.model === "claude-sonnet-4-5" && claudeParsed?.effort === "high",
+      `LOOP-125 AC6: FireRow.codingAgent/provider/model/effort parsed correctly`);
+
+    // CLI tests: use recent timestamps so the fires land inside the CLI's 7-day window.
+    // (The fixture rows above use the fixed NOW=2026-07-04 for deterministic unit tests; CLI fires
+    // use Date.now() so they are always inside the default 7-day window.)
+    const NOW_REAL = Date.now();
+    const mkRow = (offsetMs: number, extra: Record<string, unknown>) =>
+      ({ ts: new Date(NOW_REAL - offsetMs).toISOString(), ...extra });
+    const cliClaudeRow = mkRow(1 * DAY, { agent: "pm", project: "web", codingAgent: "claude", provider: "anthropic", model: "claude-sonnet-4-5", durationMs: 60_000, exitCode: 0, usage: { source: "provider", inputTokens: 1000, outputTokens: 300, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 0.015, currency: "USD" } });
+    const cliCodexRow  = mkRow(2 * DAY, { agent: "dev", project: "web", codingAgent: "codex",  provider: "openai",    model: "gpt-4o",           durationMs: 30_000, exitCode: 0, usage: { source: "provider", inputTokens: 500, outputTokens: 150, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null, currency: null } });
+    const cliPreRow    = mkRow(3 * DAY, { agent: "sweep", project: "web", durationMs: 10_000, exitCode: 0 });
+
+    const usageWs = join(tmp, "ws-usage");
+    mkdirSync(join(usageWs, ".dev-loop", "team"), { recursive: true });
+    writeFileSync(join(usageWs, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2, workspaceId: "test-ws-u", team: { key: "u-team", backend: "linear", mode: "live", autonomy: "guarded" },
+      repos: {}, projects: { "u-team": { repos: [] } },
+    }));
+    writeFileSync(join(usageWs, ".dev-loop", "team", "fires.jsonl"),
+      [cliClaudeRow, cliCodexRow, cliPreRow].map((r) => JSON.stringify(r)).join("\n") + "\n");
+
+    // CLI --usage --by provider --json
+    const rUJ = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--usage", "--by", "provider", "--json"],
+      { cwd: usageWs, env: { ...process.env }, encoding: "utf8" });
+    const uJOut = (() => { try { return JSON.parse((rUJ.stdout ?? "").trim()); } catch { return null; } })();
+    ok(rUJ.status === 0, `LOOP-125: --usage --json exits 0 (stderr: ${(rUJ.stderr ?? "").slice(0, 200)})`);
+    ok(uJOut?.usage?.meteredFires === 2, `LOOP-125 AC1: --json meteredFires=2 (got ${uJOut?.usage?.meteredFires})`);
+    const byDimJ = uJOut?.usage?.byDimension as Record<string, { inputTokens: number | null; costUsd: number | null }> | undefined;
+    ok(byDimJ?.["anthropic"]?.inputTokens === 1000, `LOOP-125 AC1: --json anthropic inputTokens=1000 (got ${byDimJ?.["anthropic"]?.inputTokens})`);
+    ok(byDimJ?.["openai"]?.costUsd === null, `LOOP-125 AC1: --json openai costUsd=null (not 0; got ${byDimJ?.["openai"]?.costUsd})`);
+
+    // CLI --cost --json: overall.costUsd sums only priced rows; never a string "$0.00"
+    const rCJ = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--cost", "--json"],
+      { cwd: usageWs, env: { ...process.env }, encoding: "utf8" });
+    const cJOut = (() => { try { return JSON.parse((rCJ.stdout ?? "").trim()); } catch { return null; } })();
+    ok(rCJ.status === 0, `LOOP-125: --cost --json exits 0`);
+    ok(typeof (cJOut?.usage?.overall?.costUsd ?? null) !== "string",
+      `LOOP-125 AC2: --cost overall.costUsd is a number or null (never a string "$0.00"; got ${JSON.stringify(cJOut?.usage?.overall?.costUsd)})`);
+    ok(cJOut?.usage?.overall?.costMetered === 1,
+      `LOOP-125 AC2: --cost overall.costMetered=1 (only claude row priced; got ${cJOut?.usage?.overall?.costMetered})`);
+
+    // CLI --flow --json: linear backend → throughput:null, boardNote mentions linear
+    const rFJ = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--flow", "--json"],
+      { cwd: usageWs, env: { ...process.env }, encoding: "utf8" });
+    const fJOut = (() => { try { return JSON.parse((rFJ.stdout ?? "").trim()); } catch { return null; } })();
+    ok(rFJ.status === 0, `LOOP-125: --flow --json exits 0`);
+    ok(fJOut?.flow?.throughput === null, `LOOP-125 AC3: --flow on linear → throughput:null (got ${fJOut?.flow?.throughput})`);
+    ok(typeof fJOut?.flow?.boardNote === "string" && /linear/.test(fJOut.flow.boardNote),
+      `LOOP-125 AC3: --flow on linear → boardNote mentions linear`);
+
+    // fireRowsFromEvents — shapes hub events into FireRows (ORDER BY created_at ASC: older=dev, newer=pm)
+    const evDb = openDb(join(tmp, "ev-hub.db"));
+    evDb.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p2','evtest','EvTest','t')").run();
+    evDb.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('p2',NULL,'pm','fire.completed',?,?)")
+      .run(JSON.stringify({ codingAgent: "claude", provider: "anthropic", model: "claude-opus-5", effort: "high", durationMs: 10_000, exitCode: 0, timedOut: false, fireId: "ev1", usage: { source: "provider", inputTokens: 200, outputTokens: 50, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 0.005, currency: "USD" } }), iso(NOW - 1 * DAY));
+    evDb.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('p2',NULL,'dev','fire.completed',?,?)")
+      .run(JSON.stringify({ codingAgent: "codex", provider: "openai", model: "gpt-4o", effort: null, durationMs: 5_000, exitCode: 0, timedOut: false }), iso(NOW - 2 * DAY));
+    const evRows = fireRowsFromEvents(evDb, "p2", iso(NOW - 7 * DAY));
+    evDb.close();
+    ok(evRows.length === 2, `LOOP-125: fireRowsFromEvents returns 2 rows (got ${evRows.length})`);
+    // ASC order: dev row (NOW-2) comes before pm row (NOW-1)
+    const evPm  = evRows.find((r) => r.agent === "pm");
+    const evDev = evRows.find((r) => r.agent === "dev");
+    ok(evPm  !== undefined && evPm.project === "evtest",
+      "LOOP-125: actor→agent, project key resolved from projects table");
+    ok(evPm?.provider === "anthropic" && evPm?.model === "claude-opus-5",
+      "LOOP-125: provider/model shaped from event data");
+    ok(evPm?.usage?.costUsd === 0.005, "LOOP-125: usage.costUsd shapes correctly from event");
+    ok(evDev !== undefined && evDev.usage === undefined, "LOOP-125: row without usage key → usage:undefined");
+  }
 
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
