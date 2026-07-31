@@ -828,6 +828,58 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   already be earning its keep — **#48, #49 and #61 are open PRs on Canceled tickets right now, and #61
   is green and mergeable.** §12c's merge pass keys on *"green AND mergeable"*, reading the PR and never
   the board, so cancelling a ticket does not stop its work from shipping.
+- **↩️ Correcting the entry above: the state correction did not unstick the loop — greenness did
+  (2026-07-31).** The previous bullet's headline — *"what unstuck it was a ticket STATE, not code"* —
+  **is not supportable, and I am withdrawing the causal half of it.** §12c's fire-start merge pass
+  iterates `gh pr list --search "head:dev-loop/ is:open"`; board state is an **output** of that pass
+  (*"then move the ticket In Progress → In Review"*), never an input. The same paragraph one bullet up
+  says so in its own last sentence. A **senior-dev fire was already in flight** (started 01:18:45Z) when
+  PR #62 merged at 01:29:05Z, so the landing is fully explained without my edit. The correlation was
+  four minutes; the mechanism was a running dev fire. The next hour separated the two cleanly: **PR #65
+  (LOOP-67) merged at 01:43:43Z** moving `origin/main` to `3f6af36`, while LOOP-56 (#60, red) and
+  LOOP-57 (#64, now `DIRTY` since the base moved) did not — all three had been state-corrected
+  identically. **Greenness explains which PRs land. The state correction explains something different
+  and still real: reachability.** LOOP-56 and LOOP-57 need a human-equivalent *fix*, and `In Review` is
+  where no dev tier can see them. Both claims were true in the original entry; only one of them was the
+  cause, and I asserted the wrong one as the headline.
+- **🚪 The other half of that gap now has a ticket instead of a state file (2026-07-31).** `In Review` is
+  a one-way door for a dev tier: `agentops.ts:205-210` returns `Todo` (mine, unblocked) + `In Progress`
+  (`assignee === actor`), and nothing else. **Live evidence: LOOP-45** — `In Review`, assigned
+  `junior-dev`, PR #39 `OPEN`/`CONFLICTING` with the required checks having **never run**, stranded ~9
+  hours. Two QA fires re-checked it and correctly wrote nothing, because nothing *can* change: junior
+  cannot see it to rebase, and §3 offers QA only `Done` (it isn't) or `Cancel`, which would destroy a
+  correct 32-assertion fix over a merge conflict. Counter-example that must stay healthy: **LOOP-43**,
+  also `In Review`, but PR #38 `MERGED` — verification-pending is the right state. A second-order find
+  from the same read: `inProgress` filters on `assignee === actor`, **not** the tier label, so a ticket
+  parked in `In Progress` but assigned to `pm` is invisible to Dev too — I hit that on LOOP-75 today and
+  had to reassign by hand. Filed as **LOOP-112** (a third, explicitly non-pickable `inReview` list on
+  the dev slice, keyed on the same `assignee === actor` rule, annotated with LOOP-111's landing seam).
+- **✅ LOOP-89's design gate passed; the loop will stop admitting unlanded work (2026-07-31).** Senior's
+  `review-admission-gate` design picks **one** authoritative point — the CLI `ticket update` verb
+  refuses `In Progress → In Review` when the ticket's PR is not `MERGED` — and argues down the hub
+  `ticketwrite.ts` gate I had pushed for: `updateTicketRow` runs in the daemon with **no network**, and
+  no offline per-ticket merged signal exists in board state today (LOOP-40's `readLandingState` is
+  repo-aggregate and `gh`-based, so it cannot supply one). The reversal is correct and I accepted it.
+  The strongest call is the predicate: **`MERGED` strictly implies "was green AND mergeable"**, so one
+  condition subsumes the concluded-red case, the pending case *and* the absent-checks case (LOOP-19/#54)
+  that a "no red check" test wrongly passes. Children **LOOP-110** (the gate) + **LOOP-111** (verify-queue
+  landing annotation) promoted to `Todo`; parent `Done`.
+- **🔍 A guard that landed 10 minutes ago is blind to the operator's own decision queue (2026-07-31).**
+  `merge-guard.ts:15` (LOOP-67, shipped in `3f6af36`) declares `NOT_MERGE_ELIGIBLE = {In Review,
+  Canceled, Duplicate}`. `db.ts:30` — the declared single source of truth — lists **eight** states. The
+  other five are merge-eligible **by omission**, and one of them is **`Human-Blocked`**: the loop's only
+  explicit "a human must rule on this" park, and the entire content of the operator's decision queue
+  (`daemon-notifiers.ts:72` selects on it by name). A guard whose stated purpose is stopping *"a human's
+  single most deliberate act of steering, discarded silently"* would merge over it. **It is not a
+  trade-off — the design never saw it:** `Human-Blocked` appears **0 times** in `merge-review-guard`,
+  whose §3.3 reasons only about `In Review` and terminal-reject states. Reachable via §12c's own text
+  (`fix-exhausted` → a §9 park → `Human-Blocked` on `service`, **PR still open**; a later green re-run or
+  a base move then makes it mergeable). **Latent, not live** — the two `Human-Blocked` tickets have no
+  PR, and I checked before filing. Root cause is the negative set: four sites partition `db.ts`'s eight
+  states with their own hand-written literals, and `Human-Blocked` is the proof, having been **added
+  later** (`db.ts:257`, DL-25) into every pre-existing set's permissive side. Filed as **LOOP-113** —
+  invert to a positive `MERGE_ELIGIBLE` so an unknown state fails **closed**, plus an exhaustiveness test
+  driven off `db.ts`'s exported list so a ninth state breaks a test instead of silently widening merges.
 
 ## Personas
 
@@ -1987,6 +2039,41 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   edges this fire (LOOP-84→LOOP-94, LOOP-46→LOOP-56), which the §9c pass retires automatically on `Done`.
   **The rule: if a sequencing note would be wrong to ignore, it belongs in the graph, not in prose** —
   prose is advisory to a ranked queue, an edge is not.
+- **(pm, 2026-07-31) ⚠️ I asserted a cause from a four-minute correlation, and it was wrong. Withdrawn.**
+  Last fire's headline — *"what unstuck the loop was a ticket state, not code"* — survived a whole fire
+  and a strategy-doc commit before I tested it. It fails on one line of the convention it cites: §12c's
+  merge pass reads `gh pr list … is:open`, so **board state cannot gate a merge**. My own entry said
+  exactly that two bullets earlier, about PR #61 on a Canceled ticket. **The refutation was already in
+  the document, in my own words, and I did not connect it** — because the claim arrived attached to a
+  win (three frozen fires ended) and wins are the claims that get audited least. What made it feel
+  causal was a four-minute gap; what actually closed it was a senior-dev fire already running since
+  01:18:45Z. **The rule I am adopting: a hypothesis that explains a success gets the same cheap
+  measurement as one that explains a failure — and "I predicted X, then X happened" is a correlation
+  until the mechanism is read.** Three hypotheses died to measurement last fire; this one was never
+  put in the queue, precisely because it was the good news. Withdrawn in `Current state`, on LOOP-89,
+  and here. **What survives is the narrower, verified claim:** `In Review` hides an increment from the
+  only tier that can *fix* it — which is why LOOP-56 and LOOP-57 are still stuck while LOOP-67 landed —
+  and that is now owned by **LOOP-112**, not by my state file.
+- **(pm, 2026-07-31) 🧭 The negative set is the bug pattern, and this codebase has four of them.**
+  LOOP-113 came out of one question asked against freshly-landed code: *which states does this guard
+  NOT name?* `db.ts:30` enumerates 8 legal states as the "one source of truth" that "can never drift" —
+  and then `agentops.ts:198`, `cli-tickets.ts:20`, `push-guard.ts:73` and `merge-guard.ts:15` each
+  partition those 8 with their own hand-written **negative** literal. A source of truth that only the
+  *domain* references, never the partitions over it, does not prevent drift; it just centralises the
+  list that the partitions fall behind. `Human-Blocked` is the receipt: added later (DL-25), it landed
+  on the permissive side of every set written before it, silently. **The generalisation worth keeping:
+  when a set is defined by what it excludes, adding a member to the domain fails OPEN — so the review
+  question is never "is this set right?" but "what is in the complement, and was any of it chosen?"**
+  Ruled: fix the one axis that is wrong and make *its* partition exhaustive against `db.ts`'s exported
+  list; the wider four-site unification is noted on LOOP-113 as deliberately out of scope, for a
+  tech-debt pass — a correctness bug should not be held hostage to a refactor.
+- **(pm, 2026-07-31) 🚦 The §21a design gate outranks the §5a depth cap, and that is correct.** Junior's
+  unblocked `Todo` depth closed this fire at **12/10** — over cap — because passing LOOP-89's design gate
+  promotes LOOP-110 + LOOP-111 as part of the gate itself (§21a: promote every staged child, *then*
+  close the parent), not as a §5a paced promotion. Recorded so the overshoot is not read as a grooming
+  error and "corrected" by a later fire: the two paths are different, and Job B2 promoted **zero** this
+  fire, which is the right behaviour at cap. Both tickets filed this fire (LOOP-112, LOOP-113) went to
+  `Backlog` and wait their turn behind the pick order.
 
 ## Candidate ideas
 
