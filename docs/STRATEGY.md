@@ -767,6 +767,38 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   this is a pure landing tax. **LOOP-86**'s filed cost was silent partial runs; its second cost is that
   the chain **serializes every concurrent increment that adds a suite** — with two dev tiers running,
   the common case. Recorded there as a binding shape on the fix, not refiled.
+- **⛔ The first verify-fail caused by a missing *test*, not missing code (2026-07-31).** LOOP-99
+  (defaultBranch seam, LOOP-70 Child A) shipped a clean increment — exactly the 7 files its spec names,
+  `test/team-config.ts` + `test/worktree.ts` + `test/push-guard.ts` all green on PR #61's head `c5ec5c8`
+  with `DEVLOOP_*` stripped, typecheck clean, no EXTRA, no MISUNDERSTANDING — and still failed §3 on
+  **AC2**: `pushGuard()`'s signature at `push-guard.ts:29` still carries `defaultBranch = "main"`. Not a
+  reading invented at verify time — the design **enumerates that exact line** (`default-branch-resolution`
+  §3 names `push-guard.ts:27,41,88`; §4 requires *"no `"main"` literal anywhere in this file (AC2)"*).
+  `:88` and `:41` were fixed; `:27` was not. **The second missing delta explains the first:** design §5
+  mandates *"assert no `"main"` string-literal remains as a branch default in either file"*, and no such
+  assertion exists in `hub/test/push-guard.ts`. The one AC that would have caught the residual is the one
+  nobody wrote — so the ordering, not the code, is the lesson. Live blast radius today is zero (the sole
+  production caller passes a resolved value), but the new AC4 path only fails loud when
+  `origin/<branch>` **fails to resolve**: on a `master` repo that still carries an `origin/main` ref, an
+  arg-omitting caller silently detects passengers against the wrong base — the *"fails open, silently"*
+  shape the design exists to kill, reintroduced through the seam meant to remove it. Superseded by
+  **LOOP-107** (senior, `Mode: direct-code`, two deltas on top of the surviving branch).
+- **🔥 LOOP-43's truncation is 8× worse than documented, and it silently corrupted a live §9c pass
+  (2026-07-31).** The ticket records **65,536 bytes**, re-measured through a shell pipe fourteen times.
+  Through a **Node parent capturing stdout** (`spawnSync`/`execSync` — how an agent reads the board when
+  it parses with `node -e`) the cliff is **~8.1 KB**, still `exit 0`, still silent: `tickets --json`
+  515,269 → **8,115**; `comments LOOP-38` 24,808 → **8,099**; `comments LOOP-4` 8,560 → **8,122**. Below
+  8 KB it stops being a whole-board problem and truncates **single-ticket comment reads** — which is
+  where this loop keeps its `Blocked-by:`/`Unblocked-by:` dependency ledger. **It cost a wrong answer
+  this fire:** the §9c tracker pass resolved **LOOP-50, LOOP-38 and LOOP-4 to zero blocker edges** — the
+  three longest threads on the board, every marker present and canonical. §9c's *"a zero-edge ticket is
+  never an unpark candidate"* is the **only** reason it failed safe: three blocked tickets became
+  permanently un-parkable rather than spuriously released onto unbuilt foundations. That asymmetry is
+  luck, not design, and it inverts the moment any consumer reads zero-edges as *unblocked*. The merged
+  fix (`8cc84c5`) covers both thresholds — verified side by side, same board, same moment: installed
+  `1.11.0` → 8,115 bytes unparseable, `origin/main` source → 517,936 bytes, 107 tickets. So this is
+  **purely LOOP-38's deploy gap**, whose severity it raises from *partial reads* to *silent dependency-
+  graph corruption*. Routed as evidence (LOOP-38, LOOP-43) and one binding read-integrity AC (LOOP-104).
 
 ## Personas
 
@@ -1852,6 +1884,44 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   with the idle capacity. The coincidence is worth naming precisely so it is not mistaken for a
   precedent: **re-tiering to balance load remains the inference §21b forbids**, and the imbalance is
   still what the rules produce, not drift. Only the operator can change that.
+- **(pm, 2026-07-31) ⚖️ RULING: the boundary between a send-back and a §3 verify-fail is *whether the
+  ACs have been evaluated*, not how green the branch looks.** Last fire I held LOOP-56 `In Review` on a
+  concluded-red CI gate and recorded that *"verify-fail is for wrongness; a red gate on unlanded work is
+  unfinished ship-work the implementer owns."* This fire LOOP-99 arrived looking similar — clean branch,
+  `MERGEABLE`, checks pending — and got the **opposite** treatment. The distinction is exact and worth
+  keeping: on LOOP-56 I had evaluated **no** AC, so the blocker was ship-work; on LOOP-99 I evaluated
+  every AC against the actual diff and one was **unmet against a design-enumerated line**. §3 is
+  unconditional there — *"any MISSING hit = verify-fail, even when the code is clean … never leave the
+  original in `In Review`"* — so it closed and re-filed. **The cost is real and worth naming:** a
+  95%-correct, green, mergeable branch became a Canceled ticket plus a new senior `direct-code` ticket
+  for two mechanical deltas. The state machine offers exactly two verify outcomes — `Done`, or
+  Cancel + follow-up + escalate — and no proportionate middle for *"right, but one AC short."* Checked
+  before closing that this is survivable: `worktreeReap` deletes only the **local** branch
+  (`worktree.ts:209-213`, no `push origin --delete`), so `origin/dev-loop/LOOP-99` and PR #61 survive and
+  LOOP-107 continues rather than re-implements. Not filed as a conventions change — that is a §17
+  governing file and two operator decisions are already stalled; recorded here as an observed cost.
+- **(pm, 2026-07-31) 📝 A safety rule that survived only by luck, now made explicit.** §9c's asymmetry
+  (*"a ticket with zero blocker edges is never an unpark candidate"*) was ruled last fire on its merits,
+  for LOOP-101 — a park whose prerequisite is a person. This fire it silently absorbed a **second**,
+  unrelated failure: a truncated CLI read that returns zero edges for a ticket that has three. Same
+  output, opposite cause, and the rule made both fail safe. **The generalisation, bound onto LOOP-104:**
+  a parser must be able to say *"I could not read this"* in a way that is not spelled the same as
+  *"there is nothing here."* Encoding failure as an empty collection is what let a transient read error
+  masquerade as a factual answer about the dependency graph. LOOP-104 is the loop's single canonical
+  source for that graph and LOOP-105's read-only surface renders it, so the requirement lands there as
+  an AC with a truncated-payload regression test — deliberately **not** as a change to §9c's ruling
+  (which stands) nor as a second CLI ticket (LOOP-43 is merged and awaiting LOOP-38's deploy).
+- **(pm, 2026-07-31) 📝 Method note: the re-read caught a whole increment, and a hypothesis died in
+  30 seconds.** Two habits paid this fire. **(1)** The mid-fire board re-read surfaced **LOOP-99**
+  hitting `In Review` *after* boot — junior-dev was mid-fire — and it became the fire's only verify.
+  Seventh of eight fires the re-read changed the outcome. **(2)** On finding three parks with zero
+  edges I reached first for *"LOOP-43, 64 KiB truncation"* and **measured it before writing it down**:
+  file and shell-pipe reads returned the full payload at every size, killing that hypothesis outright.
+  Only re-running the failing call with errors surfaced instead of swallowed produced the real signature
+  (`Unterminated string at position ~8100`, `exit 0`) and the actual 8 KB threshold. The reflex worth
+  keeping is narrower than *"verify before filing"*: **when a diagnostic returns an empty result, prove
+  the read succeeded before believing the emptiness** — my resolver's `catch {}` turned three failed
+  reads into three confident wrong answers, which is the same defect I then bound onto LOOP-104.
 
 ## Candidate ideas
 
