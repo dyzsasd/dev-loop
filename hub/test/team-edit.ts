@@ -160,6 +160,31 @@ try {
   const ceil = run("team", ["set", "repos.webr.deploy.environments.prod.auto", "true"], { cwd: lin });
   ok(ceil.code === 1 && /E06/.test(ceil.out), "team set cannot break the deployPolicy ceiling (E06 re-validation)");
 
+  // ═══ add-repo existing-ref guard (LOOP-134) ═══
+  // Re-running add-repo on an already-registered ref with field flags must refuse loudly.
+  // This test would PASS against today's (pre-fix) code because the flags are silently dropped
+  // and the command exits 0 — it pins team-edit.ts:322 (the else-if(o.owner) block).
+  {
+    const cfgBefore = readJson(join(lin, "dev-loop.json"));
+    const rerun = run("team", ["add-repo", "webr", "--project", "web", "--landing", "direct", "--merge-check", "Brand New Check", "--test-cmd", "npm run something-else"], { cwd: lin });
+    ok(rerun.code !== 0 && /already registered/.test(rerun.out) && /dev-loop team set/.test(rerun.out),
+      "add-repo on an existing ref with field flags refuses non-zero and names the route (LOOP-134)");
+    const cfgAfter = readJson(join(lin, "dev-loop.json"));
+    ok(JSON.stringify(cfgBefore) === JSON.stringify(cfgAfter),
+      "refused add-repo leaves dev-loop.json byte-identical (field flags were not applied)");
+
+    // --owner is the one update-in-place exception: it works on an existing ref
+    const ownerUpd = run("team", ["add-repo", "webr", "--project", "web", "--owner", "web"], { cwd: lin });
+    ok(ownerUpd.code === 0 && readJson(join(lin, "dev-loop.json")).repos.webr.owner === "web",
+      "add-repo --owner updates an existing repo's owner in place (the one update-in-place field)");
+
+    // shared-repo re-registration (no field flags, just --project) still succeeds
+    run("team", ["add-project", "web2", "--linear-project", "Web2"], { cwd: lin });
+    const shared = run("team", ["add-repo", "webr", "--project", "web2"], { cwd: lin });
+    ok(shared.code === 0 && /now shared by/.test(shared.out),
+      "add-repo re-registration under a second project (no field flags) succeeds — the shared-repo flow");
+  }
+
   // the add-project duplicate message now names a REAL command (team-edit.ts:41 made true)
   const dup = run("team", ["add-project", "web"], { cwd: lin });
   ok(dup.code !== 0 && /dev-loop team set projects\.web\./.test(dup.out), "the duplicate add-project hint names the real `team set` syntax");

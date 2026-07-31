@@ -266,7 +266,7 @@ function detectHalf(ref: string, o: Record<string, unknown>): void {
 
 export function addRepo(argv: string[]): number {
   const [ref, ...rest] = argv;
-  if (!ref || ref.startsWith("--")) die("usage: dev-loop team add-repo <ref> --project <key> [--path <rel>] [--detect] [--role primary|docs] [--remote <url>] [--owner <proj>] [--landing pr|direct] [--auto-merge] [--merge-check <name>]... [--typecheck-cmd <c>] [--build-cmd <c>] [--test-cmd <c>] [--quality-cmd <c>] [--deploy-style <s>] [--ops-check <url>]...");
+  if (!ref || ref.startsWith("--")) die("usage: dev-loop team add-repo <ref> --project <key> [--path <rel>] [--detect] [--role primary|docs] [--remote <url>] [--owner <proj>] [--landing pr|direct] [--auto-merge] [--merge-check <name>]... [--typecheck-cmd <c>] [--build-cmd <c>] [--test-cmd <c>] [--quality-cmd <c>] [--deploy-style <s>] [--ops-check <url>]...\nNote: field flags (--path, --landing, --merge-check, --build-cmd, etc.) are only applied when <ref> is new. Re-running on an already-registered ref with field flags exits non-zero. To update a registered repo's fields use: dev-loop team set repos.<ref>.<field> <value>. --owner is the one exception: it updates in place on an existing ref.");
   const o: Record<string, unknown> = { mergeChecks: [] as string[], opsChecks: [] as string[], criticalRoutes: [] as string[] };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]; const next = () => rest[++i] ?? die(`${a} requires a value`);
@@ -301,7 +301,9 @@ export function addRepo(argv: string[]): number {
 
   const ws = mutate((file) => {
     if (!file.projects[project]) die(`project '${project}' does not exist — add it first with \`dev-loop team add-project ${project}\``);
-    // Registry entry: create if new; if the ref already exists we're only adding a reference from another project.
+    // Registry entry: create if new; if the ref already exists, refuse field-flag writes (they would
+    // be silently discarded — LOOP-134). The shared-repo re-registration path (no field flags, just
+    // --project) is the one legitimate existing-ref use case; --owner is the one update-in-place field.
     if (!file.repos[ref]) {
       if (!o.path) die(`repo '${ref}' is not registered yet — pass --path <workspace-relative-path>`);
       const entry: TeamFile["repos"][string] = { path: o.path as string };
@@ -319,8 +321,14 @@ export function addRepo(argv: string[]): number {
                       ...((o.criticalRoutes as string[]).length ? { criticalRoutes: o.criticalRoutes as string[] } : {}),
                       ...(o.logsCommand ? { logsCommand: o.logsCommand as string } : {}) };
       file.repos[ref] = entry;
-    } else if (o.owner) {
-      file.repos[ref].owner = o.owner as string; // updating owner on an existing shared repo
+    } else {
+      // Existing ref: field flags would be silently dropped — refuse loudly so the operator knows.
+      const hasFieldFlags = !!(o.path || o.remote || o.landing || o.autoMerge ||
+        (o.mergeChecks as string[]).length || o.typecheck || o.build || o.test || o.quality ||
+        o.deployStyle || (o.opsChecks as string[]).length || (o.criticalRoutes as string[]).length || o.logsCommand);
+      if (hasFieldFlags)
+        die(`repo '${ref}' is already registered — field flags on an existing ref are not applied (add-repo only writes them at creation time). To update individual fields, use: dev-loop team set repos.${ref}.<field> <value>  (see \`dev-loop team set --help\` for the settable-paths list)`);
+      if (o.owner) file.repos[ref].owner = o.owner as string;
     }
     // Project reference edge.
     const refs = file.projects[project].repos ?? (file.projects[project].repos = []);
