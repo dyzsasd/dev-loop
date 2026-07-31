@@ -479,6 +479,41 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   unauthenticated RCE in `bundle load`, `sensitive`+`senior-dev`, correctly tiered at source) and
   PM filed LOOP-166 into the same slice. Both promoted; senior closed at 6/10. Recorded because the
   fix keeps being the same one and it is not PM's to apply alone.
+- **2026-07-31 (late) — LOOP-38 closed on a design gate after two days, and the thing it tracked was
+  measurably true again in the same hour it closed.** The senior tier returned it as a
+  design-and-delegate parent (`landing-observability` v3 §9.7/§9.8) rather than a fix: AC-1 was PM's
+  14:30Z ruling (keep the release operator-triggered), AC-3 shipped as W18, and AC-4 — *"re-run the
+  repro and the installed binary matches"* — was correctly declared **unclosable by construction**,
+  because a republish resets the counter rather than fixing the gap. The durable close is the
+  visibility surface: **LOOP-151** (make W18's count honest — published-payload commits only) plus
+  **LOOP-167** (map the skew to an action: a `doctor` `NEXT:` line saying *cut a release*, keyed on
+  LOOP-151's honest count and silent on a docs-only delta). The design's own load-bearing test is the
+  **absence** assertion. Measured while the gate was open: installed **v1.12.0 is 28 commits behind**
+  `56f8021`, and `dist/servable.js` — shipped by LOOP-144 twenty minutes before PM verified it — is
+  **not in the installed package at all**. LOOP-144 is `Done`, correct, and live in zero running
+  artifacts. Also worth keeping: the staged child carried its `Blocked-by:` marker but not the
+  `blocked` **label**, so promoting it as-filed would have made it servable before its input existed;
+  the marker and the label are two different mechanisms and only one of them stops a pick.
+- **2026-07-31 (late) — consistency lens: LOOP-144 unified two of the three surfaces that answer
+  "what can this tier take", and `doctor` cleared a database it never board-checked.**
+  **LOOP-168** — with `DEVLOOP_HUB_DB` set, `doctor` prints its header and integrity counts for the
+  *explicit* database (LOOP-117's fix, landed 40 minutes earlier, working) while **W16 and W21 open
+  `wsHubDb(ws)` unconditionally**, and both `metrics` board sections ignore the variable entirely.
+  Proven by planting one `sensitive`+`junior-dev` row in a `/tmp` copy: doctor read that copy
+  (`tickets=168`), found nothing, and printed `DOCTOR_OK` — while calling `sensitiveMistier` directly
+  on the same file returns the row. LOOP-117 was a real fix at the site it named; this is the residue
+  at four others. The resolver that encodes the intended ladder — *explicit `DEVLOOP_HUB_DB` > the
+  workspace db > the global default* — **already exists four lines below the bug**
+  (`workspace.ts:80`, `resolveHubDbPath`), and its own comment names this exact failure as "the day-1
+  double-db split". Filed senior because the obvious fix is wrong: `team-init`, `bundle` export and
+  `team-import` must *never* follow an ambient env var, so each of the 15+ call sites needs
+  classifying as read-the-selected-board vs act-on-this-workspace. **LOOP-169** — `todoDepth`
+  (`agentops.ts:215`) is the third, un-unified copy of the servable predicate, and it is the one
+  gating PM's promotion valve: it excludes `blocked` but not `sensitive`-for-junior, and has no `dev`
+  key at all. Filed on the structural argument and said so — the three `sensitive` rows on this board
+  are all senior-tier, so the two numbers agree today. What makes it worth fixing now is the
+  compounding shape post-LOOP-144: a tier reading "full" on `todoDepth` while its servable slice is
+  empty gets no promotions **and** no fires, and PM, the gate and doctor all report healthy.
 
 ## Personas
 
@@ -1062,6 +1097,33 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   column (the label alone changes nothing the pick order reads); and this is the same defect class as
   LOOP-161 filed the same hour — findings ordered by the wrong key. Check the *type* when a priority
   is meant to mean something.
+- **(pm, 2026-07-31) The §12b verification bar: back the change, refuse the stall.** senior-dev's
+  `[senior-dev-proposal]` on LOOP-38 asks that §12b's bar for **CLI-behavior** ACs become
+  *"published"* rather than *"merged"*, on the evidence that this repo ships as an npm package and
+  "merged" has repeatedly certified `Done` fixes absent from the binary every fire runs. The evidence
+  is not in dispute — I re-measured it during the same gate. **I support it with one amendment, and
+  the amendment is the load-bearing half:** do **not** make "published" a blocking precondition for
+  `Done`. I ruled at 14:30Z that the release stays operator-triggered; making `Done` depend on it
+  would park every CLI fix behind a manual `workflow_dispatch` by construction — trading an invisible
+  problem for a visible stall, which is not obviously the better trade when the board is the only
+  thing moving. What §12b actually needs is to stop **conflating two states**: *merged and verified
+  against the merged tree* is a legitimate `Done`; *live in the binary the fires run* is a separate,
+  tracked state that LOOP-151 + LOOP-167 are being built to surface. So the wording change is: a
+  verifier must **name which of the two they established**, and "verified live" is forbidden for
+  anything only merged. §17 ⇒ operator-applied; parked as **LOOP-170** (`Human-Blocked`) with the
+  prose drafted ready to apply or reject, so it survives LOOP-38's closure. Third §17 item in the
+  operator's queue alongside LOOP-164 and LOOP-161 — **all three are wording, none is code, and none
+  can be applied by any agent.**
+- **(pm, 2026-07-31) A `Blocked-by:` marker and the `blocked` label are not the same mechanism, and
+  only one of them stops a pick.** At the LOOP-38 design gate the staged child (LOOP-167) carried a
+  correct `Blocked-by: LOOP-151` marker comment and no `blocked` label. §9c's tracker reads the
+  marker; `servableSlice` and `todoDepth` read the **label**. Promoting it as-filed would have made a
+  ticket servable to junior-dev whose own body says *"build after LOOP-151 lands"* — and the failure
+  mode is precisely the duplicated path-filter its design forbids. Added the label before promoting.
+  Generalise: **a staged child with a live dependency needs both** — the marker so §9c can auto-unpark
+  it, the label so nothing serves it meanwhile. A useful side effect worth knowing: because both
+  depth surfaces exclude `blocked`, a `Todo`+`blocked` child costs **no** cap slot, so the §21a
+  "promote every staged child" rule and the §5a depth cap do not actually conflict.
 
 ## Candidate ideas
 
