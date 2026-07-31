@@ -56,14 +56,15 @@ try {
   git(work, ["checkout", "-qm", "main"]);
 
   // CLI: advisory exit 0; --strict exit 1 with findings; clean --strict exit 0
+  // Pass --default-branch main explicitly — the temp work dir is not a registered workspace.
   const cli = (args: string[]) => spawnSync(process.execPath, [join(hubRoot, "src", "push-guard.ts"), ...args],
     { encoding: "utf8", env: { ...process.env, DEVLOOP_HUB_DB: db } });
-  const adv = cli(["--repo", work, "--branch", "main"]);
+  const adv = cli(["--repo", work, "--branch", "main", "--default-branch", "main"]);
   ok(adv.status === 0 && /ride-along: .*CERT-1 \(Canceled\)/.test(adv.stdout), "CLI advisory: prints the finding, exits 0");
-  const strict = cli(["--repo", work, "--branch", "main", "--strict"]);
+  const strict = cli(["--repo", work, "--branch", "main", "--strict", "--default-branch", "main"]);
   ok(strict.status === 1, "CLI --strict: findings ⇒ exit 1 (the §12 pre-push gate shape)");
   git(work, ["push", "-q", "origin", "main"]); // flush everything
-  const strictClean = cli(["--repo", work, "--branch", "main", "--strict"]);
+  const strictClean = cli(["--repo", work, "--branch", "main", "--strict", "--default-branch", "main"]);
   ok(strictClean.status === 0 && /clean/.test(strictClean.stdout), "CLI --strict on a clean branch ⇒ exit 0");
 
   // ── LOOP-25 regression: body/trailer ticket refs must be found, not just subject-line refs ──────────
@@ -82,7 +83,7 @@ try {
   ok(bodyRef.findings[0]?.subject === "fix(y): patch other behavior",
     "the finding's subject field is still the subject line (display is correct)");
   // --strict must exit 1 for body-only refs
-  const bodyStrict = cli(["--repo", work, "--branch", "main", "--strict"]);
+  const bodyStrict = cli(["--repo", work, "--branch", "main", "--strict", "--default-branch", "main"]);
   ok(bodyStrict.status === 1, "LOOP-25 CLI --strict: body-only ref to Canceled ticket ⇒ exit 1");
 
   // ── LOOP-55: passenger detection ─────────────────────────────────────────────────
@@ -132,6 +133,54 @@ try {
   ok(pgStacked.passengers.length === 0, "LOOP-55: stacked branch — CERT-10's commit is not an ancestor of local main → no false positive");
 
   git(work, ["checkout", "-q", "main"]);
+
+  // ── AC4: passenger detection on a non-main default branch + unresolvable branch ─────────────────
+  // Scenario A: a repo whose default branch is "master"; a passenger is planted on local master.
+  {
+    const masterOrigin = join(ROOT, "master-origin.git");
+    const masterWork = join(ROOT, "master-work");
+    mkdirSync(masterOrigin, { recursive: true });
+    execFileSync("git", ["init", "--bare", "-q", "-b", "master", masterOrigin]);
+    execFileSync("git", ["clone", "-q", masterOrigin, masterWork]);
+    const mg = (args: string[]) => execFileSync("git", ["-C", masterWork, "-c", "user.email=t@t", "-c", "user.name=t", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    mg(["commit", "--allow-empty", "-qm", "baseline on master"]);
+    mg(["push", "-qu", "origin", "master"]);
+
+    // Insert a LOCAL-ONLY commit on master (the passenger)
+    mg(["commit", "--allow-empty", "-qm", "docs(strategy): local-only passenger on master"]);
+
+    // Cut a dev branch off local master (before syncing origin) — the bug shape
+    mg(["checkout", "-qb", "dev-loop/CERT-40"]);
+    mg(["commit", "--allow-empty", "-qm", "fix(x): CERT-40 the real fix"]);
+
+    // AC4 part A: must DETECT the passenger when defaultBranch="master"
+    // (fails-before: the base-tree pushGuard without this fix would check origin/main which doesn't exist,
+    //  silently skip passenger detection, and return passengers=[])
+    const pg4a = pushGuard(masterWork, "dev-loop/CERT-40", db, "master");
+    ok(pg4a.passengers.length === 1, `AC4: master-default repo — 1 passenger found when defaultBranch="master" (got ${pg4a.passengers.length})`);
+    ok(/local-only passenger on master/.test(pg4a.passengers[0]?.subject ?? ""), "AC4: passenger subject is the planted commit");
+    ok(pg4a.unresolvedDefaultBranch === undefined, "AC4: unresolvedDefaultBranch is undefined when origin/master resolves normally");
+  }
+
+  // Scenario B: unresolvable default branch → unresolvedDefaultBranch is set and CLI --strict exits non-zero
+  {
+    // Use the main 'work' repo; "nonexistent" is not a remote branch
+    git(work, ["checkout", "-qb", "dev-loop/CERT-41"]);
+    git(work, ["commit", "--allow-empty", "-qm", "fix(z): CERT-41 placeholder"]);
+
+    // API: unresolvedDefaultBranch must be set
+    const pg4b = pushGuard(work, "dev-loop/CERT-41", db, "nonexistent");
+    ok(pg4b.unresolvedDefaultBranch === "nonexistent", "AC4: unresolvable defaultBranch → unresolvedDefaultBranch='nonexistent' in result");
+    ok(pg4b.passengers.length === 0, "AC4: no passengers array pollution when detection did NOT run");
+
+    // CLI: --strict must exit 1 (fails-before: today exits 0 because it silently skips)
+    const pg4bStrict = cli(["--repo", work, "--branch", "dev-loop/CERT-41", "--default-branch", "nonexistent", "--strict"]);
+    ok(pg4bStrict.status === 1, "AC4 CLI --strict: unresolvable defaultBranch ⇒ exit 1 (a safety gate must not pass silently)");
+    ok(/does not exist/.test(pg4bStrict.stdout), "AC4 CLI: output names the missing origin/<branch>");
+
+    git(work, ["checkout", "-q", "main"]);
+  }
+
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }

@@ -73,12 +73,14 @@ export interface TeamBlock {
   // Per-fire OPENCODE_PERMISSION override (whole-object replacement of the scheduler's certified
   // wildcard-deny default — run-agents.ts DEFAULT_OPENCODE_PERMISSION; PORTABILITY §5).
   opencodePermission?: Record<string, unknown>;
+  git?: { defaultBranch?: string }; // top-level default (§19 fallback chain — per-repo wins, else this, else "main")
 }
 
 export interface RepoEntry {
   path: string;
   remote?: string;
   owner?: string;
+  defaultBranch?: string; // per-repo override (§19 resolution table); falls back to team.git.defaultBranch, then "main"
   landing?: "pr" | "direct";
   autoMerge?: boolean;
   mergeChecks?: string[];
@@ -489,13 +491,24 @@ export function loadWorkspace(root: string): Workspace {
 }
 
 // ─── Resolution API (impl §2.3) ───────────────────────────────────────────────
-export interface ResolvedRepo extends RepoEntry { ref: string; absPath: string }
+export interface ResolvedRepo extends RepoEntry { ref: string; absPath: string; defaultBranch: string }
 export interface ResolvedProject extends ProjectEntry { key: string; backend: string; mode?: string; autonomy?: string; docSystem?: string; reports?: unknown }
 
 export function effectiveRepo(ws: Workspace, ref: string): ResolvedRepo {
   const r = ws.file.repos[ref];
   if (!r) throw new Error(`unknown repo ref '${ref}'`);
-  return { ...r, ref, absPath: join(ws.root, normalizedRel(r.path) ?? r.path) };
+  return {
+    ...r, ref,
+    absPath: join(ws.root, normalizedRel(r.path) ?? r.path),
+    defaultBranch: r.defaultBranch ?? ws.file.team.git?.defaultBranch ?? "main",
+  };
+}
+
+// Resolve the defaultBranch for a repo identified by its absolute working directory.
+// Returns undefined when the dir matches no registered repo — callers must fail loud, never fall back to "main".
+export function resolveDefaultBranchForPath(ws: Workspace, absDir: string): string | undefined {
+  const hit = Object.keys(ws.file.repos).find((ref) => effectiveRepo(ws, ref).absPath === absDir);
+  return hit ? effectiveRepo(ws, hit).defaultBranch : undefined;
 }
 
 // Behavior fields resolve project ∥ team (nearest wins, §4.2). Physical fields live only on the registry.
