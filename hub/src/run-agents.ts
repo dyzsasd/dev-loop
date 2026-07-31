@@ -990,7 +990,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     : (profile.codingAgent === "opencode" ? 10 * 60_000 : 0);
   const rendered = displayCommand(command, args, prompt) + (stdinPayload ? ` <stdin:${stdinPayload.length} chars>` : "");
   if (opts.dryRun) {
-    if (boot) console.log(`[dry-run] ${agent}: boot corpus ${Math.round(boot.bytes / 1024)}KB (conventions ${Math.round(boot.conventionsBytes / 1024)}KB${boot.pruned.length ? `; config-pruned §${boot.pruned.join(" §")}` : ""}) hash=${boot.hash} — prompt via stdin`);
+    if (boot) console.log(`[dry-run] ${agent}: boot corpus ${Math.round(boot.bytes / 1024)}KB (conventions ${Math.round(boot.conventionsBytes / 1024)}KB; lessons ${boot.lessonsBytes}B${boot.pruned.length ? `; config-pruned §${boot.pruned.join(" §")}` : ""}) hash=${boot.hash} — prompt via stdin`);
     const intakeMode = (cfg?.projects?.[project] as { intake?: { mode?: string } } | undefined)?.intake?.mode;
     const dryProvider = providerOf(profile);
     const fireStr = effectiveFireTimeoutMs > 0 ? formatDuration(effectiveFireTimeoutMs) : "off";
