@@ -6,8 +6,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb } from "../src/db.ts";
-import { insertTicket, updateTicketRow } from "../src/ticketwrite.ts";
+import { insertTicket, updateTicketRow, verifyCreateGateRejection } from "../src/ticketwrite.ts";
 import type { NewTicketFields, TicketUpdateFields } from "../src/ticketwrite.ts";
+import { agentOp, type OpResult } from "../src/agentops.ts"; // LOOP-183 Vector B: exercise the wired create path (opSaveIssue)
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -166,6 +167,52 @@ try {
   const saOp = updateTicketRow(db, "p", "operator", idOp, "In Review",
     updateFields({ state: "Done", assignee: "junior-dev", labels: JSON.stringify(QA_BUG) }));
   ok(saOp.ok && stateOf(idOp) === "Done", "LOOP-157: operator In Review → Done on a verifier-owned ticket stays legal (carve-out)");
+
+  // ── LOOP-183 Vector A: dropping the qa/pm owner label in the CLOSING write must not unlock the self-close ──────
+  // The gate now keys on the STORED owner labels ∪ the incoming set, not next.labels alone. A dev tier that
+  // REPLACE-merges a label set omitting the ticket's qa owner label in the SAME In Review → Done write is still
+  // rejected (previously owners.length === 0 on next.labels → the gate passed → the builder self-closed).
+  const idVA = insertTicket(db, "p", "junior-dev", newFields({ state: "In Review", assignee: "junior-dev", labels: QA_BUG }), {});
+  const vaDrop = updateTicketRow(db, "p", "junior-dev", idVA, "In Review",
+    updateFields({ state: "Done", assignee: "junior-dev", labels: JSON.stringify(["dev-loop", "Bug", "junior-dev"]) })); // qa DROPPED
+  ok(!vaDrop.ok, "LOOP-183 A: In Review → Done that DROPS the qa owner label is REJECTED (stored-label gate)");
+  ok(/verify gate/.test(vaDrop.ok ? "" : vaDrop.error) && /qa/.test(vaDrop.ok ? "" : vaDrop.error), "LOOP-183 A: the refusal names the verify gate + the stored qa owner");
+  ok(stateOf(idVA) === "In Review", "LOOP-183 A: the rejected label-strip close did NOT move the ticket (rollback)");
+
+  // … clearing ALL labels in the closing write is likewise rejected (the stored set still owns it)
+  const idVA2 = insertTicket(db, "p", "junior-dev", newFields({ state: "In Review", assignee: "junior-dev", labels: QA_BUG }), {});
+  const vaClear = updateTicketRow(db, "p", "junior-dev", idVA2, "In Review",
+    updateFields({ state: "Done", assignee: "junior-dev", labels: JSON.stringify([]) }));
+  ok(!vaClear.ok && stateOf(idVA2) === "In Review", "LOOP-183 A: In Review → Done that CLEARS all labels is still REJECTED (stored qa owner)");
+
+  // … regression guard on the legit path: the qa OWNER may still close AND drop its own label (not a dev tier → gate never fires)
+  const idVA3 = insertTicket(db, "p", "junior-dev", newFields({ state: "In Review", assignee: "junior-dev", labels: QA_BUG }), {});
+  const vaOwnerHygiene = updateTicketRow(db, "p", "qa", idVA3, "In Review",
+    updateFields({ state: "Done", assignee: "junior-dev", labels: JSON.stringify(["dev-loop", "Bug"]) })); // qa owner drops qa while closing
+  ok(vaOwnerHygiene.ok && stateOf(idVA3) === "Done", "LOOP-183 A: the qa OWNER closing + dropping labels stays legal (owner hygiene)");
+
+  // ── LOOP-183 Vector B: create-as-Done — insertTicket runs no transition gate; the create path enforces the invariant ──
+  // (i) the predicate: a builder tier may not create a qa/pm-owned ticket directly in Done; every legit carve-out passes.
+  ok(verifyCreateGateRejection("junior-dev", "Done", ["dev-loop", "Bug", "qa"]) !== null, "LOOP-183 B: dev-tier create into Done on a qa-owned ticket is rejected");
+  ok(verifyCreateGateRejection("senior-dev", "Done", ["dev-loop", "pm"]) !== null, "LOOP-183 B: dev-tier create into Done on a pm-owned ticket is rejected");
+  ok(verifyCreateGateRejection("junior-dev", "Todo", ["dev-loop", "Bug", "qa"]) === null, "LOOP-183 B: Todo intake create with a qa label stays legal (§9a)");
+  ok(verifyCreateGateRejection("junior-dev", "Backlog", ["pm"]) === null, "LOOP-183 B: Backlog intake create with a pm label stays legal (§9a)");
+  ok(verifyCreateGateRejection("senior-dev", "Done", ["dev-loop"]) === null, "LOOP-183 B: dev-tier create into Done with NO owner label stays legal (non-owner create)");
+  ok(verifyCreateGateRejection("qa", "Done", ["dev-loop", "Bug", "qa"]) === null, "LOOP-183 B: the qa OWNER may create a closed qa ticket (not a builder tier)");
+  ok(verifyCreateGateRejection("operator", "Done", ["qa"]) === null, "LOOP-183 B: the operator may create a closed qa ticket (carve-out)");
+
+  // (ii) the WIRING: the gate is enforced inside the save_issue create op (not just the predicate) — a dev-tier
+  // create-as-Done is a 400 that writes NO row; the same qa-labelled create in Todo (legit intake) succeeds.
+  const countP = (): number => (db.prepare("SELECT COUNT(*) c FROM tickets WHERE project_id='p'").get() as { c: number }).c;
+  const beforeCount = countP();
+  const vbWired = agentOp("save_issue", db, "p", "TW", "junior-dev",
+    { title: "LOOP-183 vB create-as-Done reject", type: "Bug", state: "Done", labels: ["dev-loop", "Bug", "qa"] }) as OpResult;
+  ok(vbWired.status === 400, "LOOP-183 B: opSaveIssue create-as-Done (dev tier, qa-owned) → 400 (wired, not just the predicate)");
+  ok(/verify gate/.test(((vbWired.body as { error?: string })?.error) ?? ""), "LOOP-183 B: the wired refusal names the verify gate");
+  ok(countP() === beforeCount, "LOOP-183 B: the rejected create wrote NO ticket row");
+  const vbTodo = agentOp("save_issue", db, "p", "TW", "junior-dev",
+    { title: "LOOP-183 vB todo intake ok", type: "Bug", state: "Todo", labels: ["dev-loop", "Bug", "qa"] }) as OpResult;
+  ok(vbTodo.status === 200, "LOOP-183 B: the same qa-labelled create in Todo succeeds (intake unaffected)");
 
   db.close();
 } finally {
