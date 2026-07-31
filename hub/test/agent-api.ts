@@ -10,7 +10,7 @@ import { rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
-import { openDb } from "../src/db.ts";
+import { openDb, logEvent } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
 import { createDaemon } from "../src/daemon.ts";
 
@@ -479,6 +479,76 @@ ok(full.some((t: any) => t.id === searchable.id && t.description === "the sideba
 let fieldsRejected = false;
 try { await call(pm, "list_issues", { fields: "bogus" }); } catch { fieldsRejected = true; }
 ok(fieldsRejected, "L3: an invalid fields value is rejected (400), not silently ignored");
+
+// ── LOOP-75: x-devloop-fire-id carrier — fireId attribution via AsyncLocalStorage ────────────────
+// These tests exercise the three-state store: op-API with header → stamped; without header → absent;
+// two concurrent requests → each carries its own (no cross-talk); direct-db → env fallback; scrubbed env → absent.
+// Re-enable the transport flag so op-API POSTs actually reach the daemon (it was toggled off above).
+setTransport(true);
+
+// (a) op-API write WITH x-devloop-fire-id header → event data.fireId is stamped
+{
+  const FIRE_A = "fire-loop-75-a";
+  await op("save_comment", { issueId: feat.id, body: "LOOP-75 fireId test (a)" },
+    { "x-devloop-actor": "dev", "x-devloop-fire-id": FIRE_A });
+  const rows = rdb.prepare("SELECT data FROM events WHERE kind='comment.add' ORDER BY id DESC LIMIT 1").all() as { data: string }[];
+  const data = JSON.parse(rows[0]!.data);
+  ok(data.fireId === FIRE_A,
+    `(a) op-API with x-devloop-fire-id: data.fireId='${FIRE_A}' (got: ${data.fireId ?? "(absent)"})`);
+}
+
+// (b) op-API write WITHOUT x-devloop-fire-id header → no 'fireId' key in data at all
+{
+  await op("save_comment", { issueId: feat.id, body: "LOOP-75 fireId test (b)" }, { "x-devloop-actor": "dev" });
+  const rows = rdb.prepare("SELECT data FROM events WHERE kind='comment.add' ORDER BY id DESC LIMIT 1").all() as { data: string }[];
+  const data = JSON.parse(rows[0]!.data);
+  ok(!("fireId" in data),
+    `(b) op-API without header: no 'fireId' key in event data (got: ${JSON.stringify(data)})`);
+}
+
+// (c) Two concurrent op-API POSTs with different fire ids → each event carries its own (no cross-talk)
+{
+  const FIRE_C1 = "fire-loop-75-c1";
+  const FIRE_C2 = "fire-loop-75-c2";
+  await Promise.all([
+    op("save_comment", { issueId: feat.id, body: "LOOP-75 fireId test (c1)" },
+      { "x-devloop-actor": "dev", "x-devloop-fire-id": FIRE_C1 }),
+    op("save_comment", { issueId: feat.id, body: "LOOP-75 fireId test (c2)" },
+      { "x-devloop-actor": "dev", "x-devloop-fire-id": FIRE_C2 }),
+  ]);
+  const rows = rdb.prepare("SELECT data FROM events WHERE kind='comment.add' ORDER BY id DESC LIMIT 2").all() as { data: string }[];
+  const fireIds = rows.map((r) => JSON.parse(r.data).fireId as string | undefined);
+  ok(fireIds.includes(FIRE_C1) && fireIds.includes(FIRE_C2),
+    `(c) concurrent POSTs: both fire ids present, no cross-talk (got: ${JSON.stringify(fireIds)})`);
+}
+
+// (d) Direct-db write (no ALS scope) with DEVLOOP_FIRE_ID in env → env fallback stamps the event
+// This is the direct-db fire process path: logEvent uses process.env when no ALS scope is active.
+{
+  const FIRE_D = "fire-loop-75-d";
+  const savedEnv = process.env.DEVLOOP_FIRE_ID;
+  process.env.DEVLOOP_FIRE_ID = FIRE_D;
+  logEvent(wdb, { project_id: projectId, ticket_id: feat.id, actor: "dev", kind: "test.direct-db-75" });
+  if (savedEnv === undefined) delete process.env.DEVLOOP_FIRE_ID; else process.env.DEVLOOP_FIRE_ID = savedEnv;
+  const rows = rdb.prepare("SELECT data FROM events WHERE kind='test.direct-db-75' ORDER BY id DESC LIMIT 1").all() as { data: string }[];
+  const data = JSON.parse(rows[0]!.data);
+  ok(data.fireId === FIRE_D,
+    `(d) direct-db write + DEVLOOP_FIRE_ID in env: env fallback stamps event (got: ${data.fireId ?? "(absent)"})`);
+}
+
+// (e) Daemon-internal write: DEVLOOP_FIRE_ID scrubbed to "" by daemon-lifecycle.ts → no fireId key
+// daemon-lifecycle.ts:246 sets DEVLOOP_FIRE_ID="" so a daemon spawned from a fire's env is never
+// mis-stamped with the launching fire's id. ""|undefined → absent in logEvent (LOOP-75, PM gate).
+{
+  const savedEnv = process.env.DEVLOOP_FIRE_ID;
+  process.env.DEVLOOP_FIRE_ID = ""; // simulates the scrubbed daemon spawn env
+  logEvent(wdb, { project_id: projectId, ticket_id: feat.id, actor: "operator", kind: "test.daemon-internal-75" });
+  if (savedEnv === undefined) delete process.env.DEVLOOP_FIRE_ID; else process.env.DEVLOOP_FIRE_ID = savedEnv;
+  const rows = rdb.prepare("SELECT data FROM events WHERE kind='test.daemon-internal-75' ORDER BY id DESC LIMIT 1").all() as { data: string }[];
+  const data = JSON.parse(rows[0]!.data);
+  ok(!("fireId" in data),
+    `(e) daemon-internal with scrubbed DEVLOOP_FIRE_ID="": no fireId key (daemon-lifecycle fix; got: ${JSON.stringify(data)})`);
+}
 
 await pm.close();
 await verifier.close();
