@@ -23,7 +23,7 @@ import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker } from "./breaker.ts";
-import { codexUsageAdapter, claudeAdapter, resolveAdapter } from "./fire-usage.ts";
+import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
 import type { FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -723,6 +723,7 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
     "run",
     ...(profile.model ? ["--model", profile.model] : []),
     ...(passEffort ? ["--variant", profile.effort as string] : []),
+    ...opencodeAdapter.extraArgs, // "--format json" — raw JSONL events for token/cost capture (usage:null on shape drift). opencode STREAMS these, so echo stays live (no resultText) — the operator sees the fire, LOOP-14's regression suppressed it.
     ...opts.extraArgs,
     prompt,
   ];
