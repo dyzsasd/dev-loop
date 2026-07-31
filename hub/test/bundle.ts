@@ -100,6 +100,24 @@ try {
   ok(/dev-loop run --agents core/.test(load.stdout), "load --dry-launch: stops before the loop and prints the run step");
   ok(existsSync(join(dst, "CLAUDE.md")) && existsSync(join(dst, ".claude", "settings.json")), "load: briefs + claude permission re-derived (never trusted from the bundle)");
 
+  // ── SECURITY (LOOP-162): a tampered plaintext-manifest gitCredentialEnvName is REFUSED before the
+  //    GIT_ASKPASS helper is built — no shell injection. The manifest is line 2, plaintext and
+  //    unauthenticated (age encrypts only the payload after it), so editing this one field needs no age
+  //    key — exactly the attack. The happy-path load above (valid GIT_FAKE_TOKEN) is the positive control. ──
+  {
+    const canary = join(ROOT, "pwned-LOOP-162.txt");
+    const nl = rawBundle.indexOf(0x0a, 17);
+    const evilManifest = { ...manifest, gitAuth: "https-token", gitCredentialEnvName: `GIT_FAKE_TOKEN'; touch ${canary} #` };
+    const evilBundle = join(ROOT, "evil.bundle");
+    writeFileSync(evilBundle, Buffer.concat([Buffer.from(`DEVLOOP-BUNDLE/1\n${JSON.stringify(evilManifest)}\n`), rawBundle.subarray(nl + 1)]));
+    const dstEvil = join(ROOT, "dst-evil");
+    const evil = cli(["up", "--bundle", evilBundle, "--dir", dstEvil, "--dry-launch"], ROOT, loadEnv);
+    ok(evil.status === 1, `security: tampered gitCredentialEnvName → load REFUSES (exit 1, got ${evil.status})`);
+    ok(/gitCredentialEnvName|ENV-VAR name/i.test(`${evil.stdout}${evil.stderr}`), "security: refusal names the invalid credential env name");
+    ok(!existsSync(join(dstEvil, ".dev-loop", "git_askpass.sh")), "security: GIT_ASKPASS helper NOT written for a tampered env name");
+    ok(!existsSync(canary), "security: the injected `touch` NEVER executed (no RCE)");
+  }
+
   // ── idempotency: live state wins ──
   const dstDb = join(dst, ".dev-loop", "hub.db");
   { // advance the live board past the bundle snapshot
