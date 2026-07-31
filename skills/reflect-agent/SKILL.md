@@ -72,6 +72,12 @@ All scoped per §2, tight queries per §10 (never page the workspace):
   and use `list_events` for detail inside the slice it reaches. Per-ticket history
   (`--ticket <id>`) is complete; only the project-wide feed is capped. Every retro states the
   oldest timestamp its event feed actually reached, so a short horizon is visible, never silent.
+- **Operator stops are NOT agent failures.** `dev-loop run` forwards SIGINT to in-flight fires on
+  shutdown; each dies exit 0 with a trailing `Execution error` and is ledgered `suspectError`.
+  Cluster before counting: `suspectError` rows sharing a timestamp to the second AND covering the
+  agents then in flight are one restart — `run.log`'s `forwarding SIGINT` line at that instant
+  confirms it. Exclude those from failure counts and patterns, and say how many you excluded. A
+  restart charged to the agents invents a failure mode that does not exist.
 
 ### Job 2 — Curate `lessons.md` (the self-evolution act)
 
