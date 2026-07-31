@@ -179,6 +179,17 @@ async function lcWaitHealthy(url: string, key: string, totalMs = 8000): Promise<
   }
   return false;
 }
+// Like lcWaitHealthy but returns "dead" the moment the child is no longer alive, so a bind-race
+// loser (EADDRINUSE → immediate child exit) is detected in ≤150ms instead of 8s. LOOP-76.
+async function lcWaitHealthyOrDead(url: string, key: string, pid: number, totalMs = 8000): Promise<"healthy" | "dead" | "timeout"> {
+  const deadline = Date.now() + totalMs;
+  while (Date.now() < deadline) {
+    if (await lcProbe(url, key, 800)) return "healthy";
+    if (!lcIsAlive(pid)) return "dead";
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return "timeout";
+}
 // Resolve the project key like the MCP server / DL-13 launcher: explicit DEVLOOP_PROJECT wins; else
 // match cwd against the configured repo paths. null ⇒ unresolved (the caller no-ops, never guesses).
 function lcResolveKey(): string | null {
@@ -223,10 +234,12 @@ async function daemonUpForKey(key: string): Promise<number> {
       // (SIGTERM→SIGKILL) so we cleanly restart on its port rather than no-op onto a dead / stale process.
       await lcStop(existing.pid);
     }
-    // port: explicit env override > recorded (stable across restarts) > fixed default 8787; probe for free.
+    // port: explicit env override > recorded (stable across restarts) > fixed default 8787.
+    // For an explicit port we spawn once and trust it (user pinned it deliberately). For the auto case
+    // we retry across the port space: lcFreePort's probe and the daemon's real bind are not atomic
+    // (TOCTOU), so a concurrent cold start for another workspace can steal the same port between the
+    // probe and the spawn. On child death before healthy we move to the next candidate. LOOP-76.
     const envPort = process.env.DEVLOOP_DAEMON_PORT ? Number(process.env.DEVLOOP_DAEMON_PORT) : 0;
-    const port = envPort > 0 ? envPort : await lcFreePort(existing?.port || DEFAULT_DAEMON_PORT, host);
-    const url = `http://${host}:${port}`;
 
     // Spawn the daemon ENTRY POINT — the foreground boot lives in daemon.ts/daemon.js (this module's
     // sibling), so resolve it relative to here. TypeScript's import rewriter does not touch string
@@ -235,33 +248,48 @@ async function daemonUpForKey(key: string): Promise<number> {
     const node = lcNode();
     const self = lcDaemonEntry();
     mkdirSync(lcRunDir(), { recursive: true });
-    const logFd = openSync(join(lcRunDir(), `daemon-${key}.log`), "a");
-    const child = spawn(node, [self], {
-      detached: true,                                   // survive the launching session (DL-42 hook)
-      stdio: ["ignore", logFd, logFd],
-      // Pin DEVLOOP_ACTOR=operator (D5): `up` is often invoked from an agent fire's env (the SessionStart
-      // hook, an inherited scheduler fire) where DEVLOOP_ACTOR=<agent>. Without pinning, the daemon adopts
-      // that actor — silently mis-attributing human writes and mis-gating publish (operator-only). The
-      // daemon is operator-owned infrastructure regardless of who happened to trigger `up`.
-      // Pin DEVLOOP_ACTOR=operator (D5 — same class for DEVLOOP_FIRE_ID, LOOP-75):
-      // `up` is often invoked from a fire's env inheriting DEVLOOP_FIRE_ID; the daemon is operator-owned
-      // infrastructure, not a fire — it must never claim a stale fire id (silently-wrong attribution is
-      // worse than absent: analytics would attribute all daemon-internal events to one arbitrary fire).
-      env: { ...process.env, DEVLOOP_ACTOR: "operator", DEVLOOP_FIRE_ID: "", DEVLOOP_NODE: node, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
-    });
-    child.unref();
-    closeSync(logFd);
-    if (!child.pid) { console.error("[daemon] up: failed to spawn the daemon process."); return 1; }
 
-    if (!(await lcWaitHealthy(url, key))) {
-      console.error(`[daemon] up: spawned daemon for '${key}' did not become healthy at ${url} (see ${join(lcRunDir(), `daemon-${key}.log`)}).`);
+    const startPort = envPort > 0 ? envPort : (existing?.port || DEFAULT_DAEMON_PORT);
+    const maxTries = envPort > 0 ? 1 : 64;
+    for (let i = 0; i < maxTries; i++) {
+      const port = startPort + i;
+      if (port > 65535) break;
+      if (envPort === 0 && !(await lcTryBind(port, host))) continue; // skip definitely-bound ports
+      const url = `http://${host}:${port}`;
+      const logFd = openSync(join(lcRunDir(), `daemon-${key}.log`), "a");
+      const child = spawn(node, [self], {
+        detached: true,                                   // survive the launching session (DL-42 hook)
+        stdio: ["ignore", logFd, logFd],
+        // Pin DEVLOOP_ACTOR=operator (D5): `up` is often invoked from an agent fire's env (the SessionStart
+        // hook, an inherited scheduler fire) where DEVLOOP_ACTOR=<agent>. Without pinning, the daemon adopts
+        // that actor — silently mis-attributing human writes and mis-gating publish (operator-only). The
+        // daemon is operator-owned infrastructure regardless of who happened to trigger `up`.
+        // Pin DEVLOOP_ACTOR=operator (D5 — same class for DEVLOOP_FIRE_ID, LOOP-75):
+        // `up` is often invoked from a fire's env inheriting DEVLOOP_FIRE_ID; the daemon is operator-owned
+        // infrastructure, not a fire — it must never claim a stale fire id (silently-wrong attribution is
+        // worse than absent: analytics would attribute all daemon-internal events to one arbitrary fire).
+        env: { ...process.env, DEVLOOP_ACTOR: "operator", DEVLOOP_FIRE_ID: "", DEVLOOP_NODE: node, DEVLOOP_PROJECT: key, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_HUB_DB: dbPath },
+      });
+      child.unref();
+      closeSync(logFd);
+      if (!child.pid) { console.error("[daemon] up: failed to spawn the daemon process."); return 1; }
+      const result = envPort > 0
+        ? ((await lcWaitHealthy(url, key)) ? "healthy" : "timeout")
+        : await lcWaitHealthyOrDead(url, key, child.pid);
+      if (result === "healthy") {
+        const started = await lcHealthInfo(url, key); // record what actually came up (version/actor) for `status` + upgrade detection
+        lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString(), version: started?.version ?? pkgVersion(), actor: started?.actor ?? "operator" });
+        console.log(`[daemon] up: started '${key}' → ${url} (pid ${child.pid})`);
+        return 0;
+      }
       await lcStop(child.pid); // never leak a slow/wedged child — escalate to SIGKILL if SIGTERM doesn't take
+      if (result === "dead") continue; // child exited before healthy (EADDRINUSE bind race) — try next port
+      // "timeout": daemon spawned but never answered — not a bind race, a real startup failure
+      console.error(`[daemon] up: spawned daemon for '${key}' did not become healthy at ${url} (see ${join(lcRunDir(), `daemon-${key}.log`)}).`);
       return 1;
     }
-    const started = await lcHealthInfo(url, key); // record what actually came up (version/actor) for `status` + upgrade detection
-    lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString(), version: started?.version ?? pkgVersion(), actor: started?.actor ?? "operator" });
-    console.log(`[daemon] up: started '${key}' → ${url} (pid ${child.pid})`);
-    return 0;
+    console.error(`[daemon] up: could not bind a port for '${key}' — exhausted ${maxTries} candidate(s) from ${startPort}.`);
+    return 1;
   } finally {
     release();
   }
