@@ -601,8 +601,13 @@ function main(): void {
       runTests(root, o.testCmd ?? "npm test", covDir);
     }
     for (const [f, p] of collectCoverage(root, covDir, tsjsSources)) painted.set(f, p);
-    if (![...painted.keys()].some((f) => !f.endsWith(".go")))
+    if (![...painted.keys()].some((f) => !f.endsWith(".go"))) {
       console.error(`quality: no V8 coverage matched the analyzed TS/JS files (dir: ${covDir}) — those rows go N/A. If tests run COMPILED output (dist/), point paths at what actually runs, or run tests directly on source (zero-build).`);
+      if (o.threshold !== null) {
+        console.error(`quality: --threshold is set but no rows are scorable — gate cannot run (dir: ${covDir})`);
+        process.exit(1);
+      }
+    }
   }
   if (goFiles.length) {
     const g = collectGoCoverage(root, goSources, o.goTestCmd);
