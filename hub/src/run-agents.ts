@@ -20,6 +20,7 @@ import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
+import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker } from "./breaker.ts";
@@ -859,6 +860,30 @@ function gateSkips(opts: Options, state: GateState, slot: string, agent: Agent, 
   return true;
 }
 function gateRecord(state: GateState, slot: string, key: string): void { state[slot] = { key, firedAt: Date.now() }; }
+// R1b (LOOP-144) — the dev-tier queue-depth gate, a sibling of the R1 change-gate. The change-gate above fires
+// whenever ANY agent moved the board cursor or a repo HEAD; on a busy board that lets a dev tier through even
+// when its OWN queue is empty, so it boots the full (opus/max) corpus in runAgent() only to no-op. Consult the
+// SAME servable predicate the `queue` op serves (agentops.servableSlice — imported, never a second copy): skip
+// the launch when a dev tier has NO servable Todo AND NO own In Progress. The In-Progress term is load-bearing —
+// an own In Progress row is the Step-0 orphan-resume input and MUST still fire; gating on empty-Todo alone would
+// turn this optimisation into a starvation bug. Dev tiers ONLY — pm/qa/architect/stewards do their best work on
+// a quiet board and have no Todo slice, so they are never gated here (isDevTierActor short-circuits). FAILS OPEN
+// exactly like changeKey: any read miss (no hub cursor on linear/local, unseeded/absent project, db busy) ⇒
+// null ⇒ fire anyway; never let a broken read starve the loop. Returns the skip REASON (for a distinct,
+// non-silent log line — a silent skip is indistinguishable from a crash) when the fire should skip, else null.
+function devTierQueueSkip(opts: Options, agent: Agent, project: string): string | null {
+  if (!isDevTierActor(agent)) return null;                    // pm/qa/architect/stewards — never queue-gated
+  try {
+    if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
+    if (!fireDb) return null;                                 // no hub cursor (linear/local) ⇒ fail open (fire)
+    const projectId = findProject(fireDb, project);
+    if (!projectId) return null;                              // unseeded / unknown project ⇒ fail open (fire)
+    const { todo, inProgress } = servableSlice(fireDb, projectId, agent);
+    return todo.length === 0 && inProgress.length === 0
+      ? "queue empty (0 servable Todo, 0 In Progress)"        // distinct from the change-gate's silent skip
+      : null;
+  } catch { return null; }                                    // any read error ⇒ fail open (fire)
+}
 function gateStatePath(opts: Options, project: string): string { return join(opts.dataDir, project, "scheduler-gate.json"); }
 function loadGateState(opts: Options, project: string): GateState {
   try { return JSON.parse(readFileSync(gateStatePath(opts, project), "utf8")) as GateState; } catch { return {}; }
@@ -1427,6 +1452,15 @@ async function main(): Promise<void> {
           slot.nextAt = now + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]);
           continue; // no change since last fire ⇒ don't pay for a no-op turn
         }
+        // R1b (LOOP-144): a dev tier whose servable slice is empty would boot only to no-op — skip the launch.
+        // Mirrors the change-gate continue above: it does NOT gateRecord (the .finally below never runs), so the
+        // change-key stays un-advanced and a genuine later change still fires the next rotation.
+        const queueSkip = devTierQueueSkip(opts, slot.agent, project);
+        if (queueSkip !== null) {
+          console.log(`[${slot.agent}] skipped: ${queueSkip}`);
+          slot.nextAt = now + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]);
+          continue;
+        }
       }
       slot.running = true;
       fired++;
@@ -1625,6 +1659,10 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       if (gateActive && GATED_AGENTS.has(agent)) {
         const key = changeKey(opts, cfg, p);
         if (gateSkips(opts, gateState, gateKey(agent, p), agent, key)) continue; // unchanged (and inside the pm/qa TTL) ⇒ skip, try next candidate
+        // R1b (LOOP-144): a dev tier with an empty servable slice in THIS project would no-op — skip to the next
+        // candidate project (does not gateRecord; a genuine later change still fires). See devTierQueueSkip.
+        const queueSkip = devTierQueueSkip(opts, agent, p);
+        if (queueSkip !== null) { console.log(`[${agent}] skipped: ${queueSkip}`); continue; }
       }
       project = p; break;
     }

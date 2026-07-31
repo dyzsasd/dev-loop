@@ -11,6 +11,7 @@ import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
 import { insertTicket } from "../src/ticketwrite.ts";
 import { agentOp, type OpResult } from "../src/agentops.ts";
+import { servableSlice, isDevTierActor } from "../src/servable.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -66,6 +67,22 @@ ok(titles(call("junior-dev").body.todo).indexOf("urgent bug") < titles(call("jun
 
 // ── 2. senior slice ───────────────────────────────────────────────────────────────────────────────
 ok(JSON.stringify(titles(call("senior-dev").body.todo)) === JSON.stringify(["senior ticket"]), "senior sees exactly its own slice");
+
+// ── 2a. servableSlice: the SHARED predicate the scheduler's queue-depth fire-gate (LOOP-144) consumes
+//    DIRECTLY. Asserting it here — not only through the queue op — proves a scheduler re-implementation can't
+//    silently diverge from §5/§21b routing (AC1), and pins the two servability rules the gate depends on:
+//    a `blocked` Todo is not work, and an own In Progress row IS (the Step-0 orphan-resume input). ─────────────
+const srSlice = servableSlice(db, projectId, "senior-dev");
+ok(JSON.stringify(titles(srSlice.todo)) === JSON.stringify(["senior ticket"]), "servableSlice(senior).todo = its own slice");
+ok(srSlice.inProgress.length === 0, "servableSlice(senior).inProgress empty here (no own In Progress row)");
+const jrSlice = servableSlice(db, projectId, "junior-dev");
+ok(!titles(jrSlice.todo).includes("blocked one"), "servableSlice(junior): a `blocked` Todo is NOT servable (would-be starvation avoided)");
+ok(!titles(jrSlice.todo).includes("senior ticket"), "servableSlice(junior): the senior slice is not servable to junior");
+ok(JSON.stringify(titles(jrSlice.inProgress)) === JSON.stringify(["junior wip"]), "servableSlice(junior).inProgress = own In Progress (the Step-0 orphan-resume input the gate must still fire on)");
+ok(JSON.stringify(titles(jrSlice.todo)) === JSON.stringify(titles(call("junior-dev").body.todo)),
+  "PARITY: servableSlice(junior).todo ≡ queue op todo — the gate and the op share ONE predicate, not a copy (LOOP-144 AC1)");
+ok(isDevTierActor("dev") && isDevTierActor("senior-dev") && isDevTierActor("junior-dev") && !isDevTierActor("pm") && !isDevTierActor("qa") && !isDevTierActor("architect"),
+  "isDevTierActor: the three dev tiers only — pm/qa/architect are never queue-gated");
 
 // ── 3. pm lists + todoDepth ───────────────────────────────────────────────────────────────────────
 const pm = call("pm");

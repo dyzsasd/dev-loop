@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { openDb } from "../src/db.ts";
 import { agentOp } from "../src/agentops.ts";
+import { servableSlice } from "../src/servable.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -73,6 +74,19 @@ try {
   const devQ = agentOp("queue", db2, "p2", "QS2", "dev", {}) as { status: number; body: QueueResult };
   ok(devQ.status === 200, "dev queue op succeeded");
   ok((devQ.body.todo ?? []).map((t) => t.id).includes("QS2-1"), "dev (legacy) queue: sensitive ticket still included (unfiltered for dev actor)");
+
+  // ── LOOP-144: the scheduler's queue-depth fire-gate consumes servableSlice DIRECTLY (not the queue op).
+  //    Assert the shared predicate itself carries the sensitive exclusion, so the gate can never serve a
+  //    junior a sensitive ticket, and prove the empty-slice case the gate skips on. ───────────────────────────
+  const jrSl = servableSlice(db, "p", "junior-dev");
+  ok(!jrSl.todo.map((t) => t.id).includes("QS-1") && !jrSl.inProgress.map((t) => t.id).includes("QS-2"),
+    "servableSlice(junior): sensitive rows (QS-1 Todo, QS-2 In Progress) are NOT servable");
+  ok(jrSl.todo.map((t) => t.id).includes("QS-3"), "servableSlice(junior): the normal junior Todo (QS-3) IS servable");
+  ok(servableSlice(db, "p", "senior-dev").todo.map((t) => t.id).includes("QS-4"),
+    "servableSlice(senior): a sensitive+senior row IS servable (only junior filters `sensitive`)");
+  const emptySlice = servableSlice(db2, "p2", "senior-dev");   // p2 has only a `dev`-assigned row → senior slice empty
+  ok(emptySlice.todo.length === 0 && emptySlice.inProgress.length === 0,
+    "servableSlice: a dev tier with no own rows ⇒ empty slice — the queue-depth gate's skip trigger");
   db2.close();
 
   db.close();
