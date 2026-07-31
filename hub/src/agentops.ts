@@ -24,7 +24,7 @@ import { STEWARD_HANDLES } from "./seed.ts"; // D1: the steward roster (ONE defi
 import { TEAM_INTAKE_PROJECT } from "./team-config.ts"; // D1: the reserved "_team" intake key — the only override pm may pass
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { isDevTierActor, servableSlice } from "./servable.ts"; // LOOP-144: the shared dev-tier servable predicate (a lean, zod-free leaf so run-agents can consume it too)
-import { insertTicket, updateTicketRow, insertComment, loadRelease } from "./ticketwrite.ts";
+import { insertTicket, updateTicketRow, insertComment, loadRelease, verifyCreateGateRejection } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
 // gate) + the docstore-error→HTTP-status map are reused VERBATIM from the shared, side-effect-free docstore
 // (exactly as the 5 ticket ops reuse ticketwrite.ts), so both transports share one publish gate + one CAS.
@@ -282,6 +282,10 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
     // through two senior fires; four hotel children shipped label-only). At create time an explicit
     // assignee always wins; otherwise the tier label IS the routing intent — materialize it.
     const labels = a.labels ?? [];
+    // LOOP-183 Vector B: "Done means verified" (§3) binds the create edge too — insertTicket runs no transition
+    // gate, so a builder tier could otherwise create a qa/pm-owned ticket already in Done (owner never verifies).
+    const createGate = verifyCreateGateRejection(actor, (a.state as State) ?? "Todo", labels);
+    if (createGate) return errR(400, createGate);
     const tierAssignee = resolveAssignee(actor, a.assignee)
       ?? (labels.includes("senior-dev") && actorExists(db, "senior-dev") ? "senior-dev"
         : labels.includes("junior-dev") && actorExists(db, "junior-dev") ? "junior-dev" : null);
