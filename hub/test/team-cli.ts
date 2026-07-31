@@ -742,6 +742,85 @@ esac`);
     ok(/DOCTOR_OK/.test(w22NoQualDoc.out), "DOCTOR_OK holds with no qualifying repo");
   }
 
+  // ── LOOP-188: §19 defaultBranch chain — W19 and W22 must query the resolved branch, not "main" ──
+  // W19 regression: a workspace with team.git.defaultBranch="master" must warn about master ahead of
+  // origin/master (not main). W22 regression: the day-0 red-base stall must fire when the resolved
+  // branch (master) is red, and the W22 message must name master. Both were unreachable on non-main
+  // repos before this fix — rev-list queried origin/main and the forge queried /commits/main/check-runs.
+  {
+    const nodeDir = dirname(process.execPath);
+    const l188BasePath = `${nodeDir}:/usr/bin:/bin`;
+    const l188GhBinDir = join(tmp, "l188-gh-bin");
+    mkdirSync(l188GhBinDir, { recursive: true });
+    const writeL188Gh = (body: string) => {
+      writeFileSync(join(l188GhBinDir, "gh"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    };
+
+    // W19 with master: local master ahead of origin/master → W19 fires naming master
+    const w19MRoot = join(tmp, "w19-master");
+    const w19MOrigin = join(tmp, "w19-master-origin.git");
+    mkdirSync(w19MOrigin, { recursive: true });
+    const gitMaster = (dir: string, args: string[]) =>
+      spawnSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    gitMaster(tmp, ["init", "--bare", "-q", "-b", "master", w19MOrigin]);
+    run("team", ["init", "--dir", w19MRoot, "--key", "w19m-team", "--backend", "service"]);
+    run("team", ["add-project", "core"], { cwd: w19MRoot });
+    const w19MClone = join(w19MRoot, "clone");
+    spawnSync("git", ["clone", "-q", w19MOrigin, w19MClone], { stdio: ["ignore", "pipe", "pipe"] });
+    gitMaster(w19MClone, ["commit", "--allow-empty", "-qm", "baseline"]);
+    gitMaster(w19MClone, ["push", "-qu", "origin", "master"]);
+    run("team", ["add-repo", "repo", "--project", "core", "--path", "clone", "--landing", "pr", "--auto-merge"], { cwd: w19MRoot });
+    run("team", ["set", "team.git.defaultBranch", "master"], { cwd: w19MRoot });
+    // Local master 1 commit ahead of origin/master → W19 fires naming master
+    gitMaster(w19MClone, ["commit", "--allow-empty", "-qm", "unpushed doc on master"]);
+    const w19Mahead = run("server", ["doctor"], { cwd: w19MRoot });
+    ok(/\[W19\]/.test(w19Mahead.out), "W19 fires when local master is ahead of origin/master (LOOP-188)");
+    ok(/DOCTOR_OK/.test(w19Mahead.out), "W19 is warn-only on master branch (LOOP-188)");
+    ok(/master/.test(w19Mahead.out.match(/\[W19\].*/)?.[0] ?? ""), "W19 line names master not main (LOOP-188)");
+
+    // W22 day-0 red-base stall on master: fake gh returns red checks for /commits/master/ only.
+    // PR is MERGEABLE and old (threshold stall is suppressed when base is green, so with the wrong
+    // branch the unfixed code would see green main → not stalled → W22 silent — the discriminating case).
+    const w22MRoot = join(tmp, "w22-master");
+    run("team", ["init", "--dir", w22MRoot, "--key", "w22m-team", "--backend", "linear", "--linear-team", "W22M"]);
+    run("team", ["add-project", "core"], { cwd: w22MRoot });
+    const w22MRepo = join(w22MRoot, "git-repo");
+    mkdirSync(w22MRepo, { recursive: true });
+    spawnSync("git", ["init", "-q", "-b", "master", w22MRepo], { stdio: "ignore" });
+    spawnSync("git", ["-C", w22MRepo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init"], { stdio: "ignore" });
+    run("team", ["add-repo", "testrepo", "--project", "core", "--path", "git-repo",
+      "--landing", "pr", "--auto-merge", "--merge-check", "Lint",
+      "--remote", "https://github.com/fake-org/fake-repo.git"], { cwd: w22MRoot });
+    run("team", ["set", "team.git.defaultBranch", "master"], { cwd: w22MRoot });
+    run("team", ["set", "team.mode", "live"], { cwd: w22MRoot });
+    // Fake gh: red Lint check only for /commits/master/check-runs; green for /commits/main/ (discriminating).
+    // PR is MERGEABLE and old (2020) so the threshold stall fires on the BLOCKED-or-not-green axis —
+    // but MERGEABLE+green would suppress it, so only the day-0 red path triggers on the correct branch.
+    writeL188Gh(`
+case "$*" in
+  *"/commits/master/check-runs"*)
+    echo '{"check_runs":[{"name":"Lint","conclusion":"failure"}]}'
+    ;;
+  *"/commits/main/check-runs"*)
+    echo '{"check_runs":[{"name":"Lint","conclusion":"success"}]}'
+    ;;
+  *"--state open"*)
+    echo '[{"number":1,"headRefName":"dev-loop/LOOP-X","createdAt":"2020-01-01T00:00:00Z","url":"https://github.com/fake-org/fake-repo/pull/1","mergeable":"MERGEABLE"}]'
+    ;;
+  *"--state merged"*)
+    echo '[]'
+    ;;
+  *)
+    exit 1
+    ;;
+esac`);
+    const w22Mstall = run("server", ["doctor"], { cwd: w22MRoot, extra: { PATH: `${l188GhBinDir}:${l188BasePath}` } });
+    ok(/\[W22\]/.test(w22Mstall.out), "W22 fires on day-0 red-base stall when defaultBranch=master (LOOP-188)");
+    ok(/DOCTOR_OK/.test(w22Mstall.out), "W22 is warn-only on master stall (LOOP-188)");
+    ok(/base 'master'/.test(w22Mstall.out), "W22 warn names master not main when team.git.defaultBranch=master (LOOP-188)");
+  }
+
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {

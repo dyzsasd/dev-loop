@@ -413,10 +413,9 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // worktree (which branches off origin) silently misses those docs, and they land as passengers
   // in dev PRs. Best-effort, warn/info only — NEVER flips DOCTOR_OK.
   try {
-    const defaultBranch = "main";
     for (const [ref, entry] of Object.entries(ws.file.repos)) {
       if (entry.landing !== "pr") continue;
-      const dir = effectiveRepo(ws, ref).absPath;
+      const { absPath: dir, defaultBranch } = effectiveRepo(ws, ref);
       if (!existsSync(dir) || !isGitWorkTree(dir)) continue;
       try {
         const r = spawnSync("git", ["-C", dir, "rev-list", "--count", `origin/${defaultBranch}..${defaultBranch}`],
@@ -490,7 +489,7 @@ async function checkLandingW22Stall(
         const remote = ws.file.repos[s.repo]?.remote ?? "";
         const m = remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
         const ghRepo = m ? m[1]! : s.repo;
-        warn(`[W22] [${s.repo}] landing stalled: ${s.openLoopPRs} open dev-loop/* PR(s), oldest ${age}; base 'main' required checks ${base} — autoMerge cannot fire. Clear it: gh pr list --repo ${ghRepo} --state open --head dev-loop/`);
+        warn(`[W22] [${s.repo}] landing stalled: ${s.openLoopPRs} open dev-loop/* PR(s), oldest ${age}; base '${effectiveRepo(ws, s.repo).defaultBranch}' required checks ${base} — autoMerge cannot fire. Clear it: gh pr list --repo ${ghRepo} --state open --head dev-loop/`);
         if (!stalledRepo) stalledRepo = ghRepo;
       } else if (s.state === "unknown") {
         info(`landing: ${s.reason ?? "forge unreachable"} (best-effort; not a failure)`);

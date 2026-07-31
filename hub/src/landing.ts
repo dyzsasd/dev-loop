@@ -3,7 +3,7 @@
 // Pure detector: never throws, never mutates the forge; all forge failures collapse to explicit
 // unknown/na (degradation contract §4). Injectable exec seam for unit testing.
 import { spawnSync } from "node:child_process";
-import { type Workspace } from "./team-config.ts";
+import { effectiveRepo, type Workspace } from "./team-config.ts";
 
 export interface LandingState {
   repo: string;
@@ -231,7 +231,7 @@ export async function readLandingState(
       continue;
     }
 
-    const defaultBranch = "main"; // RepoEntry has no defaultBranch field; "main" is the universal default
+    const defaultBranch = effectiveRepo(ws, ref).defaultBranch;
     const mergeChecks = repoEntry.mergeChecks ?? [];
 
     // 1. Open loop PRs — the primary forge call; its success/failure gates the state
