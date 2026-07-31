@@ -3,7 +3,7 @@
 import { realpathSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readLandingState, type ExecFn, type LandingState } from "../src/landing.ts";
+import { readLandingState, ticketToPr, prToTicket, type ExecFn, type LandingState } from "../src/landing.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 
 let fails = 0;
@@ -78,13 +78,17 @@ function makeExec(routes: Array<[RegExp, { stdout?: string; stderr?: string; ok?
   };
 }
 
-function prJson(prs: Array<{ headRefName: string; createdAt: string; mergeable?: string; number?: number; mergedAt?: string }>): string {
+function prJson(prs: Array<{ headRefName: string; createdAt?: string; mergeable?: string; number?: number; mergedAt?: string; url?: string; state?: string; title?: string; body?: string }>): string {
   return JSON.stringify(prs.map((p) => ({
     number: p.number ?? 1,
     headRefName: p.headRefName,
     createdAt: p.createdAt ?? new Date(NOW - 1 * DAY_MS).toISOString(),
     mergeable: p.mergeable ?? "MERGEABLE",
     mergedAt: p.mergedAt,
+    url: p.url ?? `https://github.com/test-org/test-repo/pull/${p.number ?? 1}`,
+    state: p.state ?? "OPEN",
+    title: p.title ?? `PR for ${p.headRefName}`,
+    body: p.body ?? "",
   })));
 }
 
@@ -274,11 +278,135 @@ function checkRunsJson(runs: Array<{ name: string; conclusion: string | null }>)
   let acceptsValid = true;
   try {
     const goodExec = makeExec([[/.*/, { stdout: "[]" }]]);
-    goodExec(["pr", "list", "--repo", "test/repo", "--state", "open", "--json", "number,headRefName,createdAt,mergeable"]);
+    goodExec(["pr", "list", "--repo", "test/repo", "--state", "open", "--json", "number,headRefName,createdAt,mergeable,url"]);
   } catch {
     acceptsValid = false;
   }
-  ok(acceptsValid, "makeExec double accepts all valid --json fields used by readLandingState");
+  ok(acceptsValid, "makeExec double accepts all valid --json fields used by readLandingState (incl. url)");
+}
+
+// ── LOOP-66: prToTicket / ticketToPr + prs field in LandingState ──────────────
+
+// Case 15: prToTicket — primary dev-loop/<id> branch convention
+{
+  ok(prToTicket("dev-loop/LOOP-66") === "LOOP-66", "prToTicket: dev-loop/<id> → ticket id");
+  ok(prToTicket("dev-loop/LOOP-1") === "LOOP-1", "prToTicket: dev-loop/LOOP-1 → LOOP-1");
+}
+
+// Case 16: prToTicket — fix/<id>-... branch convention (the explicit non-dev-loop-slash-id path)
+{
+  ok(prToTicket("fix/LOOP-45-description") === "LOOP-45", "prToTicket: fix/<id>-… → ticket id");
+}
+
+// Case 17: prToTicket — non-standard branch, fallback to TICKET_RE over title/body
+{
+  ok(prToTicket("feature/some-work", { title: "Implements LOOP-99: new feature", body: "" }) === "LOOP-99",
+    "prToTicket: non-standard branch, title fallback → LOOP-99");
+  ok(prToTicket("feature/some-work") === null,
+    "prToTicket: non-standard branch, no title/body → null");
+}
+
+// Case 18: ticketToPr — found via primary head-branch lookup
+{
+  const exec: ExecFn = (args) => {
+    const joined = args.join(" ");
+    if (/--head dev-loop\/LOOP-66/.test(joined))
+      return { stdout: JSON.stringify([{ number: 77, url: "https://github.com/test/repo/pull/77", state: "OPEN" }]), stderr: "", ok: true };
+    return { stdout: "[]", stderr: "", ok: true };
+  };
+  const result = ticketToPr("test/repo", "LOOP-66", { exec });
+  ok(result !== null, "ticketToPr: primary lookup finds PR");
+  ok(result?.pr === 77, "ticketToPr: primary lookup returns correct PR number");
+  ok(result?.url === "https://github.com/test/repo/pull/77", "ticketToPr: primary lookup returns correct URL");
+  ok(result?.state === "OPEN", "ticketToPr: primary lookup returns state");
+}
+
+// Case 19: ticketToPr — primary returns empty, fallback search finds PR via TICKET_RE on title
+{
+  const exec: ExecFn = (args) => {
+    const joined = args.join(" ");
+    if (/--head dev-loop\/LOOP-45/.test(joined)) return { stdout: "[]", stderr: "", ok: true };
+    if (/--search LOOP-45/.test(joined))
+      return {
+        stdout: JSON.stringify([{
+          number: 55,
+          url: "https://github.com/test/repo/pull/55",
+          state: "MERGED",
+          headRefName: "fix/LOOP-45-fix-typo",
+          title: "Fix typo in LOOP-45",
+          body: "",
+        }]),
+        stderr: "",
+        ok: true,
+      };
+    return { stdout: "[]", stderr: "", ok: true };
+  };
+  const result = ticketToPr("test/repo", "LOOP-45", { exec });
+  ok(result !== null, "ticketToPr: search fallback finds PR when primary empty");
+  ok(result?.pr === 55, "ticketToPr: search fallback returns correct PR number");
+  ok(result?.state === "MERGED", "ticketToPr: search fallback returns MERGED state");
+}
+
+// Case 20: ticketToPr — no PR exists → null (no throw)
+{
+  const exec: ExecFn = () => ({ stdout: "[]", stderr: "", ok: true });
+  const result = ticketToPr("test/repo", "LOOP-999", { exec });
+  ok(result === null, "ticketToPr: no PR for ticket → null (no throw)");
+}
+
+// Case 21: ticketToPr — forge unreadable → null (never throws)
+{
+  const exec: ExecFn = () => { throw new Error("ENOENT"); };
+  let threw = false;
+  let result: ReturnType<typeof ticketToPr> = null;
+  try { result = ticketToPr("test/repo", "LOOP-66", { exec }); }
+  catch { threw = true; }
+  ok(!threw, "ticketToPr: forge throw → returns null, never propagates");
+  ok(result === null, "ticketToPr: forge throw → null result");
+}
+
+// Case 22: readLandingState populates prs[] from open loop PRs (design §5.2 / LOOP-66)
+{
+  const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["CI / test"] }));
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: prJson([
+      { headRefName: "dev-loop/LOOP-10", number: 10, url: "https://github.com/test-org/test-repo/pull/10" },
+      { headRefName: "dev-loop/LOOP-11", number: 11, url: "https://github.com/test-org/test-repo/pull/11" },
+      { headRefName: "other-branch", number: 12 }, // no ticket id → filtered out of prs
+    ]) }],
+    [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI / test", conclusion: "success" }]) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(result!.prs !== null, "prs field is non-null when open loop PRs exist");
+  ok(result!.prs!.length === 2, `prs: only dev-loop/<id> branches included (got ${result!.prs!.length})`);
+  ok(result!.prs![0]!.ticket === "LOOP-10", "prs[0].ticket = LOOP-10");
+  ok(result!.prs![0]!.pr === 10, "prs[0].pr = 10");
+  ok(result!.prs![0]!.url === "https://github.com/test-org/test-repo/pull/10", "prs[0].url correct");
+  ok(result!.prs![0]!.state === "OPEN", "prs[0].state = OPEN");
+  ok(result!.prs![1]!.ticket === "LOOP-11", "prs[1].ticket = LOOP-11");
+}
+
+// Case 23: readLandingState with no open loop PRs → prs is [] (empty, not null)
+{
+  const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["CI / test"] }));
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: "[]" }],
+    [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI / test", conclusion: "success" }]) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(Array.isArray(result!.prs), "prs is an array (not null) when forge readable with no loop PRs");
+  ok(result!.prs!.length === 0, "prs is empty when no open loop PRs");
+}
+
+// Case 24: readLandingState prs=null when state=unknown (forge failure)
+{
+  const ws = makeWorkspace(qualifyingRepo());
+  const execFail: ExecFn = () => ({ stdout: "", stderr: "not logged in", ok: false });
+  const [result] = await readLandingState(ws, { exec: execFail, now: NOW });
+  ok(result!.state === "unknown", "forge failure → state=unknown");
+  ok(result!.prs === null, "forge failure → prs=null (not empty array)");
 }
 
 console.log(fails === 0 ? "\nLANDING_OK" : `\n${fails} CHECK(S) FAILED`);
