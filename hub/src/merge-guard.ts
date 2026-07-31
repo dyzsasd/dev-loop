@@ -87,12 +87,14 @@ function applyTrip(
     if (!trow) return { action: "skipped_no_ticket" };
     const projectId = trow.project_id;
     const commentBody = buildCommentBody(pr, forgeReview, boardState);
-    // Idempotency: skip if the exact objection comment already exists on this ticket.
+    // Comment dedup: skip the post only if the exact objection text already exists (LOOP-65).
+    // Routing is independent and always enforced — dedup must not suppress re-enforcement (LOOP-130).
     const dup = db.prepare("SELECT id FROM comments WHERE ticket_id=? AND body=?").get(ticketId, commentBody);
-    if (dup) return { action: "already_present", commentBody };
-    // Post comment (standard write layer — addComment validates ticket existence + non-empty body).
-    addComment(db, projectId, "operator", ticketId, commentBody);
-    // Board routing: state→Todo, labels+=blocked, assignee→null (§9 Dev bail / design §5.1).
+    if (!dup) {
+      // Post comment (standard write layer — addComment validates ticket existence + non-empty body).
+      addComment(db, projectId, "operator", ticketId, commentBody);
+    }
+    // Board routing always runs on every trip call, regardless of comment dedup (LOOP-130).
     const cur = db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?")
       .get(ticketId, projectId) as TicketUpdateFields | undefined;
     if (cur) {
@@ -102,7 +104,7 @@ function applyTrip(
         ...cur, state: "Todo", assignee: null, labels: JSON.stringify(labels),
       });
     }
-    return { action: "wrote", commentBody };
+    return { action: dup ? "already_present" : "wrote", commentBody };
   } finally {
     db.close();
   }
