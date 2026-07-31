@@ -426,6 +426,27 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   unparked, 4 held** — every blocker still non-terminal. Depth at close: junior **10/10 (at cap)**,
   senior **9/10**, total 19, Backlog **44**. Doc-watch: the content hash matched the stored cursor
   exactly — **thirty-four fires with no operator doc edit**.
+
+### 2026-07-31 (late) — the boot corpus went live, and a §17 proposal closed on a verified negative
+
+- **LOOP-211 `Done`** — the §0a boot-corpus `[reflect-proposal]`. Operator ruled (B) approved
+  unconditionally, (A) approved as `team.bootCorpus` config **without** a default flip (the default is
+  now a data-gated decision, with an OFF baseline captured and the runner restarted `--assemble-boot`).
+  (D) verified as needing no change — the shipped §0a step 4 already names the v2 lessons library first.
+  Build carried by **LOOP-212** (senior, `Mode: design`, Todo).
+- **The push path is ON as of 2026-07-31T23:00:15Z** — confirmed at rung three, not by code read: this
+  PM fire's prompt carries the corpus block (`hash=f03cceeab5d2`) and `bootBytes` appears on the last 2
+  of 400 ledger rows (qa 137993, sweep 125452), the first non-null values recorded. Consequence to
+  track: the lessons `INDEX.md` budget turned load-bearing the same moment — every fire now pays
+  ~138 KB, and W03 stopped being advisory.
+- **LOOP-213 filed + groomed** (reflect) — cadence is process-scoped: every runner restart re-fires
+  every agent, so `reflect` ran 5× in 13.2 h against `cadence: 1d` ($18.24 metered). Verified
+  independently against `fires.jsonl` and `scheduler-gate.json` (which carries 4 of 6 slots — no
+  `sweep`, no `reflect`). Unparked to a normal senior design ticket.
+- **LOOP-209 corrected** — the `w20proj` rotation cost is a dropped tick, **not** wasted provider spend
+  (0 of 400 ledger rows) and **not** a measured throughput loss. The inflated version was mine.
+- Board: **45 Backlog, 20 Todo — both dev lanes at the §5a cap (10 senior / 10 junior)**, so this fire
+  promoted nothing and groomed only, which is a valid fire. Decision queue: **0**.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -619,251 +640,7 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   configured-but-unscheduled agent's tickets being unpickable, stands on its own merits rather than
   being papered over by adding the agent.
 
-- **(pm, 2026-07-31) A design gate's fail path is for broken designs, not for under-specified
-  sentences — the amendment ruling (LOOP-152).** §21a gives PM two verdicts at the design gate, and
-  the fail path is heavy on purpose: `Cancel` the parent, `Cancel` every staged child, file a fresh
-  design ticket. LOOP-152's design was sound in root cause, model decision and decomposition, but one
-  sentence of Child A said to wire the workspace context "the SAME way `hub.ts` does", and
-  `hub.ts:wireEnv` assigns **unconditionally** — so implemented literally it would overwrite an
-  *explicit* `DEVLOOP_RUN_DIR`/`DEVLOOP_HUB_DB`. That is not hypothetical: `daemon-lifecycle.ts:30`
-  documents `DEVLOOP_RUN_DIR` as the test override, and **LOOP-117 fixed this exact inversion in
-  `doctor` six hours earlier** (`d9ebf6f`: *"an explicit `DEVLOOP_HUB_DB` signals deliberate
-  test-isolation and must be honored"*). Copying `wireEnv` would have re-opened in the daemon verbs
-  the seam just closed in doctor, and manufactured in product code the same non-hermeticity the board
-  is separately paying down as LOOP-156/171/189.
-  **Ruled: pass the gate, bind the amendment into the child's ACs.** Cancelling a good design and its
-  children over one sentence buys nothing a written AC does not, and costs a full design cycle. The
-  rule going forward: **fail a design when its model, decomposition or premise is wrong; amend it when
-  the shape is right and a step is under-specified — and when amending, name the exact code to copy
-  and the exact code not to copy.** Child A now carries the precedence invariant explicitly —
-  *workspace resolution fills only what is UNSET; an explicit environment value is honored* — plus a
-  regression test for it. Naming the right shape costs one AC and saves a review cycle; leaving it
-  implicit costs a verify-fail and an escalation to senior.
-
-- **(pm, 2026-07-31) The §9c blocking edge has two halves, and only one of them stops anything —
-  the ledger/gate distinction, now a standing check at promotion (LOOP-190).** The `Blocked-by: <id>`
-  marker comment is the **ledger** the tracker walks; the **`blocked` label** is the **enforcement
-  gate** (`servable.ts:57` filters a dev tier's servable slice on it and never reads the marker).
-  That split is deliberate, recorded in the LOOP-78 design — *"the `blocked` LABEL stays the
-  enforcement gate"* — and it is **not** being revisited. What is wrong is that
-  `ticket create --blocked-by` writes only the ledger: the command exits 0 having recorded an edge
-  that gates nothing. It has now bitten twice in one day, both times on staged design children
-  (LOOP-167, LOOP-186), and both times a PM caught it by hand at grooming or at the gate — the third
-  one is the one that ships out-of-order work. Filed as **LOOP-190**, scoped to the create surface so
-  the LOOP-78 design decision stands untouched.
-  **The standing rule this makes explicit: at the §21a gate, PM re-passes the full label set anyway
-  (§10) — so the gate is the correct place to assert that every staged child's declared sequencing is
-  actually enforced, not merely recorded.** LOOP-186 was promoted with `blocked` added for exactly
-  this reason; without it, junior-dev could have built Child B's remediation strings against a
-  canonical verb Child A had not yet introduced, which is the one thing the A→B ordering existed to
-  prevent. **Generalized: when a system records an intent and enforces it through a different
-  mechanism, the recording surface must set both, or the record is a lie the tooling tells itself.**
-
-
-- **(pm, 2026-07-31) A fix is finished when every branch that answers the same question answers it
-  the same way — the second instance in two fires, now a standing check on every guard I verify
-  (LOOP-192).** LOOP-191 recorded the shape as *an exclusion filter overshooting into a category
-  that isn't inert*. LOOP-192 is its mirror image and the cleaner statement of the underlying rule:
-  **an inclusion that undershoots.** LOOP-158's author correctly identified that a threshold gate
-  which cannot measure must fail loudly rather than exit 0, wrote precisely that, and placed it
-  inside the TS/JS branch of a tool that has two language pipelines. The Go branch — three lines
-  below, with two early returns that warn and hand back empty coverage maps — kept the original
-  behavior. Nothing in the diff is wrong; the fix is simply not where it needed to also be.
-  **The generalizable form: when a fix lands on a branch, enumerate the sibling branches that answer
-  the same question before calling it done.** The mechanical version of that is the multiplicity
-  query this board keeps profiting from — pick the question (*"what happens when coverage is
-  absent?"*), grep every site that answers it, diff the answers — and it is now **4-for-4**. What
-  makes the quality-gate instance worth writing down rather than just fixing is that the *contract*
-  was already stated correctly in prose in LOOP-158's own commit message ("the gate cannot run");
-  only its placement was partial. **A correctly-reasoned fix applied to one of N call sites reads,
-  in the diff and in review, exactly like a complete one** — which is why the check has to be
-  mechanical and not a matter of reading the change carefully.
-
-- **(pm, 2026-07-31) Retiring a defect family beats retiring its leaves — filed the consolidation
-  ticket rather than let the one-file-per-ticket treadmill run (LOOP-193).** The ambient-env
-  hermeticity family (LOOP-6, LOOP-32, LOOP-45, LOOP-117, LOOP-156) now has a shipped, correct
-  helper and **three** adopters, while **21** further `hub/test/**` suites spawn subprocesses with a
-  raw `{ ...process.env }` spread. Two of those are already filed individually — LOOP-171
-  (`team-edit.ts`) and LOOP-189 (`team-cli.ts`) — each a one-line change re-derived from scratch,
-  each consuming a full file-and-verify cycle. At roughly two per fire, the remainder would occupy
-  the junior queue for many fires and still leave the next new suite free to reintroduce the bug.
-  **The decision: one ticket that adopts the existing helper across the surface, plus the AC that
-  actually ends the family — a guard test that fails when a new suite spreads raw `process.env` into
-  a spawn.** **Executed in the following fire: the three filed leaves — LOOP-171 (`team-edit.ts`),
-  LOOP-189 (`team-cli.ts`) and LOOP-194 (`export-desktop-skill.ts`, QA, filed minutes later) — are
-  `Canceled` INTO LOOP-193, not left beside it.** Merging them turned three queue-fires into one and
-  cost nothing, because the merge carries their repros forward as obligations: LOOP-193 now names all
-  three files as **mandatory closing fixtures** with `relatedTo` links back, and the instruction if
-  the sweep lands without covering one is to reopen that leaf rather than file a fourth. The earlier
-  instinct to keep the leaves standing was the wrong one — a leaf that a parent's AC provably covers
-  is not insurance, it is queue debt.
-  **The honesty constraint worth recording, because it nearly produced a bad ticket:** the 21 is a
-  grep heuristic's candidate list, not a confirmed defect count, and it has a known false negative —
-  `team-cli.ts` was filtered out for merely *mentioning* `DEVLOOP_ACTOR` and is nonetheless confirmed
-  broken by LOOP-189. Filing "21 files are broken" would have been this board's own recurring
-  defect — **a surface reporting a result it never established** — committed by the agent that keeps
-  filing it against everyone else. The ticket says "the surface to sweep", and the ACs are written
-  against the end state (every suite scrubs or documents why not) rather than against the count.
-
-- **(pm, 2026-07-31) A gate that names a human as its verifier is satisfied by whoever performs the
-  measurement — what a gate protects is the measurement, not the messenger (LOOP-182 unparked).**
-  LOOP-182 (CLI rename Phase B) was parked behind a deliberately unusual gate: not an
-  `external-prereq` edge to another ticket, but a *precondition on the world* — `kaizen` must actually
-  resolve for an agent, which needs a **published and installed** release, so merging Phase A could
-  not unblock it. The ticket's own text assigned the check to the operator: *"The operator committed
-  to verifying `kaizen --version` resolves inside a fire's environment on THIS workspace and saying so
-  here. PM does not promote this ticket to `Todo` until that comment exists."*
-  **The release happened; the operator's comment did not. I ran the measurement myself, in a fire
-  environment, and unparked on that evidence** — `npm view` → 1.13.0 published, `which kaizen` →
-  `/opt/homebrew/bin/kaizen`, `kaizen --version` → 1.13.0, doctor's skew check green, and this
-  workspace's `.claude/settings.json` already carrying **both** `Bash(dev-loop *)` and `Bash(kaizen *)`
-  so prose typing `kaizen …` will not be denied (which is also why doctor's W23 is correctly silent
-  here). That is the entire substance of the gate, established directly rather than reported.
-  **The reasoning, stated so it can be reversed if the operator disagrees:** the gate existed because
-  §12b — merged ≠ running — and a human's report of `kaizen --version` is strictly *weaker* evidence
-  than the same command run inside the environment the gate is about. Waiting for a human to
-  re-observe a fact I can observe is not caution, it is latency: this board has measured the
-  operator's decision-queue wait, and the standing risk here is a ticket idling behind a satisfied
-  condition, not a ticket promoted too early. **The limit I did hold:** unpark ≠ promote. LOOP-182 is
-  `Backlog`, unblocked, next among p2 Improvements — the junior slot this fire went to the top of the
-  §5 pick order, and the §17 split inside the ticket (generator + tests agent-applied, `references/`
-  and `skills/` operator-applied) is untouched and non-negotiable.
-
-- **(pm, 2026-07-31) The §21a design-gate promotion is unconditional on a pass; the §5a
-  `todoDepthCap` meters *new* commitments, not ones the gate has already made (LOOP-199 promoted to
-  junior 11/10).** The junior tier was exactly at its cap of 10 when LOOP-168's design passed. §21a is
-  explicit — pass ⇒ promote **every** staged child `Backlog → Todo` first, then close the parent — and
-  it carries no cap language, while §5a's cap governs the metered Job B2 pass. **The reasoning, so it
-  can be reversed:** the two alternatives are both worse. Marking the parent `Done` while holding the
-  child in `Backlog` produces precisely the orphan §21a's ordering exists to prevent — no gate ever
-  fires on that child again, and Sweep's slow-cadence repair is its only rescue. Leaving the parent
-  `In Review` to respect the cap discards a completed verification and re-runs the whole gate next
-  fire for nothing. A cap is a throttle on how fast the loop takes on *new* work; a passed design gate
-  is work already committed, being handed to the tier that was always going to build it. **The limit I
-  did hold:** the metered pass promoted **zero** junior tickets this fire, so the cap did its job on
-  everything it actually governs — the overshoot is one ticket, gate-driven, and self-correcting as
-  junior drains.
-
-- **(pm, 2026-07-31) Filing LOOP-200 at the junior tier while the Backlog is 42/42 junior — the
-  imbalance is surfaced, not fixed by re-tiering.** The honest §21b read is unambiguous: a two-token
-  fix plus a regression test in one file is a scoped bug-fix, it is not `sensitive`, it is not a new
-  module, and it needs no cross-module design. Tiering it senior to balance the queue is exactly what
-  §21b forbids, and the standing lesson says to set the tier deliberately at filing and surface a
-  lopsided split to the operator instead. So: **junior, and the number goes in the report.** The
-  senior queue is 8/10 with an *empty* senior Backlog — which is the healthy shape of a metered queue,
-  not starvation — while every one of the 42 Backlog rows waits on the tier whose median cycle time is
-  ~2× the senior's. The lever that would actually move this is more senior-shaped work existing, not
-  re-labelling junior-shaped work.
-- **(pm, 2026-07-31) 🧾 §20 R2 rollup, pass 3 — the keep/roll criterion is now written down, and
-  a rollup that only moves bytes is doing half the job.** The first two rollups of the day treated
-  the live log as a queue: archive the old tail, keep the new one. That is wrong in one specific
-  way — **age and load-bearingness are independent.** A method note from six fires ago is dead
-  weight; a STANDING RULE from the same fire still governs every future one, and moving it to an
-  archive that is "provenance, never re-ingested per fire" is equivalent to deleting it. So the
-  criterion applied here, and to be applied next time: **roll by KIND, not by date.** Fire-journal
-  (what I did, how long it took, which hypotheses died) rolls in full. Doctrine (STANDING RULE /
-  RULING / DECISION) is DISTILLED to one line and stays. Product direction still in flight stays
-  whole. That produced a 14-rule digest replacing ~54 KB of prose.
-- **(pm, 2026-07-31) ⚖️ RULING — a rollup must also RETIRE, and two rules died in this one.**
-  Carrying a stale rule forward is worse than losing a live one, because the live one gets
-  re-derived from the code while the stale one gets *obeyed*. Retired here, with the reason on the
-  record: **(1)** *"a new `hub/test/*.ts` in a diff is a two-file change, the second being
-  `hub/package.json`"* — a genuine §3 triage step when it was written, superseded by
-  `run-all.ts`'s glob discovery (LOOP-138/LOOP-139); a new test file with no `package.json` script
-  now runs, so the check would fail an increment for omitting something it must not add.
-  **(2)** *"the release gate is the loop's single blocking constraint — every other sequencing
-  question is subordinate to it"* — true for two days, false since v1.13.0 published at
-  **2026-07-31T20:06Z**. Its live successor is the DAEMON skew, not the npm one. **The general
-  form: when a rule names a blocking constraint, the rule expires the moment the constraint does —
-  and nothing in the doc expires on its own.**
-- **(pm, 2026-07-31) 🧭 A banked idea's PRECONDITION is a claim with an expiry date, and one had
-  quietly cleared.** The `Candidate ideas` entry for Loop-cost-governance Phase 2 was banked
-  2026-06-27 behind *"not buildable until the hub has a per-fire cost signal"*. Metering went live
-  **2026-07-31T14:04Z** — the premise had been false for six hours and the parking lot did not
-  know. Part (a) turned out to be filed already (LOOP-197, via reflect's LOOP-196). Parts (b)
-  cost-per-accepted-change and (c) accept-rate in the Reflect digest are **deliberately NOT filed,
-  with a named reversal condition**: both divide by `acceptRate`, which **LOOP-98** records as
-  wrong in both of its implementations (86% shown vs 75% true). Filing them now would ship a
-  plausible dollar figure over a known-bad divisor — the same defect family this board has been
-  retiring all day. **File (b)+(c) in the first PM fire after LOOP-98 goes `Done`.** The method is
-  the reusable part: **grooming the parking lot means re-testing each entry's stated precondition
-  against today's board, not re-reading the idea.**
-- **(pm, 2026-07-31) 🧭 When a priority ladder's fall-through is its success case, "nothing
-  matched" renders as "all clear".** `doctor`'s `NEXT:` line is documented as *"the single
-  most-blocking next step, in fix order"*; its terminal `return "dev-loop run"` is the all-green
-  action, and `nextStep()` is never passed the `ok` it sits one line below. So `DOCTOR_FAILED` and
-  `DOCTOR_OK` emit the same NEXT — while the ❌ immediately above already carried its own
-  remediation (*"clone it, or /dev-loop:sync-repo"*), which the ladder discards. Filed as
-  **LOOP-202**. **The general form, and it is a cheap grep: whenever a ladder, `switch`, or guard
-  chain ends in the success branch, check that failure reaches a rung — a default that means "fine"
-  will be reached by every case nobody enumerated.** This is the 21st instance of the board's
-  standing defect (*a surface reporting a result it never established*), and LOOP-167 made it
-  costlier the same day by moving release-readiness onto that line.
-- **(pm, 2026-07-31) 🧭 A cached local mirror of a remote fact, read as the fact — and it fails
-  GREEN.** W18 claims *"installed vN matches `origin/main` — no skew"* while measuring
-  `origin/main` **as of the last `git fetch`**; nothing in doctor's call path fetches (`bundle.ts`,
-  `doc-land.ts`, `worktree.ts` do — `doctor.ts` does not). A/B on one workspace at one instant:
-  tracking ref at the v1.13.0 release commit ⇒ `✅ no skew` + `NEXT: dev-loop run`; ref advanced ⇒
-  `⚠️ 3 code commits behind` + `NEXT: cut a release`. Filed as **LOOP-203**. Two things make this
-  sharper than an ordinary stale read: the author **already guarded the ref's total absence**
-  (*"run git fetch to check"*) and not its staleness — the rare case, not the common one; and the
-  stale outcome is a **✅**, which is strictly worse than silence. **Rule: a check named against a
-  remote must either establish freshness or say what it actually measured — and `doctor` may not
-  buy freshness with a fetch, because "never writes, never repairs" is its contract and offline
-  runs must keep working.** Sibling already on the board at the same priority: **LOOP-195** (a green
-  check for a daemon measured as running pre-upgrade code).
-- **(pm, 2026-07-31) 🧭 The parking-lot re-test paid on its second consecutive fire — retiring one
-  entry into a real ticket.** The `Candidate ideas` entry *"Unclassified-failure-rate health
-  warning — banked, blocked on a refactor"* had a header contradicting its own body: the body
-  already recorded the correction (`doctorWorkspace` re-measured at CRAP **82.9**, not the stale
-  90.4 it was banked on) and stated *"so this is filable now"* — and it stayed banked anyway. Filed
-  as **LOOP-204** (claims **W24**; W20 is reserved by LOOP-74, In Progress) and **removed from the
-  parking lot**. **The lesson is narrower than last fire's and worth keeping separate: an entry
-  whose HEADER states a blocker its own BODY has already retracted is the parking lot's most
-  expensive shape — it reads as blocked at a glance and nobody re-opens it. Re-read each entry's
-  verdict line, not just its title.** Measured value at filing time: 64 of 82 failure-ish rows
-  unclassified (78%), so LOOP-8's breaker cannot engage on four failures in five.
-- **(pm, 2026-07-31) 🧭 STANDING RULE 12, REFINED — priority gives no tiebreak *inside* a rank
-  either, and my own promote order had it wrong.** Rule 12 already says §5 ranks type first and
-  priority elevates only at rank 1. The half it does not state: *within* a rank the sole tiebreak is
-  **oldest `createdAt`** — "FIFO, don't let tickets starve." My carried promote order sorted the
-  rank-3.5 Bugs by priority and parked **LOOP-175** (`p4`, filed `18:09Z`) **last**, behind seven
-  `p2` Bugs all filed later. That is precisely the starvation the FIFO clause exists to prevent: a
-  low-priority bug that is never the highest-priority thing is never picked at all. **Corrected and
-  promoted LOOP-175 first this fire.** The general form: *when a rule names its own rationale
-  ("don't let tickets starve"), check your ordering against the rationale, not just the table —
-  a tiebreak you added for tidiness can invert the rule's purpose.*
-- **(pm, 2026-07-31) ⚠️ LOOP-74 verify-FAILED — W20 reads `tickets.updated_at`, the one source its
-  own binding AC forbade, and the failure mode is worse than a wrong number: the ticket doctor
-  NAMES flips.** A/B on one scratch workspace, two queue items, one variable moved (a Sweep-style
-  label repair on the older one, human rules on nothing): `oldest AB-OLD … 2d (blocked)` becomes
-  `oldest AB-NEW … 9h (approve)`, and `NEXT:` — the single action doctor gives the operator — points
-  at the wrong ticket. The count stays `2`, so the line still reads complete. **Instance 23 of "a
-  surface reporting a result it never established."** Escalated to **LOOP-207** (senior direct-code,
-  §21a first-real-fail routing). **The reusable correction is to my OWN spec, and it cost nothing to
-  find: I ran the comment arm FIRST and it was a clean negative — `save_comment` does not touch
-  `tickets.updated_at`; only `save_issue` writes (labels/priority/assignee) reset it.** My 01:08Z AC
-  had said "a comment or label". Had I filed on the comment claim it would have been refutable in
-  one command. *Run the arm you expect to confirm you, too — a negative arm is what makes the
-  positive one unarguable.* Third correct reader now exists in-repo (`daemon-notifiers.ts:89-92`,
-  `views/activity.ts:43`); W20 was the third site asking the question and the second to get it wrong,
-  so LOOP-207 asks for one shared helper with LOOP-108's surface fenced off.
-- **(pm, 2026-07-31) ✅ LOOP-180 `/kaizen` design gate — PASS WITH AMENDMENT, and the failure mode
-  was new: every source was cited CORRECTLY and two were READ wrong.** The `kaizen-panel` design is
-  the best-sourced this board has produced — I re-derived all nine pinned referents by hand
-  (`AGENT_HANDLES`, the `operator` human-actor distinction, `scripts.quality --threshold`,
-  `lessonsPaths`, the `/reports` filesystem-view precedent, `boardMetrics.verifyFails`/`acceptRate`,
-  the `EXPECT` byte-assert) and **every citation was exact**. But two pinned *queries* were wrong:
-  (1) stat 4's `title LIKE '[%-proposal]'` returns **0 against a live board holding 4** — SQLite
-  `LIKE` anchors the whole string, so it demands the title *end* at `-proposal]`, and the panel would
-  have rendered "no §17 proposals filed yet" over four Done proposals: **instance 16 of the very
-  defect class the panel was design-gated to prevent, inside the panel itself**; (2) stat 3's
-  trajectory parse silently drops `**90**` — the emphasised current value — yielding a truncated
-  series that never triggers the honest fallback because `history` is non-null. **The lesson:
-  "cites a source" and "reads that source correctly" are independent properties, and a design gate
-  that only checks the first will pass a panel that renders confident zeros. Open the referent AND
-  run the query.** Children promoted (LOOP-205 amended, LOOP-206 + the `blocked` label per LOOP-190),
-  parent closed last per §21a.
+- **2026-07-31 (late arc) — [ARCHIVED] 16 method rulings from the day's later PM fires** (the design-gate fail path vs under-specification; the two halves of a §9c edge; a fix is finished only when every branch answering one question agrees; retiring a defect FAMILY over its leaves; a gate naming a human verifier; §21a promotion unconditional on a pass; the pass-3 rollup keep/roll criterion and the rule that a rollup must RETIRE; a banked idea's precondition as a claim with an expiry; a priority ladder whose fall-through is its success case; a cached mirror read as the fact; STANDING RULE 12 refined; LOOP-74 verify-fail; LOOP-180 pass-with-amendment). Distilled into the STANDING RULES block below; full text in `docs/strategy-archive/2026-07.md` under `# Rolled 2026-08-01 (pass 4)`.
 - **(pm, 2026-07-31) 🔐 LOOP-208 — the verify gate asks "is this a builder?" when its invariant needs
   "is this the verifier-owner?", so five agents close `qa`-owned work unchallenged.** LOOP-183 hardened
   the gate against both *dev-tier* vectors; the predicate it keys on, `isDevTierActor`, covers 3 of the
@@ -910,6 +687,74 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   sequencing precondition earns the design step. Its ACs were already §6-shaped (four testable, one
   discriminating regression), so grooming added only the tier, the missing `Bug` type label, and the
   mode marker; the `qa` owner and the operator's `needs-qa` routing label are untouched.
+
+- **(pm, 2026-07-31) ✅ LOOP-211 CLOSED — the operator ruled, and (D) was verified as asking for an
+  edit to a file that was already correct.** Ruling: **(B)** make the negative observable — approved
+  unconditionally; **(A)** reachable from config — approved as `team.bootCorpus`, **not** as a default
+  flip, with the operator capturing an OFF baseline and restarting with `--assemble-boot` to decide the
+  default from data instead of intuition. (C) rides with them on LOOP-212. **(D) asked to reconcile
+  §0a step 4 / §14 prose on the premise that "the pull path targets `<data>/<project>/lessons.md`,
+  which does not exist on a v2 workspace" — the shipped file says the opposite**: §0a step 4 names
+  `<workspace>/.dev-loop/lessons/` FIRST and marks the v1 path optional, "its absence is normal, not an
+  error" (LOOP-164, `4e591b0`). Nothing to change. **RULE: before accepting a proposal to fix a
+  document, open the document. A claim about prose is as checkable as a claim about code, and cheaper.**
+
+- **(pm, 2026-07-31) 🧭 The push path went live mid-fire, and the flag being ON is NOT the defect
+  being fixed.** Rung-three, first-person: this fire's own prompt carries
+  `<!-- devloop-boot:begin agent=pm hash=f03cceeab5d2 -->`, and `bootBytes` now appears on the last 2 of
+  400 ledger rows (qa 137993, sweep 125452) — the first non-null values in the file's history, against
+  reflect's measured 0/392. **But `bootBytes` is still written only when `boot` is truthy, so an OFF fire
+  remains byte-identical to "never assembled" — which is exactly what LOOP-212's (B) exists to fix.** I
+  wrote onto LOOP-212 that (B) must be verified against an OFF fire, because an implementation that only
+  writes the field when the corpus was built passes an ON-only test and fails the requirement. **RULE: when
+  the world changes under a ticket mid-flight, re-ask which of its ACs the change actually satisfied —
+  usually fewer than it appears.**
+
+- **(pm, 2026-07-31) ⚠️ I ESCALATED A THROUGHPUT CLAIM I COULD NOT MEASURE, AND CORRECTED IT
+  THIS FIRE.** Last fire I carried reflect's deferred finding to the operator as `w20proj` "costs a
+  provider call per fire" and "silently halves dev-tier throughput". **Both are wrong.** `w20proj` has
+  **0 rows in 400** of `fires.jsonl` — the scheduler drops the fire *before* spawn (`no usable repo cwd`),
+  so there is no model call and no spend. And the throughput half is unmeasurable from the data I had:
+  post-restart n=1 per dev agent over ~30 min, while pre-restart gaps (5–69 min against a 5 m cadence)
+  are dominated by fire DURATION, not tick scheduling. What is actually observed is one dropped tick (pm
+  routed to `w20proj` at ~23:00Z, next fire 23:04:56Z). Corrected on LOOP-209 so nobody designs against
+  the inflated size, and I deliberately did **not** file the generic "unservable project should fall
+  through within the tick" ticket — I could not measure its impact, and this board does not need another
+  row whose premise is an inference. **STANDING RULE 8 EXTENDED: the rule that a guard can go green by
+  measuring less than it reports applies to MY OWN escalations. An operator acts on what PM reports; a
+  number I did not measure costs them a decision, not just a line.**
+
+- **(pm, 2026-07-31) ⚖️ LOOP-213 UNPARKED — §17's "the plugin's own code is the operator's to
+  apply" does not bind a workspace whose PRODUCT is the plugin.** Reflect filed a verified scheduler
+  defect (cadence is process-scoped: `reflect` fired 5× in 13.2 h against `cadence: 1d`, costing $18.24
+  metered) as `blocked`+`needs-pm`+`external-prereq`, per §17's mechanical firewall — while itself
+  writing "dev-loop product code, NOT a §17 governing file". Both are true statements about different
+  files. Here they are the same repo, so the operator-prerequisite premise does not hold: `run-agents.ts`
+  is ordinary dev-editable product code (LOOP-144, ~13 landed `LOOP-*` commits). Unparked, typed, tiered
+  **senior + `Mode: design`**, priority 4→2. Senior because (A) fails in the dangerous direction — a
+  next-due seeded from bad state suppresses an agent's fires entirely, which is worse than the
+  over-firing it fixes. **The firewall still binds where it applies: `conventions.md` and any `SKILL.md`
+  stay operator-only, and nothing in (A)/(B)/(C) touches them.** Both `## Deferred findings` resolved on
+  the ticket; nothing left in `Deferred`.
+
+- **(pm, 2026-07-31) 🧭 A hazard to the operator's OWN measurement is worth more than a ticket —
+  escalate it, don't file it.** Reflect's deferred #1: the boot-corpus A/B now in flight is degraded by
+  the very defect LOOP-213 describes — (i) each restart costs a fresh ~143 KB cache-WRITE per agent,
+  taxing the arm being measured; (ii) cadence reset per restart makes per-agent fire counts on the two
+  arms non-comparable without normalising. No loop ticket can act on that; only the operator can. Carried
+  into the report and preserved on LOOP-213 with reflect's OFF baseline (20:00–23:00Z, n=38: pm cacheR
+  7.16M / out 65.4k / $7.01 · junior-dev 7.90M / 52.1k / $4.13 · senior-dev 3.32M / 69.7k / $6.30 · qa
+  3.92M / 16.8k / $2.07 · sweep 4.47M / 21.6k / $2.33 · reflect 3.74M / 50.2k / $4.50), because a
+  baseline that exists only in one agent's report is the thing most likely to be lost.
+
+- **(pm, 2026-07-31) 🗃️ §20 R2 rollup, pass 4 — and the parking lot was re-checked, not just
+  re-read.** Rolled 16 method rulings (the day's later PM fires) whose durable content is already in the
+  STANDING RULES block; kept whole: the npm-publish decision, the operator's §12b amendment, the Kaizen
+  Factory naming + tagline (rebrand tickets LOOP-176/177/178/182 still open, so still in-flight
+  direction), and the last fire's three ticket rulings. Candidate ideas (12 entries) re-checked against
+  their stated preconditions: **cost-governance (b)+(c) still waits on LOOP-98 `Done` (still Backlog);
+  daemon stale-VIEW-code still waits on LOOP-195 shipping (still Backlog)** — both correctly stay parked,
+  neither is stale. **A parking lot is groomed by testing its preconditions, not by re-reading its prose.**
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
