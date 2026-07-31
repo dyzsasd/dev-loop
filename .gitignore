@@ -29,3 +29,6 @@ hub/skills/
 hub/references/
 hub/hooks/
 hub/config/
+# LOOP-187: export-desktop-skill output folders (devloop-<agent>-<project>/) when accidentally pointed
+# inside the repo via explicit --out; belt-and-suspenders so a generated skill is never committable.
+devloop-*-*/

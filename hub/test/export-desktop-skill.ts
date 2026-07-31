@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scrubFireEnv } from "./env-scrub.ts";
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/test
 const src = join(here, "..", "src", "export-desktop-skill.ts");
@@ -51,6 +52,35 @@ const rp = spawnSync(process.execPath, [src, "pm", "--project", "demo", "--out",
 });
 const pmMd = rp.status === 0 ? readFileSync(join(out, "devloop-pm-demo", "SKILL.md"), "utf8") : "";
 ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.test(pmMd), "a passive project's export inlines intake.mode + the §5a posture");
+
+// LOOP-187: no --out from inside a git working tree → must NOT drop artifact into the source tree.
+// Use a temp git repo as cwd so the test is hermetic: it IS inside a git tree but NOT inside the
+// dev-loop workspace (no dev-loop.json upward), preventing tryResolveWorkspace from finding the live config.
+{
+  const gitCwd = mkdtempSync(join(tmpdir(), "dl-export-gitcwd-"));
+  spawnSync("git", ["init", "-q", "-b", "main", gitCwd], { stdio: "ignore" });
+  spawnSync("git", ["-C", gitCwd, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init"], { stdio: "ignore" });
+  writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { demo: {
+    backend: "linear", mode: "live", autonomy: "full", linearTeam: "T", linearProject: "P",
+    git: { landing: "pr" }, testEnv: { baseUrl: "https://dev.example.com" },
+  } } }));
+  const noOut = spawnSync(process.execPath, [src, "qa", "--project", "demo"], {
+    encoding: "utf8",
+    cwd: gitCwd, // inside a git tree but no dev-loop.json → workspace lookup fails → falls back to DEVLOOP_PROJECTS_JSON
+    env: { ...scrubFireEnv(), DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+  });
+  ok(noOut.status === 0, "no-out: exits 0 when cwd is git-tracked (LOOP-187)");
+  ok((noOut.stdout + noOut.stderr).includes("dl-export-"), "no-out: message/path references the temp dir (LOOP-187)");
+  // Verify nothing landed in the temp git cwd (the write went to a temp dir outside it)
+  ok(!existsSync(join(gitCwd, "devloop-qa-demo")), "no-out: no devloop-qa-* artifact under the git cwd (LOOP-187)");
+  // Explicit --out still writes to the given path, not a temp dir (AC4 — behavior unchanged)
+  const withOut = spawnSync(process.execPath, [src, "qa", "--project", "demo", "--out", out], {
+    encoding: "utf8",
+    cwd: gitCwd,
+    env: { ...scrubFireEnv(), DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+  });
+  ok(withOut.status === 0 && existsSync(join(out, "devloop-qa-demo", "SKILL.md")), "no-out: explicit --out still writes to the given path (LOOP-187 AC4)");
+}
 
 console.log(fails === 0 ? "\nEXPORT_DESKTOP_SKILL_OK" : `\n${fails} FAILED — run: node hub/src/export-desktop-skill.ts <agent> --project <key>`);
 process.exit(fails === 0 ? 0 : 1);
