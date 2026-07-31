@@ -971,6 +971,38 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   the fourth instance of the same shape on this codebase and the method note now has a name: *ask
   which variable the fixture holds constant.*
 
+### 2026-07-31 (later) — the daemon port band is exhausted, and every health surface says fine
+
+- **🔴 All 64 ports the allocator can hand out are occupied.** `lcFreePort`
+  (`daemon-lifecycle.ts:149`) probes exactly `tries = 64` consecutive ports from 8787. Replicating
+  its own `lcTryBind` across that band at 08:53Z: **0 free, no gaps.** So it falls through to
+  `return start` and the next `daemon up` for any project without an existing runfile port dies with
+  `EADDRINUSE` on 8787 — a port held by a **14-day-old daemon from an unrelated workspace**
+  (`/Users/shuai/workspace/jinko/dev-loop`). LOOP-53 filed this fleet at **58**; it is now **64**,
+  which is also the ceiling. The fleet is mostly foreign-workspace daemons and deleted
+  `/private/tmp/qa-*` fixtures.
+- **`dev-loop doctor` prints `DOCTOR_OK` on that machine.** Its only daemon line is a single
+  `/api/health` GET for the *current* project — which passes exactly because that project already
+  holds a port (8840). There is no fleet or band check anywhere in its 630 lines. The operator
+  console instructs the human to run doctor and *"read every W-code"* before an unattended run, so
+  the designated pre-flight surface is the one that cannot see the machine's actual blocker. Filed
+  **LOOP-137** (`Backlog`, blocked-by LOOP-95 — the W22 line is only useful once LOOP-95's
+  `dbPresent` marker can tell a reapable orphan from a colleague's live board, and once
+  `daemon reap` exists to be named).
+- **The measurement invalidates an AC that was already written.** LOOP-94's AC-A1 says to count
+  listeners in 8787..8850 before and after a suite run and assert the delta is 0. On a saturated
+  band **nothing can bind, so the delta is 0 whether or not the suite leaks** — the check is
+  unfalsifiable exactly where it was meant to bite. Recorded on LOOP-136 as a replacement method
+  (assert the exit hook killed the registered pid directly, never a range delta). *A count-based
+  assertion needs a stated precondition that the resource it counts was available.*
+- **⏳ LOOP-84 unparked and promoted (P1).** Its only edge was LOOP-94, which closed `Canceled` —
+  but its artifact **landed** (`daemon-harness.ts` is on main at `9932337`), and the edge existed so
+  LOOP-84 would build on that harness rather than race it. That condition is met, so the edge
+  retires: **a `Canceled` ticket whose artifact shipped still satisfies a "wait for the harness"
+  edge.** Read the reason, not the state. LOOP-84 truncates `npm test` at suite ~29 of ~60 — it is
+  why `test/quality.ts` never runs on this workspace — and QA re-reproduced it on current main this
+  fire.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1298,6 +1330,38 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   kept** — they are what the section is *for*; only the dated arcs roll. At this append rate the
   rollup is not an occasional chore but a **per-fire cost**, and the next PM should budget it as a
   first-class task rather than discovering it at close.
+- **(pm, 2026-07-31) 🔴 A guard can go green by moving the code out of its own field of view — and
+  the same diff that built the guard did it.** LOOP-94's AC-A4 asked for a scan proving
+  `src/daemon.ts` **/ `daemon up`** is spawned only from the test harness. The shipped rule matches
+  one literal: a line carrying both `daemon.ts` and `spawn`. Seeding one line into a non-harness
+  test at the merge sha, the guard **caught** `spawn(NODE,["src/daemon.ts","up"])` but **passed**
+  both `spawnSync(NODE,["src/server.ts","daemon","up"])` and the installed-CLI `[instCli,"daemon",
+  "up"]` — and those two idioms are not hypothetical future ones, they are **what this very diff
+  rewrote `lifecycle.ts` and `lifecycle-race.ts` into**. Four of the seven pre-fix violations went
+  green by changing the spawn target string, not by routing through the harness. The harness itself
+  is correct and the guard does have teeth (7 violations, exit 1, against the pre-fix tree) — the
+  defect is that it cannot see the pattern the tree now teaches, so the next test to copy
+  `lifecycle.ts` leaks silently. Verify-failed; superseded by **LOOP-136** (senior-dev,
+  `direct-code`). **The generalisation, and it is the fourth instance this week: a guard's rule must
+  be written against the PROPERTY it defends, never against one spelling of it — and when a diff
+  both writes a guard and edits the code it guards, check whether the green came from the fix or
+  from the relocation.**
+- **(pm, 2026-07-31) ⏳ The same class caught one ticket earlier, before it shipped.** LOOP-95
+  (`Todo`, unbuilt) specifies its early-warning line as *"if the chosen port is more than
+  `PROBE_WARN_GAP` (8) above the requested start"*. But `lcFreePort` probes exactly 64 ports and on
+  total failure **returns `start`** — so at full exhaustion the gap is **0 and the warning never
+  fires**, in precisely the case the operator most needs it. Root cause is a lossy return type: 8787
+  means "the start port was free" and "I tried 64 and failed" identically, so no caller-side
+  arithmetic can recover it. Binding correction posted (amended AC-B5 + new AC-B6/AC-B7: signal
+  exhaustion at the source, emit a distinct louder line naming `daemon reap` *before* the bind, and
+  regression-test both polarities). **Two guards blind in their own defining case, found in one
+  fire, on unrelated code.**
+- **(pm, 2026-07-31) 🧭 Deliberately filed one Job-C ticket, not five.** The junior tier sat at its
+  Todo depth cap (10/10) with **31 unblocked Backlog items** behind it. With the queue saturated the
+  marginal value of another junior-tier idea is ~0 — the bottleneck is throughput, not ideas — so
+  the fire's discretionary output went into two **binding spec corrections on unbuilt tickets**
+  (LOOP-95, and LOOP-84's build guidance) instead of new rows. Correcting a spec before it is built
+  is worth more than filing the ticket that would have caught it afterwards.
 
 ## Candidate ideas
 
