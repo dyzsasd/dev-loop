@@ -569,6 +569,77 @@ try {
     const w18nextNoVer = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgNoTag, DEVLOOP_HUB_DB: "" } });
     ok(!/cut a release/.test(w18nextNoVer.out), "no release-readiness NEXT when version unresolvable (LOOP-167)");
     ok(/DOCTOR_OK/.test(w18nextNoVer.out), "DOCTOR_OK holds when version unresolvable — NEXT check adds no git calls (LOOP-167)");
+
+    // Cases J–M (LOOP-191): skills/**/*.md and references/**/*.md count as code, not doc-only
+    {
+      // Seed hub/package.json in the test repo (mirrors real hub/package.json files); w18Clone is matchDir
+      mkdirSync(join(w18Clone, "hub"), { recursive: true });
+      writeFileSync(join(w18Clone, "hub", "package.json"), JSON.stringify({
+        name: "@dyzsasd/dev-loop", version: "1.2.3",
+        files: ["dist/", "skills/", "references/", "hooks/", "config/", ".claude-plugin/", "postinstall.cjs", "README.md"]
+      }));
+      gitW18(w18Clone, ["add", "hub/package.json"]);
+      gitW18(w18Clone, ["commit", "-qm", "chore: seed hub/package.json for LOOP-191 tests"]);
+      gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+      const headLoopBase = spawnSync("git", ["-C", w18Clone, "rev-parse", "origin/main"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+      const w18loop191env = { DEVLOOP_W18_PKG_JSON: w18PkgJson, DEVLOOP_HUB_DB: "" };
+
+      // Case J (LOOP-191 AC-2): skills/**/*.md commit → W18 fires (packaged behavior, not doc-only)
+      gitW18(w18Clone, ["tag", "-f", "v1.2.3", headLoopBase]);
+      mkdirSync(join(w18Clone, "skills", "pm-agent"), { recursive: true });
+      writeFileSync(join(w18Clone, "skills", "pm-agent", "SKILL.md"), "# PM agent skill\n");
+      gitW18(w18Clone, ["add", "skills/pm-agent/SKILL.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs(governing): update pm skill"]);
+      gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+      const w18skills = run("server", ["doctor"], { cwd: w18Root, extra: w18loop191env });
+      ok(/\[W18\]/.test(w18skills.out), "W18 fires when only commit changes skills/**/*.md (LOOP-191 AC-2)");
+      ok(/1 code commit/.test(w18skills.out), "skills/**/*.md counts as a code commit (LOOP-191 AC-2)");
+      ok(/DOCTOR_OK/.test(w18skills.out), "DOCTOR_OK holds for skills-only commit (LOOP-191)");
+
+      // Case K (LOOP-191 AC-1): references/**/*.md commit → W18 fires
+      const headJ = spawnSync("git", ["-C", w18Clone, "rev-parse", "origin/main"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+      gitW18(w18Clone, ["tag", "-f", "v1.2.3", headJ]);
+      mkdirSync(join(w18Clone, "references"), { recursive: true });
+      writeFileSync(join(w18Clone, "references", "conventions.md"), "# conventions\n");
+      gitW18(w18Clone, ["add", "references/conventions.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs(governing): update conventions"]);
+      gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+      const w18refs = run("server", ["doctor"], { cwd: w18Root, extra: w18loop191env });
+      ok(/\[W18\]/.test(w18refs.out), "W18 fires when only commit changes references/**/*.md (LOOP-191 AC-1)");
+      ok(/1 code commit/.test(w18refs.out), "references/**/*.md counts as a code commit (LOOP-191 AC-1)");
+      ok(/DOCTOR_OK/.test(w18refs.out), "DOCTOR_OK holds for references-only commit (LOOP-191)");
+
+      // Case L (LOOP-191 AC-3 preserved): docs/** stays silent even with hub/package.json present
+      const headK = spawnSync("git", ["-C", w18Clone, "rev-parse", "origin/main"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+      gitW18(w18Clone, ["tag", "-f", "v1.2.3", headK]);
+      writeFileSync(join(w18Clone, "docs", "loop191.md"), "# loop191 doc\n");
+      gitW18(w18Clone, ["add", "docs/loop191.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs: loop191 doc-only test"]);
+      gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+      const w18docOnlyPost191 = run("server", ["doctor"], { cwd: w18Root, extra: w18loop191env });
+      ok(!/\[W18\]/.test(w18docOnlyPost191.out), "docs-only stays silent with hub/package.json present (LOOP-191 AC-3 preserved)");
+      ok(/DOCTOR_OK/.test(w18docOnlyPost191.out), "DOCTOR_OK holds when docs-only after LOOP-191 fix");
+
+      // Case M (LOOP-191 AC-4): skills + docs mixed → 1 code commit, +1 doc-only (skills not in doc count)
+      const headL = spawnSync("git", ["-C", w18Clone, "rev-parse", "origin/main"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+      gitW18(w18Clone, ["tag", "-f", "v1.2.3", headL]);
+      writeFileSync(join(w18Clone, "skills", "pm-agent", "SKILL.md"), "# updated pm skill\n");
+      gitW18(w18Clone, ["add", "skills/pm-agent/SKILL.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs(governing): update pm skill again"]);
+      writeFileSync(join(w18Clone, "docs", "loop191-extra.md"), "# extra\n");
+      gitW18(w18Clone, ["add", "docs/loop191-extra.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs: extra loop191 doc"]);
+      gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+      const w18mixedPost191 = run("server", ["doctor"], { cwd: w18Root, extra: w18loop191env });
+      ok(/\[W18\]/.test(w18mixedPost191.out), "W18 fires for skills+docs mixed window (LOOP-191 AC-4)");
+      ok(/1 code commit/.test(w18mixedPost191.out), "skills commit counts as code; docs commit is doc-only (LOOP-191 AC-4)");
+      ok(/\+1 doc-only/.test(w18mixedPost191.out), "doc-only note is +1 (only docs/); skills/ not counted as doc (LOOP-191 AC-4)");
+      ok(/DOCTOR_OK/.test(w18mixedPost191.out), "DOCTOR_OK holds for skills+docs mixed window (LOOP-191)");
+    }
   }
 
   // ── W20: operator decision-queue stall; DOCTOR_OK stays; NEXT flips to decision (LOOP-74) ──
