@@ -210,7 +210,14 @@ function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
     return okR({ agent: actor, inProgress, todo });
   }
   if (actor === "pm" || actor === "qa") {
-    const verify = byState("In Review").filter((t) => t.labels.includes(actor)).map(summary);
+    // A Mode:design parent belongs to PM's verify gate regardless of its label set (§21a).
+    // QA must not gate design parents — it has no authority over design coherence.
+    const isDesignParent = (t: Ticket): boolean => t.description.trimStart().startsWith("Mode: design");
+    const verify = byState("In Review").filter((t) =>
+      actor === "pm"
+        ? (isDesignParent(t) || t.labels.includes("pm"))
+        : (t.labels.includes(actor) && !isDesignParent(t))
+    ).map(summary);
     const open = (db.prepare("SELECT * FROM tickets WHERE project_id=?").all(projectId) as unknown as TicketRow[])
       .map(toTicket).filter((t) => !TERMINAL_STATES.has(t.state));
     const blocked = open.filter((t) => t.labels.includes("blocked"));
