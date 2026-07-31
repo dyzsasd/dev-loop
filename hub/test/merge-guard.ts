@@ -34,6 +34,7 @@ try {
   tk("MG-7", "In Review");   // board-state trip + --apply
   tk("MG-8", "In Progress"); // no-trip path + --apply (should NOT write)
   tk("MG-9", "In Review");   // idempotency: second --apply must not dup comment
+  tk("MG-10", "In Review");  // LOOP-130: re-apply-after-external-unblock
   conn.close();
 
   // A fake repo dir so resolveHubDbPath has something to look at (we pass dbPath explicitly)
@@ -407,6 +408,38 @@ try {
   const cliL142NoInput = cli(["--repo", repoDir, "--strict"], { DEVLOOP_HUB_DB: dbPath });
   ok(cliL142NoInput.status === 0, "LOOP-142 CLI: no --ticket no --pr --strict → exit 0 (skipped)");
   ok(/skipped/.test(cliL142NoInput.stdout), `LOOP-142 CLI: no ticket → mentions 'skipped' (got: ${cliL142NoInput.stdout.trim().slice(0, 120)})`);
+
+  // ── LOOP-130: re-apply-after-external-unblock — routing must re-enforce even when comment is dup ──
+  // Scenario: ticket tripped and routed (comment posted + Todo+blocked), then an out-of-band event
+  // reverts the board state (e.g. Sweep clears the block), and --apply is called again with the
+  // same trip reason. The comment must NOT be duplicated; the routing MUST be re-applied.
+
+  // Step 1: initial trip — comment posted, ticket routed to Todo+blocked
+  const rL130First = mergeGuard(repoDir, { ticketId: "MG-10", dbPath, apply: true });
+  ok(rL130First.trip, "LOOP-130: initial trip detected (In Review)");
+  ok(rL130First.applied?.action === "wrote", `LOOP-130: first --apply → action=wrote (got: ${rL130First.applied?.action})`);
+  ok(readComments("MG-10").length === 1, "LOOP-130: first --apply posted exactly one comment");
+  const mg10RowFirst = readTicket("MG-10");
+  ok(mg10RowFirst?.state === "Todo", `LOOP-130: first --apply routed to Todo (got: ${mg10RowFirst?.state})`);
+  ok(mg10RowFirst?.labels.includes("blocked") ?? false, "LOOP-130: first --apply added 'blocked' label");
+
+  // Step 2: simulate out-of-band unblock (Sweep/PM cleared routing without resolving objection)
+  {
+    const db2 = openDb(dbPath);
+    db2.prepare("UPDATE tickets SET state='In Review', labels='[]', assignee=NULL WHERE id='MG-10'").run();
+    db2.close();
+  }
+  const mg10RowReverted = readTicket("MG-10");
+  ok(mg10RowReverted?.state === "In Review", "LOOP-130: state reverted to In Review (setup check)");
+
+  // Step 3: second --apply with same trip reason — must re-apply routing, must not dup comment
+  const rL130Second = mergeGuard(repoDir, { ticketId: "MG-10", dbPath, apply: true });
+  ok(rL130Second.trip, "LOOP-130: second call still trips (In Review)");
+  ok(rL130Second.applied?.action === "already_present", `LOOP-130: second --apply → action=already_present (no dup comment) (got: ${rL130Second.applied?.action})`);
+  ok(readComments("MG-10").length === 1, "LOOP-130: comment count still 1 — no duplicate post");
+  const mg10RowSecond = readTicket("MG-10");
+  ok(mg10RowSecond?.state === "Todo", `LOOP-130: second --apply re-routed to Todo (got: ${mg10RowSecond?.state})`);
+  ok(mg10RowSecond?.labels.includes("blocked") ?? false, "LOOP-130: second --apply re-added 'blocked' label");
 
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
