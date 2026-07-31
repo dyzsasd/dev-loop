@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.13.0
 
 **CLI rename — Phase A (brand: Kaizen Factory; the command becomes `kaizen`).** The bin now ships
 under both names while prose still types `dev-loop`; the prose flips one release later (Phase B),
