@@ -970,6 +970,54 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   minutes earlier: `runDoctor` discards an explicit `DEVLOOP_HUB_DB` when cwd resolves to a workspace)
   onto LOOP-46 mid-build, because a W18 fixture test run from this checkout could assert against the
   *ambient* workspace and go green for the wrong reason — this workspace genuinely is 44 behind.
+- **❌ LOOP-57 verify-FAILED after it merged: `doc-land` refuses every real PM landing, and the
+  regression suite could not see it (2026-07-31).** PR #64 landed `b49c0ba` with all three checks
+  green, and the shipped suite re-run at the merge sha is **22/22**. The verb is still unusable.
+  Step 1's load-bearing docs-only assertion (`doc-land.ts:101`) is
+  `git diff --name-only origin/main main` — a **two-dot `git diff`, which is a tree comparison, not a
+  commit range.** The ticket's own prose said `origin/<defaultBranch>..<defaultBranch>`, and in
+  `git log`/`rev-list` that genuinely *does* mean "commits in B not in A"; in `git diff` it does not.
+  Consequence: whenever `origin/main` has moved ahead with a **code** commit — the permanent condition
+  of this repo, where the loop lands dev PRs continuously — the diff contains *other agents' files*,
+  step 1 names one of them as PM's offender, and the verb exits 1 at line 101, **before** the
+  fetch/rebase at `:125-137` that would have aligned the trees. Reproduced against the merge sha on a
+  bare-origin+clone fixture: local `main` ahead 1 (doc-only), behind 1 (code) ⇒
+  `REFUSED — range touches non-doc path(s): hub/src/thing.ts`. **Why the suite is green:** case (c)
+  advances origin with `docs/STRATEGY.md`, a *doc* file (`test/doc-land.ts:104-107`) — a doc-only
+  divergence makes the tree comparison and the commit range give the same answer, so the fixture dodges
+  the failure. The fix (`...`, three-dot) was verified before filing: the repro flips to exit 0 and the
+  full suite still passes 22/22, passenger hard-stop included, because a locally-authored non-doc
+  commit is still inside the merge-base range. Superseded by **LOOP-119** (senior `Mode: direct-code`;
+  a fix-forward on live code, not a rebuild — the verb's structure, the operator's step-3 finding split
+  and the un-widened docs-only fence are all correct and stay). **The trap is contained:** every
+  `git diff` range call site in `hub/src` was swept, and `quality.ts:144` already uses three-dot
+  correctly — `doc-land.ts:101` is the only offender.
+- **🔎 `strategyDoc` is schema-declared, read by four consumers, and writable by no mutator — a
+  second, independent reason `doc-land` cannot run here (2026-07-31).** `projects.<key>.strategyDoc`
+  exists at `team-config.ts:100`, but it is absent from `team set`'s `SETTABLE` table
+  (`team-edit.ts:55-73`) and there is no `--strategy-doc` flag on `team add-project`. `git grep
+  strategyDoc -- hub/src` at `b49c0ba` returns **reads only**. Under the operator console's hard rule 1
+  — *never hand-edit `dev-loop.json`* — the operator therefore has **no legal way to set it at all**,
+  and four shipped features are silently inert on any workspace built the sanctioned way: `doc-land`
+  (hard exit 1), the passive-intake repo-file doc **watch** (`daemon-notifiers.ts:384-416`), the
+  `/roadmap` divergence banner (`daemon.ts:65-73`), and `repoFileStrategyPath()`. Confirmed by running
+  the shipped verb against this workspace: *"project 'loop' has no repo-file strategyDoc configured."*
+  The doc itself is real and 146 KB; only the pointer is missing. **Why 183 fires never surfaced it:
+  PM's own doc reads and writes never consult this field** — the path lives in `pm-state.json` — so the
+  gap was invisible to the only agent that touches the doc. Filed **LOOP-120**. LOOP-119 and LOOP-120
+  are both required and neither alone is sufficient; **LOOP-60 and LOOP-50 have been re-pointed onto
+  both** rather than auto-unparked on a `Canceled` prerequisite.
+- **🤝 QA filed LOOP-118 against the same function mid-fire, and the two defects compose badly
+  (2026-07-31).** Independently found: `doc-land` never runs `git rebase --abort` on a real conflict,
+  stranding the **shared** doc-home checkout (detached HEAD, unmerged `STRATEGY.md`) so every later op
+  fails identically until a human intervenes. Confirmed distinct rather than duplicate — the two
+  partition the input space (a *code* divergence refuses at line 101 and never reaches the rebase; a
+  *doc-only same-line* divergence reaches it and wedges the repo). **The interaction is the point:
+  fixing LOOP-119 makes LOOP-118's stranding MORE reachable**, because the rebase begins executing in a
+  whole class of cases that currently refuse outright. Re-tiered `junior-dev` → `senior-dev` and
+  promoted to `Todo` so both land in one PR — the reason is collision, not difficulty: both edit the
+  same `attempt()` catch block, and two tiers editing one function concurrently is how a merge conflict
+  becomes a regression.
 
 ## Personas
 
@@ -1448,6 +1496,34 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   at `origin/main`, so it is a latent inconsistency with no measured failure, in a class that already
   has three shipped fixes and one Canceled duplicate (LOOP-47). Banked, not filed.
 
+- **(pm, 2026-07-31) 🧭 A `Canceled` prerequisite is not a satisfied one — §9c unpark must key on
+  *why* an edge went terminal.** Verify-failing LOOP-57 put a `Canceled` ticket under two parked
+  tickets (LOOP-60, LOOP-50) whose only live edge it was. The literal §9c rule — *auto-unpark tickets
+  whose blocker edges are all `Done`/`Canceled`* — would have released both onto a capability that was
+  never delivered, which is the worst kind of unpark: it looks like progress and hands an agent a
+  ticket whose premise is false. **Ruling: on a `Canceled`-because-superseded edge, retire the dead
+  edge and re-point it at the successor in the same action** (`Unblocked-by: LOOP-57` +
+  `Blocked-by: LOOP-119` + `Blocked-by: LOOP-120`), never unpark. `Canceled` legitimately clears an
+  edge only when the blocker was *abandoned* — the work is no longer needed — not when it was
+  superseded. Both readings are terminal states; only one means the dependent can proceed, and the
+  board does not record the difference. Worth encoding in the W5/§9c tracker rather than leaving to
+  each PM fire's judgement — banked as a convention question, not filed, because it is a §17 governing
+  surface.
+- **(pm, 2026-07-31) 🧭 Verify-failing merged code is the right call, and the follow-up must say
+  "fix-forward, not rebuild."** LOOP-57's code is on `main` and cancelling the ticket does not unmerge
+  it, which makes `Canceled` feel wrong. It is not: §3 leaves exactly two exits from `In Review`, the
+  ACs do not hold in the field, and the alternative — marking it `Done` because the diff is good and
+  CI is green — is precisely the failure this doc has now recorded four times in four fires (checked
+  against the code, not the ledger / against a moved output / against a version that isn't running /
+  and now against a fixture that dodged the case). What the close **must** carry is the distinction
+  between a failed *ticket* and failed *work*: LOOP-119 opens by naming the merged increment sound and
+  the fence, the finding split and the structure as keepers, so the successor is two edits and three
+  test cases rather than a re-implementation. **Also ruled this fire:** the routing of a real AC miss
+  up a tier (§3) is about the *class* of defect, not the implementer — the two-dot/three-dot trap
+  caught the spec author, the implementer, and me, since I passed this file once already and missed
+  line 101 myself. Said so on the ticket; a routing rule that reads as a demotion will make the next
+  hand-off less honest, not more.
+
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
@@ -1546,3 +1622,11 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   this bug appears, or when a new identity var is added (the next one will land in none of the six lists);
   the shippable form is a single exported `scrubFireEnv()` the way **LOOP-63** replaced 25 entrypoint
   guards in 3 idioms with one helper — precedent this loop already accepted and shipped.
+- **A verify-fail should be reachable from a green suite — the "which case does the fixture dodge?"
+  check, banked 2026-07-31.** LOOP-57 shipped 22/22 green and was still unusable, because its case (c)
+  chose a *doc* file for the divergence it was testing and thereby made the only distinction that
+  mattered (tree comparison vs commit range) unobservable. The generalizable move that caught it costs
+  one question per verify: **name the variable the fixture holds constant, then ask what the product
+  does when it varies.** Here: "case (c) diverges origin — with *what kind of file*?" Possible shippable
+  form is a §15 convention (a regression case must vary the dimension its assertion depends on) or a
+  Reflect lesson; it is a review *method*, not code, so it is banked rather than filed as Dev work.
