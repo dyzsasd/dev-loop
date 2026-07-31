@@ -415,9 +415,13 @@ try {
     gitW18(w18Clone, ["tag", "v1.2.3"]);
     gitW18(w18Clone, ["push", "-q", "origin", "v1.2.3"]);
 
-    // Add 2 commits to origin after the v1.2.3 tag (simulate merged-after-release work)
-    gitW18(w18Clone, ["commit", "--allow-empty", "-qm", "post-release fix 1"]);
-    gitW18(w18Clone, ["commit", "--allow-empty", "-qm", "post-release fix 2"]);
+    // Add 2 code commits to origin after the v1.2.3 tag (simulate merged-after-release work)
+    writeFileSync(join(w18Clone, "src-fix1.ts"), "// code fix 1\n");
+    gitW18(w18Clone, ["add", "src-fix1.ts"]);
+    gitW18(w18Clone, ["commit", "-qm", "fix: code change 1"]);
+    writeFileSync(join(w18Clone, "src-fix2.ts"), "// code fix 2\n");
+    gitW18(w18Clone, ["add", "src-fix2.ts"]);
+    gitW18(w18Clone, ["commit", "-qm", "fix: code change 2"]);
     gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
 
     // Configure repo with remote matching the package repository.url
@@ -431,7 +435,7 @@ try {
     const w18behind = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgJson } });
     ok(/\[W18\]/.test(w18behind.out), "W18 fires when installed version is behind origin/main");
     ok(/DOCTOR_OK/.test(w18behind.out), "W18 is warn-only — DOCTOR_OK still holds when behind");
-    ok(/2 commit/.test(w18behind.out), "W18 names the commit count (2 commits behind)");
+    ok(/2 code commit/.test(w18behind.out), "W18 names the code commit count (2 code commits behind)");
     ok(/1\.2\.3/.test(w18behind.out), "W18 names the installed version");
 
     // Case B: installed == origin/main tip (no skew) → no W18, DOCTOR_OK
@@ -470,6 +474,50 @@ try {
     const w18notag = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgNoTag } });
     ok(!/\[W18\]/.test(w18notag.out), "no W18 warn when v-commit is unresolvable (only info)");
     ok(/DOCTOR_OK/.test(w18notag.out), "DOCTOR_OK holds when v-commit unresolvable (info-only path)");
+
+    // Case E (LOOP-151): doc-only commits behind the release → W18 SILENT, DOCTOR_OK holds
+    {
+      // Re-tag v1.2.3 at the current origin/main HEAD (the 2 code commits from Case A)
+      const headE = spawnSync("git", ["-C", w18Clone, "rev-parse", "origin/main"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+      gitW18(w18Clone, ["tag", "-f", "v1.2.3", headE]);
+      // Add doc-only commits (simulates PM doc-land, which should not trigger W18)
+      mkdirSync(join(w18Clone, "docs"), { recursive: true });
+      writeFileSync(join(w18Clone, "docs", "STRATEGY.md"), "# strategy\n");
+      gitW18(w18Clone, ["add", "docs/STRATEGY.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs: update strategy"]);
+      writeFileSync(join(w18Clone, "docs", "NOTES.md"), "# notes\n");
+      gitW18(w18Clone, ["add", "docs/NOTES.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs: add notes"]);
+      gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+      const w18docOnly = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgJson } });
+      ok(!/\[W18\]/.test(w18docOnly.out), "W18 is silent when every commit since the release touches only docs/** (LOOP-151)");
+      ok(/DOCTOR_OK/.test(w18docOnly.out), "DOCTOR_OK holds when all post-release commits are doc-only (LOOP-151)");
+    }
+
+    // Case F (LOOP-151): mixed doc + code commits → W18 fires with CODE-ONLY count, not total
+    {
+      // Re-tag v1.2.3 at the current origin/main HEAD (after the doc commits from Case E)
+      const headF = spawnSync("git", ["-C", w18Clone, "rev-parse", "origin/main"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+      gitW18(w18Clone, ["tag", "-f", "v1.2.3", headF]);
+      // Add 1 code commit + 2 doc commits (3 total, but only 1 is code-bearing)
+      writeFileSync(join(w18Clone, "src-mixed.ts"), "// code change\n");
+      gitW18(w18Clone, ["add", "src-mixed.ts"]);
+      gitW18(w18Clone, ["commit", "-qm", "fix: code fix in mixed window"]);
+      writeFileSync(join(w18Clone, "docs", "MORE.md"), "# more\n");
+      gitW18(w18Clone, ["add", "docs/MORE.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs: more strategy"]);
+      writeFileSync(join(w18Clone, "docs", "EXTRA.md"), "# extra\n");
+      gitW18(w18Clone, ["add", "docs/EXTRA.md"]);
+      gitW18(w18Clone, ["commit", "-qm", "docs: extra notes"]);
+      gitW18(w18Clone, ["push", "-qu", "origin", "main"]);
+      const w18mixed = run("server", ["doctor"], { cwd: w18Root, extra: { DEVLOOP_W18_PKG_JSON: w18PkgJson } });
+      ok(/\[W18\]/.test(w18mixed.out), "W18 fires for mixed window: code commit present (LOOP-151)");
+      ok(/1 code commit/.test(w18mixed.out), "W18 reports code-bearing count (1), not total (3) (LOOP-151)");
+      ok(/\+2 doc-only/.test(w18mixed.out), "W18 mentions doc-only commits separately (+2 doc-only) (LOOP-151)");
+      ok(/DOCTOR_OK/.test(w18mixed.out), "DOCTOR_OK holds for mixed commits (LOOP-151)");
+    }
   }
 
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
