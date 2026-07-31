@@ -21,7 +21,7 @@ import { openDb as openHubDbConn } from "./db.ts";
 import { findProject as findHubProject } from "./seed.ts";
 import { detectRepoFacts } from "./team-edit.ts";
 import * as metricsMod from "./metrics.ts";
-import { readLandingState, type LandingState } from "./landing.ts";
+import { readLandingState } from "./landing.ts";
 const require_metrics = () => metricsMod;
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
@@ -349,39 +349,8 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     } catch { /* W21 is best-effort — never fails doctor */ }
   }
 
-  // W22 — landing stall: best-effort forge glance, warn/info only, never flips DOCTOR_OK (LOOP-41 Child B, design §5.1)
-  // Fires only when ≥1 qualifying repo (landing:"pr" + autoMerge). DEVLOOP_DOCTOR_NO_FORGE=1 → skip.
-  {
-    const qualifyingRepos = Object.keys(ws.file.repos).filter((ref) => {
-      const r = ws.file.repos[ref]!;
-      return r.landing === "pr" && r.autoMerge;
-    });
-    if (qualifyingRepos.length > 0) {
-      if (process.env.DEVLOOP_DOCTOR_NO_FORGE === "1") {
-        info("landing check skipped (DEVLOOP_DOCTOR_NO_FORGE=1)");
-      } else {
-        try {
-          const states = await readLandingState(ws, opts.exec ? { exec: opts.exec } : {});
-          for (const s of states) {
-            if (s.state === "stalled") {
-              const age = s.oldestAgeDays !== null ? `${Math.round(s.oldestAgeDays)}d` : "?d";
-              const base = s.baseChecks ?? "unknown";
-              const remote = ws.file.repos[s.repo]?.remote ?? "";
-              const m = remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
-              const ghRepo = m ? m[1]! : s.repo;
-              warn(`[W22] [${s.repo}] landing stalled: ${s.openLoopPRs} open dev-loop/* PR(s), oldest ${age}; base 'main' required checks ${base} — autoMerge cannot fire. Clear it: gh pr list --repo ${ghRepo} --state open --head dev-loop/`);
-              if (!stalledRepo) stalledRepo = ghRepo;
-            } else if (s.state === "unknown") {
-              info(`landing: ${s.reason ?? "forge unreachable"} (best-effort; not a failure)`);
-            } else if (s.state === "healthy" && (s.openLoopPRs ?? 0) > 0) {
-              pass(`landing: ${s.openLoopPRs} open loop PR(s), base green — nothing wedged`);
-            }
-            // na: silent; healthy with 0 PRs: silent
-          }
-        } catch { /* W22 is best-effort — never fails doctor */ }
-      }
-    }
-  }
+  // W22 — landing stall: extracted to helper to keep doctorWorkspace CC in budget (design §5.1).
+  stalledRepo = await checkLandingW22Stall(ws, opts, { warn, info, pass });
 
   // W19 — unpushed strategy/doc commits: local <defaultBranch> is ahead of origin (LOOP-56).
   // A landing:"pr" repo where PM commits docs to local main but never pushes means every dev
@@ -429,6 +398,40 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
 function isGitWorkTree(dir: string): boolean {
   try { return execFileSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() === "true"; }
   catch { return false; }
+}
+
+// W22 — landing stall: forge glance, warn/info only, never flips DOCTOR_OK (design §5.1).
+// Fires only when ≥1 qualifying repo (landing:"pr" + autoMerge). DEVLOOP_DOCTOR_NO_FORGE=1 → skip.
+// Returns the first stalled ghRepo name (for NEXT flip), or undefined.
+async function checkLandingW22Stall(
+  ws: Workspace,
+  opts: { exec?: import("./landing.ts").ExecFn },
+  out: { warn: (m: string) => void; info: (m: string) => void; pass: (m: string) => void }
+): Promise<string | undefined> {
+  const { warn, info, pass } = out;
+  const hasQualifyingRepo = Object.values(ws.file.repos).some((r) => r.landing === "pr" && r.autoMerge);
+  if (!hasQualifyingRepo) return undefined;
+  if (process.env.DEVLOOP_DOCTOR_NO_FORGE === "1") { info("landing check skipped (DEVLOOP_DOCTOR_NO_FORGE=1)"); return undefined; }
+  let stalledRepo: string | undefined;
+  try {
+    const states = await readLandingState(ws, opts.exec ? { exec: opts.exec } : {});
+    for (const s of states) {
+      if (s.state === "stalled") {
+        const age = s.oldestAgeDays !== null ? `${Math.round(s.oldestAgeDays)}d` : "?d";
+        const base = s.baseChecks ?? "unknown";
+        const remote = ws.file.repos[s.repo]?.remote ?? "";
+        const m = remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
+        const ghRepo = m ? m[1]! : s.repo;
+        warn(`[W22] [${s.repo}] landing stalled: ${s.openLoopPRs} open dev-loop/* PR(s), oldest ${age}; base 'main' required checks ${base} — autoMerge cannot fire. Clear it: gh pr list --repo ${ghRepo} --state open --head dev-loop/`);
+        if (!stalledRepo) stalledRepo = ghRepo;
+      } else if (s.state === "unknown") {
+        info(`landing: ${s.reason ?? "forge unreachable"} (best-effort; not a failure)`);
+      } else if (s.state === "healthy" && (s.openLoopPRs ?? 0) > 0) {
+        pass(`landing: ${s.openLoopPRs} open loop PR(s), base green — nothing wedged`);
+      }
+    }
+  } catch { /* W22 is best-effort — never fails doctor */ }
+  return stalledRepo;
 }
 
 // W18 — installed CLI vs origin/main skew (design landing-observability §9.3).
