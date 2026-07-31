@@ -12,7 +12,6 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
-import { isDevTierActor } from "./servable.ts"; // LOOP-157: the canonical builder-tier predicate (servable.ts §21b) — reused so the verify gate can't drift from the queue/scheduler on "who is a dev tier"
 
 export type WriteResult = { ok: true; id: string } | { ok: false; status: number; error: string };
 
@@ -73,59 +72,69 @@ function stagingDeployRejection(db: DatabaseSync, projectId: string, fromState: 
   return `staging-deploy gate: In Progress → In Review requires env:dev (this repo deploys and requireDeployBeforeReview is on)`;
 }
 
-// DL-77 verify gate (the Ralph-Wiggum guard) + LOOP-157 two-hop close. Enforced in updateTicketRow below — the
-// SAME single-choke-point placement as stagingDeployRejection — so it covers BOTH the MCP save_issue transition
-// AND the daemon board-move automatically. Two edges to Done are gated:
+// DL-77 verify gate (the Ralph-Wiggum guard) + LOOP-157 two-hop close + LOOP-208 actor coverage. Enforced in
+// updateTicketRow below — the SAME single-choke-point placement as stagingDeployRejection — so it covers BOTH the
+// MCP save_issue transition AND the daemon board-move automatically. Two edges to Done are gated:
 //   • In Progress → Done — the naive maker-self-accept shortcut — is REJECTED for everyone (Done is the OWNER's
 //     verdict, reached via In Review).
-//   • In Review → Done — LOOP-157: the single-hop check above was defeated by splitting the self-accept into two
-//     legal calls (In Progress → In Review → Done, both driven by the ticket's own builder, zero owner
-//     verification between). Enforce the PROPERTY the gate defends, NOT a spelling of the sequence (a sequence
-//     rule is beaten by the next sequence, exactly as the direct edge was beaten by two calls): a DEV-TIER actor
-//     (dev/senior-dev/junior-dev — the builder tiers, servable.ts) may NEVER close a ticket carrying a qa/pm
-//     VERIFIER-OWNER label. Only that owner (qa/pm) or the operator closes it. Keys on the actor's immutable tier
-//     + the ticket's owner label — never the mutable assignee — so no unassign / re-order / split-call trick
-//     evades it, and the refusal is greppable + names the actor and owner label (observability).
-// Every OTHER path to Done stays legal — In Review → Done by the qa/pm owner or the operator (the verified close),
-// a dev tier's In Review → Done on a ticket with NO qa/pm owner label (a §9a self-verified intake item), Todo →
-// Done / Backlog → Done (the §9a intake parent-close, which MUST stay legal or it breaks PM's grooming), and
-// In Progress → Canceled/Duplicate (terminal, NOT Done). Unlike the DL-38 gate this is UNCONDITIONAL (no opt-in
-// config): "Done means verified" is a §3 loop invariant, not an operator preference.
-// The qa/pm VERIFIER-OWNER labels — the tiers whose sign-off "Done means verified" (§3) requires. A builder tier
-// may neither self-close (verifyGateRejection) nor create-closed (verifyCreateGateRejection) a ticket carrying
-// one; only that owner or the operator closes it. Deduped so a doubled label never inflates the refusal message.
+//   • In Review → Done — LOOP-157/183 defeated the direct edge by splitting the self-accept into two legal calls
+//     and by dropping the owner label mid-close. LOOP-208: those fixes keyed the gate on isDevTierActor — a
+//     predicate that answers "is this a BUILDER?", not "is this actor entitled to sign off?". The roster has ten
+//     agents; three are builders, two (qa/pm) are the verifier-owners, and the remaining five (sweep, reflect,
+//     ops, architect, communication) are NEITHER — so they fell straight through the gate and could close a
+//     qa/pm-owned ticket with rc=0. A deny-list keyed on a role the invariant never mentions grows a hole every
+//     time the roster grows. So the gate now asks the RIGHT question — "is the actor this ticket's verifier-owner?":
+//     an In Review → Done close is refused for EVERY actor that is not one of the ticket's own qa/pm owner labels
+//     and is not the operator. Keys on the ticket's owner label (STORED ∪ incoming, so a label-drop-at-close can't
+//     unlock it — LOOP-183 Vector A) + the actor handle — never the mutable assignee — and the refusal is
+//     greppable + names the actual verifier-owner and the actor (observability), with no "builder tier" claim for
+//     actors that are not one. RULING (LOOP-208): a single-owner ticket admits ONLY that owner (pm cannot close a
+//     qa-owned ticket, nor qa a pm-owned one — "Done means verified by ITS owner", §3); a dual qa+pm-owned ticket
+//     admits either owner. §9a's Todo/Backlog → Done parent-close is a different, ungated edge — unaffected.
+// Every OTHER path to Done stays legal — In Review → Done by the ticket's own qa/pm owner or the operator (the
+// verified close), any actor's In Review → Done on a ticket with NO qa/pm owner label (a §9a self-verified intake
+// item), Todo → Done / Backlog → Done (the §9a intake parent-close, which MUST stay legal or it breaks PM's
+// grooming), and In Progress → Canceled/Duplicate (terminal, NOT Done). Unlike the DL-38 gate this is
+// UNCONDITIONAL (no opt-in config): "Done means verified" is a §3 loop invariant, not an operator preference.
+// VERIFIER_OWNER_LABELS — the owner tiers whose sign-off "Done means verified" (§3) requires. Any non-owner,
+// non-operator actor may neither close (verifyGateRejection) nor create-closed (verifyCreateGateRejection) a
+// ticket carrying one. Deduped so a doubled label never inflates the refusal message.
 const VERIFIER_OWNER_LABELS = new Set<string>(["qa", "pm"]);
 const ownerLabelsOf = (labels: string[]): string[] => [...new Set(labels.filter((l) => VERIFIER_OWNER_LABELS.has(l)))];
 
 function verifyGateRejection(actor: string, fromState: string, next: TicketUpdateFields, storedLabels: string[]): string | null {
   if (fromState === "In Progress" && next.state === "Done")
     return `verify gate: In Progress → Done is not allowed — Done must be reached via In Review (owner verification); move to In Review first`;
-  // LOOP-157 + LOOP-183 Vector A: the two-hop self-accept — a builder tier cannot self-verify its own owner-owned
-  // work at the close edge. Key on the ticket's STORED owner labels ∪ the incoming set — NOT next.labels alone:
-  // the agent save_issue path REPLACE-merges labels, so gating on next.labels let a dev tier DROP the qa/pm owner
-  // label in the SAME In Review → Done write, making owners empty so the gate passed and the builder self-closed
-  // (LOOP-183 Vector A). The stored set is the ticket's real ownership at the close; unioning the incoming set
-  // keeps the original LOOP-157 check (a close that still carries the label) intact.
-  if (fromState === "In Review" && next.state === "Done" && isDevTierActor(actor)) {
+  // LOOP-208 (was LOOP-157 + LOOP-183 Vector A): the close-edge gate keys on OWNERSHIP, not builder-tier. A ticket
+  // carrying a qa/pm verifier-owner label may be closed In Review → Done ONLY by one of those owners or the
+  // operator — every other actor is refused (the five non-builder, non-owner handles used to fall through). Read
+  // owners from the STORED labels ∪ the incoming set — NOT next.labels alone: the agent save_issue path
+  // REPLACE-merges labels, so gating on next.labels let a REPLACE that DROPS the qa/pm owner label in the SAME
+  // In Review → Done write empty the owner set and unlock the close (LOOP-183 Vector A). The stored set is the
+  // ticket's real ownership at the close; unioning the incoming set keeps the plain "still carries the label"
+  // case covered too.
+  if (fromState === "In Review" && next.state === "Done") {
     const owners = ownerLabelsOf([...storedLabels, ...(JSON.parse(next.labels) as string[])]);
-    if (owners.length > 0)
-      return `verify gate: In Review → Done blocked — '${actor}' is a builder tier and cannot self-verify its own ${owners.join("/")}-owned work; the ${owners.join("/")} verifier-owner or the operator must close it`;
+    if (owners.length > 0 && actor !== "operator" && !owners.includes(actor))
+      return `verify gate: In Review → Done blocked — '${actor}' is not the ${owners.join("/")} verifier-owner of this ticket; only that ${owners.join("/")} owner or the operator may close it`;
   }
   return null; // every other transition is the caller's concern
 }
 
-// LOOP-183 Vector B: the create-edge twin of the verify gate. insertTicket writes the row verbatim — NONE of the
-// three updateTicketRow gates run on a create — so a dev-tier actor could create a ticket DIRECTLY in Done on a
+// LOOP-183 Vector B + LOOP-208: the create-edge twin of the verify gate. insertTicket writes the row verbatim —
+// NONE of the updateTicketRow gates run on a create — so an actor could create a ticket DIRECTLY in Done on a
 // qa/pm-owner-labelled ticket, reaching Done with zero owner verification (a distinct sink from the transition
-// edge LOOP-157/Vector A defend). Mirror the In Review → Done rule at the create edge: a builder tier may not
-// create a qa/pm-owned ticket already in Done. Todo/Backlog intake creates (§9a) and non-owner-labelled creates
-// stay legal (state ≠ Done, or no owner label). Wired into opSaveIssue's create path — the only create path with
-// agent-controlled state (the daemon createTicket hardcodes Todo, the Linear mirror intake hardcodes Backlog).
+// edge). Mirror the In Review → Done ownership rule at the create edge: only the ticket's own qa/pm owner (or the
+// operator) may create a qa/pm-owned ticket already in Done; every other actor is refused — NOT just builder
+// tiers (LOOP-208: sweep/reflect/ops/architect/communication fell through here too). Todo/Backlog intake creates
+// (§9a) and non-owner-labelled creates stay legal (state ≠ Done, or no owner label). Wired into opSaveIssue's
+// create path — the only create path with agent-controlled state (the daemon createTicket hardcodes Todo, the
+// Linear mirror intake hardcodes Backlog).
 export function verifyCreateGateRejection(actor: string, state: string, labels: string[]): string | null {
-  if (state !== "Done" || !isDevTierActor(actor)) return null;
+  if (state !== "Done") return null;
   const owners = ownerLabelsOf(labels);
-  if (owners.length === 0) return null;
-  return `verify gate: create directly into Done blocked — '${actor}' is a builder tier and cannot self-verify its own ${owners.join("/")}-owned work; create it in Todo/Backlog and let the ${owners.join("/")} verifier-owner close it after review`;
+  if (owners.length === 0 || actor === "operator" || owners.includes(actor)) return null;
+  return `verify gate: create directly into Done blocked — '${actor}' is not the ${owners.join("/")} verifier-owner of this ticket; create it in Todo/Backlog and let the ${owners.join("/")} owner close it after review`;
 }
 
 // Field-report P1-1 terminal-state guard (MP-275). A fire's stale queue snapshot let agents lift tickets
