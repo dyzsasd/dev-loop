@@ -70,11 +70,8 @@ RELEASE_SCRIPT_EXACT = {
         "tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/server.js && "
         "cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./"
     ),
+    "test": "node test/run-all.ts",
 }
-TEST_SEGMENT_RE = re.compile(
-    r"(?:DEVLOOP_CHANNEL_DRYRUN=1 DEVLOOP_CHANNEL_TOKEN=xoxb-DRYRUNSECRET "
-    r"DEVLOOP_MIRROR_DRYRUN=1 )?node (test/[a-z0-9-]+\.ts)\Z"
-)
 # npm auto-runs a fixed set of "lifecycle" scripts *without* an explicit
 # `npm run <name>`: on install (preinstall/install/postinstall — postinstall runs
 # on every `npm i -g` on the end user's machine), on pack/publish
@@ -181,10 +178,9 @@ def _scan_release_manifest(
     data: bytes,
     *,
     source_path: str | None = None,
-    expected_test_paths: frozenset[str] | None = None,
 ) -> list[Finding]:
     manifest_path = PurePosixPath(path if source_path is None else source_path)
-    if manifest_path != PurePosixPath("hub/package.json") or expected_test_paths is None:
+    if manifest_path != PurePosixPath("hub/package.json"):
         return []
     try:
         document = json.loads(data)
@@ -215,25 +211,6 @@ def _scan_release_manifest(
             findings.append(
                 _finding(path, data, "unsafe-package-script", 0, f"{script_name!r} is not the audited command")
             )
-
-    test_script = scripts.get("test")
-    test_paths: list[str] = []
-    if isinstance(test_script, str):
-        for segment in test_script.split(" && "):
-            match = TEST_SEGMENT_RE.fullmatch(segment)
-            if match is None:
-                findings.append(
-                    _finding(path, data, "unsafe-package-script", 0, f"unaudited test command segment: {segment!r}")
-                )
-                break
-            test_paths.append(match.group(1))
-    else:
-        findings.append(_finding(path, data, "unsafe-package-script", 0, "missing string-valued test script"))
-
-    if len(test_paths) != len(set(test_paths)) or frozenset(test_paths) != expected_test_paths:
-        findings.append(
-            _finding(path, data, "unsafe-package-script", 0, "test script must invoke every tracked hub/test/*.ts once")
-        )
     return findings
 
 
@@ -242,7 +219,6 @@ def scan_bytes(
     data: bytes,
     *,
     source_path: str | None = None,
-    expected_test_paths: frozenset[str] | None = None,
 ) -> list[Finding]:
     """Scan one file as inert bytes; never import or evaluate its contents."""
     findings: list[Finding] = []
@@ -261,7 +237,6 @@ def scan_bytes(
             path,
             data,
             source_path=source_path,
-            expected_test_paths=expected_test_paths,
         )
     )
     executable_path = PurePosixPath(path if source_path is None else source_path)
@@ -352,11 +327,6 @@ def _whole_tree_paths(root: Path) -> list[Path]:
 def scan_worktree(root: Path, *, whole_tree: bool = False) -> tuple[list[Finding], int]:
     tracked_paths = _tracked_paths(root)
     paths = _whole_tree_paths(root) if whole_tree else tracked_paths
-    expected_test_paths = frozenset(
-        path.relative_to(root / "hub").as_posix()
-        for path in tracked_paths
-        if path.parent == root / "hub" / "test" and path.suffix == ".ts"
-    )
     findings: list[Finding] = []
     scanned = 0
     for path in paths:
@@ -372,7 +342,6 @@ def scan_worktree(root: Path, *, whole_tree: bool = False) -> tuple[list[Finding
                 _display_path(relative),
                 data,
                 source_path=relative,
-                expected_test_paths=expected_test_paths,
             )
         )
         scanned += 1
