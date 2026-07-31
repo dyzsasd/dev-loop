@@ -12,6 +12,7 @@
 //   • with a configured repoPath, the bootstrap merges dev-loop-hub into the product .mcp.json (DL-61),
 //     preserving an existing server; dry-run previews the merge and writes nothing.
 import { spawnSync, execFileSync, type SpawnSyncReturns } from "node:child_process";
+import { registerDaemonPid } from "./daemon-harness.ts";
 import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -79,7 +80,7 @@ try {
   ok(/install-autostart/.test(perform.stdout), "perform printed standalone daemon autostart guidance");
   ok(/Claude SessionStart hook present/.test(perform.stdout), "perform reported the optional Claude SessionStart compatibility hook");
   ok(existsSync(runfile("iscv")), "perform brought the per-project daemon up (runfile written)");
-  const r4 = readRun("iscv");
+  const r4 = readRun("iscv"); registerDaemonPid(r4.pid);
   const h4 = await fetch(`${r4.url}/api/health`).then((x) => x.json()).catch(() => null) as { ok?: boolean; project?: string } | null;
   ok(!!h4 && h4.ok === true && h4.project === "iscv", "the bootstrapped daemon serves /api/health {ok:true} for the project");
 
@@ -100,6 +101,7 @@ try {
   cfg({ hookless: { backend: "service", mode: "live" } });
   const hookless = is(["hookless", "Hookless", "HKL"], PLUGIN_ABSENT);
   ok(hookless.status === 0, `hook absent → still exit 0 (bootstrap succeeds; got ${hookless.status})`);
+  if (existsSync(runfile("hookless"))) registerDaemonPid(readRun("hookless").pid);
   ok(/Claude SessionStart hook not found/.test(hookless.stdout), "absent hook → informational only (standalone/scheduler installs do not need it)");
   ok(/Board: http:\/\/127\.0\.0\.1:/.test(hookless.stdout), "absent hook did NOT block the bootstrap (board still reported)");
 
@@ -117,6 +119,7 @@ try {
   writeFileSync(join(PRODUCT, ".mcp.json"), JSON.stringify({ mcpServers: { "other-srv": { type: "stdio", command: "x", args: ["y"] } } }, null, 2));
   cfg({ mergeproj: { backend: "service", mode: "live", repoPath: PRODUCT } });
   const merged = is(["mergeproj", "Merge Project", "MRG"]);
+  if (existsSync(runfile("mergeproj"))) registerDaemonPid(readRun("mergeproj").pid);
   ok(merged.status === 0, `perform with repoPath → exit 0 (got ${merged.status})${merged.stderr ? "\n   " + merged.stderr : ""}`);
   ok(/\.mcp\.json (merged|created|updated): dev-loop-hub registered/.test(merged.stdout), "the bootstrap registered dev-loop-hub in the product .mcp.json");
   const pm = JSON.parse(readFileSync(join(PRODUCT, ".mcp.json"), "utf8"));

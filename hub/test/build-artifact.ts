@@ -9,6 +9,7 @@
 // suite (a) builds dist/, (b) smoke-runs the compiled bins, and (c) exercises those two entry points from a dist/
 // COPY in an installed-like layout (no repo config/ sibling — the exact `npm i -g dev-loop` shape).
 import { spawnSync } from "node:child_process";
+import { registerDaemonPid } from "./daemon-harness.ts";
 import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -151,17 +152,19 @@ try {
     const h = spawnSync(process.execPath, ["-e", `(async()=>{const r=await fetch(${JSON.stringify(`${url}/api/health`)}); const j=await r.json(); process.exit(j.ok===true&&j.project==="demo"?0:1);})().catch(()=>process.exit(1));`], { encoding: "utf8" });
     return h.status === 0;
   };
-  const runInfo = (): { url?: string } | null => {
-    try { return JSON.parse(readFileSync(join(tmp, "daemon-demo.json"), "utf8")) as { url?: string }; } catch { return null; }
+  const runInfo = (): { url?: string; pid?: number } | null => {
+    try { return JSON.parse(readFileSync(join(tmp, "daemon-demo.json"), "utf8")) as { url?: string; pid?: number }; } catch { return null; }
   };
   const daemonUp = run(process.execPath, [instCli, "daemon", "up"], daemonEnv);
   const info = runInfo();
+  if (info?.pid) registerDaemonPid(info.pid);
   ok(daemonUp.code === 0 && !!info?.url && healthOk(info.url), "installed cli.js daemon up → starts daemon.js and serves /api/health");
   const daemonDown = run(process.execPath, [instCli, "daemon", "down"], daemonEnv);
   ok(daemonDown.code === 0, "installed cli.js daemon down → stops the daemon");
 
   const hookUp = run(process.execPath, [instHook], daemonEnv);
   const hookInfo = runInfo();
+  if (hookInfo?.pid) registerDaemonPid(hookInfo.pid);
   ok(hookUp.code === 0 && !!hookInfo?.url && healthOk(hookInfo.url), "installed hook-session-start.js → starts the service daemon");
   const hookDown = run(process.execPath, [instCli, "daemon", "down"], daemonEnv);
   ok(hookDown.code === 0, "installed daemon down after hook start → stops the daemon");

@@ -13,6 +13,7 @@
 //
 // Runs against an ISOLATED temp DB + DEVLOOP_RUN_DIR (never the operator's ~/.dev-loop). cwd = hub/ (npm).
 import { spawn, execFileSync } from "node:child_process";
+import { registerDaemonPid } from "./daemon-harness.ts";
 import { rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -40,7 +41,7 @@ execFileSync(NODE, ["src/seed.ts", PROJ, "Race Project", "RC", DB], { encoding: 
 // run `src/daemon.ts <sub>` ASYNC so two `up`s can overlap (the existing lifecycle.ts uses blocking spawnSync)
 function lcAsync(sub: string): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((res) => {
-    const c = spawn(NODE, ["src/daemon.ts", sub], { env: { ...process.env, DEVLOOP_NODE: NODE, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator" } });
+    const c = spawn(NODE, ["src/server.ts", "daemon", sub], { env: { ...process.env, DEVLOOP_NODE: NODE, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECT: PROJ, DEVLOOP_ACTOR: "operator" } });
     let stdout = "", stderr = "";
     c.stdout.on("data", (d) => (stdout += d));
     c.stderr.on("data", (d) => (stderr += d));
@@ -65,7 +66,7 @@ try {
     const tag = `trial ${i}${seedStale ? " (stale-lock seeded)" : ""}`;
     ok(a.status === 0 && b.status === 0, `${tag}: both \`up\` exit 0 (got ${a.status},${b.status})`);
     ok(existsSync(runfile), `${tag}: a runfile exists`);
-    const r = readRun();
+    const r = readRun(); if (existsSync(runfile)) registerDaemonPid(r.pid);
     touchedPorts.add(r.port);
     // the recorded pid must be a LIVE daemon that actually answers health — not an orphaned-loser dead pid
     const trackedHealthy = await health(r.url);
