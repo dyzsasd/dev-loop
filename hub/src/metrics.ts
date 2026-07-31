@@ -324,6 +324,24 @@ export function ownerLiveness(
   return out;
 }
 
+// P4: sensitive mis-tier backstop — non-terminal tickets carrying `sensitive` AND assigned to the
+// junior-dev tier (by assignee or label). Surfaced as doctor W21 and in the board-health rollup
+// (design sensitive-routing §§3-4). Silent in single-dev projects (no senior-dev actor present).
+export interface SensitiveMistierFinding { id: string; assignee: string | null; labels: string[] }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function sensitiveMistier(db: any, projectId: string): SensitiveMistierFinding[] {
+  const hasSenior = db.prepare("SELECT 1 FROM actors WHERE handle='senior-dev' AND active=1").get() !== undefined;
+  if (!hasSenior) return [];
+  const rows = db.prepare(
+    "SELECT id, assignee, labels FROM tickets WHERE project_id=? AND state NOT IN ('Done','Canceled','Duplicate') AND labels LIKE '%\"sensitive\"%' AND (assignee='junior-dev' OR labels LIKE '%\"junior-dev\"%')",
+  ).all(projectId) as { id: string; assignee: string | null; labels: string }[];
+  return rows.map((r) => {
+    let labels: string[] = [];
+    try { labels = JSON.parse(r.labels) as string[]; } catch { /* leave empty */ }
+    return { id: r.id, assignee: r.assignee, labels };
+  });
+}
+
 // Service-backend board rollup: per-project board KPIs + the operator decision queue folded into
 // `out` (1.8.1 quality-gauntlet drain: metricsCli CC 22 → collect/render phases).
 async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>): Promise<void> {
@@ -334,6 +352,7 @@ async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<
     try {
       const board: Record<string, BoardMetrics> = {};
       const roll = { throughput: 0, verifyFails: 0, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
+      let sensitiveMistierCount = 0;
       const queue: Array<DecisionItem & { project: string }> = [];
       for (const key of deliveryProjects(ws)) {
         const pid = findProject(db, key);
@@ -342,10 +361,11 @@ async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<
         board[key] = m;
         roll.throughput += m.throughput; roll.verifyFails += m.verifyFails; roll.blockedNow += m.blockedNow; roll.sequencedNow += m.sequencedNow;
         roll.bugsFiled += m.qa.bugsFiled; roll.escaped += m.qa.escaped;
+        sensitiveMistierCount += sensitiveMistier(db, pid).length;
         queue.push(...decisionQueue(db, pid).map((t) => ({ ...t, project: key }))); // P1-3
       }
       out.board = board;
-      out.teamRollup = { ...roll, acceptRate: roll.throughput + roll.verifyFails ? roll.throughput / (roll.throughput + roll.verifyFails) : null };
+      out.teamRollup = { ...roll, acceptRate: roll.throughput + roll.verifyFails ? roll.throughput / (roll.throughput + roll.verifyFails) : null, sensitiveMistierCount };
       out.decisionQueue = queue;
     } finally { db.close(); }
   } else {
