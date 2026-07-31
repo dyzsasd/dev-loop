@@ -42,10 +42,12 @@ export const isDevTierActor = (actor: string): boolean =>
 
 // servableSlice — a dev tier's SERVABLE work: its §5-ranked Todo slice (own assignee, `blocked` excluded, and —
 // for junior — `sensitive` excluded per LOOP-80 Child B) PLUS its own In Progress (the Step-0 orphan-resume
-// input). This is the SINGLE source both `opQueue` and the scheduler's queue-depth fire-gate (LOOP-144) consume,
-// so the gate can't grow a second, drifting copy of "what is servable". Callers pass a dev-tier actor
-// (isDevTierActor); a non-dev actor just yields its (empty) assignee slice. Output is summarized (no bodies).
-export function servableSlice(db: DatabaseSync, projectId: string, actor: string): { todo: Ticket[]; inProgress: Ticket[] } {
+// input) PLUS its own In Review (landing/repair only — a §12c fire-start pass: merge green, fix+repush red,
+// leave merged-but-unverified alone; LOOP-112). This is the SINGLE source both `opQueue` and the
+// scheduler's queue-depth fire-gate (LOOP-144) consume, so the gate can't grow a second, drifting copy of
+// "what is servable". Callers pass a dev-tier actor (isDevTierActor); a non-dev actor yields empty slices.
+// Output is summarized (no bodies). Hub issues NO network/gh calls — landing state is CLI-side only.
+export function servableSlice(db: DatabaseSync, projectId: string, actor: string): { todo: Ticket[]; inProgress: Ticket[]; inReview: Ticket[] } {
   const summary = (t: Ticket): Ticket => ({ ...t, description: "" });
   const byState = (state: string): Ticket[] =>
     (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state=? ORDER BY created_at").all(projectId, state) as unknown as TicketRow[]).map(toTicket);
@@ -58,5 +60,8 @@ export function servableSlice(db: DatabaseSync, projectId: string, actor: string
     .sort((x, y) => PICK_RANK(x) - PICK_RANK(y) || x.created_at.localeCompare(y.created_at))
     .map(summary);
   const inProgress = byState("In Progress").filter((t) => t.assignee === actor && notSensitiveForJunior(t)).map(summary);
-  return { todo, inProgress };
+  // inReview: landing/repair only — NOT a pick list (LOOP-112). Keyed on assignee===actor (not mine())
+  // so the legacy `dev` null-assignee path never bleeds in, and a pm-assigned In Review ticket stays out.
+  const inReview = byState("In Review").filter((t) => t.assignee === actor && notSensitiveForJunior(t)).map(summary);
+  return { todo, inProgress, inReview };
 }

@@ -187,8 +187,8 @@ Your ops: `queue` FIRST (verify + blocked pre-listed), board reads for Jobs A/B/
 # queue
 dev-loop queue
     Your FIRST board read: the work lists pre-ranked server-side (§5/§21b in code). dev tiers
-    { inProgress, todo — your slice, blocked excluded }; pm { verify, unblock, backlog,
-    todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
+    { inProgress, todo — your slice, blocked excluded; inReview — LANDING/REPAIR ONLY (merge green PRs/fix red) };
+    pm { verify, unblock, backlog, todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
 
 # list_issues
 dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT] [--assignee A] [--related-to ID]
