@@ -394,6 +394,23 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **empty senior Backlog**, so Job B2 promoted 0 and groomed only. Backlog label integrity swept
   clean (0 of 44 malformed) and the tier split is **44/44 junior — now 47/47** with this fire's three;
   §21b forbids re-tiering to balance load, so it is filed honestly and reported, not rebalanced.
+- **2026-07-31 (late, +2) — shipped since the last fire, and one of the two did not survive verify.**
+  Two code commits landed on `origin/main`: **`af5a0e1`** (LOOP-183 — the verify gate's Vector A
+  label-strip close and Vector B create-as-Done sink, both closed) and **`5350a75`** (LOOP-74 —
+  doctor **W20**, the operator decision-queue warn plus the decision-first `NEXT` clause).
+  **LOOP-74 verify-FAILED and is `Canceled`, superseded by LOOP-207** — the code stays on `main`
+  (it is a net improvement over silence; the follow-up carries one field, not a revert). The
+  **LOOP-180 `/kaizen` design gate PASSED with two amendments**, promoting **LOOP-205** and
+  **LOOP-206**. Two new filings: **LOOP-207** (senior direct-code) and **LOOP-208** (senior,
+  `sensitive`).
+- **2026-07-31 (late, +2) — board state.** Verify **0 at close** (In Review is LOOP-183 + LOOP-167 +
+  LOOP-166 + LOOP-185, all four `qa`-owned and correctly not mine), unblock 0, `needs-pm` 0,
+  `Human-Blocked` 0, `_team` carrier 0 — **eighth consecutive fire with nothing waiting on the
+  human**. §9c: **4 edges** (LOOP-206←LOOP-205 new this fire, LOOP-186←LOOP-185, LOOP-137←LOOP-95,
+  LOOP-105←LOOP-104), **0 unparked, 4 held** — every blocker non-terminal. Depth at close: junior
+  **10/10 (at cap)**, senior **8/10**, total 18, Backlog **46**, label integrity **0 of 47
+  malformed**. The tier split is no longer 100% junior: **LOOP-208 is the senior Backlog's first
+  entry in days**, filed senior on the `sensitive` override, not to balance load.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -787,6 +804,63 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   expensive shape — it reads as blocked at a glance and nobody re-opens it. Re-read each entry's
   verdict line, not just its title.** Measured value at filing time: 64 of 82 failure-ish rows
   unclassified (78%), so LOOP-8's breaker cannot engage on four failures in five.
+- **(pm, 2026-07-31) 🧭 STANDING RULE 12, REFINED — priority gives no tiebreak *inside* a rank
+  either, and my own promote order had it wrong.** Rule 12 already says §5 ranks type first and
+  priority elevates only at rank 1. The half it does not state: *within* a rank the sole tiebreak is
+  **oldest `createdAt`** — "FIFO, don't let tickets starve." My carried promote order sorted the
+  rank-3.5 Bugs by priority and parked **LOOP-175** (`p4`, filed `18:09Z`) **last**, behind seven
+  `p2` Bugs all filed later. That is precisely the starvation the FIFO clause exists to prevent: a
+  low-priority bug that is never the highest-priority thing is never picked at all. **Corrected and
+  promoted LOOP-175 first this fire.** The general form: *when a rule names its own rationale
+  ("don't let tickets starve"), check your ordering against the rationale, not just the table —
+  a tiebreak you added for tidiness can invert the rule's purpose.*
+- **(pm, 2026-07-31) ⚠️ LOOP-74 verify-FAILED — W20 reads `tickets.updated_at`, the one source its
+  own binding AC forbade, and the failure mode is worse than a wrong number: the ticket doctor
+  NAMES flips.** A/B on one scratch workspace, two queue items, one variable moved (a Sweep-style
+  label repair on the older one, human rules on nothing): `oldest AB-OLD … 2d (blocked)` becomes
+  `oldest AB-NEW … 9h (approve)`, and `NEXT:` — the single action doctor gives the operator — points
+  at the wrong ticket. The count stays `2`, so the line still reads complete. **Instance 23 of "a
+  surface reporting a result it never established."** Escalated to **LOOP-207** (senior direct-code,
+  §21a first-real-fail routing). **The reusable correction is to my OWN spec, and it cost nothing to
+  find: I ran the comment arm FIRST and it was a clean negative — `save_comment` does not touch
+  `tickets.updated_at`; only `save_issue` writes (labels/priority/assignee) reset it.** My 01:08Z AC
+  had said "a comment or label". Had I filed on the comment claim it would have been refutable in
+  one command. *Run the arm you expect to confirm you, too — a negative arm is what makes the
+  positive one unarguable.* Third correct reader now exists in-repo (`daemon-notifiers.ts:89-92`,
+  `views/activity.ts:43`); W20 was the third site asking the question and the second to get it wrong,
+  so LOOP-207 asks for one shared helper with LOOP-108's surface fenced off.
+- **(pm, 2026-07-31) ✅ LOOP-180 `/kaizen` design gate — PASS WITH AMENDMENT, and the failure mode
+  was new: every source was cited CORRECTLY and two were READ wrong.** The `kaizen-panel` design is
+  the best-sourced this board has produced — I re-derived all nine pinned referents by hand
+  (`AGENT_HANDLES`, the `operator` human-actor distinction, `scripts.quality --threshold`,
+  `lessonsPaths`, the `/reports` filesystem-view precedent, `boardMetrics.verifyFails`/`acceptRate`,
+  the `EXPECT` byte-assert) and **every citation was exact**. But two pinned *queries* were wrong:
+  (1) stat 4's `title LIKE '[%-proposal]'` returns **0 against a live board holding 4** — SQLite
+  `LIKE` anchors the whole string, so it demands the title *end* at `-proposal]`, and the panel would
+  have rendered "no §17 proposals filed yet" over four Done proposals: **instance 16 of the very
+  defect class the panel was design-gated to prevent, inside the panel itself**; (2) stat 3's
+  trajectory parse silently drops `**90**` — the emphasised current value — yielding a truncated
+  series that never triggers the honest fallback because `history` is non-null. **The lesson:
+  "cites a source" and "reads that source correctly" are independent properties, and a design gate
+  that only checks the first will pass a panel that renders confident zeros. Open the referent AND
+  run the query.** Children promoted (LOOP-205 amended, LOOP-206 + the `blocked` label per LOOP-190),
+  parent closed last per §21a.
+- **(pm, 2026-07-31) 🔐 LOOP-208 — the verify gate asks "is this a builder?" when its invariant needs
+  "is this the verifier-owner?", so five agents close `qa`-owned work unchallenged.** LOOP-183 hardened
+  the gate against both *dev-tier* vectors; the predicate it keys on, `isDevTierActor`, covers 3 of the
+  10 `AGENT_HANDLES`. Seven-actor A/B, identical tickets, identical write, only the actor moving:
+  `junior-dev`/`senior-dev` → `rc=1`, blocked; **`sweep`, `reflect`, `ops`, `architect`,
+  `communication` → `rc=0`, `Done`.** Sweep makes this live rather than theoretical — highest-volume
+  non-dev writer, 30-minute unattended cadence, and a charter that literally includes *resetting*
+  tickets. `ticketwrite.ts` calls "Done means verified" a loop invariant, "not an operator
+  preference"; it is enforced against three of the ten actors who can reach the edge. **The standing
+  form, and it generalises past this gate: a deny-list keyed on a role the invariant does not mention
+  grows a new hole every time the roster grows — `ops`, `architect` and `communication` joined the
+  allowed set silently, by being added to `AGENT_HANDLES`.** Filed `sensitive` under standing rule 11
+  (a gate deciding WHO may act), hence senior. **The choke point itself is sound** — I verified
+  `INSERT INTO tickets` and `UPDATE tickets` each appear exactly once in `src/`, and that
+  `moveTicket`/`createTicket`/the mirror's `fileIntake` all route through them; only the predicate is
+  wrong, so no new plumbing is needed.
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
