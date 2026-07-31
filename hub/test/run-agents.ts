@@ -115,7 +115,7 @@ try {
   // flips the claude prompt channel to stdin (Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB).
   const boot = run(["--cli", "claude", "--once", "--dry-run", "--assemble-boot", "--agents", "pm", ...common]);
   ok(boot.code === 0, "assemble-boot dry-run exits 0");
-  ok(/pm: boot corpus \d+KB \(conventions \d+KB(; config-pruned [^)]+)?\) hash=[0-9a-f]{12} — prompt via stdin/.test(boot.out),
+  ok(/pm: boot corpus \d+KB \(conventions \d+KB; lessons \d+B(; config-pruned [^)]+)?\) hash=[0-9a-f]{12} — prompt via stdin/.test(boot.out),
     "assemble-boot dry-run reports the corpus size + content hash");
   ok(/pm: boot corpus .*config-pruned §5 §19 §24/.test(boot.out),
     "the featureless service fixture prunes pm's config-gated spans (§5 queue, §19 multi-repo, §24 codex)");
