@@ -14,6 +14,7 @@ def rules_for(
     data: bytes,
     *,
     source_path: str | None = None,
+    worktree: bool = False,
 ) -> set[str]:
     return {
         finding.rule
@@ -21,6 +22,7 @@ def rules_for(
             path,
             data,
             source_path=source_path,
+            worktree=worktree,
         )
     }
 
@@ -57,6 +59,7 @@ def release_manifest_rules(**overrides: str | None) -> set[str]:
     return rules_for(
         "hub/package.json",
         valid_release_manifest(**overrides),
+        worktree=True,
     )
 
 
@@ -254,6 +257,7 @@ class SourceIntegrityRegressionTest(unittest.TestCase):
         rules = rules_for(
             "hub/package.json",
             json.dumps(manifest).encode(),
+            worktree=True,
         )
         self.assertIn("unsafe-package-script", rules)
 
@@ -297,9 +301,57 @@ class SourceIntegrityRegressionTest(unittest.TestCase):
             for finding in scan_bytes(
                 "hub/package.json",
                 valid_release_manifest(build="evil"),
+                worktree=True,
             )
         }
         self.assertIn("'build' is not the audited command", details)
+
+    def test_manifest_audit_scoped_to_worktree_not_history(self) -> None:
+        # Regression for LOOP-140/LOOP-86: _scan_release_manifest must not run on
+        # historical blobs. A historical hub/package.json with stale script bytes
+        # is a property of past commits, not current runtime risk — auditing it
+        # permanently blocks every release.
+        #
+        # Failure mode: on the pre-fix tree (c02ba33), scan_history returns
+        # unsafe-package-script findings for this blob, so the history assertion
+        # below raises AssertionError. On the fixed tree, scan_history is silent
+        # and the worktree-mode assertion confirms the audit still fires in worktree.
+        stale_manifest = json.dumps({"scripts": {
+            "build": "old build command",
+            "test": "old test command",
+        }}).encode()
+
+        # Worktree mode must flag stale script bytes in hub/package.json
+        worktree_rules = rules_for(
+            "hub/package.json",
+            stale_manifest,
+            source_path="hub/package.json",
+            worktree=True,
+        )
+        self.assertIn("unsafe-package-script", worktree_rules)
+
+        # History mode must NOT flag a historical hub/package.json with those same bytes
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            git(repo, "init", "-q")
+            git(repo, "config", "user.name", "Integrity Test")
+            git(repo, "config", "user.email", "integrity@example.invalid")
+            hub_dir = repo / "hub"
+            hub_dir.mkdir()
+            (hub_dir / "package.json").write_bytes(stale_manifest)
+            git(repo, "add", "hub/package.json")
+            git(repo, "commit", "-m", "historical manifest with stale bytes")
+            findings, _ = scan_history(repo)
+
+        manifest_findings = [
+            f for f in findings
+            if f.rule == "unsafe-package-script" and "package.json" in f.path
+        ]
+        self.assertEqual(
+            [],
+            manifest_findings,
+            "scan_history must not flag hub/package.json manifest bytes in historical blobs",
+        )
 
 
 if __name__ == "__main__":
