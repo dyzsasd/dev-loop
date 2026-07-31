@@ -21,6 +21,7 @@ import { findProject } from "./seed.ts";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode } from "./node-runtime.ts";
 import { devloopProjectsPath, hubDbPath, pkgVersion } from "./paths.ts";
+import { tryResolveWorkspace, wsStateRoot, wsHubDb } from "./workspace.ts";
 
 interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; version?: string; actor?: string; }
 const DEFAULT_DAEMON_PORT = 8787;
@@ -199,6 +200,19 @@ function lcResolveKey(): string | null {
   return cfg ? resolveProjectFromCwd(process.cwd(), cfg) : null;
 }
 
+// Bind DEVLOOP_RUN_DIR / DEVLOOP_HUB_DB to the active workspace before a bare daemon verb reads the
+// runfile store — closing the seam where `hub status` lists a daemon the bare verbs can't reach
+// (LOOP-152 defect 2). Fills in only what is UNSET; an explicit caller-supplied value is honored
+// (the LOOP-117 shape: doctor.ts:63 — never hub.ts:wireEnv which overwrites unconditionally).
+// Falls back cleanly when no workspace resolves (bare-machine / test with explicit env).
+function resolveDaemonContext(): void {
+  if (process.env.DEVLOOP_RUN_DIR && process.env.DEVLOOP_HUB_DB) return;
+  const ws = tryResolveWorkspace();
+  if (!ws) return;
+  if (!process.env.DEVLOOP_RUN_DIR) process.env.DEVLOOP_RUN_DIR = wsStateRoot(ws);
+  if (!process.env.DEVLOOP_HUB_DB) process.env.DEVLOOP_HUB_DB = wsHubDb(ws);
+}
+
 async function daemonUpForKey(key: string): Promise<number> {
   // Serveable ⇔ seeded in the hub DB. A non-service / unknown project is never in the hub ⇒ clean no-op.
   const dbPath = lcDbPath();
@@ -296,12 +310,14 @@ async function daemonUpForKey(key: string): Promise<number> {
 }
 
 async function daemonUp(): Promise<number> {
+  resolveDaemonContext();
   const key = lcResolveKey();
   if (!key) { console.log("[daemon] up: no project resolved from cwd and DEVLOOP_PROJECT is unset — nothing to start."); return 0; }
   return daemonUpForKey(key);
 }
 
 async function daemonUpAll(): Promise<number> {
+  resolveDaemonContext();
   const cfg = loadProjectsConfig();
   const entries = Object.entries(cfg?.projects ?? {}) as Array<[string, { backend?: string }]>;
   const serviceKeys = entries.filter(([, p]) => p.backend === "service").map(([key]) => key);
@@ -318,6 +334,7 @@ async function daemonUpAll(): Promise<number> {
 }
 
 async function daemonDown(): Promise<number> {
+  resolveDaemonContext();
   const key = lcResolveKey();
   if (!key) { console.log("[daemon] down: no project resolved — nothing to stop."); return 0; }
   const info = lcReadRun(key);
@@ -333,6 +350,7 @@ async function daemonDown(): Promise<number> {
 }
 
 async function daemonStatus(): Promise<number> {
+  resolveDaemonContext();
   const key = lcResolveKey();
   if (!key) { console.log("[daemon] status: no project resolved (DEVLOOP_PROJECT unset, cwd outside every repo). Set DEVLOOP_PROJECT=<key>, or run from inside a configured repo."); return 0; }
   const info = lcReadRun(key);
@@ -340,7 +358,7 @@ async function daemonStatus(): Promise<number> {
     const live = await lcHealthInfo(info.url, key);
     if (live) {
       const ver = live.version || info.version || "?";
-      const stale = ver !== "?" && ver !== pkgVersion() ? ` — running OLD code v${ver}, CLI is v${pkgVersion()}; run \`dev-loop daemon up\` to restart` : "";
+      const stale = ver !== "?" && ver !== pkgVersion() ? ` — running OLD code v${ver}, CLI is v${pkgVersion()}; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart` : "";
       const actor = live.actor || info.actor;
       const misId = actor && actor !== "operator" ? ` — WARNING actor='${actor}' (not operator; publish/attribution may be mis-gated)` : "";
       console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid}, v${ver}, actor=${actor ?? "?"})${stale}${misId}`);
@@ -348,7 +366,7 @@ async function daemonStatus(): Promise<number> {
     }
   }
   if (info && !lcIsAlive(info.pid)) lcRemoveRun(key); // a dead pid must never read as "running" — clear it
-  console.log(`[daemon] status: '${key}' stopped. Start it with \`dev-loop daemon up\`.`);
+  console.log(`[daemon] status: '${key}' stopped. Start it with \`DEVLOOP_PROJECT=${key} dev-loop daemon up\`.`);
   return 0;
 }
 
@@ -451,16 +469,16 @@ export async function daemonStatusAll(): Promise<number> {
       const live = await lcHealthInfo(info.url, key);
       if (live) {
         const ver = live.version || info.version || "?";
-        const stale = ver !== "?" && ver !== pkgVersion() ? ` — running OLD code v${ver}, CLI is v${pkgVersion()}; run \`dev-loop daemon up\` to restart` : "";
+        const stale = ver !== "?" && ver !== pkgVersion() ? ` — running OLD code v${ver}, CLI is v${pkgVersion()}; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart` : "";
         const actor = live.actor || info.actor;
         const misId = actor && actor !== "operator" ? ` — WARNING actor='${actor}' (not operator; publish/attribution may be mis-gated)` : "";
         console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid}, v${ver}, actor=${actor ?? "?"})${stale}${misId}`);
       } else {
-        console.log(`[daemon] status: '${key}' RUNNING (pid ${info.pid}) → ${info.url} — probe failed; run \`dev-loop daemon up\` to restart`);
+        console.log(`[daemon] status: '${key}' RUNNING (pid ${info.pid}) → ${info.url} — probe failed; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart`);
       }
     } else {
       if (info && !lcIsAlive(info.pid)) lcRemoveRun(key);
-      console.log(`[daemon] status: '${key}' stopped. Start it with \`dev-loop daemon up\`.`);
+      console.log(`[daemon] status: '${key}' stopped. Start it with \`DEVLOOP_PROJECT=${key} dev-loop daemon up\`.`);
     }
   }
   return 0;
