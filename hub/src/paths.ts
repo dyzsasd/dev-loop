@@ -15,6 +15,13 @@ export function pkgVersion(): string {
   return cachedVersion;
 }
 
+// Uncached fresh read — used to detect an on-disk upgrade while a daemon is still running
+// the old code (pkgVersion() is cached at startup; pkgVersionFresh() reads the file each call).
+export function pkgVersionFresh(): string {
+  try { return (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string }).version ?? ""; }
+  catch { return ""; }
+}
+
 // A launcher that interpolates an unset JS variable into one of these env vars hands us the truthy
 // literal "undefined" (e.g. DEVLOOP_HUB_DB=`${ws}/hub.db` with ws unset) — the || fallbacks below never
 // see a falsy value, and the first openDb()/mkdirSync then silently plants a junk `undefined/` directory

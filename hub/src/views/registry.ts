@@ -28,6 +28,7 @@ export interface ViewCtx {
   canPublish: boolean;               // writable && actor === "operator" (the DL-3 operator-publish gate)
   roadmapRepoFileStrategy?: string;  // DL-83 divergence banner input (resolved config, never request input)
   draftsPending: () => number;       // docs P6a: gated docs with a draft ahead of published (the header chip) — LAZY like humanWrite
+  basePageOpts: { workspaceId?: string; daemonVersion?: string; cliVersion?: string }; // LOOP-52 board identity
 }
 export type ViewOut =
   | { kind: "html"; status: number; html: string }   // a full page() document
@@ -49,6 +50,9 @@ export function decodeSeg(seg: string): string | null {
 
 const html = (status: number, doc: string): ViewOut => ({ kind: "html", status, html: doc });
 const MALFORMED: ViewOut = { kind: "json", status: 400, body: { error: "malformed percent-escape in path" } };
+// Thread board-identity opts (LOOP-52) into every page() call without repeating the spread at each call site.
+const pg = (c: ViewCtx, title: string, project: string, inner: string, opts: Parameters<typeof page>[3] = {}): string =>
+  page(title, project, inner, { ...c.basePageOpts, ...opts });
 
 export const VIEW_ROUTES: ViewRoute[] = [
   // GET / — the PROJECT board (DL-2): server-rendered HTML, read-only, columns by state. DL-20:
@@ -60,7 +64,7 @@ export const VIEW_ROUTES: ViewRoute[] = [
       const filters: BoardFilters = { state: sp.get("state") ?? undefined, type: sp.get("type") ?? undefined, label: sp.get("label") ?? undefined, assignee: sp.get("assignee") ?? undefined, q: sp.get("q") ?? undefined };
       // DL-31: validate ?group to the single known view ("assignee" → swimlanes); anything else ⇒ default board.
       const group = sp.get("group") === "assignee" ? "assignee" : undefined;
-      return html(200, page(`${c.projectKey} · board`, c.projectKey, boardPage(c.db, c.projectId, c.projectKey, filters, c.humanWrite(), group), { active: "board", drafts: c.draftsPending() }));
+      return html(200, pg(c, `${c.projectKey} · board`, c.projectKey, boardPage(c.db, c.projectId, c.projectKey, filters, c.humanWrite(), group), { active: "board", drafts: c.draftsPending() }));
     },
   },
   // GET /roadmap — a 302 onto the roadmap DOC page (D3: the doc system superseded the dedicated
@@ -74,12 +78,12 @@ export const VIEW_ROUTES: ViewRoute[] = [
   // through the query_only db; Date.now() injected here so activityPage stays pure/testable.
   {
     method: "GET", pattern: "/activity", handler: (c) =>
-      html(200, page(`activity · ${c.projectKey}`, c.projectKey, activityPage(c.db, c.projectId, c.projectKey, Date.now()), { active: "activity", drafts: c.draftsPending() })),
+      html(200, pg(c, `activity · ${c.projectKey}`, c.projectKey, activityPage(c.db, c.projectId, c.projectKey, Date.now()), { active: "activity", drafts: c.draftsPending() })),
   },
   // GET /reports — the agent reports index (DL-10, read-only filesystem view; empty state if absent).
   {
     method: "GET", pattern: "/reports", handler: (c) =>
-      html(200, page(`reports · ${c.projectKey}`, c.projectKey, reportsIndexPage(reportsRoot(c.projectKey), c.projectKey), { active: "reports", drafts: c.draftsPending() })),
+      html(200, pg(c, `reports · ${c.projectKey}`, c.projectKey, reportsIndexPage(reportsRoot(c.projectKey), c.projectKey), { active: "reports", drafts: c.draftsPending() })),
   },
   // GET /reports/<agent>/<level>/<date> — one report, read-only (path-validated → 400 traversal, 404 absent).
   {
@@ -88,8 +92,8 @@ export const VIEW_ROUTES: ViewRoute[] = [
       if (agent === null || level === null || date === null) return MALFORMED;
       const r = reportPage(reportsRoot(c.projectKey), c.projectKey, agent, level, date);
       if (r === "badpath") return { kind: "json", status: 400, body: { error: "invalid report path" } };
-      if (r === null) return html(404, page("Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/reports"))}">← reports</a><p class="empty">No report ${esc(agent)}/${esc(level)}/${esc(date)}.</p>`, { active: "reports" }));
-      return html(200, page(`${date} · ${agent} · ${c.projectKey}`, c.projectKey, r.html, { active: "reports", drafts: c.draftsPending() }));
+      if (r === null) return html(404, pg(c, "Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/reports"))}">← reports</a><p class="empty">No report ${esc(agent)}/${esc(level)}/${esc(date)}.</p>`, { active: "reports" }));
+      return html(200, pg(c, `${date} · ${agent} · ${c.projectKey}`, c.projectKey, r.html, { active: "reports", drafts: c.draftsPending() }));
     },
   },
   // GET /ticket/:id — the web UI detail view (DL-2): full description + comments.
@@ -98,8 +102,8 @@ export const VIEW_ROUTES: ViewRoute[] = [
       const id = decodeSeg(c.params.id);
       if (id === null) return MALFORMED;
       const inner = ticketPage(c.db, c.projectId, c.projectKey, id, c.humanWrite());
-      if (!inner) return html(404, page("Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/"))}">← board</a><p class="empty">No ticket ${esc(id)} in ${esc(c.projectKey)}.</p>`, { active: "board" }));
-      return html(200, page(`${id} · ${c.projectKey}`, c.projectKey, inner, { active: "board", drafts: c.draftsPending() }));
+      if (!inner) return html(404, pg(c, "Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/"))}">← board</a><p class="empty">No ticket ${esc(id)} in ${esc(c.projectKey)}.</p>`, { active: "board" }));
+      return html(200, pg(c, `${id} · ${c.projectKey}`, c.projectKey, inner, { active: "board", drafts: c.draftsPending() }));
     },
   },
   // ── F4 (D3): the docs system — index / viewer / history / diff (views/docs.ts) ──
@@ -107,7 +111,7 @@ export const VIEW_ROUTES: ViewRoute[] = [
   // D6: archived docs are hidden by default; ?archived=1 shows them (any other value ⇒ default hide).
   {
     method: "GET", pattern: "/docs", handler: (c) =>
-      html(200, page(`docs · ${c.projectKey}`, c.projectKey, docsIndexPage(c.db, c.projectId, c.projectKey, c.url.searchParams.get("archived") === "1"), { active: "docs", drafts: c.draftsPending() })),
+      html(200, pg(c, `docs · ${c.projectKey}`, c.projectKey, docsIndexPage(c.db, c.projectId, c.projectKey, c.url.searchParams.get("archived") === "1"), { active: "docs", drafts: c.draftsPending() })),
   },
   // GET /doc/:slug — the kind-agnostic doc viewer (+ ?v=N picker; gated CAS edit + operator publish).
   {
@@ -124,10 +128,10 @@ export const VIEW_ROUTES: ViewRoute[] = [
         canEdit: c.humanWrite(), canPublish: c.humanWrite() && c.canPublish, // the DL-29 double gate; publish additionally operator-only
         version, roadmapRepoFileStrategy: c.roadmapRepoFileStrategy,
       });
-      if (out === null) return html(404, page("Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/docs"))}">← docs</a><p class="empty">No document <code>${esc(slug)}</code> in ${esc(c.projectKey)}.</p>`, { active: "docs" }));
-      if (out === "noversion") return html(404, page("Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, `/doc/${encodeURIComponent(slug)}`))}">← ${esc(slug)}</a><p class="empty">No version ${version} of <code>${esc(slug)}</code>.</p>`, { active: "docs" }));
+      if (out === null) return html(404, pg(c, "Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/docs"))}">← docs</a><p class="empty">No document <code>${esc(slug)}</code> in ${esc(c.projectKey)}.</p>`, { active: "docs" }));
+      if (out === "noversion") return html(404, pg(c, "Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, `/doc/${encodeURIComponent(slug)}`))}">← ${esc(slug)}</a><p class="empty">No version ${version} of <code>${esc(slug)}</code>.</p>`, { active: "docs" }));
       if (typeof out !== "string") return { kind: "redirect", status: 302, location: href(c.projectKey, `/doc/${encodeURIComponent(out.redirect)}`) }; // /doc/<kind> → the kind's canonical slug
-      return html(200, page(`${slug} · ${c.projectKey}`, c.projectKey, out, { active: "docs", drafts: c.draftsPending() }));
+      return html(200, pg(c, `${slug} · ${c.projectKey}`, c.projectKey, out, { active: "docs", drafts: c.draftsPending() }));
     },
   },
   // GET /doc/:slug/history — the append-only version ledger (author / summary / base / date).
@@ -136,8 +140,8 @@ export const VIEW_ROUTES: ViewRoute[] = [
       const slug = decodeSeg(c.params.slug);
       if (slug === null) return MALFORMED;
       const inner = docHistoryPage(c.db, c.projectId, c.projectKey, slug);
-      if (inner === null) return html(404, page("Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/docs"))}">← docs</a><p class="empty">No document <code>${esc(slug)}</code> in ${esc(c.projectKey)}.</p>`, { active: "docs" }));
-      return html(200, page(`history · ${slug} · ${c.projectKey}`, c.projectKey, inner, { active: "docs", drafts: c.draftsPending() }));
+      if (inner === null) return html(404, pg(c, "Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/docs"))}">← docs</a><p class="empty">No document <code>${esc(slug)}</code> in ${esc(c.projectKey)}.</p>`, { active: "docs" }));
+      return html(200, pg(c, `history · ${slug} · ${c.projectKey}`, c.projectKey, inner, { active: "docs", drafts: c.draftsPending() }));
     },
   },
   // GET /doc/:slug/diff?from=N&to=N — unified diff between two versions, esc()'d line by line.
@@ -150,9 +154,9 @@ export const VIEW_ROUTES: ViewRoute[] = [
         return { kind: "json", status: 400, body: { error: "diff requires ?from=N&to=N (positive integers)" } };
       }
       const inner = docDiffPage(c.db, c.projectId, c.projectKey, slug, from, to);
-      if (inner === null) return html(404, page("Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/docs"))}">← docs</a><p class="empty">No document <code>${esc(slug)}</code> in ${esc(c.projectKey)}.</p>`, { active: "docs" }));
-      if (inner === "noversion") return html(404, page("Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, `/doc/${encodeURIComponent(slug)}/history`))}">← history</a><p class="empty">No version v${from}→v${to} of <code>${esc(slug)}</code>.</p>`, { active: "docs" }));
-      return html(200, page(`diff · ${slug} · ${c.projectKey}`, c.projectKey, inner, { active: "docs", drafts: c.draftsPending() }));
+      if (inner === null) return html(404, pg(c, "Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, "/docs"))}">← docs</a><p class="empty">No document <code>${esc(slug)}</code> in ${esc(c.projectKey)}.</p>`, { active: "docs" }));
+      if (inner === "noversion") return html(404, pg(c, "Not found", c.projectKey, `<a class="back" href="${esc(href(c.projectKey, `/doc/${encodeURIComponent(slug)}/history`))}">← history</a><p class="empty">No version v${from}→v${to} of <code>${esc(slug)}</code>.</p>`, { active: "docs" }));
+      return html(200, pg(c, `diff · ${slug} · ${c.projectKey}`, c.projectKey, inner, { active: "docs", drafts: c.draftsPending() }));
     },
   },
 ];
