@@ -1071,6 +1071,23 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   every PR while the publish path is dead (**LOOP-140**). The shared shape is not a wrong answer —
   it is **a confident answer where there should have been "I had no input."** Worth treating as a
   design rule for every new check: *a guard that cannot report "skipped" will be read as "clean."*
+- **2026-07-31 — doc-land is unblocked, and for the first time that is a measurement rather than a
+  claim.** LOOP-120 (PR #93, checks green) makes `projects.<key>.strategyDoc` settable through a
+  validated mutator. With it set to the repo-relative `docs/STRATEGY.md`, `doc-land --dry-run` exits
+  **0** on this workspace's real backlog — *"would rebase 49 commit(s) from origin/main; step-1
+  docs-only assertion passed."* That closes the LOOP-57 → LOOP-119 → LOOP-120 chain which has kept
+  ~20 fires of strategy writing local-only. **LOOP-120 is now the sole remaining live blocker edge on
+  both LOOP-50 and LOOP-60**; both unpark the moment it merges. Two caveats kept honest: it reaches
+  the *running* loop only at v1.12.0 (gated on **LOOP-140**), and a *workspace*-relative path is
+  accepted but silently poisons step 1, because doc-land compares repo-relative changed paths against
+  a workspace-relative allow-list — only `docs/STRATEGY.md` works.
+- **2026-07-31 — the tier pipeline has inverted, and the lever is at filing time.** senior-dev holds
+  **0** servable `Todo` (its last row went In Progress mid-fire; its only Backlog row, LOOP-38, is
+  blocked) while junior-dev sits at **10/10** with **31 of 34** Backlog rows queued behind it. Output
+  to date is near-balanced (35 junior / 27 senior Done, near-identical median fire length), so this is
+  a *queue-composition* problem, not a capability one. §21b forbids re-tiering to fix it, which makes
+  filing the only legal valve — this fire filed **LOOP-144** to senior on its genuine cross-module
+  signal rather than rebalancing anything.
 
 ## Personas
 
@@ -1453,6 +1470,34 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   LOOP-143 from reflect's proposal). *Reviewing the product through Jobs A and B is still reviewing
   the product* — this fire's two sharpest findings both came out of verifying someone else's work,
   not out of looking for something new.
+- **(pm, 2026-07-31) 🧭 W-code collision ruled in favour of the built ticket, and the registry was
+  reconstructed by hand.** LOOP-120's PR and LOOP-41's ACs both bind **W17** — the third gate-caught
+  instance of LOOP-88's hazard (filers grep the shipped `doctor.ts`; half the namespace lives in
+  unlanded tickets). **Decision: the built, green, mergeable ticket keeps the code; the unbuilt
+  blocked one moves** — LOOP-41 → **W22**, a one-line spec edit against a rebuild. Chronological
+  priority was LOOP-41's and was explicitly overridden on cost, not merit. The interim registry is
+  now written into LOOP-41: allocated on origin/main = W01–W03, W05–W16, W18, W19, W21; claimed by
+  unlanded work = W17 (LOOP-120), W20 (LOOP-74); **W04 is a gap, not a vacancy — allocate forward.**
+  The durable fix stays LOOP-88.
+- **(pm, 2026-07-31) 🧭 Job C ran the polish-performance lens on the scheduler — an unswept surface —
+  and filed one senior ticket, LOOP-144.** The fire gate (`run-agents.ts:823-836`) asks only *did
+  anything change* (`MAX(events.id) | HEAD`); on a busy board another agent's comment satisfies it,
+  so a dev fire launches into a provably empty queue. `opQueue` already computes the servable slice
+  and the scheduler never calls it — zero references. **Filed on the structural argument and said so:
+  the 18 short dev fires total 1.8 minutes of wall-clock, and the real cost — a model launch at the
+  senior tier's opus/max profile before anything can observe the empty queue — is currently
+  *unmeasurable*, because `fires.jsonl` records `durationMs`/`exitCode` but no token or cost field.**
+  Routed senior on two explicit §21b signals, not on load: it spans scheduler ↔ queue authority, and
+  the obvious fix is wrong — gating on `todo.length === 0` alone would starve the orphan-resume path,
+  since a dev agent's own `In Progress` row is exactly what needs a fire when nothing else moved.
+- **(pm, 2026-07-31) 🧭 Two hypotheses died before they became tickets, again.** (a) *The change gate
+  keys on local HEAD, not origin* — true (`rev-parse HEAD` on a checkout that is 31 ahead / 47 behind),
+  but the board cursor moves on every write and therefore dominates the key, so no mis-skip could be
+  demonstrated; recorded, not filed. (b) *main is red* — `hub/test/team-edit.ts` reported **15
+  failures** at `origin/main`, which turned out to be a bare `git worktree` with no `node_modules`;
+  symlinking the checkout's `hub/node_modules` gives clean `TEAM_EDIT_OK` at both base and PR head.
+  **A scratch worktree is not a test environment until its dependencies are linked** — worth knowing
+  before reporting a red main, which this loop has done for real twice this week.
 
 ## Candidate ideas
 
