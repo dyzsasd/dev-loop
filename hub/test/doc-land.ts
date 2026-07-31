@@ -114,7 +114,10 @@ try {
   const originAfterC = git(repoDir, ["rev-parse", "origin/main"]);
   ok(originAfterC !== originAdvancedSha, `(c) origin/main advanced past the other agent's commit (new tip is the rebased archive entry)`);
   // The archive file from our doc commit should be on origin/main
-  const archiveOnOrigin = execFileSync("git", ["-C", repoDir, "ls-tree", "--name-only", "origin/main:docs/strategy-archive/"], { encoding: "utf8" }).trim();
+  const archiveOnOrigin = (() => {
+    try { return execFileSync("git", ["-C", repoDir, "ls-tree", "--name-only", "origin/main:docs/strategy-archive/"], { encoding: "utf8" }).trim(); }
+    catch { return ""; }
+  })();
   ok(/2026-07\.md/.test(archiveOnOrigin), `(c) rebased doc commit is on origin/main (archive file present)`);
 
   // Sync local to origin

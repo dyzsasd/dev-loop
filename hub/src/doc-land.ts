@@ -85,6 +85,10 @@ Design: landing-discipline §4.6 (LOOP-57).`);
   const git = (args: string[]): string =>
     execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const gitOk = (args: string[]): boolean => { try { git(args); return true; } catch { return false; } };
+  // Provide fallback identity flags for git rebase in environments without a global git config
+  // (e.g., CI runners). Only used if no identity is found; never overrides a configured identity.
+  const gitIdArgs = gitOk(["config", "user.email"]) ? [] as string[]
+    : ["-c", "user.email=dev-loop@local", "-c", "user.name=dev-loop"];
 
   // If there's no remote origin/<defaultBranch>, nothing to land
   if (!gitOk(["rev-parse", "--verify", "--quiet", `origin/${defaultBranch}`])) {
@@ -128,7 +132,7 @@ Design: landing-discipline §4.6 (LOOP-57).`);
           if (dryRun) {
             console.log(`doc-land (dry-run): would rebase ${behind} commit(s) from origin/${defaultBranch}`);
           } else {
-            git(["rebase", `origin/${defaultBranch}`]);
+            git([...gitIdArgs, "rebase", `origin/${defaultBranch}`]);
           }
         }
       } catch (e) {
