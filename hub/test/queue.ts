@@ -153,5 +153,50 @@ agentOp("save_issue", db, projectId, "qproj", "pm", { id: (doneId.body as { id: 
 ok(create({ title: "was done once", labels: ["dev-loop"] }).status === 200,
   "a TERMINAL (Done) ticket's title is free to reuse (dedupe is non-terminal only)");
 
+// ── 8. inReview — LOOP-112: the dev tier's landing/repair list ───────────────────────────────────
+// Seed one In Review ticket per assignee (junior-dev, senior-dev, pm) to confirm isolation.
+// Also seed a sensitive In Review ticket for junior to confirm the Layer-2 filter applies.
+{
+  mk({ title: "ir-junior", state: "In Review", assignee: "junior-dev", labels: ["dev-loop", "qa", "junior-dev"] });
+  mk({ title: "ir-senior", state: "In Review", assignee: "senior-dev", labels: ["dev-loop", "qa", "senior-dev"] });
+  mk({ title: "ir-pm", state: "In Review", assignee: "pm", labels: ["dev-loop", "pm"] });
+  mk({ title: "ir-sensitive", state: "In Review", assignee: "junior-dev", labels: ["dev-loop", "sensitive", "qa", "junior-dev"] });
+
+  const jrQ = call("junior-dev");
+  const srQ = call("senior-dev");
+
+  // (a) each dev tier sees only its own In Review tickets
+  ok(titles(jrQ.body.inReview).includes("ir-junior"),
+    "LOOP-112: junior inReview contains its own In Review ticket");
+  ok(!titles(jrQ.body.inReview).includes("ir-senior"),
+    "LOOP-112: junior inReview does NOT contain senior's In Review ticket");
+  ok(!titles(jrQ.body.inReview).includes("ir-pm"),
+    "LOOP-112: junior inReview does NOT contain pm-assigned In Review ticket (AC3)");
+
+  // (b) senior sees only its own
+  ok(titles(srQ.body.inReview).includes("ir-senior"),
+    "LOOP-112: senior inReview contains its own In Review ticket");
+  ok(!titles(srQ.body.inReview).includes("ir-junior"),
+    "LOOP-112: senior inReview does NOT contain junior's In Review ticket");
+  ok(!titles(srQ.body.inReview).includes("ir-pm"),
+    "LOOP-112: senior inReview does NOT contain pm-assigned In Review ticket");
+
+  // (c) Layer-2 filter: sensitive In Review is excluded from junior
+  ok(!titles(jrQ.body.inReview).includes("ir-sensitive"),
+    "LOOP-112: sensitive In Review ticket is excluded from junior inReview (Layer-2)");
+
+  // (d) todo and inProgress are UNCHANGED — inReview never adds to the pick list
+  ok(!titles(call("junior-dev").body.todo).includes("ir-junior"),
+    "LOOP-112: an In Review ticket does not appear in todo (not a pick list, AC4)");
+  ok(!titles(call("junior-dev").body.inProgress).includes("ir-junior"),
+    "LOOP-112: an In Review ticket does not appear in inProgress (AC4)");
+
+  // (e) pm/qa branch is unchanged — no inReview key added to pm/qa response
+  ok((call("pm").body as Record<string, unknown>).inReview === undefined,
+    "LOOP-112: pm queue has no inReview key (pm/qa branch untouched, AC5)");
+  ok((call("qa").body as Record<string, unknown>).inReview === undefined,
+    "LOOP-112: qa queue has no inReview key (pm/qa branch untouched, AC5)");
+}
+
 console.log(fails === 0 ? "\nQUEUE_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

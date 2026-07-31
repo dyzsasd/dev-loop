@@ -196,8 +196,9 @@ function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
     (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state=? ORDER BY created_at").all(projectId, state) as unknown as TicketRow[]).map(toTicket);
   if (isDevTierActor(actor)) {
     // The dev-tier slice is the SHARED servable predicate — never a second copy (LOOP-144 AC1).
-    const { todo, inProgress } = servableSlice(db, projectId, actor);
-    return okR({ agent: actor, inProgress, todo });
+    // inReview: landing/repair pass (LOOP-112) — not a pick list; hub returns raw set, no gh calls.
+    const { todo, inProgress, inReview } = servableSlice(db, projectId, actor);
+    return okR({ agent: actor, inProgress, todo, inReview });
   }
   if (actor === "pm" || actor === "qa") {
     // A Mode:design parent belongs to PM's verify gate regardless of its label set (§21a).
