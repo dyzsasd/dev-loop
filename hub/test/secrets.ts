@@ -13,6 +13,7 @@ import { resolveWorkspace, wsHubDb } from "../src/workspace.ts";
 import { doctorWorkspace } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import { openDb } from "../src/db.ts";
+import { secretCli } from "../src/secret-cli.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -169,6 +170,31 @@ try {
 
     const outWarn = capture(() => doctorWorkspace(loadWorkspace(root)));
     ok(/\[W21\]/.test(outWarn) && outWarn.includes("W21-1"), "doctor W21: sensitive+junior-dev ticket → W21 warn with ticket id");
+  }
+
+  // ── secret list: source column reflects env-wins + EMPTY, never a value (LOOP-166) ──
+  // The `list` path had NO test before this run; its correct twin (doctor W12/W13, above) did. Assert
+  // all three source/resolvability states AND that no stored/env value ever reaches stdout/stderr (§16).
+  {
+    delete process.env.DL_SECLIST_FILEONLY;
+    delete process.env.DL_SECLIST_EMPTY;
+    process.env.DL_SECLIST_SHADOW = "val-in-ENV"; // exported ⇒ env-wins: the real environment shadows the file
+    const root = mkWs("seclist-ws", "DL_SECLIST_WEBHOOK",
+      "DL_SECLIST_FILEONLY=val-fileonly\nDL_SECLIST_SHADOW=val-in-file\nDL_SECLIST_EMPTY=\n");
+    process.env.DEVLOOP_WORKSPACE = root; // secretCli takes no cwd — DEVLOOP_WORKSPACE is resolveWorkspace()'s selector
+    const captured: string[] = [];
+    const ol = console.log, oe = console.error;
+    console.log = (m?: unknown) => { captured.push(String(m)); };
+    console.error = (m?: unknown) => { captured.push(String(m)); };
+    let code = 1;
+    try { code = await secretCli(["list"]); }
+    finally { console.log = ol; console.error = oe; delete process.env.DEVLOOP_WORKSPACE; delete process.env.DL_SECLIST_SHADOW; }
+    const out = captured.join("\n");
+    ok(code === 0, "secret list: exits 0");
+    ok(/^DL_SECLIST_FILEONLY {2}\(secrets\.env, resolvable\)$/m.test(out), "secret list: a file-only key → (secrets.env, resolvable)");
+    ok(/^DL_SECLIST_SHADOW {2}\(env, resolvable\)$/m.test(out), "secret list: a key shadowed by the real env → (env, resolvable) — the fix (was reported secrets.env)");
+    ok(/^DL_SECLIST_EMPTY {2}\(secrets\.env, EMPTY\)$/m.test(out), "secret list: an empty stored value → (secrets.env, EMPTY) — the fix (was reported resolvable)");
+    ok(!/val-fileonly|val-in-file|val-in-ENV/.test(out), "secret list: never prints any stored/env VALUE (§16 credential surface)");
   }
 
   // ── acceptance: webhook ONLY in secrets.env, clean shell ⇒ `dev-loop notify` delivers ──
