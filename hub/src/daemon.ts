@@ -207,7 +207,7 @@ function writeOriginOk(req: IncomingMessage): boolean {
   return true;                                                  // no Origin/Referer → non-browser client (allowed)
 }
 
-async function handleDocWrite(action: "save" | "publish", slug: string, req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string, roadmapRepoFileStrategy: string | undefined, successPath?: string): Promise<void> {
+async function handleDocWrite(action: "save" | "publish", slug: string, req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string, roadmapRepoFileStrategy: string | undefined, successPath: string | undefined, pg: typeof page): Promise<void> {
   let form: URLSearchParams;
   // If the body was rejected (too large / aborted), the socket may already be destroyed — only respond
   // when the response is still writable, so we never throw write-after-destroy into the outer catch.
@@ -266,7 +266,7 @@ function isTicketWriteRoute(seg: string[]): boolean {
   return (seg.length === 1 && seg[0] === "ticket")
     || (seg.length === 3 && seg[0] === "ticket" && (seg[2] === "comment" || seg[2] === "move" || seg[2] === "assign"));
 }
-async function handleTicketWrite(seg: string[], req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string): Promise<void> {
+async function handleTicketWrite(seg: string[], req: IncomingMessage, res: ServerResponse, db: DatabaseSync, writeDb: DatabaseSync, projectId: string, projectKey: string, actor: string, pg: typeof page): Promise<void> {
   let form: URLSearchParams;
   try { form = await parseFormBody(req); }
   catch (e) { if (!res.headersSent && !res.destroyed) json(res, 400, { error: (e as Error).message }); return; }
@@ -523,7 +523,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
         } else {
           slug = roadmapDocSlug(writeDb!, projectId); // the alias hard-targets the roadmap doc — never caller input
         }
-        await handleDocWrite(seg[seg.length - 1] as "save" | "publish", slug, req, res, db, writeDb!, projectId, projectKey, actor!, divergenceFor(projectKey), isRoadmapAlias ? "/roadmap" : undefined);
+        await handleDocWrite(seg[seg.length - 1] as "save" | "publish", slug, req, res, db, writeDb!, projectId, projectKey, actor!, divergenceFor(projectKey), isRoadmapAlias ? "/roadmap" : undefined, pg);
         return;
       }
       // DL-29: opt-in human ticket-write routes — present ONLY when canWrite AND humanWrite.enabled. When
@@ -531,7 +531,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
       // read-only). Origin/Host guard runs BEFORE any write, exactly like /roadmap/*.
       if (method === "POST" && canWrite && humanWriteEnabled(db, projectId) && isTicketWriteRoute(seg)) {
         if (!authedByToken && !writeOriginOk(req)) return json(res, 403, { error: "write refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
-        await handleTicketWrite(seg, req, res, db, writeDb!, projectId, projectKey, actor!);
+        await handleTicketWrite(seg, req, res, db, writeDb!, projectId, projectKey, actor!, pg);
         return;
       }
       // DL-43: opt-in agent op-API — POST /api/op/<op>, active ONLY when canWrite AND the project opted in
