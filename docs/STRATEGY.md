@@ -880,6 +880,22 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   later** (`db.ts:257`, DL-25) into every pre-existing set's permissive side. Filed as **LOOP-113** —
   invert to a positive `MERGE_ELIGIBLE` so an unknown state fails **closed**, plus an exhaustiveness test
   driven off `db.ts`'s exported list so a ninth state breaks a test instead of silently widening merges.
+- **🔍 The loop's failure taxonomy explains 1 of its 26 failures; the other 25 are all the same cause
+  (2026-07-31).** `dev-loop metrics` reports `fires: 174 … 26 failed` above `errors: timeout×1`. Reading
+  `.dev-loop/team/fires.jsonl` directly: `{"timeout": 1, "(none)": 25}`, and **all 25 unclassified rows
+  carry one tail** — `"You've hit your session limit · resets <time> (Europe/Paris)"` (junior 6, senior 6,
+  qa 6, pm 6, sweep 1). `classifyFireError` matches `spend limit|usage limit|monthly limit|…` and
+  `rate limit|too many requests|429|…`; Claude Code emits **`session limit`**, which hits neither, so the
+  class is `null`. Two consequences, both measured. **(a)** `PROVIDER_SCOPED_CLASSES` is keyed on the
+  class, so a `null` can never enter it and the streak falls to the per-agent lane — meaning the
+  provider breaker **LOOP-8 built for exactly this case** ("when one key is exhausted every agent on it
+  fails identically") cannot engage for the one failure that actually exhausts the key. On 07-30
+  20:36→20:59 four agents each independently accumulated their own 5-failure streak: **20 wasted fires
+  where a provider-scoped trip costs 5**, a multiplier equal to the agent count on the provider (9 at
+  full roster). **(b)** `metrics.ts:68` tallies `byErrorClass` only `if (r.errorClass)`, so both
+  `metrics` and `doctor`'s "top errors" line drop all 25. Filed as **LOOP-114**. Worth stating plainly:
+  the per-agent breaker **did** trip and the 60-minute probe cadence held — this is a 4× overpay and an
+  observability hole, **not** the blind-retry runaway LOOP-1 was built to stop.
 
 ## Personas
 
@@ -2074,6 +2090,23 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   error and "corrected" by a later fire: the two paths are different, and Job B2 promoted **zero** this
   fire, which is the right behaviour at cap. Both tickets filed this fire (LOOP-112, LOOP-113) went to
   `Backlog` and wait their turn behind the pick order.
+- **(pm, 2026-07-31) 🔬 "Already shipped" was verified against the code and not against the output — for
+  170 fires.** The very first PM fire on this workspace declined to file the operator's `quota
+  errorClass` intake item, recorded above as: *"already shipped — `classifyFireError` already emits
+  `spend-limit`/`rate-limit`/`auth`/`network`. Reported, not refiled (§8 dedupe-against-reality)."* That
+  check was correct about the code and wrong about reality. The classifier exists, is well-built, and
+  **has never once matched this workspace's failures**: 25 of 26 ledger rows are the string
+  `session limit`, which none of its patterns name. A feature can be fully implemented, fully tested,
+  and have a **0% hit rate in production** — and reading the implementation cannot tell you that. Only
+  the ledger can. **The rule I am adopting: when deduping a candidate against "we already built that",
+  the evidence is the output column, not the source file — `SELECT class, count(*)` before
+  `git grep`.** This also sharpens the standing lens habit: *find a value that crosses two paths and
+  diff how each path treats it* found LOOP-113 by comparing two code sites; this one needed a code site
+  compared against **the data it actually produced**, which is a path I had not been walking. Ruled:
+  fix the classifier + set membership only (**LOOP-114**); the durable defense — a health warning when
+  the unclassified share of failures is high — is **deliberately not filed**, because it belongs in
+  `doctorWorkspace`, the CRAP ratchet's #1 entry at 90.4 where LOOP-56 already failed CI adding a
+  single W-code block. Banked in `Candidate ideas` until that function is split.
 
 ## Candidate ideas
 
@@ -2083,6 +2116,15 @@ filed / shipped / retired DL-era entries (16 KB) moved to
 candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bridge ideas were filed
 2026-06-23.)_
 
+- **Unclassified-failure-rate health warning — banked 2026-07-31, blocked on a refactor, not on value.**
+  LOOP-114 fixes the one classifier pattern this workspace needed, but the taxonomy will always lag the
+  next provider's wording: the failure mode is silent, and the whole point is that nobody notices a
+  `null` class. The durable defense is a doctor line that fires when the unclassified share of failures
+  crosses a threshold ("25 of 26 failures carry no class — the taxonomy is blind here"), which turns an
+  invisible gap into a health warning. **Not filed deliberately:** it belongs in `doctorWorkspace`
+  (`doctor.ts:185`), the CRAP ratchet's #1 entry at 90.4 with ten W-code blocks, where LOOP-56 already
+  failed CI adding a *single* block. File it after that function is split — otherwise it is unshippable
+  by construction. Same gate holds LOOP-46 (W18), LOOP-74 (W20), LOOP-81 (W21).
 - **Cross-store ticket migration (linear↔service) — DEFERRED epic, operator decision; not a ticket
   until prioritized.** (Live remainder of the archived backend-choice-at-init bullet.) The blocker
   is structural, not effort: hub ids are a global PK minted from prefix+seq (`hub/src/db.ts:286-292`)
