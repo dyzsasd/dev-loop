@@ -124,6 +124,109 @@ try {
   const cliInProgress = cli(["--repo", repoDir, "--ticket", "MG-2", "--strict"], { DEVLOOP_HUB_DB: dbPath });
   ok(cliInProgress.status === 0, "CLI --strict: In Progress → exit 0");
 
+  // ── Forge review axis (Child 1 / LOOP-64) — unit tests with injected exec ──
+  // All tests use a fixed ghRepo and injected exec returning canned gh JSON.
+  // No real gh calls are made; no network access.
+
+  type ExecFn = (args: string[]) => { stdout: string; stderr: string; ok: boolean };
+
+  const PR_URL = "https://github.com/owner/repo/pull/42";
+  const GHREPO = "owner/repo";
+
+  // Build a canned exec that returns different responses for pr view vs graphql
+  const makePrExec = (prData: object, gqlData?: object | "fail"): ExecFn => {
+    return (args: string[]) => {
+      if (args[0] === "pr" && args[1] === "view") {
+        return { ok: true, stdout: JSON.stringify(prData), stderr: "" };
+      }
+      if (args[0] === "api" && args[1] === "graphql") {
+        if (gqlData === "fail" || !gqlData) return { ok: false, stdout: "", stderr: "graphql failed" };
+        return { ok: true, stdout: JSON.stringify(gqlData), stderr: "" };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected gh call" };
+    };
+  };
+
+  const prChangesRequested = { number: 42, reviewDecision: "CHANGES_REQUESTED", url: PR_URL, latestReviews: [{ author: { login: "alice" }, state: "CHANGES_REQUESTED" }] };
+  const prApproved = { number: 42, reviewDecision: "APPROVED", url: PR_URL, latestReviews: [{ author: { login: "alice" }, state: "APPROVED" }] };
+  const prEmpty = { number: 42, reviewDecision: "", url: PR_URL, latestReviews: [] };
+
+  const gqlUnresolvedThread = (login: string) => ({
+    data: { repository: { pullRequest: { reviewThreads: { nodes: [
+      { isResolved: false, comments: { nodes: [{ author: { login } }] } },
+    ] } } } },
+  });
+  const gqlNoThreads = { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
+
+  // AC1: non-agent CHANGES_REQUESTED → trip
+  const rCR = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prChangesRequested, gqlNoThreads) });
+  ok(rCR.forgeReview.trip, "forge: CHANGES_REQUESTED from non-agent → trip");
+  ok(rCR.forgeReview.changeRequesters.includes("alice"), "forge: changeRequesters includes alice");
+  ok(!rCR.forgeReview.skipped, "forge: CHANGES_REQUESTED — axis was evaluated");
+  ok(rCR.trip, "forge: overall trip=true when forgeReview trips");
+
+  // AC1: APPROVED → no trip
+  const rApproved = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prApproved, gqlNoThreads) });
+  ok(!rApproved.forgeReview.trip, "forge: APPROVED → no trip");
+  ok(!rApproved.trip, "forge: APPROVED → overall trip=false");
+
+  // AC1: empty reviewDecision, no threads → no trip
+  const rEmpty = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prEmpty, gqlNoThreads) });
+  ok(!rEmpty.forgeReview.trip, "forge: empty reviewDecision + no threads → no trip");
+  ok(!rEmpty.forgeReview.skipped, "forge: empty reviewDecision — axis evaluated");
+
+  // AC1: unresolved thread from non-agent → trip even when reviewDecision is ""
+  const rThread = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prEmpty, gqlUnresolvedThread("bob")) });
+  ok(rThread.forgeReview.trip, "forge: unresolved thread from non-agent → trip");
+  ok(rThread.forgeReview.unresolvedThreadAuthors.includes("bob"), "forge: unresolvedThreadAuthors includes bob");
+
+  // AC2: agent-login review → no trip (agent reviews are excluded)
+  const rAgentCR = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: ["alice"], exec: makePrExec(prChangesRequested, gqlNoThreads) });
+  ok(!rAgentCR.forgeReview.trip, "forge: CHANGES_REQUESTED by agent login → no trip (AC2)");
+  ok(!rAgentCR.trip, "forge: agent review → overall trip=false");
+
+  // AC2: agent thread author → no trip
+  const rAgentThread = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: ["bob"], exec: makePrExec(prEmpty, gqlUnresolvedThread("bob")) });
+  ok(!rAgentThread.forgeReview.trip, "forge: unresolved thread by agent login → no trip (AC2)");
+
+  // AC5: gh exec throws (ENOENT — gh not on PATH) → skip, no trip
+  const rEnoent = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }); } });
+  ok(!rEnoent.forgeReview.trip, "forge: exec throws ENOENT → no trip (degrade, AC5)");
+  ok(rEnoent.forgeReview.skipped, "forge: exec throws → skipped=true");
+
+  // AC5: exec returns ok:false (unauth/offline) → skip, no trip
+  const rUnauth = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: () => ({ ok: false, stdout: "", stderr: "gh: not logged in" }) });
+  ok(!rUnauth.forgeReview.trip, "forge: gh returns ok:false → no trip (degrade, AC5)");
+  ok(rUnauth.forgeReview.skipped, "forge: gh not-ok → skipped=true");
+
+  // AC5: graphql failure degrades thread sub-signal but still honours reviewDecision
+  const rGqlFail = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prChangesRequested, "fail") });
+  ok(rGqlFail.forgeReview.trip, "forge: graphql fails but CHANGES_REQUESTED still trips (§3.4 partial degrade)");
+  ok(rGqlFail.forgeReview.unresolvedThreadAuthors.length === 0, "forge: graphql fail → empty unresolvedThreadAuthors");
+
+  // AC5: no PR provided → forge axis skipped (not a false trip)
+  const rNoPr = mergeGuard(repoDir, { ghRepo: GHREPO, agentReviewers: [] });
+  ok(!rNoPr.forgeReview.trip, "forge: no --pr → no trip");
+  ok(rNoPr.forgeReview.skipped, "forge: no --pr → skipped=true");
+
+  // AC5: non-GitHub remote → forge axis skipped
+  const rNonGh = mergeGuard(repoDir, { pr: 42, ghRepo: undefined, agentReviewers: [], exec: makePrExec(prChangesRequested) });
+  // repoDir has no real git remote → resolveGhRepo returns null → skipped
+  ok(rNonGh.forgeReview.skipped, "forge: no resolvable ghRepo → skipped (non-GitHub remote, AC5)");
+
+  // Assert no path throws (all paths return, never throw)
+  const noThrowPaths = [
+    () => mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prChangesRequested) }),
+    () => mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: () => { throw new Error("forced"); } }),
+    () => mergeGuard(repoDir, { pr: "branch-name", ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prApproved) }),
+    () => mergeGuard(repoDir, {}),
+  ];
+  let noThrowOk = true;
+  for (const fn of noThrowPaths) {
+    try { fn(); } catch { noThrowOk = false; }
+  }
+  ok(noThrowOk, "forge: no path throws (all failures return, AC5)");
+
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
