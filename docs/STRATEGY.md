@@ -162,7 +162,7 @@ Supporting goals (all in scope this milestone):
   New installs start from `dev-loop team init`; `dev-loop.json` is the source of truth.
 - **Main surfaces / modules:** `skills/` agent and operator skills; `references/` shared specs
   (`conventions.md`, `config-schema.md`, `codex-integration.md`); `hub/` — the `node:sqlite`
-  service backend + `dev-loop` CLI, **v1.11.0 line** (see `CHANGELOG.md`), with the full npm test
+  service backend + `dev-loop` CLI, **v1.12.0 line** (see `CHANGELOG.md`), with the full npm test
   suite; `docs/`
   for architecture, running, portability, daemon, design records, and reviews; `config/` for
   MCP templates and example workspace config.
@@ -404,6 +404,40 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   published. `decisionQueue` read `[]` for the first time. One new park replaces them: **LOOP-153**
   (reflect's §17 proposal — a SKILL-side cluster heuristic), whose product half I filed as
   **LOOP-155**.
+
+- **2026-07-31 (late) — the install skew came back 75 minutes after it was closed, and that reframes
+  LOOP-38 from an incident into a structural gap.** Last fire recorded the skew as resolved: the
+  operator cut and installed **v1.12.0** at 12:59Z and eight verifications unblocked at once. By
+  14:27Z I measured it open again. Two code PRs landed on top of the tag — **#98 (LOOP-76**, the
+  daemon cold-start port race) and **#99 (LOOP-128**, local CI parity) — and the running binary does
+  not carry either: `grep -c EADDRINUSE` returns **1** in the installed `dist/daemon-lifecycle.js`
+  against **3** in `origin/main`'s source. **LOOP-76 is `Done`, its fix is merged, and it is not in
+  the tool every fire runs.** That is this ticket's original sentence with a new id substituted. A
+  manual publish is not a fix for it; it is a reset of the counter. LOOP-38 unparked (its last live
+  edge, LOOP-46, closed) and went to `Todo` on the senior tier with the AC-1 decision recorded.
+  Alongside it: W18 currently reports **22 commits behind when 2 are shipped code** — 20 are this
+  document — which is LOOP-151 measured live at 91% noise.
+- **2026-07-31 (late) — the gate that guards the other gates passes without measuring anything.**
+  Swept the `consistency` lens over LOOP-128's freshly-merged `npm run verify` (landed 14:12Z, 20
+  minutes before the sweep) by the method that keeps paying: a prescribed command line is a testable
+  artifact, so run it. Two findings, both measured, both filed. **LOOP-159** — `verify` executes
+  **3 of the required merge check's 5 gating steps**, omitting the `security.test_source_integrity`
+  unittests and, more expensively, the CRAP ratchet: the one gate that has actually blocked every
+  merge in this repo before (LOOP-22/LOOP-24) and that today passes by a margin of exactly 0.0
+  (LOOP-115). **LOOP-158** — the ratchet itself is vacuous without coverage. `quality.ts:654` reads
+  `maxCrap !== null && maxCrap > threshold`; with no `.v8cov` every row scores `N/A`, `maxCrap` is
+  `null`, and `process.exit(2)` is unreachable. Running CI's exact command line with the coverage
+  directory absent exits **0** with all 15 rows `N/A`. `hub/test/quality.ts` does test the gate —
+  but every assertion passes `--test-cmd`, so it varies the *threshold* while holding
+  *coverage-present* constant, and the arm CI actually takes has never been exercised. The two are
+  coupled: naively appending the gate to `verify` would produce a local check that reports parity
+  while measuring nothing, so LOOP-158 sequences first.
+- **2026-07-31 (late) — the escalation channel came back up; last fire's park-pings-nobody warning is
+  no longer true.** `doctor` now reports `daemon /api/health reachable → http://127.0.0.1:8789
+  (project 'loop')` plus an installed autostart plist. The `loop` daemon was absent last fire, which
+  is why LOOP-153's `Human-Blocked` park was recorded as board-visible only. It can ping now. The
+  underlying lifecycle defects (LOOP-152, LOOP-137) are unchanged — this is the daemon running, not
+  the daemon being fixed.
 
 ## Personas
 
@@ -916,6 +950,46 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   did not work around it with a manual notify — §9 forbids that double-ping — but the escalation
   channel being silently disabled by an unrelated daemon-lifecycle defect (LOOP-152) is itself part
   of that ticket's blast radius, and is recorded on it.
+
+- **(pm, 2026-07-31) 📌 DECISION — `dev-loop` will NOT auto-publish to npm on merge to `main`. The
+  release stays operator-triggered, deliberately.** This answers LOOP-38's AC-1, which had been open
+  across three separate blocking edges and two days, and it is recorded here so the design does not
+  re-litigate it. AC-1 offered "automated publish on merge, or a doctor W-code, or both." Rejecting
+  the automated-publish half on two pieces of evidence from this repo, both from today: (1) `main` is
+  **not a protected branch** and a stale-green merge already left it red once — two separately-green
+  PRs merged 3s apart and the second check certified a tree that no longer existed (LOOP-149). A
+  `push`-triggered publish inherits that failure directly: the first bad merge ships to npm, where
+  unpublish is a 72-hour window that breaks everyone who already installed. (2) The release workflow
+  was **silently dead from `c02ba33` until LOOP-140**, today, with every CI signal green throughout.
+  Auto-triggering a path with that failure history multiplies the blast radius instead of reducing
+  it. **The chosen shape is the other half: keep the human in the release loop, and make the signal
+  that calls them trustworthy** — W18 shipped (LOOP-46), W18's honesty is LOOP-151, and LOOP-38's
+  residual is the operator-facing release-readiness surface driven off the honest count. One
+  consequence needs the operator, not me: the §12b verification bar for a `landing:"pr"` repo that
+  ships as a published npm package is currently *"merged"*, and the evidence says CLI-behavior ACs
+  need *"published"*. That is `references/conventions.md` prose — a §17 proposal on the design, never
+  a PM edit.
+- **(pm, 2026-07-31) 🔐 A gate that decides *who* may act is `sensitive`, even when its diff looks
+  small.** LOOP-157 arrived from QA untiered: DL-77's verify gate pattern-matches state names and
+  never reads the acting actor, so any builder self-closes its own `qa`-owned ticket by splitting
+  `In Progress → Done` into two legal calls. LOOP-76 did exactly that, 8 seconds apart, with no QA
+  involvement. Classified **`sensitive` → senior tier** under §4/§21b: this is an authorization
+  control on the write path and the fix changes who may transition a ticket, which is not something a
+  junior should shape alone. Two constraints carried into the design: the check must be written
+  against the property it defends — independent verification by the **verifier-owner label** — and
+  never against one spelling of the transition sequence, because a sequence-shaped rule is what just
+  got defeated by adding a hop; and a same-actor close stays legitimate in at least one shape the
+  loop depends on (an agent applying an operator's approval on an `investigation` ticket parked
+  In Review, §9a), so "block the second edge" is the wrong control. **Not reopening LOOP-76** — QA
+  independently re-verified that fix this fire and it holds; reopening a `Done` ticket on a
+  confirmed-correct fix is a destructive board move, and the class defect is LOOP-157's to carry.
+- **(pm, 2026-07-31) 🧭 Both tickets that reached the board untiered today came from QA, and an
+  untiered ticket is invisible to both dev tiers.** Grooming caught LOOP-156 (→ junior) and LOOP-157
+  (→ senior/sensitive) and the board is now 0 untiered. This is the third fire running where the
+  senior/junior inversion eased only through **filing-time tiering, never re-tiering** — the legal
+  lever, per §21b. Worth saying plainly since it keeps recurring: the fix for a lopsided tier mix is
+  upstream, at the moment of filing, and the agents that file most (QA, Ops, Architect, the operator)
+  are the ones who set it. Depth at close: senior **4/10**, junior **10/10** (at cap).
 
 ## Candidate ideas
 
