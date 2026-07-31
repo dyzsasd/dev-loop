@@ -896,6 +896,344 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `metrics` and `doctor`'s "top errors" line drop all 25. Filed as **LOOP-114**. Worth stating plainly:
   the per-agent breaker **did** trip and the 60-minute probe cadence held — this is a 4× overpay and an
   observability hole, **not** the blind-retry runaway LOOP-1 was built to stop.
+- **🎚️ The merge gate that protects every PR is passing by exactly zero, and its top entry has no
+  test file at all (2026-07-31).** The CRAP ratchet (`node src/quality.ts --coverage-dir .v8cov
+  --threshold 90 --top 15`) is a required check on both Node lanes; `quality.ts:654` gates on
+  `maxCrap > threshold`. Read from the last green run on `origin/main` @ `2dc6c7b` (run
+  `30598713412`, 02:26:57Z): max is **`isError` (`fire-usage.ts:48`) at CRAP 90.0 against threshold
+  90 — a margin of 0.0**. The score is arithmetic, not judgement: `CRAP = CC²·(1−cov)³ + CC`, and a
+  CC-9 function at **0.0% coverage** is exactly `81 + 9`. There is no `hub/test/fire-usage.ts` and no
+  test in the 68-link chain imports `codexUsageAdapter` — the function shipped with LOOP-15, passed
+  review, and has never been executed by a test. One added branch anywhere in it red-lines every loop
+  PR, which is the outage LOOP-22/LOOP-24 already lived through once. Filed as **LOOP-115**.
+- **🧱 A second entry sits at 86.7 that no amount of testing can lower — CRAP floors at raw CC
+  (2026-07-31).** `daemon.ts:449` (the 225-line anonymous `createServer` handler holding the whole
+  daemon HTTP surface: 38 `if`, 31 `&&`, 35 ternaries) measures **CC 86 at 95.4% coverage**. The
+  coverage term contributes 0.7 of its 86.7; the rest is the undiscounted `+ CC`. **Any function with
+  CC ≥ 90 fails this gate at 100% coverage** — the only exit is a refactor, and this one is four
+  branches from that wall. It is the counter-example to the reflex the first finding invites: "the
+  ratchet is a coverage problem." Two top-3 entries, two different remedies. Filed as **LOOP-116**
+  (senior + `sensitive` — the closure carries the bearer-token gate and the path-derived project
+  key's traversal guard).
+- **♻️ LOOP-46 was parked on a number that stopped being true, and the thing that fixed the number
+  was the ticket it was parked behind (2026-07-31).** Last fire I sequenced LOOP-46 behind LOOP-56 on
+  a measured basis: `doctorWorkspace` at CRAP **90.4** > 90, with LOOP-56's own CI failing on exactly
+  that string. LOOP-56 then landed (`9ad4aec`) — and the tests it brought raised that function's
+  coverage to 83.4%, dropping it to **82.9**, off the top of the ratchet entirely. The blocker
+  dissolved at the moment the blocking ticket landed, and nothing re-read it. Compounding it, the
+  §9c unpark retired the `Blocked-by` edge and dropped the `blocked` label but left `state: Backlog`,
+  so the ticket was invisible to junior's pick query regardless — **QA caught that half at 02:34Z and
+  routed it to PM rather than acting outside its lane.** Both halves fixed this fire; LOOP-46 is in
+  `Todo` and **LOOP-38** (p1, the stale installed binary that keeps every Done CLI fix from actually
+  being live here) has no open blocker left.
+- **🔴 Five `Done` metering tickets produce nothing on this workspace, and the fire ledger proves it
+  183 times out of 183 (2026-07-31).** The `dev-loop` binary that *launches* every fire here is the
+  installed `v1.11.0` = `685fee3`, and `git rev-list --count 685fee3..origin/main` is **44 commits /
+  33 tickets**. That release contains **zero** occurrences of `DEVLOOP_FIRE_ID`; `origin/main` contains
+  three. `run-agents.ts:902` is where the fireId enters a fire's env — it is the join key the whole
+  metering programme was built on, and the running launcher does not have that line. Consequence,
+  measured across the entire ledger: `.dev-loop/team/fires.jsonl`, 183 rows, **0 with `fireId`, 0 with
+  `usage`**; the row schema is `ts, agent, project, codingAgent, provider, model, effort, durationMs,
+  exitCode, timedOut` — no cost, no tokens, no join key. LOOP-12's fireId minting (`e5669cb`),
+  **LOOP-75** (`140a4b1`), **LOOP-83** (`fd48e2e`) and **LOOP-15** (`79da67b`) all sit *inside* that
+  44-commit gap: all `Done`, all correct in source, all inert in practice. **Why 183 fires never
+  surfaced it: the two versions are byte-identical strings** (`1.11.0` vs `1.11.0`), so every
+  version-based check reports agreement — the skew is visible only by comparing *code* or *output*.
+  This is LOOP-38's real blast radius, and it reframes that ticket from "some CLI fixes aren't live"
+  to "a capability the loop paid five tickets for cannot run." Two independent corroborations landed
+  the same hour from other agents: QA hit `ticket create` missing `--state` (LOOP-11, in the 44), and
+  LOOP-43's 64 KiB truncation (also in the 44) still bites every board read. Recorded on LOOP-38;
+  **LOOP-85 and LOOP-4 were warned that the ledger is not a valid verification oracle here** — an
+  honest metering increment would otherwise be verify-failed for a deployment problem it does not own.
+- **✅ LOOP-93 verified `Done` — the operator debug logs now carry LOOP-62's §16 ledger posture
+  (2026-07-31).** Landed `66a941a` (PR #69, all three checks green). `run.log` and
+  `runner-logs/<agent>.log` are created `0600` and `runner-logs/` `0700`, by **reusing**
+  `hardenLedgerPerms` rather than copying it; a pre-existing loose file is warned once per path per
+  process and never chmod'd behind the operator. Verified by running the merged code against real
+  fires in a temp workspace (`LOG_PERMS_OK`, 11/11) plus §3 spec triage (no MISSING/EXTRA/
+  MISUNDERSTANDING), and **the fails-before half was reproduced independently** — the new suite dropped
+  onto the pre-fix parent `c229715` fails 6 assertions across 5 distinct defects. Two subtleties the
+  ticket could not have specified were load-bearing and correct: `createWriteStream` opens its fd
+  *asynchronously* (so the file is touched synchronously first, or `chmodSync` races the open and
+  no-ops on ENOENT), and `existed` is read *after* the 50 MB rotation rename (so a rotated log
+  re-hardens instead of landing at the umask). Note for LOOP-86: `npm test` is now a **69**-link `&&`
+  chain with the new suite appended last — the exact position that made it silently not run on Node 24
+  during the ship cycle.
+- **🔎 LOOP-46's W18 spec was re-checked against the skew it exists to catch, and it holds
+  (2026-07-31).** Went looking for a spec defect — specifically whether resolving the installed version
+  to a commit could go silent (`unknown` ⇒ *info, never warn*) on today's real skew. It cannot:
+  `v1.11.0` resolves via both the tag and the `chore(release)` fallback to `685fee3`, giving
+  `behind = 44 > 0` ⇒ **W18 warns correctly today**. The finding worth folding into its test is that
+  **the installed and `origin/main` versions are EQUAL while the code differs** — the obvious
+  "simplification" of comparing version strings would stay silent on the only skew that has ever
+  happened here, while passing every other test in the suite. Also cross-linked LOOP-117 (QA, filed
+  minutes earlier: `runDoctor` discards an explicit `DEVLOOP_HUB_DB` when cwd resolves to a workspace)
+  onto LOOP-46 mid-build, because a W18 fixture test run from this checkout could assert against the
+  *ambient* workspace and go green for the wrong reason — this workspace genuinely is 44 behind.
+- **❌ LOOP-57 verify-FAILED after it merged: `doc-land` refuses every real PM landing, and the
+  regression suite could not see it (2026-07-31).** PR #64 landed `b49c0ba` with all three checks
+  green, and the shipped suite re-run at the merge sha is **22/22**. The verb is still unusable.
+  Step 1's load-bearing docs-only assertion (`doc-land.ts:101`) is
+  `git diff --name-only origin/main main` — a **two-dot `git diff`, which is a tree comparison, not a
+  commit range.** The ticket's own prose said `origin/<defaultBranch>..<defaultBranch>`, and in
+  `git log`/`rev-list` that genuinely *does* mean "commits in B not in A"; in `git diff` it does not.
+  Consequence: whenever `origin/main` has moved ahead with a **code** commit — the permanent condition
+  of this repo, where the loop lands dev PRs continuously — the diff contains *other agents' files*,
+  step 1 names one of them as PM's offender, and the verb exits 1 at line 101, **before** the
+  fetch/rebase at `:125-137` that would have aligned the trees. Reproduced against the merge sha on a
+  bare-origin+clone fixture: local `main` ahead 1 (doc-only), behind 1 (code) ⇒
+  `REFUSED — range touches non-doc path(s): hub/src/thing.ts`. **Why the suite is green:** case (c)
+  advances origin with `docs/STRATEGY.md`, a *doc* file (`test/doc-land.ts:104-107`) — a doc-only
+  divergence makes the tree comparison and the commit range give the same answer, so the fixture dodges
+  the failure. The fix (`...`, three-dot) was verified before filing: the repro flips to exit 0 and the
+  full suite still passes 22/22, passenger hard-stop included, because a locally-authored non-doc
+  commit is still inside the merge-base range. Superseded by **LOOP-119** (senior `Mode: direct-code`;
+  a fix-forward on live code, not a rebuild — the verb's structure, the operator's step-3 finding split
+  and the un-widened docs-only fence are all correct and stay). **The trap is contained:** every
+  `git diff` range call site in `hub/src` was swept, and `quality.ts:144` already uses three-dot
+  correctly — `doc-land.ts:101` is the only offender.
+- **🔎 `strategyDoc` is schema-declared, read by four consumers, and writable by no mutator — a
+  second, independent reason `doc-land` cannot run here (2026-07-31).** `projects.<key>.strategyDoc`
+  exists at `team-config.ts:100`, but it is absent from `team set`'s `SETTABLE` table
+  (`team-edit.ts:55-73`) and there is no `--strategy-doc` flag on `team add-project`. `git grep
+  strategyDoc -- hub/src` at `b49c0ba` returns **reads only**. Under the operator console's hard rule 1
+  — *never hand-edit `dev-loop.json`* — the operator therefore has **no legal way to set it at all**,
+  and four shipped features are silently inert on any workspace built the sanctioned way: `doc-land`
+  (hard exit 1), the passive-intake repo-file doc **watch** (`daemon-notifiers.ts:384-416`), the
+  `/roadmap` divergence banner (`daemon.ts:65-73`), and `repoFileStrategyPath()`. Confirmed by running
+  the shipped verb against this workspace: *"project 'loop' has no repo-file strategyDoc configured."*
+  The doc itself is real and 146 KB; only the pointer is missing. **Why 183 fires never surfaced it:
+  PM's own doc reads and writes never consult this field** — the path lives in `pm-state.json` — so the
+  gap was invisible to the only agent that touches the doc. Filed **LOOP-120**. LOOP-119 and LOOP-120
+  are both required and neither alone is sufficient; **LOOP-60 and LOOP-50 have been re-pointed onto
+  both** rather than auto-unparked on a `Canceled` prerequisite.
+- **🤝 QA filed LOOP-118 against the same function mid-fire, and the two defects compose badly
+  (2026-07-31).** Independently found: `doc-land` never runs `git rebase --abort` on a real conflict,
+  stranding the **shared** doc-home checkout (detached HEAD, unmerged `STRATEGY.md`) so every later op
+  fails identically until a human intervenes. Confirmed distinct rather than duplicate — the two
+  partition the input space (a *code* divergence refuses at line 101 and never reaches the rebase; a
+  *doc-only same-line* divergence reaches it and wedges the repo). **The interaction is the point:
+  fixing LOOP-119 makes LOOP-118's stranding MORE reachable**, because the rebase begins executing in a
+  whole class of cases that currently refuse outright. Re-tiered `junior-dev` → `senior-dev` and
+  promoted to `Todo` so both land in one PR — the reason is collision, not difficulty: both edit the
+  same `attempt()` catch block, and two tiers editing one function concurrently is how a merge conflict
+  becomes a regression.
+- **✅ The metering lane is complete in code and still unobserved in production (2026-07-31).**
+  **LOOP-85** (opencode usage capture) verified Done against `origin/main` `22f2e4c` — the last of the
+  three lanes (claude/LOOP-83, codex/LOOP-15, opencode/LOOP-85) on top of the LOOP-2 core. It is the
+  strongest increment this loop has produced: the adapter reads `part.tokens`/`part.cost` from a
+  **verbatim recorded opencode 1.2.24 event**, takes the LAST `step_finish` rather than the first, and
+  `test/run-agents-live.ts` proves usage capture end-to-end through a real subprocess (input 111 /
+  output 12, cache split, cost), output survival on multi-line **and truncated** JSONL, and all three
+  `suspectError` arms. The builder went and measured the real shape instead of trusting a documented
+  one — the exact failure that sank LOOP-13/LOOP-14, closed at the source. **And the ledger is still
+  `193 rows, 0 with usage, 0 with fireId`**: that is LOOP-38 (installed launcher ~44 commits behind
+  under an unchanged version string), not metering. Every lane is built; none of them can run here.
+  With both blockers Done, **LOOP-4** (the aggregation surfaces) was unparked to `Todo` — not
+  re-blocked on LOOP-38, but re-scoped: the empty column is now a first-class AC (render "no metered
+  fires", never a zero-filled table; report *N of M fires carry usage*, which reads `0 of 193` today
+  and self-corrects the day the binary is current).
+- **🔴 `landing-observability` shipped whole and has never produced a single real reading
+  (2026-07-31).** `hub/src/landing.ts:130` asks `gh pr list` for `--json …,mergeableState` — **a field
+  `gh` does not have.** gh validates field names locally, exits 1 before any network call, and
+  `readLandingState` reports that as `reason:"forge unreachable"`, so every repo, every invocation,
+  every machine returns `state:"unknown"`. Reproduced against the live forge with every other `gh` call
+  in the same fire succeeding; a one-word fix in a worktree turned `landed: null` into **`landed: 42`**
+  and `unknown` into `healthy`. So the design's three children are: **LOOP-40** `Done` and inert (**I
+  verified it, off the code and its injected-`exec` suite, and never ran it against a real forge**),
+  **LOOP-42** correct code whose output is permanently `unknown` (verified `Done` on its own ACs —
+  its contract explicitly forbids opening its own forge call), and **LOOP-41** now blocked before it
+  ships a doctor line that can never say anything but "forge unreachable". Filed **LOOP-121** (P1) with
+  the repro, the tested fix, and the test that would have caught it.
+- **🔴 `push-guard`'s passenger detection is blind to a rebase, and this strategy doc was the payload
+  (2026-07-31).** PR #70 (LOOP-52) merged carrying **16 of PM's unpushed `docs(strategy)` commits** —
+  `docs/STRATEGY.md` **+1074 lines** plus three READMEs — onto `origin/main` under a hub-feature
+  commit, bypassing `doc-land`'s ff-only path and the §20 D4 progress-only fence. `push-guard`
+  reported **clean**. Replaying its algorithm at the refs it would have seen: **18 commits in range,
+  0 flagged.** The passenger loop's second clause (`push-guard.ts:53`) asks
+  `merge-base --is-ancestor <sha> main` — SHA ancestry in *local* `main`. **The junior rebased the
+  branch onto `origin/main` an hour before the merge** (the ordinary response to CI asking for an
+  update), and a rebase rewrites every SHA, so the copies are no longer ancestors and the clause
+  `continue`s past all 16. Content identity proved by `git patch-id --stable`: **16 of the 18 branch
+  commits have a patch-id twin on local `main`; zero were flagged.** The guard therefore catches only
+  the *un-rebased* passenger — the case least likely to reach a merge — and with `autoMerge:true` it
+  is the last gate before an unattended landing. Evidence folded into **LOOP-87**, raised to **P1**;
+  its already-prescribed remedy (attribute by the `(TICKET-ID)` subject convention) is
+  **rewrite-invariant** and is the right fix, so clause 2's ancestry test should be *retired*, not
+  layered onto. **Consequence this time was benign and I verified that rather than assuming it** — see
+  the doc-fork entry below.
+- **🟢 The strategy doc's apparent `origin`-vs-local fork is not a fork, and needs no operator
+  decision (2026-07-31).** After the passenger landing, `origin/main:docs/STRATEGY.md` stood at
+  **2179 lines** against local `main`'s **1693**, and senior-dev flagged it as "two divergent
+  evolutions; PM must choose the canonical version". Measured instead of adjudicated: every one of the
+  **27** entries `origin` holds that local lacks is present in local's
+  `docs/strategy-archive/2026-07.md` (**878** lines vs origin's stale **77**) — `origin` is simply a
+  **pre-R2-rollup** snapshot that also stops **10** entries short. Local is a strict superset; nothing
+  was lost. A real `git rebase origin/main` in a throwaway worktree then **succeeded with zero
+  conflicts**, skipping the 16 passenger commits by patch-id and reproducing the canonical doc
+  **byte-for-byte** (1693 lines / 161200 b). So the first real `doc-land` will rebase cleanly and
+  publish the correct post-rollup doc. **Recorded so nobody hand-edits the doc to "fix" a divergence
+  that resolves itself.**
+- **🟡 `doc-land` is now correct and still cannot run here (2026-07-31).** LOOP-119 verified `Done`
+  against this repository's *real* divergence rather than a fixture: with local `main`
+  `[ahead 20, behind 32]`, the old two-dot range named **30 paths, 28 of them non-doc** (other agents'
+  commits, any one of which PM would be blamed for); the three-dot fix names **2 paths, 0 non-doc**.
+  28 → 0 on live data. LOOP-118's abort-on-conflict landed in the same PR, so a conflicted rebase no
+  longer wedges the shared checkout. **But the verb still refuses on this workspace** —
+  `doc-land: project 'loop' has no repo-file strategyDoc configured` — because
+  `projects.<key>.strategyDoc` is schema-declared, read by four consumers, and writable by **no
+  mutator** (**LOOP-120**, P1, the top junior promote). The mechanism is finished; the config surface
+  is the last mile. Same family as **LOOP-123** (`team.agentReviewers`, QA) — **two config fields in
+  two days that shipped complete and unreachable.**
+- **✅ The cost-governance arc reached its read surfaces (2026-07-31).** **LOOP-4**'s design gate
+  **passed** — the first design this loop has produced whose every load-bearing code claim survived
+  independent re-verification against `origin/main`: `FireRow` really does omit the four dimension
+  fields `recordFire` writes; `FireUsage`'s quoted shape is byte-exact; `comms.ts` really is
+  transport-only (senior-dev **overrode the ticket's own "Affected area"** and was right); `/activity`
+  really does inject `Date.now()` at the route, which is the purity seam the web child copies. Three
+  children promoted (**LOOP-125** core+CLI → **LOOP-126** `/usage` → **LOOP-127** digest line), B and C
+  `Todo`+`blocked` behind A so the aggregation is written once. **The measurement that reframed it:**
+  the ledger is `206 rows, 0 with usage, 0 with fireId` — **but 206 of 206 carry `provider` and
+  `model`.** The dimension columns are fully populated *today*; only token/cost are empty. So
+  `metrics --usage --by provider` is not a stub waiting on LOOP-38 — the `FireRow` type-drift is the
+  *only* thing between this loop and that answer, and Child A ships real value on day one.
+- **🔴 A required merge check with no local runner — this cost two landings in one fire (2026-07-31).**
+  LOOP-79 (PR #78) and LOOP-80 (PR #79) both reached `In Review` with red CI, **same finding**:
+  `hub/package.json:1:1: unsafe-package-script: test script must invoke every tracked hub/test/*.ts once`.
+  Both added a **new** `hub/test/*.ts` without a `hub/package.json` chain entry, so **the regression
+  test each ticket was built to prove itself with had never executed — not once.** `main` was green,
+  so both were branch-introduced. The structural cause: CI runs `security/source_integrity.py` as
+  **two steps of its own** (pre-install + post-test `--whole-tree`), and **no npm script runs it at
+  all** — the 75-segment `test` chain contains zero `python`/`security` invocations. `npm test` cannot
+  catch this by construction: an unwired test simply does not run, so the chain stays green. A tier can
+  execute the entire documented local gate, see green, push, and be rejected for a rule it had no way
+  to evaluate. Filed **LOOP-128** (P1): make one command reproduce every required CI check locally.
+  Both tickets were routed back to `Todo` rather than superseded — one packaging line from green, and
+  per **LOOP-112** `In Review` is a dead end a dev tier cannot reach.
+- **🟢 The board can point at the code under review (2026-07-31).** **LOOP-66** verified `Done`
+  (`2dc2db5`): `metrics --json` → `landing[].prs[]` now carries real `{ticket, pr, url, state}` links
+  on live data — `LOOP-80`→#79, `LOOP-79`→#78 — with the 31-day-old non-loop PR #8 correctly filtered
+  out, **zero extra forge calls** (it re-reads the list already fetched, adding only `url` to the
+  `--json` set), and the single-`spawnSync("gh")` invariant intact. Its test double **validates the
+  argv** — the discipline that would have caught the `mergeableState` bug (LOOP-121). Known gap, and
+  it is **PM's spec defect, not the builder's**: the surfaced `prs[]` is open-PRs-only with `state`
+  hardcoded `"OPEN"`, so a *merged* PR is not readable back; the exported `ticketToPr` (`--state all`)
+  that would close it is called by **nothing** in `hub/src`. Folded into **LOOP-111** — the
+  verify-queue landing annotation is exactly that function's intended consumer.
+- **🔴 The integrity scanner audits what CI executes — and the two scripts CI structurally
+  *cannot* execute are the two that ship to users (2026-07-31, trust-safety lens).**
+  `security/source_integrity.py` is a required merge check on every PR and gates the npm publish
+  four times over. Its docstring names the threat: *"an injected lifecycle script cannot execute
+  before the repository is inspected."* The **ordering** half holds; the **inspection** half does
+  not. `RELEASE_SCRIPT_EXACT` pins exactly two script strings — `build`, `typecheck` — and
+  `IMPLICIT_RELEASE_HOOKS` flags six `pre*`/`post*` names. `hub/package.json` ships **two explicit
+  npm lifecycle scripts, `postinstall` and `prepack`, and neither is in either set.** Measured, with
+  a control: poisoning `postinstall` → **no findings, scanner passes**; poisoning `prepack` → **no
+  findings**; poisoning `build` → `'build' is not the audited command`. **The pinning mechanism
+  works perfectly and is simply not pointed at the two scripts that need it most.** Four layers miss
+  the same bytes in the same direction: `package.json` is not an `_is_executable_source`, so the
+  eval/`Function`/IOC scans never read the strings; the pin set omits them; `_scan_lockfile`'s
+  `if package_path and …` deliberately skips the **root** entry, whose `hasInstallScript` really is
+  `True`; and both workflows run `--ignore-scripts` everywhere, so CI never executes either script
+  and gets no behavioural signal either. Consequence is concrete, not theoretical:
+  `postinstall.cjs` is in `files[]`, so `postinstall` runs on every `npm i -g @dyzsasd/dev-loop`.
+  Poisoning the *file* is partly covered (`.cjs` **is** scanned); poisoning the *script string*
+  reaches users unexamined. Filed **LOOP-129** (P2, `sensitive` → senior). **The generalisable
+  lesson, and the sixth entry in the method: a guard's coverage tends to stop exactly where its
+  own CI's observability stops — so audit the paths CI cannot run, because those are the paths
+  nothing else is watching either.**
+- **🟢 A destructive verb made safe, and the metering surfaces verified where absence is the answer
+  (2026-07-31, late).** Two landed increments verified in the same closing window. **LOOP-106** —
+  `dev-loop team repair` is **non-destructive by default**; the terminal-worktree reap is now opt-in
+  (`--reap`), so `bundle.ts:380`'s unattended pre-doctor call on `up --bundle` deletes nothing, and a
+  branch is deleted only when `branchRecoverable()` proves the work survives elsewhere (merged, or
+  pushed with no local-only commits ahead). **The standing "do not move this workspace" warning is
+  withdrawn.** The verdict turned on checking the ticket's own claim that its tests fail against the
+  pre-fix code: a worktree at the old SHA carrying *only* the new test file returned **9 failures
+  across AC1/AC2/AC3**. senior-dev made the recoverability rule *stricter* than the AC and named the
+  deviation — the right way to overrule a spec. **LOOP-125** — `metrics --usage/--cost/--flow` verified
+  against this workspace's **214 fires with zero metered rows**, which is precisely the case the ACs
+  protect: every token field renders `null` (**not `0`**), cost renders `unavailable` (**not `$0.00`**),
+  and the genuinely measurable half keeps reporting (`board throughput: 58 →Done`). AC6 closed the
+  `FireRow` dimension type-drift found at the LOOP-4 design gate. LOOP-126 + LOOP-127 unparked.
+- **🔴 LOOP-87 recurred live, and the payload was this document again (2026-07-31, late).** PR #82
+  (LOOP-65) reached review carrying **eight commits, only one its own** — LOOP-125's commit plus **six
+  unpushed PM `docs(strategy)` commits**, each confirmed by a `git patch-id --stable` twin on the
+  shared checkout's local `main`. Same shape as the PR #70 incident. **The root cause is LOOP-120, and
+  it is PM's:** while doc-land cannot push, local `main` stays permanently dirty, so *any* branch cut
+  from it inherits the doc commits. The ticket's own work was scope-clean and passed every AC, so it
+  was routed back to `Todo` (right and unfinished), not `Canceled` — and **PR #81 cut clean off
+  `origin/main` in the same window**, which is the proof that the clean path was available. **The
+  standing lesson: a dirty shared `main` is not a PM inconvenience, it is a supply route into
+  `origin/main`** — and there is no mechanical guard, because LOOP-69 (wiring merge-guard into the
+  fire-start merge pass) is still parked.
+- **✅ LOOP-87's recurrence closed in twelve minutes, and the guard chain is now complete but unwired
+  (2026-07-31).** LOOP-65 was routed back to `Todo` at 05:40Z with a force-push instruction;
+  junior-dev cherry-picked its own commit onto `origin/main`, force-pushed, and merged at 05:52Z.
+  The landed commit `4d1beb6` touches **exactly two files** (`hub/src/merge-guard.ts` +100/-4,
+  `hub/test/merge-guard.ts` +108) — the seven passengers are gone, not squashed in. ACs re-run at the
+  *merged* sha, not the PR head: suite exit 0, typecheck exit 0. **Route-back beat close-and-refile by
+  a wide margin** — a `Canceled` + follow-up would have discarded a branch whose every AC passed.
+  With LOOP-64, LOOP-67 and LOOP-65 all `Done`, the merge-guard mechanism is **complete and calls
+  nothing**: LOOP-69 (the §17 wiring hand-off) unparked this fire to the operator, both of its edges
+  retired.
+- **🔴 The pipeline is 12.5:1 skewed toward the tier that is at cap, and the two tiers deliver nearly
+  the same output (2026-07-31).** Measured across all 129 board rows: non-terminal work is **50
+  junior / 4 senior**, and the Backlog is **30 junior / 1 senior** (that one, LOOP-38, blocked).
+  Delivered work is **junior 31 `Done` / senior 26 `Done`** — near parity from a 12.5:1 queue. So
+  senior is not slower; it is *starved*, and junior has been over its depth cap for twelve
+  consecutive fires (11/10 at close after two verified increments were routed back to land).
+  **The mechanism is §21b working exactly as written, not drift:** only 6 of 129 tickets ever carried
+  `sensitive` (4.7%), and "when borderline, junior" sends everything else down. senior-dev's own
+  design-and-delegate mode then *manufactures* junior work — it created **37 junior-tier tickets and
+  zero senior-tier ones**. Only PM/QA/operator file senior work (24/3/1). Re-tiering to balance load
+  remains the inference §21b forbids; §21b is governing prose no agent may edit (§17). **This is an
+  operator lever, and it is now quantified rather than merely observed.**
+- **✅ §21b's own justification tested and upheld — no ticket filed.** The rule justifies "when
+  borderline, junior" by asserting *"escalation (§21a) is the cheap safety net, so over-routing to the
+  expensive tier is the costlier mistake."* That is a testable claim, and the obvious hypothesis was
+  that the net never fires. It fires: **8 `Mode: direct-code` senior escalations exist (LOOP-23, 33,
+  58, 63, 83, 85, 107, 119) and all 8 are `Done`** — a 100% completion rate. The imbalance above is
+  therefore a capacity-allocation question, *not* a safety question.
+- **⛔ The 68-link test chain took its second landing, and it is now the expected case, not bad luck.**
+  PR #78 (LOOP-79) and PR #79 (LOOP-80) are each `MERGEABLE`/`CLEAN` with every check green, and are
+  **mutually unmergeable**: `git merge-tree --write-tree pr78 pr79` reports a conflict in
+  `hub/package.json` and nothing else. One inserts `test/ticketwrite.ts`, the other
+  `test/queue-sensitive.ts`, into the same single ~4.5 KB `"test"` line; their source changes touch
+  disjoint files. First instance was LOOP-37 × LOOP-40 (PR #59). **What changed is that it is no
+  longer accidental:** LOOP-128's source-integrity gate makes registering a new suite in that line
+  *mandatory* for CI to pass, and the two dev tiers run concurrently by design — so any two
+  test-adding increments in flight collide. **LOOP-86 raised to P1**, with a binding shape on the fix:
+  a partial run must stay distinguishable from a full one *and* two increments must be able to
+  register a suite without editing a shared line.
+- **🔴 `In Review` stranded two verified increments, and only a hand-route freed them.** LOOP-79 and
+  LOOP-80 sat `In Review` with green, mergeable, **unmerged** PRs. `agentops.ts:205-210` serves a dev
+  tier only `Todo` + its *own* `In Progress`, so neither ticket was reachable by the one agent allowed
+  to land it (**LOOP-112**, Backlog). Both were verified in full — including running LOOP-79's new
+  suite against `cec3598` with only the test file dropped in, which returned **exit 1 / 4 failures**,
+  proving a real regression test rather than a tautology — then routed to `Todo` to be landed.
+  **LOOP-110** (the review-admission gate) is the mechanism and sits in `Todo`; until it lands, PM
+  hand-routing is the only egress, and it is exactly why the `In Review` axis of merge-guard must stay
+  out of the enforcing set (recorded on LOOP-69).
+- **✅ The developer incident scanner does what its docstring claims — controlled, not assumed.**
+  `security/local_code_scan.py` is the largest unreviewed file in the repo (98,869 bytes) and no lens
+  had ever swept it. Two hypotheses died on contact. **(a) "CI never runs it" is true and correct by
+  design** — CI runs its *tests* but never the scanner, because it scans a *developer host*
+  (`~/workspace`, npm caches, VS Code extensions, git object DBs), not the repo; it is an
+  incident-response tool meant to be run from a trusted copy against a suspect machine. **(b) Its
+  docstring's safety claim — *"Findings never include source snippets or environment values"* — holds
+  under test.** A fixture carrying a fake AWS key, a fake `sk-ant-` token, a malicious `postinstall`,
+  an `eval(atob(...))` and a `curl | sh` was scanned with `--format json`: **all six planted canaries
+  are absent from the output**, while the scanner still correctly reported
+  `suspicious-lifecycle-script (postinstall combines: decode, dynamic-exec)` and two
+  `dynamic-decoder-review` findings, exiting 1. Findings carry rule IDs, paths and digests — never
+  bytes. **The output is safe to attach to a ticket, which is the property that matters for a tool
+  shipped to users.**
+- **✅ The worktree base fix is holding — the doc payload is contained.** PR #83 opened at 05:52Z
+  while local `main` carried **24 unpushed PM commits**, and it carries **one commit, three files, no
+  passengers**. Local `main`'s 24-commit lead touches only `docs/STRATEGY.md` and
+  `docs/strategy-archive/2026-07.md`. So the PR #82 incident was a stale branch base, not a live leak
+  (LOOP-48 landed), though LOOP-120 still keeps local `main` permanently dirty.
 
 ## Personas
 
@@ -971,801 +1309,12 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   hub `project` override (D1), investigation protocol + doc mirror (D4/D5), retention/archive
   (D6), SKILL template + context budgets. Repo hygiene (D11): `examples/` + `evaluation.xlsx`
   moved out to `~/workspace/jinko/writing-loop/`.
-- **(pm, 2026-07-30, fire 2) `strategy-gaps` lens — the north star had not noticed where the
-  product's center of gravity moved.** The board was quiet (nothing `In Review`, nothing
-  `blocked`/`needs-pm`, the Backlog drained to the dependency-held LOOP-4), so the whole fire went
-  to the lens.
-  - **The finding: four consecutive releases are absent from `Goals`.** 1.7.0→1.10.0 went almost
-    entirely into `dev-loop quality`, yet the strings `quality` / `CRAP` / `mutation` appear
-    **nowhere** in `Vision`, `Goals`, `Non-goals` or `Current state` — the doc still describes
-    dev-loop as exactly one thing, a coordination daemon with interchangeable CLI clients. The
-    1.10.0 reusable CI workflow ("adopt in three lines") implies a second audience the doc does not
-    admit exists: a repo with no daemon, no agents and no board.
-  - **Proposed, not edited.** `Goals` is a §20 D4 DIRECTION section, so PM opened **LOOP-18** on
-    itself per the investigation protocol: findings + a mechanically generated unified diff (one
-    12-line insert adding the gauntlet as a fifth supporting goal, with an explicit "gate and
-    report, not a linter/formatter/refactoring engine" boundary), parked `In Review` assigned to the
-    operator, with two alternatives spelled out (promote to a first-class goal / reject it as a
-    private ship-gate detail). **PM has not committed that diff, and continues to treat the quality
-    line as out-of-mandate for Job C filings until the operator rules.**
-  - **`Current state` re-synced 1.2.0 → v1.10.0** — the progress half of the same gap, which is
-    PM's own lane per §20, closing what the previous fire flagged but left.
-  - **Filed 2, both held in `Backlog`:** **LOOP-16** (`--detect` build-fact gaps — the `:350` emit
-    guard silently discards detected `test`/`quality`, and the `package.json` read is
-    repo-root-only) and **LOOP-17** (doctor cannot nudge a repo with **no** `build` block at all,
-    because the existing `doctor.ts:208` nudge requires a test gate to fire).
-  - **Two sequencing calls, both deliberate.** LOOP-16 sits behind a `Blocked-by: LOOP-5` edge —
-    both tickets edit `detectRepoFacts` in one file, and two concurrent junior fires in one function
-    is a collision, not throughput. LOOP-17 is held even though junior depth is 6/10 and the §5a
-    rule would permit promoting it: the junior queue already carries an unstarted P1 (LOOP-6) and
-    three P2s, and 6 of 7 open Todo items are junior-tier, so Dev is the pace setter and the cap is
-    a ceiling rather than a target.
-  - **Dogfood gap → operator, not a ticket** (PM cannot write `dev-loop.json`, and a Dev ticket
-    cannot either): this workspace has **no `build` block** for its own repo, so the loop's own
-    Step-5 gates are entirely unconfigured and the quality ratchet it ships (`hub/package.json` →
-    `"quality": "node src/quality.ts --threshold 90 --top 15"`) is wired to nothing. Root cause is
-    exactly LOOP-16(b) — `--detect` reads the repo ROOT, and this repo's package is
-    `hub/package.json`. Immediate fix, if wanted:
-    `dev-loop team set repos.dev-loop.build.quality "cd hub && npm run quality"` (likewise
-    `typecheck` / `build` / `test`).
-
-- **(pm, 2026-07-30, fire 3) Both design gates PASSED, one increment sent back, and the loop's
-  landing path found blocked.** The `ux-flows` lens ran; HEAD had not moved on product code (the
-  only commit since the last review was PM's own doc commit), so this fire was Job-A-heavy by
-  design.
-  - **LOOP-2 (metering core) — design gate PASS**, children LOOP-12/13/14/15 promoted, parent
-    `Done`. **Deliberately NOT parked for §21a big-module operator sign-off**, and the reasoning is
-    the precedent worth keeping: cross-cutting scope alone does not make a design "big-module" —
-    it is additive-only (every field optional), needs no schema migration, touches no
-    auth/money/PII/secret surface, and carries an explicit best-effort/non-fatal posture. The one
-    property that *would* have forced the park (an irreversible or migrating change) is a named
-    non-goal in the design itself. Parking it would have stalled the whole cost-governance line
-    behind a human for no safety gain.
-  - **LOOP-10 (infra-kill ticket release) — design gate PASS**, child LOOP-19 promoted, parent
-    `Done`. The design's sharpest point is now precedent: the runner release **preserves the
-    assignee**, because on `service` the split-dev pick filter IS the assignee — Sweep's generic
-    unassign-on-reset would make a released ticket invisible to BOTH dev queues.
-  - **📌 Mechanism discovered, and it changes how PM promotes design children: a `Blocked-by:`
-    marker comment does NOT gate anything.** The dev queue filters on the **`blocked` LABEL**
-    (`hub/src/agentops.ts:206,218`); `Blocked-by:` is convention consumed by humans, PM and Sweep.
-    So a staged child promoted `Backlog → Todo` on nothing but its marker comment is served to
-    junior-dev as pickable work immediately, out of order. **Rule going forward:** when the §21a
-    gate promotes children, any child with an unmet dependency gets the `blocked` label too — that
-    is what actually implements the senior's stated sequencing — and PM drops the label as the
-    blockers land (§9c). Applied to LOOP-13/14/15/19 this fire.
-  - **⚠️ A false-unpark trap, caught and fixed — worth remembering.** LOOP-19 carried
-    `Blocked-by: LOOP-7`. LOOP-7 failed verify this fire and became `Canceled` — and §9c unparks a
-    ticket once **every** blocker edge is `Done`/`Canceled`. A Canceled blocker reads as
-    *satisfied*, so the edge would have released LOOP-19 while its real prerequisite (the
-    process-group kill) had not landed at all. **Whenever a verify-fail Cancels a ticket, re-point
-    every inbound `Blocked-by:` edge to the follow-up in the same fire.** Re-pointed to LOOP-23.
-  - **LOOP-7 (process-group kill + retry-loop detection) — verify FAIL, routed UP to senior-dev as
-    LOOP-23 (`Mode: direct-code`, §3).** ACs 1–4 (the process-group half) are genuinely met and
-    PR #27 is explicitly kept as the base. AC 5 is not: `seenLines` is capped at 200 entries and
-    **never evicts**, so after the first ~200 distinct lines every line fails the `has()` check,
-    counts as new content, and the retry-loop watchdog can never trip. A real fire saturates that
-    set in seconds, so the detector is inert in exactly the 429-retry-loop scenario the ticket was
-    written to fix. Its live test passes only because the stub repeats from the very first byte —
-    **the test proved the mechanism, not the requirement.** Worth generalizing: a bounded cache
-    that is described as "rolling" but only freezes is a shape to look for.
-  - **CI red on `main` — the whole board is undeliverable until it clears.** Found independently
-    during the LOOP-7 verify; senior-dev filed it concurrently as **LOOP-22** while this fire was
-    running. LOOP-22 is the better ticket (it proves `stripGo` is the *only* function over the
-    ratchet, next-worst 86.7, so the fix is bounded to one function) — PM's duplicate LOOP-24 was
-    `Canceled` into it, LOOP-22 groomed to junior-dev and promoted P1 ahead of everything.
-    Reinforced its third AC with a route: **do not raise the threshold to go green** — the 90
-    ratchet is a deliberate commitment (`2e18244` tightened 160 → 90) and relaxing it to unblock a
-    merge would quietly retire the product's own headline gate; if the threshold must move, that
-    is a direction call routed to PM, not an edit.
-  - **Process note carried from LOOP-22, deliberately NOT filed as Dev work:** the *Release npm
-    package* workflow does not depend on *Test*, which is why 1.9.0 and 1.10.0 both shipped over a
-    red gate and the breach went unnoticed for ~6 days. That is CI topology / process, for the
-    operator and reflect/architect — not a product ticket.
-  - **PM also observed a second, distinct failure** on `main` (run 30149735763): the `Test` step
-    itself fails on **Node 23.6.0 only** — it does not reproduce on PR #27's branch, so it is
-    already fixed or intermittent. Recorded on LOOP-22, since a green quality gate alone will not
-    turn that check green if it is still live.
-  - **Filed on the `ux-flows` lens: LOOP-26 (Backlog).** `blockedNow` (`hub/src/metrics.ts:104`)
-    counts the `blocked` label without distinguishing *parked-needs-attention* from
-    *sequenced-behind-a-dependency*. This fire proved the cost: labelling four design children for
-    sequencing drove the operator's board KPI to `blockedNow: 4` when **none** of them needs a
-    human. The metric reads worst exactly when the loop is doing dependency management well.
-    Scoped to split the count from data that already exists (`Blocked-by:` edges + `needs-*`), with
-    an explicit instruction **not** to add a label — the taxonomy lives behind the §17 boundary.
-  - **Still with the operator: LOOP-18** (the `Goals`/quality-gauntlet direction proposal) has had
-    no verdict. `Goals` stays untouched; the diff is applied and committed on approval.
-  - **Housekeeping due next fire:** this doc is ~53KB, well past the §20 ~20KB rollup threshold.
-    The 2026-07 Decisions tail should be rolled to `docs/strategy-archive/2026-07.md` the way
-    2026-06 already was. Deliberately deferred rather than done half-way at the end of a long fire.
-
-- **(pm, 2026-07-30) `conversion-retention` lens — the loop's health surfaces cannot see its own
-  ship pipeline; plus the doc rollup, done where the bloat actually was.**
-  - **Filed LOOP-27 (Feature, High, senior `Mode: design`) — landing observability.** The finding:
-    at this fire `dev-loop doctor` printed `DOCTOR_OK` + `NEXT: dev-loop run` and `dev-loop metrics`
-    printed `21 fires, 100% success · 3 shipped, accept 75%` — while **three loop PRs (#27/#28/#29)
-    sat unmergeable on a base branch whose required checks have been red since `7f18a62` (1.9.0,
-    2026-07-24), six days.** Two concrete causes, both verified in code: `boardMetrics`
-    (`hub/src/metrics.ts:96-101`) increments `throughput` on the `issue.transition` `to === "Done"`
-    event, so **"shipped" means "a PM/QA verify passed", not "the branch landed"**; and
-    `grep -rn "gh pr\|pull_request\|prNumber" hub/src/*.ts` returns **zero hits** — the hub has no
-    forge concept at all, even for repos configured `landing:"pr"` + `autoMerge:true`. This is the
-    retention failure mode for an autonomous loop: every dial reads green while the output goes
-    nowhere, and the operator finds out by accident. Routed senior/`Mode: design` because the hard
-    parts are posture calls, not code — whether offline-and-fast `doctor` may make a network call at
-    all, what the degradation contract is with no `gh`/no auth/no network/a non-GitHub remote, and
-    which signal is worth trusting. Explicitly **detect-and-report only**: it never merges, re-runs
-    or mutates a PR. Related-not-duplicate to LOOP-22 (this instance's *fix*), LOOP-5 (one *cause*
-    class), LOOP-26 (a different metric).
-  - **Filed LOOP-28 (Improvement, Medium, junior) — an agent that fires but writes no report.**
-    `.dev-loop/team/fires.jsonl` records **junior-dev 4 fires and sweep 3** in 7d; the reports tree
-    holds files for `pm-agent`, `qa-agent` and `senior-dev-agent` **only**. So 7 of 21 fires left no
-    durable trail — including the tier doing most of the implementation — against a §22 contract
-    that says every agent leaves one, and a README that sells the trail as a core value prop.
-    Nothing notices. **The §17 line matters here:** whether an agent *should* have written a report
-    is SKILL behavior and not PM's to fix; what is squarely a product gap is that the loop cannot
-    tell the operator its own record has holes. Scoped as the exact mirror of the existing **W16
-    owner-liveness** check (`hub/src/metrics.ts:140-163` → `hub/src/doctor.ts:276-296`) over the same
-    ledger — deterministic, read-only, no new data source.
-  - **§20 rollup — done on `Candidate ideas`, and deliberately NOT on the Decisions log.** The prior
-    fire banked "roll the 2026-07 Decisions tail." Measuring first changed the answer: `Candidate
-    ideas` was **23.7 KB — the doc's largest section**, bigger than the 16.5 KB Decisions log. Ten
-    entries there were already `✅ FILED` / `VERIFIED DONE` / `COMPLETE` / `RETIRED` DL-era
-    provenance, i.e. not candidates at all; they rolled to
-    `docs/strategy-archive/2026-07.md` (**59.5 KB → 43.5 KB**, nothing lost). The Decisions log
-    **stays** because §20 rolls *completed/superseded* decisions, not merely *dated* ones, and its
-    2026-07 entries are live standing direction — the operator's Linear-parity "**do NOT re-propose**
-    these on the competitive-parity lens" list and the DL-2 inline-script amendment are guard rails a
-    date-based roll would have silently deleted. **Next fire: do not re-attempt the Decisions roll as
-    a mechanical chore.** One live remainder was lifted out of an archived bullet rather than buried
-    with it: the deferred cross-store ticket-migration (linear↔service) epic.
-  - **Tier encoding, settled by reading the code — do not "fix" it.** `opQueue`
-    (`hub/src/agentops.ts:199-210`) filters the dev queues on **`assignee`**, never on a
-    `senior-dev`/`junior-dev` **label**. LOOP-16/LOOP-17/LOOP-4 carry the assignee without the label
-    and are fully routable; the label is decorative on the `service` backend. (The `blocked` **label**
-    *is* load-bearing in the same function — that asymmetry is the trap.)
-  - **Promotion pace (Job B2).** Promoted **LOOP-16** (High, junior) and **LOOP-27** (senior). Junior
-    unblocked-Todo depth 7 → 8 of 10: held LOOP-17 (sequenced behind LOOP-16's `detectRepoFacts`
-    change), LOOP-26 (Medium behind a deep queue) and LOOP-4 (correctly parked behind the LOOP-12…15
-    metering children). Senior depth was **0** — the expensive tier was idle with LOOP-23 its only
-    live work — so LOOP-27 went straight to `Todo` rather than waiting a full cycle in `Backlog`.
-  - **Still with the operator: LOOP-18** — no verdict yet on the `Goals`/quality-gauntlet direction
-    proposal. `Goals` remains untouched and the quality line stays out-of-mandate for Job C filings;
-    neither ticket filed this fire depends on that ruling.
-
-- **(pm, 2026-07-30) `data-analytics` lens — the health surfaces are auditing the wrong columns,
-  and one blocker edge was about to lie.** Fourth lens at the unchanged product HEAD (`3cfc250` /
-  v1.10.0; the three commits on top are PM doc-only edits and correctly did **not** reset the lens
-  rotation). No foreign edit to this doc since last fire.
-  - **The finding, and why it is one finding.** LOOP-30 (ownership read from labels, routing done
-    by assignee) and LOOP-31 (`blockedNow` label-based in the CLI, `Human-Blocked` state-based on
-    `/activity`) are the same mistake in two places, and LOOP-27/LOOP-28 are it in two more:
-    **the loop measures proxies for the thing it wants to know.** Verified against the live db
-    rather than inferred — the 12-vs-9 ownership split and the 4-vs-0 blocked contradiction are
-    both reproducible today. LOOP-31 is deliberately sequenced behind LOOP-26 (`Blocked-by:`)
-    because LOOP-26 defines the taxonomy this one applies; filing them merged would have hidden
-    that ordering. Neither is a `Bug`: both surfaces behave exactly as their own header comments
-    document — the documented *assumption* is what broke.
-  - **A false unpark caught before it fired (§9c).** LOOP-4's blocker edge read `Blocked-by:
-    LOOP-2`, and **LOOP-2 is now `Done`** — so the next §9c pass would have unparked LOOP-4 and
-    handed senior-dev three cost dashboards over an empty column, the exact outcome the hold
-    existed to prevent. A design parent going `Done` means the plan is agreed, not that the data
-    exists. Edge retired and re-pointed at the implementation children (LOOP-12…15). Second
-    instance of this shape after LOOP-19 (`Canceled` LOOP-7 would have counted as satisfied):
-    **a blocker edge must name the ticket that produces the artifact, never its design parent.**
-  - **Promotion pace (Job B2).** Promoted four in §5 pick order — LOOP-21 and LOOP-29 (both
-    `Bug`+`edge-case`, rank 2, oldest first) ahead of LOOP-17 and LOOP-26 (rank 5). Junior
-    unblocked-Todo **6 → 10 of 10, now at cap**; senior stays 1. Promoting into a landing-blocked
-    board was deliberate: the wedge is on **merge**, not on work — junior is demonstrably
-    productive (PRs #30/#31 opened this hour) and every finished PR flushes the moment LOOP-22
-    goes green. Tier labels were re-passed on LOOP-17/21/29 for consistency, which is a workaround
-    for LOOP-30, not a fix.
-  - **Landing: still red, and the pile is growing.** Five `dev-loop/*` PRs now open and
-    unmergeable (#27/#28/#29/#30/#31), up from three last fire. Every one fails *only* the CRAP
-    ratchet on `stripGo` (113.8 > 90); their own tests pass on both Node lanes. **LOOP-22 remains
-    the single gate on the entire loop's output.**
-
-- **(pm, 2026-07-30) `trust-safety` lens — the loop's two named hard invariants are enforced by
-  prose, and the landing wedge cleared mid-fire.** Fifth lens at the same product line; product
-  HEAD moved `3cfc250` → **`cec3598`** during this fire (LOOP-22 merging), the first product
-  movement in five fires. No foreign edit to this doc since last fire.
-  - **The finding, and why the two tickets are one shape.** `Goals` lists the §17 firewall and
-    §21b's *"SENSITIVE ⇒ senior-dev, **ALWAYS**"* as hard invariants — and §21b is explicit that
-    for sensitive work *"the protection is the mandatory design step + the owner's independent
-    verification, not a pause,"* which is the entire safety argument for letting an unattended loop
-    ship auth, money, PII, and migration code. **Neither invariant has an enforcement point.**
-    `sensitive` exists in `hub/src/` only at `seed.ts:44` (seeded into the taxonomy) and
-    `views/board.ts:35` (painted red); `opQueue` (`agentops.ts:205`) filters the dev slice on
-    `assignee` and `blocked` and consults nothing else, so a `sensitive` ticket assigned junior is
-    served to junior in normal pick order and **no surface — board, `queue`, `doctor`, digest —
-    reports that it happened.** The §17 file surface is the same story: `push-guard` never looks at
-    a changed path, Sweep's D4 audit covers only this doc's direction sections, and
-    `cli-cheatsheet.ts` byte-checks that the *generated* block is fresh, not that the prose around
-    it is untouched. Filed as **LOOP-34** (senior `Mode: design` — choosing the enforcement point
-    is a real decision across `ticketwrite`/`agentops`/`doctor`, and the wrong choice is worse than
-    the gap) and **LOOP-35** (junior — extend `push-guard`, which already walks the pre-push commit
-    list under `--strict`).
-  - **What makes it more than theory.** `gen-cheatsheets.ts:286` *writes into* all ten
-    `skills/*/SKILL.md` files by design, and two junior tickets in flight (LOOP-11, LOOP-20) both
-    require running it. The only thing separating that legitimate regeneration from an
-    out-of-bounds prose edit is a sentence LOOP-11's author hand-wrote into the ticket body
-    (*"Out of scope: … every `skills/**/SKILL.md` prose section (§17)"*). **The invariant is
-    currently enforced by asking the agent nicely, per ticket.** Checked before filing: all 40 most
-    recent commits touching `skills/` or `conventions.md` are operator-authored, and no ticket on
-    this board carries `sensitive` — both rules hold today. Filed as tripwires while cheap, not as
-    incidents.
-  - **The docs seam is the counter-example worth keeping.** `docstore.ts:6` / `db.ts:125` make §17
-    structural for documents by giving doc tools no filesystem path at all. That is the pattern the
-    other two gates should be judged against: *make the violation unrepresentable*, not detected.
-  - **Job B — two blocker edges retired, no unpark.** LOOP-4 still carried a live `Blocked-by:
-    LOOP-2` (Done) alongside last fire's corrected edges — the re-point added markers but never
-    retired the old one, and §9c only clears an edge on an explicit `Unblocked-by:`. LOOP-19
-    carried `Blocked-by: LOOP-7` (Canceled). Both retired; both tickets stay parked on their live
-    edges (LOOP-12…15 / LOOP-12 + LOOP-23). Third fire running with this shape: **correcting an
-    edge means retiring the old one, not just adding the right one.**
-  - **Job B2 — one promotion, and a ticket that was invisible to the entire Dev tier.** LOOP-32
-    (QA's flaky-CI filing) had **no dev-tier marker at all** — `assignee=null`, so `opQueue` served
-    it to neither tier and it would have sat until Sweep's slow repair. Tiered junior and promoted
-    into the single free slot **ahead of the strict rank-5 FIFO** (LOOP-28/LOOP-30 keep their
-    position): with the ratchet gone, that wall-clock race is the remaining source of red CI on the
-    landing path, and §5's own tiebreak is *defects beat features*. Junior unblocked-`Todo`
-    **10/10, at cap**; senior 1 → 2 (QA's LOOP-33 landed there mid-fire). LOOP-34/LOOP-35 filed to
-    `Backlog` for the next fire's B2, per §5a.
-  - **Still with the operator: LOOP-18**, fourth fire with no verdict. `Goals` stays untouched and
-    the quality-gauntlet line stays out-of-mandate for Job C filings; neither ticket filed this
-    fire depends on that ruling.
-
-- **(pm, 2026-07-30) Consistency lens — the loop's own artifacts disagree about where they live,
-  and the strategy doc is the worst case.** Product moved for real this fire (`3cfc250 → 6b4b1e5`,
-  four merges), so the swept-lens list reset and `consistency` ran first. Both findings are the
-  same shape: **a contract stated in prose, with two or three implementations of it on disk.**
-  - **The doc-landing gap (LOOP-36) is the sequencing call of the fire.** §20 D4 says PM lands a
-    repo-file strategy doc *by committing*; §12b says nothing reaches `defaultBranch` except
-    through a PR, and §7 branches every dev worktree off `origin/<defaultBranch>`. Both rules are
-    individually right; together they mean **PM is the only writer in the workspace with no
-    landing path at all**. This is not a projection — the 60,523 vs 41,004-byte split between PM's
-    checkout and the `LOOP-32` worktree is on disk right now (recorded in `Current state`). Routed
-    **senior `Mode: design`** rather than "just push": the four candidate fixes (PM pushes
-    doc-only / PM opens a doc PR / move to the hub `doc` kind / detect-and-report) have genuinely
-    different blast radii, and the cheapest one makes PM the single actor that bypasses this
-    repo's stated human gate. The design must also rule on senior-dev's `docs/design/*.md`, which
-    is autonomously committed through the identical gap, and on recovering the existing
-    divergence without a destructive reset.
-  - **Worktrees under two roots (LOOP-37), neither the documented one.** `wsWorktree()`
-    (`workspace.ts:74`) builds `<ws>/.dev-loop/wt/<ticket>/<ref>` and four live worktrees sit
-    there; three more sit at `<ws>/worktrees/<ticket>`, a shape that appears **nowhere** in
-    `hub/src/`; conventions §7 documents a **third** shape again. The cause is the same as the
-    LOOP-20 class: `wsWorktree()` is correct but **not reachable from the CLI surface**, so an
-    agent implementing §7 hand-builds a path and three fires built three. Consequence already on
-    disk: **LOOP-7 is `Canceled` and its worktree + branch are still live** — land-time cleanup
-    never fires for a ticket that never lands, and `prune` only drops entries whose directory is
-    already gone. Routed junior; the reaper must enumerate from `git worktree list` rather than
-    from a computed root, or it inherits the blind spot it is fixing.
-  - **The §17 boundary bit twice, and both tickets say so in-body.** LOOP-36's real fix may imply
-    a §20 D4 prose change and LOOP-37's certainly implies a §7 one — neither of which an agent may
-    make. Both carry an explicit `Out of scope (§17)` section routing the prose delta to the
-    operator as a proposal. This is the third fire in a row where the correct code change sits
-    next to a governing-prose change the loop cannot apply; **LOOP-34/LOOP-35 exist because that
-    boundary is enforced by prose too.**
-  - **Job A / Job B — nothing to do, verified rather than assumed.** LOOP-18 is now on its
-    **fifth** fire with no operator verdict (still correctly parked `In Review`/`investigation`,
-    not re-commented). No `needs-pm` intake, no team (`_team`) intake. Every §9c edge re-resolved
-    from its markers rather than from the state file: LOOP-4 (LOOP-12/13/14/15), LOOP-13/14/15
-    (LOOP-12), LOOP-19 (LOOP-12 + LOOP-23), LOOP-31 (LOOP-26) — **every blocker still open, so
-    zero unparks**, which is the correct outcome and not a stall.
-  - **Job B2 — promoted strictly by priority within rank, no exception this time.** Junior had one
-    free slot and took **LOOP-30** (p2) ahead of three p3 siblings; senior had eight and took
-    **LOOP-34** (p2). **LOOP-4 and LOOP-31 were deliberately NOT promoted** despite free senior /
-    junior capacity — both carry live blocker edges, and promoting a blocked ticket into `Todo`
-    just to fill a slot is how a depth cap starts lying about ready work.
-  - **Noted for QA, not filed (staying in lane).** LOOP-20's regression test
-    (`hub/test/cli-agentops.ts:319-333`) asserts that **`queue` specifically** routes, while its
-    comment claims *"any future ROUTES omission fails here immediately."* It does not — `ROUTES`,
-    `ATTACH_OK`, and `NEEDS_NODE_SQLITE` remain three hand-maintained parallel lists over one verb
-    set with no invariant test between them, so the next verb repeats LOOP-20 exactly. A
-    test-strength gap is QA's call, and LOOP-37's first AC already forces the new verb through all
-    three lists.
-
-- **(pm, 2026-07-30) Competitive-parity lens — the loop can merge over a human's "Request changes",
-  and the 2026-07-02 "do not re-propose" list correctly stopped everything else.** Filed **LOOP-39**
-  (Feature, senior `Mode: design`, `relatedTo` LOOP-27/LOOP-35) on the one finding that survived.
-  - **The finding.** §12c's fire-start merge pass merges on `mergeChecks` green **AND** `MERGEABLE`,
-    and never reads `reviewDecision`. That is not an isolated oversight: §12c deliberately avoids
-    GitHub branch protection (required-check gating deadlocks PRs whose checks never report, e.g.
-    `GITHUB_TOKEN`-created deploy PRs) — a decision that should stand. But **without protection a
-    `CHANGES_REQUESTED` review cannot make a PR non-mergeable**, so nothing stops the next dev fire
-    from squash-merging over it. Verified: `gh api …/branches/main/protection` → **404 Branch not
-    protected**. Separately, `grep -rn "gh pr\|pull_request\|prNumber" hub/src/` → **0 hits**: the hub
-    has no forge concept, so review comments reach no agent and ticket→PR exists only as pasted prose.
-  - **Why it is worth a ticket though it has never fired** (`reviewDecision: ""` on every loop PR,
-    #30–#36): the Vision sells operator **点评** as the steering mechanism, and today that steering
-    cannot reach the diff — the surface a reviewer actually uses. The failure mode is a human's most
-    deliberate act of steering being discarded silently, with the change already on `main`.
-  - **Checked against the standing non-goal, and it holds.** *"No default human step-by-step
-    gating"* forbids requiring approval; it does not require ignoring refusal. LOOP-39 adds no wait:
-    an unreviewed PR merges exactly as today.
-  - **The 2026-07-02 Linear-parity skip list did its job.** Re-read before filing, as that entry
-    instructs. Cycles/estimates, due dates, milestones, saved views, reactions, attachments, and SLAs
-    were all considered and **not** re-proposed — no new concrete need. LOOP-39 is forge/review
-    integration, which that entry never covered, so it is not a re-proposal.
-  - **§17 split, deliberate.** LOOP-39 scopes only the *enforceable* half (a `push-guard`-style verb
-    + board-visible review state + a structured ticket↔PR link). Wiring the guard into the merge rule
-    edits `conventions.md` §12c and `skills/dev-agent/SKILL.md`, so it rides a `[pm-proposal]` for the
-    operator — the same prose-not-code weakness **LOOP-35** is filed against.
-
-- **(pm, 2026-07-30) Routing correction worth keeping: an un-tiered ticket is invisible, and
-  `sensitive` is decided from the ACs, not the label.** LOOP-38 arrived p1 with `assignee: null` and
-  no tier, so it was in **neither** dev pick-query (`opQueue`, `hub/src/agentops.ts:205`, filters the
-  dev queues on assignee) — a p1 bug parked where nobody could see it. PM re-tiered it by hand at
-  grooming, to **senior + `sensitive`**: its leading option turns `release-npm.yml` into a
-  push-triggered publish, which changes when a credential publishes a public package (§4 → §21b:
-  sensitive ⇒ senior, always — design before code). Two standing rules for future fires: **every
-  QA/Architect/Ops-filed ticket gets a tier check during Job B2** until **LOOP-30** lands, and
-  `sensitive` is judged from what the ACs plainly touch even when the filer did not label it.
-
-- **(pm, 2026-07-30) The §21a design gate passed LOOP-27 but amended its children — and the
-  amendment is the reusable lesson: a design can be right everywhere and still hand a junior an
-  unbuildable contract.** Two defects, neither in the design's reasoning:
-  - **`landed` had no data source.** Design §5.2 asked `metrics` for "loop PRs merged to base in the
-    window" while §4 made the Child-A reader the **only** module permitted to touch the forge — but
-    the `LandingState` type carried no merged count. Child C could satisfy its AC only by opening a
-    second forge call and breaking the single-reader invariant, and its own test AC ("inject Child
-    A's result → assert `landed`") was literally unbuildable. Fixed at the gate: **LOOP-40 now owns
-    `mergedInWindow`** (fed by a `windowMs` option, `null` — never `0` — under `unknown`/`na`) and
-    **LOOP-42 consumes it**.
-  - **"Do not start until A lands" was prose, not an edge.** For the **fourth** time on this board
-    (LOOP-13/14/15, LOOP-19, now LOOP-41/42) sequencing was written in English while the dev queue
-    filters on the `blocked` **label** (`hub/src/agentops.ts:206,218`). Both children now carry a
-    real `Blocked-by: LOOP-40` marker **and** the label. Four repeats is a product signal, not an
-    agent-discipline one: **LOOP-35**'s neighbourhood should eventually make an unlabelled
-    `Blocked-by:` marker impossible rather than merely discouraged.
-
-  **Standing ruling — §21a "promote every staged child" vs §5a's depth cap.** They collide whenever a
-  gate passes into a full queue, as it did here (junior at 10/10). **The cap wins for new capability;
-  nothing is stranded.** LOOP-40 stays `Backlog` at the head of the promote order and rises the first
-  fire junior drains; LOOP-41/42 sit behind live blocker edges that §9c releases automatically. §21a's
-  anti-stranding rule is written against the *fail* path (cancel the children with the parent) — on the
-  pass path a capped queue is the pace control working, not a dropped increment.
-
-  **The counter-case, ruled the other way in the same fire, deliberately.** LOOP-43 — the 64 KiB
-  stdout truncation — was filed straight to **Todo at p1**, taking junior to 11/10 by exception. The
-  distinction is not severity but *kind*: the cap paces **origination** of new capability, and
-  deferring a live fault that silently corrupts the dedupe input of **every** agent does not protect
-  dev focus, it compounds damage across the whole team while they keep reasoning about a board that
-  is two-thirds invisible. New capability waits for the queue; a poisoned shared input does not.
-
-  **Lane note, flagged rather than quietly taken.** A defect is QA's `Bug`. PM filed LOOP-43 itself
-  because the repro is deterministic, because the corruption is in the *shared* read path so QA's own
-  scoped queries would likely never surface it, and because it had already written a false conclusion
-  into the loop's durable state — active ongoing harm, not a first sighting. The reasoning is recorded
-  in the ticket so QA or Reflect can overrule it cheaply.
-
-  **Design-home ruling (asked for explicitly by senior-dev, settled here).** A `Mode: design` doc for
-  this project lives as a hub `design` doc-kind, **not** a repo `docs/design/*.md`. The deciding
-  argument is the senior's own: `main` is `landing:"pr"`, so a repo-file design needs its own PR to
-  land — which would couple every design gate to the CI health that **LOOP-27 exists to detect**. It
-  also matches the `metering` precedent. No repo mirror.
-
-- **(pm, 2026-07-30) A merged PR carried nine commits nobody reviewed — dev branches are cut from
-  local `main`, and a passenger commit is invisible to every gate we have.** Found on the preflight
-  SHA sweep (`24d974f` → `d2e0732`), from an anomaly rather than a lens: `docs/STRATEGY.md` appeared
-  in the *product* diff. PR **#28** — titled `fix(hub): wireEnv always overrides DEVLOOP_PROJECT` —
-  merged **123 insertions of strategy prose** alongside its five lines of hub code, because the
-  worktree was cut from local `main` and inherited two unpushed PM doc commits. This is live, not
-  historical: the in-flight `dev-loop/LOOP-43` branch already carries **all nine** of PM's local-only
-  doc commits and will ship them with a CLI truncation fix. Filed as **LOOP-48** (senior, `Mode:
-  design`).
-
-  **Why it earns a Decisions entry rather than just a ticket.** Every governance gate this project
-  has built guards an actor's *own* commit path — §20 D4 routes PM's direction edits through the §9a
-  investigation flow, §17 keeps SKILL/conventions files human-gated, and LOOP-35 proposes to enforce
-  that firewall mechanically. **None of them inspects what a PR is merely carrying.** Any local-only
-  commit, from any actor, lands on `origin/main` as a passenger with `autoMerge:true` and test-only
-  merge checks. The gates are load-bearing on an assumption — that a branch contains only its own
-  work — which nothing establishes, because §7's "branch off the up-to-date `origin/<defaultBranch>`"
-  is prose with **no implementation anywhere in `hub/src/`**: `wsWorktree()` has no caller, so every
-  fire hand-builds its own `git worktree add`. This is the same root as **LOOP-37** (worktree *paths*)
-  seen on a second axis, and the inverse of **LOOP-36** (PM's doc commits never land *at all*).
-  LOOP-36's fix does not close it — a correct PM landing path still leaves every other unpushed
-  commit free to ride. Recorded because the conclusion generalises past the bug: **a convention that
-  no code implements is not a control, and building further gates on top of it compounds the error.**
-
-- **(pm, 2026-07-30) The §21a design gate passed LOOP-38's design and still refused to close the
-  ticket — "the design is sound" and "the bug is fixed" are different claims.** LOOP-38 (installed
-  `dev-loop` binary stale vs `origin/main`) came to the gate with a genuinely good design:
-  `landing-observability` §9 extends the living module doc rather than duplicating it, rejects
-  auto-publish-on-merge on *mechanism* (`release-npm.yml` computes a version per run and refuses
-  without an `## Unreleased` section, so a `push:` trigger either churns public releases or
-  fail-refuses), and stages one faithful child (**LOOP-46**, doctor W18). Gate: **passed**.
-
-  It went **`Human-Blocked`**, not `Done`. Its AC4 is *"re-run this ticket's repro"* — and the repro
-  fired during this very fire's boot (`dev-loop: unknown command 'queue'` from the installed
-  `1.10.0`, while `origin/main` reached `d2e0732`). Marking it `Done` would have produced precisely
-  the false-`Done` this ticket was filed to expose: a verified verdict invisible in the tool every
-  agent runs. **A design gate certifies a plan, not an outcome; when a ticket's own acceptance test
-  still reproduces, the honest terminal state is the human park, not `Done`.** What remains is
-  genuinely operator-only — the A-vs-B sync-mechanism call, and the publish-or-pin action. PM concurs
-  with senior-dev's **Option B** (pin agents to a local build): under A the public npm registry
-  becomes a log of an internal loop's every green merge — an outward, irreversible side effect
-  adopted for internal convenience, where B is contained and reversible.
-
-- **(pm, 2026-07-30) Two agents filed the same bug eleven minutes apart; the dedupe rule that
-  resolved it was "whose root cause is better", not "who was first".** QA filed **LOOP-45** and PM
-  filed **LOOP-47** for the same defect (`hub/test/run-agents.ts` inherits the fire's `DEVLOOP_*`
-  env). §8 dedupe cannot prevent this class — both agents deduped against a board snapshot taken
-  before the other's write. PM's snapshot was simply older.
-
-  Kept **LOOP-45** and canceled its own ticket, because QA's bisect was the stronger artifact
-  (`DEVLOOP_PROJECTS_JSON` alone proven necessary *and* sufficient). PM's evidence was ported into
-  it: the consequence is **not** 32 noisy assertions but that `npm test` is one `&&` chain of ~60
-  suites with `run-agents.ts` ~21st — inside a fire it short-circuits there, so **~40 later suites
-  including `test/quality.ts`, the fourth Step-5 ship gate, never execute at all.** Also corrected
-  one wrong turn in LOOP-45's fix-shape reasoning: it assumed the assertions run in-process, but
-  both sites `spawnSync` a child (`:13`, `:247`), so the fix is the plain `env:` scrub that
-  `7c43c06` already landed for `hub-lifecycle.ts` — not a scrub-and-restore around resolution calls.
-  **The general rule: when two filings collide, merge toward the better diagnosis and port the rest;
-  seniority of timestamp decides nothing.** Routing was also repaired — LOOP-45 sat at P1 with
-  `assignee: null`, invisible to both dev tiers (`agentops.ts:205`), the third instance of the
-  LOOP-30 class this week.
-
-- **(pm, 2026-07-30) Fifth instance: a blocker written as prose blocks nothing.** LOOP-4 and LOOP-31
-  both carried correct `Blocked-by:` marker comments and correct prose, and **neither carried the
-  `blocked` label** — so both would have read as promotable to a grooming pass that trusted the
-  board over the ledger. Repaired this fire. The lesson is now old enough to state as an invariant
-  rather than a reminder: **the marker comment is the ledger, the label is the enforcement, and
-  writing one without the other is a no-op.** LOOP-26 (the blocked taxonomy) and LOOP-31 (its web
-  surface) are the durable fix; until they land this is a per-fire manual audit, and it has caught
-  something in five of five fires.
-
-- **(pm, 2026-07-30) `strategy-gaps` lens — the loop schedules every resource except the human, and
-  the audit's sixth hit was the mirror image of the first five.** Two calls this fire.
-
-  **(1) The gap is the operator's latency, and it is filed as senior design work.** Reading `Goals`
-  against the board: of the four supporting goals, three are densely covered and **"broaden
-  portability" has zero tickets** — deliberately left that way, because filing portability work while
-  the loop still cannot reliably ship itself would be padding, and this lens is not a quota. The real
-  gap was elsewhere. Every proxy in the "no surface reports the thing itself" pattern now has an
-  owner; the operator's own response time had none, even though `decisionQueue` already computes it
-  with timestamps. Filed **LOOP-49** as senior `Mode: design` — not junior — for a reason worth
-  recording, because the borderline default is junior (§21b): it edits `doctor.ts` in the same
-  function as LOOP-41's W17, and the open question (may a *board* condition move `DOCTOR_OK`, when
-  LOOP-27's gate fenced a landing stall to warn-only?) is a policy call with a CI blast radius. That
-  is design work by the §21b test — "needs a design," not "is large." Scope was fenced explicitly to
-  the `decisionQueue` population so it cannot drift into LOOP-26's `blocked` taxonomy.
-
-  **(2) §9c, sixth instance — and this time the marker was there and the label was not needed.** The
-  five prior fires all found the same shape: a correct `Blocked-by:` marker with no `blocked` label
-  (ledger without enforcement). This fire's audit found the inverse on **LOOP-16** — a live
-  `Blocked-by: LOOP-5` edge on a ticket sitting correctly unblocked in `Todo`, because LOOP-5 landed,
-  a later fire promoted the ticket, and **nobody wrote the `Unblocked-by:` retirement line.** Also
-  retired a resolved `LOOP-23` edge on LOOP-19 (which stays blocked behind LOOP-12). Neither was
-  causing harm *yet*, which is the point: §9c warns that an un-retired edge set is one re-park away
-  from resolving `{all Done}` and self-unparking instantly. **Standing correction to how this audit
-  is run:** checking "does every `blocked` ticket have a marker?" only catches five of the six
-  shapes. Walk it in **both** directions — every marker needs a live-or-retired verdict, including on
-  tickets that carry no `blocked` label at all. LOOP-16 was invisible to the W5 query
-  (`blocked`+`external-prereq`) for its entire held life and cleared only because a PM fire happened
-  to notice its blocker had landed.
-
-- **(pm, 2026-07-30) 📝 RULING — a fixed *instance* does not close a *visibility* bug; re-sequence
-  it behind its own detector.** The operator resolved LOOP-38 out of band (released v1.11.0,
-  upgraded the global install, drift → 0) and un-parked it to `Todo` for PM verify. I confirmed AC4
-  independently and still did **not** close it `Done`: AC2/AC3/AC5 — *make the skew visible* — are
-  carried entirely by LOOP-46, unshipped. Drift is zero only because a human re-published by hand;
-  the next merge re-creates it silently, which is the defect. Closing would have re-asserted exactly
-  the silent inheritance the ticket exists to kill. **Standing rule:** when a ticket's ACs split into
-  *this instance is fixed* and *this class is now detectable*, the instance being green is not a
-  close condition — block the parent on the detector (`Blocked-by: LOOP-46`) and let it auto-unpark.
-  Second half of the ruling: it un-parks to **`In Review` for PM verify, not back to a dev `Todo`**,
-  because the residual is verification, not code — a design parent whose children carry the build
-  should never re-enter a dev pick queue.
-
-- **(pm, 2026-07-30) 📝 RULING — the reconcile the operator proposed for the diverged doc-home clone
-  does not work, and the two "parallel" git defects are one entangled defect.** LOOP-50 (operator
-  intake) asked for `git pull --rebase … then push`, on the stated assumption that *"doc commits
-  rebase cleanly over code PRs"*. Tested in a throwaway worktree: it **conflicts on commit 1 of 11**
-  in `docs/STRATEGY.md`. Cause confirmed via `git log origin/main -S<line>` → **`7c43c06`** — PR #28
-  already carried `b278db8`'s content onto `origin/main` as a passenger, so replaying it
-  double-applies. **Therefore: passenger smuggling (LOOP-48) is not a parallel harm to the
-  divergence (LOOP-36) — it is what makes the divergence unrecoverable by rebase.** Every smuggled
-  PR that merges adds another conflict to the eventual reconciliation. Recorded so neither design
-  lands assuming a clean replay. PM did **not** perform the reconcile: it conflicts, `push` to a
-  shared `origin/main` is outward-facing and hard to reverse in an unattended fire, senior owns both
-  designs in that repo, and `docs/strategy-archive/2026-07.md` exists only locally.
-
-- **(pm, 2026-07-30) 📝 RULING — a groomed intake parent whose AC is an *outcome* stays open.** §9a
-  closes an intake parent once its asks are routed to children. LOOP-50's AC is *"origin/main's
-  STRATEGY.md history is linear and current"* — a state of the world, not a routing step. Closing it
-  on routing alone would be **phantom-`Done`**, the precise failure the ticket was filed to name. So
-  it stays open as an umbrella, `Blocked-by: LOOP-36 LOOP-48 LOOP-51`, and PM verifies the outcome
-  directly at unpark. **Generalised:** route-and-close applies to asks; asks whose acceptance is an
-  observable end-state get an umbrella with real blocker edges instead.
-
-- **(pm, 2026-07-30) ux-flows lens — the operator's front door does not point at their own house.**
-  `http://127.0.0.1:8787` is published as *the* board URL in all three READMEs, `docs/DAEMON.md`,
-  `docs/HUB-ARCHITECTURE.md` and every `deploy/` manifest. On the dogfooding machine it currently
-  serves a **13-day-old v1.2.1 daemon from a different workspace**, answering `{"ok":true}` and
-  rendering a normal board for a project called `certproj`; this project's real board is on `:8840`,
-  53 ports up the probe. The board page names the *project* but never the workspace, the `hub.db`,
-  or the daemon version — and project keys are not unique across workspaces (`_team` exists in all
-  of them), so a wrong board is indistinguishable from the right one. The discovery verb disagrees
-  with itself too: `daemon status` honours `DEVLOOP_PROJECT`, `hub status` — the verb first-run setup
-  teaches — is pinned to `_team`. Filed **LOOP-52** (identity + discoverability). **Root cause filed
-  separately as LOOP-53:** the hub test suite starts detached daemons and never stops them — **58
-  listening on 8787→8844, oldest 13d 21h, 53 of them holding throwaway `$TMPDIR` fixture databases**,
-  several already deleted from disk and therefore unreachable by `daemon down` (its runfile went with
-  the fixture). Scoped honestly: they hold *fixture* DBs, so there is **no** contention on any real
-  `hub.db` — the harm is port/process/handle exhaustion and a documented URL that lies. Routed to
-  senior `Mode: design` because the cleanup rule, not the teardown, is the hard part: three unrelated
-  *legitimate* workspaces are listening on this machine right now (one 8 days old), so **age is not a
-  liveness signal** and a naive reaper kills someone's live board.
-
-- **(pm, 2026-07-30) conversion-retention lens — `main` is shipping a silent kill-switch, and the
-  verify gate that caught it had no power to stop it.** Verifying LOOP-12 (metering increment A) found
-  all five ACs passing and both suites green, but one **EXTRA delta** in the diff: to let the test
-  `import { recordFire }`, the tail of `hub/src/run-agents.ts` became
-  ``if (import.meta.url === `file://${process.argv[1]}`)``. That is naive string concatenation —
-  `import.meta.url` is percent-encoded, `process.argv[1]` is a raw path — so on any checkout path
-  containing a space, `#`, `?`, or non-ASCII the comparison fails, `main()` never runs, and
-  **`dev-loop run` becomes a silent no-op that exits 0**. Proven, same file and command, only the
-  directory differing: `"/tmp/pm space test"` → 0 bytes of output; `/tmp/pm-l12` → the normal 5587-byte
-  help. macOS `Google Drive` / `iCloud Drive` checkouts make this an ordinary install shape, and its
-  failure mode — a loop that looks healthy and does nothing — is the worst class this product can ship.
-  Verify-failed and Canceled (LOOP-12); **fix-forward is LOOP-58** (senior, p1).
-  - **The governing finding is not the bug, it is what happened next.** `autoMerge` merged PR #40 to
-    `origin/main` as `e5669cb` **while the ticket sat In Review awaiting this very gate** — green CI
-    was treated as sufficient authority to land. The gate produced the correct verdict and could not
-    act on it: remediation became a fix-forward on `main` instead of a branch that never lands. The
-    merge pass reads `gh pr checks` + `mergeable` and reads **neither `reviewDecision` nor the board**,
-    so a human's "Request changes" and an owning agent's pending verify gate are the same blind spot.
-    Evidence routed to **LOOP-39**, which already owns the merge-policy axis, with a suggested scope
-    addition: gate the merge on **ticket state**, not only on review state — the board is already the
-    system of record and needs no new forge concept to read.
-  - **The lens's own answer.** Asked "does a new operator convert and stay?", the honest reading of
-    this fire is that **every severe finding today was invisible to the operator until an agent
-    happened to look**: `dev-loop doctor` printed `DOCTOR_OK` and `NEXT: dev-loop run` against a
-    `main` that had just acquired the kill-switch. Retention risk here is not a missing feature, it is
-    a health surface that is confidently wrong. That theme already has owners (LOOP-46/56 skew and
-    divergence W-codes, LOOP-49 decision-queue ageing, LOOP-31/26 blocked-now contradictions), so it
-    is recorded here rather than re-filed — **zero new tickets from this lens beyond LOOP-58.**
-  - **Two design gates cleared (§21a).** `landing-discipline` v1 verified against the repo, not the
-    hand-off. **LOOP-48 (Part A) PASSED → `Done`**, children LOOP-54/LOOP-55 promoted; its claims hold
-    live — PRs #38 and #39 each carry **7 passenger `docs(strategy)` commits** and are conflicted,
-    while #41 (cut after the base reconciliation) carries only its own work, which is exactly the
-    behaviour the `worktree add` verb makes structural. One caveat recorded for the build: the design
-    rests on *"`autoMerge` cannot fire on a `DIRTY` PR"*, which is true today but is a coincidence, not
-    a rule — #40 proved how fast a clean PR lands. **LOOP-36 (Part B) design verified but parked
-    `Human-Blocked`**: Option 1 makes PM the one actor pushing to `origin/main` outside the repo's PR
-    gate, which is the operator's call, not senior's and not mine. Its AC3 (rescue the 12-commit
-    divergence) and AC6 (PM and dev read the same doc) are **already satisfied** — `strategy-archive/
-    2026-07.md` is on `origin/main` and both copies now hash identically — but by a manual one-time act
-    with a recurrence interval of *one PM fire*, which is the whole argument for the mechanism.
-  - **Board hygiene:** LOOP-51 and LOOP-56 were the same W19 detector filed 15 minutes apart by PM and
-    senior; merged toward the design child (LOOP-56) with the loser's unique content ported, not
-    dropped. And LOOP-48's design gate never reached PM's `queue` at all — its labels predated its
-    `Mode: design` conversion, so a pure-label filter served it to QA and hid it from its §21a owner
-    (QA caught it and filed **LOOP-59**). Cancelling LOOP-12 would have false-unparked five tickets
-    behind a Canceled blocker; all five edges were re-pointed to LOOP-58 in the same fire.
-
-- **(operator, 2026-07-30) 📝 RULING — PM may land doc-only PROGRESS commits on `origin/main`, via
-  `doc-land` only.** The Part-B question LOOP-36 was parked on is answered: **APPROVED (Option 1 +
-  Option 4).** Verbatim scope — *"PM MAY push doc-only progress commits directly to
-  `origin/<defaultBranch>` on this `landing:"pr"` repo, **exclusively via the B2 `dev-loop doc-land`
-  verb once it ships**."* The operator's stated rationale, which bounds any future reading of this:
-  direction-section content is already human-gated at the CONTENT level (§9a), progress sections are
-  PM's pen by design, and the doc-PR alternative was **empirically refuted in this workspace** —
-  docs queued behind six-days-red merge checks land *less* often. So this is not a review bypass; it
-  is the §20 D4-autonomous write finally reaching the branch everyone reads. **Two fences are part of
-  the ruling, not commentary:** (1) the pushed range must touch ONLY the configured `strategyDoc` +
-  `strategy-archive/` — *"that assertion is load-bearing; treat any future widening of that allowlist
-  as a NEW operator sign-off, not a follow-up"*; (2) until `doc-land` exists there is **no** manual
-  push — PM commits and leaves it local. **Consequence recorded for the next fire that reads only
-  this entry:** the pm-agent SKILL and §20 D4 still describe the commit-only shape, so a fresh PM
-  boot re-derives the old behaviour from the SKILL rather than from this ruling. That prose is the
-  operator's to apply (§17) and is deliberately deferred until `doc-land` merges — carried as
-  **LOOP-60**, blocked on LOOP-57, to be re-parked `Human-Blocked` when it lands.
-
-- **(pm, 2026-07-30) `data-analytics` lens — the metering arc's join key does not survive its own
-  canonical write path.** Reviewed at product HEAD `e5669cb`, the just-merged metering foundation.
-  The lens question was *"will the data this arc collects answer the operator's question?"* and the
-  answer is: on the direct-db transports yes, on the daemon transports no — silently. `fireId` is
-  read from ambient `process.env` **at the INSERT**, so it is stamped by whichever process performs
-  the write; identity, by contrast, was deliberately carried env→header→daemon (`op-client.ts` sends
-  `x-devloop-actor`, `daemon.ts:345` reads it back, commented as *"the only attribution the daemon
-  trusts"*). The fire is present one hop from the write and dropped at exactly the hop already
-  solved for identity. Filed **LOOP-61** (senior, p2) to carry it the same way, with the explicit
-  constraint that it is **attribution, never authorization** — it must not touch the G1 phantom-actor
-  guard — and a concurrency AC, since a module-global would let one request's fire id leak onto
-  another's write. **Deliberately NOT filed:** `events` keeps `fireId` in a JSON blob with no column
-  or index and is never pruned (`db.ts:117`) — at **477 rows** that is not a problem, and filing it
-  would be padding. Re-examine when the LOOP-4 join is measurably slow. Method note for the next
-  lens: the empirical `0 of 477 events carry a fireId` on this hub is **confounded** by the
-  LOOP-38/W18 skew (installed 1.11.0 predates `e5669cb`, so this workspace has not started stamping
-  at all) — it is recorded as a baseline, and the finding rests on the code path, not on that count.
-
-- **(pm, 2026-07-30) Board note — a design gate's close is not a delivery.** Three tickets resolved
-  this fire without anything shipping: LOOP-36 `Done` (gate + sign-off), LOOP-48 `Done`, LOOP-51
-  `Canceled`. By §9c's letter that unparks LOOP-50, whose remaining AC none of them satisfies. The
-  edges were re-pointed to the four tickets that actually deliver prevention (LOOP-54/55/56/57)
-  rather than letting resolved *designs* read as a delivered *fix* — the same failure shape as the
-  cancel-a-blocker false-unpark caught last fire, arriving from the opposite direction.
-
-- **(pm, 2026-07-30) `trust-safety` lens — the loop's own telemetry writes the one thing its secrets
-  module promises never to write.** Reviewed at product HEAD `e5669cb`. The lens question was *"where
-  does this product's autonomy get to do harm the operator cannot see?"*, and the answer was not in
-  any of the guard surfaces — it was in a **sink asymmetry inside a single function**. `recordFire()`
-  (`run-agents.ts:766-789`) writes the same `extra` object to two places: the JSONL ledger builds its
-  row by **spreading `extra` whole** (`:775`), while the hub `fire.completed` event three lines below
-  **enumerates** the fields and forwards only `suspectError`/`errorClass`/`bootBytes` (`:786`). So
-  `outputTail` — a raw 400-byte slice of the coding CLI's combined stdout+stderr, attached to **every**
-  non-clean fire (`:1125`) — is dropped on one path and lands verbatim on disk on the other, in a file
-  created **world-readable (644)**. Meanwhile `secrets.ts:16` states the invariant *"values are NEVER
-  logged"* and `warnLoosePerms()` nags the operator to `chmod 600` the very file whose contents the
-  fire's env is hydrated from. **The sharpest fact: nothing reads the persisted field** — `grep -n
-  outputTail hub/src/*.ts` is writers-only; the breaker takes the tail as a function *argument*, and
-  neither `metrics` nor `doctor` touches it. It is stored liability with zero consumers, and the
-  populated case is the credential-adjacent one, since `classifyFireError()` exists to bucket auth and
-  quota failures. Filed **LOOP-62** (senior, `sensitive`, p2) — with the minimal fix named in the
-  ticket: stop spreading, enumerate like the sibling. Live evidence bounded honestly: 71 rows, 4
-  carrying tails, and **no `secrets.env` on this workspace**, so this is a code-path finding, not an
-  observed leak — the ticket says so explicitly, so nobody closes it on "I grepped the ledger and
-  found no key."
-  - **Two candidates examined and deliberately NOT filed, both because the code already says they are
-    not defects.** (1) The operator-write guard (`cli-agentops.ts:188-198`) keys on env markers the
-    agent itself controls, and the agent SKILLs instruct agents to `env -u DEVLOOP_DEV_SPLIT` for
-    their own test runs — but the code comments it as a *"Cooperative accident guard … not
-    anti-spoof,"* matching `tooldefs.ts:89`'s cooperative `doc.publish` role-gate. Filing it would
-    re-propose a deliberate design. **Re-examine trigger:** a compound command that strips the markers
-    *and* performs a board write in one invocation, or any real `operator`-attributed write traced to
-    an agent fire — that is the guard failing at its own stated job, and is filable. (2) The daemon's
-    write surface is **already** correctly walled — `writeOriginOk()` (`daemon.ts:196-204`) refuses a
-    foreign/rebound `Host` and a cross-origin `Origin`/`Referer`, allows absent-both as the non-browser
-    client, and the bearer path is `timingSafeEqual` (`ui-token.ts:23-28`). Recorded as swept so a
-    future trust-safety rotation does not re-audit it.
-  - **Method note for the next lens.** This is the second consecutive finding produced by the same
-    move: **find a value that crosses two paths and diff how each path treats it.** Last fire it was
-    `fireId` (carried env→header for identity, dropped for the fire); this fire it was `outputTail`
-    (enumerated out of the event, spread into the ledger). A neighbouring call that solved the same
-    problem correctly is the strongest available evidence that the gap is an oversight and not intent
-    — and the inverse holds too, which is how both non-filings above were settled: when the code
-    *documents* the weaker treatment as chosen, it is a design, not a defect.
-
-- **(pm, 2026-07-30) `consistency` lens — the fix landed in one file; the defect class is still
-  shipping in twenty-five places.** The product moved for the first time in three fires (`e5669cb` →
-  **`768a2d8`**), so the rotation reset and the diff chose the lens. LOOP-58 removed *one* entrypoint
-  guard. `hub/src` still carries **25 guards across 22 files in three mutually inconsistent idioms**,
-  and each was tested directly rather than reasoned about: form 1 —
-  `` import.meta.url === `file://${argv[1]}` `` (2 sites) fails on **both** a space and a symlink;
-  form 2 — `pathToFileURL(argv[1]).href` (8 sites) survives spaces, **silently no-ops through a
-  symlink**; form 3 — `fileURLToPath(import.meta.url) === argv[1]` (14 sites) has the same symlink
-  hole. `import.meta.url` is realpath-resolved and `argv[1]` is not, so two thirds of the codebase's
-  guards share one latent failure mode.
-  - **The live one:** `seed.ts:94` is form 1 and is spawned as a node entry from **21 test files / 23
-    call sites**. On a spaced checkout of merged `main` it exits **0, prints nothing, and creates no
-    database** — measured; the clean path seeds normally. Any suite run from such a checkout fails
-    downstream with errors pointing nowhere near the cause.
-  - **The trap:** `doctor.ts:492` carries the same broken form but is **unreachable** — `dev-loop
-    doctor` routes `["server","doctor"]` and `server.ts` *imports* `runDoctor`. Checked before
-    claiming an outage: this is a dead-but-wrong guard serving as a copy-paste template, and the
-    ticket says so, so nobody files it as a live break.
-  - **The one that is only safe by accident:** `daemon.ts` is the sole spawned-detached entry among
-    the form-2 sites, and it matches today **solely because `lcDaemonEntry()` derives the path from
-    `import.meta.url`** — both sides realpath'd. Nothing documents or tests that coupling; a spawner
-    change turns `dev-loop hub start` into a detached process that silently never binds the board.
-  - Filed **LOOP-63** (senior, p2, `Mode: direct-code`) with a **verified** prescription rather than a
-    plausible one: `realpathSync(argv[1]) === fileURLToPath(import.meta.url)` was measured `MAIN RAN`
-    on real / symlinked / spaced / spaced+symlinked paths and correctly `GUARD BLOCKED` on import.
-    First preference stays LOOP-58's shape (b) — delete the guard where nothing imports the module.
-    Enforcement belongs in `test/consistency.ts`, whose own header says it exists for "drift classes
-    that have already shipped twice"; this one has now shipped and been *half*-fixed once.
-  - **Examined and deliberately NOT filed:** the "am I source or published?" decision
-    (`fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts"`) is duplicated in 5 files —
-    but all five are **byte-identical**, so it is duplication with zero divergence and no defect.
-    **Re-examine trigger:** any sixth copy that differs, or a published-package bug traced to one of
-    them disagreeing. Do not re-file on a future `consistency` rotation without that.
-  - **Board bottleneck, stated as a fact rather than padded around:** the four unparks put junior at
-    **14 unblocked Todo against a cap of 10**, so nothing was promoted to it — including **LOOP-46**
-    (p2), which is what unparks the p1 **LOOP-38**. Senior has capacity (6/10 after LOOP-63) but its
-    entire Backlog (LOOP-4, LOOP-38) is blocked, so senior-shaped lens findings remain the only way
-    to feed it. LOOP-46 is first in the junior promote order the moment depth drops below the cap.
-
-- **(pm, 2026-07-30) The LOOP-39 design gate PASSED, and the strategy-gaps lens found a documented
-  config field with no implementation.** Product SHA `35479b9`; the lens rotation was reset by the
-  two new commits.
-  - **§21a design gate — LOOP-39 (`merge-review-guard`) passed on the merits.** The 22 KB design is
-    coherent, cites its strategy parents (Goals → *agent skill robustness* + *harden the hub*;
-    Vision → *steered by operator review (点评)*), and its four staged children decompose it 1:1 with
-    no parent AC orphaned (AC1/AC2/AC5 → LOOP-64, AC3 → LOOP-65, AC4 → LOOP-66, PM's board-state
-    fold-in → LOOP-67). Its load-bearing claims were **checked, not accepted**: `hub/src/landing.ts`
-    genuinely does not exist on `origin/main`, so the `Blocked-by: LOOP-40` edges are real; the
-    `push-guard` precedent it cites is real (`TICKET_RE`, the `resolveHubDbPath` + `SELECT state` DB
-    pattern); all five `cli.ts` registration points exist and `ATTACH_OK` genuinely excludes
-    `push-guard`. Promoted all four children `Backlog → Todo` **before** closing the parent (the
-    §21a crash-safe order). **One correction recorded on LOOP-64 rather than failing the gate:** §6
-    prescribed the entry guard `fileURLToPath(import.meta.url) === process.argv[1]` — the best form
-    in the tree, and the exact form **LOOP-63** measured as symlink-unsafe. Shipping it would have
-    made `merge-guard.ts` the 26th instance of a guard LOOP-63 exists to convert. Cancelling a sound
-    design and four children over one line would have been wildly disproportionate; catching it
-    before the code is written is what the gate is for.
-  - **The §17 wiring now has a ticket instead of a report line — LOOP-69.** The guard ships
-    *enforceable but unwired*: calling it from the fire-start merge pass means editing
-    `conventions.md` §12c and `skills/dev-agent/SKILL.md`, which no agent may touch. That is now a
-    pm-owned carrier, `blocked` on LOOP-64 + LOOP-65, which re-parks `Human-Blocked` to the operator
-    the moment the mechanism it would wire in actually exists. The operator is **not** pinged yet, by
-    design — the same posture as LOOP-60's §4.7 hand-off.
-  - **The strategy-gaps finding: `defaultBranch` is prose all the way down.** Detail in **Current
-    state** above. What makes it a *strategy* gap rather than a bug: the Goals section commits to
-    **"Broaden portability"** and to outward adoption by legacy repos, and legacy repos are exactly
-    the population still on `master`. The loop's own landing machinery — 15 references to
-    `defaultBranch` across the §7 merge-back, §12b landing modes, and the §12c merge pass — is
-    specified against a value the config layer cannot express, so every implementation reaches for a
-    literal instead. Filed **LOOP-70** as `Mode: design` (§21b: one config field, one resolution
-    function, two shipped call sites to clean up, two queued consumers) rather than as a two-line
-    patch, because patching the call sites without landing the seam first just relocates the
-    duplication.
-  - **Method note, four fires running:** *find a value that crosses two paths and diff how each path
-    treats it* — `fireId` → `outputTail` → the entrypoint path → now `defaultBranch`. The new move
-    that made it pay this time: **read the governing docs as a specification and grep the code for
-    every field they promise.** The §19 resolution table has eight rows; seven are implemented on
-    `RepoEntry` and one is not, and that asymmetry was visible in a single grep.
-  - **Board bottleneck, unchanged and worth repeating:** junior is at **14 unblocked Todo against a
-    cap of 10**, so B2 promoted nothing to it for a second consecutive fire — including LOOP-46 (p2),
-    which is what unparks the p1 LOOP-38. Senior had room and now holds LOOP-70 (7/10). **LOOP-40 is
-    the highest-leverage ticket on the board:** LOOP-41, 42, 64, 66 and transitively 65 all wait on
-    it, and it is p2, `Todo`, junior-assigned and unblocked.
-
-- **(pm, 2026-07-30) 📝 DECISION — §3's "any triage hit ⇒ verify-fail" is read against the contract the
-  ticket actually set, not against every gap the increment leaves.** Ruled on **LOOP-9**. The shipped
-  increment left a real hole (`projects.<key>.agents` timeouts validated, documented and never applied),
-  and I passed it anyway. **The reasoning, recorded because it is a precedent:** LOOP-9's own Context
-  scoped itself as *"the per-agent config plumbing already exists for `codingAgent`/`model`/`effort`/
-  `cadence` … this extends that same shape rather than inventing one"*, and the shipped code has exactly
-  `cadence`'s reach — it **inherited** the hole, it did not introduce one. Against the contract the
-  ticket set there is no MISSING/EXTRA/MISUNDERSTANDING in the *behaviour*. Cancelling a correct, tested,
-  CI-green, already-merged increment over an inherited gap trades a real increment for a bookkeeping
-  purity that helps nobody. **What the rule still binds:** the two deltas that *over-reached* the scope —
-  a docs sentence asserting a false resolution order, and `E17` validating the unsupported form — got
-  their own ticket (**LOOP-77**), routed senior because the fix requires ruling whether a per-project
-  *cadence* is even coherent with one scheduler over N projects. **The general form:** when a triage hit
-  falls inside a gap the ticket's own scoping paragraph pre-authorised, pass and file; when it falls
-  outside, fail and supersede. Verdicts that pass on a hit must say so in the open, with the reasoning,
-  so the operator can overrule cheaply — LOOP-9's does.
-- **(pm, 2026-07-30) 📝 DECISION — W-code allocation is first-claim-wins by `created_at`, resolved
-  against the BOARD, never against `doctor.ts`.** Three tickets held a live claim on **W19** while
-  `doctor.ts` still emitted only W05–W16, because a claimed code is invisible in shipped code until its
-  ticket lands — my own LOOP-49 gate ratified a duplicate on exactly that mistake and this entry
-  corrects it. Rule going forward: **sweep open tickets for the code, oldest claim keeps it**, later
-  claimants take the next genuinely unused code and say so in their handoff. Current ledger: **W17 →
-  LOOP-41, W18 → LOOP-46, W19 → LOOP-56, W20 → LOOP-74.** This is the escape hatch the
-  `decision-queue-observability` design already wrote (*"the reconciliation rule, not the literal
-  integer, is the contract"*) — exercised, not overridden. The durable fix is an allocator; until one
-  exists the sweep is the procedure.
-- **(pm, 2026-07-30) 📝 DECISION — the allocator from the entry above is now filed (LOOP-88), because the
-  sweep procedure failed a second time in the next fire.** LOOP-81 (LOOP-34's child C) claimed **W17**,
-  already held by LOOP-41; reassigned to **W21**. That is two consecutive design gates catching a
-  collision by hand. The pattern is now evidence, not anecdote: *a procedure that only works when a
-  human-shaped reader happens to look is not a mechanism.* Both catches landed on a design gate, which is
-  luck — nothing catches a collision between two tickets that never share a gate, and nothing catches it
-  at merge. LOOP-88 puts every code in one registry, fails a test on a duplicate or an unregistered
-  emission, and adds `doctor --codes` so "what is free" is a command. Explicitly **out of scope**:
-  reserving codes for unlanded tickets — the registry cannot know about tickets; the goal is that a
-  collision fails a test the moment the second one *lands*, instead of shipping. Ledger now: **W17 →
-  LOOP-41, W18 → LOOP-46, W19 → LOOP-56, W20 → LOOP-74, W21 → LOOP-81.**
-- **(pm, 2026-07-30) 📝 DECISION — a verify-fail on a stacked branch fails BOTH tickets, and the
-  follow-ups are sequenced, not merged.** LOOP-14 branched from LOOP-13's branch; when LOOP-13 was
-  Canceled, most of what failed in LOOP-14 was inherited. The tempting shortcuts were to fold both into
-  one senior ticket, or to fail only the parent and let the child ride the fix. **Both are wrong.**
-  §3 binds one close+follow-up per verified increment — a merged ticket loses the second increment's ACs
-  and its own distinct defects (LOOP-14 violated *its own* spec line, "keep the tail-regex as the
-  fallback", independently of anything it inherited). So: **LOOP-83** (claude lane) and **LOOP-85**
-  (opencode lane), with LOOP-85 `blocked` behind LOOP-83 by a real §9c edge, because it must build on the
-  corrected wiring rather than re-derive it. **The generalisable rule:** when a stack fails, fail every
-  ticket in it, file one follow-up each, and encode the stacking as a blocker edge — never as an implicit
-  assumption that whoever picks the second one will remember the first. And the `blocked` **label** goes
-  on with the marker: the marker is the ledger, the label is what the dev queue actually filters
-  (`agentops.ts:206,218`). Corollary applied to **LOOP-4**: both its `Blocked-by` edges pointed at the
-  now-`Canceled` LOOP-13/LOOP-14, so they were re-pointed to LOOP-83/LOOP-85 — a `Canceled` blocker reads
-  as *satisfied* to the §9c unpark rule, and LOOP-4 is the aggregation ticket, the one place where
-  false-unparking would surface as honest-looking zeros in `metrics --usage/--cost` rather than an error.
+- **2026-07-30 — [ARCHIVED] the 2026-07-30 pm fire arc** (fires 2-N: the lens rotation from
+  `strategy-gaps` through `trust-safety`, the metering/landing/observability chains, and the
+  design-gate + §9c tracker rulings of that day). All verified Done or superseded by later
+  entries and by **Current state**. Full provenance rolled to
+  [`docs/strategy-archive/2026-07.md`](strategy-archive/2026-07.md) (R2 ledger-rollup, 71.2 KB)
+  so this live log stays the recent, actionable tail.
 
 - **(pm, 2026-07-31) 📝 DECISION — the run set is the operator's call, but the config must stop
   claiming agents that never fire.** Having found that `ops`/`reflect`/`communication` carry seeded
@@ -2107,6 +1656,255 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   the unclassified share of failures is high — is **deliberately not filed**, because it belongs in
   `doctorWorkspace`, the CRAP ratchet's #1 entry at 90.4 where LOOP-56 already failed CI adding a
   single W-code block. Banked in `Candidate ideas` until that function is split.
+- **(pm, 2026-07-31) ⏳ A measurement decays, and a park built on one inherits the decay.** Last fire
+  I made the right call the right way: LOOP-46 was deferred on a *measured* CRAP of 90.4 with LOOP-56's
+  CI failure as corroboration — not a guess, not a vibe. It was still wrong one fire later, because
+  **LOOP-56 landing is what fixed the number** (its tests took `doctorWorkspace` to 83.4% coverage →
+  CRAP 82.9). The deferral and its own remedy were the same event, and I filed the deferral without a
+  re-check condition. This is the twin of last fire's lesson rather than a repeat: that one was
+  *"'already shipped' was checked against the code and never against the output"*; this one is
+  **"checked against the output, but an output that has since moved."** Neither is fixed by measuring
+  more carefully — both are fixed by **attaching an expiry to any ruling that cites a number: what
+  would have to change for this to stop being true, and when do I look again.** For a park the answer
+  is nearly always *"when the blocking ticket lands"* — which is precisely the moment the §9c unpark
+  already runs, and the moment I did not re-measure. **Standing rule from here: a §9c unpark re-reads
+  the measurement that justified the park, not just the edge.**
+- **(pm, 2026-07-31) 🎚️ The repo's merge gate has no headroom, and its two nearest entries fail in
+  opposite ways.** Measured on `origin/main` @ `2dc6c7b`: `isError` (`fire-usage.ts:48`) CRAP **90.0**
+  vs threshold **90** — margin 0.0 — and `daemon.ts:449` at **86.7**. The first is a *coverage* defect
+  (CC 9, 0.0% covered, no `hub/test/fire-usage.ts` exists at all) and one test file erases it. The
+  second is a *complexity* defect (CC 86 at 95.4% covered) and **no test can touch it**, because
+  `CRAP = CC²·(1−cov)³ + CC` never falls below `CC`. I nearly filed these as one ticket; they share a
+  symptom and share nothing else. Filed as **LOOP-115** (junior, tests + a headroom warning so a
+  zero-margin pass is legible in CI instead of silent) and **LOOP-116** (senior + `sensitive`, split
+  the handler; its closure holds the bearer gate and the SAFE_KEY traversal guard). **Method note that
+  generalises past this repo: when a gate is a formula, read the formula's floor, not just today's
+  value.** A threshold of 90 is not a quality bar, it is a hard cap on the cyclomatic complexity of any
+  single function in the codebase — which nothing in the repo states.
+- **(pm, 2026-07-31) 🧾 §20 R2 ledger rollup executed — the live doc was 10× its own budget.**
+  `docs/STRATEGY.md` had grown to **203 KB** against §20's ~20 KB trigger, with the Decisions log alone
+  at 111 KB; PM re-reads the whole doc every fire, so that is a per-fire tax paid ~35 times so far.
+  Rolled the contiguous **2026-07-30 pm fire arc** (796 lines, 71.2 KB) to
+  [`docs/strategy-archive/2026-07.md`](strategy-archive/2026-07.md), leaving a one-line index entry and
+  the actionable 2026-07-31 tail live: **201 KB → 133 KB**. Verified by byte accounting in both
+  directions and by asserting every archived entry header is present in the archive — zero entries
+  lost. Prior state carried a note reading *"doc rollup is done — do not redo"*; that referred to the
+  2026-06 arc and was being read as a standing prohibition. It is not one: **the rollup is a recurring
+  chore keyed on size, not a one-time migration.**
+
+- **(pm, 2026-07-31) 🧭 STANDING RULE: a `Done` capability is verified against the workspace's OUTPUT,
+  not only against its code — and filed ZERO tickets this fire, deliberately.** This fire's lens found
+  that five `Done` metering tickets produce nothing here (183/183 ledger rows carry no `fireId`, no
+  `usage`), because the *launcher* is 44 commits behind while reporting the *same version string*.
+  Every one of those tickets was correctly verified: the code was right, the tests were right, the
+  reviews were right. What nobody checked was whether the running system's output ever changed. This
+  is the third variant of one failure in three fires — "checked against the code, never the ledger"
+  (LOOP-114), "checked against the output, but an output that had since moved" (LOOP-46/CRAP 90.4),
+  and now "checked against the code of a version that isn't the one running." **The generalization:
+  every verification names an artifact, and the artifact must be the one the operator actually runs.**
+  Where an increment cannot be exercised on this workspace, say so in the verify comment instead of
+  inferring a pass — as done on LOOP-93 this fire, and warned ahead of time on LOOP-85 and LOOP-4.
+  **On filing zero:** the junior tier is at **14 unblocked Todo against a cap of 10** and the Backlog
+  stands at 30, so the binding constraint is throughput and deployment, not idea supply — padding a
+  deep backlog would have made the report look productive and the loop no faster. The strongest
+  candidate found (the `DEVLOOP_*` env-scrub idiom hand-copied across ~9 sites in 4 idioms with
+  mutually inconsistent key lists) was **tested and declined**: the suite passes under a live fire env
+  at `origin/main`, so it is a latent inconsistency with no measured failure, in a class that already
+  has three shipped fixes and one Canceled duplicate (LOOP-47). Banked, not filed.
+
+- **(pm, 2026-07-31) 🧭 A `Canceled` prerequisite is not a satisfied one — §9c unpark must key on
+  *why* an edge went terminal.** Verify-failing LOOP-57 put a `Canceled` ticket under two parked
+  tickets (LOOP-60, LOOP-50) whose only live edge it was. The literal §9c rule — *auto-unpark tickets
+  whose blocker edges are all `Done`/`Canceled`* — would have released both onto a capability that was
+  never delivered, which is the worst kind of unpark: it looks like progress and hands an agent a
+  ticket whose premise is false. **Ruling: on a `Canceled`-because-superseded edge, retire the dead
+  edge and re-point it at the successor in the same action** (`Unblocked-by: LOOP-57` +
+  `Blocked-by: LOOP-119` + `Blocked-by: LOOP-120`), never unpark. `Canceled` legitimately clears an
+  edge only when the blocker was *abandoned* — the work is no longer needed — not when it was
+  superseded. Both readings are terminal states; only one means the dependent can proceed, and the
+  board does not record the difference. Worth encoding in the W5/§9c tracker rather than leaving to
+  each PM fire's judgement — banked as a convention question, not filed, because it is a §17 governing
+  surface.
+- **(pm, 2026-07-31) 🧭 Verify-failing merged code is the right call, and the follow-up must say
+  "fix-forward, not rebuild."** LOOP-57's code is on `main` and cancelling the ticket does not unmerge
+  it, which makes `Canceled` feel wrong. It is not: §3 leaves exactly two exits from `In Review`, the
+  ACs do not hold in the field, and the alternative — marking it `Done` because the diff is good and
+  CI is green — is precisely the failure this doc has now recorded four times in four fires (checked
+  against the code, not the ledger / against a moved output / against a version that isn't running /
+  and now against a fixture that dodged the case). What the close **must** carry is the distinction
+  between a failed *ticket* and failed *work*: LOOP-119 opens by naming the merged increment sound and
+  the fence, the finding split and the structure as keepers, so the successor is two edits and three
+  test cases rather than a re-implementation. **Also ruled this fire:** the routing of a real AC miss
+  up a tier (§3) is about the *class* of defect, not the implementer — the two-dot/three-dot trap
+  caught the spec author, the implementer, and me, since I passed this file once already and missed
+  line 101 myself. Said so on the ticket; a routing rule that reads as a demotion will make the next
+  hand-off less honest, not more.
+- **(pm, 2026-07-31) 📝 DECISION — a test double that never validates its input cannot catch a wrong
+  input, and that is now the loop's fifth distinct way of shipping a green lie.** LOOP-121: the
+  `landing-observability` reader has asked `gh` for a nonexistent JSON field since the day it landed,
+  through a passing suite, two verifications, and green CI on two Node versions. Nothing about the
+  *code* was wrong in a way review could see — `hub/test/landing.ts` injects an `ExecFn` that answers
+  any argv, and LOOP-42's fixture writes a fake `gh` binary that regex-matches `--state open` and
+  ignores the rest. **Both doubles accept arguments the real tool rejects**, so the suite proves the
+  parser and the classifier and is structurally silent about the only thing that is broken. The
+  running tally of this failure family, one per fire: (1) checked against the code, never the ledger;
+  (2) checked against an output that had since moved; (3) checked against the code of a version that
+  isn't the one running; (4) checked against a fixture that dodged the case; (5) **checked against a
+  double that would have accepted anything.** The standing method — *ask which variable the fixture
+  holds constant, then ask what the product does when it varies* — held again; the new refinement is
+  that **an argv is a variable too**, and a mock is the one place a wrong argv is guaranteed to look
+  right. LOOP-121's third AC makes the double validate its own input; LOOP-111's guard-rail comment
+  applies the same rule to the next hand-rolled `gh` probe before it is written.
+- **(pm, 2026-07-31) 📝 DECISION — a child that correctly consumes a broken dependency is `Done`, and
+  the strategy doc carries the inertness.** LOOP-42 met all five of its ACs against the merged product
+  and its contract explicitly forbade opening its own forge call, so failing it would have punished
+  the implementer for LOOP-40's defect *and* stranded correct merged code In Review (the LOOP-112
+  one-way door). The ticket state answers "did this increment do its job"; **`Current state` answers
+  "does the capability exist"** — and only the second one is allowed to say no here. The corollary is
+  a duty: when a `Done` sits on top of something inert, the doc entry is not optional, because the
+  board will otherwise read as three shipped children and a working feature.
+- **(pm, 2026-07-31) 📝 DECISION — a `Done` blocker whose *reason* is still true gets its edge retired
+  and its constraint promoted into the ACs, never a re-block.** LOOP-4 was parked because "there is no
+  token/cost data, so every surface would aggregate an empty column". Both blockers (LOOP-83, LOOP-85)
+  are now Done and the sentence is still true — the ledger is `0 of 193` until LOOP-38 lands. Blocking
+  again on an operator-gated prerequisite would park a buildable design for a third time; unparking
+  silently would send senior at a surface that renders `$0.00` and calls it a total. So the edge was
+  retired and the empty column became a requirement: fixtures not this ledger, an explicit no-data
+  render (LOOP-42's `landed unknown` is the in-repo precedent), and *N of M fires carry usage* stated
+  on the surface itself. **Generalises last fire's Canceled-because-superseded ruling:** the board
+  records that a blocker *closed*, never whether the condition it protected against *cleared* — so
+  every §9c unpark must re-read the reason, not just the edge.
+- **(pm, 2026-07-31) 📝 The `board:` line is now three-for-three on unmeasurable fields presented as
+  measurements.** `landed unknown` (correct, LOOP-42's AC3 — the one that got it right); `0 escaped to
+  prod` on a loop that runs neither agent able to set the `incident`/`signal` label and has no prod
+  deploy at all — 0 of 121 tickets carry either (filed **LOOP-122**); `1 parked` while **two** tickets
+  sit in `Human-Blocked`, because the KPI keys on the `blocked` *label* while the human park on
+  `service` is a *state* (LOOP-92 has been invisible to it for fourteen fires; evidence added to
+  LOOP-31). The pattern worth naming: **a zero that cannot be non-zero is a null wearing a number's
+  clothes**, and it always reads as the reassuring answer.
+- **(pm, 2026-07-31) 🧭 STANDING RULE — a guard's predicate must be invariant under the operations
+  its own workflow performs routinely.** `push-guard` identifies a passenger commit by **SHA ancestry
+  in local `main`**; the workflow it guards tells agents to **rebase onto `origin/main`** whenever CI
+  asks for an update. Rebase rewrites SHAs, so the predicate is destroyed by the most ordinary action
+  in the pipeline — and the guard fails *silently and in the permissive direction*, reporting `clean`
+  on 18 commits of which 16 were passengers. **The generalisation, and it is the fourth member of the
+  `validate-then-drop` family:** when a check keys on an *identity* (a SHA, a path, a pid, a port)
+  rather than a *property* (what ticket the commit claims, what DB the handle points at), ask which
+  routine operation changes that identity — then assume it happens. The fix is not a tighter identity
+  (patch-id would close this instance and still miss an edited passenger) but a **rewrite-invariant
+  property**: the `(TICKET-ID)` subject convention, which survives every rebase. Ratified on LOOP-87
+  (raised P1). **Same fire, same shape, second surface:** LOOP-124 — the board identity bar keys on
+  `process.cwd()` when the property it means is *the database this daemon opened*.
+- **(pm, 2026-07-31) ⚖️ RULING — when the ambiguity a triage hit exploits is in PM's OWN acceptance
+  criterion, passing is mandatory, not discretionary.** LOOP-52 shipped an identity affordance that
+  names the daemon's cwd-resolved workspace rather than the DB it serves; I reproduced the lie on the
+  production entry point first try. Under §3's letter that is a MISUNDERSTANDING ⇒ verify-fail. I
+  passed it. **The reasoning, extending the LOOP-9 precedent rather than restating it:** LOOP-9
+  established that a triage hit inside a gap *the ticket's own scoping* pre-authorised is passed-and-
+  filed. LOOP-52 is the sharper case — the gap was authored by **me**, in the AC's own words
+  (*"the workspace root **or** `hub.db` path"*, offered as equivalents that are only equivalent when
+  no `DEVLOOP_HUB_DB` override is in play). The implementer satisfied the criterion as written **and**
+  solved the motivating scenario (a foreign daemon runs in its own workspace, so the two boards *are*
+  distinguishable). Cancelling merged, CI-green, correct-to-spec work because the spec was mine to
+  get right would teach the tier to distrust its own ACs — the most expensive lesson available. **The
+  rule:** own the ambiguity by name in the verify comment, pass, file the defect with the AC the spec
+  should have carried (LOOP-124), and say plainly that the operator may overrule cheaply.
+- **(pm, 2026-07-31) 📝 A green suite is silent about every variable it never varies — now measured
+  three fires running, and this fire it was MY OWN test that lied to me.** LOOP-52's regression suite
+  spins two **real** daemons and fetches **real** pages (genuinely good practice, and I said so) — and
+  asserts the ws-bar's CSS class and version string, **never the path**. So the wrong path survived a
+  green suite, CI on two Node versions, and my own verify; the suite would pass if the bar rendered
+  any string at all. Then, hunting the same class of bug, I mis-read my *own* probe: zsh does not
+  word-split unquoted variables, so a `for a in "--pr notanumber"` loop passed one argument, not two,
+  and reported exit 2 where the real argv gives exit 0 — I nearly filed an AC miss against a correct
+  exit-code table. **The tally, one per fire: (1) checked against the code, never the ledger; (2)
+  against an output that had since moved; (3) against the code of a version not running; (4) against a
+  fixture that dodged the case; (5) against a double that would accept anything; (6) against an
+  assertion that never named the field under test; (7) against my own harness's argv.** The discipline
+  that keeps working: **re-run the real thing with the exact inputs the code sends, and read the
+  degraded field instead of skimming past it.**
+- **(pm, 2026-07-31) 📝 DECISION — a design gate promotes *every* staged child, even the blocked ones;
+  and an increment that cannot land goes back to `Todo`, not to `Canceled`.** Two routing rules
+  settled this fire, both against a plausible alternative. **(1)** senior-dev's LOOP-4 handoff proposed
+  "promote A; leave B/C parked in `Backlog`". §21a requires promoting all staged children *before*
+  closing the parent, and the reason is concrete: a child left in `Backlog` behind a `Done` parent is
+  invisible to every dev pick-query *and* to the §9c unpark scan — that is precisely how children get
+  stranded. Resolution: **all children → `Todo`, with `blocked` added to the ones carrying real
+  `Blocked-by` edges.** The junior slice excludes `blocked`, so sequencing is preserved and §9c
+  auto-unparks them; nothing is stranded. Note `ticket create --blocked-by` writes the *marker* but
+  **not the label** — closing that gap is the gate's job. **(2)** LOOP-79/LOOP-80 arrived `In Review`
+  with red CI over a one-line packaging omission. §3's close-and-supersede is built for *landed* work
+  that missed its ACs; these never landed, and superseding would have burned two branches and two
+  rebuild cycles for an omission. But leaving them `In Review` was not an option either — per LOOP-112
+  the dev queue serves `todo` + the tier's *own* `In Progress`, so an unlanded ticket parked there is
+  unreachable by the only agent allowed to land it (LOOP-45 stranded 9h that way). **Routed back to
+  `Todo` with the exact fix.** The general rule: *`Canceled` is for work that was wrong; `Todo` is for
+  work that is right and unfinished.*
+- **(pm, 2026-07-31) 📝 The lens found the defect in the *agent's* flow, not the human's — and the
+  operator's manual is otherwise accurate.** Audited every factual claim `operator-brief.ts` generates
+  into each workspace's `CLAUDE.md` by running the argv it advertises: `team add-project|add-repo|
+  add-provider|set|sync-opencode`, `secret set`, `hub start`, `bundle export`, `up`, `doc list|get`,
+  `run --agents core --once`, and doctor codes W13/W14/W15 — **all real, all as described.** Exactly
+  one claim is false, and it is the same `:8787` literal LOOP-124's AC4 already covers. But the live
+  proof is worse than staleness: `:8787` is held by a **15-day-old v1.2.1 daemon from a different
+  workspace** (`/Users/shuai/workspace/jinko/dev-loop`) that answers **200 OK**, so an operator
+  following the instruction lands on a real-looking, wrong, foreign board. A connection-refused would
+  have been kinder. Added as **LOOP-124 AC5**: `up.ts:215` prints `env ?? 8787` while the lifecycle it
+  just invoked *resolved and recorded* the true port — and **`doctor`, `hub status` and
+  `init-wizard.ts:211` all read it correctly**, so the fix is to copy a sibling, not to invent one.
+  **The pattern worth keeping: when one surface is wrong, look for the sibling that is right — this
+  loop keeps shipping the correct resolution ladder in one place and re-deriving it badly in another
+  (LOOP-117, LOOP-124, and now `up`).**
+- **(pm, 2026-07-31) Integrity-audit doctrine: the script audit denies by default, and LOOP-129 is
+  NOT folded into LOOP-128.** Two calls, both encoded into LOOP-129's ACs:
+  **(1) Deny by default, not a longer allow-list.** The obvious fix for the `postinstall`/`prepack`
+  gap is to add those two names to `RELEASE_SCRIPT_EXACT`. That is refused as the *whole* fix,
+  because an allow-list of two only moves the hole to the third name — the next lifecycle script
+  anyone adds re-opens it silently, and nothing fails to announce that. AC3 therefore requires that
+  **any** unpinned npm lifecycle script (`preinstall`, `prepare`, `prepublishOnly`, …) is itself a
+  finding. A security guard whose coverage depends on someone remembering to extend it is a guard
+  with a maintenance-shaped hole. Constraint the implementer must respect: the scanner is
+  deliberately stdlib-and-Git-only because it runs *before* Node exists, so it cannot grow an
+  npm dependency to enumerate lifecycle names.
+  **(2) Same file, two tickets, deliberately.** LOOP-128 ("the check has no local runner" —
+  throughput/DX, P1, junior) and LOOP-129 ("the check has a hole" — coverage, P2, `sensitive` →
+  senior) both live in `security/`. They are kept apart because the fixes touch different files, at
+  different tiers, on different urgencies: LOOP-128 is why two PRs are red *right now*; LOOP-129 is
+  defence-in-depth on the published artifact. Folding them would let the urgent one drag the
+  careful one, or the careful one delay the urgent one.
+- **(pm, 2026-07-31) ⚖️ RULING: an increment whose ACs pass but whose PR has not merged goes back to
+  `Todo`, not `Done` and not `Canceled` — and the route-back is now evidence-backed.** LOOP-79 and
+  LOOP-80 were verified in full (every AC observed, §3 triage clean, LOOP-79's regression test proven
+  RED against `cec3598`) and still moved to `Todo`, because an unmerged PR has not landed and
+  `In Review` is unreachable by the tier that must land it (LOOP-112). The precedent is now measured
+  rather than argued: **the same treatment on LOOP-65 produced a clean landing in twelve minutes**,
+  where §3's close-and-follow-up would have discarded a branch that passed every AC. **The boundary
+  holds at wrongness.** `Canceled` + follow-up is for an increment that is *wrong*; `Todo` is for one
+  that is *right and unfinished*. A green-but-unlanded PR is unfinished ship-work owned by the
+  implementer, and the ticket state should say so out loud rather than parking it where nobody can
+  act. Cost to name: this pushes junior to 11/10, over cap — accepted, because false `Done` and
+  silent stranding are both worse than a visibly over-full queue. **A route-back is not a §5a
+  promotion and is not depth-capped.**
+- **(pm, 2026-07-31) 📝 Three hypotheses died this fire and none became a ticket — the count is the
+  point.** (1) *"senior idles because §21b's escalation safety net never fires"* — it fired 8 times,
+  all 8 `Done`. (2) *"`local_code_scan.py` is 98 KB of shipped code CI never invokes"* — true and
+  correct by design; it scans a developer host, not a repo. (3) *"its no-source-snippets claim is
+  unenforced prose — there is no redaction code anywhere in the file"* — the claim is structural and
+  **holds under a six-canary control**. Each was a plausible P1/P2 that would have cost an implementer
+  a fire to disprove. **The method that killed all three is the same one that found LOOP-129: treat
+  the stated claim as an assertion and go run it.** The difference between "I read the code and it
+  looks wrong" and "I ran a control and it is wrong" is an entire wasted increment, and this fire it
+  went the other way three times. Filing **zero** with a 34-deep backlog and junior over cap is the
+  correct outcome, not an unproductive one.
+- **(pm, 2026-07-31) 📝 The merge-guard chain is complete and enforces nothing — wire it in two
+  stages.** LOOP-64 (review axis), LOOP-67 (board-state axis) and LOOP-65 (`--apply`) are all `Done`;
+  LOOP-69, the §17 hand-off that calls the verb from the fire-start merge pass, unparked to the
+  operator this fire with both edges retired. The staged recommendation is recorded on the ticket and
+  is unchanged, but its premise was **re-confirmed against live state rather than assumed**: enforce
+  `Canceled`/`Duplicate` now (unambiguous, and PR #61 already needed it), and hold `In Review` out of
+  the enforcing set until **LOOP-110** lands — because LOOP-79 and LOOP-80 sat `In Review` with green
+  unmerged PRs at 06:00Z today, and an `In Review`-enforcing guard would have made both permanently
+  unmergeable with no state either ticket could reach to clear the refusal.
 
 ## Candidate ideas
 
@@ -2116,15 +1914,29 @@ filed / shipped / retired DL-era entries (16 KB) moved to
 candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bridge ideas were filed
 2026-06-23.)_
 
+- **`worktree reap --dry-run` previews the worktrees but not the branch decisions** (recorded
+  2026-07-31 at the LOOP-106 verify, deliberately not filed). The dry-run path returns before the
+  branch logic, so it prints `would remove worktree …` and never says which branches would be
+  *deleted* versus *KEPT as unrecoverable*. Since LOOP-106 the reap is an opt-in destructive verb, and
+  for that shape **the preview is the safety mechanism** — an operator deciding whether to pass
+  `--reap` cannot currently see the half that is irreversible. Not a LOOP-106 failure: no AC asked for
+  it, and when the ambiguity is in PM's own AC, passing is mandatory. Pick this up wherever the reap
+  is next touched.
+
 - **Unclassified-failure-rate health warning — banked 2026-07-31, blocked on a refactor, not on value.**
   LOOP-114 fixes the one classifier pattern this workspace needed, but the taxonomy will always lag the
   next provider's wording: the failure mode is silent, and the whole point is that nobody notices a
   `null` class. The durable defense is a doctor line that fires when the unclassified share of failures
   crosses a threshold ("25 of 26 failures carry no class — the taxonomy is blind here"), which turns an
   invisible gap into a health warning. **Not filed deliberately:** it belongs in `doctorWorkspace`
-  (`doctor.ts:185`), the CRAP ratchet's #1 entry at 90.4 with ten W-code blocks, where LOOP-56 already
-  failed CI adding a *single* block. File it after that function is split — otherwise it is unshippable
-  by construction. Same gate holds LOOP-46 (W18), LOOP-74 (W20), LOOP-81 (W21).
+  (`doctor.ts:185`), which carries ten W-code blocks. **⚠️ CORRECTED 2026-07-31: the 90.4 figure this
+  bullet was banked on is stale and was blocking more than it should.** Re-measured on `origin/main` @
+  `2dc6c7b`, `doctorWorkspace` is CRAP **82.9** (CC 64, 83.4% covered) and is **not** the ratchet's #1
+  entry — LOOP-56 landing is what fixed it. An eleventh W-code block lands at ~84.3 **provided it ships
+  with a covering test** (coverage is cubed; the same block at 80% coverage is 98.8 and red). So this
+  is filable now, and so were LOOP-46 (W18 — promoted to `Todo` this fire), LOOP-74 (W20) and LOOP-81
+  (W21). The real zero-margin entries are elsewhere: LOOP-115 (`fire-usage.ts:48`, CRAP 90.0) and
+  LOOP-116 (`daemon.ts:449`, CC-floored at 86).
 - **Cross-store ticket migration (linear↔service) — DEFERRED epic, operator decision; not a ticket
   until prioritized.** (Live remainder of the archived backend-choice-at-init bullet.) The blocker
   is structural, not effort: hub ids are a global PK minted from prefix+seq (`hub/src/db.ts:286-292`)
@@ -2177,3 +1989,26 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   redundant with the existing wordmark-as-home at `daemon.ts:127`.)
 - **Loop-cost-governance — Phase 2 (sequenced after a cost-signal precursor; PM 2026-06-27, banked from the DL-73 groom).** The DL-73 intake's two cost-*quantifying* asks are **not buildable until the hub has a per-fire cost signal** (agents don't report token/$ spend to the SoR today): **(a)** a loop-level **token/$ budget ceiling** (the hard circuit-breaker complementing DL-76's no-progress detector), and **(b)** a **cost-per-accepted-change** metric + a cost column on `/activity` (complementing DL-79's accept-rate). The likely precursor is a **§17 [pm-proposal]** for the operator-owned launcher to emit per-fire cost into the hub (a new `events` kind), then a buildable hub cap + the cost surfacing. File the precursor proposal when the operator signals appetite, or when an adopter hits a real runaway-cost incident. **(c)** Surfacing DL-79's accept-rate in the **Reflect daily digest** is a Reflect SKILL change → a §17 [reflect-proposal], not a code ticket; fold into the next Reflect-curation pass rather than filing Dev work. **UPDATE 2026-07-30 (pm): ✅ (a)+(b) UNBANKED — the operator asked for the whole arc directly, and the precursor is now FILED as `LOOP-2` (metering core: `fireId` + per-fire token/cache/cost across all three CLI lanes, senior `Mode: design`), with the read surfaces as `LOOP-4` (held in `Backlog` behind `Blocked-by: LOOP-2`).** Confirmed still not built before filing: `recordFire` writes duration/exit/model/effort/`bootBytes` only, and `context-bill.ts` is a *static* 4-bytes-per-token estimator of the boot corpus — there is no measured provider usage anywhere in the hub. Note the shape changed from what was banked here: this is **operator-directed work through the normal intake path, NOT a §17 `[pm-proposal]`** — the launcher already writes the per-fire ledger (`fire.completed`), so extending it is ordinary Dev work on hub code, with no SKILL/conventions edit required. **Enforcement (a budget ceiling that stops fires) is still NOT filed** — it is a separate ticket built ON this signal once LOOP-2 lands; do not fold it into LOOP-4's read surfaces.
 - **Daemon serves stale VIEW code until restarted — observe-surface lag after a Dev ship (ux-flows/ops lens, PM 2026-06-27 — banked).** The long-lived daemon (DL-41) loads `daemonviews.ts` + routes at boot, and `daemon ensure` is idempotent (never restarts a live process), so after a Dev commit that changes the web-UI rendering (e.g. DL-84's new `/activity` section, or DL-83's banner) the running daemon keeps serving the OLD view code until manually `down`+`up`'d — the operator sees fresh DATA (read per-request from the SoR) with **stale RENDERING**. Standard server behavior, but a real papercut for THIS dogfooding loop where Dev ships ~every 20min and the daemon IS the operator's observe surface (a new feature looks un-shipped until restart). **Options when filed:** a `dev-loop daemon restart` subcommand + a post-ship hint; OR a lightweight **served-commit-vs-HEAD banner** on the web UI so staleness is *visible* (the DL-83 surface-don't-prevent pattern); OR file-watch auto-reload (heavier — touches the lifecycle + the stateless contract). **Banked, not filed** — expected daemon behavior, low-severity (data is correct, only new view code lags); file if the operator finds the lag misleading or asks.
+- **`DEVLOOP_*` test-env scrubbing is one idiom hand-copied ~9 times with mutually inconsistent key
+  lists (consistency lens, PM 2026-07-31 — TESTED AND DECLINED, banked).** The runner injects 11
+  identity vars into every fire (`run-agents.ts:896-909`). Tests that spawn a child must scrub them or
+  the fire's own env leaks in — the bug that produced **LOOP-6** (`hub-lifecycle.ts`), **LOOP-32**
+  (`run-agents-live.ts`) and **LOOP-45** (`run-agents.ts`), plus **LOOP-47** filed and Canceled as a
+  duplicate of the last. Four fixes, one class, zero shared helper. The sites now disagree: `run-agents.ts`
+  scrubs 8 keys at two spawn helpers but only 4 at a third (`runL9`, line 383, a *destructuring* idiom);
+  `hub-lifecycle.ts` scrubs 3; `cli-agentops.ts` 4 (a different 4); `init-wizard.ts` 4; `daemon-lifecycle.ts`
+  uses an array loop; `DEVLOOP_FIRE_ID` is handled by direct `process.env` mutation in a fifth idiom.
+  **Declined because it was measured, not assumed:** `node test/run-agents.ts` at `origin/main` run under
+  a full live fire env returns `RUN_AGENTS_OK` — the weak `runL9` list is a *latent* inconsistency with
+  no live failure, because those cases pass `--project` explicitly. **File it when** a fifth instance of
+  this bug appears, or when a new identity var is added (the next one will land in none of the six lists);
+  the shippable form is a single exported `scrubFireEnv()` the way **LOOP-63** replaced 25 entrypoint
+  guards in 3 idioms with one helper — precedent this loop already accepted and shipped.
+- **A verify-fail should be reachable from a green suite — the "which case does the fixture dodge?"
+  check, banked 2026-07-31.** LOOP-57 shipped 22/22 green and was still unusable, because its case (c)
+  chose a *doc* file for the divergence it was testing and thereby made the only distinction that
+  mattered (tree comparison vs commit range) unobservable. The generalizable move that caught it costs
+  one question per verify: **name the variable the fixture holds constant, then ask what the product
+  does when it varies.** Here: "case (c) diverges origin — with *what kind of file*?" Possible shippable
+  form is a §15 convention (a regression case must vary the dimension its assertion depends on) or a
+  Reflect lesson; it is a review *method*, not code, so it is banked rather than filed as Dev work.
