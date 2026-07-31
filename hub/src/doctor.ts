@@ -494,10 +494,23 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
     if (isNaN(behind)) {
       info(`[${matchRef}] W18: rev-list output unexpected — skipping (best-effort)`);
     } else if (behind > 0) {
-      const shortR = spawnSync("git", ["-C", matchDir, "rev-parse", "--short", `origin/${matchBranch}`],
+      // Count only commits that touch packaged paths (exclude docs/**  and *.md — doc-only
+      // commits do not change installed behavior). LOOP-151: a guard that fires on every PM
+      // doc-land is a guard that is off.
+      const codeR = spawnSync("git", ["-C", matchDir, "rev-list", "--count", `${vCommit}..origin/${matchBranch}`,
+        "--", ".", ":(exclude)docs/", ":(exclude)*.md"],
         { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-      const shortSha = shortR.stdout.trim() || "unknown";
-      warn(`[W18] [${matchRef}] installed ${pkgName} v${V} is ${behind} commit(s) behind origin/${matchBranch} (${shortSha}) — CLI-behavior fixes merged after v${V} are NOT live: every fire runs the published npm package, not origin/main. An operator must re-publish + agents reinstall, or pin agents to a local build (design landing-observability §9.2).`);
+      const codeRaw = (codeR.status === 0 && codeR.stdout.trim()) ? parseInt(codeR.stdout.trim(), 10) : NaN;
+      const codeBehind = isNaN(codeRaw) ? behind : codeRaw; // fallback to total when pathspec fails
+      if (codeBehind > 0) {
+        const docBehind = behind - codeBehind;
+        const shortR = spawnSync("git", ["-C", matchDir, "rev-parse", "--short", `origin/${matchBranch}`],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        const shortSha = shortR.stdout.trim() || "unknown";
+        const docNote = docBehind > 0 ? ` (+${docBehind} doc-only)` : "";
+        warn(`[W18] [${matchRef}] installed ${pkgName} v${V} is ${codeBehind} code commit(s) behind origin/${matchBranch} (${shortSha})${docNote} — CLI-behavior fixes merged after v${V} are NOT live: every fire runs the published npm package, not origin/main. An operator must re-publish + agents reinstall, or pin agents to a local build (design landing-observability §9.2).`);
+      }
+      // codeBehind === 0: all commits are doc-only — silent (no behavior skew)
     } else {
       pass(`[${matchRef}] installed ${pkgName} v${V} matches origin/${matchBranch} — no skew`);
     }
