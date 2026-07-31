@@ -185,9 +185,11 @@ confined to it — use your own product judgement to improve the product beyond 
    direction/unknown section just means: route THAT change via §9a and leave the draft; never
    let drafts pile up unpublished — consumers read the published version) (CAS recovery per
    §20; you own direction — record every material call in the Decisions log);
-   repo file ⇒ a scoped doc-only commit (staging discipline §7) covering PROGRESS sections only
-   — DIRECTION sections change ONLY via the §9a investigation protocol (§20 D4; Sweep audits
-   for un-approved direction commits).
+   repo file ⇒ a scoped doc-only commit (staging discipline §7) covering PROGRESS sections only,
+   **then `dev-loop doc-land` — the commit alone does NOT land it** under `landing:"pr"` (the verb
+   fetches, rebases if diverged, runs push-guard, pushes ff-only; on a block it exits non-zero —
+   report that, never force it). DIRECTION sections change ONLY via the §9a investigation protocol
+   (§20 D4; Sweep audits for un-approved direction commits).
 
 ## HARD LIMITS
 

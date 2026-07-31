@@ -1680,8 +1680,15 @@ landing — so PM's write policy splits **by section**:
 
 - **Progress sections — autonomous.** `Current state` (shipped markers/✅), `Decisions
   (running log)` appends, `Candidate ideas`, and `Personas`/`Glossary` upkeep: PM commits
-  these directly, exactly as before (pm-agent Job C step 5). Recording reality is not a
-  direction change.
+  these directly (pm-agent Job C step 5). Recording reality is not a direction change.
+  **Under `landing:"pr"` the commit is not the landing** — every dev worktree branches off
+  `origin/<defaultBranch>`, so an unpushed doc commit is invisible to the whole team. PM lands
+  it with **`dev-loop doc-land`** (fetch → rebase-if-diverged → `push-guard` → ff-only push;
+  a block exits non-zero and is reported, never forced). The verb asserts the pushed range
+  touches **only** the strategy doc + its archive — this is a docs path, never a licence to
+  push code, and DIRECTION sections still route via §9a regardless. Senior's repo-file design
+  docs (`docs/design/<slug>.md` on `linear`/`local`) land the same way; on `service` they are
+  hub `design` docs and never touch git.
 - **Direction sections — propose first.** `Vision`, `Goals (north star)`, `Non-goals` —
   plus any `Appetite` / `No-gos` headings a doc carries: changing WHAT the product pursues
   requires the §9a **investigation protocol** (findings + the unified diff on a
