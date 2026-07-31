@@ -12,7 +12,56 @@ export interface LandingState {
   oldestAgeDays: number | null;
   baseChecks: "green" | "red" | "unknown" | null;
   mergedInWindow: number | null;
+  prs: Array<{ ticket: string; pr: number; url: string; state: string }> | null;
   reason?: string;
+}
+
+// Regex matching a ticket id in any string (e.g. branch names, PR titles/bodies).
+// Mirrors push-guard.ts's TICKET_RE — kept local to avoid a cross-module dep until a shared
+// constants module is warranted (design merge-review-guard §5.2, LOOP-66).
+const TICKET_RE = /\b[A-Z][A-Z0-9]{1,9}-\d+\b/;
+
+// Parse the ticket id from a PR head-branch name (primary: dev-loop/<id> or fix/<id>-... convention)
+// or fall back to the TICKET_RE scan over the PR title + body.
+// Returns null when no recognisable id is found.
+export function prToTicket(headRefName: string, opts?: { title?: string; body?: string }): string | null {
+  const m = headRefName.match(/(?:dev-loop\/|fix\/)([^/\s]+)/);
+  if (m) {
+    const hit = m[1]!.match(TICKET_RE);
+    if (hit) return hit[0]!;
+  }
+  const text = (opts?.title ?? "") + " " + (opts?.body ?? "");
+  const fallback = text.match(TICKET_RE);
+  return fallback ? fallback[0]! : null;
+}
+
+// Look up the PR for a given ticket id in a GitHub repo.
+// Primary: gh pr list --head dev-loop/<id> (the branch convention).
+// Fallback: gh pr list --search <id> filtered through prToTicket for a TICKET_RE match.
+// Returns null on any forge failure or when no PR exists — never throws.
+export function ticketToPr(
+  ghRepo: string,
+  ticketId: string,
+  opts?: { exec?: ExecFn },
+): { pr: number; url: string; state: string } | null {
+  const exec = opts?.exec ?? defaultGhExec;
+  try {
+    const primary = exec(["pr", "list", "--repo", ghRepo, "--state", "all", "--head", `dev-loop/${ticketId}`, "--json", "number,url,state"]);
+    if (primary.ok) {
+      const prs = JSON.parse(primary.stdout) as Array<{ number: number; url: string; state: string }>;
+      if (prs.length > 0) return { pr: prs[0]!.number, url: prs[0]!.url, state: prs[0]!.state };
+    }
+    // Fallback: search by ticket id text (covers fix/<id>-… and other non-convention branches)
+    const search = exec(["pr", "list", "--repo", ghRepo, "--state", "all", "--search", ticketId, "--json", "number,url,state,headRefName,title,body"]);
+    if (search.ok) {
+      const candidates = JSON.parse(search.stdout) as Array<{ number: number; url: string; state: string; headRefName: string; title: string; body: string }>;
+      const match = candidates.find((p) => prToTicket(p.headRefName, { title: p.title, body: p.body }) === ticketId);
+      if (match) return { pr: match.number, url: match.url, state: match.state };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export type ExecFn = (args: string[]) => { stdout: string; stderr: string; ok: boolean };
@@ -107,11 +156,11 @@ function isAuthError(stderr: string): boolean {
 }
 
 function mkUnknown(repo: string, reason: string): LandingState {
-  return { repo, state: "unknown", openLoopPRs: null, oldestAgeDays: null, baseChecks: null, mergedInWindow: null, reason };
+  return { repo, state: "unknown", openLoopPRs: null, oldestAgeDays: null, baseChecks: null, mergedInWindow: null, prs: null, reason };
 }
 
 function mkNa(repo: string, reason: string): LandingState {
-  return { repo, state: "na", openLoopPRs: null, oldestAgeDays: null, baseChecks: null, mergedInWindow: null, reason };
+  return { repo, state: "na", openLoopPRs: null, oldestAgeDays: null, baseChecks: null, mergedInWindow: null, prs: null, reason };
 }
 
 function readBaseChecks(
@@ -193,7 +242,7 @@ export async function readLandingState(
         "--repo", ghRepo,
         "--state", "open",
         "--limit", "100",
-        "--json", "number,headRefName,createdAt,mergeable",
+        "--json", "number,headRefName,createdAt,mergeable,url",
       ]);
     } catch (e) {
       const code = (e as { code?: string }).code;
@@ -215,7 +264,7 @@ export async function readLandingState(
       continue;
     }
 
-    type PRItem = { number: number; headRefName: string; createdAt: string; mergeable: string };
+    type PRItem = { number: number; headRefName: string; createdAt: string; mergeable: string; url: string };
     let allOpen: PRItem[];
     try {
       allOpen = JSON.parse(openResult.stdout) as PRItem[];
@@ -230,6 +279,16 @@ export async function readLandingState(
       openLoopPRs > 0
         ? Math.max(...loopOpen.map((p) => (now - Date.parse(p.createdAt)) / (24 * 60 * 60 * 1000)))
         : null;
+
+    // Derive ticket↔PR links from the already-read open loop PRs (design §5.2 / LOOP-66).
+    // Null entries (unrecognised branch names) are filtered out; no extra forge call.
+    const prs = loopOpen
+      .map((p) => {
+        const ticket = prToTicket(p.headRefName);
+        if (!ticket) return null;
+        return { ticket, pr: p.number, url: p.url ?? "", state: "OPEN" };
+      })
+      .filter((p): p is { ticket: string; pr: number; url: string; state: string } => p !== null);
 
     // 2. Base checks (best-effort; never blocks classification)
     const baseChecks = readBaseChecks(exec, ghRepo, mergeChecks, defaultBranch);
@@ -249,9 +308,9 @@ export async function readLandingState(
       const reason = hasDayZeroStall
         ? `base '${defaultBranch}' required checks red — autoMerge structurally blocked`
         : `${openLoopPRs} PR(s) open >${LANDING_STALL_DAYS}d without MERGEABLE+green status`;
-      results.push({ repo: ref, state: "stalled", openLoopPRs, oldestAgeDays, baseChecks, mergedInWindow, reason });
+      results.push({ repo: ref, state: "stalled", openLoopPRs, oldestAgeDays, baseChecks, mergedInWindow, prs, reason });
     } else {
-      results.push({ repo: ref, state: "healthy", openLoopPRs, oldestAgeDays, baseChecks, mergedInWindow });
+      results.push({ repo: ref, state: "healthy", openLoopPRs, oldestAgeDays, baseChecks, mergedInWindow, prs });
     }
   }
 
