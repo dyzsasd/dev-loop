@@ -178,9 +178,10 @@ def _scan_release_manifest(
     data: bytes,
     *,
     source_path: str | None = None,
+    worktree: bool = False,
 ) -> list[Finding]:
     manifest_path = PurePosixPath(path if source_path is None else source_path)
-    if manifest_path != PurePosixPath("hub/package.json"):
+    if manifest_path != PurePosixPath("hub/package.json") or not worktree:
         return []
     try:
         document = json.loads(data)
@@ -219,6 +220,7 @@ def scan_bytes(
     data: bytes,
     *,
     source_path: str | None = None,
+    worktree: bool = False,
 ) -> list[Finding]:
     """Scan one file as inert bytes; never import or evaluate its contents."""
     findings: list[Finding] = []
@@ -237,6 +239,7 @@ def scan_bytes(
             path,
             data,
             source_path=source_path,
+            worktree=worktree,
         )
     )
     executable_path = PurePosixPath(path if source_path is None else source_path)
@@ -342,6 +345,7 @@ def scan_worktree(root: Path, *, whole_tree: bool = False) -> tuple[list[Finding
                 _display_path(relative),
                 data,
                 source_path=relative,
+                worktree=True,
             )
         )
         scanned += 1
