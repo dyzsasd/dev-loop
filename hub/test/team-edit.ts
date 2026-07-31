@@ -425,6 +425,41 @@ try {
       "--team-default writes team.codingAgentDefaults.<cli>.model");
   }
 
+  // ═══ projects.<k>.strategyDoc — repo-relative file path, validated, doctor W17 ═══
+  {
+    // round-trip: set + read back
+    const sdSet = run("team", ["set", "projects.web.strategyDoc", "docs/STRATEGY.md"], { cwd: lin });
+    ok(sdSet.code === 0 && readJson(join(lin, "dev-loop.json")).projects.web.strategyDoc === "docs/STRATEGY.md",
+      "team set projects.<k>.strategyDoc writes a plain-string repo-relative path");
+    // --help summary contains strategyDoc
+    const help = run("team", ["set", "--help"], { cwd: lin });
+    ok(/strategyDoc/.test(help.out), "team set --help lists strategyDoc in the settable-paths summary");
+    // absolute path rejected
+    const sdAbs = run("team", ["set", "projects.web.strategyDoc", "/abs/path/STRATEGY.md"], { cwd: lin });
+    ok(sdAbs.code === 2 && /repo-relative/.test(sdAbs.out), "team set rejects an absolute strategyDoc path");
+    // Linear URL rejected
+    const sdLin = run("team", ["set", "projects.web.strategyDoc", "https://linear.app/foo/document/bar"], { cwd: lin });
+    ok(sdLin.code === 2 && /repo-relative file path/.test(sdLin.out), "team set rejects a Linear document URL for strategyDoc");
+    // add-project --strategy-doc sets it at creation; absolute path also rejected there
+    const sdCreate = run("team", ["add-project", "strategy-proj", "--strategy-doc", "docs/STRATEGY.md"], { cwd: lin });
+    ok(sdCreate.code === 0 && readJson(join(lin, "dev-loop.json")).projects["strategy-proj"]?.strategyDoc === "docs/STRATEGY.md",
+      "add-project --strategy-doc sets strategyDoc at creation");
+    const sdCreateAbs = run("team", ["add-project", "bad-proj", "--strategy-doc", "/abs/STRATEGY.md"], { cwd: lin });
+    ok(sdCreateAbs.code === 2 && /repo-relative/.test(sdCreateAbs.out), "add-project --strategy-doc rejects an absolute path");
+    // doctor W17: a project with repos but no strategyDoc
+    // Use doctor.ts directly (not server.ts) — doctor.ts has no @modelcontextprotocol/sdk dependency
+    // so it works in worktrees where node_modules may not be installed.
+    const cfgLin = readJson(join(lin, "dev-loop.json"));
+    delete cfgLin.projects.web.strategyDoc;
+    writeFileSync(join(lin, "dev-loop.json"), JSON.stringify(cfgLin, null, 2) + "\n");
+    const dW17Fire = run("doctor", [], { cwd: lin });
+    ok(/\[W17\]/.test(dW17Fire.out) && /strategyDoc/.test(dW17Fire.out), "doctor W17 fires when a project has repos but no strategyDoc");
+    // set strategyDoc → W17 goes silent
+    run("team", ["set", "projects.web.strategyDoc", "docs/STRATEGY.md"], { cwd: lin });
+    const dW17Clear = run("doctor", [], { cwd: lin });
+    ok(!/\[W17\].*web/.test(dW17Clear.out), "doctor W17 is silent once strategyDoc is set");
+  }
+
   console.log(fails === 0 ? "\nTEAM_EDIT_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
