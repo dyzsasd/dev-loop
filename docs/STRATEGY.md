@@ -572,6 +572,36 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   closing write; create-as-`Done` via `insertTicket`, which has no verify gate at all) as
   **LOOP-183**, now in senior `Todo`.
 
+- **2026-07-31 (late) — the loop can finally see its own landing stalls: doctor **W22** shipped and
+  verified against a true forge reading (LOOP-41, `460f5cf`, PR #107).** This closes the
+  `landing-observability` design's Child B, which had been parked behind two separate blockers for
+  most of a week — LOOP-40 (the `landing.ts` reader) and then LOOP-121 (that reader asking `gh` for
+  a `mergeableState` field `gh` does not have, so every call degraded to "forge unreachable"). The
+  motivating failure was **a green `DOCTOR_OK` printed over three PRs rotting on a red base for six
+  days**, and it recurred live on this workspace at 11:45Z with `main` red for 49 minutes while
+  doctor said `NEXT: dev-loop run`. Doctor now glances at the forge and reports a stall, a healthy
+  base, or an honest "best-effort, could not tell" — and flips `NEXT:` to *clear the landing stall*
+  when wedged. Verified this fire against the merged tree with real `gh`: `✅ landing: 1 open loop
+  PR(s), base green — nothing wedged`, byte-exact to the design template.
+  **The design constraint that made this safe is worth keeping as a pattern:** the check is
+  warn/info-only and can never flip `DOCTOR_OK` — and rather than relying on a reviewer to enforce
+  that, the implementation puts the stall check in a helper that is *handed* `{warn, info, pass}`
+  and **has no `fail` in scope at all**. The fence is structural, not editorial.
+  **Status is `merged`, not `published` (§12b)** — and doctor now says so in its own voice: the
+  installed v1.12.0 is **41 commits behind `origin/main`**, so no fire on this workspace gets W22
+  until the operator re-publishes. The release cadence is now the standing constraint on four
+  separate shipped-but-dark fixes (LOOP-157's verify gate, LOOP-181's CLI rename, this, and W18's
+  own skew line reporting it).
+  **One real limit found while verifying, filed as LOOP-188:** W22's day-0 red-base detection is
+  **unreachable on any repo whose default branch is not `main`**. Three sites still hardcode
+  `"main"` and bypass the §19 `defaultBranch` chain that `doc-land`, `worktree`, `push-guard` and
+  doctor's own W18 already consume correctly — including a `landing.ts` comment justifying the
+  hardcode with "RepoEntry has no defaultBranch field", which LOOP-70 made false. The forge is then
+  asked for `/commits/main/check-runs` on a repo that has no such branch, the 404 degrades to
+  `unknown`, and the stall arm can never be entered. **Same shape as LOOP-121 — ask the forge for
+  something that does not exist and the failure reads as "nothing to report"** — which is why the
+  fix is specified as a test that a red non-`main` base *does* warn, not merely as a rename.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
