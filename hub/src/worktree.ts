@@ -2,7 +2,10 @@
 // dev-loop worktree — dev worktree lifecycle management (LOOP-54, LOOP-37).
 //   add  <id> [--repo <ref>]            create a dev worktree off origin/<defaultBranch>
 //   path <id> [--repo <ref>]            print the canonical wsWorktree() path (LOOP-37: single path-builder)
-//   reap [--repo <ref>] [--dry-run]     remove worktrees for terminal-state tickets + delete their branches
+//   reap [--repo <ref>] [--dry-run]     remove terminal-state worktrees + delete each RECOVERABLE branch
+//                                       (merged into the base, or pushed to origin). A dirty worktree or an
+//                                       unrecoverable Canceled branch is KEPT with a printed reason — never a
+//                                       silent `remove --force` / `branch -D` of the only copy (LOOP-106).
 // Importable: exports worktreeReap() so team-repair.ts can call it as part of its pass (isMainEntry guard).
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -135,6 +138,19 @@ function isMergedIntoOrigin(repoDir: string, branch: string, defaultBranch: stri
   return (r.status ?? 1) === 0;
 }
 
+// A terminal-ticket branch is safe to delete ONLY when its work survives somewhere other than the
+// local branch: (a) merged into origin/<defaultBranch>, or (b) pushed to origin with no local-only
+// commits ahead of that remote ref. Otherwise the branch is the ONLY copy and must be KEPT — the
+// pre-LOOP-106 reaper force-deleted (-D) every Canceled branch on ticket state alone, unrecoverably.
+function branchRecoverable(repoDir: string, branch: string, defaultBranch: string): boolean {
+  if (isMergedIntoOrigin(repoDir, branch, defaultBranch)) return true;
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  const hasRemote = spawnSync("git", ["-C", repoDir, "show-ref", "--verify", "--quiet", remoteRef], { stdio: "ignore" }).status === 0;
+  if (!hasRemote) return false;
+  const ahead = git(repoDir, ["rev-list", "--count", `origin/${branch}..${branch}`]);
+  return ahead.ok && ahead.out === "0"; // no local commits beyond what origin already holds
+}
+
 // Exported so team-repair can call it as part of its pass.
 export async function worktreeReap(
   ws: Workspace,
@@ -192,33 +208,43 @@ export async function worktreeReap(
     return { reaped: toReap, kept: toKeep };
   }
 
+  const reaped: ReapEntry[] = [];
   await withLock(lockPath, {}, async () => {
     for (const e of toReap) {
-      // Remove the worktree (--force handles uncommitted or missing-on-disk directories).
-      if (existsSync(e.path)) {
-        const rm = git(repoDir, ["worktree", "remove", "--force", e.path]);
+      // 1. Remove the worktree checkout — NEVER `--force` by default. A terminal-ticket worktree may
+      //    still hold uncommitted work, and a silent `remove --force` is exactly what makes that loss
+      //    unrecoverable (LOOP-106, AC3). Plain `git worktree remove` refuses a dirty or locked tree;
+      //    we KEEP it (and its branch — the only home of that uncommitted work) with a loud line.
+      if (!existsSync(e.path)) {
+        git(repoDir, ["worktree", "prune"]); // registration for a directory the OS already removed
+        print(`[reap] pruned stale worktree registration '${e.path}' (already gone; ${e.ticketId} is ${e.state})`);
+      } else {
+        const rm = git(repoDir, ["worktree", "remove", e.path]); // no --force — safe by construction
         if (!rm.ok) {
-          // Fall back to prune if remove fails (already gone or can't lock)
-          git(repoDir, ["worktree", "prune"]);
+          print(`[reap] KEPT worktree '${e.path}' — ${e.ticketId} is ${e.state} but the tree is not safe to remove` +
+            ` (uncommitted changes, or locked): ${rm.err.split("\n")[0] || "git worktree remove refused"}.` +
+            ` Not force-removing; if the work is truly disposable run: git -C ${repoDir} worktree remove --force ${e.path}`);
+          toKeep.push(e); // reclassify — this entry was NOT reaped
+          continue;       // keep the branch too: its worktree still holds the only copy
         }
-      } else {
-        git(repoDir, ["worktree", "prune"]);
+        print(`[reap] removed worktree '${e.path}' (${e.ticketId} is ${e.state})`);
       }
-      print(`[reap] removed worktree '${e.path}' (${e.ticketId} is ${e.state})`);
 
-      // Delete the local branch: always for Canceled; only if merged for Done/Duplicate.
-      const deleteBranch = e.state === "Canceled" || isMergedIntoOrigin(repoDir, e.branch, defaultBranch);
-      if (deleteBranch) {
-        const flag = e.state === "Canceled" ? "-D" : "-d";
-        const del = git(repoDir, ["branch", flag, e.branch]);
-        if (del.ok) print(`[reap] deleted branch '${e.branch}'`);
+      // 2. Delete the local branch ONLY when the work is recoverable elsewhere — merged into the base,
+      //    or fully pushed to origin. A Canceled branch that exists nowhere else is KEPT with a reason
+      //    (LOOP-106, AC2); the pre-LOOP-106 reaper force-deleted every Canceled branch on state alone.
+      if (branchRecoverable(repoDir, e.branch, defaultBranch)) {
+        const del = git(repoDir, ["branch", "-D", e.branch]);
+        if (del.ok) print(`[reap] deleted branch '${e.branch}' (${e.state}; recoverable — merged into ${defaultBranch} or pushed to origin)`);
+        else print(`[reap] kept branch '${e.branch}' (delete failed: ${del.err.split("\n")[0] || "git branch -D refused"})`);
       } else {
-        print(`[reap] kept branch '${e.branch}' (unmerged; non-Canceled ticket)`);
+        print(`[reap] kept branch '${e.branch}' (${e.state} but UNRECOVERABLE — no origin upstream and not merged into ${defaultBranch}; its only copy is local)`);
       }
+      reaped.push(e);
     }
   });
 
-  return { reaped: toReap, kept: toKeep };
+  return { reaped, kept: toKeep };
 }
 
 async function worktreeReapCli(argv: string[]): Promise<number> {
@@ -250,8 +276,10 @@ Usage: dev-loop worktree <verb> [args]
       worktree paths. Agent fires should call this instead of constructing the path themselves.
 
   reap [--repo <ref>] [--dry-run]
-      Remove worktrees whose ticket is in a terminal state (Done / Canceled / Duplicate) and
-      delete their local branches (force-delete for Canceled; safe-delete for merged Done/Duplicate).
+      DESTRUCTIVE. Remove worktrees whose ticket is in a terminal state (Done / Canceled / Duplicate)
+      and delete each branch that is RECOVERABLE (merged into the base, or fully pushed to origin). A
+      dirty or locked worktree, or an unrecoverable Canceled branch (its only copy is local), is KEPT
+      with a printed reason — never a silent \`remove --force\` / \`branch -D\` of the only copy (LOOP-106).
       Enumerates via \`git worktree list\` so it covers all roots, including legacy paths.
       --dry-run: print what would be reaped without removing anything.`);
 }
