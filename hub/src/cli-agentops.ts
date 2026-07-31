@@ -41,10 +41,8 @@ LAYER 0 — any hub op, raw JSON:
 LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; errors as JSON on stderr):
   dev-loop queue
       Your FIRST board read: the work lists pre-ranked server-side (§5/§21b in code). dev tiers
-      { inProgress, todo — your slice, blocked excluded; inReview — LANDING/REPAIR ONLY, never
-      a pick list: merge green PRs, fix+repush red, leave verifier-owned merged entries alone };
-      pm { verify, unblock, backlog, todoDepth }; qa { verify, blocked }.
-      Summaries — 'ticket <id>' fetches the one you pick.
+      { inProgress, todo — your slice, blocked excluded; inReview — LANDING/REPAIR ONLY (merge green PRs/fix red) };
+      pm { verify, unblock, backlog, todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
   dev-loop ticket create --title T --type Bug|Feature|Improvement [--state S] [--description TEXT|'-'] [--description-file F]
                          [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
       --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes §9c marker comment ('Blocked-by: <id>') after create.
