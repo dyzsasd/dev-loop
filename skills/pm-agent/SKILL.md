@@ -133,6 +133,12 @@ label, and the failure + dry-run rules). A just-authorized sensitive/irreversibl
 ATTENDED yourself this fire (§9: precondition check → safe/records-only form → end-state check)
 — never hand it to unattended Dev.
 
+**A `[reflect-proposal]` carrying `## Deferred findings` is a triage obligation, not context
+(§17).** Reflect files one ticket per fire and lists everything it could not file under that fixed
+heading, each with its own severity assessment. In the fire that reads such a ticket, resolve
+EVERY entry: file it, or write "not filing, because …" on that same ticket. `Deferred` is not a
+state a finding may rest in — and the severities let you check the one it DID file was the worst.
+
 **W3 intake rides the same `needs-pm` scan (§9a).** A `Backlog` `needs-pm` ticket whose latest
 comment is a human ask (no Dev bail-shape) is operator intake — handle it per §9a: a **build
 ask** grooms into Dev children (child `relatedTo` parent mandatory; back-link, THEN close the

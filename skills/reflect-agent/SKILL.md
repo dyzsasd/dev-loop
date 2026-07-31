@@ -106,6 +106,10 @@ priority Low, titled `[reflect-proposal] <one line>`, body first line
 `Bail-shape: external-prereq` (§9) — the mechanical firewall: `blocked` keeps it out of
 Dev's pick set, `external-prereq` makes PM park it for the operator (§17). This is your
 single product-side write. Under `dry-run`: print the proposal only, file nothing.
+**Several findings in one fire?** The ticket goes to the **highest-severity** one, never
+the first one found; list every other under a literal `## Deferred findings` heading in
+that same ticket — one entry each with its evidence and **your own severity assessment**
+(PM must triage each one; §17). A finding left only in a comment thread is a finding lost.
 
 ### Job 4 — The retrospective digest (report only)
 

@@ -111,8 +111,11 @@ Defined ONCE here — each SKILL's BOOT line carries a one-line pointer (cite §
    route the SAME ticket operations; only the transport differs — then read the
    matching `references/backend-<backend>.md` (§18; `linear` needs no file) before your
    first board operation.
-4. **Read lessons** (§14): `<data>/<project-key>/lessons.md` — your own section
-   (+ `## Dev` for the split tiers) plus `## Shared`.
+4. **Read lessons** (§14): the team lessons **LIBRARY** at `<workspace>/.dev-loop/lessons/` —
+   `INDEX.md` always, plus this project's shard `<project-key>.md`. From each, read your own
+   section (+ `## Dev` for the split tiers) plus `## Shared`. A legacy
+   `<data>/<project-key>/lessons.md`, when present, is read as well (v1 workspaces); its
+   absence is normal, not an error.
 5. **§22 report start**: finalize any due daily/weekly/monthly roll-up, then
    check for un-acted `<report>.review.md` files (点评) and distill per §22.
 6. Open with the one-line run summary your SKILL's BOOT specifies, then proceed.
@@ -1379,7 +1382,22 @@ self-modifying loop with no review compounds errors. The boundary is bright:
   change to the plugin's own code is the operator's to apply. (Reusing `external-prereq`
   here is **deliberate**, not a misclassification — a plugin self-edit is a
   human-operator prerequisite; don't "correct" it to `decision-needed`/`scope-design`,
-  which PM would resolve straight back into Dev.) A correction that should
+  which PM would resolve straight back into Dev.)
+- **One ticket per fire, spent on the WORST finding — and nothing else is lost.** The
+  single-ticket cap is anti-thrash (a daily self-observer is the easiest agent to turn
+  into a firehose), so it stays; what it must not do is order findings by discovery. Two
+  rules make it severity-aware:
+  **(1) Rank, don't queue** — when a fire produces several structural findings, the one
+  ticket goes to the **highest-severity** one, not the first one found.
+  **(2) Nothing deferred is lost** — every other finding is listed in that same ticket
+  under a literal `## Deferred findings` heading (fixed, so it is greppable), one entry
+  each with its evidence and **Reflect's own severity assessment** — which also makes
+  rule (1) auditable rather than trusted. **PM must triage every entry in the fire that
+  reads the ticket**: each becomes a filed ticket or an explicit "not filing, because …"
+  note on that same ticket. `Deferred` is not a state a finding may rest in. (A finding
+  parked in a comment thread is reachable only if a human happens to read it — that is
+  the failure this closes.)
+  A correction that should
   hold for *every* operator belongs here (conventions) or in the `strategyDoc`
   (product direction), reached via that human-reviewed proposal — not via `lessons.md`.
 
