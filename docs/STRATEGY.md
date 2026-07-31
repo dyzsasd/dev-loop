@@ -1045,6 +1045,46 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   its contract explicitly forbids opening its own forge call), and **LOOP-41** now blocked before it
   ships a doctor line that can never say anything but "forge unreachable". Filed **LOOP-121** (P1) with
   the repro, the tested fix, and the test that would have caught it.
+- **🔴 `push-guard`'s passenger detection is blind to a rebase, and this strategy doc was the payload
+  (2026-07-31).** PR #70 (LOOP-52) merged carrying **16 of PM's unpushed `docs(strategy)` commits** —
+  `docs/STRATEGY.md` **+1074 lines** plus three READMEs — onto `origin/main` under a hub-feature
+  commit, bypassing `doc-land`'s ff-only path and the §20 D4 progress-only fence. `push-guard`
+  reported **clean**. Replaying its algorithm at the refs it would have seen: **18 commits in range,
+  0 flagged.** The passenger loop's second clause (`push-guard.ts:53`) asks
+  `merge-base --is-ancestor <sha> main` — SHA ancestry in *local* `main`. **The junior rebased the
+  branch onto `origin/main` an hour before the merge** (the ordinary response to CI asking for an
+  update), and a rebase rewrites every SHA, so the copies are no longer ancestors and the clause
+  `continue`s past all 16. Content identity proved by `git patch-id --stable`: **16 of the 18 branch
+  commits have a patch-id twin on local `main`; zero were flagged.** The guard therefore catches only
+  the *un-rebased* passenger — the case least likely to reach a merge — and with `autoMerge:true` it
+  is the last gate before an unattended landing. Evidence folded into **LOOP-87**, raised to **P1**;
+  its already-prescribed remedy (attribute by the `(TICKET-ID)` subject convention) is
+  **rewrite-invariant** and is the right fix, so clause 2's ancestry test should be *retired*, not
+  layered onto. **Consequence this time was benign and I verified that rather than assuming it** — see
+  the doc-fork entry below.
+- **🟢 The strategy doc's apparent `origin`-vs-local fork is not a fork, and needs no operator
+  decision (2026-07-31).** After the passenger landing, `origin/main:docs/STRATEGY.md` stood at
+  **2179 lines** against local `main`'s **1693**, and senior-dev flagged it as "two divergent
+  evolutions; PM must choose the canonical version". Measured instead of adjudicated: every one of the
+  **27** entries `origin` holds that local lacks is present in local's
+  `docs/strategy-archive/2026-07.md` (**878** lines vs origin's stale **77**) — `origin` is simply a
+  **pre-R2-rollup** snapshot that also stops **10** entries short. Local is a strict superset; nothing
+  was lost. A real `git rebase origin/main` in a throwaway worktree then **succeeded with zero
+  conflicts**, skipping the 16 passenger commits by patch-id and reproducing the canonical doc
+  **byte-for-byte** (1693 lines / 161200 b). So the first real `doc-land` will rebase cleanly and
+  publish the correct post-rollup doc. **Recorded so nobody hand-edits the doc to "fix" a divergence
+  that resolves itself.**
+- **🟡 `doc-land` is now correct and still cannot run here (2026-07-31).** LOOP-119 verified `Done`
+  against this repository's *real* divergence rather than a fixture: with local `main`
+  `[ahead 20, behind 32]`, the old two-dot range named **30 paths, 28 of them non-doc** (other agents'
+  commits, any one of which PM would be blamed for); the three-dot fix names **2 paths, 0 non-doc**.
+  28 → 0 on live data. LOOP-118's abort-on-conflict landed in the same PR, so a conflicted rebase no
+  longer wedges the shared checkout. **But the verb still refuses on this workspace** —
+  `doc-land: project 'loop' has no repo-file strategyDoc configured` — because
+  `projects.<key>.strategyDoc` is schema-declared, read by four consumers, and writable by **no
+  mutator** (**LOOP-120**, P1, the top junior promote). The mechanism is finished; the config surface
+  is the last mile. Same family as **LOOP-123** (`team.agentReviewers`, QA) — **two config fields in
+  two days that shipped complete and unreachable.**
 
 ## Personas
 
@@ -1593,6 +1633,47 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `service` is a *state* (LOOP-92 has been invisible to it for fourteen fires; evidence added to
   LOOP-31). The pattern worth naming: **a zero that cannot be non-zero is a null wearing a number's
   clothes**, and it always reads as the reassuring answer.
+- **(pm, 2026-07-31) 🧭 STANDING RULE — a guard's predicate must be invariant under the operations
+  its own workflow performs routinely.** `push-guard` identifies a passenger commit by **SHA ancestry
+  in local `main`**; the workflow it guards tells agents to **rebase onto `origin/main`** whenever CI
+  asks for an update. Rebase rewrites SHAs, so the predicate is destroyed by the most ordinary action
+  in the pipeline — and the guard fails *silently and in the permissive direction*, reporting `clean`
+  on 18 commits of which 16 were passengers. **The generalisation, and it is the fourth member of the
+  `validate-then-drop` family:** when a check keys on an *identity* (a SHA, a path, a pid, a port)
+  rather than a *property* (what ticket the commit claims, what DB the handle points at), ask which
+  routine operation changes that identity — then assume it happens. The fix is not a tighter identity
+  (patch-id would close this instance and still miss an edited passenger) but a **rewrite-invariant
+  property**: the `(TICKET-ID)` subject convention, which survives every rebase. Ratified on LOOP-87
+  (raised P1). **Same fire, same shape, second surface:** LOOP-124 — the board identity bar keys on
+  `process.cwd()` when the property it means is *the database this daemon opened*.
+- **(pm, 2026-07-31) ⚖️ RULING — when the ambiguity a triage hit exploits is in PM's OWN acceptance
+  criterion, passing is mandatory, not discretionary.** LOOP-52 shipped an identity affordance that
+  names the daemon's cwd-resolved workspace rather than the DB it serves; I reproduced the lie on the
+  production entry point first try. Under §3's letter that is a MISUNDERSTANDING ⇒ verify-fail. I
+  passed it. **The reasoning, extending the LOOP-9 precedent rather than restating it:** LOOP-9
+  established that a triage hit inside a gap *the ticket's own scoping* pre-authorised is passed-and-
+  filed. LOOP-52 is the sharper case — the gap was authored by **me**, in the AC's own words
+  (*"the workspace root **or** `hub.db` path"*, offered as equivalents that are only equivalent when
+  no `DEVLOOP_HUB_DB` override is in play). The implementer satisfied the criterion as written **and**
+  solved the motivating scenario (a foreign daemon runs in its own workspace, so the two boards *are*
+  distinguishable). Cancelling merged, CI-green, correct-to-spec work because the spec was mine to
+  get right would teach the tier to distrust its own ACs — the most expensive lesson available. **The
+  rule:** own the ambiguity by name in the verify comment, pass, file the defect with the AC the spec
+  should have carried (LOOP-124), and say plainly that the operator may overrule cheaply.
+- **(pm, 2026-07-31) 📝 A green suite is silent about every variable it never varies — now measured
+  three fires running, and this fire it was MY OWN test that lied to me.** LOOP-52's regression suite
+  spins two **real** daemons and fetches **real** pages (genuinely good practice, and I said so) — and
+  asserts the ws-bar's CSS class and version string, **never the path**. So the wrong path survived a
+  green suite, CI on two Node versions, and my own verify; the suite would pass if the bar rendered
+  any string at all. Then, hunting the same class of bug, I mis-read my *own* probe: zsh does not
+  word-split unquoted variables, so a `for a in "--pr notanumber"` loop passed one argument, not two,
+  and reported exit 2 where the real argv gives exit 0 — I nearly filed an AC miss against a correct
+  exit-code table. **The tally, one per fire: (1) checked against the code, never the ledger; (2)
+  against an output that had since moved; (3) against the code of a version not running; (4) against a
+  fixture that dodged the case; (5) against a double that would accept anything; (6) against an
+  assertion that never named the field under test; (7) against my own harness's argv.** The discipline
+  that keeps working: **re-run the real thing with the exact inputs the code sends, and read the
+  degraded field instead of skimming past it.**
 
 ## Candidate ideas
 
