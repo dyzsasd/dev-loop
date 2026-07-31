@@ -26,7 +26,10 @@ const require_metrics = () => metricsMod;
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
 // the service runtime wiring (below). Library callers that only want the DB-integrity verdict (init-service
 // step (d)) call runDoctor(dbPath) with no opts → no reconcile, behavior byte-for-byte unchanged.
-export async function runDoctor(dbPath: string, opts: { reconcile?: boolean } = {}): Promise<boolean> {
+// preferWorkspace (opt-in, init-wizard only) keeps workspace-db-preferring behavior for the `dev-loop init`
+// epilogue — the workspace being checked is the one just configured, not an ambient DEVLOOP_HUB_DB override.
+// All other callers honor the explicit dbPath.
+export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; preferWorkspace?: boolean } = {}): Promise<boolean> {
   let ok = true;
   const pass = (m: string) => console.log("✅ " + m);
   const fail = (m: string) => { console.log("❌ " + m); ok = false; };
@@ -53,7 +56,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean } = 
         console.log(`NEXT: ${nextStep(ws, [], [])}`);
         return ok;
       }
-      dbPath = wsHubDb(ws); // service: check the workspace's own hub.db below
+      if (opts.preferWorkspace) dbPath = wsHubDb(ws); // init-wizard: check the workspace just configured
     }
   }
 
