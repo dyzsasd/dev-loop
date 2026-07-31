@@ -3,8 +3,8 @@
 // the LOCAL_HOST write guard (the reverse-proxy/attach posture); a token-LESS daemon is byte-identical
 // to the pre-token surface (foreign-Host op still 403s, reads still open); and the boot fail-closed
 // refusal — a widened bind without a token must not start.
-import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { startTestDaemon } from "./daemon-harness.ts";
 import { rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,27 +92,24 @@ const op = (base: string, name: string, headers: Record<string, string> = {}, ho
 
 // ── boot fail-closed: widened bind without a token refuses to start ─────────
 {
-  const run = (env: Record<string, string>) => new Promise<{ code: number | null; out: string }>((resolve) => {
-    const child = spawn(process.execPath, [join(hubRoot, "src", "daemon.ts")], {
-      env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "tok", DEVLOOP_DAEMON_PORT: "0", DEVLOOP_UI_TOKEN: "", DEVLOOP_UI_TOKEN_FILE: "", ...env },
-    });
-    let out = "";
-    child.stdout.on("data", (d) => { out += d; });
-    child.stderr.on("data", (d) => { out += d; });
-    const timer = setTimeout(() => { child.kill("SIGTERM"); }, 4000);
-    child.on("exit", (code) => { clearTimeout(timer); resolve({ code, out }); });
-    // a SUCCESSFUL boot never exits on its own — kill it once the listen line appears
-    child.stdout.on("data", () => { if (/dev-loop-hub for 'tok'/.test(out)) child.kill("SIGTERM"); });
-  });
-  const refused = await run({ DEVLOOP_DAEMON_HOST: "0.0.0.0" });
-  ok(refused.code === 1 && /refusing to bind 0\.0\.0\.0/.test(refused.out),
-    `boot: 0.0.0.0 without token → exit 1 + refusal (got ${refused.code})`);
-  const tokened = await run({ DEVLOOP_DAEMON_HOST: "0.0.0.0", DEVLOOP_UI_TOKEN: "tok-xyz" });
+  const baseEnv = { DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "tok", DEVLOOP_DAEMON_PORT: "0", DEVLOOP_UI_TOKEN: "", DEVLOOP_UI_TOKEN_FILE: "" };
+  const tryStart = (extra: Record<string, string>) =>
+    startTestDaemon({ ...baseEnv, ...extra }, { detectPattern: /dev-loop-hub for 'tok'/ });
+
+  const refusedErr = await tryStart({ DEVLOOP_DAEMON_HOST: "0.0.0.0" }).then(() => null).catch((e: Error) => e);
+  const refusedMsg = refusedErr?.message ?? "";
+  ok(refusedErr !== null && /exited 1/.test(refusedMsg) && /refusing to bind 0\.0\.0\.0/.test(refusedMsg),
+    `boot: 0.0.0.0 without token → exit 1 + refusal (got ${refusedMsg.split("\n")[0]})`);
+
+  const tokened = await tryStart({ DEVLOOP_DAEMON_HOST: "0.0.0.0", DEVLOOP_UI_TOKEN: "tok-xyz" });
   ok(/bearer-token required/.test(tokened.out) && !/refusing to bind/.test(tokened.out),
     "boot: 0.0.0.0 WITH token → starts and announces the token posture");
-  const localDefault = await run({});
+  tokened.stop();
+
+  const localDefault = await tryStart({});
   ok(/localhost-only/.test(localDefault.out) && !/refusing/.test(localDefault.out),
     "boot: no knob → loopback default, unchanged wording");
+  localDefault.stop();
 }
 
 console.log(fails ? `${fails} CHECK(S) FAILED` : "ui-token: all checks passed");
