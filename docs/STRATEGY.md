@@ -515,6 +515,33 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   compounding shape post-LOOP-144: a tier reading "full" on `todoDepth` while its servable slice is
   empty gets no promotions **and** no fires, and PM, the gate and doctor all report healthy.
 
+- **2026-07-31 (late) — trust-safety lens: two credential-boundary defects, and unlike everything
+  else on this board they are live in the binary every fire runs.** This lens had not been swept
+  since the workspace was created. Both finds are *published*, not merely merged — the regexes and
+  call sites below were read byte-identical out of the installed `@dyzsasd/dev-loop` v1.12.0, which
+  inverts this board's usual posture where a fix is correct and inert.
+  **LOOP-172** — `daemon.ts` decides "is this bind loopback?" **twice, with two predicates that
+  disagree**: `isLoopbackHost` (`ui-token.ts:30`) accepts `::1`/`[::1]`; `LOCAL_HOST`
+  (`daemon.ts:192`) does not. So `DEVLOOP_DAEMON_HOST=::1` boots **token-less** — the gate at
+  `daemon.ts:766` judges the Host-allowlist write guard sufficient — and then **403s every write**,
+  because the guard it just vouched for rejects the very `Host` that bind produces. The code states
+  the invariant it breaks ("the guard widens WITH it exactly as this invariant demands"): it widens
+  for *routable* addresses, never for IPv6 loopback, the third case the prose never considers. The
+  same root cause makes `daemon.ts:835` build `http://::1:8789`, on which `new URL()` throws, so the
+  notifier link is malformed rather than merely ugly. Why the suite is green:
+  `hub/test/ui-token.ts:24` asserts exactly four hosts and never exercises `::1` — the branch the
+  regex was *deliberately widened to add*. Fail-closed, so a defect and not a hole.
+  **LOOP-173** — `up --attach` (`up.ts:149`) and `op-client` (`op-client.ts:62`) both accept
+  plaintext `http:` to an arbitrary remote host, and `postOpUrl` attaches
+  `Authorization: Bearer <DEVLOOP_UI_TOKEN>` without ever consulting the scheme. That bearer is the
+  sole credential over the remote board's entire write surface and, by design, **bypasses the
+  CSRF/Host guard entirely** — so one on-path observation is a durable compromise, replayed on every
+  op call. The distinction the fix needs already exists in this codebase: the daemon fails closed on
+  its own *bind*, the client does not fail closed on its own *egress*. The SSH-tunnel posture
+  (`http://127.0.0.1`) is loopback and must survive the fix untouched.
+  Both filed `sensitive` ⇒ senior by §21b's overriding rule, which took the senior Backlog off empty
+  for the first time in three fires.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1124,6 +1151,30 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   it, the label so nothing serves it meanwhile. A useful side effect worth knowing: because both
   depth surfaces exclude `blocked`, a `Todo`+`blocked` child costs **no** cap slot, so the §21a
   "promote every staged child" rule and the §5a depth cap do not actually conflict.
+
+- **(operator, 2026-07-31) §12b amended — "merged" and "running" are different states, and a
+  verifier must name which one it established.** LOOP-170 applied as `13bbc89`. Two positions were on
+  the table and the ruling chose between them. senior-dev's original — make **"published"** the bar
+  for CLI-behavior ACs — was **declined**. PM's amendment — stop *conflating* the two states, require
+  the verifier to say which it established, and forbid "verified live" for anything only merged — was
+  adopted, plus an operator clause pinning that **publishing stays an operator act and a `Done` never
+  waits on it**. The reasoning for the decline is worth keeping so the branch is not re-proposed from
+  the prose alone: publishing is operator-triggered by prior ruling (LOOP-38 AC-1), so a blocking
+  publish bar would stall every CLI fix's `Done` behind a human act — the §12b human gate
+  reintroduced at ticket granularity — and would additionally park LOOP-144-class tickets `In Review`
+  for hours accumulating exactly the wait-state re-check noise that is already error-prone.
+  **Do not re-propose "published" as a blocking close bar.** The visibility half proceeds unchanged:
+  LOOP-151 (honest skew count) → LOOP-167 (release-readiness NEXT hint). The rule's own recursive
+  footnote holds — it is not in the installed package, so today it binds the operator, this log, and
+  anyone reading LOOP-170, but *not* the verifiers it addresses.
+- **(pm, 2026-07-31) The first measurement taken under the new rule: W18's headline number is 81%
+  noise.** Applying §12b's "check the artifact the fires actually run" to the release question, and
+  measuring rather than repeating the filing: against installed v1.12.0 (`efb2fce`) the repo is
+  **32 commits ahead, of which 26 are doc-only — the honest code-bearing skew is 6** (LOOP-123,
+  LOOP-130, LOOP-144, LOOP-117, LOOP-128, LOOP-76). This matters more now than when LOOP-151 was
+  filed, because §12b routes **every verifier** through W18 to tell merged from live — so the number
+  they are now sent to read is the one that is wrong. LOOP-151 was promoted to `Todo` this fire on
+  that argument, ahead of its FIFO position among p2 bugs being the only thing that recommended it.
 
 ## Candidate ideas
 
