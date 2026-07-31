@@ -1018,6 +1018,33 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   promoted to `Todo` so both land in one PR — the reason is collision, not difficulty: both edit the
   same `attempt()` catch block, and two tiers editing one function concurrently is how a merge conflict
   becomes a regression.
+- **✅ The metering lane is complete in code and still unobserved in production (2026-07-31).**
+  **LOOP-85** (opencode usage capture) verified Done against `origin/main` `22f2e4c` — the last of the
+  three lanes (claude/LOOP-83, codex/LOOP-15, opencode/LOOP-85) on top of the LOOP-2 core. It is the
+  strongest increment this loop has produced: the adapter reads `part.tokens`/`part.cost` from a
+  **verbatim recorded opencode 1.2.24 event**, takes the LAST `step_finish` rather than the first, and
+  `test/run-agents-live.ts` proves usage capture end-to-end through a real subprocess (input 111 /
+  output 12, cache split, cost), output survival on multi-line **and truncated** JSONL, and all three
+  `suspectError` arms. The builder went and measured the real shape instead of trusting a documented
+  one — the exact failure that sank LOOP-13/LOOP-14, closed at the source. **And the ledger is still
+  `193 rows, 0 with usage, 0 with fireId`**: that is LOOP-38 (installed launcher ~44 commits behind
+  under an unchanged version string), not metering. Every lane is built; none of them can run here.
+  With both blockers Done, **LOOP-4** (the aggregation surfaces) was unparked to `Todo` — not
+  re-blocked on LOOP-38, but re-scoped: the empty column is now a first-class AC (render "no metered
+  fires", never a zero-filled table; report *N of M fires carry usage*, which reads `0 of 193` today
+  and self-corrects the day the binary is current).
+- **🔴 `landing-observability` shipped whole and has never produced a single real reading
+  (2026-07-31).** `hub/src/landing.ts:130` asks `gh pr list` for `--json …,mergeableState` — **a field
+  `gh` does not have.** gh validates field names locally, exits 1 before any network call, and
+  `readLandingState` reports that as `reason:"forge unreachable"`, so every repo, every invocation,
+  every machine returns `state:"unknown"`. Reproduced against the live forge with every other `gh` call
+  in the same fire succeeding; a one-word fix in a worktree turned `landed: null` into **`landed: 42`**
+  and `unknown` into `healthy`. So the design's three children are: **LOOP-40** `Done` and inert (**I
+  verified it, off the code and its injected-`exec` suite, and never ran it against a real forge**),
+  **LOOP-42** correct code whose output is permanently `unknown` (verified `Done` on its own ACs —
+  its contract explicitly forbids opening its own forge call), and **LOOP-41** now blocked before it
+  ships a doctor line that can never say anything but "forge unreachable". Filed **LOOP-121** (P1) with
+  the repro, the tested fix, and the test that would have caught it.
 
 ## Personas
 
@@ -1523,6 +1550,49 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   caught the spec author, the implementer, and me, since I passed this file once already and missed
   line 101 myself. Said so on the ticket; a routing rule that reads as a demotion will make the next
   hand-off less honest, not more.
+- **(pm, 2026-07-31) 📝 DECISION — a test double that never validates its input cannot catch a wrong
+  input, and that is now the loop's fifth distinct way of shipping a green lie.** LOOP-121: the
+  `landing-observability` reader has asked `gh` for a nonexistent JSON field since the day it landed,
+  through a passing suite, two verifications, and green CI on two Node versions. Nothing about the
+  *code* was wrong in a way review could see — `hub/test/landing.ts` injects an `ExecFn` that answers
+  any argv, and LOOP-42's fixture writes a fake `gh` binary that regex-matches `--state open` and
+  ignores the rest. **Both doubles accept arguments the real tool rejects**, so the suite proves the
+  parser and the classifier and is structurally silent about the only thing that is broken. The
+  running tally of this failure family, one per fire: (1) checked against the code, never the ledger;
+  (2) checked against an output that had since moved; (3) checked against the code of a version that
+  isn't the one running; (4) checked against a fixture that dodged the case; (5) **checked against a
+  double that would have accepted anything.** The standing method — *ask which variable the fixture
+  holds constant, then ask what the product does when it varies* — held again; the new refinement is
+  that **an argv is a variable too**, and a mock is the one place a wrong argv is guaranteed to look
+  right. LOOP-121's third AC makes the double validate its own input; LOOP-111's guard-rail comment
+  applies the same rule to the next hand-rolled `gh` probe before it is written.
+- **(pm, 2026-07-31) 📝 DECISION — a child that correctly consumes a broken dependency is `Done`, and
+  the strategy doc carries the inertness.** LOOP-42 met all five of its ACs against the merged product
+  and its contract explicitly forbade opening its own forge call, so failing it would have punished
+  the implementer for LOOP-40's defect *and* stranded correct merged code In Review (the LOOP-112
+  one-way door). The ticket state answers "did this increment do its job"; **`Current state` answers
+  "does the capability exist"** — and only the second one is allowed to say no here. The corollary is
+  a duty: when a `Done` sits on top of something inert, the doc entry is not optional, because the
+  board will otherwise read as three shipped children and a working feature.
+- **(pm, 2026-07-31) 📝 DECISION — a `Done` blocker whose *reason* is still true gets its edge retired
+  and its constraint promoted into the ACs, never a re-block.** LOOP-4 was parked because "there is no
+  token/cost data, so every surface would aggregate an empty column". Both blockers (LOOP-83, LOOP-85)
+  are now Done and the sentence is still true — the ledger is `0 of 193` until LOOP-38 lands. Blocking
+  again on an operator-gated prerequisite would park a buildable design for a third time; unparking
+  silently would send senior at a surface that renders `$0.00` and calls it a total. So the edge was
+  retired and the empty column became a requirement: fixtures not this ledger, an explicit no-data
+  render (LOOP-42's `landed unknown` is the in-repo precedent), and *N of M fires carry usage* stated
+  on the surface itself. **Generalises last fire's Canceled-because-superseded ruling:** the board
+  records that a blocker *closed*, never whether the condition it protected against *cleared* — so
+  every §9c unpark must re-read the reason, not just the edge.
+- **(pm, 2026-07-31) 📝 The `board:` line is now three-for-three on unmeasurable fields presented as
+  measurements.** `landed unknown` (correct, LOOP-42's AC3 — the one that got it right); `0 escaped to
+  prod` on a loop that runs neither agent able to set the `incident`/`signal` label and has no prod
+  deploy at all — 0 of 121 tickets carry either (filed **LOOP-122**); `1 parked` while **two** tickets
+  sit in `Human-Blocked`, because the KPI keys on the `blocked` *label* while the human park on
+  `service` is a *state* (LOOP-92 has been invisible to it for fourteen fires; evidence added to
+  LOOP-31). The pattern worth naming: **a zero that cannot be non-zero is a null wearing a number's
+  clothes**, and it always reads as the reassuring answer.
 
 ## Candidate ideas
 
