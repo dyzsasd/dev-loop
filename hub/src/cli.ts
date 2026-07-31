@@ -57,7 +57,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   queue:            ["cli-agentops", "queue"],     // LAYER 1: the pre-ranked per-agent work lists (§5/§21b) — every agent's mandated first board read
   "export-desktop-skill": ["export-desktop-skill"],// render a self-contained Claude Desktop skill for an agent + project (P2-12)
   worktree:         ["worktree"],                  // add <id> [--repo <ref>] — create dev worktree off origin/<defaultBranch> (LOOP-54; LOOP-37 adds path + reaper)
-  "merge-guard":    ["merge-guard"],               // LOOP-67: board-state axis — trip when PR's ticket is In Review/Canceled/Duplicate (design: merge-review-guard §3.3+§8-Child4)
+  "merge-guard":    ["merge-guard"],               // LOOP-64+67: forge review (§3.1/§3.2) + board-state (§3.3) axes — trip on human CHANGES_REQUESTED or non-merge-eligible ticket (design: merge-review-guard)
   "doc-land":       ["doc-land"],                  // LOOP-57: land PM's doc-only strategyDoc commits to origin/<defaultBranch> ff-only (design: landing-discipline §4.6)
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
@@ -100,8 +100,9 @@ Usage: dev-loop <command> [args]
                               (never local main — prevents passenger commits; LOOP-54)
   worktree path <id> [--repo <ref>]  print the canonical worktree path (single source of truth; LOOP-37)
   worktree reap [--repo <ref>] [--dry-run]   remove terminal-state ticket worktrees + local branches (LOOP-37)
-  merge-guard [--repo <dir>] [--ticket <id>] [--strict] [--json]   board-state axis: trip when PR's ticket
-                              is In Review / Canceled / Duplicate; hub-only, no forge needed (design: merge-review-guard §3.3; LOOP-67)
+  merge-guard [--repo <dir>] [--pr <n>] [--ticket <id>] [--strict] [--json]
+                              refuse merge on human CHANGES_REQUESTED (forge axis, --pr) or non-merge-eligible
+                              ticket (board-state axis); both degrade silently (design: merge-review-guard; LOOP-64+67)
   doc-land [--repo <ref>] [--dry-run]   land PM's doc-only strategyDoc progress commits to origin/<defaultBranch>
                               ff-only (design: landing-discipline §4.6; LOOP-57)
   init-service <key> <name> <PREFIX>   (legacy) turnkey-bootstrap a service project — start at \`init\`/\`up\` instead
