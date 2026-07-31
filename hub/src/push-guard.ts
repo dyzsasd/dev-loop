@@ -26,7 +26,7 @@ const branchTicketId = (br: string): string | undefined => {
   return m[1].match(TICKET_RE)?.[0]; // "LOOP-54" from "dev-loop/LOOP-54"
 };
 
-export function pushGuard(repoDir: string, branch?: string, dbPath?: string, defaultBranch = "main"): PushGuardResult {
+export function pushGuard(repoDir: string, branch: string | undefined, dbPath: string | undefined, defaultBranch: string): PushGuardResult {
   const git = (args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const gitOk = (args: string[]): boolean => { try { git(args); return true; } catch { return false; } };
   const parseLog = (raw: string) => raw ? raw.split("\0").filter(Boolean).map((r) => {
