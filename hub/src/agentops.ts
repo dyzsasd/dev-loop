@@ -202,11 +202,14 @@ function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
     (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state=? ORDER BY created_at").all(projectId, state) as unknown as TicketRow[]).map(toTicket);
   if (actor === "dev" || actor === "senior-dev" || actor === "junior-dev") {
     const mine = (t: Ticket): boolean => actor === "dev" ? (t.assignee === null || t.assignee === "dev") : t.assignee === actor;
+    // Layer-2 queue defense (design sensitive-routing §2 / LOOP-80 Child B): a residual sensitive+junior
+    // row (written before the Layer-1 write gate or via a raw path) must never be served to junior-dev.
+    const notSensitiveForJunior = (t: Ticket): boolean => actor !== "junior-dev" || !t.labels.includes("sensitive");
     const todo = byState("Todo")
-      .filter((t) => mine(t) && !t.labels.includes("blocked"))
+      .filter((t) => mine(t) && !t.labels.includes("blocked") && notSensitiveForJunior(t))
       .sort((x, y) => PICK_RANK(x) - PICK_RANK(y) || x.created_at.localeCompare(y.created_at))
       .map(summary);
-    const inProgress = byState("In Progress").filter((t) => t.assignee === actor).map(summary);
+    const inProgress = byState("In Progress").filter((t) => t.assignee === actor && notSensitiveForJunior(t)).map(summary);
     return okR({ agent: actor, inProgress, todo });
   }
   if (actor === "pm" || actor === "qa") {
