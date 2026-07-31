@@ -31,9 +31,9 @@ async function worktreeAdd(argv: string[]): Promise<number> {
   if (!resolvedRef) die("no repos registered in workspace");
   const repo = ws.file.repos[resolvedRef];
   if (!repo) die(`unknown repo ref '${resolvedRef}'`);
-  const repoDir = effectiveRepo(ws, resolvedRef).absPath;
-
-  const defaultBranch = "main"; // RepoEntry has no defaultBranch field yet; "main" is the universal default
+  const resolved = effectiveRepo(ws, resolvedRef);
+  const repoDir = resolved.absPath;
+  const defaultBranch = resolved.defaultBranch;
   const branchName = `dev-loop/${id}`;
   const worktreePath = wsWorktree(ws, id, resolvedRef);
   const lockPath = wsLockPath(ws, `repo-${resolvedRef}`);
@@ -143,7 +143,9 @@ export async function worktreeReap(
 ): Promise<{ reaped: ReapEntry[]; kept: ReapEntry[] }> {
   const print = opts.print ?? ((m: string) => console.log(m));
   const dryRun = opts.dryRun ?? false;
-  const repoDir = effectiveRepo(ws, repoRef).absPath;
+  const resolvedReap = effectiveRepo(ws, repoRef);
+  const repoDir = resolvedReap.absPath;
+  const defaultBranch = resolvedReap.defaultBranch;
   const lockPath = wsLockPath(ws, `repo-${repoRef}`);
 
   // Query terminal-state tickets from hub DB (service backend only).
@@ -191,7 +193,6 @@ export async function worktreeReap(
   }
 
   await withLock(lockPath, {}, async () => {
-    const defaultBranch = "main";
     for (const e of toReap) {
       // Remove the worktree (--force handles uncommitted or missing-on-disk directories).
       if (existsSync(e.path)) {

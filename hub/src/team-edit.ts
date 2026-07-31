@@ -37,6 +37,7 @@ type SetKind = "string" | "boolean" | "number" | "int" | readonly string[];
 const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.mode$/, kind: ["dry-run", "live"] as const },
   { re: /^team\.linearTeam$/, kind: "string" },
+  { re: /^team\.git\.defaultBranch$/, kind: "string" },
   { re: /^team\.comms\.provider$/, kind: ["slack", "lark"] as const },
   { re: /^team\.comms\.webhookEnv$/, kind: "string" },
   { re: /^team\.intake\.mode$/, kind: ["autonomous", "passive"] as const },
@@ -66,7 +67,7 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
-  "team.{mode,linearTeam,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap}, " +
+  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap}, " +
   "projects.<key>.{enabled,weight,devSplit,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +

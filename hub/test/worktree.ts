@@ -100,6 +100,44 @@ try {
   git(cloneDir, ["worktree", "remove", "--force", printedPath]);
   git(cloneDir, ["branch", "-D", "dev-loop/OTHER"]);
 
+  // ── AC3: master-default repo — worktree add bases on origin/master, not origin/main ──
+  {
+    const masterOrigin = join(ROOT, "master-origin.git");
+    const masterWsRoot = join(ROOT, "master-ws");
+    const masterCloneDir = join(masterWsRoot, "dev-loop");
+    mkdirSync(masterOrigin, { recursive: true });
+    mkdirSync(masterWsRoot, { recursive: true });
+
+    execFileSync("git", ["init", "--bare", "-q", "-b", "master", masterOrigin]);
+    execFileSync("git", ["clone", "-q", masterOrigin, masterCloneDir]);
+    git(masterCloneDir, ["commit", "--allow-empty", "-qm", "initial on master"]);
+    git(masterCloneDir, ["push", "-qu", "origin", "master"]);
+
+    writeFileSync(join(masterWsRoot, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      workspaceId: "master-ws",
+      team: { key: "testm", backend: "service", mode: "live", autonomy: "ask" },
+      repos: { "dev-loop": { path: "dev-loop", remote: masterOrigin, landing: "pr", defaultBranch: "master" } },
+      projects: { testm: { repos: [{ ref: "dev-loop" }] } },
+    }, null, 2));
+    mkdirSync(join(masterWsRoot, ".dev-loop", "locks"), { recursive: true });
+
+    const masterId = "LOOP-MASTER1";
+    const masterResult = run(["add", masterId, "--repo", "dev-loop"], masterWsRoot);
+    ok(masterResult.status === 0, `AC3: master-default worktree add exits 0 (stderr: ${masterResult.stderr.trim()})`);
+
+    const masterAhead = git(masterCloneDir, ["log", "--oneline", `origin/master..dev-loop/${masterId}`]);
+    ok(masterAhead === "", `AC3: no passenger commits on master-default repo (origin/master..dev-loop/${masterId} empty)`);
+
+    const masterBranchExists = git(masterCloneDir, ["branch", "--list", `dev-loop/${masterId}`]);
+    ok(masterBranchExists.trim() !== "", `AC3: dev-loop/${masterId} branch exists on master-default repo`);
+
+    const masterMasterExists = git(masterCloneDir, ["rev-parse", "--verify", "--quiet", "origin/master"]).trim();
+    ok(masterMasterExists !== "", "AC3: origin/master resolves — worktree based on real origin branch");
+
+    // Existing main-default tests still pass (backward compat AC7 — verified implicitly by the main test block above)
+  }
+
   // ── AC5: no remote configured → bases on local defaultBranch, says so ────────────
   const wsNoRemote = join(ROOT, "ws-no-remote");
   const cloneNoRemote = join(wsNoRemote, "dev-loop");
