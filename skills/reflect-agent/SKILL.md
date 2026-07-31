@@ -27,8 +27,10 @@ per-agent inputs:
   output.
 - Evidence window per backend (§18): `local` ⇒ the dated comment log + git (each state move
   appends a comment); `service` ⇒ the hub `list_events` feed (per-agent-attributed
-  create/transition/comment events — cycle time/throughput/attribution reconstruct
-  faithfully).
+  create/transition/comment events). **`list_events` is a high-resolution RECENT SLICE, not
+  your window**: it is capped (max 500 rows, newest first) with no backward paging, and a
+  truncated feed is indistinguishable from a complete one — on a busy board those 500 rows
+  can cover a fraction of a 24h window.
 - State: `pm-state.json`/`qa-state.json` mark the last-reflected span (don't re-process
   it); optional run-log dir `logs/<agent>-<date>.log` in the project state dir — absent ⇒
   skip silently (Linear + git always suffice).
@@ -65,6 +67,11 @@ All scoped per §2, tight queries per §10 (never page the workspace):
   + a `Bail-shape: fix-exhausted` reopen) as smoke/rollback incidents.
 - **Run logs** (optional, only if present): hard failures, repeated retries, compaction
   bail-outs, the same error recurring across fires.
+- **Evidence horizon (say it out loud).** Take full-window facts from sources that span it —
+  the fire ledger (`<workspace>/.dev-loop/team/fires.jsonl`), the reports tree, and `git log` —
+  and use `list_events` for detail inside the slice it reaches. Per-ticket history
+  (`--ticket <id>`) is complete; only the project-wide feed is capped. Every retro states the
+  oldest timestamp its event feed actually reached, so a short horizon is visible, never silent.
 
 ### Job 2 — Curate `lessons.md` (the self-evolution act)
 
