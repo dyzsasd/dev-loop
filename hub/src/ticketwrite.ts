@@ -99,6 +99,22 @@ function terminalExitRejection(actor: string, fromState: string, next: TicketUpd
   return `terminal-state guard: '${fromState}' → '${next.state}' — only the operator reopens a ${fromState} ticket (P1-1); file a NEW ticket for the follow-up and link it with relatedTo`;
 }
 
+// ─── sensitive → senior-dev re-tier gate (design sensitive-routing §2 / LOOP-79 Child A) ──────
+// Applied in both insertTicket and updateTicketRow so every write path is covered by construction.
+// Rule: sensitive+junior-dev present AND senior-dev actor exists → silently correct to senior-dev
+// and log issue.retier. Strict no-op otherwise (incl. legacy no-senior-dev projects).
+function applySensitiveRetier(
+  db: DatabaseSync,
+  assignee: string | null,
+  labels: string[],
+): { assignee: string | null; labels: string[]; retiered: { from: string; to: string } | null } {
+  if (!labels.includes("sensitive")) return { assignee, labels, retiered: null };
+  const isJunior = assignee === "junior-dev" || labels.includes("junior-dev");
+  if (!isJunior || !actorExists(db, "senior-dev")) return { assignee, labels, retiered: null };
+  const newLabels = [...new Set(labels.map((l) => (l === "junior-dev" ? "senior-dev" : l)))];
+  return { assignee: "senior-dev", labels: newLabels, retiered: { from: "junior-dev", to: "senior-dev" } };
+}
+
 // ─── the raw mechanics: the ONLY tickets/comments writers in the hub ──────────
 
 // THE ticket INSERT. Allocates the id, writes all 14 columns, logs issue.create. `createEventData` is passed
@@ -107,12 +123,18 @@ function terminalExitRejection(actor: string, fromState: string, next: TicketUpd
 export function insertTicket(
   db: DatabaseSync, projectId: string, actor: string, f: NewTicketFields, createEventData: Record<string, unknown>,
 ): string {
+  const retier = applySensitiveRetier(db, f.assignee, f.labels);
+  const assignee = retier.assignee;
+  const labels = retier.labels;
   const id = nextTicketId(db, projectId);
   const t = nowIso();
   db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at)
               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(id, projectId, f.title, f.description, f.type, f.state, f.assignee, f.priority, JSON.stringify(f.labels), f.duplicateOf, JSON.stringify(f.relatedTo), actor, t, t);
+    .run(id, projectId, f.title, f.description, f.type, f.state, assignee, f.priority, JSON.stringify(labels), f.duplicateOf, JSON.stringify(f.relatedTo), actor, t, t);
   logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.create", data: createEventData });
+  if (retier.retiered) {
+    logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.retier", data: { from: retier.retiered.from, to: retier.retiered.to, reason: "sensitive" } });
+  }
   return id;
 }
 
@@ -124,16 +146,26 @@ export function insertTicket(
 export function updateTicketRow(
   db: DatabaseSync, projectId: string, actor: string, id: string, fromState: string, next: TicketUpdateFields,
 ): WriteResult {
-  const gate = terminalExitRejection(actor, fromState, next)
-    ?? stagingDeployRejection(db, projectId, fromState, next)
-    ?? verifyGateRejection(fromState, next);
+  // Apply sensitive re-tier before transition gates (design sensitive-routing §2, LOOP-79 Child A).
+  const labelsArr = JSON.parse(next.labels) as string[];
+  const retier = applySensitiveRetier(db, next.assignee, labelsArr);
+  const resolved: TicketUpdateFields = retier.retiered
+    ? { ...next, assignee: retier.assignee, labels: JSON.stringify(retier.labels) }
+    : next;
+
+  const gate = terminalExitRejection(actor, fromState, resolved)
+    ?? stagingDeployRejection(db, projectId, fromState, resolved)
+    ?? verifyGateRejection(fromState, resolved);
   if (gate) return { ok: false, status: 400, error: gate };
   const t = nowIso();
   db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
-    .run(next.title, next.description, next.type, next.state, next.assignee, next.priority, next.labels, next.duplicate_of, next.related_to, t, id, projectId);
-  logEvent(db, next.state !== fromState
-    ? { project_id: projectId, ticket_id: id, actor, kind: "issue.transition", data: { from: fromState, to: next.state, assignee: next.assignee } }
+    .run(resolved.title, resolved.description, resolved.type, resolved.state, resolved.assignee, resolved.priority, resolved.labels, resolved.duplicate_of, resolved.related_to, t, id, projectId);
+  logEvent(db, resolved.state !== fromState
+    ? { project_id: projectId, ticket_id: id, actor, kind: "issue.transition", data: { from: fromState, to: resolved.state, assignee: resolved.assignee } }
     : { project_id: projectId, ticket_id: id, actor, kind: "issue.update", data: {} });
+  if (retier.retiered) {
+    logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.retier", data: { from: retier.retiered.from, to: retier.retiered.to, reason: "sensitive" } });
+  }
   return { ok: true, id };
 }
 
