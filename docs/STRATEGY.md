@@ -447,6 +447,38 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   (0 of 400 ledger rows) and **not** a measured throughput loss. The inflated version was mine.
 - Board: **45 Backlog, 20 Todo — both dev lanes at the §5a cap (10 senior / 10 junior)**, so this fire
   promoted nothing and groomed only, which is a valid fire. Decision queue: **0**.
+
+### 2026-07-31 (close of day) — the audit trail was misfiling itself at the month boundary
+
+- **LOOP-214 filed** (`Improvement`, junior, p2) — the §22 reports tree is keyed on `date +%F`
+  (LOCAL) while every artifact a report describes is UTC. Measured at 23:30:40Z on this UTC+2 box:
+  `qa-agent/daily/2026-08-01.md` and `sweep-agent/daily/2026-08-01.md` were both written on
+  **2026-07-31 UTC**, minutes apart from `pm-agent/daily/2026-07-31.md` — same day's work, two
+  different files. The misfiled reports say so in their own first lines (qa: "2026-08-01 (fire
+  timestamps ~22:0x UTC)"; sweep: "daily 2026-08-01 / 00:44 — first fire of the day", where 00:44
+  local is 22:44Z). Root cause is three lines of conventions §22 that guard the ISO-week
+  year-boundary hazard correctly and never mention the timezone one. Consequences: one finalize is
+  silently skipped per agent per day (qa's `2026-07-31.md` can now never receive its header —
+  `TODAY` is already 08-01), and the workspace's **first-ever monthly roll-up** splits one UTC day
+  across July and August. There is **no code surface** — nothing under `hub/src/` computes a report
+  path — so the ticket carries only the agent-applicable half (doctor **W25**, the next free code);
+  the 3-line prose fix is operator-applied under §17 and is in this fire's report, not in the ticket.
+- **LOOP-195 promoted** Backlog→Todo — the junior lane had drained to 9/10, and LOOP-195 is the
+  oldest junior `Bug` in the Backlog (rank by type, then created_at). It is also the ticket behind
+  the standing daemon-skew ask, so the one available slot went to the item the operator has been
+  told about eight times.
+- **LOOP-28's promotion condition tested and NOT met — 0 of 2.** The condition set last fire was
+  "the next TWO junior-dev fires that carry `bootBytes`". `fires.jsonl` carries `bootBytes` on 6 of
+  404 rows (qa x2, sweep, reflect, pm, senior-dev) and **junior-dev is not among them** — its last
+  fire (22:59:55Z) predates the 23:00:15Z flip. The condition stands unchanged; the ticket stays in
+  Backlog. Separately, junior-dev has 63 ledger fires and exactly one daily report file, which
+  strengthens LOOP-28's premise without satisfying its test.
+- Board at close: **45 Backlog, 21 Todo — both dev lanes at the §5a cap again (10 senior / 10
+  junior)**. §9c: **4 edges, 0 unparked, 4 held** (LOOP-205 Todo, LOOP-185 In Review, LOOP-95 Todo,
+  LOOP-104 Todo — every blocker still non-terminal). Verify queue **0**, `needs-pm` **0**,
+  `Human-Blocked` **0**, decision queue **0**. Doc-watch: hash matched the stored cursor exactly —
+  **thirty-five fires with no operator doc edit**. Lens swept: **consistency** (at `1806e17`).
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -508,9 +540,15 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   distilled immediately below — read those, not the archive.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
-  1. **A guard's predicate must be invariant under the operations its own workflow performs
-     routinely.** `push-guard` keyed passenger detection on SHA ancestry in local `main`, while the
-     workflow it guards tells agents to rebase onto `origin/main` — rebase rewrites SHAs.
+  1. **A derived key must be invariant under the operations its own system performs routinely —
+     and computed from the SAME source as the data it indexes.** Two instances, same shape:
+     `push-guard` keyed passenger detection on SHA ancestry in local `main`, while the workflow it
+     guards tells agents to rebase onto `origin/main` — rebase rewrites SHAs. And §22 keys the
+     reports tree on `date +%F` (**local**) while every artifact a report describes — the fire
+     ledger, the board, the strategy doc — is **UTC**: on a UTC+2 box two agents filed the same
+     day's work under `2026-08-01.md` and a third under `2026-07-31.md`, and the skew is
+     unrecoverable once the roll-up reads the wrong bucket (**LOOP-214**). Ask of any key: what
+     clock/ref computes it, and is that the same one the indexed data was stamped with?
   2. **When the ambiguity a §3 triage hit exploits is in PM's OWN acceptance criterion, passing is
      mandatory, not discretionary.** My ticket is also a claim; ambiguity I wrote is my defect.
   3. **A design gate promotes EVERY staged child, even blocked ones — and an increment whose ACs
@@ -547,6 +585,15 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   test file with no `package.json` script now runs. *"The release gate is the loop's single
   blocking constraint"* — v1.13.0 published 2026-07-31T20:06Z; the constraint is retired and the
   live successor is the DAEMON skew (below), not the npm one.
+- **(pm, 2026-07-31) 📤 §17 PROPOSAL CARRIED TO THE OPERATOR — make the §22 report clock UTC.**
+  `references/conventions.md:2080-2082` is a governing file, so this is proposed, never applied
+  (§17). The change is three characters plus a sentence: `date -u +%F` / `date -u +%G-W%V` /
+  `date -u +%Y-%m`, and one line stating the reports tree is UTC-dated to match the ledger and the
+  board. Evidence and blast radius are on **LOOP-214**; the ticket deliberately does NOT depend on
+  this landing — doctor W25 is independently correct, because fixing the prose stops new misfiling
+  but makes no existing skew visible, and a workspace copied between machines (§27 portability)
+  can acquire the skew with correct prose. Recorded here because a proposal that lives only in a
+  fire report dies with the fire.
 - **(pm, 2026-07-31) 📌 DECISION — `dev-loop` will NOT auto-publish to npm on merge to `main`. The
   release stays operator-triggered, deliberately.** This answers LOOP-38's AC-1, which had been open
   across three separate blocking edges and two days, and it is recorded here so the design does not
