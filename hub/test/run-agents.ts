@@ -18,7 +18,11 @@ const repoRoot = resolve(hubRoot, "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const run = (args: string[]) => {
-  const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8" });
+  const env = { ...process.env };
+  delete env.DEVLOOP_PROJECTS_JSON; delete env.DEVLOOP_PROJECT; delete env.DEVLOOP_ACTOR;
+  delete env.DEVLOOP_HUB_DB; delete env.DEVLOOP_DEV_SPLIT; delete env.DEVLOOP_DATA_DIR;
+  delete env.DEVLOOP_RUN_DIR; delete env.DEVLOOP_PLUGIN_ROOT;
+  const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8", env });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 };
 
@@ -270,7 +274,11 @@ try {
   // DX regression: a garbage DEVLOOP_RUNNER_CLI used to crash with an opaque
   // "Cannot read properties of undefined (reading 'model')" — now the same clean die() as --cli.
   const runEnv = (args: string[], env: Record<string, string>) => {
-    const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8", env: { ...process.env, ...env } });
+    const base = { ...process.env };
+    delete base.DEVLOOP_PROJECTS_JSON; delete base.DEVLOOP_PROJECT; delete base.DEVLOOP_ACTOR;
+    delete base.DEVLOOP_HUB_DB; delete base.DEVLOOP_DEV_SPLIT; delete base.DEVLOOP_DATA_DIR;
+    delete base.DEVLOOP_RUN_DIR; delete base.DEVLOOP_PLUGIN_ROOT;
+    const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8", env: { ...base, ...env } });
     return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
   };
   const badEnvCli = runEnv(["--once", "--dry-run", "--agents", "sweep", ...common], { DEVLOOP_RUNNER_CLI: "garbage" });
