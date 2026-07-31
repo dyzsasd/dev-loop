@@ -743,10 +743,10 @@ let fireLedgerPath: string | null = null;                            // team mod
 // scheduler. recordFire's ledger + event writes are covered by real-fire subprocess harnesses instead —
 // the fires.jsonl row in test/team-scheduler.ts and the fire.completed event in test/run-agents-live.ts.
 
-// §16 perms posture for the fire ledger (secrets.ts warnLoosePerms sibling): the ledger sits in the same
-// .dev-loop data home as secrets.env and can capture credential-adjacent fire output, so keep it owner-only.
-// chmod ONLY a file/dir WE just created; a PRE-EXISTING loose one is warned once — never chmod'd behind the
-// operator's back, never a failure, never on win32.
+// §16 perms posture for the fire ledger AND the operator debug logs (run.log / runner-logs — LOOP-93), the
+// secrets.ts warnLoosePerms sibling: all three sit in the same .dev-loop data home as secrets.env and capture
+// credential-adjacent fire output, so keep them owner-only. chmod ONLY a file/dir WE just created; a
+// PRE-EXISTING loose one is warned once — never chmod'd behind the operator's back, never a failure, never on win32.
 const ledgerPermsWarned = new Set<string>();
 function hardenLedgerPerms(p: string, existedBefore: boolean, mode: number, chmodHint: string): void {
   if (platform() === "win32") return;                                   // never touch perms on win32
@@ -756,7 +756,7 @@ function hardenLedgerPerms(p: string, existedBefore: boolean, mode: number, chmo
     const cur = statSync(p).mode;
     if (cur & 0o077) {
       ledgerPermsWarned.add(p);
-      console.error(`[dev-loop] ${p} is readable by group/others (mode ${(cur & 0o777).toString(8)}) — the fire ledger can hold fire output; tighten it: chmod ${chmodHint} ${p}`);
+      console.error(`[dev-loop] ${p} is readable by group/others (mode ${(cur & 0o777).toString(8)}) — it can hold credential-adjacent fire output; tighten it: chmod ${chmodHint} ${p}`);
     }
   } catch { /* raced away between the write and the stat — nothing to warn about */ }
 }
@@ -986,10 +986,21 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   }
 
   const logDir = opts.logDir || join(opts.dataDir, project, "runner-logs");
+  const logDirExisted = existsSync(logDir);
   mkdirSync(logDir, { recursive: true });
   const logPath = join(logDir, `${agent}.log`);
   // Unattended runs append forever — rotate at 50MB (single .1 generation) so a chatty agent can't fill the disk.
   try { if (statSync(logPath).size > 50 * 1024 * 1024) renameSync(logPath, `${logPath}.1`); } catch { /* no log yet */ }
+  // §16 (LOOP-93): the runner logs hold the FULL stdout+stderr fire stream — a strictly larger credential-adjacent
+  // surface than the fires.jsonl ledger LOOP-62 hardened, in the same .dev-loop data home. Same posture: owner-only
+  // on create, a pre-existing loose one warned once (never chmod'd). Read `existed` AFTER the rotation rename so a
+  // freshly-rotated log counts as new and is re-hardened (AC4 — rotation must not recreate at the default umask).
+  // createWriteStream opens its fd asynchronously, so touch the file synchronously first — otherwise the chmodSync
+  // in hardenLedgerPerms would race the open and silently no-op on ENOENT, leaving a new log world-readable.
+  const logFileExisted = existsSync(logPath);
+  try { closeSync(openSync(logPath, "a")); } catch { /* the stream open below surfaces any real error */ }
+  hardenLedgerPerms(logDir, logDirExisted, 0o700, "700");   // runner-logs/ → owner-only
+  hardenLedgerPerms(logPath, logFileExisted, 0o600, "600"); // <agent>.log  → owner-only
   const log = createWriteStream(logPath, { flags: "a" });
   // A stream 'error' with no listener is an uncaught exception that kills the WHOLE scheduler —
   // one ENOSPC/EACCES on a log file must degrade logging, not take down the loop.
@@ -1285,7 +1296,12 @@ async function main(): Promise<void> {
     const bgWs = tryResolveWorkspace(opts.cwd ?? process.cwd());
     const logPath = bgWs ? join(bgWs.root, ".dev-loop", "run.log") : join(opts.dataDir, "run.log");
     mkdirSync(dirname(logPath), { recursive: true });
+    // §16 (LOOP-93): run.log holds the FULL unredacted detached fire stream (every agent's stdout+stderr) in the
+    // .dev-loop data home alongside secrets.env — owner-only on create, a pre-existing loose one warned once. openSync
+    // is synchronous, so hardenLedgerPerms' chmod acts on a file that already exists (no createWriteStream race here).
+    const runLogExisted = existsSync(logPath);
     const fd = openSync(logPath, "a");
+    hardenLedgerPerms(logPath, runLogExisted, 0o600, "600");
     const args = process.argv.slice(2).filter((a) => a !== "--background");
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...args], { detached: true, stdio: ["ignore", fd, fd], env: process.env });
     child.unref();
