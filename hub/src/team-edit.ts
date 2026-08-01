@@ -297,16 +297,17 @@ function detectHalf(ref: string, o: Record<string, unknown>): void {
     if (!o.test && facts.build?.test) o.test = facts.build.test;
     if (!o.quality && facts.build?.quality) o.quality = facts.build.quality;
     if (!(o.mergeChecks as string[]).length && facts.mergeChecks?.length) o.mergeChecks = facts.mergeChecks;
+    if (!o.defaultBranch && facts.defaultBranch) o.defaultBranch = facts.defaultBranch;
     if (!o.landing) o.landing = "pr";
     console.log("detected (deterministic, no LLM):");
-    console.log(JSON.stringify({ ...(facts.build ? { build: facts.build } : {}), ...(facts.mergeChecks?.length ? { mergeChecks: facts.mergeChecks } : {}), landing: o.landing }, null, 2));
+    console.log(JSON.stringify({ ...(facts.build ? { build: facts.build } : {}), ...(facts.mergeChecks?.length ? { mergeChecks: facts.mergeChecks } : {}), ...(o.defaultBranch ? { defaultBranch: o.defaultBranch } : {}), landing: o.landing }, null, 2));
     console.log(`NOTE: interview-only fields left unset (deploy, ops health checks${o.owner ? "" : ", owner"}) — \`dev-loop doctor\` surfaces the gaps (repo info line; W07 once the repo deploys).`);
   }
 }
 
 export function addRepo(argv: string[]): number {
   const [ref, ...rest] = argv;
-  if (!ref || ref.startsWith("--")) die("usage: dev-loop team add-repo <ref> --project <key> [--path <rel>] [--detect] [--role primary|docs] [--remote <url>] [--owner <proj>] [--landing pr|direct] [--auto-merge] [--merge-check <name>]... [--typecheck-cmd <c>] [--build-cmd <c>] [--test-cmd <c>] [--quality-cmd <c>] [--deploy-style <s>] [--ops-check <url>]...\nNote: field flags (--path, --landing, --merge-check, --build-cmd, etc.) are only applied when <ref> is new. Re-running on an already-registered ref with field flags exits non-zero. To update a registered repo's fields use: dev-loop team set repos.<ref>.<field> <value>. --owner is the one exception: it updates in place on an existing ref.");
+  if (!ref || ref.startsWith("--")) die("usage: dev-loop team add-repo <ref> --project <key> [--path <rel>] [--detect] [--role primary|docs] [--remote <url>] [--owner <proj>] [--landing pr|direct] [--auto-merge] [--merge-check <name>]... [--default-branch <name>] [--typecheck-cmd <c>] [--build-cmd <c>] [--test-cmd <c>] [--quality-cmd <c>] [--deploy-style <s>] [--ops-check <url>]...\nNote: field flags (--path, --landing, --merge-check, --build-cmd, etc.) are only applied when <ref> is new. Re-running on an already-registered ref with field flags exits non-zero. To update a registered repo's fields use: dev-loop team set repos.<ref>.<field> <value>. --owner and --default-branch are exceptions: they update in place on an existing ref.");
   const o: Record<string, unknown> = { mergeChecks: [] as string[], opsChecks: [] as string[], criticalRoutes: [] as string[] };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]; const next = () => rest[++i] ?? die(`${a} requires a value`);
@@ -327,6 +328,7 @@ export function addRepo(argv: string[]): number {
     else if (a === "--ops-check") (o.opsChecks as string[]).push(next());
     else if (a === "--critical-route") (o.criticalRoutes as string[]).push(next());
     else if (a === "--logs-command") o.logsCommand = next();
+    else if (a === "--default-branch") o.defaultBranch = next();
     else die(`unknown option '${a}'`);
   }
   const project = o.project as string | undefined;
@@ -352,6 +354,7 @@ export function addRepo(argv: string[]): number {
       if (o.landing) entry.landing = o.landing as "pr" | "direct";
       if (o.autoMerge) entry.autoMerge = true;
       if ((o.mergeChecks as string[]).length) entry.mergeChecks = o.mergeChecks as string[];
+      if (o.defaultBranch) entry.defaultBranch = o.defaultBranch as string;
       if (o.typecheck || o.build || o.test || o.quality) entry.build = {
         ...(o.typecheck ? { typecheck: o.typecheck as string } : {}), ...(o.build ? { build: o.build as string } : {}),
         ...(o.test ? { test: o.test as string } : {}), ...(o.quality ? { quality: o.quality as string } : {}) };
@@ -369,6 +372,7 @@ export function addRepo(argv: string[]): number {
       if (hasFieldFlags)
         die(`repo '${ref}' is already registered — field flags on an existing ref are not applied (add-repo only writes them at creation time). To update individual fields, use: dev-loop team set repos.${ref}.<field> <value>  (see \`dev-loop team set --help\` for the settable-paths list)`);
       if (o.owner) file.repos[ref].owner = o.owner as string;
+      if (o.defaultBranch) file.repos[ref].defaultBranch = o.defaultBranch as string;
     }
     // Project reference edge.
     const refs = file.projects[project].repos ?? (file.projects[project].repos = []);
@@ -380,7 +384,7 @@ export function addRepo(argv: string[]): number {
 }
 
 // ── deterministic repo-fact detection (`add-repo --detect`) ───────────────────
-export interface DetectedRepoFacts { build?: { typecheck?: string; build?: string; test?: string; quality?: string }; mergeChecks?: string[] }
+export interface DetectedRepoFacts { build?: { typecheck?: string; build?: string; test?: string; quality?: string }; mergeChecks?: string[]; defaultBranch?: string }
 
 // package.json scripts named `typecheck`/`build` become build gates (runner chosen by lockfile:
 // pnpm-lock.yaml → pnpm, yarn.lock → yarn, else npm); .github/workflows job names become CANDIDATE
@@ -432,6 +436,17 @@ export function detectRepoFacts(absPath: string): DetectedRepoFacts {
     }
   } catch { /* no workflows dir */ }
   if (checks.length) out.mergeChecks = [...new Set(checks)];
+  // Detect the default branch: try symbolic-ref first (fast, offline), fall back to `remote show`.
+  const symRef = spawnSync("git", ["-C", absPath, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { encoding: "utf8" });
+  if (symRef.status === 0 && symRef.stdout.trim()) {
+    out.defaultBranch = symRef.stdout.trim().replace(/^origin\//, "");
+  } else {
+    const remoteShow = spawnSync("git", ["-C", absPath, "remote", "show", "origin"], { encoding: "utf8" });
+    if (remoteShow.status === 0) {
+      const m = remoteShow.stdout.match(/HEAD branch:\s*(.+)/);
+      if (m) out.defaultBranch = m[1].trim();
+    }
+  }
   return out;
 }
 
