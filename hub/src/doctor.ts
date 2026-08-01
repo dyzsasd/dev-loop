@@ -476,6 +476,22 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // checkGitTreeLeaks.
   checkGitTreeLeaks(ws.root, warn, info);
 
+  // W27 — null-assignee stranded tickets in split-dev (LOOP-244): in a split-dev project a null
+  // assignee makes a ticket invisible to every actor's servable slice and to todoDepth. Extracted to
+  // helper to keep doctorWorkspace CC in budget. Best-effort; never flips DOCTOR_OK.
+  if (ws.file.team.backend === "service" && existsSync(boardDb)) {
+    try {
+      const db = openHubDbConn(boardDb);
+      try {
+        for (const key of deliveryProjects(ws)) {
+          const pid = findHubProject(db, key);
+          if (!pid) continue;
+          checkNullAssigneeStranded(db, pid, effectiveProject(ws, key).devSplit ?? false, (m) => warn(`[W27] [${key}] ${m}`));
+        }
+      } finally { db.close(); }
+    } catch { /* W27 is best-effort — never fails doctor */ }
+  }
+
   return { ok, stalledRepo, decisionStall, skewResult };
 }
 
@@ -551,6 +567,40 @@ function unignoredBundleArtifacts(root: string): string[] {
     finally { if (fd !== undefined) closeSync(fd); }
   }
   return hits;
+}
+
+// W27 helper — extracted to keep doctorWorkspace CC in budget (LOOP-244). Best-effort; never throws.
+// Flags non-terminal null-assignee tickets that are unreachable by every actor in a split-dev project.
+// Predicate per PM grooming: Todo/InProgress (no dev tier can pick), InReview without a dev-tier label
+// (servable.ts inReview fix makes label-present tickets landable — no need to flag those), Backlog with
+// a tier label (stuck promotion-queue row; no-tier Backlog rows are intentional umbrellas, not faults).
+function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplitOn: boolean, warn: (m: string) => void): void {
+  if (!devSplitOn) return;
+  try {
+    const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
+    const DEV_TIERS = ["junior-dev", "senior-dev"];
+    const rows = db.prepare("SELECT id, state, labels FROM tickets WHERE project_id=? AND assignee IS NULL").all(projectId) as { id: string; state: string; labels: string }[];
+    const stranded: { id: string; tier: string | null }[] = [];
+    for (const row of rows) {
+      if (TERMINAL.has(row.state)) continue;
+      const labels = JSON.parse(row.labels) as string[];
+      const tier = DEV_TIERS.find((t) => labels.includes(t)) ?? null;
+      if (row.state === "Backlog") {
+        if (tier) stranded.push({ id: row.id, tier });        // tier label present → stuck in promotion queue
+        continue;                                              // no tier label → intentional umbrella, not a fault
+      }
+      if (row.state === "In Review") {
+        if (!tier) stranded.push({ id: row.id, tier: null }); // no tier label → not landable by any dev tier
+        continue;                                              // tier label present → landable via servable.ts fix
+      }
+      stranded.push({ id: row.id, tier });                    // Todo / In Progress — always unreachable with null assignee
+    }
+    if (stranded.length === 0) return;
+    const idList = stranded.map((s) => s.id).join(", ");
+    const first = stranded[0]!;
+    const tierHint = first.tier ?? "<tier>";
+    warn(`${stranded.length} non-terminal ticket${stranded.length === 1 ? "" : "s"} with null assignee unreachable: ${idList} — fix: dev-loop ticket update ${first.id} --assignee ${tierHint}`);
+  } catch { /* best-effort — never fails doctor */ }
 }
 
 // W22 — landing stall: forge glance, warn/info only, never flips DOCTOR_OK (design §5.1).
