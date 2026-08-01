@@ -380,7 +380,7 @@ function parseLessons(lessonsDir: string): KaizenReport["lessons"] {
   const byMonth: Record<string, number> = {};
   for (const f of files) {
     let txt = "";
-    try { txt = readFileSync(f, "utf8"); } catch { continue; }
+    try { txt = readFileSync(f, "utf8"); } catch { return { entries: 0, byMonth: {}, present: false }; }
     for (const line of txt.split("\n")) {
       const trimmed = line.trimStart();
       if (!trimmed.startsWith("- ") && !trimmed.startsWith("* ")) continue;
