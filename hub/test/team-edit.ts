@@ -393,6 +393,15 @@ try {
   ok(detectRepoFacts(fix).defaultBranch === undefined,
     "LOOP-100: detectRepoFacts returns no defaultBranch for a dir with no git origin");
 
+  // Negative: clone of an empty (unborn) remote reports HEAD branch: (unknown) — must NOT persist that sentinel
+  const emptyRemote = join(tmp, "empty-remote-100");
+  mkdirSync(emptyRemote, { recursive: true });
+  spawnSync("git", ["init", "--bare"], { cwd: emptyRemote });
+  const cloneOfEmpty = join(tmp, "clone-of-empty-100");
+  spawnSync("git", ["clone", emptyRemote, cloneOfEmpty]);
+  ok(detectRepoFacts(cloneOfEmpty).defaultBranch === undefined,
+    "LOOP-100: detectRepoFacts returns no defaultBranch for a clone of an unborn remote (guards against '(unknown)' sentinel)");
+
   // LOOP-17 regressions: doctor nudge for repos with no configured build gates
   // (state 1) no build block + detectable gates → nudge appears, DOCTOR_OK maintained
   const ungatedDir = join(lin, "ungated-repo");
