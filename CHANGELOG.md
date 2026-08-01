@@ -61,6 +61,23 @@ because it is *trusted*.
   standing in (LOOP-185).
 - **Go CRAP gate** exits 1 when `--threshold` is set and no coverage is present, instead of passing
   vacuously — the same class of bug as the bundle export gate above (LOOP-192).
+- **The provider breaker names the provider, not the agent that tripped it.** An OPEN/CLOSE line
+  reported whichever agent happened to hit the limit, which read as an agent fault and hid the blast
+  radius — every agent on that provider is affected, not one (LOOP-175).
+
+**Cost governance — new config surface.** `budget.dailyUsd` and `budget.perFireUsd` are settable via
+`dev-loop team set`, validated (unknown keys under `budget` are refused with **E18**), and documented
+in `references/config-schema.md`. This release ships the *keys and validation* only — the pre-launch
+gate and breaker that read them are still in flight. Setting them today is inert and safe; leaving
+them unset is byte-identical to 1.13.0 (LOOP-226 / LOOP-197).
+
+**Test hermeticity — the suite no longer reads the workspace it is running inside.** Three helpers
+resolved config by walking up from cwd (or leaked `DEVLOOP_HUB_PORT`), so `run-agents`,
+`export-desktop-skill` and `isolation` compared fixture expectations against the *live* workspace
+whenever the checkout sat inside one — 76 checks across 4 suites failing on a tree whose CI was
+green. Spawns now pass a `DEVLOOP_WORKSPACE` sentinel and `scrubFireEnv()`, closing both the
+walk-up and the env-var axis. This is what a dogfooded repo costs: the defect was invisible to CI
+by construction, because CI never checks out inside a workspace (LOOP-240).
 
 **Governing rule (operator-applied §17 edit — live for the agents with this release, not when it was
 committed).** **§12b**: a verify that finds the change merged in the tree closes `Done` in that fire
