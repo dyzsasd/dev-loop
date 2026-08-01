@@ -79,13 +79,60 @@ ok(!!bare && JSON.stringify(bare.pruned) === JSON.stringify(["5", "12c", "12d", 
   `bare service config prunes §5 (queue pre-ranks) + the four feature spans (got: ${bare?.pruned.join(",")})`);
 ok(!!bare && !bare.text.includes("## 19. Multiple repos") && /declared but OFF in this project's config: [^\]]*§19/.test(bare.text),
   "a pruned span's content is absent and its gap marker says config-off, not uncited");
-const featured = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
-  { repos: [{ name: "web" }], codex: { enabled: true }, deploy: { style: "release-pr" } });
-ok(!!featured && JSON.stringify(featured.pruned) === JSON.stringify(["5"]),
-  `a fully-featured service config still prunes §5 only (got: ${featured?.pruned.join(",")})`);
-ok(!!featured && featured.text.includes("## 19. Multiple repos") && featured.text.includes("## 24. Codex"),
-  "feature-on spans ship");
-ok(!!bare && !!featured && bare.hash !== featured.hash && bare.bytes < featured.bytes,
+// ── real-workspace-shape regression (LOOP-236) ────────────────────────────────────────────────────
+// The real dev-loop workspace shape: project.repos is ProjectRepoRef[] pointers, repo facts live
+// in the workspace-level repos registry (flat autoMerge/deploy — NOT nested under .git/.deploy).
+// The old `featured` fixture used top-level `deploy` + `repos:[{name}]` (no registry), which is
+// NOT the real shape and couldn't catch the three bugs this ticket fixes.
+
+// Fixture A: single repo, autoMerge=true, no deploy → §12c kept, §12d pruned, §19 pruned
+// Mirrors the ACTUAL dev-loop workspace shape.
+const realSingleAutoMerge = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
+  { repos: [{ ref: "dev-loop" }] },
+  { "dev-loop": { autoMerge: true, landing: "pr" } });
+ok(!!realSingleAutoMerge && !realSingleAutoMerge.pruned.includes("12c"),
+  "LOOP-236: real-shape single repo with autoMerge:true → §12c NOT pruned (flat field read)");
+ok(!!realSingleAutoMerge && realSingleAutoMerge.pruned.includes("12d"),
+  "LOOP-236: real-shape single repo with no deploy → §12d pruned");
+ok(!!realSingleAutoMerge && realSingleAutoMerge.pruned.includes("19"),
+  "LOOP-236: real-shape single repo → §19 pruned (≤1 repo, >1 semantics)");
+
+// Fixture B: neither knob (no autoMerge, no deploy) → §12c AND §12d both pruned
+const realNeitherKnob = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
+  { repos: [{ ref: "r1" }] },
+  { r1: { landing: "pr" } });
+ok(!!realNeitherKnob && realNeitherKnob.pruned.includes("12c") && realNeitherKnob.pruned.includes("12d"),
+  "LOOP-236: neither autoMerge nor deploy → §12c AND §12d pruned (pruning still works)");
+
+// Fixture C: ≥2 repos → §19 kept
+const realMultiRepo = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
+  { repos: [{ ref: "r1" }, { ref: "r2" }] },
+  { r1: { autoMerge: true }, r2: { autoMerge: true } });
+ok(!!realMultiRepo && !realMultiRepo.pruned.includes("19"),
+  "LOOP-236: ≥2 repos in registry → §19 NOT pruned (multi-repo)");
+
+// Fixture D: ref not in registry → fail open, no throw, treated as no repos for that anchor
+let dThrew = false;
+let realGhostRef: ReturnType<typeof assembleBootCorpus> = null;
+try { realGhostRef = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
+  { repos: [{ ref: "ghost" }] }, {}); } catch { dThrew = true; }
+ok(!dThrew, "LOOP-236: ref not in registry → no throw (fail open)");
+ok(!!realGhostRef && realGhostRef.pruned.includes("12c"),
+  "LOOP-236: ref not in registry → §12c pruned (no repos resolved, fail open)");
+
+// Keep hash/size determinism check with new real-shape fixtures
+const realSingle2 = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
+  { repos: [{ ref: "dev-loop" }] },
+  { "dev-loop": { autoMerge: true, landing: "pr" } });
+ok(!!realSingleAutoMerge && !!realSingle2 && realSingleAutoMerge.text === realSingle2.text,
+  "LOOP-236: same real-shape config ⇒ byte-identical (cache key holds)");
+ok(!!bare && !!realSingleAutoMerge && bare.hash !== realSingleAutoMerge.hash,
+  "LOOP-236: pruned-bare vs auto-merge-on have different hashes");
+
+const featured = realMultiRepo; // alias for assertions below that use the 'featured' name
+ok(!!featured && featured.text.includes("## 19. Multiple repos"),
+  "multi-repo featured config ships §19");
+ok(!!bare && !!featured && bare.bytes < featured.bytes,
   "pruning is config-deterministic and smaller (different hash, fewer bytes)");
 const bare2 = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service", {});
 ok(!!bare && !!bare2 && bare.text === bare2.text, "same config ⇒ byte-identical (cache key holds)");

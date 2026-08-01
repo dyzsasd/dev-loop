@@ -33,29 +33,40 @@ export interface BootCorpus {
 // and fails OPEN (unreadable config ⇒ no pruning). Conservative v1 table — every predicate is
 // "the feature is affirmatively configured somewhere in this project".
 type ProjectCfg = Record<string, unknown> | null | undefined;
+type ReposRegistry = Record<string, unknown> | null | undefined;
 const asObj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? v as Record<string, unknown> : {});
-const repoList = (cfg: ProjectCfg): Record<string, unknown>[] => {
+// Resolve the project's repos[] (ProjectRepoRef pointers) through the workspace repos registry.
+// Falls OPEN: a ref not found in the registry ⇒ omit it (no throw, no pruning for that anchor).
+const resolveRepos = (cfg: ProjectCfg, reg: ReposRegistry): Record<string, unknown>[] => {
   const r = asObj(cfg).repos;
-  return Array.isArray(r) ? r.map(asObj) : [];
+  if (!Array.isArray(r)) return [];
+  const registry = asObj(reg);
+  return r
+    .map((entry) => {
+      const ref = asObj(entry).ref;
+      if (typeof ref === "string" && registry[ref]) return asObj(registry[ref]);
+      return null;
+    })
+    .filter((e): e is Record<string, unknown> => e !== null);
 };
-const anyRepoOrTop = (cfg: ProjectCfg, pick: (o: Record<string, unknown>) => boolean): boolean =>
-  pick(asObj(cfg)) || repoList(cfg).some(pick);
-export const CONDITIONAL_SECTIONS: Record<string, { why: string; active: (cfg: ProjectCfg, backend: string) => boolean }> = {
+const anyRepo = (repos: Record<string, unknown>[], pick: (o: Record<string, unknown>) => boolean): boolean =>
+  repos.some(pick);
+export const CONDITIONAL_SECTIONS: Record<string, { why: string; active: (cfg: ProjectCfg, backend: string, repos: Record<string, unknown>[]) => boolean }> = {
   "5": { // the pick ranking — the `queue` op computes it server-side on the hub backend
     why: "the queue op pre-ranks on service",
     active: (_cfg, backend) => backend !== "service",
   },
-  "12c": { // auto-merge + release-PR deploy — only real when one of the two knobs is on
-    why: "no git.autoMerge / deploy.style:\"release-pr\" configured",
-    active: (cfg) => anyRepoOrTop(cfg, (o) => asObj(o.git).autoMerge === true || asObj(o.deploy).style === "release-pr"),
+  "12c": { // auto-merge (flat autoMerge field) + release-PR deploy — only real when one of the two knobs is on
+    why: "no autoMerge / deploy.style:\"release-pr\" configured",
+    active: (_cfg, _backend, repos) => anyRepo(repos, (o) => o.autoMerge === true || asObj(o.deploy).style === "release-pr"),
   },
   "12d": { // deploy ceiling — meaningless when nothing can deploy
     why: "no deploy configured",
-    active: (cfg) => anyRepoOrTop(cfg, (o) => Object.keys(asObj(o.deploy)).length > 0),
+    active: (_cfg, _backend, repos) => anyRepo(repos, (o) => Object.keys(asObj(o.deploy)).length > 0),
   },
-  "19": { // multi-repo model — strictly opt-in via repos[]
-    why: "single-repo project (no repos[])",
-    active: (cfg) => repoList(cfg).length > 0,
+  "19": { // multi-repo model — strictly for projects with ≥2 repos
+    why: "single-repo project",
+    active: (_cfg, _backend, repos) => repos.length > 1,
   },
   "24": { // Codex accelerant — opt-in via codex.enabled
     why: "codex not enabled",
@@ -130,14 +141,16 @@ export function conventionsUnionText(convText: string, anchors: readonly string[
 }
 
 export function assembleBootCorpus(
-  root: string, dataDir: string, agent: string, project: string, backend: string, projectCfg?: ProjectCfg,
+  root: string, dataDir: string, agent: string, project: string, backend: string,
+  projectCfg?: ProjectCfg, reposRegistry?: ReposRegistry,
 ): BootCorpus | null {
   try {
     const skillRaw = readFileSync(join(root, "skills", `${agent}-agent`, "SKILL.md"), "utf8");
     const sec = parseSectionsLine(splitSkill(skillRaw.replace(/^---\n[\s\S]*?\n---\n/, "")).prose);
     if (sec.errors.length) return null; // malformed Sections line ⇒ pull mode
     // config-aware selection: drop declared spans whose feature is off in THIS project
-    const pruned = sec.anchors.filter((a) => CONDITIONAL_SECTIONS[a] && !CONDITIONAL_SECTIONS[a].active(projectCfg, backend));
+    const repos = resolveRepos(projectCfg, reposRegistry);
+    const pruned = sec.anchors.filter((a) => CONDITIONAL_SECTIONS[a] && !CONDITIONAL_SECTIONS[a].active(projectCfg, backend, repos));
     const conv = conventionsUnionText(readFileSync(join(root, "references", "conventions.md"), "utf8"), sec.anchors, new Set(pruned));
 
     const parts: string[] = [];
