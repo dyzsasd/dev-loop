@@ -287,6 +287,31 @@ export function decisionQueue(db: import("node:sqlite").DatabaseSync, projectId:
     .map((t) => ({ id: t.id, title: t.title, state: t.state, updatedAt: t.updated_at }));
 }
 
+// LOOP-207: "waiting since" for a decision-queue item — the newest issue.transition INTO the ticket's
+// current queue-state (Human-Blocked, or In Review-for-operator), from the events ledger; issue.create
+// then the tickets row's created_at as fallbacks when it was never transitioned in (seeded/imported).
+// This is the SAME question daemon-notifiers.ts:89-94 (the reminder age) and views/activity.ts HIST_SQL
+// answer — modeled on that reader, deliberately NOT tickets.updated_at, so an unrelated later write (a
+// Sweep label repair, §9c edge re-pointing) cannot change a parked item's reported age or the "oldest"
+// ordering. `state` is the item's current queue-state (from decisionQueue), the daemon-notifiers `approval`
+// discriminator; the ledger idiom keys on the globally-unique ticket_id, so no projectId is needed.
+export function decisionEnteredAt(db: import("node:sqlite").DatabaseSync, ticketId: string, state: string): string {
+  const rows = db.prepare(
+    "SELECT data, created_at FROM events WHERE ticket_id=? AND kind='issue.transition' ORDER BY id DESC",
+  ).all(ticketId) as { data: string; created_at: string }[];
+  for (const e of rows) {
+    let to: string | undefined;
+    try { to = (JSON.parse(e.data) as { to?: string }).to; } catch { /* skip a malformed ledger row */ }
+    if (to === state) return e.created_at;
+  }
+  const created = (db.prepare(
+    "SELECT created_at FROM events WHERE ticket_id=? AND kind='issue.create' ORDER BY id DESC",
+  ).get(ticketId) as { created_at: string } | undefined)?.created_at;
+  if (created) return created;
+  const row = (db.prepare("SELECT created_at FROM tickets WHERE id=?").get(ticketId) as { created_at: string } | undefined)?.created_at;
+  return row ?? new Date(0).toISOString();
+}
+
 // P1-4: owner-liveness — an owner label whose actor never fires strands its tickets forever (the field's
 // MP-156: qa-owned In Review sat 4+ days because no qa agent exists in the roster and nothing noticed).
 // A finding = an agent handle that OWNS open Todo/In Review tickets (labels carry the owner handle) but
