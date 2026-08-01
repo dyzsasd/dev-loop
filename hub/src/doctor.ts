@@ -459,7 +459,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
       warn(`[W23] ${join(ws.root, ".claude", "settings.json")} allows ${DEVLOOP_PERMISSION} but not ${KAIZEN_PERMISSION} — the CLI is gaining a \`kaizen\` alias (LOOP-181); top up the allow-list so fires keep board access when prose flips: dev-loop team repair`);
   } catch { /* W23 is best-effort — never fails doctor */ }
 
-  // W24 — unmerged paths in the shared checkout (LOOP-215). Extracted to helper to keep doctorWorkspace
+  // W26 — unmerged paths in the shared checkout (LOOP-215). Extracted to helper to keep doctorWorkspace
   // CC in budget. Best-effort; never flips DOCTOR_OK.
   warnUnmergedPaths(ws, warn);
 
@@ -479,7 +479,7 @@ function isGitWorkTree(dir: string): boolean {
   catch { return false; }
 }
 
-// W24 helper — extracted to keep doctorWorkspace CC in budget (LOOP-215). Best-effort; never throws.
+// W26 helper — extracted to keep doctorWorkspace CC in budget (LOOP-215). Best-effort; never throws.
 function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
   try {
     for (const ref of Object.keys(ws.file.repos)) {
@@ -492,7 +492,7 @@ function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
         r.stdout.split("\0").filter(Boolean).map(line => line.split("\t")[1]).filter(Boolean)
       )];
       if (paths.length)
-        warn(`[W24] repo '${ref}' (${dir}) has ${paths.length} unmerged path${paths.length === 1 ? "" : "s"}: ${paths.join(", ")} — conflict markers may block direct tsc/build/test runs (per-ticket worktrees are unaffected). Resolve: edit each file, then \`git add <file>\`. Likely cause: an interrupted \`git stash pop\` or \`git merge\`.`);
+        warn(`[W26] repo '${ref}' (${dir}) has ${paths.length} unmerged path${paths.length === 1 ? "" : "s"}: ${paths.join(", ")} — conflict markers may block direct tsc/build/test runs (per-ticket worktrees are unaffected). Resolve: edit each file, then \`git add <file>\`. Likely cause: an interrupted \`git stash pop\` or \`git merge\`.`);
     }
   } catch { /* best-effort — never fails doctor */ }
 }
