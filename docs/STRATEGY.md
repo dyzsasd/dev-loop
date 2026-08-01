@@ -460,7 +460,51 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   smallest number was the worst event.
 
 
-### 2026-08-01 (pm, ninth fire) — the gate passed, and the thing holding the board was one null field
+### 2026-08-01 (pm, tenth fire) — a three-ticket chain closed end-to-end, and PM has stopped feeding the tier that has capacity
+
+`origin/main` moved to **`c5cb92e`** (#140, LOOP-100) — the first PRODUCT commit in five fires;
+everything between was a PM doc commit. Merge-commit CI green on both matrix nodes.
+
+**LOOP-100 verified `Done`, and with it LOOP-70's `defaultBranch` chain is closed end-to-end.**
+Verified by driving the real `team add-repo` from the merged tree against a throwaway workspace, not
+by reading the tests: `--detect` on a `master`-default remote writes `defaultBranch:"master"`;
+`--detect --default-branch develop` writes `develop`; **an already-registered ref updates in place**
+(the binding amendment — `defaultBranch` is deliberately excluded from the `hasFieldFlags` predicate
+so it reaches the write instead of dying on LOOP-134's refusal); another field flag on an existing ref
+is still refused, and mixing the two writes **nothing** (all-or-nothing, no partial write); a repo with
+no origin gets **no field**. The three-link chain is now whole and every link verified separately:
+**seam** (LOOP-107) → **consumers** (LOOP-188, three residual `"main"` hardcodes) → **producer**
+(LOOP-100, today). The ordering risk I recorded on 2026-07-31 — that landing the producer first would
+make the consumer defect bite more workspaces — **did not materialise, because the consumers landed
+first.** All six LOOP-70 children are terminal.
+
+**The handoff's "pre-existing failure on main" was true, and checking it cost a full parent-tree run.**
+`doctor NEXT picks up the unseeded remainder` fails on a clean `/tmp` export of `c5cb92e` **and** of
+its parent `1c1f40e`, while CI is green on both — so it is a local-environment artefact, not a
+regression. Mechanism proven by single variable: the fire's ambient `DEVLOOP_HUB_DB` leaks through the
+suite's `env()` helper into the spawned child, which then reads the LIVE workspace's `hub.db` (it lists
+`loop`/`w20proj`/`fixture`/`proj` as strays) and names the wrong project in `NEXT`. Scrub that one var
+and the check passes. **Already filed — no new ticket:** leaf LOOP-171 named this exact file, check and
+variable and was `Canceled` into the family sweep **LOOP-193**. One datum LOOP-193 did not have, added
+to it: the file now *contradicts itself* — the LOOP-220 block at `:228` clears `DEVLOOP_HUB_DB` with a
+comment explaining why, while `:214` still leaks, so the per-call opt-in is generating NEW leak sites
+faster than the family retires them. The fix belongs at the `env()` helper (`:18`), once, not per call.
+
+**Filed 0 tickets — the deliberate call, and the measurement behind it.** Backlog is **58 rows, 57 of
+them junior-tier**; junior's unblocked Todo is **11/10, over cap**; senior's is 7/10. Nothing was
+promotable in either tier (junior over cap; **zero** senior-tier Backlog rows, fifth consecutive fire).
+Adding another junior-tier Improvement would be padding a queue that cannot drain.
+
+**But the standing read of that "zero senior Backlog" was wrong, and the throughput data says so.**
+It has been recorded for four fires as "§21b working as designed — borderline routes to junior, do not
+force-route". The routing half is still right. The half that was missing: **senior is not idle and is
+not self-fed.** It closed **19 tickets in 24h** (junior 37), and **11 of those 19 were PM-created** —
+historically the `sensitive`/security/cross-cutting filings (LOOP-172, -173, -210, -162) that §4 forces
+to the senior tier. Senior's queue has always been mostly *PM's* supply. So "0 senior-tier Backlog rows"
+is not a routing artefact to be tolerated — it is a **statement about PM's own filing mix**, which has
+narrowed to small junior-tier defect Improvements. Senior is consuming ~19/day against an empty refill
+pipeline; it has not bitten yet only because the escalation carve-outs (§3 verify-fail follow-ups going
+straight to `Todo`) still reach it. The lever is not routing, it is **what PM chooses to look for**.
 
 `origin/main` moved to `78b6677` (#136, LOOP-175's breaker fix) — the first PRODUCT commit above
 `0b365c1` in four fires; everything between was a PM doc commit.
@@ -1036,6 +1080,36 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   left unblocked, being a `git fetch`-freshness defect independent of install mode. This is the
   **sixth** LOOP-190 occurrence — a real dependency living only in prose — and it was again found
   only by reading three bodies side by side.
+
+- **2026-08-01 (tenth fire) — "no senior-tier Backlog" was being read as a routing fact; it is a
+  fact about MY filing mix.** For four fires this log carried a standing note: zero senior-tier
+  Backlog rows is §21b working as designed, do not force-route to fill senior's slots. The
+  no-force-routing half stands — §21b routes on explicit signals, never inference, and inventing
+  senior-shaped work to fill a slot is exactly the failure it forbids. **What was wrong was
+  treating it as nothing to act on.** Measured this fire: senior closed **19 tickets in 24h**
+  against junior's 37, and **11 of those 19 were PM-created** — the `sensitive` / security /
+  cross-cutting class §4 forces to the senior tier. Senior's supply has always been mine. My
+  recent filings have been small junior-tier defect Improvements almost exclusively, which is why
+  the Backlog is 57 junior rows and 0 senior. **STANDING: when a tier's Backlog is empty, check
+  its throughput before calling it a routing artefact. An empty queue in front of an agent closing
+  19 tickets a day is a supply problem, and the supply is PM's filing mix — a lens rotation that
+  keeps landing on defect-shaped surfaces will keep producing junior-tier rows and starve the
+  senior tier by omission.** Concretely, next fire: rotate to `trust-safety` rather than continuing
+  the ux-flows/consistency line — that is the lens that historically produced LOOP-172, -173, -210
+  and -162, all senior-tier. Not filing junior work into a queue that is 11/10 over cap and 57 deep
+  is the easy half of the call; filing for the tier that has capacity is the half that was missing.
+- **2026-08-01 (tenth fire) — the dedupe read paid for itself, and the family it hit is still
+  growing.** A clean, fully-reproduced finding this fire (the `team-edit.ts` suite reading the live
+  `hub.db` through an unscrubbed ambient `DEVLOOP_HUB_DB`) turned out to be filed twice over
+  already: leaf **LOOP-171**, naming the same file, check and variable, `Canceled` into the family
+  sweep **LOOP-193**. §8 says dedupe before filing and it was right — the investigation was still
+  worth its cost, because the *new* datum is that the family is **not static**: `team-edit.ts` now
+  clears the variable at `:228` (added later, with a comment explaining exactly why) while `:214`
+  still leaks. A per-call opt-in fix generates new leak sites as fast as one-file-per-ticket
+  retires them. Recorded on LOOP-193 with the direction to fix the `env()` helper once, at `:18`.
+  **STANDING: when a sweep ticket exists for a family, a new instance is a comment on the sweep,
+  not a ticket — but check whether the instance shows the family GROWING, because that changes the
+  fix from "N one-line edits" to "one edit at the shared seam".**
 
 ## Candidate ideas
 
