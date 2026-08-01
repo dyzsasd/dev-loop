@@ -33,7 +33,7 @@ try {
   const docClean = cli(["doctor"], gitWs);
   const cleanOut = `${docClean.stdout}${docClean.stderr}`;
   ok(/is gitignored/.test(cleanOut), "W06: clean tree (no artifact) still prints the .dev-loop/ gitignored info line");
-  ok(!/git add -A/.test(cleanOut), "W06: no false-positive bundle warning on a tree with no bundle artifact");
+  ok(!/secret\/state-bearing/.test(cleanOut), "W06: no false-positive bundle warning on a tree with no bundle artifact");
 
   // (a) export --out INSIDE the git tree ⇒ a stderr warning naming the artifact + the exposure.
   const inTreeOut = join(gitWs, "ws.bundle");
@@ -239,6 +239,30 @@ try {
   const tcOut = `${docTc.stdout}${docTc.stderr}`;
   ok(/\[W06\][^\n]*\blink\b/.test(tcOut), "(k) W06 warns for a bundle that replaced a symlink at a tracked path — a TYPE change (names link)");
   ok(!/is gitignored/.test(tcOut), "(k) the reassuring 'clean' line is suppressed for the type-change case");
+
+  // (l) LOOP-235 review P1 #7 — the REMEDIATION, not the detection. The staged/committed arms now DETECT a
+  // tracked bundle, but a blob already in the index is not removed by a .gitignore rule (nor by moving the
+  // worktree file): follow the old "add it to .gitignore" advice, `git commit`, and the secret still ships.
+  // W06 must tell the operator to `git rm --cached <path>` for a TRACKED leak — and must NOT bolt that clause
+  // onto an UNTRACKED leak, where a .gitignore rule is the correct fix. The staged assertion fails against the
+  // untracked-only remediation string and passes against the state-aware one.
+  const remWs = join(ROOT, "rem-ws"); mkdirSync(remWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", remWs, "--key", "gg8", "--backend", "service", "--yes"], ROOT).status === 0, "setup: rem-ws team init");
+  gitInit(remWs);
+  writeFileSync(join(remWs, ".gitignore"), ".dev-loop/\n");
+  ok(cli(exportArgs(join(remWs, "ws.bundle")), remWs).status === 0, "(l) setup: bundle export into rem-ws");
+  // untracked leak: the .gitignore advice is right, and the unstage clause must be ABSENT (precise remediation).
+  const docRemU = cli(["doctor"], remWs);
+  const remUOut = `${docRemU.stdout}${docRemU.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(remUOut) && /\.gitignore/.test(remUOut), "(l) untracked leak: W06 warns and still advises .gitignore");
+  ok(!/rm --cached/.test(remUOut), "(l) untracked leak: NO unstage clause — a .gitignore rule is the correct fix for an untracked file");
+  // stage it: the same blob now lives in the index, where a .gitignore rule cannot reach it.
+  execFileSync("git", ["-C", remWs, "add", "-A"]);
+  ok(/^A\s+ws\.bundle$/m.test(execFileSync("git", ["-C", remWs, "status", "--short"], { encoding: "utf8" })), "(l) precondition: ws.bundle is now STAGED (a blob in the index)");
+  const docRemS = cli(["doctor"], remWs);
+  const remSOut = `${docRemS.stdout}${docRemS.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(remSOut), "(l) staged leak: W06 still warns (names ws.bundle)");
+  ok(/git rm --cached/.test(remSOut), "(l) staged leak: the remediation tells the operator to `git rm --cached` — a .gitignore rule does not unstage a tracked blob (LOOP-235 review P1 #7)");
 
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });

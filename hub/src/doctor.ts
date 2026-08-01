@@ -507,8 +507,20 @@ function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg
   // LOOP-210: a bundle artifact (MAGIC header, any --out name, encrypted or plaintext) or the
   // moved.json marker sitting un-ignored in the tree is a secret/state leak a `git add -A` commits.
   const leaks = unignoredBundleArtifacts(root);
-  if (existsSync(join(root, ".dev-loop", "moved.json")) && !isPathIgnored(root, join(".dev-loop", "moved.json"))) leaks.push(".dev-loop/moved.json");
-  if (leaks.length) warn(`[W06] the workspace root is inside a git work-tree and these secret/state-bearing artifacts are NOT gitignored — a 'git add -A' would commit them: ${leaks.join(", ")} (a bundle carries every secret VALUE + hub.db; add *.age / the artifact to .gitignore or write it outside the repo)`);
+  const movedRel = join(".dev-loop", "moved.json");
+  if (existsSync(join(root, movedRel)) && !isPathIgnored(root, movedRel)) leaks.push({ path: ".dev-loop/moved.json", tracked: isIndexed(root, movedRel) });
+  if (leaks.length) {
+    // Remediation must match each artifact's git STATE, not just its name (LOOP-235 review P1 #7): a
+    // .gitignore rule (or moving the worktree file) removes an UNTRACKED artifact from the next commit,
+    // but it never unstages a blob already in the index/history — follow that advice on a staged or
+    // committed bundle, `git commit`, and the secret still ships. Only the clauses the leak set actually
+    // needs are printed, so an untracked-only leak is not told to run a pointless `git rm --cached`.
+    const names = leaks.map((l) => l.path).join(", ");
+    const fixes: string[] = [];
+    if (leaks.some((l) => !l.tracked)) fixes.push("add *.age / the artifact to .gitignore, or write it outside the repo");
+    if (leaks.some((l) => l.tracked)) fixes.push("for one already staged or committed, `git rm --cached <path>` to drop it from the index — a .gitignore rule does NOT unstage a tracked blob, so the next commit still ships it");
+    warn(`[W06] the workspace root is inside a git work-tree and these secret/state-bearing artifacts are reachable by the next commit or push: ${names} (a bundle carries every secret VALUE + hub.db — ${fixes.join("; ")})`);
+  }
   if (devLoopIgnored && !leaks.length) info("workspace root is inside a git repo but .dev-loop/ is gitignored");
 }
 
@@ -517,6 +529,13 @@ function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg
 function isPathIgnored(root: string, rel: string): boolean {
   try { execFileSync("git", ["-C", root, "check-ignore", "-q", rel], { stdio: "ignore" }); return true; }
   catch { return false; }
+}
+
+// LOOP-235 — is <rel> in the index (staged, or committed and unmodified)? `ls-files --error-unmatch`
+// exits 0 iff the path is tracked. Distinguishes a staged/committed leak (needs `git rm --cached`) from
+// an untracked one (needs a .gitignore rule) so W06's remediation matches the artifact's git state (P1 #7).
+function isIndexed(root: string, rel: string): boolean {
+  return spawnSync("git", ["-C", root, "ls-files", "--error-unmatch", "--", rel], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
 }
 
 // LOOP-210 + LOOP-235 — files under <root> that a routine git op (commit or push) would land in
@@ -535,7 +554,7 @@ function isPathIgnored(root: string, rel: string): boolean {
 // path), and a git blob is read via `cat-file` under a small maxBuffer so a multi-MB bundle costs the
 // captured prefix, not a full slurp. MAGIC must match bundle.ts (the bundle-gitguard test writes a real
 // bundle and asserts this detects it, so the two constants can't silently drift).
-function unignoredBundleArtifacts(root: string): string[] {
+function unignoredBundleArtifacts(root: string): { path: string; tracked: boolean }[] {
   const MAGIC = "DEVLOOP-BUNDLE/1";
   const MAX_PROBES_PER_ARM = 2000;
   const gitZ = (args: string[]): string[] => {
@@ -568,7 +587,10 @@ function unignoredBundleArtifacts(root: string): string[] {
   const blobHasMagic = (spec: string): boolean =>
     bufHasMagic(spawnSync("git", ["-C", root, "cat-file", "blob", spec], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 16 }).stdout as Buffer | undefined);
 
-  const hits = new Set<string>();
+  // path → tracked (present in the index or a local commit). A tracked leak needs `git rm --cached`, an
+  // untracked one a .gitignore rule (LOOP-235 P1 #7): the staged/committed arms mark true, the untracked
+  // arm fills only a path not already seen, so a path reachable both ways stays tracked (the sharper fix).
+  const hits = new Map<string, boolean>();
 
   // Staged (index) — probe the index blob. Small set, and the LOOP-235 P1 #1 target, so run it first.
   // `diff --cached --name-only` lists staged paths against HEAD, or the empty tree on an unborn HEAD
@@ -576,7 +598,7 @@ function unignoredBundleArtifacts(root: string): string[] {
   let s = 0;
   for (const rel of gitZ(["diff", "--cached", "--name-only", "-z"])) {
     if (s++ >= MAX_PROBES_PER_ARM) break;
-    if (blobHasMagic(`:${rel}`)) hits.add(rel);
+    if (blobHasMagic(`:${rel}`)) hits.set(rel, true);
   }
   // Committed-but-unpushed — the commits the next `git push` would transfer, so a bundle committed but not
   // yet pushed is caught before it ships. Prefer the branch's configured push destination (`@{push}`) then
@@ -605,7 +627,7 @@ function unignoredBundleArtifacts(root: string): string[] {
       if (c >= MAX_PROBES_PER_ARM) break;
       for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AMT", "--root", commit])) {
         if (c++ >= MAX_PROBES_PER_ARM) break;
-        if (blobHasMagic(`${commit}:${rel}`)) hits.add(rel);
+        if (blobHasMagic(`${commit}:${rel}`)) hits.set(rel, true);
       }
     }
   }
@@ -614,9 +636,9 @@ function unignoredBundleArtifacts(root: string): string[] {
   let u = 0;
   for (const rel of gitZ(["ls-files", "--others", "--exclude-standard", "-z"])) {
     if (u++ >= MAX_PROBES_PER_ARM) break;
-    if (worktreeHasMagic(rel)) hits.add(rel);
+    if (!hits.has(rel) && worktreeHasMagic(rel)) hits.set(rel, false);
   }
-  return [...hits];
+  return [...hits].map(([path, tracked]) => ({ path, tracked }));
 }
 
 // W22 — landing stall: forge glance, warn/info only, never flips DOCTOR_OK (design §5.1).
