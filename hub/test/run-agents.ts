@@ -441,6 +441,53 @@ try {
   ok(/\[dry-run\] junior-dev:.*stallTimeout=off/.test(timeoutJunior.out),
     "LOOP-9: claude/codex stall default is off when neither config nor --stall-timeout is set");
 
+  // ── LOOP-103: project-scope fireTimeout/stallTimeout on the v2 team path ────────────────────────────
+  // Delivery fires (no teamScope) pick up per-project agents config; steward fires (teamScope set) must
+  // use only team-scope config (AC6 pin: a per-project steward timeout would silently favour whichever
+  // project happens to be profileProject on that fire).
+  {
+    const wsDir = mkdtempSync(join(tmpdir(), "dl-ws-loop103-"));
+    const repoA = join(wsDir, "repo-a"); mkdirSync(repoA, { recursive: true });
+    const repoB = join(wsDir, "repo-b"); mkdirSync(repoB, { recursive: true });
+    spawnSync("git", ["init", "-b", "main"], { cwd: repoA, encoding: "utf8" });
+    spawnSync("git", ["init", "-b", "main"], { cwd: repoB, encoding: "utf8" });
+    writeFileSync(join(wsDir, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "test-loop103", backend: "linear", linearTeam: "TestT", agents: { sweep: { fireTimeout: "55m" } } },
+      repos: { ra: { path: "repo-a" }, rb: { path: "repo-b" } },
+      projects: {
+        "proj-a": { repos: [{ ref: "ra", role: "primary" }], agents: { pm: { fireTimeout: "45m" }, sweep: { fireTimeout: "33m" } } },
+        "proj-b": { repos: [{ ref: "rb", role: "primary" }], agents: { pm: { fireTimeout: "20m" } } },
+      },
+    }));
+    const runWs = (args: string[]) => {
+      const { DEVLOOP_WORKSPACE: _ws, DEVLOOP_PROJECTS_JSON: _pj, DEVLOOP_HUB_DB: _hdb, DEVLOOP_TEAM: _dt, ...inheritedEnv } = process.env;
+      delete inheritedEnv.DEVLOOP_PROJECT; delete inheritedEnv.DEVLOOP_ACTOR;
+      delete inheritedEnv.DEVLOOP_DEV_SPLIT; delete inheritedEnv.DEVLOOP_DATA_DIR;
+      delete inheritedEnv.DEVLOOP_RUN_DIR; delete inheritedEnv.DEVLOOP_PLUGIN_ROOT;
+      const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8", env: { ...inheritedEnv, DEVLOOP_WORKSPACE: wsDir } });
+      return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+    };
+
+    // Delivery fire for proj-a: project-scope agents.pm.fireTimeout "45m" applies
+    const resA = runWs(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--project", "proj-a"]);
+    ok(resA.code === 0, "LOOP-103 v2: project-scope fireTimeout in team path, proj-a, exits 0");
+    ok(/\[dry-run\] pm:.*fireTimeout=45m/.test(resA.out),
+      "LOOP-103 v2: proj-a agents.pm.fireTimeout='45m' applies to delivery fire");
+
+    // Delivery fire for proj-b: different project-scope timeout (AC6 isolation across projects)
+    const resB = runWs(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--project", "proj-b"]);
+    ok(resB.code === 0, "LOOP-103 v2: project-scope fireTimeout in team path, proj-b, exits 0");
+    ok(/\[dry-run\] pm:.*fireTimeout=20m/.test(resB.out),
+      "LOOP-103 v2: proj-b agents.pm.fireTimeout='20m' applies to delivery fire (AC6: isolated per-project)");
+
+    // Steward fire (sweep): teamScope is set → project-scope 33m is ignored → team-scope 55m applies
+    const resC = runWs(["--cli", "claude", "--once", "--dry-run", "--agents", "sweep"]);
+    ok(resC.code === 0, "LOOP-103 v2: steward fire (sweep) in team path exits 0");
+    ok(/\[dry-run\] sweep:.*fireTimeout=55m/.test(resC.out),
+      "LOOP-103 v2: steward sweep uses team.agents.sweep.fireTimeout='55m', not proj-a's '33m' (AC6: teamScope guard)");
+  }
+
   // ── P0-1b: provider-scoped circuit breaker (LOOP-8) ─────────────────────────────────────────────────
   // 5 same-class failures spread across 3 agents on one provider trips it; a 4th agent on that provider
   // is immediately probe-capped without accumulating its own streak; an agent on a different provider is

@@ -268,7 +268,15 @@ function checkNotify(raw: unknown, path: string, E: Emit): void {
 // --fire-timeout/--stall-timeout flags) or "0" to disable. Validated at load time so a typo surfaces as a
 // clear schema error naming the agent+field, never a silent runtime ignore.
 const TIMEOUT_DUR_RE = /^\d+(?:\.\d+)?(ms|s|m|h|d)?$/;
-function validateAgentConfigs(agents: unknown, path: string, E: Emit): void {
+function parsedDurationMs(s: string): number {
+  const m = s.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/);
+  if (!m) return 0;
+  const n = Number(m[1]);
+  const unit = m[2] ?? "m";
+  const mult = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : unit === "h" ? 60 * 60_000 : 24 * 60 * 60_000;
+  return Math.round(n * mult);
+}
+function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectScope = false): void {
   if (agents === null || typeof agents !== "object" || Array.isArray(agents)) { E("E17", path, "agents must be an object"); return; }
   for (const [agent, cfg] of Object.entries(agents as Record<string, unknown>)) {
     const apath = `${path}.${agent}`;
@@ -277,10 +285,17 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit): void {
     for (const field of ["fireTimeout", "stallTimeout"] as const) {
       if (a[field] !== undefined) {
         const v = a[field];
-        if (typeof v !== "string" || (v.trim() !== "0" && !TIMEOUT_DUR_RE.test(v.trim())))
+        const t = typeof v === "string" ? v.trim() : "";
+        if (typeof v !== "string" || (t !== "0" && !TIMEOUT_DUR_RE.test(t)))
           E("E17", `${apath}.${field}`, `agents.${agent}.${field} must be a duration string (e.g. "30m", "1h") or "0" to disable (got ${JSON.stringify(v)})`);
+        else if (t !== "0" && parsedDurationMs(t) <= 0)
+          E("E17", `${apath}.${field}`, `agents.${agent}.${field} must be a positive duration or "0" to disable — zero-valued spellings like "0ms" are not allowed (got ${JSON.stringify(v)})`);
+        else if (t !== "0" && parsedDurationMs(t) > 2_147_483_647)
+          E("E17", `${apath}.${field}`, `agents.${agent}.${field} exceeds Node's 32-bit timer limit (~24.8d); setTimeout coerces it to 1ms, killing the fire immediately (got ${JSON.stringify(v)})`);
       }
     }
+    if (isProjectScope && a.cadence !== undefined)
+      E("E17", `${apath}.cadence`, `projects.<key>.agents.<agent>.cadence is not honoured in team mode — the team runs one scheduler that rotates across projects by weight; set cadence under team.agents instead, or express per-project frequency with the project's rotation weight`);
   }
 }
 
@@ -396,7 +411,7 @@ function validateProjects(projects: Record<string, ProjectEntry>, repos: Record<
     if (p?.hub !== undefined) checkHub(p.hub, `projects.${key}.hub`, E);
     if (p?.communication !== undefined) checkCommunication(p.communication, `projects.${key}.communication`, E);
     if (p?.notify !== undefined) checkNotify(p.notify, `projects.${key}.notify`, E);
-    if (p?.agents !== undefined) validateAgentConfigs(p.agents, `projects.${key}.agents`, E);
+    if (p?.agents !== undefined) validateAgentConfigs(p.agents, `projects.${key}.agents`, E, true);
     if (p?.scratch !== undefined && typeof p.scratch !== "boolean") E("E08", `projects.${key}.scratch`, "scratch must be a boolean");
     const refs = Array.isArray(p?.repos) ? p.repos : [];
     if (!refs.length && p?.scratch !== true) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);

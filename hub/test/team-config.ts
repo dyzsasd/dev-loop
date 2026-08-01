@@ -356,6 +356,16 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
 { const f = base(); (f.team as { agents?: unknown }).agents = { pm: { fireTimeout: 30 } }; ok(has(f, "E17"), "E17: a numeric fireTimeout is rejected (must be a string)"); }
 { const f = base(); (f.team as { agents?: unknown }).agents = "sweep"; ok(has(f, "E17"), "E17: a non-object agents block is rejected"); }
 { const f = base(); (f.team as { agents?: unknown }).agents = { pm: "fast" }; ok(has(f, "E17"), "E17: a non-object agent config entry is rejected"); }
+// zero-valued duration spellings that parse to 0ms are rejected (would cause parseDuration to process.exit at fire time)
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "0ms" } }; ok(has(f, "E17"), "E17: '0ms' is rejected — zero-valued duration, not the disable sentinel"); }
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "0.0" } }; ok(has(f, "E17"), "E17: '0.0' (minutes, rounds to 0) is rejected"); }
+{ const f = base(); f.team.agents = { pm: { stallTimeout: "0s" } }; ok(has(f, "E17"), "E17: '0s' stallTimeout is rejected"); }
+{ const f = base(); f.projects.devplatform.agents = { dev: { fireTimeout: "0ms" } }; ok(has(f, "E17"), "E17: project-scope '0ms' fireTimeout is also rejected"); }
+// duration exceeding Node's 32-bit timer ceiling (~24.8d) is rejected (setTimeout coerces to 1ms → immediate kill)
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "30d" } }; ok(has(f, "E17"), "E17: '30d' exceeds 32-bit timer limit and is rejected"); }
+{ const f = base(); f.team.agents = { pm: { stallTimeout: "25d" } }; ok(has(f, "E17"), "E17: '25d' exceeds 32-bit timer limit (just over) and is rejected"); }
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "24d" } }; ok(codes(f).length === 0, "E17: '24d' is within the 32-bit timer limit and is valid"); }
+{ const f = base(); f.projects.devplatform.agents = { pm: { fireTimeout: "30d" } }; ok(has(f, "E17"), "E17: project-scope '30d' fireTimeout also rejected"); }
 // error path must name the agent + field (WsError.path carries the dotted location)
 {
   const f = base(); f.team.agents = { sweep: { fireTimeout: "bad" } };
@@ -374,6 +384,14 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   const f = base(); f.projects.devplatform.agents = { dev: { stallTimeout: "bad" } };
   const paths = validateTeamFile(f).errors.filter((e) => e.code === "E17").map((e) => e.path);
   ok(paths.some((p) => /projects\.devplatform\.agents\.dev\.stallTimeout/.test(p)), "E17: project-level error path names projects.<key>.agents.<agent>.stallTimeout");
+}
+// LOOP-103: cadence rejected at project scope (E17), allowed at team scope
+{ const f = base(); f.projects.devplatform.agents = { pm: { cadence: "daily" } }; ok(has(f, "E17"), "E17: projects.<key>.agents.<a>.cadence is rejected at project scope"); }
+{ const f = base(); f.team.agents = { pm: { cadence: "daily" } }; ok(codes(f).length === 0, "E17: team.agents.<a>.cadence is allowed at team scope"); }
+{
+  const f = base(); f.projects.devplatform.agents = { pm: { cadence: "daily" } };
+  const paths = validateTeamFile(f).errors.filter((e) => e.code === "E17").map((e) => e.path);
+  ok(paths.some((p) => /projects\.devplatform\.agents\.pm\.cadence/.test(p)), "E17: project-scope cadence error path names projects.<key>.agents.<a>.cadence");
 }
 
 // ── E18 budget validation — unknown keys ──
