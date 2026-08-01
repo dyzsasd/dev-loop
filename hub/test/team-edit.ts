@@ -214,6 +214,27 @@ try {
   const dSvc = run("server", ["doctor"], { cwd: svc });
   ok(/NEXT: dev-loop seed clash/.test(dSvc.out), "doctor NEXT picks up the unseeded remainder");
 
+  // ═══ add-project --scratch: marker + hub.db mirror + count exclusion (LOOP-220) ═══
+  const scr = join(tmp, "scr");
+  run("team", ["init", "--dir", scr, "--key", "scr-team", "--backend", "service"]);
+  // add a scratch project and confirm config + hub row
+  const scrAdd = run("team", ["add-project", "fixture", "--scratch"], { cwd: scr });
+  ok(scrAdd.code === 0, "--scratch add-project exits 0");
+  const scrJson = readJson(join(scr, "dev-loop.json"));
+  ok(scrJson.projects.fixture?.scratch === true, "scratch:true written to dev-loop.json config (AC1)");
+  const scrDbRows = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT settings_json FROM projects WHERE key=?').get('fixture');console.log(r?JSON.parse(r.settings_json).scratch:null);db.close()})`, join(scr, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  ok(/true/.test(scrDbRows.stdout.trim()), "settings_json.scratch=true written to hub.db row (AC1)");
+  // doctor: no W01 for scratch project, and project count excludes it
+  // Clear DEVLOOP_HUB_DB so the doctor uses the test workspace's hub.db, not the live fire's db.
+  const scrDoctor = run("server", ["doctor"], { cwd: scr, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(!/W01.*fixture/.test(scrDoctor.out), "doctor produces no W01 warning for scratch project (AC2)");
+  ok(/projects=1/.test(scrDoctor.out), "doctor hub.db project count excludes scratch project (counts only _team) (AC2)");
+  ok(/0 repos, 0 projects/.test(scrDoctor.out), "doctor config count excludes scratch project (AC2)");
+  // discriminator: add an unmarked zero-repo project and confirm W01 still fires
+  run("team", ["add-project", "real-new"], { cwd: scr });
+  const scrDoctor2 = run("server", ["doctor"], { cwd: scr, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(/W01.*real-new/.test(scrDoctor2.out), "W01 still fires for unmarked zero-repo project (AC3 discriminator)");
+
   // ═══ add-repo --detect: deterministic detection, no LLM ═══
   // unit: the workflow job-name extractor never confuses step/with-level `name:` lines
   const wf = [
