@@ -664,15 +664,24 @@ try {
 
     kDb.close();
 
-    // CLI smoke: --kaizen --json round-trips (service backend; use DEVLOOP_WORKSPACE to resolve workspace)
+    // CLI smoke: --kaizen --json round-trips (service backend only; skip on linear or missing hub.db)
     const wsEnv = process.env.DEVLOOP_WORKSPACE;
-    if (wsEnv && existsSync(wsEnv)) {
+    const hubDbPath = wsEnv ? join(wsEnv, ".dev-loop", "hub.db") : "";
+    const cfgPath = wsEnv ? join(wsEnv, "dev-loop.json") : "";
+    const isServiceWorkspace = (() => {
+      if (!wsEnv || !existsSync(cfgPath) || !existsSync(hubDbPath)) return false;
+      try {
+        const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
+        const projects = cfg.projects as Record<string, { backend?: string }> | undefined ?? {};
+        return Object.values(projects).some((p) => p.backend === "service");
+      } catch { return false; }
+    })();
+    if (isServiceWorkspace) {
       const kRes = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen", "--json"], {
         cwd: wsEnv, encoding: "utf8", timeout: 10_000, env: { ...process.env },
       });
       ok(kRes.status === 0, `metrics --kaizen --json exits 0 (got ${kRes.status}; stderr: ${(kRes.stderr ?? "").slice(0, 200)})`);
       const parsed = (() => { try { return JSON.parse(kRes.stdout ?? ""); } catch { return null; } })();
-      // P2 fix: --kaizen --json now emits an array of KaizenReport objects (one per project); validate array shape + key
       ok(Array.isArray(parsed) && parsed.length > 0 && parsed.every((r: unknown) => r !== null && typeof r === "object" && "selfImprovement" in (r as Record<string, unknown>) && "key" in (r as Record<string, unknown>)),
         "metrics --kaizen --json emits an array of {key, ...KaizenReport} objects (one per project)");
     }
