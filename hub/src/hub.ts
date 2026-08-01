@@ -56,10 +56,24 @@ export async function hubCmd(argv = process.argv.slice(2)): Promise<number> {
   }
   const ws = resolveWorkspace();
   if (ws.file.team.backend !== "service") die(`team '${ws.file.team.key}' is backend:'${ws.file.team.backend}' — hub commands are for service-backend teams only (a linear team has no hub.db)`, 2);
+  // Read the project the operator named BEFORE wireEnv overwrites DEVLOOP_PROJECT: a non-_team project
+  // must never be silently retargeted to _team (LOOP-152/LOOP-186 mis-target fix).
+  const namedProject = process.env.DEVLOOP_PROJECT?.trim() || null;
+  const isNonTeamProject = namedProject !== null && namedProject !== TEAM_INTAKE_PROJECT;
   switch (sub) {
-    case "start": wireEnv(ws); return daemonLifecycleCode("up");
-    case "ensure": wireEnv(ws); return daemonLifecycleCode("ensure");
-    case "stop": { wireEnv(ws); const c = await daemonLifecycleCode("down"); walCheckpoint(wsHubDb(ws)); return c; }
+    case "start": {
+      if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'DEVLOOP_PROJECT=${namedProject} dev-loop daemon up' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
+      wireEnv(ws); console.log(`hub start: '${TEAM_INTAKE_PROJECT}'`); return daemonLifecycleCode("up");
+    }
+    case "ensure": {
+      if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'DEVLOOP_PROJECT=${namedProject} dev-loop daemon up' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
+      wireEnv(ws); console.log(`hub ensure: '${TEAM_INTAKE_PROJECT}'`); return daemonLifecycleCode("ensure");
+    }
+    case "stop": {
+      if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'DEVLOOP_PROJECT=${namedProject} dev-loop daemon down' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
+      wireEnv(ws); console.log(`hub stop: '${TEAM_INTAKE_PROJECT}'`);
+      const c = await daemonLifecycleCode("down"); walCheckpoint(wsHubDb(ws)); return c;
+    }
     case "status": { wireEnvForStatus(ws); const c = await daemonStatusAll(); reportSize(wsHubDb(ws)); return c; }
     default: die(`unknown subcommand '${sub}' (start|stop|status|ensure)`, 2);
   }
