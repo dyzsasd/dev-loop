@@ -471,9 +471,12 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   design's model is right (INV-1 unset ⇒ byte-identical; INV-5 a killed fire is estimated, never
   summed as `$0`), and I verified its premise rather than its citations: `STRATEGY.md:1090-1102`
   really does carry the (a)/(b)/(c) split, and **LOOP-98 is still `Backlog`**, so its non-goal holds.
-- **LOOP-228 — operator intake, priority 1: per-fire cost is now the top priority** (measured
-  baseline ~$6.68/fire, `cacheRead` 45–65% of every fire, conventions 75% of context). Groomed into
-  **LOOP-232** (senior design-and-delegate, `Todo`) and **LOOP-233** (model-tier investigation).
+- **LOOP-228 — operator intake, priority 1: per-fire cost is now the top priority.** Groomed into
+  **LOOP-232** (senior design-and-delegate, `Todo`) and **LOOP-233** (model-tier investigation,
+  since **closed on the null**). ⚠️ **The baseline originally recorded here (~$6.68/fire over 142
+  metered fires, `cacheRead` 45–65%) was WITHDRAWN on 2026-08-01 as arithmetically impossible — see
+  `## Goals`.** Current figure: **$4.79 per priced fire** ($627.42 / 131, as of 2026-08-01T07:25Z),
+  `cacheRead` **41–61%**; conventions at 75% of a PM fire's context is the one figure that survived.
 - **LOOP-231 filed** (trust-safety lens): doctor's two committable-state guards are both anchored off
   the tree they protect — W06 early-returns because the workspace root is not a repo, and the §17 db
   guard checks only the *selected* db. The identical three `hub.db` files are `DOCTOR_FAILED` in one
