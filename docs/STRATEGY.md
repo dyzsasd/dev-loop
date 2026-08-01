@@ -459,6 +459,36 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   mid-flight as delivered — 7.9% / 40.27 USD (LOOP-219), and an aggregate can never show that the
   smallest number was the worst event.
 
+
+### 2026-08-01 (pm, ninth fire) — the gate passed, and the thing holding the board was one null field
+
+`origin/main` moved to `78b6677` (#136, LOOP-175's breaker fix) — the first PRODUCT commit above
+`0b365c1` in four fires; everything between was a PM doc commit.
+
+**Design gate:** LOOP-149 (merge freshness) **PASSED** with two binding amendments; child LOOP-242
+promoted `Backlog → Todo`, parent `Done` (§21a order). LOOP-243 filed + promoted for the re-freshen
+half the design flagged but never filed — senior tier, which had a Backlog of 0 and free slots.
+
+**Landing, measured rather than assumed.** Of six open PRs: #133 / #134 / #135 are **correctly** held
+on unresolved Codex review threads (1, 2, 1); #131 is clear and reachable; #137 was clear with checks
+still running; and **#132 was the only one clear-but-unreachable** — CI-green, `CLEAN`/`MERGEABLE`,
+0 unresolved threads, held solely because LOOP-226 carried `assignee: null`. **Repaired at ~09:03Z;
+PR #132 merged at 09:04:18Z and PR #137 (LOOP-240) merged behind it — so the null assignee was the
+whole of what held them, proven by the landing rather than argued.** Last fire's "landing is the
+constraint" survives, but the sharper statement is that **most of the queue is held for a good reason
+and the exceptions are invisible rather than numerous** — a queue-depth number cannot tell those
+apart, which is what LOOP-244 is for.
+
+**Stranded-work repair, third consecutive fire:** LOOP-226 + LOOP-240 re-assigned; LOOP-240 +
+LOOP-175 unparked from zero-edge `blocked` labels. Both repairs were consumed within minutes —
+LOOP-240 shipped to `In Review`, LOOP-175 verified `Done` by QA — the control that says the repair
+was the actual blocker. `blocked` 10 → 8; **all 8 remaining carry real non-terminal edges, 0
+zero-edge parks left.** The mechanism is now on record rather than inferred: `op list_events`'s
+`issue.transition` rows carry `{from, to, assignee}` and show merge-guard's bounce writing
+`assignee: null` (08:03:57Z LOOP-186, 08:44:06Z LOOP-175), objection comment paired to the same
+second — trace added to LOOP-225. LOOP-240 is a fourth instance with a **different** signature: back
+in `Todo` with **no `issue.transition` row at all**, flagged as a gap, not explained.
+
 ### 2026-08-01 (early) — [ARCHIVED] the orphan reset that erased the dev tier, and seven
 merged fixes running nowhere
 
@@ -695,65 +725,26 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   LOOP-151 (honest skew count) → LOOP-167 (release-readiness NEXT hint). The rule's own recursive
   footnote holds — it is not in the installed package, so today it binds the operator, this log, and
   anyone reading LOOP-170, but *not* the verifiers it addresses.
-- **(pm, 2026-07-31) 📝 DECISION recorded: the product is named Kaizen Factory; the engine keeps
-  the dev-loop name; the CLI command becomes `kaizen` over two releases.** Operator decision
-  (LOOP-174, W3 intake), superseding an earlier "Dark Factory" candidate that collided with an
-  active same-space npm product. **Name facts verified 2026-07-31:** npm `kaizen-factory` and
-  `kaizenfactory` are both free; bare `kaizen` is a dead 0.1.5 stub declaring **no bin**, so
-  nothing else claims `kaizen` on a developer's PATH. Domains/trademark are operator-side, out of
-  loop scope. **The two-layer rule:** brand = Kaizen Factory, engine = dev-loop; the npm package
-  name, `dev-loop.json`, `DEVLOOP_*`, `.dev-loop/`, `dev-loop/<id>`, `/dev-loop:*`, and the §2
-  safety label stay VERBATIM — each of those is a separate future decision and none is user-visible
-  typing. **This edit is a Vision (direction) change made WITHOUT an investigation round-trip
-  because LOOP-174 carries the operator's explicit §9a pre-authorization for exactly this edit,
-  citing that ticket** (§20 D4 — the standing rule is unchanged; this is an authorized instance of
-  it, and the D4 audit trail is the ticket).
-
-  **Why the CLI rename is phased, which is the load-bearing part of the decision.** A workspace's
-  `.claude/settings.json` carries `Bash(dev-loop *)`, written once at init and never updated by an
-  npm upgrade, while fires read their prose from the INSTALLED package. A single-release rename
-  therefore breaks every already-initialized workspace the moment it upgrades: the prose says
-  `kaizen queue`, the shell has the bin, the permission allow-list does not — denied, and the agent
-  cannot reach the board at all. That is the LOOP-69 wedge and the LOOP-38 installed-vs-source class
-  in one. **Phase A** (LOOP-181) ships the `kaizen`/`kaizen-hub` bins, provisions BOTH permissions
-  at init, tops up existing workspaces through the existing `team repair` verb, and adds a warn-only
-  doctor check — prose unchanged. **Phase B** (LOOP-182) flips the prose one release later, gated on
-  `kaizen --version` actually resolving in a fire's environment here — published and installed, not
-  merely merged (§12b).
-
-  **Two consequences worth recording as direction, not just as tickets.** (a) Phase A was tiered
-  **senior + `sensitive`** against the intake's junior estimate, because its ACs write into a
-  permissions allow-list and §21b routes permissions work to senior unconditionally. (b) Phase B is
-  **mostly not agent-appliable**: ~175 of its occurrences live in `references/` + `skills/`, and
-  §17 forbids an agent auto-rewriting `conventions.md` or a SKILL file — so it splits into an
-  agent-applied generator/test change and an operator-applied prose diff, on the same
-  propose→operator-applies→agent-verifies path LOOP-161 / LOOP-164 / LOOP-170 already ran. The
-  brand's load-bearing claim — "improves itself" — gets its evidence surface in the `/kaizen` panel
-  (LOOP-180, senior design-gated), rendered from the board and ledger only, with honest empty
-  states. **Nothing is built yet; `Current state` is deliberately untouched.**
-
-- **(operator, 2026-07-31) The Kaizen Factory tagline is chosen — _"The lights-out dev team that
-  improves itself."_ — and the runner-up is grafted rather than discarded (LOOP-179).** PM drafted
-  five candidates on five deliberately different angles; the operator picked **A** on the ground
-  that a brand-new commercial name has to explain itself, and A is the only one doing all three
-  jobs at once: it **decodes "Factory"** (lights-out), **names the category** (dev team — without
-  which "Kaizen Factory" cold-reads as manufacturing consulting), and **states the kaizen claim**
-  (improves itself). The wordmark carries the poetry; the tagline's job is clarity.
-  **Runner-up D — _"It ships software. Then it improves the shipping."_ — is grafted onto the
-  `/kaizen` panel** (LOOP-180) as its header line, where the numbers underneath make it evidence
-  rather than a boast. Recorded as a reusable rule, not a one-off: **runner-up lines are cheapest
-  to use where they are provable.** PM added the constraint that rationale implies — above an empty
-  or unmeasured panel that header *is* the boast, i.e. instance 16 of this board's "a surface
-  reporting a result it never established" class — so the design must state its no-data behaviour.
-  **Localization is not translation.** `README.zh-CN.md` and `README.fr.md` each get a NATIVE line
-  carrying the same two claims (lights-out + improves itself) with the category named; the
-  constraint is those three elements, never the wording, so a native speaker may improve either
-  line freely. Chinese uses **黑灯工厂**, already the native term, and carries **改善** — the
-  brand's own word — so the zh line states kaizen instead of transliterating it.
-  **Also settled here:** `communication` is **not** joining the running roster (there is no
-  `team.comms` channel for it to deliver to, and brand voice is PM's lane) — LOOP-90, a
-  configured-but-unscheduled agent's tickets being unpickable, stands on its own merits rather than
-  being papered over by adding the agent.
+- **2026-07-31 — [ARCHIVED] the brand decisions + 3 method rulings** (full text in
+  `docs/strategy-archive/2026-07.md` under `# Rolled 2026-08-01 (pass 9)`). Live clauses kept here
+  because nothing else carries them:
+  - **Brand, two-layer rule:** brand = **Kaizen Factory**, engine = **dev-loop**. The npm package
+    name, `dev-loop.json`, `DEVLOOP_*`, `.dev-loop/`, `dev-loop/<id>`, `/dev-loop:*` and the §2
+    safety label stay VERBATIM — each is a separate future decision.
+  - **Tagline (operator, LOOP-179):** _"The lights-out dev team that improves itself."_ Runner-up
+    _"It ships software. Then it improves the shipping."_ is grafted onto the `/kaizen` panel header
+    (LOOP-180), where the numbers make it evidence rather than a boast — so that design must state
+    its no-data behaviour. Localization is not translation: zh uses 黑灯工厂 + 改善.
+  - **CLI rename stays phased:** Phase A (LOOP-181) ships the bins + BOTH permissions; Phase B
+    (LOOP-182) flips the prose one release later, gated on `kaizen --version` resolving in a real
+    fire — published and installed, not merely merged (§12b).
+  - **An operator filing that arrives `assignee: null` is TIERED under standing rule 9's second
+    clause — that is not a re-tier**, and the load-balancing prohibition is not engaged.
+  - **§17's "the plugin's own code is the operator's to apply" does NOT bind a workspace whose
+    PRODUCT is the plugin:** `run-agents.ts` is ordinary dev-editable product code. The firewall
+    still binds where it applies — `conventions.md` and any `SKILL.md` stay operator-only.
+  - **A hazard to the operator's OWN measurement is escalated, not filed** — no loop ticket can act
+    on it.
 
 - **2026-07-31 (late arc) — [ARCHIVED] 16 method rulings from the day's later PM fires** (the design-gate fail path vs under-specification; the two halves of a §9c edge; a fix is finished only when every branch answering one question agrees; retiring a defect FAMILY over its leaves; a gate naming a human verifier; §21a promotion unconditional on a pass; the pass-3 rollup keep/roll criterion and the rule that a rollup must RETIRE; a banked idea's precondition as a claim with an expiry; a priority ladder whose fall-through is its success case; a cached mirror read as the fact; STANDING RULE 12 refined; LOOP-74 verify-fail; LOOP-180 pass-with-amendment). Distilled into the STANDING RULES block below; full text in `docs/strategy-archive/2026-07.md` under `# Rolled 2026-08-01 (pass 4)`.
 - **2026-08-01 (mid arc) — [ARCHIVED] 14 fire-journal rulings from the day's middle PM fires** (the merge-objection ruling; machine-demotion-is-not-a-verdict; §5 rank-1; the §17-caution proposal ruling; merge-guard's actor; the boot-corpus A/B cost axis; the discard-cost fix; "has the product moved" asked of `origin`; the NEW-in-range marker test; rollup pass 5; the open condition tested NOT met; promotion-count-0 with an idle lane; the cost ordering and why it did not descend KB×agents; the late re-scan's third payday) — full text in `docs/strategy-archive/2026-08.md`.
@@ -764,40 +755,6 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   with its re-checked parking lot). Doctrine kept in the STANDING RULES block above and in the
   entries retained around it; full text in `docs/strategy-archive/2026-07.md` under
   `# Rolled 2026-08-01 (pass 8)`.
-- **(pm, 2026-07-31) ⚖️ LOOP-209 — an operator filing arrived `assignee: null`; tiering it is standing
-  rule 9's second clause, not a re-tier.** Routed **senior-dev, `Mode: design`** on substance, and the
-  reasoning is recorded so it is auditable against the load-balancing prohibition: the body offers
-  three composable mechanisms (prevent / mark / reap) and explicitly leaves the choice open — the
-  ambiguity §21c tells a junior to BLOCK on rather than guess, so a junior fire would have spent
-  itself and routed straight back — and its AC3 builds a path that **deletes projects from a live
-  `dev-loop.json` + `hub.db`**, gated on LOOP-207 reaching terminal first. A deletion path with a
-  sequencing precondition earns the design step. Its ACs were already §6-shaped (four testable, one
-  discriminating regression), so grooming added only the tier, the missing `Bug` type label, and the
-  mode marker; the `qa` owner and the operator's `needs-qa` routing label are untouched.
-
-- **(pm, 2026-07-31) ⚖️ LOOP-213 UNPARKED — §17's "the plugin's own code is the operator's to
-  apply" does not bind a workspace whose PRODUCT is the plugin.** Reflect filed a verified scheduler
-  defect (cadence is process-scoped: `reflect` fired 5× in 13.2 h against `cadence: 1d`, costing $18.24
-  metered) as `blocked`+`needs-pm`+`external-prereq`, per §17's mechanical firewall — while itself
-  writing "dev-loop product code, NOT a §17 governing file". Both are true statements about different
-  files. Here they are the same repo, so the operator-prerequisite premise does not hold: `run-agents.ts`
-  is ordinary dev-editable product code (LOOP-144, ~13 landed `LOOP-*` commits). Unparked, typed, tiered
-  **senior + `Mode: design`**, priority 4→2. Senior because (A) fails in the dangerous direction — a
-  next-due seeded from bad state suppresses an agent's fires entirely, which is worse than the
-  over-firing it fixes. **The firewall still binds where it applies: `conventions.md` and any `SKILL.md`
-  stay operator-only, and nothing in (A)/(B)/(C) touches them.** Both `## Deferred findings` resolved on
-  the ticket; nothing left in `Deferred`.
-
-- **(pm, 2026-07-31) 🧭 A hazard to the operator's OWN measurement is worth more than a ticket —
-  escalate it, don't file it.** Reflect's deferred #1: the boot-corpus A/B now in flight is degraded by
-  the very defect LOOP-213 describes — (i) each restart costs a fresh ~143 KB cache-WRITE per agent,
-  taxing the arm being measured; (ii) cadence reset per restart makes per-agent fire counts on the two
-  arms non-comparable without normalising. No loop ticket can act on that; only the operator can. Carried
-  into the report and preserved on LOOP-213 with reflect's OFF baseline (20:00–23:00Z, n=38: pm cacheR
-  7.16M / out 65.4k / $7.01 · junior-dev 7.90M / 52.1k / $4.13 · senior-dev 3.32M / 69.7k / $6.30 · qa
-  3.92M / 16.8k / $2.07 · sweep 4.47M / 21.6k / $2.33 · reflect 3.74M / 50.2k / $4.50), because a
-  baseline that exists only in one agent's report is the thing most likely to be lost.
-
 - **2026-08-01 — standing rule 1 refined rather than appended to (sixth fire running that refining
   beat appending; still 14 rules).** The rule covered derived values — keys and ratios. LOOP-223 is
   a third form: **one field carrying two meanings, where each meaning has a legitimate routine
@@ -944,7 +901,28 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   recoverable (actor + fireId + timestamp); **content is not** — `issue.update.data` carries only
   `{fireId}`, with no before/after values, unlike `issue.transition`. **Do not generalise a UI gap
   into a data gap; run the query first.**
-
+- **2026-08-01 (pm) — a design gate can PASS on a mechanism I expected to fail, and the
+  measurement is what decides it.** I ran LOOP-149's designed predicate (`behind_by > 0` ⇒ `stale`)
+  against the live board expecting an AC5 false-stall event: 5 of 5 CI-green PRs trip on day one.
+  **They trip correctly** — the delta all five sit behind contains real code (`breaker.ts`,
+  `run-agents.ts` + tests, from #136), so their greens genuinely predate a change to a module under
+  test. I had the finding drafted and the measurement killed it. **Trip-on-any-delta is also the
+  right conservative default here: "docs-only ⇒ safe" is NOT sound in this repo, because
+  `references/conventions.md` is byte-checked by `hub/test/cli-cheatsheet.ts`.** The design's §1
+  describes a two-step manual procedure and §3 automates only step one — the correct half.
+- **2026-08-01 (pm) — the amendment a holding guard always needs: it must state its own remedy.**
+  LOOP-149 passed with two binding amendments, the load-bearing one being that a `stale` objection
+  must name the fix (rebase + `--force-with-lease`). Nothing in the loop re-freshens a held PR —
+  Step 0.5's only rebase path is keyed on `DIRTY`, and these PRs are `CLEAN`. A guard that holds
+  without saying what clears the hold is LOOP-241's shape, now the most-repeated amendment I write.
+  **Filed the missing half as LOOP-243**: the design called the re-freshen follow-up "tracked as a
+  related ticket" and it had never been filed. **A flagged finding nobody filed is a deferred one.**
+- **2026-08-01 (pm) — fixing every writer is not the same as detecting the state, and only
+  detection survives the next writer.** LOOP-223 and LOOP-225 each fix one path that nulls an
+  assignee; neither *detects* one, so a third writer reintroduces it silently. Filed **LOOP-244**
+  (doctor W27) for the detection half. **Cost of not having it, measured this fire: LOOP-226 /
+  PR #132 was CI-green, `CLEAN`/`MERGEABLE`, 0 unresolved review threads — clear to merge — and sat
+  unmerged because a null assignee kept it out of the `inReview` landing slice.**
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
