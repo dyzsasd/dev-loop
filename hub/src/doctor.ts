@@ -4,7 +4,7 @@
 // DL-81: the `doctor` COMMAND additionally runs a service runtime-wiring reconcile (reads the product
 // .mcp.json / daemon runfile / autostart/hook presence + a localhost /api/health GET) — still READ-ONLY (no writes,
 // no auto-create) and NON-FATAL; see serviceReconcile. Library callers (init-service) skip it.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, openSync, readSync, closeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
@@ -463,18 +463,16 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // CC in budget. Best-effort; never flips DOCTOR_OK.
   warnUnmergedPaths(ws, warn);
 
-  // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
-  if (isGitWorkTree(ws.root)) {
-    let ignored = false;
-    try { execFileSync("git", ["-C", ws.root, "check-ignore", "-q", ".dev-loop"], { stdio: "ignore" }); ignored = true; } catch { /* not ignored */ }
-    if (!ignored) warn(`[W06] the workspace root is inside a git work-tree and .dev-loop/ is not gitignored — state/reports could be committed (add .dev-loop/ to .gitignore)`);
-    else info("workspace root is inside a git repo but .dev-loop/ is gitignored");
-  }
+  // W06 — git-work-tree leak checks: committable .dev-loop state/reports (I5 neighbor) or a bundle
+  // artifact carrying every secret VALUE + hub.db (LOOP-210). Extracted to a helper (same pattern as
+  // W26) to keep doctorWorkspace's cyclomatic complexity within the CRAP-ratchet budget; see
+  // checkGitTreeLeaks.
+  checkGitTreeLeaks(ws.root, warn, info);
 
   return { ok, stalledRepo, decisionStall, skewResult };
 }
 
-function isGitWorkTree(dir: string): boolean {
+export function isGitWorkTree(dir: string): boolean {
   try { return execFileSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() === "true"; }
   catch { return false; }
 }
@@ -495,6 +493,57 @@ function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
         warn(`[W26] repo '${ref}' (${dir}) has ${paths.length} unmerged path${paths.length === 1 ? "" : "s"}: ${paths.join(", ")} — conflict markers may block direct tsc/build/test runs (per-ticket worktrees are unaffected). Resolve: edit each file, then \`git add <file>\`. Likely cause: an interrupted \`git stash pop\` or \`git merge\`.`);
     }
   } catch { /* best-effort — never fails doctor */ }
+}
+
+// W06 helper (LOOP-210) — extracted to keep doctorWorkspace CC within the CRAP-ratchet budget, matching
+// the warnUnmergedPaths (W26) pattern. Warns when the workspace root is a git work-tree that could commit
+// .dev-loop state/reports (I5 neighbor) or an un-ignored bundle artifact (every secret VALUE + hub.db).
+// The reassuring "clean" info line prints ONLY when the whole checked set is ignored — never on a tree it
+// did not measure (the old check asked "is .dev-loop/ ignored?", not "is anything here committable?").
+function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg: string) => void): void {
+  if (!isGitWorkTree(root)) return;
+  const devLoopIgnored = isPathIgnored(root, ".dev-loop");
+  if (!devLoopIgnored) warn(`[W06] the workspace root is inside a git work-tree and .dev-loop/ is not gitignored — state/reports could be committed (add .dev-loop/ to .gitignore)`);
+  // LOOP-210: a bundle artifact (MAGIC header, any --out name, encrypted or plaintext) or the
+  // moved.json marker sitting un-ignored in the tree is a secret/state leak a `git add -A` commits.
+  const leaks = unignoredBundleArtifacts(root);
+  if (existsSync(join(root, ".dev-loop", "moved.json")) && !isPathIgnored(root, join(".dev-loop", "moved.json"))) leaks.push(".dev-loop/moved.json");
+  if (leaks.length) warn(`[W06] the workspace root is inside a git work-tree and these secret/state-bearing artifacts are NOT gitignored — a 'git add -A' would commit them: ${leaks.join(", ")} (a bundle carries every secret VALUE + hub.db; add *.age / the artifact to .gitignore or write it outside the repo)`);
+  if (devLoopIgnored && !leaks.length) info("workspace root is inside a git repo but .dev-loop/ is gitignored");
+}
+
+// LOOP-210 — `git check-ignore -q <rel>` inside <root>: exit 0 ⇒ ignored. Best-effort: a non-repo or
+// a git error is treated as "not ignored" — the safe, loud default for a leak check.
+function isPathIgnored(root: string, rel: string): boolean {
+  try { execFileSync("git", ["-C", root, "check-ignore", "-q", rel], { stdio: "ignore" }); return true; }
+  catch { return false; }
+}
+
+// LOOP-210 — untracked, NOT-ignored files under <root> whose first bytes are the bundle MAGIC header.
+// `git ls-files --others --exclude-standard` already honours .gitignore, so a gitignored bundle never
+// appears here. A bundle (operator-chosen --out name, encrypted or plaintext) carries every secret
+// VALUE + hub.db; un-ignored, a `git add -A` commits it. Bounded 16-byte header probe — doctor is not
+// a hot path. MAGIC must match bundle.ts (the bundle-gitguard test writes a real bundle and asserts
+// this detects it, so the two constants can't silently drift).
+function unignoredBundleArtifacts(root: string): string[] {
+  const MAGIC = "DEVLOOP-BUNDLE/1";
+  let others: string[] = [];
+  try {
+    others = execFileSync("git", ["-C", root, "ls-files", "--others", "--exclude-standard", "-z"], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24 })
+      .toString().split("\0").filter(Boolean);
+  } catch { return []; }
+  const hits: string[] = [];
+  for (const rel of others.slice(0, 2000)) { // bound a pathological untracked set
+    let fd: number | undefined;
+    try {
+      fd = openSync(join(root, rel), "r");
+      const buf = Buffer.alloc(MAGIC.length);
+      const n = readSync(fd, buf, 0, MAGIC.length, 0);
+      if (n === MAGIC.length && buf.toString("latin1") === MAGIC) hits.push(rel);
+    } catch { /* unreadable/gone — skip */ }
+    finally { if (fd !== undefined) closeSync(fd); }
+  }
+  return hits;
 }
 
 // W22 — landing stall: forge glance, warn/info only, never flips DOCTOR_OK (design §5.1).
