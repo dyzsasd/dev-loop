@@ -570,6 +570,26 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   occurrence in ~2 days** (LOOP-38, 2026-07-30). Parked for the operator as **LOOP-246** — the only
   outstanding action is a reinstall, which is one command on their host.
 
+- **2026-08-01 (this fire) — the writer I exonerated twice was guilty, and I had been auditing a tree
+  that is not executing.** Two prior fires investigated why LOOP-235 kept losing its assignee, read
+  `hub/src/merge-guard.ts:107-113` on `origin/main`, correctly found `assignee: cur.assignee,
+  labels: cur.labels`, and published *"merge-guard is innocent"* — then handed the blame to the
+  Step-0 orphan reset (LOOP-223, raised to P1) and downgraded LOOP-225 to a test-coverage gap. All
+  three verdicts were wrong. The guard that ran is the **installed 1.13.0** one:
+  `dist/merge-guard.js:34` — *"route the ticket (state→Todo, labels+=blocked, assignee→null)"*.
+  LOOP-216 fixed it, 1.14.0 published it, this host never installed it (LOOP-246). The event ledger
+  splits the morning's **11 assignee-nulling transitions across three independent writers**:
+  **8** by `operator`/merge-guard-1.13.0 (LOOP-235 ×3, LOOP-220 ×2, LOOP-226, LOOP-186, LOOP-175),
+  **2** by the Step-0 reclaim (LOOP-175 only — LOOP-223's real and only evidence, reverted to P2),
+  and **3** by the **In Review ship handoff** (LOOP-220, LOOP-226, LOOP-175), which is the writer
+  behind this doc's own "green PRs held by unreachable tickets" finding and was attributed to
+  neither. LOOP-235 is a livelock, not a recurrence: claim → guard trip → null+`blocked` → no
+  actor's slice → hand unpark → repeat, three PM unparks and ~6 senior fires on one green-PR ticket.
+  **The lesson is not about merge-guard.** A fire diagnosing dev-loop reasons from the repo about
+  behaviour produced by the package, and nothing anywhere puts that gap in front of it — `doctor`'s
+  W18 measures it, but a diagnosing fire has no reason to run `doctor`. Filed as **LOOP-249**; the
+  third fire only escaped by grepping the installed tree, a step no convention asks for.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -968,6 +988,20 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   purpose the state implies, and to keep *verifiable* apart from *landable* — the LOOP-226/PR #132
   case this program is named for was held by the landing half, not the verification half. **A W-code
   that cries wolf on its first day is worth less than no W-code**, and this one is one ticket from shipping.
+
+- **2026-08-01 — a source read is not evidence about running behaviour; the installed artifact is.**
+  Three formal verdicts (two "merge-guard is innocent", one P1 raise on LOOP-223, one P1 defect claim
+  on LOOP-225) were derived from correct readings of `origin/main` while the defect sat in the
+  installed `dist/`. Standing rule for this loop, recorded so it outlives the instance: **when a
+  fire diagnoses dev-loop's own behaviour, attribute from the event ledger and the installed tree —
+  `dev-loop events --ticket <id>` for the writer and actor, `grep` the global npm tree for the code —
+  and treat a repo-source read as a hypothesis until one of those confirms it.** Corrections applied
+  this fire: LOOP-225 re-scoped from a live code defect to the vacuous test that let it through
+  (`hub/test/merge-guard.ts:287` asserts `assignee === null` against a fixture seeded `null`, so it
+  passes against both the fixed and the clobbering implementation) and dropped to P2; LOOP-223's
+  P1 raise reverted with its LOOP-235 evidence struck and its LOOP-175 evidence intact; LOOP-244
+  given the three-writer split so its detector is scoped to cover all of them. The generalisable
+  gap — not the instance — is **LOOP-249**.
 
 ## Candidate ideas
 
