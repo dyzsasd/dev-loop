@@ -578,20 +578,20 @@ function unignoredBundleArtifacts(root: string): string[] {
     if (s++ >= MAX_PROBES_PER_ARM) break;
     if (blobHasMagic(`:${rel}`)) hits.add(rel);
   }
-  // Committed-but-unpushed — only when an upstream is configured (a bare `git init` workspace has none).
-  // Walk EVERY unpushed commit and probe the blobs IT introduced, so an add-then-delete pair within the
-  // range is still caught (LOOP-235 P1 #2). `-c` (combined diff) makes a MERGE commit report the paths
-  // that differ from ALL parents — a bundle added during conflict resolution, which a plain `diff-tree
-  // -r` suppresses for merges (it emits no diff) and would leak on the next push (LOOP-235 P1 #3); for a
-  // non-merge commit `-c` is a no-op, so the single-parent add/delete coverage is unchanged. `--root`
-  // covers an initial commit; deletions (--diff-filter excludes D) have no blob here and were already
-  // probed at the commit that added them.
-  let upstream = "";
-  try { upstream = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
-  catch { /* no upstream — skip the committed-but-unpushed arm */ }
-  if (upstream) {
+  // Committed-but-unpushed — every commit reachable from HEAD but NOT from any remote-tracking ref, i.e.
+  // exactly what the next `git push` would transfer. `rev-list HEAD --not --remotes` needs NO configured
+  // `@{upstream}`: a fresh branch never pushed, or a repo with no remote at all, still holds committed
+  // bundles a `git push origin HEAD:refs/heads/X` would ship (LOOP-235 P1 #4) — the old `@{upstream}..HEAD`
+  // form skipped the whole arm there. With no remotes it scans all of HEAD's history, bounded by the probe
+  // cap. Walk each such commit and probe the blobs IT introduced, so an add-then-delete pair in the range
+  // is still caught (P1 #2). `-c` (combined diff) makes a MERGE commit report the paths that differ from
+  // ALL parents — a bundle added during conflict resolution, which a plain `diff-tree -r` suppresses for
+  // merges and would leak on the next push (P1 #3); for a non-merge commit `-c` is a no-op, so single-
+  // parent coverage is unchanged. `--root` covers an initial commit; deletions (--diff-filter excludes D)
+  // have no blob here and were already probed at the commit that added them.
+  {
     let c = 0;
-    for (const commit of gitLines(["rev-list", `${upstream}..HEAD`])) {
+    for (const commit of gitLines(["rev-list", "HEAD", "--not", "--remotes"])) {
       if (c >= MAX_PROBES_PER_ARM) break;
       for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AM", "--root", commit])) {
         if (c++ >= MAX_PROBES_PER_ARM) break;
