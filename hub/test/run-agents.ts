@@ -456,8 +456,8 @@ try {
       team: { key: "test-loop103", backend: "linear", linearTeam: "TestT", agents: { sweep: { fireTimeout: "55m" } } },
       repos: { ra: { path: "repo-a" }, rb: { path: "repo-b" } },
       projects: {
-        "proj-a": { repos: [{ ref: "ra", role: "primary" }], agents: { pm: { fireTimeout: "45m" }, sweep: { fireTimeout: "33m" } } },
-        "proj-b": { repos: [{ ref: "rb", role: "primary" }], agents: { pm: { fireTimeout: "20m" } } },
+        "proj-a": { repos: [{ ref: "ra", role: "primary" }], agents: { pm: { fireTimeout: "45m", stallTimeout: "13m" }, sweep: { fireTimeout: "33m" } } },
+        "proj-b": { repos: [{ ref: "rb", role: "primary" }], agents: { pm: { fireTimeout: "20m", stallTimeout: "4m" } } },
       },
     }));
     const runWs = (args: string[]) => {
@@ -474,18 +474,30 @@ try {
     ok(resA.code === 0, "LOOP-103 v2: project-scope fireTimeout in team path, proj-a, exits 0");
     ok(/\[dry-run\] pm:.*fireTimeout=45m/.test(resA.out),
       "LOOP-103 v2: proj-a agents.pm.fireTimeout='45m' applies to delivery fire");
+    ok(/\[dry-run\] pm:.*stallTimeout=13m/.test(resA.out),
+      "LOOP-257: proj-a agents.pm.stallTimeout='13m' applies on a delivery fire (stallTimeout coverage, mirrors fireTimeout)");
 
     // Delivery fire for proj-b: different project-scope timeout (AC6 isolation across projects)
     const resB = runWs(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--project", "proj-b"]);
     ok(resB.code === 0, "LOOP-103 v2: project-scope fireTimeout in team path, proj-b, exits 0");
     ok(/\[dry-run\] pm:.*fireTimeout=20m/.test(resB.out),
       "LOOP-103 v2: proj-b agents.pm.fireTimeout='20m' applies to delivery fire (AC6: isolated per-project)");
+    ok(/\[dry-run\] pm:.*stallTimeout=4m/.test(resB.out),
+      "LOOP-257: proj-b agents.pm.stallTimeout='4m' — project-scope stallTimeout differs across projects (AC6 isolation, second field)");
 
     // Steward fire (sweep): teamScope is set → project-scope 33m is ignored → team-scope 55m applies
     const resC = runWs(["--cli", "claude", "--once", "--dry-run", "--agents", "sweep"]);
     ok(resC.code === 0, "LOOP-103 v2: steward fire (sweep) in team path exits 0");
     ok(/\[dry-run\] sweep:.*fireTimeout=55m/.test(resC.out),
       "LOOP-103 v2: steward sweep uses team.agents.sweep.fireTimeout='55m', not proj-a's '33m' (AC6: teamScope guard)");
+
+    // LOOP-257: team-scope config beats an explicit CLI flag on the v2 team path — the corrected precedence
+    // (config > CLI) made executable. LOOP-9 pins this on the legacy path only; without this the v2 row could
+    // silently regress to the false "CLI > team-config" order the schema doc used to claim.
+    const resCli = runWs(["--cli", "claude", "--once", "--dry-run", "--agents", "sweep", "--fire-timeout", "5m"]);
+    ok(resCli.code === 0, "LOOP-257: sweep fire with an explicit --fire-timeout on the v2 team path exits 0");
+    ok(/\[dry-run\] sweep:.*fireTimeout=55m/.test(resCli.out),
+      "LOOP-257: team.agents.sweep.fireTimeout='55m' wins over explicit --fire-timeout 5m (team-scope config > CLI flag, v2 team path)");
   }
 
   // ── P0-1b: provider-scoped circuit breaker (LOOP-8) ─────────────────────────────────────────────────
