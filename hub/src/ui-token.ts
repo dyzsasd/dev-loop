@@ -40,7 +40,7 @@ export function isLoopbackHost(host: string): boolean {
 // an explicit DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1 opt-in escapes for a trusted private link. Default: refuse.
 export function plaintextBearerToRemote(base: URL, hasToken: boolean): boolean {
   if (!hasToken) return false;                                            // nothing to leak
-  if (base.protocol !== "http:") return false;                           // https carries it safely
+  if (base.protocol === "https:") return false;                          // https carries it safely
   if (isLoopbackHost(base.hostname)) return false;                       // loopback (tunnel) http is fine
   if (process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT?.trim() === "1") return false; // explicit opt-in
   return true;
