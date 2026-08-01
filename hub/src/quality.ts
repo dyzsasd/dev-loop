@@ -613,6 +613,12 @@ function main(): void {
     const g = collectGoCoverage(root, goSources, o.goTestCmd);
     for (const [f, p] of g.painted) painted.set(f, p);
     for (const [f, c] of g.claimed) claimed.set(f, c);
+    if (!goFiles.some((f) => g.painted.has(f))) {
+      if (o.threshold !== null) {
+        console.error("quality: --threshold is set but no Go rows are scorable — gate cannot run (Go coverage was not collected)");
+        process.exit(1);
+      }
+    }
   }
 
   // rows
