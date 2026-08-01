@@ -174,7 +174,7 @@ Supporting goals (all in scope this milestone):
   New installs start from `dev-loop team init`; `dev-loop.json` is the source of truth.
 - **Main surfaces / modules:** `skills/` agent and operator skills; `references/` shared specs
   (`conventions.md`, `config-schema.md`, `codex-integration.md`); `hub/` — the `node:sqlite`
-  service backend + `dev-loop` CLI, **v1.12.0 line** (see `CHANGELOG.md`), with the full npm test
+  service backend + `dev-loop` CLI, **v1.13.0 line** (see `CHANGELOG.md`; the installed binary is what the loop actually runs — see the release-skew note below), with the full npm test
   suite; `docs/`
   for architecture, running, portability, daemon, design records, and reviews; `config/` for
   MCP templates and example workspace config.
@@ -427,155 +427,68 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   senior **9/10**, total 19, Backlog **44**. Doc-watch: the content hash matched the stored cursor
   exactly — **thirty-four fires with no operator doc edit**.
 
-### 2026-07-31 (late) — the boot corpus went live, and a §17 proposal closed on a verified negative
+- **Fire journals through 2026-07-31 are archived in `docs/strategy-archive/2026-08.md`** (§20 R2,
+  pass 5 — rolled 2026-08-01). Still in force from that arc, distilled: **(a)** the boot corpus is
+  DELIVERED (`--assemble-boot`, 98–147 KB per fire, all six agents) — score a lessons rule only from
+  2026-07-31T23:00:15Z on; **(b)** the reports tree keys on **local** `date +%F` while every artifact
+  it indexes is **UTC** (LOOP-214, standing rule 1); **(c)** every cost surface bills fires killed
+  mid-flight as delivered — 7.9% / 40.27 USD (LOOP-219), and an aggregate can never show that the
+  smallest number was the worst event.
 
-- **LOOP-211 `Done`** — the §0a boot-corpus `[reflect-proposal]`. Operator ruled (B) approved
-  unconditionally, (A) approved as `team.bootCorpus` config **without** a default flip (the default is
-  now a data-gated decision, with an OFF baseline captured and the runner restarted `--assemble-boot`).
-  (D) verified as needing no change — the shipped §0a step 4 already names the v2 lessons library first.
-  Build carried by **LOOP-212** (senior, `Mode: design`, Todo).
-- **The push path is ON as of 2026-07-31T23:00:15Z** — confirmed at rung three, not by code read: this
-  PM fire's prompt carries the corpus block (`hash=f03cceeab5d2`) and `bootBytes` appears on the last 2
-  of 400 ledger rows (qa 137993, sweep 125452), the first non-null values recorded. Consequence to
-  track: the lessons `INDEX.md` budget turned load-bearing the same moment — every fire now pays
-  ~138 KB, and W03 stopped being advisory.
-- **LOOP-213 filed + groomed** (reflect) — cadence is process-scoped: every runner restart re-fires
-  every agent, so `reflect` ran 5× in 13.2 h against `cadence: 1d` ($18.24 metered). Verified
-  independently against `fires.jsonl` and `scheduler-gate.json` (which carries 4 of 6 slots — no
-  `sweep`, no `reflect`). Unparked to a normal senior design ticket.
-- **LOOP-209 corrected** — the `w20proj` rotation cost is a dropped tick, **not** wasted provider spend
-  (0 of 400 ledger rows) and **not** a measured throughput loss. The inflated version was mine.
-- Board: **45 Backlog, 20 Todo — both dev lanes at the §5a cap (10 senior / 10 junior)**, so this fire
-  promoted nothing and groomed only, which is a valid fire. Decision queue: **0**.
+### 2026-08-01 (early) — the reset erased the tier it was told to keep, and seven merged fixes are running nowhere
 
-### 2026-07-31 (close of day) — the audit trail was misfiling itself at the month boundary
-
-- **LOOP-214 filed** (`Improvement`, junior, p2) — the §22 reports tree is keyed on `date +%F`
-  (LOCAL) while every artifact a report describes is UTC. Measured at 23:30:40Z on this UTC+2 box:
-  `qa-agent/daily/2026-08-01.md` and `sweep-agent/daily/2026-08-01.md` were both written on
-  **2026-07-31 UTC**, minutes apart from `pm-agent/daily/2026-07-31.md` — same day's work, two
-  different files. The misfiled reports say so in their own first lines (qa: "2026-08-01 (fire
-  timestamps ~22:0x UTC)"; sweep: "daily 2026-08-01 / 00:44 — first fire of the day", where 00:44
-  local is 22:44Z). Root cause is three lines of conventions §22 that guard the ISO-week
-  year-boundary hazard correctly and never mention the timezone one. Consequences: one finalize is
-  silently skipped per agent per day (qa's `2026-07-31.md` can now never receive its header —
-  `TODAY` is already 08-01), and the workspace's **first-ever monthly roll-up** splits one UTC day
-  across July and August. There is **no code surface** — nothing under `hub/src/` computes a report
-  path — so the ticket carries only the agent-applicable half (doctor **W25**, the next free code);
-  the 3-line prose fix is operator-applied under §17 and is in this fire's report, not in the ticket.
-- **LOOP-195 promoted** Backlog→Todo — the junior lane had drained to 9/10, and LOOP-195 is the
-  oldest junior `Bug` in the Backlog (rank by type, then created_at). It is also the ticket behind
-  the standing daemon-skew ask, so the one available slot went to the item the operator has been
-  told about eight times.
-- **LOOP-28's promotion condition tested and NOT met — 0 of 2.** The condition set last fire was
-  "the next TWO junior-dev fires that carry `bootBytes`". `fires.jsonl` carries `bootBytes` on 6 of
-  404 rows (qa x2, sweep, reflect, pm, senior-dev) and **junior-dev is not among them** — its last
-  fire (22:59:55Z) predates the 23:00:15Z flip. The condition stands unchanged; the ticket stays in
-  Backlog. Separately, junior-dev has 63 ledger fires and exactly one daily report file, which
-  strengthens LOOP-28's premise without satisfying its test.
-- Board at close: **45 Backlog, 21 Todo — both dev lanes at the §5a cap again (10 senior / 10
-  junior)**. §9c: **4 edges, 0 unparked, 4 held** (LOOP-205 Todo, LOOP-185 In Review, LOOP-95 Todo,
-  LOOP-104 Todo — every blocker still non-terminal). Verify queue **0**, `needs-pm` **0**,
-  `Human-Blocked` **0**, decision queue **0**. Doc-watch: hash matched the stored cursor exactly —
-  **thirty-five fires with no operator doc edit**. Lens swept: **consistency** (at `1806e17`).
-
-- **2026-08-01 00:0xZ (UTC) — the fire that found merged code with no way home.** Product moved for
-  the first time in four fires: `1806e17 → 0f43c3f` (LOOP-199 `5da3a66`, LOOP-112 `bb98503`,
-  LOOP-191 `0f43c3f`), so the lens rotation **reset**.
-- **LOOP-112 verified `Done`** — the first pm-owned verify in several fires. `inReview` is now a
-  third list on the dev-tier queue (`servable.ts:50/65`, keyed `assignee === actor` so the legacy
-  `dev` null-assignee path and pm-assigned tickets stay out); `todo`/`inProgress` and the pm/qa
-  branch are untouched. Spec triage clean. Cited CI on the merged tree as the test evidence, and
-  said plainly what was NOT exercised: no live dev fire was observed receiving the list.
-- **The defect that fire found: `merge-guard --apply` strands merged increments (LOOP-216, p1).**
-  LOOP-199 and LOOP-112 were both demoted `In Review → Todo` + `blocked` + unassigned at
-  `23:42:33/34Z` — **72 seconds and 65 seconds after their PRs merged green**. The guard's comment
-  ("*Not merged.*") was false of a PR already on `main`, and its routing target is served by
-  nothing: `blocked` excludes the ticket from the dev slice (`servable.ts:59`) while leaving
-  `In Review` removes it from the owner's verify queue. No routing label, no §9c edge — a park with
-  no exit, holding shipped code. **Both tickets repaired by hand this fire** (LOOP-112 → `Done`,
-  LOOP-199 → `In Review` for QA, `blocked` dropped, assignees restored).
-- **Consistency lens, run on the landing↔board agreement surface:** all 30 recent merged PRs mapped
-  to their tickets — after the repair, the only non-terminal ones are 6 correctly sitting
-  `In Review`, all qa-owned. The surface is clean; **nothing further filed from the lens**.
-- **LOOP-215 (qa-filed) promoted rank 1** and its blast radius widened with measurement: the
-  unresolved `UU hub/src/doctor.ts` in the shared checkout leaves the tree **3 behind `origin/main`
-  with the conflicted path inside the incoming range**, so `pull --ff-only`/rebase refuse — it
-  blocks **PM's `doc-land` sync step**, not just build/typecheck.
-- Board at close: **Backlog 46, Todo 21 — both lanes at the §5a cap (10 senior / 10 junior)**. §9c:
-  **4 edges, 0 unparked, 4 held** (LOOP-205, LOOP-185, LOOP-95, LOOP-104 all non-terminal). Verify
-  queue **0** at close, `needs-pm` **0**, `Human-Blocked` **0**, decision queue **0**. Doc-watch:
-  hash matched the stored cursor exactly — **thirty-six fires with no operator doc edit**.
-
-- **2026-08-01 00:14Z (UTC) — the fire that priced the restarts.** **No product code since
-  `1806e17` for the fifth consecutive fire** (`git diff --name-only 1806e17..HEAD | grep -v
-  '^docs/'` ⇒ empty; HEAD `8bb8d2b` is a pm doc commit), so the lens rotation did **not** reset.
-  Lens swept: **data-analytics**, run on the fire ledger as a product surface in its own right.
-- **LOOP-219 filed — 7.9% of metered spend is billed as work delivered.** Every money surface sums
-  `usage.costUsd` over all metered rows, killed fires included: **$40.27 of $510.66**, 461,454
-  output tokens and 4.7 agent-hours, with **no `suspectError` branch anywhere in the cost path**
-  (`metrics.ts:106-115`). The discarded share scales with fire duration — senior-dev **13.1%**, pm
-  9.7%, junior-dev 8.1%, qa 3.3%, sweep and reflect **0%** — so it is a structural tax on the most
-  expensive tier, and `cost-per-accepted-change` (`metrics.ts:465`) divides that inflated numerator
-  by an outcome those fires could not produce. Three of six kill clusters predate metering, so
-  $40.27 is a **floor**. Directly load-bearing on **LOOP-197**, whose spend ceiling is the
-  operator's one genuinely open decision: a ceiling enforced on gross spend charges the agents for
-  the operator's own restarts.
-- **What `suspectError` actually is here, established rather than assumed: all 19 rows sit in one of
-  6 multi-agent clusters; ZERO are isolated.** Several agents' rows share a timestamp to within
-  27–72 ms while their `durationMs` spans 4 to 39 minutes — impossible for independent completions.
-  Corroborated at `run.log:5753-5765` (four `exit 0` lines inside 27 ms, then a fresh `dev-loop run`
-  banner). **LOOP-155 owns the classification half of this flag and is untouched by the above** —
-  same flag, different consumer, different fix; it was filed when the metered cost of those rows was
-  $0.00.
-- **LOOP-218 arrived mid-fire and the late re-scan caught it — 14 fires running, and the first time
-  it paid.** `needs-pm` was **0** at boot; reflect filed a `blocked`+`needs-pm` proposal during the
-  fire. Ruled, re-shaped (`Bug`/`qa`/`junior-dev`, p3) and unparked; both deferred findings triaged
-  to LOOP-212 and LOOP-219. **The one-command re-scan is not optional.**
-- **LOOP-28's standing condition closed out — met, 2 of 2.** junior-dev now carries three
-  `bootBytes` ledger rows and a `2026-08-01.md` report with two fire entries. Its *symptom* ("4
-  fires, 0 reports") is resolved; its *gap* — nothing detects a missing report — is untouched, and
-  the ticket now stands on that alone. Recorded on the ticket so no one implements against a dead
-  premise.
-- **§21a design gate PASSED on LOOP-209 (`scratch-project-lifecycle`) — arrived mid-fire, caught by
-  the late re-scan.** Verified by opening every referent, not by checking that one was cited: the
-  north-star quote is verbatim in Goals, all five code line-refs are exact, and **Child B's whole
-  premise — "no project-removal path exists" — holds** (`grep 'DELETE FROM projects'` ⇒ none).
-  Children LOOP-220/221/222 promoted, then the parent closed `Done` (crash-safe order). **Two
-  amendments.** (1) The design's "33 occurrences" of the rotation-skip log is an overcount — the live
-  figure is **23**, and the counter only grows, so 33 was never true; **third inflated motivating
-  quantity in three days, and the correction discipline was written on that very ticket.** (2)
-  LOOP-222's `Blocked-by:` markers were correct but it carried **no `blocked` label**, so as staged
-  it was immediately servable — and it is the child that **deletes projects from the live operator
-  workspace**. I added the label. **LOOP-190's third bite, all three on staged design children.**
-- **A W-code collision caught by PM holding the allocation, which no gate does.** PR **#127**
-  (LOOP-215, open) takes **W24**; **LOOP-204 already claims W24** in its title and ACs. Shipped
-  `doctor.ts` carries W05…W23, so **both filers grepped it, both were correct, and both got the same
-  answer** — neither ticket had landed. Asked #127 to take **W26** (W25 is LOOP-214's) and left
-  LOOP-204 its code. **This is LOOP-88's third instance and the first no gate caught: grepping
-  shipped code is not a filer error to train out, it is the only instrument available and it is
-  structurally blind to in-flight claims.**
-- **`doc-land` BLOCKED again (rc=1) — second consecutive fire, and the doc is now provably not the
-  cause.** `docs/STRATEGY.md` is **not** in the incoming range (`git diff --name-only $(git
-  merge-base HEAD origin/main) origin/main -- docs/` ⇒ empty) while `hub/src/doctor.ts` — the path
-  holding the unmerged index entry — **is**. So doc-land's headline names the wrong file with
-  certainty now, not just suspicion (**LOOP-217**). **Two strategy-doc commits (`8bb8d2b`,
-  `63c99eb`) are stranded local-only and origin's north star is two fires stale.** Not forced, and
-  the conflict deliberately not resolved by me: marking another agent's conflict resolved with
-  markers still in the file is worse than the block. LOOP-215 is being worked (PR #127).
-- Board at close: **Backlog 46, Todo 25 (21 servable) — senior 9/10, junior 11/10.** Junior is over
-  the §5a cap **because the §21a gate outranks it**; I promoted **no** discretionary ticket in that
-  pass (LOOP-201 was next and stays in Backlog). Promoted this fire: LOOP-200, LOOP-213, and the
-  three gate children. §9c: **6 edges, 0 unparked** — the prior four (LOOP-205, LOOP-185, LOOP-95,
-  LOOP-104) plus LOOP-222←LOOP-207 and LOOP-222←LOOP-221. Verify queue **0** at close, `needs-pm`
-  **0**, `Human-Blocked` **0**, decision queue **0**. In Review 9, all qa-owned. Doc-watch: the hash
-  moved but the only commit touching the doc is `8bb8d2b`, a pm agent commit — **thirty-seven fires
-  with no operator doc edit**.
-- **Method note, earned twice this fire: the late re-scan is not optional.** `needs-pm` was **0** and
-  the verify queue was **0** at boot. By close the re-scan had caught **LOOP-218** (a reflect
-  proposal filed mid-fire, ruled and unparked) and **LOOP-209** (a design parent that reached
-  `In Review` mid-fire). Fourteen fires of running it for nothing, then two catches in one fire.
-
+- **The Step-0 orphan reset strips the dev tier; it stranded a ticket for 1h35m (LOOP-223 filed,
+  junior, p2).** On the `service` backend the claim and the dev tier are the same field (`assignee`,
+  §18/§21b). `hub/src/servable.ts:52` reads
+  `actor === "dev" ? (t.assignee === null || t.assignee === "dev") : t.assignee === actor` — a null
+  assignee is servable ONLY by the legacy `dev`, which no-ops under the split (§21c). So a reclaimed
+  ticket returns to `Todo` reachable by nobody. Live victim: **LOOP-175**, promoted 07-31T21:56Z as
+  head of the junior queue, reset to `assignee: null` at 23:18Z, unservable until pm repaired it by
+  hand at 00:53Z. The board showed it as `{junior-dev: 10, senior-dev: 9, none: 1}` — counted by
+  `todoDepth`, reachable by no one.
+- **It is not an agent error — four governing files instruct it**, all inherited from the legacy
+  single-dev model where `assignee: null` IS servable, so the same words are right there and wrong
+  under the split: `dev-agent` :54 *unassign*, `junior-dev-agent` :59 *release the claim … keep the
+  `junior-dev` label*, `senior-dev-agent` :54 *clear the claim*, `sweep-agent` :79 *unassign*. The
+  junior/senior wording is self-contradictory on this backend: the surviving label is the copy
+  `servable.ts` never reads.
+- **The same correction had already landed on the OTHER carrier 72 minutes earlier.** LOOP-216
+  (`9726490`) changed merge-guard's forge trip from `assignee: null` to `assignee: cur.assignee`,
+  reasoning *"the ticket is already in the state the guard is objecting about; moving it reduces
+  reachability."* Two carriers of "reset to Todo + null the assignee": merge-guard **fixed**, the
+  orphan reset **open**. LOOP-223 carries the landed shape to copy and the placement
+  (`ticketwrite.ts`'s `applySensitiveRetier`, already a write-layer tier hook reading the label
+  when the assignee is unreliable, called from both write paths).
+- **The product moved — on ORIGIN, and it had been reviewable for five fires.** `origin/main`
+  carries **7 product commits** since my last reviewed SHA (`1806e17`). My prior five fires each
+  reported "no local product diff" and swept a lens instead, because the shared checkout cannot pull
+  past the `hub/src/doctor.ts` conflict. **A pull was never required for a read-only review**:
+  `git fetch` + `git diff <sha>..origin/main` reads the whole window. Lens rotation reset; the diff
+  picked **consistency**, and it paid immediately — LOOP-218's premise re-verified against the landed
+  code (merge-guard still writes as actor `operator` at :100 and :112; LOOP-216 changed when and what
+  it writes, never who), and LOOP-112's new `inReview` slice was found deliberately keyed strict
+  *"so the legacy `dev` null-assignee path never bleeds in"* — the null-assignee hole is known on the
+  read side, which is why LOOP-223 belongs on the write side.
+- **Fourteen merged product commits are in nothing that runs.** Installed CLI is **v1.13.0**
+  (`d1ceabb`); `git log d1ceabb..origin/main -- hub/src/ skills/ references/` = **14 commits**,
+  including all 7 above. Rung-2 proof, not a version string: the installed
+  `skills/pm-agent/SKILL.md:256` still carries the pre-`bb98503` cheat-sheet line, and
+  `skipped_merged` (LOOP-216) is absent from the installed `dist/`. Two other probes I ran
+  (`applySensitiveRetier`, `reconcileDaemonHealth`) were **uninformative** — both symbols pre-date
+  the window; a marker test is only evidence when the marker is new in the range. **LOOP-167's own
+  release-readiness hint is itself in the un-installed set**, so the surface that would tell the
+  operator to cut a release cannot run until someone cuts one.
+- **W-code contest resolved in favour of the standing ledger.** PR #127 re-titled itself to **W26**,
+  so LOOP-204 keeps **W24** and LOOP-214 keeps **W25**; `origin/main` doctor allocates W05–W23.
+  **W27 is next free.** No gate exists for this (LOOP-88) — the ledger is carried in `pm-state.json`
+  by hand.
+- **Board at close:** verify queue **0** (agreed with a board-wide no-owner-filter scan — all 10
+  In Review are qa-owned), `needs-pm` **0**, `Human-Blocked` **0**, decision queue **0**. §9c: **6
+  edges, 0 unparked** (LOOP-205, LOOP-185, LOOP-95, LOOP-104, LOOP-207, LOOP-221 — none Done).
+  Depth junior **11/10**, senior **9/10** with a **senior Backlog of 0**; the junior overage is the
+  LOOP-175 repair correcting an accounting error, not a promotion — nothing was promoted this fire
+  and nothing should be demoted. Filed **1**. Doc-land still blocked by the unresolved
+  `hub/src/doctor.ts` conflict (LOOP-215); this is the **fourth** stranded local-only doc commit.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -637,9 +550,17 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   distilled immediately below — read those, not the archive.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
-  1. **A derived value — a key that indexes data, or a ratio that summarizes it — must be
-     invariant under the operations its own system performs routinely, and computed from the
-     SAME source and over the SAME population as the data it describes.** Two instances, same shape:
+  1. **A value the system routes or reports on — a key that indexes data, a ratio that
+     summarizes it, or ONE FIELD CARRYING TWO MEANINGS AT ONCE — must be invariant under the
+     operations its own system performs routinely, and computed from the SAME source and over
+     the SAME population as the data it describes.** The overload form is the newest and the
+     most dangerous, because each meaning has a legitimate operation that destroys the other:
+     on the `service` backend `assignee` is BOTH the claim and the dev tier (§18/§21b), so the
+     Step-0 orphan reset doing exactly what its prose says — *release the claim* — erases the
+     routing key and returns the ticket to `Todo` servable by no actor at all (LOOP-223;
+     `servable.ts:52` serves a null assignee only to the legacy `dev`). **Ask of any field two
+     subsystems both write: is there a routine operation on one meaning that silently destroys
+     the other?** Two older instances, same shape:
      `push-guard` keyed passenger detection on SHA ancestry in local `main`, while the workflow it
      guards tells agents to rebase onto `origin/main` — rebase rewrites SHAs. And §22 keys the
      reports tree on `date +%F` (**local**) while every artifact a report describes — the fire
@@ -981,6 +902,36 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `In Progress` by a fire that no longer exists. Recorded on LOOP-219 as the motivation for its
   per-agent AC: **an aggregate can never show that the smallest number was the worst event.**
 
+- **2026-08-01 — "the product has not moved" must be asked of `origin`, not of the local checkout.**
+  Five consecutive PM fires reported no product diff and swept a review lens instead, while **7
+  product commits sat unreviewed on `origin/main`**. The cause was a self-imposed precondition: my
+  own state note gated the lens reset on *"if the pull is unblocked"*, and the shared checkout has
+  been unable to pull past an unresolved `hub/src/doctor.ts` conflict since 07-31T23:35Z. **A pull
+  makes the WORKING COPY current; it is not required to READ.** `git fetch` then
+  `git diff <lastReviewedSha>..origin/main` / `git show origin/main:<path>` reviews the entire
+  window with a dirty tree and a blocked merge. Standing correction: the change-gate computes HEAD
+  as **`origin/<defaultBranch>` after a fetch**, and a blocked pull is a *landing* problem, never a
+  *review* problem. It cost five fires of lens rotation aimed at a product that had moved.
+- **2026-08-01 — standing rule 1 refined rather than appended to (sixth fire running that refining
+  beat appending; still 14 rules).** The rule covered derived values — keys and ratios. LOOP-223 is
+  a third form: **one field carrying two meanings, where each meaning has a legitimate routine
+  operation that destroys the other.** `assignee` is both the claim and the dev tier, so "release
+  the claim" erases the routing. Folded into rule 1 with its own test: *is there a routine operation
+  on one meaning that silently destroys the other?* Recording it as a rule refinement rather than a
+  15th rule keeps the doctrine block readable, which is the only reason anyone reads it.
+- **2026-08-01 — a marker test is evidence only when the marker is NEW in the range.** Checking
+  whether 14 merged commits are installed, I probed the installed `dist/` for four symbols; three
+  (`inReview`, `applySensitiveRetier`, `reconcileDaemonHealth`) pre-date the window and would have
+  matched either way. Only `skipped_merged` was new, and the packaged `skills/pm-agent/SKILL.md`
+  line was the second decisive probe. **Reporting all four as if they agreed would have been the
+  recurring defect committed against my own evidence** — a surface reporting a result it never
+  established. Two clean probes beat four dirty ones; say which ones were uninformative.
+- **2026-08-01 — §20 R2 rollup pass 5.** Both fire-journal blocks rolled whole into
+  **`docs/strategy-archive/2026-08.md`** (a new file; `2026-07.md` closed after four passes),
+  doctrine distilled to three lines in `Current state`. Doc was 96,742 B and approaching the ~100 KB
+  threshold; `Current state`'s remaining bulk is the **22.4 KB standing product-facts preamble**,
+  which is live description and does NOT roll — note for pass 6: the recoverable surface is the
+  journals only, so the floor is ~22 KB plus the Decisions log.
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
