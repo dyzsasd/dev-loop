@@ -184,7 +184,7 @@ async function stampFingerprint(ws: Workspace, projectKey: string, linearProject
 // ── add-project ───────────────────────────────────────────────────────────────
 export async function addProject(argv: string[]): Promise<number> {
   const [key, ...rest] = argv;
-  if (!key || key.startsWith("--")) die("usage: dev-loop team add-project <key> [--linear-project <name>] [--linear-project-id <id>] [--test-url <url>] [--dev-split] [--weight <n>] [--enabled true|false] [--intake-mode autonomous|passive] [--name <hub name>] [--prefix <TICKET_PREFIX>] [--strategy-doc <rel-path>]");
+  if (!key || key.startsWith("--")) die("usage: dev-loop team add-project <key> [--linear-project <name>] [--linear-project-id <id>] [--test-url <url>] [--dev-split] [--scratch] [--weight <n>] [--enabled true|false] [--intake-mode autonomous|passive] [--name <hub name>] [--prefix <TICKET_PREFIX>] [--strategy-doc <rel-path>]");
   const o: Record<string, string | boolean> = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]; const next = () => rest[++i] ?? die(`${a} requires a value`);
@@ -192,6 +192,7 @@ export async function addProject(argv: string[]): Promise<number> {
     else if (a === "--linear-project-id") o.linearProjectId = next();
     else if (a === "--test-url") o.testUrl = next();
     else if (a === "--dev-split") o.devSplit = true;
+    else if (a === "--scratch") o.scratch = true;
     else if (a === "--weight") o.weight = next();
     else if (a === "--enabled") o.enabled = next();
     else if (a === "--intake-mode") o.intakeMode = next();
@@ -212,6 +213,7 @@ export async function addProject(argv: string[]): Promise<number> {
     if (o.linearProjectId) p.linearProjectId = o.linearProjectId as string;
     if (o.testUrl) p.testEnv = { baseUrl: o.testUrl as string };
     if (o.devSplit) p.devSplit = true;
+    if (o.scratch) p.scratch = true;
     if (o.weight !== undefined) p.weight = Number(o.weight);
     if (o.enabled !== undefined) p.enabled = o.enabled === "true" || o.enabled === true;
     if (o.intakeMode !== undefined) p.intake = { mode: o.intakeMode as "autonomous" | "passive" }; // E12 validates the value
@@ -224,13 +226,13 @@ export async function addProject(argv: string[]): Promise<number> {
 
   // Service backend: AUTO-SEED the hub row (find-or-create, seed.ts logic) so the scheduler's pick-time
   // guard / doctor W08 rarely fire — a config project with no hub row gets zero board access on its fires.
-  if (ws.file.team.backend === "service") seedHubRow(ws, key, o.name as string | undefined, o.prefix as string | undefined);
+  if (ws.file.team.backend === "service") seedHubRow(ws, key, o.name as string | undefined, o.prefix as string | undefined, !!o.scratch);
   // Linear backend: stamp the workspace fingerprint when the operator handed us the backend id.
   if (ws.file.team.backend === "linear" && o.linearProjectId) await stampFingerprint(ws, key, o.linearProjectId as string);
   return 0;
 }
 
-function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix: string | undefined): void {
+function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix: string | undefined, scratch = false): void {
   const dbPath = wsHubDb(ws);
   let db: DatabaseSync;
   try { db = openDb(dbPath); }
@@ -240,6 +242,7 @@ function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix
     const chosen = prefix ?? derivePrefix(db, key);
     try { ensureSeed(db, key, name ?? key, chosen); }
     catch (e) { die(`config written, but the hub row could not be seeded: ${(e as Error).message}\n  fix it by hand: dev-loop seed ${key} "<Project Name>" <UNIQUE_PREFIX>  (doctor reports the gap as W08)`, 1); }
+    if (scratch) db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify({ scratch: true }), key);
     console.log(existed
       ? `hub row for '${key}' already present in ${dbPath} (labels backfilled; find-or-create)`
       : `seeded hub row '${key}' (prefix ${chosen}) in ${dbPath}`);

@@ -19,7 +19,7 @@ export type SchedulerState = Record<string, CursorMap>; // agent → CursorMap
 // The enabled, positively-weighted projects for delivery rotation, sorted by key for determinism.
 export function rotationCandidates(ws: Workspace): Candidate[] {
   return Object.entries(ws.file.projects)
-    .filter(([key, p]) => !isTeamProject(key) && p.enabled !== false && (p.weight ?? 1) > 0)
+    .filter(([key, p]) => !isTeamProject(key) && p.enabled !== false && (p.weight ?? 1) > 0 && !p.scratch)
     .map(([key, p]) => ({ key, weight: p.weight ?? 1 }))
     .sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 }

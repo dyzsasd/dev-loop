@@ -223,6 +223,9 @@ for (const bad of ["team", "lessons", "wt", "locks", "hub.db"]) {
 // ── W01/W02 warnings (not errors) ──
 { const f = base(); f.repos.orphan = { path: "orphan-dir" }; ok(validateTeamFile(f).warnings.some((w) => w.code === "W02"), "W02: registered repo referenced by nobody"); }
 { const f = base(); f.projects.empty = { repos: [] }; ok(validateTeamFile(f).warnings.some((w) => w.code === "W01"), "W01: project with zero repos"); }
+// W01 discriminator: scratch:true suppresses the warning; an unmarked zero-repo project still warns (AC3/AC4)
+{ const f = base(); f.projects.scratch1 = { repos: [], scratch: true }; ok(!validateTeamFile(f).warnings.some((w) => w.code === "W01" && w.path.includes("scratch1")), "W01 suppressed for scratch:true project"); }
+{ const f = base(); f.projects.unmarked = { repos: [] }; ok(validateTeamFile(f).warnings.some((w) => w.code === "W01" && w.path.includes("unmarked")), "W01 still fires for an unmarked zero-repo project (discriminator preserved)"); }
 
 // ── parseWorkspaceFile throws WsValidationError on bad JSON / bad schema ──
 try { parseWorkspaceFile("{not json", "/x/dev-loop.json"); ok(false, "parseWorkspaceFile throws on bad JSON"); }

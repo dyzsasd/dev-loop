@@ -51,6 +51,17 @@ function mkWs(projects: TeamFile["projects"]): Workspace {
   // dropping c (enabled:false) and the _team intake row.
   ok(stewardProjects(ws).join(",") === "a,b,d", "stewardProjects keeps weight:0 (maintenance mode) and drops enabled:false + _team");
 }
+// scratch:true projects are excluded from rotation (AC2); an unmarked zero-repo project is NOT excluded (AC4 discriminator)
+{
+  const ws = mkWs({ real: { repos: [] }, fixture: { repos: [], scratch: true } });
+  const cands = rotationCandidates(ws);
+  ok(cands.map((c) => c.key).join(",") === "real", "rotationCandidates excludes scratch:true projects");
+}
+{
+  const ws = mkWs({ unmarked: { repos: [] } });
+  const cands = rotationCandidates(ws);
+  ok(cands.map((c) => c.key).join(",") === "unmarked", "rotationCandidates still includes an unmarked zero-repo project (discriminator preserved)");
+}
 
 // ── hot-reload cursor prune: a stale cursor key for a removed project doesn't distort argmax ──
 {

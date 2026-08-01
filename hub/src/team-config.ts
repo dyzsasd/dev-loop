@@ -95,6 +95,7 @@ export interface ProjectRepoRef { ref: string; role?: string }
 export interface ProjectEntry {
   enabled?: boolean;
   weight?: number;
+  scratch?: boolean;
   linearProject?: string;
   linearProjectId?: string | null;
   syncedAt?: string;
@@ -379,7 +380,7 @@ function validateProjects(projects: Record<string, ProjectEntry>, repos: Record<
     if (p?.notify !== undefined) checkNotify(p.notify, `projects.${key}.notify`, E);
     if (p?.agents !== undefined) validateAgentConfigs(p.agents, `projects.${key}.agents`, E);
     const refs = Array.isArray(p?.repos) ? p.repos : [];
-    if (!refs.length) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);
+    if (!refs.length && !p.scratch) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);
     for (const rr of refs) {
       const ref = rr?.ref;
       if (typeof ref !== "string" || !(ref in repos)) { E("E04", `projects.${key}.repos`, `references unknown repo ref ${JSON.stringify(ref)}`); continue; }
