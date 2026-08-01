@@ -1,4 +1,4 @@
-// doctor-unmerged.ts — W24 regression: doctorWorkspace warns (not fails) on unmerged paths in
+// doctor-unmerged.ts — W26 regression: doctorWorkspace warns (not fails) on unmerged paths in
 // the shared checkout, and stays silent on a clean tree. (LOOP-215)
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { doctorWorkspace } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-doc-w24-")));
+const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-doc-w26-")));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
@@ -34,14 +34,14 @@ try {
 
   writeFileSync(join(wsRoot, "dev-loop.json"), JSON.stringify({
     schemaVersion: 2,
-    team: { key: "w24-test", backend: "service" },
+    team: { key: "w26-test", backend: "service" },
     repos: { repo: { path: "repo" } },
     projects: {},
   }));
 
-  // ── clean checkout: W24 must be silent ──
+  // ── clean checkout: W26 must be silent ──
   const out1 = await capture(() => doctorWorkspace(loadWorkspace(wsRoot)));
-  ok(!out1.includes("[W24]"), "clean checkout → no W24 warning");
+  ok(!out1.includes("[W26]"), "clean checkout → no W26 warning");
   ok(!out1.includes("❌"), "clean checkout → no failures");
 
   // ── introduce unmerged paths via a conflicting merge ──
@@ -68,10 +68,10 @@ try {
   const st = execFileSync("git", ["-C", repoDir, "status", "--short"], { encoding: "utf8" });
   ok(st.includes("UU"), "test setup: git confirms unmerged paths (UU status)");
 
-  // W24 must fire as a warning, never a failure
+  // W26 must fire as a warning, never a failure
   const out2 = await capture(() => doctorWorkspace(loadWorkspace(wsRoot)));
-  ok(out2.includes("[W24]"), "unmerged paths → W24 warning fires");
-  ok(!out2.includes("❌"), "W24 is warn-only: no ❌ failures");
+  ok(out2.includes("[W26]"), "unmerged paths → W26 warning fires");
+  ok(!out2.includes("❌"), "W26 is warn-only: no ❌ failures");
 
 } catch (e) {
   console.error("unexpected test error:", e);
