@@ -290,6 +290,8 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectS
           E("E17", `${apath}.${field}`, `agents.${agent}.${field} must be a duration string (e.g. "30m", "1h") or "0" to disable (got ${JSON.stringify(v)})`);
         else if (t !== "0" && parsedDurationMs(t) <= 0)
           E("E17", `${apath}.${field}`, `agents.${agent}.${field} must be a positive duration or "0" to disable — zero-valued spellings like "0ms" are not allowed (got ${JSON.stringify(v)})`);
+        else if (t !== "0" && parsedDurationMs(t) > 2_147_483_647)
+          E("E17", `${apath}.${field}`, `agents.${agent}.${field} exceeds Node's 32-bit timer limit (~24.8d); setTimeout coerces it to 1ms, killing the fire immediately (got ${JSON.stringify(v)})`);
       }
     }
     if (isProjectScope && a.cadence !== undefined)

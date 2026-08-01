@@ -361,6 +361,11 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
 { const f = base(); f.team.agents = { pm: { fireTimeout: "0.0" } }; ok(has(f, "E17"), "E17: '0.0' (minutes, rounds to 0) is rejected"); }
 { const f = base(); f.team.agents = { pm: { stallTimeout: "0s" } }; ok(has(f, "E17"), "E17: '0s' stallTimeout is rejected"); }
 { const f = base(); f.projects.devplatform.agents = { dev: { fireTimeout: "0ms" } }; ok(has(f, "E17"), "E17: project-scope '0ms' fireTimeout is also rejected"); }
+// duration exceeding Node's 32-bit timer ceiling (~24.8d) is rejected (setTimeout coerces to 1ms → immediate kill)
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "30d" } }; ok(has(f, "E17"), "E17: '30d' exceeds 32-bit timer limit and is rejected"); }
+{ const f = base(); f.team.agents = { pm: { stallTimeout: "25d" } }; ok(has(f, "E17"), "E17: '25d' exceeds 32-bit timer limit (just over) and is rejected"); }
+{ const f = base(); f.team.agents = { pm: { fireTimeout: "24d" } }; ok(codes(f).length === 0, "E17: '24d' is within the 32-bit timer limit and is valid"); }
+{ const f = base(); f.projects.devplatform.agents = { pm: { fireTimeout: "30d" } }; ok(has(f, "E17"), "E17: project-scope '30d' fireTimeout also rejected"); }
 // error path must name the agent + field (WsError.path carries the dotted location)
 {
   const f = base(); f.team.agents = { sweep: { fireTimeout: "bad" } };
