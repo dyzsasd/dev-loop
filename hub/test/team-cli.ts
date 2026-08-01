@@ -706,6 +706,46 @@ try {
       ok(!/no out-of-band escalation path/.test(w20c_out.out), "no-comms note absent when team.comms IS configured (LOOP-74)");
       ok(/DOCTOR_OK/.test(w20c_out.out), "DOCTOR_OK holds with comms configured (LOOP-74)");
     }
+
+    // Case D (LOOP-207): W20's age + "oldest" ordering come from the into-queue-state TRANSITION event,
+    // never tickets.updated_at. Reuses the w20Root workspace (emptied in Case B). Two Human-Blocked items:
+    // W20D-OLD entered the queue FIRST (transition 2020-06-01), W20D-NEW entered LATER (2021-06-01). Seed
+    // the events rows directly, the way this fixture seeds tickets.
+    spawnSync("node", ["-e",
+      `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const pid=db.prepare('SELECT id FROM projects WHERE key=?').get('w20proj').id;const ins=db.prepare("INSERT INTO tickets(id,project_id,title,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,'Human-Blocked',null,0,'[]','[]','pm',?,?)");ins.run('W20D-OLD',pid,'Older by entry, bumped by a label repair','2020-06-01T00:00:00.000Z','2020-06-01T00:00:00.000Z');ins.run('W20D-NEW',pid,'Entered the queue later','2021-06-01T00:00:00.000Z','2021-06-01T00:00:00.000Z');const ev=db.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES(?,?,'pm','issue.transition',?,?)");ev.run(pid,'W20D-OLD','{"from":"Todo","to":"Human-Blocked"}','2020-06-01T00:00:00.000Z');ev.run(pid,'W20D-NEW','{"from":"Todo","to":"Human-Blocked"}','2021-06-01T00:00:00.000Z');db.close()})`,
+      w20Db
+    ], { cwd: hubRoot, env: env(), encoding: "utf8" });
+
+    const w20line = (s: string) => (s.split("\n").find((l) => l.includes("[W20]")) ?? "");
+    const nextLine = (s: string) => (s.split("\n").find((l) => l.startsWith("NEXT:")) ?? "");
+
+    // State A — control: both a (buggy) updated_at sort and the (correct) transition sort agree the
+    // genuinely-older W20D-OLD is oldest, so doctor names it. This is the baseline the relabel must not move.
+    const w20dA = run("server", ["doctor"], { cwd: w20Root });
+    ok(/oldest W20D-OLD/.test(w20line(w20dA.out)), "W20 names the genuinely-oldest (earliest into-Human-Blocked) item (LOOP-207)");
+    ok(/rule on the oldest decision W20D-OLD/.test(nextLine(w20dA.out)), "NEXT names the genuinely-oldest item (LOOP-207)");
+    ok(/DOCTOR_OK/.test(w20dA.out), "W20 stays warn-only in Case D (LOOP-207)");
+
+    // The single variable (the ticket's A→B): ONE Sweep-style label repair on the oldest item — it bumps
+    // tickets.updated_at to a recent time and changes labels, but adds NO issue.transition (a relabel is not
+    // a transition). A tickets.updated_at sort would now flip "oldest" to W20D-NEW; the transition anchor
+    // must not. (Do NOT weaken this to a comment: save_comment leaves updated_at untouched and would pass
+    // vacuously — the reset comes from save_issue writes: labels/priority/assignee/relatedTo.)
+    spawnSync("node", ["-e",
+      `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);db.prepare("UPDATE tickets SET labels=?, updated_at=? WHERE id=?").run('["needs-operator"]','2026-08-01T00:00:00.000Z','W20D-OLD');db.close()})`,
+      w20Db
+    ], { cwd: hubRoot, env: env(), encoding: "utf8" });
+
+    // State B — after the relabel: W20 must STILL name W20D-OLD, and its age must still read in DAYS off the
+    // 2020 transition (a buggy age-from-updated_at renders minutes, since updated_at is now recent). This is
+    // the fails-before / passes-after arm: the pre-fix code flips both lines to W20D-NEW here.
+    const w20dB = run("server", ["doctor"], { cwd: w20Root });
+    ok(/oldest W20D-OLD "[^"]*" \d+d \(blocked\)/.test(w20line(w20dB.out)),
+      "an unrelated label repair does NOT change WHICH item W20 names, nor reset its age to the bump (LOOP-207)");
+    ok(!/oldest W20D-NEW/.test(w20line(w20dB.out)), "W20 does not flip to the later-entered item after a relabel (LOOP-207)");
+    ok(/rule on the oldest decision W20D-OLD/.test(nextLine(w20dB.out)), "NEXT stays on the genuinely-oldest item after a relabel (LOOP-207)");
+    ok(/2 waiting on you/.test(w20dB.out), "W20 count unchanged by the relabel (LOOP-207)");
+    ok(/DOCTOR_OK/.test(w20dB.out), "W20 stays warn-only after the relabel (LOOP-207)");
   }
 
   // ── W22: landing stall detection; DOCTOR_OK stays; NEXT flips only on stall ──
