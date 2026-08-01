@@ -360,6 +360,48 @@ try {
     && readJson(join(lin, "dev-loop.json")).repos.det2.landing === "direct",
     "explicit --typecheck-cmd/--landing beat the detected values");
 
+  // ═══ LOOP-100: defaultBranch detection + --default-branch flag ═══
+  // Fixture: a git repo initialized with 'master' as the default branch (non-main)
+  const masterSrc = join(tmp, "master-src-100");
+  mkdirSync(masterSrc, { recursive: true });
+  writeFileSync(join(masterSrc, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+  for (const gitArgs of [
+    ["init", "-b", "master"],
+    ["add", "-A"],
+    ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"],
+  ]) spawnSync("git", gitArgs, { cwd: masterSrc });
+
+  // --detect on a clone of masterSrc infers defaultBranch:"master" via origin/HEAD
+  const detMaster = run("team", ["add-repo", "det-master", "--project", "web", "--path", "det-master-repo", "--detect", "--remote", masterSrc], { cwd: lin });
+  ok(detMaster.code === 0, "LOOP-100: add-repo --detect with a master-branch remote exits 0");
+  ok(readJson(join(lin, "dev-loop.json")).repos["det-master"].defaultBranch === "master",
+    "LOOP-100: --detect infers defaultBranch:\"master\" from a repo with master as default");
+
+  // --detect --default-branch develop: explicit flag beats detection
+  const detMasterExplicit = run("team", ["add-repo", "det-master-x", "--project", "web", "--path", "det-master-repo-x", "--detect", "--remote", masterSrc, "--default-branch", "develop"], { cwd: lin });
+  ok(detMasterExplicit.code === 0, "LOOP-100: add-repo --detect --default-branch develop exits 0");
+  ok(readJson(join(lin, "dev-loop.json")).repos["det-master-x"].defaultBranch === "develop",
+    "LOOP-100: explicit --default-branch develop beats detection (not master)");
+
+  // --default-branch on an already-registered ref must update in place (PM amendment)
+  const detBranchUpdate = run("team", ["add-repo", "det", "--project", "web", "--default-branch", "trunk"], { cwd: lin });
+  ok(detBranchUpdate.code === 0, "LOOP-100: --default-branch on an existing ref exits 0 (update in place)");
+  ok(readJson(join(lin, "dev-loop.json")).repos.det.defaultBranch === "trunk",
+    "LOOP-100: --default-branch persists on an already-registered ref (PM amendment — existing-ref path)");
+
+  // Negative: fix fixture has no git remote → defaultBranch absent (backward-compat)
+  ok(detectRepoFacts(fix).defaultBranch === undefined,
+    "LOOP-100: detectRepoFacts returns no defaultBranch for a dir with no git origin");
+
+  // Negative: clone of an empty (unborn) remote reports HEAD branch: (unknown) — must NOT persist that sentinel
+  const emptyRemote = join(tmp, "empty-remote-100");
+  mkdirSync(emptyRemote, { recursive: true });
+  spawnSync("git", ["init", "--bare"], { cwd: emptyRemote });
+  const cloneOfEmpty = join(tmp, "clone-of-empty-100");
+  spawnSync("git", ["clone", emptyRemote, cloneOfEmpty]);
+  ok(detectRepoFacts(cloneOfEmpty).defaultBranch === undefined,
+    "LOOP-100: detectRepoFacts returns no defaultBranch for a clone of an unborn remote (guards against '(unknown)' sentinel)");
+
   // LOOP-17 regressions: doctor nudge for repos with no configured build gates
   // (state 1) no build block + detectable gates → nudge appears, DOCTOR_OK maintained
   const ungatedDir = join(lin, "ungated-repo");
