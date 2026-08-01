@@ -663,10 +663,14 @@ export function renderFlow(report: UsageReport, throughput: number | null, board
   else console.log(boardNote ?? "board throughput: unavailable");
 }
 
-export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
+interface MetricsOpts {
+  windowMs: number; asJson: boolean; context: boolean;
+  showUsage: boolean; showCost: boolean; showFlow: boolean; showKaizen: boolean;
+  byDim: UsageDimension | undefined;
+}
+function parseMetricsArgs(argv: string[]): MetricsOpts | number {
   let windowMs = 7 * 86_400_000;
-  let asJson = false;
-  let context = false;
+  let asJson = false, context = false;
   let showUsage = false, showCost = false, showFlow = false, showKaizen = false;
   let byDim: UsageDimension | undefined;
   for (let i = 0; i < argv.length; i++) {
@@ -684,8 +688,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
         return 2;
       }
       byDim = dim;
-    }
-    else if (argv[i] === "--help" || argv[i] === "-h") {
+    } else if (argv[i] === "--help" || argv[i] === "-h") {
       console.log("usage: dev-loop metrics [--window 7d|24h|30d] [--json] [--context]\n" +
         "                        [--usage] [--cost] [--flow] [--kaizen] [--by agent|project|provider|model]\n" +
         "  default: team KPIs from fires.jsonl (+ hub board on service)\n" +
@@ -698,6 +701,13 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
       return 0;
     }
   }
+  return { windowMs, asJson, context, showUsage, showCost, showFlow, showKaizen, byDim };
+}
+
+export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
+  const parsed = parseMetricsArgs(argv);
+  if (typeof parsed === "number") return parsed;
+  const { windowMs, asJson, context, showUsage, showCost, showFlow, showKaizen, byDim } = parsed;
   // --context: the per-agent context bill (task #8 — SKILL prose + cheat sheet + the conventions
   // §-spans its Sections line cites + lessons caps). It lives under `metrics`, not `doctor`: the
   // bill is a director-view NUMBER over the plugin's static sources (skills/ + conventions.md) that
