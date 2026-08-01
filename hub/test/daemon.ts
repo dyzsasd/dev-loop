@@ -155,6 +155,19 @@ ok(board.text.includes('href="/p/dmn/usage"'), "LOOP-126: the header nav links t
 // AC4: POST /usage → 405 (read-only route)
 ok((await get("/usage", "POST")).status === 405, "LOOP-126 AC4: POST /usage → 405 (read-only)");
 
+// ─── LOOP-206: /kaizen self-improvement panel (design kaizen-panel Surface 2) ───
+const kzn = await getHtml("/kaizen");
+ok(kzn.status === 200 && kzn.type.includes("text/html"), "LOOP-206 AC1: GET /kaizen → 200 text/html");
+ok(kzn.text.includes("<!doctype html") && /<h1>Kaizen\b/.test(kzn.text), "LOOP-206 AC1: /kaizen is an HTML page titled Kaizen");
+// On the seed db: bug was filed by pm (agent) + reached Done → selfFixed >= 1 → header line IS shown
+ok(kzn.text.includes("It ships software. Then it improves the shipping."),
+  "LOOP-206 AC2: header line renders above stat 1 when selfFixed >= 1");
+ok(kzn.text.includes("self-fixed"), "LOOP-206 AC2: stat 1 self-fix data renders (not empty state)");
+// Nav link to /kaizen appears on the board page
+ok(board.text.includes('href="/p/dmn/kaizen"'), "LOOP-206: the header nav links to the project's /kaizen");
+// AC5: POST /kaizen → 405 (read-only route)
+ok((await get("/kaizen", "POST")).status === 405, "LOOP-206 AC5: POST /kaizen → 405 (read-only)");
+
 // GET /api — the JSON API index (moved off / when DL-2 took the root for the UI)
 const root = await get("/api");
 ok(root.status === 200 && root.body.project === "dmn" && root.body.endpoints.includes("/api/tickets") && root.body.ui === "/", "GET /api → 200 JSON index naming the project, endpoints, and the UI root");
