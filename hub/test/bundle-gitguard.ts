@@ -50,6 +50,17 @@ try {
   ok(/\[W06\][^\n]*ws\.bundle/.test(dirtyOut), "(d) W06 warns for an un-ignored bundle artifact while .dev-loop/ IS ignored (names ws.bundle)");
   ok(!/is gitignored/.test(dirtyOut), "(d) the reassuring 'clean' line is suppressed once an un-ignored artifact is present");
 
+  // (e) LOOP-235 — STAGE the un-ignored artifact (`git add -A`, the common pre-commit operator habit) and
+  // re-run doctor on the SAME tree: W06 must STILL warn (a staged bundle is one `git commit` from history
+  // — MORE imminent, not less) and must NOT regress to the reassuring "clean" line. Fails against an
+  // untracked-only `unignoredBundleArtifacts` (a staged file drops out of `git ls-files --others`).
+  execFileSync("git", ["-C", gitWs, "add", "-A"]);
+  ok(/^A\s+ws\.bundle$/m.test(execFileSync("git", ["-C", gitWs, "status", "--short"], { encoding: "utf8" })), "(e) precondition: ws.bundle is now STAGED (git add -A), not untracked");
+  const docStaged = cli(["doctor"], gitWs);
+  const stagedOut = `${docStaged.stdout}${docStaged.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(stagedOut), "(e) W06 still warns for a STAGED un-ignored bundle artifact (names ws.bundle)");
+  ok(!/is gitignored/.test(stagedOut), "(e) the reassuring 'clean' line stays suppressed once the artifact is staged, not just untracked");
+
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });
   ok(cli(["team", "init", "--dir", plainWs, "--key", "gg2", "--backend", "service", "--yes"], ROOT).status === 0, "setup: plain-ws team init");
