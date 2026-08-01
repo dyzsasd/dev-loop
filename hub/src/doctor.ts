@@ -116,7 +116,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
 
   // 4. Counts + per-project, and the unique-prefix integrity check (the real multi-project guard)
   const c = (sql: string) => (db!.prepare(sql).get() as { c: number }).c;
-  info(`projects=${c("SELECT count(*) c FROM projects")} tickets=${c("SELECT count(*) c FROM tickets")} docs=${c("SELECT count(*) c FROM documents")} actors=${c("SELECT count(*) c FROM actors")} events=${c("SELECT count(*) c FROM events")}`);
+  info(`projects=${c("SELECT count(*) c FROM projects WHERE json_extract(settings_json,'$.scratch') IS NOT 1")} tickets=${c("SELECT count(*) c FROM tickets")} docs=${c("SELECT count(*) c FROM documents")} actors=${c("SELECT count(*) c FROM actors")} events=${c("SELECT count(*) c FROM events")}`);
   const projects = db.prepare("SELECT id, key, ticket_prefix FROM projects ORDER BY key").all() as { id: string; key: string; ticket_prefix: string }[];
   const countByProject = db.prepare("SELECT count(*) c FROM tickets WHERE project_id = ?");
   for (const p of projects) {
@@ -258,7 +258,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
 
   const { errors, warnings } = validateTeamFile(ws.file);
   if (errors.length) for (const e of errors) fail(`[${e.code}] ${e.path}: ${e.message}`);
-  else pass(`dev-loop.json valid (${Object.keys(ws.file.repos).length} repos, ${Object.keys(ws.file.projects).length} projects)`);
+  else pass(`dev-loop.json valid (${Object.keys(ws.file.repos).length} repos, ${Object.values(ws.file.projects).filter((p) => !p.scratch).length} projects)`);
   for (const w of [...warnings, ...checkLessonsBudget(ws)]) warn(`[${w.code}] ${w.path}: ${w.message}`);
 
   // Every registered repo exists on disk + is a git repo (path existence + realpath sanity).
