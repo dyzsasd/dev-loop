@@ -33,9 +33,11 @@ export interface ForgeReviewResult {
 
 // Result of --apply when the guard trips (§5.1 / LOOP-65).
 export interface MergeGuardApplyResult {
-  // "wrote": comment posted + ticket routed; "already_present": marker existed, no dup posted;
-  // "skipped_no_db": no hub DB available (degrade); "skipped_no_ticket": ticket not in hub.
-  action: "wrote" | "already_present" | "skipped_no_db" | "skipped_no_ticket";
+  // "wrote": comment posted + ticket routed (forge axis) or comment-only (board axis);
+  // "already_present": marker existed, no dup posted;
+  // "skipped_no_db": no hub DB available (degrade); "skipped_no_ticket": ticket not in hub;
+  // "skipped_merged": PR is already merged — no board write (AC1 / LOOP-216).
+  action: "wrote" | "already_present" | "skipped_no_db" | "skipped_no_ticket" | "skipped_merged";
   commentBody?: string; // the comment that was (or would have been) posted
 }
 
@@ -68,15 +70,20 @@ function buildCommentBody(
   return `${APPLY_MARKER} ticket is ${state} (not merge-eligible). Not merged.`;
 }
 
-// Post objection comment + route the ticket (state→Todo, labels+=blocked, assignee→null).
+// Post objection comment and, for forge-review trips, route the ticket.
+// tripAxis determines the routing behaviour (LOOP-216):
+//   "board": comment only — state/assignee/labels are left untouched (AC2).
+//   "forge": comment + route to Todo with existing assignee, without adding "blocked" (AC3).
 // Degrades silently when the hub DB is absent (no throw, returns skipped_no_db).
-// Idempotent: if a comment with the same body already exists, skips with already_present.
+// Idempotent on the comment: if the exact body already exists, skips re-posting (LOOP-65).
+// Routing still re-enforces on every call regardless of comment dedup (LOOP-130).
 function applyTrip(
   ticketId: string,
   dbPath: string | undefined | null,
   pr: number | string | undefined,
   forgeReview: ForgeReviewResult,
   boardState: MergeGuardBoardStateResult,
+  tripAxis: "forge" | "board",
 ): MergeGuardApplyResult {
   if (!dbPath || !existsSync(dbPath)) return { action: "skipped_no_db" };
   let db;
@@ -87,21 +94,23 @@ function applyTrip(
     if (!trow) return { action: "skipped_no_ticket" };
     const projectId = trow.project_id;
     const commentBody = buildCommentBody(pr, forgeReview, boardState);
-    // Comment dedup: skip the post only if the exact objection text already exists (LOOP-65).
-    // Routing is independent and always enforced — dedup must not suppress re-enforcement (LOOP-130).
+    // Comment dedup: skip re-posting only if the exact objection text already exists (LOOP-65).
     const dup = db.prepare("SELECT id FROM comments WHERE ticket_id=? AND body=?").get(ticketId, commentBody);
     if (!dup) {
-      // Post comment (standard write layer — addComment validates ticket existence + non-empty body).
       addComment(db, projectId, "operator", ticketId, commentBody);
     }
-    // Board routing always runs on every trip call, regardless of comment dedup (LOOP-130).
+    if (tripAxis === "board") {
+      // AC2 (LOOP-216): board-state trip — comment only, no mutation of state/assignee/labels.
+      // The ticket is already in the state the guard is objecting about; moving it reduces reachability.
+      return { action: dup ? "already_present" : "wrote", commentBody };
+    }
+    // AC3 (LOOP-216): forge-review trip — route to Todo with existing assignee, without "blocked".
+    // Routing re-enforces on every call, regardless of comment dedup (LOOP-130).
     const cur = db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?")
       .get(ticketId, projectId) as TicketUpdateFields | undefined;
     if (cur) {
-      const labels = JSON.parse(cur.labels) as string[];
-      if (!labels.includes("blocked")) labels.push("blocked");
       updateTicketRow(db, projectId, "operator", ticketId, cur.state, {
-        ...cur, state: "Todo", assignee: null, labels: JSON.stringify(labels),
+        ...cur, state: "Todo", assignee: cur.assignee, labels: cur.labels,
       });
     }
     return { action: dup ? "already_present" : "wrote", commentBody };
@@ -255,7 +264,31 @@ export function mergeGuard(
   if (trip && opts.apply && (boardState.ticketId ?? ticketId)) {
     const applyTicketId = boardState.ticketId ?? ticketId!;
     const dbPath = opts.dbPath ?? process.env.DEVLOOP_HUB_DB ?? resolveHubDbPath(repoDir);
-    const applied = applyTrip(applyTicketId, dbPath, opts.pr, forgeReview, boardState);
+
+    // AC1/AC4 (LOOP-216): when a PR is provided, check whether it is already merged before any board write.
+    // If merged → moot objection, skip all writes (AC1).
+    // If the merged state cannot be determined (gh unavailable/non-GitHub remote) → also skip (AC4).
+    if (opts.pr !== undefined) {
+      const ghRepo = opts.ghRepo ?? resolveGhRepo(repoDir);
+      let prMerged: boolean | null = null; // null = unknown
+      if (ghRepo) {
+        try {
+          const exec = opts.exec ?? defaultGhExec;
+          const r = exec(["pr", "view", String(opts.pr), "--repo", ghRepo, "--json", "state"]);
+          if (r.ok) {
+            const parsed = JSON.parse(r.stdout) as { state?: string };
+            prMerged = parsed.state === "MERGED";
+          }
+        } catch { /* gh unavailable → prMerged stays null */ }
+      }
+      if (prMerged !== false) {
+        // merged (true) or unknown (null) → skip apply; report moot
+        return { trip, boardState, forgeReview, applied: { action: "skipped_merged" } };
+      }
+    }
+
+    const tripAxis: "forge" | "board" = forgeReview.trip ? "forge" : "board";
+    const applied = applyTrip(applyTicketId, dbPath, opts.pr, forgeReview, boardState, tripAxis);
     return { trip, boardState, forgeReview, applied };
   }
   return { trip, boardState, forgeReview };

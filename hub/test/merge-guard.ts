@@ -35,6 +35,7 @@ try {
   tk("MG-8", "In Progress"); // no-trip path + --apply (should NOT write)
   tk("MG-9", "In Review");   // idempotency: second --apply must not dup comment
   tk("MG-10", "In Review");  // LOOP-130: re-apply-after-external-unblock
+  tk("MG-11", "In Review");  // LOOP-216: merged-PR check → skipped_merged (AC1)
   conn.close();
 
   // A fake repo dir so resolveHubDbPath has something to look at (we pass dbPath explicitly)
@@ -281,9 +282,9 @@ try {
   const mg6Comments = readComments("MG-6");
   ok(mg6Comments.length === 1, `apply: exactly one comment written (got ${mg6Comments.length})`);
   const mg6Row = readTicket("MG-6");
-  ok(mg6Row?.state === "Todo", `apply: ticket moved to Todo (got: ${mg6Row?.state})`);
-  ok(mg6Row?.labels.includes("blocked") ?? false, "apply: ticket labels include 'blocked'");
-  ok(mg6Row?.assignee === null, "apply: ticket unassigned (null)");
+  ok(mg6Row?.state === "Todo", `apply: forge trip ticket moved to Todo (got: ${mg6Row?.state})`);
+  ok(!mg6Row?.labels.includes("blocked"), "apply: forge trip — 'blocked' NOT added (AC3)");
+  ok(mg6Row?.assignee === null, "apply: forge trip — assignee preserved (null from init) (AC3)");
 
   // AC: idempotent — re-running --apply with same trip does not duplicate the comment
   const rApplyForge2 = mergeGuard(repoDir, {
@@ -301,8 +302,8 @@ try {
   ok(rApplyBoard.applied?.commentBody?.includes("⛔ merge-guard:") ?? false, "apply: board trip comment includes marker");
   ok(rApplyBoard.applied?.commentBody?.includes("In Review") ?? false, "apply: board trip comment mentions ticket state");
   const mg7Row = readTicket("MG-7");
-  ok(mg7Row?.state === "Todo", `apply: board trip ticket moved to Todo (got: ${mg7Row?.state})`);
-  ok(mg7Row?.labels.includes("blocked") ?? false, "apply: board trip ticket labels include 'blocked'");
+  ok(mg7Row?.state === "In Review", `apply: board trip — state unchanged (got: ${mg7Row?.state}) (AC2)`);
+  ok(!mg7Row?.labels.includes("blocked"), "apply: board trip — 'blocked' NOT added (AC2)");
 
   // AC: no trip + --apply → no board write (guard not tripped)
   const rApplyNoTrip = mergeGuard(repoDir, { ticketId: "MG-8", dbPath, apply: true });
@@ -328,8 +329,8 @@ try {
   ok(/--apply wrote/.test(cliApply.stdout), `CLI --apply: stdout mentions '--apply wrote' (got: ${cliApply.stdout.trim().slice(0, 200)})`);
   ok(readComments("MG-9").length === 1, "CLI --apply: comment written to hub");
   const mg9Row = readTicket("MG-9");
-  ok(mg9Row?.state === "Todo", `CLI --apply: ticket moved to Todo (got: ${mg9Row?.state})`);
-  ok(mg9Row?.labels.includes("blocked") ?? false, "CLI --apply: ticket labels include 'blocked'");
+  ok(mg9Row?.state === "In Review", `CLI --apply: board trip — state unchanged (got: ${mg9Row?.state}) (AC2)`);
+  ok(!mg9Row?.labels.includes("blocked"), "CLI --apply: board trip — 'blocked' NOT added (AC2)");
 
   // AC: CLI without --apply on tripped ticket → no comment written
   const cliNoApplyCli = cli(["--repo", repoDir, "--ticket", "MG-3", "--strict"], { DEVLOOP_HUB_DB: dbPath });
@@ -409,37 +410,65 @@ try {
   ok(cliL142NoInput.status === 0, "LOOP-142 CLI: no --ticket no --pr --strict → exit 0 (skipped)");
   ok(/skipped/.test(cliL142NoInput.stdout), `LOOP-142 CLI: no ticket → mentions 'skipped' (got: ${cliL142NoInput.stdout.trim().slice(0, 120)})`);
 
-  // ── LOOP-130: re-apply-after-external-unblock — routing must re-enforce even when comment is dup ──
-  // Scenario: ticket tripped and routed (comment posted + Todo+blocked), then an out-of-band event
-  // reverts the board state (e.g. Sweep clears the block), and --apply is called again with the
-  // same trip reason. The comment must NOT be duplicated; the routing MUST be re-applied.
+  // ── LOOP-130: re-apply-after-external-unblock — comment dedup across repeated fires ──
+  // Scenario: board-state trip (In Review) fires twice. Under AC2, board trips post the comment
+  // but leave the state alone. The second fire must not duplicate the comment.
 
-  // Step 1: initial trip — comment posted, ticket routed to Todo+blocked
+  // Step 1: initial trip — comment posted, board state unchanged (AC2)
   const rL130First = mergeGuard(repoDir, { ticketId: "MG-10", dbPath, apply: true });
   ok(rL130First.trip, "LOOP-130: initial trip detected (In Review)");
   ok(rL130First.applied?.action === "wrote", `LOOP-130: first --apply → action=wrote (got: ${rL130First.applied?.action})`);
   ok(readComments("MG-10").length === 1, "LOOP-130: first --apply posted exactly one comment");
   const mg10RowFirst = readTicket("MG-10");
-  ok(mg10RowFirst?.state === "Todo", `LOOP-130: first --apply routed to Todo (got: ${mg10RowFirst?.state})`);
-  ok(mg10RowFirst?.labels.includes("blocked") ?? false, "LOOP-130: first --apply added 'blocked' label");
+  ok(mg10RowFirst?.state === "In Review", `LOOP-130: first --apply (board trip) — state unchanged (got: ${mg10RowFirst?.state}) (AC2)`);
+  ok(!mg10RowFirst?.labels.includes("blocked"), "LOOP-130: first --apply (board trip) — 'blocked' NOT added (AC2)");
 
-  // Step 2: simulate out-of-band unblock (Sweep/PM cleared routing without resolving objection)
+  // Step 2: no-op reset — ticket already In Review (AC2 never changed it); clears any stale labels
   {
     const db2 = openDb(dbPath);
     db2.prepare("UPDATE tickets SET state='In Review', labels='[]', assignee=NULL WHERE id='MG-10'").run();
     db2.close();
   }
   const mg10RowReverted = readTicket("MG-10");
-  ok(mg10RowReverted?.state === "In Review", "LOOP-130: state reverted to In Review (setup check)");
+  ok(mg10RowReverted?.state === "In Review", "LOOP-130: state still In Review after step 2 (setup check)");
 
-  // Step 3: second --apply with same trip reason — must re-apply routing, must not dup comment
+  // Step 3: second --apply — comment must NOT be duplicated
   const rL130Second = mergeGuard(repoDir, { ticketId: "MG-10", dbPath, apply: true });
   ok(rL130Second.trip, "LOOP-130: second call still trips (In Review)");
   ok(rL130Second.applied?.action === "already_present", `LOOP-130: second --apply → action=already_present (no dup comment) (got: ${rL130Second.applied?.action})`);
   ok(readComments("MG-10").length === 1, "LOOP-130: comment count still 1 — no duplicate post");
   const mg10RowSecond = readTicket("MG-10");
-  ok(mg10RowSecond?.state === "Todo", `LOOP-130: second --apply re-routed to Todo (got: ${mg10RowSecond?.state})`);
-  ok(mg10RowSecond?.labels.includes("blocked") ?? false, "LOOP-130: second --apply re-added 'blocked' label");
+  ok(mg10RowSecond?.state === "In Review", `LOOP-130: second --apply (board trip) — state unchanged (got: ${mg10RowSecond?.state}) (AC2)`);
+  ok(!mg10RowSecond?.labels.includes("blocked"), "LOOP-130: second --apply (board trip) — 'blocked' still absent (AC2)");
+
+  // ── LOOP-216: merged-PR check — skipped_merged short-circuit (AC1) ──────────────────────────────
+  // When the PR is already MERGED, applyTrip must not fire — the guard should
+  // return action="skipped_merged" and leave the board state untouched.
+  // The makePrExec factory returns prData for ALL pr-view calls (both the forge
+  // review fetch and the new merged-state check). Adding state:"MERGED" to the
+  // prData makes both calls respond with the merged flag.
+  const prMergedData = { number: 99, reviewDecision: "", url: PR_URL, latestReviews: [], state: "MERGED" };
+  const rMerged = mergeGuard(repoDir, {
+    ticketId: "MG-11", dbPath, pr: 99, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prMergedData, gqlNoThreads),
+    apply: true,
+  });
+  ok(rMerged.trip, "LOOP-216 AC1: In Review ticket trips board-state axis");
+  ok(rMerged.applied?.action === "skipped_merged", `LOOP-216 AC1: merged PR → action=skipped_merged (got: ${rMerged.applied?.action})`);
+  // No board write: ticket must still be In Review
+  const mg11Row = readTicket("MG-11");
+  ok(mg11Row?.state === "In Review", `LOOP-216 AC1: merged PR — board state unchanged (got: ${mg11Row?.state})`);
+  ok(readComments("MG-11").length === 0, "LOOP-216 AC1: merged PR — no comment written");
+
+  // AC4: prMerged=null (gh unavailable) → also skipped_merged (conservative: don't write if unsure)
+  const rMergedGhFail = mergeGuard(repoDir, {
+    ticketId: "MG-11", dbPath, pr: 99, ghRepo: GHREPO, agentReviewers: [],
+    exec: () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }); },
+    apply: true,
+  });
+  ok(rMergedGhFail.trip, "LOOP-216 AC4: In Review still trips when gh unavailable");
+  ok(rMergedGhFail.applied?.action === "skipped_merged", `LOOP-216 AC4: gh unavailable → skipped_merged (got: ${rMergedGhFail.applied?.action})`);
+  ok(readComments("MG-11").length === 0, "LOOP-216 AC4: gh unavailable — still no comment written");
 
   // ── LOOP-123 regression: agentReviewers read from workspace config (not just injected opts) ─────
   // Verify the full path: `team set team.agentReviewers` writes config → merge-guard reads it without
