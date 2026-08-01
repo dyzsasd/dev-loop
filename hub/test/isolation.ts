@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { pkgVersion } from "../src/paths.ts";
+import { scrubFireEnv } from "./env-scrub.ts";
 
 const DB = "/tmp/hub-iso/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -59,13 +60,16 @@ ok(phantomProjectRejected, "unknown project 'scartch' (no create flag) is REFUSE
 
 // ── doctor on the seeded db → OK (and exit 0) ─────────────────────────────────
 let doctorOk = false;
-try { doctorOk = execFileSync("node", ["src/server.ts", "doctor"], { env: { ...process.env, DEVLOOP_HUB_DB: DB } }).toString().includes("DOCTOR_OK"); } catch { doctorOk = false; }
+// LOOP-240: scrub fire env + workspace sentinel so doctor doesn't resolve the live workspace.
+try { doctorOk = execFileSync("node", ["src/server.ts", "doctor"], { env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_HUB_DB: DB } }).toString().includes("DOCTOR_OK"); } catch { doctorOk = false; }
 ok(doctorOk, "dev-loop-hub doctor → DOCTOR_OK (WAL, quick_check, unique prefixes, secrecy)");
 
 // ── DL-54: doctor is READ-ONLY — it must NEVER create/initialize a db, and must REJECT an
 //    existing empty/truncated/non-hub file (not falsely green it). Run doctor and capture exit+stdout.
 function doctorRun(db: string): { out: string; code: number } {
-  try { return { out: execFileSync("node", ["src/server.ts", "doctor"], { env: { ...process.env, DEVLOOP_HUB_DB: db }, encoding: "utf8" }), code: 0 }; }
+  // LOOP-240: clear DEVLOOP_WORKSPACE sentinel to block CWD walk-up from resolving the live workspace
+  // and polluting the doctor verdict with real workspace checks that mask the fixture db's failure.
+  try { return { out: execFileSync("node", ["src/server.ts", "doctor"], { env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_HUB_DB: db }, encoding: "utf8" }), code: 0 }; }
   catch (e: any) { return { out: (e.stdout ?? "") + (e.stderr ?? ""), code: e.status ?? 1 }; }
 }
 const EMPTY = "/tmp/hub-iso/empty.db";

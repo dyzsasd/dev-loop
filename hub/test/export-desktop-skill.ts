@@ -23,9 +23,11 @@ writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { demo: {
 } } }));
 const out = join(tmp, "out"); mkdirSync(out, { recursive: true });
 
+// LOOP-240: cwd outside the workspace blocks CWD walk-up; DEVLOOP_WORKSPACE sentinel blocks env-var resolution.
 const r = spawnSync(process.execPath, [src, "qa", "--project", "demo", "--out", out], {
   encoding: "utf8",
-  env: { ...process.env, DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+  cwd: tmp,
+  env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
 });
 ok(r.status === 0, "export exits 0");
 const skillFile = join(out, "devloop-qa-demo", "SKILL.md");
@@ -36,7 +38,8 @@ ok(!/\$\{CLAUDE_PLUGIN_ROOT\}/.test(md), "no unresolved ${CLAUDE_PLUGIN_ROOT} re
 ok(/## Conventions \(inlined/.test(md), "inlines the conventions appendix");
 ok(/\n## 2\./.test(md) && /\n## 12b\./.test(md), "appendix includes the load-bearing sections (safety §2, landing §12b)");
 ok(/dev\.example\.com/.test(md) && /landing.*:.*pr/.test(md), "inlines the project config facts (test env + landing)");
-const noProj = spawnSync(process.execPath, [src, "qa"], { encoding: "utf8" });
+// LOOP-240: cwd outside the workspace + DEVLOOP_WORKSPACE sentinel — both axes blocked.
+const noProj = spawnSync(process.execPath, [src, "qa"], { encoding: "utf8", cwd: tmp, env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: "/dev/null/no-workspace" } });
 ok(noProj.status === 2 && /--project/.test(noProj.stderr ?? ""), "missing --project exits 2 with usage");
 
 // A passive-intake project must carry its mode into the export — Desktop has no config access,
@@ -48,7 +51,8 @@ writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { demo: {
 } } }));
 const rp = spawnSync(process.execPath, [src, "pm", "--project", "demo", "--out", out], {
   encoding: "utf8",
-  env: { ...process.env, DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+  cwd: tmp,
+  env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
 });
 const pmMd = rp.status === 0 ? readFileSync(join(out, "devloop-pm-demo", "SKILL.md"), "utf8") : "";
 ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.test(pmMd), "a passive project's export inlines intake.mode + the §5a posture");
@@ -67,7 +71,7 @@ ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.
   const noOut = spawnSync(process.execPath, [src, "qa", "--project", "demo"], {
     encoding: "utf8",
     cwd: gitCwd, // inside a git tree but no dev-loop.json → workspace lookup fails → falls back to DEVLOOP_PROJECTS_JSON
-    env: { ...scrubFireEnv(), DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+    env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
   });
   ok(noOut.status === 0, "no-out: exits 0 when cwd is git-tracked (LOOP-187)");
   ok((noOut.stdout + noOut.stderr).includes("dl-export-"), "no-out: message/path references the temp dir (LOOP-187)");
@@ -77,7 +81,7 @@ ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.
   const withOut = spawnSync(process.execPath, [src, "qa", "--project", "demo", "--out", out], {
     encoding: "utf8",
     cwd: gitCwd,
-    env: { ...scrubFireEnv(), DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+    env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
   });
   ok(withOut.status === 0 && existsSync(join(out, "devloop-qa-demo", "SKILL.md")), "no-out: explicit --out still writes to the given path (LOOP-187 AC4)");
 }
