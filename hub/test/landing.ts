@@ -502,5 +502,23 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ok(caughtUnknown, "makeExec double rejects unknown gh pr view --json field (parallel to LOOP-121 AC3)");
 }
 
+// Case 34: STARTUP_FAILURE check → "open-red" (P2 — startup-failed checks treated as red)
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-34/, { stdout: PR_LIST_OPEN }],
+    [/pr view 7/, { stdout: viewJson({ checks: [{ conclusion: "STARTUP_FAILURE" }] }) }],
+  ]);
+  ok(annotateTicketLanding("LOOP-34", REPO, exec) === "open-red", "annotateTicketLanding: STARTUP_FAILURE check → 'open-red'");
+}
+
+// Case 35: UNKNOWN mergeable → "unknown" (P2 — don't report open-green on transient UNKNOWN)
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-35/, { stdout: PR_LIST_OPEN }],
+    [/pr view 7/, { stdout: viewJson({ mergeable: "UNKNOWN", checks: [{ conclusion: "SUCCESS" }] }) }],
+  ]);
+  ok(annotateTicketLanding("LOOP-35", REPO, exec) === "unknown", "annotateTicketLanding: mergeable=UNKNOWN → 'unknown' (not open-green)");
+}
+
 console.log(fails === 0 ? "\nLANDING_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
