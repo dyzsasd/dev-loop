@@ -546,6 +546,30 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   Filed **LOOP-241** — the guard's objection names the hold but omits the one step devs get wrong:
   2 of the 3 PRs had the fix pushed with **every review thread still open** (one carrying the
   comment *"merge-guard will clear on green"*, which is false). The LOOP-224 shape again.
+- **2026-08-01 (later fire) — CORRECTION: the producer named in the entry above is innocent, and the
+  entry stated it as fact.** That entry identified "merge-guard's LOOP-216 AC3 path" as what nulls
+  assignees. It does not. On `origin/main`, `applyTrip` writes `assignee: cur.assignee` and the AC3
+  forge-review branch adds no `blocked` label (`hub/src/merge-guard.ts:107-113`) — it preserves what
+  it finds. **LOOP-225 is a test-coverage gap on that assertion, not a live defect**: QA drove
+  `applyTrip` against a seeded non-null assignee and confirmed correct preservation. The writer that
+  fits the trace is the **Step-0 orphan reset (LOOP-223)**: LOOP-235 was claimed at 08:35Z, its
+  senior fire completed 09:24:01Z leaving it `In Progress`, and at 09:39:19-20Z actor `operator`,
+  from inside *junior-dev's* fire, wrote `{from: "In Progress", to: "Todo", assignee: null}` with no
+  comment — the orphan-reclaim shape LOOP-223 describes verbatim. **LOOP-223 raised to P1** on this
+  second victim (the first, LOOP-175, was a P2 improvement; this one is P1 + `sensitive` + a green
+  PR). Recorded as a correction rather than an edit: naming the wrong producer sends the fix to the
+  wrong file, and this doc's own most-repeated finding is a surface asserting what it never established.
+- **2026-08-01 (later fire) — `merged` is not `running`, again: 22 code commits of verified fixes
+  execute nowhere on this host.** `dev-loop` on PATH is **1.13.0**; **npm already carries 1.14.0**;
+  `origin/main` is `a43a832`. Every `cli`-interface fire runs the installed package, so LOOP-220,
+  LOOP-226, LOOP-240, LOOP-175, LOOP-210, LOOP-200, LOOP-215, LOOP-216 and LOOP-195 are all merged
+  and inert. Verified by content, not by version string: the installed tree has **0** occurrences of
+  LOOP-220's `scratch` predicate against 10 on `origin/main`, and this box's `doctor` still raises
+  `[W01]` for the project whose config reads `"scratch": true` while printing **two disagreeing
+  project counts in one run** (`3 projects` from config, `projects=5` from hub.db). **Second
+  occurrence in ~2 days** (LOOP-38, 2026-07-30). Parked for the operator as **LOOP-246** — the only
+  outstanding action is a reinstall, which is one command on their host.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -923,6 +947,28 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   (doctor W27) for the detection half. **Cost of not having it, measured this fire: LOOP-226 /
   PR #132 was CI-green, `CLEAN`/`MERGEABLE`, 0 unresolved review threads — clear to merge — and sat
   unmerged because a null assignee kept it out of the `inReview` landing slice.**
+- **2026-08-01 (pm) — the release gate stays; what needed fixing was the instruction, not the bet.**
+  The install-skew recurrence (LOOP-246) is the second in two days, and the obvious reading is that
+  the human release gate is the bottleneck. I am **not** proposing to change it. `landing-observability`
+  §9.7 retired the pin-to-local-build option deliberately and paid for the human gate with a promise:
+  *"make when to pull it a one-look call."* Detection held up its end — W18 fired with the right
+  number. **The failure was in the sentence, not the gate:** W18 told the operator to "re-publish +
+  reinstall" when npm already had 1.14.0 and only the reinstall was outstanding, because W18 measures
+  installed-vs-`origin/main` and **never asks the registry what is published**. A one-look call that
+  names an action the operator does not need is not one look. Filed **LOOP-247** to resolve the
+  published version and pick the remediation from the comparison (registry lookup best-effort, so an
+  offline doctor degrades to today's wording and never hangs the head of a fire).
+- **2026-08-01 (pm) — a detector's predicate has to be sharper than the symptom that motivated it.**
+  LOOP-244 (W27) was filed to flag null-assignee tickets. Checked against the live board before it
+  gets built: of the three non-terminal null-assignee rows, **only one is actually stuck.** The other
+  two are reachable, because the two queue layers key on different fields — dev-tier slices on
+  `t.assignee === actor`, but **pm/qa `verify` on the OWNER LABEL** and pm `backlog` on state alone.
+  So LOOP-220 (`In Review` + `qa`) sits in QA's verify queue right now, and LOOP-228 (the cost-program
+  epic in `Backlog`) is unreachable-by-design and always will be. Refined the ACs to flag per the
+  purpose the state implies, and to keep *verifiable* apart from *landable* — the LOOP-226/PR #132
+  case this program is named for was held by the landing half, not the verification half. **A W-code
+  that cries wolf on its first day is worth less than no W-code**, and this one is one ticket from shipping.
+
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
