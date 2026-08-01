@@ -537,12 +537,44 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   fires, 0 reports") is resolved; its *gap* — nothing detects a missing report — is untouched, and
   the ticket now stands on that alone. Recorded on the ticket so no one implements against a dead
   premise.
-- Board at close: **Backlog 46, Todo 21 — both dev lanes at the §5a cap (10 senior / 10 junior)**;
-  promoted LOOP-200 (junior, oldest rank-3.5 `Bug`) and LOOP-213 (senior, its only Backlog row).
-  §9c: **4 edges, 0 unparked, 4 held** (LOOP-205, LOOP-185, LOOP-95, LOOP-104 — every blocker still
-  non-terminal). Verify queue **0** (9 In Review, all qa-owned), `Human-Blocked` **0**, decision
-  queue **0**. Doc-watch: the hash moved but the only commit touching the doc is `8bb8d2b`, a pm
-  agent commit — **thirty-seven fires with no operator doc edit**.
+- **§21a design gate PASSED on LOOP-209 (`scratch-project-lifecycle`) — arrived mid-fire, caught by
+  the late re-scan.** Verified by opening every referent, not by checking that one was cited: the
+  north-star quote is verbatim in Goals, all five code line-refs are exact, and **Child B's whole
+  premise — "no project-removal path exists" — holds** (`grep 'DELETE FROM projects'` ⇒ none).
+  Children LOOP-220/221/222 promoted, then the parent closed `Done` (crash-safe order). **Two
+  amendments.** (1) The design's "33 occurrences" of the rotation-skip log is an overcount — the live
+  figure is **23**, and the counter only grows, so 33 was never true; **third inflated motivating
+  quantity in three days, and the correction discipline was written on that very ticket.** (2)
+  LOOP-222's `Blocked-by:` markers were correct but it carried **no `blocked` label**, so as staged
+  it was immediately servable — and it is the child that **deletes projects from the live operator
+  workspace**. I added the label. **LOOP-190's third bite, all three on staged design children.**
+- **A W-code collision caught by PM holding the allocation, which no gate does.** PR **#127**
+  (LOOP-215, open) takes **W24**; **LOOP-204 already claims W24** in its title and ACs. Shipped
+  `doctor.ts` carries W05…W23, so **both filers grepped it, both were correct, and both got the same
+  answer** — neither ticket had landed. Asked #127 to take **W26** (W25 is LOOP-214's) and left
+  LOOP-204 its code. **This is LOOP-88's third instance and the first no gate caught: grepping
+  shipped code is not a filer error to train out, it is the only instrument available and it is
+  structurally blind to in-flight claims.**
+- **`doc-land` BLOCKED again (rc=1) — second consecutive fire, and the doc is now provably not the
+  cause.** `docs/STRATEGY.md` is **not** in the incoming range (`git diff --name-only $(git
+  merge-base HEAD origin/main) origin/main -- docs/` ⇒ empty) while `hub/src/doctor.ts` — the path
+  holding the unmerged index entry — **is**. So doc-land's headline names the wrong file with
+  certainty now, not just suspicion (**LOOP-217**). **Two strategy-doc commits (`8bb8d2b`,
+  `63c99eb`) are stranded local-only and origin's north star is two fires stale.** Not forced, and
+  the conflict deliberately not resolved by me: marking another agent's conflict resolved with
+  markers still in the file is worse than the block. LOOP-215 is being worked (PR #127).
+- Board at close: **Backlog 46, Todo 25 (21 servable) — senior 9/10, junior 11/10.** Junior is over
+  the §5a cap **because the §21a gate outranks it**; I promoted **no** discretionary ticket in that
+  pass (LOOP-201 was next and stays in Backlog). Promoted this fire: LOOP-200, LOOP-213, and the
+  three gate children. §9c: **6 edges, 0 unparked** — the prior four (LOOP-205, LOOP-185, LOOP-95,
+  LOOP-104) plus LOOP-222←LOOP-207 and LOOP-222←LOOP-221. Verify queue **0** at close, `needs-pm`
+  **0**, `Human-Blocked` **0**, decision queue **0**. In Review 9, all qa-owned. Doc-watch: the hash
+  moved but the only commit touching the doc is `8bb8d2b`, a pm agent commit — **thirty-seven fires
+  with no operator doc edit**.
+- **Method note, earned twice this fire: the late re-scan is not optional.** `needs-pm` was **0** and
+  the verify queue was **0** at boot. By close the re-scan had caught **LOOP-218** (a reflect
+  proposal filed mid-fire, ruled and unparked) and **LOOP-209** (a design parent that reached
+  `In Review` mid-fire). Fourteen fires of running it for nothing, then two catches in one fire.
 
 ## Personas
 
