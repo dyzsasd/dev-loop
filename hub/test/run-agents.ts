@@ -8,7 +8,7 @@ import { openDb, logEvent } from "../src/db.ts";
 // NB: run-agents.ts must NOT be imported here — its main() runs unconditionally (LOOP-58), so an import
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
-import { breaker, formatBreakerMsg, PROVIDER_SCOPED_CLASSES } from "../src/breaker.ts";
+import { breaker, formatBreakerMsg, PROVIDER_SCOPED_CLASSES, type Agent } from "../src/breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "../src/fire-usage.ts";
 import { releaseClaimedTickets } from "../src/ticket-release.ts";
 import { insertTicket } from "../src/ticketwrite.ts";
@@ -495,7 +495,7 @@ try {
   // Regression: provider-scoped OPEN/CLOSE name the provider + blast radius, not the tripping agent.
   // Agent-scoped OPEN/CLOSE keep the original per-agent wording unchanged.
   {
-    const providerMap = new Map<string, string | null>([
+    const providerMap = new Map<Agent, string | null>([
       ["pm", "anthropic"], ["qa", "anthropic"], ["senior-dev", "anthropic"],
       ["junior-dev", "anthropic"], ["sweep", "openai"],
     ]);

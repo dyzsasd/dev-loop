@@ -1,7 +1,7 @@
 // P0-1a/P0-1b circuit breaker — extracted so tests can import it without triggering main().
 // run-agents.ts is an entry-point (main() is unconditional) and cannot be imported by anything.
 import { AGENT_HANDLES } from "./seed.ts";
-type Agent = (typeof AGENT_HANDLES)[number];
+export type Agent = (typeof AGENT_HANDLES)[number];
 
 type BreakerEntry = { key: string | null; streak: number; open: boolean };
 export const PROVIDER_SCOPED_CLASSES = new Set<string>(["spend-limit", "rate-limit", "auth"]);
