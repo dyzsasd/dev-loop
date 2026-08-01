@@ -578,22 +578,32 @@ function unignoredBundleArtifacts(root: string): string[] {
     if (s++ >= MAX_PROBES_PER_ARM) break;
     if (blobHasMagic(`:${rel}`)) hits.add(rel);
   }
-  // Committed-but-unpushed — every commit reachable from HEAD but NOT from any remote-tracking ref, i.e.
-  // exactly what the next `git push` would transfer. `rev-list HEAD --not --remotes` needs NO configured
-  // `@{upstream}`: a fresh branch never pushed, or a repo with no remote at all, still holds committed
-  // bundles a `git push origin HEAD:refs/heads/X` would ship (LOOP-235 P1 #4) — the old `@{upstream}..HEAD`
-  // form skipped the whole arm there. With no remotes it scans all of HEAD's history, bounded by the probe
-  // cap. Walk each such commit and probe the blobs IT introduced, so an add-then-delete pair in the range
-  // is still caught (P1 #2). `-c` (combined diff) makes a MERGE commit report the paths that differ from
-  // ALL parents — a bundle added during conflict resolution, which a plain `diff-tree -r` suppresses for
-  // merges and would leak on the next push (P1 #3); for a non-merge commit `-c` is a no-op, so single-
-  // parent coverage is unchanged. `--root` covers an initial commit; deletions (--diff-filter excludes D)
-  // have no blob here and were already probed at the commit that added them.
+  // Committed-but-unpushed — the commits the next `git push` would transfer, so a bundle committed but not
+  // yet pushed is caught before it ships. Prefer the branch's configured push destination (`@{push}`) then
+  // its upstream (`@{upstream}`): `rev-list <dest>..HEAD` is EXACTLY what a push to that ref sends, and —
+  // unlike `HEAD --not --remotes` — it still includes a commit that merely happens to be reachable from an
+  // UNRELATED remote (a feature commit living on `fork/feat`, merged into a branch that tracks `origin/main`:
+  // pushing to origin ships it, yet `--remotes` subtracts it and the merge's combined diff omits it because
+  // it is unchanged from the feature parent) (LOOP-235 P1 #5). With no destination configured — a fresh
+  // branch never pushed, or a repo with no remote — fall back to `HEAD --not --remotes`, which scans commits
+  // absent from every remote, i.e. all of HEAD when there is no remote at all (LOOP-235 P1 #4); the whole arm
+  // is bounded by the probe cap. Walk each commit and probe the blobs IT introduced, so an add-then-delete
+  // pair in the range is still caught (P1 #2). `-c` (combined diff) makes a MERGE commit report the paths
+  // that differ from ALL parents — a bundle added during conflict resolution, which a plain `diff-tree -r`
+  // suppresses for merges and would leak on the next push (P1 #3); for a non-merge commit `-c` is a no-op, so
+  // single-parent coverage is unchanged. `--diff-filter=AMT` keeps a TYPE change (`T`) — a bundle replacing a
+  // symlink/submodule at an existing path, which Git reports as neither A nor M (LOOP-235 P1 #6). `--root`
+  // covers an initial commit; deletions (D, excluded) have no blob here and were already probed at the commit
+  // that added them.
   {
+    const revParseOk = (rev: string): boolean =>
+      spawnSync("git", ["-C", root, "rev-parse", "--verify", "--quiet", rev], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
+    const dest = revParseOk("@{push}") ? "@{push}" : revParseOk("@{upstream}") ? "@{upstream}" : null;
+    const unpushed = dest ? [`${dest}..HEAD`] : ["HEAD", "--not", "--remotes"];
     let c = 0;
-    for (const commit of gitLines(["rev-list", "HEAD", "--not", "--remotes"])) {
+    for (const commit of gitLines(["rev-list", ...unpushed])) {
       if (c >= MAX_PROBES_PER_ARM) break;
-      for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AM", "--root", commit])) {
+      for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AMT", "--root", commit])) {
         if (c++ >= MAX_PROBES_PER_ARM) break;
         if (blobHasMagic(`${commit}:${rel}`)) hits.add(rel);
       }
