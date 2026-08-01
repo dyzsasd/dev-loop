@@ -264,6 +264,50 @@ try {
   ok(/\[W06\][^\n]*ws\.bundle/.test(remSOut), "(l) staged leak: W06 still warns (names ws.bundle)");
   ok(/git rm --cached/.test(remSOut), "(l) staged leak: the remediation tells the operator to `git rm --cached` — a .gitignore rule does not unstage a tracked blob (LOOP-235 review P1 #7)");
 
+  // (m) LOOP-235 review P1 #8 — a bundle in an unpushed COMMIT needs different advice than a staged one:
+  // `git rm --cached` clears only the index, so the committed blob still ships on the next push. The
+  // remediation must tell the operator to REWRITE/DROP the unpushed commit, not to unstage. Fails against a
+  // remediation that lumps "staged or committed" into a single `git rm --cached` clause.
+  const cmWs = join(ROOT, "cm-ws"); mkdirSync(cmWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", cmWs, "--key", "gg9", "--backend", "service", "--yes"], ROOT).status === 0, "setup: cm-ws team init");
+  gitInit(cmWs);
+  writeFileSync(join(cmWs, ".gitignore"), ".dev-loop/\n");
+  writeFileSync(join(cmWs, "README"), "x\n");
+  execFileSync("git", ["-C", cmWs, "add", "README", ".gitignore"]);
+  execFileSync("git", ["-C", cmWs, "commit", "-qm", "init"]);
+  ok(cli(exportArgs(join(cmWs, "ws.bundle")), cmWs).status === 0, "(m) setup: bundle export into cm-ws");
+  execFileSync("git", ["-C", cmWs, "add", "ws.bundle"]);
+  execFileSync("git", ["-C", cmWs, "commit", "-qm", "add bundle (committed, unpushed)"]);
+  ok(execFileSync("git", ["-C", cmWs, "diff", "--cached", "--name-only"], { encoding: "utf8" }).trim() === "",
+     "(m) precondition: nothing staged — the bundle's only reachable copy is an unpushed COMMIT, not the index");
+  const docCm = cli(["doctor"], cmWs);
+  const cmOut = `${docCm.stdout}${docCm.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(cmOut), "(m) committed leak: W06 warns (names ws.bundle)");
+  ok(/unpushed commit/.test(cmOut) && /rebase|reset/.test(cmOut),
+     "(m) committed leak: remediation says to rewrite/drop the unpushed commit, not just `git rm --cached` (LOOP-235 review P1 #8)");
+
+  // (n) LOOP-235 review P1 #9 — the tracked (staged/committed) scans must NOT truncate: a secret-leak guard
+  // that stops after N candidates can print clean while a bundle past the cutoff still commits. Stage a bulk
+  // change LARGER than the old per-arm cap (2000) with the bundle sorted LAST, and W06 must still warn.
+  // Fails against a staged arm that breaks at the cap.
+  const bulkN = 2050; // comfortably past the historical 2000 per-arm cap
+  const bulkWs = join(ROOT, "bulk-ws"); mkdirSync(bulkWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", bulkWs, "--key", "gg10", "--backend", "service", "--yes"], ROOT).status === 0, "setup: bulk-ws team init");
+  gitInit(bulkWs);
+  writeFileSync(join(bulkWs, ".gitignore"), ".dev-loop/\n");
+  mkdirSync(join(bulkWs, "bulk"), { recursive: true });
+  for (let i = 0; i < bulkN; i++) writeFileSync(join(bulkWs, "bulk", `f${String(i).padStart(5, "0")}.txt`), "");
+  ok(cli(exportArgs(join(bulkWs, "zz-ws.bundle")), bulkWs).status === 0, "(n) setup: bundle export as zz-ws.bundle (sorts AFTER the bulk files)");
+  execFileSync("git", ["-C", bulkWs, "add", "-A"]);
+  const stagedNames = execFileSync("git", ["-C", bulkWs, "diff", "--cached", "--name-only"], { encoding: "utf8" }).split("\n").filter(Boolean);
+  ok(stagedNames.length > 2000 && stagedNames[stagedNames.length - 1] === "zz-ws.bundle",
+     `(n) precondition: >2000 staged paths (got ${stagedNames.length}) with zz-ws.bundle sorted LAST — past the old 2000 cap`);
+  const docBulk = cli(["doctor"], bulkWs);
+  const bulkOut = `${docBulk.stdout}${docBulk.stderr}`;
+  ok(/\[W06\][^\n]*zz-ws\.bundle/.test(bulkOut),
+     "(n) W06 still warns for a bundle past the 2000th staged candidate — the tracked scan is not truncated (LOOP-235 review P1 #9)");
+  ok(!/is gitignored/.test(bulkOut), "(n) the reassuring 'clean' line is suppressed for the bulk-staged case");
+
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });
   ok(cli(["team", "init", "--dir", plainWs, "--key", "gg2", "--backend", "service", "--yes"], ROOT).status === 0, "setup: plain-ws team init");
