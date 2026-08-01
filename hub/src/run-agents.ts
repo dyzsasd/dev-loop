@@ -1540,6 +1540,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       die(`this workspace was MOVED (bundle '${moved.bundle ?? "?"}' at ${moved.movedAt ?? "?"}) — the home now runs elsewhere; use \`dev-loop up --attach <url>\` here, or delete .dev-loop/moved.json to un-retire`, 1);
   } catch (e) { if ((e as { code?: string }).code !== "ERR_MODULE_NOT_FOUND") throw e; }
   const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
+  (cfg as ProjectsConfig).repos = ws.file.repos as unknown as Record<string, unknown>;
   const backend = ws.file.team.backend;
   // Model-provider routing: the TEAM-level registry + permission override ride the run options into
   // commandFor/runAgent (never the legacy per-project view — providers are team infrastructure).
