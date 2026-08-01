@@ -76,8 +76,9 @@ Usage: dev-loop <command> [args]
 
   serve                       run the stdio MCP server (the agent transport; same as the dev-loop-hub bin)
   shim                        run the thin stdio MCP shim → the loopback daemon op-API (hub.transport:"daemon")
-  daemon up|up-all|down|status|install-autostart|uninstall-autostart
+  daemon up|up-all|down|status|reap|install-autostart|uninstall-autostart
                               daemon lifecycle — idempotent localhost web UI + optional login autostart
+  daemon reap [--dry-run]     stop orphaned dev-loop-hub daemons (dbPresent:false) across the port band
   init [--dir <path>] [--yes]  guided setup — workspace + first project/repo (interactive on a TTY;
                               --yes takes every default), ends with the doctor verdict + its NEXT line
   team init|import|repair|set|add-project|add-repo|add-provider|sync-opencode

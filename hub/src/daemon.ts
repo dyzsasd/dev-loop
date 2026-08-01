@@ -14,6 +14,7 @@
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
+import { existsSync } from "node:fs";
 import { isMainEntry } from "./is-entry.ts";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, fireIdStore } from "./db.ts";
@@ -611,9 +612,12 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
   if (path === "/api/stream") { serveStream(ctx); return true; }
   if (path === "/api/health") {
     const h = healthLiveness(db, writeDb);
+    // §16: expose dbPresent as a BOOLEAN only — /api/health bypasses the UI token (daemon.ts:471)
+    // so the raw DB path must never appear here; the boolean is sufficient for the reaper (LOOP-95).
+    const dbPresent = existsSync(ctx.getBasePageOpts().workspaceId);
     json(res, h.ok ? 200 : 503, h.ok
-      ? { ok: true, project: projectKey, version: pkgVersion(), actor }
-      : { ok: false, project: projectKey, version: pkgVersion(), actor, error: h.error });
+      ? { ok: true, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent }
+      : { ok: false, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent, error: h.error });
     return true;
   }
   if (path === "/api/tickets") {
