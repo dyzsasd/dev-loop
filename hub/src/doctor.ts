@@ -519,28 +519,48 @@ function isPathIgnored(root: string, rel: string): boolean {
   catch { return false; }
 }
 
-// LOOP-210 — untracked, NOT-ignored files under <root> whose first bytes are the bundle MAGIC header.
-// `git ls-files --others --exclude-standard` already honours .gitignore, so a gitignored bundle never
-// appears here. A bundle (operator-chosen --out name, encrypted or plaintext) carries every secret
-// VALUE + hub.db; un-ignored, a `git add -A` commits it. Bounded 16-byte header probe — doctor is not
-// a hot path. MAGIC must match bundle.ts (the bundle-gitguard test writes a real bundle and asserts
-// this detects it, so the two constants can't silently drift).
+// LOOP-210 + LOOP-235 — files under <root> that a routine git op would land in history and whose first
+// bytes are the bundle MAGIC header. A bundle (operator-chosen --out name, encrypted or plaintext) carries
+// every secret VALUE + hub.db. LOOP-210 scanned only untracked files (`git ls-files --others`), so the
+// guard went silent the instant a `git add` moved the artifact into the index (LOOP-235); scan the UNION
+// of every path reachable by the next commit/push — untracked-not-ignored ∪ staged-vs-HEAD ∪
+// committed-but-unpushed — deduped. --exclude-standard honours .gitignore for the untracked arm; a
+// staged/committed path is tracked, so its presence in the index/local history is itself the leak
+// regardless of ignore rules. The MAGIC probe is the discriminator, so a broad candidate set is safe —
+// only real bundles are flagged. Bounded 16-byte header probe over a commit-relevant set (NOT all tracked
+// files) — doctor is not a hot path. MAGIC must match bundle.ts (the bundle-gitguard test writes a real
+// bundle and asserts this detects it, so the two constants can't silently drift).
 function unignoredBundleArtifacts(root: string): string[] {
   const MAGIC = "DEVLOOP-BUNDLE/1";
-  let others: string[] = [];
-  try {
-    others = execFileSync("git", ["-C", root, "ls-files", "--others", "--exclude-standard", "-z"], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24 })
-      .toString().split("\0").filter(Boolean);
-  } catch { return []; }
+  const gitZ = (args: string[]): string[] => {
+    try {
+      return execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24 })
+        .toString().split("\0").filter(Boolean);
+    } catch { return []; }
+  };
+  // `git diff --cached --name-only` lists staged paths against HEAD, and against the empty tree on an
+  // unborn HEAD (a fresh `git init` — the exact repro), so a bundle staged before the first commit is seen.
+  const candidates = new Set<string>([
+    ...gitZ(["ls-files", "--others", "--exclude-standard", "-z"]),
+    ...gitZ(["diff", "--cached", "--name-only", "-z"]),
+  ]);
+  // Committed-but-unpushed: only when an upstream is configured (a bare `git init` workspace has none).
+  let upstream = "";
+  try { upstream = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
+  catch { /* no upstream — skip the committed-but-unpushed arm */ }
+  if (upstream) for (const p of gitZ(["diff", "--name-only", "-z", `${upstream}..HEAD`])) candidates.add(p);
+
   const hits: string[] = [];
-  for (const rel of others.slice(0, 2000)) { // bound a pathological untracked set
+  let scanned = 0;
+  for (const rel of candidates) {
+    if (scanned++ >= 2000) break; // bound a pathological candidate set
     let fd: number | undefined;
     try {
       fd = openSync(join(root, rel), "r");
       const buf = Buffer.alloc(MAGIC.length);
       const n = readSync(fd, buf, 0, MAGIC.length, 0);
       if (n === MAGIC.length && buf.toString("latin1") === MAGIC) hits.push(rel);
-    } catch { /* unreadable/gone — skip */ }
+    } catch { /* unreadable/gone (e.g. a staged deletion) — skip */ }
     finally { if (fd !== undefined) closeSync(fd); }
   }
   return hits;
