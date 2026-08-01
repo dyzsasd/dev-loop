@@ -14,7 +14,7 @@ import { request as httpsRequest } from "node:https";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { hubDbPath } from "./paths.ts";
-import { resolveUiToken } from "./ui-token.ts"; // leaf→leaf: the §6.2 bearer rides every op call when configured
+import { resolveUiToken, plaintextBearerToRemote, plaintextBearerRefusal } from "./ui-token.ts"; // leaf→leaf: the §6.2 bearer rides every op call when configured
 
 // ─── DL-41 lifecycle runfile path (REPLICATES daemon.ts lcDbPath/lcRunDir/lcRunfile) ────────────────────────
 // A thin client must NOT import the 92KB daemon, so the stable runfile path convention is re-derived here —
@@ -46,11 +46,14 @@ export function resolveOpPort(projectKey: string): number | null {
 // verbatim, body already JSON-parsed — null when the body was empty/non-JSON); "dormant" = the mount answers
 // every /api/op/* with 404 {error:"not found: …"} (daemon.ts:759) — the project has not opted in via
 // settings_json.hub.transport="daemon"; "down" = no HTTP response at all (ECONNREFUSED / timeout / DNS-level
-// error), `detail` carrying the same parenthesized why-string the shim always rendered.
+// error), `detail` carrying the same parenthesized why-string the shim always rendered; "refused" =
+// the LOOP-173 §16 egress guard fired BEFORE any socket write (a bearer would have ridden plaintext http
+// to a non-loopback host), `detail` carrying the risk + remedies — no request was made, nothing leaked.
 export type OpHttpOutcome =
   | { kind: "result"; status: number; body: unknown }
   | { kind: "dormant" }
-  | { kind: "down"; detail: string };
+  | { kind: "down"; detail: string }
+  | { kind: "refused"; detail: string };
 
 // One-click P2 (§6.0 attach): the op target is either the machine-local loopback daemon (default —
 // DEVLOOP_HUB_PORT / the DL-41 runfile, exactly the pre-attach behavior) or a REMOTE hub named by
@@ -73,6 +76,10 @@ export function resolveOpBase(projectKey: string): URL | null {
 export function postOpUrl(base: URL, op: string, args: Record<string, unknown>, actor: string): Promise<OpHttpOutcome> {
   const body = JSON.stringify(args ?? {});
   const token = resolveUiToken();
+  // §16/LOOP-173 egress guard: fail CLOSED before any socket write — the bearer must never ride a
+  // plaintext non-loopback wire. Returned (not thrown) so a mishandling caller still cannot leak: no
+  // request is issued. Loopback http / https / a token-less call all pass through unchanged.
+  if (plaintextBearerToRemote(base, token !== null)) return Promise.resolve({ kind: "refused", detail: plaintextBearerRefusal(base) });
   return new Promise<OpHttpOutcome>((resolve) => {
     let settled = false;
     const finish = (r: OpHttpOutcome) => { if (!settled) { settled = true; resolve(r); } };

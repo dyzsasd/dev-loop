@@ -92,6 +92,26 @@ try {
   const attLaunch = JSON.parse(att.stdout.slice(att.stdout.search(/\{/)));
   ok(att.status === 0 && attLaunch.envAdded.DEVLOOP_HUB_URL === "https://hub.example:8787" && !existsSync(join(bare, "dev-loop.json")),
     "attach: DEVLOOP_HUB_URL rides the console env; NO local workspace is scaffolded (the home is remote)");
+
+  // LOOP-173 §16: `up --attach` refuses a plaintext bearer to a NON-loopback host at the entry point, so
+  // the operator learns BEFORE the session (and its every write) starts. https / loopback / no-token /
+  // the explicit opt-in all still launch. Token set per case; DEVLOOP_ATTACH_ALLOW_PLAINTEXT is cleared
+  // in the base env so an ambient opt-in can't mask the refusal (LOOP-156 hermeticity).
+  const upAttach = (url: string, extraEnv: Record<string, string | undefined> = {}) =>
+    spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), "up", "--attach", url, "--dry-launch"],
+      { cwd: bare, encoding: "utf8", env: { ...process.env, HOME: join(ROOT, "home"), DEVLOOP_ATTACH_ALLOW_PLAINTEXT: undefined, ...extraEnv } as NodeJS.ProcessEnv });
+  const leak = upAttach("http://hub.remote:8787", { DEVLOOP_UI_TOKEN: "up-canary-not-a-real-secret" });
+  ok(leak.status !== 0 && /cleartext|non-loopback/.test(leak.stderr), `attach guard: plaintext + remote + token ⇒ refused before launch (got ${leak.status})`);
+  ok(/https:\/\//.test(leak.stderr) && /ssh -L|loopback/.test(leak.stderr), "attach guard: the refusal names BOTH remedies (https + tunnel), not a bare 'invalid URL'");
+  ok(!/up-canary/.test(`${leak.stdout}${leak.stderr}`), "attach guard: the refusal NEVER echoes the token value (§16)");
+  const loopOk = upAttach("http://127.0.0.1:8787", { DEVLOOP_UI_TOKEN: "up-canary-not-a-real-secret" });
+  ok(loopOk.status === 0, `attach guard: plaintext + LOOPBACK + token still launches — the ssh -L posture (got ${loopOk.status}: ${(loopOk.stderr ?? "").split("\n")[0]})`);
+  const tlsOk = upAttach("https://hub.remote:8787", { DEVLOOP_UI_TOKEN: "up-canary-not-a-real-secret" });
+  ok(tlsOk.status === 0, "attach guard: https + remote + token still launches unchanged");
+  const noTokOk = upAttach("http://hub.remote:8787", { DEVLOOP_UI_TOKEN: undefined, DEVLOOP_UI_TOKEN_FILE: undefined });
+  ok(noTokOk.status === 0, "attach guard: plaintext + remote + NO token still launches (nothing to leak)");
+  const optInOk = upAttach("http://hub.remote:8787", { DEVLOOP_UI_TOKEN: "up-canary-not-a-real-secret", DEVLOOP_ATTACH_ALLOW_PLAINTEXT: "1" });
+  ok(optInOk.status === 0, "attach guard: the DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1 opt-in still launches");
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }

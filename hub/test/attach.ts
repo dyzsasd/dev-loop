@@ -17,6 +17,42 @@ const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
+// ── LOOP-173 §16 egress guard: the §6.2 bearer must never ride plaintext http to a non-loopback host.
+// Pure decision (plaintextBearerToRemote) + the postOpUrl egress that consults it BEFORE opening a
+// socket. Fully hermetic: never-resolving / loopback hosts, no daemon, the token controlled in-process
+// and the three env levers snapshot+restored so the daemon legs below are undisturbed (LOOP-156).
+{
+  const { plaintextBearerToRemote } = await import("../src/ui-token.ts");
+  const { postOpUrl } = await import("../src/op-client.ts");
+  const saved = { tok: process.env.DEVLOOP_UI_TOKEN, tokFile: process.env.DEVLOOP_UI_TOKEN_FILE, optIn: process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT };
+  delete process.env.DEVLOOP_UI_TOKEN; delete process.env.DEVLOOP_UI_TOKEN_FILE; delete process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT;
+  try {
+    // the AC decision matrix — the predicate never resolves a hostname, so this needs no network
+    ok(plaintextBearerToRemote(new URL("http://hub.internal:8787"), true) === true, "guard: plaintext + remote + token ⇒ REFUSE");
+    ok(plaintextBearerToRemote(new URL("http://127.0.0.1:8787"), true) === false, "guard: plaintext + loopback + token ⇒ allow (the ssh -L tunnel posture)");
+    ok(plaintextBearerToRemote(new URL("http://localhost:8787"), true) === false, "guard: plaintext + localhost + token ⇒ allow");
+    ok(plaintextBearerToRemote(new URL("https://hub.internal:8787"), true) === false, "guard: https + remote + token ⇒ allow");
+    ok(plaintextBearerToRemote(new URL("http://hub.internal:8787"), false) === false, "guard: plaintext + remote + NO token ⇒ allow (nothing to leak)");
+    process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT = "1";
+    ok(plaintextBearerToRemote(new URL("http://hub.internal:8787"), true) === false, "guard: DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1 ⇒ the explicit opt-in allows plaintext");
+    delete process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT;
+
+    // egress: postOpUrl SHORT-CIRCUITS to "refused" without opening a socket. hub.invalid never resolves,
+    // so unguarded the token case would reach DNS and return "down"; guarded it returns "refused" with no
+    // request at all. Loopback falls through to a real (dead-port) attempt → NOT refused.
+    process.env.DEVLOOP_UI_TOKEN = "egress-canary-not-a-real-secret";
+    const refused = await postOpUrl(new URL("http://hub.invalid:8787"), "get_project", {}, "operator");
+    ok(refused.kind === "refused" && /cleartext/.test((refused as { detail?: string }).detail ?? ""),
+      "egress: postOpUrl(plaintext remote, token) ⇒ refused BEFORE any request, risk named in the detail");
+    const loopOut = await postOpUrl(new URL("http://127.0.0.1:59321"), "get_project", {}, "operator");
+    ok(loopOut.kind !== "refused", "egress: postOpUrl(plaintext LOOPBACK, token) is NOT refused — the tunnel posture still connects");
+  } finally {
+    for (const [k, key] of [["tok", "DEVLOOP_UI_TOKEN"], ["tokFile", "DEVLOOP_UI_TOKEN_FILE"], ["optIn", "DEVLOOP_ATTACH_ALLOW_PLAINTEXT"]] as const) {
+      const v = saved[k]; if (v === undefined) delete process.env[key]; else process.env[key] = v;
+    }
+  }
+}
+
 const ROOT = mkdtempSync(join(tmpdir(), "dl-attach-"));
 try {
   // ── the "remote home": a seeded hub + a token-gated daemon booted on _team, in its OWN process —

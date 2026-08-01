@@ -15,6 +15,7 @@ import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
+import { resolveUiToken, plaintextBearerToRemote, plaintextBearerRefusal } from "./ui-token.ts"; // LOOP-173: refuse a plaintext bearer to a remote at the entry point
 import { tryResolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import type { Workspace } from "./team-config.ts";
 import { teamInit } from "./team-init.ts";
@@ -146,8 +147,14 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
   let ws: Workspace | null = null;
   if (o.attach) {
     // Attach needs no local hub/scaffold — the home is remote. A local workspace is OPTIONAL context.
-    try { const u = new URL(o.attach); if (u.protocol !== "http:" && u.protocol !== "https:") die("--attach must be an http(s) URL"); }
+    let u: URL;
+    try { u = new URL(o.attach); }
     catch { die(`--attach: '${o.attach}' is not a valid URL`); }
+    if (u.protocol !== "http:" && u.protocol !== "https:") die("--attach must be an http(s) URL");
+    // LOOP-173 §16: every attached verb sends the §6.2 bearer — full board-write authority. Refuse to
+    // open a session that would leak it in cleartext to a non-loopback host, so the operator learns
+    // BEFORE the session starts (op-client.ts backstops an exported DEVLOOP_HUB_URL that skips this).
+    if (plaintextBearerToRemote(u, resolveUiToken() !== null)) die(plaintextBearerRefusal(u));
     ws = tryResolveWorkspace(o.dir);
   } else {
     ws = tryResolveWorkspace(o.dir);

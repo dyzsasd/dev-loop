@@ -167,6 +167,7 @@ async function attachMain(base: URL, sub: string, rest: string[]): Promise<numbe
     }
   }
   const out = await postOpUrl(base, op, args, actor);
+  if (out.kind === "refused") { console.error(`dev-loop: ${out.detail}`); return 5; } // LOOP-173: bearer would leak in cleartext — never sent
   if (out.kind === "down") { console.error(`dev-loop: remote hub ${base.origin} is not reachable${out.detail}`); return 5; }
   if (out.kind === "dormant") { console.error(`dev-loop: ${base.origin} op-API is dormant — seed settings_json.hub.transport:"daemon" at the home`); return 5; }
   if (out.status === 401) { console.error(`dev-loop: ${base.origin} requires the bearer token — set DEVLOOP_UI_TOKEN (§6.2)`); return 5; }
