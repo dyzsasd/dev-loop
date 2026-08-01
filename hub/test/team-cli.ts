@@ -892,6 +892,54 @@ esac`);
     ok(/base 'master'/.test(w22Mstall.out), "W22 warn names master not main when team.git.defaultBranch=master (LOOP-188)");
   }
 
+  // ═══ team.budget.{dailyUsd,perFireUsd} config keys (LOOP-226) ═══
+  {
+    const bws = join(tmp, "budget-ws");
+    run("team", ["init", "--dir", bws, "--key", "bgt-team", "--backend", "service"]);
+
+    // dailyUsd round-trip: set a positive number, read it back
+    const bdSet = run("team", ["set", "team.budget.dailyUsd", "50"], { cwd: bws });
+    ok(bdSet.code === 0, "team set team.budget.dailyUsd 50 exits 0 (AC1)");
+    ok(/50/.test(bdSet.out), "team set team.budget.dailyUsd 50 prints the new value");
+    const bdCfg = readJson(join(bws, "dev-loop.json"));
+    ok(bdCfg.team.budget?.dailyUsd === 50, "dailyUsd=50 round-trips through dev-loop.json (AC1)");
+
+    // dailyUsd null → stored as null (OFF/unset semantics)
+    const bdNull = run("team", ["set", "team.budget.dailyUsd", "null"], { cwd: bws });
+    ok(bdNull.code === 0, "team set team.budget.dailyUsd null exits 0 (AC1 null/OFF)");
+    const bdCfgNull = readJson(join(bws, "dev-loop.json"));
+    ok(bdCfgNull.team.budget?.dailyUsd === null, "dailyUsd null round-trips through dev-loop.json (AC1 OFF semantics)");
+
+    // perFireUsd round-trip
+    const bpSet = run("team", ["set", "team.budget.perFireUsd", "12"], { cwd: bws });
+    ok(bpSet.code === 0, "team set team.budget.perFireUsd 12 exits 0 (AC1)");
+    const bpCfg = readJson(join(bws, "dev-loop.json"));
+    ok(bpCfg.team.budget?.perFireUsd === 12, "perFireUsd=12 round-trips through dev-loop.json (AC1)");
+
+    // reject negative / zero / NaN for dailyUsd
+    ok(run("team", ["set", "team.budget.dailyUsd", "-5"], { cwd: bws }).code !== 0, "dailyUsd negative rejected (AC2)");
+    ok(run("team", ["set", "team.budget.dailyUsd", "0"], { cwd: bws }).code !== 0, "dailyUsd zero rejected (AC2)");
+    ok(run("team", ["set", "team.budget.dailyUsd", "NaN"], { cwd: bws }).code !== 0, "dailyUsd NaN rejected (AC2)");
+    // reject negative / zero / NaN for perFireUsd
+    ok(run("team", ["set", "team.budget.perFireUsd", "-1"], { cwd: bws }).code !== 0, "perFireUsd negative rejected (AC2)");
+    ok(run("team", ["set", "team.budget.perFireUsd", "0"], { cwd: bws }).code !== 0, "perFireUsd zero rejected (AC2)");
+    ok(run("team", ["set", "team.budget.perFireUsd", "NaN"], { cwd: bws }).code !== 0, "perFireUsd NaN rejected (AC2)");
+    // file unchanged after rejections
+    const bpCfgAfterRejects = readJson(join(bws, "dev-loop.json"));
+    ok(bpCfgAfterRejects.team.budget?.perFireUsd === 12, "dev-loop.json unchanged after rejected set (AC2)");
+
+    // validateTeamFile rejects a hand-broken budget value (E18)
+    const { validateTeamFile } = await import(join(hubRoot, "src", "team-config.ts"));
+    const bBroken = readJson(join(bws, "dev-loop.json"));
+    bBroken.team.budget = { dailyUsd: -99 };
+    const bErrs = validateTeamFile(bBroken).errors as { code: string; path: string }[];
+    ok(bErrs.some((e) => e.code === "E18" && /dailyUsd/.test(e.path)), "validateTeamFile E18 on negative dailyUsd (hand-broken, AC2)");
+    const bBroken2 = readJson(join(bws, "dev-loop.json"));
+    bBroken2.team.budget = { perFireUsd: 0 };
+    const bErrs2 = validateTeamFile(bBroken2).errors as { code: string; path: string }[];
+    ok(bErrs2.some((e) => e.code === "E18" && /perFireUsd/.test(e.path)), "validateTeamFile E18 on zero perFireUsd (hand-broken, AC2)");
+  }
+
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
