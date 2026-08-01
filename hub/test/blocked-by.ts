@@ -105,5 +105,12 @@ const setEq = (a: Set<string>, b: string[]) => a.size === b.length && b.every((x
   ok(setEq(live, ["LOOP-99"]), "multi-line body: marker line is found even amid prose lines");
 }
 
+{
+  // P2 fix: hyphenated prefixes like FOO-BAR yield IDs like FOO-BAR-1; the regex must accept them
+  const live = liveBlockerIds(["Blocked-by: FOO-BAR-1 baz-qux-42"]);
+  ok(live.has("FOO-BAR-1") && live.has("baz-qux-42"),
+    "P2: hyphenated prefix IDs (FOO-BAR-1, baz-qux-42) are accepted by the parser");
+}
+
 if (fails) { console.log(`\n${fails} CHECK(S) FAILED`); process.exit(1); }
 else console.log("\nBLOCKED_BY_OK");
