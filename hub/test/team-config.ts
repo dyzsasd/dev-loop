@@ -375,6 +375,14 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   const paths = validateTeamFile(f).errors.filter((e) => e.code === "E17").map((e) => e.path);
   ok(paths.some((p) => /projects\.devplatform\.agents\.dev\.stallTimeout/.test(p)), "E17: project-level error path names projects.<key>.agents.<agent>.stallTimeout");
 }
+// LOOP-103: cadence rejected at project scope (E17), allowed at team scope
+{ const f = base(); f.projects.devplatform.agents = { pm: { cadence: "daily" } }; ok(has(f, "E17"), "E17: projects.<key>.agents.<a>.cadence is rejected at project scope"); }
+{ const f = base(); f.team.agents = { pm: { cadence: "daily" } }; ok(codes(f).length === 0, "E17: team.agents.<a>.cadence is allowed at team scope"); }
+{
+  const f = base(); f.projects.devplatform.agents = { pm: { cadence: "daily" } };
+  const paths = validateTeamFile(f).errors.filter((e) => e.code === "E17").map((e) => e.path);
+  ok(paths.some((p) => /projects\.devplatform\.agents\.pm\.cadence/.test(p)), "E17: project-scope cadence error path names projects.<key>.agents.<a>.cadence");
+}
 
 // ── E18 budget validation — unknown keys ──
 { const f = base(); (f.team as unknown as Record<string, unknown>).budget = { dailyUSD: 50 }; ok(has(f, "E18"), "E18: misspelled budget key dailyUSD (capital USD) is rejected"); }
