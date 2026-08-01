@@ -5,12 +5,13 @@
 // Convention: a marker line carries ids only after the keyword; unrelated ids as prose on a marker
 // line are treated as part of the marker. Authors should not mix marker lines with prose.
 const MARKER_RE = /^\s*(blocked-by|unblocked-by):\s*(.*)/i;
-const ID_RE = /^[A-Z][A-Z0-9]*-[A-Z0-9]+$/;
+// Case-insensitive: ticket prefixes can be lowercase (e.g. "foo-1") and are stored verbatim
+// in the DB — do NOT uppercase IDs or the case-sensitive lookup in hasLiveBlockerEdge will miss them.
+const ID_RE = /^[A-Za-z][A-Za-z0-9]*-[A-Za-z0-9]+$/;
 
 function extractIds(remainder: string): string[] {
   return remainder
     .split(/[\s,]+/)
-    .map((t) => t.toUpperCase())
     .filter((t) => ID_RE.test(t));
 }
 
