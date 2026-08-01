@@ -514,8 +514,10 @@ function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg
     // differs and getting it wrong still leaks: a .gitignore rule removes an UNTRACKED artifact from the
     // next commit but never unstages a tracked blob; `git rm --cached` drops a STAGED blob from the index
     // but does NOT rewrite history, so a bundle already in an unpushed COMMIT survives it and ships on push
-    // — that one needs the commit rewritten. Only the clauses the leak set actually needs are printed.
-    const names = leaks.map((l) => l.path).join(", ");
+    // — that one needs the commit rewritten. Every state present in the leak set prints its clause (a path
+    // carrying a bundle in BOTH the index and an unpushed commit contributes both — LOOP-235 both-states),
+    // and the artifact names are deduped so such a path is listed once.
+    const names = [...new Set(leaks.map((l) => l.path))].join(", ");
     const states = new Set(leaks.map((l) => l.state));
     const fixes: string[] = [];
     if (states.has("untracked")) fixes.push("for an untracked one, add *.age / the artifact to .gitignore or write it outside the repo");
@@ -555,17 +557,25 @@ function indexState(root: string, rel: string): "untracked" | "staged" | "commit
 //     added in one unpushed commit and deleted in a later one nets to nothing in `upstream..HEAD` yet
 //     still ships in the intermediate commit on push (LOOP-235 review P1 #2).
 // A staged/committed path is tracked, so its presence in the index/local history is itself the leak,
-// regardless of ignore rules. The 16-byte MAGIC probe is the discriminator, so a broad candidate set is
-// safe — only real bundles are flagged. Only the UNTRACKED worktree arm is capped (MAX_UNTRACKED_PROBES),
-// the single set that can be pathologically large; the STAGED and COMMITTED arms scan in FULL, because
-// truncating a secret-leak scan could print clean while a bundle past the cutoff still ships (LOOP-235
-// review P1 #9) and those sets are bounded by the index / unpushed history. Doctor is not a hot path, and
-// a git blob is read via `cat-file` under a small maxBuffer so a multi-MB bundle costs the
-// captured prefix, not a full slurp. MAGIC must match bundle.ts (the bundle-gitguard test writes a real
-// bundle and asserts this detects it, so the two constants can't silently drift).
+// regardless of ignore rules. A path may carry a DIFFERENT bundle in the index AND in an unpushed commit;
+// both are reported with their own state (never collapsed to one), so the remediation covers unstage AND
+// rewrite — collapsing would drop a live escape (LOOP-235 review, both-states). The 16-byte MAGIC probe is
+// the discriminator, so a broad candidate set is safe — only real bundles are flagged. Only the UNTRACKED
+// worktree arm is capped (MAX_UNTRACKED_PROBES), the single set that can be pathologically large; the
+// STAGED and COMMITTED arms scan in FULL, because truncating a secret-leak scan could print clean while a
+// bundle past the cutoff still ships (LOOP-235 review P1 #9). Every tracked candidate is probed through a
+// shared, content-budget-bounded `git cat-file --batch` — one batch process per group, NOT a subprocess
+// per path (LOOP-235 review P2: the no-destination scan below can select all of HEAD, so per-path spawning
+// would launch a `cat-file` per blob in history). A blob larger than the budget rides its own group and
+// costs only the captured prefix (spawnSync returns ENOBUFS yet hands back the leading bytes, all the
+// 16-byte compare needs), so a multi-MB bundle is never fully slurped and the scan never truncates. MAGIC
+// must match bundle.ts (the bundle-gitguard test writes a real bundle and asserts this detects it, so the
+// two constants can't silently drift).
 function unignoredBundleArtifacts(root: string): { path: string; state: "untracked" | "staged" | "committed" }[] {
   const MAGIC = "DEVLOOP-BUNDLE/1";
   const MAX_UNTRACKED_PROBES = 2000;
+  const CATFILE_BUDGET = 8 << 20; // bytes of blob content captured per `cat-file --batch` group
+  const CHECK_CHUNK = 4096;       // specs per `cat-file --batch-check` call (bounds its stdout buffer)
   const gitZ = (args: string[]): string[] => {
     try {
       return execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24 })
@@ -578,8 +588,8 @@ function unignoredBundleArtifacts(root: string): { path: string; state: "untrack
         .toString().split("\n").map((s) => s.trim()).filter(Boolean);
     } catch { return []; }
   };
-  const bufHasMagic = (buf: Buffer | undefined): boolean =>
-    !!buf && buf.length >= MAGIC.length && buf.subarray(0, MAGIC.length).toString("latin1") === MAGIC;
+  const bufHasMagic = (buf: Buffer | undefined, at = 0): boolean =>
+    !!buf && buf.length >= at + MAGIC.length && buf.subarray(at, at + MAGIC.length).toString("latin1") === MAGIC;
   const worktreeHasMagic = (rel: string): boolean => {
     let fd: number | undefined;
     try {
@@ -590,65 +600,127 @@ function unignoredBundleArtifacts(root: string): { path: string; state: "untrack
     } catch { return false; } // unreadable/gone — skip
     finally { if (fd !== undefined) closeSync(fd); }
   };
-  // Probe a git object: `:path` = the staged/index blob, `<commit>:path` = a blob in a commit tree.
-  // `cat-file blob` streams raw content; a small maxBuffer bounds memory — on a large bundle spawnSync
-  // returns ENOBUFS yet still hands back the captured prefix, which is all the 16-byte compare needs.
+  // Single-object probe: `:path` = the staged/index blob, `<commit>:path` = a blob in a commit tree. Used
+  // only for the newline-in-path fallback below (the `cat-file --batch` stdin line protocol cannot carry a
+  // path with a newline); a small maxBuffer bounds memory — on a large bundle spawnSync returns ENOBUFS yet
+  // still hands back the captured prefix, all the 16-byte compare needs.
   const blobHasMagic = (spec: string): boolean =>
     bufHasMagic(spawnSync("git", ["-C", root, "cat-file", "blob", spec], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 16 }).stdout as Buffer | undefined);
 
-  // path → git state, committed > staged > untracked (a bundle in an unpushed commit is the hardest to
-  // remediate, so it wins the label; the remediation clause differs per state — LOOP-235 P1 #7/#8).
-  const rank = { untracked: 0, staged: 1, committed: 2 } as const;
-  const hits = new Map<string, "untracked" | "staged" | "committed">();
-  const mark = (rel: string, st: "untracked" | "staged" | "committed") => {
-    const cur = hits.get(rel);
-    if (cur === undefined || rank[st] > rank[cur]) hits.set(rel, st);
+  // (path, state) hits, distinct — NOT keyed by path alone, so a path that carries a bundle in BOTH the
+  // index and an unpushed commit keeps both states (LOOP-235 review, both-states remediation).
+  const pairs: [string, "untracked" | "staged" | "committed"][] = [];
+  const seenPair = new Set<string>();
+  const addPair = (path: string, state: "untracked" | "staged" | "committed") => {
+    const k = `${state}\0${path}`;
+    if (!seenPair.has(k)) { seenPair.add(k); pairs.push([path, state]); }
   };
 
-  // Staged (index) — probe the index blob. The LOOP-235 P1 #1 target; scanned in FULL (no cap) since a
-  // truncated secret-leak scan could miss a bundle past the cutoff (P1 #9), and the staged set is bounded
-  // by what the operator staged. `diff --cached --name-only` lists staged paths against HEAD, or the empty
-  // tree on an unborn HEAD (a fresh `git init` — the exact repro), so a bundle staged before the first
-  // commit is seen.
-  for (const rel of gitZ(["diff", "--cached", "--name-only", "-z"])) {
-    if (blobHasMagic(`:${rel}`)) mark(rel, "staged");
-  }
-  // Committed-but-unpushed — the commits the next `git push` would transfer, so a bundle committed but not
-  // yet pushed is caught before it ships. Prefer the branch's configured push destination (`@{push}`) then
-  // its upstream (`@{upstream}`): `rev-list <dest>..HEAD` is EXACTLY what a push to that ref sends, and —
-  // unlike `HEAD --not --remotes` — it still includes a commit that merely happens to be reachable from an
-  // UNRELATED remote (a feature commit living on `fork/feat`, merged into a branch that tracks `origin/main`:
-  // pushing to origin ships it, yet `--remotes` subtracts it and the merge's combined diff omits it because
-  // it is unchanged from the feature parent) (LOOP-235 P1 #5). With no destination configured — a fresh
-  // branch never pushed, or a repo with no remote — fall back to `HEAD --not --remotes`, which scans commits
-  // absent from every remote, i.e. all of HEAD when there is no remote at all (LOOP-235 P1 #4). Walk EVERY
-  // unpushed commit (no cap — P1 #9) and probe the blobs IT introduced, so an add-then-delete
-  // pair in the range is still caught (P1 #2). `-c` (combined diff) makes a MERGE commit report the paths
-  // that differ from ALL parents — a bundle added during conflict resolution, which a plain `diff-tree -r`
-  // suppresses for merges and would leak on the next push (P1 #3); for a non-merge commit `-c` is a no-op, so
-  // single-parent coverage is unchanged. `--diff-filter=AMT` keeps a TYPE change (`T`) — a bundle replacing a
-  // symlink/submodule at an existing path, which Git reports as neither A nor M (LOOP-235 P1 #6). `--root`
-  // covers an initial commit; deletions (D, excluded) have no blob here and were already probed at the commit
-  // that added them.
+  // ---- gather every tracked candidate object spec, each tagged with its (path, state) ----
+  const specs: { spec: string; path: string; state: "staged" | "committed" }[] = [];
+  // Staged (index) — `diff --cached --name-only` lists staged paths against HEAD, or the empty tree on an
+  // unborn HEAD (a fresh `git init` — the exact repro), so a bundle staged before the first commit is seen.
+  // The index blob is `:path`; a staged deletion resolves to `missing` below and is skipped.
+  for (const rel of gitZ(["diff", "--cached", "--name-only", "-z"]))
+    specs.push({ spec: `:${rel}`, path: rel, state: "staged" });
+  // Committed-but-unpushed — the commits the next `git push` would transfer. Prefer the branch's configured
+  // push destination (`@{push}`) then its upstream (`@{upstream}`): `rev-list <dest>..HEAD` is EXACTLY what
+  // a push to that ref sends, and — unlike `HEAD --not --remotes` — still includes a commit merely reachable
+  // from an UNRELATED remote (LOOP-235 P1 #5). With NO destination configured — a fresh branch never pushed,
+  // or a current branch with no tracking ref — the push target is unknowable, so scan ALL of HEAD rather than
+  // `HEAD --not --remotes`: that fallback subtracts commits reachable from any remote-tracking ref, yet an
+  // explicit `git push origin HEAD:<branch>` still ships them (LOOP-235 review, no-destination). Walk EVERY
+  // unpushed commit (no cap — P1 #9) and probe the blobs IT introduced, so an add-then-delete pair is still
+  // caught (P1 #2). `-c` (combined diff) makes a MERGE commit report the paths that differ from ALL parents —
+  // a bundle added during conflict resolution, which a plain `diff-tree -r` suppresses for merges (P1 #3);
+  // for a non-merge commit `-c` is a no-op. `--diff-filter=AMT` keeps a TYPE change (`T`) — a bundle
+  // replacing a symlink/submodule (P1 #6). `--root` covers an initial commit; deletions (D, excluded) have
+  // no blob here and were already probed at the commit that added them.
   {
     const revParseOk = (rev: string): boolean =>
       spawnSync("git", ["-C", root, "rev-parse", "--verify", "--quiet", rev], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
     const dest = revParseOk("@{push}") ? "@{push}" : revParseOk("@{upstream}") ? "@{upstream}" : null;
-    const unpushed = dest ? [`${dest}..HEAD`] : ["HEAD", "--not", "--remotes"];
-    for (const commit of gitLines(["rev-list", ...unpushed])) {
-      for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AMT", "--root", commit])) {
-        if (blobHasMagic(`${commit}:${rel}`)) mark(rel, "committed");
-      }
+    const range = dest ? [`${dest}..HEAD`] : ["HEAD"];
+    for (const commit of gitLines(["rev-list", ...range]))
+      for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AMT", "--root", commit]))
+        specs.push({ spec: `${commit}:${rel}`, path: rel, state: "committed" });
+  }
+
+  // ---- resolve specs → blob OIDs (deduped) via batched `cat-file --batch-check`, then probe each unique
+  //      blob through content-budget-bounded `cat-file --batch` groups (LOOP-235 review P2) ----
+  const oidRefs = new Map<string, { path: string; state: "staged" | "committed" }[]>(); // oid → its (path,state)s
+  const oidSize = new Map<string, number>();
+  const nlFallback: { spec: string; path: string; state: "staged" | "committed" }[] = [];
+  const batchable = specs.filter((s) => { if (s.path.includes("\n")) { nlFallback.push(s); return false; } return true; });
+  for (let i = 0; i < batchable.length; i += CHECK_CHUNK) {
+    const chunk = batchable.slice(i, i + CHECK_CHUNK);
+    const out = spawnSync("git", ["-C", root, "cat-file", "--batch-check"],
+      { input: chunk.map((c) => c.spec).join("\n") + "\n", stdio: ["pipe", "pipe", "ignore"], maxBuffer: 1 << 24 });
+    const lines = (out.stdout ? out.stdout.toString() : "").split("\n"); // one line per query, in order
+    for (let j = 0; j < chunk.length; j++) {
+      const line = lines[j];
+      if (!line || line.endsWith(" missing")) continue; // deleted/absent — no blob to ship
+      const p = line.split(" ");
+      if (p[1] !== "blob") continue;
+      const oid = p[0], size = parseInt(p[2], 10);
+      if (!Number.isFinite(size)) continue;
+      oidSize.set(oid, size);
+      let refs = oidRefs.get(oid);
+      if (!refs) { refs = []; oidRefs.set(oid, refs); }
+      refs.push({ path: chunk[j].path, state: chunk[j].state });
     }
   }
-  // Untracked, not ignored — the worktree file is the content. Probe LAST: a pathological untracked set
-  // (a stray node_modules, build output) can be huge, so this is the ONE arm that keeps the DoS cap.
+  // Probe unique blobs, grouped so each `--batch` call's captured content stays within budget; a lone blob
+  // larger than the budget rides its own group (the ENOBUFS prefix still holds the header + 16 magic bytes).
+  // The candidate SET is never truncated (P1 #9) — only content past the budget of an oversized blob is, and
+  // the magic sits in the first 16 bytes.
+  const magic = new Set<string>();
+  const probeGroup = (oids: string[]) => {
+    if (!oids.length) return;
+    const out = spawnSync("git", ["-C", root, "cat-file", "--batch"],
+      { input: oids.join("\n") + "\n", stdio: ["pipe", "pipe", "ignore"], maxBuffer: CATFILE_BUDGET + (1 << 20) });
+    const buf = out.stdout as Buffer | undefined;
+    if (!buf) return;
+    let i = 0;
+    while (i < buf.length) {
+      const nl = buf.indexOf(0x0a, i);
+      if (nl < 0) break;
+      const p = buf.toString("utf8", i, nl).split(" ");
+      i = nl + 1;
+      if (p[p.length - 1] === "missing") continue; // no content body follows
+      const size = parseInt(p[2], 10);
+      if (!Number.isFinite(size)) break; // malformed header — stop this (bounded) group
+      // A blob shorter than MAGIC can't be a bundle; the guard also keeps the probe inside this object's
+      // own content rather than reading into the next header.
+      if (p[1] === "blob" && size >= MAGIC.length && bufHasMagic(buf, i)) magic.add(p[0]);
+      i += size + 1; // skip content + trailing LF; may run past a truncated (ENOBUFS) tail, ending the loop
+    }
+  };
+  {
+    let group: string[] = [], bytes = 0;
+    for (const [oid, size] of oidSize) {
+      const cost = size + 64; // + header line and trailing LF overhead
+      if (group.length && bytes + cost > CATFILE_BUDGET) { probeGroup(group); group = []; bytes = 0; }
+      group.push(oid); bytes += cost;
+      if (bytes >= CATFILE_BUDGET) { probeGroup(group); group = []; bytes = 0; } // an oversized blob flushes alone
+    }
+    probeGroup(group);
+  }
+  for (const oid of magic)
+    for (const ref of oidRefs.get(oid) ?? []) addPair(ref.path, ref.state);
+  // Newline-in-path fallback (unbatchable) — probe individually so the scan stays complete (never silent).
+  for (const s of nlFallback)
+    if (blobHasMagic(s.spec)) addPair(s.path, s.state);
+
+  // Untracked, not ignored — the worktree file is the content. Probe LAST and capped: a pathological
+  // untracked set (a stray node_modules, build output) can be huge, so this is the ONE arm with the DoS cap.
+  const trackedPaths = new Set(pairs.map(([path]) => path));
   let u = 0;
   for (const rel of gitZ(["ls-files", "--others", "--exclude-standard", "-z"])) {
     if (u++ >= MAX_UNTRACKED_PROBES) break;
-    if (!hits.has(rel) && worktreeHasMagic(rel)) mark(rel, "untracked");
+    if (!trackedPaths.has(rel) && worktreeHasMagic(rel)) addPair(rel, "untracked");
   }
-  return [...hits].map(([path, state]) => ({ path, state }));
+  return pairs.map(([path, state]) => ({ path, state }));
 }
 
 // W22 — landing stall: forge glance, warn/info only, never flips DOCTOR_OK (design §5.1).
