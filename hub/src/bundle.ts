@@ -30,6 +30,7 @@ import { provisionClaudePermissions } from "./team-init.ts";
 import { scaffoldOperatorBriefs } from "./operator-brief.ts";
 import { syncOpencodeConfig } from "./opencode-sync.ts";
 import { wsSecretsPath } from "./secrets.ts";
+import { parseAgentSpec } from "./agent-roster.ts";
 
 const MAGIC = "DEVLOOP-BUNDLE/1";
 const here = dirname(fileURLToPath(import.meta.url));
@@ -285,6 +286,18 @@ function readBundle(file: string): { manifest: BundleManifest; payload: Payload 
 export async function bundleLoad(file: string, dir: string, opts: { forceReseed: boolean; noRun?: boolean }): Promise<number> {
   const { manifest, payload } = readBundle(file);
 
+  // SECURITY (LOOP-184): manifest.run.agents rides the bundle's PLAINTEXT, unauthenticated line-2
+  // manifest (LOOP-162's trust boundary) straight into a `dev-loop run --agents <spec>` argv element
+  // and two console.log sites. Validate it fail-closed against the SAME roster/groups the run parser
+  // accepts, BEFORE any side effect (config write, clone, spawn) — an unknown agent, a flag-smuggling
+  // `-…` token, or an empty spec is tampering/corruption, never legitimate. The re-joined validated
+  // tokens are a known-safe set (only [a-z-] roster/group names), which also closes the terminal-
+  // escape exposure at the two print sites. repos[].remote is already config-sourced (ws.file.repos
+  // below), so it needs no manifest guard — confirmed for LOOP-162's stated audit.
+  if (!parseAgentSpec(manifest.run.agents))
+    die(`bundle manifest run.agents ${JSON.stringify(manifest.run.agents)} is not a valid agent spec (comma-separated known agents/groups, e.g. 'core'; no flags) — refusing to load (tampered or corrupt bundle)`, 1);
+  const runAgents = manifest.run.agents.split(",").map((t) => t.trim()).filter(Boolean).join(",");
+
   const root = resolve(dir);
   mkdirSync(join(root, ".dev-loop"), { recursive: true });
   const cfgPath = join(root, "dev-loop.json");
@@ -404,13 +417,13 @@ export async function bundleLoad(file: string, dir: string, opts: { forceReseed:
   const doc = runCli(["doctor"]);
   if (doc.status !== 0) die("doctor preflight FAILED — a headless loop on a broken workspace burns tokens blind; fix the ❌ items and re-run `dev-loop up --bundle`", 1);
 
-  if (opts.noRun) { console.log("✅ bundle loaded (--no-run) — start the loop with: dev-loop run --agents " + manifest.run.agents); return 0; }
+  if (opts.noRun) { console.log("✅ bundle loaded (--no-run) — start the loop with: dev-loop run --agents " + runAgents); return 0; }
 
   // Chain into the loop — `run` OWNS the daemon (Q5: its auto-ensure via the lifecycle path). Signals
   // forward so a container stop reaches the scheduler's own SIGTERM drain.
-  console.log(`starting the loop: dev-loop run --agents ${manifest.run.agents} (run owns the board daemon — Q5)`);
+  console.log(`starting the loop: dev-loop run --agents ${runAgents} (run owns the board daemon — Q5)`);
   return await new Promise<number>((resolveExit) => {
-    const child = spawn(process.execPath, [cliEntry, "run", "--agents", manifest.run.agents], { cwd: ws.root, env, stdio: "inherit" });
+    const child = spawn(process.execPath, [cliEntry, "run", "--agents", runAgents], { cwd: ws.root, env, stdio: "inherit" });
     const fwd = (sig: NodeJS.Signals) => { try { child.kill(sig); } catch { /* gone */ } };
     process.on("SIGTERM", () => fwd("SIGTERM"));
     process.on("SIGINT", () => fwd("SIGINT"));
