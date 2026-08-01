@@ -571,9 +571,9 @@ function unignoredBundleArtifacts(root: string): string[] {
 
 // W27 helper — extracted to keep doctorWorkspace CC in budget (LOOP-244). Best-effort; never throws.
 // Flags non-terminal null-assignee tickets that are unreachable by every actor in a split-dev project.
-// Predicate per PM grooming: Todo/InProgress (no dev tier can pick), InReview without a dev-tier label
-// (servable.ts inReview fix makes label-present tickets landable — no need to flag those), Backlog with
-// a tier label (stuck promotion-queue row; no-tier Backlog rows are intentional umbrellas, not faults).
+// Predicate per PM grooming: ALL Backlog+null rows (promotion queue is assignee-keyed), Todo/InProgress
+// (no dev tier can pick), InReview without a dev-tier label (label-present InReview is landable via the
+// servable.ts tier-label fix — only null-assignee InReview WITHOUT a tier label is truly stuck).
 function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplitOn: boolean, warn: (m: string) => void): void {
   if (!devSplitOn) return;
   try {
@@ -586,8 +586,8 @@ function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplit
       const labels = JSON.parse(row.labels) as string[];
       const tier = DEV_TIERS.find((t) => labels.includes(t)) ?? null;
       if (row.state === "Backlog") {
-        if (tier) stranded.push({ id: row.id, tier });        // tier label present → stuck in promotion queue
-        continue;                                              // no tier label → intentional umbrella, not a fault
+        stranded.push({ id: row.id, tier });                  // null assignee → unreachable (promotion queue is assignee-keyed)
+        continue;
       }
       if (row.state === "In Review") {
         if (!tier) stranded.push({ id: row.id, tier: null }); // no tier label → not landable by any dev tier

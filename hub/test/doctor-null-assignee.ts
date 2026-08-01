@@ -86,7 +86,7 @@ try {
     ok(!out.includes("[W27]"), "AC3: W27 does NOT fire on terminal tickets (Done/Canceled/Duplicate)");
   }
 
-  // ── Backlog + tier label → fires (LOOP-261 pattern); Backlog + no tier → silent (LOOP-228 umbrella) ──
+  // ── Backlog + null assignee → W27 fires regardless of tier label (promotion queue is assignee-keyed) ──
   {
     const root = join(tmp, "backlog");
     seedWs(root, true);
@@ -97,8 +97,8 @@ try {
     ]);
     const ws = loadWorkspace(root);
     const out = await capture(() => doctorWorkspace(ws, { boardDb: dbPath }));
-    ok(out.includes("[W27]") && out.includes("LOOP-4a"), "Backlog + tier label fires W27 (stuck promotion queue)");
-    ok(!out.includes("LOOP-4b"), "Backlog + no tier label stays silent (umbrella/epic)");
+    ok(out.includes("[W27]") && out.includes("LOOP-4a"), "Backlog + tier label fires W27 (unreachable from promotion queue)");
+    ok(out.includes("LOOP-4b"), "Backlog + no tier label also fires W27 (promotion queue is assignee-keyed, not label-keyed)");
   }
 
   // ── InReview + null + tier label → W27 silent (servable fix makes it landable) ──
@@ -122,6 +122,23 @@ try {
     db.close();
     ok(slice.inReview.some((t) => t.id === "LOOP-5a"), "servable.ts: null-assignee InReview + tier label appears in inReview slice");
     ok(!slice.inReview.some((t) => t.id === "LOOP-5b"), "servable.ts: null-assignee InReview + no tier label stays out of inReview slice");
+  }
+
+  // ── P1 fix: explicit-assignee InReview must NOT leak to other tier via label (LOOP-244) ──
+  {
+    const root = join(tmp, "assignee-leak");
+    seedWs(root, true);
+    const dbPath = join(root, ".dev-loop", "hub.db");
+    seedDb(dbPath, [
+      // senior-dev owns this ticket; junior-dev label is residual but should not grant access
+      { id: "LOOP-6a", state: "In Review", labels: ["dev-loop", "Bug", "qa", "junior-dev", "senior-dev"], assignee: "senior-dev" },
+    ]);
+    const db = openDb(dbPath);
+    const jrSlice = servableSlice(db, "p1", "junior-dev");
+    const srSlice = servableSlice(db, "p1", "senior-dev");
+    db.close();
+    ok(!jrSlice.inReview.some((t) => t.id === "LOOP-6a"), "P1 fix: explicitly-assigned senior-dev ticket NOT in junior-dev inReview (label fallback requires assignee===null)");
+    ok(srSlice.inReview.some((t) => t.id === "LOOP-6a"), "P1 fix: that same ticket IS in senior-dev inReview (assignee match)");
   }
 
   // ── AC5 proof: current main has no W27 check (must fail-before, pass-after) ──
