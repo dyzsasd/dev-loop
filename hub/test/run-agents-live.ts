@@ -384,7 +384,7 @@ sleep 600
   // (a) empty servable slice ⇒ NO fire, and a DISTINCT reason logged (a silent skip is indistinguishable from a crash)
   const qgEmpty = runQg(join(tmp, "qg-empty"));
   ok(qgEmpty.fires === 0, `LOOP-144: senior-dev with an empty servable slice does NOT fire (fired ${qgEmpty.fires}×, expected 0)`);
-  ok(/\[senior-dev\] skipped: queue empty \(0 servable Todo, 0 In Progress\)/.test(qgEmpty.out),
+  ok(/\[senior-dev\] skipped: queue empty \(0 servable Todo, 0 In Progress(, 0 In Review)?\)/.test(qgEmpty.out),
     "LOOP-144: the queue-empty skip logs a distinct, non-silent reason (not a change-gate skip)");
   // (b) own In Progress ⇒ STILL fires — orphan-resume preserved (the load-bearing anti-starvation assertion)
   { const qdb = openDb(qgDb); const qpid = findProject(qdb, "qg");
