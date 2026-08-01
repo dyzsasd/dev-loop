@@ -226,6 +226,8 @@ for (const bad of ["team", "lessons", "wt", "locks", "hub.db"]) {
 // W01 discriminator: scratch:true suppresses the warning; an unmarked zero-repo project still warns (AC3/AC4)
 { const f = base(); f.projects.scratch1 = { repos: [], scratch: true }; ok(!validateTeamFile(f).warnings.some((w) => w.code === "W01" && w.path.includes("scratch1")), "W01 suppressed for scratch:true project"); }
 { const f = base(); f.projects.unmarked = { repos: [] }; ok(validateTeamFile(f).warnings.some((w) => w.code === "W01" && w.path.includes("unmarked")), "W01 still fires for an unmarked zero-repo project (discriminator preserved)"); }
+// E08: scratch must be a boolean; string "false" is truthy but not true → E08 + W01 (P2 fix)
+{ const f = base(); (f.projects as Record<string, unknown>).str_scratch = { repos: [], scratch: "false" }; const r = validateTeamFile(f); ok(r.errors.some((e) => e.code === "E08" && e.path.includes("scratch")), "E08: non-boolean scratch string is rejected"); ok(r.warnings.some((w) => w.code === "W01" && w.path.includes("str_scratch")), "W01 still fires when scratch is not boolean true"); }
 
 // ── parseWorkspaceFile throws WsValidationError on bad JSON / bad schema ──
 try { parseWorkspaceFile("{not json", "/x/dev-loop.json"); ok(false, "parseWorkspaceFile throws on bad JSON"); }

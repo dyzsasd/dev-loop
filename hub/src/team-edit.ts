@@ -242,7 +242,12 @@ function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix
     const chosen = prefix ?? derivePrefix(db, key);
     try { ensureSeed(db, key, name ?? key, chosen); }
     catch (e) { die(`config written, but the hub row could not be seeded: ${(e as Error).message}\n  fix it by hand: dev-loop seed ${key} "<Project Name>" <UNIQUE_PREFIX>  (doctor reports the gap as W08)`, 1); }
-    if (scratch) db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify({ scratch: true }), key);
+    if (scratch) {
+      const row = db.prepare("SELECT settings_json FROM projects WHERE key=?").get(key) as { settings_json: string | null } | undefined;
+      let settings: Record<string, unknown> = {};
+      try { settings = row?.settings_json ? (JSON.parse(row.settings_json) as Record<string, unknown>) : {}; } catch { /* malformed — start fresh */ }
+      db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify({ ...settings, scratch: true }), key);
+    }
     console.log(existed
       ? `hub row for '${key}' already present in ${dbPath} (labels backfilled; find-or-create)`
       : `seeded hub row '${key}' (prefix ${chosen}) in ${dbPath}`);
