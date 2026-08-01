@@ -32,3 +32,8 @@ hub/config/
 # LOOP-187: export-desktop-skill output folders (devloop-<agent>-<project>/) when accidentally pointed
 # inside the repo via explicit --out; belt-and-suspenders so a generated skill is never committable.
 devloop-*-*/
+# LOOP-210: dev-loop bundle export artifacts carry every workspace secret VALUE + the whole hub.db;
+# belt-and-suspenders so an encrypted bundle written inside the repo is never committable. This only
+# covers the .age (age-encrypted) name — the export-time stderr warning + doctor W06 catch arbitrarily
+# -named and --insecure-plaintext bundles by their MAGIC header regardless of --out.
+*.age
