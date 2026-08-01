@@ -198,7 +198,7 @@ export async function bundleExport(argv: string[]): Promise<number> {
   console.log(`bundle export — workspace '${ws.file.team.key}' @ ${ws.root}${o.backup ? " (backup: live checkpoint)" : ""}`);
 
   // Doctor refusal (design §4.4 step 1): a workspace that fails its own health gate does not ship.
-  if (!doctorWorkspace(ws) && !o.force) die("doctor reports hard failures — fix them (or pass --force) before exporting", 1);
+  if (!(await doctorWorkspace(ws)).ok && !o.force) die("doctor reports hard failures — fix them (or pass --force) before exporting", 1);
 
   // Consistency gate: a MOVE exports a stopped home. Live run-lock / daemon runfiles refuse (not for --backup).
   if (!o.backup) {
