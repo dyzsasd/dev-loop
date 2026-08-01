@@ -33,7 +33,7 @@ function mutate(apply: (file: TeamFile, ws: Workspace) => void): Workspace {
 // operator-tunable paths (the fields references/config-schema.md marks `team set` ✓). Everything else
 // (registry paths, owners, agent launch maps, …) is either structural — add-project/add-repo territory —
 // or an interview field: edit dev-loop.json directly and let doctor validate.
-type SetKind = "string" | "boolean" | "number" | "int" | "string-list" | readonly string[];
+type SetKind = "string" | "boolean" | "number" | "int" | "string-list" | "nullable-pos-number" | readonly string[];
 const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.mode$/, kind: ["dry-run", "live"] as const },
   { re: /^team\.linearTeam$/, kind: "string" },
@@ -44,6 +44,9 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.intake\.todoDepthCap$/, kind: "int" },
   // agentReviewers: comma-separated GitHub logins to exclude from forge-review trips (§3.2); stores as string[]
   { re: /^team\.agentReviewers$/, kind: "string-list" as const },
+  // budget: rolling 24h spend ceiling (dailyUsd, null=OFF) and per-fire ceiling (perFireUsd, must be positive)
+  { re: /^team\.budget\.dailyUsd$/, kind: "nullable-pos-number" as const },
+  { re: /^team\.budget\.perFireUsd$/, kind: "number" },
   { re: /^projects\.[^.]+\.enabled$/, kind: "boolean" },
   { re: /^projects\.[^.]+\.weight$/, kind: "number" },
   { re: /^projects\.[^.]+\.devSplit$/, kind: "boolean" },
@@ -72,7 +75,7 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
-  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers}, " +
+  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd}, " +
   "projects.<key>.{enabled,weight,devSplit,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
@@ -85,6 +88,12 @@ function coerce(kind: SetKind, raw: string, path: string): unknown {
   if (kind === "number" || kind === "int") {
     const n = Number(raw);
     if (!Number.isFinite(n) || (kind === "int" && !Number.isInteger(n))) die(`${path} expects a${kind === "int" ? "n integer" : " number"} (got '${raw}')`);
+    return n;
+  }
+  if (kind === "nullable-pos-number") {
+    if (raw.trim() === "null") return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) die(`${path} must be a positive number or null to disable (got '${raw}')`);
     return n;
   }
   if (kind === "string-list") return raw.split(",").map((s) => s.trim()).filter(Boolean);
@@ -112,6 +121,9 @@ export async function teamSet(argv: string[]): Promise<number> {
     // tunes fields, it never creates projects/repos (that is add-project/add-repo's job).
     if (segs[0] === "projects" && !Object.hasOwn(file.projects, segs[1])) die(`unknown project '${segs[1]}' — add it first: dev-loop team add-project ${segs[1]}`);
     if (segs[0] === "repos" && !Object.hasOwn(file.repos, segs[1])) die(`unknown repo ref '${segs[1]}' — register it first: dev-loop team add-repo ${segs[1]} --project <key> --path <rel>`);
+    // budget.perFireUsd must be strictly positive (the "number" kind accepts any finite number).
+    if (path === "team.budget.perFireUsd" && (coerced as number) <= 0)
+      die(`team.budget.perFireUsd must be a positive number (got '${value}')`);
     // strategyDoc validation: must be a repo-relative path (no absolute paths, no Linear document URLs).
     if (segs[0] === "projects" && segs[2] === "strategyDoc") {
       const v = coerced as string;
