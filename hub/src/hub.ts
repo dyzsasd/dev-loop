@@ -62,15 +62,15 @@ export async function hubCmd(argv = process.argv.slice(2)): Promise<number> {
   const isNonTeamProject = namedProject !== null && namedProject !== TEAM_INTAKE_PROJECT;
   switch (sub) {
     case "start": {
-      if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'dev-loop daemon up --project ${namedProject}' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
+      if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'DEVLOOP_PROJECT=${namedProject} dev-loop daemon up' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
       wireEnv(ws); console.log(`hub start: '${TEAM_INTAKE_PROJECT}'`); return daemonLifecycleCode("up");
     }
     case "ensure": {
-      if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'dev-loop daemon up --project ${namedProject}' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
+      if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'DEVLOOP_PROJECT=${namedProject} dev-loop daemon up' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
       wireEnv(ws); console.log(`hub ensure: '${TEAM_INTAKE_PROJECT}'`); return daemonLifecycleCode("ensure");
     }
     case "stop": {
-      if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'dev-loop daemon down --project ${namedProject}' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
+      if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'DEVLOOP_PROJECT=${namedProject} dev-loop daemon down' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
       wireEnv(ws); console.log(`hub stop: '${TEAM_INTAKE_PROJECT}'`);
       const c = await daemonLifecycleCode("down"); walCheckpoint(wsHubDb(ws)); return c;
     }
