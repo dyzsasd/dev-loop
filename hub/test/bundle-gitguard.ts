@@ -262,7 +262,8 @@ try {
   const docRemS = cli(["doctor"], remWs);
   const remSOut = `${docRemS.stdout}${docRemS.stderr}`;
   ok(/\[W06\][^\n]*ws\.bundle/.test(remSOut), "(l) staged leak: W06 still warns (names ws.bundle)");
-  ok(/git rm --cached/.test(remSOut), "(l) staged leak: the remediation tells the operator to `git rm --cached` — a .gitignore rule does not unstage a tracked blob (LOOP-235 review P1 #7)");
+  // Codex P1 fix: -f is required so the command also works for AM blobs (staged then modified in worktree).
+  ok(/git rm -f --cached/.test(remSOut), "(l) staged leak: the remediation tells the operator to `git rm -f --cached` — handles AM state where index and worktree differ");
 
   // (m) LOOP-235 review P1 #8 — a bundle in an unpushed COMMIT needs different advice than a staged one:
   // `git rm --cached` clears only the index, so the committed blob still ships on the next push. The
@@ -372,8 +373,8 @@ try {
   const docBs = cli(["doctor"], bsWs);
   const bsOut = `${docBs.stdout}${docBs.stderr}`;
   ok(/\[W06\][^\n]*ws\.bundle/.test(bsOut), "(p) W06 warns (names ws.bundle)");
-  ok(/git rm --cached/.test(bsOut) && /unpushed commit/.test(bsOut) && /rebase|reset/.test(bsOut),
-     "(p) both remediations present: `git rm --cached` (staged) AND rewrite the unpushed commit (committed) — not collapsed to one (LOOP-235 review both-states)");
+  ok(/git rm -f --cached/.test(bsOut) && /unpushed commit/.test(bsOut) && /rebase|reset/.test(bsOut),
+     "(p) both remediations present: `git rm -f --cached` (staged) AND rewrite the unpushed commit (committed) — not collapsed to one (LOOP-235 review both-states)");
 
   // (q) LOOP-235 review P2 — the tracked scan probes blobs through a shared, batched `git cat-file --batch`
   // (one process per content-budget group) instead of a subprocess per path, which the no-destination
@@ -405,6 +406,29 @@ try {
   ok(!/plain\.txt/.test(bqOut) && !/data\.bin/.test(bqOut),
      "(q) the non-bundle blobs sharing the batch are NOT flagged — the batch parser maps magic to the right OID/path");
   ok(!/is gitignored/.test(bqOut), "(q) the reassuring 'clean' line is suppressed while unpushed bundles are present");
+
+  // (r) LOOP-235 Codex P1 fix — moved.json dual-state: already in HEAD (committed) AND re-staged.
+  // Before the fix, indexState() returned "committed" only, omitting the "staged" remediation step.
+  // indexStates() returns both, so W06 now recommends BOTH `git rm -f --cached` AND commit rewrite.
+  const dualWs = join(ROOT, "dual-ws"); mkdirSync(dualWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", dualWs, "--key", "gg14", "--backend", "service", "--yes"], ROOT).status === 0, "setup: dual-ws team init");
+  gitInit(dualWs);
+  writeFileSync(join(dualWs, "README"), "x\n");
+  execFileSync("git", ["-C", dualWs, "add", "README"]);
+  execFileSync("git", ["-C", dualWs, "commit", "-qm", "init"]);
+  // Write moved.json, commit it (so it's in HEAD), then stage a NEW version
+  const dualMovedPath = join(dualWs, ".dev-loop", "moved.json");
+  mkdirSync(join(dualWs, ".dev-loop"), { recursive: true });
+  writeFileSync(dualMovedPath, JSON.stringify({ from: "a", to: "b" }));
+  execFileSync("git", ["-C", dualWs, "add", dualMovedPath]);
+  execFileSync("git", ["-C", dualWs, "commit", "-qm", "add moved.json (committed, unpushed)"]);
+  writeFileSync(dualMovedPath, JSON.stringify({ from: "x", to: "y" })); // modify and re-stage
+  execFileSync("git", ["-C", dualWs, "add", dualMovedPath]);
+  const docDual = cli(["doctor"], dualWs);
+  const dualOut = `${docDual.stdout}${docDual.stderr}`;
+  ok(/\[W06\][^\n]*moved\.json/.test(dualOut), "(r) W06 warns for moved.json in both HEAD and staged");
+  ok(/git rm -f --cached/.test(dualOut), "(r) dual-state moved.json: staged remediation (`git rm -f --cached`) is present");
+  ok(/unpushed commit/.test(dualOut) && /rebase|reset/.test(dualOut), "(r) dual-state moved.json: committed remediation (rewrite/drop commit) is present");
 
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });

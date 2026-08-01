@@ -508,7 +508,10 @@ function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg
   // moved.json marker sitting un-ignored in the tree is a secret/state leak a `git add -A` commits.
   const leaks = unignoredBundleArtifacts(root);
   const movedRel = join(".dev-loop", "moved.json");
-  if (existsSync(join(root, movedRel)) && !isPathIgnored(root, movedRel)) leaks.push({ path: ".dev-loop/moved.json", state: indexState(root, movedRel) });
+  // P1 fix (PRRT_kwDOS6Puk86Vn_bA): moved.json can be in BOTH HEAD (committed) and the index (staged),
+  // e.g. a previously committed marker that was re-staged. indexStates() returns all applicable states.
+  if (existsSync(join(root, movedRel)) && !isPathIgnored(root, movedRel))
+    for (const state of indexStates(root, movedRel)) leaks.push({ path: ".dev-loop/moved.json", state });
   if (leaks.length) {
     // Remediation must match each artifact's git STATE (LOOP-235 review P1 #7/#8), because the escape
     // differs and getting it wrong still leaks: a .gitignore rule removes an UNTRACKED artifact from the
@@ -521,7 +524,9 @@ function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg
     const states = new Set(leaks.map((l) => l.state));
     const fixes: string[] = [];
     if (states.has("untracked")) fixes.push("for an untracked one, add *.age / the artifact to .gitignore or write it outside the repo");
-    if (states.has("staged")) fixes.push("for a staged one, `git rm --cached <path>` to drop it from the index");
+    // P1 fix (PRRT_kwDOS6Puk86Vn_a_): use -f so the command also works for AM blobs (staged then
+    // modified in the worktree); without -f `git rm --cached` refuses when the index and worktree differ.
+    if (states.has("staged")) fixes.push("for a staged one, `git rm -f --cached <path>` to drop it from the index");
     if (states.has("committed")) fixes.push("for one already in an unpushed commit, rewrite or drop that commit (`git rebase -i` / `git reset`) before pushing — `git rm --cached` clears only the index, not history");
     warn(`[W06] the workspace root is inside a git work-tree and these secret/state-bearing artifacts are reachable by the next commit or push: ${names} (a bundle carries every secret VALUE + hub.db — ${fixes.join("; ")})`);
   }
@@ -535,15 +540,22 @@ function isPathIgnored(root: string, rel: string): boolean {
   catch { return false; }
 }
 
-// LOOP-235 — classify a path's git state for W06's remediation (review P1 #7/#8): "untracked" (not in the
-// index → a .gitignore rule fixes it), "staged" (in the index but not yet in HEAD → `git rm --cached`), or
-// "committed" (in HEAD, i.e. an unpushed commit → the commit must be rewritten; `git rm --cached` won't
-// touch history). Used for the moved.json marker, which the MAGIC-probe arms below do not cover.
-function indexState(root: string, rel: string): "untracked" | "staged" | "committed" {
+// LOOP-235 — classify a path's git state(s) for W06's remediation (review P1 #7/#8/#bA): "untracked"
+// (not in the index → a .gitignore rule fixes it), "staged" (in the index but not yet in HEAD →
+// `git rm -f --cached`), or "committed" (in HEAD → commit must be rewritten). A path can be in BOTH
+// "staged" and "committed" (e.g. a file committed in a prior unpushed commit and re-staged) — both
+// states are returned so the remediation message covers both cleanup steps. Used for moved.json.
+function indexStates(root: string, rel: string): ("untracked" | "staged" | "committed")[] {
   const runOk = (args: string[]): boolean =>
     spawnSync("git", ["-C", root, ...args], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
-  if (!runOk(["ls-files", "--error-unmatch", "--", rel])) return "untracked";
-  return runOk(["cat-file", "-e", `HEAD:${rel}`]) ? "committed" : "staged";
+  if (!runOk(["ls-files", "--error-unmatch", "--", rel])) return ["untracked"];
+  const states: ("staged" | "committed")[] = [];
+  if (runOk(["cat-file", "-e", `HEAD:${rel}`])) states.push("committed");
+  // Staged when the index has the file (ls-files matched above) and it differs from HEAD (or HEAD has no entry).
+  // `diff --cached --quiet -- rel` exits 0 when no staged diff, 1 when staged changes exist.
+  if (spawnSync("git", ["-C", root, "diff", "--cached", "--quiet", "--", rel], { stdio: "ignore" }).status !== 0)
+    states.push("staged");
+  return states.length ? states : ["staged"]; // fallback: tracked but not in HEAD and no diff (shouldn't happen)
 }
 
 // LOOP-210 + LOOP-235 — files under <root> that a routine git op (commit or push) would land in
@@ -576,17 +588,26 @@ function unignoredBundleArtifacts(root: string): { path: string; state: "untrack
   const MAX_UNTRACKED_PROBES = 2000;
   const CATFILE_BUDGET = 8 << 20; // bytes of blob content captured per `cat-file --batch` group
   const CHECK_CHUNK = 4096;       // specs per `cat-file --batch-check` call (bounds its stdout buffer)
+  // P1 fix (PRRT_kwDOS6Puk86Vn_bB): on maxBuffer overflow execFileSync throws; catch rethrows so the
+  // W06 check surfaces the truncation rather than silently returning [] and reporting a false clean.
+  // All other errors (not a repo, git not found) are safe to swallow with [] — they mean no paths.
   const gitZ = (args: string[]): string[] => {
     try {
       return execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24 })
         .toString().split("\0").filter(Boolean);
-    } catch { return []; }
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code === "ENOBUFS") throw e; // fail loud — a silent [] drops candidates
+      return [];
+    }
   };
   const gitLines = (args: string[]): string[] => {
     try {
       return execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24 })
         .toString().split("\n").map((s) => s.trim()).filter(Boolean);
-    } catch { return []; }
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code === "ENOBUFS") throw e; // fail loud — a silent [] drops candidates
+      return [];
+    }
   };
   const bufHasMagic = (buf: Buffer | undefined, at = 0): boolean =>
     !!buf && buf.length >= at + MAGIC.length && buf.subarray(at, at + MAGIC.length).toString("latin1") === MAGIC;
