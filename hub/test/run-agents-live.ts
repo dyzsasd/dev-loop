@@ -146,9 +146,10 @@ exit 0
     "--cli", "claude", "--agents", "sweep", "--interval", "sweep=1s", "--stagger", "0",
     "--breaker", "3", "--breaker-probe", "3s", "--max-fires", "6",
   ], { DEVLOOP_CLAUDE_BIN: stubFlaky, CNT_FILE: cnt }, 120_000);
-  const openIdx = brk.out.indexOf("breaker OPEN: sweep");
-  const closeIdx = brk.out.indexOf("breaker CLOSED: sweep");
-  ok(openIdx >= 0 && /3× identical failures \(.*spend-limit.*\)/.test(brk.out), "P0-1a: 3 identical spend-limit failures trip the breaker (keyed on errorClass)");
+  // LOOP-175: spend-limit is provider-scoped (claude → anthropic), so OPEN/CLOSE name the provider blast radius.
+  const openIdx = brk.out.indexOf("breaker OPEN: provider anthropic (spend-limit)");
+  const closeIdx = brk.out.indexOf("breaker CLOSED: provider anthropic (spend-limit)");
+  ok(openIdx >= 0 && /3× identical failures.*tripped by sweep/.test(brk.out), "P0-1a: 3 identical spend-limit failures trip the breaker (keyed on errorClass)");
   ok(closeIdx > openIdx, "P0-1a: the first successful probe fire closes the breaker (recovery notice after the open)");
   ok(readFileSync(cnt, "utf8") === "6", `P0-1a: all 6 fires ran — the breaker paces, it never strands the slot (got ${readFileSync(cnt, "utf8")})`);
   ok(brk.out.split("breaker OPEN").length === 2 && brk.out.split("breaker CLOSED").length === 2, "P0-1a: trip and recovery notify exactly ONCE each");
