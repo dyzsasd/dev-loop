@@ -9,6 +9,7 @@ import { rmSync, statSync, writeFileSync, existsSync, mkdtempSync, mkdirSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
+import { pkgVersion } from "../src/paths.ts";
 
 const DB = "/tmp/hub-iso/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -139,6 +140,49 @@ stub.close();
 ok(okR.code === 0 && okR.out.includes("DOCTOR_OK")
    && okR.out.includes("registers dev-loop-hub") && okR.out.includes("daemon /api/health reachable") && okR.out.includes("Claude SessionStart hook compatibility present"),
    "doctor: service context wired → .mcp.json + daemon health + optional Claude hook PASS, DOCTOR_OK (autostart may still be operator-installed)");
+
+// ── LOOP-195: reconcileDaemonHealth reads version/actor from /api/health and warns when stale ──────
+// Regression: reconcileDaemonHealth discarded version+actor from the response body so doctor printed
+// DOCTOR_OK for a daemon running pre-upgrade code. Each stub returns different fields; the fixed code
+// must surface the same staleness warning `daemon status` already prints.
+{
+  const l195run = mkdtempSync(join(tmpdir(), "l195-run-"));
+  const l195cfg = join(recRoot, "l195.projects.json");
+  writeFileSync(l195cfg, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: bareRepo } } }));
+
+  // Helper: spin up a one-shot stub and run doctor against it, then tear down.
+  const withStub = async (body: object): Promise<{ out: string; code: number }> => {
+    const s = createServer((_req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(body)); });
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", () => r()));
+    const port = (s.address() as { port: number }).port;
+    writeFileSync(join(l195run, "daemon-alpha.json"), JSON.stringify({ project: "alpha", pid: process.pid, port, host: "127.0.0.1", url: `http://127.0.0.1:${port}`, startedAt: "2026-01-01T00:00:00.000Z" }));
+    const result = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: l195cfg, DEVLOOP_RUN_DIR: l195run, DEVLOOP_PLUGIN_ROOT: emptyRoot });
+    s.close();
+    return result;
+  };
+
+  // Case 1 (AC1): version present and stale → warn (not bare pass only)
+  const staleVer = await withStub({ ok: true, project: "alpha", version: "0.0.1" });
+  ok(staleVer.out.includes("daemon /api/health reachable"), "LOOP-195 AC1: pass line present even when version is stale");
+  ok(staleVer.out.includes("running old code v0.0.1"), "LOOP-195 AC1: version mismatch surfaces in doctor output");
+  ok(staleVer.code === 0 && staleVer.out.includes("DOCTOR_OK"), "LOOP-195 AC5: version warn does not flip exit status — DOCTOR_OK holds");
+
+  // Case 2 (AC1): version present and current → no stale warning
+  const curVer = await withStub({ ok: true, project: "alpha", version: pkgVersion() });
+  ok(curVer.out.includes("daemon /api/health reachable"), "LOOP-195 AC3: pass line present when version is current");
+  ok(!curVer.out.includes("running old code"), "LOOP-195 AC1: current version produces no stale warning");
+
+  // Case 3 (AC1): version absent → no warning (older daemon compatibility)
+  const noVer = await withStub({ ok: true, project: "alpha" });
+  ok(noVer.out.includes("daemon /api/health reachable"), "LOOP-195 AC3: pass line present when version absent");
+  ok(!noVer.out.includes("running old code"), "LOOP-195 AC1: absent version produces no warning (older daemon compat)");
+
+  // Case 4 (AC2): actor present and not operator → warn
+  const wrongActor = await withStub({ ok: true, project: "alpha", actor: "senior-dev" });
+  ok(wrongActor.out.includes("actor='senior-dev'"), "LOOP-195 AC2: wrong actor surfaces in doctor output");
+  ok(wrongActor.code === 0 && wrongActor.out.includes("DOCTOR_OK"), "LOOP-195 AC5: actor warn does not flip exit status");
+}
+
 // DX regression: the canonical INSTALLED shape mcp-merge/init-service write — {command:"dev-loop",
 // args:["serve"]} (a PATH bin, no on-disk server path) — used to permanently WARN "no server.ts/.js arg …
 // re-run init to repair", and re-running init reproduces the identical entry: an unfixable false alarm.
