@@ -6,12 +6,14 @@
 //     accept rate = Done ÷ (Done + verify-fail Cancels, i.e. the §3 In Review→Canceled edge), blocked count.
 //     On linear there is no local board mirror — the digest agent computes board numbers via MCP queries
 //     at fire time, per the §22 digest contract; this CLI never guesses them.
-import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
 import { deliveryProjects, type Workspace } from "./team-config.ts";
 import { AGENT_HANDLES } from "./seed.ts";
 import { liveBlockerIds } from "./blocked-by.ts";
+import { lessonsPaths } from "./lessons.ts";
 
 // ─── fires.jsonl ──────────────────────────────────────────────────────────────
 export interface FireUsage {
@@ -346,6 +348,163 @@ export function sensitiveMistier(db: any, projectId: string): SensitiveMistierFi
   });
 }
 
+// ─── kaizen panel ─────────────────────────────────────────────────────────────
+
+export interface KaizenReport {
+  windowMs: number;
+  selfImprovement: {
+    selfFiled: number; selfFixed: number; totalDone: number;
+    selfFixRate: number | null;   // selfFixed/selfFiled, null if selfFiled===0
+    selfSlice: number | null;     // selfFixed/totalDone, null if totalDone===0
+    fixedIds: string[];
+  };
+  lessons: { entries: number; byMonth: Record<string, number>; present: boolean };
+  ratchet: { current: number | null; history: Array<{ value: number; version: string }> | null; source: string };
+  evolution: { filed: number; appliedProxy: number };
+  verifyFail: { totalInWindow: number; byClass: null };
+  showHeaderLine: boolean;        // selfFixed >= 1, computed once so both surfaces agree
+}
+
+function parseLessons(lessonsDir: string): KaizenReport["lessons"] {
+  if (!existsSync(lessonsDir)) return { entries: 0, byMonth: {}, present: false };
+  const files: string[] = [];
+  try {
+    const index = join(lessonsDir, "INDEX.md");
+    if (existsSync(index)) files.push(index);
+    for (const f of readdirSync(lessonsDir)) {
+      if (f !== "INDEX.md" && f !== "archive.md" && f.endsWith(".md")) files.push(join(lessonsDir, f));
+    }
+  } catch { return { entries: 0, byMonth: {}, present: true }; }
+  let entries = 0;
+  const byMonth: Record<string, number> = {};
+  for (const f of files) {
+    let txt = "";
+    try { txt = readFileSync(f, "utf8"); } catch { continue; }
+    for (const line of txt.split("\n")) {
+      const trimmed = line.trimStart();
+      if (!trimmed.startsWith("- ") && !trimmed.startsWith("* ")) continue;
+      entries++;
+      const m = /(\d{4}-\d{2})-\d{2}/.exec(trimmed);
+      if (m) byMonth[m[1]] = (byMonth[m[1]] ?? 0) + 1;
+    }
+  }
+  return { entries, byMonth, present: true };
+}
+
+function parseRatchet(pkgJsonPath: string, gauntletDocPath: string): KaizenReport["ratchet"] {
+  let current: number | null = null;
+  let pkgJson = "";
+  try { pkgJson = readFileSync(pkgJsonPath, "utf8"); } catch { /* no package.json */ }
+  if (pkgJson) {
+    let scripts: Record<string, string> = {};
+    try { scripts = (JSON.parse(pkgJson) as { scripts?: Record<string, string> }).scripts ?? {}; } catch { /* ignore */ }
+    const q = scripts["quality"] ?? "";
+    const m = /--threshold\s+(\d+)/.exec(q);
+    if (m) current = parseInt(m[1], 10);
+  }
+  let history: Array<{ value: number; version: string }> | null = null;
+  let gauntletTxt = "";
+  try { gauntletTxt = readFileSync(gauntletDocPath, "utf8"); } catch { /* no doc */ }
+  if (gauntletTxt) {
+    const m = /ratchet trajectory:\s*(.+)/i.exec(gauntletTxt);
+    if (m) {
+      const raw = m[1].replace(/\*+/g, "");  // strip markdown emphasis (** and *)
+      const pairs: Array<{ value: number; version: string }> = [];
+      const re = /(\d+)\s*\(([^)]+)\)/g;
+      let pm: RegExpExecArray | null;
+      while ((pm = re.exec(raw)) !== null) pairs.push({ value: parseInt(pm[1], 10), version: pm[2] });
+      if (pairs.length) history = pairs;
+    }
+  }
+  const source = gauntletDocPath;
+  return { current, history, source };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function kaizenReport(
+  db: any,
+  projectId: string,
+  opts: { nowMs: number; windowMs?: number; lessonsDir?: string; ratchetSources?: { pkgJson: string; gauntletDoc: string } },
+): KaizenReport {
+  const windowMs = opts.windowMs ?? 7 * 86_400_000;
+  // Stat 1 — self-filed → self-fixed
+  const inList = AGENT_HANDLES.map(() => "?").join(",");
+  const filed = db.prepare(
+    `SELECT id, state FROM tickets WHERE project_id=? AND created_by IN (${inList})`,
+  ).all(projectId, ...AGENT_HANDLES) as { id: string; state: string }[];
+  const selfFiled = filed.length;
+  const fixedRows = filed.filter((r) => r.state === "Done");
+  const selfFixed = fixedRows.length;
+  const totalDone = (db.prepare("SELECT COUNT(*) as n FROM tickets WHERE project_id=? AND state='Done'").get(projectId) as { n: number }).n;
+  const fixedIds = fixedRows.map((r) => r.id);
+  const selfFixRate = selfFiled > 0 ? selfFixed / selfFiled : null;
+  const selfSlice = totalDone > 0 ? selfFixed / totalDone : null;
+  // Stat 2 — lessons
+  const lessons = opts.lessonsDir ? parseLessons(opts.lessonsDir) : { entries: 0, byMonth: {}, present: false };
+  // Stat 3 — quality ratchet
+  const ratchet = opts.ratchetSources
+    ? parseRatchet(opts.ratchetSources.pkgJson, opts.ratchetSources.gauntletDoc)
+    : { current: null, history: null, source: "" };
+  // Stat 4 — §17 proposals (amended: trailing % to match real titles like "[reflect-proposal] ...")
+  const evoRows = db.prepare(
+    "SELECT state FROM tickets WHERE project_id=? AND title LIKE '[%-proposal]%'",
+  ).all(projectId) as { state: string }[];
+  const evolution = { filed: evoRows.length, appliedProxy: evoRows.filter((r) => r.state === "Done").length };
+  // Stat 5 — verify-fail (reuse boardMetrics; byClass permanently null)
+  const bm = boardMetrics(db, projectId, windowMs, opts.nowMs);
+  const verifyFail = { totalInWindow: bm.verifyFails, byClass: null as null };
+  const showHeaderLine = selfFixed >= 1;
+  return { windowMs, selfImprovement: { selfFiled, selfFixed, totalDone, selfFixRate, selfSlice, fixedIds }, lessons, ratchet, evolution, verifyFail, showHeaderLine };
+}
+
+export function renderKaizen(report: KaizenReport): void {
+  const pct = (x: number | null) => x === null ? "—" : `${Math.round(x * 100)}%`;
+  const si = report.selfImprovement;
+  if (report.showHeaderLine) console.log("It ships software. Then it improves the shipping.");
+  // Stat 1
+  if (si.selfFiled === 0) {
+    console.log("self-improvement: — the loop hasn't filed its own issues yet");
+  } else if (si.selfFixed === 0) {
+    console.log(`self-improvement: ${si.selfFiled} self-filed, none fixed yet`);
+  } else {
+    console.log(`self-improvement: ${si.selfFixed}/${si.selfFiled} self-filed issues fixed (${pct(si.selfFixRate)}); ${pct(si.selfSlice)} of all ${si.totalDone} Done tickets`);
+    const show = si.fixedIds.slice(0, 20);
+    const more = si.fixedIds.length > 20 ? ` (showing latest 20 of ${si.fixedIds.length})` : "";
+    console.log(`  fixed: ${show.join(", ")}${more}`);
+  }
+  // Stat 2
+  if (!report.lessons.present) {
+    console.log("lessons: — no lessons recorded yet (0 entries)");
+  } else if (report.lessons.entries === 0) {
+    console.log("lessons: 0 entries");
+  } else {
+    console.log(`lessons: ${report.lessons.entries} entries`);
+    const months = Object.entries(report.lessons.byMonth).sort((a, b) => a[0].localeCompare(b[0]));
+    if (months.length) console.log(`  by month: ${months.map(([k, v]) => `${k}: ${v}`).join(", ")}`);
+  }
+  // Stat 3
+  if (report.ratchet.current === null) {
+    console.log("quality ratchet: — quality gate threshold not configured");
+  } else {
+    const hist = report.ratchet.history;
+    const histStr = hist ? hist.map((h) => `${h.value} (${h.version})`).join(" → ") : `see ${report.ratchet.source}`;
+    console.log(`quality ratchet: current threshold ${report.ratchet.current} | trajectory: ${histStr}`);
+  }
+  // Stat 4
+  if (report.evolution.filed === 0) {
+    console.log("§17 proposals: — no §17 proposals filed yet");
+  } else {
+    console.log(`§17 proposals: ${report.evolution.filed} filed, ${report.evolution.appliedProxy} reached Done (proxy; §17 application is an operator git edit with no board signal)`);
+  }
+  // Stat 5
+  if (report.verifyFail.totalInWindow === 0) {
+    console.log(`verify-fails: — no verify-fails in the last ${Math.round(report.windowMs / 86_400_000)}d`);
+  } else {
+    console.log(`verify-fails: ${report.verifyFail.totalInWindow} in window`);
+  }
+  console.log("  verify-fail class: not yet recorded (no Verify-fail-class: marker emitted yet)");
+}
+
 // Service-backend board rollup: per-project board KPIs + the operator decision queue folded into
 // `out` (1.8.1 quality-gauntlet drain: metricsCli CC 22 → collect/render phases).
 async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>, boardDb: string): Promise<void> {
@@ -484,7 +643,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   let windowMs = 7 * 86_400_000;
   let asJson = false;
   let context = false;
-  let showUsage = false, showCost = false, showFlow = false;
+  let showUsage = false, showCost = false, showFlow = false, showKaizen = false;
   let byDim: UsageDimension | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--window") windowMs = parseWindow(argv[++i] ?? "7d");
@@ -493,6 +652,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     else if (argv[i] === "--usage") showUsage = true;
     else if (argv[i] === "--cost") showCost = true;
     else if (argv[i] === "--flow") showFlow = true;
+    else if (argv[i] === "--kaizen") showKaizen = true;
     else if (argv[i] === "--by") {
       const dim = argv[++i] as UsageDimension;
       if (!["agent", "project", "provider", "model"].includes(dim)) {
@@ -503,11 +663,12 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     }
     else if (argv[i] === "--help" || argv[i] === "-h") {
       console.log("usage: dev-loop metrics [--window 7d|24h|30d] [--json] [--context]\n" +
-        "                        [--usage] [--cost] [--flow] [--by agent|project|provider|model]\n" +
+        "                        [--usage] [--cost] [--flow] [--kaizen] [--by agent|project|provider|model]\n" +
         "  default: team KPIs from fires.jsonl (+ hub board on service)\n" +
         "  --usage: token flow per group (metered N-of-M; null=unmeasured, never 0)\n" +
         "  --cost:  money (provider-reported costUsd only; 'unavailable' when none priced — never $0.00)\n" +
         "  --flow:  spend→outcome view: cost-per-accepted-change = costUsd÷throughput (service-only)\n" +
+        "  --kaizen: self-improvement panel (board+ledger only; —=no data, never 0; composable with --window --json)\n" +
         "  --by:    grouping dimension for --usage/--cost (default: agent)\n" +
         "  --context: per-agent context bill (plugin-static, needs no workspace)");
       return 0;
@@ -528,6 +689,30 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   // wires DEVLOOP_HUB_DB=wsHubDb; team-init.ts:176 creates; bundle.ts:153 exports;
   // team-import.ts:230 writes) must NOT follow ambient env — they call wsHubDb(ws) directly.
   const boardDb = resolveHubDbPath(ws.root);
+
+  // ── kaizen path (LOOP-205) ───────────────────────────────────────────────────
+  if (showKaizen) {
+    if (ws.file.team.backend !== "service" || !existsSync(boardDb)) {
+      console.error("metrics --kaizen: requires service backend with hub.db");
+      return 1;
+    }
+    const { openDb } = await import("./db.ts");
+    const { findProject } = await import("./seed.ts");
+    const db = openDb(boardDb);
+    try {
+      for (const key of deliveryProjects(ws)) {
+        const pid = findProject(db, key);
+        if (!pid) continue;
+        const lessonsDir = lessonsPaths(ws).dir;
+        const hubRoot = join(new URL(".", import.meta.url).pathname, "..");
+        const pkgJson = join(hubRoot, "package.json");
+        const gauntletDoc = join(ws.root, "docs", "design", "quality-gauntlet.md");
+        const report = kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } });
+        if (asJson) { console.log(JSON.stringify(report, null, 2)); } else { renderKaizen(report); }
+      }
+    } finally { db.close(); }
+    return 0;
+  }
 
   // ── usage/cost/flow path (LOOP-125) ──────────────────────────────────────────
   if (showUsage || showCost || showFlow) {
