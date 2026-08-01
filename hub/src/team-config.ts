@@ -284,9 +284,13 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit): void {
 }
 
 // E18 — team.budget: dailyUsd must be a positive number or null/unset; perFireUsd must be a positive number.
+const BUDGET_KEYS = new Set(["dailyUsd", "perFireUsd"]);
 function validateBudget(budget: unknown, E: Emit): void {
   const b = budget as { dailyUsd?: unknown; perFireUsd?: unknown } | null;
   if (b === null || typeof b !== "object" || Array.isArray(b)) { E("E18", "team.budget", "budget must be an object"); return; }
+  for (const k of Object.keys(b as object)) {
+    if (!BUDGET_KEYS.has(k)) E("E18", `team.budget.${k}`, `unknown budget key '${k}' (expected ${[...BUDGET_KEYS].join(", ")})`);
+  }
   if (b.dailyUsd !== undefined && b.dailyUsd !== null &&
       (typeof b.dailyUsd !== "number" || !Number.isFinite(b.dailyUsd) || b.dailyUsd <= 0))
     E("E18", "team.budget.dailyUsd", `budget.dailyUsd must be a positive number or null/unset to disable (got ${JSON.stringify(b.dailyUsd)})`);
