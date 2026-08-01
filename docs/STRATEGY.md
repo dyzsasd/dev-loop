@@ -152,6 +152,16 @@ Supporting goals (all in scope this milestone):
   resilience (shipped, v1.11.0) → observability/metering (LOOP-12..15 → LOOP-3 → LOOP-4);
   sequence quality-line filings behind it.*
 
+**Top priority (operator, 2026-08-01): CUT PER-FIRE COST — context and prompt compression.**
+Recorded under the explicit §9a authorization in **LOOP-228** (*"this intake IS the §9a authorization
+for the direction-section edits it implies"*). Measured baseline: ~$6.68/fire over 142 metered fires,
+`cacheRead` 45–65% of every fire, `references/conventions.md` 75% of a PM fire's context. This
+outranks the current queue except correctness/security work already in flight. Program carried by
+**LOOP-228** (umbrella, holds the acceptance criteria) → **LOOP-232** (senior design-and-delegate) and
+**LOOP-233** (model tier, PM's reserved call). Binding constraints from the operator: measure every
+change; never trade correctness for bytes (verification classes, block-vs-guess, §16, the §2 label
+stay); splitting files saves nothing; turns count as much as bytes; and `assembleBoot` is **not**
+re-proposed — LOOP-211/212 measured push-mode a net loss here (+44% cacheWrite / +25% cacheRead).
 ## Non-goals
 
 - **Not Linear-locked.** Linear is a default, never a requirement; the loop must keep
@@ -435,105 +445,27 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   mid-flight as delivered — 7.9% / 40.27 USD (LOOP-219), and an aggregate can never show that the
   smallest number was the worst event.
 
-### 2026-08-01 (early) — the reset erased the tier it was told to keep, and seven merged fixes are running nowhere
+### 2026-08-01 (early) — [ARCHIVED] the orphan reset that erased the dev tier, and seven
+merged fixes running nowhere
 
-- **The Step-0 orphan reset strips the dev tier; it stranded a ticket for 1h35m (LOOP-223 filed,
-  junior, p2).** On the `service` backend the claim and the dev tier are the same field (`assignee`,
-  §18/§21b). `hub/src/servable.ts:52` reads
-  `actor === "dev" ? (t.assignee === null || t.assignee === "dev") : t.assignee === actor` — a null
-  assignee is servable ONLY by the legacy `dev`, which no-ops under the split (§21c). So a reclaimed
-  ticket returns to `Todo` reachable by nobody. Live victim: **LOOP-175**, promoted 07-31T21:56Z as
-  head of the junior queue, reset to `assignee: null` at 23:18Z, unservable until pm repaired it by
-  hand at 00:53Z. The board showed it as `{junior-dev: 10, senior-dev: 9, none: 1}` — counted by
-  `todoDepth`, reachable by no one.
-- **It is not an agent error — four governing files instruct it**, all inherited from the legacy
-  single-dev model where `assignee: null` IS servable, so the same words are right there and wrong
-  under the split: `dev-agent` :54 *unassign*, `junior-dev-agent` :59 *release the claim … keep the
-  `junior-dev` label*, `senior-dev-agent` :54 *clear the claim*, `sweep-agent` :79 *unassign*. The
-  junior/senior wording is self-contradictory on this backend: the surviving label is the copy
-  `servable.ts` never reads.
-- **The same correction had already landed on the OTHER carrier 72 minutes earlier.** LOOP-216
-  (`9726490`) changed merge-guard's forge trip from `assignee: null` to `assignee: cur.assignee`,
-  reasoning *"the ticket is already in the state the guard is objecting about; moving it reduces
-  reachability."* Two carriers of "reset to Todo + null the assignee": merge-guard **fixed**, the
-  orphan reset **open**. LOOP-223 carries the landed shape to copy and the placement
-  (`ticketwrite.ts`'s `applySensitiveRetier`, already a write-layer tier hook reading the label
-  when the assignee is unreliable, called from both write paths).
-- **The product moved — on ORIGIN, and it had been reviewable for five fires.** `origin/main`
-  carries **7 product commits** since my last reviewed SHA (`1806e17`). My prior five fires each
-  reported "no local product diff" and swept a lens instead, because the shared checkout cannot pull
-  past the `hub/src/doctor.ts` conflict. **A pull was never required for a read-only review**:
-  `git fetch` + `git diff <sha>..origin/main` reads the whole window. Lens rotation reset; the diff
-  picked **consistency**, and it paid immediately — LOOP-218's premise re-verified against the landed
-  code (merge-guard still writes as actor `operator` at :100 and :112; LOOP-216 changed when and what
-  it writes, never who), and LOOP-112's new `inReview` slice was found deliberately keyed strict
-  *"so the legacy `dev` null-assignee path never bleeds in"* — the null-assignee hole is known on the
-  read side, which is why LOOP-223 belongs on the write side.
-- **Fourteen merged product commits are in nothing that runs.** Installed CLI is **v1.13.0**
-  (`d1ceabb`); `git log d1ceabb..origin/main -- hub/src/ skills/ references/` = **14 commits**,
-  including all 7 above. Rung-2 proof, not a version string: the installed
-  `skills/pm-agent/SKILL.md:256` still carries the pre-`bb98503` cheat-sheet line, and
-  `skipped_merged` (LOOP-216) is absent from the installed `dist/`. Two other probes I ran
-  (`applySensitiveRetier`, `reconcileDaemonHealth`) were **uninformative** — both symbols pre-date
-  the window; a marker test is only evidence when the marker is new in the range. **LOOP-167's own
-  release-readiness hint is itself in the un-installed set**, so the surface that would tell the
-  operator to cut a release cannot run until someone cuts one.
-- **W-code contest resolved in favour of the standing ledger.** PR #127 re-titled itself to **W26**,
-  so LOOP-204 keeps **W24** and LOOP-214 keeps **W25**; `origin/main` doctor allocates W05–W23.
-  **W27 is next free.** No gate exists for this (LOOP-88) — the ledger is carried in `pm-state.json`
-  by hand.
-- **Board at close:** verify queue **0** (agreed with a board-wide no-owner-filter scan — all 10
-  In Review are qa-owned), `needs-pm` **0**, `Human-Blocked` **0**, decision queue **0**. §9c: **6
-  edges, 0 unparked** (LOOP-205, LOOP-185, LOOP-95, LOOP-104, LOOP-207, LOOP-221 — none Done).
-  Depth junior **11/10**, senior **9/10** with a **senior Backlog of 0**; the junior overage is the
-  LOOP-175 repair correcting an accounting error, not a promotion — nothing was promoted this fire
-  and nothing should be demoted. Filed **1**. Doc-land still blocked by the unresolved
-  `hub/src/doctor.ts` conflict (LOOP-215); this is the **fourth** stranded local-only doc commit.
-- **The doc-land block outlived its own fix and changed shape — the previous entry's cause is now
-  stale.** Last fire recorded the block as "the unresolved `hub/src/doctor.ts` conflict (LOOP-215)".
-  That conflict is **resolved**: `git ls-files -u` is empty, 0 markers, `tsc` passes. But the
-  resolution was `git add`ed and never committed, so `git rebase` still refuses — `cannot rebase:
-  Your index contains uncommitted changes` — and `doc-land` failed for the **third consecutive
-  fire**, with local `main` **4 doc commits ahead** of origin. The staged content is **orphaned**: it
-  adds a "Service-backend only" sentence to W20's comment that `origin/main` has never carried
-  (`git log -S` on origin returns only the unrelated W16/W21 commits), the stash entry is gone, and
-  PR #127's merged fix does not contain it. No agent will commit it, because no agent knows it is
-  there. Flagged on LOOP-215 with the ruling left to its owner: a `Done` on "markers resolved" would
-  retire the only ticket naming a checkout that is still wedged.
-- **The detector shipped for that hazard cannot see the state its own advice creates (LOOP-224).**
-  W26 landed 6h earlier (`84d7666`, PR #127, for LOOP-215) keyed on `git ls-files --unmerged`, and
-  prints *"Resolve: edit each file, then `git add <file>`"*. Following that instruction clears the
-  predicate and leaves the hazard. Isolated in a scratch workspace against origin/main's shipped
-  doctor — exactly one variable moves between A and B:
+Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 6). Doctrine from that fire stays distilled in the STANDING RULES block below.
 
-  | arm | repo state | `--unmerged` | `git rebase` | doctor |
-  |---|---|---|---|---|
-  | 0 control | clean | 0 | rc=0 | `DOCTOR_OK`, silent |
-  | A interrupted `stash pop` | `UU f.txt` | 3 | rc=1 needs merge | **[W26] fires** |
-  | B = A + W26's own remedy (`git add`) | `M  f.txt` | 0 | rc=1 dirty index | `DOCTOR_OK`, **silent** |
+### 2026-08-01 (mid) — both things that mattered arrived AFTER the boot scans said the board was empty
 
-  The live shared checkout has been sitting in arm B since 00:52 local. Refute arm run first:
-  nothing else in `hub/src/` checks for a dirty tree at health-check time (the `--porcelain` callers
-  are worktree reaping and the mutation gate). Filed as an **Improvement**, not a Bug — the
-  implementer built LOOP-215's AC3 faithfully; the gap is between that AC's predicate and its own
-  purpose clause, plus a remediation string that is independently incomplete.
-- **The product moved by exactly one commit since the last review, and the review found the defect
-  in it.** Prior fire reviewed `1806e17..origin/main` at 7 commits; `84d7666` landed after. The
-  diff-picks-the-lens method now has its second consecutive real test and its first on a one-commit
-  delta: the diff was a detector, the lens was `trust-safety`, and the finding is in that commit.
-- **Grooming by re-derivation against MERGED code, not by re-reading prose.** Three Backlog tickets
-  re-tested against `origin/main` rather than assumed: **LOOP-218** still reproduces (merge-guard
-  writes as actor `operator` at `:100`/`:112`; LOOP-216 changed *when* and *what* it writes, never
-  *who*), **LOOP-113** still reproduces (`NOT_MERGE_ELIGIBLE` still names 3 of 8 states), and
-  **LOOP-223** needed no refinement. Two of the three were re-checked precisely because LOOP-216's
-  fix had just merged into the same file — the cheapest moment for a wrong `Cancel`.
-- **Board at close:** verify **0** (agreed with a board-wide no-owner-filter scan — all 11 In Review
-  are qa-owned), `needs-pm` **0**, `Human-Blocked` **0**, decision queue **0**. §9c: **6 edges, 0
-  unparked** (LOOP-205, LOOP-185, LOOP-95, LOOP-104, LOOP-207, LOOP-221 — none terminal). Depth
-  junior **10/10 at cap**, senior **9/10 with a senior Backlog of 0** — so **promoted 0**, and not
-  for want of a slot: the one open slot is in the tier with nothing to fill it. Backlog **49**, all
-  junior. Filed **1** (LOOP-224), groomed **4**, canceled **0**.
-
+- **LOOP-197 `Done` — the `budget-ceiling` design gate PASSED WITH TWO AMENDMENTS**, all four
+  children promoted. It reached `In Review` at 06:42Z, *after* my boot verify queue read 0. The
+  design's model is right (INV-1 unset ⇒ byte-identical; INV-5 a killed fire is estimated, never
+  summed as `$0`), and I verified its premise rather than its citations: `STRATEGY.md:1090-1102`
+  really does carry the (a)/(b)/(c) split, and **LOOP-98 is still `Backlog`**, so its non-goal holds.
+- **LOOP-228 — operator intake, priority 1: per-fire cost is now the top priority** (measured
+  baseline ~$6.68/fire, `cacheRead` 45–65% of every fire, conventions 75% of context). Groomed into
+  **LOOP-232** (senior design-and-delegate, `Todo`) and **LOOP-233** (model-tier investigation).
+- **LOOP-231 filed** (trust-safety lens): doctor's two committable-state guards are both anchored off
+  the tree they protect — W06 early-returns because the workspace root is not a repo, and the §17 db
+  guard checks only the *selected* db. The identical three `hub.db` files are `DOCTOR_FAILED` in one
+  tree and a green `PASS` in the product repo, where 9.2 MB sits un-ignored right now.
+- **`origin/main` moved three times during this fire** (`90ba897`, `64f1c58`, then the operator's own
+  `0b365c1` §12b governing fix). I reviewed through **`64f1c58`** and recorded that, not end-of-run HEAD.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1003,6 +935,38 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   filing, never to balance load). So: surface the ratio, promote nothing, and do not let an idle
   lane argue for breaking the routing rule that keeps tiering honest.
 
+- **2026-08-01 — a design gate passes on its MODEL, and amends on its PROSE; the two are not the
+  same axis.** `budget-ceiling` (LOOP-197) had a right model, a right decomposition and a verified
+  premise — and two real defects: its preamble said *"four junior children / every child is
+  `junior-dev`"* while Children 3–4 are `sensitive` (which forces senior), and its dependency 1+2 → 3,4
+  existed as prose **and as §9c `Blocked-by:` edges** but with **no `blocked` label**, so both would
+  have been immediately servable ahead of their own prerequisites. That is **LOOP-190's fourth strike,
+  all four on staged design children**. Pass-with-amendment, both fixed at promotion. **The edge was
+  right and the enforcement bit was missing — check the LABEL, not the marker.**
+- **2026-08-01 — the §21a gate promotion is a HANDOFF, not the pace valve.** Promoting LOOP-197's four
+  children put junior Todo at **12/10**, over cap. That is correct: §5a's cap throttles *grooming*,
+  while stranding verified design children in `Backlog` is the precise failure §21a exists to prevent.
+  Do not "repair" this overrun by demoting a child.
+- **2026-08-01 — an intake ticket carrying PROGRAM acceptance criteria does not close when its children
+  are filed.** §9a says back-link then close the parent; LOOP-228 instead keeps `needs-pm` removed
+  (intake discharged) and stays **open** as the carrier for its own ACs — the measured before/after,
+  the target, the `context-bill.ts` ratchet. Closing it would repeat 2026-07-31's recorded failure
+  where the cost-governance plan's follow-up had no carrier. **Discharge the ask, keep the program.**
+- **2026-08-01 — cost ordering: I did NOT order the cuts by descending KB×agents, and said why.**
+  §22 is the largest single item (137 KB×agents) but its deletions are governing prose gated on an
+  operator apply. **Conditional delivery goes first** — §19/§18/§21a/§12c ≈ 195 KB×agents that some
+  fires simply cannot use — because it deletes no prose, changes no rule, and needs no operator
+  round-trip. Its enabler is already filed and already broken: **LOOP-109**, where the boot pruner's
+  predicate reads `repo.git.autoMerge` while the schema writes a flat `autoMerge`, making it a silent
+  no-op. **The cheapest byte to cut is the one that was never relevant to this fire's workspace shape.**
+- **2026-08-01 — recurring defect, instance 31: a guard anchored on the wrong TREE (LOOP-231).** W06
+  asks the right question ("is anything here committable?") of the wrong root, and the §17 db guard asks
+  about the db it *opened* rather than the class it *protects*. Both then print reassurance. **Folded
+  into standing rule 8: for any guard, check its ANCHOR as well as its predicate — the right question
+  asked of the wrong object is indistinguishable from a pass.**
+- **2026-08-01 — the late re-scan earned its keep for the third fire running, and this time it carried
+  the whole fire.** `needs-pm` 0 and verify 0 at boot; by close, an operator intake (LOOP-228) *and* a
+  design parent (LOOP-197) had both arrived. **Everything of consequence this fire was invisible at boot.**
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
