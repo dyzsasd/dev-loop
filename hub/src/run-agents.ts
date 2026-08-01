@@ -20,6 +20,7 @@ import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
+import { AGENT_GROUPS } from "./agent-roster.ts"; // LOOP-184: group aliases shared with the bundle-load validator — a zod-free leaf (roster still sourced from seed.ts AGENT_HANDLES)
 import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
@@ -82,14 +83,7 @@ type EffortConfigValue = string | {
 };
 
 const AGENT_SET = new Set<string>(VALID_AGENTS);
-const GROUPS: Record<string, Agent[]> = {
-  core: ["pm", "qa", "senior-dev", "junior-dev", "sweep"],
-  split: ["pm", "qa", "senior-dev", "junior-dev", "sweep"],
-  legacy: ["pm", "qa", "dev", "sweep"],
-  "single-dev": ["pm", "qa", "dev", "sweep"],
-  outward: ["ops", "architect", "communication"],
-  all: ["pm", "qa", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "communication"],
-};
+const GROUPS: Record<string, Agent[]> = AGENT_GROUPS; // one source, shared with bundle-load (LOOP-184)
 const DEFAULT_AGENTS: Agent[] = GROUPS.core;
 const DEFAULT_INTERVALS: Record<Agent, number> = {
   pm: 5 * 60_000,
