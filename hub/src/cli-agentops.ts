@@ -272,23 +272,14 @@ async function verbOp(rest: string[]): Promise<never> {
 
 function resolveTicketGhRepo(labels: string[], ws: Workspace | null, projectKey: string): string | null {
   if (!ws) return null;
-  const ghFromRemote = (remote: string | undefined): string | null => {
-    if (!remote) return null;
-    const m = remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
-    return m ? m[1]! : null;
-  };
   const repoLabel = labels.find((l) => l.startsWith("repo:"));
-  if (repoLabel) {
-    const ref = repoLabel.slice(5);
-    const entry = ws.file.repos[ref];
-    if (!entry || entry.landing !== "pr" || !entry.autoMerge) return null;
-    return ghFromRemote(entry.remote);
-  }
-  const projRepos = reposOfProject(ws, projectKey);
-  if (projRepos.length !== 1) return null;
-  const entry = ws.file.repos[projRepos[0]!.ref];
-  if (!entry || entry.landing !== "pr" || !entry.autoMerge) return null;
-  return ghFromRemote(entry.remote);
+  const projRepos = repoLabel ? null : reposOfProject(ws, projectKey);
+  const ref = repoLabel ? repoLabel.slice(5) : (projRepos!.length === 1 ? projRepos![0]!.ref : null);
+  if (!ref) return null;
+  const entry = ws.file.repos[ref];
+  if (!entry?.autoMerge || entry.landing !== "pr" || !entry.remote) return null;
+  const m = entry.remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
+  return m ? m[1]! : null;
 }
 
 async function verbQueue(rest: string[]): Promise<never> {
