@@ -6,7 +6,7 @@
 // §16-clean: no real secret VALUES — export runs --insecure-plaintext on a minimal fresh workspace.
 import { execFileSync, spawnSync } from "node:child_process";
 import { scrubFireEnv } from "./env-scrub.ts";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, symlinkSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -307,6 +307,104 @@ try {
   ok(/\[W06\][^\n]*zz-ws\.bundle/.test(bulkOut),
      "(n) W06 still warns for a bundle past the 2000th staged candidate — the tracked scan is not truncated (LOOP-235 review P1 #9)");
   ok(!/is gitignored/.test(bulkOut), "(n) the reassuring 'clean' line is suppressed for the bulk-staged case");
+
+  // (o) LOOP-235 review (no-destination, follow-up to P1 #5) — a committed bundle on a branch with NEITHER
+  // `@{push}` NOR `@{upstream}`, whose commit is ALSO reachable from an unrelated remote-tracking ref. The
+  // old no-destination fallback `HEAD --not --remotes` SUBTRACTS that commit (it is on a remote), so the scan
+  // is empty and doctor prints clean — yet `git push origin HEAD:<branch>` still ships it. With no destination
+  // the push target is unknowable, so the scan must range over ALL of HEAD. Fails against `HEAD --not
+  // --remotes`, passes against `["HEAD"]`.
+  const ndWs = join(ROOT, "nd-ws"); mkdirSync(ndWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", ndWs, "--key", "gg11", "--backend", "service", "--yes"], ROOT).status === 0, "setup: nd-ws team init");
+  gitInit(ndWs);
+  writeFileSync(join(ndWs, ".gitignore"), ".dev-loop/\n");
+  writeFileSync(join(ndWs, "README"), "x\n");
+  execFileSync("git", ["-C", ndWs, "add", "README", ".gitignore"]);
+  execFileSync("git", ["-C", ndWs, "commit", "-qm", "init"]);
+  const ndOrigin = join(ROOT, "nd-origin.git"); execFileSync("git", ["init", "--bare", "-q", ndOrigin]);
+  execFileSync("git", ["-C", ndWs, "remote", "add", "origin", ndOrigin]);
+  execFileSync("git", ["-C", ndWs, "push", "-q", "origin", "HEAD:refs/heads/main"]); // origin/main = C0 (no bundle); NO -u ⇒ not tracking
+  const ndFork = join(ROOT, "nd-fork.git"); execFileSync("git", ["init", "--bare", "-q", ndFork]);
+  execFileSync("git", ["-C", ndWs, "remote", "add", "fork", ndFork]);
+  execFileSync("git", ["-C", ndWs, "checkout", "-q", "-b", "feat"]);
+  ok(cli(exportArgs(join(ndWs, "ws.bundle")), ndWs).status === 0, "(o) setup: bundle export on feat");
+  execFileSync("git", ["-C", ndWs, "add", "ws.bundle"]);
+  execFileSync("git", ["-C", ndWs, "commit", "-qm", "feat: add bundle (unpushed to origin, pushed to fork)"]);
+  const ndSha = execFileSync("git", ["-C", ndWs, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  execFileSync("git", ["-C", ndWs, "push", "-q", "fork", "HEAD:refs/heads/feat"]); // no -u
+  execFileSync("git", ["-C", ndWs, "fetch", "-q", "fork"]); // create refs/remotes/fork/feat so --not --remotes subtracts ndSha
+  ok(spawnSync("git", ["-C", ndWs, "rev-parse", "--verify", "--quiet", "@{upstream}"]).status !== 0 &&
+     spawnSync("git", ["-C", ndWs, "rev-parse", "--verify", "--quiet", "@{push}"]).status !== 0,
+     "(o) precondition: branch feat has NEITHER @{upstream} NOR @{push} — the no-destination fallback path");
+  ok(!execFileSync("git", ["-C", ndWs, "rev-list", "HEAD", "--not", "--remotes"], { encoding: "utf8" }).split("\n").map((s) => s.trim()).filter(Boolean).includes(ndSha),
+     "(o) precondition: 'rev-list HEAD --not --remotes' OMITS the bundle commit (it is on fork/*) — why the old fallback prints clean");
+  ok(execFileSync("git", ["-C", ndWs, "rev-list", "HEAD"], { encoding: "utf8" }).split("\n").map((s) => s.trim()).includes(ndSha),
+     "(o) precondition: 'rev-list HEAD' (all of HEAD, the new no-destination range) DOES include the bundle commit");
+  const docNd = cli(["doctor"], ndWs);
+  const ndOut = `${docNd.stdout}${docNd.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(ndOut), "(o) W06 warns for a committed bundle with no push destination, reachable from an unrelated remote (names ws.bundle)");
+  ok(!/is gitignored/.test(ndOut), "(o) the reassuring 'clean' line is suppressed for the no-destination case");
+
+  // (p) LOOP-235 review (both-states remediation) — the SAME path carries a bundle in an unpushed COMMIT and
+  // a DIFFERENT bundle STAGED in the index. Collapsing the path to a single "hardest" state (committed) drops
+  // the staged clause, so the operator is told only to rewrite history — a soft reset then leaves the staged
+  // bundle in the index, ready to leak in the replacement commit. W06 must print BOTH remediations. Fails
+  // against the hardest-state-wins collapse, passes when both states are retained.
+  const bsWs = join(ROOT, "bs-ws"); mkdirSync(bsWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", bsWs, "--key", "gg12", "--backend", "service", "--yes"], ROOT).status === 0, "setup: bs-ws team init");
+  gitInit(bsWs);
+  writeFileSync(join(bsWs, ".gitignore"), ".dev-loop/\n");
+  writeFileSync(join(bsWs, "README"), "x\n");
+  execFileSync("git", ["-C", bsWs, "add", "README", ".gitignore"]);
+  execFileSync("git", ["-C", bsWs, "commit", "-qm", "init"]);
+  const bsBundle = join(bsWs, "ws.bundle");
+  ok(cli(exportArgs(bsBundle), bsWs).status === 0, "(p) setup: first bundle export (to be committed)");
+  execFileSync("git", ["-C", bsWs, "add", "ws.bundle"]);
+  execFileSync("git", ["-C", bsWs, "commit", "-qm", "add bundle v1 (committed, unpushed)"]);
+  const bsCommittedOid = execFileSync("git", ["-C", bsWs, "rev-parse", "HEAD:ws.bundle"], { encoding: "utf8" }).trim();
+  ok(cli(exportArgs(bsBundle), bsWs).status === 0, "(p) setup: second bundle export OVER the same path");
+  appendFileSync(bsBundle, Buffer.from([0])); // force a DISTINCT index blob (magic header intact) so the path has a real staged change
+  execFileSync("git", ["-C", bsWs, "add", "ws.bundle"]);
+  const bsStagedOid = execFileSync("git", ["-C", bsWs, "rev-parse", ":ws.bundle"], { encoding: "utf8" }).trim();
+  ok(bsStagedOid !== bsCommittedOid &&
+     execFileSync("git", ["-C", bsWs, "diff", "--cached", "--name-only"], { encoding: "utf8" }).split("\n").includes("ws.bundle"),
+     "(p) precondition: ws.bundle is BOTH a staged index blob AND a distinct blob in an unpushed commit");
+  const docBs = cli(["doctor"], bsWs);
+  const bsOut = `${docBs.stdout}${docBs.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(bsOut), "(p) W06 warns (names ws.bundle)");
+  ok(/git rm --cached/.test(bsOut) && /unpushed commit/.test(bsOut) && /rebase|reset/.test(bsOut),
+     "(p) both remediations present: `git rm --cached` (staged) AND rewrite the unpushed commit (committed) — not collapsed to one (LOOP-235 review both-states)");
+
+  // (q) LOOP-235 review P2 — the tracked scan probes blobs through a shared, batched `git cat-file --batch`
+  // (one process per content-budget group) instead of a subprocess per path, which the no-destination
+  // all-of-HEAD scan above would otherwise explode into a `cat-file` per blob in history. This exercises the
+  // batch's correctness: TWO bundles at different paths across TWO unpushed commits must BOTH be named, and
+  // the non-bundle blobs sharing the batch must NOT be — a mis-mapped OID→path or a wrong magic offset in the
+  // batch parser would surface here.
+  const bqWs = join(ROOT, "bq-ws"); mkdirSync(bqWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", bqWs, "--key", "gg13", "--backend", "service", "--yes"], ROOT).status === 0, "setup: bq-ws team init");
+  gitInit(bqWs);
+  writeFileSync(join(bqWs, ".gitignore"), ".dev-loop/\n");
+  writeFileSync(join(bqWs, "README"), "x\n");
+  execFileSync("git", ["-C", bqWs, "add", "README", ".gitignore"]);
+  execFileSync("git", ["-C", bqWs, "commit", "-qm", "init"]);
+  mkdirSync(join(bqWs, "a"), { recursive: true });
+  writeFileSync(join(bqWs, "a", "plain.txt"), "not a bundle\n".repeat(400)); // a non-bundle blob sharing the batch
+  ok(cli(exportArgs(join(bqWs, "a", "one.bundle")), bqWs).status === 0, "(q) setup: bundle export a/one.bundle");
+  execFileSync("git", ["-C", bqWs, "add", "a"]);
+  execFileSync("git", ["-C", bqWs, "commit", "-qm", "commit 1: one.bundle + plain.txt (unpushed)"]);
+  mkdirSync(join(bqWs, "b"), { recursive: true });
+  writeFileSync(join(bqWs, "b", "data.bin"), Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])); // an 8-byte blob (< MAGIC) in the same batch
+  ok(cli(exportArgs(join(bqWs, "b", "two.bundle")), bqWs).status === 0, "(q) setup: bundle export b/two.bundle");
+  execFileSync("git", ["-C", bqWs, "add", "b"]);
+  execFileSync("git", ["-C", bqWs, "commit", "-qm", "commit 2: two.bundle + data.bin (unpushed)"]);
+  const docBq = cli(["doctor"], bqWs);
+  const bqOut = `${docBq.stdout}${docBq.stderr}`;
+  ok(/\[W06\][^\n]*one\.bundle/.test(bqOut) && /\btwo\.bundle\b/.test(bqOut),
+     "(q) batched scan names BOTH bundles across two unpushed commits (one.bundle + two.bundle)");
+  ok(!/plain\.txt/.test(bqOut) && !/data\.bin/.test(bqOut),
+     "(q) the non-bundle blobs sharing the batch are NOT flagged — the batch parser maps magic to the right OID/path");
+  ok(!/is gitignored/.test(bqOut), "(q) the reassuring 'clean' line is suppressed while unpushed bundles are present");
 
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });
