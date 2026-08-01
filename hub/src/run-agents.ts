@@ -984,8 +984,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     }
   }
   // Resolve per-agent timeouts here so the dry-run log can report them (same values used below at fire time).
-  const effectiveFireTimeoutMs = opts.perAgentFireTimeoutMs?.[agent] ?? opts.fireTimeoutMs;
-  const stallConfigOverride = opts.perAgentStallTimeoutMs?.[agent] ?? opts.stallTimeoutMs;
+  // Project-scope timeout override applies to delivery fires only — steward fires use team-scope timeouts since
+  // profileProject on a steward fire is the first enabled project, not the actual firing context (a per-project
+  // timeout on a steward would silently favour one project's config).
+  const projTO = !teamScope ? cfg?.projects?.[profileProject]?.agents?.[agent] : undefined;
+  const parseTO = (s?: string): number | undefined => s === undefined ? undefined : (s.trim() === "0" ? 0 : parseDuration(s.trim()));
+  const effectiveFireTimeoutMs = parseTO(projTO?.fireTimeout) ?? opts.perAgentFireTimeoutMs?.[agent] ?? opts.fireTimeoutMs;
+  const stallConfigOverride    = parseTO(projTO?.stallTimeout) ?? opts.perAgentStallTimeoutMs?.[agent] ?? opts.stallTimeoutMs;
   const effectiveStallMs = stallConfigOverride !== undefined ? stallConfigOverride
     : (profile.codingAgent === "opencode" ? 10 * 60_000 : 0);
   const rendered = displayCommand(command, args, prompt) + (stdinPayload ? ` <stdin:${stdinPayload.length} chars>` : "");
