@@ -506,6 +506,44 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   **4 edges, 0 unparked, 4 held** (LOOP-205, LOOP-185, LOOP-95, LOOP-104 all non-terminal). Verify
   queue **0** at close, `needs-pm` **0**, `Human-Blocked` **0**, decision queue **0**. Doc-watch:
   hash matched the stored cursor exactly — **thirty-six fires with no operator doc edit**.
+
+- **2026-08-01 00:14Z (UTC) — the fire that priced the restarts.** **No product code since
+  `1806e17` for the fifth consecutive fire** (`git diff --name-only 1806e17..HEAD | grep -v
+  '^docs/'` ⇒ empty; HEAD `8bb8d2b` is a pm doc commit), so the lens rotation did **not** reset.
+  Lens swept: **data-analytics**, run on the fire ledger as a product surface in its own right.
+- **LOOP-219 filed — 7.9% of metered spend is billed as work delivered.** Every money surface sums
+  `usage.costUsd` over all metered rows, killed fires included: **$40.27 of $510.66**, 461,454
+  output tokens and 4.7 agent-hours, with **no `suspectError` branch anywhere in the cost path**
+  (`metrics.ts:106-115`). The discarded share scales with fire duration — senior-dev **13.1%**, pm
+  9.7%, junior-dev 8.1%, qa 3.3%, sweep and reflect **0%** — so it is a structural tax on the most
+  expensive tier, and `cost-per-accepted-change` (`metrics.ts:465`) divides that inflated numerator
+  by an outcome those fires could not produce. Three of six kill clusters predate metering, so
+  $40.27 is a **floor**. Directly load-bearing on **LOOP-197**, whose spend ceiling is the
+  operator's one genuinely open decision: a ceiling enforced on gross spend charges the agents for
+  the operator's own restarts.
+- **What `suspectError` actually is here, established rather than assumed: all 19 rows sit in one of
+  6 multi-agent clusters; ZERO are isolated.** Several agents' rows share a timestamp to within
+  27–72 ms while their `durationMs` spans 4 to 39 minutes — impossible for independent completions.
+  Corroborated at `run.log:5753-5765` (four `exit 0` lines inside 27 ms, then a fresh `dev-loop run`
+  banner). **LOOP-155 owns the classification half of this flag and is untouched by the above** —
+  same flag, different consumer, different fix; it was filed when the metered cost of those rows was
+  $0.00.
+- **LOOP-218 arrived mid-fire and the late re-scan caught it — 14 fires running, and the first time
+  it paid.** `needs-pm` was **0** at boot; reflect filed a `blocked`+`needs-pm` proposal during the
+  fire. Ruled, re-shaped (`Bug`/`qa`/`junior-dev`, p3) and unparked; both deferred findings triaged
+  to LOOP-212 and LOOP-219. **The one-command re-scan is not optional.**
+- **LOOP-28's standing condition closed out — met, 2 of 2.** junior-dev now carries three
+  `bootBytes` ledger rows and a `2026-08-01.md` report with two fire entries. Its *symptom* ("4
+  fires, 0 reports") is resolved; its *gap* — nothing detects a missing report — is untouched, and
+  the ticket now stands on that alone. Recorded on the ticket so no one implements against a dead
+  premise.
+- Board at close: **Backlog 46, Todo 21 — both dev lanes at the §5a cap (10 senior / 10 junior)**;
+  promoted LOOP-200 (junior, oldest rank-3.5 `Bug`) and LOOP-213 (senior, its only Backlog row).
+  §9c: **4 edges, 0 unparked, 4 held** (LOOP-205, LOOP-185, LOOP-95, LOOP-104 — every blocker still
+  non-terminal). Verify queue **0** (9 In Review, all qa-owned), `Human-Blocked` **0**, decision
+  queue **0**. Doc-watch: the hash moved but the only commit touching the doc is `8bb8d2b`, a pm
+  agent commit — **thirty-seven fires with no operator doc edit**.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -567,8 +605,9 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   distilled immediately below — read those, not the archive.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
-  1. **A derived key must be invariant under the operations its own system performs routinely —
-     and computed from the SAME source as the data it indexes.** Two instances, same shape:
+  1. **A derived value — a key that indexes data, or a ratio that summarizes it — must be
+     invariant under the operations its own system performs routinely, and computed from the
+     SAME source and over the SAME population as the data it describes.** Two instances, same shape:
      `push-guard` keyed passenger detection on SHA ancestry in local `main`, while the workflow it
      guards tells agents to rebase onto `origin/main` — rebase rewrites SHAs. And §22 keys the
      reports tree on `date +%F` (**local**) while every artifact a report describes — the fire
@@ -576,6 +615,13 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
      day's work under `2026-08-01.md` and a third under `2026-07-31.md`, and the skew is
      unrecoverable once the roll-up reads the wrong bucket (**LOOP-214**). Ask of any key: what
      clock/ref computes it, and is that the same one the indexed data was stamped with?
+     **The ratio form, two instances:** `acceptRate` divides a board-wide `Done` numerator by an
+     `In Review` denominator that omits two of four exit edges (**LOOP-98**), and
+     cost-per-accepted-change divides total spend — including the 7.9% burned by fires killed
+     mid-flight, which produced no changes at all — by accepted changes (**LOOP-219**). Ask of
+     any ratio: do the numerator and denominator cover the SAME population? A ratio whose two
+     halves disagree about who they count is not imprecise, it silently answers a different
+     question than its label asks.
   2. **When the ambiguity a §3 triage hit exploits is in PM's OWN acceptance criterion, passing is
      mandatory, not discretionary.** My ticket is also a claim; ambiguity I wrote is my defect.
   3. **A design gate promotes EVERY staged child, even blocked ones — and an increment whose ACs
@@ -611,7 +657,12 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
      **LOOP-190**.
   14. **Reflect's one-ticket-per-fire quota is severity-ORDERED and loss-PROOF:** everything it
      could not file is listed under `## Deferred findings`, and PM triages every entry in the fire
-     that reads it (§17).
+     that reads it (§17). **And when a proposal argues it is NOT a duplicate of a sibling ticket,
+     test that claim by opening the SIBLING's acceptance criteria and asking whether the
+     sibling's fix, as specified, leaves the defect standing** — not by comparing titles or
+     subject matter. LOOP-218 vs LOOP-216 turned on exactly this: same incident, same file, and
+     LOOP-216's own AC2 ("comments, but leaves state/assignee/labels untouched") *preserves* the
+     mis-attributed write that LOOP-218 is about.
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
@@ -865,6 +916,39 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   ordering ("rank by type, then oldest-created; priority gives no tiebreak") is correct *within* a
   rank and wrong *across* ranks — §5's table makes `priority=1` + `Bug` its own top class. Re-read
   §5's table, do not re-derive the order from memory of a past fire's note.
+- **2026-08-01 — a proposal parked out of §17 caution is still PM's to rule on; `external-prereq`
+  describes the world, not the filer's authority.** LOOP-218 arrived `blocked`+`needs-pm` tagged
+  `external-prereq`. There was no external prerequisite: `hub/src/merge-guard.ts` is ordinary
+  product code. §17 restricts **reflect** from *applying* structural change — it does not convert a
+  product-code proposal into a human-only call. Answered in-ticket and unparked. **Ask of any
+  `external-prereq` park: name the external thing. If it cannot be named, the bail-shape is wrong
+  and the ticket is answerable.**
+- **2026-08-01 — ruling on merge-guard's actor (LOOP-218), with the fallback pinned.** The guard
+  hardcodes `"operator"` at `merge-guard.ts:95` and `:103` (re-derived from source before ruling),
+  so a tool decision is recorded as a human ruling — and the loop's own read of operator activity
+  over-counts by exactly the number of guard trips. **(A) accepted**, with the case the proposal
+  left open: use `DEVLOOP_ACTOR` *when set*, and `operator` *when absent* — a hand-run from the
+  operator console is genuinely an operator act, so this is not an unconditional substitution.
+  **(B) accepted** as a documented, tested invariant (an `operator` event carrying a `data.fireId`
+  is a tool write) plus the consumer repair — that is the only half that fixes the four rows already
+  on the ledger. **(C) accepted and it is the durable half**: route the writes through the guarded
+  layer so the next such caller fails closed rather than being fixed after the fact. Typed `Bug`,
+  not `Improvement`: shipped code writing a factually false actor is a defect.
+- **2026-08-01 — the boot-corpus A/B is readable on its headline axis and NOT on its cost axis; the
+  default flip waits for a restart-free stretch.** Adopting reflect's recommendation (LOOP-218
+  deferred finding 1, routed to **LOOP-212**). Cache-read share is **flat, 97.46% OFF → 97.31% ON**
+  — the corpus caches cleanly, which was the substantive worry, and it does not reproduce. The cost
+  axis must not be read yet: two runner restarts landed *inside* the ON arm, each forcing a fresh
+  98–147 KB cache-write per agent onto the arm being measured, and one of senior-dev's two ON fires
+  was itself killed. **A measurement whose treatment arm is being taxed by the effect under study is
+  not a result** — say so and wait, rather than reporting the number with a caveat nobody reads.
+- **2026-08-01 — the cheapest discard was the most expensive one, which is why the fix needs a
+  per-agent split.** The junior-dev fire killed at `00:08:37.373Z` burned only $1.13 — and had taken
+  **LOOP-215 ninety-six seconds earlier**, so the discard dropped the in-flight fix to the conflict
+  that is currently blocking every direct build in the shared checkout, and left the ticket claimed
+  `In Progress` by a fire that no longer exists. Recorded on LOOP-219 as the motivation for its
+  per-agent AC: **an aggregate can never show that the smallest number was the worst event.**
+
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
