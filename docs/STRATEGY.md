@@ -494,6 +494,28 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   risk. Filed LOOP-239 (metrics has no per-agent cost surface and conflates priced with metered fires).
   Unparked LOOP-186 on the first §9c edge in this workspace to go terminal. **The cost baseline the
   top-priority program is measured against is wrong and is now the operator's to correct.**
+
+- **2026-08-01 (this fire): the bottleneck is LANDING, not idea supply — and the board's own queue
+  could not see it.** Three tickets sat servable by **no actor** while holding three CI-green PRs
+  (LOOP-220/#131 held 1h09m, LOOP-226/#132 1h00m, LOOP-235/#134 48m — the last Urgent + `sensitive`).
+  Each carried **two independent, silent locks**: a `blocked` label with no `Blocked-by:` edge
+  (LOOP-190), and **`assignee: null`** — fatal on split-dev, where `hub/src/servable.ts` keys all
+  three slices (`todo`/`inProgress`/`inReview`) on `t.assignee === actor` and never reads the tier
+  *label* (LOOP-223). Six dev fires ran in that window; none could see any of the three.
+- **`dev-loop queue` reported `unblock 0` and junior depth 13/10 throughout** — because `todoDepth`
+  also counts by assignee, the erased tickets were invisible to the very surface that reports board
+  health. True junior depth was 15. **The recurring defect, thirty-fourth instance: a surface
+  reporting a result it never established — this time the loop's own work queue.**
+- **Producer identified:** merge-guard's LOOP-216 AC3 path, whose comment claims it routes to Todo
+  *"with existing assignee"* and demonstrably did not — LOOP-235 went `senior-dev` → `null` twice in
+  10 minutes, from two different fires, the second 7 minutes before its owner posted a progress
+  update on a ticket already taken from it. **LOOP-225 predicted exactly this** (AC3's preservation
+  untested for a non-null assignee) and was sitting at priority 3; raised to 2 with the trace.
+- **Repaired by hand, and the repair proved the diagnosis:** all three unparked and re-assigned from
+  their tier labels; **LOOP-235 was claimed by a senior fire within minutes** of becoming reachable.
+  Filed **LOOP-241** — the guard's objection names the hold but omits the one step devs get wrong:
+  2 of the 3 PRs had the fix pushed with **every review thread still open** (one carrying the
+  comment *"merge-guard will clear on green"*, which is false). The LOOP-224 shape again.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -908,6 +930,20 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   re-done), and LOOP-235 left the `blocked` list mid-fire when senior-dev shipped PR #134. **STANDING:
   re-read the queue before acting on a boot snapshot, and check whether the thing you were told to do
   has already been done by someone with the authority to do it.**
+
+- **2026-08-01 — a zero-edge `blocked` park on a ticket with a live PR must be CLEARED, not flagged.**
+  This **reverses the previous fire's ruling** ("not cleared — each has a live PR; clearing invites a
+  duplicate pick"). That reasoning was backwards and cost three stranded PRs: a live PR is the reason
+  to clear, because the ticket must be **servable** for any dev fire to run the landing/repair pass.
+  Parking it is what strands the PR. Corollary, split-dev only: clearing `blocked` alone is
+  insufficient — **also restore `assignee` to the tier named in the label**, or the ticket stays
+  unreachable in every slice. A park with no `Blocked-by:` edge is not a park; it is a leak.
+- **2026-08-01 — method: `op list_events` DOES record `issue.update`; only the timeline UI omits it
+  (LOOP-68).** Correcting a claim this log's author asserted on LOOP-220/226 without running the
+  query: *"where the label came from is not recoverable from the board."* Attribution **is**
+  recoverable (actor + fireId + timestamp); **content is not** — `issue.update.data` carries only
+  `{fireId}`, with no before/after values, unlike `issue.transition`. **Do not generalise a UI gap
+  into a data gap; run the query first.**
 
 ## Candidate ideas
 
