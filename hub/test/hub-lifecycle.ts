@@ -53,19 +53,44 @@ try {
 
   // Regression (LOOP-6): a DEVLOOP_HUB_DB leaked from an ambient fire (pointing at a DIFFERENT workspace)
   // must never silently redirect hub commands — wireEnv always overrides from the cwd-resolved workspace.
+  // Test only the foreign-HUB_DB case (no foreign PROJECT), since LOOP-186 makes a non-_team PROJECT refuse.
   const wsB = join(tmp, "wsB");
   team(["init", "--dir", wsB, "--key", "hublc-other", "--backend", "service"]);
   const foreignHubDb = join(wsB, ".dev-loop", "hub.db");
-  const hubForeign = (sub: string, cwd: string) => {
+  const hubForeignDb = (sub: string, cwd: string) => {
     const r = spawnSync("node", [join(hubRoot, "src", "hub.ts"), sub], {
       cwd, encoding: "utf8", timeout: 20000,
-      env: { ...env, DEVLOOP_HUB_DB: foreignHubDb, DEVLOOP_PROJECT: "hublc-other" },
+      env: { ...env, DEVLOOP_HUB_DB: foreignHubDb }, // foreign HUB_DB only; no PROJECT override
     });
     return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
   };
-  const startForeign = hubForeign("start", ws);
-  ok(startForeign.code === 0 && /up:.*RUNNING|up: started|RUNNING/.test(startForeign.out), "hub start with a foreign DEVLOOP_HUB_DB still resolves the cwd workspace");
-  hubForeign("stop", ws);
+  const startForeign = hubForeignDb("start", ws);
+  ok(startForeign.code === 0 && /up:.*RUNNING|up: started|RUNNING/.test(startForeign.out), "hub start with a foreign DEVLOOP_HUB_DB still resolves the cwd workspace (LOOP-6)");
+  hubForeignDb("stop", ws);
+
+  // Regression (LOOP-186): hub stop with an explicit non-_team DEVLOOP_PROJECT must REFUSE and name the
+  // project — it must never silently stop _team while the operator asked for another project.
+  const stateDir186 = join(ws, ".dev-loop");
+  const runfileTeam = join(stateDir186, "daemon-_team.json");
+  // Start _team so we can verify the runfile is NOT touched when DEVLOOP_PROJECT names another project.
+  hub("start", ws);
+  const hadRunfile = existsSync(runfileTeam);
+  const hubMistarget = (sub: string) => {
+    const r = spawnSync("node", [join(hubRoot, "src", "hub.ts"), sub], {
+      cwd: ws, encoding: "utf8", timeout: 5000,
+      env: { ...env, DEVLOOP_PROJECT: "hublc-other" }, // explicit non-_team project
+    });
+    return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+  const stopMistarget = hubMistarget("stop");
+  ok(stopMistarget.code !== 0, "hub stop refuses when DEVLOOP_PROJECT names a non-_team project (LOOP-186 AC1)");
+  ok(/hublc-other/.test(stopMistarget.out), "hub stop refusal message names the requested project (LOOP-186 AC1)");
+  ok(hadRunfile && existsSync(runfileTeam), "hub stop refusal did NOT remove the _team runfile (LOOP-186 AC4: mis-target gone)");
+  const startMistarget = hubMistarget("start");
+  ok(startMistarget.code !== 0, "hub start refuses when DEVLOOP_PROJECT names a non-_team project (LOOP-186 AC1)");
+  ok(/daemon up --project/.test(startMistarget.out), "hub start refusal redirects to daemon up --project (LOOP-186 AC2)");
+  // Clean up the started daemon
+  hub("stop", ws);
 
   console.log(fails === 0 ? "\nHUB_LIFECYCLE_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
