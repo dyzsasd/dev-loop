@@ -75,3 +75,45 @@ export const breaker = {
   // The one seam every slot-rescheduling site goes through: open ⇒ the probe cadence (never faster).
   intervalFor(agent: Agent, baseMs: number): number { return this.isOpen(agent) ? Math.max(baseMs, this.probeMs) : baseMs; },
 };
+
+// ─── LOOP-175: provider-scoped breaker message formatting ────────────────────────────────────────────
+// Provider-scoped events (rate-limit / spend-limit / auth) name the whole blast radius rather than
+// the single tripping agent. Agent-scoped events keep the original per-agent wording unchanged.
+// Accepts a pre-formatted probeDuration string so this module stays free of duration arithmetic.
+export function formatBreakerMsg(
+  agent: Agent,
+  ev: "open" | "close",
+  key: string,
+  streak: number,
+  probeDuration: string,
+  agentProvider: ReadonlyMap<Agent, string | null>,
+): string {
+  // OPEN from a provider-scoped breaker: key = "[provider=X] errorClass"
+  const openMatch = ev === "open" ? key.match(/^\[provider=([^\]]+)\] (.+)$/) : null;
+  if (openMatch) {
+    const [, provider, errorClass] = openMatch;
+    const lanes = _affectedLanes(provider, agentProvider);
+    return `breaker OPEN: provider ${provider} (${errorClass}) → ${lanes} on probe cadence ${probeDuration} after ${streak}× identical failures; tripped by ${agent}`;
+  }
+  // CLOSE from a provider-scoped breaker: key = "provider:errorClass" where errorClass ∈ PROVIDER_SCOPED_CLASSES
+  if (ev === "close") {
+    const colonIdx = key.indexOf(":");
+    if (colonIdx !== -1) {
+      const errorClass = key.slice(colonIdx + 1);
+      if (PROVIDER_SCOPED_CLASSES.has(errorClass)) {
+        const provider = key.slice(0, colonIdx);
+        const lanes = _affectedLanes(provider, agentProvider);
+        return `breaker CLOSED: provider ${provider} (${errorClass}) → ${lanes} resumed normal cadence (recovery by ${agent})`;
+      }
+    }
+  }
+  // Agent-scoped events: original wording, unchanged.
+  return ev === "open"
+    ? `breaker OPEN: ${agent} → probe cadence ${probeDuration} after ${streak}× identical failures (${key})`
+    : `breaker CLOSED: ${agent} recovered (${key}) — normal cadence resumed`;
+}
+
+function _affectedLanes(provider: string, agentProvider: ReadonlyMap<Agent, string | null>): string {
+  const agents = [...agentProvider.entries()].filter(([, p]) => p === provider).map(([a]) => a).sort();
+  return agents.length ? agents.join(", ") : "ALL lanes";
+}

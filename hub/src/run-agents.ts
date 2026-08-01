@@ -23,7 +23,7 @@ import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
-import { breaker } from "./breaker.ts";
+import { breaker, formatBreakerMsg } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
 import type { FireUsage } from "./metrics.ts";
@@ -1292,9 +1292,7 @@ function schedulerNotify(ws: Workspace | null, level: "info" | "warn" | "error",
 // workspace with team.comms exists (comms-less: console only — see schedulerNotify's die(3) note).
 function wireBreakerEvents(ws: Workspace | null): void {
   breaker.onEvent = (agent, ev, key, streak) => {
-    const msg = ev === "open"
-      ? `breaker OPEN: ${agent} → probe cadence ${formatDuration(breaker.probeMs)} after ${streak}× identical failures (${key})`
-      : `breaker CLOSED: ${agent} recovered (${key}) — normal cadence resumed`;
+    const msg = formatBreakerMsg(agent, ev, key, streak, formatDuration(breaker.probeMs), breaker._agentProvider);
     console.error(`[breaker] ${msg}`);
     schedulerNotify(ws, ev === "open" ? "error" : "info", msg);
   };
