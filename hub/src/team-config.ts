@@ -75,6 +75,7 @@ export interface TeamBlock {
   opencodePermission?: Record<string, unknown>;
   git?: { defaultBranch?: string }; // top-level default (§19 fallback chain — per-repo wins, else this, else "main")
   agentReviewers?: string[]; // GitHub logins excluded from forge-review merge-guard trips (§3.2); set via `dev-loop team set team.agentReviewers`
+  budget?: { dailyUsd?: number | null; perFireUsd?: number }; // cost-governance ceilings (design budget-ceiling); dailyUsd = rolling 24h cap (null/unset = OFF), perFireUsd = per-fire cap
 }
 
 export interface RepoEntry {
@@ -282,6 +283,22 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit): void {
   }
 }
 
+// E18 — team.budget: dailyUsd must be a positive number or null/unset; perFireUsd must be a positive number.
+const BUDGET_KEYS = new Set(["dailyUsd", "perFireUsd"]);
+function validateBudget(budget: unknown, E: Emit): void {
+  const b = budget as { dailyUsd?: unknown; perFireUsd?: unknown } | null;
+  if (b === null || typeof b !== "object" || Array.isArray(b)) { E("E18", "team.budget", "budget must be an object"); return; }
+  for (const k of Object.keys(b as object)) {
+    if (!BUDGET_KEYS.has(k)) E("E18", `team.budget.${k}`, `unknown budget key '${k}' (expected ${[...BUDGET_KEYS].join(", ")})`);
+  }
+  if (b.dailyUsd !== undefined && b.dailyUsd !== null &&
+      (typeof b.dailyUsd !== "number" || !Number.isFinite(b.dailyUsd) || b.dailyUsd <= 0))
+    E("E18", "team.budget.dailyUsd", `budget.dailyUsd must be a positive number or null/unset to disable (got ${JSON.stringify(b.dailyUsd)})`);
+  if (b.perFireUsd !== undefined &&
+      (typeof b.perFireUsd !== "number" || !Number.isFinite(b.perFireUsd) || b.perFireUsd <= 0))
+    E("E18", "team.budget.perFireUsd", `budget.perFireUsd must be a positive number (got ${JSON.stringify(b.perFireUsd)})`);
+}
+
 // team.key/backend/E09 + E12/E13 (team level) + E07 comms + E16 providers/opencodePermission.
 function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   if (typeof team.key !== "string" || !TEAM_KEY_RE.test(team.key)) E("E02", "team.key", `team.key must match ${TEAM_KEY_RE}`);
@@ -313,6 +330,7 @@ function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
     if (op === null || typeof op !== "object" || Array.isArray(op))
       E("E16", "team.opencodePermission", "opencodePermission must be a JSON object (opencode permission config, injected per fire — replaces the certified wildcard-deny default wholesale)");
   }
+  if (team.budget !== undefined) validateBudget(team.budget, E);
 }
 
 const PROVIDER_KEYS = "kind, baseUrl, authTokenEnv, models, extraOptions, effortMode";
