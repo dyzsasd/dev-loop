@@ -228,7 +228,9 @@ function hasLiveBlockerEdge(db: any, ticketId: string): boolean {
   // P2 fix: secondary sort by rowid (insertion order) makes ordering deterministic when two
   // comments share a millisecond-resolution created_at timestamp (rapid or concurrent writes).
   const comments = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at, rowid").all(ticketId) as { body: string }[];
-  const live = liveBlockerIds(comments.map((c) => c.body));
+  const { live, hadReadFailure } = liveBlockerIds(comments);
+  // If any comment was partially read, we can't trust the live set — treat as sequenced (safe direction).
+  if (hadReadFailure) return true;
   if (live.size === 0) return false;
   for (const id of live) {
     const row = db.prepare("SELECT state FROM tickets WHERE id=?").get(id) as { state: string } | undefined;

@@ -30,15 +30,35 @@ export function parseMarkerLines(commentBodiesInOrder: string[]): { kind: "block
   return events;
 }
 
+// Result type that distinguishes "no markers found" from "source could not be fully read".
+// hadReadFailure: true when any source comment was marked partial/truncated — the live set is
+// untrustworthy and callers must NOT treat it as authoritative (do not unpark or unblock on it).
+export interface BlockerParseResult {
+  live: Set<string>;
+  hadReadFailure: boolean;
+}
+
 // Parse a ticket's comment bodies (chronological) into its live blocker id set.
 // Fail-safe: no marker → empty set (caller treats as parked — the safe under-report direction).
-export function liveBlockerIds(commentBodiesInOrder: string[]): Set<string> {
+// Read integrity: a partial/truncated comment sets hadReadFailure=true; its body is skipped so
+// surviving markers from a partial read cannot be mistaken for a complete dependency ledger.
+export function liveBlockerIds(
+  comments: Array<{ body: string; partial?: boolean }>,
+): BlockerParseResult {
+  let hadReadFailure = false;
   const live = new Set<string>();
-  for (const { kind, ids } of parseMarkerLines(commentBodiesInOrder)) {
-    for (const id of ids) {
-      if (kind === "block") live.add(id);
-      else live.delete(id);
+  for (const { body, partial } of comments) {
+    if (partial) { hadReadFailure = true; continue; }
+    for (const line of body.split(/\r?\n/)) {
+      const m = MARKER_RE.exec(line);
+      if (!m) continue;
+      const kind = m[1].toLowerCase() === "blocked-by" ? "block" as const : "unblock" as const;
+      const ids = extractIds(m[2]);
+      for (const id of ids) {
+        if (kind === "block") live.add(id);
+        else live.delete(id);
+      }
     }
   }
-  return live;
+  return { live, hadReadFailure };
 }
