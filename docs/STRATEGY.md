@@ -460,228 +460,104 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   smallest number was the worst event.
 
 
-### 2026-08-01 (pm, tenth fire) — a three-ticket chain closed end-to-end, and PM has stopped feeding the tier that has capacity
+### 2026-08-01 (tenth fire + mid arc) — [ARCHIVED]
 
-`origin/main` moved to **`c5cb92e`** (#140, LOOP-100) — the first PRODUCT commit in five fires;
-everything between was a PM doc commit. Merge-commit CI green on both matrix nodes.
+Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 10) —
+the tenth-fire entry and the `2026-08-01 (mid)` arc, ~20 KB. The `2026-08-01 (early)` arc was rolled
+earlier under pass 6 (verified present in the archive at its reworded heading before this fold was
+taken). Clauses from those fires still in force:
 
-**LOOP-100 verified `Done`, and with it LOOP-70's `defaultBranch` chain is closed end-to-end.**
-Verified by driving the real `team add-repo` from the merged tree against a throwaway workspace, not
-by reading the tests: `--detect` on a `master`-default remote writes `defaultBranch:"master"`;
-`--detect --default-branch develop` writes `develop`; **an already-registered ref updates in place**
-(the binding amendment — `defaultBranch` is deliberately excluded from the `hasFieldFlags` predicate
-so it reaches the write instead of dying on LOOP-134's refusal); another field flag on an existing ref
-is still refused, and mixing the two writes **nothing** (all-or-nothing, no partial write); a repo with
-no origin gets **no field**. The three-link chain is now whole and every link verified separately:
-**seam** (LOOP-107) → **consumers** (LOOP-188, three residual `"main"` hardcodes) → **producer**
-(LOOP-100, today). The ordering risk I recorded on 2026-07-31 — that landing the producer first would
-make the consumer defect bite more workspaces — **did not materialise, because the consumers landed
-first.** All six LOOP-70 children are terminal.
-
-**The handoff's "pre-existing failure on main" was true, and checking it cost a full parent-tree run.**
-`doctor NEXT picks up the unseeded remainder` fails on a clean `/tmp` export of `c5cb92e` **and** of
-its parent `1c1f40e`, while CI is green on both — so it is a local-environment artefact, not a
-regression. Mechanism proven by single variable: the fire's ambient `DEVLOOP_HUB_DB` leaks through the
-suite's `env()` helper into the spawned child, which then reads the LIVE workspace's `hub.db` (it lists
-`loop`/`w20proj`/`fixture`/`proj` as strays) and names the wrong project in `NEXT`. Scrub that one var
-and the check passes. **Already filed — no new ticket:** leaf LOOP-171 named this exact file, check and
-variable and was `Canceled` into the family sweep **LOOP-193**. One datum LOOP-193 did not have, added
-to it: the file now *contradicts itself* — the LOOP-220 block at `:228` clears `DEVLOOP_HUB_DB` with a
-comment explaining why, while `:214` still leaks, so the per-call opt-in is generating NEW leak sites
-faster than the family retires them. The fix belongs at the `env()` helper (`:18`), once, not per call.
-
-**Filed 0 tickets — the deliberate call, and the measurement behind it.** Backlog is **58 rows, 57 of
-them junior-tier**; junior's unblocked Todo is **11/10, over cap**; senior's is 7/10. Nothing was
-promotable in either tier (junior over cap; **zero** senior-tier Backlog rows, fifth consecutive fire).
-Adding another junior-tier Improvement would be padding a queue that cannot drain.
-
-**But the standing read of that "zero senior Backlog" was wrong, and the throughput data says so.**
-It has been recorded for four fires as "§21b working as designed — borderline routes to junior, do not
-force-route". The routing half is still right. The half that was missing: **senior is not idle and is
-not self-fed.** It closed **19 tickets in 24h** (junior 37), and **11 of those 19 were PM-created** —
-historically the `sensitive`/security/cross-cutting filings (LOOP-172, -173, -210, -162) that §4 forces
-to the senior tier. Senior's queue has always been mostly *PM's* supply. So "0 senior-tier Backlog rows"
-is not a routing artefact to be tolerated — it is a **statement about PM's own filing mix**, which has
-narrowed to small junior-tier defect Improvements. Senior is consuming ~19/day against an empty refill
-pipeline; it has not bitten yet only because the escalation carve-outs (§3 verify-fail follow-ups going
-straight to `Todo`) still reach it. The lever is not routing, it is **what PM chooses to look for**.
-
-`origin/main` moved to `78b6677` (#136, LOOP-175's breaker fix) — the first PRODUCT commit above
-`0b365c1` in four fires; everything between was a PM doc commit.
-
-**Design gate:** LOOP-149 (merge freshness) **PASSED** with two binding amendments; child LOOP-242
-promoted `Backlog → Todo`, parent `Done` (§21a order). LOOP-243 filed + promoted for the re-freshen
-half the design flagged but never filed — senior tier, which had a Backlog of 0 and free slots.
-
-**Landing, measured rather than assumed.** Of six open PRs: #133 / #134 / #135 are **correctly** held
-on unresolved Codex review threads (1, 2, 1); #131 is clear and reachable; #137 was clear with checks
-still running; and **#132 was the only one clear-but-unreachable** — CI-green, `CLEAN`/`MERGEABLE`,
-0 unresolved threads, held solely because LOOP-226 carried `assignee: null`. **Repaired at ~09:03Z;
-PR #132 merged at 09:04:18Z and PR #137 (LOOP-240) merged behind it — so the null assignee was the
-whole of what held them, proven by the landing rather than argued.** Last fire's "landing is the
-constraint" survives, but the sharper statement is that **most of the queue is held for a good reason
-and the exceptions are invisible rather than numerous** — a queue-depth number cannot tell those
-apart, which is what LOOP-244 is for.
-
-**Stranded-work repair, third consecutive fire:** LOOP-226 + LOOP-240 re-assigned; LOOP-240 +
-LOOP-175 unparked from zero-edge `blocked` labels. Both repairs were consumed within minutes —
-LOOP-240 shipped to `In Review`, LOOP-175 verified `Done` by QA — the control that says the repair
-was the actual blocker. `blocked` 10 → 8; **all 8 remaining carry real non-terminal edges, 0
-zero-edge parks left.** The mechanism is now on record rather than inferred: `op list_events`'s
-`issue.transition` rows carry `{from, to, assignee}` and show merge-guard's bounce writing
-`assignee: null` (08:03:57Z LOOP-186, 08:44:06Z LOOP-175), objection comment paired to the same
-second — trace added to LOOP-225. LOOP-240 is a fourth instance with a **different** signature: back
-in `Todo` with **no `issue.transition` row at all**, flagged as a gap, not explained.
-
-### 2026-08-01 (early) — [ARCHIVED] the orphan reset that erased the dev tier, and seven
-merged fixes running nowhere
-
-Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 6). Doctrine from that fire stays distilled in the STANDING RULES block below.
-
-### 2026-08-01 (mid) — both things that mattered arrived AFTER the boot scans said the board was empty
-
-- **LOOP-197 `Done` — the `budget-ceiling` design gate PASSED WITH TWO AMENDMENTS**, all four
-  children promoted. It reached `In Review` at 06:42Z, *after* my boot verify queue read 0. The
-  design's model is right (INV-1 unset ⇒ byte-identical; INV-5 a killed fire is estimated, never
-  summed as `$0`), and I verified its premise rather than its citations: `STRATEGY.md:1090-1102`
-  really does carry the (a)/(b)/(c) split, and **LOOP-98 is still `Backlog`**, so its non-goal holds.
-- **LOOP-228 — operator intake, priority 1: per-fire cost is now the top priority.** Groomed into
-  **LOOP-232** (senior design-and-delegate, `Todo`) and **LOOP-233** (model-tier investigation,
-  since **closed on the null**). ⚠️ **The baseline originally recorded here (~$6.68/fire over 142
-  metered fires, `cacheRead` 45–65%) was WITHDRAWN on 2026-08-01 as arithmetically impossible — see
-  `## Goals`.** Current figure: **$4.79 per priced fire** ($627.42 / 131, as of 2026-08-01T07:25Z),
-  `cacheRead` **41–61%**; conventions at 75% of a PM fire's context is the one figure that survived.
-- **LOOP-231 filed** (trust-safety lens): doctor's two committable-state guards are both anchored off
-  the tree they protect — W06 early-returns because the workspace root is not a repo, and the §17 db
-  guard checks only the *selected* db. The identical three `hub.db` files are `DOCTOR_FAILED` in one
-  tree and a green `PASS` in the product repo, where 9.2 MB sits un-ignored right now.
-- **`origin/main` moved three times during this fire** (`90ba897`, `64f1c58`, then the operator's own
-  `0b365c1` §12b governing fix). I reviewed through **`64f1c58`** and recorded that, not end-of-run HEAD.
-
-- **2026-08-01 (this fire): the cost program's own numbers were the thing most in need of auditing.**
-  The board arrived quiet (verify 0 / unblock 0) and both items of consequence landed mid-fire again —
-  the LOOP-232 design gate and the LOOP-233 evidence. **Seventeenth consecutive fire in which the late
-  re-scan carried the fire.** Verified and closed the context-compression design gate (PASS + three
-  amendments, three children promoted with the §9c edges its prose only implied, LOOP-109 retired as
-  superseded). Ruled PM's reserved model-tier call: **no downgrade**, because the measured opus:sonnet
-  ratio is ~1.6x rather than the 5-9x in circulation, and compression saves more with no capability
-  risk. Filed LOOP-239 (metrics has no per-agent cost surface and conflates priced with metered fires).
-  Unparked LOOP-186 on the first §9c edge in this workspace to go terminal. **The cost baseline the
-  top-priority program is measured against is wrong and is now the operator's to correct.**
-
-- **2026-08-01 (this fire): the bottleneck is LANDING, not idea supply — and the board's own queue
-  could not see it.** Three tickets sat servable by **no actor** while holding three CI-green PRs
-  (LOOP-220/#131 held 1h09m, LOOP-226/#132 1h00m, LOOP-235/#134 48m — the last Urgent + `sensitive`).
-  Each carried **two independent, silent locks**: a `blocked` label with no `Blocked-by:` edge
-  (LOOP-190), and **`assignee: null`** — fatal on split-dev, where `hub/src/servable.ts` keys all
-  three slices (`todo`/`inProgress`/`inReview`) on `t.assignee === actor` and never reads the tier
-  *label* (LOOP-223). Six dev fires ran in that window; none could see any of the three.
-- **`dev-loop queue` reported `unblock 0` and junior depth 13/10 throughout** — because `todoDepth`
-  also counts by assignee, the erased tickets were invisible to the very surface that reports board
-  health. True junior depth was 15. **The recurring defect, thirty-fourth instance: a surface
-  reporting a result it never established — this time the loop's own work queue.**
-- **Producer identified:** merge-guard's LOOP-216 AC3 path, whose comment claims it routes to Todo
-  *"with existing assignee"* and demonstrably did not — LOOP-235 went `senior-dev` → `null` twice in
-  10 minutes, from two different fires, the second 7 minutes before its owner posted a progress
-  update on a ticket already taken from it. **LOOP-225 predicted exactly this** (AC3's preservation
-  untested for a non-null assignee) and was sitting at priority 3; raised to 2 with the trace.
-- **Repaired by hand, and the repair proved the diagnosis:** all three unparked and re-assigned from
-  their tier labels; **LOOP-235 was claimed by a senior fire within minutes** of becoming reachable.
-  Filed **LOOP-241** — the guard's objection names the hold but omits the one step devs get wrong:
-  2 of the 3 PRs had the fix pushed with **every review thread still open** (one carrying the
-  comment *"merge-guard will clear on green"*, which is false). The LOOP-224 shape again.
-- **2026-08-01 (later fire) — CORRECTION: the producer named in the entry above is innocent, and the
-  entry stated it as fact.** That entry identified "merge-guard's LOOP-216 AC3 path" as what nulls
-  assignees. It does not. On `origin/main`, `applyTrip` writes `assignee: cur.assignee` and the AC3
-  forge-review branch adds no `blocked` label (`hub/src/merge-guard.ts:107-113`) — it preserves what
-  it finds. **LOOP-225 is a test-coverage gap on that assertion, not a live defect**: QA drove
-  `applyTrip` against a seeded non-null assignee and confirmed correct preservation. The writer that
-  fits the trace is the **Step-0 orphan reset (LOOP-223)**: LOOP-235 was claimed at 08:35Z, its
-  senior fire completed 09:24:01Z leaving it `In Progress`, and at 09:39:19-20Z actor `operator`,
-  from inside *junior-dev's* fire, wrote `{from: "In Progress", to: "Todo", assignee: null}` with no
-  comment — the orphan-reclaim shape LOOP-223 describes verbatim. **LOOP-223 raised to P1** on this
-  second victim (the first, LOOP-175, was a P2 improvement; this one is P1 + `sensitive` + a green
-  PR). Recorded as a correction rather than an edit: naming the wrong producer sends the fix to the
-  wrong file, and this doc's own most-repeated finding is a surface asserting what it never established.
-- **2026-08-01 (later fire) — `merged` is not `running`, again: 22 code commits of verified fixes
-  execute nowhere on this host.** `dev-loop` on PATH is **1.13.0**; **npm already carries 1.14.0**;
-  `origin/main` is `a43a832`. Every `cli`-interface fire runs the installed package, so LOOP-220,
-  LOOP-226, LOOP-240, LOOP-175, LOOP-210, LOOP-200, LOOP-215, LOOP-216 and LOOP-195 are all merged
-  and inert. Verified by content, not by version string: the installed tree has **0** occurrences of
-  LOOP-220's `scratch` predicate against 10 on `origin/main`, and this box's `doctor` still raises
-  `[W01]` for the project whose config reads `"scratch": true` while printing **two disagreeing
-  project counts in one run** (`3 projects` from config, `projects=5` from hub.db). **Second
-  occurrence in ~2 days** (LOOP-38, 2026-07-30). Parked for the operator as **LOOP-246** — the only
-  outstanding action is a reinstall, which is one command on their host.
-
-- **2026-08-01 (this fire) — the writer I exonerated twice was guilty, and I had been auditing a tree
-  that is not executing.** Two prior fires investigated why LOOP-235 kept losing its assignee, read
-  `hub/src/merge-guard.ts:107-113` on `origin/main`, correctly found `assignee: cur.assignee,
-  labels: cur.labels`, and published *"merge-guard is innocent"* — then handed the blame to the
-  Step-0 orphan reset (LOOP-223, raised to P1) and downgraded LOOP-225 to a test-coverage gap. All
-  three verdicts were wrong. The guard that ran is the **installed 1.13.0** one:
-  `dist/merge-guard.js:34` — *"route the ticket (state→Todo, labels+=blocked, assignee→null)"*.
-  LOOP-216 fixed it, 1.14.0 published it, this host never installed it (LOOP-246). The event ledger
-  splits the morning's **11 assignee-nulling transitions across three independent writers**:
-  **8** by `operator`/merge-guard-1.13.0 (LOOP-235 ×3, LOOP-220 ×2, LOOP-226, LOOP-186, LOOP-175),
-  **2** by the Step-0 reclaim (LOOP-175 only — LOOP-223's real and only evidence, reverted to P2),
-  and **3** by the **In Review ship handoff** (LOOP-220, LOOP-226, LOOP-175), which is the writer
-  behind this doc's own "green PRs held by unreachable tickets" finding and was attributed to
-  neither. LOOP-235 is a livelock, not a recurrence: claim → guard trip → null+`blocked` → no
-  actor's slice → hand unpark → repeat, three PM unparks and ~6 senior fires on one green-PR ticket.
-  **The lesson is not about merge-guard.** A fire diagnosing dev-loop reasons from the repo about
-  behaviour produced by the package, and nothing anywhere puts that gap in front of it — `doctor`'s
-  W18 measures it, but a diagnosing fire has no reason to run `doctor`. Filed as **LOOP-249**; the
-  third fire only escaped by grepping the installed tree, a step no convention asks for.
-
-- **2026-08-01 (later fire) — the pin landed and the CLI axis is genuinely fixed; two other axes
-  were never covered, and one of them reverted the fix in 67 seconds.** The operator executed the
-  human's reversal (see the Decisions entry below): this host now installs `dev-loop` from a local
-  source build of `64aebc2`, and `dev-loop --version` reports **1.14.0**. Verified by consequence,
-  not by version string — the installed tree now carries LOOP-220's `scratch` predicate **10** times
-  (`team-config` 3 + `rotation` 4 + `doctor` 3, matching `origin/main` exactly, against **0**
-  before), `doctor` no longer raises `[W01]` for the `"scratch": true` project, and the installed
-  `merge-guard` carries LOOP-216's preserve path. The consequence followed on the board: **zero
-  `operator`-actor writes since 10:26:17Z**, against 8 assignee-nulling writes earlier the same day;
-  LOOP-235 has since moved three times with its assignee intact. The livelock stopped. Mechanism
-  worth recording — `merge-guard` is a **CLI verb**, spawned fresh per call, so it picked up the new
-  build with no restart at all.
-  **But "the host is upgraded" turned out to be three claims, not one.** (i) The **CLI** axis —
-  fixed, instantly, because every invocation is a new process. (ii) The **daemon** axis — the
-  operator restarted both daemons onto 1.14.0 and said so; **67 seconds later** a leaked daemon from
-  a stale foreign checkout (`workspace/jinko/dev-loop`, v1.13.0) took port 8789 and has served this
-  board ever since. Cause is direction-blind: `daemon-lifecycle.ts:230` tests version **inequality**,
-  so an older CLI meeting a newer daemon calls it *"running old code"* and restarts it *downward*,
-  announcing the downgrade as an upgrade — and `hub status` prescribes exactly that command
-  (**LOOP-252**). It was reachable because 13 leaked daemons hold ports 8787–8799, LOOP-146's
-  subject. (iii) The **scheduler** axis — `run-agents` pid 13131 loaded its modules at 02:08Z, ten
-  hours before the reinstall replaced them; node never reloads a module graph, so `servable.ts`
-  (LOOP-144's fire gate), `rotation.ts` (LOOP-220), `ticket-release.ts` (LOOP-223), `breaker.ts`
-  (LOOP-175) and `boot-prefix.ts` are all still executing 1.13.0 in the orchestrator. **Nothing
-  detects it** — doctor has no scheduler probe and the scheduler reports its version nowhere
-  (**LOOP-253**). LOOP-220 is the clean illustration: doctor, a fresh CLI spawn, correctly excludes
-  the scratch project while the identical fix inside `rotation.ts` is dead in the scheduler — **the
-  same commit reading as live on one axis and dead on another, in the same minute.**
+- **An upgrade has THREE axes on this host, not one** — the CLI (fresh process, instant), the hub
+  daemons (restart required), and the long-lived `run-agents` scheduler (restart required, nothing
+  detects it). Never answer "is this host current?" with `dev-loop --version`. This rule was earned
+  twice and paid a third time on 2026-08-01 (see the eleventh-fire entry below).
+- **`merged` ≠ `published` ≠ `installed` ≠ `running`.** Attribute runtime behaviour from
+  `dev-loop events` and the installed tree, never from repo source.
+- **The bottleneck is landing, not idea supply.** A deep Backlog with an idle tier is a routing or
+  infrastructure problem; filing more tickets is padding, not throughput.
+- **Aggregates hide the worst event.** Every cost surface bills fires killed mid-flight as delivered
+  (LOOP-219), and a mean can never reveal that the smallest number was the most expensive mistake.
+- **A correction must travel with the thing it corrects.** The merge-guard producer named in that
+  arc was exonerated, then found guilty on the third pass; the record keeps all three steps because
+  the middle one is what made the last one findable.
 
 
-- **2026-08-01 (later fire) — the queue has been served in pure creation-date FIFO the whole time,
-  and the top priority's own precondition is 8th in line.** `strategy-gaps` lens. §5's pick order
-  has six ranks, but it reads `priority` in only two of them — both gated on `type` (`p1`+`Bug` → 0,
-  `p1`+`Feature` → 1); everything else falls to rank 5 and is separated only by `created_at`
-  (`servable.ts:29-35,60`). Measured on the live board this fire: **69 of 88 open rows (78%) are
-  rank 5, and 18 of 18 SERVABLE `Todo` rows are — 100%.** The priority spread inside that tied set
-  is `p1×1, p2×13, p3×4`, entirely inert. So the ordering machinery is currently deciding nothing:
-  every dev fire is served oldest-first. Not a one-day artifact — Improvements are 71 of 143 Done.
-  The concrete cost is on this doc's own top priority: **LOOP-239**, the precondition Goals names
-  verbatim (*"must land before this program measures anything against a baseline"*), is `p1` and
-  sits **8th of 11** in junior-dev's slice behind two `p3`s, purely on filing date; LOOP-236/237/238
-  are in the same tail. **PM has no lever** — the §5a `todoDepthCap` gates entry to `Todo`, not
-  order within it, and junior is over cap at 11/10 while senior sits at 7/10 with zero backlog rows
-  to promote, so the board is simultaneously over-cap and un-steerable. The code is not
-  mis-built: `servable.ts` implements the §5 table exactly. The gap is in the rule, which tells
-  PM/QA "urgency lives in `priority`, set it on create" and then discards it for 4 of every 5
-  tickets. Filed **LOOP-254** and parked `Human-Blocked` — a conventions §5 change is
-  operator-applied under §17, and this one is a genuine ordering-policy call, not a repair.
+### 2026-08-01 (pm, eleventh fire) — the third staleness axis stopped being theory: a stale daemon has been silently rewriting board writes, and it killed split-dev delegation
+
+`origin/main` moved to **`57af9a7`** — PR #141 (LOOP-103), merge-commit CI green on both matrix
+nodes. Product moved for the second consecutive fire.
+
+**LOOP-103 verify-FAILED on AC3, and the code is not the reason.** The implementation is right and
+stays: project-scope `fireTimeout`/`stallTimeout` are honoured on delivery fires, `cadence` is
+rejected at project scope, and the BINDING AC6 steward guard I attached at the design gate was
+resolved the cheap way (`!teamScope`) with the rule stated beside the lookup. I exercised it on a
+**three**-project fixture rather than reading the diff: `proj-a` → `45m/13m`, `proj-b` → `20m/4m`
+(isolated), a project with no `agents` block → `1h/off` (defaults byte-unchanged), and the steward
+`sweep` fire → team `55m/7m`, not `proj-a`'s `33m/3m`. What failed is the Change-3 doc edit: the
+`projects.<key>.agents` row now claims the resolution order is *project > **CLI flag > team-scope**
+> default*. It is not. `--fire-timeout 5m` against `team.agents.sweep.fireTimeout:"55m"` renders
+`55m` — the flag loses — and this repo's own green test says so by name (`LOOP-9: per-agent config
+(30m) beats explicit --fire-timeout 2h`). The ticket's own spec had the order right; the sentence
+transposed two terms. That matters because it is the **only** precedence statement in the schema
+doc: an operator reading it will expect their command-line flag to win, and it is silently ignored —
+the same validate-then-drop surprise the ticket existed to remove, relocated from the code into the
+docs. `Canceled`, superseded by **LOOP-257** (senior direct-code per the §3 junior-escalation rule,
+carrying the doc fix, the `stallTimeout` test variant the shipped block omitted, and one assertion
+that makes the corrected claim executable on the v2 path).
+
+**The daemon axis has been corrupting writes, not just serving old reads.** The `loop` hub daemon is
+pid 89725 on **v1.13.0** while the CLI is **v1.14.0**. Board writes execute in the daemon, so this
+is not a stale-read problem: a dev-tier actor writing a cross-tier assignment had it **silently
+collapsed to self**, which means **senior→junior delegation has been impossible** — senior-dev hit
+exactly this staging a child for LOOP-172 and had to cancel the half-staged LOOP-256. The same stale
+build is why merge-guard kept nulling assignees on hold, and why LOOP-235 needed unparking three
+times: the fix shipped in the **CLI**, and `--apply` writes through the **daemon**. Four fires of
+churn, one canceled ticket, and a dead delegation path from one un-restarted process. Filed
+**LOOP-258** — `Human-Blocked`, assigned to the operator, one command
+(`DEVLOOP_PROJECT=loop dev-loop daemon up`). I did not restart it myself: shared infra, other fires
+may be mid-write, `autonomy: ask`.
+
+**I re-pointed LOOP-172's blocker edge, because it was aimed at a ticket that cannot resolve it.**
+It carried `Blocked-by: LOOP-235`, but LOOP-235's deliverable is the W06 bundle-leak guard — it is
+where the diagnosis was *recorded*, not what *fixes* it. Left alone, LOOP-172 would have auto-unparked
+the moment LOOP-235 went `Done`, daemon still stale, delegation still impossible: the second churn on
+the same root cause. Both edges now stand, and §9c unparks only when all are terminal, so the
+AND-gate is strictly safer than swapping one for the other.
+
+**Corrected a handoff claim rather than repeating it — `doctor` is not blind here.** senior-dev's
+hardening note said a W-check on "daemon code-version ≠ CLI version" would have caught this three
+fires ago. That check already exists (`doctor.ts:840`) and it fired correctly this fire, naming both
+versions and the exact remediation. The defect is its **classification**: it is an *unnumbered* warn
+inside the section header that reads *"best-effort; informational, not a hard-fail gate"*, so
+`DOCTOR_OK` prints anyway. Its sibling **W18** — the npm-publish skew, whose blast radius is merely
+running old *read* code — is numbered and prominent, while the skew that silently corrupts the
+system of record is neither. The operator console tells the human to *"fix every ❌ and read every
+W-code"*; this line is neither. Filed **LOOP-259** (junior tier — a scoped classification change, no
+`sensitive` signal, and §21b's "when borderline, junior" holds).
+
+**Last fire's tier-feeding worry resolves differently than I framed it.** Senior is not starved: it
+holds **8 unblocked `Todo`** rows against a cap of 10, so the two open slots are an allowance, not
+an emptiness — filing senior work to fill them would be padding. The real constraint is narrower and
+worse: while the daemon is stale, senior can design but **cannot delegate**, so any
+design-and-delegate ticket filed now stalls at the staging step exactly as LOOP-172 just did. Until
+LOOP-258 clears, the only *completable* senior work is direct-code shaped. That is a routing fact,
+not a capacity fact, and it is why I filed one junior ticket and no senior ideation this fire.
+
+- **2026-08-01 (eleventh fire) — board state.** Verify **1 → 0** (LOOP-103 closed). Unblock **0**;
+  `needs-pm` **0**; `_team` carrier **0**; `Human-Blocked` **0 → 1** (LOOP-258, the first item to
+  reach the operator's queue in ten fires). §9c: **10 edges, 0 unparked, 10 held** — every blocker
+  non-terminal, and one edge re-pointed. Depth at close: senior **8/10**, junior **13/10 (over
+  cap)**, Backlog **60**. Promoted **0** — junior is over cap and the Backlog holds no senior-tier
+  row (LOOP-256 was canceled by its author). Doc-watch: content hash matched the stored cursor —
+  **thirty-five fires with no operator doc edit**. `DOCTOR_OK` with W01/W18/W20 + the unnumbered
+  daemon warn; W20 notes there is no `team.comms`, so LOOP-258 surfaces only in `doctor` and
+  `dev-loop metrics`, never as a push reminder — doctor's own `NEXT:` line does route to it.
+- **§20 R2 rollup pass 10.** Rolled the tenth-fire entry and the whole `2026-08-01 (mid)` arc to
+  `docs/strategy-archive/2026-08.md`: **109.0 KB → 90.7 KB (−16.8%)**. Current state had never been
+  rolled and was the growth; it now is. Before folding I verified the pass-6 fold it cited was
+  genuinely performed — it is, at a **reworded** heading in the archive, which is why a
+  phrase-match against the live doc's wording finds nothing. Cite folds by arc, not by title.
+
 
 ## Personas
 
@@ -715,6 +591,35 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-01 (pm, eleventh fire) — while the hub daemon is version-skewed, senior-tier filings are
+  direct-code shaped only.** A stale daemon silently collapses a dev-tier actor's cross-tier
+  assignment to self, so senior-dev can author a design but cannot stage its junior children
+  (observed: LOOP-172's child LOOP-256, canceled by its author). Filing `Mode: design`
+  design-and-delegate work in that state creates tickets that provably cannot complete. Until
+  **LOOP-258** (the operator restart tracker) clears, senior-tier ideation routes to direct-code or
+  waits. This is a routing constraint imposed by infrastructure, **not** a revision of §21b — the
+  tier signals are unchanged, and borderline work still goes junior. Corollary for reading the
+  board: a tier holding open cap slots is not evidence of starvation; check whether its queue is
+  *completable* before concluding PM has under-fed it.
+- **2026-08-01 (pm, eleventh fire) — a doc that misdescribes config is the same defect class as code
+  that drops it, and gets the same verify-fail.** LOOP-103 shipped correct, tested, merged code and
+  still failed AC3, because its schema-doc row inverted two terms of the precedence chain. The
+  ticket existed to stop `config-schema.md` making false claims about what config does; shipping a
+  new false claim in it is not a rounding error on an otherwise-good increment. Recorded because the
+  cheap call was to wave it through on the strength of the code.
+- **2026-08-01 (pm, eleventh fire) — a blocker edge must point at the ticket that RESOLVES the
+  block, not the ticket where it was diagnosed.** LOOP-172 was blocked on LOOP-235 because that is
+  where the daemon root-cause was written up; LOOP-235's own deliverable would never have restarted
+  the daemon, so the edge would have auto-unparked into the identical failure. When correcting such
+  an edge, ADD the true blocker rather than swapping it out — §9c unparks only when every edge is
+  terminal, so an extra edge is strictly safer and does not discard another agent's marker.
+- **2026-08-01 (pm, eleventh fire) — verify a handoff's claim about a shared surface before
+  repeating it, including a negative one.** senior-dev reported that `doctor` was blind to the
+  daemon skew and suggested adding a W-check. The check already existed and had been firing; the
+  real defect was that it is unnumbered and sits in a section explicitly stamped non-gating, so
+  `DOCTOR_OK` prints over it (**LOOP-259**). Filing the suggested ticket as described would have
+  added a duplicate check and left the actual defect in place.
 
 - **2026-06-14 → 06-27 — [ARCHIVED] the 2026-06 milestone arc** (daemon foundation DL-1..DL-5;
   the standalone-daemon + multi-CLI repositioning P1..P5 incl. the MCP↔daemon dispatch unification,
