@@ -23,9 +23,11 @@ writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { demo: {
 } } }));
 const out = join(tmp, "out"); mkdirSync(out, { recursive: true });
 
+// LOOP-240: cwd must be outside the workspace so CWD walk-up can't resolve the live dev-loop.json.
 const r = spawnSync(process.execPath, [src, "qa", "--project", "demo", "--out", out], {
   encoding: "utf8",
-  env: { ...process.env, DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+  cwd: tmp,
+  env: { ...scrubFireEnv(), DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
 });
 ok(r.status === 0, "export exits 0");
 const skillFile = join(out, "devloop-qa-demo", "SKILL.md");
@@ -36,7 +38,8 @@ ok(!/\$\{CLAUDE_PLUGIN_ROOT\}/.test(md), "no unresolved ${CLAUDE_PLUGIN_ROOT} re
 ok(/## Conventions \(inlined/.test(md), "inlines the conventions appendix");
 ok(/\n## 2\./.test(md) && /\n## 12b\./.test(md), "appendix includes the load-bearing sections (safety §2, landing §12b)");
 ok(/dev\.example\.com/.test(md) && /landing.*:.*pr/.test(md), "inlines the project config facts (test env + landing)");
-const noProj = spawnSync(process.execPath, [src, "qa"], { encoding: "utf8" });
+// LOOP-240: cwd must be outside the workspace so that tryResolveWorkspace can't supply a default project.
+const noProj = spawnSync(process.execPath, [src, "qa"], { encoding: "utf8", cwd: tmp, env: scrubFireEnv() });
 ok(noProj.status === 2 && /--project/.test(noProj.stderr ?? ""), "missing --project exits 2 with usage");
 
 // A passive-intake project must carry its mode into the export — Desktop has no config access,
@@ -48,7 +51,8 @@ writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { demo: {
 } } }));
 const rp = spawnSync(process.execPath, [src, "pm", "--project", "demo", "--out", out], {
   encoding: "utf8",
-  env: { ...process.env, DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+  cwd: tmp,
+  env: { ...scrubFireEnv(), DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
 });
 const pmMd = rp.status === 0 ? readFileSync(join(out, "devloop-pm-demo", "SKILL.md"), "utf8") : "";
 ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.test(pmMd), "a passive project's export inlines intake.mode + the §5a posture");
