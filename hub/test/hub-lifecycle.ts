@@ -88,7 +88,7 @@ try {
   ok(hadRunfile && existsSync(runfileTeam), "hub stop refusal did NOT remove the _team runfile (LOOP-186 AC4: mis-target gone)");
   const startMistarget = hubMistarget("start");
   ok(startMistarget.code !== 0, "hub start refuses when DEVLOOP_PROJECT names a non-_team project (LOOP-186 AC1)");
-  ok(/daemon up --project/.test(startMistarget.out), "hub start refusal redirects to daemon up --project (LOOP-186 AC2)");
+  ok(/DEVLOOP_PROJECT=.*daemon up/.test(startMistarget.out), "hub start refusal redirects to DEVLOOP_PROJECT=<key> daemon up (LOOP-186 AC2)");
   // Clean up the started daemon
   hub("stop", ws);
 
