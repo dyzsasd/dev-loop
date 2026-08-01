@@ -8,7 +8,7 @@ import { openDb, logEvent } from "../src/db.ts";
 // NB: run-agents.ts must NOT be imported here — its main() runs unconditionally (LOOP-58), so an import
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
-import { breaker } from "../src/breaker.ts";
+import { breaker, formatBreakerMsg, PROVIDER_SCOPED_CLASSES, type Agent } from "../src/breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "../src/fire-usage.ts";
 import { releaseClaimedTickets } from "../src/ticket-release.ts";
 import { insertTicket } from "../src/ticketwrite.ts";
@@ -489,6 +489,47 @@ try {
     breaker.threshold = savedThreshold;
     breaker.byAgent.clear(); breaker.byProvider.clear(); breaker._agentProvider.clear();
     breaker.onEvent = savedOnEvent;
+  }
+
+  // ── LOOP-175: formatBreakerMsg — provider-scoped vs agent-scoped message shapes ──────────────────────
+  // Regression: provider-scoped OPEN/CLOSE name the provider + blast radius, not the tripping agent.
+  // Agent-scoped OPEN/CLOSE keep the original per-agent wording unchanged.
+  {
+    const providerMap = new Map<Agent, string | null>([
+      ["pm", "anthropic"], ["qa", "anthropic"], ["senior-dev", "anthropic"],
+      ["junior-dev", "anthropic"], ["sweep", "openai"],
+    ]);
+
+    // Provider-scoped OPEN — key emitted by breaker: "[provider=anthropic] rate-limit"
+    const openMsg = formatBreakerMsg("qa", "open", "[provider=anthropic] rate-limit", 5, "1h", providerMap);
+    ok(!openMsg.startsWith("breaker OPEN: qa"), "LOOP-175 AC1: provider OPEN does not name the agent as subject");
+    ok(openMsg.includes("provider anthropic"), "LOOP-175 AC1: provider OPEN names the provider");
+    ok(openMsg.includes("rate-limit"), "LOOP-175 AC1: provider OPEN names the errorClass");
+    ok(openMsg.includes("tripped by qa"), "LOOP-175 AC1: provider OPEN mentions tripping agent as detail");
+    ok(openMsg.includes("junior-dev") && openMsg.includes("pm"), "LOOP-175 AC1: provider OPEN lists all lanes on that provider");
+    ok(!openMsg.includes("sweep"), "LOOP-175 AC1: provider OPEN excludes agents on a different provider");
+
+    // Provider-scoped CLOSE — key emitted by breaker: "anthropic:rate-limit"
+    const closeMsg = formatBreakerMsg("pm", "close", "anthropic:rate-limit", 5, "1h", providerMap);
+    ok(!closeMsg.startsWith("breaker CLOSED: pm"), "LOOP-175 AC2: provider CLOSE does not name agent as subject");
+    ok(closeMsg.includes("provider anthropic"), "LOOP-175 AC2: provider CLOSE names the provider");
+    ok(closeMsg.includes("rate-limit"), "LOOP-175 AC2: provider CLOSE names the errorClass");
+    ok(closeMsg.includes("recovery by pm"), "LOOP-175 AC2: provider CLOSE mentions recovering agent");
+
+    // Agent-scoped OPEN — keeps original wording (LOOP-175 AC3)
+    const agentOpenMsg = formatBreakerMsg("sweep", "open", "task-failed", 3, "1h", providerMap);
+    ok(agentOpenMsg.startsWith("breaker OPEN: sweep →"), "LOOP-175 AC3: agent-scoped OPEN still names the agent as subject");
+    ok(agentOpenMsg.includes("task-failed"), "LOOP-175 AC3: agent-scoped OPEN includes the error key");
+
+    // Agent-scoped CLOSE — keeps original wording (LOOP-175 AC3)
+    const agentCloseMsg = formatBreakerMsg("sweep", "close", "task-failed", 3, "1h", providerMap);
+    ok(agentCloseMsg.startsWith("breaker CLOSED: sweep"), "LOOP-175 AC3: agent-scoped CLOSE still names the agent");
+
+    // PROVIDER_SCOPED_CLASSES covers rate-limit, spend-limit, auth — provider-scoped pattern applies to all
+    for (const cls of PROVIDER_SCOPED_CLASSES) {
+      const msg = formatBreakerMsg("qa", "open", `[provider=anthropic] ${cls}`, 5, "1h", providerMap);
+      ok(msg.includes(`provider anthropic (${cls})`), `LOOP-175 AC3: ${cls} is provider-scoped`);
+    }
   }
 
   // ── LOOP-19: releaseClaimedTickets — runner-side infra-kill release ──────────────────────────────────
