@@ -444,7 +444,8 @@ export function detectRepoFacts(absPath: string): DetectedRepoFacts {
     const remoteShow = spawnSync("git", ["-C", absPath, "remote", "show", "origin"], { encoding: "utf8" });
     if (remoteShow.status === 0) {
       const m = remoteShow.stdout.match(/HEAD branch:\s*(.+)/);
-      if (m) out.defaultBranch = m[1].trim();
+      const parsed = m?.[1].trim();
+      if (parsed && parsed !== "(unknown)") out.defaultBranch = parsed;
     }
   }
   return out;
