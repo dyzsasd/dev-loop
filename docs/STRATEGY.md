@@ -198,7 +198,7 @@ is precisely how the withdrawn one survived a day steering the top priority.
   New installs start from `dev-loop team init`; `dev-loop.json` is the source of truth.
 - **Main surfaces / modules:** `skills/` agent and operator skills; `references/` shared specs
   (`conventions.md`, `config-schema.md`, `codex-integration.md`); `hub/` — the `node:sqlite`
-  service backend + `dev-loop` CLI, **v1.13.0 line** (see `CHANGELOG.md`; the installed binary is what the loop actually runs — see the release-skew note below), with the full npm test
+  service backend + `dev-loop` CLI, **v1.14.0 line** (see `CHANGELOG.md`; the installed binary is what the loop actually runs, and since 2026-08-01 this host installs it from a **local source build**, not npm — see the release-skew and pin notes below), with the full npm test
   suite; `docs/`
   for architecture, running, portability, daemon, design records, and reviews; `config/` for
   MCP templates and example workspace config.
@@ -589,6 +589,35 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   behaviour produced by the package, and nothing anywhere puts that gap in front of it — `doctor`'s
   W18 measures it, but a diagnosing fire has no reason to run `doctor`. Filed as **LOOP-249**; the
   third fire only escaped by grepping the installed tree, a step no convention asks for.
+
+- **2026-08-01 (later fire) — the pin landed and the CLI axis is genuinely fixed; two other axes
+  were never covered, and one of them reverted the fix in 67 seconds.** The operator executed the
+  human's reversal (see the Decisions entry below): this host now installs `dev-loop` from a local
+  source build of `64aebc2`, and `dev-loop --version` reports **1.14.0**. Verified by consequence,
+  not by version string — the installed tree now carries LOOP-220's `scratch` predicate **10** times
+  (`team-config` 3 + `rotation` 4 + `doctor` 3, matching `origin/main` exactly, against **0**
+  before), `doctor` no longer raises `[W01]` for the `"scratch": true` project, and the installed
+  `merge-guard` carries LOOP-216's preserve path. The consequence followed on the board: **zero
+  `operator`-actor writes since 10:26:17Z**, against 8 assignee-nulling writes earlier the same day;
+  LOOP-235 has since moved three times with its assignee intact. The livelock stopped. Mechanism
+  worth recording — `merge-guard` is a **CLI verb**, spawned fresh per call, so it picked up the new
+  build with no restart at all.
+  **But "the host is upgraded" turned out to be three claims, not one.** (i) The **CLI** axis —
+  fixed, instantly, because every invocation is a new process. (ii) The **daemon** axis — the
+  operator restarted both daemons onto 1.14.0 and said so; **67 seconds later** a leaked daemon from
+  a stale foreign checkout (`workspace/jinko/dev-loop`, v1.13.0) took port 8789 and has served this
+  board ever since. Cause is direction-blind: `daemon-lifecycle.ts:230` tests version **inequality**,
+  so an older CLI meeting a newer daemon calls it *"running old code"* and restarts it *downward*,
+  announcing the downgrade as an upgrade — and `hub status` prescribes exactly that command
+  (**LOOP-252**). It was reachable because 13 leaked daemons hold ports 8787–8799, LOOP-146's
+  subject. (iii) The **scheduler** axis — `run-agents` pid 13131 loaded its modules at 02:08Z, ten
+  hours before the reinstall replaced them; node never reloads a module graph, so `servable.ts`
+  (LOOP-144's fire gate), `rotation.ts` (LOOP-220), `ticket-release.ts` (LOOP-223), `breaker.ts`
+  (LOOP-175) and `boot-prefix.ts` are all still executing 1.13.0 in the orchestrator. **Nothing
+  detects it** — doctor has no scheduler probe and the scheduler reports its version nowhere
+  (**LOOP-253**). LOOP-220 is the clean illustration: doctor, a fresh CLI spawn, correctly excludes
+  the scratch project while the identical fix inside `rotation.ts` is dead in the scheduler — **the
+  same commit reading as live on one axis and dead on another, in the same minute.**
 
 ## Personas
 
@@ -1002,6 +1031,38 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   P1 raise reverted with its LOOP-235 evidence struck and its LOOP-175 evidence intact; LOOP-244
   given the three-writer split so its detector is scoped to cover all of them. The generalisable
   gap — not the instance — is **LOOP-249**.
+
+- **2026-08-01 — DIRECTION: this host is pinned to a local source build. `landing-observability`
+  §9.2 Option B supersedes §9.7 here.** *(Recorded under the §9a authorization in the operator's
+  ruling comment on **LOOP-246**, 2026-08-01T10:26:17Z. The human's words: "instead of publish and
+  test, let's install dev-loop directly from source code, then you can test it immediately.")*
+  **Mechanism.** Build tree at **`/Users/shuai/workspace/dev-loop-build`**, pinned to a CI-green
+  code commit (`64aebc2` at adoption — deliberately not `origin/main`, whose CI was still in
+  flight); `npm i -g <tree>/hub` makes it the PATH `dev-loop`; the daemons are restarted onto it.
+  The npm round-trip is removed from the loop; the human release gate survives, because what gets
+  built is still a commit a human chose.
+  **Refresh procedure** — `git fetch && git checkout <green sha> && npm run build &&
+  npm i -g <tree>/hub && dev-loop daemon up`, **then restart the `run-agents` runner.** The runner
+  step is mine, not the operator's: the scheduler caches its module graph at boot, so without it the
+  orchestrator silently keeps the pre-refresh build (LOOP-253, found by this fire's verification).
+  **One correction to how the pin was described, for whoever refreshes it.** The operator recorded
+  it as *"a snapshot copy install, not `npm link`"*; `npm ls -g` shows a **symlink** into that live
+  worktree, so the stated mechanism is wrong. The safety property survives for a different reason —
+  `hub/dist/` is gitignored there, so `git fetch`/`checkout`/`pull` change no executable byte. The
+  real exposure is narrower and must be respected: a stray **`npm run build`** in that tree
+  re-points every fire on this host instantly, with no version bump, no reinstall, and no doctor
+  signal. **That directory is not a scratch checkout.**
+  **Why this is not the evidence being overruled.** §9.7 retired Options A and B together on
+  arguments — unprotected `main` with a stale-green merge history, and a silently-dead release
+  workflow — that are both about **A** (auto-publish to a public registry). Neither transfers to
+  **B**: a local build publishes nothing, has no unpublish window, breaks no installer, and reverts
+  in seconds. The reversal separates two options that were bundled, rather than contradicting the
+  record. **STANDING: when a decision retires several options at once, check which option each
+  argument was actually about before treating the bundle as settled.**
+  **The measurable claim this makes.** LOOP-38 → LOOP-246 was 2 days and 22 commits of merged-but-
+  not-running code. Under the pin that interval should not recur on the CLI axis. It recurred
+  immediately on the other two (LOOP-252, LOOP-253) — so the standing test is now per-axis, and
+  "is this host up to date" is not answerable by `dev-loop --version` alone.
 
 ## Candidate ideas
 
