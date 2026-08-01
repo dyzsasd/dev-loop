@@ -279,7 +279,10 @@ function entryGhRepo(entry: RepoEntry | undefined): string | null {
 function resolveTicketGhRepo(labels: string[], ws: Workspace | null, projectKey: string): string | null {
   if (!ws) return null;
   const repoLabel = labels.find((l) => l.startsWith("repo:"));
-  const projRepos = repoLabel ? null : reposOfProject(ws, projectKey);
+  let projRepos: ReturnType<typeof reposOfProject> | null = null;
+  if (!repoLabel) {
+    try { projRepos = reposOfProject(ws, projectKey); } catch { return null; }
+  }
   const ref = repoLabel ? repoLabel.slice(5) : (projRepos!.length === 1 ? projRepos![0]!.ref : null);
   if (!ref) return null;
   return entryGhRepo(ws.file.repos[ref]);
@@ -298,13 +301,15 @@ async function verbQueue(rest: string[]): Promise<never> {
     const verify = body.verify as Array<{ id: string; labels: string[]; [k: string]: unknown }> | undefined;
     if (verify?.length) {
       const ws = tryResolveWorkspace();
+      const ENRICH_TIMEOUT_MS = 15_000;
+      const enrichStart = Date.now();
       for (const item of verify) {
-        const ghRepo = resolveTicketGhRepo(item.labels, ws, hub.projectKey);
-        if (ghRepo) {
-          item.landing = annotateTicketLanding(item.id, ghRepo, defaultGhExec);
-        } else {
+        if (Date.now() - enrichStart > ENRICH_TIMEOUT_MS) {
           item.landing = "unknown";
+          continue;
         }
+        const ghRepo = resolveTicketGhRepo(item.labels, ws, hub.projectKey);
+        item.landing = ghRepo ? annotateTicketLanding(item.id, ghRepo, defaultGhExec) : "unknown";
       }
     }
   }

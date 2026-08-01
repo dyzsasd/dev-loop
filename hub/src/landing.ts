@@ -97,8 +97,9 @@ export function annotateTicketLanding(ticketId: string, ghRepo: string, exec: Ex
     if (!r.ok) return "unknown";
     const data = JSON.parse(r.stdout) as { mergeable: string; statusCheckRollup: Array<{ conclusion: string | null }> };
     if (data.mergeable === "CONFLICTING") return "conflicting";
+    if (data.mergeable === "UNKNOWN") return "unknown";
+    const BAD = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"]);
     const checks = (data.statusCheckRollup ?? []).filter((c) => c.conclusion && c.conclusion !== "");
-    const BAD = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"]);
     if (checks.some((c) => BAD.has(c.conclusion!))) return "open-red";
     if (checks.length > 0 && checks.every((c) => !BAD.has(c.conclusion!))) return "open-green";
     return "open-red";
