@@ -160,6 +160,31 @@ try {
     const noKey = cli(["up", "--bundle", out, "--dir", join(ROOT, "dst4"), "--dry-launch"], ROOT, { AGE_IDENTITY_FILE: undefined, DEVLOOP_BUNDLE_KEY: undefined });
     ok(noKey.status === 1 && /AGE_IDENTITY_FILE/.test(`${noKey.stdout}${noKey.stderr}`), "load: missing identity → the headless-clear message (no interactive prompt)");
   }
+  // ── doctor gate (LOOP-200): a workspace failing its own health check is refused ──
+  // These three assertions test the AC directly: fail-before, --force bypass, healthy baseline.
+  {
+    const badws = join(ROOT, "bad-ws");
+    mkdirSync(join(badws, ".dev-loop"), { recursive: true });
+    // Repo path does not exist → doctorWorkspace fails with "repo '...' path missing on disk" (hard ❌).
+    writeFileSync(join(badws, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "doctest", backend: "service" },
+      repos: { app: { path: "repos/app-missing" } },
+      projects: {},
+    }));
+    const gateOut = join(ROOT, "gate.bundle");
+
+    // AC1 — a workspace with hard failures REFUSES (exit 1, error message, no bundle written).
+    const refused = cli(["bundle", "export", "--out", gateOut, "--no-hub-db", "--insecure-plaintext"], badws);
+    ok(refused.status === 1, `doctor gate: export refuses a workspace with hard failures (exit 1, got ${refused.status}: ${(refused.stderr ?? "").slice(0, 120)})`);
+    ok(/doctor reports hard failures/.test(`${refused.stdout}${refused.stderr}`), "doctor gate: refusal cites the doctor gate message");
+    ok(!existsSync(gateOut), "doctor gate: no bundle file written on refusal");
+
+    // AC2 — --force bypasses the gate and produces a bundle.
+    const forced = cli(["bundle", "export", "--out", gateOut, "--no-hub-db", "--insecure-plaintext", "--force"], badws);
+    ok(forced.status === 0, `doctor gate: --force bypasses the refusal (exit 0, got ${forced.status}: ${(forced.stderr ?? "").slice(0, 120)})`);
+    ok(existsSync(gateOut), "doctor gate: bundle written when --force");
+  }
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
