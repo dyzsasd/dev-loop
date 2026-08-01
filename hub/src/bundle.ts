@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { tryResolveWorkspace, wsHubDb, wsLockPath } from "./workspace.ts";
 import type { TeamFile, Workspace } from "./team-config.ts";
-import { doctorWorkspace } from "./doctor.ts";
+import { doctorWorkspace, isGitWorkTree } from "./doctor.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed } from "./seed.ts";
 import { TEAM_INTAKE_PROJECT } from "./team-config.ts";
@@ -228,6 +228,13 @@ export async function bundleExport(argv: string[]): Promise<number> {
   mkdirSync(dirname(o.out), { recursive: true });
   writeFileSync(o.out, Buffer.concat([Buffer.from(`${MAGIC}\n${JSON.stringify(manifest)}\n`), payloadOut]), { mode: 0o600 });
   chmodSync(o.out, 0o600);
+  // LOOP-210: an artifact carrying every secret VALUE (+ hub.db) that lands inside a git working tree
+  // is one `git add -A` from being committed. Warn — never silently refuse (a failed export mid-migration
+  // is worse than the leak the refusal would prevent); .gitignore *.age + doctor W06 are the belt-and-
+  // suspenders. Check dirname(o.out) (already created above), which may be a DIFFERENT tree than ws.root.
+  if (isGitWorkTree(dirname(o.out))) {
+    process.stderr.write(`⚠️  bundle export: ${o.out} is inside a git working tree — it carries every workspace secret VALUE${hubDb.included ? " + hub.db" : ""}; a 'git add -A' would commit it. Add it to .gitignore (e.g. *.age) or export outside the repo (doctor W06 also flags this).\n`);
+  }
   console.log(`✅ bundle written: ${o.out} (${(payloadOut.length / 1024).toFixed(0)}KB payload, ${o.plaintext ? "PLAINTEXT — protect this file" : "age-encrypted"}; hub.db ${hubDb.included ? "included" : "NOT included"})`);
 
   if (o.move) {
