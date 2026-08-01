@@ -33,6 +33,8 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
     ok(plaintextBearerToRemote(new URL("http://localhost:8787"), true) === false, "guard: plaintext + localhost + token ⇒ allow");
     ok(plaintextBearerToRemote(new URL("https://hub.internal:8787"), true) === false, "guard: https + remote + token ⇒ allow");
     ok(plaintextBearerToRemote(new URL("http://hub.internal:8787"), false) === false, "guard: plaintext + remote + NO token ⇒ allow (nothing to leak)");
+    ok(plaintextBearerToRemote(new URL("ftp://hub.internal:8787"), true) === true, "guard: non-http/https scheme (ftp) + remote + token ⇒ REFUSE — only https is safe; every other scheme rides plaintext http (codex P2)");
+    ok(plaintextBearerToRemote(new URL("ftp://127.0.0.1:8787"), true) === false, "guard: non-https + loopback + token ⇒ allow (the tunnel exemption is scheme-agnostic)");
     process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT = "1";
     ok(plaintextBearerToRemote(new URL("http://hub.internal:8787"), true) === false, "guard: DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1 ⇒ the explicit opt-in allows plaintext");
     delete process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT;
@@ -44,6 +46,8 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
     const refused = await postOpUrl(new URL("http://hub.invalid:8787"), "get_project", {}, "operator");
     ok(refused.kind === "refused" && /cleartext/.test((refused as { detail?: string }).detail ?? ""),
       "egress: postOpUrl(plaintext remote, token) ⇒ refused BEFORE any request, risk named in the detail");
+    const refusedFtp = await postOpUrl(new URL("ftp://hub.invalid:8787"), "get_project", {}, "operator");
+    ok(refusedFtp.kind === "refused", "egress: postOpUrl(non-https remote ftp, token) ⇒ refused BEFORE any request — the guard is not http-only (codex P2)");
     const loopOut = await postOpUrl(new URL("http://127.0.0.1:59321"), "get_project", {}, "operator");
     ok(loopOut.kind !== "refused", "egress: postOpUrl(plaintext LOOPBACK, token) is NOT refused — the tunnel posture still connects");
   } finally {
