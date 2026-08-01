@@ -162,6 +162,7 @@ const DEFAULT_LAUNCH_PROFILES: Record<Agent, Record<CodingAgent, CodingAgentDefa
 
 type ProjectsConfig = {
   defaultProject?: string;
+  repos?: Record<string, unknown>; // workspace-level repo registry (flat RepoEntry facts; used by boot-prefix)
   projects?: Record<string, {
     devSplit?: boolean;
     // Two-level launch config (conventions §11 / config-schema):
@@ -906,7 +907,8 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   // rides stdin, see commandFor). Assembly failure fails OPEN: the fire boots in classic pull mode.
   const boot = opts.assembleBoot && profile.codingAgent === "claude"
     ? assembleBootCorpus(opts.root, opts.dataDir, agent, project, backend,
-        cfg?.projects?.[profileProject] as Record<string, unknown> | undefined) // config-aware selection: feature-off spans never ship
+        cfg?.projects?.[profileProject] as Record<string, unknown> | undefined,
+        cfg?.repos as Record<string, unknown> | undefined) // config-aware selection: feature-off spans never ship
     : null;
   if (opts.assembleBoot && profile.codingAgent === "claude" && !boot)
     console.warn(`[${agent}] --assemble-boot: corpus assembly unavailable — firing in §0a pull mode`);
