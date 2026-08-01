@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
+import { pkgVersion } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -762,9 +763,14 @@ async function reconcileDaemonHealth(key: string, dbPath: string, pass: (m: stri
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 1500); // short bound — doctor is a one-shot liveness probe, never a wait
     const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
-    const b = r.status === 200 ? ((await r.json().catch(() => null)) as { ok?: boolean; project?: string } | null) : null;
-    if (b && b.ok === true && b.project === key) pass(`daemon /api/health reachable → ${url} (project '${key}')`);
-    else warn(`daemon — ${url}/api/health did not return {ok:true} for '${key}' (wedged/restarting? \`dev-loop daemon up\`)`);
+    const b = r.status === 200 ? ((await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; actor?: string } | null) : null;
+    if (b && b.ok === true && b.project === key) {
+      pass(`daemon /api/health reachable → ${url} (project '${key}')`);
+      if (b.version !== undefined && b.version !== pkgVersion())
+        warn(`daemon — running old code v${b.version}, CLI is v${pkgVersion()}; run \`dev-loop daemon up\` to restart`);
+      if (b.actor !== undefined && b.actor !== "operator")
+        warn(`daemon — actor='${b.actor}' (not operator; publish/attribution may be mis-gated)`);
+    } else warn(`daemon — ${url}/api/health did not return {ok:true} for '${key}' (wedged/restarting? \`dev-loop daemon up\`)`);
   } catch { warn(`daemon — ${url}/api/health unreachable (not running?); start it with \`dev-loop daemon up\``); }
 }
 
