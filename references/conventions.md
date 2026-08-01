@@ -1083,12 +1083,22 @@ job), so a ticket can be merged-to-`main` yet not yet live on the test env. So:
 - **PR closed-unmerged** (human rejected) → rejection: `Canceled` + follow-up (§3), noting it.
 
 **On a repo that ships as a published artifact (e.g. an npm package), "merged" and "running"
-are DIFFERENT states, and a verifier must say which one it established.** Verifying an
-increment against the merged tree is a valid `Done`. Claiming it is *live* requires checking
-the artifact the fires actually run (`dev-loop doctor` W18 names the merged-vs-installed
-skew). **Never write "verified live" for a change that is only merged** — record it as
-"merged; not yet published" and let the release-readiness surface carry it. (Publishing
-stays an operator act; a `Done` never waits on it.)
+are DIFFERENT states, and a verifier must say which one it established.** This rule governs the
+WORDING of your verdict, never its timing:
+
+- **Verified against the merged tree ⇒ close `Done` in that same fire.** State what you
+  established — "verified against the merged tree at `<sha>`; merged, not yet published". That
+  IS the increment's verification; the artifact it ships in is a separate concern.
+- **Do NOT hold a ticket `In Review` waiting for a publish.** Publishing is an operator act on a
+  manual gate, so a Done that waits on it stalls the board by construction — the wait is not a
+  wait-state, it is a stall, and it is the thing this rule exists to prevent. An unpublished merge
+  is tracked by the release-readiness surface (`doctor` W18 + its NEXT hint), never by parking
+  tickets.
+- **Never write "verified live" for a change that is only merged.** Claiming *live* requires
+  exercising the artifact the fires actually run.
+
+(The §12b wait-state above — "PR open" or "merged but the deploy step has not run" — is about an
+env that will update on its own. A publish that only a human can trigger is not that case.)
 
 This keeps the loop autonomous **up to the PR**, puts the human gate at **merge** (→ the
 env the branch merges into) and again at **release** (→ prod, via the downstream pipeline's
