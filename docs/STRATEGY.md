@@ -154,14 +154,28 @@ Supporting goals (all in scope this milestone):
 
 **Top priority (operator, 2026-08-01): CUT PER-FIRE COST — context and prompt compression.**
 Recorded under the explicit §9a authorization in **LOOP-228** (*"this intake IS the §9a authorization
-for the direction-section edits it implies"*). Measured baseline: ~$6.68/fire over 142 metered fires,
-`cacheRead` 45–65% of every fire, `references/conventions.md` 75% of a PM fire's context. This
+for the direction-section edits it implies"*). **Measured baseline — a snapshot, not a constant; re-derive it, do not quote it forward:** as of
+**2026-08-01T07:25Z**, **$627.42 across 131 priced fires = $4.79/fire** (ledger
+`.dev-loop/team/fires.jsonl`, metered era only — metering came on 2026-07-31T~14:00Z, and earlier
+fires carry no price at all). Per agent, mean $/fire: senior-dev 9.20, pm 7.44, reflect 4.60,
+junior-dev 4.41, sweep 2.90, qa 2.58. `cacheRead` is **41–61%** of every fire's bill;
+`references/conventions.md` is 75% of a PM fire's context. **The prior "~$6.68/fire over 142 metered
+fires" baseline was arithmetically impossible — two agents' stated means exceeded their own most
+expensive fire ever recorded — and is withdrawn** (found by PM under LOOP-233; re-derived
+independently and corrected by the operator, 2026-08-01 — LOOP-228 carries the corrected table).
+This
 outranks the current queue except correctness/security work already in flight. Program carried by
 **LOOP-228** (umbrella, holds the acceptance criteria) → **LOOP-232** (senior design-and-delegate) and
-**LOOP-233** (model tier, PM's reserved call). Binding constraints from the operator: measure every
+**LOOP-233** (model tier — **CLOSED on the null, operator ruling 2026-08-01**: no tier change for
+pm / senior-dev / reflect, and **the bill is driven by context VOLUME, not model tier** — junior-dev,
+on the cheapest tier, reads more `cacheRead` per fire (8.69M) than pm (7.50M), senior-dev (7.12M) or
+reflect (3.79M), and sweep on sonnet is the most expensive agent per hour on this board. Do not
+re-open tiering on price; `effort` is refused on the same grounds, absent a measurement). Binding constraints from the operator: measure every
 change; never trade correctness for bytes (verification classes, block-vs-guess, §16, the §2 label
 stay); splitting files saves nothing; turns count as much as bytes; and `assembleBoot` is **not**
-re-proposed — LOOP-211/212 measured push-mode a net loss here (+44% cacheWrite / +25% cacheRead).
+re-proposed — LOOP-211/212 measured push-mode a net loss here (+44% cacheWrite / +25% cacheRead). **LOOP-239 (the per-agent cost surface) must land before this program measures
+anything against a baseline** — a figure no shipped surface can reproduce is unfalsifiable, and that
+is precisely how the withdrawn one survived a day steering the top priority.
 ## Non-goals
 
 - **Not Linear-locked.** Linear is a default, never a requirement; the loop must keep
@@ -718,42 +732,13 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
 
 - **2026-07-31 (late arc) — [ARCHIVED] 16 method rulings from the day's later PM fires** (the design-gate fail path vs under-specification; the two halves of a §9c edge; a fix is finished only when every branch answering one question agrees; retiring a defect FAMILY over its leaves; a gate naming a human verifier; §21a promotion unconditional on a pass; the pass-3 rollup keep/roll criterion and the rule that a rollup must RETIRE; a banked idea's precondition as a claim with an expiry; a priority ladder whose fall-through is its success case; a cached mirror read as the fact; STANDING RULE 12 refined; LOOP-74 verify-fail; LOOP-180 pass-with-amendment). Distilled into the STANDING RULES block below; full text in `docs/strategy-archive/2026-07.md` under `# Rolled 2026-08-01 (pass 4)`.
 - **2026-08-01 (mid arc) — [ARCHIVED] 14 fire-journal rulings from the day's middle PM fires** (the merge-objection ruling; machine-demotion-is-not-a-verdict; §5 rank-1; the §17-caution proposal ruling; merge-guard's actor; the boot-corpus A/B cost axis; the discard-cost fix; "has the product moved" asked of `origin`; the NEW-in-range marker test; rollup pass 5; the open condition tested NOT met; promotion-count-0 with an idle lane; the cost ordering and why it did not descend KB×agents; the late re-scan's third payday) — full text in `docs/strategy-archive/2026-08.md`.
-- **(pm, 2026-07-31) 🔐 LOOP-208 — the verify gate asks "is this a builder?" when its invariant needs
-  "is this the verifier-owner?", so five agents close `qa`-owned work unchallenged.** LOOP-183 hardened
-  the gate against both *dev-tier* vectors; the predicate it keys on, `isDevTierActor`, covers 3 of the
-  10 `AGENT_HANDLES`. Seven-actor A/B, identical tickets, identical write, only the actor moving:
-  `junior-dev`/`senior-dev` → `rc=1`, blocked; **`sweep`, `reflect`, `ops`, `architect`,
-  `communication` → `rc=0`, `Done`.** Sweep makes this live rather than theoretical — highest-volume
-  non-dev writer, 30-minute unattended cadence, and a charter that literally includes *resetting*
-  tickets. `ticketwrite.ts` calls "Done means verified" a loop invariant, "not an operator
-  preference"; it is enforced against three of the ten actors who can reach the edge. **The standing
-  form, and it generalises past this gate: a deny-list keyed on a role the invariant does not mention
-  grows a new hole every time the roster grows — `ops`, `architect` and `communication` joined the
-  allowed set silently, by being added to `AGENT_HANDLES`.** Filed `sensitive` under standing rule 11
-  (a gate deciding WHO may act), hence senior. **The choke point itself is sound** — I verified
-  `INSERT INTO tickets` and `UPDATE tickets` each appear exactly once in `src/`, and that
-  `moveTicket`/`createTicket`/the mirror's `fileIntake` all route through them; only the predicate is
-  wrong, so no new plumbing is needed.
-- **(pm, 2026-07-31) 🔐 LOOP-210 — the command that carries every secret got none of the protection
-  the command that carries none of them got three commits earlier.** LOOP-187 (`d81666b`) gave
-  `export-desktop-skill` — which writes a *generated skill* — a cwd-inside-git-tree detector, a
-  mkdtemp redirect, a stderr notice, and a `.gitignore` entry whose own comment reads "belt-and-
-  suspenders so a generated skill is never committable". `bundle export`, which writes **every
-  referenced secret VALUE, the SSH deploy key, and the whole `hub.db`**, has none of the four: `--out`
-  accepts any path unchecked. A/B with exactly one variable moving — the same workspace, the same
-  export, `.dev-loop/` gitignored or not: **gitignored ⇒ doctor's tree verdict is two reassuring
-  lines and zero warnings** (`• workspace root is inside a git repo but .dev-loop/ is gitignored`)
-  while `?? ws-backup.age` sits untracked in that tree with the webhook secret and the deploy-key
-  bytes greppable inside it; **not gitignored ⇒ W06 warns, one line after `✅ bundle written`, about
-  a different path.** `bundle export` itself calls `doctorWorkspace(ws)` in that same invocation, so
-  it holds the answer and does not use it. Encryption does not retire it: the manifest header is
-  cleartext by construction (`MAGIC\n<manifest>\n` precedes the ciphertext), carrying workspaceId,
-  teamKey, every repo ref/path/remote, and the `secretEnvNames` list. **The standing form: W06's
-  predicate asks "is `.dev-loop/` ignored?" while its position — doctor's only "am I inside a git
-  tree" check — and its pass line make it read as the tree-safety answer.** Filed `sensitive` (§4
-  secrets) ⇒ senior by the §21b override, not to fill the senior lane. Fences written into the
-  ticket: LOOP-187 is done and correct, `--insecure-plaintext` stays, W06's existing `.dev-loop/`
-  warn is EXTENDED and never redefined, and LOOP-200/LOOP-184/LOOP-132 are not to be folded in.
+- **2026-07-31 (fix-arc) — [ARCHIVED] 6 fire-journal rulings from the day's PM fires** (LOOP-208's
+  ownership-vs-builder verify gate; LOOP-210's unprotected `bundle export`; LOOP-211 closed on the
+  operator's ruling; the push path going live mid-fire, with the flag being ON not the defect; the
+  throughput claim I escalated without measuring and corrected in-fire; and the §20 R2 pass-4 rollup
+  with its re-checked parking lot). Doctrine kept in the STANDING RULES block above and in the
+  entries retained around it; full text in `docs/strategy-archive/2026-07.md` under
+  `# Rolled 2026-08-01 (pass 8)`.
 - **(pm, 2026-07-31) ⚖️ LOOP-209 — an operator filing arrived `assignee: null`; tiering it is standing
   rule 9's second clause, not a re-tier.** Routed **senior-dev, `Mode: design`** on substance, and the
   reasoning is recorded so it is auditable against the load-balancing prohibition: the body offers
@@ -764,42 +749,6 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   sequencing precondition earns the design step. Its ACs were already §6-shaped (four testable, one
   discriminating regression), so grooming added only the tier, the missing `Bug` type label, and the
   mode marker; the `qa` owner and the operator's `needs-qa` routing label are untouched.
-
-- **(pm, 2026-07-31) ✅ LOOP-211 CLOSED — the operator ruled, and (D) was verified as asking for an
-  edit to a file that was already correct.** Ruling: **(B)** make the negative observable — approved
-  unconditionally; **(A)** reachable from config — approved as `team.bootCorpus`, **not** as a default
-  flip, with the operator capturing an OFF baseline and restarting with `--assemble-boot` to decide the
-  default from data instead of intuition. (C) rides with them on LOOP-212. **(D) asked to reconcile
-  §0a step 4 / §14 prose on the premise that "the pull path targets `<data>/<project>/lessons.md`,
-  which does not exist on a v2 workspace" — the shipped file says the opposite**: §0a step 4 names
-  `<workspace>/.dev-loop/lessons/` FIRST and marks the v1 path optional, "its absence is normal, not an
-  error" (LOOP-164, `4e591b0`). Nothing to change. **RULE: before accepting a proposal to fix a
-  document, open the document. A claim about prose is as checkable as a claim about code, and cheaper.**
-
-- **(pm, 2026-07-31) 🧭 The push path went live mid-fire, and the flag being ON is NOT the defect
-  being fixed.** Rung-three, first-person: this fire's own prompt carries
-  `<!-- devloop-boot:begin agent=pm hash=f03cceeab5d2 -->`, and `bootBytes` now appears on the last 2 of
-  400 ledger rows (qa 137993, sweep 125452) — the first non-null values in the file's history, against
-  reflect's measured 0/392. **But `bootBytes` is still written only when `boot` is truthy, so an OFF fire
-  remains byte-identical to "never assembled" — which is exactly what LOOP-212's (B) exists to fix.** I
-  wrote onto LOOP-212 that (B) must be verified against an OFF fire, because an implementation that only
-  writes the field when the corpus was built passes an ON-only test and fails the requirement. **RULE: when
-  the world changes under a ticket mid-flight, re-ask which of its ACs the change actually satisfied —
-  usually fewer than it appears.**
-
-- **(pm, 2026-07-31) ⚠️ I ESCALATED A THROUGHPUT CLAIM I COULD NOT MEASURE, AND CORRECTED IT
-  THIS FIRE.** Last fire I carried reflect's deferred finding to the operator as `w20proj` "costs a
-  provider call per fire" and "silently halves dev-tier throughput". **Both are wrong.** `w20proj` has
-  **0 rows in 400** of `fires.jsonl` — the scheduler drops the fire *before* spawn (`no usable repo cwd`),
-  so there is no model call and no spend. And the throughput half is unmeasurable from the data I had:
-  post-restart n=1 per dev agent over ~30 min, while pre-restart gaps (5–69 min against a 5 m cadence)
-  are dominated by fire DURATION, not tick scheduling. What is actually observed is one dropped tick (pm
-  routed to `w20proj` at ~23:00Z, next fire 23:04:56Z). Corrected on LOOP-209 so nobody designs against
-  the inflated size, and I deliberately did **not** file the generic "unservable project should fall
-  through within the tick" ticket — I could not measure its impact, and this board does not need another
-  row whose premise is an inference. **STANDING RULE 8 EXTENDED: the rule that a guard can go green by
-  measuring less than it reports applies to MY OWN escalations. An operator acts on what PM reports; a
-  number I did not measure costs them a decision, not just a line.**
 
 - **(pm, 2026-07-31) ⚖️ LOOP-213 UNPARKED — §17's "the plugin's own code is the operator's to
   apply" does not bind a workspace whose PRODUCT is the plugin.** Reflect filed a verified scheduler
@@ -823,15 +772,6 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   7.16M / out 65.4k / $7.01 · junior-dev 7.90M / 52.1k / $4.13 · senior-dev 3.32M / 69.7k / $6.30 · qa
   3.92M / 16.8k / $2.07 · sweep 4.47M / 21.6k / $2.33 · reflect 3.74M / 50.2k / $4.50), because a
   baseline that exists only in one agent's report is the thing most likely to be lost.
-
-- **(pm, 2026-07-31) 🗃️ §20 R2 rollup, pass 4 — and the parking lot was re-checked, not just
-  re-read.** Rolled 16 method rulings (the day's later PM fires) whose durable content is already in the
-  STANDING RULES block; kept whole: the npm-publish decision, the operator's §12b amendment, the Kaizen
-  Factory naming + tagline (rebrand tickets LOOP-176/177/178/182 still open, so still in-flight
-  direction), and the last fire's three ticket rulings. Candidate ideas (12 entries) re-checked against
-  their stated preconditions: **cost-governance (b)+(c) still waits on LOOP-98 `Done` (still Backlog);
-  daemon stale-VIEW-code still waits on LOOP-195 shipping (still Backlog)** — both correctly stay parked,
-  neither is stale. **A parking lot is groomed by testing its preconditions, not by re-reading its prose.**
 
 - **2026-08-01 — standing rule 1 refined rather than appended to (sixth fire running that refining
   beat appending; still 14 rules).** The rule covered derived values — keys and ratios. LOOP-223 is
@@ -933,6 +873,39 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   spend the fire removing the reason you could not decide it — not restating the ask.** (`git diff
   --cached` is rejected by this box's git wrapper — `git show HEAD:f` vs `git show :f` is the way, and
   that gap is likely why the hunk stayed invisible for five fires.)
+- **2026-08-01 (pm, sixth fire) — the operator ruled LOOP-233, and the corrected cost baseline is
+  now IN `## Goals` under an explicit §9a grant.** The null was approved (no tier change for pm /
+  senior-dev / reflect) and, more importantly, **the operator re-derived my refutation independently
+  before accepting it** and corrected LOOP-228 themselves: the table that steered the loop's top
+  priority for a day claimed pm $16.99/fire and reflect $12.13/fire against most-expensive-fire-ever
+  figures of $11.91 and $5.05. **I re-ran the ledger a third time this fire before writing the number
+  into a direction section: 131 priced fires, $627.42, and every per-agent mean and max reproduced to
+  the cent.** A direction-section number is worth re-deriving even when two parties already agree.
+  **STANDING: the correction records WHY the old number is gone and stamps the new one with its own
+  timestamp and denominator — a frozen number in a direction section is how the last one went wrong.**
+- **2026-08-01 (pm) — I contradicted the ruling's suggested remedy, with the code, and the ticket is
+  better for it (LOOP-217).** The ruling inferred that `doc-land` should run under `with-repo-lock`.
+  It already does — `doc-land.ts:140` and `with-repo-lock.ts:34` resolve the **identical**
+  `wsLockPath(ws, repo-<ref>)`, so an AC saying "take the lock" would have been a no-op that masked
+  the real gap. What no lock covers is the **edit→commit window before `doc-land` is invoked**, so a
+  concurrent fire's dirty tree is reported as a permanent hand-merge wedge. Folded as AC6: a
+  transient dirty tree waits, an unmerged entry blocks. **STANDING: an instruction that names a
+  mechanism is still a claim about the code — check it before encoding it as an AC.**
+- **2026-08-01 (pm) — `blocked` is two mechanisms wearing one label, and the §9c pass is blind to
+  the difference.** This fire's tracker pass: 8 edges, none terminal, **0 unparks**. But LOOP-226 and
+  LOOP-220 carry `blocked` with **no `Blocked-by:` marker at all**, and §9c only unparks a ticket with
+  ≥1 terminal edge — so **a zero-edge park can never be unparked by the pass built to unpark it.** I
+  ruled out merge-guard as the source (`merge-guard.ts:107` routes a forge trip to `Todo` *without*
+  `blocked`, LOOP-216 AC3) and could not recover the true origin, because the timeline omits
+  `issue.update` (LOOP-68). I flagged both rather than clearing the label: each has a live PR, and
+  clearing it would invite a duplicate pick. **This is LOOP-190's mirror — that is an edge with no
+  label; this is a label with no edge.**
+- **2026-08-01 (pm) — the board moved under me twice in one fire, in both directions.** LOOP-239 was
+  already promoted by the operator under a §3 carve-out before I reached it (so B2 was confirmed, not
+  re-done), and LOOP-235 left the `blocked` list mid-fire when senior-dev shipped PR #134. **STANDING:
+  re-read the queue before acting on a boot snapshot, and check whether the thing you were told to do
+  has already been done by someone with the authority to do it.**
+
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
