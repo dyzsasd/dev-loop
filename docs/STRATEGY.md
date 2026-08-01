@@ -489,6 +489,51 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   LOOP-175 repair correcting an accounting error, not a promotion — nothing was promoted this fire
   and nothing should be demoted. Filed **1**. Doc-land still blocked by the unresolved
   `hub/src/doctor.ts` conflict (LOOP-215); this is the **fourth** stranded local-only doc commit.
+- **The doc-land block outlived its own fix and changed shape — the previous entry's cause is now
+  stale.** Last fire recorded the block as "the unresolved `hub/src/doctor.ts` conflict (LOOP-215)".
+  That conflict is **resolved**: `git ls-files -u` is empty, 0 markers, `tsc` passes. But the
+  resolution was `git add`ed and never committed, so `git rebase` still refuses — `cannot rebase:
+  Your index contains uncommitted changes` — and `doc-land` failed for the **third consecutive
+  fire**, with local `main` **4 doc commits ahead** of origin. The staged content is **orphaned**: it
+  adds a "Service-backend only" sentence to W20's comment that `origin/main` has never carried
+  (`git log -S` on origin returns only the unrelated W16/W21 commits), the stash entry is gone, and
+  PR #127's merged fix does not contain it. No agent will commit it, because no agent knows it is
+  there. Flagged on LOOP-215 with the ruling left to its owner: a `Done` on "markers resolved" would
+  retire the only ticket naming a checkout that is still wedged.
+- **The detector shipped for that hazard cannot see the state its own advice creates (LOOP-224).**
+  W26 landed 6h earlier (`84d7666`, PR #127, for LOOP-215) keyed on `git ls-files --unmerged`, and
+  prints *"Resolve: edit each file, then `git add <file>`"*. Following that instruction clears the
+  predicate and leaves the hazard. Isolated in a scratch workspace against origin/main's shipped
+  doctor — exactly one variable moves between A and B:
+
+  | arm | repo state | `--unmerged` | `git rebase` | doctor |
+  |---|---|---|---|---|
+  | 0 control | clean | 0 | rc=0 | `DOCTOR_OK`, silent |
+  | A interrupted `stash pop` | `UU f.txt` | 3 | rc=1 needs merge | **[W26] fires** |
+  | B = A + W26's own remedy (`git add`) | `M  f.txt` | 0 | rc=1 dirty index | `DOCTOR_OK`, **silent** |
+
+  The live shared checkout has been sitting in arm B since 00:52 local. Refute arm run first:
+  nothing else in `hub/src/` checks for a dirty tree at health-check time (the `--porcelain` callers
+  are worktree reaping and the mutation gate). Filed as an **Improvement**, not a Bug — the
+  implementer built LOOP-215's AC3 faithfully; the gap is between that AC's predicate and its own
+  purpose clause, plus a remediation string that is independently incomplete.
+- **The product moved by exactly one commit since the last review, and the review found the defect
+  in it.** Prior fire reviewed `1806e17..origin/main` at 7 commits; `84d7666` landed after. The
+  diff-picks-the-lens method now has its second consecutive real test and its first on a one-commit
+  delta: the diff was a detector, the lens was `trust-safety`, and the finding is in that commit.
+- **Grooming by re-derivation against MERGED code, not by re-reading prose.** Three Backlog tickets
+  re-tested against `origin/main` rather than assumed: **LOOP-218** still reproduces (merge-guard
+  writes as actor `operator` at `:100`/`:112`; LOOP-216 changed *when* and *what* it writes, never
+  *who*), **LOOP-113** still reproduces (`NOT_MERGE_ELIGIBLE` still names 3 of 8 states), and
+  **LOOP-223** needed no refinement. Two of the three were re-checked precisely because LOOP-216's
+  fix had just merged into the same file — the cheapest moment for a wrong `Cancel`.
+- **Board at close:** verify **0** (agreed with a board-wide no-owner-filter scan — all 11 In Review
+  are qa-owned), `needs-pm` **0**, `Human-Blocked` **0**, decision queue **0**. §9c: **6 edges, 0
+  unparked** (LOOP-205, LOOP-185, LOOP-95, LOOP-104, LOOP-207, LOOP-221 — none terminal). Depth
+  junior **10/10 at cap**, senior **9/10 with a senior Backlog of 0** — so **promoted 0**, and not
+  for want of a slot: the one open slot is in the tier with nothing to fill it. Backlog **49**, all
+  junior. Filed **1** (LOOP-224), groomed **4**, canceled **0**.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -597,7 +642,12 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
      subject where no queue looks — `Todo` + `blocked` + unassigned is invisible to the dev slice
      and to the verify slice at once (LOOP-216). A guard that mutates state owes its subject a
      reachable destination, and a remedy applied after the objection is moot (the PR had already
-     merged) is pure damage.**
+     merged) is pure damage. **And for an ADVISORY guard — one whose remedy the
+     operator performs — the test is the ROUND TRIP: after doing exactly what the guard printed, is
+     the guard silent AND the hazard gone?** W26 warns on unmerged paths and says *"edit each file,
+     then `git add`"*; `git add` clears its predicate and leaves `git rebase` just as broken, so the
+     advice converts a detected wedge into an undetected one (LOOP-224). A remedy that silences the
+     guard without clearing the hazard is worse than no guard, because the silence is now evidence.**
   9. **Tier at FILING time; never re-tier to balance load (§21b).** Assigning a tier to a ticket
      that arrived `assignee: null` is not a re-tier — it is the filer's job left undone.
   10. **§9c: prose is not a marker.** An edge is retired by a machine-parseable `Unblocked-by:`
@@ -932,6 +982,27 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   threshold; `Current state`'s remaining bulk is the **22.4 KB standing product-facts preamble**,
   which is live description and does NOT roll — note for pass 6: the recoverable surface is the
   journals only, so the floor is ~22 KB plus the Decisions log.
+- **2026-08-01 — standing rule 8 refined rather than appended to (seventh fire running that
+  refining beat appending; still 14 rules).** Rule 8 already covered a guard's remedy for guards
+  that MUTATE state (LOOP-216). LOOP-224 is the advisory form, where the operator performs the
+  remedy, and it needs its own test because the failure is invisible: **the round trip.** After
+  doing exactly what the guard printed, the guard must be silent *and* the hazard gone; if only the
+  first holds, the guard has taught the operator how to hide the problem from it. Folded into rule 8
+  with that test rather than filed as a 15th rule.
+- **2026-08-01 — an open condition I owed, tested and ruled NOT met.** The parked
+  daemon-stale-view-code remediation was to be filed *"only if LOOP-195 ships and the operator still
+  has to be told by hand."* LOOP-195's fix has **merged** (`a55c808`) and the operator does still
+  have to be told by hand — but the reason is the **v1.13.0 release skew** (W18: the installed CLI
+  is 15 code commits behind `origin/main`), not a gap in LOOP-195. Merged is not shipped. Filing now
+  would duplicate the release-skew ticket and blame the wrong surface. **Re-test after a release is
+  cut** — that is the first moment the condition can give a true answer. The other parked condition
+  (cost-governance (b)+(c), gated on LOOP-98 going `Done`) is still Backlog, so also not met.
+- **2026-08-01 — a promotion count of 0 with an idle lane is the honest number, and the reason
+  matters.** Junior sits at **10/10** with 49 Backlog tickets; senior has **9/10** and a Backlog of
+  **0**. The open slot cannot be filled without re-tiering, which standing rule 9 forbids (tier at
+  filing, never to balance load). So: surface the ratio, promote nothing, and do not let an idle
+  lane argue for breaking the routing rule that keeps tiering honest.
+
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
