@@ -6,7 +6,7 @@
 // §16-clean: no real secret VALUES — export runs --insecure-plaintext on a minimal fresh workspace.
 import { execFileSync, spawnSync } from "node:child_process";
 import { scrubFireEnv } from "./env-scrub.ts";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -167,6 +167,78 @@ try {
   const noUpOut = `${docNoUp.stdout}${docNoUp.stderr}`;
   ok(/\[W06\][^\n]*ws\.bundle/.test(noUpOut), "(i) W06 warns for a committed bundle on a branch with no upstream (names ws.bundle)");
   ok(!/is gitignored/.test(noUpOut), "(i) the reassuring 'clean' line is suppressed while a committed no-upstream bundle is present");
+
+  // (j) LOOP-235 review P1 #5 — a bundle-bearing commit reachable from an UNRELATED remote-tracking ref: a
+  // feature commit F pushed to `fork/feat`, then merged into a branch that tracks `origin/main`. A push to
+  // origin still ships F, but `rev-list HEAD --not --remotes` SUBTRACTS it (F is on fork/*) and the merge's
+  // combined diff omits it (unchanged from the feature parent) — so the P1 #4 form misses it. The scan must
+  // range against the tracked destination (`@{push}`/`@{upstream}`), which includes F. Fails against the
+  // `--not --remotes` form, passes against `<dest>..HEAD`.
+  const mrWs = join(ROOT, "mr-ws"); mkdirSync(mrWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", mrWs, "--key", "gg6", "--backend", "service", "--yes"], ROOT).status === 0, "setup: mr-ws team init");
+  gitInit(mrWs);
+  writeFileSync(join(mrWs, ".gitignore"), ".dev-loop/\n");
+  writeFileSync(join(mrWs, "README"), "x\n");
+  execFileSync("git", ["-C", mrWs, "add", "README", ".gitignore"]);
+  execFileSync("git", ["-C", mrWs, "commit", "-qm", "init"]);
+  const mrOrigin = join(ROOT, "mr-origin.git");
+  execFileSync("git", ["init", "--bare", "-q", mrOrigin]);
+  execFileSync("git", ["-C", mrWs, "remote", "add", "origin", mrOrigin]);
+  execFileSync("git", ["-C", mrWs, "push", "-q", "-u", "origin", "HEAD:refs/heads/main"]); // main tracks origin/main
+  const mrFork = join(ROOT, "mr-fork.git");
+  execFileSync("git", ["init", "--bare", "-q", mrFork]);
+  execFileSync("git", ["-C", mrWs, "remote", "add", "fork", mrFork]);
+  execFileSync("git", ["-C", mrWs, "checkout", "-q", "-b", "feat"]);
+  const mrBundle = join(mrWs, "ws.bundle");
+  ok(cli(exportArgs(mrBundle), mrWs).status === 0, "(j) setup: bundle export on the feat branch");
+  execFileSync("git", ["-C", mrWs, "add", "ws.bundle"]);
+  execFileSync("git", ["-C", mrWs, "commit", "-qm", "feat: add bundle (pushed only to fork)"]);
+  const mrFeatSha = execFileSync("git", ["-C", mrWs, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  execFileSync("git", ["-C", mrWs, "push", "-q", "fork", "HEAD:refs/heads/feat"]);
+  execFileSync("git", ["-C", mrWs, "fetch", "-q", "fork"]); // ensure refs/remotes/fork/feat exists so --not --remotes subtracts F
+  execFileSync("git", ["-C", mrWs, "checkout", "-q", "main"]);
+  execFileSync("git", ["-C", mrWs, "merge", "--no-ff", "--no-edit", "-q", "feat"]); // F enters main's tree via a merge commit, unchanged from the feat parent
+  const revListNotRemotes = execFileSync("git", ["-C", mrWs, "rev-list", "HEAD", "--not", "--remotes"], { encoding: "utf8" }).split("\n").map((s) => s.trim()).filter(Boolean);
+  ok(!revListNotRemotes.includes(mrFeatSha), "(j) precondition: the bundle-adding commit F is reachable from fork/* so 'rev-list HEAD --not --remotes' OMITS it (why the P1 #4 form misses)");
+  ok(execFileSync("git", ["-C", mrWs, "rev-list", "@{upstream}..HEAD"], { encoding: "utf8" }).split("\n").map((s) => s.trim()).includes(mrFeatSha), "(j) precondition: F IS in @{upstream}..HEAD — the range a push to the tracked origin would ship");
+  ok(execFileSync("git", ["-C", mrWs, "ls-files", "ws.bundle"], { encoding: "utf8" }).trim() === "ws.bundle" &&
+     execFileSync("git", ["-C", mrWs, "diff", "--cached", "--name-only"], { encoding: "utf8" }).trim() === "",
+     "(j) precondition: ws.bundle is committed/tracked and nothing is staged — only the committed-history arm, ranged against the destination, reaches it");
+  const docMr = cli(["doctor"], mrWs);
+  const mrOut = `${docMr.stdout}${docMr.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(mrOut), "(j) W06 warns for a bundle on a commit that is on an unrelated remote but still shipped by a push to the tracked destination (names ws.bundle)");
+  ok(!/is gitignored/.test(mrOut), "(j) the reassuring 'clean' line is suppressed for the multi-remote destination case");
+
+  // (k) LOOP-235 review P1 #6 — a committed bundle that REPLACES a tracked symlink at an existing path is a
+  // TYPE change (`T`), which Git reports as neither `A` nor `M`; the `--diff-filter=AM` scan skipped it, so
+  // after the staged arm clears (committed) doctor could print clean while the next push still ships the blob.
+  // The committed walk must include `T`. Fails against `--diff-filter=AM`, passes against `AMT`.
+  const tcWs = join(ROOT, "tc-ws"); mkdirSync(tcWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", tcWs, "--key", "gg7", "--backend", "service", "--yes"], ROOT).status === 0, "setup: tc-ws team init");
+  gitInit(tcWs);
+  writeFileSync(join(tcWs, ".gitignore"), ".dev-loop/\n");
+  writeFileSync(join(tcWs, "README"), "x\n");
+  symlinkSync("README", join(tcWs, "link")); // 'link' starts life as a symlink (mode 120000)
+  execFileSync("git", ["-C", tcWs, "add", "README", ".gitignore", "link"]);
+  execFileSync("git", ["-C", tcWs, "commit", "-qm", "init (link is a symlink)"]);
+  const tcRemote = join(ROOT, "tc-remote.git");
+  execFileSync("git", ["init", "--bare", "-q", tcRemote]);
+  execFileSync("git", ["-C", tcWs, "remote", "add", "origin", tcRemote]);
+  execFileSync("git", ["-C", tcWs, "push", "-q", "-u", "origin", "HEAD:refs/heads/main"]); // the symlink version is on the upstream
+  rmSync(join(tcWs, "link"));
+  ok(cli(exportArgs(join(tcWs, "link")), tcWs).status === 0, "(k) setup: bundle export OVER the path that was a symlink (now a regular file)");
+  execFileSync("git", ["-C", tcWs, "add", "link"]);
+  execFileSync("git", ["-C", tcWs, "commit", "-qm", "replace symlink with bundle (unpushed, a TYPE change)"]);
+  const tcStatusLine = execFileSync("git", ["-C", tcWs, "diff-tree", "-r", "--no-commit-id", "--name-status", "HEAD"], { encoding: "utf8" }).split("\n").find((l) => /\blink$/.test(l)) ?? "";
+  ok(/^T\b/.test(tcStatusLine), `(k) precondition: 'link' is a TYPE change (T) symlink→regular-file in the unpushed commit (got '${tcStatusLine}')`);
+  ok(!execFileSync("git", ["-C", tcWs, "diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "--diff-filter=AM", "--root", "HEAD"], { encoding: "utf8" }).split("\n").map((s) => s.trim()).includes("link"),
+     "(k) precondition: a --diff-filter=AM scan OMITS the type-changed path (why the pre-fix arm missed it)");
+  ok(execFileSync("git", ["-C", tcWs, "diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "--diff-filter=AMT", "--root", "HEAD"], { encoding: "utf8" }).split("\n").map((s) => s.trim()).includes("link"),
+     "(k) precondition: --diff-filter=AMT DOES enumerate the type-changed path");
+  const docTc = cli(["doctor"], tcWs);
+  const tcOut = `${docTc.stdout}${docTc.stderr}`;
+  ok(/\[W06\][^\n]*\blink\b/.test(tcOut), "(k) W06 warns for a bundle that replaced a symlink at a tracked path — a TYPE change (names link)");
+  ok(!/is gitignored/.test(tcOut), "(k) the reassuring 'clean' line is suppressed for the type-change case");
 
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });
