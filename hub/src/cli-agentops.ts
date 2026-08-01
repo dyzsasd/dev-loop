@@ -23,7 +23,7 @@ import { openDb, actorExists, listActorHandles, STATES } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { ensureActors, findProject } from "./seed.ts";
 import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
-import { reposOfProject, type Workspace } from "./team-config.ts";
+import { reposOfProject, type RepoEntry, type Workspace } from "./team-config.ts";
 import { agentOp, isAgentOp, AGENT_OPS, AGENT_WRITE_OPS, type AgentOp, type OpResult } from "./agentops.ts";
 import { defaultGhExec, annotateTicketLanding } from "./landing.ts";
 import { checkReviewAdmission } from "./review-admission.ts";
@@ -270,16 +270,19 @@ async function verbOp(rest: string[]): Promise<never> {
   return emit(name, await runOp(openHub(), name, args));
 }
 
+function entryGhRepo(entry: RepoEntry | undefined): string | null {
+  if (!entry?.autoMerge || entry.landing !== "pr" || !entry.remote) return null;
+  const m = entry.remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
+  return m ? m[1]! : null;
+}
+
 function resolveTicketGhRepo(labels: string[], ws: Workspace | null, projectKey: string): string | null {
   if (!ws) return null;
   const repoLabel = labels.find((l) => l.startsWith("repo:"));
   const projRepos = repoLabel ? null : reposOfProject(ws, projectKey);
   const ref = repoLabel ? repoLabel.slice(5) : (projRepos!.length === 1 ? projRepos![0]!.ref : null);
   if (!ref) return null;
-  const entry = ws.file.repos[ref];
-  if (!entry?.autoMerge || entry.landing !== "pr" || !entry.remote) return null;
-  const m = entry.remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
-  return m ? m[1]! : null;
+  return entryGhRepo(ws.file.repos[ref]);
 }
 
 async function verbQueue(rest: string[]): Promise<never> {
