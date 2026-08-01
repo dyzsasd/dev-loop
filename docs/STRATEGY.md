@@ -619,6 +619,26 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   the scratch project while the identical fix inside `rotation.ts` is dead in the scheduler — **the
   same commit reading as live on one axis and dead on another, in the same minute.**
 
+
+- **2026-08-01 (later fire) — the queue has been served in pure creation-date FIFO the whole time,
+  and the top priority's own precondition is 8th in line.** `strategy-gaps` lens. §5's pick order
+  has six ranks, but it reads `priority` in only two of them — both gated on `type` (`p1`+`Bug` → 0,
+  `p1`+`Feature` → 1); everything else falls to rank 5 and is separated only by `created_at`
+  (`servable.ts:29-35,60`). Measured on the live board this fire: **69 of 88 open rows (78%) are
+  rank 5, and 18 of 18 SERVABLE `Todo` rows are — 100%.** The priority spread inside that tied set
+  is `p1×1, p2×13, p3×4`, entirely inert. So the ordering machinery is currently deciding nothing:
+  every dev fire is served oldest-first. Not a one-day artifact — Improvements are 71 of 143 Done.
+  The concrete cost is on this doc's own top priority: **LOOP-239**, the precondition Goals names
+  verbatim (*"must land before this program measures anything against a baseline"*), is `p1` and
+  sits **8th of 11** in junior-dev's slice behind two `p3`s, purely on filing date; LOOP-236/237/238
+  are in the same tail. **PM has no lever** — the §5a `todoDepthCap` gates entry to `Todo`, not
+  order within it, and junior is over cap at 11/10 while senior sits at 7/10 with zero backlog rows
+  to promote, so the board is simultaneously over-cap and un-steerable. The code is not
+  mis-built: `servable.ts` implements the §5 table exactly. The gap is in the rule, which tells
+  PM/QA "urgency lives in `priority`, set it on create" and then discards it for 4 of every 5
+  tickets. Filed **LOOP-254** and parked `Human-Blocked` — a conventions §5 change is
+  operator-applied under §17, and this one is a genuine ordering-policy call, not a repair.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -986,6 +1006,36 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   not-running code. Under the pin that interval should not recur on the CLI axis. It recurred
   immediately on the other two (LOOP-252, LOOP-253) — so the standing test is now per-axis, and
   "is this host up to date" is not answerable by `dev-loop --version` alone.
+
+
+- **2026-08-01 (later fire) — I did not take the pick-order call, and the reason generalises.**
+  The finding above (LOOP-254) is the kind PM normally resolves inside a ticket: a measured defect,
+  a small fix, an obvious direction. I parked it for the operator instead, on two grounds worth
+  writing down because they will recur.
+  **(1) The code matches its spec, so "fix" means "change the rule".** Every previous ordering
+  ticket on this board (LOOP-144, LOOP-169, LOOP-251) repaired an implementation that had drifted
+  from §5/§21b — agent-buildable by construction. This one has no drift to repair:
+  `servable.ts:29-35` is a faithful rendering of the §5 table. The defect is §5 contradicting
+  itself, and §17 makes a conventions edit operator-applied. **STANDING: before filing an
+  "obviously broken" behaviour, check whether it is broken against its spec or IS its spec — the
+  second is a proposal, not a ticket, and shipping it as a ticket routes a rule change around the
+  §17 firewall.**
+  **(2) A queue-ordering change is not verifiable after the fact.** If it lands and is wrong, the
+  evidence is an absence — work that would have been picked and wasn't — which no gate, test or
+  digest surfaces. That asymmetry, not the size of the diff, is what makes it the operator's.
+  The ticket therefore carries three answers, not one (approve as proposed / approve the larger
+  full-`priority` sort / decline and make `priority` explicitly advisory for Improvements).
+  **Declining is a real option and I said so in the ticket**: FIFO-within-rank is §5's stated
+  anti-starvation guarantee, and "urgent Improvements jump the queue" trades it away. What is not
+  an option is the status quo, where filing agents are instructed to encode urgency that is then
+  discarded for 78% of the board — if the answer is "advisory", the instruction should say so.
+  **Grooming note from the same pass, sixth of its kind.** LOOP-247 was blocked behind LOOP-250:
+  three open tickets rewrite `doctor`'s W18 (LOOP-203 the origin side, LOOP-247 the remediation
+  text, LOOP-250 the installed side) and were sequenced only by creation date. LOOP-250 replaces the
+  mechanism the other two branch on. Marker + `blocked` label both written; LOOP-203 deliberately
+  left unblocked, being a `git fetch`-freshness defect independent of install mode. This is the
+  **sixth** LOOP-190 occurrence — a real dependency living only in prose — and it was again found
+  only by reading three bodies side by side.
 
 ## Candidate ideas
 
