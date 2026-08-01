@@ -100,6 +100,45 @@ try {
   ok(/\[W06\][^\n]*ws\.bundle/.test(upOut), "(g) W06 warns for a bundle carried by an unpushed intermediate commit even though the endpoint diff is empty (names ws.bundle)");
   ok(!/is gitignored/.test(upOut), "(g) the reassuring 'clean' line is suppressed while an unpushed commit still carries the artifact");
 
+  // (h) LOOP-235 review P1 #3 — a bundle introduced BY an unpushed MERGE commit (e.g. staged during
+  // conflict resolution). It lives in NEITHER parent, so the per-commit walk only meets it at the merge —
+  // and a plain `diff-tree -r` emits nothing for a merge (git suppresses merge diffs unless a merge mode
+  // is asked), so both the endpoint- and per-parent-commit scans miss it while `git push` still ships it.
+  // W06's walk must pass `-c` (combined diff) so a merge reports paths differing from ALL parents. Fails
+  // against the pre-`-c` scan.
+  const mergeWs = join(ROOT, "merge-ws"); mkdirSync(mergeWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", mergeWs, "--key", "gg4", "--backend", "service", "--yes"], ROOT).status === 0, "setup: merge-ws team init");
+  gitInit(mergeWs);
+  writeFileSync(join(mergeWs, ".gitignore"), ".dev-loop/\n");
+  writeFileSync(join(mergeWs, "README"), "x\n");
+  execFileSync("git", ["-C", mergeWs, "add", "README", ".gitignore"]);
+  execFileSync("git", ["-C", mergeWs, "commit", "-qm", "init"]);
+  const mergeRemote = join(ROOT, "merge-remote.git");
+  execFileSync("git", ["init", "--bare", "-q", mergeRemote]);
+  execFileSync("git", ["-C", mergeWs, "remote", "add", "origin", mergeRemote]);
+  execFileSync("git", ["-C", mergeWs, "push", "-q", "-u", "origin", "HEAD:refs/heads/main"]); // @{upstream}=origin/main
+  execFileSync("git", ["-C", mergeWs, "checkout", "-q", "-b", "feat"]);
+  writeFileSync(join(mergeWs, "feat.txt"), "feat\n");
+  execFileSync("git", ["-C", mergeWs, "add", "feat.txt"]);
+  execFileSync("git", ["-C", mergeWs, "commit", "-qm", "feat work (unpushed)"]);
+  execFileSync("git", ["-C", mergeWs, "checkout", "-q", "main"]);
+  execFileSync("git", ["-C", mergeWs, "merge", "--no-ff", "--no-commit", "feat"]); // pause before the merge commit
+  const mergeBundle = join(mergeWs, "ws.bundle");
+  ok(cli(exportArgs(mergeBundle), mergeWs).status === 0, "(h) setup: bundle export into the pending merge");
+  execFileSync("git", ["-C", mergeWs, "add", "ws.bundle"]);
+  execFileSync("git", ["-C", mergeWs, "commit", "--no-edit", "-q"]); // finalize a real 2-parent merge carrying ws.bundle
+  const mParents = execFileSync("git", ["-C", mergeWs, "rev-list", "--parents", "-n", "1", "HEAD"], { encoding: "utf8" }).trim().split(/\s+/).length - 1;
+  ok(mParents === 2, `(h) precondition: HEAD is a real 2-parent merge commit (got ${mParents})`);
+  ok(spawnSync("git", ["-C", mergeWs, "cat-file", "-e", "HEAD^1:ws.bundle"]).status !== 0 &&
+     spawnSync("git", ["-C", mergeWs, "cat-file", "-e", "HEAD^2:ws.bundle"]).status !== 0,
+     "(h) precondition: ws.bundle exists in NEITHER parent — its only reachable copy is the merge commit itself");
+  ok(execFileSync("git", ["-C", mergeWs, "diff-tree", "-r", "--no-commit-id", "--name-only", "--diff-filter=AM", "--root", "HEAD"], { encoding: "utf8" }).trim() === "",
+     "(h) precondition: a plain (non-combined) diff-tree of the merge is EMPTY — exactly why the pre-`-c` scan misses it");
+  const docMerge = cli(["doctor"], mergeWs);
+  const mergeOut = `${docMerge.stdout}${docMerge.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(mergeOut), "(h) W06 warns for a bundle introduced by an unpushed merge commit (names ws.bundle)");
+  ok(!/is gitignored/.test(mergeOut), "(h) the reassuring 'clean' line is suppressed while an unpushed merge commit carries the artifact");
+
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });
   ok(cli(["team", "init", "--dir", plainWs, "--key", "gg2", "--backend", "service", "--yes"], ROOT).status === 0, "setup: plain-ws team init");

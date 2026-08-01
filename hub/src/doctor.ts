@@ -579,9 +579,13 @@ function unignoredBundleArtifacts(root: string): string[] {
     if (blobHasMagic(`:${rel}`)) hits.add(rel);
   }
   // Committed-but-unpushed — only when an upstream is configured (a bare `git init` workspace has none).
-  // Walk EVERY unpushed commit and probe the blobs IT introduced (diff vs its parent; --root covers an
-  // initial commit), so an add-then-delete pair within the range is still caught (LOOP-235 P1 #2). A
-  // deletion (--diff-filter excludes D) has no blob here and was already probed at the commit that added it.
+  // Walk EVERY unpushed commit and probe the blobs IT introduced, so an add-then-delete pair within the
+  // range is still caught (LOOP-235 P1 #2). `-c` (combined diff) makes a MERGE commit report the paths
+  // that differ from ALL parents — a bundle added during conflict resolution, which a plain `diff-tree
+  // -r` suppresses for merges (it emits no diff) and would leak on the next push (LOOP-235 P1 #3); for a
+  // non-merge commit `-c` is a no-op, so the single-parent add/delete coverage is unchanged. `--root`
+  // covers an initial commit; deletions (--diff-filter excludes D) have no blob here and were already
+  // probed at the commit that added them.
   let upstream = "";
   try { upstream = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
   catch { /* no upstream — skip the committed-but-unpushed arm */ }
@@ -589,7 +593,7 @@ function unignoredBundleArtifacts(root: string): string[] {
     let c = 0;
     for (const commit of gitLines(["rev-list", `${upstream}..HEAD`])) {
       if (c >= MAX_PROBES_PER_ARM) break;
-      for (const rel of gitZ(["diff-tree", "-r", "--no-commit-id", "--name-only", "-z", "--diff-filter=AM", "--root", commit])) {
+      for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AM", "--root", commit])) {
         if (c++ >= MAX_PROBES_PER_ARM) break;
         if (blobHasMagic(`${commit}:${rel}`)) hits.add(rel);
       }
