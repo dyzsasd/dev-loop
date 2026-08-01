@@ -559,6 +559,69 @@ not a capacity fact, and it is why I filed one junior ticket and no senior ideat
   phrase-match against the live doc's wording finds nothing. Cite folds by arc, not by title.
 
 
+
+### 2026-08-01 (pm, twelfth fire) — the promotion queue has never been ordered, and the cost program is measuring against a denominator missing its largest input
+
+`origin/main` is **`626f6f4`** — my own doc commit from the eleventh fire. **The product did not
+move this fire** (`57af9a7..626f6f4` is docs-only), so this was a lens rotation on an unchanged SHA,
+not a review of new code. Doc-watch: `docs/STRATEGY.md` hash unchanged — **36 consecutive fires with
+no operator doc edit**.
+
+**Nothing to verify, nothing to unblock, nothing promotable.** In Review was empty board-wide (Job A
+= 0). `needs-pm` = 0. The §9c tracker pass ran all 10 parked rows: **10 edges, 0 unparked, 10 held**
+— every park still has ≥1 live blocker, unchanged from the eleventh fire. Both open
+`[reflect-proposal]` tickets carrying `## Deferred findings` (LOOP-213, LOOP-218) were already
+triaged in earlier fires; no §17 debt outstanding. **Promoted 0**: junior sits at **12/10** unblocked
+Todo (over cap → §5a says promote nothing), and senior has 3 free slots but **zero senior-tier
+Backlog rows to promote into them**.
+
+**LOOP-258 is still Human-Blocked on the operator (26m at boot), and the daemon is still v1.13.0
+against CLI v1.14.0.** The eleventh fire's constraint therefore stands unchanged: senior-tier
+filings stay direct-code shaped, because a stale daemon collapses a dev-tier actor's cross-tier
+assignment to self and `Mode: design` work provably cannot stage its children. PM writes remain
+unaffected — both tickets filed this fire kept `assignee: junior-dev`.
+
+**The finding: PM's promotion list is the only servable list in the codebase with no ordering.**
+`opQueue`'s pm `backlog` array (`agentops.ts:212`, `:221`) is built from a `SELECT` with **no
+`ORDER BY` at all** and is then filtered and capped with **no sort applied** — while all three
+sibling reads order correctly (`agentops.ts:196` and `servable.ts:53` both `ORDER BY created_at`;
+`servable.ts:60` sorts the dev-tier slice by pick rank *then* `created_at` FIFO). §5a instructs PM
+to "promote the top of the §5 pick order", and the list it is handed carries no pick rank and no
+aging term.
+
+Measured consequence, all 260 board rows: **zero Todo rows survive from 2026-07-30, while 13
+Backlog rows from that day have never been promoted** — through ~500 fires and two days. 16 rows
+filed *today* are already Todo. The served order's first 13 positions are all 2026-08-01 rows; the
+tail is 2026-07-30 (LOOP-31, -98, -97, -96, -91, -90), and the order is provably neither
+`created_at` ASC nor DESC. The starved rows are not stragglers — LOOP-98 (`acceptRate` wrong in
+both implementations), LOOP-97, LOOP-90 tie on rank with the rows that overtook them and lost
+purely on list position. Filed **LOOP-262**. Note this is the *third* copy of the same
+rank/order drift after LOOP-144 and LOOP-169/251 — and that **LOOP-254 landing makes it worse**,
+since new p1 rows will jump a tail that is still unordered.
+
+**The second finding is on the operator's own top priority.** `dev-loop metrics --context` is the
+surface LOOP-228 guardrail 1 makes the compression program measure against, and it omits the
+largest PM-specific per-fire read. `hub/src/context-bill.ts:14–16` states its scope exactly (SKILL
+prose + cheat block + cited conventions spans + lessons caps); `grep -n 'STRATEGY\|strategyDoc'`
+against it returns **nothing** — while `references/conventions.md:1667` (§20 R2) says in plain words
+that "PM re-reads this whole doc-base every fire, so an unbounded `Decisions (running log)` is a
+per-fire token tax." pm's modeled bill is 191 322 B (~47.8K tokens); this doc is 99 839 B (~25.0K
+tokens) and uncounted — **pm is understated by ~52 %**. A −30 % target against that denominator can
+be hit on paper while pm's real bill barely moves. And the doc regrows ~9 KB per PM fire against a
+periodic manual fold (109.0 → 90.7 → 99.8 KB across pass 10 alone), which **LOOP-238's
+conventions-only ratchet cannot observe**. Filed **LOOP-263**, back-linked onto LOOP-228.
+
+**Groomed:** LOOP-236 raised p2 → p1. It is Lever 1 — the head of the compression program's only
+chain (`LOOP-236 → LOOP-237 → LOOP-238`, each blocked on its predecessor) — and sat below its own
+precondition LOOP-239 and the unrelated LOOP-254. Recorded honestly on the ticket that this changes
+nothing today (all Improvements tie at rank 5 and FIFO decides) and only bites once LOOP-254 lands.
+
+**Board shape, for whoever reads this next.** Intake exceeds completion every day — created
+90 / 114 / 46 against closed 35 / 91 / 31 — so the Backlog grows and the unordered tail sinks
+further out of reach each fire. 61 Backlog rows: **60 junior, 0 senior**, plus the LOOP-228 umbrella
+(null assignee by design, not the LOOP-244 defect). The tenth fire's correction still applies —
+senior's supply is PM's filing mix — but its prescription cannot be executed while LOOP-258 blocks
+design-and-delegate work.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -591,6 +654,36 @@ not a capacity fact, and it is why I filed one junior ticket and no senior ideat
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-01 (pm, twelfth fire) — "an ordinary Backlog ticket awaiting promotion is normal, not
+  stranded" (§5a) is true per-ticket and false in aggregate; check the AGE DISTRIBUTION, not the
+  depth.** For twelve fires this log treated a deep Backlog as a supply/throughput question and never
+  asked whether the same rows were being skipped every time. They were: **zero Todo rows survive from
+  2026-07-30 while 13 Backlog rows from that day have never once been promoted**, across ~500 fires.
+  The cause is mechanical, not judgement — `opQueue`'s pm `backlog` list is the only servable list
+  with no `ORDER BY`, no pick rank and no FIFO tie-break (`agentops.ts:212`/`:221`), so "promote the
+  top of the §5 pick order" is an instruction PM cannot follow with the data it is handed, and
+  whatever SQLite emits first wins. **STANDING: a queue whose depth is stable can still be starving
+  its tail — measure a backlog by the age spread of what leaves it, not by how many rows are in it.
+  A per-item "this is normal" rule cannot detect a systemic ordering fault.** Filed LOOP-262.
+- **2026-08-01 (pm, twelfth fire) — a measurement surface that omits an input is worse than no
+  surface, because it converts an unknown into a confident wrong number.** LOOP-228 guardrail 1 makes
+  `dev-loop metrics --context` the method the whole compression program is judged by, and
+  `context-bill.ts` does not count the strategy doc at all — the very file §20 R2 calls "a per-fire
+  token tax". pm is understated by ~52 % (191 322 B counted, 99 839 B uncounted), so the operator's
+  suggested **−30 % target is reachable on paper at a true saving near 20 %**, and LOOP-238's
+  conventions-only ratchet would be seeded from that incomplete baseline. **STANDING: before
+  optimising against a metric, enumerate what the metric does NOT count — and check that list against
+  the rules that tell agents what to read. The program's own guardrail ("measure every change") is
+  what makes the omission expensive rather than merely inaccurate.** Filed LOOP-263 against LOOP-228.
+- **2026-08-01 (pm, twelfth fire) — encode intent at the priority even when the pick order cannot
+  read it yet, and say plainly that it is inert.** LOOP-236 is the head of the top-priority program's
+  only chain and sat at p2 beneath its own precondition. Raising it to p1 changes **nothing today** —
+  every Improvement ties at rank 5 and `created_at` FIFO decides — and only bites once LOOP-254 lands
+  its approved variant. Recording the inertness on the ticket is the point: a silent priority bump
+  reads to the next fire as a steering action that already took effect. **STANDING: when a grooming
+  action is a bet on an unlanded mechanism, name the mechanism and the date it starts working, or the
+  next reader will mistake intent for effect.**
 
 - **2026-08-01 (pm, eleventh fire) — while the hub daemon is version-skewed, senior-tier filings are
   direct-code shaped only.** A stale daemon silently collapses a dev-tier actor's cross-tier
@@ -830,100 +923,37 @@ not a capacity fact, and it is why I filed one junior ticket and no senior ideat
   6. **A design gate passes on its MODEL and amends on its PROSE** — the two are different axes, so
      a right model with a wrong preamble is pass-with-amendment, not a fail.
 
-- **2026-08-01 (pm) — I contradicted the ruling's suggested remedy, with the code, and the ticket is
-  better for it (LOOP-217).** The ruling inferred that `doc-land` should run under `with-repo-lock`.
-  It already does — `doc-land.ts:140` and `with-repo-lock.ts:34` resolve the **identical**
-  `wsLockPath(ws, repo-<ref>)`, so an AC saying "take the lock" would have been a no-op that masked
-  the real gap. What no lock covers is the **edit→commit window before `doc-land` is invoked**, so a
-  concurrent fire's dirty tree is reported as a permanent hand-merge wedge. Folded as AC6: a
-  transient dirty tree waits, an unmerged entry blocks. **STANDING: an instruction that names a
-  mechanism is still a claim about the code — check it before encoding it as an AC.**
-- **2026-08-01 (pm) — `blocked` is two mechanisms wearing one label, and the §9c pass is blind to
-  the difference.** This fire's tracker pass: 8 edges, none terminal, **0 unparks**. But LOOP-226 and
-  LOOP-220 carry `blocked` with **no `Blocked-by:` marker at all**, and §9c only unparks a ticket with
-  ≥1 terminal edge — so **a zero-edge park can never be unparked by the pass built to unpark it.** I
-  ruled out merge-guard as the source (`merge-guard.ts:107` routes a forge trip to `Todo` *without*
-  `blocked`, LOOP-216 AC3) and could not recover the true origin, because the timeline omits
-  `issue.update` (LOOP-68). I flagged both rather than clearing the label: each has a live PR, and
-  clearing it would invite a duplicate pick. **This is LOOP-190's mirror — that is an edge with no
-  label; this is a label with no edge.**
-- **2026-08-01 (pm) — the board moved under me twice in one fire, in both directions.** LOOP-239 was
-  already promoted by the operator under a §3 carve-out before I reached it (so B2 was confirmed, not
-  re-done), and LOOP-235 left the `blocked` list mid-fire when senior-dev shipped PR #134. **STANDING:
-  re-read the queue before acting on a boot snapshot, and check whether the thing you were told to do
-  has already been done by someone with the authority to do it.**
-
-- **2026-08-01 — a zero-edge `blocked` park on a ticket with a live PR must be CLEARED, not flagged.**
-  This **reverses the previous fire's ruling** ("not cleared — each has a live PR; clearing invites a
-  duplicate pick"). That reasoning was backwards and cost three stranded PRs: a live PR is the reason
-  to clear, because the ticket must be **servable** for any dev fire to run the landing/repair pass.
-  Parking it is what strands the PR. Corollary, split-dev only: clearing `blocked` alone is
-  insufficient — **also restore `assignee` to the tier named in the label**, or the ticket stays
-  unreachable in every slice. A park with no `Blocked-by:` edge is not a park; it is a leak.
-- **2026-08-01 — method: `op list_events` DOES record `issue.update`; only the timeline UI omits it
-  (LOOP-68).** Correcting a claim this log's author asserted on LOOP-220/226 without running the
-  query: *"where the label came from is not recoverable from the board."* Attribution **is**
-  recoverable (actor + fireId + timestamp); **content is not** — `issue.update.data` carries only
-  `{fireId}`, with no before/after values, unlike `issue.transition`. **Do not generalise a UI gap
-  into a data gap; run the query first.**
-- **2026-08-01 (pm) — a design gate can PASS on a mechanism I expected to fail, and the
-  measurement is what decides it.** I ran LOOP-149's designed predicate (`behind_by > 0` ⇒ `stale`)
-  against the live board expecting an AC5 false-stall event: 5 of 5 CI-green PRs trip on day one.
-  **They trip correctly** — the delta all five sit behind contains real code (`breaker.ts`,
-  `run-agents.ts` + tests, from #136), so their greens genuinely predate a change to a module under
-  test. I had the finding drafted and the measurement killed it. **Trip-on-any-delta is also the
-  right conservative default here: "docs-only ⇒ safe" is NOT sound in this repo, because
-  `references/conventions.md` is byte-checked by `hub/test/cli-cheatsheet.ts`.** The design's §1
-  describes a two-step manual procedure and §3 automates only step one — the correct half.
-- **2026-08-01 (pm) — the amendment a holding guard always needs: it must state its own remedy.**
-  LOOP-149 passed with two binding amendments, the load-bearing one being that a `stale` objection
-  must name the fix (rebase + `--force-with-lease`). Nothing in the loop re-freshens a held PR —
-  Step 0.5's only rebase path is keyed on `DIRTY`, and these PRs are `CLEAN`. A guard that holds
-  without saying what clears the hold is LOOP-241's shape, now the most-repeated amendment I write.
-  **Filed the missing half as LOOP-243**: the design called the re-freshen follow-up "tracked as a
-  related ticket" and it had never been filed. **A flagged finding nobody filed is a deferred one.**
-- **2026-08-01 (pm) — fixing every writer is not the same as detecting the state, and only
-  detection survives the next writer.** LOOP-223 and LOOP-225 each fix one path that nulls an
-  assignee; neither *detects* one, so a third writer reintroduces it silently. Filed **LOOP-244**
-  (doctor W27) for the detection half. **Cost of not having it, measured this fire: LOOP-226 /
-  PR #132 was CI-green, `CLEAN`/`MERGEABLE`, 0 unresolved review threads — clear to merge — and sat
-  unmerged because a null assignee kept it out of the `inReview` landing slice.**
-- **2026-08-01 (pm) — the release gate stays; what needed fixing was the instruction, not the bet.**
-  The install-skew recurrence (LOOP-246) is the second in two days, and the obvious reading is that
-  the human release gate is the bottleneck. I am **not** proposing to change it. `landing-observability`
-  §9.7 retired the pin-to-local-build option deliberately and paid for the human gate with a promise:
-  *"make when to pull it a one-look call."* Detection held up its end — W18 fired with the right
-  number. **The failure was in the sentence, not the gate:** W18 told the operator to "re-publish +
-  reinstall" when npm already had 1.14.0 and only the reinstall was outstanding, because W18 measures
-  installed-vs-`origin/main` and **never asks the registry what is published**. A one-look call that
-  names an action the operator does not need is not one look. Filed **LOOP-247** to resolve the
-  published version and pick the remediation from the comparison (registry lookup best-effort, so an
-  offline doctor degrades to today's wording and never hangs the head of a fire).
-- **2026-08-01 (pm) — a detector's predicate has to be sharper than the symptom that motivated it.**
-  LOOP-244 (W27) was filed to flag null-assignee tickets. Checked against the live board before it
-  gets built: of the three non-terminal null-assignee rows, **only one is actually stuck.** The other
-  two are reachable, because the two queue layers key on different fields — dev-tier slices on
-  `t.assignee === actor`, but **pm/qa `verify` on the OWNER LABEL** and pm `backlog` on state alone.
-  So LOOP-220 (`In Review` + `qa`) sits in QA's verify queue right now, and LOOP-228 (the cost-program
-  epic in `Backlog`) is unreachable-by-design and always will be. Refined the ACs to flag per the
-  purpose the state implies, and to keep *verifiable* apart from *landable* — the LOOP-226/PR #132
-  case this program is named for was held by the landing half, not the verification half. **A W-code
-  that cries wolf on its first day is worth less than no W-code**, and this one is one ticket from shipping.
-
-- **2026-08-01 — a source read is not evidence about running behaviour; the installed artifact is.**
-  Three formal verdicts (two "merge-guard is innocent", one P1 raise on LOOP-223, one P1 defect claim
-  on LOOP-225) were derived from correct readings of `origin/main` while the defect sat in the
-  installed `dist/`. Standing rule for this loop, recorded so it outlives the instance: **when a
-  fire diagnoses dev-loop's own behaviour, attribute from the event ledger and the installed tree —
-  `dev-loop events --ticket <id>` for the writer and actor, `grep` the global npm tree for the code —
-  and treat a repo-source read as a hypothesis until one of those confirms it.** Corrections applied
-  this fire: LOOP-225 re-scoped from a live code defect to the vacuous test that let it through
-  (`hub/test/merge-guard.ts:287` asserts `assignee === null` against a fixture seeded `null`, so it
-  passes against both the fixed and the clobbering implementation) and dropped to P2; LOOP-223's
-  P1 raise reverted with its LOOP-235 evidence struck and its LOOP-175 evidence intact; LOOP-244
-  given the three-writer split so its detector is scoped to cover all of them. The generalisable
-  gap — not the instance — is **LOOP-249**.
-
+- **2026-08-01 (pm, fires ~6–11) — [ARCHIVED] 14 fire-journal rulings from the day's middle and
+  later PM fires** (the `doc-land` lock contradiction on LOOP-217; `blocked` as two mechanisms and
+  the zero-edge park; the reversal that a zero-edge park on a live PR must be CLEARED; `issue.update`
+  recoverability; the LOOP-149 design gate passing on a mechanism expected to fail; the
+  holding-guard remedy amendment; detect-vs-fix-every-writer; the release-gate defence; predicate
+  sharpness for a new W-code; source-read-is-not-runtime-evidence; the pick-order non-call; the
+  senior-supply correction; the dedupe family-growth note). Full text in
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) under
+  `# Rolled 2026-08-01 (pass 11)`. The DIRECTION entry on this host's local-source-build pin is
+  **kept live below** — it is operational, not historical. Clauses still in force, distilled:
+  - **An instruction that names a mechanism is still a claim about the code** — check it before
+    encoding it as an AC. A ruling can be contradicted with evidence and the ticket be better for it.
+  - **Re-read the queue before acting on a boot snapshot**; check whether the thing you were told to
+    do has already been done by someone with the authority to do it.
+  - **A zero-edge `blocked` park on a ticket with a live PR must be CLEARED, not flagged** — a park
+    with no `Blocked-by:` edge is a leak, not a park, and §9c can never unpark it. Split-dev
+    corollary: also restore `assignee` to the tier named in the label, or it stays unreachable.
+  - **`op list_events` DOES record `issue.update`** — attribution (actor + fire + time) is
+    recoverable, content is not. Do not generalise a UI gap into a data gap; run the query first.
+  - **A flagged finding nobody filed is a deferred one**, and **a W-code that cries wolf on its first
+    day is worth less than no W-code** — check a new detector's predicate against the live board
+    before it ships.
+  - **A source read is not evidence about running behaviour; the installed artifact is.** Attribute
+    from `dev-loop events` and the installed tree; treat repo source as a hypothesis.
+  - **Before filing an "obviously broken" behaviour, check whether it is broken against its spec or
+    IS its spec** — the second is a §17 proposal for the operator, not a ticket.
+  - **When a tier's Backlog is empty, check its throughput before calling it a routing artefact.**
+    An empty queue in front of a productive tier is a supply problem, and the supply is PM's filing
+    mix. The no-force-routing half of §21b still holds.
+  - **When a sweep ticket exists for a family, a new instance is a comment on the sweep** — but check
+    whether the instance shows the family GROWING, which moves the fix to the shared seam.
 - **2026-08-01 — DIRECTION: this host is pinned to a local source build. `landing-observability`
   §9.2 Option B supersedes §9.7 here.** *(Recorded under the §9a authorization in the operator's
   ruling comment on **LOOP-246**, 2026-08-01T10:26:17Z. The human's words: "instead of publish and
@@ -957,64 +987,6 @@ not a capacity fact, and it is why I filed one junior ticket and no senior ideat
   "is this host up to date" is not answerable by `dev-loop --version` alone.
 
 
-- **2026-08-01 (later fire) — I did not take the pick-order call, and the reason generalises.**
-  The finding above (LOOP-254) is the kind PM normally resolves inside a ticket: a measured defect,
-  a small fix, an obvious direction. I parked it for the operator instead, on two grounds worth
-  writing down because they will recur.
-  **(1) The code matches its spec, so "fix" means "change the rule".** Every previous ordering
-  ticket on this board (LOOP-144, LOOP-169, LOOP-251) repaired an implementation that had drifted
-  from §5/§21b — agent-buildable by construction. This one has no drift to repair:
-  `servable.ts:29-35` is a faithful rendering of the §5 table. The defect is §5 contradicting
-  itself, and §17 makes a conventions edit operator-applied. **STANDING: before filing an
-  "obviously broken" behaviour, check whether it is broken against its spec or IS its spec — the
-  second is a proposal, not a ticket, and shipping it as a ticket routes a rule change around the
-  §17 firewall.**
-  **(2) A queue-ordering change is not verifiable after the fact.** If it lands and is wrong, the
-  evidence is an absence — work that would have been picked and wasn't — which no gate, test or
-  digest surfaces. That asymmetry, not the size of the diff, is what makes it the operator's.
-  The ticket therefore carries three answers, not one (approve as proposed / approve the larger
-  full-`priority` sort / decline and make `priority` explicitly advisory for Improvements).
-  **Declining is a real option and I said so in the ticket**: FIFO-within-rank is §5's stated
-  anti-starvation guarantee, and "urgent Improvements jump the queue" trades it away. What is not
-  an option is the status quo, where filing agents are instructed to encode urgency that is then
-  discarded for 78% of the board — if the answer is "advisory", the instruction should say so.
-  **Grooming note from the same pass, sixth of its kind.** LOOP-247 was blocked behind LOOP-250:
-  three open tickets rewrite `doctor`'s W18 (LOOP-203 the origin side, LOOP-247 the remediation
-  text, LOOP-250 the installed side) and were sequenced only by creation date. LOOP-250 replaces the
-  mechanism the other two branch on. Marker + `blocked` label both written; LOOP-203 deliberately
-  left unblocked, being a `git fetch`-freshness defect independent of install mode. This is the
-  **sixth** LOOP-190 occurrence — a real dependency living only in prose — and it was again found
-  only by reading three bodies side by side.
-
-- **2026-08-01 (tenth fire) — "no senior-tier Backlog" was being read as a routing fact; it is a
-  fact about MY filing mix.** For four fires this log carried a standing note: zero senior-tier
-  Backlog rows is §21b working as designed, do not force-route to fill senior's slots. The
-  no-force-routing half stands — §21b routes on explicit signals, never inference, and inventing
-  senior-shaped work to fill a slot is exactly the failure it forbids. **What was wrong was
-  treating it as nothing to act on.** Measured this fire: senior closed **19 tickets in 24h**
-  against junior's 37, and **11 of those 19 were PM-created** — the `sensitive` / security /
-  cross-cutting class §4 forces to the senior tier. Senior's supply has always been mine. My
-  recent filings have been small junior-tier defect Improvements almost exclusively, which is why
-  the Backlog is 57 junior rows and 0 senior. **STANDING: when a tier's Backlog is empty, check
-  its throughput before calling it a routing artefact. An empty queue in front of an agent closing
-  19 tickets a day is a supply problem, and the supply is PM's filing mix — a lens rotation that
-  keeps landing on defect-shaped surfaces will keep producing junior-tier rows and starve the
-  senior tier by omission.** Concretely, next fire: rotate to `trust-safety` rather than continuing
-  the ux-flows/consistency line — that is the lens that historically produced LOOP-172, -173, -210
-  and -162, all senior-tier. Not filing junior work into a queue that is 11/10 over cap and 57 deep
-  is the easy half of the call; filing for the tier that has capacity is the half that was missing.
-- **2026-08-01 (tenth fire) — the dedupe read paid for itself, and the family it hit is still
-  growing.** A clean, fully-reproduced finding this fire (the `team-edit.ts` suite reading the live
-  `hub.db` through an unscrubbed ambient `DEVLOOP_HUB_DB`) turned out to be filed twice over
-  already: leaf **LOOP-171**, naming the same file, check and variable, `Canceled` into the family
-  sweep **LOOP-193**. §8 says dedupe before filing and it was right — the investigation was still
-  worth its cost, because the *new* datum is that the family is **not static**: `team-edit.ts` now
-  clears the variable at `:228` (added later, with a comment explaining exactly why) while `:214`
-  still leaks. A per-call opt-in fix generates new leak sites as fast as one-file-per-ticket
-  retires them. Recorded on LOOP-193 with the direction to fix the `env()` helper once, at `:18`.
-  **STANDING: when a sweep ticket exists for a family, a new instance is a comment on the sweep,
-  not a ticket — but check whether the instance shows the family GROWING, because that changes the
-  fix from "N one-line edits" to "one edit at the shared seam".**
 
 ## Candidate ideas
 
