@@ -472,21 +472,55 @@ async function lcReapInfo(url: string): Promise<{ pid: number; project: string; 
 export async function daemonReap(opts: { dryRun?: boolean; host?: string } = {}): Promise<number> {
   const host = opts.host ?? "127.0.0.1";
   const dryRun = opts.dryRun ?? false;
-  console.log(`[daemon] reap: scanning ${host}:${DEFAULT_DAEMON_PORT}..${DEFAULT_DAEMON_PORT + REAP_SCAN_PORTS - 1}${dryRun ? " (dry-run)" : ""}`);
-  const urls = Array.from({ length: REAP_SCAN_PORTS }, (_, i) => `http://${host}:${DEFAULT_DAEMON_PORT + i}`);
-  const results = await Promise.all(urls.map((url) => lcReapInfo(url)));
+  const bandStart = DEFAULT_DAEMON_PORT;
+  const bandEnd = DEFAULT_DAEMON_PORT + REAP_SCAN_PORTS - 1;
+
+  // P2 fix (LOOP-95): collect extra ports that lifecycle can allocate outside the fixed band.
+  // (a) Any port recorded in a workspace runfile — daemons that landed outside the band on a
+  //     restart from an existing.port near the top are captured this way.
+  // (b) DEVLOOP_DAEMON_PORT if set — an explicit env override can point anywhere.
+  const extraPorts = new Set<number>();
+  try {
+    const runDir = lcRunDir();
+    let runFiles: string[] = [];
+    try { runFiles = readdirSync(runDir).filter((f) => /^daemon-.+\.json$/.test(f)); } catch { /* dir absent */ }
+    for (const f of runFiles) {
+      try {
+        const info = JSON.parse(readFileSync(join(runDir, f), "utf8")) as RunInfo;
+        if (typeof info.port === "number" && (info.port < bandStart || info.port > bandEnd)) extraPorts.add(info.port);
+      } catch { /* malformed — skip */ }
+    }
+  } catch { /* lcRunDir() itself failed — skip */ }
+  const envPort = process.env.DEVLOOP_DAEMON_PORT ? Number(process.env.DEVLOOP_DAEMON_PORT) : 0;
+  if (envPort > 0 && (envPort < bandStart || envPort > bandEnd)) extraPorts.add(envPort);
+
+  const extraList = [...extraPorts].sort((a, b) => a - b);
+  console.log(`[daemon] reap: scanning ${host}:${bandStart}..${bandEnd}${extraList.length ? ` + extra ports ${extraList.join(",")}` : ""}${dryRun ? " (dry-run)" : ""}`);
+
+  const bandUrls = Array.from({ length: REAP_SCAN_PORTS }, (_, i) => `http://${host}:${DEFAULT_DAEMON_PORT + i}`);
+  const extraUrls = extraList.map((p) => `http://${host}:${p}`);
+  const allUrls = [...bandUrls, ...extraUrls];
+
+  const results = await Promise.all(allUrls.map((url) => lcReapInfo(url)));
   let reaped = 0, kept = 0;
-  for (let i = 0; i < urls.length; i++) {
+  for (let i = 0; i < allUrls.length; i++) {
     const info = results[i];
     if (!info) continue; // no dev-loop-hub at this port
     if (info.dbPresent) {
-      console.log(`[daemon] reap: KEEP ${urls[i]} (pid ${info.pid}, project '${info.project}') — dbPresent:true (live board)`);
+      console.log(`[daemon] reap: KEEP ${allUrls[i]} (pid ${info.pid}, project '${info.project}') — dbPresent:true (live board)`);
       kept++;
     } else {
       if (dryRun) {
-        console.log(`[daemon] reap: WOULD REAP ${urls[i]} (pid ${info.pid}, project '${info.project}') — dbPresent:false`);
+        console.log(`[daemon] reap: WOULD REAP ${allUrls[i]} (pid ${info.pid}, project '${info.project}') — dbPresent:false`);
       } else {
-        console.log(`[daemon] reap: REAPING ${urls[i]} (pid ${info.pid}, project '${info.project}') — dbPresent:false`);
+        // P3 fix (LOOP-95): re-probe immediately before killing to guard against PID reuse if a
+        // prior lcStop caused a delay and the OS recycled the PID to an unrelated process.
+        const recheck = await lcReapInfo(allUrls[i]);
+        if (!recheck || recheck.pid !== info.pid || recheck.dbPresent) {
+          console.log(`[daemon] reap: SKIPPED ${allUrls[i]} (pid changed or no longer stale since initial scan)`);
+          continue;
+        }
+        console.log(`[daemon] reap: REAPING ${allUrls[i]} (pid ${info.pid}, project '${info.project}') — dbPresent:false`);
         await lcStop(info.pid);
       }
       reaped++;
