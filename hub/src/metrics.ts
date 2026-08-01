@@ -11,6 +11,7 @@ import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
 import { deliveryProjects, type Workspace } from "./team-config.ts";
 import { AGENT_HANDLES } from "./seed.ts";
+import { liveBlockerIds } from "./blocked-by.ts";
 
 // ─── fires.jsonl ──────────────────────────────────────────────────────────────
 export interface FireUsage {
@@ -220,19 +221,18 @@ export interface BoardMetrics {
 const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
 
 // True if the ticket has at least one Blocked-by: marker comment referencing a ticket still open.
-// Fail-safe: no Blocked-by comment → false (counts as parked, the dangerous under-report direction).
+// Delegates to liveBlockerIds (canonical multi-id + Unblocked-by-aware parser).
+// Fail-safe: no marker → empty set → false (counts as parked, the safe under-report direction).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function hasLiveBlockerEdge(db: any, ticketId: string): boolean {
   const comments = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at").all(ticketId) as { body: string }[];
-  const blockerIds = new Set<string>();
-  for (const { body } of comments)
-    for (const m of (body as string).matchAll(/^Blocked-by:\s*(\S+)/gm)) blockerIds.add(m[1]);
-  if (blockerIds.size === 0) return false;
-  for (const id of blockerIds) {
+  const live = liveBlockerIds(comments.map((c) => c.body));
+  if (live.size === 0) return false;
+  for (const id of live) {
     const row = db.prepare("SELECT state FROM tickets WHERE id=?").get(id) as { state: string } | undefined;
-    if (row && !TERMINAL.has(row.state)) return true; // at least one live edge
+    if (row && !TERMINAL.has(row.state)) return true;
   }
-  return false; // all referenced tickets are in terminal states → parked
+  return false;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
