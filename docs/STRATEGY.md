@@ -466,6 +466,17 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   tree and a green `PASS` in the product repo, where 9.2 MB sits un-ignored right now.
 - **`origin/main` moved three times during this fire** (`90ba897`, `64f1c58`, then the operator's own
   `0b365c1` §12b governing fix). I reviewed through **`64f1c58`** and recorded that, not end-of-run HEAD.
+
+- **2026-08-01 (this fire): the cost program's own numbers were the thing most in need of auditing.**
+  The board arrived quiet (verify 0 / unblock 0) and both items of consequence landed mid-fire again —
+  the LOOP-232 design gate and the LOOP-233 evidence. **Seventeenth consecutive fire in which the late
+  re-scan carried the fire.** Verified and closed the context-compression design gate (PASS + three
+  amendments, three children promoted with the §9c edges its prose only implied, LOOP-109 retired as
+  superseded). Ruled PM's reserved model-tier call: **no downgrade**, because the measured opus:sonnet
+  ratio is ~1.6x rather than the 5-9x in circulation, and compression saves more with no capability
+  risk. Filed LOOP-239 (metrics has no per-agent cost surface and conflates priced with metered fires).
+  Unparked LOOP-186 on the first §9c edge in this workspace to go terminal. **The cost baseline the
+  top-priority program is measured against is wrong and is now the operator's to correct.**
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -706,6 +717,7 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   being papered over by adding the agent.
 
 - **2026-07-31 (late arc) — [ARCHIVED] 16 method rulings from the day's later PM fires** (the design-gate fail path vs under-specification; the two halves of a §9c edge; a fix is finished only when every branch answering one question agrees; retiring a defect FAMILY over its leaves; a gate naming a human verifier; §21a promotion unconditional on a pass; the pass-3 rollup keep/roll criterion and the rule that a rollup must RETIRE; a banked idea's precondition as a claim with an expiry; a priority ladder whose fall-through is its success case; a cached mirror read as the fact; STANDING RULE 12 refined; LOOP-74 verify-fail; LOOP-180 pass-with-amendment). Distilled into the STANDING RULES block below; full text in `docs/strategy-archive/2026-07.md` under `# Rolled 2026-08-01 (pass 4)`.
+- **2026-08-01 (mid arc) — [ARCHIVED] 14 fire-journal rulings from the day's middle PM fires** (the merge-objection ruling; machine-demotion-is-not-a-verdict; §5 rank-1; the §17-caution proposal ruling; merge-guard's actor; the boot-corpus A/B cost axis; the discard-cost fix; "has the product moved" asked of `origin`; the NEW-in-range marker test; rollup pass 5; the open condition tested NOT met; promotion-count-0 with an idle lane; the cost ordering and why it did not descend KB×agents; the late re-scan's third payday) — full text in `docs/strategy-archive/2026-08.md`.
 - **(pm, 2026-07-31) 🔐 LOOP-208 — the verify gate asks "is this a builder?" when its invariant needs
   "is this the verifier-owner?", so five agents close `qa`-owned work unchallenged.** LOOP-183 hardened
   the gate against both *dev-tier* vectors; the predicate it keys on, `isDevTierActor`, covers 3 of the
@@ -821,79 +833,6 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   daemon stale-VIEW-code still waits on LOOP-195 shipping (still Backlog)** — both correctly stay parked,
   neither is stale. **A parking lot is groomed by testing its preconditions, not by re-reading its prose.**
 
-- **2026-08-01 — what a merge-objection may and may not do to the board (ruling; encoded as
-  LOOP-216's ACs rather than escalated).** The question the guard raised is legitimate — do not
-  merge a PR whose ticket is not merge-eligible — but its board mutation is not. Three calls, made
-  here so the implementer does not have to re-litigate them:
-  1. **A merged PR is never routed.** Once the PR is `MERGED` the objection is moot; `--apply`
-     writes nothing and comments nothing. The guard must not record "Not merged." against a commit
-     that is on `main`.
-  2. **A board-state trip does not mutate the board.** When the trip fires because the ticket is
-     `In Review`/`Canceled`/`Duplicate`, the guard refuses the merge and comments, and leaves
-     `state`/`assignee`/`labels` alone. The ticket is already in the state being objected about;
-     moving it can only reduce reachability, and `In Review` is exactly where its verifier looks.
-     Note the standing tension this exposes and does **not** resolve: under `git.landing:"pr"`
-     (§12b) `In Review` is the *normal* state of a ticket whose PR awaits merge, so the board-state
-     axis trips on the common case. Whether it should trip at all is **LOOP-113's** question, and
-     `NOT_MERGE_ELIGIBLE` is explicitly out of scope for LOOP-216.
-  3. **A human-review trip routes somewhere a queue serves** — `Todo`, assignee kept at the
-     ticket's dev tier, **no `blocked` label** — so the tier's own slice returns it for repair.
-  The general form is now folded into standing rule 8: *a guard that mutates state owes its subject
-  a reachable destination.*
-- **2026-08-01 — a machine demotion is not a verdict, and undoing one is not verifying.** Both
-  stranded tickets were repaired, but differently on purpose: LOOP-112 is `pm`-owned, so I verified
-  it and closed it `Done`; LOOP-199 is a `Bug` labelled `qa`, so I restored the exact state
-  junior-dev had legitimately set (`In Review`, assignee `junior-dev`) and said in the comment that
-  nothing in it should be read as a pass. Repairing reachability is lane-neutral; issuing the
-  verdict is not.
-- **2026-08-01 — §5 rank 1 is a real rank, not a tiebreak.** LOOP-215 and LOOP-216 (both
-  `priority=1` + `Bug`) were promoted ahead of four older rank-3.5 bugs. The prior fire's derived
-  ordering ("rank by type, then oldest-created; priority gives no tiebreak") is correct *within* a
-  rank and wrong *across* ranks — §5's table makes `priority=1` + `Bug` its own top class. Re-read
-  §5's table, do not re-derive the order from memory of a past fire's note.
-- **2026-08-01 — a proposal parked out of §17 caution is still PM's to rule on; `external-prereq`
-  describes the world, not the filer's authority.** LOOP-218 arrived `blocked`+`needs-pm` tagged
-  `external-prereq`. There was no external prerequisite: `hub/src/merge-guard.ts` is ordinary
-  product code. §17 restricts **reflect** from *applying* structural change — it does not convert a
-  product-code proposal into a human-only call. Answered in-ticket and unparked. **Ask of any
-  `external-prereq` park: name the external thing. If it cannot be named, the bail-shape is wrong
-  and the ticket is answerable.**
-- **2026-08-01 — ruling on merge-guard's actor (LOOP-218), with the fallback pinned.** The guard
-  hardcodes `"operator"` at `merge-guard.ts:95` and `:103` (re-derived from source before ruling),
-  so a tool decision is recorded as a human ruling — and the loop's own read of operator activity
-  over-counts by exactly the number of guard trips. **(A) accepted**, with the case the proposal
-  left open: use `DEVLOOP_ACTOR` *when set*, and `operator` *when absent* — a hand-run from the
-  operator console is genuinely an operator act, so this is not an unconditional substitution.
-  **(B) accepted** as a documented, tested invariant (an `operator` event carrying a `data.fireId`
-  is a tool write) plus the consumer repair — that is the only half that fixes the four rows already
-  on the ledger. **(C) accepted and it is the durable half**: route the writes through the guarded
-  layer so the next such caller fails closed rather than being fixed after the fact. Typed `Bug`,
-  not `Improvement`: shipped code writing a factually false actor is a defect.
-- **2026-08-01 — the boot-corpus A/B is readable on its headline axis and NOT on its cost axis; the
-  default flip waits for a restart-free stretch.** Adopting reflect's recommendation (LOOP-218
-  deferred finding 1, routed to **LOOP-212**). Cache-read share is **flat, 97.46% OFF → 97.31% ON**
-  — the corpus caches cleanly, which was the substantive worry, and it does not reproduce. The cost
-  axis must not be read yet: two runner restarts landed *inside* the ON arm, each forcing a fresh
-  98–147 KB cache-write per agent onto the arm being measured, and one of senior-dev's two ON fires
-  was itself killed. **A measurement whose treatment arm is being taxed by the effect under study is
-  not a result** — say so and wait, rather than reporting the number with a caveat nobody reads.
-- **2026-08-01 — the cheapest discard was the most expensive one, which is why the fix needs a
-  per-agent split.** The junior-dev fire killed at `00:08:37.373Z` burned only $1.13 — and had taken
-  **LOOP-215 ninety-six seconds earlier**, so the discard dropped the in-flight fix to the conflict
-  that is currently blocking every direct build in the shared checkout, and left the ticket claimed
-  `In Progress` by a fire that no longer exists. Recorded on LOOP-219 as the motivation for its
-  per-agent AC: **an aggregate can never show that the smallest number was the worst event.**
-
-- **2026-08-01 — "the product has not moved" must be asked of `origin`, not of the local checkout.**
-  Five consecutive PM fires reported no product diff and swept a review lens instead, while **7
-  product commits sat unreviewed on `origin/main`**. The cause was a self-imposed precondition: my
-  own state note gated the lens reset on *"if the pull is unblocked"*, and the shared checkout has
-  been unable to pull past an unresolved `hub/src/doctor.ts` conflict since 07-31T23:35Z. **A pull
-  makes the WORKING COPY current; it is not required to READ.** `git fetch` then
-  `git diff <lastReviewedSha>..origin/main` / `git show origin/main:<path>` reviews the entire
-  window with a dirty tree and a blocked merge. Standing correction: the change-gate computes HEAD
-  as **`origin/<defaultBranch>` after a fetch**, and a blocked pull is a *landing* problem, never a
-  *review* problem. It cost five fires of lens rotation aimed at a product that had moved.
 - **2026-08-01 — standing rule 1 refined rather than appended to (sixth fire running that refining
   beat appending; still 14 rules).** The rule covered derived values — keys and ratios. LOOP-223 is
   a third form: **one field carrying two meanings, where each meaning has a legitimate routine
@@ -901,19 +840,6 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   the claim" erases the routing. Folded into rule 1 with its own test: *is there a routine operation
   on one meaning that silently destroys the other?* Recording it as a rule refinement rather than a
   15th rule keeps the doctrine block readable, which is the only reason anyone reads it.
-- **2026-08-01 — a marker test is evidence only when the marker is NEW in the range.** Checking
-  whether 14 merged commits are installed, I probed the installed `dist/` for four symbols; three
-  (`inReview`, `applySensitiveRetier`, `reconcileDaemonHealth`) pre-date the window and would have
-  matched either way. Only `skipped_merged` was new, and the packaged `skills/pm-agent/SKILL.md`
-  line was the second decisive probe. **Reporting all four as if they agreed would have been the
-  recurring defect committed against my own evidence** — a surface reporting a result it never
-  established. Two clean probes beat four dirty ones; say which ones were uninformative.
-- **2026-08-01 — §20 R2 rollup pass 5.** Both fire-journal blocks rolled whole into
-  **`docs/strategy-archive/2026-08.md`** (a new file; `2026-07.md` closed after four passes),
-  doctrine distilled to three lines in `Current state`. Doc was 96,742 B and approaching the ~100 KB
-  threshold; `Current state`'s remaining bulk is the **22.4 KB standing product-facts preamble**,
-  which is live description and does NOT roll — note for pass 6: the recoverable surface is the
-  journals only, so the floor is ~22 KB plus the Decisions log.
 - **2026-08-01 — standing rule 8 refined rather than appended to (seventh fire running that
   refining beat appending; still 14 rules).** Rule 8 already covered a guard's remedy for guards
   that MUTATE state (LOOP-216). LOOP-224 is the advisory form, where the operator performs the
@@ -921,20 +847,6 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   doing exactly what the guard printed, the guard must be silent *and* the hazard gone; if only the
   first holds, the guard has taught the operator how to hide the problem from it. Folded into rule 8
   with that test rather than filed as a 15th rule.
-- **2026-08-01 — an open condition I owed, tested and ruled NOT met.** The parked
-  daemon-stale-view-code remediation was to be filed *"only if LOOP-195 ships and the operator still
-  has to be told by hand."* LOOP-195's fix has **merged** (`a55c808`) and the operator does still
-  have to be told by hand — but the reason is the **v1.13.0 release skew** (W18: the installed CLI
-  is 15 code commits behind `origin/main`), not a gap in LOOP-195. Merged is not shipped. Filing now
-  would duplicate the release-skew ticket and blame the wrong surface. **Re-test after a release is
-  cut** — that is the first moment the condition can give a true answer. The other parked condition
-  (cost-governance (b)+(c), gated on LOOP-98 going `Done`) is still Backlog, so also not met.
-- **2026-08-01 — a promotion count of 0 with an idle lane is the honest number, and the reason
-  matters.** Junior sits at **10/10** with 49 Backlog tickets; senior has **9/10** and a Backlog of
-  **0**. The open slot cannot be filled without re-tiering, which standing rule 9 forbids (tier at
-  filing, never to balance load). So: surface the ratio, promote nothing, and do not let an idle
-  lane argue for breaking the routing rule that keeps tiering honest.
-
 - **2026-08-01 — a design gate passes on its MODEL, and amends on its PROSE; the two are not the
   same axis.** `budget-ceiling` (LOOP-197) had a right model, a right decomposition and a verified
   premise — and two real defects: its preamble said *"four junior children / every child is
@@ -952,21 +864,75 @@ Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md
   (intake discharged) and stays **open** as the carrier for its own ACs — the measured before/after,
   the target, the `context-bill.ts` ratchet. Closing it would repeat 2026-07-31's recorded failure
   where the cost-governance plan's follow-up had no carrier. **Discharge the ask, keep the program.**
-- **2026-08-01 — cost ordering: I did NOT order the cuts by descending KB×agents, and said why.**
-  §22 is the largest single item (137 KB×agents) but its deletions are governing prose gated on an
-  operator apply. **Conditional delivery goes first** — §19/§18/§21a/§12c ≈ 195 KB×agents that some
-  fires simply cannot use — because it deletes no prose, changes no rule, and needs no operator
-  round-trip. Its enabler is already filed and already broken: **LOOP-109**, where the boot pruner's
-  predicate reads `repo.git.autoMerge` while the schema writes a flat `autoMerge`, making it a silent
-  no-op. **The cheapest byte to cut is the one that was never relevant to this fire's workspace shape.**
 - **2026-08-01 — recurring defect, instance 31: a guard anchored on the wrong TREE (LOOP-231).** W06
   asks the right question ("is anything here committable?") of the wrong root, and the §17 db guard asks
   about the db it *opened* rather than the class it *protects*. Both then print reassurance. **Folded
   into standing rule 8: for any guard, check its ANCHOR as well as its predicate — the right question
   asked of the wrong object is indistinguishable from a pass.**
-- **2026-08-01 — the late re-scan earned its keep for the third fire running, and this time it carried
-  the whole fire.** `needs-pm` 0 and verify 0 at boot; by close, an operator intake (LOOP-228) *and* a
-  design parent (LOOP-197) had both arrived. **Everything of consequence this fire was invisible at boot.**
+
+- **2026-08-01 — the tier premise did not survive its own ledger, and the baseline it rested on is
+  arithmetically impossible (LOOP-233, PM's reserved call).** The circulating figure — pm/senior/reflect
+  "5-9x their sonnet peers", baseline ~$6.68/fire over 142 metered fires — multiplies out to $948.56
+  against a ledger whose **total priced spend, all agents, all time, is $616.33**. Two of its six rows
+  state a *mean* $/fire above that agent's most expensive fire **ever** (pm 16.99 vs max 11.91; reflect
+  12.13 vs max 5.05), and a cumulative replay shows no denominator rule reproduces it at any point in
+  the ledger's history. **All three opus agents were overstated and all three sonnet agents understated
+  — every error in the direction that widens the gap.** Measured truth: opus is **~1.6x** sonnet per
+  cacheRead token (the `opus` price card solves at R²=1.0000 — in $5.00/M, out $25.00/M, cacheRead
+  $0.50/M, cacheWrite $10.00/M); per HOUR the opus agents are **not** the expensive ones (sweep on
+  sonnet is the most expensive agent per hour on this board, and pm/qa are within 1%); and junior-dev
+  on sonnet reads **more** cacheRead per fire (8.69M) than any opus agent. **RULING: no tier change.**
+  Downgrading all three saves 24.9%; a 30% context cut saves ~30%, across all six agents, at no
+  capability risk — and the levers are multiplicative, so compression must land first or its
+  before/after is uninterpretable. Parked `In Review` for the operator with a fully-specified
+  reversible trial (pm first, 30 fires, named abort signals) so the null can be overruled in one line.
+- **2026-08-01 — a number that cannot be reproduced must not be the baseline of a program that is
+  measured against it.** LOOP-228 makes "measured before/after" the acceptance criterion for the whole
+  compression program. On the wrong baseline the program books a **~28% saving on day one for changing
+  nothing**, and a real regression can still measure as a win. **STANDING: before a program's first
+  measurement lands, re-derive its baseline from the raw ledger and state the denominator.** The
+  surface could not have caught this — `metrics` exposes no per-agent cost at all and counts 34
+  zero-cost rate-limit rows as "metered", deflating $/fire ~21% (filed LOOP-239).
+- **2026-08-01 — I ran the arm that refuted my own first answer, and it cost me the headline.** My
+  first pass found 64% of fires unpriced and extrapolated "true spend ~$1,987" — a 3.2x scandal. Then I
+  tested the alternative: metering **switched on** at 2026-07-31T~12:00Z, so the 292 unpriced rows are
+  pre-metering, not a capture defect. **I discarded the extrapolation.** Post-onset coverage is 78.7%.
+  A finding that survives only because you did not test the boring explanation is not a finding.
+- **2026-08-01 — the rationale for a tier and the economics of it point in opposite directions, and
+  only one of them was ever written down.** senior-dev's opus is the ONE tier choice with a documented,
+  load-bearing argument (conventions §21a: "the expensive reasoning model concentrates on design +
+  escalation"; §21c: escalation is "opus + max on the work the cheaper tier couldn't get right") — so
+  downgrading it removes the rung above junior and a junior failure would escalate to the model that
+  just failed. **pm and reflect have no recovered rationale at all**: they inherit
+  `config-schema.md:54`'s blanket `claude: opus` default. Nobody decided; nobody overrode. Yet senior
+  is the LARGEST saving ($68.20) and reflect the smallest ($9.46). **A default is not a decision, and
+  discovering that is worth more than the price comparison that led to it.**
+- **2026-08-01 — a design gate that re-verifies the premise instead of the citation, for the second
+  consecutive fire (LOOP-232 → PASS with three amendments).** senior-dev adopted my Lever-1-first
+  ordering but **corrected its premise**: conventions is delivered to a fire nowhere, so config-aware
+  pruning is dead code. I did not take the citation — I opened `run-agents.ts:907-914` (prompt = SKILL
+  unless `--assemble-boot`), then climbed to **rung three**: `bootBytes` is on exactly **16 of 456**
+  ledger rows, spanning a **66-minute window** that closed at 2026-08-01T00:08Z, and nothing since.
+  The premise holds. **Amendments: (1) C3's before/after must divide by PRICED fires, not "metered" —
+  the soak is the program's acceptance evidence and would inherit a 21% denominator artifact; (2) §1's
+  claim that this workspace has no flat `fires.jsonl` is false — it exists, 456 rows, and is the source
+  of every number in the ruling; (3) the C2→C3→C4 sequencing had NEITHER a §9c marker NOR a `blocked`
+  label — LOOP-190's FIFTH strike and the first where the edge was missing too.** Also executed the
+  board move the design only *described*: LOOP-109 `Canceled`, superseded by LOOP-236.
+- **2026-08-01 — the lessons file broke its own top rule, and only rung three could see it.** The team
+  INDEX still reads `STATUS — DELIVERED … bootBytes on 16 of 16 fires`. True when written; false now —
+  it described a window that closed minutes later, and every agent boots with it. The Shared lesson
+  immediately above it says *"Shipped ≠ installed ≠ running. Never declare a mechanism live off a code
+  read."* **A status line is a claim with an expiry, and "16 of 16" is the most dangerous shape of
+  correct-at-the-time.** Lessons are reflect's under §17; recorded the evidence on LOOP-212 instead.
+- **2026-08-01 — I made the parked ruling lossless instead of re-asking for it (LOOP-234, fifth fire).**
+  The wedge blocked `doc-land` again — seven strategy commits now stranded. My stated reason for not
+  deciding was that `git checkout --` would destroy the only copy of the staged hunk, so **I extracted
+  the hunk and put it verbatim on the ticket**: it is a **two-line comment change with zero behaviour**.
+  The objection dissolves; either ruling is now free. **STANDING: when a park is waiting on a human,
+  spend the fire removing the reason you could not decide it — not restating the ask.** (`git diff
+  --cached` is rejected by this box's git wrapper — `git show HEAD:f` vs `git show :f` is the way, and
+  that gap is likely why the hunk stayed invisible for five fires.)
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
