@@ -84,10 +84,11 @@ const setEq = (a: Set<string>, b: string[]) => a.size === b.length && b.every((x
   ok(setEq(live, ["LOOP-1", "LOOP-2", "LOOP-3"]), "R2: mixed comma+space separators work");
 }
 {
-  // ids are canonicalized to uppercase
+  // P2 fix: ids are preserved as written — prefixes can be lowercase in the DB
+  // (uppercasing would cause the case-sensitive ticket lookup to miss lowercase-prefix tickets)
   const events = parseMarkerLines(["Blocked-by: loop-1 LOOP-2"]);
-  ok(events[0]?.ids[0] === "LOOP-1" && events[0]?.ids[1] === "LOOP-2",
-    "R2: ids are canonicalized to uppercase");
+  ok(events[0]?.ids[0] === "loop-1" && events[0]?.ids[1] === "LOOP-2",
+    "R2: ids are preserved as written (no case normalization — DB lookup is case-sensitive)");
 }
 {
   // multi-comment ordering: later Blocked-by wins over earlier Unblocked-by

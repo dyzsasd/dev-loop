@@ -225,7 +225,9 @@ const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
 // Fail-safe: no marker → empty set → false (counts as parked, the safe under-report direction).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function hasLiveBlockerEdge(db: any, ticketId: string): boolean {
-  const comments = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at").all(ticketId) as { body: string }[];
+  // P2 fix: secondary sort by rowid (insertion order) makes ordering deterministic when two
+  // comments share a millisecond-resolution created_at timestamp (rapid or concurrent writes).
+  const comments = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at, rowid").all(ticketId) as { body: string }[];
   const live = liveBlockerIds(comments.map((c) => c.body));
   if (live.size === 0) return false;
   for (const id of live) {
