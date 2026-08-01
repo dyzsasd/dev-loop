@@ -530,7 +530,7 @@ async function runKaizenCli(ws: Workspace, boardDb: string, windowMs: number, as
       for (const key of keys) {
         const pid = findProject(db, key);
         if (!pid) continue;
-        reports.push(kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } }));
+        reports.push({ key, ...kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } }) });
       }
       console.log(JSON.stringify(reports, null, 2));
     } else {
