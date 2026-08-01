@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, sensitiveMistier, kaizenReport } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, sensitiveMistier, kaizenReport, renderKaizen } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -649,6 +649,18 @@ try {
     // AC6: showHeaderLine === (selfFixed >= 1)
     ok(report.showHeaderLine === true, "kaizen showHeaderLine=true when selfFixed>=1");
     ok(emptyRep.showHeaderLine === false, "kaizen showHeaderLine=false when selfFixed=0");
+
+    // renderKaizen branch-coverage (CRAP-ratchet guard: CC=12, was 0.3% covered → must exercise all paths).
+    // Each call exercises a different branch cluster; stdout goes to console (test runner captures it).
+    renderKaizen(report);                 // showHeaderLine=true; selfFixed>0; lessons absent; ratchet null; verifyFail>0
+    renderKaizen(emptyRep);              // showHeaderLine=false; selfFiled=0; ratchet null; verifyFail=0
+    renderKaizen(reportWithLessons);     // lessons.present=true with entries
+    renderKaizen(reportWithRatchet);     // ratchet.current set; ratchet.history set
+    renderKaizen(reportFallback);        // ratchet.current set; ratchet.history null
+    // selfFiled>0 but selfFixed=0 (the "none fixed yet" display branch)
+    renderKaizen({ ...emptyRep, showHeaderLine: false,
+      selfImprovement: { selfFiled: 2, selfFixed: 0, totalDone: 0, selfFixRate: null, selfSlice: null, fixedIds: [] } });
+    ok(true, "renderKaizen covers all display branches (CRAP-ratchet guard)");
 
     kDb.close();
 

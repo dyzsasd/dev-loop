@@ -505,6 +505,30 @@ export function renderKaizen(report: KaizenReport): void {
   console.log("  verify-fail class: not yet recorded (no Verify-fail-class: marker emitted yet)");
 }
 
+// Extracted from metricsCli to keep its CC under the ratchet (CRAP-90 guard; kaizen body adds ~6 branches).
+async function runKaizenCli(ws: Workspace, boardDb: string, windowMs: number, asJson: boolean): Promise<number> {
+  if (ws.file.team.backend !== "service" || !existsSync(boardDb)) {
+    console.error("metrics --kaizen: requires service backend with hub.db");
+    return 1;
+  }
+  const { openDb } = await import("./db.ts");
+  const { findProject } = await import("./seed.ts");
+  const db = openDb(boardDb);
+  try {
+    for (const key of deliveryProjects(ws)) {
+      const pid = findProject(db, key);
+      if (!pid) continue;
+      const lessonsDir = lessonsPaths(ws).dir;
+      const hubRoot = join(new URL(".", import.meta.url).pathname, "..");
+      const pkgJson = join(hubRoot, "package.json");
+      const gauntletDoc = join(ws.root, "docs", "design", "quality-gauntlet.md");
+      const report = kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } });
+      if (asJson) { console.log(JSON.stringify(report, null, 2)); } else { renderKaizen(report); }
+    }
+  } finally { db.close(); }
+  return 0;
+}
+
 // Service-backend board rollup: per-project board KPIs + the operator decision queue folded into
 // `out` (1.8.1 quality-gauntlet drain: metricsCli CC 22 → collect/render phases).
 async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>, boardDb: string): Promise<void> {
@@ -690,29 +714,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   // team-import.ts:230 writes) must NOT follow ambient env — they call wsHubDb(ws) directly.
   const boardDb = resolveHubDbPath(ws.root);
 
-  // ── kaizen path (LOOP-205) ───────────────────────────────────────────────────
-  if (showKaizen) {
-    if (ws.file.team.backend !== "service" || !existsSync(boardDb)) {
-      console.error("metrics --kaizen: requires service backend with hub.db");
-      return 1;
-    }
-    const { openDb } = await import("./db.ts");
-    const { findProject } = await import("./seed.ts");
-    const db = openDb(boardDb);
-    try {
-      for (const key of deliveryProjects(ws)) {
-        const pid = findProject(db, key);
-        if (!pid) continue;
-        const lessonsDir = lessonsPaths(ws).dir;
-        const hubRoot = join(new URL(".", import.meta.url).pathname, "..");
-        const pkgJson = join(hubRoot, "package.json");
-        const gauntletDoc = join(ws.root, "docs", "design", "quality-gauntlet.md");
-        const report = kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } });
-        if (asJson) { console.log(JSON.stringify(report, null, 2)); } else { renderKaizen(report); }
-      }
-    } finally { db.close(); }
-    return 0;
-  }
+  if (showKaizen) return runKaizenCli(ws, boardDb, windowMs, asJson);
 
   // ── usage/cost/flow path (LOOP-125) ──────────────────────────────────────────
   if (showUsage || showCost || showFlow) {
