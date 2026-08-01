@@ -22,7 +22,7 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 // socket. Fully hermetic: never-resolving / loopback hosts, no daemon, the token controlled in-process
 // and the three env levers snapshot+restored so the daemon legs below are undisturbed (LOOP-156).
 {
-  const { plaintextBearerToRemote } = await import("../src/ui-token.ts");
+  const { plaintextBearerToRemote, plaintextBearerRefusal } = await import("../src/ui-token.ts");
   const { postOpUrl } = await import("../src/op-client.ts");
   const saved = { tok: process.env.DEVLOOP_UI_TOKEN, tokFile: process.env.DEVLOOP_UI_TOKEN_FILE, optIn: process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT };
   delete process.env.DEVLOOP_UI_TOKEN; delete process.env.DEVLOOP_UI_TOKEN_FILE; delete process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT;
@@ -38,6 +38,15 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
     process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT = "1";
     ok(plaintextBearerToRemote(new URL("http://hub.internal:8787"), true) === false, "guard: DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1 ⇒ the explicit opt-in allows plaintext");
     delete process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT;
+
+    // The refusal's tunnel remedy must target the URL's EFFECTIVE remote port, not a hardcoded 8787:
+    // for a default-port `http://hub.example` (port 80) the old `ssh -L 8787:localhost:8787` reaches
+    // nothing (codex P2). Keep a convenient LOCAL 8787; derive only the REMOTE end (80 here). An
+    // explicit port is used for both ends unchanged.
+    ok(/ssh -L 8787:localhost:80 hub\.example\b/.test(plaintextBearerRefusal(new URL("http://hub.example"))),
+      "refusal: default-port http derives the REMOTE tunnel port (80), keeping a convenient local 8787 — not a hardcoded 8787:8787");
+    ok(/ssh -L 9000:localhost:9000 hub\.example\b/.test(plaintextBearerRefusal(new URL("http://hub.example:9000"))),
+      "refusal: an explicit non-default port is used for BOTH tunnel ends unchanged");
 
     // egress: postOpUrl SHORT-CIRCUITS to "refused" without opening a socket. hub.invalid never resolves,
     // so unguarded the token case would reach DNS and return "down"; guarded it returns "refused" with no

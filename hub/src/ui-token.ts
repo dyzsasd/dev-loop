@@ -48,12 +48,18 @@ export function plaintextBearerToRemote(base: URL, hasToken: boolean): boolean {
 
 // The refusal diagnostic — names the real risk and BOTH remedies (AC4); NEVER the token value (§16).
 export function plaintextBearerRefusal(base: URL): string {
-  const port = base.port || "8787";
+  // The tunnel's REMOTE port must be the one the client will ACTUALLY hit — the URL's effective port,
+  // which is 80 when http omits it. A hardcoded `ssh -L 8787:localhost:8787` would forward to a port
+  // the hub is not on for `--attach http://hub.example` (codex P2). Keep the LOCAL port convenient (the
+  // hub's own 8787 default); derive only the remote end. base.port is "" when omitted OR when it equals
+  // the scheme default, so `|| …` supplies the right fallback either way.
+  const remotePort = base.port || "80";
+  const localPort = base.port || "8787";
   return (
     `refusing to send the hub bearer token in cleartext to non-loopback host '${base.hostname}' over http — ` +
     `it is full write authority over the board (tickets, comments, docs) and rides every op call, so one ` +
     `on-path capture is a durable compromise. Attach over TLS (https://${base.host}), or tunnel to loopback ` +
-    `(ssh -L ${port}:localhost:${port} ${base.hostname} — then --attach http://127.0.0.1:${port}). ` +
+    `(ssh -L ${localPort}:localhost:${remotePort} ${base.hostname} — then --attach http://127.0.0.1:${localPort}). ` +
     `To allow plaintext on a trusted private link, set DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1.`
   );
 }
