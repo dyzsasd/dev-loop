@@ -139,6 +139,35 @@ try {
   ok(/\[W06\][^\n]*ws\.bundle/.test(mergeOut), "(h) W06 warns for a bundle introduced by an unpushed merge commit (names ws.bundle)");
   ok(!/is gitignored/.test(mergeOut), "(h) the reassuring 'clean' line is suppressed while an unpushed merge commit carries the artifact");
 
+  // (i) LOOP-235 review P1 #4 — a bundle COMMITTED on a branch with NO `@{upstream}` (a fresh branch never
+  // pushed, or a repo with no remote at all). `git push origin HEAD:refs/heads/X` still ships that commit,
+  // but the old `@{upstream}..HEAD` arm skipped ENTIRELY when `rev-parse @{upstream}` failed. The scan must
+  // enumerate `HEAD --not --remotes` (what a push would transfer) so it works with no tracking ref. Here:
+  // no remote at all → the committed bundle is invisible to the staged + untracked arms. Fails against the
+  // upstream-gated arm.
+  const noUpWs = join(ROOT, "noup-ws"); mkdirSync(noUpWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", noUpWs, "--key", "gg5", "--backend", "service", "--yes"], ROOT).status === 0, "setup: noup-ws team init");
+  gitInit(noUpWs);
+  writeFileSync(join(noUpWs, ".gitignore"), ".dev-loop/\n");
+  writeFileSync(join(noUpWs, "README"), "x\n");
+  execFileSync("git", ["-C", noUpWs, "add", "README", ".gitignore"]);
+  execFileSync("git", ["-C", noUpWs, "commit", "-qm", "init"]);
+  const noUpBundle = join(noUpWs, "ws.bundle");
+  ok(cli(exportArgs(noUpBundle), noUpWs).status === 0, "(i) setup: bundle export into noup-ws");
+  execFileSync("git", ["-C", noUpWs, "add", "ws.bundle"]);
+  execFileSync("git", ["-C", noUpWs, "commit", "-qm", "add bundle (committed, no upstream, never pushed)"]);
+  ok(spawnSync("git", ["-C", noUpWs, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).status !== 0,
+     "(i) precondition: the branch has NO @{upstream} — exactly why the old upstream-gated arm skipped");
+  ok(execFileSync("git", ["-C", noUpWs, "diff", "--cached", "--name-only"], { encoding: "utf8" }).trim() === "",
+     "(i) precondition: nothing staged (index == HEAD after commit — the staged arm sees nothing)");
+  ok(execFileSync("git", ["-C", noUpWs, "ls-files", "ws.bundle"], { encoding: "utf8" }).trim() === "ws.bundle" &&
+     !execFileSync("git", ["-C", noUpWs, "ls-files", "--others", "--exclude-standard"], { encoding: "utf8" }).split("\n").includes("ws.bundle"),
+     "(i) precondition: ws.bundle is committed/tracked (not in the untracked set) — only the committed-history arm can catch it");
+  const docNoUp = cli(["doctor"], noUpWs);
+  const noUpOut = `${docNoUp.stdout}${docNoUp.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(noUpOut), "(i) W06 warns for a committed bundle on a branch with no upstream (names ws.bundle)");
+  ok(!/is gitignored/.test(noUpOut), "(i) the reassuring 'clean' line is suppressed while a committed no-upstream bundle is present");
+
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });
   ok(cli(["team", "init", "--dir", plainWs, "--key", "gg2", "--backend", "service", "--yes"], ROOT).status === 0, "setup: plain-ws team init");
