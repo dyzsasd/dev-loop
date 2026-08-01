@@ -19,16 +19,16 @@ export type SchedulerState = Record<string, CursorMap>; // agent → CursorMap
 // The enabled, positively-weighted projects for delivery rotation, sorted by key for determinism.
 export function rotationCandidates(ws: Workspace): Candidate[] {
   return Object.entries(ws.file.projects)
-    .filter(([key, p]) => !isTeamProject(key) && p.enabled !== false && (p.weight ?? 1) > 0)
+    .filter(([key, p]) => !isTeamProject(key) && p.enabled !== false && (p.weight ?? 1) > 0 && !p.scratch)
     .map(([key, p]) => ({ key, weight: p.weight ?? 1 }))
     .sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 }
 
-// Steward coverage (T3.2): every ENABLED project at ANY weight, sorted. weight:0 is maintenance mode —
-// delivery rotation pauses, but the stewards (sweep/ops/reflect/communication) keep covering the project;
-// enabled:false removes it from both lists.
+// Steward coverage (T3.2): every ENABLED non-scratch project at ANY weight, sorted. weight:0 is maintenance
+// mode — delivery rotation pauses, but the stewards (sweep/ops/reflect/communication) keep covering the
+// project; enabled:false or scratch:true removes it from both lists.
 export function stewardProjects(ws: Workspace): string[] {
-  return deliveryProjects(ws).filter((key) => ws.file.projects[key].enabled !== false).sort();
+  return deliveryProjects(ws).filter((key) => ws.file.projects[key].enabled !== false && ws.file.projects[key].scratch !== true).sort();
 }
 
 // One smooth-WRR step. Mutates + returns `cur` (pruned to the current candidate set) and the pick.
