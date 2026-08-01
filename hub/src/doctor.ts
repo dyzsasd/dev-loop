@@ -519,51 +519,90 @@ function isPathIgnored(root: string, rel: string): boolean {
   catch { return false; }
 }
 
-// LOOP-210 + LOOP-235 — files under <root> that a routine git op would land in history and whose first
-// bytes are the bundle MAGIC header. A bundle (operator-chosen --out name, encrypted or plaintext) carries
-// every secret VALUE + hub.db. LOOP-210 scanned only untracked files (`git ls-files --others`), so the
-// guard went silent the instant a `git add` moved the artifact into the index (LOOP-235); scan the UNION
-// of every path reachable by the next commit/push — untracked-not-ignored ∪ staged-vs-HEAD ∪
-// committed-but-unpushed — deduped. --exclude-standard honours .gitignore for the untracked arm; a
-// staged/committed path is tracked, so its presence in the index/local history is itself the leak
-// regardless of ignore rules. The MAGIC probe is the discriminator, so a broad candidate set is safe —
-// only real bundles are flagged. Bounded 16-byte header probe over a commit-relevant set (NOT all tracked
-// files) — doctor is not a hot path. MAGIC must match bundle.ts (the bundle-gitguard test writes a real
+// LOOP-210 + LOOP-235 — files under <root> that a routine git op (commit or push) would land in
+// history and whose first bytes are the bundle MAGIC header. A bundle (operator-chosen --out name,
+// encrypted or plaintext) carries every secret VALUE + hub.db. The guard must see every path reachable
+// by the next commit/push AND probe the CONTENT that would actually ship, arm by arm:
+//   • untracked, not-ignored — the worktree file IS that content (`ls-files --others` honours .gitignore);
+//   • staged — the INDEX blob (`:path`), NOT the worktree: a bundle staged then modified/removed in the
+//     worktree (`AM`/`AD`) keeps the magic in the index and still lands on commit (LOOP-235 review P1 #1);
+//   • committed-but-unpushed — the blob in EACH unpushed commit's tree, NOT the endpoint diff: a bundle
+//     added in one unpushed commit and deleted in a later one nets to nothing in `upstream..HEAD` yet
+//     still ships in the intermediate commit on push (LOOP-235 review P1 #2).
+// A staged/committed path is tracked, so its presence in the index/local history is itself the leak,
+// regardless of ignore rules. The 16-byte MAGIC probe is the discriminator, so a broad candidate set is
+// safe — only real bundles are flagged. Each arm is bounded (MAX_PROBES_PER_ARM; doctor is not a hot
+// path), and a git blob is read via `cat-file` under a small maxBuffer so a multi-MB bundle costs the
+// captured prefix, not a full slurp. MAGIC must match bundle.ts (the bundle-gitguard test writes a real
 // bundle and asserts this detects it, so the two constants can't silently drift).
 function unignoredBundleArtifacts(root: string): string[] {
   const MAGIC = "DEVLOOP-BUNDLE/1";
+  const MAX_PROBES_PER_ARM = 2000;
   const gitZ = (args: string[]): string[] => {
     try {
       return execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24 })
         .toString().split("\0").filter(Boolean);
     } catch { return []; }
   };
-  // `git diff --cached --name-only` lists staged paths against HEAD, and against the empty tree on an
-  // unborn HEAD (a fresh `git init` — the exact repro), so a bundle staged before the first commit is seen.
-  const candidates = new Set<string>([
-    ...gitZ(["ls-files", "--others", "--exclude-standard", "-z"]),
-    ...gitZ(["diff", "--cached", "--name-only", "-z"]),
-  ]);
-  // Committed-but-unpushed: only when an upstream is configured (a bare `git init` workspace has none).
-  let upstream = "";
-  try { upstream = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
-  catch { /* no upstream — skip the committed-but-unpushed arm */ }
-  if (upstream) for (const p of gitZ(["diff", "--name-only", "-z", `${upstream}..HEAD`])) candidates.add(p);
-
-  const hits: string[] = [];
-  let scanned = 0;
-  for (const rel of candidates) {
-    if (scanned++ >= 2000) break; // bound a pathological candidate set
+  const gitLines = (args: string[]): string[] => {
+    try {
+      return execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24 })
+        .toString().split("\n").map((s) => s.trim()).filter(Boolean);
+    } catch { return []; }
+  };
+  const bufHasMagic = (buf: Buffer | undefined): boolean =>
+    !!buf && buf.length >= MAGIC.length && buf.subarray(0, MAGIC.length).toString("latin1") === MAGIC;
+  const worktreeHasMagic = (rel: string): boolean => {
     let fd: number | undefined;
     try {
       fd = openSync(join(root, rel), "r");
       const buf = Buffer.alloc(MAGIC.length);
       const n = readSync(fd, buf, 0, MAGIC.length, 0);
-      if (n === MAGIC.length && buf.toString("latin1") === MAGIC) hits.push(rel);
-    } catch { /* unreadable/gone (e.g. a staged deletion) — skip */ }
+      return n === MAGIC.length && buf.toString("latin1") === MAGIC;
+    } catch { return false; } // unreadable/gone — skip
     finally { if (fd !== undefined) closeSync(fd); }
+  };
+  // Probe a git object: `:path` = the staged/index blob, `<commit>:path` = a blob in a commit tree.
+  // `cat-file blob` streams raw content; a small maxBuffer bounds memory — on a large bundle spawnSync
+  // returns ENOBUFS yet still hands back the captured prefix, which is all the 16-byte compare needs.
+  const blobHasMagic = (spec: string): boolean =>
+    bufHasMagic(spawnSync("git", ["-C", root, "cat-file", "blob", spec], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 16 }).stdout as Buffer | undefined);
+
+  const hits = new Set<string>();
+
+  // Staged (index) — probe the index blob. Small set, and the LOOP-235 P1 #1 target, so run it first.
+  // `diff --cached --name-only` lists staged paths against HEAD, or the empty tree on an unborn HEAD
+  // (a fresh `git init` — the exact repro), so a bundle staged before the first commit is seen.
+  let s = 0;
+  for (const rel of gitZ(["diff", "--cached", "--name-only", "-z"])) {
+    if (s++ >= MAX_PROBES_PER_ARM) break;
+    if (blobHasMagic(`:${rel}`)) hits.add(rel);
   }
-  return hits;
+  // Committed-but-unpushed — only when an upstream is configured (a bare `git init` workspace has none).
+  // Walk EVERY unpushed commit and probe the blobs IT introduced (diff vs its parent; --root covers an
+  // initial commit), so an add-then-delete pair within the range is still caught (LOOP-235 P1 #2). A
+  // deletion (--diff-filter excludes D) has no blob here and was already probed at the commit that added it.
+  let upstream = "";
+  try { upstream = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
+  catch { /* no upstream — skip the committed-but-unpushed arm */ }
+  if (upstream) {
+    let c = 0;
+    for (const commit of gitLines(["rev-list", `${upstream}..HEAD`])) {
+      if (c >= MAX_PROBES_PER_ARM) break;
+      for (const rel of gitZ(["diff-tree", "-r", "--no-commit-id", "--name-only", "-z", "--diff-filter=AM", "--root", commit])) {
+        if (c++ >= MAX_PROBES_PER_ARM) break;
+        if (blobHasMagic(`${commit}:${rel}`)) hits.add(rel);
+      }
+    }
+  }
+  // Untracked, not ignored — the worktree file is the content. Probe LAST: a pathological untracked set
+  // can be huge, and its cap must not starve the two tracked arms above.
+  let u = 0;
+  for (const rel of gitZ(["ls-files", "--others", "--exclude-standard", "-z"])) {
+    if (u++ >= MAX_PROBES_PER_ARM) break;
+    if (worktreeHasMagic(rel)) hits.add(rel);
+  }
+  return [...hits];
 }
 
 // W22 — landing stall: forge glance, warn/info only, never flips DOCTOR_OK (design §5.1).
