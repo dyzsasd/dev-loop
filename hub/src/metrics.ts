@@ -537,6 +537,7 @@ async function runKaizenCli(ws: Workspace, boardDb: string, windowMs: number, as
       for (const key of keys) {
         const pid = findProject(db, key);
         if (!pid) continue;
+        if (keys.length > 1) console.log(`\n[${key}]`);
         renderKaizen(kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } }));
       }
     }
@@ -598,8 +599,8 @@ const fmtDur = (ms: number): string => {
 // `--window 1h` shows "last 1h" not "last 0d" and `--window 12h` shows "last 12h" not "last 1d".
 function fmtWindow(ms: number): string {
   const h = ms / 3_600_000;
-  if (h < 24) return `${Math.round(h)}h`;
-  return `${Math.round(ms / 86_400_000)}d`;
+  if (h % 24 === 0) return `${h / 24}d`;
+  return `${Math.round(h)}h`;
 }
 
 export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<typeof fireMetrics>, out: Record<string, unknown>, nowMs = Date.now()): void {
