@@ -508,17 +508,19 @@ function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg
   // moved.json marker sitting un-ignored in the tree is a secret/state leak a `git add -A` commits.
   const leaks = unignoredBundleArtifacts(root);
   const movedRel = join(".dev-loop", "moved.json");
-  if (existsSync(join(root, movedRel)) && !isPathIgnored(root, movedRel)) leaks.push({ path: ".dev-loop/moved.json", tracked: isIndexed(root, movedRel) });
+  if (existsSync(join(root, movedRel)) && !isPathIgnored(root, movedRel)) leaks.push({ path: ".dev-loop/moved.json", state: indexState(root, movedRel) });
   if (leaks.length) {
-    // Remediation must match each artifact's git STATE, not just its name (LOOP-235 review P1 #7): a
-    // .gitignore rule (or moving the worktree file) removes an UNTRACKED artifact from the next commit,
-    // but it never unstages a blob already in the index/history — follow that advice on a staged or
-    // committed bundle, `git commit`, and the secret still ships. Only the clauses the leak set actually
-    // needs are printed, so an untracked-only leak is not told to run a pointless `git rm --cached`.
+    // Remediation must match each artifact's git STATE (LOOP-235 review P1 #7/#8), because the escape
+    // differs and getting it wrong still leaks: a .gitignore rule removes an UNTRACKED artifact from the
+    // next commit but never unstages a tracked blob; `git rm --cached` drops a STAGED blob from the index
+    // but does NOT rewrite history, so a bundle already in an unpushed COMMIT survives it and ships on push
+    // — that one needs the commit rewritten. Only the clauses the leak set actually needs are printed.
     const names = leaks.map((l) => l.path).join(", ");
+    const states = new Set(leaks.map((l) => l.state));
     const fixes: string[] = [];
-    if (leaks.some((l) => !l.tracked)) fixes.push("add *.age / the artifact to .gitignore, or write it outside the repo");
-    if (leaks.some((l) => l.tracked)) fixes.push("for one already staged or committed, `git rm --cached <path>` to drop it from the index — a .gitignore rule does NOT unstage a tracked blob, so the next commit still ships it");
+    if (states.has("untracked")) fixes.push("for an untracked one, add *.age / the artifact to .gitignore or write it outside the repo");
+    if (states.has("staged")) fixes.push("for a staged one, `git rm --cached <path>` to drop it from the index");
+    if (states.has("committed")) fixes.push("for one already in an unpushed commit, rewrite or drop that commit (`git rebase -i` / `git reset`) before pushing — `git rm --cached` clears only the index, not history");
     warn(`[W06] the workspace root is inside a git work-tree and these secret/state-bearing artifacts are reachable by the next commit or push: ${names} (a bundle carries every secret VALUE + hub.db — ${fixes.join("; ")})`);
   }
   if (devLoopIgnored && !leaks.length) info("workspace root is inside a git repo but .dev-loop/ is gitignored");
@@ -531,11 +533,15 @@ function isPathIgnored(root: string, rel: string): boolean {
   catch { return false; }
 }
 
-// LOOP-235 — is <rel> in the index (staged, or committed and unmodified)? `ls-files --error-unmatch`
-// exits 0 iff the path is tracked. Distinguishes a staged/committed leak (needs `git rm --cached`) from
-// an untracked one (needs a .gitignore rule) so W06's remediation matches the artifact's git state (P1 #7).
-function isIndexed(root: string, rel: string): boolean {
-  return spawnSync("git", ["-C", root, "ls-files", "--error-unmatch", "--", rel], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
+// LOOP-235 — classify a path's git state for W06's remediation (review P1 #7/#8): "untracked" (not in the
+// index → a .gitignore rule fixes it), "staged" (in the index but not yet in HEAD → `git rm --cached`), or
+// "committed" (in HEAD, i.e. an unpushed commit → the commit must be rewritten; `git rm --cached` won't
+// touch history). Used for the moved.json marker, which the MAGIC-probe arms below do not cover.
+function indexState(root: string, rel: string): "untracked" | "staged" | "committed" {
+  const runOk = (args: string[]): boolean =>
+    spawnSync("git", ["-C", root, ...args], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
+  if (!runOk(["ls-files", "--error-unmatch", "--", rel])) return "untracked";
+  return runOk(["cat-file", "-e", `HEAD:${rel}`]) ? "committed" : "staged";
 }
 
 // LOOP-210 + LOOP-235 — files under <root> that a routine git op (commit or push) would land in
@@ -550,13 +556,16 @@ function isIndexed(root: string, rel: string): boolean {
 //     still ships in the intermediate commit on push (LOOP-235 review P1 #2).
 // A staged/committed path is tracked, so its presence in the index/local history is itself the leak,
 // regardless of ignore rules. The 16-byte MAGIC probe is the discriminator, so a broad candidate set is
-// safe — only real bundles are flagged. Each arm is bounded (MAX_PROBES_PER_ARM; doctor is not a hot
-// path), and a git blob is read via `cat-file` under a small maxBuffer so a multi-MB bundle costs the
+// safe — only real bundles are flagged. Only the UNTRACKED worktree arm is capped (MAX_UNTRACKED_PROBES),
+// the single set that can be pathologically large; the STAGED and COMMITTED arms scan in FULL, because
+// truncating a secret-leak scan could print clean while a bundle past the cutoff still ships (LOOP-235
+// review P1 #9) and those sets are bounded by the index / unpushed history. Doctor is not a hot path, and
+// a git blob is read via `cat-file` under a small maxBuffer so a multi-MB bundle costs the
 // captured prefix, not a full slurp. MAGIC must match bundle.ts (the bundle-gitguard test writes a real
 // bundle and asserts this detects it, so the two constants can't silently drift).
-function unignoredBundleArtifacts(root: string): { path: string; tracked: boolean }[] {
+function unignoredBundleArtifacts(root: string): { path: string; state: "untracked" | "staged" | "committed" }[] {
   const MAGIC = "DEVLOOP-BUNDLE/1";
-  const MAX_PROBES_PER_ARM = 2000;
+  const MAX_UNTRACKED_PROBES = 2000;
   const gitZ = (args: string[]): string[] => {
     try {
       return execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24 })
@@ -587,18 +596,22 @@ function unignoredBundleArtifacts(root: string): { path: string; tracked: boolea
   const blobHasMagic = (spec: string): boolean =>
     bufHasMagic(spawnSync("git", ["-C", root, "cat-file", "blob", spec], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 16 }).stdout as Buffer | undefined);
 
-  // path → tracked (present in the index or a local commit). A tracked leak needs `git rm --cached`, an
-  // untracked one a .gitignore rule (LOOP-235 P1 #7): the staged/committed arms mark true, the untracked
-  // arm fills only a path not already seen, so a path reachable both ways stays tracked (the sharper fix).
-  const hits = new Map<string, boolean>();
+  // path → git state, committed > staged > untracked (a bundle in an unpushed commit is the hardest to
+  // remediate, so it wins the label; the remediation clause differs per state — LOOP-235 P1 #7/#8).
+  const rank = { untracked: 0, staged: 1, committed: 2 } as const;
+  const hits = new Map<string, "untracked" | "staged" | "committed">();
+  const mark = (rel: string, st: "untracked" | "staged" | "committed") => {
+    const cur = hits.get(rel);
+    if (cur === undefined || rank[st] > rank[cur]) hits.set(rel, st);
+  };
 
-  // Staged (index) — probe the index blob. Small set, and the LOOP-235 P1 #1 target, so run it first.
-  // `diff --cached --name-only` lists staged paths against HEAD, or the empty tree on an unborn HEAD
-  // (a fresh `git init` — the exact repro), so a bundle staged before the first commit is seen.
-  let s = 0;
+  // Staged (index) — probe the index blob. The LOOP-235 P1 #1 target; scanned in FULL (no cap) since a
+  // truncated secret-leak scan could miss a bundle past the cutoff (P1 #9), and the staged set is bounded
+  // by what the operator staged. `diff --cached --name-only` lists staged paths against HEAD, or the empty
+  // tree on an unborn HEAD (a fresh `git init` — the exact repro), so a bundle staged before the first
+  // commit is seen.
   for (const rel of gitZ(["diff", "--cached", "--name-only", "-z"])) {
-    if (s++ >= MAX_PROBES_PER_ARM) break;
-    if (blobHasMagic(`:${rel}`)) hits.set(rel, true);
+    if (blobHasMagic(`:${rel}`)) mark(rel, "staged");
   }
   // Committed-but-unpushed — the commits the next `git push` would transfer, so a bundle committed but not
   // yet pushed is caught before it ships. Prefer the branch's configured push destination (`@{push}`) then
@@ -608,8 +621,8 @@ function unignoredBundleArtifacts(root: string): { path: string; tracked: boolea
   // pushing to origin ships it, yet `--remotes` subtracts it and the merge's combined diff omits it because
   // it is unchanged from the feature parent) (LOOP-235 P1 #5). With no destination configured — a fresh
   // branch never pushed, or a repo with no remote — fall back to `HEAD --not --remotes`, which scans commits
-  // absent from every remote, i.e. all of HEAD when there is no remote at all (LOOP-235 P1 #4); the whole arm
-  // is bounded by the probe cap. Walk each commit and probe the blobs IT introduced, so an add-then-delete
+  // absent from every remote, i.e. all of HEAD when there is no remote at all (LOOP-235 P1 #4). Walk EVERY
+  // unpushed commit (no cap — P1 #9) and probe the blobs IT introduced, so an add-then-delete
   // pair in the range is still caught (P1 #2). `-c` (combined diff) makes a MERGE commit report the paths
   // that differ from ALL parents — a bundle added during conflict resolution, which a plain `diff-tree -r`
   // suppresses for merges and would leak on the next push (P1 #3); for a non-merge commit `-c` is a no-op, so
@@ -622,23 +635,20 @@ function unignoredBundleArtifacts(root: string): { path: string; tracked: boolea
       spawnSync("git", ["-C", root, "rev-parse", "--verify", "--quiet", rev], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
     const dest = revParseOk("@{push}") ? "@{push}" : revParseOk("@{upstream}") ? "@{upstream}" : null;
     const unpushed = dest ? [`${dest}..HEAD`] : ["HEAD", "--not", "--remotes"];
-    let c = 0;
     for (const commit of gitLines(["rev-list", ...unpushed])) {
-      if (c >= MAX_PROBES_PER_ARM) break;
       for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AMT", "--root", commit])) {
-        if (c++ >= MAX_PROBES_PER_ARM) break;
-        if (blobHasMagic(`${commit}:${rel}`)) hits.set(rel, true);
+        if (blobHasMagic(`${commit}:${rel}`)) mark(rel, "committed");
       }
     }
   }
   // Untracked, not ignored — the worktree file is the content. Probe LAST: a pathological untracked set
-  // can be huge, and its cap must not starve the two tracked arms above.
+  // (a stray node_modules, build output) can be huge, so this is the ONE arm that keeps the DoS cap.
   let u = 0;
   for (const rel of gitZ(["ls-files", "--others", "--exclude-standard", "-z"])) {
-    if (u++ >= MAX_PROBES_PER_ARM) break;
-    if (!hits.has(rel) && worktreeHasMagic(rel)) hits.set(rel, false);
+    if (u++ >= MAX_UNTRACKED_PROBES) break;
+    if (!hits.has(rel) && worktreeHasMagic(rel)) mark(rel, "untracked");
   }
-  return [...hits].map(([path, tracked]) => ({ path, tracked }));
+  return [...hits].map(([path, state]) => ({ path, state }));
 }
 
 // W22 — landing stall: forge glance, warn/info only, never flips DOCTOR_OK (design §5.1).
