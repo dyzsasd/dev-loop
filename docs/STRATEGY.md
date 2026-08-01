@@ -482,84 +482,21 @@ taken). Clauses from those fires still in force:
   the middle one is what made the last one findable.
 
 
-### 2026-08-01 (pm, eleventh fire) — the third staleness axis stopped being theory: a stale daemon has been silently rewriting board writes, and it killed split-dev delegation
+### 2026-08-01 (pm, eleventh fire) — [ARCHIVED]
 
-`origin/main` moved to **`57af9a7`** — PR #141 (LOOP-103), merge-commit CI green on both matrix
-nodes. Product moved for the second consecutive fire.
+Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 12) —
+the stale-daemon fire, ~7 KB. Clauses from that fire still in force:
 
-**LOOP-103 verify-FAILED on AC3, and the code is not the reason.** The implementation is right and
-stays: project-scope `fireTimeout`/`stallTimeout` are honoured on delivery fires, `cadence` is
-rejected at project scope, and the BINDING AC6 steward guard I attached at the design gate was
-resolved the cheap way (`!teamScope`) with the rule stated beside the lookup. I exercised it on a
-**three**-project fixture rather than reading the diff: `proj-a` → `45m/13m`, `proj-b` → `20m/4m`
-(isolated), a project with no `agents` block → `1h/off` (defaults byte-unchanged), and the steward
-`sweep` fire → team `55m/7m`, not `proj-a`'s `33m/3m`. What failed is the Change-3 doc edit: the
-`projects.<key>.agents` row now claims the resolution order is *project > **CLI flag > team-scope**
-> default*. It is not. `--fire-timeout 5m` against `team.agents.sweep.fireTimeout:"55m"` renders
-`55m` — the flag loses — and this repo's own green test says so by name (`LOOP-9: per-agent config
-(30m) beats explicit --fire-timeout 2h`). The ticket's own spec had the order right; the sentence
-transposed two terms. That matters because it is the **only** precedence statement in the schema
-doc: an operator reading it will expect their command-line flag to win, and it is silently ignored —
-the same validate-then-drop surprise the ticket existed to remove, relocated from the code into the
-docs. `Canceled`, superseded by **LOOP-257** (senior direct-code per the §3 junior-escalation rule,
-carrying the doc fix, the `stallTimeout` test variant the shipped block omitted, and one assertion
-that makes the corrected claim executable on the v2 path).
-
-**The daemon axis has been corrupting writes, not just serving old reads.** The `loop` hub daemon is
-pid 89725 on **v1.13.0** while the CLI is **v1.14.0**. Board writes execute in the daemon, so this
-is not a stale-read problem: a dev-tier actor writing a cross-tier assignment had it **silently
-collapsed to self**, which means **senior→junior delegation has been impossible** — senior-dev hit
-exactly this staging a child for LOOP-172 and had to cancel the half-staged LOOP-256. The same stale
-build is why merge-guard kept nulling assignees on hold, and why LOOP-235 needed unparking three
-times: the fix shipped in the **CLI**, and `--apply` writes through the **daemon**. Four fires of
-churn, one canceled ticket, and a dead delegation path from one un-restarted process. Filed
-**LOOP-258** — `Human-Blocked`, assigned to the operator, one command
-(`DEVLOOP_PROJECT=loop dev-loop daemon up`). I did not restart it myself: shared infra, other fires
-may be mid-write, `autonomy: ask`.
-
-**I re-pointed LOOP-172's blocker edge, because it was aimed at a ticket that cannot resolve it.**
-It carried `Blocked-by: LOOP-235`, but LOOP-235's deliverable is the W06 bundle-leak guard — it is
-where the diagnosis was *recorded*, not what *fixes* it. Left alone, LOOP-172 would have auto-unparked
-the moment LOOP-235 went `Done`, daemon still stale, delegation still impossible: the second churn on
-the same root cause. Both edges now stand, and §9c unparks only when all are terminal, so the
-AND-gate is strictly safer than swapping one for the other.
-
-**Corrected a handoff claim rather than repeating it — `doctor` is not blind here.** senior-dev's
-hardening note said a W-check on "daemon code-version ≠ CLI version" would have caught this three
-fires ago. That check already exists (`doctor.ts:840`) and it fired correctly this fire, naming both
-versions and the exact remediation. The defect is its **classification**: it is an *unnumbered* warn
-inside the section header that reads *"best-effort; informational, not a hard-fail gate"*, so
-`DOCTOR_OK` prints anyway. Its sibling **W18** — the npm-publish skew, whose blast radius is merely
-running old *read* code — is numbered and prominent, while the skew that silently corrupts the
-system of record is neither. The operator console tells the human to *"fix every ❌ and read every
-W-code"*; this line is neither. Filed **LOOP-259** (junior tier — a scoped classification change, no
-`sensitive` signal, and §21b's "when borderline, junior" holds).
-
-**Last fire's tier-feeding worry resolves differently than I framed it.** Senior is not starved: it
-holds **8 unblocked `Todo`** rows against a cap of 10, so the two open slots are an allowance, not
-an emptiness — filing senior work to fill them would be padding. The real constraint is narrower and
-worse: while the daemon is stale, senior can design but **cannot delegate**, so any
-design-and-delegate ticket filed now stalls at the staging step exactly as LOOP-172 just did. Until
-LOOP-258 clears, the only *completable* senior work is direct-code shaped. That is a routing fact,
-not a capacity fact, and it is why I filed one junior ticket and no senior ideation this fire.
-
-- **2026-08-01 (eleventh fire) — board state.** Verify **1 → 0** (LOOP-103 closed). Unblock **0**;
-  `needs-pm` **0**; `_team` carrier **0**; `Human-Blocked` **0 → 1** (LOOP-258, the first item to
-  reach the operator's queue in ten fires). §9c: **10 edges, 0 unparked, 10 held** — every blocker
-  non-terminal, and one edge re-pointed. Depth at close: senior **8/10**, junior **13/10 (over
-  cap)**, Backlog **60**. Promoted **0** — junior is over cap and the Backlog holds no senior-tier
-  row (LOOP-256 was canceled by its author). Doc-watch: content hash matched the stored cursor —
-  **thirty-five fires with no operator doc edit**. `DOCTOR_OK` with W01/W18/W20 + the unnumbered
-  daemon warn; W20 notes there is no `team.comms`, so LOOP-258 surfaces only in `doctor` and
-  `dev-loop metrics`, never as a push reminder — doctor's own `NEXT:` line does route to it.
-- **§20 R2 rollup pass 10.** Rolled the tenth-fire entry and the whole `2026-08-01 (mid)` arc to
-  `docs/strategy-archive/2026-08.md`: **109.0 KB → 90.7 KB (−16.8%)**. Current state had never been
-  rolled and was the growth; it now is. Before folding I verified the pass-6 fold it cited was
-  genuinely performed — it is, at a **reworded** heading in the archive, which is why a
-  phrase-match against the live doc's wording finds nothing. Cite folds by arc, not by title.
-
-
-
+- **A stale hub daemon silently rewrites board writes.** Board writes execute *in the daemon*, so
+  while it runs old code a dev-tier actor's cross-tier assignment collapses to self and senior-dev
+  cannot stage junior children — split-dev delegation is disabled with no error anywhere. Tracked
+  as LOOP-258; still open and still stale as of the fourteenth fire, 1h45m parked.
+- **A doc edit riding a correct code change is the least-guarded thing a ticket can ship.** LOOP-103's
+  code was right, its CI was green, and its verify checked behaviour — the false claim entered through
+  the *documentation* half. Closed by LOOP-257 (verified, fourteenth fire), which added the executable
+  pins that make the corrected precedence testable rather than merely written down.
+- **Verify against a fixture that can distinguish, not one that can only agree.** The three-project
+  fixture is what separated "the code is correct" from "the sentence describing it is correct".
 ### 2026-08-01 (pm, twelfth fire) — the promotion queue has never been ordered, and the cost program is measuring against a denominator missing its largest input
 
 `origin/main` is **`626f6f4`** — my own doc commit from the eleventh fire. **The product did not
@@ -704,6 +641,74 @@ and intake still exceeds completion. **Filed 1 this fire, not 5.** With junior a
 already queued, the scarce resource is not ideas — the useful contribution was a measurement the
 operator reads every fire, and one repair that made an Urgent bug reachable at all.
 
+### 2026-08-01 (pm, fourteenth fire) — I have been wrong about how the board's clock works, and the belief had already been written into a ticket's headline
+
+`origin/main` moved `4e6bde2` → **`093d295`**, main's own CI green. Three increments landed and all
+three verified **Done** this fire: **LOOP-207** (W20 ages + orders the decision queue by the
+into-state transition), **LOOP-257** (the inverted timeout-precedence sentence, plus executable pins),
+**LOOP-205** (the `kaizenReport` core + `metrics --kaizen`). Two of them had been sitting unverified
+since the previous fire read an empty `In Review` **two minutes** before they landed.
+
+**The correction that matters is against me.** For several fires I have refused to comment on
+`Human-Blocked` LOOP-258 — the operator's oldest open decision — on the belief that any comment would
+reset its decision-queue age and bury the one signal escalating it. LOOP-207's implementer said
+otherwise in the ticket ("a clean negative"), so I tested it instead of choosing whose prose to
+believe. **`save_comment` does not touch `tickets.updated_at`.** Measured three ways: a controlled
+write of my own on LOOP-207 (age unmoved across my claim comment), and two natural experiments —
+LOOP-218 commented 6 h after its row last moved, LOOP-228 5 h after, both rows unmoved. The reset
+vector is `save_issue` only: labels, priority, assignee, relatedTo.
+
+That was not a private bookkeeping error. **It was already load-bearing in a ticket I wrote.**
+LOOP-108's title says *"Sweep's own hygiene **comment** reset LOOP-101 from 1h10m to 1m"* and its
+summary generalises to *"the write layer bumps on every mutation — comment, label, priority,
+assignee."* The incident is real, but the bump came from the `external-prereq` **label** write; the
+comment rode alongside and took the credit. An implementer building the regression test from that
+headline would seed the bump as a comment, observe no reset, and watch the test pass **before** the
+fix as well as after — the LOOP-225 shape that cost this board a verify-fail two days ago. Groomed
+with the correction, the measurements, and an instruction to make the fixture bump a `save_issue`
+write. A wrong mechanism in a ticket's *headline* is more dangerous than one in its body, because the
+headline is what a builder reads first and re-derives least.
+
+**The verify method paid for itself again.** LOOP-207's Case D asserts that an unrelated label repair
+does not change which decision doctor names. Rather than trust a green suite, I ran the **new** test
+file unchanged against the **pre-fix** source: exactly 3 of its 8 checks fail there, and they are
+precisely the post-relabel assertions. The fixture discriminates. This is the second consecutive fire
+where "does this test fail without the fix?" was the only question that separated real coverage from
+decoration — and this time the implementer had already anticipated it in the test's own comments.
+
+**Job C filed nothing, and that is the report.** I swept the operator console through the `ux-flows`
+lens — `doctor`, `metrics`, the NEXT ladder, the daemon surface — and **every** defect I found was
+already on the board: `DOCTOR_OK` printed over two staleness warnings (LOOP-259, P1), the `parked`
+counter (LOOP-265), the publish gate (LOOP-247, itself blocked), unclassified failures (LOOP-204,
+LOOP-114), rate-limit cost accounting (LOOP-239), `0 escaped to prod` (LOOP-122), `acceptRate`
+(LOOP-98). I also tested a new theory — that the scheduler misallocates fires, since qa takes 178
+fires to junior-dev's 83 while junior is the bottleneck — and **the measurement killed it**: qa's
+median fire is 307 s against junior's 1278 s, so those are cheap short fires, not stolen capacity.
+Filing it would have been theory dressed as a finding.
+
+**LOOP-265 got the best evidence it will ever have, from one command.** `dev-loop metrics` prints
+`… 0 parked, 9 sequenced …` and, on the *very next line*, `decision queue (yours): 1, oldest LOOP-258
+waiting 1h`. Adjacent lines, one render, opposite answers to "is the operator blocked".
+
+**The structural picture is unchanged and now fully priced.** Junior sits at **13** unblocked `Todo`
+against a cap of 10; senior at 6 with **zero** senior-tier Backlog rows to draw from; the Backlog is
+**64 junior / 0 senior — 100%**, for the sixth consecutive measurement. So promotion was correctly
+**0** this fire. The mechanism is not mysterious and it is partly mine: I am deliberately not filing
+senior `Mode: design` work while LOOP-258 keeps the stale daemon from letting senior stage children,
+and §21b forbids re-tiering existing rows to rebalance. The one lever that remains — tier at filing
+time — cannot be pulled while the tier that would receive the work cannot delegate.
+
+**And none of today's three verified fixes reach the operator.** W18: the installed CLI is v1.14.0,
+**10 code commits behind** `origin/main`. `decisionEnteredAt` is absent from the installed `dist/`, so
+the operator's live `doctor` still ages W20 off `updated_at` — the exact defect verified fixed today.
+Merged, green, verified, and invisible.
+
+**Filed 1** (LOOP-266, and it came out of the verify itself: exercising `--kaizen` against the *live*
+board showed stat 2 counting every lessons shard under a per-project heading — something the correct,
+thorough synthetic fixture could not have produced). **Unparked 1** (LOOP-206, its blocker cleared by
+LOOP-205 going Done in the same fire). Verified 3, promoted 0, groomed 3.
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -736,6 +741,33 @@ operator reads every fire, and one repair that made an Urgent bug reachable at a
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-01 (pm, fourteenth fire) — test the mechanism before you let it shape behaviour; a
+  procedural belief decays exactly like a code claim.** I carried "any comment resets a parked
+  ticket's decision-queue age" across several fires and let it *stop* me from writing status on the
+  operator's oldest open decision. It was false, and one controlled write plus two natural
+  experiments settled it in under a minute (`save_comment` never touches `tickets.updated_at`; only
+  `save_issue` does). The same false mechanism was already published in LOOP-108's headline, where it
+  was on track to produce a regression test that passes before the fix. **Rule adopted:** a belief
+  that changes what I *refuse* to do gets the same rung-three treatment as a claim about the product
+  — measure it, or stop acting on it. The cost of the error was not the wrong fact, it was several
+  fires of silence on a park that was blocking split-dev delegation.
+
+- **2026-08-01 (pm, fourteenth fire) — a measurement that kills my own hypothesis is a result, and it
+  stays out of the Backlog.** The fire-allocation theory (qa takes 178 fires to junior-dev's 83 while
+  junior is the throughput bottleneck) looked like a strong finding until I priced it: qa's median
+  fire is 307 s against junior's 1278 s. Cheap short fires, not stolen capacity. **Rule:** on a board
+  already carrying 64 unpromoted rows, filing an unmeasured theory is worse than filing nothing —
+  it converts a hunch into work someone must later triage. Job C filing **zero** is the honest
+  outcome when the lens sweep finds only already-filed defects, and the report is the bottleneck, not
+  the ticket count.
+
+- **2026-08-01 (pm, fourteenth fire) — do not manufacture a dependency between tickets that share a
+  core.** I filed LOOP-266 with "land before LOOP-206" and withdrew it the same fire. Both surfaces
+  render `kaizenReport` verbatim, so the fix propagates in either merge order; a sequencing
+  instruction would only have cost queue time and invited a blocker edge on a ticket I had just
+  unparked. **Rule:** sequence on a real data dependency, never on a preference about which surface
+  should look correct first.
 
 - **2026-08-01 (pm, twelfth fire) — "an ordinary Backlog ticket awaiting promotion is normal, not
   stranded" (§5a) is true per-ticket and false in aggregate; check the AGE DISTRIBUTION, not the
