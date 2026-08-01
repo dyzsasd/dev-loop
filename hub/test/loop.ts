@@ -72,7 +72,7 @@ ok(f3seen.comments.at(-1).body.startsWith("Bail-shape: external-prereq"), "PM re
 
 // 6. QA verifies F1 → Done.
 await call(qa, "save_comment", { issueId: f1.id, body: "verified ✅" });
-ok((await call(qa, "save_issue", { id: f1.id, state: "Done" })).state === "Done", "QA verified F1 → Done");
+ok((await call(pm, "save_issue", { id: f1.id, state: "Done" })).state === "Done", "PM (Feature owner) verified F1 → Done"); // LOOP-208: F1 is a pm-owned Feature — its owner verifies it; qa's line-74 note keeps qa in the attribution set
 
 // 7. Sweep orphan-reset: a ticket stuck In Progress gets reset; partial-merge preserves title.
 const g1 = await call(pm, "save_issue", { title: "Orphan candidate", state: "In Progress", assignee: "dev", labels: FULL() });

@@ -6,9 +6,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb } from "../src/db.ts";
-import { insertTicket, updateTicketRow, verifyCreateGateRejection } from "../src/ticketwrite.ts";
+import { insertTicket, updateTicketRow, moveTicket, verifyCreateGateRejection } from "../src/ticketwrite.ts";
 import type { NewTicketFields, TicketUpdateFields } from "../src/ticketwrite.ts";
 import { agentOp, type OpResult } from "../src/agentops.ts"; // LOOP-183 Vector B: exercise the wired create path (opSaveIssue)
+import { AGENT_HANDLES } from "../src/seed.ts"; // LOOP-208: drive the actor-coverage assertion from the REAL roster, so a future handle fails the test
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -23,10 +24,11 @@ try {
     db.prepare("INSERT INTO actors(id,handle,kind,display_name,created_at) VALUES(?,?,?,?,?)")
       .run(handle, handle, kind, handle, "2024-01-01T00:00:00Z");
   };
-  actor("pm", "human");
-  actor("qa");
-  actor("junior-dev");
-  actor("senior-dev");
+  // LOOP-208: seed the FULL agent roster from AGENT_HANDLES (plus the human operator) so the
+  // actor-coverage assertions below can drive EVERY handle — including the five non-builder,
+  // non-owner stewards (sweep/reflect/ops/architect/communication) that fell through the old gate —
+  // through the write path. Deriving the fixture from the roster keeps it in lock-step with seed.ts.
+  for (const h of AGENT_HANDLES) actor(h);
   actor("operator", "human");
   db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES(?,?,?,?)")
     .run("p", "TW", "test", "2024-01-01T00:00:00Z");
@@ -213,6 +215,101 @@ try {
   const vbTodo = agentOp("save_issue", db, "p", "TW", "junior-dev",
     { title: "LOOP-183 vB todo intake ok", type: "Bug", state: "Todo", labels: ["dev-loop", "Bug", "qa"] }) as OpResult;
   ok(vbTodo.status === 200, "LOOP-183 B: the same qa-labelled create in Todo succeeds (intake unaffected)");
+
+  // ── LOOP-208: actor coverage — the close/create gate keys on OWNERSHIP, not builder-tier ──────────
+  // LOOP-157/183 keyed the gate on isDevTierActor ("is this a BUILDER?"). The roster has ten agents;
+  // three are builders, two (qa/pm) are the verifier-owners, and the remaining five — sweep, reflect,
+  // ops, architect, communication — are NEITHER, so they fell straight through the gate and could close
+  // a qa/pm-owned ticket In Review → Done with rc=0. The gate now asks "is the actor this ticket's
+  // verifier-owner?": refused for EVERY non-owner, non-operator actor. The assertions DRIVE from
+  // AGENT_HANDLES itself, so adding a handle to the roster fails THIS test rather than the invariant.
+  const QA_OWN = ["dev-loop", "Bug", "qa"];
+  const PM_OWN = ["dev-loop", "Feature", "pm"];
+
+  // (a) transition edge — a qa-owned In Review ticket is refused Done for every non-qa, non-operator
+  // handle in the roster (a gate rejection writes nothing, so one fixture ticket serves the whole loop).
+  const rosterQa = insertTicket(db, "p", "qa", newFields({ state: "In Review", type: "Bug", labels: QA_OWN }), {});
+  for (const h of AGENT_HANDLES) {
+    if (h === "qa") continue; // the owner's own close is asserted legal right after the loop
+    const res = updateTicketRow(db, "p", h, rosterQa, "In Review",
+      updateFields({ state: "Done", labels: JSON.stringify(QA_OWN) }));
+    ok(!res.ok, `LOOP-208: In Review → Done on a qa-owned ticket is REFUSED for non-owner handle '${h}'`);
+    ok(!res.ok && res.error.includes(`'${h}'`) && /qa/.test(res.error),
+      `LOOP-208: the '${h}' refusal names the actor + the qa verifier-owner (observability)`);
+    ok(!res.ok && !/builder tier/.test(res.error),
+      `LOOP-208: the '${h}' refusal makes NO 'builder tier' claim (that is the wrong question)`);
+    ok(stateOf(rosterQa) === "In Review", `LOOP-208: the refused '${h}' close did not move the qa-owned ticket`);
+  }
+  // … and the qa OWNER closes that very same ticket → LEGAL (the gate admits exactly the owner)
+  const rosterQaOwner = updateTicketRow(db, "p", "qa", rosterQa, "In Review",
+    updateFields({ state: "Done", labels: JSON.stringify(QA_OWN) }));
+  ok(rosterQaOwner.ok && stateOf(rosterQa) === "Done", "LOOP-208: the qa verifier-owner closes its own qa ticket → LEGAL");
+
+  // (b) transition edge — symmetric for a pm-owned ticket: refused for every non-pm, non-operator handle.
+  const rosterPm = insertTicket(db, "p", "pm", newFields({ state: "In Review", labels: PM_OWN }), {});
+  for (const h of AGENT_HANDLES) {
+    if (h === "pm") continue;
+    const res = updateTicketRow(db, "p", h, rosterPm, "In Review",
+      updateFields({ state: "Done", labels: JSON.stringify(PM_OWN) }));
+    ok(!res.ok && stateOf(rosterPm) === "In Review",
+      `LOOP-208: In Review → Done on a pm-owned ticket is REFUSED for non-owner handle '${h}'`);
+  }
+  const rosterPmOwner = updateTicketRow(db, "p", "pm", rosterPm, "In Review",
+    updateFields({ state: "Done", labels: JSON.stringify(PM_OWN) }));
+  ok(rosterPmOwner.ok && stateOf(rosterPm) === "Done", "LOOP-208: the pm verifier-owner closes its own pm ticket → LEGAL");
+
+  // (c) create edge — the same ownership rule mirrored at create-into-Done, driven from the roster:
+  // every non-owner, non-operator handle is refused; the owner (and, below, the operator) pass.
+  for (const h of AGENT_HANDLES) {
+    const qaRej = verifyCreateGateRejection(h, "Done", QA_OWN);
+    if (h === "qa") ok(qaRej === null, "LOOP-208: create-into-Done of a qa-owned ticket is ALLOWED for the qa owner");
+    else {
+      ok(qaRej !== null, `LOOP-208: create-into-Done of a qa-owned ticket is REFUSED for non-owner handle '${h}'`);
+      ok(qaRej !== null && qaRej.includes(`'${h}'`) && !/builder tier/.test(qaRej),
+        `LOOP-208: the '${h}' create refusal names the actor and makes no 'builder tier' claim`);
+    }
+    const pmRej = verifyCreateGateRejection(h, "Done", PM_OWN);
+    if (h === "pm") ok(pmRej === null, "LOOP-208: create-into-Done of a pm-owned ticket is ALLOWED for the pm owner");
+    else ok(pmRej !== null, `LOOP-208: create-into-Done of a pm-owned ticket is REFUSED for non-owner handle '${h}'`);
+  }
+  ok(verifyCreateGateRejection("operator", "Done", QA_OWN) === null, "LOOP-208: the operator may create a closed qa ticket (carve-out)");
+
+  // (d) the RULED open question — STRICT cross-owner: pm may NOT close a qa-owned ticket, nor qa a
+  // pm-owned one (each is an unverified close — "Done means verified by ITS owner", §3). Also covered by
+  // the roster loops above; asserted explicitly here because it is the design's load-bearing ruling.
+  const pmXqaId = insertTicket(db, "p", "qa", newFields({ state: "In Review", type: "Bug", labels: QA_OWN }), {});
+  const pmXqa = updateTicketRow(db, "p", "pm", pmXqaId, "In Review", updateFields({ state: "Done", labels: JSON.stringify(QA_OWN) }));
+  ok(!pmXqa.ok && stateOf(pmXqaId) === "In Review", "LOOP-208: pm may NOT close a qa-owned ticket (strict cross-owner ruling)");
+  const qaXpmId = insertTicket(db, "p", "pm", newFields({ state: "In Review", labels: PM_OWN }), {});
+  const qaXpm = updateTicketRow(db, "p", "qa", qaXpmId, "In Review", updateFields({ state: "Done", labels: JSON.stringify(PM_OWN) }));
+  ok(!qaXpm.ok && stateOf(qaXpmId) === "In Review", "LOOP-208: qa may NOT close a pm-owned ticket (strict cross-owner ruling)");
+
+  // (e) a DUAL qa+pm-owned ticket is closable by EITHER owner (actor ∈ owners), never by a non-owner.
+  const DUAL_OWN = ["dev-loop", "qa", "pm"];
+  const dualA = insertTicket(db, "p", "pm", newFields({ state: "In Review", labels: DUAL_OWN }), {});
+  ok(updateTicketRow(db, "p", "qa", dualA, "In Review", updateFields({ state: "Done", labels: JSON.stringify(DUAL_OWN) })).ok && stateOf(dualA) === "Done",
+    "LOOP-208: a dual qa+pm-owned ticket is closable by the qa owner");
+  const dualB = insertTicket(db, "p", "pm", newFields({ state: "In Review", labels: DUAL_OWN }), {});
+  ok(updateTicketRow(db, "p", "pm", dualB, "In Review", updateFields({ state: "Done", labels: JSON.stringify(DUAL_OWN) })).ok && stateOf(dualB) === "Done",
+    "LOOP-208: a dual qa+pm-owned ticket is closable by the pm owner");
+  const dualC = insertTicket(db, "p", "pm", newFields({ state: "In Review", labels: DUAL_OWN }), {});
+  const dualCsweep = updateTicketRow(db, "p", "sweep", dualC, "In Review", updateFields({ state: "Done", labels: JSON.stringify(DUAL_OWN) }));
+  ok(!dualCsweep.ok && stateOf(dualC) === "In Review", "LOOP-208: a dual qa+pm-owned ticket is NOT closable by a non-owner (sweep)");
+
+  // (f) the gate lives in the SHARED write path, so the daemon board-move primitive (moveTicket →
+  // updateTicketRow) is covered too: sweep's move is refused; the operator's move (a human actor) is legal.
+  const mvId = insertTicket(db, "p", "qa", newFields({ state: "In Review", type: "Bug", labels: QA_OWN }), {});
+  const mvSweep = moveTicket(db, "p", "sweep", mvId, "Done");
+  ok(!mvSweep.ok && stateOf(mvId) === "In Review", "LOOP-208: the daemon board-move (moveTicket) refuses a non-owner In Review → Done");
+  const mvOp = moveTicket(db, "p", "operator", mvId, "Done");
+  ok(mvOp.ok && stateOf(mvId) === "Done", "LOOP-208: the daemon board-move by the operator In Review → Done stays legal (human actor)");
+
+  // (g) the gate is edge-specific — a NON-transition write (e.g. sweep re-labelling an In Review qa
+  // ticket, its actual job) never reaches the gate, so owner-label hygiene by any actor is unaffected.
+  const hyId = insertTicket(db, "p", "qa", newFields({ state: "In Review", type: "Bug", labels: QA_OWN }), {});
+  const hySweep = updateTicketRow(db, "p", "sweep", hyId, "In Review",
+    updateFields({ state: "In Review", labels: JSON.stringify([...QA_OWN, "needs-qa"]) }));
+  ok(hySweep.ok && stateOf(hyId) === "In Review", "LOOP-208: a non-transition write (sweep re-labels an In Review qa ticket) is NOT gated (edge-specific)");
 
   db.close();
 } finally {
