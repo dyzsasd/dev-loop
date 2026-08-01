@@ -3,6 +3,87 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 1.14.0
+
+**The gates that were supposed to catch things, and didn't.** Almost every entry below is a guard
+that existed, ran, and reported success over a condition it could not actually see — found by the
+loop running against itself. The through-line: a check that cannot fail is worse than no check,
+because it is *trusted*.
+
+**Data safety — the bundle path.**
+
+- **`bundle export` no longer writes a secret-bearing artifact inside a git tree.** The encrypted
+  bundle carries config + secrets + `hub.db`; writing it under `--out` inside a working tree put it
+  one `git add` away from a public repo. Export now guards the destination, and **doctor W06**
+  catches an un-ignored bundle artifact already on disk (LOOP-210).
+- **The export gate was never running.** `bundle export` called `doctorWorkspace` without awaiting
+  it and tested the returned promise for truthiness — which is always true. The safety gate shipped,
+  passed review, and vacuously approved every export for its whole life. It is now awaited and reads
+  `.ok` (LOOP-200).
+- **`export-desktop-skill`** redirects its artifact to a temp dir when `--out` is omitted inside a
+  git tree, instead of dropping it in the working tree (LOOP-187).
+
+**doctor — seven blind spots.**
+
+- **W26** warns on unmerged paths in a shared checkout — a wedged base clone used to read as healthy
+  while every `doc-land` failed behind it (LOOP-215).
+- **W20** warns on an operator decision-queue stall and flips `NEXT` to decision-first. A waiting
+  human ruling now outranks a landing stall in the printed next step; the operator is the loop's
+  only unscalable resource (LOOP-74).
+- **W18 counts what actually ships.** Its pathspec derives from `hub/package.json`'s `files`, so
+  `skills/**/*.md` and `references/**/*.md` count as code commits — agent-facing prose ships in the
+  package, and a release that leaves it behind is real skew (LOOP-191).
+- **W19/W22** route through the §19 `defaultBranch` chain instead of assuming `main` (LOOP-188);
+  **W16/W21** and the board reads route through the `DEVLOOP_HUB_DB` ladder, so they resolve the
+  same database the fire does (LOOP-199).
+- **Daemon health reconciliation** warns on a version or actor mismatch reported by `/api/health` —
+  a daemon running older code than the CLI that talks to it is now visible (LOOP-195).
+- **Release-readiness hint**: `NEXT` names the release when shipped-code skew is non-zero, instead
+  of pointing at `dev-loop run` while merged fixes sit unpublished (LOOP-167).
+
+**Verification gates.**
+
+- **The close/create gate keys on ownership, not builder tier.** Asking *"is this a builder?"* when
+  the rule means *"is this the owner?"* let the wrong tier close work it did not own (LOOP-208).
+- **Two self-accept sinks closed** — stripping a label to escape the gate, and creating a ticket
+  directly as `Done` (LOOP-183).
+- **`merge-guard` stops writing to merged PRs.** A board-state trip now posts a comment only, and
+  the guard skips writes entirely once the PR is merged — it had been objecting to merges that had
+  already happened, and filing the objection where nothing looks (LOOP-216).
+
+**Agent surface.**
+
+- **`queue` returns an `inReview` list to the dev tiers** — the landing/repair pass. A dev tier could
+  previously not see its own work waiting in review without a separate board read (LOOP-112).
+- **`secret list`'s source column** reflects env-wins precedence and distinguishes an EMPTY value
+  from an absent one (LOOP-166). Values are still never printed.
+- **Bare `daemon` verbs resolve their run-dir workspace-aware**, so they act on the workspace you are
+  standing in (LOOP-185).
+- **Go CRAP gate** exits 1 when `--threshold` is set and no coverage is present, instead of passing
+  vacuously — the same class of bug as the bundle export gate above (LOOP-192).
+- **The provider breaker names the provider, not the agent that tripped it.** An OPEN/CLOSE line
+  reported whichever agent happened to hit the limit, which read as an agent fault and hid the blast
+  radius — every agent on that provider is affected, not one (LOOP-175).
+
+**Cost governance — new config surface.** `budget.dailyUsd` and `budget.perFireUsd` are settable via
+`dev-loop team set`, validated (unknown keys under `budget` are refused with **E18**), and documented
+in `references/config-schema.md`. This release ships the *keys and validation* only — the pre-launch
+gate and breaker that read them are still in flight. Setting them today is inert and safe; leaving
+them unset is byte-identical to 1.13.0 (LOOP-226 / LOOP-197).
+
+**Test hermeticity — the suite no longer reads the workspace it is running inside.** Three helpers
+resolved config by walking up from cwd (or leaked `DEVLOOP_HUB_PORT`), so `run-agents`,
+`export-desktop-skill` and `isolation` compared fixture expectations against the *live* workspace
+whenever the checkout sat inside one — 76 checks across 4 suites failing on a tree whose CI was
+green. Spawns now pass a `DEVLOOP_WORKSPACE` sentinel and `scrubFireEnv()`, closing both the
+walk-up and the env-var axis. This is what a dogfooded repo costs: the defect was invisible to CI
+by construction, because CI never checks out inside a workspace (LOOP-240).
+
+**Governing rule (operator-applied §17 edit — live for the agents with this release, not when it was
+committed).** **§12b**: a verify that finds the change merged in the tree closes `Done` in that fire
+and never parks waiting for a publish. Parking for a publish stalls the board on an operator action
+that is not part of the verification.
+
 ## 1.13.0
 
 **CLI rename — Phase A (brand: Kaizen Factory; the command becomes `kaizen`).** The bin now ships
