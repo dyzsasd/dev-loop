@@ -8,6 +8,7 @@
 //     at fire time, per the §22 digest contract; this CLI never guesses them.
 import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
 import { deliveryProjects, type Workspace } from "./team-config.ts";
@@ -430,10 +431,11 @@ export function kaizenReport(
   // Stat 1 — self-filed → self-fixed
   const inList = AGENT_HANDLES.map(() => "?").join(",");
   const filed = db.prepare(
-    `SELECT id, state FROM tickets WHERE project_id=? AND created_by IN (${inList})`,
-  ).all(projectId, ...AGENT_HANDLES) as { id: string; state: string }[];
+    `SELECT id, state, updated_at FROM tickets WHERE project_id=? AND created_by IN (${inList})`,
+  ).all(projectId, ...AGENT_HANDLES) as { id: string; state: string; updated_at: string }[];
   const selfFiled = filed.length;
-  const fixedRows = filed.filter((r) => r.state === "Done");
+  // P2 fix: sort Done rows by updated_at DESC so the first 20 in the report are the most recent.
+  const fixedRows = filed.filter((r) => r.state === "Done").sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   const selfFixed = fixedRows.length;
   const totalDone = (db.prepare("SELECT COUNT(*) as n FROM tickets WHERE project_id=? AND state='Done'").get(projectId) as { n: number }).n;
   const fixedIds = fixedRows.map((r) => r.id);
@@ -515,15 +517,28 @@ async function runKaizenCli(ws: Workspace, boardDb: string, windowMs: number, as
   const { findProject } = await import("./seed.ts");
   const db = openDb(boardDb);
   try {
-    for (const key of deliveryProjects(ws)) {
-      const pid = findProject(db, key);
-      if (!pid) continue;
-      const lessonsDir = lessonsPaths(ws).dir;
-      const hubRoot = join(new URL(".", import.meta.url).pathname, "..");
-      const pkgJson = join(hubRoot, "package.json");
-      const gauntletDoc = join(ws.root, "docs", "design", "quality-gauntlet.md");
-      const report = kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } });
-      if (asJson) { console.log(JSON.stringify(report, null, 2)); } else { renderKaizen(report); }
+    const keys = deliveryProjects(ws);
+    const hubRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+    const pkgJson = join(hubRoot, "package.json");
+    // P2 fix: gauntlet doc lives at the repo root's docs/, one level above hub/
+    const gauntletDoc = join(hubRoot, "..", "docs", "design", "quality-gauntlet.md");
+    const lessonsDir = lessonsPaths(ws).dir;
+    if (asJson) {
+      // P1 fix (LOOP-95 Codex): collect all project reports into one JSON array so
+      // --json output is a single parseable value regardless of project count.
+      const reports: unknown[] = [];
+      for (const key of keys) {
+        const pid = findProject(db, key);
+        if (!pid) continue;
+        reports.push(kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } }));
+      }
+      console.log(JSON.stringify(reports, null, 2));
+    } else {
+      for (const key of keys) {
+        const pid = findProject(db, key);
+        if (!pid) continue;
+        renderKaizen(kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } }));
+      }
     }
   } finally { db.close(); }
   return 0;
