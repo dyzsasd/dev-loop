@@ -622,6 +622,88 @@ further out of reach each fire. 61 Backlog rows: **60 junior, 0 senior**, plus t
 (null assignee by design, not the LOOP-244 defect). The tenth fire's correction still applies —
 senior's supply is PM's filing mix — but its prescription cannot be executed while LOOP-258 blocks
 design-and-delegate work.
+### 2026-08-01 (pm, thirteenth fire) — the board's "parked" counter has never once counted a park, and a P1 arrived unpickable because it was filed that way
+
+`origin/main` is **`4e6bde2`** — my own doc commit from the twelfth fire. The product *did* move
+since the last lens sweep: that sweep was taken at `626f6f4`, and **`58b2eb0` (LOOP-104) landed
+mid-fire on top of it**, so the swept-lens list reset and this fire ran a fresh rotation against the
+current tree, as the twelfth fire's state note instructed. Doc-watch: `docs/STRATEGY.md` hash
+unchanged — **37 consecutive fires with no operator doc edit**.
+
+**Job A empty, Job B empty, §9c unchanged.** In Review was 0 board-wide. `needs-pm` = 0. The §9c
+tracker pass ran all 10 parked rows: **10 edges, 0 unparked, 10 held** — every park still has ≥1
+live blocker (LOOP-105 correctly stays parked: LOOP-104 went terminal but LOOP-264 now gates the
+same parser contract). LOOP-218's `## Deferred findings` were confirmed already triaged; no §17
+debt outstanding.
+
+**LOOP-258 is still Human-Blocked on the operator — 1h at boot — and the daemon is still v1.13.0
+against CLI v1.14.0.** I deliberately did **not** comment on it to nudge. On this board a comment
+would be actively harmful: **LOOP-108** measures that the operator's decision-queue wait is derived
+from `updated_at`, so any comment resets the age. LOOP-258's *whole value as a signal is its age* —
+it is what puts it at the top of `dev-loop doctor`'s NEXT line and `metrics`' decision queue.
+Writing "still blocked" would have reset a 1h wait to 0m and buried the thing I was trying to
+raise. Recording the reasoning because the temptation recurs every fire the park survives. The
+eleventh fire's constraint stands: senior filings stay direct-code shaped while the daemon is stale.
+
+**The finding: `dev-loop metrics` prints two contradictory answers about the same ticket, two lines
+apart.** Verbatim this fire: `board: … 0 parked, 10 sequenced` sits directly above
+`decision queue (yours): 1, oldest LOOP-258 … waiting 1h`. Both describe LOOP-258.
+
+The cause is two definitions of "the human park" inside one file. `boardMetrics()`
+(`metrics.ts:257`) selects on the **`blocked` label**; `decisionQueue()` (`:285`) selects on the
+**`Human-Blocked` state**. §9 makes the state the human park on `service` and the label park the
+`linear`/`local` form — so `blockedNow`, whose own doc comment at `:216` claims "parked (need human
+attention)", is **structurally incapable** of counting an operator park on this backend.
+`decisionQueue()` is the newer surface and was never reconciled with the older field.
+
+Measured against the full event ledger: **15 tickets have been parked `Human-Blocked` in this
+board's life; 0 of them carry a `blocked` label — so the counter has missed 15 of 15, every one.**
+It is not mis-derived, it is a constant `0` rendered as a clean board — the same family as
+LOOP-122's `0 escaped to prod` and the same principle LOOP-42 already established (an unmeasurable
+field must not print the reassuring reading). Filed **LOOP-265** (p2, junior).
+
+**This re-orders LOOP-31 rather than duplicating it.** LOOP-31 (filed 07-30, before
+`decisionQueue()` existed) frames the same area as *CLI-vs-web-tile* and asks for them to agree.
+One reading of it — align the tile to `blockedNow` — would push a structural constant `0` into the
+operator's primary dashboard. LOOP-265 fixes the definition first; LOOP-31 then aligns the tile to
+something correct, and its own distinct contribution (the tile cannot see a §9 Dev bail at all)
+survives intact. Noted on both tickets; no hard edge added, since LOOP-31 is implementable either
+way.
+
+**Groomed: a P1 Urgent bug arrived unpickable, and the cause is new.** qa filed **LOOP-261** at
+12:45Z with `assignee: null` — no dev tier. For 43 minutes an Urgent bug was absent from both
+tiers' `servableSlice`, and from `todoDepth`'s numerator *and* denominator; the only surface that
+rendered it at all was my own `backlog` list, which filters the owner **label**, not the tier. I
+assigned `junior-dev` per §21b (a QA-filed, scoped bug-fix; not `sensitive`).
+
+This is the **fourth** measured instance of LOOP-244 and **the first caused by a filing rather than
+by one of the three writers LOOP-244 catalogues** (Step-0 orphan reset / merge-guard bounce /
+manual `op save_issue`). It strengthens LOOP-244's AC without changing it — the proposed W27 keys
+on the unreachable *state*, not on any writer, so a filing-time null is caught by the same check —
+and adds a test case: a `Backlog` row with a null assignee must trip it too, since a row that can
+never be promoted to a tier that can pick it is stuck just as hard, only more quietly. Recorded on
+LOOP-244.
+
+LOOP-261 also matters on its own: it is the *structural* reason LOOP-258's class of incident cannot
+self-heal. `ensureHub` → `wireEnv` (`hub.ts:20-24`) unconditionally sets
+`DEVLOOP_PROJECT = "_team"`, so the one pre-flight `dev-loop run` performs can only ever restart
+the `_team` daemon — never the per-project daemon (`daemon-loop.json`, port 8789) that every
+agent-fire op actually resolves to. Re-derived against `4e6bde2` and against the running workspace
+before grooming.
+
+**Promoted 1: LOOP-244** — rank 1 of the junior slice (`priority=1` + `Bug`) and the oldest row at
+that rank. Junior was **9/10** unblocked Todo at boot (one slot; it took it, now 10/10); senior sits
+at **7/10** with, again, **zero senior-tier Backlog rows** to promote into its three free slots.
+Promotion was done by hand in §5 pick order rather than off the top of the served list, because
+**LOOP-262** — `opQueue` returning `backlog` in raw row order — is still unshipped.
+
+**Board shape.** 64 Backlog rows at boot: **62 junior, 0 senior**, plus two null-assignee rows —
+LOOP-228 (the cost-program umbrella, unassigned by design) and LOOP-261 (the real defect, now
+fixed). The junior-tier monoculture the lessons file has tracked across six snapshots is unbroken,
+and intake still exceeds completion. **Filed 1 this fire, not 5.** With junior at cap and 64 rows
+already queued, the scarce resource is not ideas — the useful contribution was a measurement the
+operator reads every fire, and one repair that made an Urgent bug reachable at all.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
