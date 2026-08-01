@@ -45,7 +45,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   const unseeded: string[] = []; // W08 hits, collected for the NEXT line
   let stalledRepo: string | undefined;
   let skewResult: { codeBehind: number; version: string } | null | undefined;
-  let decisionStall: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null | undefined;
+  let decisionStall: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null | undefined;
   if (opts.reconcile) {
     try { ws = tryResolveWorkspace(); }
     catch (e) {
@@ -182,7 +182,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
 // an invalid config blocks everything → a blank linearTeam blocks every fire → no projects/repos blocks
 // scheduling → an unseeded service project silently starves its fires → dry-run is the last gate before
 // live. All green ⇒ run the team.
-function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, decisionStall?: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null, skewResult?: { codeBehind: number; version: string } | null): string {
+function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null, skewResult?: { codeBehind: number; version: string } | null): string {
   if (errors.length) { const e = errors[0]; return `fix dev-loop.json — [${e.code}] ${e.path ? e.path + ": " : ""}${e.message}`; }
   if (!ws) return "dev-loop run";
   const t = ws.file.team;
@@ -195,7 +195,7 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], s
   // W20 NEXT flip: decision queue stall outranks landing stall — operator is the loop's only unscalable resource
   if (decisionStall != null && decisionStall.count > 0) {
     const oldest = decisionStall.oldest;
-    const ageMs = Date.now() - Date.parse(oldest.updatedAt);
+    const ageMs = Date.now() - Date.parse(oldest.enteredAt);
     const h = Math.floor(ageMs / 3_600_000);
     const ageStr = h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ageMs / 60_000))}m`;
     return `rule on the oldest decision ${oldest.id} (${ageStr}): http://127.0.0.1:8787/ticket/${oldest.id}`;
@@ -210,22 +210,29 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], s
 // ── W20 helper — extracted to keep doctorWorkspace CC under the CRAP gate threshold ─────────────────────
 // Reads the per-project decisionQueue and emits [W20] when non-empty. Best-effort; swallows all exceptions.
 // Returns the stall descriptor (oldest + count) for NEXT-line threading, or null when clean/unavailable.
-function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { oldest: { id: string; updatedAt: string; state: string }; count: number } | null {
+function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { oldest: { id: string; enteredAt: string; state: string }; count: number } | null {
   if (ws.file.team.backend !== "service" || !existsSync(wsHubDb(ws))) return null;
   try {
-    const { decisionQueue } = require_metrics();
+    const { decisionQueue, decisionEnteredAt } = require_metrics();
     const db = openHubDbConn(wsHubDb(ws));
     try {
-      const allItems: Array<{ id: string; title: string; state: string; updatedAt: string }> = [];
+      // LOOP-207: age AND "oldest" ordering come from each item's into-queue-state transition event
+      // (decisionEnteredAt), NEVER tickets.updated_at — an unrelated later write (a Sweep label repair on
+      // a parked item, §9c edge re-pointing) must not reset its age nor change WHICH item is named oldest.
+      // decisionQueue's own ORDER BY updated_at is LOOP-108's concern (the metrics render); W20 re-derives
+      // and re-sorts locally, so the two corrections don't collide.
+      const allItems: Array<{ id: string; title: string; state: string; enteredAt: string }> = [];
       for (const key of deliveryProjects(ws)) {
         const pid = findHubProject(db, key);
         if (!pid) continue;
-        allItems.push(...(decisionQueue(db, pid) as Array<{ id: string; title: string; state: string; updatedAt: string }>));
+        for (const t of decisionQueue(db, pid) as Array<{ id: string; title: string; state: string; updatedAt: string }>) {
+          allItems.push({ id: t.id, title: t.title, state: t.state, enteredAt: decisionEnteredAt(db, t.id, t.state) });
+        }
       }
       if (allItems.length > 0) {
-        allItems.sort((a, b) => a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0);
+        allItems.sort((a, b) => a.enteredAt < b.enteredAt ? -1 : a.enteredAt > b.enteredAt ? 1 : 0);
         const oldest = allItems[0];
-        const ageMs = Date.now() - Date.parse(oldest.updatedAt);
+        const ageMs = Date.now() - Date.parse(oldest.enteredAt);
         const h = Math.floor(ageMs / 3_600_000);
         const ageStr = h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ageMs / 60_000))}m`;
         const title60 = oldest.title.length > 60 ? oldest.title.slice(0, 57) + "…" : oldest.title;
@@ -234,7 +241,7 @@ function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { ol
           ? " — no out-of-band escalation path (no team.comms): these surface only here and in `dev-loop metrics`, never as a reminder."
           : "";
         warn(`[W20] decision queue: ${allItems.length} waiting on you, oldest ${oldest.id} "${title60}" ${ageStr} (${stateLabel}) — rule on it: http://127.0.0.1:8787/ticket/${oldest.id}; full queue: dev-loop metrics${noCommsNote}`);
-        return { oldest, count: allItems.length };
+        return { oldest: { id: oldest.id, enteredAt: oldest.enteredAt, state: oldest.state }, count: allItems.length };
       }
     } finally { db.close(); }
   } catch { /* decision-queue is best-effort — never fails doctor */ }
@@ -245,10 +252,10 @@ function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { ol
 // Reports the E-code/W-code verdict for a dev-loop.json, that every registered repo exists and is a git
 // repo, and the two migration/leak warnings (W05 user-scope MCP for linear steward fires; W06 workspace
 // inside a git work-tree). Never writes, never repairs.
-export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null }> {
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null }> {
   let ok = true;
   let stalledRepo: string | undefined;
-  let decisionStall: { oldest: { id: string; updatedAt: string; state: string }; count: number } | null = null;
+  let decisionStall: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null = null;
   const pass = (m: string) => console.log("✅ " + m);
   const fail = (m: string) => { console.log("❌ " + m); ok = false; };
   const warn = (m: string) => console.log("⚠️  " + m);
