@@ -458,15 +458,20 @@ function uninstallAutostart(): number {
 // Never touch: a no-marker listener (foreign server) OR a marked daemon with dbPresent:true (a LIVE board —
 // including another workspace's). Age, port, and fixture-name heuristics are never consulted.
 async function lcReapInfo(url: string): Promise<{ pid: number; project: string; version?: string; dbPresent: boolean } | null> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 1200);
+  // P2 fix (PRRT_kwDOS6Puk86VoEUp): clear the timer only AFTER body consumption, not after headers.
+  // A stalling foreign listener that sends headers instantly but delays the body would hang r.json()
+  // indefinitely if we cleared the timer in a fetch .finally (which fires when headers arrive).
+  // The outer try/finally keeps the timer alive through r.json() and then cleans it up.
   try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 1200);
-    const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
+    const r = await fetch(`${url}/api/health`, { signal: ac.signal });
     if (r.status !== 200 && r.status !== 503) return null; // only ok:true(200) and ok:false(503) carry the identity fields
     const b = (await r.json().catch(() => null)) as { service?: string; pid?: number; project?: string; version?: string; dbPresent?: boolean } | null;
     if (!b || b.service !== "dev-loop-hub" || typeof b.pid !== "number" || typeof b.dbPresent !== "boolean") return null;
     return { pid: b.pid, project: b.project ?? "", version: b.version, dbPresent: b.dbPresent };
   } catch { return null; }
+  finally { clearTimeout(t); }
 }
 
 export async function daemonReap(opts: { dryRun?: boolean; host?: string } = {}): Promise<number> {
@@ -480,8 +485,13 @@ export async function daemonReap(opts: { dryRun?: boolean; host?: string } = {})
   //     restart from an existing.port near the top are captured this way.
   // (b) DEVLOOP_DAEMON_PORT if set — an explicit env override can point anywhere.
   const extraPorts = new Set<number>();
-  try {
-    const runDir = lcRunDir();
+  // P2 fix (PRRT_kwDOS6Puk86VoEUq): only read runfiles when DEVLOOP_RUN_DIR is explicit. Without it
+  // lcRunDir() falls back to dirname(lcDbPath()) which resolves from DEVLOOP_HUB_DB or the home .dev-loop
+  // dir — NOT the current workspace — so reap would read orphan records from a different workspace.
+  // An explicit DEVLOOP_RUN_DIR (set by `resolveDaemonContext` in the `up`/`down`/`status` paths)
+  // means the caller has already resolved the workspace and the runfiles are authoritative.
+  if (process.env.DEVLOOP_RUN_DIR) {
+    const runDir = lcRunDir(); // resolves to DEVLOOP_RUN_DIR when set
     let runFiles: string[] = [];
     try { runFiles = readdirSync(runDir).filter((f) => /^daemon-.+\.json$/.test(f)); } catch { /* dir absent */ }
     for (const f of runFiles) {
@@ -490,7 +500,7 @@ export async function daemonReap(opts: { dryRun?: boolean; host?: string } = {})
         if (typeof info.port === "number" && (info.port < bandStart || info.port > bandEnd)) extraPorts.add(info.port);
       } catch { /* malformed — skip */ }
     }
-  } catch { /* lcRunDir() itself failed — skip */ }
+  }
   const envPort = process.env.DEVLOOP_DAEMON_PORT ? Number(process.env.DEVLOOP_DAEMON_PORT) : 0;
   if (envPort > 0 && (envPort < bandStart || envPort > bandEnd)) extraPorts.add(envPort);
 
