@@ -61,6 +61,45 @@ try {
   ok(/\[W06\][^\n]*ws\.bundle/.test(stagedOut), "(e) W06 still warns for a STAGED un-ignored bundle artifact (names ws.bundle)");
   ok(!/is gitignored/.test(stagedOut), "(e) the reassuring 'clean' line stays suppressed once the artifact is staged, not just untracked");
 
+  // (f) LOOP-235 review P1 #1 — STAGE the bundle, then garble the WORKTREE copy so index and worktree
+  // diverge (`AM`): the index blob still carries the magic and the next `git commit` still leaks it, but
+  // a worktree-file probe now sees non-magic bytes and misses. W06 must probe the INDEX blob (`:ws.bundle`),
+  // not the worktree. Fails against a worktree-only `unignoredBundleArtifacts`, passes against the index probe.
+  writeFileSync(join(gitWs, "ws.bundle"), "not-a-bundle-anymore"); // ws.bundle is already STAGED from (e)
+  ok(/^AM\s+ws\.bundle$/m.test(execFileSync("git", ["-C", gitWs, "status", "--short"], { encoding: "utf8" })), "(f) precondition: ws.bundle is STAGED-then-worktree-modified (AM) — the worktree copy no longer holds the magic");
+  const docAM = cli(["doctor"], gitWs);
+  const amOut = `${docAM.stdout}${docAM.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(amOut), "(f) W06 warns off the STAGED INDEX blob even after the worktree copy was overwritten to non-magic (names ws.bundle)");
+  ok(!/is gitignored/.test(amOut), "(f) the reassuring 'clean' line stays suppressed while the index still holds a bundle");
+
+  // (g) LOOP-235 review P1 #2 — a bundle COMMITTED then DELETED in a later commit, both UNPUSHED. The
+  // endpoint diff `upstream..HEAD` nets to empty (add+delete cancel), yet `git push` still ships the
+  // intermediate commit's blob. W06 must walk EVERY unpushed commit, not just the endpoint. Needs a real
+  // upstream to define "unpushed", so wire a bare remote. Fails against the endpoint-diff scan.
+  const upWs = join(ROOT, "up-ws"); mkdirSync(upWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", upWs, "--key", "gg3", "--backend", "service", "--yes"], ROOT).status === 0, "setup: up-ws team init");
+  gitInit(upWs);
+  writeFileSync(join(upWs, ".gitignore"), ".dev-loop/\n");
+  writeFileSync(join(upWs, "README"), "x\n");
+  execFileSync("git", ["-C", upWs, "add", "README", ".gitignore"]);
+  execFileSync("git", ["-C", upWs, "commit", "-qm", "init"]);
+  const bareRemote = join(ROOT, "up-remote.git");
+  execFileSync("git", ["init", "--bare", "-q", bareRemote]);
+  execFileSync("git", ["-C", upWs, "remote", "add", "origin", bareRemote]);
+  execFileSync("git", ["-C", upWs, "push", "-q", "-u", "origin", "HEAD:refs/heads/main"]); // establishes @{upstream}=origin/main, pushes init
+  const upBundle = join(upWs, "ws.bundle");
+  ok(cli(exportArgs(upBundle), upWs).status === 0, "(g) setup: bundle export into up-ws");
+  execFileSync("git", ["-C", upWs, "add", "ws.bundle"]);
+  execFileSync("git", ["-C", upWs, "commit", "-qm", "add bundle (unpushed)"]);
+  execFileSync("git", ["-C", upWs, "rm", "-q", "ws.bundle"]);
+  execFileSync("git", ["-C", upWs, "commit", "-qm", "remove bundle (unpushed)"]);
+  ok(execFileSync("git", ["-C", upWs, "diff", "--name-only", "@{upstream}..HEAD"], { encoding: "utf8" }).trim() === "", "(g) precondition: the endpoint diff upstream..HEAD is EMPTY (add+delete net out — why an endpoint-only scan misses it)");
+  ok(!existsSync(upBundle), "(g) precondition: ws.bundle is gone from the worktree AND index — its only reachable copy is the intermediate unpushed commit");
+  const docUp = cli(["doctor"], upWs);
+  const upOut = `${docUp.stdout}${docUp.stderr}`;
+  ok(/\[W06\][^\n]*ws\.bundle/.test(upOut), "(g) W06 warns for a bundle carried by an unpushed intermediate commit even though the endpoint diff is empty (names ws.bundle)");
+  ok(!/is gitignored/.test(upOut), "(g) the reassuring 'clean' line is suppressed while an unpushed commit still carries the artifact");
+
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });
   ok(cli(["team", "init", "--dir", plainWs, "--key", "gg2", "--backend", "service", "--yes"], ROOT).status === 0, "setup: plain-ws team init");
