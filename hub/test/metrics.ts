@@ -672,7 +672,9 @@ try {
       });
       ok(kRes.status === 0, `metrics --kaizen --json exits 0 (got ${kRes.status}; stderr: ${(kRes.stderr ?? "").slice(0, 200)})`);
       const parsed = (() => { try { return JSON.parse(kRes.stdout ?? ""); } catch { return null; } })();
-      ok(parsed !== null && "selfImprovement" in parsed, "metrics --kaizen --json emits KaizenReport shape");
+      // P2 fix: --kaizen --json now emits an array of KaizenReport objects (one per project); validate array shape
+      ok(Array.isArray(parsed) && parsed.length > 0 && parsed.every((r: unknown) => r !== null && typeof r === "object" && "selfImprovement" in (r as Record<string, unknown>)),
+        "metrics --kaizen --json emits an array of KaizenReport objects (one per project)");
     }
   }
 

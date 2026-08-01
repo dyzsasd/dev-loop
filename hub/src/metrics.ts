@@ -500,7 +500,7 @@ export function renderKaizen(report: KaizenReport): void {
   }
   // Stat 5
   if (report.verifyFail.totalInWindow === 0) {
-    console.log(`verify-fails: — no verify-fails in the last ${Math.round(report.windowMs / 86_400_000)}d`);
+    console.log(`verify-fails: — no verify-fails in the last ${fmtWindow(report.windowMs)}`);
   } else {
     console.log(`verify-fails: ${report.verifyFail.totalInWindow} in window`);
   }
@@ -594,9 +594,17 @@ const fmtDur = (ms: number): string => {
 
 // The default human render (asserted non-JSON by the 1.7.1 mutation-killer test).
 // Exported so tests can call it directly with a fixed nowMs for deterministic age assertions (LOOP-73).
+// P2 fix: format a window duration to human-readable, using hours for sub-day durations so
+// `--window 1h` shows "last 1h" not "last 0d" and `--window 12h` shows "last 12h" not "last 1d".
+function fmtWindow(ms: number): string {
+  const h = ms / 3_600_000;
+  if (h < 24) return `${Math.round(h)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
+}
+
 export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<typeof fireMetrics>, out: Record<string, unknown>, nowMs = Date.now()): void {
   const pct = (x: number | null) => x === null ? "—" : `${Math.round(x * 100)}%`;
-  console.log(`team '${ws.file.team.key}' — last ${windowMs / 86_400_000}d`);
+  console.log(`team '${ws.file.team.key}' — last ${fmtWindow(windowMs)}`);
   console.log(`fires: ${fires.fires} (success ${pct(fires.successRate)}, ${fires.failures} failed, ${fires.timeouts} timeout, ${fires.suspectErrors} suspect)`);
   if (Object.keys(fires.byErrorClass).length) // P0-1b: infra failure classes split from task failures
     console.log(`errors: ${Object.entries(fires.byErrorClass).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join(", ")}`);
