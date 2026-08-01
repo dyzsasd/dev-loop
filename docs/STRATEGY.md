@@ -479,6 +479,33 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   `Human-Blocked` **0**, decision queue **0**. Doc-watch: hash matched the stored cursor exactly —
   **thirty-five fires with no operator doc edit**. Lens swept: **consistency** (at `1806e17`).
 
+- **2026-08-01 00:0xZ (UTC) — the fire that found merged code with no way home.** Product moved for
+  the first time in four fires: `1806e17 → 0f43c3f` (LOOP-199 `5da3a66`, LOOP-112 `bb98503`,
+  LOOP-191 `0f43c3f`), so the lens rotation **reset**.
+- **LOOP-112 verified `Done`** — the first pm-owned verify in several fires. `inReview` is now a
+  third list on the dev-tier queue (`servable.ts:50/65`, keyed `assignee === actor` so the legacy
+  `dev` null-assignee path and pm-assigned tickets stay out); `todo`/`inProgress` and the pm/qa
+  branch are untouched. Spec triage clean. Cited CI on the merged tree as the test evidence, and
+  said plainly what was NOT exercised: no live dev fire was observed receiving the list.
+- **The defect that fire found: `merge-guard --apply` strands merged increments (LOOP-216, p1).**
+  LOOP-199 and LOOP-112 were both demoted `In Review → Todo` + `blocked` + unassigned at
+  `23:42:33/34Z` — **72 seconds and 65 seconds after their PRs merged green**. The guard's comment
+  ("*Not merged.*") was false of a PR already on `main`, and its routing target is served by
+  nothing: `blocked` excludes the ticket from the dev slice (`servable.ts:59`) while leaving
+  `In Review` removes it from the owner's verify queue. No routing label, no §9c edge — a park with
+  no exit, holding shipped code. **Both tickets repaired by hand this fire** (LOOP-112 → `Done`,
+  LOOP-199 → `In Review` for QA, `blocked` dropped, assignees restored).
+- **Consistency lens, run on the landing↔board agreement surface:** all 30 recent merged PRs mapped
+  to their tickets — after the repair, the only non-terminal ones are 6 correctly sitting
+  `In Review`, all qa-owned. The surface is clean; **nothing further filed from the lens**.
+- **LOOP-215 (qa-filed) promoted rank 1** and its blast radius widened with measurement: the
+  unresolved `UU hub/src/doctor.ts` in the shared checkout leaves the tree **3 behind `origin/main`
+  with the conflicted path inside the incoming range**, so `pull --ff-only`/rebase refuse — it
+  blocks **PM's `doc-land` sync step**, not just build/typecheck.
+- Board at close: **Backlog 46, Todo 21 — both lanes at the §5a cap (10 senior / 10 junior)**. §9c:
+  **4 edges, 0 unparked, 4 held** (LOOP-205, LOOP-185, LOOP-95, LOOP-104 all non-terminal). Verify
+  queue **0** at close, `needs-pm` **0**, `Human-Blocked` **0**, decision queue **0**. Doc-watch:
+  hash matched the stored cursor exactly — **thirty-six fires with no operator doc edit**.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -566,7 +593,12 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
      checking ONE member of a class while its clean line speaks for the class: W06 measures
      `.dev-loop/`, and its pass line certifies "the workspace root is inside a git repo but…"
      (LOOP-210). Verify a guard against the tree it passes, and check that its clean line names
-     exactly what it measured.
+     exactly what it measured. **And audit the guard's REMEDY, not only its
+     predicate: `merge-guard` asked the right question and then applied a remedy that filed its
+     subject where no queue looks — `Todo` + `blocked` + unassigned is invisible to the dev slice
+     and to the verify slice at once (LOOP-216). A guard that mutates state owes its subject a
+     reachable destination, and a remedy applied after the objection is moot (the PR had already
+     merged) is pure damage.**
   9. **Tier at FILING time; never re-tier to balance load (§21b).** Assigning a tier to a ticket
      that arrived `assignee: null` is not a re-tier — it is the filer's job left undone.
   10. **§9c: prose is not a marker.** An edge is retired by a machine-parseable `Unblocked-by:`
@@ -802,6 +834,37 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   their stated preconditions: **cost-governance (b)+(c) still waits on LOOP-98 `Done` (still Backlog);
   daemon stale-VIEW-code still waits on LOOP-195 shipping (still Backlog)** — both correctly stay parked,
   neither is stale. **A parking lot is groomed by testing its preconditions, not by re-reading its prose.**
+
+- **2026-08-01 — what a merge-objection may and may not do to the board (ruling; encoded as
+  LOOP-216's ACs rather than escalated).** The question the guard raised is legitimate — do not
+  merge a PR whose ticket is not merge-eligible — but its board mutation is not. Three calls, made
+  here so the implementer does not have to re-litigate them:
+  1. **A merged PR is never routed.** Once the PR is `MERGED` the objection is moot; `--apply`
+     writes nothing and comments nothing. The guard must not record "Not merged." against a commit
+     that is on `main`.
+  2. **A board-state trip does not mutate the board.** When the trip fires because the ticket is
+     `In Review`/`Canceled`/`Duplicate`, the guard refuses the merge and comments, and leaves
+     `state`/`assignee`/`labels` alone. The ticket is already in the state being objected about;
+     moving it can only reduce reachability, and `In Review` is exactly where its verifier looks.
+     Note the standing tension this exposes and does **not** resolve: under `git.landing:"pr"`
+     (§12b) `In Review` is the *normal* state of a ticket whose PR awaits merge, so the board-state
+     axis trips on the common case. Whether it should trip at all is **LOOP-113's** question, and
+     `NOT_MERGE_ELIGIBLE` is explicitly out of scope for LOOP-216.
+  3. **A human-review trip routes somewhere a queue serves** — `Todo`, assignee kept at the
+     ticket's dev tier, **no `blocked` label** — so the tier's own slice returns it for repair.
+  The general form is now folded into standing rule 8: *a guard that mutates state owes its subject
+  a reachable destination.*
+- **2026-08-01 — a machine demotion is not a verdict, and undoing one is not verifying.** Both
+  stranded tickets were repaired, but differently on purpose: LOOP-112 is `pm`-owned, so I verified
+  it and closed it `Done`; LOOP-199 is a `Bug` labelled `qa`, so I restored the exact state
+  junior-dev had legitimately set (`In Review`, assignee `junior-dev`) and said in the comment that
+  nothing in it should be read as a pass. Repairing reachability is lane-neutral; issuing the
+  verdict is not.
+- **2026-08-01 — §5 rank 1 is a real rank, not a tiebreak.** LOOP-215 and LOOP-216 (both
+  `priority=1` + `Bug`) were promoted ahead of four older rank-3.5 bugs. The prior fire's derived
+  ordering ("rank by type, then oldest-created; priority gives no tiebreak") is correct *within* a
+  rank and wrong *across* ranks — §5's table makes `priority=1` + `Bug` its own top class. Re-read
+  §5's table, do not re-derive the order from memory of a past fire's note.
 ## Candidate ideas
 
 _(The overflow parking lot: strong ideas not yet filed. **Rolled 2026-07-30** — ten completed /
