@@ -371,6 +371,11 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   ok(paths.some((p) => /projects\.devplatform\.agents\.dev\.stallTimeout/.test(p)), "E17: project-level error path names projects.<key>.agents.<agent>.stallTimeout");
 }
 
+// ── E18 budget validation — unknown keys ──
+{ const f = base(); (f.team as unknown as Record<string, unknown>).budget = { dailyUSD: 50 }; ok(has(f, "E18"), "E18: misspelled budget key dailyUSD (capital USD) is rejected"); }
+{ const f = base(); (f.team as unknown as Record<string, unknown>).budget = { dailyUsd: 50, extraKey: 1 }; ok(has(f, "E18"), "E18: unknown extra budget key is rejected"); }
+{ const f = base(); (f.team as unknown as Record<string, unknown>).budget = { dailyUsd: 50, perFireUsd: 5 }; ok(!has(f, "E18"), "E18: known keys dailyUsd + perFireUsd are valid"); }
+
 // ── AC1: defaultBranch resolution — effectiveRepo fallback chain + resolveDefaultBranchForPath ──
 {
   const mkWsDb = (overrides: Partial<ReturnType<typeof base>["team"]>, repoOverrides?: Record<string, unknown>): Workspace => {
