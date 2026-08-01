@@ -699,7 +699,12 @@ function unignoredBundleArtifacts(root: string): { path: string; state: "untrack
   {
     let group: string[] = [], bytes = 0;
     for (const [oid, size] of oidSize) {
-      const cost = size + 64; // + header line and trailing LF overhead
+      // + the `--batch` header (`<oid> blob <size>\n`) and the trailing LF. Sized for a 64-char
+      // SHA-256 oid (not just 40-char SHA-1) + a long size field, so the ESTIMATE is never below the
+      // real per-object overhead: a group's actual output then stays under `probeGroup`'s maxBuffer
+      // (CATFILE_BUDGET + 1 MiB) even for ~100k tiny blobs, and no bundle is lost to an ENOBUFS-
+      // truncated tail (LOOP-235 review, SHA-256 header sizing).
+      const cost = size + 128;
       if (group.length && bytes + cost > CATFILE_BUDGET) { probeGroup(group); group = []; bytes = 0; }
       group.push(oid); bytes += cost;
       if (bytes >= CATFILE_BUDGET) { probeGroup(group); group = []; bytes = 0; } // an oversized blob flushes alone
