@@ -459,6 +459,25 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
       warn(`[W23] ${join(ws.root, ".claude", "settings.json")} allows ${DEVLOOP_PERMISSION} but not ${KAIZEN_PERMISSION} — the CLI is gaining a \`kaizen\` alias (LOOP-181); top up the allow-list so fires keep board access when prose flips: dev-loop team repair`);
   } catch { /* W23 is best-effort — never fails doctor */ }
 
+  // W24 — unmerged paths in the shared checkout (LOOP-215): a git stash pop or interrupted merge can
+  // leave conflict markers staged in a repo's working tree, silently blocking direct tsc/build/test runs.
+  // Per-ticket worktrees branch off committed refs and are unaffected; this is a shared-checkout hazard only.
+  // Best-effort; never flips DOCTOR_OK.
+  try {
+    for (const ref of Object.keys(ws.file.repos)) {
+      const { absPath: dir } = effectiveRepo(ws, ref);
+      if (!existsSync(dir) || !isGitWorkTree(dir)) continue;
+      const r = spawnSync("git", ["-C", dir, "ls-files", "--unmerged", "-z"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      if (r.status !== 0 || r.error) continue;
+      const paths = [...new Set(
+        r.stdout.split("\0").filter(Boolean).map(line => line.split("\t")[1]).filter(Boolean)
+      )];
+      if (paths.length)
+        warn(`[W24] repo '${ref}' (${dir}) has ${paths.length} unmerged path${paths.length === 1 ? "" : "s"}: ${paths.join(", ")} — conflict markers may block direct tsc/build/test runs (per-ticket worktrees are unaffected). Resolve: edit each file, then \`git add <file>\`. Likely cause: an interrupted \`git stash pop\` or \`git merge\`.`);
+    }
+  } catch { /* W24 is best-effort — never fails doctor */ }
+
   // W06 — the workspace root inside a git work-tree risks committing .dev-loop state/reports (I5 neighbor).
   if (isGitWorkTree(ws.root)) {
     let ignored = false;
