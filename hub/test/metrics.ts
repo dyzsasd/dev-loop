@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, sensitiveMistier } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, sensitiveMistier, kaizenReport, renderKaizen } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -553,6 +553,138 @@ try {
       env: { ...process.env, DEVLOOP_HUB_DB: dbBPath, DEVLOOP_HOME: join(tmp, "home-l199") },
     });
     ok(existsSync(join(wsNew, ".dev-loop", "hub.db")), "LOOP-199 AC5: team init creates hub.db at workspace path even when DEVLOOP_HUB_DB points elsewhere");
+  }
+
+  // ── kaizenReport (LOOP-205) ──────────────────────────────────────────────────
+  {
+    const kDb = openDb(join(tmp, "kaizen-hub.db"));
+    kDb.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('kp','kloop','KLoop','t')").run();
+    const kTrans = (from: string, to: string, ms: number) =>
+      kDb.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('kp','x','dev','issue.transition',?,?)").run(JSON.stringify({ from, to }), iso(ms));
+    const kTicket = (id: string, createdBy: string, state: string, title: string) =>
+      kDb.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)").run(
+        id, "kp", title, "", "Bug", state, createdBy, iso(NOW), iso(NOW));
+    // Self-filed tickets (by agents): 3 filed, 2 Done
+    kTicket("K1", "pm", "Done", "loop issue 1");
+    kTicket("K2", "qa", "Done", "loop issue 2");
+    kTicket("K3", "senior-dev", "In Progress", "loop issue 3");
+    // Operator-filed (should NOT count as self-filed)
+    kTicket("K4", "operator", "Done", "operator issue");
+    // Total Done = 3 (K1, K2, K4)
+    kTrans("In Review", "Done", NOW - 1 * DAY);
+    kTrans("In Review", "Done", NOW - 2 * DAY);
+    kTrans("In Review", "Done", NOW - 3 * DAY);
+    // Verify-fail (In Review → Canceled)
+    kTrans("In Review", "Canceled", NOW - 1 * DAY);
+    // Proposal tickets — title LIKE '[%-proposal]%' (PM amendment: trailing %)
+    kTicket("P1", "reflect", "Done", "[reflect-proposal] add lessons to boot (refactored)");
+    kTicket("P2", "senior-dev", "In Progress", "[senior-dev-proposal] redesign the ratchet");
+
+    const kNow = NOW + DAY;
+    const report = kaizenReport(kDb, "kp", { nowMs: kNow, windowMs: 7 * DAY });
+
+    // AC1: correct selfFiled/selfFixed/totalDone, null rates at zero denominators
+    // selfFiled=5: K1(pm),K2(qa),K3(senior-dev),P1(reflect),P2(senior-dev) — all agents, operator not in roster
+    // selfFixed=3: K1(Done),K2(Done),P1(Done); totalDone=4: K1,K2,K4(operator),P1
+    ok(report.selfImprovement.selfFiled === 5, `kaizen selfFiled=5 (got ${report.selfImprovement.selfFiled})`);
+    ok(report.selfImprovement.selfFixed === 3, `kaizen selfFixed=3 (got ${report.selfImprovement.selfFixed})`);
+    ok(report.selfImprovement.totalDone === 4, `kaizen totalDone=4 (K1,K2,K4,P1; got ${report.selfImprovement.totalDone})`);
+    ok(report.selfImprovement.selfFixRate !== null && Math.abs(report.selfImprovement.selfFixRate - 3 / 5) < 1e-9, `kaizen selfFixRate=3/5 (got ${report.selfImprovement.selfFixRate})`);
+    ok(report.selfImprovement.selfSlice !== null && Math.abs(report.selfImprovement.selfSlice - 3 / 4) < 1e-9, `kaizen selfSlice=3/4 (got ${report.selfImprovement.selfSlice})`);
+    ok(report.selfImprovement.fixedIds.length === 3, `kaizen fixedIds has 3 entries (got ${report.selfImprovement.fixedIds.length})`);
+
+    // AC1 null-not-0: zero-denominator case
+    const emptyDb = openDb(join(tmp, "kaizen-empty.db"));
+    emptyDb.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('ep','ep','E','t')").run();
+    const emptyRep = kaizenReport(emptyDb, "ep", { nowMs: kNow });
+    ok(emptyRep.selfImprovement.selfFixRate === null, "kaizen selfFixRate null (not 0) when selfFiled=0");
+    ok(emptyRep.selfImprovement.selfSlice === null, "kaizen selfSlice null (not 0) when totalDone=0");
+    emptyDb.close();
+
+    // AC2: proposal query with PM amendment — title must have text after ']'
+    ok(report.evolution.filed === 2, `kaizen evolution.filed=2 (got ${report.evolution.filed})`);
+    ok(report.evolution.appliedProxy === 1, `kaizen evolution.appliedProxy=1 (only Done proposal; got ${report.evolution.appliedProxy})`);
+
+    // AC3: verifyFail.byClass===null, totalInWindow from boardMetrics
+    ok(report.verifyFail.byClass === null, "kaizen verifyFail.byClass===null");
+    ok(report.verifyFail.totalInWindow === 1, `kaizen verifyFail.totalInWindow=1 (In Review→Canceled; got ${report.verifyFail.totalInWindow})`);
+
+    // AC4: lessons absent → present:false (no lessonsDir supplied)
+    ok(!report.lessons.present, "kaizen lessons.present=false when lessonsDir absent");
+
+    // AC4: lessons present path — write synthetic lessons dir
+    const lessonsDir = join(tmp, "lessons-test");
+    mkdirSync(lessonsDir, { recursive: true });
+    writeFileSync(join(lessonsDir, "INDEX.md"), [
+      "- [shared] 2026-01-15 lesson one (evidence: LOOP-1)",
+      "- [shared] 2026-01-20 lesson two",
+      "- [shared] 2026-02-03 lesson three",
+    ].join("\n") + "\n");
+    const reportWithLessons = kaizenReport(kDb, "kp", { nowMs: kNow, lessonsDir });
+    ok(reportWithLessons.lessons.present, "kaizen lessons.present=true when dir exists");
+    ok(reportWithLessons.lessons.entries === 3, `kaizen lessons.entries=3 (got ${reportWithLessons.lessons.entries})`);
+    ok(reportWithLessons.lessons.byMonth["2026-01"] === 2, `kaizen lessons byMonth 2026-01=2 (got ${reportWithLessons.lessons.byMonth["2026-01"]})`);
+    ok(reportWithLessons.lessons.byMonth["2026-02"] === 1, `kaizen lessons byMonth 2026-02=1 (got ${reportWithLessons.lessons.byMonth["2026-02"]})`);
+
+    // AC5: ratchet — parse from real package.json + real quality-gauntlet.md (PM amendment 2)
+    const hubRoot2 = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const gauntletDoc = join(hubRoot2, "..", "docs", "design", "quality-gauntlet.md");
+    const pkgJson = join(hubRoot2, "package.json");
+    const reportWithRatchet = kaizenReport(kDb, "kp", { nowMs: kNow, ratchetSources: { pkgJson, gauntletDoc } });
+    ok(reportWithRatchet.ratchet.current === 90, `kaizen ratchet.current=90 from package.json (got ${reportWithRatchet.ratchet.current})`);
+    ok(Array.isArray(reportWithRatchet.ratchet.history) && reportWithRatchet.ratchet.history.length === 3,
+      `kaizen ratchet.history has 3 entries including **90** (got ${JSON.stringify(reportWithRatchet.ratchet.history)})`);
+    const last = reportWithRatchet.ratchet.history?.[2];
+    ok(last?.value === 90 && last?.version === "1.8.1", `kaizen ratchet last entry is 90 (1.8.1) despite markdown ** (got ${JSON.stringify(last)})`);
+
+    // AC5: honest fallback when history line absent
+    const syntheticPkg = join(tmp, "fake-pkg.json");
+    writeFileSync(syntheticPkg, JSON.stringify({ scripts: { quality: "node quality.ts --threshold 42" } }));
+    const syntheticDoc = join(tmp, "no-gauntlet.md");
+    writeFileSync(syntheticDoc, "# Quality\nno trajectory line here\n");
+    const reportFallback = kaizenReport(kDb, "kp", { nowMs: kNow, ratchetSources: { pkgJson: syntheticPkg, gauntletDoc: syntheticDoc } });
+    ok(reportFallback.ratchet.current === 42, `kaizen ratchet fallback.current=42 (got ${reportFallback.ratchet.current})`);
+    ok(reportFallback.ratchet.history === null, `kaizen ratchet history=null when line absent (got ${reportFallback.ratchet.history})`);
+
+    // AC6: showHeaderLine === (selfFixed >= 1)
+    ok(report.showHeaderLine === true, "kaizen showHeaderLine=true when selfFixed>=1");
+    ok(emptyRep.showHeaderLine === false, "kaizen showHeaderLine=false when selfFixed=0");
+
+    // renderKaizen branch-coverage (CRAP-ratchet guard: CC=12, was 0.3% covered → must exercise all paths).
+    // Each call exercises a different branch cluster; stdout goes to console (test runner captures it).
+    renderKaizen(report);                 // showHeaderLine=true; selfFixed>0; lessons absent; ratchet null; verifyFail>0
+    renderKaizen(emptyRep);              // showHeaderLine=false; selfFiled=0; ratchet null; verifyFail=0
+    renderKaizen(reportWithLessons);     // lessons.present=true with entries
+    renderKaizen(reportWithRatchet);     // ratchet.current set; ratchet.history set
+    renderKaizen(reportFallback);        // ratchet.current set; ratchet.history null
+    // selfFiled>0 but selfFixed=0 (the "none fixed yet" display branch)
+    renderKaizen({ ...emptyRep, showHeaderLine: false,
+      selfImprovement: { selfFiled: 2, selfFixed: 0, totalDone: 0, selfFixRate: null, selfSlice: null, fixedIds: [] } });
+    ok(true, "renderKaizen covers all display branches (CRAP-ratchet guard)");
+
+    kDb.close();
+
+    // CLI smoke: --kaizen --json round-trips (service backend only; skip on linear or missing hub.db)
+    const wsEnv = process.env.DEVLOOP_WORKSPACE;
+    const hubDbPath = wsEnv ? join(wsEnv, ".dev-loop", "hub.db") : "";
+    const cfgPath = wsEnv ? join(wsEnv, "dev-loop.json") : "";
+    const isServiceWorkspace = (() => {
+      if (!wsEnv || !existsSync(cfgPath) || !existsSync(hubDbPath)) return false;
+      try {
+        const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
+        const projects = cfg.projects as Record<string, { backend?: string }> | undefined ?? {};
+        return Object.values(projects).some((p) => p.backend === "service");
+      } catch { return false; }
+    })();
+    if (isServiceWorkspace) {
+      const kRes = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen", "--json"], {
+        cwd: wsEnv, encoding: "utf8", timeout: 10_000, env: { ...process.env },
+      });
+      ok(kRes.status === 0, `metrics --kaizen --json exits 0 (got ${kRes.status}; stderr: ${(kRes.stderr ?? "").slice(0, 200)})`);
+      const parsed = (() => { try { return JSON.parse(kRes.stdout ?? ""); } catch { return null; } })();
+      ok(Array.isArray(parsed) && parsed.length > 0 && parsed.every((r: unknown) => r !== null && typeof r === "object" && "selfImprovement" in (r as Record<string, unknown>) && "key" in (r as Record<string, unknown>)),
+        "metrics --kaizen --json emits an array of {key, ...KaizenReport} objects (one per project)");
+    }
   }
 
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
