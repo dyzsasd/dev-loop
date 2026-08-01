@@ -375,7 +375,7 @@ function parseLessons(lessonsDir: string): KaizenReport["lessons"] {
     for (const f of readdirSync(lessonsDir)) {
       if (f !== "INDEX.md" && f !== "archive.md" && f.endsWith(".md")) files.push(join(lessonsDir, f));
     }
-  } catch { return { entries: 0, byMonth: {}, present: true }; }
+  } catch { return { entries: 0, byMonth: {}, present: false }; }
   let entries = 0;
   const byMonth: Record<string, number> = {};
   for (const f of files) {
