@@ -119,6 +119,27 @@ try {
     ok(!existsSync(canary), "security: the injected `touch` NEVER executed (no RCE)");
   }
 
+  // ── SECURITY (LOOP-184): a tampered plaintext-manifest run.agents is REFUSED before ANY side
+  //    effect — same line-2, unauthenticated trust boundary as LOOP-162 (needs no age key). run.agents
+  //    flows into a `dev-loop run --agents <spec>` argv element + two console.log sites, so an unknown
+  //    agent, a flag-smuggling `-…` token, or an empty spec must refuse. The happy-path load above
+  //    ("core" ⇒ prints `run --agents core`) is the positive control. Refusal is at bundleLoad's top,
+  //    before the config write — so `dev-loop.json` absent proves nothing materialized and, a fortiori,
+  //    no `dev-loop run` child was spawned (AC4). ──
+  {
+    const nl = rawBundle.indexOf(0x0a, 17);
+    for (const [i, bad] of ["--force", "bogus-agent", ""].entries()) {
+      const evilManifest = { ...manifest, run: { agents: bad } };
+      const evilBundle = join(ROOT, `evil-agents-${i}.bundle`);
+      writeFileSync(evilBundle, Buffer.concat([Buffer.from(`DEVLOOP-BUNDLE/1\n${JSON.stringify(evilManifest)}\n`), rawBundle.subarray(nl + 1)]));
+      const dstEvil = join(ROOT, `dst-evil-agents-${i}`);
+      const evil = cli(["up", "--bundle", evilBundle, "--dir", dstEvil, "--dry-launch"], ROOT, loadEnv);
+      ok(evil.status === 1, `security: tampered run.agents ${JSON.stringify(bad)} → load REFUSES (exit 1, got ${evil.status})`);
+      ok(/run\.agents|valid agent spec/i.test(`${evil.stdout}${evil.stderr}`), `security: refusal names run.agents (${JSON.stringify(bad)})`);
+      ok(!existsSync(join(dstEvil, "dev-loop.json")), `security: NOTHING materialized for tampered run.agents ${JSON.stringify(bad)} (fail-closed before the config write + the run spawn)`);
+    }
+  }
+
   // ── idempotency: live state wins ──
   const dstDb = join(dst, ".dev-loop", "hub.db");
   { // advance the live board past the bundle snapshot
