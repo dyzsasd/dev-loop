@@ -2,27 +2,34 @@
 // Read-only, server-rendered, 127.0.0.1-only; mirrors /usage conventions (DL-2 doctrine).
 // Reads kaizenReport from metrics.ts — one computation, two surfaces; they can never disagree.
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { esc, href } from "./ui.ts";
 import { kaizenReport } from "../metrics.ts";
 import { devloopDataDir } from "../paths.ts";
 
-// Resolve the lessons directory (reportsRoot-style — no workspace object needed in views).
-// Falls back to devloopDataDir()/lessons; DEVLOOP_LESSONS_DIR overrides for tests.
+// Resolve the lessons directory: workspace-specific path derived from DEVLOOP_HUB_DB
+// (hub.db lives at <workspace>/.dev-loop/hub.db; lessons are beside it).
+// DEVLOOP_LESSONS_DIR overrides for tests; falls back to devloopDataDir() when neither is set.
 function kaizenLessonsDir(): string {
   if (process.env.DEVLOOP_LESSONS_DIR) return process.env.DEVLOOP_LESSONS_DIR;
+  const hubDb = process.env.DEVLOOP_HUB_DB;
+  if (hubDb) return join(dirname(hubDb), "lessons");
   return join(devloopDataDir(), "lessons");
 }
 
-// Ratchet sources resolved relative to this file's location (hub/src/views/kaizen.ts):
-// hub/package.json is two dirs up; docs/design/quality-gauntlet.md is three dirs up.
+// Ratchet sources resolved relative to this file's location.
+// _pkgRoot = hub/ (source) or <pkgRoot>/ (installed) — consistent via up-2 from views/.
+// Gauntlet doc: prefer references/quality-gauntlet.md (shipped with the package via build);
+// fall back to docs/design/ relative to the repo root for source-only dev builds.
 const _viewsDir = fileURLToPath(new URL(".", import.meta.url));
-const _hubDir = join(_viewsDir, "..");
-const _repoRoot = join(_viewsDir, "..", "..", "..");
-const _pkgJson = join(_hubDir, "..", "package.json");
-const _gauntletDoc = join(_repoRoot, "docs", "design", "quality-gauntlet.md");
+const _pkgRoot = join(_viewsDir, "..", "..");
+const _pkgJson = join(_pkgRoot, "package.json");
+const _gauntletInRefs = join(_pkgRoot, "references", "quality-gauntlet.md");
+const _gauntletDoc = existsSync(_gauntletInRefs)
+  ? _gauntletInRefs
+  : join(_pkgRoot, "..", "docs", "design", "quality-gauntlet.md");
 
 function card(inner: string): string { return `<section class="acard">${inner}</section>`; }
 function metricRow(k: string, v: string): string {
