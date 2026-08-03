@@ -9,7 +9,7 @@ import { join, isAbsolute } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb } from "./workspace.ts";
-import { validateTeamFile, referencingProjects, type TeamFile, type Workspace } from "./team-config.ts";
+import { validateTeamFile, referencingProjects, isTeamProject, type TeamFile, type Workspace } from "./team-config.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
 import { provisionClaudePermissions } from "./team-init.ts";
@@ -636,13 +636,74 @@ export function addProvider(argv: string[]): number {
   return 0;
 }
 
+// ── remove-project ────────────────────────────────────────────────────────────
+// `dev-loop team remove-project <key> [--force]`
+// Recoverable-only by default: refuses if the project has tickets or repos. `--force` bypasses.
+// Handles the db-only case (key in hub but absent from config). Never removes _team / reserved.
+export function removeProject(argv: string[]): number {
+  const [key, ...rest] = argv;
+  if (!key || key.startsWith("--"))
+    die("usage: dev-loop team remove-project <key> [--force]");
+  if (isTeamProject(key)) die(`'${key}' is a reserved project key and cannot be removed`, 1);
+  const force = rest.includes("--force");
+
+  const ws = resolveWorkspace();
+  const inConfig = key in (ws.file.projects ?? {});
+
+  let inDb = false, projectId: string | null = null;
+  let db: ReturnType<typeof openDb> | undefined;
+  if (ws.file.team.backend === "service") {
+    const dbPath = wsHubDb(ws);
+    if (existsSync(dbPath)) {
+      try { db = openDb(dbPath); projectId = findProject(db, key); inDb = projectId !== null; }
+      catch { /* hub db unreachable — proceed config-only */ }
+    }
+  }
+
+  if (!inConfig && !inDb) { db?.close(); die(`project '${key}' not found in config or hub db`, 1); }
+
+  if (!force) {
+    if (db && projectId) {
+      const tc = (db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c;
+      if (tc > 0) { db.close(); die(`project '${key}' has ${tc} ticket(s) — pass --force to remove anyway`, 1); }
+    }
+    if (inConfig && (ws.file.projects[key].repos ?? []).length > 0) {
+      db?.close();
+      die(`project '${key}' has ${ws.file.projects[key].repos.length} repo(s) — pass --force to remove anyway`, 1);
+    }
+  }
+
+  if (inConfig) {
+    mutate((file) => { delete file.projects[key]; });
+    console.log(`removed project '${key}' from dev-loop.json`);
+  }
+  if (db && projectId) {
+    // Cascade delete child rows (FK-safe order) before removing the project row.
+    db.prepare("DELETE FROM channel_messages WHERE channel_id IN (SELECT id FROM channels WHERE project_id=?)").run(projectId);
+    db.prepare("DELETE FROM channels WHERE project_id=?").run(projectId);
+    db.prepare("DELETE FROM labels WHERE project_id=?").run(projectId);
+    db.prepare("DELETE FROM document_versions WHERE doc_id IN (SELECT id FROM documents WHERE project_id=?)").run(projectId);
+    db.prepare("DELETE FROM documents WHERE project_id=?").run(projectId);
+    db.prepare("DELETE FROM events WHERE project_id=?").run(projectId);
+    db.prepare("DELETE FROM mirror_map WHERE project_id=?").run(projectId);
+    db.prepare("DELETE FROM comments WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id=?)").run(projectId);
+    db.prepare("DELETE FROM tickets WHERE project_id=?").run(projectId);
+    db.prepare("DELETE FROM projects WHERE key=?").run(key);
+    console.log(`removed project '${key}' from hub.db`);
+  }
+  db?.close();
+  if (!inConfig) console.log(`note: '${key}' was db-only (not in dev-loop.json)`);
+  return 0;
+}
+
 if (isMainEntry(import.meta.url)) {
   const [sub, ...rest] = process.argv.slice(2);
   if (sub === "add-project") process.exit(await addProject(rest));
   if (sub === "add-repo") process.exit(addRepo(rest));
   if (sub === "set") process.exit(await teamSet(rest));
   if (sub === "add-provider") process.exit(addProvider(rest));
-  console.error("usage: team-edit add-project|add-repo|set|add-provider …"); process.exit(2);
+  if (sub === "remove-project") process.exit(removeProject(rest));
+  console.error("usage: team-edit add-project|add-repo|set|add-provider|remove-project …"); process.exit(2);
 }
 
 // ── set-model ─────────────────────────────────────────────────────────────────
