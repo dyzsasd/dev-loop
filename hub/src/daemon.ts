@@ -14,6 +14,7 @@
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
+import { existsSync } from "node:fs";
 import { isMainEntry } from "./is-entry.ts";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, fireIdStore } from "./db.ts";
@@ -62,6 +63,9 @@ export interface DaemonOpts {
   // LOOP-52: the version the daemon was started with (defaults to pkgVersion(); override in tests to
   // simulate a stale daemon without modifying package.json on disk).
   daemonVersion?: string;
+  // LOOP-95: the actual path of the DB file the daemon opened (may differ from wsHubDb when
+  // DEVLOOP_HUB_DB overrides; /api/health checks existsSync on THIS path, not on workspaceId).
+  dbPath?: string;
 }
 
 // DL-83: does THIS project's resolved config make the hub roadmap doc its north-star, or is a repo-file
@@ -457,6 +461,7 @@ interface RouteCtx {
   pg: (title: string, project: string, inner: string, opts?: Parameters<typeof page>[3]) => string;
   divergenceFor: (key: string) => string | undefined;
   getBasePageOpts: () => { workspaceId: string; daemonVersion: string; cliVersion?: string };
+  dbPath: string;
   stream: { count: number; max: number };
 }
 
@@ -611,9 +616,13 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
   if (path === "/api/stream") { serveStream(ctx); return true; }
   if (path === "/api/health") {
     const h = healthLiveness(db, writeDb);
+    // §16: expose dbPresent as a BOOLEAN only — /api/health bypasses the UI token (daemon.ts:471)
+    // so the raw DB path must never appear here; the boolean is sufficient for the reaper (LOOP-95).
+    // Use ctx.dbPath (the actual opened path) not workspaceId (which ignores DEVLOOP_HUB_DB overrides).
+    const dbPresent = existsSync(ctx.dbPath);
     json(res, h.ok ? 200 : 503, h.ok
-      ? { ok: true, project: projectKey, version: pkgVersion(), actor }
-      : { ok: false, project: projectKey, version: pkgVersion(), actor, error: h.error });
+      ? { ok: true, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent }
+      : { ok: false, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent, error: h.error });
     return true;
   }
   if (path === "/api/tickets") {
@@ -658,7 +667,7 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
   return true;
 }
 
-export function createDaemon({ db, projectId: bootProjectId, projectKey: bootProjectKey, writeDb, actor, roadmapRepoFileStrategy, daemonVersion: daemonVersionOpt }: DaemonOpts): Server {
+export function createDaemon({ db, projectId: bootProjectId, projectKey: bootProjectKey, writeDb, actor, roadmapRepoFileStrategy, daemonVersion: daemonVersionOpt, dbPath: daemonDbPath }: DaemonOpts): Server {
   const canWrite = !!writeDb && !!actor;
   const streamGate = { count: 0, max: 16 }; // bound concurrent SSE connections (one operator, a few tabs)
   // LOOP-52 board identity: record daemon's startup version + resolve the workspace hub.db path.
@@ -710,7 +719,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
       const { seg, path, projectId, projectKey, prefixed } = rp;
       const ctx: RouteCtx = {
         req, res, method, url, rawPath, seg, path, projectId, projectKey, prefixed, authedByToken,
-        db, writeDb, canWrite, actor, pg, divergenceFor, getBasePageOpts, stream: streamGate,
+        db, writeDb, canWrite, actor, pg, divergenceFor, getBasePageOpts, dbPath: daemonDbPath ?? "", stream: streamGate,
       };
 
       // Under a /p/<key>/ prefix only the HTML views, write routes, and the project SSE stream are mounted;
@@ -800,7 +809,7 @@ if (isMainEntry(import.meta.url)) {
   let roadmapRepoFileStrategy: string | undefined;
   try { roadmapRepoFileStrategy = roadmapDivergenceDoc(loadProjectsConfig()?.projects?.[PROJECT_KEY]); }
   catch { roadmapRepoFileStrategy = undefined; }
-  const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR, roadmapRepoFileStrategy });
+  const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR, roadmapRepoFileStrategy, dbPath: DB_PATH });
   // DL-59: resolve the daemon's OWN view of the project config ONCE — the §9 `notify` webhook (so a project
   // with ONLY a notify webhook still receives reminders; team.comms is bridged into it by toLegacyView), the
   // comms presence (the workflows-P3 reminder default below), and intake.mode (the docs-P3 passive notifier).
