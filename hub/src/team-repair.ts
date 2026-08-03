@@ -3,12 +3,13 @@
 // Idempotent: repairs git worktrees whose absolute gitdir moved (the machine-migration case, §10.3),
 // prunes stale worktrees, re-registers the convenience index, (service) truncates the hub WAL, and
 // reaps worktrees whose ticket is in a terminal state (Done / Canceled / Duplicate). LOOP-37.
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsHubDb, upsertWorkspaceIndex } from "./workspace.ts";
-import { effectiveRepo } from "./team-config.ts";
+import { effectiveRepo, validateTeamFile } from "./team-config.ts";
 import { openDb } from "./db.ts";
+import { findProject } from "./seed.ts";
 import { worktreeReap } from "./worktree.ts";
 import { ensureCliPermissions, CLI_PERMISSIONS } from "./team-init.ts";
 
@@ -107,6 +108,54 @@ export async function teamRepair(argv = process.argv.slice(2)): Promise<number> 
     });
     if (reapForReal && result.reaped.length > 0) pass(`repo '${ref}': reaped ${result.reaped.length} terminal worktree(s)`);
     else if (!reapForReal && result.reaped.length > 0) info(`repo '${ref}': ${result.reaped.length} terminal worktree(s) would be reaped — run \`dev-loop team repair --reap\` (or \`dev-loop worktree reap\`) to remove them`);
+  }
+
+  // 5. Scratch project reap — scratch + zero-ticket + zero-repo projects.
+  // Service backend only (ticket count requires hub.db). Mirrors worktreeReap's guard shape:
+  // report-only by default; --reap (without --dry-run) applies; no forced destroy.
+  if (ws.file.team.backend === "service") {
+    const dbPath = wsHubDb(ws);
+    let db: ReturnType<typeof openDb> | undefined;
+    try { if (existsSync(dbPath)) db = openDb(dbPath); } catch { /* hub db unreachable */ }
+
+    const candidates = Object.entries(ws.file.projects)
+      .filter(([, p]) => p.scratch === true && (p.repos ?? []).length === 0)
+      .map(([k]) => k);
+
+    for (const key of candidates) {
+      const projectId = db ? findProject(db, key) : null;
+      const tc = db && projectId
+        ? ((db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c)
+        : 0;
+      if (tc > 0) { info(`project '${key}': scratch but has ${tc} ticket(s) — kept`); continue; }
+      if (!reapForReal) {
+        info(`project '${key}': scratch 0-ticket 0-repo — would be reaped (run \`team repair --reap\` to apply)`);
+        continue;
+      }
+      // Apply: config first (validated write), then db
+      try {
+        const file = JSON.parse(JSON.stringify(ws.file)) as typeof ws.file;
+        delete file.projects[key];
+        const { errors } = validateTeamFile(file);
+        if (errors.length) { info(`project '${key}': skipped — config invalid after removal: ${errors[0].message}`); continue; }
+        writeFileSync(ws.filePath, JSON.stringify(file, null, 2) + "\n");
+        ws.file = file;
+      } catch (e) { info(`project '${key}': config removal failed: ${(e as Error).message}`); continue; }
+      if (db && projectId) {
+        try {
+          db.prepare("DELETE FROM channel_messages WHERE channel_id IN (SELECT id FROM channels WHERE project_id=?)").run(projectId);
+          db.prepare("DELETE FROM channels WHERE project_id=?").run(projectId);
+          db.prepare("DELETE FROM labels WHERE project_id=?").run(projectId);
+          db.prepare("DELETE FROM document_versions WHERE doc_id IN (SELECT id FROM documents WHERE project_id=?)").run(projectId);
+          db.prepare("DELETE FROM documents WHERE project_id=?").run(projectId);
+          db.prepare("DELETE FROM events WHERE project_id=?").run(projectId);
+          db.prepare("DELETE FROM mirror_map WHERE project_id=?").run(projectId);
+          db.prepare("DELETE FROM projects WHERE key=?").run(key);
+        } catch (e2) { info(`project '${key}': db cleanup failed: ${(e2 as Error).message}`); continue; }
+      }
+      pass(`project '${key}': reaped (scratch 0-ticket 0-repo)`);
+    }
+    db?.close();
   }
 
   console.log(dryRun ? "\nREPAIR_DRYRUN_OK" : "\nREPAIR_OK");
