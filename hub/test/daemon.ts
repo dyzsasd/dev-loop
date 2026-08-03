@@ -720,7 +720,12 @@ async function freeInBand(lo: number, hi: number): Promise<number | null> {
 
     // AC-B3: foreign listener (no hub marker) — should survive reap
     const PORT3 = await freeInBand(PORT2 + 1, 8914);
-    const foreignSrv = PORT3 !== null ? netCreateServer(s => s.end()) : null;
+    // s.destroy() (not s.end()) so each probe connection is immediately torn down with RST.
+    // s.end() half-closes the TCP socket: the server sends FIN but the socket stays open
+    // until the client also closes, which undici never does after the connection error.
+    // foreignSrv.close() would then block waiting for those half-open sockets to drain,
+    // hanging the test indefinitely. s.destroy() closes both directions immediately.
+    const foreignSrv = PORT3 !== null ? netCreateServer(s => s.destroy()) : null;
     if (foreignSrv && PORT3 !== null) await new Promise<void>(r => foreignSrv.listen(PORT3, "127.0.0.1", r));
 
     // AC-B2: dry-run must NOT stop any process
