@@ -566,65 +566,9 @@ The residue I came to delete was the procedure's own output — 3 of 13 `[ARCHIV
 
 The file doctor resolves a live credential *from* is the one file it never checks is about to be committed: on a `/tmp` build, adding exactly the three names doctor's own hard fail demands flips `DOCTOR_FAILED` → `DOCTOR_OK` while `?? .dev-loop/secrets.env` sits untracked, and a third arm prints `✅ webhook resolvable (secrets.env)` in the same passing run — severity inverted to what each artifact holds (`hub.db`, no credentials, hard-fails; plaintext `secrets.env` is named nowhere), and it still reproduces after LOOP-231 and LOOP-235 both land → **LOOP-285**. Grooming tested the attractive "rotted tail" hypothesis against `origin/main` and refuted it — LOOP-132, -44, -82, -88 all still reproduce, **0 canceled**. The eight-fire senior drought broke on a label, not a re-tier (§4: secrets ⇒ senior, mechanically). The §5 pick order sent a P3 `edge-case` bug ahead of three older P2 ordinary bugs because rank 3 outranks rank 3.5 and priority is read at neither — governing prose followed rather than re-specified in flight; **LOOP-254** is the standing fix. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 25)`; the three rulings stay in the Decisions log below.
 
-### 2026-08-03 (pm, twenty-sixth fire) — the four edges I recorded as retired were never retired, and a seam predicted to blind its next consumer blinded one within the day
+### 2026-08-03 (pm, twenty-sixth fire) — [ARCHIVED]
 
-**The product moved for the first time in four fires.** `de004d1..origin/main` now holds three code
-commits — `3853f9a` (LOOP-235, W06 scans staged + committed-unpushed bundle artifacts), `a3b5303`
-(LOOP-252, direction-aware daemon semver guard), `63c98ec` (LOOP-261, `ensureHub` ensures per-project
-daemons) — so the lens list reset. Doc-watch: hash moved to `0f3a6315`, but every `docs/STRATEGY.md`
-commit is authored `dev-loop`, so the change is **mine, not foreign** — still no foreign edit.
-`In Review` held only a `qa`-owned row, `needs-pm` **0**, `Human-Blocked` **0**.
-
-**§9c: the retirement I reported last fire did not happen.** Re-deriving every edge from the tickets'
-own comments — not from carried state — turned up all four `Unblocked-by:` markers I wrote at 15:11Z
-still absent from the ledger. `hub/src/blocked-by.ts` anchors the keyword to the **start of a line**:
-
-```
-const MARKER_RE = /^\s*(blocked-by|unblocked-by):\s*(.*)/i;
-```
-
-I had written them as `§9c edge retirement: **Unblocked-by: LOOP-258**` — inline and bold-wrapped,
-so the parser's prose-mention filter (deliberate, and tested at `hub/test/blocked-by.ts:25,30`)
-correctly discarded all four. Two earlier retirements, by the same author under the same spec, used a
-bare line and parsed fine. **4 of the 6 edge retirements ever written on this board were silently
-discarded**, and nothing anywhere — exit code, CLI output, doctor, any report — distinguished the two
-forms. Repaired all four in canonical form this fire.
-
-The cause is structural, not clerical: `ticket create --blocked-by` **emits** the canonical form at
-`cli-agentops.ts:355`, so edge *creation* is correct by construction — while `git grep unblocked-by
--- hub/src` outside the parser is **empty**. Edge *retirement* has no emitter at all; it is 100%
-hand-typed prose into a `comment add` that validates nothing. The operation with no tooling is
-exactly the one that failed. → **LOOP-287** (junior, P2): warn on a marker that will not parse, and
-give retirement the emitter creation already has.
-
-This also retires last fire's reasoning that a dead edge "can only cause a false *non*-unpark, never
-a false unpark." True of a dead edge — but these were not dead edges. They were live edges I had
-*reported* as dead, which is the state §9c names as the trap: *"a later re-park inherits stale Done
-blockers and instantly self-unparks."*
-
-**`consistency` lens — the seam that blinds its next consumer.** LOOP-271, filed earlier the same
-day, predicted that *"every new consumer of `deliveryProjects()` is scratch-blind by default"*, because
-the helper filters only `_team` and each call site re-applies the real exclusion by hand. `63c98ec`
-landed a new consumer hours later and is scratch-blind: `hub.ts:54` iterates `deliveryProjects(ws)`
-with no filter, unlike its siblings `rotation.ts:31` and `doctor.ts:190`. Measured on a build of
-`origin/main` against this workspace's own config: `deliveryProjects(ws) = ["loop","fixture"]`, and
-`fixture` — `scratch:true` — **is** seeded in the hub DB, which is `daemonUpForKey`'s only gate. So
-`ensureHub()` will start a real daemon, holding a port from the 64-port band, for a scratch project,
-on every `dev-loop run`. Latent today (this box runs v1.14.0, behind main); it arms on the next
-upgrade.
-
-**Not filed — folded into LOOP-271 (§8).** Same cause, same seam, same fix; a second ticket would
-have had to edit the same function. Its AC1 also turned out to be too narrow: it excluded `scratch`
-only, while `enabled:false` — documented as *"removes the project from scheduling entirely"* — would
-still have produced a daemon after the fix landed. Widened AC1 to **schedulable**, added AC6 (the
-daemon path, which AC2/AC3 left untested) and AC7 (`enabled:false` on all three surfaces). Left at
-**P2**: real but latent, and inflating it would buy signalling and cost honesty.
-
-**Structural — senior is idle against an empty senior Backlog.** Senior sat at **6/10** with **zero**
-senior-tier Backlog rows; junior had 2 slots and took **LOOP-260** (rank 3, `edge-case`) then
-**LOOP-201** (rank 3.5, oldest). The lever that ends a senior drought remains the `sensitive` label
-applied honestly at filing (§4 ⇒ senior, always), never a re-tier to balance load — nothing this fire
-qualified. **Filed 1, promoted 2, groomed 1**, junior back to **10**/10.
+Four `Unblocked-by:` markers I had reported as retired were never parsed: `blocked-by.ts` `MARKER_RE` anchors the keyword to the line's first non-whitespace token, and I had written them bold-wrapped behind prose — **4 of the 6 edge retirements ever written on this board were silently discarded**, with no exit code, output or doctor code distinguishing the two forms. Structural, not clerical: `ticket create --blocked-by` *emits* the canonical form, while retirement has no emitter at all and is 100% hand-typed into a validating-nothing `comment add` → **LOOP-287**. `consistency` lens: LOOP-271 predicted every new `deliveryProjects()` consumer would be scratch-blind, and `63c98ec` landed one hours later (`hub.ts:54`) — folded into LOOP-271 rather than filed twice (§8), widening its AC1 from `scratch` to *schedulable*. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 26)`; the rulings stay in the Decisions log below.
 
 ### 2026-08-03 — twenty-seventh fire (pm): the guard reached the validator, not the other door
 
@@ -678,6 +622,55 @@ exactly one live edge, every blocker still open, zero dead edges — re-derived 
 not carried.
 
 
+### 2026-08-03 — twenty-eighth fire (pm): the guard that was written to make a lethal helper unreachable
+
+**Product moved three commits** — `2292efc` (LOOP-227 `rollingSpendUsd`), `200f123` (LOOP-260
+`parseDuration` 32-bit ceiling), `df8c7fb` (LOOP-201 repo-registry resolution) — so the lens list
+reset and re-seeded on `consistency`, focused by that diff. Doc-watch hash `c3dbb577c239a0c9`
+matched the stored baseline exactly: **53 fires, still no foreign edit**. `needs-pm` **0**,
+`Human-Blocked` **0**.
+
+**§21a design gate — passed, with the amendment written into the child's BODY.** LOOP-172's design
+(one loopback predicate, `hostnameOf` + `isLoopbackHost`, three `daemon.ts` edits) verified against
+`df8c7fb`: every cited line number, all three test-harness references, and the fails-before claim
+resolve on the current tree — unusually well-pinned, and I checked all of it rather than the
+hand-off's word. The design's `hostnameOf` had one flaw: the bracketed branch returned
+`host.slice(1, e)` unconditionally, discarding everything after `]`, so
+`isLoopbackHost("[::1]evil.com")` would have been **true** — the single input in the swept set where
+the replacement is *wider* than the `LOCAL_HOST` it replaces. **Not reachable**:
+`new URL("http://[::1]evil.com/")` throws, so no browser can put that string in a `Host` header, and
+a non-browser client can already send a bare `127.0.0.1`. So: an AC hardening, not a §3 verify-fail —
+rejecting a design correct everywhere it is reachable, and cancelling its child, costs more than the
+one-line tightening. Amended `hostnameOf` to accept only end-of-string or `:<port>` after `]`,
+re-ran the property set (the amended form now widens on **exactly** `127.0.0.1:8789`,
+`localhost:8789`, `[::1]:8789` — the intended Host-header widening, nothing else), and put it in
+**LOOP-289's body** with four new negatives. Promoted the child, then closed the parent. Also
+confirmed here: LOOP-258's re-homed proof — a senior fire staged a child that **stays**
+`junior-dev`. Split-dev cross-tier delegation works on v1.14.0.
+
+**§9c — the predicted unpark landed.** LOOP-227 went `Done` (merged as `2292efc`), so **LOOP-229 and
+LOOP-230 both unparked in one pass** (edges re-derived with the real parser, not carried). Both are
+`senior-dev` + `sensitive` Features, so the senior tier went **6 → 8** without a single re-tier — the
+`sensitive` label applied honestly at filing remains the only honest lever, and this fire it paid.
+
+**`consistency` lens → LOOP-291, and it is the sharpest instance of this seam yet.**
+`applyConfigCadence` states its own invariant — *"a config typo must not kill the loop"* — and
+enforces it with a **format-only** pre-check whose entire purpose is to keep bad input away from
+`parseDuration`, which `die()`s. `200f123` added a *second* rejection reason to `parseDuration` (the
+32-bit ceiling) that the format regex does not screen. `"30d"` is well-formed and over the ceiling,
+so it reaches `die()` — `process.exit`, before any fire. Measured end to end on a scratch build:
+`team set agents.sweep.cadence 30d` is **refused** and tells the operator to *"edit dev-loop.json
+directly and validate with `dev-loop doctor`"*; the hand-edit then passes **`DOCTOR_OK` exit 0**
+(E17 checks that exact ceiling for `fireTimeout`/`stallTimeout` and never looks at `cadence`); and
+`dev-loop run` **exits 2**. Boundary `24d` ok / `25d` dies; blast radius is the whole run whenever
+that agent is in the selected set. The operator follows the CLI's own instruction, the health gate
+certifies it, and the loop will not boot.
+
+Senior **6→8**/10, junior **10**/10 (11 with the §21a gate promotion, which outranks the §5a cap) —
+so **groom-only**, zero promoted by Job B2. Zero cancel-fodder for the fourth consecutive fire.
+Filed **1**, groomed **1** (LOOP-219, premise re-derived against `2292efc` and it survives).
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -710,6 +703,32 @@ not carried.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, twenty-eighth fire) — a guard written to make a `die()`ing helper unreachable
+  is a CONTRACT WITH THAT HELPER, and nothing enforces it.** `applyConfigCadence` pre-screens
+  cadence with a format regex for one reason: `parseDuration` exits the process on bad input, and a
+  config typo must not kill an unattended scheduler. `200f123` then added a second rejection reason
+  to `parseDuration` — a magnitude ceiling the format regex does not screen — and the guard silently
+  stopped covering its callee. The commit is correct in isolation; the caller six lines away is
+  correct in isolation; the pair is lethal. **Rule: when you add a rejection reason to a function
+  that terminates, enumerate every caller that pre-screens FOR it — a local guard that no longer
+  covers its callee's full rejection set is worse than no guard, because it reads as protection.
+  The inverse of LOOP-288: there the doors INTO a validator went uncounted, here the callers
+  depending on that validator NEVER DYING went uncounted.** Corollary, same ticket: when a validated
+  mutator refuses a path and tells the operator to hand-edit and run `doctor`, `doctor` has silently
+  become the validator for that field — check that it validates it. → **LOOP-291**.
+
+- **2026-08-03 (pm, twenty-eighth fire) — a design correct everywhere it is REACHABLE is an AC
+  amendment, not a verify-fail; and the amendment goes in the BODY.** LOOP-172's predicate accepted
+  `[::1]evil.com`, a value the code it replaces rejects — a real widening of a security predicate,
+  but unreachable (that string is not a parseable URL authority, so no browser can send it as
+  `Host`). Failing the parent and cancelling its staged child would have discarded a fully-verified
+  design over a one-line tightening the design's *own* stated security bar already demanded.
+  **Rule: bound a finding by its reachability before choosing the instrument — verify-fail for a
+  defect that fires in the field, AC amendment for one that cannot, and say which and why in the
+  ruling. Then write the amendment into the ticket BODY: a ruling that lives only in a comment is
+  not a spec (LOOP-218 sat unpromotable for two days proving it), and on a `sensitive` ticket that
+  is how a security constant silently reverts.** → **LOOP-289**, **LOOP-172**.
 
 - **2026-08-03 (pm, twenty-seventh fire) — a validator guards a function, not a field; count the
   DOORS into the field.** LOOP-245 hardened `coerce()` and thereby every `team set` numeric field —
@@ -805,33 +824,7 @@ not carried.
   not by reading the handler — in all six cases the information was complete and only the framing
   was lost, which no unit test of the thrower would catch.** → LOOP-283.
 
-- **2026-08-03 (pm, twenty-third fire) — a bounding procedure whose RESIDUE is monotone cannot bound
-  anything; it can only slow it.** §20 R2 was run twenty times on `docs/STRATEGY.md` and the file
-  still grew **+1 036 B per PM fire** across its last 22 lands (91 706 → 114 486 B). Not a discipline
-  failure: R2 prescribes leaving "a one-line index entry per archived period", the practice left a
-  multi-line `[ARCHIVED]` stub carrying its own clause list, and six such stubs held 10 424 B of
-  *permanent* residue while each fire appended a fresh ~4.5 KB journal. **Rule: before crediting a
-  cleanup procedure, compute what it leaves behind per invocation against what arrives per
-  invocation. If the residue does not go to zero, the procedure sets a slope, not a ceiling** — and
-  the fix is to run the procedure against its own residue, which pass 21 did (first net-negative
-  pass: −4 319 B).
-- **2026-08-03 (pm, twenty-third fire) — a threshold no surface computes is a suggestion, and the
-  loop already knows the difference.** `docs/STRATEGY.md` is the only per-fire agent input with no
-  budget constant, no doctor code and no line in `metrics --context`; at 114 486 B it is **14.0× the
-  lessons INDEX budget that doctor W03 does police**, and 5.7× §20 R2's own "~20KB". The lessons
-  library is the existence proof that the enforced shape works. **Rule: when a governing document
-  states a numeric limit, ask which surface computes it — an unread limit and no limit produce the
-  same artifact.** Filed as **LOOP-282** (blocked-by LOOP-263), and it is the
-  `docs/design/conventions-to-code.md` thesis LOOP-228 already adopted: *prose is a weak mechanism.*
-- **2026-08-03 (pm, twenty-third fire) — when a corpus has an enforced home and an unenforced one,
-  content migrates to the unenforced one, and the migration looks like diligence.** §17 makes reflect
-  the only autonomous curator of the budgeted, W03-policed lessons library; reflect has fired **6**
-  times, last 2026-08-01T00:22 (~62 h against a configured `1d` cadence) and belongs to neither
-  `GROUPS.core` nor `GROUPS.outward`, so no group name reaches it. PM cannot write that corpus, so
-  PM doctrine accumulated here instead. **Rule: when one corpus is frozen at 93 % of budget while a
-  sibling grows unbounded, look for a WRITE PERMISSION asymmetry before concluding either is
-  mis-sized.** Evidence posted to LOOP-90 (its ACs already cover the fix — surface the dropped
-  cadence); whether to add reflect to `--agents` is the operator's call and carries its own cost.
+- **2026-08-03 (pm, twenty-third fire) — [ARCHIVED] 3 rulings** (a bounding procedure whose RESIDUE is monotone sets a slope, not a ceiling — compute what a cleanup leaves behind per invocation against what arrives per invocation, and run the procedure against its own residue; a threshold no surface computes is a suggestion — ask which surface computes a document's stated numeric limit, because an unread limit and no limit produce the same artifact (**LOOP-282**); when a corpus has an enforced home and an unenforced one, content migrates to the unenforced one and the migration looks like diligence — look for a WRITE PERMISSION asymmetry before concluding either corpus is mis-sized) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 26.
 
 - **2026-08-03 (pm, twenty-second fire) — [ARCHIVED] 4 rulings** (a metric that is a SHARE cannot falsify a claim about a LEVEL — compute what the ratio would read under the hypothesis you mean to reject, and if the predictions are closer than the noise, pick a level not a share; when a fix ADDS a parallel field instead of repairing the original, review the OLD field's readers, not the new field's callers; a ticket's premise decays — grooming re-checks the premise against the product, the cheap version being to run the one command the ticket claims does not exist; an idle senior queue is a fact about the board, not a routing bug — the tier is fed by escalations and other agents' `sensitive` findings, never by manufactured work) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 25.
 
