@@ -15,6 +15,7 @@
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, fireIdStore } from "./db.ts";
@@ -66,6 +67,9 @@ export interface DaemonOpts {
   // LOOP-95: the actual path of the DB file the daemon opened (may differ from wsHubDb when
   // DEVLOOP_HUB_DB overrides; /api/health checks existsSync on THIS path, not on workspaceId).
   dbPath?: string;
+  // LOOP-252: the resolved entry path of this daemon process (daemon.ts / daemon.js), so daemon status
+  // can identify which tree is serving the board without resorting to `ps`.
+  entryPath?: string;
 }
 
 // DL-83: does THIS project's resolved config make the hub roadmap doc its north-star, or is a repo-file
@@ -460,8 +464,9 @@ interface RouteCtx {
   actor?: string;
   pg: (title: string, project: string, inner: string, opts?: Parameters<typeof page>[3]) => string;
   divergenceFor: (key: string) => string | undefined;
-  getBasePageOpts: () => { workspaceId: string; daemonVersion: string; cliVersion?: string };
+  getBasePageOpts: () => { workspaceId: string; daemonVersion: string; cliVersion?: string; daemonIsNewer?: boolean };
   dbPath: string;
+  entryPath?: string;
   stream: { count: number; max: number };
 }
 
@@ -621,8 +626,8 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
     // Use ctx.dbPath (the actual opened path) not workspaceId (which ignores DEVLOOP_HUB_DB overrides).
     const dbPresent = existsSync(ctx.dbPath);
     json(res, h.ok ? 200 : 503, h.ok
-      ? { ok: true, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent }
-      : { ok: false, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent, error: h.error });
+      ? { ok: true, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent, entryPath: ctx.entryPath }
+      : { ok: false, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent, error: h.error, entryPath: ctx.entryPath });
     return true;
   }
   if (path === "/api/tickets") {
@@ -667,7 +672,14 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
   return true;
 }
 
-export function createDaemon({ db, projectId: bootProjectId, projectKey: bootProjectKey, writeDb, actor, roadmapRepoFileStrategy, daemonVersion: daemonVersionOpt, dbPath: daemonDbPath }: DaemonOpts): Server {
+// semver direction: true when a < b. Unparseable → false.
+function semverBefore(a: string, b: string): boolean {
+  const pa = a.match(/^(\d+)\.(\d+)\.(\d+)/), pb = b.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!pa || !pb) return false;
+  for (let i = 1; i <= 3; i++) { const d = Number(pa[i]) - Number(pb[i]); if (d !== 0) return d < 0; }
+  return false;
+}
+export function createDaemon({ db, projectId: bootProjectId, projectKey: bootProjectKey, writeDb, actor, roadmapRepoFileStrategy, daemonVersion: daemonVersionOpt, dbPath: daemonDbPath, entryPath: daemonEntryPath }: DaemonOpts): Server {
   const canWrite = !!writeDb && !!actor;
   const streamGate = { count: 0, max: 16 }; // bound concurrent SSE connections (one operator, a few tabs)
   // LOOP-52 board identity: record daemon's startup version + resolve the workspace hub.db path.
@@ -675,9 +687,13 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
   const DAEMON_VER = daemonVersionOpt ?? pkgVersion();
   const WS_ID = daemonDbPath ?? hubDbPath();
   // Per-request: compare DAEMON_VER with the on-disk version to detect an upgrade while the daemon runs.
-  const getBasePageOpts = (): { workspaceId: string; daemonVersion: string; cliVersion?: string } => {
+  // LOOP-252: direction-aware — only set cliVersion (upgrade prompt) when daemon is OLDER; when daemon is
+  // NEWER than the on-disk CLI, flag daemonIsNewer so the UI warns against running daemon up.
+  const getBasePageOpts = (): { workspaceId: string; daemonVersion: string; cliVersion?: string; daemonIsNewer?: boolean } => {
     const freshVer = pkgVersionFresh();
-    return { workspaceId: WS_ID, daemonVersion: DAEMON_VER, ...(DAEMON_VER !== freshVer ? { cliVersion: freshVer } : {}) };
+    if (DAEMON_VER === freshVer) return { workspaceId: WS_ID, daemonVersion: DAEMON_VER };
+    if (semverBefore(freshVer, DAEMON_VER)) return { workspaceId: WS_ID, daemonVersion: DAEMON_VER, cliVersion: freshVer, daemonIsNewer: true };
+    return { workspaceId: WS_ID, daemonVersion: DAEMON_VER, cliVersion: freshVer };
   };
   const pg = (title: string, project: string, inner: string, opts: Parameters<typeof page>[3] = {}): string =>
     page(title, project, inner, { ...getBasePageOpts(), ...opts });
@@ -717,7 +733,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
       const { seg, path, projectId, projectKey, prefixed } = rp;
       const ctx: RouteCtx = {
         req, res, method, url, rawPath, seg, path, projectId, projectKey, prefixed, authedByToken,
-        db, writeDb, canWrite, actor, pg, divergenceFor, getBasePageOpts, dbPath: daemonDbPath ?? "", stream: streamGate,
+        db, writeDb, canWrite, actor, pg, divergenceFor, getBasePageOpts, dbPath: daemonDbPath ?? "", entryPath: daemonEntryPath, stream: streamGate,
       };
 
       // Under a /p/<key>/ prefix only the HTML views, write routes, and the project SSE stream are mounted;
@@ -807,7 +823,7 @@ if (isMainEntry(import.meta.url)) {
   let roadmapRepoFileStrategy: string | undefined;
   try { roadmapRepoFileStrategy = roadmapDivergenceDoc(loadProjectsConfig()?.projects?.[PROJECT_KEY]); }
   catch { roadmapRepoFileStrategy = undefined; }
-  const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR, roadmapRepoFileStrategy, dbPath: DB_PATH });
+  const server = createDaemon({ db, projectId, projectKey: PROJECT_KEY, writeDb, actor: ACTOR, roadmapRepoFileStrategy, dbPath: DB_PATH, entryPath: fileURLToPath(import.meta.url) });
   // DL-59: resolve the daemon's OWN view of the project config ONCE — the §9 `notify` webhook (so a project
   // with ONLY a notify webhook still receives reminders; team.comms is bridged into it by toLegacyView), the
   // comms presence (the workflows-P3 reminder default below), and intake.mode (the docs-P3 passive notifier).
