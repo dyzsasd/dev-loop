@@ -551,56 +551,9 @@ the source of truth for whether a cited ticket has shipped.** Clauses still in f
   infrastructure problem; filing more tickets is padding.
 - **A correction must travel with the thing it corrects.**
 
-### 2026-08-03 (pm, twenty-second fire) — a share cannot falsify a claim about a level, and a fix that ADDS a field instead of repairing one leaves the old field lying beside the new one
+### 2026-08-03 (pm, twenty-second fire) — [ARCHIVED]
 
-`origin/main` moved **twice inside this fire** again — `1f39d66` (my own doc land) → `78378e1`
-(LOOP-276) → `de004d1` (LOOP-221). **Fifth consecutive fire** with another actor writing during mine,
-and the second in a row where an `In Review` item arrived *after* the boot `queue` read: LOOP-221 was
-invisible at boot and was caught only by the end-of-Job-A re-scan. The re-scan is now load-bearing, not
-belt-and-braces. Doc-watch `80f51311` unchanged — **47 fires, no foreign doc edit**.
-
-**LOOP-221 `Done`** — `team remove-project` + `team repair --reap` project reap. Verified by driving
-the merged binary against a hermetic `/tmp` workspace carrying all four fixture shapes; all five AC1
-clauses and all four AC2 clauses pass, exit codes measured **unpiped** (piping through `grep` reports
-grep's status and would have shown every refusal as exit 0). 142 suite assertions green, 20 of them
-LOOP-221's. Its unpark of **LOOP-222** retired both edges.
-
-**The finding, and why it is not a ticket.** LOOP-276 landed 20 minutes before this fire and correctly
-repaired `cost-per-fire` — but it did so by **adding** `costPriced` rather than repairing `costMetered`,
-and the coverage line one row above still labels `costMetered` "priced". So the merged surface now
-prints, in three adjacent lines: `cost: $1198.6833 (276 of 568 fires priced)` … `cost-per-fire:
-$5.1008/priced fire`. **$1198.6833 ÷ 276 = $4.3431.** A reader who divides the two numbers the surface
-hands them lands **17.45 % away** from the rate the same surface publishes, one line down. That is
-LOOP-239's Defect 1 with a repro, not a new row — filed there. Generalizable: **a fix that introduces a
-parallel field instead of repairing the original leaves every existing consumer of the original stating
-a number the fix has just contradicted.** Look at the old field's readers, not only the new field's.
-
-**LOOP-239's Defect 2 has partly shipped and would have been rebuilt.** It says *"metrics has no
-per-agent cost breakdown at all"* — true when filed, false now (`metrics --cost --by agent`, LOOP-125).
-Re-scoped in place. **A ticket's premise decays; re-derive it at promotion, not only at filing.**
-
-**§17 obligation discharged after two days.** LOOP-218's `## Deferred findings` had sat untriaged since
-08-01 — my three prior comments there all ruled on the ticket's own body and never touched the section.
-Both entries resolved, neither filed. Entry 1 claimed the boot-corpus A/B shows "no degradation" off a
-**flat cache-read share** (97.46 % → 97.31 %). Propagating LOOP-211/212's measured degradation (+25 %
-cacheRead, +44 % cacheWrite) through the same ratio predicts **97.09 %** — so the entire distance
-between "no degradation" and "the degradation already measured" is **0.37 pp**, and the observation
-sits between them at n=16. **A metric that is a share cannot falsify a claim about a level**: pinned
-near 97 %, it is nearly invariant to the thing it was used to rule out — while the finding's own cost
-column moved **+25.3 %**, the magnitude it was arguing against. The ON arm is also frozen: exactly 16
-ledger rows carry `bootBytes`, all inside a 66-minute window, unchanged for 2.5 days. LOOP-228's
-standing rule holds unchanged.
-
-**Structural — eleventh consecutive measurement, and the first break in the pattern.** Junior **10**/10
-(the LOOP-222 unpark refilled the one slot LOOP-221 freed). Senior **5**/10 — but the seven-fire drought
-of senior-tier Backlog rows **ended**, and not from a PM design filing: **QA** filed LOOP-280 (`sensitive`
-⇒ senior by §21b) mid-fire, the fail-open in the very feature I was verifying. Promoted it. The lesson
-corrects six of my own entries: the senior tier is fed by **escalations and by other agents' sensitive
-findings**, not only by PM-authored design tickets — an idle senior queue is a fact about what the
-board contains, not proof of a routing bug, and manufacturing senior work to fill it would have been
-the real error. §9c: **11** parked → **1 unpark**, the rest all holding ≥1 live edge. **Filed 1**
-(LOOP-281 — `--force` appears nowhere in `hub/test/team-edit.ts` and the ticket-count refusal has no
-assertion, so inverting the data-loss guard stays green).
+A share cannot falsify a claim about a level; a fix that adds a parallel field leaves the old field's readers lying; a ticket's premise decays, so re-derive it at promotion; an idle senior queue is a fact about the board, not a gap to fill. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 22)`; the four rulings stay in the Decisions log below.
 
 ### 2026-08-03 (pm, twenty-third fire) — the doc that records the compression program is the one input the compression program cannot see, and twenty compliant rollups could never have bounded it
 
@@ -650,6 +603,52 @@ the unenforced one grows — that is the routing reason PM doctrine lands here a
 Filed 1. Promoted 0 — the cap, not a shortage of candidates, and manufacturing a senior row to fill
 an idle slot remains refused.
 
+### 2026-08-03 (pm, twenty-fourth fire) — the residue I came to delete was the procedure's output, and the surface told to gate an unattended run never checks what it is looking at
+
+**Second quiet fire running.** `origin/main` `2886952` = my own prior doc land; `de004d1..HEAD` holds
+no code commit, so the product SHA stays **`de004d1`** and the lens rotation continues. Doc-watch
+`2d3ed060` unchanged — **49 fires, no foreign edit**. `In Review` **0**, `needs-pm` **0**. §9c:
+**11** parked (282 joined), each holding ≥1 live edge — 282→263 · 277→278 · 237→279 · 31→265 ·
+267→239 · 172→235 · 105→264 · 247→250 · 238→237 · 230/229→227 — **0** unparks.
+
+**The carried plan was wrong and reading the thing refuted it before I edited.** I came in to strip
+the `[ARCHIVED]` stubs as monotone residue (my own prior ruling). **3 of 13 hold the only copy of
+clauses still in force** — the brand two-layer rule, the operator-confirmed LOOP-233 no-tier-change,
+the design-gate MODEL-vs-PROSE axis — and the largest (12 117 B) is not a stub but the
+`STANDING RULES IN FORCE` distillation that made archiving ~54 KB safe. §20 R2 archives *detail* and
+has no home for an archived period's still-in-force *rules*, so every pass must leave one. That
+sharpens **LOOP-282**: its budget must treat the standing-rules home as live, not rollable. Pass 22
+therefore hit only the inert — 10 stubs that each say in their own text that their doctrine lives
+elsewhere, collapsed to true one-line entries, plus the 22nd-fire journal rolled whole.
+
+**`ux-flows` lens — 26 invocations of a `/tmp` build of `origin/main`, clean dir, `DEVLOOP_*` unset.**
+
+- **LOOP-284** — `dev-loop doctor` exits **0** with `DOCTOR_OK` outside a workspace. It falls
+  silently to the machine-global `~/.dev-loop/hub.db`, prints *another* workspace's projects, and
+  **skips W01, W18, repo/build, fires, landing and the identity smoke entirely** — verdict
+  unchanged. LOOP-117/168/199 fixed rungs 1–2 of that db ladder; this is rung 3, the silent
+  fall-through, on the one surface the console names as the pre-flight. **18 of 19**
+  workspace-dependent verbs refuse there; doctor alone returns success.
+- **LOOP-283** — six verbs answer "not in a workspace" with a raw Node stack, and `team repair` does
+  it from **inside** the `try/catch` commented *"NEVER a raw stack trace"*: it is the one async
+  subcommand dispatched without `await`, and a `try` cannot catch a rejection it never awaits.
+  `team import` (sync) is the control proving the catch works. The other five — `metrics` (the
+  console's documented day-2 first command), `next-project`, `hub status`, `doc-land`,
+  `secret list` — have no handler at all. The guidance string is already correct inside the thrown
+  message; only the framing is lost.
+
+**One grooming write.** The carried W18 cluster is now verified, not asserted: **LOOP-250** (the
+version *string*), **LOOP-203** (an unrefreshed `origin/<branch>` ref) and **LOOP-247** (remediation
+that never asks npm what is published) are three axes of one function, `checkInstalledCliSkew`
+(`hub/src/doctor.ts:663-753`). A routing note on LOOP-250 names the anchors and asks for a shape the
+others drop into — explicitly without widening its diff; 247 unparks when 250 lands.
+
+**Structural — thirteenth consecutive measurement.** Junior **10**/10 (at cap, promote nothing);
+senior **6**/10 with **zero** senior-tier Backlog rows for the eighth straight fire. Backlog 69 → 71.
+Filed 2, promoted 0 — the cap, not a shortage of candidates. Junior throughput, not discovery, sets
+this loop's pace.
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -682,6 +681,29 @@ an idle slot remains refused.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, twenty-fourth fire) — a cleanup procedure's residue can be its OUTPUT rather
+  than its waste; establish which before stripping it.** I carried a plan to delete this log's
+  `[ARCHIVED]` stubs as monotone residue — my own prior ruling. 3 of 13 hold the **only** copy of
+  clauses still in force, and the largest (12 117 B) is the `STANDING RULES IN FORCE` distillation
+  that made archiving ~54 KB safe. §20 R2 archives *detail* and gives an archived period's
+  still-in-force *rules* no home, so every pass must leave one. **Rule: before deleting what a
+  procedure leaves behind, establish whether the leftover is the procedure's product. Load-bearing
+  residue is a missing section in the procedure, not a discipline failure.**
+- **2026-08-03 (pm, twenty-fourth fire) — a pre-flight that never asserts its own subject can only
+  ever be a green light.** `dev-loop doctor` exits **0** with `DOCTOR_OK` outside a workspace: it
+  falls silently to the machine-global db, reports another workspace's projects, and skips
+  W01/W18/repo/fires/landing entirely, while 18 of 19 sibling verbs refuse to act there.
+  LOOP-117/168/199 fixed rungs 1–2 of that db ladder; nothing covers rung 3. **Rule: a surface whose
+  verdict means "safe to proceed" must state what it examined — a green verdict over an unnamed
+  subject is worse than no verdict, because it is trusted.** → LOOP-284.
+- **2026-08-03 (pm, twenty-fourth fire) — a `try` cannot catch what it does not `await`, so an
+  intent written as a comment is not an implemented intent.** `team.ts:49-53` catches `WsNotFound`
+  under a comment reading *"NEVER a raw stack trace"*; `team repair` is the one async subcommand
+  dispatched without `await`, so its rejection escapes the block written to contain it, while its
+  async siblings carry `await` and behave. **Rule: verify a stated intent by exercising the surface,
+  not by reading the handler — in all six cases the information was complete and only the framing
+  was lost, which no unit test of the thrower would catch.** → LOOP-283.
 
 - **2026-08-03 (pm, twenty-third fire) — a bounding procedure whose RESIDUE is monotone cannot bound
   anything; it can only slow it.** §20 R2 was run twenty times on `docs/STRATEGY.md` and the file
@@ -881,30 +903,13 @@ an idle slot remains refused.
   the cheapest generalisation available from this fire: it is the same defect shape as a gate that
   prints a plausible success, only inverted.
 
-- **2026-08-03 (pm, sixteenth fire) — [ARCHIVED] 4 rulings** (one predicate failing in two
-  opposite directions so an ordering-only fix leaves the silent half alive; a tracker whose
-  prerequisite was satisfied and then reverted; find the CALLER before re-asking a human for a
-  fix; when the bug IS invisibility, diagnosability is part of the fix). Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 16).
+- **2026-08-03 (pm, sixteenth fire) — [ARCHIVED] 4 rulings** (one predicate failing in two opposite directions; a reverted prerequisite; find the CALLER first; diagnosability is part of the fix) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 16.
 
-- **2026-08-01 (pm, fifteenth fire) — [ARCHIVED] 4 rulings** (one correlation as the cheapest test
-  that a program is aimed at the right variable; an AC pinning a live measurement is a test with an
-  expiry date; a landing order that lives in prose is not a landing order; a standing authorization
-  covers the edit it named, not every edit in the same section). Distilled into the merged
-  twelfth–fifteenth stub under `Current state`; full text in
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (pass 15)`.
+- **2026-08-01 (pm, fifteenth fire) — [ARCHIVED] 4 rulings** (correlation as the cheapest aim test; an AC pinning a live measurement expires; a landing order in prose is not one; an authorization covers the edit it named) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 15.
 
-- **2026-08-01 (pm, fourteenth fire) — [ARCHIVED] 3 rulings** (test a procedural
-  mechanism before letting it shape behaviour; a measurement that kills your own hypothesis is a
-  result and stays out of the Backlog; sequence on a real data dependency, never on a preference).
-  Distilled into the merged twelfth–fourteenth stub under `Current state`; full text in
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (pass 14)`.
+- **2026-08-01 (pm, fourteenth fire) — [ARCHIVED] 3 rulings** (test a procedural mechanism before it shapes behaviour; a measurement that kills your hypothesis is a result, not a ticket; sequence on data dependencies) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 14.
 
-- **2026-08-01 (pm, twelfth fire) — [ARCHIVED] 3 rulings** (the age-distribution test for a starving
-  backlog; enumerate what a metric does not count before optimising against it; name the mechanism
-  and its start date when a grooming action bets on an unlanded one). Distilled into the twelfth-fire
-  stub under `Current state`; full text in
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-01 (pass 13)`.
+- **2026-08-01 (pm, twelfth fire) — [ARCHIVED] 3 rulings** (the age-distribution test for a starving backlog; enumerate what a metric omits before optimising it; name the mechanism and date when betting on an unlanded one) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 13.
 
 - **2026-08-01 (pm, eleventh fire) — while the hub daemon is version-skewed, senior-tier filings are
   direct-code shaped only.** A stale daemon silently collapses a dev-tier actor's cross-tier
@@ -935,26 +940,10 @@ an idle slot remains refused.
   `DOCTOR_OK` prints over it (**LOOP-259**). Filing the suggested ticket as described would have
   added a duplicate check and left the actual defect in place.
 
-- **2026-06-14 → 06-27 — [ARCHIVED] the 2026-06 milestone arc** (daemon foundation DL-1..DL-5;
-  the standalone-daemon + multi-CLI repositioning P1..P5 incl. the MCP↔daemon dispatch unification,
-  npm packaging, Codex certification; the hub buildout; the two-tier Dev split). All verified Done and
-  superseded by **Current state**. Full provenance rolled to **`docs/strategy-archive/2026-06.md`**
-  (R2 ledger-rollup) so this live log stays the recent, actionable tail.
-- **2026-07-30 — [ARCHIVED] the 2026-07-30 pm fire arc** (fires 2-N: the lens rotation from
-  `strategy-gaps` through `trust-safety`, the metering/landing/observability chains, and the
-  design-gate + §9c tracker rulings of that day). All verified Done or superseded by later
-  entries and by **Current state**. Full provenance rolled to
-  [`docs/strategy-archive/2026-07.md`](strategy-archive/2026-07.md) (R2 ledger-rollup, 71.2 KB)
-  so this live log stays the recent, actionable tail.
+- **2026-06-14 → 06-27 — [ARCHIVED] the 2026-06 milestone arc** (daemon foundation DL-1..DL-5; standalone-daemon + multi-CLI repositioning P1..P5; hub buildout; the two-tier Dev split) — all Done, superseded by **Current state** → [`2026-06.md`](strategy-archive/2026-06.md).
+- **2026-07-30 — [ARCHIVED] the 2026-07-30 pm fire arc** (lens rotation `strategy-gaps`→`trust-safety`; the metering/landing/observability chains; that day's design-gate + §9c rulings) — superseded by **Current state** → [`2026-07.md`](strategy-archive/2026-07.md).
 
-- **2026-07-31 (early arc) — [ARCHIVED] ~30 rulings and method notes from the day's earlier PM
-  fires.** The board's search / acceptance-rate / ownership contracts; the send-back-vs-verify-fail
-  boundary and the third verify outcome; §9c's `Canceled`-is-not-satisfied asymmetry and the
-  decaying-measurement rule; the §21a-gate-outranks-the-§5a-cap ruling; the validate-then-drop family
-  reaching six shapes; the first §20 R2 rollup; and the standing rules that a `Done` capability is
-  verified against the workspace's OUTPUT and that a guard's predicate must be invariant under the
-  operations it guards. Rolled to **`docs/strategy-archive/2026-07.md`** (§20 R2, second rollup of the
-  day) — the live tail below keeps the most recent entries.
+- **2026-07-31 (early arc) — [ARCHIVED] ~30 rulings and method notes** (board search / acceptance-rate / ownership contracts; send-back-vs-verify-fail and the third verify outcome; §9c's `Canceled`-is-not-satisfied asymmetry; §21a-gate-outranks-§5a-cap; the validate-then-drop family; the first R2 rollup) — doctrine in the STANDING RULES block below → [`2026-07.md`](strategy-archive/2026-07.md), R2 pass 2.
 - **2026-07-31 (mid-arc) — [ARCHIVED] ~54 rulings and method notes from the day's middle PM fires**
   (the release-gate arc, the merge-guard wiring, the integrity-audit doctrine, the tier-inversion
   rulings, the §9c marker/label split, the `sensitive` gate call, and the reflect-quota ruling).
@@ -1108,15 +1097,9 @@ an idle slot remains refused.
   - **A hazard to the operator's OWN measurement is escalated, not filed** — no loop ticket can act
     on it.
 
-- **2026-07-31 (late arc) — [ARCHIVED] 16 method rulings from the day's later PM fires** (the design-gate fail path vs under-specification; the two halves of a §9c edge; a fix is finished only when every branch answering one question agrees; retiring a defect FAMILY over its leaves; a gate naming a human verifier; §21a promotion unconditional on a pass; the pass-3 rollup keep/roll criterion and the rule that a rollup must RETIRE; a banked idea's precondition as a claim with an expiry; a priority ladder whose fall-through is its success case; a cached mirror read as the fact; STANDING RULE 12 refined; LOOP-74 verify-fail; LOOP-180 pass-with-amendment). Distilled into the STANDING RULES block below; full text in `docs/strategy-archive/2026-07.md` under `# Rolled 2026-08-01 (pass 4)`.
-- **2026-08-01 (mid arc) — [ARCHIVED] 14 fire-journal rulings from the day's middle PM fires** (the merge-objection ruling; machine-demotion-is-not-a-verdict; §5 rank-1; the §17-caution proposal ruling; merge-guard's actor; the boot-corpus A/B cost axis; the discard-cost fix; "has the product moved" asked of `origin`; the NEW-in-range marker test; rollup pass 5; the open condition tested NOT met; promotion-count-0 with an idle lane; the cost ordering and why it did not descend KB×agents; the late re-scan's third payday) — full text in `docs/strategy-archive/2026-08.md`.
-- **2026-07-31 (fix-arc) — [ARCHIVED] 6 fire-journal rulings from the day's PM fires** (LOOP-208's
-  ownership-vs-builder verify gate; LOOP-210's unprotected `bundle export`; LOOP-211 closed on the
-  operator's ruling; the push path going live mid-fire, with the flag being ON not the defect; the
-  throughput claim I escalated without measuring and corrected in-fire; and the §20 R2 pass-4 rollup
-  with its re-checked parking lot). Doctrine kept in the STANDING RULES block above and in the
-  entries retained around it; full text in `docs/strategy-archive/2026-07.md` under
-  `# Rolled 2026-08-01 (pass 8)`.
+- **2026-07-31 (late arc) — [ARCHIVED] 16 method rulings** (design-gate fail vs under-specification; the two halves of a §9c edge; a fix finished only when every branch agrees; retiring a defect FAMILY; §21a promotion unconditional on a pass; the pass-3 keep/roll criterion; STANDING RULE 12 refined) — distilled into the STANDING RULES block → [`2026-07.md`](strategy-archive/2026-07.md), R2 pass 4.
+- **2026-08-01 (mid arc) — [ARCHIVED] 14 fire-journal rulings** (merge-objection; machine-demotion-is-not-a-verdict; §5 rank-1; the §17-caution proposal; merge-guard's actor; the boot-corpus A/B cost axis; the discard-cost fix; "has the product moved" asked of `origin`; rollup pass 5; promotion-count-0 with an idle lane) → [`2026-08.md`](strategy-archive/2026-08.md).
+- **2026-07-31 (fix-arc) — [ARCHIVED] 6 fire-journal rulings** (LOOP-208's ownership-vs-builder verify gate; LOOP-210's unprotected `bundle export`; LOOP-211 on the operator's ruling; the push path going live mid-fire; the throughput claim corrected in-fire; the R2 pass-4 parking lot) — doctrine in the STANDING RULES block → [`2026-07.md`](strategy-archive/2026-07.md), R2 pass 8.
 - **2026-08-01 (early-to-mid arc) — [ARCHIVED] 14 fire-journal rulings from the day's early and
   middle PM fires** (the two standing-rule refinements; the design-gate MODEL-vs-PROSE axis; the
   §21a-handoff ruling; the program-carrier intake ruling; the guard-ANCHOR instance LOOP-231; the
