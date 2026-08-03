@@ -45,7 +45,7 @@ import { // A3: extracted timers; imported for the foreground boot, re-exported 
   startStrategyFileEditNotifier, // docs P3b: the passive-mode repo-FILE strategy-doc watch
   fireHealthNotifyTick, startFireHealthNotifier, // P0-1c: the loop fire-health self-monitor
 } from "./daemon-notifiers.ts";
-import { tryResolveWorkspace, wsFireLedger, wsHubDb } from "./workspace.ts";
+import { tryResolveWorkspace, wsFireLedger } from "./workspace.ts";
 import { resolveUiToken, bearerOk, isLoopbackHost } from "./ui-token.ts"; // one-click P1 §6.2: the bearer gate + bind knob
 
 export interface DaemonOpts {
@@ -673,9 +673,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
   // LOOP-52 board identity: record daemon's startup version + resolve the workspace hub.db path.
   // WS_ID is the authenticated surface's identity affordance — shows which workspace's board you're on.
   const DAEMON_VER = daemonVersionOpt ?? pkgVersion();
-  const WS_ID = (() => {
-    try { const ws = tryResolveWorkspace(); return ws ? wsHubDb(ws) : hubDbPath(); } catch { return hubDbPath(); }
-  })();
+  const WS_ID = daemonDbPath ?? hubDbPath();
   // Per-request: compare DAEMON_VER with the on-disk version to detect an upgrade while the daemon runs.
   const getBasePageOpts = (): { workspaceId: string; daemonVersion: string; cliVersion?: string } => {
     const freshVer = pkgVersionFresh();
