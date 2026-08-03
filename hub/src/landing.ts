@@ -66,6 +66,48 @@ export function ticketToPr(
 
 export type ExecFn = (args: string[]) => { stdout: string; stderr: string; ok: boolean };
 
+// ── Allow-lists (sourced from `gh pr list --json bogus` and `gh pr view --json bogus` — offline, no network) ──
+// Exported so test doubles and callers share one validated field set (LOOP-121 AC3).
+export const GH_PR_LIST_FIELDS = new Set([
+  "additions", "assignees", "author", "autoMergeRequest", "baseRefName",
+  "baseRefOid", "body", "changedFiles", "closed", "closedAt",
+  "closingIssuesReferences", "comments", "commits", "createdAt", "deletions",
+  "files", "fullDatabaseId", "headRefName", "headRefOid", "headRepository",
+  "headRepositoryOwner", "id", "isCrossRepository", "isDraft", "labels",
+  "latestReviews", "maintainerCanModify", "mergeCommit", "mergeStateStatus",
+  "mergeable", "mergedAt", "mergedBy", "milestone", "number",
+  "potentialMergeCommit", "projectCards", "projectItems", "reactionGroups",
+  "reviewDecision", "reviewRequests", "reviews", "state", "statusCheckRollup",
+  "title", "updatedAt", "url",
+]);
+// Fields used in the per-ticket annotation probe (pr view); a subset of the same field space.
+export const GH_PR_VIEW_ANNOTATION_FIELDS = "state,statusCheckRollup,mergeable";
+
+// ── Per-ticket landing annotation (LOOP-111, LOOP-89 Child B) ──────────────────
+export type LandingAnnotation = "merged" | "open-green" | "open-red" | "conflicting" | "no-pr" | "unknown";
+
+// Annotate a single ticket's PR landing state: find its PR via ticketToPr, then probe CI + mergeability.
+// Never throws; all forge failures degrade to "unknown". "no-pr" means no PR was found at all.
+export function annotateTicketLanding(ticketId: string, ghRepo: string, exec: ExecFn): LandingAnnotation {
+  try {
+    const pr = ticketToPr(ghRepo, ticketId, { exec });
+    if (!pr) return "no-pr";
+    if (pr.state === "MERGED") return "merged";
+    const r = exec(["pr", "view", String(pr.pr), "--repo", ghRepo, "--json", GH_PR_VIEW_ANNOTATION_FIELDS]);
+    if (!r.ok) return "unknown";
+    const data = JSON.parse(r.stdout) as { mergeable: string; statusCheckRollup: Array<{ conclusion: string | null }> };
+    if (data.mergeable === "CONFLICTING") return "conflicting";
+    if (data.mergeable === "UNKNOWN") return "unknown";
+    const BAD = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"]);
+    const checks = (data.statusCheckRollup ?? []).filter((c) => c.conclusion && c.conclusion !== "");
+    if (checks.some((c) => BAD.has(c.conclusion!))) return "open-red";
+    if (checks.length > 0 && checks.every((c) => !BAD.has(c.conclusion!))) return "open-green";
+    return "open-red";
+  } catch {
+    return "unknown";
+  }
+}
+
 // ── Per-PR review state (design merge-review-guard §4 / LOOP-64 Child 1) ──────
 
 export interface PrReviewState {
@@ -134,20 +176,21 @@ export function readPrReviewState(
 
 const LANDING_STALL_DAYS = 2;
 const DEFAULT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const GH_TIMEOUT_MS = 5_000;
+export const GH_EXEC_TIMEOUT_MS = 5_000; // per-call spawnSync cap; exported for the enrich deadline
 
-export function defaultGhExec(args: string[]): { stdout: string; stderr: string; ok: boolean } {
-  const r = spawnSync("gh", args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: GH_TIMEOUT_MS,
-  });
-  if (r.error) throw r.error; // ENOENT → gh not on PATH; thrown → caller returns unknown
-  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", ok: (r.status ?? 1) === 0 };
+export function makeGhExec(opts?: { timeoutMs?: number }): ExecFn {
+  const timeout = opts?.timeoutMs ?? GH_EXEC_TIMEOUT_MS;
+  return (args) => {
+    const r = spawnSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout });
+    if (r.error) throw r.error;
+    return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", ok: (r.status ?? 1) === 0 };
+  };
 }
 
+export const defaultGhExec: ExecFn = makeGhExec();
+
 function extractGitHubRepo(remote: string): string | null {
-  const m = remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
+  const m = remote.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
   return m ? m[1]! : null;
 }
 
