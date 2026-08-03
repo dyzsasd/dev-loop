@@ -488,7 +488,8 @@ passes 10 and 12; the two stubs merged into one here under pass 13). Clauses sti
 ### 2026-08-01 (pm, twelfth → fifteenth fires) — [ARCHIVED]
 
 All four rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2
-passes 13, 14 and 15; four stubs merged into one here under pass 15). Clauses still in force:
+passes 13, 14, 15 and 16 — the fifteenth fire's journal block followed under pass 16;
+four stubs merged into one here). Clauses still in force:
 
 - **A queue whose depth is stable can still be starving its tail.** Measure a backlog by the age
   spread of what *leaves* it, not by row count: `opQueue`'s pm `backlog` list is the only servable
@@ -529,71 +530,6 @@ passes 13, 14 and 15; four stubs merged into one here under pass 15). Clauses st
 - **A standing authorization covers the edit it named, not every edit in its section.** When an old
   number in a DIRECTION section is hedged rather than wrong, the correction belongs in the progress
   sections and on the program's carrier ticket.
-### 2026-08-01 (pm, fifteenth fire) — the top-priority cost program is aimed at the variable that explains 14% of the bill, and the one that explains 78% just moved 2.5x unwatched
-
-`origin/main` is **`8689700`** — my own doc commit from the fourteenth fire. **The product did not
-move this fire**, so this was a lens rotation on an unchanged SHA. Doc-watch: `docs/STRATEGY.md`
-hash unchanged at `a33d933327dce341` — **40 consecutive fires with no operator doc edit**.
-
-**Job A 0, `needs-pm` 0, promoted 0.** In Review was empty board-wide. The §9c tracker pass walked
-all 9 parked rows: **9 edges, 0 unparked, 9 held** — every park still has ≥1 live blocker
-(LOOP-222's LOOP-207 edge went `Done` but its LOOP-221 edge is still `Todo`; LOOP-105's LOOP-36 edge
-is `Done` but LOOP-264 is `Todo`). Promotion: junior sits at **12/10** unblocked Todo (over cap →
-§5a promote nothing) and senior has ~4 free slots with **zero senior-tier Backlog rows** — the
-**seventh consecutive** measurement of the same shape. **LOOP-258 is still `Human-Blocked` on the
-operator (2h17m at boot)** and `daemon status` still reports the loop daemon on **v1.13.0 against
-CLI v1.14.0**, so the eleventh fire's constraint stands: senior-tier filings stay direct-code shaped.
-
-**The finding — the compression program has six carriers and they are all on one of its two
-factors.** LOOP-228 states the model in its own words: *"`cacheRead is approximately turns x
-context-size` … Both are in scope"*, and *"turns count as much as bytes"*. LOOP-236, -237, -238 and
--263 are all byte-side; LOOP-239 adds per-agent **USD**, not volume. Nothing measures turns.
-
-Measured on this workspace's ledger, 196 priced fires, against `metrics --context`'s modeled corpus:
-
-| | correlation with a fire's `cacheReadTokens` |
-|---|---|
-| modeled context bytes — the quantity the program is cutting | **0.138** |
-| fire duration | **0.777** |
-
-The modeled corpus spans **1.5×** across the six agents (129–192 KB); the measured bill spans
-**4.9×** (3.59M–17.47M `cacheRead`/fire). A model with almost no variance cannot explain a bill with
-a lot of it. **The honest limit of that claim:** a near-zero *cross-agent* correlation does not
-refute the *within-agent* mechanism — a 30 % smaller corpus should still cut every turn's read by
-30 %. What it establishes is narrower and enough: context size is not what makes one fire cost 5×
-another, and the factor that does was unwatched.
-
-**It had already moved, and no surface noticed for seven hours.** junior-dev, before vs since the
-07:25Z baseline LOOP-228 records — **medians**, so not one outlier: $/fire **3.77 → 6.68**,
-`cacheRead`/fire **7.65M → 14.23M**, duration **16.0 → 40.5 min**, and its most expensive fire ever
-($16.24, `exitCode 124`, hit the 60-minute wall). Board-wide $/fire since the baseline is **$5.66
-against the recorded $4.79 (+18 %)**; holding the fire mix constant it is **$5.23**, so this is
-per-fire growth, not composition, and junior-dev alone is ~81 % of it. Its modeled context bytes did
-not change by one byte — **LOOP-238's ratchet, the program's only regression guard, could not have
-fired**, because it ratchets the model. Filed **LOOP-267** (p1, junior, `blocked-by` LOOP-239).
-
-**Second finding, on a p1 `Todo` about to be picked: LOOP-239's AC 2 is already false.** It pins six
-live-ledger figures as expected constants (pm 7.44, senior-dev 9.14, junior-dev 4.41, qa 2.62, sweep
-2.90, reflect 4.60). Re-derived over all 195 priced rows: **7.70 / 9.42 / 5.72 / 2.43 / 3.01 / 4.60**
-— **five of six wrong seven hours after they were written**, and the sixth holds only because reflect
-has not fired since. The danger is not the failing box; it is that a correct implementation looks
-broken and the cheapest repair is to bend the code until it matches a stale constant. Amended on the
-ticket: exact values move to the fixture AC 5 already builds; the live board keeps only invariants
-(`Σ byAgent.costUsd == fires.costUsd`), which cannot go stale.
-
-**Third: an ordering that only existed in prose is now an edge.** LOOP-265's description warns that
-one plausible reading of LOOP-31 — *"align the tile to `blockedNow`"* — would copy a confirmed defect
-into the web UI, and says land LOOP-265 first. That instruction lived in a sibling ticket's prose,
-which the §5 pick order does not read. LOOP-31 now carries `Blocked-by: LOOP-265` + the `blocked`
-label (sequenced, not parked), and its discharged LOOP-26 edge is recorded as retired.
-
-**What I deliberately did not do.** The measured baseline in `Goals` still reads $4.79/fire. `Goals`
-is a §20 D4 **direction** section, and although LOOP-228 authorises the direction edits its intake
-implies, re-deriving a number is not one of them — and the section already hedges itself correctly
-(*"a snapshot, not a constant; re-derive it, do not quote it forward"*), so it is not wrong, only
-old. The re-derivation lives here and on LOOP-228, where the operator will see it.
-
-Verified 0, unblocked 0, filed 1, groomed 2, promoted 0.
 ### 2026-08-03 (pm, sixteenth fire) — the daemon downgrade is not drift; it is a scheduled event that fires with every fire, and the vector is our own Claude plugin
 
 `origin/main` is **`aef0d5f`** — my own doc commit from the fifteenth fire. **The product has not
@@ -679,6 +615,48 @@ worktrees, `/tmp` copies and the product repo, the oldest dating to Jul 22. That
 new row.
 
 
+### 2026-08-03 (pm, eighteenth fire) — two verifications closed, and one only closed because I broke a cycle the board could not
+
+`origin/main` is **`f590b68`** — LOOP-173's own merge; the product moved on code for the second
+consecutive fire, so the lens list resets here. Doc-watch: `docs/STRATEGY.md` unchanged from what I
+landed (**43 fires, no foreign doc edit**) — but the operator wrote on the *board* this fire, which is
+where the direction actually arrived.
+
+**LOOP-173 `Done`, and its own wire repro is the whole verdict.** Against a listener bound to this
+box's non-loopback address: at `50a488c` it printed `authorization="Bearer <canary>"`; at `f590b68`
+it printed **nothing at all** while the CLI exited 5 naming both remedies; with
+`DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1` the request arrives again. Leak real, closed, escape hatch intact
+— three rows, no inference. Both suites green on the merged tree (28 new assertions), `main`'s own CI
+green during the fire, and all five cited Codex thread resolutions re-derived as genuinely present.
+
+**LOOP-258 `Done` — the operator closed the daemon-downgrade vector at its source**, repointing the
+`dev-loop` marketplace `source.path` from the stale jinko checkout to the pinned 1.14.0 build, so
+plugin and PATH CLI are now one artifact and skew is structurally impossible rather than fixed.
+Verified from my own fire rather than their table: `loop` pid 45295 **v1.14.0**, `_team` pid 40984
+**v1.14.0**, and the CLI's "running OLD code" remedy line — the surface that named this bug — is gone.
+Third attempt, first that held under load.
+
+**I closed it on AC1 alone because of a cycle, not a concession.** AC3 ("LOOP-172's junior child is
+re-staged") can only happen inside LOOP-172, which was blocked **by LOOP-258**; holding the tracker
+open for AC3 guaranteed AC3 could not occur. AC2 needs a real senior-dev cross-tier write, which I
+cannot honestly produce as `pm`. Both were **re-homed onto LOOP-172** — one observable, on the ticket
+that owns the work — rather than checked or dropped.
+
+**The operator's loose end was real and worse than reported.**
+`~/.claude/plugins/cache/dev-loop/dev-loop/1.9.0` is a real directory carrying `hub/package.json`
+**1.9.0**, whose `hook-session-start.ts:16` spawns `daemon up` from *its own tree*; if it ever became
+the resolved plugin source again it would downgrade a 1.14.0 daemon **five minor versions**. Filed
+nothing — LOOP-252's AC1 neutralizes it and its AC4 is what would have made it visible without `ps`.
+The verified writeup went **on LOOP-252**, whose stakes it raises; a second ticket would have split
+one fix across two rows.
+
+**Structural picture, ninth consecutive measurement, unchanged.** Junior **12** unblocked `Todo`
+against a cap of 10 (over); senior **6**/10 with **zero** senior-tier Backlog rows to draw from;
+Backlog **67** (66 junior + the untiered LOOP-228 umbrella). Promotion correctly **0** — not for want
+of slots, but because the side *with* slots has nothing filed for it. §9c: all **11** parked rows hold
+≥1 live blocker, **0 unparks**; LOOP-172 lost one edge when LOOP-258 closed and stays parked on
+LOOP-235. **Filed 0** — the one candidate deduped into LOOP-252 on a real reading of its ACs.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -711,6 +689,41 @@ new row.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, eighteenth fire) — when a tracker's remaining acceptance can only be satisfied by
+  a ticket the tracker itself blocks, the tracker is the side that must yield.** LOOP-258's AC3 was
+  "LOOP-172's junior child is re-staged"; LOOP-172 was blocked by LOOP-258. Held open for AC3, the
+  tracker guaranteed AC3 could never happen — a cycle with no exit that does not run through closing
+  it. **STANDING: before holding a ticket open for an unchecked AC, check whether that AC's work sits
+  behind an edge this ticket owns. If it does, close on the ticket's own deliverable and RE-HOME the
+  remaining ACs onto the ticket that owns the work — never leave orphaned boxes on a closed tracker,
+  and never leave a cycle to the next fire on the theory that caution is free.** A second rule fell
+  out of the same close: **an AC only another actor can honestly certify is not a box for the verifier
+  to check** — AC2 needed a real senior-dev write, and producing it under a borrowed actor would have
+  been worse evidence than leaving it open.
+
+- **2026-08-03 (pm, eighteenth fire) — a verification step that only proves its worth when it fires is
+  still cheap enough to always run.** Last fire the assertion-vs-tree check caught two Codex thread
+  resolutions on LOOP-184 whose named symbols were absent from the merged tree. This fire the
+  identical check on LOOP-173 confirmed **five of five** hardening claims genuinely present in
+  `ui-token.ts` at the merge SHA. **STANDING: do not score a check by its hit rate. The LOOP-184 case
+  cost two seconds and caught a permanent false claim on `main`; the LOOP-173 case cost the same two
+  seconds and converted "the author says so" into "the tree says so" — which is what let me close a
+  `sensitive` ticket without hedging.** Related and distinct: when an AC asserts a universal ("the
+  token is NEVER sent over plaintext"), the named cases passing is not the invariant holding —
+  enumerate the exits and prove there is only one.
+
+- **2026-08-03 (pm, eighteenth fire) — I have been rolling up the second-largest section for fifteen
+  passes.** Measured rather than assumed this fire: `Current state` is **40,201 B (38.1%)** and
+  `Decisions (running log)` **36,782 B (34.8%)** of a 105,576 B doc — my carried belief that Decisions
+  was the largest PM-ingested section was wrong, and the rollup discipline has been aimed accordingly.
+  The doc has also grown **net** across recent passes despite every one of them. **STANDING: a
+  retention discipline needs a periodic measurement of WHERE the bytes are, not just a ritual applied
+  where they were once. Pass 16 therefore rolls a Current-state journal block for the first
+  time (5.0 KB) alongside the sixteenth-fire rulings (3.5 KB): 8.5 KB out against 6.7 KB written
+  back, taking the doc 105,576 → 103,759 B. A **measured** net reduction — the first pass in this
+  arc whose arithmetic was checked rather than assumed.** This doc is read by every PM fire, so its size is a direct
+  input to LOOP-228's per-fire cost program, not merely housekeeping.
 
 - **2026-08-03 (pm, seventeenth fire) — a code-review thread is closed by an assertion, and nothing
   on this loop compares the assertion to the tree.** LOOP-184 landed with two Codex P2 threads
@@ -755,46 +768,11 @@ new row.
   the cheapest generalisation available from this fire: it is the same defect shape as a gate that
   prints a plausible success, only inverted.
 
-- **2026-08-03 (pm, sixteenth fire) — one predicate can fail in two opposite directions, and fixing
-  the direction you were bitten by can leave the other one live.** `daemon up` compares installed
-  against running version. It fires when it should not (installed OLDER ⇒ downgrades a healthy
-  daemon, LOOP-252) *and* fails to fire when it should (equal version STRING, different SHA under a
-  local source-build pin ⇒ a no-op that prints `already running`, LOOP-250). Both were observed on
-  this host within 90 seconds. The obvious fix for the first — compare ordering — closes it and
-  leaves the second alive. **Rule:** before fixing a comparison, enumerate every way it can be wrong,
-  not just the way that hurt you; then pick the fix that dominates (here, SHA-aware) and route the
-  class to one carrier rather than patching each symptom on its own ticket. **Corollary:** the
-  dangerous failure is the silent one — an over-firing check is noisy and self-reporting, an
-  under-firing check prints a plausible success message, which is why its regression test must assert
-  on the pid changing and never on the output.
-
-- **2026-08-03 (pm, sixteenth fire) — a tracker whose prerequisite was satisfied and then
-  *un*-satisfied does not close, and the re-park must carry a CHANGED ask.** LOOP-258 came back at
-  `In Review` with its ACs met and honestly evidenced by the operator; by the time I verified, the
-  system had undone them. Closing it `Done` on the strength of the record would have been verifying
-  a transcript instead of a product. But re-parking it with the *original* ask would have been worse:
-  a third request to run a command whose effect is destroyed ~2 s later. **Rule:** when a park
-  recurs, the ticket owes the human a different instruction than last time, or it is not a decision
-  request — it is a treadmill. Re-derive the AC against the running system every time; a passing AC
-  witnessed by someone else at another moment is evidence, not verification.
-
-- **2026-08-03 (pm, sixteenth fire) — when a fix reverts, find the CALLER before asking for the fix
-  again.** Two restarts had been performed and reverted before anyone asked what was doing the
-  reverting. The answer was two commands away (`ps` on the daemon pid, then `~/.claude/settings.json`)
-  and it changed the ask completely — the culprit was not a stray human invocation but our own
-  plugin's `SessionStart` hook, running an unrelated 1.13.0 checkout on **every fire**. **Rule:**
-  a fix that does not hold is a signal about the environment, not about the fix; the next action is
-  provenance (which tree, which process, launched by what), never a repeat of the same remedy.
-  **Corollary:** "idempotent" is a claim about a *caller*, not about an operation — `daemon up` is
-  idempotent only while every caller shares a version, and nothing enforced that.
-
-- **2026-08-03 (pm, sixteenth fire) — when the bug is invisibility, diagnosability is part of the
-  fix's acceptance.** I added one AC to LOOP-252 rather than filing a new row: `daemon status` must
-  name the daemon's resolved entry path. The justification is not tidiness — the fix is *unverifiable
-  without it*, since asserting "an older caller did not downgrade a newer daemon" requires naming the
-  tree each daemon came from. **Rule:** strengthen the existing carrier instead of fragmenting a
-  cause across rows, and when a defect cost repeated misdiagnosis, the instrument that would have
-  ended it belongs in the same ticket as the cause.
+- **2026-08-03 (pm, sixteenth fire) — [ARCHIVED] 4 rulings** (one predicate failing in two
+  opposite directions so an ordering-only fix leaves the silent half alive; a tracker whose
+  prerequisite was satisfied and then reverted; find the CALLER before re-asking a human for a
+  fix; when the bug IS invisibility, diagnosability is part of the fix). Rolled whole to
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 16).
 
 - **2026-08-01 (pm, fifteenth fire) — [ARCHIVED] 4 rulings** (one correlation as the cheapest test
   that a program is aimed at the right variable; an AC pinning a live measurement is a test with an
