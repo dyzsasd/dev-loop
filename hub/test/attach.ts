@@ -64,6 +64,17 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
     ok(!/localhost:8899 evil;id/.test(metaRefusal),
       "refusal: the metacharacter hostname is NEVER emitted bare (unquoted) into the copyable command");
 
+    // codex P2: an IPv6 literal keeps its URL brackets in base.hostname — the https URL form needs
+    // them, but the ssh DESTINATION must be bare (`2001:db8::1`) or OpenSSH resolves the brackets
+    // literally and the advertised tunnel fails.
+    const v6Refusal = plaintextBearerRefusal(new URL("http://[2001:db8::1]:8787"));
+    ok(/ssh -L 8787:localhost:8787 '2001:db8::1'/.test(v6Refusal),
+      "refusal: an IPv6 hub's ssh destination is bracket-stripped AND quoted (codex P2)");
+    ok(/https:\/\/\[2001:db8::1\]:8787\b/.test(v6Refusal),
+      "refusal: the https URL form KEEPS the IPv6 brackets (URLs require them)");
+    ok(!/localhost:8787 '\[2001:db8::1\]'/.test(v6Refusal),
+      "refusal: the bracketed IPv6 form is NEVER emitted as the ssh operand (the prose host label keeps brackets, the ssh destination does not)");
+
     // egress: postOpUrl SHORT-CIRCUITS to "refused" without opening a socket. hub.invalid never resolves,
     // so unguarded the token case would reach DNS and return "down"; guarded it returns "refused" with no
     // request at all. Loopback falls through to a real (dead-port) attempt → NOT refused.

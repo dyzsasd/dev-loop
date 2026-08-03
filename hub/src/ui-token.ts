@@ -68,11 +68,16 @@ export function plaintextBearerRefusal(base: URL): string {
   // and a remedy that drops the prefix points at the wrong path (codex P2). Same trailing-slash strip as
   // postOpUrl, so a bare host (pathname "/") collapses to "" and gains no spurious slash.
   const basePath = base.pathname.replace(/\/$/, "");
+  // An IPv6 literal keeps its URL brackets in base.hostname (`[2001:db8::1]`), which the https URL
+  // form needs but OpenSSH does not — as a destination operand ssh reads the brackets literally and
+  // fails to resolve, while the bare `2001:db8::1` is accepted (codex P2). Strip them only for the ssh
+  // operand (host in the https URL keeps them), then shell-quote as before.
+  const sshHost = shellSingleQuote(base.hostname.replace(/^\[|\]$/g, ""));
   return (
     `refusing to send the hub bearer token in cleartext to non-loopback host '${base.hostname}' over http — ` +
     `it is full write authority over the board (tickets, comments, docs) and rides every op call, so one ` +
     `on-path capture is a durable compromise. Attach over TLS (https://${base.host}${basePath}), or tunnel to loopback ` +
-    `(ssh -L ${localPort}:localhost:${remotePort} ${shellSingleQuote(base.hostname)} — then --attach http://127.0.0.1:${localPort}${basePath}). ` +
+    `(ssh -L ${localPort}:localhost:${remotePort} ${sshHost} — then --attach http://127.0.0.1:${localPort}${basePath}). ` +
     `To allow plaintext on a trusted private link, set DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1.`
   );
 }
