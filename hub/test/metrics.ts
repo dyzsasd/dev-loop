@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -278,6 +278,55 @@ try {
   ok(fiRows[0].fireId === "aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee",
     `LOOP-12: FireRow with fireId parses correctly (got ${fiRows[0].fireId})`);
   ok(fiRows[1].fireId === undefined, `LOOP-12: legacy FireRow without fireId parses without error (fireId=${fiRows[1].fireId})`);
+
+  // ── LOOP-227: rollingSpendUsd — enforcement spend total estimates killed/unpriced fires ──
+  {
+    const WIN = 7 * DAY;
+    const mkU = (costUsd: number | null) => ({
+      source: "provider" as const, inputTokens: null, outputTokens: null,
+      cacheReadTokens: null, cacheWriteTokens: null, costUsd, currency: "USD" as const,
+    });
+
+    // AC1: a killed row (no usage) returns a NON-ZERO estimate — this is the gap fireMetrics has
+    const ac1 = rollingSpendUsd(
+      [{ ts: iso(NOW - DAY), agent: "pm", project: "web", timedOut: true, durationMs: 3_600_000 }],
+      WIN, NOW,
+    );
+    ok(ac1 > 0, `LOOP-227 AC1: timedOut row with no usage → non-zero estimate (got ${ac1})`);
+    // 3_600_000 × (18.21 / 3_600_000) = 18.21 exactly (same constants cancel)
+    ok(Math.abs(ac1 - 18.21) < 1e-6, `LOOP-227 AC1: fallback estimate ≈ $18.21 (got ${ac1})`);
+
+    // AC2: all-priced window → exact costUsd sum (parity with fireMetrics on this case)
+    const ac2 = rollingSpendUsd([
+      { ts: iso(NOW - DAY), agent: "pm", project: "web", durationMs: 60_000, exitCode: 0, usage: mkU(5.00) },
+      { ts: iso(NOW - 2 * DAY), agent: "qa", project: "web", durationMs: 30_000, exitCode: 0, usage: mkU(3.50) },
+    ], WIN, NOW);
+    ok(Math.abs(ac2 - 8.50) < 1e-9, `LOOP-227 AC2: all-priced window = exact costUsd sum (got ${ac2})`);
+
+    // AC3: mixed — priced exact + killed estimated via same-profile median, or fallback
+    //   priced row: $6.00 over 60_000 ms → rate 1e-4 $/ms
+    //   same-profile killed: 3_600_000 × 1e-4 = $360
+    //   diff-profile killed (no priced history): 1_800_000 × (18.21/3_600_000) ≈ $9.105
+    const sameRate = 6.00 / 60_000;
+    const expectedAc3 = 6.00 + 3_600_000 * sameRate + 1_800_000 * (18.21 / 3_600_000);
+    const ac3 = rollingSpendUsd([
+      { ts: iso(NOW - DAY), agent: "pm", project: "web", durationMs: 60_000, exitCode: 0,
+        codingAgent: "claude", model: "claude-3", usage: mkU(6.00) },
+      { ts: iso(NOW - 2 * DAY), agent: "qa", project: "web", durationMs: 3_600_000, timedOut: true,
+        codingAgent: "claude", model: "claude-3" },
+      { ts: iso(NOW - 3 * DAY), agent: "sweep", project: "web", durationMs: 1_800_000, timedOut: true,
+        codingAgent: "other", model: "other-model" },
+    ], WIN, NOW);
+    ok(Math.abs(ac3 - expectedAc3) < 1e-6,
+      `LOOP-227 AC3: mixed = priced exact + same-profile estimate + fallback (expected ${expectedAc3.toFixed(4)}, got ${ac3.toFixed(4)})`);
+
+    // AC4: pure function — nowMs injection excludes out-of-window rows
+    const ac4 = rollingSpendUsd(
+      [{ ts: iso(NOW - 30 * DAY), agent: "pm", project: "web", timedOut: true, durationMs: 3_600_000 }],
+      WIN, NOW,
+    );
+    ok(ac4 === 0, `LOOP-227 AC4: out-of-window row excluded when nowMs injected (got ${ac4})`);
+  }
 
   // ── CLI e2e on a real workspace (linear → fire metrics + boardNote) ──
   const HOME = join(tmp, "home");
