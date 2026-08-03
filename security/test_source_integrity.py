@@ -41,7 +41,8 @@ def valid_release_manifest(**overrides: str | None) -> bytes:
         "build": (
             "rm -rf dist .claude-plugin skills references hooks config && "
             "tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/server.js && "
-            "cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./"
+            "cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./ && "
+            "cp ../docs/design/quality-gauntlet.md ./references/quality-gauntlet.md"
         ),
         "postinstall": "node postinstall.cjs",
         "prepack": "npm run build",
