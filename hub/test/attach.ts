@@ -17,6 +17,90 @@ const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
+// ── LOOP-173 §16 egress guard: the §6.2 bearer must never ride plaintext http to a non-loopback host.
+// Pure decision (plaintextBearerToRemote) + the postOpUrl egress that consults it BEFORE opening a
+// socket. Fully hermetic: never-resolving / loopback hosts, no daemon, the token controlled in-process
+// and the three env levers snapshot+restored so the daemon legs below are undisturbed (LOOP-156).
+{
+  const { plaintextBearerToRemote, plaintextBearerRefusal } = await import("../src/ui-token.ts");
+  const { postOpUrl } = await import("../src/op-client.ts");
+  const saved = { tok: process.env.DEVLOOP_UI_TOKEN, tokFile: process.env.DEVLOOP_UI_TOKEN_FILE, optIn: process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT };
+  delete process.env.DEVLOOP_UI_TOKEN; delete process.env.DEVLOOP_UI_TOKEN_FILE; delete process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT;
+  try {
+    // the AC decision matrix — the predicate never resolves a hostname, so this needs no network
+    ok(plaintextBearerToRemote(new URL("http://hub.internal:8787"), true) === true, "guard: plaintext + remote + token ⇒ REFUSE");
+    ok(plaintextBearerToRemote(new URL("http://127.0.0.1:8787"), true) === false, "guard: plaintext + loopback + token ⇒ allow (the ssh -L tunnel posture)");
+    ok(plaintextBearerToRemote(new URL("http://localhost:8787"), true) === false, "guard: plaintext + localhost + token ⇒ allow");
+    ok(plaintextBearerToRemote(new URL("https://hub.internal:8787"), true) === false, "guard: https + remote + token ⇒ allow");
+    ok(plaintextBearerToRemote(new URL("http://hub.internal:8787"), false) === false, "guard: plaintext + remote + NO token ⇒ allow (nothing to leak)");
+    ok(plaintextBearerToRemote(new URL("ftp://hub.internal:8787"), true) === true, "guard: non-http/https scheme (ftp) + remote + token ⇒ REFUSE — only https is safe; every other scheme rides plaintext http (codex P2)");
+    ok(plaintextBearerToRemote(new URL("ftp://127.0.0.1:8787"), true) === false, "guard: non-https + loopback + token ⇒ allow (the tunnel exemption is scheme-agnostic)");
+    process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT = "1";
+    ok(plaintextBearerToRemote(new URL("http://hub.internal:8787"), true) === false, "guard: DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1 ⇒ the explicit opt-in allows plaintext");
+    delete process.env.DEVLOOP_ATTACH_ALLOW_PLAINTEXT;
+
+    // The refusal's tunnel remedy must target the URL's EFFECTIVE remote port, not a hardcoded 8787:
+    // for a default-port `http://hub.example` (port 80) the old `ssh -L 8787:localhost:8787` reaches
+    // nothing (codex P2). Keep a convenient LOCAL 8787; derive only the REMOTE end (80 here). An
+    // explicit port is used for both ends unchanged. The host is single-quoted (metachar case below).
+    ok(/ssh -L 8787:localhost:80 'hub\.example'/.test(plaintextBearerRefusal(new URL("http://hub.example"))),
+      "refusal: default-port http derives the REMOTE tunnel port (80), keeping a convenient local 8787 — not a hardcoded 8787:8787");
+    ok(/ssh -L 9000:localhost:9000 'hub\.example'/.test(plaintextBearerRefusal(new URL("http://hub.example:9000"))),
+      "refusal: an explicit non-default port is used for BOTH tunnel ends unchanged");
+
+    // codex P2: a reverse-proxy path prefix must survive into BOTH remedies — postOpUrl targets
+    // `${pathname}/api/op/...`, so a hub under `/dev-loop` needs the https + loopback URLs to keep it.
+    const pathRefusal = plaintextBearerRefusal(new URL("http://hub.example/dev-loop"));
+    ok(/'https:\/\/hub\.example\/dev-loop'/.test(pathRefusal) && /--attach 'http:\/\/127\.0\.0\.1:8787\/dev-loop'/.test(pathRefusal),
+      "refusal: a reverse-proxy path prefix is preserved in the TLS and loopback remedy URLs, each shell-quoted whole (codex P2)");
+    ok(/https:\/\/hub\.example(?![\w./])/.test(plaintextBearerRefusal(new URL("http://hub.example"))),
+      "refusal: a bare host (pathname '/') gains no spurious trailing slash in the remedy URL");
+
+    // codex P2: a WHATWG URL permits shell metacharacters in the hostname (`http://evil;id` ⇒ host
+    // `evil;id`), so the COPYABLE ssh remedy single-quotes it — a copy-paste must not execute `;id`.
+    const metaRefusal = plaintextBearerRefusal(new URL("http://evil;id:8899"));
+    ok(/ssh -L 8899:localhost:8899 'evil;id'/.test(metaRefusal),
+      "refusal: a shell-metacharacter hostname is single-quoted in the ssh remedy (codex P2)");
+    ok(!/localhost:8899 evil;id/.test(metaRefusal),
+      "refusal: the metacharacter hostname is NEVER emitted bare (unquoted) into the copyable command");
+
+    // codex P2: an IPv6 literal keeps its URL brackets in base.hostname — the https URL form needs
+    // them, but the ssh DESTINATION must be bare (`2001:db8::1`) or OpenSSH resolves the brackets
+    // literally and the advertised tunnel fails.
+    const v6Refusal = plaintextBearerRefusal(new URL("http://[2001:db8::1]:8787"));
+    ok(/ssh -L 8787:localhost:8787 '2001:db8::1'/.test(v6Refusal),
+      "refusal: an IPv6 hub's ssh destination is bracket-stripped AND quoted (codex P2)");
+    ok(/https:\/\/\[2001:db8::1\]:8787\b/.test(v6Refusal),
+      "refusal: the https URL form KEEPS the IPv6 brackets (URLs require them)");
+    ok(!/localhost:8787 '\[2001:db8::1\]'/.test(v6Refusal),
+      "refusal: the bracketed IPv6 form is NEVER emitted as the ssh operand (the prose host label keeps brackets, the ssh destination does not)");
+
+    // codex P2: a shell-active PATH also survives WHATWG parsing (`/dev;id`, `/dev$(id)`), and basePath
+    // now rides BOTH attach URLs — so each URL is shell-quoted WHOLE, not merely the ssh host.
+    const pathMeta = plaintextBearerRefusal(new URL("http://hub.example/dev;id"));
+    ok(/--attach 'http:\/\/127\.0\.0\.1:8787\/dev;id'/.test(pathMeta) && /'https:\/\/hub\.example\/dev;id'/.test(pathMeta),
+      "refusal: a shell-active path is quoted WHOLE in both attach URL remedies (codex P2)");
+    ok(!/8787\/dev;id(?!')/.test(pathMeta),
+      "refusal: the shell-active path never appears unquoted in the attach fragment");
+
+    // egress: postOpUrl SHORT-CIRCUITS to "refused" without opening a socket. hub.invalid never resolves,
+    // so unguarded the token case would reach DNS and return "down"; guarded it returns "refused" with no
+    // request at all. Loopback falls through to a real (dead-port) attempt → NOT refused.
+    process.env.DEVLOOP_UI_TOKEN = "egress-canary-not-a-real-secret";
+    const refused = await postOpUrl(new URL("http://hub.invalid:8787"), "get_project", {}, "operator");
+    ok(refused.kind === "refused" && /cleartext/.test((refused as { detail?: string }).detail ?? ""),
+      "egress: postOpUrl(plaintext remote, token) ⇒ refused BEFORE any request, risk named in the detail");
+    const refusedFtp = await postOpUrl(new URL("ftp://hub.invalid:8787"), "get_project", {}, "operator");
+    ok(refusedFtp.kind === "refused", "egress: postOpUrl(non-https remote ftp, token) ⇒ refused BEFORE any request — the guard is not http-only (codex P2)");
+    const loopOut = await postOpUrl(new URL("http://127.0.0.1:59321"), "get_project", {}, "operator");
+    ok(loopOut.kind !== "refused", "egress: postOpUrl(plaintext LOOPBACK, token) is NOT refused — the tunnel posture still connects");
+  } finally {
+    for (const [k, key] of [["tok", "DEVLOOP_UI_TOKEN"], ["tokFile", "DEVLOOP_UI_TOKEN_FILE"], ["optIn", "DEVLOOP_ATTACH_ALLOW_PLAINTEXT"]] as const) {
+      const v = saved[k]; if (v === undefined) delete process.env[key]; else process.env[key] = v;
+    }
+  }
+}
+
 const ROOT = mkdtempSync(join(tmpdir(), "dl-attach-"));
 try {
   // ── the "remote home": a seeded hub + a token-gated daemon booted on _team, in its OWN process —

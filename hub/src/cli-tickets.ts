@@ -167,6 +167,7 @@ async function attachMain(base: URL, sub: string, rest: string[]): Promise<numbe
     }
   }
   const out = await postOpUrl(base, op, args, actor);
+  if (out.kind === "refused") { console.error(`dev-loop: ${out.detail}`); return 5; } // LOOP-173: bearer would leak in cleartext — never sent
   if (out.kind === "down") { console.error(`dev-loop: remote hub ${base.origin} is not reachable${out.detail}`); return 5; }
   if (out.kind === "dormant") { console.error(`dev-loop: ${base.origin} op-API is dormant — seed settings_json.hub.transport:"daemon" at the home`); return 5; }
   if (out.status === 401) { console.error(`dev-loop: ${base.origin} requires the bearer token — set DEVLOOP_UI_TOKEN (§6.2)`); return 5; }
@@ -188,7 +189,8 @@ async function main(): Promise<number> {
   const hubUrl = process.env.DEVLOOP_HUB_URL?.trim();
   if (hubUrl) {
     let base: URL;
-    try { base = new URL(hubUrl); } catch { console.error(`dev-loop: DEVLOOP_HUB_URL '${hubUrl}' is not a valid URL`); return 2; }
+    try { base = new URL(hubUrl); if (base.protocol !== "http:" && base.protocol !== "https:") throw new Error("bad protocol"); }
+    catch { console.error(`dev-loop: DEVLOOP_HUB_URL '${hubUrl}' is not a valid http(s) URL`); return 2; }
     return attachMain(base, sub, rest);
   }
   // a read needs no DEVLOOP_ACTOR to run; the resolved actor only parameterizes assignee:"me" + attribution-free reads

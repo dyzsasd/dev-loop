@@ -204,6 +204,7 @@ async function runOp(hub: Hub, op: AgentOp, args: Record<string, unknown>): Prom
   if (hub.attachBase) { // §6.0: the remote hub — same op, same body, over the token-authed op-API
     const sent = hub.projectKey && args.project === undefined ? { ...args, project: hub.projectKey } : args;
     const out = await postOpUrl(hub.attachBase, op, sent, hub.actor);
+    if (out.kind === "refused") { console.error(`dev-loop: ${out.detail}`); process.exit(5); } // LOOP-173: bearer would leak in cleartext — never sent
     if (out.kind === "down") { console.error(`dev-loop: remote hub ${hub.attachBase.origin} is not reachable${out.detail}. Check DEVLOOP_HUB_URL / the tunnel / the server.`); process.exit(5); }
     if (out.kind === "dormant") { console.error(`dev-loop: ${hub.attachBase.origin} answers but its op-API is dormant — the home's project rows need settings_json.hub.transport:"daemon" (a bundle load seeds this; else seed it at the home).`); process.exit(5); }
     if (out.status === 401) { console.error(`dev-loop: ${hub.attachBase.origin} requires the bearer token — set DEVLOOP_UI_TOKEN (or _FILE) to the home's token (§6.2).`); process.exit(5); }
@@ -216,6 +217,7 @@ async function runOp(hub: Hub, op: AgentOp, args: Record<string, unknown>): Prom
       process.exit(5);
     }
     const out = await postOp(port, op, args, hub.actor);
+    if (out.kind === "refused") { console.error(`dev-loop: ${out.detail}`); process.exit(5); } // exhaustiveness: a loopback base never trips the LOOP-173 egress guard
     if (out.kind === "down") { console.error(`dev-loop: hub daemon for '${hub.projectKey}' is not reachable on 127.0.0.1${out.detail}.`); process.exit(5); }
     if (out.kind === "dormant") { console.error(`dev-loop: the daemon is running but its agent op-API is dormant for '${hub.projectKey}' — the project's settings_json says hub.transport:"daemon" here but the daemon disagrees. Restart it (dev-loop daemon up) or check settings_json.`); process.exit(5); }
     return { status: out.status, body: out.body };
