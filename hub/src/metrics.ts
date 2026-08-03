@@ -172,6 +172,26 @@ export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number
   return total;
 }
 
+// ─── ratePerMsFor (LOOP-230) — per-profile $/ms for the in-flight perFireUsd watchdog ─────────────────────
+// The perFireUsd watchdog (run-agents.ts, budget-ceiling Child 4) has no mid-flight cost signal — cost is
+// known only post-hoc — so it kills at a wall-clock deadline: perFireUsd / ratePerMs. This returns that rate
+// for ONE fire's (codingAgent, model): the median costUsd/durationMs over the window's priced same-profile
+// rows — the SAME derivation rollingSpendUsd applies per row — falling back to FALLBACK_RATE_PER_MS when the
+// profile has no priced history yet. NEVER returns 0 (a 0 rate ⇒ an infinite deadline ⇒ no enforcement at all).
+export function ratePerMsFor(rows: FireRow[], codingAgent: string | null | undefined, model: string | null | undefined, windowMs: number, nowMs: number): number {
+  const cutoff = nowMs - windowMs;
+  const key = `${codingAgent ?? ""}/${model ?? ""}`;
+  const rates: number[] = [];
+  for (const r of rows) {
+    if (Date.parse(r.ts) < cutoff) continue;
+    if (`${r.codingAgent ?? ""}/${r.model ?? ""}` !== key) continue;
+    if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
+      rates.push(r.usage.costUsd / r.durationMs);
+  }
+  const m = median(rates);
+  return m != null && m > 0 ? m : FALLBACK_RATE_PER_MS; // 0/absent ⇒ the conservative floor, never an infinite deadline
+}
+
 // ─── checkBudget (LOOP-229) — doctor's budget-ceiling health line ─────────────────────────────────────────
 // Mirrors checkLessonsBudget (W03, lessons.ts): a pure READ returning WsWarning[] for doctorWorkspace to
 // surface. Never a hard-fail — a WsWarning prints as ⚠️ and keeps DOCTOR_OK (the AC: an unset workspace stays
