@@ -26,6 +26,8 @@ import { tryResolveWorkspace, wsStateRoot, wsHubDb } from "./workspace.ts";
 interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; version?: string; actor?: string; }
 const DEFAULT_DAEMON_PORT = 8787;
 const AUTOSTART_LABEL = "com.dyzsasd.dev-loop.daemon";
+const PROBE_WARN_GAP = 8;   // warn when the probe walked more than 8 ports above the start (AC-B5)
+const REAP_SCAN_PORTS = 128; // wider than the 64-port allocation band so the reaper sees beyond it (AC-B2)
 
 // The runfile lives next to the hub DB (machine-local, never committed — ~/.dev-loop by default), one
 // file per project so distinct projects never clobber each other. DEVLOOP_RUN_DIR overrides for tests.
@@ -147,13 +149,16 @@ function lcTryBind(port: number, host: string): Promise<boolean> {
     s.listen(port, host, () => s.close(() => res(true)));
   });
 }
-async function lcFreePort(start: number, host: string, tries = 64): Promise<number> {
+// Returns { port, exhausted } — exhausted:true when the entire probe band is occupied (AC-B5 amendment:
+// the give-up fallback is indistinguishable from success on the return value alone; callers use `exhausted`
+// to emit the loud remediation warning BEFORE the bind attempt surfaces EADDRINUSE).
+async function lcFreePort(start: number, host: string, tries = 64): Promise<{ port: number; exhausted: boolean }> {
   for (let i = 0; i < tries; i++) {
     const p = start + i;
     if (p > 65535) break;
-    if (await lcTryBind(p, host)) return p;
+    if (await lcTryBind(p, host)) return { port: p, exhausted: false };
   }
-  return start; // give up probing — the spawned daemon will surface EADDRINUSE loudly rather than silently
+  return { port: start, exhausted: true }; // give up — callers emit the remediation warning, then the daemon surfaces EADDRINUSE loudly
 }
 async function lcProbe(url: string, key: string, timeoutMs = 1000): Promise<boolean> {
   return !!(await lcHealthInfo(url, key, timeoutMs));
@@ -265,6 +270,18 @@ async function daemonUpForKey(key: string): Promise<number> {
 
     const startPort = envPort > 0 ? envPort : (existing?.port || DEFAULT_DAEMON_PORT);
     const maxTries = envPort > 0 ? 1 : 64;
+    // Port-probe warning (AC-B5/B6): scan before spawning so the operator sees the remedy BEFORE the bind.
+    // The pre-probe and the spawn loop are intentionally separate — lcFreePort is NOT atomic with the
+    // actual bind (TOCTOU), so the spawn loop below still handles port conflicts correctly.
+    if (envPort === 0) {
+      const probe = await lcFreePort(startPort, host, maxTries);
+      if (probe.exhausted) {
+        // AC-B6: distinct louder line when the entire band is occupied
+        process.stderr.write(`[daemon] up: port band ${startPort}..${startPort + maxTries - 1} fully occupied (${maxTries} ports checked) — run 'dev-loop daemon reap' to remove stale orphan daemons\n`);
+      } else if (probe.port - startPort > PROBE_WARN_GAP) {
+        process.stderr.write(`[daemon] up: port walked to ${probe.port} (${probe.port - startPort} above start ${startPort}) — run 'dev-loop daemon reap' to remove stale orphan daemons\n`);
+      }
+    }
     for (let i = 0; i < maxTries; i++) {
       const port = startPort + i;
       if (port > 65535) break;
@@ -435,8 +452,97 @@ function uninstallAutostart(): number {
 // `node src/daemon.ts <sub>` here. Both importers are side-effect-free: this module has no top-level boot,
 // and daemon.ts's dispatch/foreground guards key on argv[1]===daemon.ts (false when server.ts is the entry).
 // `ensure` is an accepted alias for `up` (the design's `daemon ensure` — idempotent one-per-project start).
-export type LifecycleSub = "up" | "ensure" | "up-all" | "down" | "status" | "install-autostart" | "uninstall-autostart";
-export const LIFECYCLE_SUBS: readonly LifecycleSub[] = ["up", "ensure", "up-all", "down", "status", "install-autostart", "uninstall-autostart"];
+// Ownership rule (LOOP-95 reaper — keep verbatim): reap a listener iff BOTH:
+//   (a) it self-identifies via /api/health as service:"dev-loop-hub"; AND
+//   (b) it reports dbPresent:false.
+// Never touch: a no-marker listener (foreign server) OR a marked daemon with dbPresent:true (a LIVE board —
+// including another workspace's). Age, port, and fixture-name heuristics are never consulted.
+async function lcReapInfo(url: string): Promise<{ pid: number; project: string; version?: string; dbPresent: boolean } | null> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 1200);
+  // P2 fix (PRRT_kwDOS6Puk86VoEUp): clear the timer only AFTER body consumption, not after headers.
+  // A stalling foreign listener that sends headers instantly but delays the body would hang r.json()
+  // indefinitely if we cleared the timer in a fetch .finally (which fires when headers arrive).
+  // The outer try/finally keeps the timer alive through r.json() and then cleans it up.
+  try {
+    const r = await fetch(`${url}/api/health`, { signal: ac.signal });
+    if (r.status !== 200 && r.status !== 503) return null; // only ok:true(200) and ok:false(503) carry the identity fields
+    const b = (await r.json().catch(() => null)) as { service?: string; pid?: number; project?: string; version?: string; dbPresent?: boolean } | null;
+    if (!b || b.service !== "dev-loop-hub" || typeof b.pid !== "number" || typeof b.dbPresent !== "boolean") return null;
+    return { pid: b.pid, project: b.project ?? "", version: b.version, dbPresent: b.dbPresent };
+  } catch { return null; }
+  finally { clearTimeout(t); }
+}
+
+export async function daemonReap(opts: { dryRun?: boolean; host?: string } = {}): Promise<number> {
+  const host = opts.host ?? "127.0.0.1";
+  const dryRun = opts.dryRun ?? false;
+  const bandStart = DEFAULT_DAEMON_PORT;
+  const bandEnd = DEFAULT_DAEMON_PORT + REAP_SCAN_PORTS - 1;
+
+  // P2 fix (LOOP-95): collect extra ports that lifecycle can allocate outside the fixed band.
+  // (a) Any port recorded in a workspace runfile — daemons that landed outside the band on a
+  //     restart from an existing.port near the top are captured this way.
+  // (b) DEVLOOP_DAEMON_PORT if set — an explicit env override can point anywhere.
+  const extraPorts = new Set<number>();
+  // P2 fix (PRRT_kwDOS6Puk86VoEUq): only read runfiles when DEVLOOP_RUN_DIR is explicit. Without it
+  // lcRunDir() falls back to dirname(lcDbPath()) which resolves from DEVLOOP_HUB_DB or the home .dev-loop
+  // dir — NOT the current workspace — so reap would read orphan records from a different workspace.
+  // An explicit DEVLOOP_RUN_DIR (set by `resolveDaemonContext` in the `up`/`down`/`status` paths)
+  // means the caller has already resolved the workspace and the runfiles are authoritative.
+  if (process.env.DEVLOOP_RUN_DIR) {
+    const runDir = lcRunDir(); // resolves to DEVLOOP_RUN_DIR when set
+    let runFiles: string[] = [];
+    try { runFiles = readdirSync(runDir).filter((f) => /^daemon-.+\.json$/.test(f)); } catch { /* dir absent */ }
+    for (const f of runFiles) {
+      try {
+        const info = JSON.parse(readFileSync(join(runDir, f), "utf8")) as RunInfo;
+        if (typeof info.port === "number" && (info.port < bandStart || info.port > bandEnd)) extraPorts.add(info.port);
+      } catch { /* malformed — skip */ }
+    }
+  }
+  const envPort = process.env.DEVLOOP_DAEMON_PORT ? Number(process.env.DEVLOOP_DAEMON_PORT) : 0;
+  if (envPort > 0 && (envPort < bandStart || envPort > bandEnd)) extraPorts.add(envPort);
+
+  const extraList = [...extraPorts].sort((a, b) => a - b);
+  console.log(`[daemon] reap: scanning ${host}:${bandStart}..${bandEnd}${extraList.length ? ` + extra ports ${extraList.join(",")}` : ""}${dryRun ? " (dry-run)" : ""}`);
+
+  const bandUrls = Array.from({ length: REAP_SCAN_PORTS }, (_, i) => `http://${host}:${DEFAULT_DAEMON_PORT + i}`);
+  const extraUrls = extraList.map((p) => `http://${host}:${p}`);
+  const allUrls = [...bandUrls, ...extraUrls];
+
+  const results = await Promise.all(allUrls.map((url) => lcReapInfo(url)));
+  let reaped = 0, kept = 0;
+  for (let i = 0; i < allUrls.length; i++) {
+    const info = results[i];
+    if (!info) continue; // no dev-loop-hub at this port
+    if (info.dbPresent) {
+      console.log(`[daemon] reap: KEEP ${allUrls[i]} (pid ${info.pid}, project '${info.project}') — dbPresent:true (live board)`);
+      kept++;
+    } else {
+      if (dryRun) {
+        console.log(`[daemon] reap: WOULD REAP ${allUrls[i]} (pid ${info.pid}, project '${info.project}') — dbPresent:false`);
+      } else {
+        // P3 fix (LOOP-95): re-probe immediately before killing to guard against PID reuse if a
+        // prior lcStop caused a delay and the OS recycled the PID to an unrelated process.
+        const recheck = await lcReapInfo(allUrls[i]);
+        if (!recheck || recheck.pid !== info.pid || recheck.dbPresent) {
+          console.log(`[daemon] reap: SKIPPED ${allUrls[i]} (pid changed or no longer stale since initial scan)`);
+          continue;
+        }
+        console.log(`[daemon] reap: REAPING ${allUrls[i]} (pid ${info.pid}, project '${info.project}') — dbPresent:false`);
+        await lcStop(info.pid);
+      }
+      reaped++;
+    }
+  }
+  if (reaped === 0 && kept === 0) console.log("[daemon] reap: no dev-loop-hub listeners found in band (nothing to reap)");
+  else console.log(`[daemon] reap: ${dryRun ? "would reap" : "reaped"} ${reaped}, kept ${kept}`);
+  return 0;
+}
+
+export type LifecycleSub = "up" | "ensure" | "up-all" | "down" | "status" | "reap" | "install-autostart" | "uninstall-autostart";
+export const LIFECYCLE_SUBS: readonly LifecycleSub[] = ["up", "ensure", "up-all", "down", "status", "reap", "install-autostart", "uninstall-autostart"];
 // The exit-code core, exported so composable callers (e.g. `dev-loop hub stop` → down + WAL checkpoint)
 // can run a lifecycle op WITHOUT the process.exit that daemonLifecycle applies.
 export async function daemonLifecycleCode(sub: LifecycleSub): Promise<number> {
@@ -444,6 +550,7 @@ export async function daemonLifecycleCode(sub: LifecycleSub): Promise<number> {
     : sub === "up-all" ? await daemonUpAll()
     : sub === "down" ? await daemonDown()
     : sub === "status" ? await daemonStatus()
+    : sub === "reap" ? await daemonReap({ dryRun: process.argv.includes("--dry-run") })
     : sub === "install-autostart" ? installAutostart()
     : uninstallAutostart();
 }

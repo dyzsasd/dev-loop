@@ -3,15 +3,19 @@
 // the same WAL db and asserts every read endpoint, the 404s, the read-only 405, and the 127.0.0.1 bind.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { rmSync, mkdirSync, writeFileSync, unlinkSync, mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
+import { tmpdir } from "node:os";
+import { createServer as netCreateServer } from "node:net";
 import { openDb } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
 import { createDaemon, roadmapDivergenceDoc } from "../src/daemon.ts";
 import { ticketPage, boardPage } from "../src/daemonviews.ts"; // DL-86: unit-check the failed-write re-render input preservation
+import { startTestDaemon, runDaemonCli } from "./daemon-harness.ts";
+import { daemonReap } from "../src/daemon-lifecycle.ts";
 
 const DB = "/tmp/hub-daemon/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -162,6 +166,10 @@ ok(root.status === 200 && root.body.project === "dmn" && root.body.endpoints.inc
 // GET /api/health
 const health = await get("/api/health");
 ok(health.status === 200 && health.body.ok === true && health.body.project === "dmn", "GET /api/health → ok:true for the project");
+// LOOP-95 AC-B1: identity fields present on both ok branches
+ok(health.body.service === "dev-loop-hub", "LOOP-95 AC-B1: /api/health ok:true carries service:'dev-loop-hub'");
+ok(typeof health.body.pid === "number" && health.body.pid > 0, "LOOP-95 AC-B1: /api/health ok:true carries pid (positive integer)");
+ok(typeof health.body.dbPresent === "boolean", "LOOP-95 AC-B1: /api/health ok:true carries dbPresent (boolean)");
 
 // ── DL-41: /api/health is a REAL DB-writable liveness check, NOT a static {ok:true} — a bound-but-wedged
 // daemon (write connection dead → SoR unwritable) reads NOT healthy (503), so the lifecycle up/status
@@ -178,6 +186,9 @@ ok(typeof hLiveBody.version === "string" && hLiveBody.actor === "operator",
 hwrite.close();                       // simulate a bound-but-wedged daemon: its write connection is dead
 const hWedged = await fetch(hbase + "/api/health"); const hWedgedBody = await hWedged.json().catch(() => ({})) as { ok?: boolean };
 ok(hWedged.status === 503 && hWedgedBody.ok === false, "DL-41: a wedged (unwritable) SoR → /api/health 503 ok:false (lifecycle then reclaims it)");
+// LOOP-95 AC-B1: identity fields must also appear on the ok:false (503) branch
+ok((hLiveBody as any).service === "dev-loop-hub" && typeof (hLiveBody as any).pid === "number", "LOOP-95 AC-B1: ok:true /api/health carries service + pid");
+ok((hWedgedBody as any).service === "dev-loop-hub" && typeof (hWedgedBody as any).pid === "number" && typeof (hWedgedBody as any).dbPresent === "boolean", "LOOP-95 AC-B1: ok:false /api/health carries service + pid + dbPresent");
 hsrv.close(); hread.close();
 
 // GET /api/tickets — full board
@@ -646,6 +657,152 @@ await new Promise((r) => setTimeout(r, 2500)); // one more full poll tick for th
 ok(countData(sDmn.text()) === dmnData0, "F2 SSE: the sibling event does NOT reach the /p/dmn stream (event for project A never hits a /p/b subscriber)");
 ok(countData(sAll.text()) > 1, "F2 SSE: the ?all=1 stream sees the sibling event (index-page scope)");
 sDmn.close(); sSib.close(); sAll.close();
+
+// ─── LOOP-95 AC-B: process-level reap tests ───────────────────────────────────────────────────
+const NODE_EXE = process.env.DEVLOOP_NODE || process.execPath;
+const isAliveReap = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch(e) { return (e as {code?:string}).code === "EPERM"; } };
+// Find a free port within [lo, hi] (within the reap scan band 8787..8914)
+async function freeInBand(lo: number, hi: number): Promise<number | null> {
+  for (let p = lo; p <= hi; p++) {
+    const avail = await new Promise<boolean>(r => {
+      const s = netCreateServer();
+      s.listen(p, "127.0.0.1", () => s.close(() => r(true)));
+      s.on("error", () => r(false));
+    });
+    if (avail) return p;
+  }
+  return null;
+}
+
+// ── AC-B4/B2/B3: DB-vanish reap + safety test ──────────────────────────────────────────────────
+{
+  const dir1 = mkdtempSync(join(tmpdir(), "dlrp1-"));
+  const db1 = join(dir1, "hub.db");
+  const dir2 = mkdtempSync(join(tmpdir(), "dlrp2-"));
+  const db2 = join(dir2, "hub.db");
+  execFileSync("node", ["src/seed.ts", "rp1", "Reap Test 1", "RP1", db1], { encoding: "utf8" });
+  execFileSync("node", ["src/seed.ts", "rp2", "Reap Test 2", "RP2", db2], { encoding: "utf8" });
+
+  // Use the upper end of the reap scan band (8870..8890) to avoid colliding with common ports
+  const PORT1 = await freeInBand(8870, 8880);
+  const PORT2 = PORT1 !== null ? await freeInBand(PORT1 + 1, 8885) : null;
+  if (PORT1 === null || PORT2 === null) {
+    ok(false, "LOOP-95 AC-B: could not find two free ports in 8870..8885 — reap tests skipped");
+  } else {
+    // daemon1: live board (DB present → dbPresent:true, must NOT be reaped)
+    // DEVLOOP_WORKSPACE=dir1 forces WsNotFound (no dev-loop.json in dir1) so tryResolveWorkspace()
+    // returns null and WS_ID=hubDbPath()=DEVLOOP_HUB_DB=db1 — essential for dbPresent to track db1.
+    const d1 = await startTestDaemon({
+      DEVLOOP_WORKSPACE: dir1, DEVLOOP_TEAM: "",
+      DEVLOOP_HUB_DB: db1, DEVLOOP_PROJECT: "rp1", DEVLOOP_ACTOR: "operator",
+      DEVLOOP_DAEMON_PORT: String(PORT1),
+    });
+    // daemon2: starts healthy, becomes stale after we unlink its DB
+    const d2 = await startTestDaemon({
+      DEVLOOP_WORKSPACE: dir2, DEVLOOP_TEAM: "",
+      DEVLOOP_HUB_DB: db2, DEVLOOP_PROJECT: "rp2", DEVLOOP_ACTOR: "operator",
+      DEVLOOP_DAEMON_PORT: String(PORT2),
+    });
+
+    // AC-B1 (process-spawned): identity fields in spawned daemon health response
+    // startTestDaemon returns a URL with a trailing slash; strip it so /api/health doesn't double-slash
+    const base1 = d1.url.replace(/\/$/, "");
+    const base2 = d2.url.replace(/\/$/, "");
+    const hd1 = await fetch(`${base1}/api/health`).then(r => r.json()).catch(() => null) as any;
+    ok(hd1?.service === "dev-loop-hub" && typeof hd1?.pid === "number" && hd1?.dbPresent === true,
+      "LOOP-95 AC-B1/B4: spawned daemon /api/health has service:'dev-loop-hub', pid, dbPresent:true while DB exists");
+
+    // AC-B4: unlink daemon2's DB → the daemon stays running but WS_ID no longer exists on disk
+    unlinkSync(db2);
+    const hd2stale = await fetch(`${base2}/api/health`).then(r => r.json()).catch(() => null) as any;
+    ok(hd2stale?.service === "dev-loop-hub" && hd2stale?.dbPresent === false,
+      "LOOP-95 AC-B4: after DB unlink daemon reports dbPresent:false — lcReapInfo can identify it with NO runfile");
+
+    // AC-B3: foreign listener (no hub marker) — should survive reap
+    const PORT3 = await freeInBand(PORT2 + 1, 8914);
+    // s.destroy() (not s.end()) so each probe connection is immediately torn down with RST.
+    // s.end() half-closes the TCP socket: the server sends FIN but the socket stays open
+    // until the client also closes, which undici never does after the connection error.
+    // foreignSrv.close() would then block waiting for those half-open sockets to drain,
+    // hanging the test indefinitely. s.destroy() closes both directions immediately.
+    const foreignSrv = PORT3 !== null ? netCreateServer(s => s.destroy()) : null;
+    if (foreignSrv && PORT3 !== null) await new Promise<void>(r => foreignSrv.listen(PORT3, "127.0.0.1", r));
+
+    // AC-B2: dry-run must NOT stop any process
+    await daemonReap({ dryRun: true });
+    ok(isAliveReap(d2.pid), "LOOP-95 AC-B2: --dry-run reap does not stop the stale daemon");
+
+    // Live reap: only daemon2 (dbPresent:false) is stopped; daemon1 and foreign server survive
+    ok(isAliveReap(d1.pid), "LOOP-95 AC-B3: live-board daemon alive before reap");
+    ok(isAliveReap(d2.pid), "LOOP-95 AC-B3: stale-orphan daemon alive before reap");
+    if (foreignSrv) ok(foreignSrv.listening, "LOOP-95 AC-B3: foreign listener alive before reap");
+
+    await daemonReap();
+    for (let i = 0; i < 40 && isAliveReap(d2.pid); i++) await new Promise(r => setTimeout(r, 100));
+
+    ok(isAliveReap(d1.pid), "LOOP-95 AC-B3: live-board daemon (dbPresent:true) survives reap");
+    ok(!isAliveReap(d2.pid), "LOOP-95 AC-B2/B4: stale-orphan daemon (dbPresent:false) is stopped by reap");
+    if (foreignSrv) ok(foreignSrv.listening, "LOOP-95 AC-B3: foreign listener (no hub marker) survives reap");
+
+    // Second reap is a no-op (daemon2 already gone, daemon1 kept)
+    await daemonReap();
+    ok(isAliveReap(d1.pid), "LOOP-95 AC-B2: second reap is a no-op for the live-board daemon");
+
+    d1.stop();
+    if (foreignSrv) await new Promise<void>(r => foreignSrv.close(() => r()));
+  }
+}
+
+// ── AC-B5/B6/B7: port-probe warning when band is occupied ───────────────────────────────────────
+{
+  const dir7 = mkdtempSync(join(tmpdir(), "dlb7-"));
+  const db7 = join(dir7, "hub.db");
+  const run7 = join(dir7, "run");
+  mkdirSync(run7, { recursive: true });
+  execFileSync(NODE_EXE, ["src/seed.ts", "b7", "B7 Test", "B7T", db7], { encoding: "utf8" });
+
+  // Pre-write a runfile with a dead PID pointing to port 8890 so daemonUpForKey starts scanning there.
+  // This keeps the test away from the system default (8787) which a live workspace daemon may occupy.
+  const B7_START = 8890;
+  writeFileSync(join(run7, "daemon-b7.json"), JSON.stringify({
+    project: "b7", pid: 999999999, port: B7_START,
+    host: "127.0.0.1", url: `http://127.0.0.1:${B7_START}`,
+    startedAt: "1970-01-01T00:00:00.000Z",
+  }));
+
+  // Bind B7_START..B7_START+8 (9 consecutive ports) so the probe walks >(PROBE_WARN_GAP=8) above B7_START
+  const blockedB7: import("node:net").Server[] = [];
+  let consecutiveBound = 0;
+  for (let p = B7_START; p < B7_START + 9; p++) {
+    const didBind = await new Promise<boolean>(r => {
+      const s = netCreateServer();
+      s.listen(p, "127.0.0.1", () => { blockedB7.push(s); consecutiveBound++; r(true); });
+      s.on("error", () => r(false));
+    });
+    if (!didBind) break; // can't bind this port; can't guarantee consecutive band
+  }
+
+  if (consecutiveBound >= 9) {
+    // 9 consecutive ports occupied from B7_START → probe finds B7_START+9 free → walk=9>PROBE_WARN_GAP
+    const b7up = runDaemonCli("daemon", "up", {
+      DEVLOOP_HUB_DB: db7, DEVLOOP_RUN_DIR: run7, DEVLOOP_PROJECT: "b7",
+      DEVLOOP_ACTOR: "operator", DEVLOOP_WORKSPACE: dir7, DEVLOOP_TEAM: "",
+    }, { timeout: 20_000 });
+    const warnMsg = b7up.stderr ?? "";
+    ok(warnMsg.includes("daemon reap"), `LOOP-95 AC-B5/B6/B7: occupied port band emits 'daemon reap' remediation warning`);
+    ok(warnMsg.includes("port walked"), "LOOP-95 AC-B5: long-walk warning includes 'port walked' with the landed port");
+    // Clean up the started daemon
+    for (const s of blockedB7) await new Promise<void>(r => s.close(() => r()));
+    if (b7up.status === 0 && existsSync(join(run7, "daemon-b7.json"))) {
+      const runInfo = JSON.parse(readFileSync(join(run7, "daemon-b7.json"), "utf8")) as { pid: number };
+      if (isAliveReap(runInfo.pid)) try { process.kill(runInfo.pid, "SIGKILL"); } catch { /* already dead */ }
+    }
+  } else {
+    // Some of 8890..8898 are occupied by other services — release what we bound and skip
+    for (const s of blockedB7) await new Promise<void>(r => s.close(() => r()));
+    console.log(`ℹ️  LOOP-95 AC-B5/B6/B7: skipped (only ${consecutiveBound}/9 consecutive ports available at ${B7_START})`);
+  }
+}
 
 await verifier.close();
 opd.close();
