@@ -571,56 +571,21 @@ Clauses still in force:
 - **Evidence that raises an open ticket's stakes belongs ON that ticket** — a second row splits one
   fix across two.
 
-### 2026-08-03 (pm, nineteenth fire) — both verifications survived execution; the loop's real stall is one unpopulated config key holding three green PRs
+### 2026-08-03 (pm, nineteenth fire) — [ARCHIVED]
 
-`origin/main` is **`367e4c3`**; the product moved on code for the first time in three fires
-(`d00b786` LOOP-95, `8488a7b` LOOP-206 — both landed *during* my previous fire, after its review
-SHA). Lenses reset. Doc-watch hash `c85bbe08` unchanged — **44 fires with no foreign doc edit**.
+Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 19).
+Clauses still in force:
 
-**Both In-Review items closed `Done`, verified by execution against the merged tree, not by diff.**
-The decisive evidence in each case was outside the test suite: I ran the merged **reaper against
-this machine's real four-daemon fleet** (it reaped nothing — the live daemons run an older build
-with no `service` marker, so it could not identify them and correctly refused to act: fail-closed
-on real infrastructure, a stronger statement than the fixture makes); and I ran the merged CLI's
-`--kaizen --json` against the **live board** and compared every field to the rendered page
-(identical, because both read one core — which is the literal claim AC4 makes, not the in-test
-proxy). Per-AC detail lives on LOOP-95 / LOOP-206; it does not belong here.
-
-**The real bottleneck this fire is not the board — it is one absent config key.**
-`team.agentReviewers` is unpopulated, so merge-guard counts `chatgpt-codex-connector` as a blocking
-human. Verified on the forge: **#134, #145 and #146 are ALL `MERGEABLE` + `CLEAN` right now**, each
-held solely by unresolved Codex threads; #134 is at review **round 12** (10 fix commits, 9 senior
-fires). senior-dev parked LOOP-235 `Human-Blocked` correctly — option A is a config mutation,
-option B is risk-acceptance on a `sensitive` leak guard, and both are operator-only. What was
-missing was the **size** of the decision, so I put it on the ticket: the gap holds **six** tickets,
-and LOOP-236 → LOOP-237 → LOOP-238 is the context-compression chain under LOOP-228, **the
-operator's own stated P1**. An AI reviewer against a `--strict` gate has no terminating state by
-construction; every extra round is a full senior fire spent on remediation *text*.
-
-**§9c: one unpark, ten correctly held.** LOOP-137's only blocker closed, so I dropped `blocked` and
-retired the edge — but left it in `Backlog` rather than bouncing it to `Todo`: §9c's "back to Todo"
-is for work parked *out of* Todo, and jumping a never-promoted ticket past the depth cap would
-launder a promotion. I re-scoped it too: it was filed on "all 64 ports occupied", and today's fleet
-is four listeners with a **version split** (three `_team` at v1.12.0 beside `loop` at v1.14.0), so
-its check needs a duplication/skew axis alongside saturation.
-
-**One ticket filed — LOOP-271 — and its value is that it names a cause, not an instance.**
-`metrics --kaizen` printed a full panel for `[fixture]`, a project this workspace declares
-`scratch:true` and `rotation.ts` guarantees can never fire. Cause: `deliveryProjects()` filters
-`_team` **only**, so four consumers re-apply `!p.scratch` by hand and every consumer written since
-is scratch-blind by default — metrics (3 sites) and the web (2 queries) already are.
-
-**Structural picture — ninth consecutive measurement.** Junior **10/10** unblocked `Todo` (exactly
-at cap, down from 12 — the two verifications drained it); senior **4/10** with **zero** senior-tier
-Backlog rows. Promotion correctly **0** on both tiers: junior has no headroom, senior has headroom
-and nothing eligible. I did **not** manufacture senior work to feed the idle tier — §21b routes by
-the work's nature, and an idle expensive tier is a cheaper mistake than an invented design.
-
-**Not filed, deliberately:** the duplicated `_team` fleet is LOOP-252 / LOOP-261 / LOOP-137, all
-open — recorded as evidence on LOOP-137. The kaizen ratchet rendering `… → 90 (1.8.1) → 90` is a
-display duplicate the implementer self-flagged; a nit, and I closed the correct increment rather
-than holding it hostage.
-
+- **Verify by EXECUTION against the merged tree, not by diff.** The decisive evidence twice sat
+  outside the test suite: the merged reaper run against this machine's real daemon fleet, and the
+  merged CLI's `--kaizen --json` compared field-by-field to the rendered page.
+- **A cancelled CI run on a superseded SHA is not a red gate** — GitHub's concurrency group kills the
+  in-flight run on the next push, so "cancelled" is the *normal* state of a mid-stack commit. Read the
+  conclusion of the tree that CONTAINS the change.
+- **The stall was one unpopulated config key**, not the board: `team.agentReviewers` absent ⇒
+  merge-guard counts `chatgpt-codex-connector` as a blocking human. Still open as LOOP-235.
+- **An AI reviewer against a `--strict` gate has no terminating state by construction** — every extra
+  round costs a full senior fire spent on remediation *text*.
 
 ### 2026-08-03 (pm, twentieth fire) — a spec warning that names the mechanism is an acceptance criterion, and the test asserted the trap it was written to avoid
 
@@ -669,6 +634,74 @@ the `wsHubDb`/`hubDbPath` split looked like LOOP-124's family, but `daemon-lifec
 names `hub.ts:wireEnv` as the deliberate exception. Groomed LOOP-228 into an explicit **permanent
 umbrella** with the program's first status roll-up.
 
+### 2026-08-03 (pm, twenty-first fire) — a green suite, a green CI and a merged PR, and the increment is still a no-op: the fixture hand-supplied the argument the caller never passes
+
+`origin/main` moved **three times inside this fire** — `7ac25a8` → `e80aa7b` (LOOP-270) →
+`096663c` (LOOP-127, PR #153) → `519cc1f` (LOOP-236, PR #146) — and **two new `In Review` items
+arrived mid-fire**, neither in the boot queue. Fourth consecutive fire with another actor writing
+during mine; the boot `queue` read is a starting point, never the list. Lenses reset. Doc-watch
+`282e3565` unchanged — **46 fires, no foreign doc edit**.
+
+**One passed, two failed, and the failure that matters looked green from every angle.** LOOP-236 is
+Lever 1 of the compression program: repair `CONDITIONAL_SECTIONS` so a fire stops shipping
+feature-off conventions spans. It merged with 23 green checks, a clean typecheck, an approving Codex
+round, and a purpose-built regression fixture. **It is still a no-op.** Called exactly as
+`run-agents.ts:906-908` calls it, through the `toLegacyView` projection the runtime actually reads:
+
+```
+cfg.repos (registry) = undefined      RESOLVED repos = []
+pruned = ["5","12c","12d","19","24"]  ← §12c pruned; AC1 requires §12c KEPT
+```
+
+`LegacyProjectsConfig` has **no `repos` field**; `toLegacyView` inlines the flat facts into each
+project's `repos[]` and emits no workspace-level registry. `as unknown as ProjectsConfig` is what
+lets `cfg?.repos` compile. The commit message says the type "gains a `repos?` field" — it does, and
+nothing populates it. §19 still reads "pruned", but vacuously: `[].length > 1` is false because the
+list is *empty*. The one AC that looked satisfied was satisfied by the bug.
+
+**Fixture E diagnosed the shape correctly and then papered over it**, passing a 7th argument the
+production caller never passes:
+
+```ts
+assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
+  { repos: [{ name: "dev-loop", autoMerge: true, … }] },
+  { "dev-loop": { autoMerge: true, landing: "pr" } });   // ← invented registry
+```
+
+The ticket's own description had already flagged the sibling case ("the existing test sidesteps the
+real shape — add the real-shape fixture"). Fixture E is the same sidestep moved from the config
+boundary to the caller boundary. → LOOP-279 (senior, P1), and LOOP-237's `Blocked-by` re-pointed
+there so the compression chain does not auto-unpark on a head that never worked.
+
+**I found it by being wrong first, and the correction is the transferable part.** My first pass
+evaluated the predicate against the raw `dev-loop.json` and concluded §5 was broken because
+`projects.loop.backend` is absent there. It is — but the runtime never reads that file directly, and
+`toLegacyView` injects `backend: t.backend` into every project. Re-running through the real
+projection retired my §5 claim and surfaced the worse, true one. **The disk file is not the input;
+the projection is.** That single move is also exactly what Fixture E skipped.
+
+**LOOP-243 failed on the two ACs its own handoff was silent about.** The proposal (LOOP-277) covered
+AC1 — I byte-checked its verbatim Step 0.5 quote against the file — and AC2's ordering call well
+enough that LOOP-279's sibling keeps both untouched. It never mentioned Amendment 1 (AC4), and it
+carried the 2026-08-01 `behind_by` table forward verbatim (AC5) although that AC says in its own
+words not to; all five PRs it cites are closed. Re-measured: **#153 behind 2, #146 behind 20, #134
+behind 45 — 3 of 3 CI-green loop PRs stale**, and #153 was seven minutes old and already stale when
+the proposal was drafted. LOOP-277 stays parked behind LOOP-278 rather than reaching the operator
+half-written.
+
+**First shipped per-accepted-change price.** LOOP-127 passed on live data:
+`cost: $1162.7887 over 270 of 562 metered fires ($7.3594/accepted change)` — 48% metering coverage.
+The Goals baseline still reads $4.79/fire; that is a §20 D4 direction section and the operator has
+not answered whether re-deriving it is standing authorization, so it stays untouched and the
+measured figure lives here.
+
+**Structural — eleventh consecutive measurement.** Junior **10**/10 after promoting two rank-1 Urgent
+bugs (LOOP-252, LOOP-261) — the **first promotion in four fires**; senior **6**/10 with **zero**
+senior-tier Backlog rows for the sixth straight fire, so the tier that absorbs every escalation can
+only be fed by escalation. §9c: **11** parked, all holding ≥1 live edge, **0** unparks. Filed 2, both
+§3 follow-ups. Job C's lens budget went entirely into the LOOP-236 verification, which is where it
+belonged.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -702,6 +735,30 @@ umbrella** with the program's first status roll-up.
 
 ## Decisions (running log)
 
+
+- **2026-08-03 (pm, twenty-first fire) — a fixture that hand-supplies an argument the production
+  caller never passes cannot catch a caller bug.** LOOP-236's Fixture E named the real runtime shape
+  in its own comment, then invented the `reposRegistry` argument that `toLegacyView` does not emit —
+  so it proved the predicate while the caller stayed broken, through a green suite, a green CI and an
+  approving review. **Rule: a regression test for a caller bug must obtain its arguments the way the
+  caller obtains them** — build the fixture, run it through the real projection, pass the result
+  straight through. If a test constructs an argument by hand, it can only test the callee.
+- **2026-08-03 (pm, twenty-first fire) — verify against the PROJECTION the runtime reads, not the
+  file on disk.** My first pass evaluated `CONDITIONAL_SECTIONS` against raw `dev-loop.json` and
+  produced a confident false finding (§5 broken); `toLegacyView` injects `backend` and the claim
+  evaporated. Re-running through the projection then exposed the real defect, which was worse.
+  **Rule: for any config-driven predicate, find the one projection every runtime consumer reads and
+  drive it from there** — `team-config.ts:627` says outright that `toLegacyView` is that seam.
+- **2026-08-03 (pm, twenty-first fire) — adding a field to a type is not populating it, and
+  `as unknown as` hides the difference.** `cfg?.repos` typechecked at the call site while being
+  structurally absent from `LegacyProjectsConfig`. **Rule: when a fix says "the type gains field X",
+  check what WRITES X on the live path; a cast between two config views suppresses exactly the error
+  that would have caught it.**
+- **2026-08-03 (pm, twenty-first fire) — an AC the handoff does not mention is the AC to check
+  first.** LOOP-243's handoff mapped AC1–AC3 and was silent on AC4 and AC5; those are precisely the
+  two that failed, and AC5 failed by doing the one thing its own text forbade. **Rule: read the
+  handoff as a locator, then check the ACs it did NOT claim** — and require the next handoff to map
+  every AC, so silence stops being cheap.
 
 - **2026-08-03 (pm, twentieth fire) — a prose warning that names both a failure and its mechanism is
   an ACCEPTANCE CRITERION; and a test can pin the very trap it was written to avoid.** LOOP-111's
@@ -1206,14 +1263,20 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   until the hub has a per-fire cost signal"* — died when metering went live **2026-07-31T14:04Z**.
   **(a) Budget ceiling — FILED as `LOOP-197`** (`Feature`, `sensitive`, senior, `Todo`); the plan's
   own instruction *"a separate ticket built ON this signal once LOOP-2 lands"* is discharged.
-  **(b) Cost-per-accepted-change metric + a cost column on `/activity` — DELIBERATELY NOT FILED,**
-  because it composes a denominator this board already knows is wrong: **`LOOP-98`** records
-  `acceptRate` as wrong in BOTH implementations (CLI `metrics.ts` + web `/activity`), 86% shown vs
-  75% true. Shipping a cost-per-accepted-change on top would give a *plausible* dollar figure
-  derived from a known-bad divisor — the exact "surface reporting a result it never established"
-  class this board is retiring. **(c) Accept-rate in the Reflect daily digest** — not filed, same
-  reason, same divisor. **REVERSAL CONDITION for both: `LOOP-98` reaches `Done`.** File (b) and (c)
-  together in the first PM fire after that, and cite this entry.
+  **(b) Cost-per-accepted-change — SHIPPED 2026-08-03 by another chain, and this entry named the
+  WRONG blocker.** It was banked as "not filed until `LOOP-98` (`acceptRate` wrong in both
+  implementations) reaches `Done`". LOOP-127 (LOOP-4 surface 3, `usage-surfaces` design) shipped it
+  anyway and PM verified it live: `cost: $1162.7887 over 270 of 562 metered fires
+  ($7.3594/accepted change)`. **`LOOP-98` was never its divisor** — the metric divides by
+  `teamRollup.throughput` ("transitions → Done in the window", a plain count), not by `acceptRate`
+  (`Done ÷ (Done + verifyFails)`). Two different quantities; this entry conflated them and deferred
+  a metric on a blocker that did not apply. **The real caveat is the NUMERATOR, and it is already
+  ticketed: `LOOP-219`** — window spend includes the ~7.9% burned by fires killed mid-flight, which
+  produced no changes, so $7.36 is an over-estimate of the price of a change and a floor on waste.
+  Nothing to file for (b). **(c) Accept-rate in the Reflect daily digest** — still not filed, and its
+  blocker IS real: it surfaces `acceptRate` itself. **REVERSAL CONDITION for (c) only: `LOOP-98`
+  reaches `Done`.** Lesson kept: check which quantity a surface actually divides by before banking
+  it behind another ticket.
 - **Daemon serves stale VIEW code until restarted — observe-surface lag after a Dev ship (ux-flows/ops lens, PM 2026-06-27 — banked).** The long-lived daemon (DL-41) loads `daemonviews.ts` + routes at boot, and `daemon ensure` is idempotent (never restarts a live process), so after a Dev commit that changes the web-UI rendering (e.g. DL-84's new `/activity` section, or DL-83's banner) the running daemon keeps serving the OLD view code until manually `down`+`up`'d — the operator sees fresh DATA (read per-request from the SoR) with **stale RENDERING**. Standard server behavior, but a real papercut for THIS dogfooding loop where Dev ships ~every 20min and the daemon IS the operator's observe surface (a new feature looks un-shipped until restart). **Options when filed:** a `dev-loop daemon restart` subcommand + a post-ship hint; OR a lightweight **served-commit-vs-HEAD banner** on the web UI so staleness is *visible* (the DL-83 surface-don't-prevent pattern); OR file-watch auto-reload (heavier — touches the lifecycle + the stateless contract). **Banked, not filed** — expected daemon behavior, low-severity (data is correct, only new view code lags); file if the operator finds the lag misleading or asks. **Re-tested 2026-07-31 (late): still banked, and the reversal condition is now NAMED rather than left to taste — the DETECTION half is already ticketed as LOOP-195 (doctor is blind to a daemon running pre-upgrade code), so file the REMEDIATION half (`daemon restart` verb / served-commit banner) only if LOOP-195 ships and the operator still has to be told by hand. Until then a second ticket would duplicate LOOP-195's surface.**
 - **A verify-fail should be reachable from a green suite — the "which case does the fixture dodge?"
   check, banked 2026-07-31.** LOOP-57 shipped 22/22 green and was still unusable, because its case (c)
