@@ -472,8 +472,10 @@ passes 10 and 12; the two stubs merged into one here under pass 13). Clauses sti
   `dev-loop events` and the installed tree, never from repo source.
 - **A stale hub daemon silently rewrites board writes.** Board writes execute *in the daemon*, so
   while it runs old code a dev-tier actor's cross-tier assignment collapses to self and senior-dev
-  cannot stage junior children — split-dev delegation is disabled with no error anywhere. Tracked as
-  LOOP-258; **still open, still stale, 2h17m parked as of the fifteenth fire.**
+  cannot stage junior children — split-dev delegation is disabled with no error anywhere.
+  **Closed by LOOP-258** (eighteenth fire) — the operator repointed the plugin `source.path` at the
+  pinned build, so plugin and PATH CLI are one artifact. The *duplication/version-split* half is not
+  closed and is owned by LOOP-137 / LOOP-252 / LOOP-261.
 - **The bottleneck is landing, not idea supply.** A deep Backlog with an idle tier is a routing or
   infrastructure problem; filing more tickets is padding, not throughput.
 - **Aggregates hide the worst event.** Every cost surface bills fires killed mid-flight as delivered
@@ -553,47 +555,21 @@ Clauses still in force:
   Read fires-per-hour against the subscription before reading it against the queue.
 
 
-### 2026-08-03 (pm, eighteenth fire) — two verifications closed, and one only closed because I broke a cycle the board could not
+### 2026-08-03 (pm, eighteenth fire) — [ARCHIVED]
 
-`origin/main` is **`f590b68`** — LOOP-173's own merge; the product moved on code for the second
-consecutive fire, so the lens list resets here. Doc-watch: `docs/STRATEGY.md` unchanged from what I
-landed (**43 fires, no foreign doc edit**) — but the operator wrote on the *board* this fire, which is
-where the direction actually arrived.
+Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 18).
+Clauses still in force:
 
-**LOOP-173 `Done`, and its own wire repro is the whole verdict.** Against a listener bound to this
-box's non-loopback address: at `50a488c` it printed `authorization="Bearer <canary>"`; at `f590b68`
-it printed **nothing at all** while the CLI exited 5 naming both remedies; with
-`DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1` the request arrives again. Leak real, closed, escape hatch intact
-— three rows, no inference. Both suites green on the merged tree (28 new assertions), `main`'s own CI
-green during the fire, and all five cited Codex thread resolutions re-derived as genuinely present.
-
-**LOOP-258 `Done` — the operator closed the daemon-downgrade vector at its source**, repointing the
-`dev-loop` marketplace `source.path` from the stale jinko checkout to the pinned 1.14.0 build, so
-plugin and PATH CLI are now one artifact and skew is structurally impossible rather than fixed.
-Verified from my own fire rather than their table: `loop` pid 45295 **v1.14.0**, `_team` pid 40984
-**v1.14.0**, and the CLI's "running OLD code" remedy line — the surface that named this bug — is gone.
-Third attempt, first that held under load.
-
-**I closed it on AC1 alone because of a cycle, not a concession.** AC3 ("LOOP-172's junior child is
-re-staged") can only happen inside LOOP-172, which was blocked **by LOOP-258**; holding the tracker
-open for AC3 guaranteed AC3 could not occur. AC2 needs a real senior-dev cross-tier write, which I
-cannot honestly produce as `pm`. Both were **re-homed onto LOOP-172** — one observable, on the ticket
-that owns the work — rather than checked or dropped.
-
-**The operator's loose end was real and worse than reported.**
-`~/.claude/plugins/cache/dev-loop/dev-loop/1.9.0` is a real directory carrying `hub/package.json`
-**1.9.0**, whose `hook-session-start.ts:16` spawns `daemon up` from *its own tree*; if it ever became
-the resolved plugin source again it would downgrade a 1.14.0 daemon **five minor versions**. Filed
-nothing — LOOP-252's AC1 neutralizes it and its AC4 is what would have made it visible without `ps`.
-The verified writeup went **on LOOP-252**, whose stakes it raises; a second ticket would have split
-one fix across two rows.
-
-**Structural picture, ninth consecutive measurement, unchanged.** Junior **12** unblocked `Todo`
-against a cap of 10 (over); senior **6**/10 with **zero** senior-tier Backlog rows to draw from;
-Backlog **67** (66 junior + the untiered LOOP-228 umbrella). Promotion correctly **0** — not for want
-of slots, but because the side *with* slots has nothing filed for it. §9c: all **11** parked rows hold
-≥1 live blocker, **0 unparks**; LOOP-172 lost one edge when LOOP-258 closed and stays parked on
-LOOP-235. **Filed 0** — the one candidate deduped into LOOP-252 on a real reading of its ACs.
+- **A tracker held open for an AC it blocks can never satisfy that AC.** LOOP-258 was closed on AC1
+  alone because AC3 could only occur inside LOOP-172, which LOOP-258 itself blocked; the remaining
+  ACs were **re-homed onto the ticket that owns the work**, not checked or dropped.
+- **An AC that needs a role you are not cannot be honestly self-checked** — re-home it, do not
+  approximate it.
+- **A stale plugin checkout is a downgrade weapon.** `~/.claude/plugins/cache/dev-loop/1.9.0` still
+  carries a `hook-session-start.ts` that spawns `daemon up` from its own tree. LOOP-252 AC1
+  neutralizes it; AC4 is what would make it visible without `ps`.
+- **Evidence that raises an open ticket's stakes belongs ON that ticket** — a second row splits one
+  fix across two.
 
 ### 2026-08-03 (pm, nineteenth fire) — both verifications survived execution; the loop's real stall is one unpopulated config key holding three green PRs
 
@@ -646,6 +622,53 @@ display duplicate the implementer self-flagged; a nit, and I closed the correct 
 than holding it hostage.
 
 
+### 2026-08-03 (pm, twentieth fire) — a spec warning that names the mechanism is an acceptance criterion, and the test asserted the trap it was written to avoid
+
+`origin/main` moved **twice inside this fire** — `367e4c3` → `cd81043` (LOOP-111) → `7ac25a8`
+(LOOP-124, which also arrived `In Review` mid-fire). Lenses reset. Doc-watch `dac1f587` unchanged —
+**45 fires, no foreign doc edit**.
+
+**Three closed, one failed.** LOOP-212 and LOOP-213 passed the §21a **design gate** (children
+LOOP-272 / LOOP-273 promoted first, parents `Done` second — the crash-safe order). LOOP-124 `Done`,
+verified on the production entry point: a daemon started inside this workspace with
+`DEVLOOP_HUB_DB=/tmp/otherws/hub.db` now renders that path, where before it named a DB it was not
+reading.
+
+**LOOP-111 `Canceled` → LOOP-274 (senior, direct-code).** Five of six behaviours verified correct
+against the real forge. The sixth: a forge-probe failure annotates **`no-pr`**, not `unknown`,
+because `ticketToPr` collapses "no PR exists" and "I could not ask" into one `null`. With `gh` off
+`PATH`, **every** verify item claims its increment never landed — `no-pr` is a positive false claim,
+and it is exactly the answer that reads as "nothing shipped".
+
+**Two things make that a journal entry, not a ticket line.** My own grooming comment named the trap —
+*"it collapses both to `null` — you will need the `ok`/throw distinction from your own probe"* —
+before a line was written; **a warning that names both the failure and its mechanism is an AC in
+prose**. And the suite **asserts the defect as intended** (Cases 30/30b), with Case 30's own
+parenthetical identifying the ambiguity before choosing the wrong side. LOOP-121 fixed doubles that
+accept any argv; these doubles *do* validate argv. A green suite cannot tell you the oracle was wrong.
+
+**The gates amended rather than bounced, deliberately.** LOOP-272 had dropped two of the operator's
+four ruled items and inherited a scope contradiction — the parent forbids editing `references/`, the
+child must document the new key in `references/config-schema.md`. Ruled the latter **in scope** (§17
+covers conventions + SKILL only; LOOP-226/123/103 each documented their own key) and added the two
+ACs as binding comments. On LOOP-273 I confirmed senior's `--fire-on-start` default of **`due`** (the
+parent's "default to today's behaviour" predates (A) and would have nulled the fix) and required a
+clamp `min(lastFire+cadence, now+cadence)` against the failure mode I named when re-scoping it: a
+seed from bad state suppressing an agent entirely.
+
+**LOOP-235 correction — my last entry is now wrong.** #145 did not wait: junior-dev resolved all 11
+Codex threads itself and it merged. Radius is **two** PRs, not three. And the AC miss above shipped
+*through* those 11 threads — so on the one PR with an outcome, the Codex block was not what caught
+the defect, and the defect merged anyway. That cuts toward option (A).
+
+**Structural — tenth consecutive measurement.** Junior **11**/10 (over cap *because of* the two gate
+promotions); senior **5**/10 with **zero** senior-tier Backlog rows; promotion **0** on both tiers,
+for the two different reasons that keep recurring. §9c: **10** parked, all holding ≥1 live edge, **0
+unparks**. **Filed 1** (LOOP-274). Job C swept `consistency` on the moved diff and filed **nothing** —
+the `wsHubDb`/`hubDbPath` split looked like LOOP-124's family, but `daemon-lifecycle.ts:211` already
+names `hub.ts:wireEnv` as the deliberate exception. Groomed LOOP-228 into an explicit **permanent
+umbrella** with the program's first status roll-up.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -679,6 +702,27 @@ than holding it hostage.
 
 ## Decisions (running log)
 
+
+- **2026-08-03 (pm, twentieth fire) — a prose warning that names both a failure and its mechanism is
+  an ACCEPTANCE CRITERION; and a test can pin the very trap it was written to avoid.** LOOP-111's
+  grooming comment predicted the `no-pr`/`unknown` collapse exactly; the code crossed it and Cases
+  30/30b assert it as correct, Case 30's own parenthetical naming the ambiguity before choosing
+  wrong. Argv-validating doubles (LOOP-121) do not help when the *oracle* is wrong. **Rule: treat a
+  mechanism-naming warning as an AC and re-read it at the line it describes; and for any two-valued
+  negative ask whether the code can tell "no" from "couldn't ask" — if not it reports the confident
+  one.** (LOOP-111 → LOOP-274.)
+- **2026-08-03 (pm, twentieth fire) — a design gate AMENDS spec-edge omissions and BOUNCES only
+  incoherent design.** LOOP-272 dropped two of four operator-ruled items; binding comments cost one
+  write, a bounce would cost a senior fire to re-add two bullets. **Rule: bounce when the design or
+  decomposition is wrong, amend when it is sound and the omission sits at the spec's edge — and say
+  which you did.** Same pass: **`references/config-schema.md` is NOT a §17 governing file** (§17 names
+  `conventions.md` + SKILL files only; LOOP-226/123/103 each documented their own key). A config key
+  that ships undocumented is half-shipped.
+- **2026-08-03 (pm, twentieth fire) — a program umbrella is not a Backlog row.** LOOP-228 sat
+  `Urgent`/untiered/unassigned for two days inside a funnel it can never leave, re-derived as
+  intentional every fire. **Rule: mark an umbrella explicitly and roll its status up on the ticket;
+  do NOT apply §9a's "close the parent" when the parent carries the baseline its children are
+  measured against** — closing it scatters that reference across seven tickets.
 - **2026-08-03 (pm, nineteenth fire) — a cancelled CI run on a superseded SHA is not a red gate; read
   the conclusion of the tree that CONTAINS the change, not of the commit that introduced it.** Both
   tickets I verified this fire had `conclusion: cancelled` on their own commit — GitHub's concurrency
@@ -1147,48 +1191,16 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   seam today is the one-way hub→Linear `mirror` (a projection, not a bridge); Linear visibility
   without migrating = `service` + `mirror`. Scope as its own epic when prioritized: exporter/importer
   per direction + `externalId` carry + id-remap + a freeze→import→verify→cutover runbook.
-- **Inter-agent discussion daemon (deferred).** The Vision also names the daemon "owning
-  inter-agent communication and discussion." Today that plane is the **poll-based, no-daemon**
-  §25 board + P6 channel. Moving it into a persistent process is a larger architectural step
-  that touches the stateless-per-fire contract and the §17 firewall — defer until the
-  read/edit daemon (DL-1…DL-4) is proven, then scope as its own initiative.
-- **Hub/`service` hardening pass** (supporting goal): widen `doctor` coverage and edge-case
-  tests for the `node:sqlite` SoR that the daemon will build on (file as the daemon backlog
-  drains and concrete gaps surface).
-- **Multi-stakeholder roadmap auth** (future persona): once the web UI exists, distinguish
-  operator vs. non-operator roadmap stakeholders beyond the single operator-publish gate.
-- **Reports + 点评 review in the web UI** (ux-flows lens, PM 2026-06-23): the operator's
-  *observe-and-steer* flow is today purely file-based (read `reports/<agent>/**`, drop a
-  `<report>.review.md` 点评 sibling). **UPDATE 2026-06-23:** the operator asked for this directly,
-  and the **read half** is now filed as **DL-10** (surface the daily/weekly/monthly reports in the
-  web UI). **Remaining follow-up (DL-10 has now landed):** accepting a **点评 *from* the web UI** (a
-  write path that drops a `<report>.review.md` sibling) — closes the operator-feedback loop without a
-  terminal; reuses DL-10's reports view + a guarded write path like DL-3's roadmap edit. **⚠️ §17/§22
-  firewall constraint (load-bearing — do NOT file as a naive Dev ticket):** conventions §22 states
-  *"agents never write a `*.review.md` file — ever,"* because that's exactly what makes any on-disk
-  review operator-authored-by-construction (the spoof-proof trust boundary). A daemon write path
-  therefore needs a **conventions §22 carve-out** — "the localhost daemon MAY write a `*.review.md`
-  ONLY for an operator-submitted 点评 via the web UI (the operator IS the author; localhost-trust),
-  attributed/audited as such" — which is a **§17-gated `[pm-proposal]`** (operator applies), paired
-  with a buildable daemon `POST /reports/<agent>/<level>/<date>/review` slice (path-validated, §16-safe,
-  CSRF/same-origin-guarded since it's a write). Scope it like the cwd feature (DL-12 proposal +
-  DL-13/15 buildable) — i.e. a small design pass, not a one-shot ticket. Awaiting operator
-  prioritization vs. the supporting goals (hub hardening + portability) now that the milestone is done.
-- **Board summary band (data-analytics lens, PM 2026-06-23 — P4 polish, parked from the 6-lens sweep).**
-  `boardPage()` renders one section per state with only a per-column count; no at-a-glance composition
-  by **type / owner / priority** above the columns. Pure read-only aggregate over the existing
-  `query_only` db (no new table, no write route). **Deliberately parked rather than filed** — it overlaps
-  the same `boardPage()` surface as the filed DL-20 (filter/search) and is convenience polish at the
-  current ~16-ticket scale; file it (or fold it into DL-20's implementation) when the board grows or
-  DL-20 lands. Buildable when filed — no §17/§22 gate. **UPDATE 2026-06-24: gate opened — DL-20 verified
-  Done and the board grew ~16→44, so this is no longer DL-20-overlapping polish at a small scale. Confirmed
-  not built (`boardPage()` still renders per-column counts only, daemon.ts:245). Filed as DL-45** (Improvement,
-  pm, Low; read-only aggregate over the existing rows, respects DL-20 filters + DL-31 swimlanes).
-- **Web-UI header nav: active-surface highlight (consistency lens, PM 2026-06-23 — marginal, parked).**
-  Highlight the current surface in the header nav (board / roadmap / reports / the DL-17 `/activity`).
-  Cosmetic parity polish with no observe/steer payoff — fold into a future nav pass alongside the
-  `/activity` nav link DL-17 adds, rather than its own ticket. (The "labeled board item" half was
-  redundant with the existing wordmark-as-home at `daemon.ts:127`.)
+- **[ARCHIVED] Six DL-era candidates** (inter-agent discussion daemon; hub/`service` hardening pass;
+  multi-stakeholder roadmap auth; 点评-from-the-web-UI write path; board summary band; header-nav
+  active-surface highlight). Rolled whole to
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 18) — each was either
+  filed/landed on the retired **DL-prefix** board or is a vague future-persona note, and this section
+  holds only candidates with an **unfiled, actionable** next step. One clause survives because it is a
+  live firewall constraint: **a 点评 write path from the web UI needs a conventions §22 carve-out**
+  (§22 says agents never write `*.review.md` — that is what makes an on-disk review
+  operator-authored-by-construction), so it is a §17-gated proposal, never a naive Dev ticket.
+
 - **Loop-cost-governance — Phase 2: PRECONDITION CLEARED 2026-07-31, and the bank entry is now a
   split verdict (rewritten 2026-07-31, was a 3.8 KB plan).** The blocking premise — *"not buildable
   until the hub has a per-fire cost signal"* — died when metering went live **2026-07-31T14:04Z**.
