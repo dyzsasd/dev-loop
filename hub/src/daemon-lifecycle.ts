@@ -23,7 +23,21 @@ import { findCompatibleNode } from "./node-runtime.ts";
 import { devloopProjectsPath, hubDbPath, pkgVersion } from "./paths.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb } from "./workspace.ts";
 
-interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; version?: string; actor?: string; }
+interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; version?: string; actor?: string; entryPath?: string; }
+// semver direction: returns true when a comes strictly before b (a < b). Unparseable strings → false (treat as equal).
+function semverBefore(a: string, b: string): boolean {
+  const pa = a.match(/^(\d+)\.(\d+)\.(\d+)/), pb = b.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!pa || !pb) return false;
+  for (let i = 1; i <= 3; i++) { const d = Number(pa[i]) - Number(pb[i]); if (d !== 0) return d < 0; }
+  return false;
+}
+// Direction-aware version status suffix for daemon status output.
+function formatVersionStatus(runningVer: string, cliVer: string, key: string): string {
+  if (runningVer === "?" || runningVer === cliVer) return "";
+  if (semverBefore(cliVer, runningVer))
+    return ` — daemon is NEWER than this CLI (v${runningVer} > v${cliVer}) — this CLI is stale; do NOT run \`dev-loop daemon up\``;
+  return ` — running OLD code v${runningVer}, CLI is v${cliVer}; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart`;
+}
 const DEFAULT_DAEMON_PORT = 8787;
 const AUTOSTART_LABEL = "com.dyzsasd.dev-loop.daemon";
 const PROBE_WARN_GAP = 8;   // warn when the probe walked more than 8 ports above the start (AC-B5)
@@ -166,15 +180,15 @@ async function lcProbe(url: string, key: string, timeoutMs = 1000): Promise<bool
 // Like lcProbe but returns the health body (version/actor) on success, null otherwise — so `up` can
 // detect a daemon still running PRE-UPGRADE code (version ≠ this CLI's) and restart it (D1). Without
 // this, an `npm i -g` upgrade never takes effect on a running detached daemon until reboot / manual down.
-async function lcHealthInfo(url: string, key: string, timeoutMs = 1000): Promise<{ version?: string; actor?: string } | null> {
+async function lcHealthInfo(url: string, key: string, timeoutMs = 1000): Promise<{ version?: string; actor?: string; entryPath?: string } | null> {
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), timeoutMs);
     const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
     if (r.status !== 200) return null;
-    const b = (await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; actor?: string } | null;
+    const b = (await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; actor?: string; entryPath?: string } | null;
     if (!b || b.ok !== true || b.project !== key) return null; // confirm it's OUR project on that port, not a stranger
-    return { version: b.version, actor: b.actor };
+    return { version: b.version, actor: b.actor, entryPath: b.entryPath };
   } catch { return null; }
 }
 async function lcWaitHealthy(url: string, key: string, totalMs = 8000): Promise<boolean> {
@@ -236,7 +250,13 @@ async function daemonUpForKey(key: string): Promise<number> {
       console.log(`[daemon] up: already running for '${key}' → ${pre.url} (pid ${pre.pid})`);
       return 0;
     }
-    if (info) console.log(`[daemon] up: '${key}' is running old code (v${info.version || "?"} ≠ v${pkgVersion()}) — restarting to pick up the upgrade`);
+    if (info && info.version && semverBefore(pkgVersion(), info.version)) {
+      // Running daemon is NEWER than this CLI — refuse to downgrade it.
+      const runningFrom = info.entryPath ?? pre.entryPath ?? "(unknown tree)";
+      process.stderr.write(`[daemon] up: '${key}' daemon is NEWER than this CLI (v${info.version} > v${pkgVersion()}) — this CLI is stale; refusing to downgrade\n  running daemon: ${runningFrom}\n  this caller:    ${lcDaemonEntry()}\n`);
+      return 1;
+    }
+    if (info) console.log(`[daemon] up: '${key}' is running old code (v${info.version || "?"} < v${pkgVersion()}) — restarting to pick up the upgrade`);
     // else: bound but unhealthy — fall through to the locked cold-start path, which stops + respawns it.
   }
   // DL-46: serialize cold start under the per-project lock — the second concurrent `up` waits here, then
@@ -249,7 +269,12 @@ async function daemonUpForKey(key: string): Promise<number> {
     if (existing && lcIsAlive(existing.pid)) {
       const info = await lcHealthInfo(existing.url, key);
       if (info && (info.version ?? "") === pkgVersion()) { console.log(`[daemon] up: already running for '${key}' → ${existing.url} (pid ${existing.pid})`); return 0; }
-      // Either not answering /api/health (a bound-but-wedged daemon) OR running pre-upgrade code — stop it
+      if (info && info.version && semverBefore(pkgVersion(), info.version)) {
+        const runningFrom = info.entryPath ?? existing.entryPath ?? "(unknown tree)";
+        process.stderr.write(`[daemon] up: '${key}' daemon is NEWER than this CLI (v${info.version} > v${pkgVersion()}) — this CLI is stale; refusing to downgrade\n  running daemon: ${runningFrom}\n  this caller:    ${lcDaemonEntry()}\n`);
+        return 1;
+      }
+      // Either not answering /api/health (a bound-but-wedged daemon) OR running old code — stop it
       // (SIGTERM→SIGKILL) so we cleanly restart on its port rather than no-op onto a dead / stale process.
       await lcStop(existing.pid);
     }
@@ -309,7 +334,7 @@ async function daemonUpForKey(key: string): Promise<number> {
         : await lcWaitHealthyOrDead(url, key, child.pid);
       if (result === "healthy") {
         const started = await lcHealthInfo(url, key); // record what actually came up (version/actor) for `status` + upgrade detection
-        lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString(), version: started?.version ?? pkgVersion(), actor: started?.actor ?? "operator" });
+        lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString(), version: started?.version ?? pkgVersion(), actor: started?.actor ?? "operator", entryPath: started?.entryPath ?? self });
         console.log(`[daemon] up: started '${key}' → ${url} (pid ${child.pid})`);
         return 0;
       }
@@ -375,10 +400,12 @@ async function daemonStatus(): Promise<number> {
     const live = await lcHealthInfo(info.url, key);
     if (live) {
       const ver = live.version || info.version || "?";
-      const stale = ver !== "?" && ver !== pkgVersion() ? ` — running OLD code v${ver}, CLI is v${pkgVersion()}; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart` : "";
+      const stale = formatVersionStatus(ver, pkgVersion(), key);
       const actor = live.actor || info.actor;
       const misId = actor && actor !== "operator" ? ` — WARNING actor='${actor}' (not operator; publish/attribution may be mis-gated)` : "";
-      console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid}, v${ver}, actor=${actor ?? "?"})${stale}${misId}`);
+      const ep = live.entryPath ?? info.entryPath;
+      const epLine = ep ? `\n  entry: ${ep}` : "";
+      console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid}, v${ver}, actor=${actor ?? "?"})${stale}${misId}${epLine}`);
       return 0;
     }
   }
@@ -576,10 +603,12 @@ export async function daemonStatusAll(): Promise<number> {
       const live = await lcHealthInfo(info.url, key);
       if (live) {
         const ver = live.version || info.version || "?";
-        const stale = ver !== "?" && ver !== pkgVersion() ? ` — running OLD code v${ver}, CLI is v${pkgVersion()}; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart` : "";
+        const stale = formatVersionStatus(ver, pkgVersion(), key);
         const actor = live.actor || info.actor;
         const misId = actor && actor !== "operator" ? ` — WARNING actor='${actor}' (not operator; publish/attribution may be mis-gated)` : "";
-        console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid}, v${ver}, actor=${actor ?? "?"})${stale}${misId}`);
+        const ep = live.entryPath ?? info.entryPath;
+        const epLine = ep ? `\n  entry: ${ep}` : "";
+        console.log(`[daemon] status: '${key}' RUNNING → ${info.url} (pid ${info.pid}, v${ver}, actor=${actor ?? "?"})${stale}${misId}${epLine}`);
       } else {
         console.log(`[daemon] status: '${key}' RUNNING (pid ${info.pid}) → ${info.url} — probe failed; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart`);
       }
