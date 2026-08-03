@@ -43,7 +43,7 @@ markers; with them set, operator writes refuse (exit 4).
    (W13 = key resolvable, W14/W15 = opencode wiring).
 4. Launch config: \`dev-loop team set\` for tunables; per-agent \`codingAgent\`/\`model\`/\`effort\` per
    \`references/config-schema.md\`.
-5. Board up: \`dev-loop hub start\` (service backend) — the ticket UI at http://127.0.0.1:8787.
+5. Board up: \`dev-loop hub start\` (service backend) — live URL in \`dev-loop hub status\`.
 6. Start the loop: \`dev-loop run --agents core\` (in a separate terminal / \`--once\` to trial).
    \`dev-loop doctor\` first — fix every ❌ and read every W-code before an unattended run.
 

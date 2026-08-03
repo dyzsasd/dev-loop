@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { deriveTeamKey, preseedClaudeTrust, interactiveCommandFor } from "../src/up.ts";
+import { deriveTeamKey, preseedClaudeTrust, interactiveCommandFor, resolvedBoardUrl } from "../src/up.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -37,6 +37,21 @@ ok(deriveTeamKey("/tmp/@@") === "team", "deriveTeamKey: degenerate name falls ba
   ok(preseedClaudeTrust("/ws/x", cj) === "already", "preseedClaudeTrust: idempotent second call");
   writeFileSync(cj, "{ not json");
   ok(preseedClaudeTrust("/ws/x", cj) === "unparseable", "preseedClaudeTrust: garbled file untouched → 'unparseable'");
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+// ── resolvedBoardUrl ─────────────────────────────────────────────────────────
+{
+  const tmp = mkdtempSync(join(tmpdir(), "dl-up-board-"));
+  const stateDir = join(tmp, ".dev-loop");
+  mkdirSync(stateDir, { recursive: true });
+  const fakeWs = { root: tmp } as any;
+  ok(resolvedBoardUrl(fakeWs).includes("hub status"), "resolvedBoardUrl: no runfile → includes hub status hint");
+  ok(resolvedBoardUrl(fakeWs).includes("8787") || /\d+/.test(resolvedBoardUrl(fakeWs)), "resolvedBoardUrl: no runfile → default port present");
+  writeFileSync(join(stateDir, "daemon-_team.json"), JSON.stringify({ url: "http://127.0.0.1:19999" }));
+  const u = resolvedBoardUrl(fakeWs);
+  ok(u.includes("19999"), "resolvedBoardUrl: runfile url used when daemon is running");
+  ok(u.includes("hub status"), "resolvedBoardUrl: hub status hint present even with runfile");
   rmSync(tmp, { recursive: true, force: true });
 }
 
