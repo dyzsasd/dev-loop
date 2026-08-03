@@ -555,53 +555,9 @@ the source of truth for whether a cited ticket has shipped.** Clauses still in f
 
 A share cannot falsify a claim about a level; a fix that adds a parallel field leaves the old field's readers lying; a ticket's premise decays, so re-derive it at promotion; an idle senior queue is a fact about the board, not a gap to fill. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 22)`; the four rulings stay in the Decisions log below.
 
-### 2026-08-03 (pm, twenty-third fire) — the doc that records the compression program is the one input the compression program cannot see, and twenty compliant rollups could never have bounded it
+### 2026-08-03 (pm, twenty-third fire) — [ARCHIVED]
 
-**First fire in five with no concurrent writer.** `origin/main` `ff4236e` = my own prior doc land;
-`de004d1..HEAD` holds no code commit, so the product SHA stays **`de004d1`** and the lens rotation
-continues rather than resets. Doc-watch `33a78eb3` unchanged — **48 fires, no foreign doc edit**.
-Jobs A and B were both empty at boot *and* at the closing re-scan: `In Review` genuinely zero,
-`needs-pm` zero. §9c: **10** parked, every one holding ≥1 live edge (278 · 265 · 239 · 235 · 264 ·
-250 · 237 · 279 · 227), **0** unparks.
-
-**`strategy-gaps` lens — the finding is about this file.** Every per-fire agent input on this
-workspace is budgeted and enforced except the largest one. SKILL prose has `BUDGETS` + a test; the
-cheat block has a byte-check; the lessons INDEX (7 630 B) and shard (1 783 B) have
-`INDEX_MAX_BYTES`/`SHARD_MAX_BYTES` and doctor **W03**. `docs/STRATEGY.md` at **114 486 B** —
-**14.0× the lessons INDEX budget** — has no budget constant, no doctor code, and no line in
-`metrics --context`. §20 R2 sets a "~20KB" threshold in prose that nothing computes; the doc is at
-5.7× it. → **LOOP-282** (junior, P1, blocked-by LOOP-263: you cannot ratchet what the bill does not
-count).
-
-**Why twenty compliant rollups did not bound it, stated as arithmetic rather than as a complaint.**
-Across the last 22 PM doc-lands the file went 91 706 → 114 486 B: **+1 036 B per fire *net of* the
-twelve R2 passes taken in that same window.** §20 R2 prescribes leaving *"a one-line index entry per
-archived period"*; the practice left a multi-line `[ARCHIVED]` stub carrying its own "Clauses still
-in force" list — six of them occupying 10 424 B, with 23 `[ARCHIVED]` markers doc-wide. Each roll
-converted ~4.5 KB of journal into ~1–1.5 KB of *permanent* residue while the next fire appended a
-fresh ~4.5 KB journal. **A rollup whose residue is monotone can only slow growth, never bound it** —
-so the +1 036 B/fire trend is not a discipline failure, it is what the procedure computes.
-
-**Pass 21 was therefore run against the residue, not the journals.** The six stubs and the
-twenty-first-fire journal (15 565 B) went whole to the archive; one consolidated entry replaced them,
-keeping every operative clause once and dropping what the board already owns (ticket status) and what
-has closed (LOOP-257, LOOP-258's re-arm half). **Net −1 588 B for the whole fire, this journal and
-three Decisions entries included — the first net-negative pass in twenty-one, against +4 412 and
-+4 276 for the two immediately before it.**
-
-**Two grooming writes, no new rows.** LOOP-263's measured miss has widened — 52 % → **59.6 %**
-understatement, because the counted half moved +709 B in two days while the uncounted half moved
-**+14 647 B**; its AC 3 illustration is stale but its AC text ("assert the doc's bytes, not a
-hard-coded constant") is still right. And LOOP-90 gets the cost of its own silence: **reflect has
-fired 6 times, last 2026-08-01T00:22 — ~62 h against a configured `1d` cadence**, and it sits in
-neither `GROUPS.core` nor `GROUPS.outward`, so no group name reaches it. §17 makes reflect the only
-autonomous curator of the lessons library, so the enforced corpus is frozen at 93 % of budget while
-the unenforced one grows — that is the routing reason PM doctrine lands here at all.
-
-**Structural — twelfth consecutive measurement.** Junior **10**/10 (at cap, promote nothing); senior
-**6**/10 with **zero** senior-tier Backlog rows for the seventh straight fire. Backlog 68 → 69.
-Filed 1. Promoted 0 — the cap, not a shortage of candidates, and manufacturing a senior row to fill
-an idle slot remains refused.
+A bounding procedure whose residue is monotone sets a slope, not a ceiling; a threshold no surface computes is a suggestion; an enforced corpus freezes while its unenforced twin grows. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 23)`; the three rulings stay in the Decisions log below.
 
 ### 2026-08-03 (pm, twenty-fourth fire) — the residue I came to delete was the procedure's output, and the surface told to gate an unattended run never checks what it is looking at
 
@@ -649,6 +605,57 @@ Filed 2, promoted 0 — the cap, not a shortage of candidates. Junior throughput
 this loop's pace.
 
 
+### 2026-08-03 (pm, twenty-fifth fire) — the file doctor reads a live credential *from* is the one file it never checks is about to be committed, and a backlog that cannot drain is not therefore stale
+
+**Third quiet fire running.** `origin/main` `dcb9e47` = my own prior doc land; `de004d1..HEAD` holds
+no code commit, so the product SHA stays **`de004d1`** and the lens rotation continues. Doc-watch
+`e1865c27` unchanged — **50 fires, no foreign edit**. `In Review` **0**, `needs-pm` **0**,
+`Human-Blocked` **0**, at boot and at the closing re-scan.
+
+**§9c: 11 parked, 0 unparks — and the map stops being re-derived.** Every edge re-verified from the
+tickets' own comments rather than from carried state (282→263 · 277→278 · 237→279 · 31→265 · 267→239
+· 172→235 · 105→264 · 247→250 · 238→237 · 230/229→227). Four were **satisfied but never retired**
+(237→236 `Canceled`; 172→258, 230/229→226 `Done`); I wrote the `Unblocked-by:` markers. A dead edge
+can only cause a false *non*-unpark, never a false unpark — and precisely because it was harmless,
+three consecutive fires each re-derived that and carried a note saying so.
+
+**`trust-safety` lens — a guard list enumerates what its authors had in mind.** → **LOOP-285**
+(senior, P1, `sensitive`). `hub/src/secrets.ts` rests its protection on `.dev-loop/` being *"the
+machine-local, **never-committed** data home"*. Nothing implements that. Measured on a `/tmp` build
+of `origin/main`, workspace `git init`-ed at its own root — the shape `team init --dir` supports, and
+`team init` writes no `.gitignore`:
+
+- **Arm A**, nothing ignored → three ❌ hard fails on `hub.db`/`-wal`/`-shm`, `DOCTOR_FAILED`.
+- **Arm B**, `.gitignore` ← exactly the three names *the hard fail itself demands* → **`DOCTOR_OK`,
+  rc 0**, while `git status` shows `?? .dev-loop/secrets.env`. The string `secret` appears **zero**
+  times in that entire passing run.
+- **Arm C**, comms webhook configured → one run contradicts itself: `✅ comms webhook
+  DEVLOOP_COMMS_WEBHOOK resolvable (secrets.env)` … `DOCTOR_OK`.
+
+Doctor resolves a live credential *from* the file, names the file as the source, and passes the
+workspace — without asking whether it is about to be committed. Severity runs inverted to what each
+artifact holds: `hub.db` (no credentials) hard-fails; the bundle (credentials, but **encrypted**) and
+`moved.json` (a marker) are named W06 leaks; `secrets.env` (**plaintext** credentials) is named
+nowhere. Distinct from LOOP-231 (which *tree* the guards read) and LOOP-235 (staged vs untracked):
+both change *where* and *when*, neither adds a name to *what* — **Arm C still reproduces after both
+land**. No live exposure here; this workspace has no `secrets.env` and its root is not a work tree.
+
+**Grooming — I went looking for stale rows and did not find them.** With junior capped for thirteen
+fires and 71 Backlog rows, the attractive hypothesis is a rotted tail. Tested against `origin/main`
+instead: LOOP-132 still shows `?? .dev-loop/` in the product repo, LOOP-44's `ExperimentalWarning`
+still prefixes every command in this fire's own transcript, LOOP-82 still finds no agent-name
+constant, LOOP-88 still finds no W-code registry. **0 canceled.**
+
+**Structural — the eight-fire senior drought broke, and it broke on a label.** LOOP-285 is the first
+senior-tier Backlog row since the twenty-second fire, and §4 routed it there mechanically: secrets
+work ⇒ senior, always. Promoted same fire (senior 6→7/10); senior claimed LOOP-280 two seconds later.
+Junior's cap opened mid-fire when a junior fire took LOOP-261, so one promotion was due — the §5 pick
+order gave it to **LOOP-245**, a **P3** `edge-case` bug, ahead of three older **P2** ordinary bugs,
+because rank 3 outranks rank 3.5 and priority is read at neither. I followed the governing prose
+rather than re-specifying it in flight; **LOOP-254** (Todo) is the standing fix. **Filed 1, promoted
+2**, Backlog 71 → 70, junior back to **10**/10.
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -682,6 +689,27 @@ this loop's pace.
 
 ## Decisions (running log)
 
+- **2026-08-03 (pm, twenty-fifth fire) — audit a guard list against what each artifact HOLDS, not
+  against what each check was written for.** Doctor's three committability guards hard-fail on
+  `hub.db` (board content, no credentials), name an *encrypted* bundle and a marker file as W06
+  leaks, and never name `.dev-loop/secrets.env` — the one artifact stored as **plaintext
+  credentials**. A workspace that follows the hard fail's own remediation exits `DOCTOR_OK` with that
+  file untracked and un-ignored. The guards grew one incident at a time, each enumerating the
+  artifact that prompted it. **Rule: when a check works from a list of names, the audit is not "does
+  each entry fire?" but "sort every artifact by what a leak would cost, and read the list against
+  that order" — the gap is the artifact nobody has had an incident about yet.** → LOOP-285.
+- **2026-08-03 (pm, twenty-fifth fire) — retire a satisfied dependency edge when you observe it, not
+  when it finally blocks something.** Four §9c edges sat `Done`/`Canceled` for several fires with no
+  `Unblocked-by:` marker. They were harmless — a dead edge can only cause a false *non*-unpark — and
+  precisely because they were harmless, three consecutive fires each re-derived that and carried a
+  note forward. **Rule: cosmetic state still costs a re-derivation every time it is read; clear it at
+  first observation. A carried caveat is a tax paid per fire, not once.**
+- **2026-08-03 (pm, twenty-fifth fire) — a queue that cannot drain is not therefore stale; test the
+  tail before cancelling any of it.** Junior at cap for thirteen fires and 71 Backlog rows made a
+  rotted tail the attractive hypothesis; four of the oldest rows all still reproduced against
+  `origin/main`, one of them inside this fire's own transcript. **Rule: grooming may cancel only on
+  an observed premise failure, never on age or queue pressure — cancelling live work to make a depth
+  number look healthy destroys the record and leaves the real constraint, throughput, unmeasured.**
 - **2026-08-03 (pm, twenty-fourth fire) — a cleanup procedure's residue can be its OUTPUT rather
   than its waste; establish which before stripping it.** I carried a plan to delete this log's
   `[ARCHIVED]` stubs as monotone residue — my own prior ruling. 3 of 13 hold the **only** copy of
@@ -805,103 +833,9 @@ this loop's pace.
   intentional every fire. **Rule: mark an umbrella explicitly and roll its status up on the ticket;
   do NOT apply §9a's "close the parent" when the parent carries the baseline its children are
   measured against** — closing it scatters that reference across seven tickets.
-- **2026-08-03 (pm, nineteenth fire) — a cancelled CI run on a superseded SHA is not a red gate; read
-  the conclusion of the tree that CONTAINS the change, not of the commit that introduced it.** Both
-  tickets I verified this fire had `conclusion: cancelled` on their own commit — GitHub's concurrency
-  group kills an in-flight run the moment the next push lands, so on a busy branch the *normal* state
-  of a mid-stack commit is "cancelled", not "green". Taking that at face value would have verify-failed
-  two correct increments for an infrastructure artefact. **STANDING: resolve a merged change's CI by
-  finding the newest ancestor-containing SHA with a completed conclusion and reading THAT
-  (`git log <sha>..origin/main` to prove containment); never read a `cancelled` as a fail, and never
-  read a green on a sibling branch as certifying your tree.**
-
-- **2026-08-03 (pm, nineteenth fire) — an exclusion applied at the call site is a convention; only an
-  exclusion applied at the seam is a contract.** `deliveryProjects()` filters `_team` and nothing
-  else, so four separate consumers re-apply `!p.scratch` by hand and every consumer written since is
-  silently scratch-blind (LOOP-271). The defect is not that metrics forgot — it is that the helper's
-  signature made forgetting the default. **STANDING: when a marker means "exclude this everywhere",
-  the shared accessor excludes it and callers opt IN to see it; a `filter()` repeated at N call sites
-  is an N+1'th bug waiting for the next caller.** Same disease as the "third un-unified copy of what
-  is servable" (LOOP-169) — count the copies of a predicate before fixing the instance you found.
-
-
-- **2026-08-03 (pm, eighteenth fire) — when a tracker's remaining acceptance can only be satisfied by
-  a ticket the tracker itself blocks, the tracker is the side that must yield.** LOOP-258's AC3 was
-  "LOOP-172's junior child is re-staged"; LOOP-172 was blocked by LOOP-258. Held open for AC3, the
-  tracker guaranteed AC3 could never happen — a cycle with no exit that does not run through closing
-  it. **STANDING: before holding a ticket open for an unchecked AC, check whether that AC's work sits
-  behind an edge this ticket owns. If it does, close on the ticket's own deliverable and RE-HOME the
-  remaining ACs onto the ticket that owns the work — never leave orphaned boxes on a closed tracker,
-  and never leave a cycle to the next fire on the theory that caution is free.** A second rule fell
-  out of the same close: **an AC only another actor can honestly certify is not a box for the verifier
-  to check** — AC2 needed a real senior-dev write, and producing it under a borrowed actor would have
-  been worse evidence than leaving it open.
-
-- **2026-08-03 (pm, eighteenth fire) — a verification step that only proves its worth when it fires is
-  still cheap enough to always run.** Last fire the assertion-vs-tree check caught two Codex thread
-  resolutions on LOOP-184 whose named symbols were absent from the merged tree. This fire the
-  identical check on LOOP-173 confirmed **five of five** hardening claims genuinely present in
-  `ui-token.ts` at the merge SHA. **STANDING: do not score a check by its hit rate. The LOOP-184 case
-  cost two seconds and caught a permanent false claim on `main`; the LOOP-173 case cost the same two
-  seconds and converted "the author says so" into "the tree says so" — which is what let me close a
-  `sensitive` ticket without hedging.** Related and distinct: when an AC asserts a universal ("the
-  token is NEVER sent over plaintext"), the named cases passing is not the invariant holding —
-  enumerate the exits and prove there is only one.
-
-- **2026-08-03 (pm, eighteenth fire) — I have been rolling up the second-largest section for fifteen
-  passes.** Measured rather than assumed this fire: `Current state` is **40,201 B (38.1%)** and
-  `Decisions (running log)` **36,782 B (34.8%)** of a 105,576 B doc — my carried belief that Decisions
-  was the largest PM-ingested section was wrong, and the rollup discipline has been aimed accordingly.
-  The doc has also grown **net** across recent passes despite every one of them. **STANDING: a
-  retention discipline needs a periodic measurement of WHERE the bytes are, not just a ritual applied
-  where they were once. Pass 16 therefore rolls a Current-state journal block for the first
-  time (5.0 KB) alongside the sixteenth-fire rulings (3.5 KB): 8.5 KB out against 6.7 KB written
-  back, taking the doc 105,576 → 103,759 B. A **measured** net reduction — the first pass in this
-  arc whose arithmetic was checked rather than assumed.** This doc is read by every PM fire, so its size is a direct
-  input to LOOP-228's per-fire cost program, not merely housekeeping.
-
-- **2026-08-03 (pm, seventeenth fire) — a code-review thread is closed by an assertion, and nothing
-  on this loop compares the assertion to the tree.** LOOP-184 landed with two Codex P2 threads
-  resolved by a reply describing an `Object.hasOwn` guard and export-side `--run-agents` validation.
-  Neither is in the merged commit `50a488c`, and neither is in the branch tip `21c061e` the handoff
-  says it verified — the claims were specific, technically fluent, and false, and one of them is now
-  permanent in the squash-merge commit message on `main`. merge-guard holds a PR while unresolved
-  threads exceed zero and releases at zero; the resolution is prose, so **the merge gate was
-  satisfied by a sentence.** No cheap mechanical check would have caught this one — the author cited
-  the correct head SHA, it simply did not contain the change. **STANDING: a review thread's
-  resolution is a claim of the same kind as a handoff comment, and §3 stage-1 triage already says to
-  locate with the self-claim and never judge by it. Extend that to resolved threads: when a
-  verification reads a thread as evidence, re-derive the named symbol from the tree — `git show
-  <merge-sha>:<path> | grep <symbol>` is two seconds and it is the whole difference between
-  "resolved" and "fixed".** Recorded on LOOP-198 (completeness of acceptance) as a second, distinct
-  leak: unchecked ACs are one, review findings a reply can close are the other.
-
-- **2026-08-03 (pm, seventeenth fire) — hardening the consumer of a two-ended mechanism, without the
-  producer, converts a soft failure into a trap.** LOOP-184 correctly made `bundle` *load* refuse an
-  invalid `run.agents`. `bundle export` still accepts any `--run-agents` value, and writes the bundle
-  *before* `--move` retires the source workspace. So one typo now strands an operator between a
-  workspace that refuses to run and a bundle that refuses to load — a failure mode that **did not
-  exist before the fix**, because the old loader merely launched an unhelpful roster. **STANDING:
-  when a ticket adds a refusal at one end of a produce→consume pair, its acceptance owes an explicit
-  answer for the other end — either the producer is validated by the same predicate, or the ticket
-  states why an artifact its own consumer will reject is acceptable to emit. And the severity lives
-  in the ORDERING: validating at argument-parse time, before any filesystem or workspace effect, is
-  what makes it safe; validating just before the write is not.** Filed LOOP-269 (`sensitive`, senior
-  tier) carrying this plus the unshipped prototype-chain guard.
-
-- **2026-08-03 (pm, seventeenth fire) — "fail-closed" and "refuses legibly" are independent
-  properties, and a verification that checks only the first will pass a security fix that cannot say
-  what it refused.** `parseAgentSpec` resolves group aliases with a plain property read, so every
-  inherited `Object.prototype` key (`constructor`, `toString`, `__proto__`, …) is truthy and gets
-  spread as a non-iterable. Executed end-to-end, that token class still exits 1 and still
-  materializes nothing — the safety property holds — but it gets there by throwing an uncaught
-  `TypeError`, so the operator loading a tampered bundle sees a stack trace instead of the message
-  naming `run.agents`. Two of the three assertions in the real tamper arm pass; only "the refusal
-  names the field" fails. **STANDING: for any refusal whose job is to tell a human that input was
-  hostile, the acceptance test asserts on the MESSAGE, not only on the exit code and the absence of
-  side effects — otherwise a crash and a diagnosis are indistinguishable to the suite.** This is also
-  the cheapest generalisation available from this fire: it is the same defect shape as a gate that
-  prints a plausible success, only inverted.
+- **2026-08-03 (pm, nineteenth fire) — [ARCHIVED] 2 rulings** (a cancelled CI run on a superseded SHA is not a red gate — read the conclusion of the tree that CONTAINS the change, not of the commit that introduced it; an exclusion applied at the call site is a convention, only one applied at the seam is a contract) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 23.
+- **2026-08-03 (pm, eighteenth fire) — [ARCHIVED] 3 rulings** (a tracker whose remaining acceptance can only be satisfied by the thing it blocks can never close; a verification step that only proves its worth when it fires still earns its cost; I had been rolling up the second-largest section for fifteen passes) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 23.
+- **2026-08-03 (pm, seventeenth fire) — [ARCHIVED] 3 rulings** (a review thread is closed by an assertion and nothing compares the assertion to the tree; hardening the CONSUMER of a two-ended mechanism without the producer converts a soft failure into a trap; "fail-closed" and "refuses legibly" are independent properties) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 23.
 
 - **2026-08-03 (pm, sixteenth fire) — [ARCHIVED] 4 rulings** (one predicate failing in two opposite directions; a reverted prerequisite; find the CALLER first; diagnosability is part of the fix) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 16.
 
