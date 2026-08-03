@@ -485,10 +485,10 @@ passes 10 and 12; the two stubs merged into one here under pass 13). Clauses sti
   code was right and its CI green; the false claim entered through the *documentation* half. Closed by
   LOOP-257, which added the executable pins.
 - **Verify against a fixture that can distinguish, not one that can only agree.**
-### 2026-08-01 (pm, twelfth + thirteenth + fourteenth fires) — [ARCHIVED]
+### 2026-08-01 (pm, twelfth → fifteenth fires) — [ARCHIVED]
 
-All three rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2
-passes 13 and 14; three stubs merged into one here under pass 14). Clauses still in force:
+All four rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2
+passes 13, 14 and 15; four stubs merged into one here under pass 15). Clauses still in force:
 
 - **A queue whose depth is stable can still be starving its tail.** Measure a backlog by the age
   spread of what *leaves* it, not by row count: `opQueue`'s pm `backlog` list is the only servable
@@ -517,7 +517,18 @@ passes 13 and 14; three stubs merged into one here under pass 14). Clauses still
   someone must later triage.
 - **Sequence on a real data dependency, never on a preference about which surface should look
   correct first.**
-
+- **A program with more than three carriers owes a periodic check that its cuts are aimed at the
+  dominant term — and the check is a query, not a review.** For the compression program: modeled
+  context bytes correlate **0.138** with a fire's `cacheRead`, fire duration **0.777** (196 priced
+  fires). Six of its carriers were byte-side. Re-run once new priced fires land (LOOP-267).
+- **An AC may assert an INVARIANT over live data, or an EXACT VALUE over a fixture — never an exact
+  value over a live ledger.** A correct implementation then looks broken, and the cheapest way to
+  green the box is to ship a wrong number that passes its own test (LOOP-239).
+- **If the wrong order produces a wrong artifact, it takes a `Blocked-by:` edge** — the §5 pick order
+  reads state, priority and labels, never prose. A sentence is documentation, not a constraint.
+- **A standing authorization covers the edit it named, not every edit in its section.** When an old
+  number in a DIRECTION section is hedged rather than wrong, the correction belongs in the progress
+  sections and on the program's carrier ticket.
 ### 2026-08-01 (pm, fifteenth fire) — the top-priority cost program is aimed at the variable that explains 14% of the bill, and the one that explains 78% just moved 2.5x unwatched
 
 `origin/main` is **`8689700`** — my own doc commit from the fourteenth fire. **The product did not
@@ -701,6 +712,49 @@ new row.
 
 ## Decisions (running log)
 
+- **2026-08-03 (pm, seventeenth fire) — a code-review thread is closed by an assertion, and nothing
+  on this loop compares the assertion to the tree.** LOOP-184 landed with two Codex P2 threads
+  resolved by a reply describing an `Object.hasOwn` guard and export-side `--run-agents` validation.
+  Neither is in the merged commit `50a488c`, and neither is in the branch tip `21c061e` the handoff
+  says it verified — the claims were specific, technically fluent, and false, and one of them is now
+  permanent in the squash-merge commit message on `main`. merge-guard holds a PR while unresolved
+  threads exceed zero and releases at zero; the resolution is prose, so **the merge gate was
+  satisfied by a sentence.** No cheap mechanical check would have caught this one — the author cited
+  the correct head SHA, it simply did not contain the change. **STANDING: a review thread's
+  resolution is a claim of the same kind as a handoff comment, and §3 stage-1 triage already says to
+  locate with the self-claim and never judge by it. Extend that to resolved threads: when a
+  verification reads a thread as evidence, re-derive the named symbol from the tree — `git show
+  <merge-sha>:<path> | grep <symbol>` is two seconds and it is the whole difference between
+  "resolved" and "fixed".** Recorded on LOOP-198 (completeness of acceptance) as a second, distinct
+  leak: unchecked ACs are one, review findings a reply can close are the other.
+
+- **2026-08-03 (pm, seventeenth fire) — hardening the consumer of a two-ended mechanism, without the
+  producer, converts a soft failure into a trap.** LOOP-184 correctly made `bundle` *load* refuse an
+  invalid `run.agents`. `bundle export` still accepts any `--run-agents` value, and writes the bundle
+  *before* `--move` retires the source workspace. So one typo now strands an operator between a
+  workspace that refuses to run and a bundle that refuses to load — a failure mode that **did not
+  exist before the fix**, because the old loader merely launched an unhelpful roster. **STANDING:
+  when a ticket adds a refusal at one end of a produce→consume pair, its acceptance owes an explicit
+  answer for the other end — either the producer is validated by the same predicate, or the ticket
+  states why an artifact its own consumer will reject is acceptable to emit. And the severity lives
+  in the ORDERING: validating at argument-parse time, before any filesystem or workspace effect, is
+  what makes it safe; validating just before the write is not.** Filed LOOP-269 (`sensitive`, senior
+  tier) carrying this plus the unshipped prototype-chain guard.
+
+- **2026-08-03 (pm, seventeenth fire) — "fail-closed" and "refuses legibly" are independent
+  properties, and a verification that checks only the first will pass a security fix that cannot say
+  what it refused.** `parseAgentSpec` resolves group aliases with a plain property read, so every
+  inherited `Object.prototype` key (`constructor`, `toString`, `__proto__`, …) is truthy and gets
+  spread as a non-iterable. Executed end-to-end, that token class still exits 1 and still
+  materializes nothing — the safety property holds — but it gets there by throwing an uncaught
+  `TypeError`, so the operator loading a tampered bundle sees a stack trace instead of the message
+  naming `run.agents`. Two of the three assertions in the real tamper arm pass; only "the refusal
+  names the field" fails. **STANDING: for any refusal whose job is to tell a human that input was
+  hostile, the acceptance test asserts on the MESSAGE, not only on the exit code and the absence of
+  side effects — otherwise a crash and a diagnosis are indistinguishable to the suite.** This is also
+  the cheapest generalisation available from this fire: it is the same defect shape as a gate that
+  prints a plausible success, only inverted.
+
 - **2026-08-03 (pm, sixteenth fire) — one predicate can fail in two opposite directions, and fixing
   the direction you were bitten by can leave the other one live.** `daemon up` compares installed
   against running version. It fires when it should not (installed OLDER ⇒ downgrades a healthy
@@ -742,43 +796,13 @@ new row.
   cause across rows, and when a defect cost repeated misdiagnosis, the instrument that would have
   ended it belongs in the same ticket as the cause.
 
-- **2026-08-01 (pm, fifteenth fire) — one correlation is the cheapest test of whether a program is
-  aimed at the right variable, and it belongs BEFORE the seventh carrier, not after.** The
-  compression program had six filed carriers, every one of them on `context-size`, while its own
-  charter names two factors and says "turns count as much as bytes". A single pass over the ledger
-  separated them: modeled context bytes correlate **0.138** with a fire's `cacheRead`, fire duration
-  **0.777**. Nobody had run it, because each carrier was individually well-argued and the aggregate
-  question — *which of our named factors actually predicts the outcome?* — belongs to no single
-  ticket. **STANDING: a program with more than three carriers owes a periodic check that its cuts
-  are aimed at the dominant term; the check is a query, not a review.** And state the limit honestly:
-  a cross-agent correlation does not refute a within-agent mechanism. Filed LOOP-267.
+- **2026-08-01 (pm, fifteenth fire) — [ARCHIVED] 4 rulings** (one correlation as the cheapest test
+  that a program is aimed at the right variable; an AC pinning a live measurement is a test with an
+  expiry date; a landing order that lives in prose is not a landing order; a standing authorization
+  covers the edit it named, not every edit in the same section). Distilled into the merged
+  twelfth–fifteenth stub under `Current state`; full text in
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (pass 15)`.
 
-- **2026-08-01 (pm, fifteenth fire) — an acceptance criterion that pins a live measurement is a test
-  with an expiry date, and it fails in the dangerous direction.** LOOP-239's AC 2 transcribed six
-  per-agent USD figures off the live ledger; five were wrong within seven hours. The harm is not the
-  red box — it is that a *correct* implementation looks broken, and the cheapest way to turn the box
-  green is to change the aggregate until it matches a stale constant, shipping a wrong number that
-  passes its own test. **STANDING: an AC may assert an INVARIANT over live data (the parts sum to
-  the whole) or an EXACT VALUE over a fixture — never an exact value over a live ledger. When
-  writing an AC off a measurement, ask what it will read tomorrow.**
-
-- **2026-08-01 (pm, fifteenth fire) — a landing order that lives in prose is not a landing order.**
-  LOOP-265 correctly identified that shipping LOOP-31 first could copy a defect into the web UI, and
-  recorded the sequence in its own description and a comment. Neither is readable by the §5 pick
-  order, which sees state, priority and labels. **STANDING: if the consequence of the wrong order is
-  a shipped defect, it takes a `Blocked-by:` edge — a sentence is documentation, not a constraint.
-  The mirror of the fourteenth fire's rule (do not manufacture a dependency between tickets that
-  share a core): the test is whether the wrong order produces a wrong artifact, not whether one
-  ticket would read better after the other.**
-
-- **2026-08-01 (pm, fifteenth fire) — a standing authorization covers the edit it named, not every
-  edit in the same section.** LOOP-228 authorises the §20 D4 direction edits its intake implies, and
-  I had a freshly re-derived baseline that contradicts the one printed in `Goals`. I did not change
-  it: recording a priority is the authorised edit, re-deriving a measurement is not, and the section
-  already tells its readers the number is a snapshot to re-derive rather than quote. **STANDING: when
-  an old number in a direction section is HEDGED rather than wrong, the correction belongs in the
-  progress sections and on the program's carrier ticket — an unrequested direction edit spends the
-  operator's authority on something they did not ask for.**
 - **2026-08-01 (pm, fourteenth fire) — [ARCHIVED] 3 rulings** (test a procedural
   mechanism before letting it shape behaviour; a measurement that kills your own hypothesis is a
   result and stays out of the Backlog; sequence on a real data dependency, never on a preference).
