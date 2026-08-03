@@ -120,6 +120,42 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
   return { windowMs, fires, failures, timeouts, suspectErrors: suspect, byErrorClass, successRate, byAgent, byProject, meteredFires, costMeteredFires, costUsd: hasCost ? costUsdAcc : null };
 }
 
+// ─── rollingSpendUsd (LOOP-227) — enforcement spend total ────────────────────
+// Counts killed/unpriced fires via an estimate rather than reading them as $0.
+// A wall-killed fire omits usage.costUsd (the cost blob is truncated by SIGTERM before finalize
+// parses it), so fireMetrics contributes $0 for that fire — exactly the runaway a ceiling must
+// catch. This function must NEVER read unmeasured as $0.
+//
+// Fallback rate derivation: worst observed fire was $18.21 over ~60 min (a claude wall-hit):
+// $18.21 / 3,600,000 ms ≈ 5.058e-6 $/ms ≈ $0.305/min ≈ $18.21/hr. Used when no same-profile
+// (codingAgent, model) priced history exists in the window to derive a median rate.
+const FALLBACK_RATE_PER_MS = 18.21 / 3_600_000; // ≈ 5.058e-6 $/ms (~$18.21/hr) conservative floor
+
+export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number): number {
+  const cutoff = nowMs - windowMs;
+  const inWindow = rows.filter((r) => Date.parse(r.ts) >= cutoff);
+
+  // Collect per-(codingAgent, model) rates from priced rows for median derivation
+  const ratesByProfile: Record<string, number[]> = {};
+  for (const r of inWindow) {
+    if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
+      (ratesByProfile[`${r.codingAgent ?? ""}/${r.model ?? ""}`] ??= []).push(r.usage.costUsd / r.durationMs);
+  }
+
+  let total = 0;
+  for (const r of inWindow) {
+    if (r.usage != null && r.usage.costUsd !== null) {
+      total += r.usage.costUsd;
+    } else {
+      // Unpriced or killed fire: estimate duration × ratePerMs, never $0
+      const rates = ratesByProfile[`${r.codingAgent ?? ""}/${r.model ?? ""}`];
+      const ratePerMs = rates?.length ? (median(rates) ?? FALLBACK_RATE_PER_MS) : FALLBACK_RATE_PER_MS;
+      total += (r.durationMs ?? 0) * ratePerMs;
+    }
+  }
+  return total;
+}
+
 // Rotation: keep the last `keepMs` of rows (default 90d). Called at scheduler start — unbounded
 // append-forever growth was the fires.jsonl retention gap. Atomic rewrite; a torn line is dropped.
 export function pruneFireLedger(ledgerPath: string, keepMs = 90 * 86_400_000, nowMs = Date.now()): void {
