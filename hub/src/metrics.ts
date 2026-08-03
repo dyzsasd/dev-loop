@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
-import { deliveryProjects, type Workspace } from "./team-config.ts";
+import { deliveryProjects, type Workspace, type WsWarning } from "./team-config.ts";
 import { AGENT_HANDLES } from "./seed.ts";
 import { liveBlockerIds } from "./blocked-by.ts";
 import { lessonsPaths } from "./lessons.ts";
@@ -170,6 +170,33 @@ export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number
     }
   }
   return total;
+}
+
+// ─── checkBudget (LOOP-229) — doctor's budget-ceiling health line ─────────────────────────────────────────
+// Mirrors checkLessonsBudget (W03, lessons.ts): a pure READ returning WsWarning[] for doctorWorkspace to
+// surface. Never a hard-fail — a WsWarning prints as ⚠️ and keeps DOCTOR_OK (the AC: an unset workspace stays
+// DOCTOR_OK with only this single nag). Best-effort: any ledger/read error yields [] (an informational health
+// line must never break the gate). The rolling total is the estimate-augmented rollingSpendUsd (a killed fire
+// counts, never $0 — INV-5), so doctor's number matches the launch gate and `dev-loop metrics`.
+//   • dailyUsd UNSET ⇒ one nag naming the measured 7d burn, so the operator can size a ceiling (ruling #2).
+//   • dailyUsd SET and 24h rolling spend is over it ⇒ a breach warning (the scheduler is refusing launches).
+export function checkBudget(ws: Workspace): WsWarning[] {
+  try {
+    const dailyUsd = ws.file.team.budget?.dailyUsd;
+    const rows = readFireRows(wsFireLedger(ws));
+    const now = Date.now();
+    if (dailyUsd == null) {
+      const burnPerDay = rollingSpendUsd(rows, 7 * 86_400_000, now) / 7; // 7d avg daily burn (estimate-augmented)
+      if (burnPerDay <= 0) return []; // no measured spend yet ⇒ nothing to size a ceiling from
+      return [{ code: "W28", path: "team.budget.dailyUsd",
+        message: `no daily budget ceiling set — the unattended loop bills ~$${burnPerDay.toFixed(2)}/day (measured, 7d avg) with no cap; set one: dev-loop team set team.budget.dailyUsd <n> (unset = OFF)` }];
+    }
+    const rolling = rollingSpendUsd(rows, 86_400_000, now);
+    if (rolling > dailyUsd)
+      return [{ code: "W28", path: "team.budget.dailyUsd",
+        message: `budget BREACH — rolling 24h spend $${rolling.toFixed(2)} is over dailyUsd $${dailyUsd.toFixed(2)}; the scheduler is refusing launches until it drops below (raise the ceiling, or let the 24h window roll over)` }];
+    return [];
+  } catch { return []; }
 }
 
 // Rotation: keep the last `keepMs` of rows (default 90d). Called at scheduler start — unbounded
@@ -749,10 +776,18 @@ export function renderUsage(report: UsageReport, byDim?: UsageDimension): void {
   }
 }
 
-export function renderCost(report: UsageReport, byDim?: UsageDimension): void {
+export function renderCost(report: UsageReport, byDim?: UsageDimension, budget?: { dailyUsd: number; rollingUsd: number }): void {
   const days = report.windowMs / 86_400_000;
   console.log(`cost — last ${days}d  (${report.meteredFires} of ${report.totalFires} fires metered)`);
   renderCostCell("overall", report.overall);
+  if (budget) {
+    // The dailyUsd ceiling line (LOOP-229), shown only when a ceiling is set. The rolling total is the
+    // estimate-augmented rollingSpendUsd — a killed/unpriced fire counts, never $0 (INV-5) — so it matches
+    // exactly what the launch gate refuses on. Always a fixed 24h window, independent of --window; distinct
+    // from the honest-null reporting cost above (which sums only provider-priced rows).
+    const over = budget.rollingUsd > budget.dailyUsd;
+    console.log(`  budget: rolling 24h $${budget.rollingUsd.toFixed(2)} / dailyUsd $${budget.dailyUsd.toFixed(2)} — ${over ? "OVER ceiling, launches refused" : "under ceiling"}`);
+  }
   if (report.byDimension) {
     const dim = byDim ?? "agent";
     for (const [k, cell] of Object.entries(report.byDimension))
@@ -845,6 +880,11 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     const rows = readFireRows(wsFireLedger(ws));
     const groupBy = byDim ?? "agent";
     const report = usageReport(rows, windowMs, { groupBy, nowMs: Date.now() });
+    // Budget-ceiling view (LOOP-229): shown only when a dailyUsd ceiling is set (so `--cost` is unchanged when
+    // unset). Always the 24h rolling enforcement total (rollingSpendUsd — the same number the launch gate and
+    // doctor use), independent of --window.
+    const dailyUsd = ws.file.team.budget?.dailyUsd;
+    const budgetView = dailyUsd != null ? { dailyUsd, rollingUsd: rollingSpendUsd(rows, 86_400_000, Date.now()) } : undefined;
     let throughput: number | null = null;
     let flowBoardNote: string | null = null;
     if (showFlow) {
@@ -867,6 +907,8 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
     if (asJson) {
       const out: Record<string, unknown> = { windowDays: windowMs / 86_400_000 };
       if (showUsage || showCost) out.usage = report;
+      if (showCost && budgetView) // budget is a cost surface — mirror renderCost (human --cost) exactly
+        out.budget = { dailyUsd: budgetView.dailyUsd, rollingUsd: budgetView.rollingUsd, windowMs: 86_400_000, overCeiling: budgetView.rollingUsd > budgetView.dailyUsd };
       if (showFlow) {
         const c = report.overall;
         out.flow = {
@@ -882,7 +924,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
       return 0;
     }
     if (showUsage) renderUsage(report, groupBy);
-    if (showCost) renderCost(report, groupBy);
+    if (showCost) renderCost(report, groupBy, budgetView);
     if (showFlow) renderFlow(report, throughput, flowBoardNote);
     return 0;
   }

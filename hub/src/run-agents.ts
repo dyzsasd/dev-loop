@@ -27,7 +27,7 @@ import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector mem
 import { breaker, formatBreakerMsg } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
-import type { FireUsage } from "./metrics.ts";
+import { rollingSpendUsd, readFireRows, type FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -883,6 +883,28 @@ function devTierQueueSkip(opts: Options, agent: Agent, project: string): string 
       : null;
   } catch { return null; }                                    // any read error ⇒ fail open (fire)
 }
+
+// ─── budget-ceiling launch gate (LOOP-229 / design budget-ceiling, Child 3 of LOOP-197) ──────────────────
+const DAY_MS = 86_400_000; // rolling window for the dailyUsd ceiling (the 24h cost window metrics/doctor use)
+// The ONE shared budget predicate both schedulers (legacy tick + team --once/tick) route through so they
+// cannot drift — a sibling of devTierQueueSkip above. Returns the refusal REASON when today's rolling spend is
+// over team.budget.dailyUsd, else null.
+//   • INV-1 (AC5, anti-deadlock, LOAD-BEARING): a null/undefined dailyUsd returns null IMMEDIATELY — no ledger
+//     read, no log, no side effect — so an unset workspace's launch path is byte-identical to today's build.
+//   • Fails open on a missing ledger or ANY read error (product ruling #1: a ceiling that silently refuses
+//     every launch is a worse outage than the spend it prevents — never let a broken read deadlock the loop).
+//   • The total is Child 2's estimate-augmented rollingSpendUsd — a killed/unpriced fire is estimated, never
+//     read as $0 (INV-5) — so this number matches what `dev-loop metrics` and `doctor` show the operator.
+function budgetGateReason(dailyUsd: number | null | undefined, ledgerPath: string | null, nowMs: number): string | null {
+  if (dailyUsd == null) return null;                          // INV-1 short-circuit: unset ⇒ today's path, byte-identical
+  if (!ledgerPath) return null;                               // no ledger to read (legacy fixed-project path) ⇒ fail open
+  try {
+    const rolling = rollingSpendUsd(readFireRows(ledgerPath), DAY_MS, nowMs);
+    return rolling > dailyUsd
+      ? `budget dailyUsd $${dailyUsd.toFixed(2)} reached (rolling $${rolling.toFixed(2)}/$${dailyUsd.toFixed(2)})`
+      : null;
+  } catch { return null; }                                    // any read error ⇒ fail open (never deadlock the loop)
+}
 function gateStatePath(opts: Options, project: string): string { return join(opts.dataDir, project, "scheduler-gate.json"); }
 function loadGateState(opts: Options, project: string): GateState {
   try { return JSON.parse(readFileSync(gateStatePath(opts, project), "utf8")) as GateState; } catch { return {}; }
@@ -1444,8 +1466,18 @@ async function main(): Promise<void> {
 
   const tick = () => {
     const now = Date.now();
+    // Budget-ceiling launch gate (LOOP-229). The legacy fixed-project path has no workspace, no team.budget,
+    // and no fire ledger (fireLedgerPath stays null — only teamMain assigns it), so this resolves INERT
+    // (INV-1: undefined dailyUsd ⇒ null, no side effect). It is wired here so BOTH schedulers route through the
+    // one budgetGateReason predicate and cannot drift; on the live team path it enforces (teamMain below).
+    const budgetReason = budgetGateReason(undefined, fireLedgerPath, now);
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
+      if (budgetReason !== null) {                               // over dailyUsd ⇒ refuse the launch, loudly (INV-3/AC3)
+        console.log(`[${slot.agent}] launch refused: ${budgetReason}`);
+        slot.nextAt = now + Math.max(opts.intervals[slot.agent], breaker.probeMs); // back off to probe cadence (INV-2)
+        continue;
+      }
       // R1: for a gated agent, if neither the code nor the board moved since its last fire, skip the spawn
       // entirely (the agent would just no-op) — except a pm/qa review fire past the quiet-board TTL (R1a).
       // fails open: a null key (no hub / git error) never skips.
@@ -1681,7 +1713,14 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   };
 
   if (opts.once) {
-    for (const a of opts.agents) await fireAgentOnce(a);
+    // Budget-ceiling launch gate (LOOP-229): --once fires bypass tick() (they call fireAgentOnce directly), so
+    // the gate is applied here too. Computed once for all agents (INV-1: unset ⇒ null, byte-identical to today).
+    // fireLedgerPath + ws.file.team.budget are the live team ledger + ceiling.
+    const budgetReason = budgetGateReason(ws.file.team.budget?.dailyUsd, fireLedgerPath, Date.now());
+    for (const a of opts.agents) {
+      if (budgetReason !== null) { console.log(`[${a}] launch refused: ${budgetReason}`); continue; } // refuse, loudly (AC3)
+      await fireAgentOnce(a);
+    }
     process.exit(0);
   }
 
@@ -1748,8 +1787,18 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     hotReload();
     if (!configParses()) return; // broken config ⇒ no new fires (in-flight fires finish; recovery is automatic)
     const now = Date.now();
+    // Budget-ceiling launch gate (LOOP-229): computed once per tick (INV-1: unset ⇒ null, byte-identical). Over
+    // team.budget.dailyUsd ⇒ refuse every runnable slot this tick and back off to probe cadence (INV-2). Read
+    // through the (hot-reloaded) ws so an operator raising the ceiling — or the costly rows aging out of the
+    // 24h window — resumes launches on the next tick (AC6).
+    const budgetReason = budgetGateReason(ws.file.team.budget?.dailyUsd, fireLedgerPath, now);
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
+      if (budgetReason !== null) {                               // over dailyUsd ⇒ refuse the launch, loudly (INV-3/AC3)
+        console.log(`[${slot.agent}] launch refused: ${budgetReason}`);
+        slot.nextAt = now + Math.max(opts.intervals[slot.agent], breaker.probeMs); // back off to probe cadence (INV-2)
+        continue;
+      }
       slot.running = true;
       fired++;
       fireAgentOnce(slot.agent)
