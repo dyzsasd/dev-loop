@@ -27,7 +27,7 @@ import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector mem
 import { breaker, formatBreakerMsg } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
-import { rollingSpendUsd, readFireRows, type FireUsage } from "./metrics.ts";
+import { rollingSpendUsd, ratePerMsFor, readFireRows, type FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -239,7 +239,8 @@ function opencodeProviderEntry(opts: Options, model: string | undefined): Provid
 // failures, every one the same stderr line, indistinguishable in the ledger from real task failures.
 // The breaker (P0-1a) keys on repeated identical classes; metrics/doctor split them out. exit-0 shapes
 // stay the suspectError flag's job; a non-zero exit with no pattern match is a plain task failure (null).
-function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false): string | null {
+function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false): string | null {
+  if (budgetKilled) return "budget-per-fire"; // LOOP-230: the perFireUsd watchdog killed this fire — DISTINCT from a wall-timeout (never "timeout")
   if (retryLoop) return "retry-loop"; // liveness watchdog kill — visible retry loop (output arriving but no new content)
   if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
   if (timedOut) return "timeout";
@@ -737,6 +738,7 @@ function displayCommand(command: string, args: string[], prompt: string): string
 // never allowed to crash a fire. One writable connection reused across fires (the scheduler is single-writer).
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
+let perFireCeilingUsd: number | null = null;                         // team mode: the resolved per-fire $ ceiling (LOOP-230); null ⇒ watchdog inert (legacy path, mirrors fireLedgerPath)
 // Internal (not exported): main() is unconditional, so nothing may import this module without running the
 // scheduler. recordFire's ledger + event writes are covered by real-fire subprocess harnesses instead —
 // the fires.jsonl row in test/team-scheduler.ts and the fire.completed event in test/run-agents-live.ts.
@@ -886,6 +888,14 @@ function devTierQueueSkip(opts: Options, agent: Agent, project: string): string 
 
 // ─── budget-ceiling launch gate (LOOP-229 / design budget-ceiling, Child 3 of LOOP-197) ──────────────────
 const DAY_MS = 86_400_000; // rolling window for the dailyUsd ceiling (the 24h cost window metrics/doctor use)
+// Default per-fire ceiling (LOOP-230, budget-ceiling Child 4 — SHIPS ON). Provenance (AC4), from the observed
+// distribution: the worst runaway was $18.21 over ~60 min (a claude wall-hit), detectable at ~$10 mid-flight;
+// a NORMAL fire costs pm $6.43 / senior $7.46. $12.00 sits above the priciest normal fire ($7.46 → 1.61×,
+// +61% headroom, so a normal fire is never clipped) yet well below the runaway ($18.21), catching that class
+// at ~66% of its runtime (~40 min of a 60-min runaway ⇒ ~$6 / ~20 min saved). perFireUsd bounds ONE fire, so
+// unlike dailyUsd it can never refuse EVERY launch (no deadlock risk); team.budget.perFireUsd overrides it.
+const DEFAULT_PER_FIRE_USD = 12.00;
+const RATE_WINDOW_MS = 7 * DAY_MS; // window for the watchdog's per-profile $/ms median (7d ⇒ enough priced samples; matches checkBudget's burn-rate lookback)
 // The ONE shared budget predicate both schedulers (legacy tick + team --once/tick) route through so they
 // cannot drift — a sibling of devTierQueueSkip above. Returns the refusal REASON when today's rolling spend is
 // over team.budget.dailyUsd, else null.
@@ -1140,8 +1150,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     // (same escalation shape as the daemon lifecycle's lcStop).
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
+    // Declared here (not at the budget watchdog below) so the two OTHER watchdogs can stand down once a budget
+    // kill is in flight: AC4's "never confused with a wall-timeout" must hold by construction, not by timing —
+    // the stall interval ticks every 15s and would otherwise re-classify a SIGTERM'd-but-silent child mid-grace.
+    let budgetKilled = false;
     // effectiveFireTimeoutMs / effectiveStallMs resolved above (before the dry-run branch) — same values here.
     const fireTimer = effectiveFireTimeoutMs > 0 ? setTimeout(() => {
+      if (budgetKilled) return; // the budget watchdog already killed this fire — do not stamp timedOut on its row
       timedOut = true;
       console.error(`[${agent}] fire exceeded ${formatDuration(effectiveFireTimeoutMs)} — SIGTERM (SIGKILL in 10s)`);
       log.write(`\n===== fire timeout after ${formatDuration(effectiveFireTimeoutMs)}: SIGTERM =====\n`);
@@ -1161,7 +1176,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     let retryLoop = false;
     const stallMs = effectiveStallMs; // claude -p buffers until the end — silence is normal there
     const stallTimer = stallMs > 0 ? setInterval(() => {
-      if (stalled || timedOut) return;
+      if (stalled || timedOut || budgetKilled) return; // a budget kill in its SIGTERM→SIGKILL grace is not a stall
       const silent = Date.now() - lastOutputAt >= stallMs;
       const looping = !silent && Date.now() - lastNewContentAt >= stallMs;
       if (!silent && !looping) return;
@@ -1179,11 +1194,48 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       killTimer.unref?.();
     }, 15_000) : undefined;
     stallTimer?.unref?.();
+    // Budget watchdog (LOOP-230, budget-ceiling Child 4): terminate a fire whose ESTIMATED spend crosses
+    // team.budget.perFireUsd, DISTINCTLY from a wall-timeout. Cost is known only post-hoc, so the mid-flight
+    // signal is elapsed wall-time: kill at perFireUsd / ratePerMs (this profile's $/ms median from the ledger —
+    // Child 2's derivation; the conservative FALLBACK when unpriced). Inert on the legacy path (perFireCeilingUsd
+    // null — only teamMain sets it, mirroring fireLedgerPath). A budget kill ledgers as errorClass
+    // "budget-per-fire" with a distinct console reason + exit 126 (finalize below), never confused with a timeout.
+    // (`budgetKilled` is declared with `timedOut` above — the other two watchdogs read it.)
+    let budgetTimer: NodeJS.Timeout | undefined;
+    if (perFireCeilingUsd != null && perFireCeilingUsd > 0) {
+      const ceiling = perFireCeilingUsd;
+      const ratePerMs = ratePerMsFor(fireLedgerPath ? readFireRows(fireLedgerPath) : [], profile.codingAgent, profile.model, RATE_WINDOW_MS, startedAt);
+      const budgetMs = ceiling / ratePerMs; // ms of runtime whose estimated spend == the ceiling
+      const ceilingLabel = ceiling >= 0.01 ? ceiling.toFixed(2) : String(ceiling); // a sub-cent ceiling must not print as "$0.00"
+      // Two bounds, and they are NOT symmetric:
+      // • UPPER — the 32-bit setTimeout limit (LOOP-260): a delay past ~24.8d coerces to 1ms and would kill
+      //   EVERY fire on the spot. A budgetMs that large means the ceiling is unreachable inside any real fire
+      //   (the wall-timeout always fires first) ⇒ arm no watchdog, which is what "unreachable" means.
+      // • LOWER — clamp to 1ms, never disarm. A budgetMs under 1ms says this profile's rate crosses the
+      //   ceiling instantly, so killing at once IS the ceiling's meaning; skipping the arm instead would make
+      //   a mis-set (absurdly small) perFireUsd silently STOP enforcing — the failure mode this guard exists
+      //   to prevent. The repeated identical "budget-per-fire" class then trips the P0-1a breaker, which is
+      //   the loop's designed response to a config that kills every fire.
+      if (Number.isFinite(budgetMs) && budgetMs <= 2_147_483_647) {
+        budgetTimer = setTimeout(() => {
+          if (timedOut || stalled) return; // a wall/stall kill is already in flight — don't double-fire
+          budgetKilled = true;
+          const estRatePerHr = ratePerMs * 3_600_000;
+          console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}) — SIGTERM (SIGKILL in 10s)`);
+          log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr): SIGTERM =====\n`);
+          killGroup("SIGTERM");
+          killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
+          killTimer.unref?.();
+        }, Math.max(1, budgetMs));
+        budgetTimer.unref?.();
+      }
+    }
     child.on("error", (e) => {
       if (logOpen && !logDead) log.write(`\nERROR: ${e.message}\n`);
       console.error(`[${agent}] failed to start: ${e.message}`);
       clearTimeout(fireTimer);
       clearInterval(stallTimer);
+      clearTimeout(budgetTimer);
       // A spawn failure (missing/broken CLI bin) never reached the ledger — invisible to metrics AND to
       // the P0-1a breaker, whose canonical trigger (a wedged bin fast-failing identically forever) it is.
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, 1, false, fireId, { errorClass: "spawn-failed", outputTail: e.message.slice(-400) });
@@ -1212,9 +1264,10 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         if (shown.trim() !== "") { process.stdout.write(`[${agent}] ${shown}\n`); if (logOpen) log.write(shown + "\n"); }
       }
       const stalledLabel = stalled ? (retryLoop ? " (retry-loop)" : " (stalled)") : "";
-      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""}${stalledLabel} =====\n`);
-      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}${stalledLabel}`);
-      const exitCode = timedOut ? 124 : stalled ? 125 : (code ?? 1);
+      const budgetLabel = budgetKilled ? " (budget perFireUsd)" : ""; // LOOP-230: DISTINCT from " (fire timeout)" so a budget kill is never read as a wall-timeout
+      log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""}${budgetLabel}${stalledLabel} =====\n`);
+      console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}${budgetLabel}${stalledLabel}`);
+      const exitCode = budgetKilled ? 126 : timedOut ? 124 : stalled ? 125 : (code ?? 1); // 126 = budget-per-fire kill, distinct from 124 (timeout) / 125 (stalled)
       // Suspect-error detection (narrow, tail-anchored to avoid false positives on error text an agent
       // merely echoed mid-run): exit 0 but the LAST line is a known CLI failure marker, or no visible
       // output at all (whitespace-only counts as none). Bare "Error:" is deliberately NOT matched — an
@@ -1238,7 +1291,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       if (usageAdapter) {
         try { const parsed = usageAdapter.parse(fullStdout); if (parsed) usage = parsed; } catch { /* usage is best-effort */ }
       }
-      const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop); // P0-1b taxonomy (+ the liveness watchdog's "stalled"/"retry-loop")
+      const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop, budgetKilled); // P0-1b taxonomy (+ liveness "stalled"/"retry-loop" + LOOP-230 "budget-per-fire")
       const fireExtras = {
         ...(suspectError ? { suspectError: true } : {}),
         ...(errorClass ? { errorClass } : {}),
@@ -1249,13 +1302,14 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       };
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
-      if (timedOut || stalled) releaseClaimedTickets(fireDb, project, agent, fireId, timedOut ? "timeout" : "stall");
+      if (timedOut || stalled || budgetKilled) releaseClaimedTickets(fireDb, project, agent, fireId, budgetKilled ? "budget" : timedOut ? "timeout" : "stall"); // a budget kill must free its claim too (reclaimable next fire)
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
     child.on("exit", (code, signal) => {
       clearTimeout(fireTimer);
       clearInterval(stallTimer);
       clearTimeout(killTimer);
+      clearTimeout(budgetTimer);
       activeChildren.delete(child);
       if (closed) { finalize(code, signal); return; }        // pipes already drained → finalize now
       const grace = setTimeout(() => finalize(code, signal), 150);
@@ -1640,6 +1694,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   const fireLedger = wsFireLedger(ws);
   fireLedgerPath = fireLedger; // recordFire appends here (backend-agnostic soak metric)
+  perFireCeilingUsd = ws.file.team.budget?.perFireUsd ?? DEFAULT_PER_FIRE_USD; // LOOP-230 in-flight watchdog: default ON, config overrides (only teamMain sets it ⇒ legacy path stays inert)
   try { const { pruneFireLedger } = await import("./metrics.ts"); pruneFireLedger(fireLedger); } catch { /* best-effort */ }
 
   const cwdFor = (project: string): string | null => primaryRepo(ws, project);
