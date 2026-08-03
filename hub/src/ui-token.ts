@@ -46,10 +46,11 @@ export function plaintextBearerToRemote(base: URL, hasToken: boolean): boolean {
   return true;
 }
 
-// A hostname reaches this diagnostic straight from a WHATWG URL, which permits shell metacharacters
-// (`http://evil;id` parses to hostname `evil;id`, and `$()`/backticks survive too) — so the ssh remedy,
-// the one COPYABLE shell command here, single-quotes the host, or a copy-paste would execute the suffix
-// (codex P2). POSIX single-quote: wrap, and close/escape/reopen for any embedded quote.
+// A URL reaches this diagnostic straight from WHATWG parsing, which permits shell metacharacters in
+// both the host (`http://evil;id` ⇒ host `evil;id`) and the path (`/dev;id`, `/dev$(id)`, backticks) —
+// so every COPYABLE fragment below (the ssh destination, and each `--attach`/TLS URL) is single-quoted
+// as a unit, or a copy-paste would execute the suffix (codex P2). POSIX single-quote: wrap, and
+// close/escape/reopen for any embedded quote.
 function shellSingleQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
@@ -68,16 +69,20 @@ export function plaintextBearerRefusal(base: URL): string {
   // and a remedy that drops the prefix points at the wrong path (codex P2). Same trailing-slash strip as
   // postOpUrl, so a bare host (pathname "/") collapses to "" and gains no spurious slash.
   const basePath = base.pathname.replace(/\/$/, "");
-  // An IPv6 literal keeps its URL brackets in base.hostname (`[2001:db8::1]`), which the https URL
-  // form needs but OpenSSH does not — as a destination operand ssh reads the brackets literally and
-  // fails to resolve, while the bare `2001:db8::1` is accepted (codex P2). Strip them only for the ssh
-  // operand (host in the https URL keeps them), then shell-quote as before.
+  // ssh destination: an IPv6 literal keeps its URL brackets in base.hostname (`[2001:db8::1]`), which a
+  // URL needs but OpenSSH does not — it reads a bracketed operand literally and fails to resolve, while
+  // the bare `2001:db8::1` is accepted (codex P2). Strip the brackets, then quote.
   const sshHost = shellSingleQuote(base.hostname.replace(/^\[|\]$/g, ""));
+  // The two attach URLs are copyable `--attach <url>` fragments, so each is quoted WHOLE: host AND the
+  // preserved reverse-proxy path can carry shell metacharacters, and an IPv6 URL's `[]` are shell globs
+  // (codex P2). base.host keeps IPv6 brackets here — correct for a URL, and the quoting neutralizes them.
+  const tlsUrl = shellSingleQuote(`https://${base.host}${basePath}`);
+  const loopbackUrl = shellSingleQuote(`http://127.0.0.1:${localPort}${basePath}`);
   return (
     `refusing to send the hub bearer token in cleartext to non-loopback host '${base.hostname}' over http — ` +
     `it is full write authority over the board (tickets, comments, docs) and rides every op call, so one ` +
-    `on-path capture is a durable compromise. Attach over TLS (https://${base.host}${basePath}), or tunnel to loopback ` +
-    `(ssh -L ${localPort}:localhost:${remotePort} ${sshHost} — then --attach http://127.0.0.1:${localPort}${basePath}). ` +
+    `on-path capture is a durable compromise. Attach over TLS (${tlsUrl}), or tunnel to loopback ` +
+    `(ssh -L ${localPort}:localhost:${remotePort} ${sshHost} — then --attach ${loopbackUrl}). ` +
     `To allow plaintext on a trusted private link, set DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1.`
   );
 }
