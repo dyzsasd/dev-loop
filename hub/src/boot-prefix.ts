@@ -43,8 +43,10 @@ const resolveRepos = (cfg: ProjectCfg, reg: ReposRegistry): Record<string, unkno
   const registry = asObj(reg);
   return r
     .map((entry) => {
-      const ref = asObj(entry).ref;
-      if (typeof ref === "string" && registry[ref]) return asObj(registry[ref]);
+      const e = asObj(entry);
+      // Support both raw workspace shape ({ref}) and legacy-view shape ({name: ref, flat facts}).
+      const ref = typeof e.ref === "string" ? e.ref : (typeof e.name === "string" ? e.name : undefined);
+      if (ref !== undefined && registry[ref]) return asObj(registry[ref]);
       return null;
     })
     .filter((e): e is Record<string, unknown> => e !== null);
