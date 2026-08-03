@@ -915,6 +915,26 @@ function budgetGateReason(dailyUsd: number | null | undefined, ledgerPath: strin
       : null;
   } catch { return null; }                                    // any read error ⇒ fail open (never deadlock the loop)
 }
+// The per-fire sibling of budgetGateReason (LOOP-230, Child 4): the deadline (+ the rate it came from) at which this fire's ESTIMATED
+// spend crosses team.budget.perFireUsd, or null to arm no watchdog. Cost is known only post-hoc, so the
+// mid-flight signal is elapsed time: perFireUsd / ratePerMs, the rate being THIS (codingAgent, model)'s median
+// $/ms over the window's priced ledger rows (Child 2's derivation; a conservative floor when unpriced).
+//   • Fails open on a missing ledger or ANY read error, exactly like budgetGateReason — this runs on the spawn
+//     path of EVERY fire (the ceiling ships ON), so a broken ledger read must cost the loop nothing.
+//   • Bounds are deliberately ASYMMETRIC. Past the 32-bit setTimeout limit (LOOP-260 — a larger delay coerces
+//     to 1ms and would kill every fire on the spot) the ceiling is unreachable inside any real fire, so nothing
+//     arms and the wall-timeout owns it. Below 1ms it CLAMPS rather than disarming: that ceiling is crossed
+//     instantly, so killing at once is its meaning, and silently ceasing to enforce is the very failure this
+//     guard exists to prevent (the repeated identical class then trips the P0-1a breaker).
+function perFireDeadline(ceilingUsd: number | null, ledgerPath: string | null, profile: LaunchProfile, nowMs: number): { deadlineMs: number; ratePerMs: number } | null {
+  if (ceilingUsd == null || !(ceilingUsd > 0)) return null;   // unset/invalid ⇒ no watchdog (legacy path, mirrors fireLedgerPath)
+  try {
+    const ratePerMs = ratePerMsFor(ledgerPath ? readFireRows(ledgerPath) : [], profile.codingAgent, profile.model, RATE_WINDOW_MS, nowMs);
+    const budgetMs = ceilingUsd / ratePerMs;                  // ms of runtime whose estimated spend == the ceiling
+    if (!Number.isFinite(budgetMs) || budgetMs > 2_147_483_647) return null;
+    return { deadlineMs: Math.max(1, budgetMs), ratePerMs };  // ratePerMs returned, not re-derived from the (possibly clamped) deadline
+  } catch { return null; }                                    // any read error ⇒ fail open (never break a launch to enforce a ceiling)
+}
 function gateStatePath(opts: Options, project: string): string { return join(opts.dataDir, project, "scheduler-gate.json"); }
 function loadGateState(opts: Options, project: string): GateState {
   try { return JSON.parse(readFileSync(gateStatePath(opts, project), "utf8")) as GateState; } catch { return {}; }
@@ -1202,33 +1222,22 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     // "budget-per-fire" with a distinct console reason + exit 126 (finalize below), never confused with a timeout.
     // (`budgetKilled` is declared with `timedOut` above — the other two watchdogs read it.)
     let budgetTimer: NodeJS.Timeout | undefined;
-    if (perFireCeilingUsd != null && perFireCeilingUsd > 0) {
-      const ceiling = perFireCeilingUsd;
-      const ratePerMs = ratePerMsFor(fireLedgerPath ? readFireRows(fireLedgerPath) : [], profile.codingAgent, profile.model, RATE_WINDOW_MS, startedAt);
-      const budgetMs = ceiling / ratePerMs; // ms of runtime whose estimated spend == the ceiling
+    const budget = perFireDeadline(perFireCeilingUsd, fireLedgerPath, profile, startedAt); // null ⇒ arm nothing
+    if (budget) {
+      const { deadlineMs: budgetMs, ratePerMs } = budget;
+      const ceiling = perFireCeilingUsd as number;
       const ceilingLabel = ceiling >= 0.01 ? ceiling.toFixed(2) : String(ceiling); // a sub-cent ceiling must not print as "$0.00"
-      // Two bounds, and they are NOT symmetric:
-      // • UPPER — the 32-bit setTimeout limit (LOOP-260): a delay past ~24.8d coerces to 1ms and would kill
-      //   EVERY fire on the spot. A budgetMs that large means the ceiling is unreachable inside any real fire
-      //   (the wall-timeout always fires first) ⇒ arm no watchdog, which is what "unreachable" means.
-      // • LOWER — clamp to 1ms, never disarm. A budgetMs under 1ms says this profile's rate crosses the
-      //   ceiling instantly, so killing at once IS the ceiling's meaning; skipping the arm instead would make
-      //   a mis-set (absurdly small) perFireUsd silently STOP enforcing — the failure mode this guard exists
-      //   to prevent. The repeated identical "budget-per-fire" class then trips the P0-1a breaker, which is
-      //   the loop's designed response to a config that kills every fire.
-      if (Number.isFinite(budgetMs) && budgetMs <= 2_147_483_647) {
-        budgetTimer = setTimeout(() => {
-          if (timedOut || stalled) return; // a wall/stall kill is already in flight — don't double-fire
-          budgetKilled = true;
-          const estRatePerHr = ratePerMs * 3_600_000;
-          console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}) — SIGTERM (SIGKILL in 10s)`);
-          log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr): SIGTERM =====\n`);
-          killGroup("SIGTERM");
-          killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
-          killTimer.unref?.();
-        }, Math.max(1, budgetMs));
-        budgetTimer.unref?.();
-      }
+      const estRatePerHr = ratePerMs * 3_600_000;             // the measured rate itself — a clamped deadline must not distort it
+      budgetTimer = setTimeout(() => {
+        if (timedOut || stalled) return; // a wall/stall kill is already in flight — don't double-fire
+        budgetKilled = true;
+        console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}) — SIGTERM (SIGKILL in 10s)`);
+        log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr): SIGTERM =====\n`);
+        killGroup("SIGTERM");
+        killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
+        killTimer.unref?.();
+      }, budgetMs);
+      budgetTimer.unref?.();
     }
     child.on("error", (e) => {
       if (logOpen && !logDead) log.write(`\nERROR: ${e.message}\n`);
