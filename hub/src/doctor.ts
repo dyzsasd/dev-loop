@@ -506,7 +506,7 @@ function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg
   if (!devLoopIgnored) warn(`[W06] the workspace root is inside a git work-tree and .dev-loop/ is not gitignored — state/reports could be committed (add .dev-loop/ to .gitignore)`);
   // LOOP-210: a bundle artifact (MAGIC header, any --out name, encrypted or plaintext) or the
   // moved.json marker sitting un-ignored in the tree is a secret/state leak a `git add -A` commits.
-  const leaks = unignoredBundleArtifacts(root);
+  const leaks: { path: string; state: "untracked" | "staged" | "committed" | "published" }[] = unignoredBundleArtifacts(root);
   const movedRel = join(".dev-loop", "moved.json");
   // P1 fix (PRRT_kwDOS6Puk86Vn_bA): moved.json can be in BOTH HEAD (committed) and the index (staged),
   // e.g. a previously committed marker that was re-staged. indexStates() returns all applicable states.
@@ -526,9 +526,15 @@ function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg
     if (states.has("untracked")) fixes.push("for an untracked one, add *.age / the artifact to .gitignore or write it outside the repo");
     // P1 fix (PRRT_kwDOS6Puk86Vn_a_): use -f so the command also works for AM blobs (staged then
     // modified in the worktree); without -f `git rm --cached` refuses when the index and worktree differ.
-    if (states.has("staged")) fixes.push("for a staged one, `git rm -f --cached <path>` to drop it from the index");
+    // LOOP-235 review (PRRT_kwDOS6Puk86VoHA5): `git rm --cached` clears only the INDEX — the worktree copy
+    // survives as an untracked file, and the next routine `git add -A` re-stages the identical secret, so
+    // the remediation must ALSO delete/move/.gitignore the worktree copy, not just unstage it.
+    if (states.has("staged")) fixes.push("for a staged one, `git rm -f --cached <path>` to drop it from the index, then delete or move the worktree copy (or add it to .gitignore) so a later `git add -A` cannot re-stage it");
     if (states.has("committed")) fixes.push("for one already in an unpushed commit, rewrite or drop that commit (`git rebase -i` / `git reset`) before pushing — `git rm --cached` clears only the index, not history");
-    warn(`[W06] the workspace root is inside a git work-tree and these secret/state-bearing artifacts are reachable by the next commit or push: ${names} (a bundle carries every secret VALUE + hub.db — ${fixes.join("; ")})`);
+    // LOOP-235 review (PRRT_kwDOS6Puk86VoHA7): a marker already in a PUSHED commit must NOT get rewrite
+    // advice — rewriting published history won't un-leak it and misdirects the operator; the secret is public.
+    if (states.has("published")) fixes.push("for one already in a PUSHED commit, the secret is public — rotate/revoke it and add the path to .gitignore so it is not re-committed; rewriting already-pushed history won't un-leak it");
+    warn(`[W06] the workspace root is inside a git work-tree and these secret/state-bearing artifacts are reachable by the next commit or push (or already pushed): ${names} (a bundle carries every secret VALUE + hub.db — ${fixes.join("; ")})`);
   }
   if (devLoopIgnored && !leaks.length) info("workspace root is inside a git repo but .dev-loop/ is gitignored");
 }
@@ -540,17 +546,53 @@ function isPathIgnored(root: string, rel: string): boolean {
   catch { return false; }
 }
 
-// LOOP-235 — classify a path's git state(s) for W06's remediation (review P1 #7/#8/#bA): "untracked"
-// (not in the index → a .gitignore rule fixes it), "staged" (in the index but not yet in HEAD →
-// `git rm -f --cached`), or "committed" (in HEAD → commit must be rewritten). A path can be in BOTH
-// "staged" and "committed" (e.g. a file committed in a prior unpushed commit and re-staged) — both
-// states are returned so the remediation message covers both cleanup steps. Used for moved.json.
-function indexStates(root: string, rel: string): ("untracked" | "staged" | "committed")[] {
+// LOOP-235 — the commits the next `git push` would transfer, as a `rev-list`/`diff` range. Prefer the
+// branch's configured push destination (`@{push}`) then its upstream (`@{upstream}`): `<dest>..HEAD` is
+// EXACTLY what a push to that ref sends, and — unlike `HEAD --not --remotes` — still includes a commit
+// merely reachable from an UNRELATED remote (LOOP-235 P1 #5). With NO destination configured (a fresh
+// branch never pushed, or a current branch with no tracking ref) the push target is unknowable, so scan
+// ALL of HEAD rather than `HEAD --not --remotes`, which subtracts commits an explicit
+// `git push origin HEAD:<branch>` still ships (LOOP-235 review, no-destination). Shared by the bundle-blob
+// walk AND moved.json's push-aware committed classification so the two can't diverge (LOOP-235 review
+// PRRT_kwDOS6Puk86VoHA7).
+//
+// OFFLINE-SCOPE LIMITATION (LOOP-235 review PRRT_kwDOS6Puk86VoHA3): `@{push}`/`@{upstream}` are cached
+// remote-tracking refs, refreshed by `git fetch` — reading them here does NOT contact the remote. If
+// another client rewinds or deletes the remote branch AFTER this workspace's last fetch, the cached ref is
+// stale and this range can under-report what the next push would restore. Closing that would require a
+// network round-trip (`git ls-remote`), which `doctor` deliberately does NOT do: it is a fast, OFFLINE
+// diagnostic, and adding per-run network I/O (a contract change — breaks offline use, adds W15/perf cost)
+// to catch a narrow multi-client remote-rewind race would be strictly worse than reflecting the last-known
+// remote. The range is correct as of the last fetch; a concurrent remote rewind is out of scope for a
+// local, offline check.
+function unpushedRange(root: string): string[] {
+  const revParseOk = (rev: string): boolean =>
+    spawnSync("git", ["-C", root, "rev-parse", "--verify", "--quiet", rev], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
+  const dest = revParseOk("@{push}") ? "@{push}" : revParseOk("@{upstream}") ? "@{upstream}" : null;
+  return dest ? [`${dest}..HEAD`] : ["HEAD"];
+}
+
+// LOOP-235 — classify a path's git state(s) for W06's remediation (review P1 #7/#8/#bA + PRRT_…VoHA7):
+// "untracked" (not in the index → a .gitignore rule fixes it), "staged" (in the index, not yet in HEAD →
+// `git rm -f --cached` + remove the worktree copy), "committed" (in an UNPUSHED commit → rewrite it before
+// pushing), or "published" (in an already-PUSHED commit → rewriting won't un-leak it; rotate + .gitignore).
+// The committed-vs-published split is push-aware via `unpushedRange` — the SAME range the bundle arm ships —
+// so W06 never tells the operator to rewrite already-published history. A path can be in BOTH "staged" and
+// "committed" (a file in a prior unpushed commit, re-staged) — every applicable state is returned so the
+// remediation covers each cleanup step. Used for moved.json.
+function indexStates(root: string, rel: string): ("untracked" | "staged" | "committed" | "published")[] {
   const runOk = (args: string[]): boolean =>
     spawnSync("git", ["-C", root, ...args], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
   if (!runOk(["ls-files", "--error-unmatch", "--", rel])) return ["untracked"];
-  const states: ("staged" | "committed")[] = [];
-  if (runOk(["cat-file", "-e", `HEAD:${rel}`])) states.push("committed");
+  const states: ("staged" | "committed" | "published")[] = [];
+  if (runOk(["cat-file", "-e", `HEAD:${rel}`])) {
+    // Push-aware: the blob is in HEAD, but "committed" (rewrite advice) is only right when the commit
+    // carrying rel is UNPUSHED — the same range the bundle arm ships. If it is already pushed, rewriting is
+    // wrong advice (it would rewrite published history), so classify "published" (rotate + .gitignore).
+    const unpushed = spawnSync("git", ["-C", root, "rev-list", ...unpushedRange(root), "--", rel],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    states.push((unpushed.stdout ?? "").trim() ? "committed" : "published");
+  }
   // Staged when the index has the file (ls-files matched above) and it differs from HEAD (or HEAD has no entry).
   // `diff --cached --quiet -- rel` exits 0 when no staged diff, 1 when staged changes exist.
   if (spawnSync("git", ["-C", root, "diff", "--cached", "--quiet", "--", rel], { stdio: "ignore" }).status !== 0)
@@ -644,28 +686,17 @@ function unignoredBundleArtifacts(root: string): { path: string; state: "untrack
   // The index blob is `:path`; a staged deletion resolves to `missing` below and is skipped.
   for (const rel of gitZ(["diff", "--cached", "--name-only", "-z"]))
     specs.push({ spec: `:${rel}`, path: rel, state: "staged" });
-  // Committed-but-unpushed — the commits the next `git push` would transfer. Prefer the branch's configured
-  // push destination (`@{push}`) then its upstream (`@{upstream}`): `rev-list <dest>..HEAD` is EXACTLY what
-  // a push to that ref sends, and — unlike `HEAD --not --remotes` — still includes a commit merely reachable
-  // from an UNRELATED remote (LOOP-235 P1 #5). With NO destination configured — a fresh branch never pushed,
-  // or a current branch with no tracking ref — the push target is unknowable, so scan ALL of HEAD rather than
-  // `HEAD --not --remotes`: that fallback subtracts commits reachable from any remote-tracking ref, yet an
-  // explicit `git push origin HEAD:<branch>` still ships them (LOOP-235 review, no-destination). Walk EVERY
-  // unpushed commit (no cap — P1 #9) and probe the blobs IT introduced, so an add-then-delete pair is still
-  // caught (P1 #2). `-c` (combined diff) makes a MERGE commit report the paths that differ from ALL parents —
-  // a bundle added during conflict resolution, which a plain `diff-tree -r` suppresses for merges (P1 #3);
-  // for a non-merge commit `-c` is a no-op. `--diff-filter=AMT` keeps a TYPE change (`T`) — a bundle
+  // Committed-but-unpushed — walk EVERY commit the next `git push` would transfer (the `unpushedRange`
+  // helper: `<dest>..HEAD`, or all of HEAD with no destination — see its doc for the range rationale and the
+  // offline-scope limitation) and probe the blobs IT introduced, so an add-then-delete pair is still caught
+  // (P1 #2; no cap — P1 #9). `-c` (combined diff) makes a MERGE commit report paths that differ from ALL
+  // parents — a bundle added during conflict resolution, which a plain `diff-tree -r` suppresses for merges
+  // (P1 #3); for a non-merge commit `-c` is a no-op. `--diff-filter=AMT` keeps a TYPE change (`T`) — a bundle
   // replacing a symlink/submodule (P1 #6). `--root` covers an initial commit; deletions (D, excluded) have
   // no blob here and were already probed at the commit that added them.
-  {
-    const revParseOk = (rev: string): boolean =>
-      spawnSync("git", ["-C", root, "rev-parse", "--verify", "--quiet", rev], { stdio: ["ignore", "ignore", "ignore"] }).status === 0;
-    const dest = revParseOk("@{push}") ? "@{push}" : revParseOk("@{upstream}") ? "@{upstream}" : null;
-    const range = dest ? [`${dest}..HEAD`] : ["HEAD"];
-    for (const commit of gitLines(["rev-list", ...range]))
-      for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AMT", "--root", commit]))
-        specs.push({ spec: `${commit}:${rel}`, path: rel, state: "committed" });
-  }
+  for (const commit of gitLines(["rev-list", ...unpushedRange(root)]))
+    for (const rel of gitZ(["diff-tree", "-r", "-c", "--no-commit-id", "--name-only", "-z", "--diff-filter=AMT", "--root", commit]))
+      specs.push({ spec: `${commit}:${rel}`, path: rel, state: "committed" });
 
   // ---- resolve specs → blob OIDs (deduped) via batched `cat-file --batch-check`, then probe each unique
   //      blob through content-budget-bounded `cat-file --batch` groups (LOOP-235 review P2) ----
