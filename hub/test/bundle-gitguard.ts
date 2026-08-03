@@ -265,6 +265,13 @@ try {
   // Codex P1 fix: -f is required so the command also works for AM blobs (staged then modified in worktree).
   ok(/git rm -f --cached/.test(remSOut), "(l) staged leak: the remediation tells the operator to `git rm -f --cached` — handles AM state where index and worktree differ");
 
+  // (s) LOOP-235 review (PRRT_kwDOS6Puk86VoHA5) — `git rm --cached` clears only the INDEX; the worktree copy
+  // survives as an untracked file and a later routine `git add -A` re-stages the identical secret. The staged
+  // remediation must ALSO name deleting/moving/.gitignoring the worktree copy, not just unstaging. Fails
+  // against the index-only remediation string, passes against the worktree-inclusive one.
+  ok(/worktree copy/.test(remSOut) && /re-stage/.test(remSOut),
+     "(s) staged leak: remediation also says to delete/move the worktree copy so a later `git add -A` cannot re-stage the same blob (LOOP-235 review PRRT_…VoHA5)");
+
   // (m) LOOP-235 review P1 #8 — a bundle in an unpushed COMMIT needs different advice than a staged one:
   // `git rm --cached` clears only the index, so the committed blob still ships on the next push. The
   // remediation must tell the operator to REWRITE/DROP the unpushed commit, not to unstage. Fails against a
@@ -429,6 +436,40 @@ try {
   ok(/\[W06\][^\n]*moved\.json/.test(dualOut), "(r) W06 warns for moved.json in both HEAD and staged");
   ok(/git rm -f --cached/.test(dualOut), "(r) dual-state moved.json: staged remediation (`git rm -f --cached`) is present");
   ok(/unpushed commit/.test(dualOut) && /rebase|reset/.test(dualOut), "(r) dual-state moved.json: committed remediation (rewrite/drop commit) is present");
+
+  // (t) LOOP-235 review (PRRT_kwDOS6Puk86VoHA7) — a moved.json marker already in a PUSHED commit must NOT get
+  // "rewrite the unpushed commit" advice: rewriting published history won't un-leak it and misdirects the
+  // operator. indexStates() is now push-aware via unpushedRange (the SAME range the bundle arm ships), so a
+  // pushed marker is classified "published" and W06 says rotate + .gitignore instead of rebase/reset. Fails
+  // against the pre-fix `cat-file -e HEAD:<rel>` classification, which calls ANY committed blob "committed".
+  // NOTE: .dev-loop/ is deliberately NOT gitignored here — an un-ignored marker is the only state in which the
+  // moved.json arm fires, and it is exactly the misconfiguration whose remediation this guards.
+  const pubWs = join(ROOT, "pub-ws"); mkdirSync(pubWs, { recursive: true });
+  ok(cli(["team", "init", "--dir", pubWs, "--key", "gg15", "--backend", "service", "--yes"], ROOT).status === 0, "setup: pub-ws team init");
+  gitInit(pubWs);
+  writeFileSync(join(pubWs, "README"), "x\n");
+  execFileSync("git", ["-C", pubWs, "add", "README"]);
+  execFileSync("git", ["-C", pubWs, "commit", "-qm", "init"]);
+  const pubMoved = join(pubWs, ".dev-loop", "moved.json");
+  mkdirSync(join(pubWs, ".dev-loop"), { recursive: true });
+  writeFileSync(pubMoved, JSON.stringify({ from: "a", to: "b" }));
+  execFileSync("git", ["-C", pubWs, "add", pubMoved]);
+  execFileSync("git", ["-C", pubWs, "commit", "-qm", "add moved.json (to be pushed)"]);
+  const pubRemote = join(ROOT, "pub-remote.git");
+  execFileSync("git", ["init", "--bare", "-q", pubRemote]);
+  execFileSync("git", ["-C", pubWs, "remote", "add", "origin", pubRemote]);
+  execFileSync("git", ["-C", pubWs, "push", "-q", "-u", "origin", "HEAD:refs/heads/main"]); // moved.json is now PUSHED (in @{upstream})
+  ok(execFileSync("git", ["-C", pubWs, "rev-list", "@{upstream}..HEAD", "--", ".dev-loop/moved.json"], { encoding: "utf8" }).trim() === "",
+     "(t) precondition: moved.json is in NO unpushed commit (@{upstream}..HEAD carries nothing for it) — it is already published");
+  ok(spawnSync("git", ["-C", pubWs, "cat-file", "-e", "HEAD:.dev-loop/moved.json"]).status === 0,
+     "(t) precondition: moved.json IS in HEAD — the pre-fix `cat-file -e HEAD:<rel>` check would call it 'committed' and emit rebase/reset advice");
+  const docPub = cli(["doctor"], pubWs);
+  const pubOut = `${docPub.stdout}${docPub.stderr}`;
+  const pubW06 = pubOut.split("\n").find((l) => /secret\/state-bearing/.test(l)) ?? ""; // the artifact-leak line only
+  ok(/moved\.json/.test(pubW06), "(t) W06 still warns for an un-ignored, already-pushed moved.json (names moved.json)");
+  ok(/rotate/.test(pubW06) && /\.gitignore/.test(pubW06), "(t) published marker: remediation says rotate/revoke the secret + .gitignore going forward");
+  ok(!/rebase|reset/.test(pubW06) && !/unpushed commit/.test(pubW06),
+     "(t) published marker: NO rewrite-history advice (rebase/reset/unpushed commit) — rewriting already-pushed history won't un-leak it (LOOP-235 review PRRT_…VoHA7)");
 
   // (b) export into a NON-git-tree workspace ⇒ silent (no false positive).
   const plainWs = join(ROOT, "plain-ws"); mkdirSync(plainWs, { recursive: true });
