@@ -640,6 +640,47 @@ try {
       ok(/\+1 doc-only/.test(w18mixedPost191.out), "doc-only note is +1 (only docs/); skills/ not counted as doc (LOOP-191 AC-4)");
       ok(/DOCTOR_OK/.test(w18mixedPost191.out), "DOCTOR_OK holds for skills+docs mixed window (LOOP-191)");
     }
+
+    // Cases N-P (LOOP-203): stale tracking ref must not produce an unqualified "no skew" green.
+    // State after Cases J-M: tag v1.2.3 at headL; origin/main is 2 commits ahead (1 code, 1 doc).
+    {
+      const trueHead = spawnSync("git", ["-C", w18Clone, "rev-parse", "origin/main"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+      const tagCommit = spawnSync("git", ["-C", w18Clone, "rev-parse", "refs/tags/v1.2.3^{commit}"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout.trim();
+      const w18loop203env = { DEVLOOP_W18_PKG_JSON: w18PkgJson, DEVLOOP_HUB_DB: "" };
+
+      // Case N (LOOP-203): stale tracking ref (rewound to tag commit) → no unqualified "no skew" ✅.
+      // Simulates "last fetched at release": refs/remotes/origin/main points to the tag commit,
+      // so behind=0 — but the real origin/main is 2 code commits ahead.
+      // Fails on today's code (prints "✅ ... matches origin/main — no skew").
+      gitW18(w18Clone, ["update-ref", "refs/remotes/origin/main", tagCommit]);
+      const w18stale = run("server", ["doctor"], { cwd: w18Root, extra: w18loop203env });
+      ok(!/matches origin\/\S+ — no skew/.test(w18stale.out),
+        "stale tracking ref: no unqualified 'matches origin — no skew' ✅ (LOOP-203)");
+      ok(/DOCTOR_OK/.test(w18stale.out), "DOCTOR_OK holds with stale tracking ref (LOOP-203)");
+
+      // Case O (LOOP-203): advance ref to true head → W18 fires with honest count, NEXT cut a release.
+      // Guards against "fixing" AC-1 by gutting the check entirely.
+      gitW18(w18Clone, ["update-ref", "refs/remotes/origin/main", trueHead]);
+      const w18advanced = run("server", ["doctor"], { cwd: w18Root, extra: w18loop203env });
+      ok(/\[W18\]/.test(w18advanced.out),
+        "advancing ref to true head: W18 fires with honest count (LOOP-203)");
+      ok(/NEXT:.*cut a release/.test(w18advanced.out),
+        "advancing ref to true head: NEXT cut a release still emits (LOOP-203)");
+      ok(/DOCTOR_OK/.test(w18advanced.out),
+        "DOCTOR_OK holds when ref advanced to true head (LOOP-203)");
+
+      // Case P (LOOP-203): genuinely up-to-date ref (tag moved to tip) → qualified no-skew, no false alarm.
+      gitW18(w18Clone, ["tag", "-f", "v1.2.3", trueHead]);
+      const w18uptd = run("server", ["doctor"], { cwd: w18Root, extra: w18loop203env });
+      ok(!/\[W18\]/.test(w18uptd.out),
+        "genuinely up-to-date ref: no W18 warn (no false alarm) (LOOP-203)");
+      ok(/no skew/.test(w18uptd.out),
+        "genuinely up-to-date ref: qualified no-skew statement present (LOOP-203)");
+      ok(/DOCTOR_OK/.test(w18uptd.out),
+        "DOCTOR_OK holds for genuinely up-to-date ref (LOOP-203)");
+    }
   }
 
   // ── W20: operator decision-queue stall; DOCTOR_OK stays; NEXT flips to decision (LOOP-74) ──
