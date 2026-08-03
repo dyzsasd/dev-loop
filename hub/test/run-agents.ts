@@ -500,6 +500,44 @@ try {
       "LOOP-257: team.agents.sweep.fireTimeout='55m' wins over explicit --fire-timeout 5m (team-scope config > CLI flag, v2 team path)");
   }
 
+  // ── LOOP-260: --fire-timeout/--stall-timeout CLI flags reject values over Node's 32-bit timer limit ──
+  // parseDuration() must enforce the same ceiling as team-config.ts's parsedDurationMs (LOOP-103 hardened
+  // the JSON-config path; this pins the matching guard on the CLI-flag path). Over-ceiling values call
+  // die() before workspace resolution — run() suffices; valid durations are covered by LOOP-9/LOOP-103.
+  {
+    const wsDir260 = mkdtempSync(join(tmpdir(), "dl-ws-loop260-"));
+    const repo260 = join(wsDir260, "repo"); mkdirSync(repo260, { recursive: true });
+    spawnSync("git", ["init", "-b", "main"], { cwd: repo260, encoding: "utf8" });
+    writeFileSync(join(wsDir260, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2, team: { key: "test-loop260", backend: "linear", linearTeam: "T" },
+      repos: { r: { path: "repo" } }, projects: { "p-loop260": { repos: [{ ref: "r", role: "primary" }] } },
+    }));
+    const runWs260 = (args: string[]) => {
+      const { DEVLOOP_WORKSPACE: _ws, DEVLOOP_PROJECTS_JSON: _pj, DEVLOOP_HUB_DB: _hdb, DEVLOOP_TEAM: _dt, ...env260 } = process.env;
+      delete env260.DEVLOOP_PROJECT; delete env260.DEVLOOP_ACTOR;
+      delete env260.DEVLOOP_DEV_SPLIT; delete env260.DEVLOOP_DATA_DIR;
+      delete env260.DEVLOOP_RUN_DIR; delete env260.DEVLOOP_PLUGIN_ROOT;
+      const r = spawnSync("node", ["src/run-agents.ts", ...args], { cwd: hubRoot, encoding: "utf8", env: { ...env260, DEVLOOP_WORKSPACE: wsDir260 } });
+      return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+    };
+
+    const ftOver = runWs260(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--fire-timeout", "30d"]);
+    ok(ftOver.code !== 0,
+      "LOOP-260: --fire-timeout 30d (>24.8d) exits non-zero — parseDuration rejects the over-ceiling value");
+    ok(/32-bit|2147483647|timer limit/i.test(ftOver.out),
+      "LOOP-260: --fire-timeout 30d error message names the Node 32-bit timer ceiling");
+
+    const stOver = runWs260(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--stall-timeout", "30d"]);
+    ok(stOver.code !== 0,
+      "LOOP-260: --stall-timeout 30d (>24.8d) exits non-zero — parseDuration rejects the over-ceiling value");
+    ok(/32-bit|2147483647|timer limit/i.test(stOver.out),
+      "LOOP-260: --stall-timeout 30d error message names the Node 32-bit timer ceiling");
+
+    const ftUnder = runWs260(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--fire-timeout", "24h"]);
+    ok(ftUnder.code === 0,
+      "LOOP-260: --fire-timeout 24h (under ceiling) still exits 0 — no regression on valid durations");
+  }
+
   // ── P0-1b: provider-scoped circuit breaker (LOOP-8) ─────────────────────────────────────────────────
   // 5 same-class failures spread across 3 agents on one provider trips it; a 4th agent on that provider
   // is immediately probe-capped without accumulating its own streak; an agent on a different provider is
