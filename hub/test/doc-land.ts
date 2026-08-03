@@ -290,6 +290,111 @@ try {
   git(repoDir, ["fetch", "origin", "main"]);
   git(repoDir, ["reset", "--hard", "origin/main"]);
 
+  // ── (k) LOOP-217 AC1/AC2/AC3: unmerged index entry on a non-doc path → names the real blocker ──
+  // State: both repoDir and origin at same commit (after j's cleanup).
+  // Setup: local doc commit + origin moves ahead via clone2 (so behind>0 → preflight runs).
+  {
+    writeFileSync(join(repoDir, "docs", "STRATEGY.md"), "# Strategy\n\nProgress k (LOOP-217).\n");
+    git(repoDir, ["add", "docs/STRATEGY.md"]);
+    git(repoDir, ["commit", "-qm", "docs(strategy): progress k (LOOP-217)"]);
+
+    // Advance origin via clone2 with a code commit (makes behind=1 in repoDir → preflight runs)
+    git(clone2, ["fetch", "-q", "origin", "main"]);
+    git(clone2, ["reset", "--hard", "origin/main"]);
+    mkdirSync(join(clone2, "hub", "src"), { recursive: true });
+    writeFileSync(join(clone2, "hub", "src", "code-k.ts"), "// code k\n");
+    git(clone2, ["add", "hub/src/code-k.ts"]);
+    git(clone2, ["commit", "-qm", "fix: code k (LOOP-217 test)"]);
+    git(clone2, ["push", "-qu", "origin", "main"]);
+    git(repoDir, ["fetch", "-q", "origin", "main"]);
+
+    // Create an unmerged index entry for a non-doc path (simulates a prior failed merge/rebase)
+    const mkBlob = (content: string): string =>
+      spawnSync("git", ["-C", repoDir, "hash-object", "-w", "--stdin"],
+        { input: content, encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }).stdout.trim();
+    const blob1 = mkBlob("// base\n");
+    const blob2 = mkBlob("// ours\n");
+    const blob3 = mkBlob("// theirs\n");
+    mkdirSync(join(repoDir, "hub", "src"), { recursive: true });
+    spawnSync("git", ["-C", repoDir, "update-index", "--index-info"],
+      { input: `100644 ${blob1} 1\thub/src/doctor.ts\n100644 ${blob2} 2\thub/src/doctor.ts\n100644 ${blob3} 3\thub/src/doctor.ts\n`,
+        encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] });
+
+    const resK = run(["--repo", "dev-loop"], wsRoot);
+    ok(resK.status !== 0, `(k) unmerged index entry → exits non-zero (LOOP-217)`);
+    ok(/hub\/src\/doctor\.ts/.test(resK.stderr), `(k) names the unmerged non-doc path (LOOP-217)`);
+    ok(!/prose merge|reconcile.*hand|must be reconciled/i.test(resK.stderr),
+      `(k) does NOT blame a prose conflict on a non-doc unmerged path (LOOP-217)`);
+  }
+  git(repoDir, ["reset", "--hard", "origin/main"]);
+
+  // ── (l) LOOP-217 AC6: dirty working tree (staged uncommitted changes) waits then blocks ──
+  // Uses DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS=2000 so the test completes in ~2s, not 30s.
+  {
+    writeFileSync(join(repoDir, "docs", "STRATEGY.md"), "# Strategy\n\nProgress l (LOOP-217).\n");
+    git(repoDir, ["add", "docs/STRATEGY.md"]);
+    git(repoDir, ["commit", "-qm", "docs(strategy): progress l (LOOP-217)"]);
+
+    // Advance origin via clone2 again (so behind=1 → preflight runs)
+    git(clone2, ["fetch", "-q", "origin", "main"]);
+    git(clone2, ["reset", "--hard", "origin/main"]);
+    mkdirSync(join(clone2, "hub", "src"), { recursive: true });
+    writeFileSync(join(clone2, "hub", "src", "code-l.ts"), "// code l\n");
+    git(clone2, ["add", "hub/src/code-l.ts"]);
+    git(clone2, ["commit", "-qm", "fix: code l (LOOP-217 test)"]);
+    git(clone2, ["push", "-qu", "origin", "main"]);
+    git(repoDir, ["fetch", "-q", "origin", "main"]);
+
+    // Create staged (uncommitted) change on a non-doc path — won't self-clear, simulates a wedge
+    mkdirSync(join(repoDir, "hub", "src"), { recursive: true });
+    writeFileSync(join(repoDir, "hub", "src", "dirty-l.ts"), "// dirty\n");
+    git(repoDir, ["add", "hub/src/dirty-l.ts"]);  // staged but not committed
+
+    const t0 = Date.now();
+    const resL = run(["--repo", "dev-loop"], wsRoot, { DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS: "2000" });
+    const elapsed = Date.now() - t0;
+    ok(resL.status !== 0, `(l) dirty tree → exits non-zero (LOOP-217)`);
+    ok(elapsed >= 2000, `(l) waited at least 2s before blocking (retried within budget: ${elapsed}ms) (LOOP-217)`);
+    ok(/dirty/.test(resL.stderr), `(l) message mentions 'dirty' (LOOP-217)`);
+    ok(!/prose merge|reconcile.*hand|must be reconciled/i.test(resL.stderr),
+      `(l) does NOT blame a prose conflict for a dirty working tree (LOOP-217)`);
+    ok(/hub\/src\/dirty-l\.ts/.test(resL.stderr), `(l) names the dirty non-doc path (LOOP-217)`);
+  }
+  git(repoDir, ["reset", "--hard", "origin/main"]);
+
+  // ── (j2) LOOP-217 AC2: genuine doc prose conflict still emits the prose-merge message ──
+  // (Regression guard: the AC1/AC6 preflight must not suppress the genuine doc message.)
+  // Reuses the conflict state already set up in (j) by re-running the same fixture.
+  {
+    // Reset both sides to a new shared baseline
+    const j2Base = "# Strategy\n\nintro\nSHARED-BASE-j2\nouttro\n";
+    writeFileSync(join(repoDir, "docs", "STRATEGY.md"), j2Base);
+    git(repoDir, ["add", "docs/STRATEGY.md"]);
+    git(repoDir, ["commit", "-qm", "docs(strategy): j2 baseline"]);
+    git(repoDir, ["push", "-qu", "origin", "main"]);
+
+    // Local diverges on the shared line
+    writeFileSync(join(repoDir, "docs", "STRATEGY.md"), "# Strategy\n\nintro\nSHARED-BASE-j2-local\nouttro\n");
+    git(repoDir, ["add", "docs/STRATEGY.md"]);
+    git(repoDir, ["commit", "-qm", "docs(strategy): j2 local edit"]);
+
+    // clone2 diverges on the same line and pushes first
+    git(clone2, ["fetch", "-q", "origin", "main"]);
+    git(clone2, ["reset", "--hard", "origin/main"]);
+    writeFileSync(join(clone2, "docs", "STRATEGY.md"), "# Strategy\n\nintro\nSHARED-BASE-j2-remote\nouttro\n");
+    git(clone2, ["add", "docs/STRATEGY.md"]);
+    git(clone2, ["commit", "-qm", "docs(strategy): j2 remote edit"]);
+    git(clone2, ["push", "-qu", "origin", "main"]);
+    git(repoDir, ["fetch", "origin", "main"]);
+
+    const resJ2 = run(["--repo", "dev-loop"], wsRoot);
+    ok(resJ2.status !== 0, `(j2) genuine doc conflict → exits non-zero (LOOP-217 AC2/AC4 guard)`);
+    ok(/conflict|reconcile/i.test(resJ2.stderr),
+      `(j2) genuine doc conflict still emits prose-merge wording (AC2 guard — LOOP-217)`);
+  }
+  git(repoDir, ["fetch", "origin", "main"]);
+  git(repoDir, ["reset", "--hard", "origin/main"]);
+
   // ── (i) LOOP-119 Fix 2: a non-'main' defaultBranch (trunk) resolves via effectiveRepo + lands ──
   //   proves the hardcoded "main" is gone — doc-land reads repo.defaultBranch (§19 fallback chain).
   {
