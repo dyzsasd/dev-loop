@@ -46,6 +46,14 @@ export function plaintextBearerToRemote(base: URL, hasToken: boolean): boolean {
   return true;
 }
 
+// A hostname reaches this diagnostic straight from a WHATWG URL, which permits shell metacharacters
+// (`http://evil;id` parses to hostname `evil;id`, and `$()`/backticks survive too) — so the ssh remedy,
+// the one COPYABLE shell command here, single-quotes the host, or a copy-paste would execute the suffix
+// (codex P2). POSIX single-quote: wrap, and close/escape/reopen for any embedded quote.
+function shellSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 // The refusal diagnostic — names the real risk and BOTH remedies (AC4); NEVER the token value (§16).
 export function plaintextBearerRefusal(base: URL): string {
   // The tunnel's REMOTE port must be the one the client will ACTUALLY hit — the URL's effective port,
@@ -55,11 +63,16 @@ export function plaintextBearerRefusal(base: URL): string {
   // the scheme default, so `|| …` supplies the right fallback either way.
   const remotePort = base.port || "80";
   const localPort = base.port || "8787";
+  // A reverse-proxy path prefix must survive into the remedies: postOpUrl targets
+  // `${base.pathname}/api/op/...`, so a hub served under `/dev-loop` is reached at `/dev-loop/api/op/...`
+  // and a remedy that drops the prefix points at the wrong path (codex P2). Same trailing-slash strip as
+  // postOpUrl, so a bare host (pathname "/") collapses to "" and gains no spurious slash.
+  const basePath = base.pathname.replace(/\/$/, "");
   return (
     `refusing to send the hub bearer token in cleartext to non-loopback host '${base.hostname}' over http — ` +
     `it is full write authority over the board (tickets, comments, docs) and rides every op call, so one ` +
-    `on-path capture is a durable compromise. Attach over TLS (https://${base.host}), or tunnel to loopback ` +
-    `(ssh -L ${localPort}:localhost:${remotePort} ${base.hostname} — then --attach http://127.0.0.1:${localPort}). ` +
+    `on-path capture is a durable compromise. Attach over TLS (https://${base.host}${basePath}), or tunnel to loopback ` +
+    `(ssh -L ${localPort}:localhost:${remotePort} ${shellSingleQuote(base.hostname)} — then --attach http://127.0.0.1:${localPort}${basePath}). ` +
     `To allow plaintext on a trusted private link, set DEVLOOP_ATTACH_ALLOW_PLAINTEXT=1.`
   );
 }

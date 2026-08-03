@@ -42,11 +42,27 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
     // The refusal's tunnel remedy must target the URL's EFFECTIVE remote port, not a hardcoded 8787:
     // for a default-port `http://hub.example` (port 80) the old `ssh -L 8787:localhost:8787` reaches
     // nothing (codex P2). Keep a convenient LOCAL 8787; derive only the REMOTE end (80 here). An
-    // explicit port is used for both ends unchanged.
-    ok(/ssh -L 8787:localhost:80 hub\.example\b/.test(plaintextBearerRefusal(new URL("http://hub.example"))),
+    // explicit port is used for both ends unchanged. The host is single-quoted (metachar case below).
+    ok(/ssh -L 8787:localhost:80 'hub\.example'/.test(plaintextBearerRefusal(new URL("http://hub.example"))),
       "refusal: default-port http derives the REMOTE tunnel port (80), keeping a convenient local 8787 — not a hardcoded 8787:8787");
-    ok(/ssh -L 9000:localhost:9000 hub\.example\b/.test(plaintextBearerRefusal(new URL("http://hub.example:9000"))),
+    ok(/ssh -L 9000:localhost:9000 'hub\.example'/.test(plaintextBearerRefusal(new URL("http://hub.example:9000"))),
       "refusal: an explicit non-default port is used for BOTH tunnel ends unchanged");
+
+    // codex P2: a reverse-proxy path prefix must survive into BOTH remedies — postOpUrl targets
+    // `${pathname}/api/op/...`, so a hub under `/dev-loop` needs the https + loopback URLs to keep it.
+    const pathRefusal = plaintextBearerRefusal(new URL("http://hub.example/dev-loop"));
+    ok(/https:\/\/hub\.example\/dev-loop\b/.test(pathRefusal) && /--attach http:\/\/127\.0\.0\.1:8787\/dev-loop\b/.test(pathRefusal),
+      "refusal: a reverse-proxy path prefix is preserved in the TLS and loopback remedy URLs (codex P2)");
+    ok(/https:\/\/hub\.example(?![\w./])/.test(plaintextBearerRefusal(new URL("http://hub.example"))),
+      "refusal: a bare host (pathname '/') gains no spurious trailing slash in the remedy URL");
+
+    // codex P2: a WHATWG URL permits shell metacharacters in the hostname (`http://evil;id` ⇒ host
+    // `evil;id`), so the COPYABLE ssh remedy single-quotes it — a copy-paste must not execute `;id`.
+    const metaRefusal = plaintextBearerRefusal(new URL("http://evil;id:8899"));
+    ok(/ssh -L 8899:localhost:8899 'evil;id'/.test(metaRefusal),
+      "refusal: a shell-metacharacter hostname is single-quoted in the ssh remedy (codex P2)");
+    ok(!/localhost:8899 evil;id/.test(metaRefusal),
+      "refusal: the metacharacter hostname is NEVER emitted bare (unquoted) into the copyable command");
 
     // egress: postOpUrl SHORT-CIRCUITS to "refused" without opening a socket. hub.invalid never resolves,
     // so unguarded the token case would reach DNS and return "down"; guarded it returns "refused" with no
