@@ -985,7 +985,16 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
       }
       // codeBehind === 0: all commits are doc-only — silent (no behavior skew)
     } else {
-      pass(`[${matchRef}] installed ${pkgName} v${V} matches origin/${matchBranch} — no skew`);
+      // behind === 0, but only as fresh as the local tracking ref. Include the ref's
+      // short sha and age so the operator knows when this was last measured.
+      const shortRefR = spawnSync("git", ["-C", matchDir, "rev-parse", "--short", `origin/${matchBranch}`],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      const ageR = spawnSync("git", ["-C", matchDir, "log", "-1", "--format=%ar", `origin/${matchBranch}`],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      const refSha = shortRefR.stdout.trim() || "unknown";
+      const refAge = ageR.stdout.trim();
+      const qualifier = refAge ? `${refSha}, ${refAge}` : refSha;
+      pass(`[${matchRef}] installed ${pkgName} v${V} matches origin/${matchBranch} (${qualifier}) — no skew as of last fetch; run git fetch to confirm`);
     }
   } catch { info(`[${matchRef}] W18: git check skipped (best-effort)`); }
   return null;
