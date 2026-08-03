@@ -353,6 +353,7 @@ function parseDuration(input: string): number {
   const mult = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : unit === "h" ? 60 * 60_000 : 24 * 60 * 60_000;
   const ms = Math.round(n * mult);
   if (!Number.isFinite(ms) || ms <= 0) die(`invalid duration '${input}'`);
+  if (ms > 2_147_483_647) die(`duration '${input}' (${ms}ms) exceeds Node's 32-bit timer limit (~24.8d); setTimeout would coerce it to 1ms, killing the fire immediately`);
   return ms;
 }
 
