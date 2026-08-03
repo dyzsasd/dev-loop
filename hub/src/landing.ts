@@ -176,20 +176,21 @@ export function readPrReviewState(
 
 const LANDING_STALL_DAYS = 2;
 const DEFAULT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const GH_TIMEOUT_MS = 5_000;
+export const GH_EXEC_TIMEOUT_MS = 5_000; // per-call spawnSync cap; exported for the enrich deadline
 
-export function defaultGhExec(args: string[]): { stdout: string; stderr: string; ok: boolean } {
-  const r = spawnSync("gh", args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: GH_TIMEOUT_MS,
-  });
-  if (r.error) throw r.error; // ENOENT → gh not on PATH; thrown → caller returns unknown
-  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", ok: (r.status ?? 1) === 0 };
+export function makeGhExec(opts?: { timeoutMs?: number }): ExecFn {
+  const timeout = opts?.timeoutMs ?? GH_EXEC_TIMEOUT_MS;
+  return (args) => {
+    const r = spawnSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout });
+    if (r.error) throw r.error;
+    return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", ok: (r.status ?? 1) === 0 };
+  };
 }
 
+export const defaultGhExec: ExecFn = makeGhExec();
+
 function extractGitHubRepo(remote: string): string | null {
-  const m = remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
+  const m = remote.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
   return m ? m[1]! : null;
 }
 
