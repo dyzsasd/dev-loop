@@ -17,6 +17,7 @@ import {
   STRATEGY_DOC_READERS,
   citedAnchors, contextBill, conventionsLoad, malformedRefs, measureOf, parseConventions,
   parseSectionsLine, pluginRoot, spanMeasure, splitSkill,
+  strategyDocRelPath,
 } from "../src/context-bill.ts";
 import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "../src/lessons.ts";
 
@@ -204,6 +205,27 @@ for (const r of bill.rows) {
         `${r.skill} (non-reader): total unchanged by strategy doc fixture (LOOP-263)`);
     }
   }
+}
+
+// ── 5c. strategyDocRelPath unit coverage (LOOP-263 quality gate — CRAP threshold) ────────
+// Direct tests for strategyDocRelPath to bring its coverage > 0% (CC=10 → CRAP=110 at 0% cov).
+{
+  const r = strategyDocRelPath; // alias for readability
+  // string cases
+  ok(r("docs/STRATEGY.md") === "docs/STRATEGY.md", "strategyDocRelPath: plain repo-relative path");
+  ok(r("  docs/STRATEGY.md  ") === "docs/STRATEGY.md", "strategyDocRelPath: trims whitespace");
+  ok(r(" \t") === null, "strategyDocRelPath: whitespace-only string → null");
+  ok(r("https://linear.app/team/document/abc123") === null, "strategyDocRelPath: Linear URL → null");
+  // object cases
+  ok(r({ hubDoc: "design/my-design" }) === null, "strategyDocRelPath: hubDoc object → null");
+  ok(r({ linearDocument: "doc-id" }) === null, "strategyDocRelPath: linearDocument object → null");
+  ok(r({ path: "docs/STRATEGY.md" }) === "docs/STRATEGY.md", "strategyDocRelPath: path object → path string");
+  ok(r({ path: "" }) === null, "strategyDocRelPath: path object with empty path → null");
+  ok(r({}) === null, "strategyDocRelPath: object without path → null");
+  // null/unknown cases
+  ok(r(null) === null, "strategyDocRelPath: null → null");
+  ok(r(42) === null, "strategyDocRelPath: number → null");
+  ok(r(undefined) === null, "strategyDocRelPath: undefined → null");
 }
 
 // ── 6. CLI e2e: `metrics --context` needs NO workspace (plugin-static; the doctor/metrics call) ────

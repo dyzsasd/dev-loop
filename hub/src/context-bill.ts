@@ -275,7 +275,7 @@ export function contextBill(root = pluginRoot(), strategyDoc?: StrategyDocStat):
 }
 
 // Resolve a DocRef to a repo-relative path string; returns null for hub/Linear forms (unreadable).
-function strategyDocRelPath(docRef: unknown): string | null {
+export function strategyDocRelPath(docRef: unknown): string | null {
   if (typeof docRef === "string") {
     if (/linear\.app\/.*\/document\//.test(docRef)) return null;
     return docRef.trim() || null;
