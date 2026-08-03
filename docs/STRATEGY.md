@@ -646,6 +646,22 @@ shipped classifier at `hub/src/run-agents.ts:253-254` still has no `session limi
 claim stands; the *weekly*-limit variant happens to classify via a 429. The hole is narrower than
 "every failure", which is LOOP-204's measurement to own. Left untouched rather than churned.
 
+**Addendum — the operator was working the same predicate four minutes into this fire, and it changes
+the fix routing.** At 08:47:18Z they commented on **LOOP-250** (a real human write, no `fireId`): after
+refreshing the pinned build `64aebc2` → `aef0d5f` and reinstalling, `daemon up` printed
+`already running for 'loop' → pid 53987` **and did nothing**. Both builds report `1.14.0` — a source
+build carries whatever `package.json` said at the built commit, so the SHA moved and the string did
+not. So this host demonstrated **both** failures of one comparison inside 90 seconds: LOOP-250 is the
+predicate failing to fire when versions are *equal by string but differ by SHA* (a no-op that reads as
+success, on the exact one-command action LOOP-258 asks a human to perform); LOOP-252 is the same
+predicate firing when the installed CLI is *older* (a downgrade). **An ordering-only fix closes
+LOOP-252 and leaves LOOP-250 alive; a SHA-aware check closes both.** Routed accordingly: LOOP-250
+raised **P2 → P1** as the class carrier (already servable, already holds the stamped-build-commit
+direction, and it unblocks LOOP-247); LOOP-252 stays P1 and open as the ordering half, cross-linked.
+Also corrected on LOOP-258: pids 12713/12725 were *their* forced `down`+`up`, not the scheduler's
+start-up — which sharpens rather than softens the finding, since they left two healthy daemons in
+place and the first two fires downgraded them anyway.
+
 **Not filed, deliberately:** this host is running **14+ leaked daemon processes** from deleted
 worktrees, `/tmp` copies and the product repo, the oldest dating to Jul 22. That is LOOP-95's reaper
 (In Progress) and LOOP-137's doctor blindness (Backlog, blocked on LOOP-95) — a report line, not a
@@ -684,6 +700,19 @@ new row.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, sixteenth fire) — one predicate can fail in two opposite directions, and fixing
+  the direction you were bitten by can leave the other one live.** `daemon up` compares installed
+  against running version. It fires when it should not (installed OLDER ⇒ downgrades a healthy
+  daemon, LOOP-252) *and* fails to fire when it should (equal version STRING, different SHA under a
+  local source-build pin ⇒ a no-op that prints `already running`, LOOP-250). Both were observed on
+  this host within 90 seconds. The obvious fix for the first — compare ordering — closes it and
+  leaves the second alive. **Rule:** before fixing a comparison, enumerate every way it can be wrong,
+  not just the way that hurt you; then pick the fix that dominates (here, SHA-aware) and route the
+  class to one carrier rather than patching each symptom on its own ticket. **Corollary:** the
+  dangerous failure is the silent one — an over-firing check is noisy and self-reporting, an
+  under-firing check prints a plausible success message, which is why its regression test must assert
+  on the pid changing and never on the output.
 
 - **2026-08-03 (pm, sixteenth fire) — a tracker whose prerequisite was satisfied and then
   *un*-satisfied does not close, and the re-park must carry a CHANGED ask.** LOOP-258 came back at
