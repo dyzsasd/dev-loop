@@ -148,6 +148,48 @@ try {
       "LOOP-73 AC4: empty queue → no decision queue line (renders exactly as today)");
   }
 
+  // ── LOOP-127: digest cost line in renderHuman ─────────────────────────────────────────────────────
+  {
+    const fakeWs = { file: { team: { key: "test-key" }, repos: {}, projects: {} } } as any;
+    const fakeRollup = { throughput: 0, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
+
+    // AC2: no metered fires → "unmetered — 0 of N", never "$0.00", never omitted
+    const noUsageFires = { windowMs: 7 * DAY, fires: 12, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null };
+    const linesNoUsage: string[] = [];
+    const origLogA = console.log;
+    console.log = (...args: unknown[]) => linesNoUsage.push(String(args[0] ?? ""));
+    try { renderHuman(fakeWs, 7 * DAY, noUsageFires, { teamRollup: fakeRollup, decisionQueue: [] }, NOW); }
+    finally { console.log = origLogA; }
+    const costLineNoUsage = linesNoUsage.find((l) => l.startsWith("cost:"));
+    ok(costLineNoUsage !== undefined, "LOOP-127 AC2: cost line is present when no metered fires");
+    ok(costLineNoUsage !== undefined && /unmetered — 0 of 12/.test(costLineNoUsage),
+      `LOOP-127 AC2: no-usage renders 'unmetered — 0 of 12' (got: ${costLineNoUsage})`);
+    ok(costLineNoUsage !== undefined && !/\$0/.test(costLineNoUsage),
+      `LOOP-127 AC2: cost line never contains '$0' in no-data state (got: ${costLineNoUsage})`);
+
+    // AC1: metered fires with cost → "$X.XXXX over N of M metered fires"
+    const meteredFires = { windowMs: 7 * DAY, fires: 20, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 5, costMeteredFires: 3, costUsd: 0.12 };
+    const linesMetered: string[] = [];
+    const origLogB = console.log;
+    console.log = (...args: unknown[]) => linesMetered.push(String(args[0] ?? ""));
+    try { renderHuman(fakeWs, 7 * DAY, meteredFires, { teamRollup: fakeRollup, decisionQueue: [] }, NOW); }
+    finally { console.log = origLogB; }
+    const costLineMetered = linesMetered.find((l) => l.startsWith("cost:"));
+    ok(costLineMetered !== undefined && /\$0\.1200 over 5 of 20 metered fires/.test(costLineMetered),
+      `LOOP-127 AC1: metered cost renders dollar + coverage (got: ${costLineMetered})`);
+
+    // AC1: $/accepted added when throughput > 0
+    const rollupWithThroughput = { throughput: 4, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
+    const linesPerAccepted: string[] = [];
+    const origLogC = console.log;
+    console.log = (...args: unknown[]) => linesPerAccepted.push(String(args[0] ?? ""));
+    try { renderHuman(fakeWs, 7 * DAY, meteredFires, { teamRollup: rollupWithThroughput, decisionQueue: [] }, NOW); }
+    finally { console.log = origLogC; }
+    const costLinePerAccepted = linesPerAccepted.find((l) => l.startsWith("cost:"));
+    ok(costLinePerAccepted !== undefined && /accepted change/.test(costLinePerAccepted),
+      `LOOP-127 AC1: $/accepted appended when throughput known (got: ${costLinePerAccepted})`);
+  }
+
   // ── P1-4: ownerLiveness — a stranded owner (open tickets, no fires) is found; live/manual handled ──
   db.prepare("UPDATE tickets SET labels=? WHERE id='T-3'").run(JSON.stringify(["dev-loop", "qa"]));      // qa-owned, In Review
   db.prepare("UPDATE tickets SET labels=? WHERE id='T-4'").run(JSON.stringify(["dev-loop", "pm"]));      // pm-owned, In Review

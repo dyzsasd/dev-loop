@@ -62,8 +62,10 @@ const base = (db: ReturnType<typeof openDb>, ledgerPath: string) =>
   const led = burst(T, 9, 1); // 10 fires, 10% success
   const n1 = await fireHealthNotifyTick({ ...base(db, led), nowMs: T, fetchImpl });
   ok(n1 === 1 && markers(db, "fire_health.notified") === 1, "degraded window → one alert + one marker");
-  ok(cap.length === 1 && /loop health: fire success 10% over the last 2h \(10 fires — spend-limit×9\)/.test(cap[0].body),
+  ok(cap.length === 1 && /loop health: fire success 10% over the last 2h \(10 fires — spend-limit×9/.test(cap[0].body),
     `the §16 line carries rate + sample + errorClass tallies (got ${cap[0]?.body.slice(0, 160)})`);
+  ok(cap.length === 1 && /; cost:/.test(cap[0].body),
+    `LOOP-127: fire-health notification carries cost fragment (got ${cap[0]?.body.slice(0, 160)})`);
   const n2 = await fireHealthNotifyTick({ ...base(db, led), nowMs: T + 10 * 60_000, fetchImpl });
   ok(n2 === 0 && markers(db, "fire_health.notified") === 1, "same episode → de-duped (no second send)");
 
