@@ -60,8 +60,14 @@ export function servableSlice(db: DatabaseSync, projectId: string, actor: string
     .sort((x, y) => PICK_RANK(x) - PICK_RANK(y) || x.created_at.localeCompare(y.created_at))
     .map(summary);
   const inProgress = byState("In Progress").filter((t) => t.assignee === actor && notSensitiveForJunior(t)).map(summary);
-  // inReview: landing/repair only — NOT a pick list (LOOP-112). Keyed on assignee===actor (not mine())
-  // so the legacy `dev` null-assignee path never bleeds in, and a pm-assigned In Review ticket stays out.
-  const inReview = byState("In Review").filter((t) => t.assignee === actor && notSensitiveForJunior(t)).map(summary);
+  // inReview: landing/repair only — NOT a pick list (LOOP-112). Keyed on assignee===actor OR, for split-dev
+  // tiers, the tier label (LOOP-244): a null-assignee InReview ticket whose tier label still names the actor
+  // is landable by Step 0.5 even if the assignee was cleared on handoff. The label fallback only applies
+  // when assignee IS NULL — an explicitly-assigned ticket stays in its owner's slice only. Legacy `dev`
+  // actor uses assignee only (actor==="dev" excluded from label-match) so null-assignee "dev" never bleeds in.
+  const tierLabel = isDevTierActor(actor) && actor !== "dev";
+  const inReview = byState("In Review")
+    .filter((t) => (t.assignee === actor || (tierLabel && t.assignee === null && t.labels.includes(actor))) && notSensitiveForJunior(t))
+    .map(summary);
   return { todo, inProgress, inReview };
 }
