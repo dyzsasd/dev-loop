@@ -652,19 +652,32 @@ export function removeProject(argv: string[]): number {
 
   let inDb = false, projectId: string | null = null;
   let db: ReturnType<typeof openDb> | undefined;
+  // dbUnverifiable: service backend + the hub.db file is PRESENT but we could not read it (openDb or the
+  // project lookup threw — busy past busy_timeout, corrupt, permission denied). We then cannot know the
+  // ticket count, and an unreadable db is exactly when a silent config-only removal would orphan a
+  // project's live tickets — so fail CLOSED below, never treat it as 0 tickets. Distinct from "db absent"
+  // and "db opened but project genuinely not present", both real 0-ticket cases that stay removable. (LOOP-280)
+  let dbUnverifiable = false;
   if (ws.file.team.backend === "service") {
     const dbPath = wsHubDb(ws);
     if (existsSync(dbPath)) {
       try { db = openDb(dbPath); projectId = findProject(db, key); inDb = projectId !== null; }
-      catch { /* hub db unreachable — proceed config-only */ }
+      catch { dbUnverifiable = true; /* present but unreadable — refuse below unless --force */ }
     }
   }
 
-  if (!inConfig && !inDb) { db?.close(); die(`project '${key}' not found in config or hub db`, 1); }
+  // Fail closed on an unverifiable db BEFORE the not-found check, so the message names the real cause
+  // (unreadable, not "not found") and no removal happens without a deliberate --force override. (LOOP-280)
+  if (dbUnverifiable && !force)
+    die(`project '${key}': hub.db is present but could not be opened to verify its ticket count — refusing to remove (pass --force to override); an unreadable db is when a silent removal would orphan live tickets`, 1);
+
+  if (!inConfig && !inDb && !dbUnverifiable) { db?.close(); die(`project '${key}' not found in config or hub db`, 1); }
 
   if (!force) {
     if (db && projectId) {
-      const tc = (db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c;
+      let tc: number;
+      try { tc = (db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c; }
+      catch { db.close(); die(`project '${key}': hub.db ticket-count query failed — refusing to remove (pass --force to override)`, 1); }
       if (tc > 0) { db.close(); die(`project '${key}' has ${tc} ticket(s) — pass --force to remove anyway`, 1); }
     }
     if (inConfig && (ws.file.projects[key].repos ?? []).length > 0) {
