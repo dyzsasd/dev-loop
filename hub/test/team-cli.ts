@@ -990,6 +990,43 @@ esac`);
     ok(bErrs2.some((e) => e.code === "E18" && /perFireUsd/.test(e.path)), "validateTeamFile E18 on zero perFireUsd (hand-broken, AC2)");
   }
 
+  // ═══ LOOP-202: NEXT on DOCTOR_FAILED names the ❌ subject (verdict-blindness fix) ═══
+  {
+    // Case A: registered repo path missing on disk → ok:false in doctorWorkspace
+    const l202Root = join(tmp, "l202-ws");
+    run("team", ["init", "--dir", l202Root, "--key", "l202-team", "--backend", "service"]);
+    run("team", ["add-project", "core", "--prefix", "L2A"], { cwd: l202Root });
+    // add-repo WITHOUT creating the dir → path is registered but missing on disk
+    run("team", ["add-repo", "myrepo", "--project", "core", "--path", "myrepo"], { cwd: l202Root });
+    run("team", ["set", "team.mode", "live"], { cwd: l202Root });
+    const l202a = run("server", ["doctor"], { cwd: l202Root, extra: { DEVLOOP_HUB_DB: "" } });
+    ok(/DOCTOR_FAILED/.test(l202a.out), "LOOP-202 A: repo path missing → DOCTOR_FAILED");
+    ok(!/NEXT: dev-loop run/.test(l202a.out), "LOOP-202 A: NEXT is not 'dev-loop run' when ok:false (verdict-blindness fix)");
+    ok(/NEXT:.*myrepo/.test(l202a.out), "LOOP-202 A: NEXT names the failing repo ref");
+
+    // Case B: §17 gitignore leak (hub.db inside a git repo, not gitignored) → ok:false in runDoctor
+    const l202bRoot = join(tmp, "l202b-ws");
+    run("team", ["init", "--dir", l202bRoot, "--key", "l202b-team", "--backend", "service"]);
+    spawnSync("git", ["init", "-q", l202bRoot], { stdio: "ignore" });
+    const l202b = run("server", ["doctor"], { cwd: l202bRoot, extra: { DEVLOOP_HUB_DB: "" } });
+    ok(/DOCTOR_FAILED/.test(l202b.out), "LOOP-202 B: gitignore ❌ → DOCTOR_FAILED");
+    ok(!/NEXT: dev-loop run/.test(l202b.out), "LOOP-202 B: NEXT is not 'dev-loop run' when hub.db not gitignored");
+
+    // Case C (green control): a fully configured workspace still emits NEXT: dev-loop run
+    const l202cRoot = join(tmp, "l202c-ws");
+    run("team", ["init", "--dir", l202cRoot, "--key", "l202c-team", "--backend", "service"]);
+    run("team", ["add-project", "core", "--prefix", "L2C"], { cwd: l202cRoot });
+    run("seed", ["core", "Core", "L2C", join(l202cRoot, ".dev-loop", "hub.db")]);
+    mkdirSync(join(l202cRoot, "repo"), { recursive: true });
+    spawnSync("git", ["init", "-q", join(l202cRoot, "repo")], { stdio: "ignore" });
+    spawnSync("git", ["-C", join(l202cRoot, "repo"), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init"], { stdio: "ignore" });
+    run("team", ["add-repo", "repo", "--project", "core", "--path", "repo"], { cwd: l202cRoot });
+    run("team", ["set", "team.mode", "live"], { cwd: l202cRoot });
+    const l202c = run("server", ["doctor"], { cwd: l202cRoot, extra: { DEVLOOP_HUB_DB: "" } });
+    ok(/DOCTOR_OK/.test(l202c.out), "LOOP-202 C: healthy workspace → DOCTOR_OK");
+    ok(/NEXT: dev-loop run/.test(l202c.out), "LOOP-202 C: NEXT stays 'dev-loop run' on DOCTOR_OK (green control)");
+  }
+
   console.log(fails === 0 ? "\nTEAM_CLI_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
