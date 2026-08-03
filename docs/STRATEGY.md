@@ -579,65 +579,9 @@ Four `Unblocked-by:` markers I had reported as retired were never parsed: `block
 
 `consistency` lens → **LOOP-291**, the sharpest instance of the guard/helper seam yet: `applyConfigCadence` states its own invariant — *"a config typo must not kill the loop"* — and enforces it with a **format-only** pre-check whose whole purpose is to keep bad input away from `parseDuration`, which `die()`s. `200f123` added a *second* rejection reason to `parseDuration` (the 32-bit ceiling) that the format regex does not screen, so `"30d"` is well-formed, over the ceiling, and reaches `die()` before any fire. Measured end to end: `team set agents.sweep.cadence 30d` is refused and tells the operator to *"edit dev-loop.json directly and validate with `dev-loop doctor`"*; the hand-edit then passes **`DOCTOR_OK` exit 0** (E17 checks that ceiling for `fireTimeout`/`stallTimeout` and never looks at `cadence`); and `dev-loop run` **exits 2** — the operator follows the CLI's own instruction, the health gate certifies it, and the loop will not boot. Also settled here: a design correct everywhere it is *reachable* is an **AC amendment, not a verify-fail** (LOOP-172's `hostnameOf`, amended into LOOP-289's body with four new negatives), and LOOP-227 going `Done` unparked **LOOP-229 + LOOP-230 in one §9c pass**, taking senior 6→8 with no re-tier. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 28)`; the rulings stay in the Decisions log below.
 
-### 2026-08-03 — twenty-ninth fire (pm): the amendment was read, and half-applied
+### 2026-08-03 (pm, twenty-ninth fire) — [ARCHIVED]
 
-Product moved one code commit (`df8c7fb` → `2aed555`, plus my own doc land `b31d162`), so the lens
-list reset and re-seeded on **`data-analytics`**, focused by that diff — which is also the commit
-Job A had to verify. Doc-watch hash `c864c5cf018cb338` matched the stored baseline: **54 fires,
-still no foreign edit**. `needs-pm` **0**, `Human-Blocked` **0**.
-
-**§3 verify-fail on LOOP-239 → LOOP-292, and the reason it failed is the reason to distrust
-comment-borne scope.** The `FireMetrics` half is genuinely good and stays landed: `costMeteredFires`
-now counts `costUsd > 0` (**264 < 315** on the live ledger), `byAgent[a].usdPerFire` exists, and both
-amended sum invariants hold exactly (`Σ costUsd = $1336.6560`, `Σ costMeteredFires = 264`). Every
-body AC passes; the suite is green from a scrubbed `/tmp` tree. What did not ship is what **two**
-binding amendments added — the operator's *"Revised scope"* item 2 (*"add the per-agent division to
-`--cost --by agent` … so nobody ever hand-computes a per-agent USD/fire off raw JSONL again"*) and my
-own *"align `renderCostCell` and the digest coverage line … print per-agent $/fire off the priced
-denominator"*. `2aed555` touches `fireMetrics()` only; both render sites are byte-identical. So on
-merged `origin/main`:
-
-```
-cost: $1336.6560  (315 of 607 fires priced)     # 315 = costMetered
-cost-per-fire: $5.0631/priced fire              # divides by costPriced = 264
-```
-
-$1336.6560 ÷ 315 = **$4.2434** against a printed **$5.0631** — the 19.3 % self-contradiction this
-ticket documented as its own headline evidence, still printing, unchanged, on the tree that was
-supposed to close it. `--cost --by agent` still never divides and still offers the wrong count to
-divide by: hand-computing gives senior-dev $7.03 against a true $9.30 (−24.5 %). The ticket's stated
-purpose is verbatim the thing that still cannot be done.
-
-**The build proves the comments were read.** The implementer followed the *comment-borne* AC2
-replacement — the fixture asserts `0.075` arithmetic rather than the stale board constants the body's
-AC2 text still names — and skipped the *comment-borne* render scope. Not an oversight about where the
-spec lived; a selective application of a spec that was demonstrably in hand. The fix is small
-(`UsageCell.costPriced` **already equals** `FireMetrics.costMeteredFires`, 264 = 264 — no accounting
-left to reconcile, only which field each render site shows and what it calls it), so it routed up to
-senior as `Mode: direct-code` per §3 with the landed half explicitly fenced off as do-not-rebuild.
-
-**Grooming — LOOP-219's numerator froze while its denominator grew, and the share reported progress
-nobody made.** Re-derived on 609 rows: discarded spend **$40.27, unchanged since filing**; priced
-spend **$510.66 → $1340.89**; so the headline share fell **7.9 % → 3.0 %** and the per-agent gradient
-the ACs call *"the actionable part"* collapsed from **0–13.1 %** to **0–4.7 %** — with nothing fixed.
-The last `suspectError` row is `2026-08-01T00:08:37Z`; since then **$832.47 over 159 priced fires,
-zero discards**. That also falsifies the ticket's own *"structural tax scaling with duration"*
-framing: it is episodic, tied to runner restarts, and will jump on the next one. The defect is
-untouched (no `suspectError` branch in the cost path). **Folded all of it into the BODY** — snapshot
-warning, a dated re-derivation section, AC2's `13.1 %` reproduction target replaced by fixture
-arithmetic plus two durable invariants, and a note that `costMeteredFires` changed meaning under it
-in `2aed555` (a no-op for discards: of 19 rows, 10 pre-metering and 9 priced, none zero/null-cost).
-
-§9c: `2aed555`'s ticket going terminal retired the board's one dead edge — **LOOP-267 unparked**
-(and its actual dependency, the per-agent aggregation, really did land; the unpark comment says so,
-because a `Canceled` blocker otherwise reads as abandoned work). The other 7 parked tickets each hold
-exactly one live edge on a still-open blocker.
-
-Senior **7→8**/10, junior **10**/10 with **0 senior-tier Backlog rows** — so **promoted 0**, filed
-**1**, groomed **1**, canceled **1** (the verify-fail). Fifth consecutive fire with zero
-cancel-fodder. Throughput, not discovery, is still the binding constraint.
-
-
+`data-analytics` lens → the **§3 verify-fail on LOOP-239 → LOOP-292**, and the reason it failed is the reason to distrust comment-borne scope: the `FireMetrics` half was correct and stays landed (`costMeteredFires` counts `costUsd > 0` — **264 < 315** on the live ledger — `byAgent[a].usdPerFire` exists, both amended sum invariants exact), and every **body** AC passed. What did not ship is what two **binding amendments** added — the operator's *"Revised scope"* item 2 and my own `renderCostCell`/digest alignment — both of which lived only in comments, leaving `--cost --by agent` printing the retired denominator on merged `origin/main`. §9c: the blocker going terminal retired the board's one dead edge and **unparked LOOP-267** (a `Canceled` blocker otherwise reads as abandoned work, so the unpark comment says which dependency really landed). Senior 7→8/10, junior 10/10, **0** senior-tier Backlog rows ⇒ promoted 0, filed 1, groomed 1, canceled 1. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 29)`; the rulings stay in the Decisions log below.
 ### 2026-08-03 — thirtieth fire (pm): an AC is a predicate over the board, so ask the board for its counter-examples
 
 Product moved one code commit (`2aed555` → `f1ae2e5`, LOOP-202's doctor NEXT ladder; `b31d162` and
@@ -686,6 +630,57 @@ decision was re-derived at the moment of the write instead of trusted from boot.
 zero cancel-fodder — throughput, not discovery, is still the binding constraint.
 
 
+### 2026-08-03 — thirty-first fire (pm): the router asked for a marker one workflow branch never writes
+
+Product moved one code commit (`f1ae2e5` → `7beb39a`, LOOP-229's budget-ceiling launch gate; `805c682`
+is my own doc land), so the lens list reset and re-seeded on **`trust-safety`**, focused by that diff.
+Doc-watch hash `fdba94c161190e0a` matched the stored baseline: **56 fires, still no foreign edit**.
+`needs-pm` **0**, `_team` carrier **0 rows**. Job A empty — and empty for a reason that was worth the
+whole fire.
+
+**A design gate had passed three hours earlier and no query on this board could see it.** LOOP-286 —
+a QA-filed `Bug` that senior-dev converted into design-and-delegate, staging child LOOP-290 — sat
+`In Review` while `pm.verify` returned `[]`. Replayed against a read-only copy of the live `hub.db`,
+`agentops.ts:206`'s predicate `description.trimStart().startsWith("Mode: design")` is **false** for
+it, so `pm.verify=false, qa.verify=true`: routed to the one agent whose own code comment says it
+*"must not gate design parents — it has no authority over design coherence."* QA gated it anyway,
+carefully and twice (16:22Z, 19:36Z), and routed the promotion to PM in **prose**, the only channel it
+had. LOOP-290 stalled **3h15m**; Sweep's stranded-child backstop was blind because its predicate wants
+a **`Done`** parent and this one is `In Review`. Promoted LOOP-290 on the §21a gate — §5a exempts
+staged children from the depth cap, which mattered, since junior was at 10/10 — left the parent
+`In Review` (its ACs describe runtime behaviour QA must still re-test against shipped code), and filed
+**LOOP-294** (P1 `Bug`).
+
+**This is LOOP-59 recurring one layer down.** LOOP-59 fixed exactly this failure for LOOP-48 and named
+the fragility precisely: *"correctness depends on every filer's label hygiene at conversion time, not
+on anything the queue itself checks."* Its fix moved the dependency from label hygiene at conversion
+time to **body-prefix** hygiene at conversion time — and §21a's small-feature design form authors the
+design as a **comment** (senior-dev's own words: *"this comment + the ticket body IS the design"*),
+editing no body at all. Measured board-wide: the parent's `Mode: design` prefix is present on **2 of
+7** design parents; the child's `Design: parent <id>` pointer — load-bearing, because the junior must
+read the design before coding — on **7 of 7**. Sibling seam recorded on LOOP-294 and deliberately left
+out of its scope: `opQueue`'s `summary()` blanks `description`, so the `backlog` list hands PM a set it
+is instructed to filter by a field the queue deleted.
+
+**The ceiling shipped disarmed.** `7beb39a` completed LOOP-197's third child and the mechanism is live
+in the *running* scheduler — dist rebuilt 19:31Z, `pid 32051` started 19:32:14Z from it,
+`budgetGateReason` present — but `team.budget` is `null`, so INV-1 short-circuits every tick and four
+tickets of enforcement guard nothing. Measured with the product's own functions against the live
+636-row ledger: rolling 24h **$369.28**, 7d **$2,696.80**, W28's nag number **$385.26/day**; `pm` is
+the largest priced line at **$435.55** of $1,406.86. Parked as **LOOP-295**, `Human-Blocked` to the
+operator, hazard stated — the current window already holds $369.28, so any ceiling ≤ ~$370 halts all
+six agents on the next tick. Two hypotheses off the same diff died on contact and cost nothing:
+`hotReload()` *does* rebind the binding the gate reads (`run-agents.ts:1741`), so AC6's live-tick
+resume holds without a restart; and the legacy `main()` tick's gate call is unreachable by
+construction (`:1368` returns to `teamMain` whenever a workspace resolves) — inert, harmless, and not
+worth a row at 62 Backlog.
+
+§9c: **7 parked**, every live edge still on an open blocker (263 `In Progress`; 278, 279, 264, 250,
+237 `Todo`; 265 `Backlog`) — **0 unparks, 0 dead edges**. Junior **10 → 13**/10 (junior fires
+claiming, not promotion), senior **7**/10 with **0 senior-tier Backlog rows**. **Promoted 1**, **filed
+2**, **groomed 1**, **canceled 0**. Seventh consecutive fire with zero cancel-fodder.
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -718,6 +713,39 @@ zero cancel-fodder — throughput, not discovery, is still the binding constrain
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, thirty-first fire) — when a fix removes "the routing depends on someone
+  remembering to set X", check that EVERY branch of the workflow sets the replacement; otherwise you
+  moved the dependency, you did not remove it.** LOOP-59 found design parents routed by a stale owner
+  label and replaced label-hygiene-at-conversion-time with a `Mode: design` **body prefix**. §21a has
+  two design forms, and the small-feature one authors the design as a **comment** on an existing
+  ticket — it edits no body, so it can never write the marker. Three hours of a passed gate, two QA
+  fires spent gating a design QA is explicitly barred from gating, and a stalled child later, the
+  measurement is stark: the parent's routing-only prefix is on **2 of 7** design parents; the child's
+  `Design: parent <id>` pointer is on **7 of 7**. **Rule: route on a marker that is load-bearing for
+  some other agent's work, never on one whose only job is routing.** The child's pointer cannot rot
+  silently — a junior that loses it cannot find the design and the build stops loudly. A parent's
+  prefix rots in perfect silence, and the failure surfaces as *"nothing is in my queue"*, which is
+  indistinguishable from a quiet board. Corollary, and the reason this fire found it at all: **when a
+  hand-off names its next actor in prose, that is a defect report about the board.** Both senior-dev
+  and QA wrote `@PM` explicitly and both were right to; the routing worked only because a PM fire
+  happened to read a comment.
+
+- **2026-08-03 (pm, thirty-first fire) — a program whose deliverable is a *configurable* guard is not
+  finished at its last code child; the arming decision is itself a ticket, filed with the code.**
+  LOOP-197 spent four children building a spend ceiling (config keys, an estimate-augmented total, the
+  launch gate, the per-fire watchdog). The gate landed verified and live in the running scheduler, and
+  guards nothing, because `team.budget` is `null` and its own INV-1 short-circuit makes an unset
+  ceiling byte-identical to no ceiling — which is exactly right as a *default* and exactly wrong as a
+  *resting state*. Nothing on the board owned the flip: every child was code, so the program read as
+  complete while the loop kept billing ~$385/day unattended. **Rule: when a program ships a guard that
+  defaults OFF, file the arming decision as an operator ticket at the same time as the code, carrying
+  the measured number to size it from.** Two supporting details, both cheap and both load-bearing:
+  quote the number the *enforcement* path computes, not the reporting one — the estimate-augmented
+  total is $385/day against $201/day priced-only, and sizing a ceiling off the reporting number sets
+  it below the line the gate actually compares; and check what is already inside the rolling window
+  before recommending a value, because a ceiling under the current 24h total does not throttle the
+  loop, it stops it on the next tick.
 
 - **2026-08-03 (pm, thirtieth fire) — an acceptance criterion is a predicate over the board, so run
   it AS a query and read the rows it returns before you promote.** LOOP-223's AC2 demanded that a
@@ -802,25 +830,7 @@ zero cancel-fodder — throughput, not discovery, is still the binding constrain
   assignment. And a downstream schema check backstops malformed input, never
   silently-reinterpreted-but-well-formed input.** → LOOP-288.
 
-- **2026-08-03 (pm, twenty-seventh fire) — a ticket's premises decay, and a ruling that lives in a
-  comment is not a spec.** Two of LOOP-281's three stated claims were falsified by a *sibling*
-  ticket's incidental test coverage, including its headline thesis — promoting it unread would have
-  bought duplicate coverage and a re-derivation of a now-false `grep`. LOOP-218, meanwhile, had a
-  fully settled ruling (three proposals accepted, tests named) that was never written into the body,
-  so it carried zero ACs and sat unpromotable at the head of the FIFO for two days. **Rule: grooming
-  is re-derivation, not reading — check a ticket's factual claims against the tree at promotion time,
-  and when you rule on a ticket, write the ruling into the DESCRIPTION in the same fire. Dev reads
-  the body; a decision reachable only by scrolling the comments has not been delivered.** Corollary
-  for the do-not-re-add list: state what a sibling already covered, or the next fire re-files it.
-
-- **2026-08-03 (pm, twenty-seventh fire) — two reads of a live board minutes apart are not a
-  controlled comparison.** `queue`'s `todoDepth` disagreed with my own servable count (15 vs 14), and
-  the obvious inference — that `todoDepth` miscounts, the exact defect LOOP-251 exists to fix — was
-  wrong. Both numbers were right; two tickets had been claimed by concurrently-firing devs between
-  the reads, and after the promotions the two counts agreed exactly (16/7/9). **Rule: on a live board
-  every read is a different instant. Before attributing a discrepancy to a defect, re-read both sides
-  at the same instant — a moving denominator explains more disagreements than a bug does, and a
-  ticket that predicts the bug you expected makes the false attribution easier to believe.**
+- **2026-08-03 (pm, twenty-seventh fire) — [ARCHIVED] 2 rulings** (a ticket's premises decay and a ruling that lives only in a comment is not a spec — re-derive a ticket's claims against the product at promotion, and fold any surviving ruling into the BODY, because the implementer builds the body; two reads of a live board minutes apart are not a contradiction but a claim about different instants — re-derive any cap or depth decision at the moment of the write, never from the boot number) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 29.
 
 - **2026-08-03 (pm, twenty-sixth fire) — a machine-readable contract with no emitter is a contract
   written by hand, and hand-written contracts fail silently.** Edge *creation* has
