@@ -86,5 +86,62 @@ ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.
   ok(withOut.status === 0 && existsSync(join(out, "devloop-qa-demo", "SKILL.md")), "no-out: explicit --out still writes to the given path (LOOP-187 AC4)");
 }
 
+// ── LOOP-201: export-desktop-skill reads landing from a v2 workspace, not a .git sub-object ───────────
+// A v2 workspace puts repo facts (landing/autoMerge/mergeChecks) in repos.<ref>, not on the project.
+// The buggy code read (p as {git?}).git.landing — always {} → always "direct". The fix reads
+// p.repos (already resolved by toLegacyView through effectiveRepo). Must fail on origin/main; pass here.
+{
+  const wsDir = mkdtempSync(join(tmpdir(), "dl-export-loop201-"));
+  const repoDir = join(wsDir, "the-repo"); mkdirSync(repoDir, { recursive: true });
+  spawnSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+  writeFileSync(join(wsDir, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    team: { key: "t201", backend: "linear", linearTeam: "T201" },
+    repos: { "dev-loop": { path: "the-repo", landing: "pr", autoMerge: true, mergeChecks: ["Test (Node 23.6.0)", "Test (Node 24)"] } },
+    projects: { "loop": { repos: [{ ref: "dev-loop", role: "primary" }] } },
+  }));
+  const wsOut = join(wsDir, "out"); mkdirSync(wsOut, { recursive: true });
+  const envWs = { ...scrubFireEnv(), DEVLOOP_WORKSPACE: wsDir, DEVLOOP_PLUGIN_ROOT: repoRoot };
+  const rWs = spawnSync(process.execPath, [src, "qa", "--project", "loop", "--out", wsOut], { encoding: "utf8", cwd: wsDir, env: envWs });
+  const wsMd = rWs.status === 0 && existsSync(join(wsOut, "devloop-qa-loop", "SKILL.md"))
+    ? readFileSync(join(wsOut, "devloop-qa-loop", "SKILL.md"), "utf8") : "";
+  ok(rWs.status === 0, "LOOP-201: workspace export exits 0");
+  ok(/\*\*landing\*\*: pr/.test(wsMd),
+    "LOOP-201 AC1: landing renders 'pr', not the buggy constant 'direct'");
+  ok(/\*\*landing\*\*:.*autoMerge/.test(wsMd),
+    "LOOP-201 AC1: autoMerge annotation is on the landing line (not just in conventions text)");
+  ok(/mergeChecks.*Test.*Node/.test(wsMd),
+    "LOOP-201 AC1: mergeChecks list present");
+  ok(!/\*\*landing\*\*: direct/.test(wsMd),
+    "LOOP-201 AC1: the literal '**landing**: direct' does NOT appear");
+
+  // AC3: a repo with no landing set → "direct" default preserved
+  writeFileSync(join(wsDir, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    team: { key: "t201b", backend: "linear", linearTeam: "T201B" },
+    repos: { "r": { path: "the-repo" } },
+    projects: { "p": { repos: [{ ref: "r", role: "primary" }] } },
+  }));
+  const rDef = spawnSync(process.execPath, [src, "qa", "--project", "p", "--out", wsOut], { encoding: "utf8", cwd: wsDir, env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: wsDir, DEVLOOP_PLUGIN_ROOT: repoRoot } });
+  const defMd = rDef.status === 0 && existsSync(join(wsOut, "devloop-qa-p", "SKILL.md"))
+    ? readFileSync(join(wsOut, "devloop-qa-p", "SKILL.md"), "utf8") : "";
+  ok(rDef.status === 0, "LOOP-201 AC3: a repo with no landing set exports without error");
+  ok(/\*\*landing\*\*: direct/.test(defMd),
+    "LOOP-201 AC3: no-landing repo → 'direct' default is preserved");
+
+  // AC4: empty repos[] → "direct", no throw
+  writeFileSync(join(wsDir, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    team: { key: "t201c", backend: "linear", linearTeam: "T201C" },
+    repos: {}, projects: { "w20proj": { repos: [] } },
+  }));
+  const rEmpty = spawnSync(process.execPath, [src, "qa", "--project", "w20proj", "--out", wsOut], { encoding: "utf8", cwd: wsDir, env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: wsDir, DEVLOOP_PLUGIN_ROOT: repoRoot } });
+  ok(rEmpty.status === 0, "LOOP-201 AC4: empty repos[] exports without throwing");
+  const emptyMd = rEmpty.status === 0 && existsSync(join(wsOut, "devloop-qa-w20proj", "SKILL.md"))
+    ? readFileSync(join(wsOut, "devloop-qa-w20proj", "SKILL.md"), "utf8") : "";
+  ok(/\*\*landing\*\*: direct/.test(emptyMd),
+    "LOOP-201 AC4: empty repos[] renders 'direct' (documented default)");
+}
+
 console.log(fails === 0 ? "\nEXPORT_DESKTOP_SKILL_OK" : `\n${fails} FAILED — run: node hub/src/export-desktop-skill.ts <agent> --project <key>`);
 process.exit(fails === 0 ? 0 : 1);
