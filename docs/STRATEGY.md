@@ -562,56 +562,9 @@ A bounding procedure whose residue is monotone sets a slope, not a ceiling; a th
 ### 2026-08-03 (pm, twenty-fourth fire) — [ARCHIVED]
 
 The residue I came to delete was the procedure's own output — 3 of 13 `[ARCHIVED]` stubs held the only live copy of a still-in-force clause, and the largest was the `STANDING RULES IN FORCE` distillation that made archiving ~54 KB safe, so every R2 pass must leave one (sharpening LOOP-282). `ux-flows` on a `/tmp` build: `doctor` exits `DOCTOR_OK` outside a workspace while 18 of 19 sibling verbs refuse (LOOP-284), and six verbs answer with a raw Node stack — `team repair` from inside the try/catch that forbids it, being the one async subcommand dispatched without `await` (LOOP-283). Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 24)`; the three rulings stay in the Decisions log below.
-### 2026-08-03 (pm, twenty-fifth fire) — the file doctor reads a live credential *from* is the one file it never checks is about to be committed, and a backlog that cannot drain is not therefore stale
+### 2026-08-03 (pm, twenty-fifth fire) — [ARCHIVED]
 
-**Third quiet fire running.** `origin/main` `dcb9e47` = my own prior doc land; `de004d1..HEAD` holds
-no code commit, so the product SHA stays **`de004d1`** and the lens rotation continues. Doc-watch
-`e1865c27` unchanged — **50 fires, no foreign edit**. `In Review` **0**, `needs-pm` **0**,
-`Human-Blocked` **0**, at boot and at the closing re-scan.
-
-**§9c: 11 parked, 0 unparks — and the map stops being re-derived.** Every edge re-verified from the
-tickets' own comments rather than from carried state (282→263 · 277→278 · 237→279 · 31→265 · 267→239
-· 172→235 · 105→264 · 247→250 · 238→237 · 230/229→227). Four were **satisfied but never retired**
-(237→236 `Canceled`; 172→258, 230/229→226 `Done`); I wrote the `Unblocked-by:` markers. A dead edge
-can only cause a false *non*-unpark, never a false unpark — and precisely because it was harmless,
-three consecutive fires each re-derived that and carried a note saying so.
-
-**`trust-safety` lens — a guard list enumerates what its authors had in mind.** → **LOOP-285**
-(senior, P1, `sensitive`). `hub/src/secrets.ts` rests its protection on `.dev-loop/` being *"the
-machine-local, **never-committed** data home"*. Nothing implements that. Measured on a `/tmp` build
-of `origin/main`, workspace `git init`-ed at its own root — the shape `team init --dir` supports, and
-`team init` writes no `.gitignore`:
-
-- **Arm A**, nothing ignored → three ❌ hard fails on `hub.db`/`-wal`/`-shm`, `DOCTOR_FAILED`.
-- **Arm B**, `.gitignore` ← exactly the three names *the hard fail itself demands* → **`DOCTOR_OK`,
-  rc 0**, while `git status` shows `?? .dev-loop/secrets.env`. The string `secret` appears **zero**
-  times in that entire passing run.
-- **Arm C**, comms webhook configured → one run contradicts itself: `✅ comms webhook
-  DEVLOOP_COMMS_WEBHOOK resolvable (secrets.env)` … `DOCTOR_OK`.
-
-Doctor resolves a live credential *from* the file, names the file as the source, and passes the
-workspace — without asking whether it is about to be committed. Severity runs inverted to what each
-artifact holds: `hub.db` (no credentials) hard-fails; the bundle (credentials, but **encrypted**) and
-`moved.json` (a marker) are named W06 leaks; `secrets.env` (**plaintext** credentials) is named
-nowhere. Distinct from LOOP-231 (which *tree* the guards read) and LOOP-235 (staged vs untracked):
-both change *where* and *when*, neither adds a name to *what* — **Arm C still reproduces after both
-land**. No live exposure here; this workspace has no `secrets.env` and its root is not a work tree.
-
-**Grooming — I went looking for stale rows and did not find them.** With junior capped for thirteen
-fires and 71 Backlog rows, the attractive hypothesis is a rotted tail. Tested against `origin/main`
-instead: LOOP-132 still shows `?? .dev-loop/` in the product repo, LOOP-44's `ExperimentalWarning`
-still prefixes every command in this fire's own transcript, LOOP-82 still finds no agent-name
-constant, LOOP-88 still finds no W-code registry. **0 canceled.**
-
-**Structural — the eight-fire senior drought broke, and it broke on a label.** LOOP-285 is the first
-senior-tier Backlog row since the twenty-second fire, and §4 routed it there mechanically: secrets
-work ⇒ senior, always. Promoted same fire (senior 6→7/10); senior claimed LOOP-280 two seconds later.
-Junior's cap opened mid-fire when a junior fire took LOOP-261, so one promotion was due — the §5 pick
-order gave it to **LOOP-245**, a **P3** `edge-case` bug, ahead of three older **P2** ordinary bugs,
-because rank 3 outranks rank 3.5 and priority is read at neither. I followed the governing prose
-rather than re-specifying it in flight; **LOOP-254** (Todo) is the standing fix. **Filed 1, promoted
-2**, Backlog 71 → 70, junior back to **10**/10.
-
+The file doctor resolves a live credential *from* is the one file it never checks is about to be committed: on a `/tmp` build, adding exactly the three names doctor's own hard fail demands flips `DOCTOR_FAILED` → `DOCTOR_OK` while `?? .dev-loop/secrets.env` sits untracked, and a third arm prints `✅ webhook resolvable (secrets.env)` in the same passing run — severity inverted to what each artifact holds (`hub.db`, no credentials, hard-fails; plaintext `secrets.env` is named nowhere), and it still reproduces after LOOP-231 and LOOP-235 both land → **LOOP-285**. Grooming tested the attractive "rotted tail" hypothesis against `origin/main` and refuted it — LOOP-132, -44, -82, -88 all still reproduce, **0 canceled**. The eight-fire senior drought broke on a label, not a re-tier (§4: secrets ⇒ senior, mechanically). The §5 pick order sent a P3 `edge-case` bug ahead of three older P2 ordinary bugs because rank 3 outranks rank 3.5 and priority is read at neither — governing prose followed rather than re-specified in flight; **LOOP-254** is the standing fix. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 25)`; the three rulings stay in the Decisions log below.
 
 ### 2026-08-03 (pm, twenty-sixth fire) — the four edges I recorded as retired were never retired, and a seam predicted to blind its next consumer blinded one within the day
 
@@ -673,6 +626,57 @@ senior-tier Backlog rows; junior had 2 slots and took **LOOP-260** (rank 3, `edg
 applied honestly at filing (§4 ⇒ senior, always), never a re-tier to balance load — nothing this fire
 qualified. **Filed 1, promoted 2, groomed 1**, junior back to **10**/10.
 
+### 2026-08-03 — twenty-seventh fire (pm): the guard reached the validator, not the other door
+
+Product moved twice since the last review (`63c98ec` → `1626411`): `4213a08` made `remove-project`
+and `repair --reap` fail closed on an unreadable `hub.db`, and `1626411` (LOOP-245) rejected
+hex/octal/binary literals for numeric config fields. Both are *guards on the config-mutation
+surface*, so the lens list reset and re-seeded on **`trust-safety`**, focused by that diff.
+
+**`trust-safety` lens — the same field, two doors, one lock.** LOOP-245 put `PLAIN_DECIMAL_RE` inside
+`team-edit.ts`'s shared `coerce()`, which is broader than its own commit message claims ("budget
+config fields") — every `team set` numeric field is now guarded. But `dev-loop.json` has a **second
+write path** for the same keys, and it never calls `coerce()`: `addProject` hand-assigns at
+`team-edit.ts:235`, `p.weight = Number(o.weight)`. Measured on a build of `origin/main`, same tree,
+same field, same config key — `team set projects.alpha.weight 0x64` is refused; `team add-project
+alpha --weight 0x64` exits 0 and writes `100`. All four literal forms (`0x64`, `0o144`, `0b1100100`,
+`1e2`) behave identically on both doors, in opposite directions.
+
+The E08 schema validator cannot backstop this, and the control proves why: `--weight abc` **is**
+caught (`weight must be a finite number >= 0`), because NaN is not a legal weight — but `100` is.
+Once the string is coerced the operator's intent is gone; the only place it still exists is the raw
+argument at the CLI boundary, which is the one place `addProject` never checks it. That is exactly
+why LOOP-245's fix belonged in `coerce()` and not in the schema. Swept the rest of the surface
+(`grep 'Number(\|parseInt(\|parseFloat('` across `team-edit`/`team-init`/`team-repair`/`seed`): three
+hits, two inside `coerce()`, one at line 235 — a one-line seam, not a class. → **LOOP-288** (junior,
+P3). `weight` is scheduler input, so a silently reinterpreted value skews which project the loop
+works on, and nothing downstream can detect a well-formed number.
+
+**Grooming found two tickets whose premises had decayed.** `4213a08` shipped a fail-closed regression
+block that *incidentally* falsified two of LOOP-281's three stated claims: `--force` is now exercised
+(`team-edit.ts:336-338`) and the ticket-count refusal is now asserted (line 321) — which also makes
+the guard inversion-proof for that case, killing the ticket's headline thesis. What survives is
+narrower and real: that `--force` test runs against a **deliberately corrupted** `hub.db`, so it
+cannot read row counts, and the 9-table cascade is asserted nowhere. Rewrote LOOP-281 to the
+surviving gap with an explicit *do-not-re-add* list. Separately, LOOP-286 (senior, `sensitive`) asked
+for `--dry-run` on `remove-project` while `removeProject` reads only `rest.includes("--force")` and
+validates nothing else — so `--dryrun` would still run the live cascade. Added the unknown-flag
+rejection AC: without it, adding `--dry-run` moves the trap one keystroke away.
+
+**A settled ruling that lives only in a comment is not a spec.** LOOP-218 was ruled on 2026-08-01 —
+three proposals accepted, fallback pinned, regression tests named — and the body was never updated,
+so it carried **zero acceptance criteria** and sat unpromotable at the head of the junior FIFO for
+two days. Folded the ruling in verbatim as AC1–AC5 (nothing new), re-derived its load-bearing claim
+against today's tree (`merge-guard.ts` still hardcodes `"operator"`, now lines **100/112** — moved
+from 95/103 when LOOP-216 landed), noted that LOOP-216 is now Done so its collision warning is spent,
+and promoted it.
+
+**Filed 1, groomed 3, promoted 5** (LOOP-286 senior; LOOP-202, LOOP-203, LOOP-217, LOOP-218 junior).
+Senior **7**/10, junior **10**/10 — junior drained 2 and senior 1 *during* the fire, which is the
+loop working. Zero cancel-fodder for the third consecutive fire. §9c: all 10 parked tickets carry
+exactly one live edge, every blocker still open, zero dead edges — re-derived with the real parser,
+not carried.
+
 
 ## Personas
 
@@ -706,6 +710,36 @@ qualified. **Filed 1, promoted 2, groomed 1**, junior back to **10**/10.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, twenty-seventh fire) — a validator guards a function, not a field; count the
+  DOORS into the field.** LOOP-245 hardened `coerce()` and thereby every `team set` numeric field —
+  but `addProject` writes the same config keys without ever calling it, so `--weight 0x64` still
+  landed as `100`. The schema validator downstream could not save it, because by then the coercion
+  had already produced a *legal* value; intent survives only in the raw argument. **Rule: after
+  landing a validation fix, enumerate every WRITE PATH to the guarded field, not every field of the
+  guarded function — a fix at the shared helper is invisible to the caller that hand-rolls its own
+  assignment. And a downstream schema check backstops malformed input, never
+  silently-reinterpreted-but-well-formed input.** → LOOP-288.
+
+- **2026-08-03 (pm, twenty-seventh fire) — a ticket's premises decay, and a ruling that lives in a
+  comment is not a spec.** Two of LOOP-281's three stated claims were falsified by a *sibling*
+  ticket's incidental test coverage, including its headline thesis — promoting it unread would have
+  bought duplicate coverage and a re-derivation of a now-false `grep`. LOOP-218, meanwhile, had a
+  fully settled ruling (three proposals accepted, tests named) that was never written into the body,
+  so it carried zero ACs and sat unpromotable at the head of the FIFO for two days. **Rule: grooming
+  is re-derivation, not reading — check a ticket's factual claims against the tree at promotion time,
+  and when you rule on a ticket, write the ruling into the DESCRIPTION in the same fire. Dev reads
+  the body; a decision reachable only by scrolling the comments has not been delivered.** Corollary
+  for the do-not-re-add list: state what a sibling already covered, or the next fire re-files it.
+
+- **2026-08-03 (pm, twenty-seventh fire) — two reads of a live board minutes apart are not a
+  controlled comparison.** `queue`'s `todoDepth` disagreed with my own servable count (15 vs 14), and
+  the obvious inference — that `todoDepth` miscounts, the exact defect LOOP-251 exists to fix — was
+  wrong. Both numbers were right; two tickets had been claimed by concurrently-firing devs between
+  the reads, and after the promotions the two counts agreed exactly (16/7/9). **Rule: on a live board
+  every read is a different instant. Before attributing a discrepancy to a defect, re-read both sides
+  at the same instant — a moving denominator explains more disagreements than a bug does, and a
+  ticket that predicts the bug you expected makes the false attribution easier to believe.**
 
 - **2026-08-03 (pm, twenty-sixth fire) — a machine-readable contract with no emitter is a contract
   written by hand, and hand-written contracts fail silently.** Edge *creation* has
@@ -799,33 +833,7 @@ qualified. **Filed 1, promoted 2, groomed 1**, junior back to **10**/10.
   mis-sized.** Evidence posted to LOOP-90 (its ACs already cover the fix — surface the dropped
   cadence); whether to add reflect to `--agents` is the operator's call and carries its own cost.
 
-- **2026-08-03 (pm, twenty-second fire) — a metric that is a SHARE cannot falsify a claim about a
-  LEVEL.** LOOP-218's deferred finding read cache-read share 97.46 % → 97.31 % and concluded the boot
-  corpus causes "no degradation". Propagating the degradation it was arguing against (+25 % cacheRead,
-  +44 % cacheWrite) through that same ratio predicts **97.09 %** — the whole span between the two
-  hypotheses is **0.37 pp**, and the reading sits inside it at n=16. **Rule: before using a ratio as
-  evidence, compute what the ratio would read under the hypothesis you mean to reject.** If the two
-  predictions are closer than the noise, the metric is not evidence — pick a level, not a share.
-- **2026-08-03 (pm, twenty-second fire) — a fix that ADDS a parallel field instead of repairing the
-  original leaves every existing consumer stating a number the fix just contradicted.** LOOP-276
-  correctly repaired `cost-per-fire` by introducing `costPriced`, and left `costMetered` — still
-  labelled "priced" — on the line directly above, so `metrics --flow` now prints a total and a count
-  that divide to $4.3431 immediately above a published rate of $5.1008. **Rule: when a fix introduces
-  a new field rather than correcting the old one, the review is not of the new field's callers but of
-  the OLD field's readers.** Routed to LOOP-239 rather than a new row.
-- **2026-08-03 (pm, twenty-second fire) — a ticket's premise decays; re-derive it at promotion, not
-  only at filing.** LOOP-239 asserts "metrics has no per-agent cost breakdown at all" — true when
-  filed on 08-01, false since LOOP-125 shipped `--cost --by agent`. An implementer taking it at its
-  word would have rebuilt a shipped surface. **Rule: grooming re-checks the premise against the
-  product, not just the wording against the template** — the cheap version is running the one command
-  the ticket claims does not exist.
-- **2026-08-03 (pm, twenty-second fire) — an idle senior queue is a fact about the board, not a
-  routing bug.** Six consecutive entries recorded "zero senior-tier Backlog rows" as a starvation
-  problem and implied PM should feed it. It broke this fire from the other direction: **QA** filed
-  LOOP-280 (`sensitive` ⇒ senior by §21b) against the feature PM was verifying. **Rule: the senior
-  tier is fed by escalations and by other agents' sensitive findings as much as by PM design
-  filings** — re-tier only on §21b's explicit signals, and never manufacture senior work to fill a
-  slot. Two candidates were examined this fire and both correctly stayed junior.
+- **2026-08-03 (pm, twenty-second fire) — [ARCHIVED] 4 rulings** (a metric that is a SHARE cannot falsify a claim about a LEVEL — compute what the ratio would read under the hypothesis you mean to reject, and if the predictions are closer than the noise, pick a level not a share; when a fix ADDS a parallel field instead of repairing the original, review the OLD field's readers, not the new field's callers; a ticket's premise decays — grooming re-checks the premise against the product, the cheap version being to run the one command the ticket claims does not exist; an idle senior queue is a fact about the board, not a routing bug — the tier is fed by escalations and other agents' `sensitive` findings, never by manufactured work) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 25.
 
 - **2026-08-03 (pm, twenty-first fire) — [ARCHIVED] 4 rulings** (a fixture that hand-supplies an argument the production caller never passes can only test the callee, never catch the caller bug; verify a config-driven predicate against the PROJECTION every runtime consumer reads, not the file on disk; adding a field to a type is not populating it, and a cast between two config views suppresses the error that would have caught it; the AC a handoff does NOT claim is the one to check first) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 24.
 - **2026-08-03 (pm, twentieth fire) — [ARCHIVED] 3 rulings** (a prose warning naming both a failure and its mechanism is an acceptance criterion, and a test can pin the very trap it was written to avoid — argv-validating doubles do not help when the oracle is wrong; a design gate AMENDS spec-edge omissions and BOUNCES only incoherent design, and `references/config-schema.md` is NOT a §17 governing file; a program umbrella is not a Backlog row, and §9a's close-the-parent does not apply when the parent carries the baseline its children are measured against) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 24.
