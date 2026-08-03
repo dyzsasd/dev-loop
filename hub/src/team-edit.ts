@@ -90,7 +90,7 @@ function coerce(kind: SetKind, raw: string, path: string): unknown {
   if (Array.isArray(kind)) { if (!kind.includes(raw)) die(`${path} must be one of ${kind.join("|")} (got '${raw}')`); return raw; }
   if (kind === "boolean") { if (raw !== "true" && raw !== "false") die(`${path} expects true|false (got '${raw}')`); return raw === "true"; }
   if (kind === "number" || kind === "int") {
-    if (!PLAIN_DECIMAL_RE.test(raw.trim())) die(`${path} expects a plain decimal ${kind === "int" ? "integer" : "number"} (got '${raw}') — hex/octal/binary/scientific notation not accepted`);
+    if (!PLAIN_DECIMAL_RE.test(raw.trim())) die(`${path} expects a${kind === "int" ? "n integer" : " number"} in plain decimal form (got '${raw}') — hex/octal/binary/scientific notation not accepted`);
     const n = Number(raw);
     if (!Number.isFinite(n) || (kind === "int" && !Number.isInteger(n))) die(`${path} expects a${kind === "int" ? "n integer" : " number"} (got '${raw}')`);
     return n;
