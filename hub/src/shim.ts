@@ -69,6 +69,7 @@ async function proxy(op: string, args: Record<string, unknown>): Promise<McpResu
   const out = await postOp(port, op, args ?? {}, ACTOR); // identity env→header (Decision #2/#5) — the only attribution the daemon trusts
   if (out.kind === "down") return daemonDown(out.detail);
   if (out.kind === "dormant") return opApiDormant();
+  if (out.kind === "refused") return err(out.detail); // exhaustiveness: a loopback base never trips the LOOP-173 egress guard
   const { status, body: parsed } = out;
   if (status >= 200 && status < 300) return ok(parsed);
   const emsg = typeof (parsed as { error?: unknown })?.error === "string" ? (parsed as { error: string }).error : "";
