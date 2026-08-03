@@ -82,16 +82,22 @@ const SETTABLE_SUMMARY =
   "repos.<ref>.deploy.{style,healthCheck,environments.<env>.{auto,deployPrPrefix,command,healthCheck}}, " +
   "projects.<key>.strategyDoc";
 
+// LOOP-245: Number("0x64") === 100, so a plain Number() check lets hex/octal/binary through silently.
+// Only plain decimal integers/decimals are accepted for numeric config fields (no scientific notation).
+const PLAIN_DECIMAL_RE = /^[+-]?\d+(\.\d+)?$/;
+
 function coerce(kind: SetKind, raw: string, path: string): unknown {
   if (Array.isArray(kind)) { if (!kind.includes(raw)) die(`${path} must be one of ${kind.join("|")} (got '${raw}')`); return raw; }
   if (kind === "boolean") { if (raw !== "true" && raw !== "false") die(`${path} expects true|false (got '${raw}')`); return raw === "true"; }
   if (kind === "number" || kind === "int") {
+    if (!PLAIN_DECIMAL_RE.test(raw.trim())) die(`${path} expects a${kind === "int" ? "n integer" : " number"} in plain decimal form (got '${raw}') — hex/octal/binary/scientific notation not accepted`);
     const n = Number(raw);
     if (!Number.isFinite(n) || (kind === "int" && !Number.isInteger(n))) die(`${path} expects a${kind === "int" ? "n integer" : " number"} (got '${raw}')`);
     return n;
   }
   if (kind === "nullable-pos-number") {
     if (raw.trim() === "null") return null;
+    if (!PLAIN_DECIMAL_RE.test(raw.trim())) die(`${path} must be a plain decimal number or null to disable (got '${raw}') — hex/octal/binary/scientific notation not accepted`);
     const n = Number(raw);
     if (!Number.isFinite(n) || n <= 0) die(`${path} must be a positive number or null to disable (got '${raw}')`);
     return n;
