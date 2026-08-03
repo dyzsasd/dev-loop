@@ -858,13 +858,16 @@ function gateRecord(state: GateState, slot: string, key: string): void { state[s
 // whenever ANY agent moved the board cursor or a repo HEAD; on a busy board that lets a dev tier through even
 // when its OWN queue is empty, so it boots the full (opus/max) corpus in runAgent() only to no-op. Consult the
 // SAME servable predicate the `queue` op serves (agentops.servableSlice — imported, never a second copy): skip
-// the launch when a dev tier has NO servable Todo AND NO own In Progress. The In-Progress term is load-bearing —
-// an own In Progress row is the Step-0 orphan-resume input and MUST still fire; gating on empty-Todo alone would
-// turn this optimisation into a starvation bug. Dev tiers ONLY — pm/qa/architect/stewards do their best work on
-// a quiet board and have no Todo slice, so they are never gated here (isDevTierActor short-circuits). FAILS OPEN
-// exactly like changeKey: any read miss (no hub cursor on linear/local, unseeded/absent project, db busy) ⇒
-// null ⇒ fire anyway; never let a broken read starve the loop. Returns the skip REASON (for a distinct,
-// non-silent log line — a silent skip is indistinguishable from a crash) when the fire should skip, else null.
+// the launch when a dev tier has NO servable Todo, NO own In Progress, AND NO In Review to land. The In-Progress
+// term is load-bearing — an own In Progress row is the Step-0 orphan-resume input and MUST still fire; gating on
+// empty-Todo alone would turn this optimisation into a starvation bug. The In-Review term is load-bearing after
+// LOOP-244: null-assignee InReview tickets now appear in the slice via tier-label matching, so a fire with only
+// InReview work (Step 0.5 — land a green PR) must not be gated out. Dev tiers ONLY — pm/qa/architect/stewards
+// do their best work on a quiet board and have no Todo slice, so they are never gated here (isDevTierActor
+// short-circuits). FAILS OPEN exactly like changeKey: any read miss (no hub cursor on linear/local, unseeded/
+// absent project, db busy) ⇒ null ⇒ fire anyway; never let a broken read starve the loop. Returns the skip
+// REASON (for a distinct, non-silent log line — a silent skip is indistinguishable from a crash) when the fire
+// should skip, else null.
 function devTierQueueSkip(opts: Options, agent: Agent, project: string): string | null {
   if (!isDevTierActor(agent)) return null;                    // pm/qa/architect/stewards — never queue-gated
   try {
@@ -872,9 +875,9 @@ function devTierQueueSkip(opts: Options, agent: Agent, project: string): string 
     if (!fireDb) return null;                                 // no hub cursor (linear/local) ⇒ fail open (fire)
     const projectId = findProject(fireDb, project);
     if (!projectId) return null;                              // unseeded / unknown project ⇒ fail open (fire)
-    const { todo, inProgress } = servableSlice(fireDb, projectId, agent);
-    return todo.length === 0 && inProgress.length === 0
-      ? "queue empty (0 servable Todo, 0 In Progress)"        // distinct from the change-gate's silent skip
+    const { todo, inProgress, inReview } = servableSlice(fireDb, projectId, agent);
+    return todo.length === 0 && inProgress.length === 0 && inReview.length === 0
+      ? "queue empty (0 servable Todo, 0 In Progress, 0 In Review)"  // distinct from the change-gate's silent skip
       : null;
   } catch { return null; }                                    // any read error ⇒ fail open (fire)
 }
