@@ -116,17 +116,32 @@ export async function teamRepair(argv = process.argv.slice(2)): Promise<number> 
   if (ws.file.team.backend === "service") {
     const dbPath = wsHubDb(ws);
     let db: ReturnType<typeof openDb> | undefined;
-    try { if (existsSync(dbPath)) db = openDb(dbPath); } catch { /* hub db unreachable */ }
+    // dbUnreadable: the hub.db file is PRESENT but openDb threw (busy past busy_timeout / corrupt /
+    // permission denied). We then cannot verify ANY candidate's ticket count, so we must NOT reap — a
+    // silent removal here would orphan live tickets AND print a fabricated "0-ticket 0-repo" success.
+    // An ABSENT db (file missing) is a genuine 0-ticket case — service tickets live in hub.db — so it
+    // stays reapable, preserving the existing fresh-workspace behaviour. (LOOP-280)
+    let dbUnreadable = false;
+    if (existsSync(dbPath)) {
+      try { db = openDb(dbPath); } catch { dbUnreadable = true; /* fail closed per candidate below */ }
+    }
 
     const candidates = Object.entries(ws.file.projects)
       .filter(([, p]) => p.scratch === true && (p.repos ?? []).length === 0)
       .map(([k]) => k);
 
     for (const key of candidates) {
-      const projectId = db ? findProject(db, key) : null;
-      const tc = db && projectId
-        ? ((db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c)
-        : 0;
+      // Fail closed, gating the WHOLE iteration (before the config writeFileSync below): an unreadable db
+      // means the ticket count is unknown, so skip loudly rather than reap on an assumed 0. (LOOP-280)
+      if (dbUnreadable) { info(`project '${key}': could not verify ticket count — hub.db present but unreadable, skipping`); continue; }
+      let projectId: string | null = null;
+      let tc = 0;
+      try {
+        projectId = db ? findProject(db, key) : null;
+        tc = db && projectId
+          ? ((db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c)
+          : 0;
+      } catch { info(`project '${key}': could not verify ticket count — hub.db query failed, skipping`); continue; }
       if (tc > 0) { info(`project '${key}': scratch but has ${tc} ticket(s) — kept`); continue; }
       if (!reapForReal) {
         info(`project '${key}': scratch 0-ticket 0-repo — would be reaped (run \`team repair --reap\` to apply)`);
