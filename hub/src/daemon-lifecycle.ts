@@ -232,7 +232,7 @@ function resolveDaemonContext(): void {
   if (!process.env.DEVLOOP_HUB_DB) process.env.DEVLOOP_HUB_DB = wsHubDb(ws);
 }
 
-async function daemonUpForKey(key: string): Promise<number> {
+export async function daemonUpForKey(key: string): Promise<number> {
   // Serveable ⇔ seeded in the hub DB. A non-service / unknown project is never in the hub ⇒ clean no-op.
   const dbPath = lcDbPath();
   let serveable = false;

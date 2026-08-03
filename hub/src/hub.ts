@@ -7,8 +7,8 @@
 import { existsSync, statSync } from "node:fs";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
-import { TEAM_INTAKE_PROJECT, type Workspace } from "./team-config.ts";
-import { daemonLifecycleCode, daemonStatusAll } from "./daemon-lifecycle.ts";
+import { TEAM_INTAKE_PROJECT, deliveryProjects, type Workspace } from "./team-config.ts";
+import { daemonLifecycleCode, daemonUpForKey, daemonStatusAll } from "./daemon-lifecycle.ts";
 import { openDb } from "./db.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop hub: ${msg}`); process.exit(code); }
@@ -42,10 +42,20 @@ function reportSize(dbPath: string): void {
 }
 
 // Idempotent ensure — used by `dev-loop run` on a service team so the operator needn't start the hub by hand.
+// LOOP-261: also ensures each per-project daemon — fire ops resolve against daemon-<key>.json, not
+// daemon-_team.json. Both are ensured; neither replaces the other.
 export async function ensureHub(ws: Workspace): Promise<number> {
   if (ws.file.team.backend !== "service") return 0;
+  // Ensure _team first (web-UI + intake daemon). _team is not in ws.file.projects, so the loop
+  // below never reaches it — the explicit call here is required.
   wireEnv(ws);
-  return daemonLifecycleCode("ensure");
+  let code = await daemonLifecycleCode("ensure");
+  // wireEnv set DEVLOOP_HUB_DB + DEVLOOP_RUN_DIR; daemonUpForKey reads them directly (no DEVLOOP_PROJECT).
+  for (const key of deliveryProjects(ws)) {
+    const c = await daemonUpForKey(key);
+    if (c !== 0) code = c;
+  }
+  return code;
 }
 
 export async function hubCmd(argv = process.argv.slice(2)): Promise<number> {
