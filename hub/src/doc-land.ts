@@ -160,24 +160,80 @@ Design: landing-discipline §4.6 (LOOP-57).`);
         if (dryRun) {
           console.log(`doc-land (dry-run): would rebase ${behind} commit(s) from origin/${defaultBranch}`);
         } else {
+          // AC1/AC2/AC3/AC6 (LOOP-217): preflight the tree before rebase to name the real blocker.
+          // git refuses to rebase with either unmerged index entries or unstaged/uncommitted changes;
+          // without this preflight, every such failure is mislabelled as a doc prose conflict.
+
+          // AC1: unmerged index entries are a hard wedge — they won't self-clear, block immediately.
+          let unmergedOut = "";
+          try { unmergedOut = git(["ls-files", "--unmerged"]); } catch { /* ignore */ }
+          if (unmergedOut.trim()) {
+            const unmergedPaths = [...new Set(
+              unmergedOut.trim().split("\n").map(l => l.split("\t")[1]).filter(Boolean)
+            )];
+            return {
+              ok: false,
+              blockedMsg: `unmerged index ${unmergedPaths.length === 1 ? "entry" : "entries"} must be resolved before re-running (rebase not attempted) — path(s): ${unmergedPaths.join(", ")}`,
+            };
+          }
+
+          // AC6: unstaged/uncommitted changes may be from a concurrent fire and can clear in seconds.
+          // Retry for up to DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS (default 30s) before blocking.
+          const getDirtyPaths = (): string[] => {
+            try {
+              const out = git(["status", "--porcelain", "--untracked-files=no"]);
+              return out.split("\n").filter(l => l.trim()).map(l => l.slice(3).trim()).filter(Boolean);
+            } catch { return []; }
+          };
+          const dirtyTimeoutMs = Math.max(0, parseInt(process.env.DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS ?? "30000", 10));
+          const dirtyDeadline = Date.now() + dirtyTimeoutMs;
+          let dirtyPaths = getDirtyPaths();
+          while (dirtyPaths.length > 0 && Date.now() < dirtyDeadline) {
+            await new Promise<void>(r => setTimeout(r, 500));
+            dirtyPaths = getDirtyPaths();
+          }
+          if (dirtyPaths.length > 0) {
+            const waited = Math.round((Date.now() - (dirtyDeadline - dirtyTimeoutMs)) / 1000);
+            return {
+              ok: false,
+              blockedMsg: `tree still dirty after ${waited}s — unstaged or uncommitted changes block the rebase (rebase not attempted): ${dirtyPaths.join(", ")}`,
+            };
+          }
+
           try {
             git([...gitIdArgs, "rebase", `origin/${defaultBranch}`]);
           } catch (e) {
-            // A real prose conflict in the strategy doc cannot be auto-merged (there is no merge
-            // strategy for free-form text). Critically, `git rebase` leaves .git/rebase-merge/ in place
-            // on failure — and this checkout is SHARED (PM/QA/Sweep/Ops all run git here), so a
-            // left-behind rebase wedges every later git op until a human aborts. Abort now to restore
-            // the checkout to its pre-rebase HEAD; swallow the abort's own error so it never masks the
-            // real conflict (LOOP-118). A conflict is not a push rejection ⇒ no retry.
-            try { git(["rebase", "--abort"]); } catch { /* best-effort restore; "no rebase in progress" is fine */ }
+            // Check which paths are conflicted BEFORE aborting (abort clears the index state).
+            // AC2: only emit the "prose merge" message when the doc path is genuinely conflicted.
+            let conflictPaths: string[] = [];
+            try {
+              const ls = git(["ls-files", "--unmerged"]);
+              conflictPaths = [...new Set(ls.split("\n").map(l => l.split("\t")[1]).filter(Boolean))];
+            } catch { /* ignore */ }
+
+            // Restore the shared checkout (LOOP-118); swallow abort's error ("no rebase in progress" ok).
+            try { git(["rebase", "--abort"]); } catch { /* best-effort restore */ }
+
             const { summary, detail } = gitErrText(e);
             const extra = detail && detail !== summary ? `\n  ${detail.replace(/\n/g, "\n  ")}` : "";
+            const docConflicted = conflictPaths.some(p => p === docRel || p.startsWith(archivePrefix));
+            if (docConflicted) {
+              // Genuine prose conflict in the strategy doc — only case warranting manual reconcile.
+              return {
+                ok: false,
+                blockedMsg:
+                  `doc content conflicts with origin/${defaultBranch} and cannot be auto-merged — ` +
+                  `'${docRel}' must be reconciled by hand (a human/PM prose merge) against origin, then re-run. ` +
+                  `The rebase was aborted and the checkout restored to its pre-rebase state.\n  git says: ${summary}${extra}`,
+              };
+            }
+            // Non-doc cause: name the real blocker so the operator does not hand-edit the wrong file.
+            const realPaths = conflictPaths.length > 0 ? conflictPaths.join(", ") : "(see git output)";
             return {
               ok: false,
               blockedMsg:
-                `doc content conflicts with origin/${defaultBranch} and cannot be auto-merged — ` +
-                `'${docRel}' must be reconciled by hand (a human/PM prose merge) against origin, then re-run. ` +
-                `The rebase was aborted and the checkout restored to its pre-rebase state.\n  git says: ${summary}${extra}`,
+                `rebase blocked by a non-doc path — the checkout was restored. ` +
+                `Resolve ${realPaths} and re-run.\n  git says: ${summary}${extra}`,
             };
           }
         }
