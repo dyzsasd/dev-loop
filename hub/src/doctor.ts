@@ -596,7 +596,10 @@ function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplit
         // (servable.ts tier-label fallback is only wired for non-dev split-dev actors).
         const verifiable = labels.includes("qa") || labels.includes("pm");
         const landable = devSplitOn && tier !== null;
-        if (!verifiable && !landable) stranded.push({ id: row.id, tier: null });
+        // Preserve the resolved tier (LOOP-270): a residual dev-tier label on a legacy-mode
+        // stranded ticket must yield a paste-ready `--assignee <tier>` hint, not the literal
+        // `<tier>` placeholder — that fallback is only for the genuinely tier-less case.
+        if (!verifiable && !landable) stranded.push({ id: row.id, tier });
         continue;
       }
       // In Progress — mine() only applies to Todo; inProgress keys on strict assignee===actor in both modes
