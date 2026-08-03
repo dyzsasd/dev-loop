@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   BUDGETS, CHEAT_MAX_LINES, CONVENTIONS_WARN_BYTES, BYTES_PER_TOKEN, type Bill,
+  STRATEGY_DOC_READERS,
   citedAnchors, contextBill, conventionsLoad, malformedRefs, measureOf, parseConventions,
   parseSectionsLine, pluginRoot, spanMeasure, splitSkill,
 } from "../src/context-bill.ts";
@@ -156,16 +157,53 @@ const bill = contextBill(root);
 ok(bill.rows.length === skillDirs.length, `bill has one row per skill (${bill.rows.length})`);
 ok(bill.rows.every((r, i) => i === 0 || bill.rows[i - 1].total.bytes >= r.total.bytes), "bill rows sorted by total bytes, descending");
 for (const r of bill.rows) {
-  const sum = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes;
+  // strategyDoc is null in the no-stat call — include it in sum for generality (0 when null)
+  const sdBytes = r.strategyDoc?.bytes ?? 0;
+  const sdLines = r.strategyDoc?.lines ?? 0;
+  const sum = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes + sdBytes;
   ok(r.total.bytes === sum && r.tokens === Math.ceil(sum / BYTES_PER_TOKEN),
-    `${r.skill}: total = prose+cheat+conventions+lessons (${sum}B), ~tokens at ${BYTES_PER_TOKEN}B/token (${r.tokens})`);
-  ok(r.total.lines === r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines, `${r.skill}: line total adds up`);
+    `${r.skill}: total = prose+cheat+conventions+lessons+strategyDoc (${sum}B), ~tokens at ${BYTES_PER_TOKEN}B/token (${r.tokens})`);
+  ok(r.total.lines === r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines + sdLines, `${r.skill}: line total adds up`);
   ok(r.conventions.bytes < bill.conventions.total.bytes,
     `${r.skill}: section-selective boot loads LESS than whole-file conventions (${r.conventions.bytes} < ${bill.conventions.total.bytes}B)`);
   const wantLessons = r.agent ? INDEX_MAX_LINES + SHARD_MAX_LINES : 0;
   ok(r.lessons.lines === wantLessons && r.lessons.bytes === (r.agent ? INDEX_MAX_BYTES + SHARD_MAX_BYTES : 0),
     `${r.skill}: lessons billed at the lessons.ts caps (${r.agent ? "agent: INDEX+shard" : "setup: none"})`);
   ok(r.withinBudget, `${r.skill}: bill row reports within-budget`);
+  // strategyDoc is null for all agents when no stat is passed (no workspace in test runner)
+  ok(r.strategyDoc === null, `${r.skill}: strategyDoc is null when no stat passed to contextBill()`);
+}
+
+// ── 5b. Strategy-doc attribution (LOOP-263) ─────────────────────────────────────────────────────────
+// Seeds a known-size stat and verifies it is charged to mandated readers, excluded from others.
+// This block MUST FAIL against code that ignores the second contextBill() argument.
+{
+  const FIXTURE_BYTES = 50_000;
+  const FIXTURE_LINES = 1_000;
+  const fixtureDoc = { bytes: FIXTURE_BYTES, lines: FIXTURE_LINES, label: "docs/STRATEGY.md" };
+  const billWithDoc = contextBill(root, fixtureDoc);
+
+  ok(billWithDoc.rows.length === skillDirs.length, `strategy-doc fixture: bill still has one row per skill`);
+  ok(billWithDoc.strategyDoc?.bytes === FIXTURE_BYTES, `strategy-doc fixture: Bill.strategyDoc carries the passed stat`);
+
+  for (const r of billWithDoc.rows) {
+    const isReader = STRATEGY_DOC_READERS.has(r.skill);
+    const baseBytes = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes;
+    const baseLines = r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines;
+    if (isReader) {
+      ok(r.strategyDoc !== null && r.strategyDoc.bytes === FIXTURE_BYTES,
+        `${r.skill} (reader): strategyDoc field is the fixture stat (LOOP-263)`);
+      ok(r.total.bytes === baseBytes + FIXTURE_BYTES,
+        `${r.skill} (reader): total includes strategyDoc bytes (${baseBytes}+${FIXTURE_BYTES}) (LOOP-263)`);
+      ok(r.total.lines === baseLines + FIXTURE_LINES,
+        `${r.skill} (reader): total includes strategyDoc lines (LOOP-263)`);
+    } else {
+      ok(r.strategyDoc === null,
+        `${r.skill} (non-reader): strategyDoc null — not charged the strategy doc (LOOP-263)`);
+      ok(r.total.bytes === baseBytes,
+        `${r.skill} (non-reader): total unchanged by strategy doc fixture (LOOP-263)`);
+    }
+  }
 }
 
 // ── 6. CLI e2e: `metrics --context` needs NO workspace (plugin-static; the doctor/metrics call) ────
