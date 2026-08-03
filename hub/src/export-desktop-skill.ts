@@ -100,7 +100,15 @@ const sections = conventions.split(/\n(?=## )/).filter((s) => {
 
 // ---- project facts (only the ones the agent needs; skip secrets) ----
 const j = (v: unknown): string => (v === undefined || v === null ? "—" : typeof v === "string" ? v : JSON.stringify(v));
-const g = (p as { git?: Record<string, unknown> }).git ?? {};
+// In workspace mode, toLegacyView() resolves each project repo ref through the workspace registry and
+// flattens landing/autoMerge/mergeChecks onto p.repos entries — read from there (not from a .git
+// sub-object, which does not exist on any v2 project entry and was always {}, rendering "direct" for
+// every workspace). In legacy projects.json mode, git facts live directly on p.git (preserved below).
+// Multi-repo (§19): primary-role repo wins; no primary → first repo; empty repos[] → {} → "direct".
+const projRepos = ws ? ((p as { repos?: Array<Record<string, unknown>> }).repos ?? []) : [];
+const g: Record<string, unknown> = projRepos.length > 0
+  ? (projRepos.find((r) => r.role === "primary") ?? projRepos[0]!)
+  : (p as { git?: Record<string, unknown> }).git ?? {};
 const te = (p as { testEnv?: Record<string, unknown> }).testEnv ?? {};
 const rep = (p as { reports?: Record<string, unknown> }).reports ?? {};
 const intake = (p as { intake?: { mode?: string } }).intake ?? {};
