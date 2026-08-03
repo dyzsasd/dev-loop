@@ -34,8 +34,9 @@ const require_metrics = () => metricsMod;
 // DEVLOOP_HUB_DB signals deliberate test-isolation and must be honored (LOOP-117).
 export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; preferWorkspace?: boolean } = {}): Promise<boolean> {
   let ok = true;
+  const allFails: string[] = [];
   const pass = (m: string) => console.log("✅ " + m);
-  const fail = (m: string) => { console.log("❌ " + m); ok = false; };
+  const fail = (m: string) => { console.log("❌ " + m); ok = false; allFails.push(m); };
   const warn = (m: string) => console.log("⚠️  " + m);
   const info = (m: string) => console.log("•  " + m);
 
@@ -62,13 +63,14 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
       if (!process.env.DEVLOOP_HUB_DB || opts.preferWorkspace) dbPath = wsHubDb(ws);
       const wsResult = await doctorWorkspace(ws, { ...opts, boardDb: dbPath });
       ok = wsResult.ok && ok;
+      allFails.push(...wsResult.fails);
       stalledRepo = wsResult.stalledRepo;
       skewResult = wsResult.skewResult;
       decisionStall = wsResult.decisionStall;
       if (ws.file.team.backend === "linear") {
         // A linear team has no hub.db; the workspace checks ARE the whole verdict.
         console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
-        console.log(`NEXT: ${nextStep(ws, [], [], stalledRepo, decisionStall, skewResult)}`);
+        console.log(`NEXT: ${nextStep(ws, [], [], stalledRepo, decisionStall, skewResult, allFails)}`);
         return ok;
       }
     }
@@ -173,7 +175,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   if (opts.reconcile) await serviceReconcile(projects.map((p) => p.key), dbPath);
 
   console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
-  if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded, stalledRepo, decisionStall, skewResult)}`);
+  if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded, stalledRepo, decisionStall, skewResult, allFails)}`);
   return ok;
 }
 
@@ -182,9 +184,10 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
 // an invalid config blocks everything → a blank linearTeam blocks every fire → no projects/repos blocks
 // scheduling → an unseeded service project silently starves its fires → dry-run is the last gate before
 // live. All green ⇒ run the team.
-function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null, skewResult?: { codeBehind: number; version: string } | null): string {
+function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null, skewResult?: { codeBehind: number; version: string } | null, fails?: string[]): string {
   if (errors.length) { const e = errors[0]; return `fix dev-loop.json — [${e.code}] ${e.path ? e.path + ": " : ""}${e.message}`; }
   if (!ws) return "dev-loop run";
+  if (fails && fails.length) return `fix the ❌ first: ${fails[0]}`;
   const t = ws.file.team;
   if (t.backend === "linear" && !(t.linearTeam ?? "").trim()) return `dev-loop team set team.linearTeam "<Team Name>"  (fires refuse to launch on a blank Linear team)`;
   if (!deliveryProjects(ws).filter(k => ws.file.projects[k]?.scratch !== true).length) return `dev-loop team add-project <key>  (or /dev-loop:add-project in a coding CLI)`;
@@ -252,12 +255,13 @@ function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { ol
 // Reports the E-code/W-code verdict for a dev-loop.json, that every registered repo exists and is a git
 // repo, and the two migration/leak warnings (W05 user-scope MCP for linear steward fires; W06 workspace
 // inside a git work-tree). Never writes, never repairs.
-export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null }> {
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null; fails: string[] }> {
   let ok = true;
   let stalledRepo: string | undefined;
   let decisionStall: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null = null;
+  const fails: string[] = [];
   const pass = (m: string) => console.log("✅ " + m);
-  const fail = (m: string) => { console.log("❌ " + m); ok = false; };
+  const fail = (m: string) => { console.log("❌ " + m); ok = false; fails.push(m); };
   const warn = (m: string) => console.log("⚠️  " + m);
   const info = (m: string) => console.log("•  " + m);
 
@@ -492,7 +496,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     } catch { /* W27 is best-effort — never fails doctor */ }
   }
 
-  return { ok, stalledRepo, decisionStall, skewResult };
+  return { ok, stalledRepo, decisionStall, skewResult, fails };
 }
 
 export function isGitWorkTree(dir: string): boolean {
