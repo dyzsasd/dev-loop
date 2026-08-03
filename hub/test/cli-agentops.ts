@@ -362,11 +362,21 @@ ok(bareQueue.status === 0,
 const bareQueueBody = bareQueue.status === 0 ? j(bareQueue.stdout) : {};
 ok("agent" in bareQueueBody,
   `bare queue returns the {agent,…} shape (got keys: ${Object.keys(bareQueueBody).join(",")})`);
-// parity: the bare ROUTES form must be byte-equal to the Layer-0 op form (same DB state, same actor)
+// shape-parity: the Layer-0 op form must also return the {agent,…} shape (same structure, not byte-equal —
+// LOOP-111: bare queue enriches verify items with `landing`; op queue stays pure daemon-side)
 const opQueueBare = cli(["op", "queue"]);
 ok(opQueueBare.status === 0, `op queue baseline returns exit 0 (got ${opQueueBare.status})`);
-ok(bareQueue.stdout.trim() === opQueueBare.stdout.trim(),
-  "PARITY: bare 'dev-loop queue' ≡ 'dev-loop op queue' (byte-equal output)");
+ok("agent" in (opQueueBare.status === 0 ? j(opQueueBare.stdout) : {}),
+  "SHAPE PARITY: 'dev-loop op queue' returns the {agent,…} shape");
+// LOOP-111 AC2: bare `queue` verify items carry a `landing` field; `op queue` items do NOT (daemon stays gh-free)
+const bareVerify: Array<Record<string, unknown>> = bareQueueBody.verify ?? [];
+const opVerify: Array<Record<string, unknown>> = opQueueBare.status === 0 ? (j(opQueueBare.stdout).verify ?? []) : [];
+if (bareVerify.length > 0) {
+  ok(bareVerify.every((v) => "landing" in v), "LOOP-111 AC1: every verify item in bare 'queue' carries a 'landing' field");
+}
+if (opVerify.length > 0) {
+  ok(opVerify.every((v) => !("landing" in v)), "LOOP-111 AC2: 'op queue' verify items have NO 'landing' field (daemon stays gh-free)");
+}
 
 console.log(fails === 0 ? "\nCLI_AGENTOPS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

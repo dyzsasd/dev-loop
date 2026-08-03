@@ -23,8 +23,9 @@ import { openDb, actorExists, listActorHandles, STATES } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { ensureActors, findProject } from "./seed.ts";
 import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
+import { reposOfProject, type RepoEntry, type Workspace } from "./team-config.ts";
 import { agentOp, isAgentOp, AGENT_OPS, AGENT_WRITE_OPS, type AgentOp, type OpResult } from "./agentops.ts";
-import { defaultGhExec } from "./landing.ts";
+import { makeGhExec, defaultGhExec, annotateTicketLanding, GH_EXEC_TIMEOUT_MS } from "./landing.ts";
 import { checkReviewAdmission } from "./review-admission.ts";
 import { opRunfilePath, resolveOpPort, postOp, postOpUrl } from "./op-client.ts";
 
@@ -271,13 +272,50 @@ async function verbOp(rest: string[]): Promise<never> {
   return emit(name, await runOp(openHub(), name, args));
 }
 
+function entryGhRepo(entry: RepoEntry | undefined): string | null {
+  if (!entry?.autoMerge || entry.landing !== "pr" || !entry.remote) return null;
+  const m = entry.remote.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
+  return m ? m[1]! : null;
+}
+
+function resolveTicketGhRepo(labels: string[], ws: Workspace | null, projectKey: string): string | null {
+  if (!ws) return null;
+  const repoLabel = labels.find((l) => l.startsWith("repo:"));
+  let projRepos: ReturnType<typeof reposOfProject> | null = null;
+  if (!repoLabel) {
+    try { projRepos = reposOfProject(ws, projectKey); } catch { return null; }
+  }
+  const ref = repoLabel ? repoLabel.slice(5) : (projRepos!.length === 1 ? projRepos![0]!.ref : null);
+  if (!ref) return null;
+  return entryGhRepo(ws.file.repos[ref]);
+}
+
 async function verbQueue(rest: string[]): Promise<never> {
   const { flags, pos } = parseFlags(rest, { ...COMMON });
   iAmTheOperator = flags["--i-am-the-operator"] === true;
   if (pos.length) fail(`unexpected argument '${pos[0]}'`);
   const qargs: Record<string, unknown> = {};
   if (flags["--project"] !== undefined) qargs.project = str(flags, "--project");
-  return emit("queue", await runOp(openHub(), "queue", qargs));
+  const hub = openHub();
+  const result = await runOp(hub, "queue", qargs);
+  if (result.status >= 200 && result.status < 300) {
+    const body = result.body as Record<string, unknown>;
+    const verify = body.verify as Array<{ id: string; labels: string[]; [k: string]: unknown }> | undefined;
+    if (verify?.length) {
+      const ws = tryResolveWorkspace();
+      const ENRICH_TIMEOUT_MS = 15_000;
+      const enrichDeadline = Date.now() + ENRICH_TIMEOUT_MS;
+      for (const item of verify) {
+        const remaining = enrichDeadline - Date.now();
+        if (remaining <= 0) { item.landing = "unknown"; continue; }
+        const ghRepo = resolveTicketGhRepo(item.labels, ws, hub.projectKey);
+        if (!ghRepo) { item.landing = "unknown"; continue; }
+        const callTimeout = Math.min(remaining, GH_EXEC_TIMEOUT_MS);
+        item.landing = annotateTicketLanding(item.id, ghRepo, makeGhExec({ timeoutMs: callTimeout }));
+      }
+    }
+  }
+  return emit("queue", result);
 }
 
 async function ticketCreate(targs: string[]): Promise<never> {

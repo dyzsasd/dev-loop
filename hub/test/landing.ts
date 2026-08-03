@@ -3,25 +3,11 @@
 import { realpathSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readLandingState, ticketToPr, prToTicket, type ExecFn, type LandingState } from "../src/landing.ts";
+import { readLandingState, ticketToPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-
-// Allow-list sourced from `gh pr list --json bogus` — offline, no network, CI-safe.
-const GH_PR_LIST_FIELDS = new Set([
-  "additions", "assignees", "author", "autoMergeRequest", "baseRefName",
-  "baseRefOid", "body", "changedFiles", "closed", "closedAt",
-  "closingIssuesReferences", "comments", "commits", "createdAt", "deletions",
-  "files", "fullDatabaseId", "headRefName", "headRefOid", "headRepository",
-  "headRepositoryOwner", "id", "isCrossRepository", "isDraft", "labels",
-  "latestReviews", "maintainerCanModify", "mergeCommit", "mergeStateStatus",
-  "mergeable", "mergedAt", "mergedBy", "milestone", "number",
-  "potentialMergeCommit", "projectCards", "projectItems", "reactionGroups",
-  "reviewDecision", "reviewRequests", "reviews", "state", "statusCheckRollup",
-  "title", "updatedAt", "url",
-]);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = Date.parse("2026-07-31T12:00:00Z");
@@ -59,13 +45,13 @@ function qualifyingRepo(extra: object = {}): Record<string, object> {
  *  Validates gh pr list --json field names against GH_PR_LIST_FIELDS on every call. */
 function makeExec(routes: Array<[RegExp, { stdout?: string; stderr?: string; ok?: boolean }]>): ExecFn {
   return (args) => {
-    if (args[0] === "pr" && args[1] === "list") {
+    if ((args[0] === "pr" && args[1] === "list") || (args[0] === "pr" && args[1] === "view")) {
       const jsonIdx = args.indexOf("--json");
       if (jsonIdx !== -1) {
         const fields = (args[jsonIdx + 1] ?? "").split(",").filter(Boolean);
         for (const field of fields) {
           if (!GH_PR_LIST_FIELDS.has(field)) {
-            throw new Error(`test-double: unknown gh pr list --json field "${field}" (not in GH_PR_LIST_FIELDS)`);
+            throw new Error(`test-double: unknown gh pr ${args[1]} --json field "${field}" (not in GH_PR_LIST_FIELDS)`);
           }
         }
       }
@@ -407,6 +393,152 @@ function checkRunsJson(runs: Array<{ name: string; conclusion: string | null }>)
   const [result] = await readLandingState(ws, { exec: execFail, now: NOW });
   ok(result!.state === "unknown", "forge failure → state=unknown");
   ok(result!.prs === null, "forge failure → prs=null (not empty array)");
+}
+
+// ── annotateTicketLanding (LOOP-111, LOOP-89 Child B) ─────────────────────────
+
+// Helper: build a statusCheckRollup JSON string for pr view stub
+function viewJson(opts: { state?: string; mergeable?: string; checks?: Array<{ conclusion: string }> }): string {
+  return JSON.stringify({
+    state: opts.state ?? "OPEN",
+    mergeable: opts.mergeable ?? "MERGEABLE",
+    statusCheckRollup: opts.checks ?? [],
+  });
+}
+
+const REPO = "test-org/test-repo";
+const PR_LIST_MERGED = JSON.stringify([{ number: 5, url: "https://github.com/test-org/test-repo/pull/5", state: "MERGED" }]);
+const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-org/test-repo/pull/7", state: "OPEN" }]);
+
+// Case 25: MERGED PR → "merged"
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-25/, { stdout: PR_LIST_MERGED }],
+  ]);
+  ok(annotateTicketLanding("LOOP-25", REPO, exec) === "merged", "annotateTicketLanding: MERGED PR → 'merged'");
+}
+
+// Case 26: open PR with all-SUCCESS checks → "open-green"
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-26/, { stdout: PR_LIST_OPEN }],
+    [/pr view 7/, { stdout: viewJson({ checks: [{ conclusion: "SUCCESS" }, { conclusion: "SUCCESS" }] }) }],
+  ]);
+  ok(annotateTicketLanding("LOOP-26", REPO, exec) === "open-green", "annotateTicketLanding: all-SUCCESS checks → 'open-green'");
+}
+
+// Case 27: open PR with a FAILURE check → "open-red"
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-27/, { stdout: PR_LIST_OPEN }],
+    [/pr view 7/, { stdout: viewJson({ checks: [{ conclusion: "SUCCESS" }, { conclusion: "FAILURE" }] }) }],
+  ]);
+  ok(annotateTicketLanding("LOOP-27", REPO, exec) === "open-red", "annotateTicketLanding: FAILURE check → 'open-red'");
+}
+
+// Case 28: CONFLICTING PR → "conflicting"
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-28/, { stdout: PR_LIST_OPEN }],
+    [/pr view 7/, { stdout: viewJson({ mergeable: "CONFLICTING" }) }],
+  ]);
+  ok(annotateTicketLanding("LOOP-28", REPO, exec) === "conflicting", "annotateTicketLanding: CONFLICTING → 'conflicting'");
+}
+
+// Case 29: no PR found → "no-pr"
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-29/, { stdout: "[]" }],
+    [/pr list.*--search LOOP-29/, { stdout: "[]" }],
+  ]);
+  ok(annotateTicketLanding("LOOP-29", REPO, exec) === "no-pr", "annotateTicketLanding: no PR found → 'no-pr'");
+}
+
+// Case 30: exec returns ok:false → "no-pr" (ticketToPr can't distinguish auth error from absent PR)
+{
+  const failExec: ExecFn = () => ({ stdout: "", stderr: "auth error", ok: false });
+  let threw = false;
+  let result: string = "threw";
+  try { result = annotateTicketLanding("LOOP-30", REPO, failExec); } catch { threw = true; }
+  ok(!threw, "annotateTicketLanding: exec ok:false never throws");
+  ok(result === "no-pr", `annotateTicketLanding: exec ok:false → 'no-pr' (ticketToPr returns null, got '${result}')`);
+}
+
+// Case 30b: exec throws → "no-pr" (ticketToPr's own catch converts throw to null; never propagates)
+{
+  const throwExec: ExecFn = () => { throw new Error("ENOENT: spawn gh"); };
+  let threw = false;
+  let result: string = "threw";
+  try { result = annotateTicketLanding("LOOP-30b", REPO, throwExec); } catch { threw = true; }
+  ok(!threw, "annotateTicketLanding: exec throw never propagates");
+  ok(result === "no-pr", `annotateTicketLanding: exec throws → 'no-pr' (ticketToPr catches + returns null, got '${result}')`);
+}
+
+// Case 31: pr view fails → "unknown"
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-31/, { stdout: PR_LIST_OPEN }],
+    [/pr view 7/, { stdout: "", stderr: "not found", ok: false }],
+  ]);
+  ok(annotateTicketLanding("LOOP-31", REPO, exec) === "unknown", "annotateTicketLanding: pr view failure → 'unknown'");
+}
+
+// Case 32: pending (empty) checks → "open-red" (conservative)
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-32/, { stdout: PR_LIST_OPEN }],
+    [/pr view 7/, { stdout: viewJson({ checks: [] }) }],
+  ]);
+  ok(annotateTicketLanding("LOOP-32", REPO, exec) === "open-red", "annotateTicketLanding: no checks → 'open-red' (conservative)");
+}
+
+// Case 33: argv validation — makeExec rejects unknown gh pr view --json field
+{
+  let caughtUnknown = false;
+  const badExec = makeExec([[/.*/, {}]]);
+  try { badExec(["pr", "view", "1", "--repo", "x/y", "--json", "bogusViewField"]); } catch (e) {
+    caughtUnknown = /unknown gh pr view --json field/.test((e as Error).message);
+  }
+  ok(caughtUnknown, "makeExec double rejects unknown gh pr view --json field (parallel to LOOP-121 AC3)");
+}
+
+// Case 34: STARTUP_FAILURE check → "open-red" (P2 — startup-failed checks treated as red)
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-34/, { stdout: PR_LIST_OPEN }],
+    [/pr view 7/, { stdout: viewJson({ checks: [{ conclusion: "STARTUP_FAILURE" }] }) }],
+  ]);
+  ok(annotateTicketLanding("LOOP-34", REPO, exec) === "open-red", "annotateTicketLanding: STARTUP_FAILURE check → 'open-red'");
+}
+
+// Case 35: UNKNOWN mergeable → "unknown" (P2 — don't report open-green on transient UNKNOWN)
+{
+  const exec = makeExec([
+    [/pr list.*dev-loop\/LOOP-35/, { stdout: PR_LIST_OPEN }],
+    [/pr view 7/, { stdout: viewJson({ mergeable: "UNKNOWN", checks: [{ conclusion: "SUCCESS" }] }) }],
+  ]);
+  ok(annotateTicketLanding("LOOP-35", REPO, exec) === "unknown", "annotateTicketLanding: mergeable=UNKNOWN → 'unknown' (not open-green)");
+}
+
+// Case 36: dotted repository name — "service.api" must not be parsed as non-GitHub (P2 thread fix)
+{
+  const ws = makeWorkspace({
+    repo: {
+      path: "clone",
+      remote: "https://github.com/test-org/service.api.git",
+      landing: "pr",
+      autoMerge: true,
+      mergeChecks: ["CI"],
+    },
+  });
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: "[]" }],
+    [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI", conclusion: "success" }]) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(result!.state !== "na", "dotted repo name 'service.api' is not rejected as non-GitHub remote");
+  ok(result!.state === "healthy", "dotted repo name 'service.api' resolves to healthy state");
 }
 
 console.log(fails === 0 ? "\nLANDING_OK" : `\n${fails} CHECK(S) FAILED`);
