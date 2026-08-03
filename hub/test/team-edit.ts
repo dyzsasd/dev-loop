@@ -235,6 +235,77 @@ try {
   const scrDoctor2 = run("server", ["doctor"], { cwd: scr, extra: { DEVLOOP_HUB_DB: "" } });
   ok(/W01.*real-new/.test(scrDoctor2.out), "W01 still fires for unmarked zero-repo project (AC3 discriminator)");
 
+  // ═══ remove-project mutator (LOOP-221 Child B) ═══
+  // Workspace: reuse `scr` (service backend; has 'fixture' scratch 0/0 project + 'real-new' 0/0 unmarked).
+  // AC1: remove-project drops a 0-ticket/0-repo project from config + hub.db
+  const rmOk = run("team", ["remove-project", "fixture"], { cwd: scr, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(rmOk.code === 0, "LOOP-221 AC1: remove-project exits 0 for 0-ticket/0-repo scratch project");
+  const rmJson = readJson(join(scr, "dev-loop.json"));
+  ok(!("fixture" in rmJson.projects), "LOOP-221 AC1: 'fixture' removed from dev-loop.json config");
+  // Check hub.db row gone (inline SQLite query)
+  const rmDbChk = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT id FROM projects WHERE key=?').get('fixture');console.log(r?'found':'gone');db.close()})`, join(scr, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  ok(/gone/.test(rmDbChk.stdout), "LOOP-221 AC1: 'fixture' hub.db row deleted");
+
+  // AC1: refuse _team / reserved keys
+  const rmTeam = run("team", ["remove-project", "_team"], { cwd: scr, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(rmTeam.code !== 0, "LOOP-221 AC1: remove-project refuses _team key");
+
+  // AC1: refuse a project with repos (real-new has 0 repos but let's add one first via config)
+  // Easier: create a fresh workspace with a project that has repos in config
+  const rmWs = join(tmp, "rm-ws");
+  run("team", ["init", "--dir", rmWs, "--key", "rm-team", "--backend", "service"]);
+  run("team", ["add-project", "proj-with-repo"], { cwd: rmWs });
+  // Manually add a repo to the config to trigger the repo-guard (no actual git repo needed for this guard)
+  const rmCfg = readJson(join(rmWs, "dev-loop.json"));
+  rmCfg.projects["proj-with-repo"].repos = [{ ref: "some-repo" }];
+  writeFileSync(join(rmWs, "dev-loop.json"), JSON.stringify(rmCfg, null, 2) + "\n");
+  const rmRefused = run("team", ["remove-project", "proj-with-repo"], { cwd: rmWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(rmRefused.code !== 0 && /repo/.test(rmRefused.out), "LOOP-221 AC1: remove-project refuses project with repos without --force");
+
+  // AC1: db-only key (key in hub but absent from config)
+  const dbOnlyWs = join(tmp, "db-only-ws");
+  run("team", ["init", "--dir", dbOnlyWs, "--key", "dbonly-team", "--backend", "service"]);
+  run("team", ["add-project", "ghost"], { cwd: dbOnlyWs });
+  // Remove from config manually but leave hub.db row
+  const dbOnlyCfg = readJson(join(dbOnlyWs, "dev-loop.json"));
+  delete dbOnlyCfg.projects.ghost;
+  writeFileSync(join(dbOnlyWs, "dev-loop.json"), JSON.stringify(dbOnlyCfg, null, 2) + "\n");
+  const dbOnlyRm = run("team", ["remove-project", "ghost"], { cwd: dbOnlyWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(dbOnlyRm.code === 0, "LOOP-221 AC1: remove-project exits 0 for db-only key");
+  ok(/db-only/.test(dbOnlyRm.out), "LOOP-221 AC1: remove-project notes the key was db-only");
+  const dbOnlyChk = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT id FROM projects WHERE key=?').get('ghost');console.log(r?'found':'gone');db.close()})`, join(dbOnlyWs, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  ok(/gone/.test(dbOnlyChk.stdout), "LOOP-221 AC1: db-only 'ghost' hub.db row deleted");
+
+  // team repair --reap: project reap (dry-run lists scratch 0/0; spares non-zero)
+  const reapWs = join(tmp, "reap-ws");
+  run("team", ["init", "--dir", reapWs, "--key", "reap-team", "--backend", "service"]);
+  run("team", ["add-project", "to-reap", "--scratch"], { cwd: reapWs, extra: { DEVLOOP_HUB_DB: "" } });
+  run("team", ["add-project", "real-proj"], { cwd: reapWs, extra: { DEVLOOP_HUB_DB: "" } }); // not scratch → spared
+  run("team", ["add-project", "with-ticket", "--scratch"], { cwd: reapWs, extra: { DEVLOOP_HUB_DB: "" } });
+  // seed a ticket into 'with-ticket' project via direct SQL so the ticket-guard fires
+  spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const pid=db.prepare('SELECT id FROM projects WHERE key=?').get('with-ticket')?.id;if(pid)db.prepare("INSERT INTO tickets(id,project_id,title,type,state,priority,labels,created_by,created_at,updated_at)VALUES(?,?,'t','Bug','Todo',0,'[]','test','2026-01-01','2026-01-01')").run('tid-1',pid);db.close()})`, join(reapWs, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  // dry-run: lists 'to-reap', spares 'real-proj' and 'with-ticket'
+  const dryReap = run("team", ["repair", "--reap", "--dry-run"], { cwd: reapWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(dryReap.code === 0, "LOOP-221 AC2: repair --reap --dry-run exits 0");
+  ok(/to-reap.*would be reaped/.test(dryReap.out.replace(/\n/g, " ")), "LOOP-221 AC2: dry-run lists scratch 0/0 project 'to-reap'");
+  ok(!/real-proj.*would be reaped/.test(dryReap.out), "LOOP-221 AC2: dry-run spares unmarked 'real-proj'");
+  ok(!/with-ticket.*would be reaped/.test(dryReap.out), "LOOP-221 AC2: dry-run spares scratch 'with-ticket' that has tickets");
+  ok(/kept/.test(dryReap.out) || /ticket/.test(dryReap.out), "LOOP-221 AC2: dry-run notes 'with-ticket' is kept due to tickets");
+  // verify dry-run didn't actually remove anything
+  const dryReapCfg = readJson(join(reapWs, "dev-loop.json"));
+  ok("to-reap" in dryReapCfg.projects, "LOOP-221 AC2: dry-run did not remove 'to-reap' from config");
+  // apply: removes 'to-reap', leaves others
+  const applyReap = run("team", ["repair", "--reap"], { cwd: reapWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(applyReap.code === 0, "LOOP-221 AC2: repair --reap exits 0");
+  ok(/reaped/.test(applyReap.out) && /to-reap/.test(applyReap.out), "LOOP-221 AC2: apply reports 'to-reap' reaped");
+  const applyReapCfg = readJson(join(reapWs, "dev-loop.json"));
+  ok(!("to-reap" in applyReapCfg.projects), "LOOP-221 AC2: 'to-reap' gone from config after apply");
+  ok("real-proj" in applyReapCfg.projects, "LOOP-221 AC2: 'real-proj' still in config (spared)");
+  ok("with-ticket" in applyReapCfg.projects, "LOOP-221 AC2: 'with-ticket' still in config (has tickets)");
+  // hub.db: 'to-reap' row gone
+  const applyReapDbChk = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT id FROM projects WHERE key=?').get('to-reap');console.log(r?'found':'gone');db.close()})`, join(reapWs, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  ok(/gone/.test(applyReapDbChk.stdout), "LOOP-221 AC2: 'to-reap' hub.db row deleted after apply");
+
   // ═══ add-repo --detect: deterministic detection, no LLM ═══
   // unit: the workflow job-name extractor never confuses step/with-level `name:` lines
   const wf = [
