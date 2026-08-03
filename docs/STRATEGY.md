@@ -530,89 +530,27 @@ four stubs merged into one here). Clauses still in force:
 - **A standing authorization covers the edit it named, not every edit in its section.** When an old
   number in a DIRECTION section is hedged rather than wrong, the correction belongs in the progress
   sections and on the program's carrier ticket.
-### 2026-08-03 (pm, sixteenth fire) — the daemon downgrade is not drift; it is a scheduled event that fires with every fire, and the vector is our own Claude plugin
+### 2026-08-03 (pm, sixteenth fire) — [ARCHIVED]
 
-`origin/main` is **`aef0d5f`** — my own doc commit from the fifteenth fire. **The product has not
-moved since `093d295`**, so the review SHA is unchanged for a second consecutive fire. Doc-watch:
-`docs/STRATEGY.md` hash `cc45e4cf`, byte-identical to what I landed — **41 fires with no foreign doc
-edit**, so no new external direction to resolve.
+Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 17).
+Clauses still in force:
 
-**The loop was dark for 40 hours and it was not the board's fault.** Every agent hit the provider's
-weekly ceiling at 2026-08-01T15:04Z — `You've hit your weekly limit · resets Aug 3 at 7pm
-(Europe/Paris)` — the breaker opened on junior-dev after 5 identical failures, and `dev-loop run`
-only resumed at 08:43Z today. Zero fires, zero commits, zero board movement in between. Any read of
-this window as a throughput problem is a misread: the constraint was the subscription, not the queue.
-
-**The operator cleared LOOP-258 on Aug 1 and it had reverted before I could verify it.** They ran the
-restart in a genuinely attended moment, verified AC1 and AC2 live, and handed the ticket back at
-`In Review`. Re-deriving AC1 against the running system this fire — the only verify that counts —
-returned `v1.13.0`. So the ticket did not close. **This was the third revert.**
-
-**The vector, traced end-to-end, is the `dev-loop` Claude Code plugin itself.**
-`~/.claude/settings.json` registers it from a **directory source** at
-`/Users/shuai/workspace/jinko/dev-loop` — an unrelated checkout at `hub/package.json` **1.13.0**
-(git `0b365c1`). Its `hooks/hooks.json` runs on every session start, and **every agent fire is a
-Claude session**:
-
-```
-node "${CLAUDE_PLUGIN_ROOT}/hub/src/hook-session-start.ts"  >/dev/null 2>&1 || true
-```
-
-The hook's own description calls this "the idempotent `dev-loop daemon up` path". That is the
-assumption LOOP-252 breaks: under inequality-as-staleness a 1.13.0 caller looks at a healthy 1.14.0
-daemon, declares it stale, and restarts it **down**. Timing, from the logs rather than inferred — pm
-fire starts 08:43:12.407Z, loop daemon replaced 08:43:14.131Z (pid 13152, v1.13.0); sweep fire starts
-08:44:32.605Z, `_team` daemon replaced 08:44:37.017Z (pid 14412, v1.13.0). Both replacements are, per
-`ps`, `.../jinko/dev-loop/hub/src/daemon.ts`. The scheduler itself is clean — pid 13095 runs the
-pinned `dev-loop-build/hub/dist/run-agents.js`. **Only the hook is stale, and it is re-armed by every
-fire.** And `>/dev/null 2>&1 || true` is deliberate ("so SessionStart never pollutes context"), so
-the one action that corrupts every board write is the one guaranteed to be silent.
-
-**A forensic marker worth keeping:** daemons launched from `.ts` source emit a `Type Stripping`
-ExperimentalWarning into `daemon-<project>.log`; dist-build daemons do not. In this workspace's log
-every downgrade is a `.ts` launch (pids 89725, 13152) and every good daemon is a dist launch (88020,
-53987, 12713). **The log had been recording the culprit since Aug 1** — nobody had a reason to read it
-as provenance.
-
-**Actions.** LOOP-258 re-parked `Human-Blocked` with a *changed* ask (repoint the plugin path or
-update that checkout — asking for the same restart again would be knowingly futile). LOOP-252 raised
-**P2 → P1**, with the evidence and one added AC: `daemon status` must report the running daemon's
-resolved **entry path**, not just pid and version. Three separate diagnoses over ~44 h all stalled at
-the same place — from `daemon status` alone, "stale because it predates the upgrade" and "stale
-because a foreign checkout owns the port" are indistinguishable, and `ps` was the only way through.
-
-**Structural picture, unchanged and now in its eighth consecutive measurement.** Junior sits at **12**
-unblocked `Todo` against a cap of 10 (over); senior at **5** with **zero** senior-tier Backlog rows to
-draw from; the Backlog is **67 rows, effectively 100% junior**. Promotion was correctly **0** and
-filing was correctly **0** — with junior over cap, rate-limited until 17:00Z, and delegation dead,
-the scarce resource is not ideas. §9c: all **11** blocked tickets hold ≥1 live blocker, **0 unparks**.
-
-**One groom that correctly produced no change:** I checked whether LOOP-114 (the failure-taxonomy
-hole) had gone stale, because today's rate-limit kills *do* carry `errorClass: "rate-limit"`. The
-shipped classifier at `hub/src/run-agents.ts:253-254` still has no `session limit` pattern, so its
-claim stands; the *weekly*-limit variant happens to classify via a 429. The hole is narrower than
-"every failure", which is LOOP-204's measurement to own. Left untouched rather than churned.
-
-**Addendum — the operator was working the same predicate four minutes into this fire, and it changes
-the fix routing.** At 08:47:18Z they commented on **LOOP-250** (a real human write, no `fireId`): after
-refreshing the pinned build `64aebc2` → `aef0d5f` and reinstalling, `daemon up` printed
-`already running for 'loop' → pid 53987` **and did nothing**. Both builds report `1.14.0` — a source
-build carries whatever `package.json` said at the built commit, so the SHA moved and the string did
-not. So this host demonstrated **both** failures of one comparison inside 90 seconds: LOOP-250 is the
-predicate failing to fire when versions are *equal by string but differ by SHA* (a no-op that reads as
-success, on the exact one-command action LOOP-258 asks a human to perform); LOOP-252 is the same
-predicate firing when the installed CLI is *older* (a downgrade). **An ordering-only fix closes
-LOOP-252 and leaves LOOP-250 alive; a SHA-aware check closes both.** Routed accordingly: LOOP-250
-raised **P2 → P1** as the class carrier (already servable, already holds the stamped-build-commit
-direction, and it unblocks LOOP-247); LOOP-252 stays P1 and open as the ordering half, cross-linked.
-Also corrected on LOOP-258: pids 12713/12725 were *their* forced `down`+`up`, not the scheduler's
-start-up — which sharpens rather than softens the finding, since they left two healthy daemons in
-place and the first two fires downgraded them anyway.
-
-**Not filed, deliberately:** this host is running **14+ leaked daemon processes** from deleted
-worktrees, `/tmp` copies and the product repo, the oldest dating to Jul 22. That is LOOP-95's reaper
-(In Progress) and LOOP-137's doctor blindness (Backlog, blocked on LOOP-95) — a report line, not a
-new row.
+- **The daemon downgrade is a scheduled event, not drift, and the vector is our own Claude plugin.**
+  `~/.claude/settings.json` sourced the plugin from a stale checkout whose SessionStart hook runs
+  `daemon up` from ITS tree on every fire — and the hook is silenced with `>/dev/null 2>&1 || true`,
+  so the one action that corrupts every board write is the one guaranteed to be invisible.
+  **Still live in a new shape:** this fire found **three** `_team` daemons at **v1.12.0** beside a
+  `loop` daemon at v1.14.0. The re-arm vector was neutralised for the pinned path; a duplicated,
+  version-split fleet was not. LOOP-252 / LOOP-261 own the causes; LOOP-137 now owns making the
+  fleet observable at all.
+- **A daemon launched from `.ts` source emits a `Type Stripping` warning into its log; a dist-build
+  daemon does not.** That warning is provenance — it names which tree a daemon came from when
+  `daemon status` cannot.
+- **One predicate, two opposite failures.** Version-string equality misses a SHA that moved
+  (LOOP-250: a no-op that reads as success); version inequality treats *older* as *stale*
+  (LOOP-252: a downgrade). An ordering-only fix closes one and leaves the other alive.
+- **A dark window is not a throughput problem.** The 40-hour gap was a provider weekly ceiling.
+  Read fires-per-hour against the subscription before reading it against the queue.
 
 
 ### 2026-08-03 (pm, eighteenth fire) — two verifications closed, and one only closed because I broke a cycle the board could not
@@ -657,6 +595,57 @@ of slots, but because the side *with* slots has nothing filed for it. §9c: all 
 ≥1 live blocker, **0 unparks**; LOOP-172 lost one edge when LOOP-258 closed and stays parked on
 LOOP-235. **Filed 0** — the one candidate deduped into LOOP-252 on a real reading of its ACs.
 
+### 2026-08-03 (pm, nineteenth fire) — both verifications survived execution; the loop's real stall is one unpopulated config key holding three green PRs
+
+`origin/main` is **`367e4c3`**; the product moved on code for the first time in three fires
+(`d00b786` LOOP-95, `8488a7b` LOOP-206 — both landed *during* my previous fire, after its review
+SHA). Lenses reset. Doc-watch hash `c85bbe08` unchanged — **44 fires with no foreign doc edit**.
+
+**Both In-Review items closed `Done`, verified by execution against the merged tree, not by diff.**
+The decisive evidence in each case was outside the test suite: I ran the merged **reaper against
+this machine's real four-daemon fleet** (it reaped nothing — the live daemons run an older build
+with no `service` marker, so it could not identify them and correctly refused to act: fail-closed
+on real infrastructure, a stronger statement than the fixture makes); and I ran the merged CLI's
+`--kaizen --json` against the **live board** and compared every field to the rendered page
+(identical, because both read one core — which is the literal claim AC4 makes, not the in-test
+proxy). Per-AC detail lives on LOOP-95 / LOOP-206; it does not belong here.
+
+**The real bottleneck this fire is not the board — it is one absent config key.**
+`team.agentReviewers` is unpopulated, so merge-guard counts `chatgpt-codex-connector` as a blocking
+human. Verified on the forge: **#134, #145 and #146 are ALL `MERGEABLE` + `CLEAN` right now**, each
+held solely by unresolved Codex threads; #134 is at review **round 12** (10 fix commits, 9 senior
+fires). senior-dev parked LOOP-235 `Human-Blocked` correctly — option A is a config mutation,
+option B is risk-acceptance on a `sensitive` leak guard, and both are operator-only. What was
+missing was the **size** of the decision, so I put it on the ticket: the gap holds **six** tickets,
+and LOOP-236 → LOOP-237 → LOOP-238 is the context-compression chain under LOOP-228, **the
+operator's own stated P1**. An AI reviewer against a `--strict` gate has no terminating state by
+construction; every extra round is a full senior fire spent on remediation *text*.
+
+**§9c: one unpark, ten correctly held.** LOOP-137's only blocker closed, so I dropped `blocked` and
+retired the edge — but left it in `Backlog` rather than bouncing it to `Todo`: §9c's "back to Todo"
+is for work parked *out of* Todo, and jumping a never-promoted ticket past the depth cap would
+launder a promotion. I re-scoped it too: it was filed on "all 64 ports occupied", and today's fleet
+is four listeners with a **version split** (three `_team` at v1.12.0 beside `loop` at v1.14.0), so
+its check needs a duplication/skew axis alongside saturation.
+
+**One ticket filed — LOOP-271 — and its value is that it names a cause, not an instance.**
+`metrics --kaizen` printed a full panel for `[fixture]`, a project this workspace declares
+`scratch:true` and `rotation.ts` guarantees can never fire. Cause: `deliveryProjects()` filters
+`_team` **only**, so four consumers re-apply `!p.scratch` by hand and every consumer written since
+is scratch-blind by default — metrics (3 sites) and the web (2 queries) already are.
+
+**Structural picture — ninth consecutive measurement.** Junior **10/10** unblocked `Todo` (exactly
+at cap, down from 12 — the two verifications drained it); senior **4/10** with **zero** senior-tier
+Backlog rows. Promotion correctly **0** on both tiers: junior has no headroom, senior has headroom
+and nothing eligible. I did **not** manufacture senior work to feed the idle tier — §21b routes by
+the work's nature, and an idle expensive tier is a cheaper mistake than an invented design.
+
+**Not filed, deliberately:** the duplicated `_team` fleet is LOOP-252 / LOOP-261 / LOOP-137, all
+open — recorded as evidence on LOOP-137. The kaizen ratchet rendering `… → 90 (1.8.1) → 90` is a
+display duplicate the implementer self-flagged; a nit, and I closed the correct increment rather
+than holding it hostage.
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -689,6 +678,26 @@ LOOP-235. **Filed 0** — the one candidate deduped into LOOP-252 on a real read
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, nineteenth fire) — a cancelled CI run on a superseded SHA is not a red gate; read
+  the conclusion of the tree that CONTAINS the change, not of the commit that introduced it.** Both
+  tickets I verified this fire had `conclusion: cancelled` on their own commit — GitHub's concurrency
+  group kills an in-flight run the moment the next push lands, so on a busy branch the *normal* state
+  of a mid-stack commit is "cancelled", not "green". Taking that at face value would have verify-failed
+  two correct increments for an infrastructure artefact. **STANDING: resolve a merged change's CI by
+  finding the newest ancestor-containing SHA with a completed conclusion and reading THAT
+  (`git log <sha>..origin/main` to prove containment); never read a `cancelled` as a fail, and never
+  read a green on a sibling branch as certifying your tree.**
+
+- **2026-08-03 (pm, nineteenth fire) — an exclusion applied at the call site is a convention; only an
+  exclusion applied at the seam is a contract.** `deliveryProjects()` filters `_team` and nothing
+  else, so four separate consumers re-apply `!p.scratch` by hand and every consumer written since is
+  silently scratch-blind (LOOP-271). The defect is not that metrics forgot — it is that the helper's
+  signature made forgetting the default. **STANDING: when a marker means "exclude this everywhere",
+  the shared accessor excludes it and callers opt IN to see it; a `filter()` repeated at N call sites
+  is an N+1'th bug waiting for the next caller.** Same disease as the "third un-unified copy of what
+  is servable" (LOOP-169) — count the copies of a predicate before fixing the instance you found.
+
 
 - **2026-08-03 (pm, eighteenth fire) — when a tracker's remaining acceptance can only be satisfied by
   a ticket the tracker itself blocks, the tracker is the side that must yield.** LOOP-258's AC3 was
