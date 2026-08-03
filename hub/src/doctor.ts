@@ -570,12 +570,12 @@ function unignoredBundleArtifacts(root: string): string[] {
 }
 
 // W27 helper — extracted to keep doctorWorkspace CC in budget (LOOP-244). Best-effort; never throws.
-// Flags non-terminal null-assignee tickets that are unreachable by every actor in a split-dev project.
-// Predicate per PM grooming: ALL Backlog+null rows (promotion queue is assignee-keyed), Todo/InProgress
-// (no dev tier can pick), InReview without a dev-tier label (label-present InReview is landable via the
-// servable.ts tier-label fix — only null-assignee InReview WITHOUT a tier label is truly stuck).
+// Flags non-terminal null-assignee tickets unreachable by every actor. Backlog+Todo are only
+// flagged in split-dev (mine() makes null Todo dev's own in legacy; PM's backlog queue is label-blind).
+// In Progress: always flag — mine() only applies to Todo; inProgress keys on strict assignee===actor.
+// InReview: reachable iff (a) qa/pm label (verify slice, both modes) OR (b) dev-tier label AND
+// devSplit:true (servable.ts tier-label fallback, split-dev only; not wired for legacy dev actor).
 function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplitOn: boolean, warn: (m: string) => void): void {
-  if (!devSplitOn) return;
   try {
     const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
     const DEV_TIERS = ["junior-dev", "senior-dev"];
@@ -585,15 +585,22 @@ function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplit
       if (TERMINAL.has(row.state)) continue;
       const labels = JSON.parse(row.labels) as string[];
       const tier = DEV_TIERS.find((t) => labels.includes(t)) ?? null;
-      if (row.state === "Backlog") {
-        stranded.push({ id: row.id, tier });                  // null assignee → unreachable (promotion queue is assignee-keyed)
+      if (row.state === "Backlog" || row.state === "Todo") {
+        // legacy: mine() makes null Todo dev's own; Backlog is PM-visible via label-blind backlog queue
+        if (!devSplitOn) continue;
+        stranded.push({ id: row.id, tier });
         continue;
       }
       if (row.state === "In Review") {
-        if (!tier) stranded.push({ id: row.id, tier: null }); // no tier label → not landable by any dev tier
-        continue;                                              // tier label present → landable via servable.ts fix
+        // Reachable via qa/pm owner label (verify slice, both modes) OR dev-tier label in split-dev
+        // (servable.ts tier-label fallback is only wired for non-dev split-dev actors).
+        const verifiable = labels.includes("qa") || labels.includes("pm");
+        const landable = devSplitOn && tier !== null;
+        if (!verifiable && !landable) stranded.push({ id: row.id, tier: null });
+        continue;
       }
-      stranded.push({ id: row.id, tier });                    // Todo / In Progress — always unreachable with null assignee
+      // In Progress — mine() only applies to Todo; inProgress keys on strict assignee===actor in both modes
+      stranded.push({ id: row.id, tier });
     }
     if (stranded.length === 0) return;
     const idList = stranded.map((s) => s.id).join(", ");
