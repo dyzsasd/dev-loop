@@ -60,6 +60,7 @@ export interface UsageCell {
   cacheWriteTokens: number | null;
   costUsd: number | null;         // summed over rows whose usage.costUsd!=null; null when costMetered===0
   costMetered: number;            // rows contributing a costUsd (money coverage)
+  costPriced: number;             // rows with costUsd > 0 (excludes zero-cost rate-limit failures)
 }
 export interface UsageReport {
   windowMs: number;
@@ -140,7 +141,7 @@ const sumNull = (a: number | null, b: number | null): number | null =>
   a === null && b === null ? null : (a ?? 0) + (b ?? 0);
 
 function emptyCell(): UsageCell {
-  return { fires: 0, metered: 0, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null, costMetered: 0 };
+  return { fires: 0, metered: 0, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null, costMetered: 0, costPriced: 0 };
 }
 
 function addToCell(cell: UsageCell, r: FireRow): void {
@@ -151,7 +152,7 @@ function addToCell(cell: UsageCell, r: FireRow): void {
   cell.outputTokens = sumNull(cell.outputTokens, r.usage.outputTokens);
   cell.cacheReadTokens = sumNull(cell.cacheReadTokens, r.usage.cacheReadTokens);
   cell.cacheWriteTokens = sumNull(cell.cacheWriteTokens, r.usage.cacheWriteTokens);
-  if (r.usage.costUsd !== null) { cell.costUsd = (cell.costUsd ?? 0) + r.usage.costUsd; cell.costMetered++; }
+  if (r.usage.costUsd !== null) { cell.costUsd = (cell.costUsd ?? 0) + r.usage.costUsd; cell.costMetered++; if (r.usage.costUsd > 0) cell.costPriced++; }
 }
 
 export function usageReport(rows: FireRow[], windowMs: number, opts: { groupBy?: UsageDimension; nowMs?: number } = {}): UsageReport {
@@ -713,8 +714,8 @@ export function renderFlow(report: UsageReport, throughput: number | null, board
   const cpa = cell.costUsd !== null && throughput !== null && throughput > 0
     ? usd(cell.costUsd / throughput) + "/accepted-change"
     : "unavailable";
-  const perFire = cell.costUsd !== null && cell.fires > 0
-    ? usd(cell.costUsd / cell.fires) + "/fire"
+  const perFire = cell.costUsd !== null && cell.costPriced > 0
+    ? usd(cell.costUsd / cell.costPriced) + "/priced fire"
     : "unavailable";
   console.log(`flow — last ${days}d`);
   console.log(`cost: ${usd(cell.costUsd)}  (${cell.costMetered} of ${cell.fires} fires priced)`);
@@ -821,7 +822,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
           tokens: { inputTokens: c.inputTokens, outputTokens: c.outputTokens, cacheReadTokens: c.cacheReadTokens, cacheWriteTokens: c.cacheWriteTokens },
           throughput,
           costPerAccepted: c.costUsd !== null && throughput !== null && throughput > 0 ? c.costUsd / throughput : null,
-          perFire: c.costUsd !== null && c.fires > 0 ? c.costUsd / c.fires : null,
+          perFire: c.costUsd !== null && c.costPriced > 0 ? c.costUsd / c.costPriced : null,
           boardNote: flowBoardNote,
         };
       }
