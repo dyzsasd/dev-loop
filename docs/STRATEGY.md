@@ -570,56 +570,9 @@ The file doctor resolves a live credential *from* is the one file it never check
 
 Four `Unblocked-by:` markers I had reported as retired were never parsed: `blocked-by.ts` `MARKER_RE` anchors the keyword to the line's first non-whitespace token, and I had written them bold-wrapped behind prose — **4 of the 6 edge retirements ever written on this board were silently discarded**, with no exit code, output or doctor code distinguishing the two forms. Structural, not clerical: `ticket create --blocked-by` *emits* the canonical form, while retirement has no emitter at all and is 100% hand-typed into a validating-nothing `comment add` → **LOOP-287**. `consistency` lens: LOOP-271 predicted every new `deliveryProjects()` consumer would be scratch-blind, and `63c98ec` landed one hours later (`hub.ts:54`) — folded into LOOP-271 rather than filed twice (§8), widening its AC1 from `scratch` to *schedulable*. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 26)`; the rulings stay in the Decisions log below.
 
-### 2026-08-03 — twenty-seventh fire (pm): the guard reached the validator, not the other door
+### 2026-08-03 (pm, twenty-seventh fire) — [ARCHIVED]
 
-Product moved twice since the last review (`63c98ec` → `1626411`): `4213a08` made `remove-project`
-and `repair --reap` fail closed on an unreadable `hub.db`, and `1626411` (LOOP-245) rejected
-hex/octal/binary literals for numeric config fields. Both are *guards on the config-mutation
-surface*, so the lens list reset and re-seeded on **`trust-safety`**, focused by that diff.
-
-**`trust-safety` lens — the same field, two doors, one lock.** LOOP-245 put `PLAIN_DECIMAL_RE` inside
-`team-edit.ts`'s shared `coerce()`, which is broader than its own commit message claims ("budget
-config fields") — every `team set` numeric field is now guarded. But `dev-loop.json` has a **second
-write path** for the same keys, and it never calls `coerce()`: `addProject` hand-assigns at
-`team-edit.ts:235`, `p.weight = Number(o.weight)`. Measured on a build of `origin/main`, same tree,
-same field, same config key — `team set projects.alpha.weight 0x64` is refused; `team add-project
-alpha --weight 0x64` exits 0 and writes `100`. All four literal forms (`0x64`, `0o144`, `0b1100100`,
-`1e2`) behave identically on both doors, in opposite directions.
-
-The E08 schema validator cannot backstop this, and the control proves why: `--weight abc` **is**
-caught (`weight must be a finite number >= 0`), because NaN is not a legal weight — but `100` is.
-Once the string is coerced the operator's intent is gone; the only place it still exists is the raw
-argument at the CLI boundary, which is the one place `addProject` never checks it. That is exactly
-why LOOP-245's fix belonged in `coerce()` and not in the schema. Swept the rest of the surface
-(`grep 'Number(\|parseInt(\|parseFloat('` across `team-edit`/`team-init`/`team-repair`/`seed`): three
-hits, two inside `coerce()`, one at line 235 — a one-line seam, not a class. → **LOOP-288** (junior,
-P3). `weight` is scheduler input, so a silently reinterpreted value skews which project the loop
-works on, and nothing downstream can detect a well-formed number.
-
-**Grooming found two tickets whose premises had decayed.** `4213a08` shipped a fail-closed regression
-block that *incidentally* falsified two of LOOP-281's three stated claims: `--force` is now exercised
-(`team-edit.ts:336-338`) and the ticket-count refusal is now asserted (line 321) — which also makes
-the guard inversion-proof for that case, killing the ticket's headline thesis. What survives is
-narrower and real: that `--force` test runs against a **deliberately corrupted** `hub.db`, so it
-cannot read row counts, and the 9-table cascade is asserted nowhere. Rewrote LOOP-281 to the
-surviving gap with an explicit *do-not-re-add* list. Separately, LOOP-286 (senior, `sensitive`) asked
-for `--dry-run` on `remove-project` while `removeProject` reads only `rest.includes("--force")` and
-validates nothing else — so `--dryrun` would still run the live cascade. Added the unknown-flag
-rejection AC: without it, adding `--dry-run` moves the trap one keystroke away.
-
-**A settled ruling that lives only in a comment is not a spec.** LOOP-218 was ruled on 2026-08-01 —
-three proposals accepted, fallback pinned, regression tests named — and the body was never updated,
-so it carried **zero acceptance criteria** and sat unpromotable at the head of the junior FIFO for
-two days. Folded the ruling in verbatim as AC1–AC5 (nothing new), re-derived its load-bearing claim
-against today's tree (`merge-guard.ts` still hardcodes `"operator"`, now lines **100/112** — moved
-from 95/103 when LOOP-216 landed), noted that LOOP-216 is now Done so its collision warning is spent,
-and promoted it.
-
-**Filed 1, groomed 3, promoted 5** (LOOP-286 senior; LOOP-202, LOOP-203, LOOP-217, LOOP-218 junior).
-Senior **7**/10, junior **10**/10 — junior drained 2 and senior 1 *during* the fire, which is the
-loop working. Zero cancel-fodder for the third consecutive fire. §9c: all 10 parked tickets carry
-exactly one live edge, every blocker still open, zero dead edges — re-derived with the real parser,
-not carried.
+`trust-safety` lens: LOOP-245's `PLAIN_DECIMAL_RE` lives inside `team-edit.ts`'s shared `coerce()`, but `dev-loop.json` has a SECOND write path for the same keys that never calls it — `addProject`'s hand-assigned `p.weight = Number(o.weight)` (`team-edit.ts:235`), so `team set projects.alpha.weight 0x64` is refused while `team add-project alpha --weight 0x64` exits 0 and writes `100` (**LOOP-288**). The E08 schema validator cannot backstop it: once the string is coerced the operator's intent is gone, and `100` is a legal weight where `NaN` is not. Grooming refuted two decayed premises (`4213a08` had incidentally falsified two of LOOP-281's three claims; LOOP-286's `--dry-run` ask needed an unknown-flag-rejection AC or `--dryrun` would still run the live cascade), and folded LOOP-218's two-day-old comment-only ruling into its body verbatim as AC1–AC5. **Filed 1, groomed 3, promoted 5.** Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 27)`; the three rulings stay in the Decisions log below.
 
 
 ### 2026-08-03 — twenty-eighth fire (pm): the guard that was written to make a lethal helper unreachable
@@ -671,6 +624,65 @@ so **groom-only**, zero promoted by Job B2. Zero cancel-fodder for the fourth co
 Filed **1**, groomed **1** (LOOP-219, premise re-derived against `2292efc` and it survives).
 
 
+### 2026-08-03 — twenty-ninth fire (pm): the amendment was read, and half-applied
+
+Product moved one code commit (`df8c7fb` → `2aed555`, plus my own doc land `b31d162`), so the lens
+list reset and re-seeded on **`data-analytics`**, focused by that diff — which is also the commit
+Job A had to verify. Doc-watch hash `c864c5cf018cb338` matched the stored baseline: **54 fires,
+still no foreign edit**. `needs-pm` **0**, `Human-Blocked` **0**.
+
+**§3 verify-fail on LOOP-239 → LOOP-292, and the reason it failed is the reason to distrust
+comment-borne scope.** The `FireMetrics` half is genuinely good and stays landed: `costMeteredFires`
+now counts `costUsd > 0` (**264 < 315** on the live ledger), `byAgent[a].usdPerFire` exists, and both
+amended sum invariants hold exactly (`Σ costUsd = $1336.6560`, `Σ costMeteredFires = 264`). Every
+body AC passes; the suite is green from a scrubbed `/tmp` tree. What did not ship is what **two**
+binding amendments added — the operator's *"Revised scope"* item 2 (*"add the per-agent division to
+`--cost --by agent` … so nobody ever hand-computes a per-agent USD/fire off raw JSONL again"*) and my
+own *"align `renderCostCell` and the digest coverage line … print per-agent $/fire off the priced
+denominator"*. `2aed555` touches `fireMetrics()` only; both render sites are byte-identical. So on
+merged `origin/main`:
+
+```
+cost: $1336.6560  (315 of 607 fires priced)     # 315 = costMetered
+cost-per-fire: $5.0631/priced fire              # divides by costPriced = 264
+```
+
+$1336.6560 ÷ 315 = **$4.2434** against a printed **$5.0631** — the 19.3 % self-contradiction this
+ticket documented as its own headline evidence, still printing, unchanged, on the tree that was
+supposed to close it. `--cost --by agent` still never divides and still offers the wrong count to
+divide by: hand-computing gives senior-dev $7.03 against a true $9.30 (−24.5 %). The ticket's stated
+purpose is verbatim the thing that still cannot be done.
+
+**The build proves the comments were read.** The implementer followed the *comment-borne* AC2
+replacement — the fixture asserts `0.075` arithmetic rather than the stale board constants the body's
+AC2 text still names — and skipped the *comment-borne* render scope. Not an oversight about where the
+spec lived; a selective application of a spec that was demonstrably in hand. The fix is small
+(`UsageCell.costPriced` **already equals** `FireMetrics.costMeteredFires`, 264 = 264 — no accounting
+left to reconcile, only which field each render site shows and what it calls it), so it routed up to
+senior as `Mode: direct-code` per §3 with the landed half explicitly fenced off as do-not-rebuild.
+
+**Grooming — LOOP-219's numerator froze while its denominator grew, and the share reported progress
+nobody made.** Re-derived on 609 rows: discarded spend **$40.27, unchanged since filing**; priced
+spend **$510.66 → $1340.89**; so the headline share fell **7.9 % → 3.0 %** and the per-agent gradient
+the ACs call *"the actionable part"* collapsed from **0–13.1 %** to **0–4.7 %** — with nothing fixed.
+The last `suspectError` row is `2026-08-01T00:08:37Z`; since then **$832.47 over 159 priced fires,
+zero discards**. That also falsifies the ticket's own *"structural tax scaling with duration"*
+framing: it is episodic, tied to runner restarts, and will jump on the next one. The defect is
+untouched (no `suspectError` branch in the cost path). **Folded all of it into the BODY** — snapshot
+warning, a dated re-derivation section, AC2's `13.1 %` reproduction target replaced by fixture
+arithmetic plus two durable invariants, and a note that `costMeteredFires` changed meaning under it
+in `2aed555` (a no-op for discards: of 19 rows, 10 pre-metering and 9 priced, none zero/null-cost).
+
+§9c: `2aed555`'s ticket going terminal retired the board's one dead edge — **LOOP-267 unparked**
+(and its actual dependency, the per-agent aggregation, really did land; the unpark comment says so,
+because a `Canceled` blocker otherwise reads as abandoned work). The other 7 parked tickets each hold
+exactly one live edge on a still-open blocker.
+
+Senior **7→8**/10, junior **10**/10 with **0 senior-tier Backlog rows** — so **promoted 0**, filed
+**1**, groomed **1**, canceled **1** (the verify-fail). Fifth consecutive fire with zero
+cancel-fodder. Throughput, not discovery, is still the binding constraint.
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -703,6 +715,36 @@ Filed **1**, groomed **1** (LOOP-219, premise re-derived against `2292efc` and i
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, twenty-ninth fire) — an amendment applied SELECTIVELY is proof it was read, not
+  proof it was missed; put scope in the BODY or expect exactly the half you wrote last to ship.**
+  LOOP-239 carried two binding comment-borne amendments. The build honored one (AC2's fixture-
+  arithmetic replacement — the fixture asserts `0.075`, not the body's stale board constants) and
+  silently dropped the other (the render-side scope both the operator and I had added), shipping a
+  correct JSON half while the printed surface kept contradicting itself by 19.3 %. The usual excuse —
+  *"the implementer only read the description"* — is refuted by the ticket's own artifact. **Rule:
+  the yesterday-ruling *"write the amendment into the BODY"* is not a style preference, it is the
+  only form that gets applied as a unit; a comment-borne scope change is picked over, and what gets
+  picked is what is cheap. When you amend, `ticket update --description-file` the body — and when you
+  verify, triage against body-plus-amendments, never against the checkboxes alone (every checkbox on
+  LOOP-239 passed).** Corollary: a fix that lands the model and leaves the renderer ships the defect
+  intact to the only audience the ticket named — the operator reads the printed surface, not the
+  JSON. → **LOOP-292**, and applied the same hour to **LOOP-219**'s body.
+
+- **2026-08-03 (pm, twenty-ninth fire) — when a ticket's numerator freezes and its denominator grows,
+  its headline SHARE reports progress that nobody made.** LOOP-219's discarded spend has been
+  **$40.27 since it was filed**; priced spend went $510.66 → $1340.89; so its headline fell
+  **7.9 % → 3.0 %** and its per-agent gradient collapsed **0–13.1 % → 0–4.7 %** with the defect
+  entirely unfixed — a decay that reads exactly like a fix landing. It also falsified the ticket's
+  own *"structural tax scaling with duration"* framing: the last discard was two days and $832.47 of
+  priced spend ago, so the phenomenon is **episodic** (runner restarts), not structural, and will
+  jump on the next one. **Rule: a stale share is worse than a stale level — a level that decays is
+  visibly stale, a share that decays looks like progress. When grooming re-derives a premise, re-count
+  the NUMERATOR and the DENOMINATOR separately and say which moved; and never leave a live-board share
+  in an AC as a reproduction target — judge on fixture arithmetic, and keep only invariants
+  (`delivered + discarded == gross`) as live-board checks.** Sharpens the twenty-second-fire ruling
+  (*a share cannot falsify a claim about a level*) with its converse: **a share can silently retire
+  one.** Same trap this board already amended out of LOOP-239's AC2.
 
 - **2026-08-03 (pm, twenty-eighth fire) — a guard written to make a `die()`ing helper unreachable
   is a CONTRACT WITH THAT HELPER, and nothing enforces it.** `applyConfigCadence` pre-screens
@@ -780,49 +822,9 @@ Filed **1**, groomed **1** (LOOP-219, premise re-derived against `2292efc` and i
   AC gap to close on it, not a new ticket — check whether the existing ACs would actually have covered
   the surface you just found.** → LOOP-271 (AC1 widened to *schedulable*, AC6/AC7 added).
 
-- **2026-08-03 (pm, twenty-fifth fire) — audit a guard list against what each artifact HOLDS, not
-  against what each check was written for.** Doctor's three committability guards hard-fail on
-  `hub.db` (board content, no credentials), name an *encrypted* bundle and a marker file as W06
-  leaks, and never name `.dev-loop/secrets.env` — the one artifact stored as **plaintext
-  credentials**. A workspace that follows the hard fail's own remediation exits `DOCTOR_OK` with that
-  file untracked and un-ignored. The guards grew one incident at a time, each enumerating the
-  artifact that prompted it. **Rule: when a check works from a list of names, the audit is not "does
-  each entry fire?" but "sort every artifact by what a leak would cost, and read the list against
-  that order" — the gap is the artifact nobody has had an incident about yet.** → LOOP-285.
-- **2026-08-03 (pm, twenty-fifth fire) — retire a satisfied dependency edge when you observe it, not
-  when it finally blocks something.** Four §9c edges sat `Done`/`Canceled` for several fires with no
-  `Unblocked-by:` marker. They were harmless — a dead edge can only cause a false *non*-unpark — and
-  precisely because they were harmless, three consecutive fires each re-derived that and carried a
-  note forward. **Rule: cosmetic state still costs a re-derivation every time it is read; clear it at
-  first observation. A carried caveat is a tax paid per fire, not once.**
-- **2026-08-03 (pm, twenty-fifth fire) — a queue that cannot drain is not therefore stale; test the
-  tail before cancelling any of it.** Junior at cap for thirteen fires and 71 Backlog rows made a
-  rotted tail the attractive hypothesis; four of the oldest rows all still reproduced against
-  `origin/main`, one of them inside this fire's own transcript. **Rule: grooming may cancel only on
-  an observed premise failure, never on age or queue pressure — cancelling live work to make a depth
-  number look healthy destroys the record and leaves the real constraint, throughput, unmeasured.**
-- **2026-08-03 (pm, twenty-fourth fire) — a cleanup procedure's residue can be its OUTPUT rather
-  than its waste; establish which before stripping it.** I carried a plan to delete this log's
-  `[ARCHIVED]` stubs as monotone residue — my own prior ruling. 3 of 13 hold the **only** copy of
-  clauses still in force, and the largest (12 117 B) is the `STANDING RULES IN FORCE` distillation
-  that made archiving ~54 KB safe. §20 R2 archives *detail* and gives an archived period's
-  still-in-force *rules* no home, so every pass must leave one. **Rule: before deleting what a
-  procedure leaves behind, establish whether the leftover is the procedure's product. Load-bearing
-  residue is a missing section in the procedure, not a discipline failure.**
-- **2026-08-03 (pm, twenty-fourth fire) — a pre-flight that never asserts its own subject can only
-  ever be a green light.** `dev-loop doctor` exits **0** with `DOCTOR_OK` outside a workspace: it
-  falls silently to the machine-global db, reports another workspace's projects, and skips
-  W01/W18/repo/fires/landing entirely, while 18 of 19 sibling verbs refuse to act there.
-  LOOP-117/168/199 fixed rungs 1–2 of that db ladder; nothing covers rung 3. **Rule: a surface whose
-  verdict means "safe to proceed" must state what it examined — a green verdict over an unnamed
-  subject is worse than no verdict, because it is trusted.** → LOOP-284.
-- **2026-08-03 (pm, twenty-fourth fire) — a `try` cannot catch what it does not `await`, so an
-  intent written as a comment is not an implemented intent.** `team.ts:49-53` catches `WsNotFound`
-  under a comment reading *"NEVER a raw stack trace"*; `team repair` is the one async subcommand
-  dispatched without `await`, so its rejection escapes the block written to contain it, while its
-  async siblings carry `await` and behave. **Rule: verify a stated intent by exercising the surface,
-  not by reading the handler — in all six cases the information was complete and only the framing
-  was lost, which no unit test of the thrower would catch.** → LOOP-283.
+- **2026-08-03 (pm, twenty-fifth fire) — [ARCHIVED] 3 rulings** (audit a guard list against what each artifact HOLDS, not against how alarming its name sounds — doctor hard-fails on a credential-free `hub.db` while plaintext `secrets.env`, the file it resolves live keys FROM, is named nowhere in the commit guard (**LOOP-285**); retire a satisfied dependency edge when you OBSERVE it, not when the unpark sweep next runs — and re-derive edges with the real parser every fire rather than trusting your own prior report; a queue that cannot drain is not therefore stale — grooming may cancel only on an observed premise failure, never on age or queue pressure, since cancelling live work to make a depth number look healthy destroys the record and leaves throughput unmeasured) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 27.
+
+- **2026-08-03 (pm, twenty-fourth fire) — [ARCHIVED] 3 rulings** (a cleanup procedure's RESIDUE can be its OUTPUT rather than its waste — establish which before stripping it, because load-bearing residue is a missing section in the procedure, not a discipline failure, and this is why every R2 pass must leave a `STANDING RULES IN FORCE` distillation; a pre-flight that never asserts its own SUBJECT can only ever be a green light — a verdict meaning "safe to proceed" must state what it examined, `dev-loop doctor` exiting `DOCTOR_OK` outside any workspace being the case (**LOOP-284**); a `try` cannot catch what it does not `await`, so an intent written as a comment is not an implemented intent — verify a stated intent by exercising the surface, not by reading the handler (**LOOP-283**)) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 27.
 
 - **2026-08-03 (pm, twenty-third fire) — [ARCHIVED] 3 rulings** (a bounding procedure whose RESIDUE is monotone sets a slope, not a ceiling — compute what a cleanup leaves behind per invocation against what arrives per invocation, and run the procedure against its own residue; a threshold no surface computes is a suggestion — ask which surface computes a document's stated numeric limit, because an unread limit and no limit produce the same artifact (**LOOP-282**); when a corpus has an enforced home and an unenforced one, content migrates to the unenforced one and the migration looks like diligence — look for a WRITE PERMISSION asymmetry before concluding either corpus is mis-sized) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 26.
 
