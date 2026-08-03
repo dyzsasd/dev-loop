@@ -129,6 +129,16 @@ ok(!!realSingleAutoMerge && !!realSingle2 && realSingleAutoMerge.text === realSi
 ok(!!bare && !!realSingleAutoMerge && bare.hash !== realSingleAutoMerge.hash,
   "LOOP-236: pruned-bare vs auto-merge-on have different hashes");
 
+// Fixture E: legacy-view shape ({name} not {ref}) — toLegacyView projects repos as {name, flat facts}
+// Without the name-fallback fix, all entries resolve to null → empty repos → §12c pruned incorrectly.
+const legacyViewShape = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
+  { repos: [{ name: "dev-loop", path: "/tmp/dev-loop", autoMerge: true, landing: "pr" }] },
+  { "dev-loop": { autoMerge: true, landing: "pr" } });
+ok(!!legacyViewShape && !legacyViewShape.pruned.includes("12c"),
+  "LOOP-236: legacy-view shape ({name} not {ref}) with autoMerge:true → §12c NOT pruned");
+ok(!!legacyViewShape && legacyViewShape.pruned.includes("19"),
+  "LOOP-236: legacy-view shape single repo → §19 pruned");
+
 const featured = realMultiRepo; // alias for assertions below that use the 'featured' name
 ok(!!featured && featured.text.includes("## 19. Multiple repos"),
   "multi-repo featured config ships §19");
