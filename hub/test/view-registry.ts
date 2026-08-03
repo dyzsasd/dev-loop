@@ -13,7 +13,7 @@ const seg = (p: string) => p.split("/").filter(Boolean); // the daemon's normali
 // the table: one entry per HTML page, GET-only (F4/D3 added the docs system: /docs index, /doc/:slug
 // viewer, history, diff; /roadmap stays as a 302 onto the roadmap doc page)
 const patterns = VIEW_ROUTES.map((r) => r.pattern);
-const EXPECT = ["/", "/roadmap", "/activity", "/usage", "/reports", "/reports/:agent/:level/:date", "/ticket/:id",
+const EXPECT = ["/", "/roadmap", "/activity", "/usage", "/kaizen", "/reports", "/reports/:agent/:level/:date", "/ticket/:id",
   "/docs", "/doc/:slug", "/doc/:slug/history", "/doc/:slug/diff"];
 ok(VIEW_ROUTES.length === EXPECT.length && EXPECT.every((p) => patterns.includes(p)),
   `the registry holds exactly the ${EXPECT.length} HTML view routes (got: ${patterns.join(" · ")})`);
@@ -21,6 +21,9 @@ ok(VIEW_ROUTES.every((r) => r.method === "GET"), "every view route is method:GET
 ok(matchViewRoute("GET", seg("/usage"))?.route.pattern === "/usage", "LOOP-126: GET /usage matches its literal entry");
 ok(matchViewRoute("HEAD", seg("/usage")) !== null, "LOOP-126: HEAD /usage also matches (GET implies HEAD)");
 ok(patterns.filter((p) => p === "/usage").length === 1, "LOOP-126: /usage is registered exactly once");
+ok(matchViewRoute("GET", seg("/kaizen"))?.route.pattern === "/kaizen", "LOOP-206: GET /kaizen matches its literal entry");
+ok(matchViewRoute("HEAD", seg("/kaizen")) !== null, "LOOP-206: HEAD /kaizen also matches (GET implies HEAD)");
+ok(patterns.filter((p) => p === "/kaizen").length === 1, "LOOP-206: /kaizen is registered exactly once");
 
 // literal + param matching
 ok(matchViewRoute("GET", seg("/"))?.route.pattern === "/", "GET / matches the board entry (root path → [] segments)");
