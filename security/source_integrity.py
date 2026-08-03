@@ -68,7 +68,8 @@ RELEASE_SCRIPT_EXACT = {
     "build": (
         "rm -rf dist .claude-plugin skills references hooks config && "
         "tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/server.js && "
-        "cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./"
+        "cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./ && "
+        "cp ../docs/design/quality-gauntlet.md ./references/quality-gauntlet.md"
     ),
     "test": "node test/run-all.ts",
 }

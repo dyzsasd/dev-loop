@@ -14,6 +14,7 @@ import { boardPage, type BoardFilters } from "./board.ts";
 import { ticketPage } from "./ticket.ts";
 import { activityPage } from "./activity.ts";
 import { usagePage } from "./usage.ts";
+import { kaizenPage } from "./kaizen.ts";
 import { reportsRoot, reportsIndexPage, reportPage } from "./reports.ts";
 import { docsIndexPage, docPage, docHistoryPage, docDiffPage, roadmapDocSlug } from "./docs.ts";
 
@@ -86,6 +87,12 @@ export const VIEW_ROUTES: ViewRoute[] = [
   {
     method: "GET", pattern: "/usage", handler: (c) =>
       html(200, pg(c, `usage · ${c.projectKey}`, c.projectKey, usagePage(c.db, c.projectId, c.projectKey, Date.now()), { active: "usage", drafts: c.draftsPending() })),
+  },
+  // GET /kaizen — self-improvement evidence surface (LOOP-206, design kaizen-panel). DL-2: GET-only,
+  // query_only db, server-rendered, no external deps. Reads kaizenReport (shared core with CLI).
+  {
+    method: "GET", pattern: "/kaizen", handler: (c) =>
+      html(200, pg(c, `kaizen · ${c.projectKey}`, c.projectKey, kaizenPage(c.db, c.projectId, c.projectKey, Date.now()), { active: "kaizen", drafts: c.draftsPending() })),
   },
   // GET /reports — the agent reports index (DL-10, read-only filesystem view; empty state if absent).
   {

@@ -294,7 +294,7 @@ export { STYLE };
 // The project-scoped nav pages, in nav order; `active` marks the current one (aria-current="page" +
 // the 2px brand underline — the 2026-07 shell spec's active state). F4/D3: "docs" replaced "roadmap"
 // (GET /roadmap is now a 302 onto the roadmap DOC page, reachable from the /docs index).
-const NAV = ["board", "docs", "activity", "usage", "reports"] as const;
+const NAV = ["board", "docs", "activity", "usage", "kaizen", "reports"] as const;
 export interface PageOpts {
   active?: (typeof NAV)[number]; // which nav item is the current page (absent ⇒ none marked)
   hub?: boolean;                 // a HUB-level page (project index / unknown-project 404): no project nav, all-projects SSE scope
