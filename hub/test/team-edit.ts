@@ -306,6 +306,37 @@ try {
   const applyReapDbChk = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT id FROM projects WHERE key=?').get('to-reap');console.log(r?'found':'gone');db.close()})`, join(reapWs, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
   ok(/gone/.test(applyReapDbChk.stdout), "LOOP-221 AC2: 'to-reap' hub.db row deleted after apply");
 
+  // ═══ LOOP-280: remove-project / repair --reap FAIL CLOSED on an unreadable hub.db ═══
+  // A present-but-unopenable hub.db (busy past busy_timeout / corrupt / permission denied) means the
+  // ticket count is UNKNOWN. Both mutators must refuse/skip — never silently treat the project as
+  // 0-ticket and discard its config entry, orphaning live tickets behind a fabricated "0-ticket" success.
+  const fcWs = join(tmp, "failclosed-ws");
+  run("team", ["init", "--dir", fcWs, "--key", "fc-team", "--backend", "service"]);
+  run("team", ["add-project", "victim", "--scratch"], { cwd: fcWs, extra: { DEVLOOP_HUB_DB: "" } });
+  const fcDb = join(fcWs, ".dev-loop", "hub.db");
+  // seed a LIVE ticket into 'victim' BEFORE corrupting the db (a fail-OPEN bug would orphan exactly this)
+  spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const pid=db.prepare('SELECT id FROM projects WHERE key=?').get('victim')?.id;if(pid)db.prepare("INSERT INTO tickets(id,project_id,title,type,state,priority,labels,created_by,created_at,updated_at)VALUES(?,?,'t','Bug','Todo',0,'[]','test','2026-01-01','2026-01-01')").run('vt-1',pid);db.close()})`, fcDb], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  // control (healthy db): remove-project correctly refuses because the guard reads tc=1
+  const fcControl = run("team", ["remove-project", "victim"], { cwd: fcWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(fcControl.code !== 0 && /ticket/.test(fcControl.out), "LOOP-280 control: healthy db refuses remove-project with a live ticket");
+  // corrupt hub.db so openDb() throws; drop the WAL/shm sidecars so there is no recovery path
+  for (const sfx of ["-wal", "-shm"]) rmSync(fcDb + sfx, { force: true });
+  writeFileSync(fcDb, Buffer.from("this is not a sqlite database ".repeat(16)));
+  // AC1: remove-project must REFUSE (fail closed) and leave the config entry intact
+  const fcRm = run("team", ["remove-project", "victim"], { cwd: fcWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(fcRm.code !== 0, "LOOP-280 AC1: remove-project refuses when hub.db is present but unreadable");
+  ok(/could not be opened|unreadable|verify/.test(fcRm.out), "LOOP-280 AC1: refusal names the unverifiable-db cause (not a false 'not found')");
+  ok("victim" in readJson(join(fcWs, "dev-loop.json")).projects, "LOOP-280 AC1: 'victim' survives in config after the refused remove-project");
+  // AC2: repair --reap must SKIP (fail closed), never reap + print a fabricated "0-ticket 0-repo" success
+  const fcReapOut = run("team", ["repair", "--reap"], { cwd: fcWs, extra: { DEVLOOP_HUB_DB: "" } }).out.replace(/\n/g, " ");
+  ok(!/victim.*reaped/.test(fcReapOut), "LOOP-280 AC2: repair --reap does NOT reap 'victim' on an unreadable db");
+  ok(/victim.*(unreadable|could not verify|skipping)/.test(fcReapOut), "LOOP-280 AC2: repair --reap skips 'victim' loudly (unverifiable ticket count)");
+  ok("victim" in readJson(join(fcWs, "dev-loop.json")).projects, "LOOP-280 AC2: 'victim' survives in config after the skipped reap");
+  // AC4: --force still deliberately bypasses on remove-project, even with an unreadable db
+  const fcForce = run("team", ["remove-project", "victim", "--force"], { cwd: fcWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(fcForce.code === 0, "LOOP-280 AC4: --force still removes 'victim' from config despite the unreadable db");
+  ok(!("victim" in readJson(join(fcWs, "dev-loop.json")).projects), "LOOP-280 AC4: 'victim' gone from config after --force");
+
   // ═══ add-repo --detect: deterministic detection, no LLM ═══
   // unit: the workflow job-name extractor never confuses step/with-level `name:` lines
   const wf = [
