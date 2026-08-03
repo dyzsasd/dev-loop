@@ -156,6 +156,7 @@ const DEFAULT_LAUNCH_PROFILES: Record<Agent, Record<CodingAgent, CodingAgentDefa
 
 type ProjectsConfig = {
   defaultProject?: string;
+  repos?: Record<string, unknown>; // workspace-level repo registry (flat RepoEntry facts; used by boot-prefix)
   projects?: Record<string, {
     devSplit?: boolean;
     // Two-level launch config (conventions §11 / config-schema):
@@ -903,7 +904,8 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   // rides stdin, see commandFor). Assembly failure fails OPEN: the fire boots in classic pull mode.
   const boot = opts.assembleBoot && profile.codingAgent === "claude"
     ? assembleBootCorpus(opts.root, opts.dataDir, agent, project, backend,
-        cfg?.projects?.[profileProject] as Record<string, unknown> | undefined) // config-aware selection: feature-off spans never ship
+        cfg?.projects?.[profileProject] as Record<string, unknown> | undefined,
+        cfg?.repos as Record<string, unknown> | undefined) // config-aware selection: feature-off spans never ship
     : null;
   if (opts.assembleBoot && profile.codingAgent === "claude" && !boot)
     console.warn(`[${agent}] --assemble-boot: corpus assembly unavailable — firing in §0a pull mode`);
@@ -1535,6 +1537,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       die(`this workspace was MOVED (bundle '${moved.bundle ?? "?"}' at ${moved.movedAt ?? "?"}) — the home now runs elsewhere; use \`dev-loop up --attach <url>\` here, or delete .dev-loop/moved.json to un-retire`, 1);
   } catch (e) { if ((e as { code?: string }).code !== "ERR_MODULE_NOT_FOUND") throw e; }
   const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
+  (cfg as ProjectsConfig).repos = ws.file.repos as unknown as Record<string, unknown>;
   const backend = ws.file.team.backend;
   // Model-provider routing: the TEAM-level registry + permission override ride the run options into
   // commandFor/runAgent (never the legacy per-project view — providers are team infrastructure).
