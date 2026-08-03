@@ -127,7 +127,8 @@
     "attach": "node test/attach.ts",
     "paths": "node test/paths.ts",
     "quality": "node src/quality.ts --threshold 90 --top 15",
-    "landing": "node test/landing.ts"
+    "landing": "node test/landing.ts",
+    "daemon-version-guard": "node test/daemon-version-guard.ts"
   },
   "engines": {
     "node": ">=23.6"
