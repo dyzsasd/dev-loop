@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveUiToken, plaintextBearerToRemote, plaintextBearerRefusal } from "./ui-token.ts"; // LOOP-173: refuse a plaintext bearer to a remote at the entry point
 import { tryResolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
-import type { Workspace } from "./team-config.ts";
+import { TEAM_INTAKE_PROJECT, type Workspace } from "./team-config.ts";
 import { teamInit } from "./team-init.ts";
 import { scaffoldOperatorBriefs } from "./operator-brief.ts";
 
@@ -122,6 +122,16 @@ export function interactiveCommandFor(cli: "claude" | "opencode", profile: { mod
   };
 }
 
+// The board URL: exact when the workspace hub daemon is running (its lifecycle runfile records it),
+// else the default port (hub start always prints the final URL either way).
+export function resolvedBoardUrl(ws: Workspace): string {
+  try {
+    const u = (JSON.parse(readFileSync(join(wsStateRoot(ws), `daemon-${TEAM_INTAKE_PROJECT}.json`), "utf8")) as { url?: string }).url;
+    if (u) return `${u}  (dev-loop hub status)`;
+  } catch { /* not running */ }
+  return `http://127.0.0.1:${process.env.DEVLOOP_DAEMON_PORT ?? 8787}/  (dev-loop hub status)`;
+}
+
 const CONSOLE_BRIEF =
   "You are the dev-loop OPERATOR CONSOLE (DEVLOOP_ACTOR=operator). Read and follow the workspace-root " +
   "CLAUDE.md; the full guide is /dev-loop:operator-console when the dev-loop plugin is installed. All " +
@@ -219,7 +229,7 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
   }
 
   if (ws && !o.attach && ws.file.team.backend === "service" && !o.noDaemon)
-    console.log(`board: http://127.0.0.1:${process.env.DEVLOOP_DAEMON_PORT ?? 8787}/  (dev-loop hub status)`);
+    console.log(`board: ${resolvedBoardUrl(ws)}`);
   console.log(`launching the operator console: ${command}${args.length ? " " + args.map((a) => (a.includes(" ") ? `'${a.slice(0, 40)}…'` : a)).join(" ") : ""}`);
   // stdio:"inherit" — a REAL TTY, the one child-process contract no fire uses (§2.2). Blocks until the
   // operator ends the session; the exit code is theirs.
