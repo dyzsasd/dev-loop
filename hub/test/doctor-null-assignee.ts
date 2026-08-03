@@ -58,17 +58,51 @@ try {
     ok(!out.includes("DOCTOR_OK"), "AC1: DOCTOR_OK not printed while W27 fires (doctorWorkspace does not print DOCTOR_OK itself)");
   }
 
-  // ── AC2: W27 does NOT fire for a single-dev (devSplit:false) project ──
+  // ── AC2: W27 does NOT fire for legacy single-dev Todo, but DOES fire for InProgress/InReview ──
   {
-    const root = join(tmp, "ac2");
-    seedWs(root, false);
-    const dbPath = join(root, ".dev-loop", "hub.db");
-    seedDb(dbPath, [
-      { id: "LOOP-2", state: "Todo", labels: ["dev-loop", "Bug", "qa"], assignee: null },
+    // AC2a: legacy + Todo + null → W27 silent (mine() makes it dev's own)
+    const root2a = join(tmp, "ac2a");
+    seedWs(root2a, false);
+    const dbPath2a = join(root2a, ".dev-loop", "hub.db");
+    seedDb(dbPath2a, [
+      { id: "LOOP-2a", state: "Todo", labels: ["dev-loop", "Bug", "qa"], assignee: null },
     ]);
-    const ws = loadWorkspace(root);
-    const out = await capture(() => doctorWorkspace(ws, { boardDb: dbPath }));
-    ok(!out.includes("[W27]"), "AC2: W27 does NOT fire for single-dev (devSplit:false) project");
+    const ws2a = loadWorkspace(root2a);
+    const out2a = await capture(() => doctorWorkspace(ws2a, { boardDb: dbPath2a }));
+    ok(!out2a.includes("[W27]"), "AC2a: W27 silent for legacy (devSplit:false) Todo + null (mine() makes it dev's own)");
+
+    // AC2b: legacy + In Progress + null → W27 FIRES (mine() is Todo-only; inProgress keys on assignee===actor)
+    const root2b = join(tmp, "ac2b");
+    seedWs(root2b, false);
+    const dbPath2b = join(root2b, ".dev-loop", "hub.db");
+    seedDb(dbPath2b, [
+      { id: "LOOP-2b", state: "In Progress", labels: ["dev-loop", "Bug", "qa"], assignee: null },
+    ]);
+    const ws2b = loadWorkspace(root2b);
+    const out2b = await capture(() => doctorWorkspace(ws2b, { boardDb: dbPath2b }));
+    ok(out2b.includes("[W27]") && out2b.includes("LOOP-2b"), "AC2b: W27 fires for legacy InProgress + null (unreachable; mine() is Todo-only)");
+
+    // AC2c: legacy + In Review + qa label → W27 silent (verifiable via qa label)
+    const root2c = join(tmp, "ac2c");
+    seedWs(root2c, false);
+    const dbPath2c = join(root2c, ".dev-loop", "hub.db");
+    seedDb(dbPath2c, [
+      { id: "LOOP-2c", state: "In Review", labels: ["dev-loop", "Bug", "qa"], assignee: null },
+    ]);
+    const ws2c = loadWorkspace(root2c);
+    const out2c = await capture(() => doctorWorkspace(ws2c, { boardDb: dbPath2c }));
+    ok(!out2c.includes("[W27]"), "AC2c: W27 silent for legacy InReview + qa label (qa verify slice needs no assignee)");
+
+    // AC2d: legacy + In Review + tier label only (no qa/pm) → W27 FIRES (tier-label fix is split-dev only)
+    const root2d = join(tmp, "ac2d");
+    seedWs(root2d, false);
+    const dbPath2d = join(root2d, ".dev-loop", "hub.db");
+    seedDb(dbPath2d, [
+      { id: "LOOP-2d", state: "In Review", labels: ["dev-loop", "Bug", "junior-dev"], assignee: null },
+    ]);
+    const ws2d = loadWorkspace(root2d);
+    const out2d = await capture(() => doctorWorkspace(ws2d, { boardDb: dbPath2d }));
+    ok(out2d.includes("[W27]") && out2d.includes("LOOP-2d"), "AC2d: W27 fires for legacy InReview + tier label only (tier-label fallback is split-dev only)");
   }
 
   // ── AC3: W27 does NOT fire on terminal tickets (Done, Canceled, Duplicate) ──
@@ -101,27 +135,31 @@ try {
     ok(out.includes("LOOP-4b"), "Backlog + no tier label also fires W27 (promotion queue is assignee-keyed, not label-keyed)");
   }
 
-  // ── InReview + null + tier label → W27 silent (servable fix makes it landable) ──
-  // ── InReview + null + NO tier → W27 fires (not landable by any dev tier) ──
+  // ── InReview + null: W27 predicate — reachable via dev-tier label OR qa/pm owner label ──
   {
     const root = join(tmp, "inreview");
     seedWs(root, true);
     const dbPath = join(root, ".dev-loop", "hub.db");
     seedDb(dbPath, [
       { id: "LOOP-5a", state: "In Review", labels: ["dev-loop", "Bug", "qa", "junior-dev"], assignee: null },
+      // LOOP-5b: qa label → reachable via opQueue verify slice; NOT stranded even with no dev-tier label
       { id: "LOOP-5b", state: "In Review", labels: ["dev-loop", "Bug", "qa"], assignee: null },
+      // LOOP-5c: no dev-tier AND no qa/pm label → truly stuck; must fire W27
+      { id: "LOOP-5c", state: "In Review", labels: ["dev-loop", "Bug"], assignee: null },
     ]);
     const ws = loadWorkspace(root);
     const out = await capture(() => doctorWorkspace(ws, { boardDb: dbPath }));
     ok(!out.includes("LOOP-5a"), "InReview + null + tier label: W27 silent (servable.ts fix makes it landable)");
-    ok(out.includes("[W27]") && out.includes("LOOP-5b"), "InReview + null + no tier: W27 fires (not landable)");
+    ok(!out.includes("LOOP-5b"), "InReview + null + qa label: W27 silent (reachable via opQueue verify slice)");
+    ok(out.includes("[W27]") && out.includes("LOOP-5c"), "InReview + null + no tier + no qa/pm: W27 fires (truly stuck)");
 
     // Verify servable.ts inReview fix: LOOP-5a now appears in junior-dev's inReview slice
     const db = openDb(dbPath);
     const slice = servableSlice(db, "p1", "junior-dev");
     db.close();
     ok(slice.inReview.some((t) => t.id === "LOOP-5a"), "servable.ts: null-assignee InReview + tier label appears in inReview slice");
-    ok(!slice.inReview.some((t) => t.id === "LOOP-5b"), "servable.ts: null-assignee InReview + no tier label stays out of inReview slice");
+    ok(!slice.inReview.some((t) => t.id === "LOOP-5b"), "servable.ts: null-assignee InReview + no dev-tier label stays out of inReview slice");
+    ok(!slice.inReview.some((t) => t.id === "LOOP-5c"), "servable.ts: null-assignee InReview + no labels stays out of inReview slice");
   }
 
   // ── P1 fix: explicit-assignee InReview must NOT leak to other tier via label (LOOP-244) ──
