@@ -51,8 +51,8 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
     // codex P2: a reverse-proxy path prefix must survive into BOTH remedies — postOpUrl targets
     // `${pathname}/api/op/...`, so a hub under `/dev-loop` needs the https + loopback URLs to keep it.
     const pathRefusal = plaintextBearerRefusal(new URL("http://hub.example/dev-loop"));
-    ok(/https:\/\/hub\.example\/dev-loop\b/.test(pathRefusal) && /--attach http:\/\/127\.0\.0\.1:8787\/dev-loop\b/.test(pathRefusal),
-      "refusal: a reverse-proxy path prefix is preserved in the TLS and loopback remedy URLs (codex P2)");
+    ok(/'https:\/\/hub\.example\/dev-loop'/.test(pathRefusal) && /--attach 'http:\/\/127\.0\.0\.1:8787\/dev-loop'/.test(pathRefusal),
+      "refusal: a reverse-proxy path prefix is preserved in the TLS and loopback remedy URLs, each shell-quoted whole (codex P2)");
     ok(/https:\/\/hub\.example(?![\w./])/.test(plaintextBearerRefusal(new URL("http://hub.example"))),
       "refusal: a bare host (pathname '/') gains no spurious trailing slash in the remedy URL");
 
@@ -74,6 +74,14 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
       "refusal: the https URL form KEEPS the IPv6 brackets (URLs require them)");
     ok(!/localhost:8787 '\[2001:db8::1\]'/.test(v6Refusal),
       "refusal: the bracketed IPv6 form is NEVER emitted as the ssh operand (the prose host label keeps brackets, the ssh destination does not)");
+
+    // codex P2: a shell-active PATH also survives WHATWG parsing (`/dev;id`, `/dev$(id)`), and basePath
+    // now rides BOTH attach URLs — so each URL is shell-quoted WHOLE, not merely the ssh host.
+    const pathMeta = plaintextBearerRefusal(new URL("http://hub.example/dev;id"));
+    ok(/--attach 'http:\/\/127\.0\.0\.1:8787\/dev;id'/.test(pathMeta) && /'https:\/\/hub\.example\/dev;id'/.test(pathMeta),
+      "refusal: a shell-active path is quoted WHOLE in both attach URL remedies (codex P2)");
+    ok(!/8787\/dev;id(?!')/.test(pathMeta),
+      "refusal: the shell-active path never appears unquoted in the attach fragment");
 
     // egress: postOpUrl SHORT-CIRCUITS to "refused" without opening a socket. hub.invalid never resolves,
     // so unguarded the token case would reach DNS and return "down"; guarded it returns "refused" with no
