@@ -266,7 +266,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   const { errors, warnings } = validateTeamFile(ws.file);
   if (errors.length) for (const e of errors) fail(`[${e.code}] ${e.path}: ${e.message}`);
   else pass(`dev-loop.json valid (${Object.keys(ws.file.repos).length} repos, ${Object.values(ws.file.projects).filter((p) => !p.scratch).length} projects)`);
-  for (const w of [...warnings, ...checkLessonsBudget(ws)]) warn(`[${w.code}] ${w.path}: ${w.message}`);
+  for (const w of [...warnings, ...checkLessonsBudget(ws), ...metricsMod.checkBudget(ws)]) warn(`[${w.code}] ${w.path}: ${w.message}`);
 
   // Every registered repo exists on disk + is a git repo (path existence + realpath sanity).
   for (const ref of Object.keys(ws.file.repos)) {
