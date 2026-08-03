@@ -964,6 +964,16 @@ esac`);
     ok(run("team", ["set", "team.budget.perFireUsd", "-1"], { cwd: bws }).code !== 0, "perFireUsd negative rejected (AC2)");
     ok(run("team", ["set", "team.budget.perFireUsd", "0"], { cwd: bws }).code !== 0, "perFireUsd zero rejected (AC2)");
     ok(run("team", ["set", "team.budget.perFireUsd", "NaN"], { cwd: bws }).code !== 0, "perFireUsd NaN rejected (AC2)");
+    // LOOP-245: hex/octal/binary numeric literals are rejected for both budget keys (silently accepted before fix)
+    ok(run("team", ["set", "team.budget.dailyUsd", "0x10"], { cwd: bws }).code !== 0, "dailyUsd hex literal rejected (LOOP-245)");
+    ok(run("team", ["set", "team.budget.dailyUsd", "0o17"], { cwd: bws }).code !== 0, "dailyUsd octal literal rejected (LOOP-245)");
+    ok(run("team", ["set", "team.budget.dailyUsd", "0b101"], { cwd: bws }).code !== 0, "dailyUsd binary literal rejected (LOOP-245)");
+    ok(run("team", ["set", "team.budget.perFireUsd", "0x64"], { cwd: bws }).code !== 0, "perFireUsd hex literal rejected (LOOP-245)");
+    ok(run("team", ["set", "team.budget.perFireUsd", "0o17"], { cwd: bws }).code !== 0, "perFireUsd octal literal rejected (LOOP-245)");
+    ok(run("team", ["set", "team.budget.perFireUsd", "0b101"], { cwd: bws }).code !== 0, "perFireUsd binary literal rejected (LOOP-245)");
+    // Scientific notation is also rejected (non-plain-decimal; 1e2 would coerce to 100 but is not a plain decimal USD input)
+    ok(run("team", ["set", "team.budget.perFireUsd", "1e2"], { cwd: bws }).code !== 0, "perFireUsd scientific notation rejected (LOOP-245)");
+    ok(run("team", ["set", "team.budget.dailyUsd", "1e2"], { cwd: bws }).code !== 0, "dailyUsd scientific notation rejected (LOOP-245)");
     // file unchanged after rejections
     const bpCfgAfterRejects = readJson(join(bws, "dev-loop.json"));
     ok(bpCfgAfterRejects.team.budget?.perFireUsd === 12, "dev-loop.json unchanged after rejected set (AC2)");
