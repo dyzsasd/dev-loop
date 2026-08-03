@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, sensitiveMistier, kaizenReport, renderKaizen } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -527,6 +527,74 @@ try {
       "LOOP-125: provider/model shaped from event data");
     ok(evPm?.usage?.costUsd === 0.005, "LOOP-125: usage.costUsd shapes correctly from event");
     ok(evDev !== undefined && evDev.usage === undefined, "LOOP-125: row without usage key → usage:undefined");
+  }
+
+  // ── LOOP-276: perFire divides by fires with costUsd > 0, not all fires or costMetered ──
+  {
+    const mixedLedger = join(tmp, "loop276-fires.jsonl");
+    // fixture: 3 priced (cost>0), 2 zero-cost rate-limit (cost=0), 1 unpriced (costUsd:null), 1 no-usage
+    // costUsd = 0.10+0.20+0.30 = 0.60; fires=7, costMetered=5, costPriced=3; perFire = 0.60/3 = $0.20
+    const mkRow276 = (agent: string, costUsd: number | null, hasUsage: boolean) => ({
+      ts: iso(NOW - 1 * DAY), agent, project: "web",
+      codingAgent: "claude", durationMs: 1000, exitCode: 0, fireId: `f276-${agent}`,
+      ...(hasUsage ? { usage: { source: "provider", inputTokens: 100, outputTokens: 50, cacheReadTokens: null, cacheWriteTokens: null, costUsd, currency: costUsd !== null ? "USD" : null } } : {}),
+    });
+    writeFileSync(mixedLedger, [
+      mkRow276("a1", 0.10, true),   // priced: costPriced++
+      mkRow276("a2", 0.20, true),   // priced: costPriced++
+      mkRow276("a3", 0.30, true),   // priced: costPriced++
+      mkRow276("b1", 0.0, true),    // zero-cost rate-limit: costMetered++ only
+      mkRow276("b2", 0.0, true),    // zero-cost rate-limit: costMetered++ only
+      mkRow276("c1", null, true),   // unpriced: metered++ only (costUsd:null)
+      mkRow276("d1", null, false),  // no usage at all
+    ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+
+    const report276 = usageReport(readFireRows(mixedLedger), 7 * DAY, { nowMs: NOW });
+    const cell276 = report276.overall;
+
+    ok(cell276.fires === 7, `LOOP-276: fires=7 (got ${cell276.fires})`);
+    ok(cell276.costMetered === 5, `LOOP-276: costMetered=5 (priced+zero-cost, excl null; got ${cell276.costMetered})`);
+    ok(cell276.costPriced === 3, `LOOP-276: costPriced=3 (only cost>0; got ${cell276.costPriced})`);
+    ok(cell276.costUsd !== null && Math.abs(cell276.costUsd - 0.60) < 1e-9,
+      `LOOP-276: costUsd=0.60 (got ${cell276.costUsd})`);
+
+    // fixture verifiably distinguishes all three denominators
+    const wrongFires   = cell276.costUsd! / cell276.fires;      // 0.60/7 ≈ 0.0857
+    const wrongMetered = cell276.costUsd! / cell276.costMetered; // 0.60/5 = 0.12
+    const correct      = cell276.costUsd! / cell276.costPriced;  // 0.60/3 = 0.20
+    ok(Math.abs(correct - wrongFires)   > 1e-6, `LOOP-276: fixture separates /costPriced from /fires`);
+    ok(Math.abs(correct - wrongMetered) > 1e-6, `LOOP-276: fixture separates /costPriced from /costMetered`);
+
+    // renderFlow must print "/priced fire" at the correct amount
+    const flowLines276: string[] = [];
+    const origLog276 = console.log;
+    console.log = (...args: unknown[]) => flowLines276.push(String(args[0] ?? ""));
+    try { renderFlow(report276, null, null); }
+    finally { console.log = origLog276; }
+    const perFireLine276 = flowLines276.find((l) => /cost-per-fire/.test(l));
+    ok(perFireLine276 !== undefined, `LOOP-276: renderFlow emits cost-per-fire line`);
+    ok(perFireLine276 !== undefined && /priced fire/.test(perFireLine276),
+      `LOOP-276 AC1: label reads "/priced fire" (got: ${perFireLine276})`);
+    ok(perFireLine276 !== undefined && /\$0\.2000/.test(perFireLine276),
+      `LOOP-276 AC1: perFire=$0.2000 = cost/costPriced (got: ${perFireLine276})`);
+    ok(perFireLine276 === undefined || (!/\$0\.08/.test(perFireLine276) && !/\$0\.12/.test(perFireLine276)),
+      `LOOP-276 AC1: perFire ≠ /fires ($0.0857) and ≠ /costMetered ($0.12) (got: ${perFireLine276})`);
+
+    // views/usage.ts formula (costPriced) must match renderFlow — anti-drift assertion
+    const webPerFire276 = cell276.costPriced > 0 && cell276.costUsd !== null
+      ? cell276.costUsd / cell276.costPriced : null;
+    ok(webPerFire276 !== null && Math.abs(webPerFire276 - correct) < 1e-9,
+      `LOOP-276 AC4: views/usage.ts formula matches renderFlow (both =${webPerFire276})`);
+
+    // guard: zero denominator → "unavailable"
+    const zeroCell: typeof cell276 = { ...cell276, costPriced: 0, costUsd: null };
+    const zeroReport276 = { ...report276, overall: zeroCell };
+    const zeroLines276: string[] = [];
+    console.log = (...args: unknown[]) => zeroLines276.push(String(args[0] ?? ""));
+    try { renderFlow(zeroReport276, null, null); }
+    finally { console.log = origLog276; }
+    ok(zeroLines276.some((l) => /unavailable/.test(l) && !/\$0/.test(l)),
+      `LOOP-276 AC2: zero denominator → "unavailable", never "$0" (got: ${zeroLines276.join("|")})`);
   }
 
   // ── LOOP-199: DEVLOOP_HUB_DB ladder — W16/W21 + metrics board figures from the selected db ──

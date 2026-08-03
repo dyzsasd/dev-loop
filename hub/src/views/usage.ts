@@ -70,9 +70,9 @@ export function usagePage(db: DatabaseSync, projectId: string, projectKey: strin
       ? `<p class="empty">— no metered fires in the last 30 days</p>`
       : provEntries.map(([k, cell]) => cellRows(k, cell as UsageCell)).join(""));
 
-  // Spend summary (the --flow precursor: total cost + cost-per-fire when metered)
-  const perFire = overall.costMetered > 0 && overall.costUsd !== null
-    ? `$${esc((overall.costUsd / overall.costMetered).toFixed(4))} / priced fire`
+  // Spend summary (the --flow precursor: total cost + cost-per-fire when priced)
+  const perFire = overall.costPriced > 0 && overall.costUsd !== null
+    ? `$${esc((overall.costUsd / overall.costPriced).toFixed(4))} / priced fire`
     : "unavailable";
   const flowSection = `<h3>Spend summary</h3>`
     + metricRow("total cost · 30d", overall.costUsd === null
