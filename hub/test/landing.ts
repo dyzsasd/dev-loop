@@ -520,5 +520,26 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ok(annotateTicketLanding("LOOP-35", REPO, exec) === "unknown", "annotateTicketLanding: mergeable=UNKNOWN → 'unknown' (not open-green)");
 }
 
+// Case 36: dotted repository name — "service.api" must not be parsed as non-GitHub (P2 thread fix)
+{
+  const ws = makeWorkspace({
+    repo: {
+      path: "clone",
+      remote: "https://github.com/test-org/service.api.git",
+      landing: "pr",
+      autoMerge: true,
+      mergeChecks: ["CI"],
+    },
+  });
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: "[]" }],
+    [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI", conclusion: "success" }]) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(result!.state !== "na", "dotted repo name 'service.api' is not rejected as non-GitHub remote");
+  ok(result!.state === "healthy", "dotted repo name 'service.api' resolves to healthy state");
+}
+
 console.log(fails === 0 ? "\nLANDING_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
