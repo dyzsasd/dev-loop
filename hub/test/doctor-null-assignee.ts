@@ -103,6 +103,10 @@ try {
     const ws2d = loadWorkspace(root2d);
     const out2d = await capture(() => doctorWorkspace(ws2d, { boardDb: dbPath2d }));
     ok(out2d.includes("[W27]") && out2d.includes("LOOP-2d"), "AC2d: W27 fires for legacy InReview + tier label only (tier-label fallback is split-dev only)");
+    // LOOP-270: the remediation must preserve the resolved tier — a residual dev-tier label here
+    // yields `--assignee junior-dev`, never the literal `<tier>` placeholder (AC4 paste-ready guard).
+    ok(out2d.includes("--assignee junior-dev"), "AC2d/LOOP-270: remediation carries the real tier (--assignee junior-dev)");
+    ok(!out2d.includes("--assignee <tier>"), "AC2d/LOOP-270: remediation never prints the literal <tier> placeholder when a real tier label exists");
   }
 
   // ── AC3: W27 does NOT fire on terminal tickets (Done, Canceled, Duplicate) ──
@@ -152,6 +156,8 @@ try {
     ok(!out.includes("LOOP-5a"), "InReview + null + tier label: W27 silent (servable.ts fix makes it landable)");
     ok(!out.includes("LOOP-5b"), "InReview + null + qa label: W27 silent (reachable via opQueue verify slice)");
     ok(out.includes("[W27]") && out.includes("LOOP-5c"), "InReview + null + no tier + no qa/pm: W27 fires (truly stuck)");
+    // LOOP-270 AC3: the genuinely tier-less case has no better hint — the <tier> placeholder must stand.
+    ok(out.includes("--assignee <tier>"), "AC3/LOOP-270: tier-less stranded ticket still falls back to the <tier> placeholder (don't regress)");
 
     // Verify servable.ts inReview fix: LOOP-5a now appears in junior-dev's inReview slice
     const db = openDb(dbPath);
