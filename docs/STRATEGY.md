@@ -460,215 +460,96 @@ question, parked for the operator on **LOOP-18** — `Goals` is unchanged pendin
   smallest number was the worst event.
 
 
-### 2026-08-01 (pm, tenth + eleventh fires) — [ARCHIVED]
+### 2026-08-01 → 2026-08-03 (pm, tenth → twenty-first fires) — [ARCHIVED]
 
-Both rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2
-passes 10 and 12; the two stubs merged into one here under pass 13). Clauses still in force:
+Twelve fire journals rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md)
+(§20 R2 passes 10–21). The six per-period stubs they had left behind are **merged into this one
+entry** — §20 R2 prescribes one index entry per archived period, and a stub per fire is what made
+twenty rollup passes net-positive (LOOP-282). **Board status is deliberately omitted: the board is
+the source of truth for whether a cited ticket has shipped.** Clauses still in force:
 
-- **An upgrade has THREE axes on this host, not one** — the CLI (fresh process, instant), the hub
-  daemons (restart required), and the long-lived `run-agents` scheduler (restart required, nothing
-  detects it). Never answer "is this host current?" with `dev-loop --version`.
-- **`merged` ≠ `published` ≠ `installed` ≠ `running`.** Attribute runtime behaviour from
-  `dev-loop events` and the installed tree, never from repo source.
-- **A stale hub daemon silently rewrites board writes.** Board writes execute *in the daemon*, so
-  while it runs old code a dev-tier actor's cross-tier assignment collapses to self and senior-dev
-  cannot stage junior children — split-dev delegation is disabled with no error anywhere.
-  **Closed by LOOP-258** (eighteenth fire) — the operator repointed the plugin `source.path` at the
-  pinned build, so plugin and PATH CLI are one artifact. The *duplication/version-split* half is not
-  closed and is owned by LOOP-137 / LOOP-252 / LOOP-261.
-- **The bottleneck is landing, not idea supply.** A deep Backlog with an idle tier is a routing or
-  infrastructure problem; filing more tickets is padding, not throughput.
-- **Aggregates hide the worst event.** Every cost surface bills fires killed mid-flight as delivered
-  (LOOP-219), and a mean can never reveal that the smallest number was the most expensive mistake.
-- **A correction must travel with the thing it corrects.** The merge-guard producer named in that
-  arc was exonerated, then found guilty on the third pass; the record keeps all three steps because
-  the middle one is what made the last one findable.
-- **A doc edit riding a correct code change is the least-guarded thing a ticket can ship** — LOOP-103's
-  code was right and its CI green; the false claim entered through the *documentation* half. Closed by
-  LOOP-257, which added the executable pins.
-- **Verify against a fixture that can distinguish, not one that can only agree.**
-### 2026-08-01 (pm, twelfth → fifteenth fires) — [ARCHIVED]
-
-All four rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2
-passes 13, 14, 15 and 16 — the fifteenth fire's journal block followed under pass 16;
-four stubs merged into one here). Clauses still in force:
-
-- **A queue whose depth is stable can still be starving its tail.** Measure a backlog by the age
-  spread of what *leaves* it, not by row count: `opQueue`'s pm `backlog` list is the only servable
-  list with no `ORDER BY` (LOOP-262, **still unshipped**), so rows filed 2026-07-30 have never once
-  been promoted. Until it lands, promote the starved tail **by hand**.
+**Measurement**
 - **Before optimising against a metric, enumerate what the metric does NOT count** — and check that
   list against the rules telling agents what to read (LOOP-263).
-- **`dev-loop metrics` prints two contradictory answers about the same ticket, two lines apart**:
-  `boardMetrics()` selects the `blocked` **label**, `decisionQueue()` the `Human-Blocked` **state**,
-  so `parked` is a constant `0` rendered as a clean board (LOOP-265, still unshipped).
-- **A filing can produce an unreachable ticket, not just a writer can** — a `Backlog` row with a null
-  assignee is invisible to both tiers and must trip the same check (LOOP-244/LOOP-261).
-- **`ensureHub` → `wireEnv` unconditionally sets `DEVLOOP_PROJECT="_team"`**, so `dev-loop run`'s
-  pre-flight can only ever restart the `_team` daemon, never the per-project daemon every agent-fire
-  op resolves to — the structural reason LOOP-258's class of incident cannot self-heal (LOOP-261).
-- **`save_comment` does not touch `tickets.updated_at`; only `save_issue` writes do.** Commenting on
-  a parked ticket is free. Measured three ways. The false version of this belief was load-bearing in
-  LOOP-108's own headline — a wrong mechanism in a *headline* is more dangerous than one in a body,
-  because it is what a builder reads first and re-derives least.
-- **Run the NEW test file unchanged against the OLD source.** "Does this test fail without the fix?"
-  is the only question separating real coverage from decoration (LOOP-207: 3 of 8 checks fail at the
-  pre-fix base, and they are exactly the post-relabel assertions).
-- **A measurement that kills my own hypothesis is a result, and it stays out of the Backlog.** The
-  fire-allocation theory died on one number: qa's median fire is 307 s against junior's 1278 s —
-  cheap short fires, not stolen capacity. Filing an unmeasured theory converts a hunch into work
-  someone must later triage.
-- **Sequence on a real data dependency, never on a preference about which surface should look
-  correct first.**
+- **Aggregates hide the worst event.** Every cost surface bills fires killed mid-flight as delivered
+  (LOOP-219); a mean can never reveal that the smallest number was the most expensive mistake.
 - **A program with more than three carriers owes a periodic check that its cuts are aimed at the
-  dominant term — and the check is a query, not a review.** For the compression program: modeled
-  context bytes correlate **0.138** with a fire's `cacheRead`, fire duration **0.777** (196 priced
-  fires). Six of its carriers were byte-side. Re-run once new priced fires land (LOOP-267).
+  dominant term — and the check is a query, not a review.** Modeled context bytes correlate **0.138**
+  with a fire's `cacheRead`, fire duration **0.777** (196 priced fires), while six of the compression
+  program's carriers were byte-side (LOOP-267).
+- **A measurement that kills my own hypothesis is a result, and it stays out of the Backlog.** The
+  fire-allocation theory died on one number — qa's median fire 307 s against junior's 1278 s. Filing
+  an unmeasured theory converts a hunch into work someone must later triage.
+- **A dark window is not a throughput problem.** Read fires-per-hour against the provider
+  subscription before reading it against the queue.
+- **A queue whose depth is stable can still be starving its tail.** Measure a backlog by the age
+  spread of what *leaves* it, not by row count: `opQueue`'s pm `backlog` list is the only servable
+  list with no `ORDER BY` (LOOP-262) — until that lands, promote the starved tail **by hand**.
+
+**Verification**
+- **Verify by EXECUTION against the merged tree, not by diff — and the disk file is not the input,
+  the projection is.** LOOP-236 merged with 23 green checks, an approving review and a purpose-built
+  fixture, and was still a no-op: `toLegacyView` emits no workspace-level `repos` registry, so the
+  predicate read `[]` and the one AC that looked satisfied was satisfied by the bug (LOOP-279).
+- **A green suite cannot tell you the ORACLE was wrong, and a fixture that hand-supplies an argument
+  the production caller never passes cannot catch a caller bug.** Check the assertion against the AC
+  text, not against the double; run the NEW test unchanged against the OLD source — *"does this fail
+  without the fix?"* is the only question separating coverage from decoration.
+- **Verify against a fixture that can distinguish, not one that can only agree.**
+- **A cancelled CI run on a superseded SHA is not a red gate** — the concurrency group kills the
+  in-flight run on the next push. Read the conclusion of the tree that CONTAINS the change.
 - **An AC may assert an INVARIANT over live data, or an EXACT VALUE over a fixture — never an exact
-  value over a live ledger.** A correct implementation then looks broken, and the cheapest way to
-  green the box is to ship a wrong number that passes its own test (LOOP-239).
+  value over a live ledger** (LOOP-239). A correct implementation then looks broken, and the cheapest
+  way to green the box is to ship a wrong number that passes its own test.
+
+**Tickets & routing**
+- **A grooming warning that names both the failure and its mechanism is an acceptance criterion in
+  prose** — if the shipped code walks into it anyway, that is an AC miss, not a missed edge case.
+- **A tracker held open for an AC it blocks can never satisfy that AC** — re-home the remaining ACs
+  onto the ticket that owns the work. **An AC that needs a role you are not cannot be honestly
+  self-checked**; re-home it, do not approximate it.
+- **Evidence that raises an open ticket's stakes belongs ON that ticket** — a second row splits one
+  fix across two.
+- **Amend the gate rather than bounce it** when the design is sound and the gaps are additive: ACs
+  added as binding comments cost one fire, a bounce costs two.
+- **A filing can produce an unreachable ticket, not just a writer can** — a `Backlog` row with a null
+  assignee is invisible to both tiers (LOOP-244/LOOP-261).
 - **If the wrong order produces a wrong artifact, it takes a `Blocked-by:` edge** — the §5 pick order
   reads state, priority and labels, never prose. A sentence is documentation, not a constraint.
+- **Sequence on a real data dependency, never on a preference about which surface should look correct
+  first.**
 - **A standing authorization covers the edit it named, not every edit in its section.** When an old
   number in a DIRECTION section is hedged rather than wrong, the correction belongs in the progress
   sections and on the program's carrier ticket.
-### 2026-08-03 (pm, sixteenth fire) — [ARCHIVED]
-
-Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 17).
-Clauses still in force:
-
-- **The daemon downgrade is a scheduled event, not drift, and the vector is our own Claude plugin.**
-  `~/.claude/settings.json` sourced the plugin from a stale checkout whose SessionStart hook runs
-  `daemon up` from ITS tree on every fire — and the hook is silenced with `>/dev/null 2>&1 || true`,
-  so the one action that corrupts every board write is the one guaranteed to be invisible.
-  **Still live in a new shape:** this fire found **three** `_team` daemons at **v1.12.0** beside a
-  `loop` daemon at v1.14.0. The re-arm vector was neutralised for the pinned path; a duplicated,
-  version-split fleet was not. LOOP-252 / LOOP-261 own the causes; LOOP-137 now owns making the
-  fleet observable at all.
-- **A daemon launched from `.ts` source emits a `Type Stripping` warning into its log; a dist-build
-  daemon does not.** That warning is provenance — it names which tree a daemon came from when
-  `daemon status` cannot.
-- **One predicate, two opposite failures.** Version-string equality misses a SHA that moved
-  (LOOP-250: a no-op that reads as success); version inequality treats *older* as *stale*
-  (LOOP-252: a downgrade). An ordering-only fix closes one and leaves the other alive.
-- **A dark window is not a throughput problem.** The 40-hour gap was a provider weekly ceiling.
-  Read fires-per-hour against the subscription before reading it against the queue.
-
-
-### 2026-08-03 (pm, eighteenth fire) — [ARCHIVED]
-
-Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 18).
-Clauses still in force:
-
-- **A tracker held open for an AC it blocks can never satisfy that AC.** LOOP-258 was closed on AC1
-  alone because AC3 could only occur inside LOOP-172, which LOOP-258 itself blocked; the remaining
-  ACs were **re-homed onto the ticket that owns the work**, not checked or dropped.
-- **An AC that needs a role you are not cannot be honestly self-checked** — re-home it, do not
-  approximate it.
-- **A stale plugin checkout is a downgrade weapon.** `~/.claude/plugins/cache/dev-loop/1.9.0` still
-  carries a `hook-session-start.ts` that spawns `daemon up` from its own tree. LOOP-252 AC1
-  neutralizes it; AC4 is what would make it visible without `ps`.
-- **Evidence that raises an open ticket's stakes belongs ON that ticket** — a second row splits one
-  fix across two.
-
-### 2026-08-03 (pm, nineteenth fire) — [ARCHIVED]
-
-Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 19).
-Clauses still in force:
-
-- **Verify by EXECUTION against the merged tree, not by diff.** The decisive evidence twice sat
-  outside the test suite: the merged reaper run against this machine's real daemon fleet, and the
-  merged CLI's `--kaizen --json` compared field-by-field to the rendered page.
-- **A cancelled CI run on a superseded SHA is not a red gate** — GitHub's concurrency group kills the
-  in-flight run on the next push, so "cancelled" is the *normal* state of a mid-stack commit. Read the
-  conclusion of the tree that CONTAINS the change.
-- **The stall was one unpopulated config key**, not the board: `team.agentReviewers` absent ⇒
-  merge-guard counts `chatgpt-codex-connector` as a blocking human. Still open as LOOP-235.
 - **An AI reviewer against a `--strict` gate has no terminating state by construction** — every extra
   round costs a full senior fire spent on remediation *text*.
-
-### 2026-08-03 (pm, twentieth fire) — [ARCHIVED]
-
-Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 20).
-Clauses still in force:
-
-- **A grooming warning that names both the failure and its mechanism is an acceptance criterion in
-  prose** — if the shipped code walks into it anyway, that is an AC miss, not a missed edge case.
-- **A green suite cannot tell you the ORACLE was wrong.** LOOP-111's doubles validated their argv
-  (the LOOP-121 fix) and still asserted the defect as intended. Check the assertion against the AC
-  text, not against the double.
-- **Amend the gate rather than bounce it** when the design is sound and the gaps are additive: ACs
-  added as binding comments cost one fire, a bounce costs two.
 - **`references/` is in scope for a child documenting its own key** — §17's firewall covers
   conventions + SKILL files only.
 
-### 2026-08-03 (pm, twenty-first fire) — a green suite, a green CI and a merged PR, and the increment is still a no-op: the fixture hand-supplied the argument the caller never passes
-
-`origin/main` moved **three times inside this fire** — `7ac25a8` → `e80aa7b` (LOOP-270) →
-`096663c` (LOOP-127, PR #153) → `519cc1f` (LOOP-236, PR #146) — and **two new `In Review` items
-arrived mid-fire**, neither in the boot queue. Fourth consecutive fire with another actor writing
-during mine; the boot `queue` read is a starting point, never the list. Lenses reset. Doc-watch
-`282e3565` unchanged — **46 fires, no foreign doc edit**.
-
-**One passed, two failed, and the failure that matters looked green from every angle.** LOOP-236 is
-Lever 1 of the compression program: repair `CONDITIONAL_SECTIONS` so a fire stops shipping
-feature-off conventions spans. It merged with 23 green checks, a clean typecheck, an approving Codex
-round, and a purpose-built regression fixture. **It is still a no-op.** Called exactly as
-`run-agents.ts:906-908` calls it, through the `toLegacyView` projection the runtime actually reads:
-
-```
-cfg.repos (registry) = undefined      RESOLVED repos = []
-pruned = ["5","12c","12d","19","24"]  ← §12c pruned; AC1 requires §12c KEPT
-```
-
-`LegacyProjectsConfig` has **no `repos` field**; `toLegacyView` inlines the flat facts into each
-project's `repos[]` and emits no workspace-level registry. `as unknown as ProjectsConfig` is what
-lets `cfg?.repos` compile. The commit message says the type "gains a `repos?` field" — it does, and
-nothing populates it. §19 still reads "pruned", but vacuously: `[].length > 1` is false because the
-list is *empty*. The one AC that looked satisfied was satisfied by the bug.
-
-**Fixture E diagnosed the shape correctly and then papered over it**, passing a 7th argument the
-production caller never passes:
-
-```ts
-assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
-  { repos: [{ name: "dev-loop", autoMerge: true, … }] },
-  { "dev-loop": { autoMerge: true, landing: "pr" } });   // ← invented registry
-```
-
-The ticket's own description had already flagged the sibling case ("the existing test sidesteps the
-real shape — add the real-shape fixture"). Fixture E is the same sidestep moved from the config
-boundary to the caller boundary. → LOOP-279 (senior, P1), and LOOP-237's `Blocked-by` re-pointed
-there so the compression chain does not auto-unpark on a head that never worked.
-
-**I found it by being wrong first, and the correction is the transferable part.** My first pass
-evaluated the predicate against the raw `dev-loop.json` and concluded §5 was broken because
-`projects.loop.backend` is absent there. It is — but the runtime never reads that file directly, and
-`toLegacyView` injects `backend: t.backend` into every project. Re-running through the real
-projection retired my §5 claim and surfaced the worse, true one. **The disk file is not the input;
-the projection is.** That single move is also exactly what Fixture E skipped.
-
-**LOOP-243 failed on the two ACs its own handoff was silent about.** The proposal (LOOP-277) covered
-AC1 — I byte-checked its verbatim Step 0.5 quote against the file — and AC2's ordering call well
-enough that LOOP-279's sibling keeps both untouched. It never mentioned Amendment 1 (AC4), and it
-carried the 2026-08-01 `behind_by` table forward verbatim (AC5) although that AC says in its own
-words not to; all five PRs it cites are closed. Re-measured: **#153 behind 2, #146 behind 20, #134
-behind 45 — 3 of 3 CI-green loop PRs stale**, and #153 was seven minutes old and already stale when
-the proposal was drafted. LOOP-277 stays parked behind LOOP-278 rather than reaching the operator
-half-written.
-
-**First shipped per-accepted-change price.** LOOP-127 passed on live data:
-`cost: $1162.7887 over 270 of 562 metered fires ($7.3594/accepted change)` — 48% metering coverage.
-The Goals baseline still reads $4.79/fire; that is a §20 D4 direction section and the operator has
-not answered whether re-deriving it is standing authorization, so it stays untouched and the
-measured figure lives here.
-
-**Structural — eleventh consecutive measurement.** Junior **10**/10 after promoting two rank-1 Urgent
-bugs (LOOP-252, LOOP-261) — the **first promotion in four fires**; senior **6**/10 with **zero**
-senior-tier Backlog rows for the sixth straight fire, so the tier that absorbs every escalation can
-only be fed by escalation. §9c: **11** parked, all holding ≥1 live edge, **0** unparks. Filed 2, both
-§3 follow-ups. Job C's lens budget went entirely into the LOOP-236 verification, which is where it
-belonged.
+**This host**
+- **An upgrade has THREE axes here** — the CLI (fresh process, instant), the hub daemons (restart
+  required), and the long-lived `run-agents` scheduler (restart required, nothing detects it).
+  **`merged` ≠ `published` ≠ `installed` ≠ `running`**: attribute runtime behaviour from
+  `dev-loop events` and the installed tree, never from repo source, and never answer *"is this host
+  current?"* with `dev-loop --version`.
+- **A stale hub daemon silently rewrites board writes** — writes execute *inside* the daemon, so
+  while it runs old code a cross-tier assignment collapses to self and split-dev delegation is
+  disabled with no error anywhere. The re-arm vector is closed; the duplicated, version-split fleet
+  is not (LOOP-137 / LOOP-252 / LOOP-261).
+- **One predicate, two opposite failures.** Version-string equality misses a SHA that moved
+  (LOOP-250 — a no-op that reads as success); version inequality treats *older* as *stale*
+  (LOOP-252 — a downgrade). An ordering-only fix closes one and leaves the other alive.
+- **`ensureHub` → `wireEnv` unconditionally sets `DEVLOOP_PROJECT="_team"`**, so `dev-loop run`'s
+  pre-flight can only ever restart the `_team` daemon, never the per-project daemon every agent-fire
+  op resolves to (LOOP-261).
+- **`save_comment` does not touch `tickets.updated_at`; only `save_issue` writes do.** Commenting on
+  a parked ticket is free — measured three ways. A wrong mechanism in a *headline* is more dangerous
+  than one in a body, because it is what a builder reads first and re-derives least.
+- **A daemon launched from `.ts` source emits a `Type Stripping` warning into its log; a dist-build
+  daemon does not.** That warning is provenance when `daemon status` cannot name the tree.
+- **The bottleneck is landing, not idea supply.** A deep Backlog beside an idle tier is a routing or
+  infrastructure problem; filing more tickets is padding.
+- **A correction must travel with the thing it corrects.**
 
 ### 2026-08-03 (pm, twenty-second fire) — a share cannot falsify a claim about a level, and a fix that ADDS a field instead of repairing one leaves the old field lying beside the new one
 
@@ -721,6 +602,54 @@ the real error. §9c: **11** parked → **1 unpark**, the rest all holding ≥1 
 (LOOP-281 — `--force` appears nowhere in `hub/test/team-edit.ts` and the ticket-count refusal has no
 assertion, so inverting the data-loss guard stays green).
 
+### 2026-08-03 (pm, twenty-third fire) — the doc that records the compression program is the one input the compression program cannot see, and twenty compliant rollups could never have bounded it
+
+**First fire in five with no concurrent writer.** `origin/main` `ff4236e` = my own prior doc land;
+`de004d1..HEAD` holds no code commit, so the product SHA stays **`de004d1`** and the lens rotation
+continues rather than resets. Doc-watch `33a78eb3` unchanged — **48 fires, no foreign doc edit**.
+Jobs A and B were both empty at boot *and* at the closing re-scan: `In Review` genuinely zero,
+`needs-pm` zero. §9c: **10** parked, every one holding ≥1 live edge (278 · 265 · 239 · 235 · 264 ·
+250 · 237 · 279 · 227), **0** unparks.
+
+**`strategy-gaps` lens — the finding is about this file.** Every per-fire agent input on this
+workspace is budgeted and enforced except the largest one. SKILL prose has `BUDGETS` + a test; the
+cheat block has a byte-check; the lessons INDEX (7 630 B) and shard (1 783 B) have
+`INDEX_MAX_BYTES`/`SHARD_MAX_BYTES` and doctor **W03**. `docs/STRATEGY.md` at **114 486 B** —
+**14.0× the lessons INDEX budget** — has no budget constant, no doctor code, and no line in
+`metrics --context`. §20 R2 sets a "~20KB" threshold in prose that nothing computes; the doc is at
+5.7× it. → **LOOP-282** (junior, P1, blocked-by LOOP-263: you cannot ratchet what the bill does not
+count).
+
+**Why twenty compliant rollups did not bound it, stated as arithmetic rather than as a complaint.**
+Across the last 22 PM doc-lands the file went 91 706 → 114 486 B: **+1 036 B per fire *net of* the
+twelve R2 passes taken in that same window.** §20 R2 prescribes leaving *"a one-line index entry per
+archived period"*; the practice left a multi-line `[ARCHIVED]` stub carrying its own "Clauses still
+in force" list — six of them occupying 10 424 B, with 23 `[ARCHIVED]` markers doc-wide. Each roll
+converted ~4.5 KB of journal into ~1–1.5 KB of *permanent* residue while the next fire appended a
+fresh ~4.5 KB journal. **A rollup whose residue is monotone can only slow growth, never bound it** —
+so the +1 036 B/fire trend is not a discipline failure, it is what the procedure computes.
+
+**Pass 21 was therefore run against the residue, not the journals.** The six stubs and the
+twenty-first-fire journal (15 565 B) went whole to the archive; one consolidated entry replaced them,
+keeping every operative clause once and dropping what the board already owns (ticket status) and what
+has closed (LOOP-257, LOOP-258's re-arm half). **Net −1 588 B for the whole fire, this journal and
+three Decisions entries included — the first net-negative pass in twenty-one, against +4 412 and
++4 276 for the two immediately before it.**
+
+**Two grooming writes, no new rows.** LOOP-263's measured miss has widened — 52 % → **59.6 %**
+understatement, because the counted half moved +709 B in two days while the uncounted half moved
+**+14 647 B**; its AC 3 illustration is stale but its AC text ("assert the doc's bytes, not a
+hard-coded constant") is still right. And LOOP-90 gets the cost of its own silence: **reflect has
+fired 6 times, last 2026-08-01T00:22 — ~62 h against a configured `1d` cadence**, and it sits in
+neither `GROUPS.core` nor `GROUPS.outward`, so no group name reaches it. §17 makes reflect the only
+autonomous curator of the lessons library, so the enforced corpus is frozen at 93 % of budget while
+the unenforced one grows — that is the routing reason PM doctrine lands here at all.
+
+**Structural — twelfth consecutive measurement.** Junior **10**/10 (at cap, promote nothing); senior
+**6**/10 with **zero** senior-tier Backlog rows for the seventh straight fire. Backlog 68 → 69.
+Filed 1. Promoted 0 — the cap, not a shortage of candidates, and manufacturing a senior row to fill
+an idle slot remains refused.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -754,6 +683,33 @@ assertion, so inverting the data-loss guard stays green).
 
 ## Decisions (running log)
 
+- **2026-08-03 (pm, twenty-third fire) — a bounding procedure whose RESIDUE is monotone cannot bound
+  anything; it can only slow it.** §20 R2 was run twenty times on `docs/STRATEGY.md` and the file
+  still grew **+1 036 B per PM fire** across its last 22 lands (91 706 → 114 486 B). Not a discipline
+  failure: R2 prescribes leaving "a one-line index entry per archived period", the practice left a
+  multi-line `[ARCHIVED]` stub carrying its own clause list, and six such stubs held 10 424 B of
+  *permanent* residue while each fire appended a fresh ~4.5 KB journal. **Rule: before crediting a
+  cleanup procedure, compute what it leaves behind per invocation against what arrives per
+  invocation. If the residue does not go to zero, the procedure sets a slope, not a ceiling** — and
+  the fix is to run the procedure against its own residue, which pass 21 did (first net-negative
+  pass: −4 319 B).
+- **2026-08-03 (pm, twenty-third fire) — a threshold no surface computes is a suggestion, and the
+  loop already knows the difference.** `docs/STRATEGY.md` is the only per-fire agent input with no
+  budget constant, no doctor code and no line in `metrics --context`; at 114 486 B it is **14.0× the
+  lessons INDEX budget that doctor W03 does police**, and 5.7× §20 R2's own "~20KB". The lessons
+  library is the existence proof that the enforced shape works. **Rule: when a governing document
+  states a numeric limit, ask which surface computes it — an unread limit and no limit produce the
+  same artifact.** Filed as **LOOP-282** (blocked-by LOOP-263), and it is the
+  `docs/design/conventions-to-code.md` thesis LOOP-228 already adopted: *prose is a weak mechanism.*
+- **2026-08-03 (pm, twenty-third fire) — when a corpus has an enforced home and an unenforced one,
+  content migrates to the unenforced one, and the migration looks like diligence.** §17 makes reflect
+  the only autonomous curator of the budgeted, W03-policed lessons library; reflect has fired **6**
+  times, last 2026-08-01T00:22 (~62 h against a configured `1d` cadence) and belongs to neither
+  `GROUPS.core` nor `GROUPS.outward`, so no group name reaches it. PM cannot write that corpus, so
+  PM doctrine accumulated here instead. **Rule: when one corpus is frozen at 93 % of budget while a
+  sibling grows unbounded, look for a WRITE PERMISSION asymmetry before concluding either is
+  mis-sized.** Evidence posted to LOOP-90 (its ACs already cover the fix — surface the dropped
+  cadence); whether to add reflect to `--agents` is the operator's call and carries its own cost.
 
 - **2026-08-03 (pm, twenty-second fire) — a metric that is a SHARE cannot falsify a claim about a
   LEVEL.** LOOP-218's deferred finding read cache-read share 97.46 % → 97.31 % and concluded the boot
