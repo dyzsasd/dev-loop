@@ -42,11 +42,12 @@ export interface FireMetrics {
   windowMs: number; fires: number; failures: number; timeouts: number; suspectErrors: number;
   byErrorClass: Record<string, number>;            // P0-1b taxonomy (spend-limit/rate-limit/auth/network/timeout/…); infra failures split from task failures
   successRate: number | null;                      // (fires - failures - suspect) / fires; null when no fires
-  byAgent: Record<string, { fires: number; failures: number; medianMs: number | null }>;
+  byAgent: Record<string, { fires: number; failures: number; medianMs: number | null; costUsd: number | null; costMeteredFires: number; usdPerFire: number | null }>;
   byProject: Record<string, { fires: number; failures: number }>;
   meteredFires: number;                            // fires carrying usage (coverage numerator)
-  costMeteredFires: number;                        // fires whose usage.costUsd !== null
-  costUsd: number | null;                          // summed costUsd; null when costMeteredFires===0
+  costMeteredFires: number;                        // fires at/after meteringOnsetTs whose usage.costUsd > 0
+  costUsd: number | null;                          // summed costUsd over costMeteredFires rows; null when 0
+  meteringOnsetTs: string | null;                  // earliest ts of any row carrying usage; null if ledger has no metered rows
 }
 
 // ─── usage aggregation (LOOP-125) ─────────────────────────────────────────────
@@ -88,8 +89,14 @@ const median = (xs: number[]): number | null => {
 };
 
 export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.now()): FireMetrics {
+  const allRows = readFireRows(ledgerPath);
+  // meteringOnsetTs: earliest ts of any row carrying usage across the full ledger.
+  // Pre-onset rows carry no usage, so they're already excluded by `if (r.usage)` below;
+  // this field makes the onset boundary visible in --json output.
+  const meteringOnsetTs = allRows.reduce<string | null>(
+    (min, r) => (r.usage ? (min === null || r.ts < min ? r.ts : min) : min), null);
   const cutoff = nowMs - windowMs;
-  const rows = readFireRows(ledgerPath).filter((r) => Date.parse(r.ts) >= cutoff);
+  const rows = allRows.filter((r) => Date.parse(r.ts) >= cutoff);
   const byAgent: FireMetrics["byAgent"] = {};
   const byProject: FireMetrics["byProject"] = {};
   let failures = 0, timeouts = 0, suspect = 0;
@@ -100,7 +107,7 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
     if (r.timedOut) timeouts++;
     if (r.suspectError) suspect++;
     if (r.errorClass) byErrorClass[r.errorClass] = (byErrorClass[r.errorClass] ?? 0) + 1;
-    const a = (byAgent[r.agent] ??= { fires: 0, failures: 0, medianMs: null });
+    const a = (byAgent[r.agent] ??= { fires: 0, failures: 0, medianMs: null, costUsd: null, costMeteredFires: 0, usdPerFire: null });
     a.fires++; if (failed) a.failures++;
     const p = (byProject[r.project || "(team)"] ??= { fires: 0, failures: 0 });
     p.fires++; if (failed) p.failures++;
@@ -112,12 +119,21 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
   for (const r of rows) {
     if (r.usage) {
       meteredFires++;
-      if (r.usage.costUsd !== null) { costMeteredFires++; costUsdAcc += r.usage.costUsd; hasCost = true; }
+      // costMeteredFires counts only rows with costUsd > 0 — zero-cost rate-limit failures (exitCode:1,
+      // source:"provider", costUsd:0) have usage but no billable spend and must not inflate the denominator.
+      if (r.usage.costUsd !== null && r.usage.costUsd > 0) {
+        costMeteredFires++; costUsdAcc += r.usage.costUsd; hasCost = true;
+        const a = byAgent[r.agent];
+        if (a) { a.costUsd = (a.costUsd ?? 0) + r.usage.costUsd; a.costMeteredFires++; }
+      }
     }
+  }
+  for (const a of Object.values(byAgent)) {
+    a.usdPerFire = a.costMeteredFires > 0 && a.costUsd !== null ? a.costUsd / a.costMeteredFires : null;
   }
   const fires = rows.length;
   const successRate = fires ? (fires - failures - suspect) / fires : null;
-  return { windowMs, fires, failures, timeouts, suspectErrors: suspect, byErrorClass, successRate, byAgent, byProject, meteredFires, costMeteredFires, costUsd: hasCost ? costUsdAcc : null };
+  return { windowMs, fires, failures, timeouts, suspectErrors: suspect, byErrorClass, successRate, byAgent, byProject, meteredFires, costMeteredFires, costUsd: hasCost ? costUsdAcc : null, meteringOnsetTs };
 }
 
 // ─── rollingSpendUsd (LOOP-227) — enforcement spend total ────────────────────

@@ -108,7 +108,7 @@ try {
   {
     // Minimal Workspace stub (renderHuman reads only ws.file.team.key).
     const fakeWs = { file: { team: { key: "test-key" }, repos: {}, projects: {} } } as any;
-    const fakeFires = { windowMs: 7 * DAY, fires: 0, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null };
+    const fakeFires = { windowMs: 7 * DAY, fires: 0, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
     const fakeRollup = { throughput: 0, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
 
     // AC1: decision queue line shows age per item and names the oldest — oldest-first (T-3 at 4d, T-5 at 2d)
@@ -154,7 +154,7 @@ try {
     const fakeRollup = { throughput: 0, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
 
     // AC2: no metered fires → "unmetered — 0 of N", never "$0.00", never omitted
-    const noUsageFires = { windowMs: 7 * DAY, fires: 12, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null };
+    const noUsageFires = { windowMs: 7 * DAY, fires: 12, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
     const linesNoUsage: string[] = [];
     const origLogA = console.log;
     console.log = (...args: unknown[]) => linesNoUsage.push(String(args[0] ?? ""));
@@ -168,7 +168,7 @@ try {
       `LOOP-127 AC2: cost line never contains '$0' in no-data state (got: ${costLineNoUsage})`);
 
     // AC1: metered fires with cost → "$X.XXXX over N of M metered fires"
-    const meteredFires = { windowMs: 7 * DAY, fires: 20, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 5, costMeteredFires: 3, costUsd: 0.12 };
+    const meteredFires = { windowMs: 7 * DAY, fires: 20, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 5, costMeteredFires: 3, costUsd: 0.12, meteringOnsetTs: null };
     const linesMetered: string[] = [];
     const origLogB = console.log;
     console.log = (...args: unknown[]) => linesMetered.push(String(args[0] ?? ""));
@@ -844,6 +844,70 @@ try {
       ok(Array.isArray(parsed) && parsed.length > 0 && parsed.every((r: unknown) => r !== null && typeof r === "object" && "selfImprovement" in (r as Record<string, unknown>) && "key" in (r as Record<string, unknown>)),
         "metrics --kaizen --json emits an array of {key, ...KaizenReport} objects (one per project)");
     }
+  }
+
+  // ── LOOP-239: costMeteredFires counts only costUsd>0; meteringOnsetTs=earliest usage ts; per-agent usdPerFire ──
+  {
+    const loop239Ledger = join(tmp, "loop239-fires.jsonl");
+    const mkRow239 = (agent: string, ts: string, costUsd: number | null, hasUsage: boolean, exitCode = 0) => ({
+      ts, agent, project: "loop", codingAgent: "claude", durationMs: 1000, exitCode, fireId: `f239-${agent}-${ts}`,
+      ...(hasUsage ? { usage: { source: "provider", inputTokens: 100, outputTokens: 50, cacheReadTokens: null, cacheWriteTokens: null, costUsd, currency: costUsd !== null ? "USD" : null } } : {}),
+    });
+    const ONSET_TS = iso(NOW - 5 * DAY); // earliest usage-bearing row → meteringOnsetTs
+    const PRE_ONSET = iso(NOW - 10 * DAY); // no usage; outside 7d window
+    writeFileSync(loop239Ledger, [
+      // Pre-onset rows: no usage → excluded from meteringOnsetTs and all cost counts; outside window
+      mkRow239("pm",         PRE_ONSET,             null,  false),
+      mkRow239("qa",         PRE_ONSET,             null,  false),
+      // Onset row: earliest row carrying usage in the full ledger
+      mkRow239("pm",         ONSET_TS,              0.05,  true),
+      // Zero-cost rate-limit failure: usage present but costUsd=0 → excluded from costMeteredFires
+      mkRow239("pm",         iso(NOW - 4 * DAY),    0.0,   true, 1),
+      // Priced fires for two agents
+      mkRow239("pm",         iso(NOW - 3 * DAY),    0.10,  true),
+      mkRow239("qa",         iso(NOW - 2 * DAY),    0.08,  true),
+      mkRow239("qa",         iso(NOW - 1 * DAY),    0.07,  true),
+      // Null-cost usage row: metered but costUsd:null → meteredFires++ only
+      mkRow239("senior-dev", iso(NOW - 1 * DAY),    null,  true),
+    ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+
+    const fm239 = fireMetrics(loop239Ledger, 7 * DAY, NOW);
+
+    // 6 in-window rows (pre-onset pair is 10d ago, outside 7d window)
+    ok(fm239.fires === 6, `LOOP-239: fires=6 (in-window only; got ${fm239.fires})`);
+    // meteringOnsetTs derived from the full ledger — earliest row with usage
+    ok(fm239.meteringOnsetTs === ONSET_TS,
+      `LOOP-239: meteringOnsetTs = earliest usage-bearing ts (got ${fm239.meteringOnsetTs})`);
+    // all 6 in-window rows carry usage
+    ok(fm239.meteredFires === 6, `LOOP-239: meteredFires=6 (all in-window rows have usage; got ${fm239.meteredFires})`);
+    // costMeteredFires: only costUsd>0 (excludes zero-cost and null); onset+pm2+qa1+qa2 = 4
+    ok(fm239.costMeteredFires === 4,
+      `LOOP-239: costMeteredFires=4 (>0 only; excludes zero-cost and null; got ${fm239.costMeteredFires})`);
+    // costUsd = 0.05+0.10+0.08+0.07 = 0.30
+    ok(fm239.costUsd !== null && Math.abs(fm239.costUsd - 0.30) < 1e-9,
+      `LOOP-239: costUsd=0.30 (sum of >0 rows; got ${fm239.costUsd})`);
+
+    // per-agent breakdown: pm has onset+priced2 (2 priced); qa has qa1+qa2 (2 priced)
+    const pm239 = fm239.byAgent["pm"];
+    const qa239 = fm239.byAgent["qa"];
+    const sd239 = fm239.byAgent["senior-dev"];
+    ok(pm239 !== undefined && pm239.fires === 3,
+      `LOOP-239: pm.fires=3 (onset+zero-cost+priced2 in window; got ${pm239?.fires})`);
+    ok(pm239 !== undefined && pm239.costMeteredFires === 2,
+      `LOOP-239: pm costMeteredFires=2 (zero-cost excluded; got ${pm239?.costMeteredFires})`);
+    ok(pm239 !== undefined && pm239.costUsd !== null && Math.abs(pm239.costUsd - 0.15) < 1e-9,
+      `LOOP-239: pm costUsd=0.15 (0.05+0.10; got ${pm239?.costUsd})`);
+    ok(pm239 !== undefined && pm239.usdPerFire !== null && Math.abs(pm239.usdPerFire - 0.075) < 1e-9,
+      `LOOP-239: pm usdPerFire=0.075 (0.15/2; got ${pm239?.usdPerFire})`);
+    ok(qa239 !== undefined && qa239.costMeteredFires === 2,
+      `LOOP-239: qa costMeteredFires=2 (got ${qa239?.costMeteredFires})`);
+    ok(qa239 !== undefined && qa239.costUsd !== null && Math.abs(qa239.costUsd - 0.15) < 1e-9,
+      `LOOP-239: qa costUsd=0.15 (0.08+0.07; got ${qa239?.costUsd})`);
+    ok(qa239 !== undefined && qa239.usdPerFire !== null && Math.abs(qa239.usdPerFire - 0.075) < 1e-9,
+      `LOOP-239: qa usdPerFire=0.075 (0.15/2; got ${qa239?.usdPerFire})`);
+    // senior-dev: null-cost usage row → 0 costMeteredFires, usdPerFire=null
+    ok(sd239 !== undefined && sd239.costMeteredFires === 0 && sd239.usdPerFire === null,
+      `LOOP-239: senior-dev costMeteredFires=0, usdPerFire=null (null costUsd; got cmf=${sd239?.costMeteredFires}, upf=${sd239?.usdPerFire})`);
   }
 
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
