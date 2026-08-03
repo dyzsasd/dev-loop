@@ -302,6 +302,7 @@ export interface PageOpts {
   workspaceId?: string;          // hub.db path — board identity affordance (authenticated surface, §16 ok — LOOP-52)
   daemonVersion?: string;        // daemon's startup version for identity display + stale detection
   cliVersion?: string;           // installed CLI version when different from daemonVersion (triggers stale warning)
+  daemonIsNewer?: boolean;       // LOOP-252: set when daemon is NEWER than the installed CLI (reverse direction)
 }
 export function page(title: string, project: string, inner: string, opts: PageOpts = {}): string {
   // Inline SVG favicon (a small "dl" mark) — data-URI, so no static-asset route and no /favicon.ico 404 noise.
@@ -325,7 +326,9 @@ export function page(title: string, project: string, inner: string, opts: PageOp
   const wsBar = opts.workspaceId
     ? (() => {
         const stale = opts.cliVersion
-          ? ` — running OLD code v${esc(opts.daemonVersion ?? "?")}, CLI is v${esc(opts.cliVersion)}; run \`dev-loop daemon up\` to restart`
+          ? opts.daemonIsNewer
+            ? ` — daemon is NEWER than this CLI (v${esc(opts.daemonVersion ?? "?")} > v${esc(opts.cliVersion)}) — this CLI is stale; do NOT run \`dev-loop daemon up\``
+            : ` — running OLD code v${esc(opts.daemonVersion ?? "?")}, CLI is v${esc(opts.cliVersion)}; run \`dev-loop daemon up\` to restart`
           : "";
         const cls = opts.cliVersion ? "ws-bar ws-bar-warn" : "ws-bar";
         return `<div class="${cls}">${esc(opts.workspaceId)} · v${esc(opts.daemonVersion ?? "?")}${stale}</div>`;
