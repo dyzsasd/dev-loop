@@ -587,52 +587,20 @@ Clauses still in force:
 - **An AI reviewer against a `--strict` gate has no terminating state by construction** — every extra
   round costs a full senior fire spent on remediation *text*.
 
-### 2026-08-03 (pm, twentieth fire) — a spec warning that names the mechanism is an acceptance criterion, and the test asserted the trap it was written to avoid
+### 2026-08-03 (pm, twentieth fire) — [ARCHIVED]
 
-`origin/main` moved **twice inside this fire** — `367e4c3` → `cd81043` (LOOP-111) → `7ac25a8`
-(LOOP-124, which also arrived `In Review` mid-fire). Lenses reset. Doc-watch `dac1f587` unchanged —
-**45 fires, no foreign doc edit**.
+Rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 20).
+Clauses still in force:
 
-**Three closed, one failed.** LOOP-212 and LOOP-213 passed the §21a **design gate** (children
-LOOP-272 / LOOP-273 promoted first, parents `Done` second — the crash-safe order). LOOP-124 `Done`,
-verified on the production entry point: a daemon started inside this workspace with
-`DEVLOOP_HUB_DB=/tmp/otherws/hub.db` now renders that path, where before it named a DB it was not
-reading.
-
-**LOOP-111 `Canceled` → LOOP-274 (senior, direct-code).** Five of six behaviours verified correct
-against the real forge. The sixth: a forge-probe failure annotates **`no-pr`**, not `unknown`,
-because `ticketToPr` collapses "no PR exists" and "I could not ask" into one `null`. With `gh` off
-`PATH`, **every** verify item claims its increment never landed — `no-pr` is a positive false claim,
-and it is exactly the answer that reads as "nothing shipped".
-
-**Two things make that a journal entry, not a ticket line.** My own grooming comment named the trap —
-*"it collapses both to `null` — you will need the `ok`/throw distinction from your own probe"* —
-before a line was written; **a warning that names both the failure and its mechanism is an AC in
-prose**. And the suite **asserts the defect as intended** (Cases 30/30b), with Case 30's own
-parenthetical identifying the ambiguity before choosing the wrong side. LOOP-121 fixed doubles that
-accept any argv; these doubles *do* validate argv. A green suite cannot tell you the oracle was wrong.
-
-**The gates amended rather than bounced, deliberately.** LOOP-272 had dropped two of the operator's
-four ruled items and inherited a scope contradiction — the parent forbids editing `references/`, the
-child must document the new key in `references/config-schema.md`. Ruled the latter **in scope** (§17
-covers conventions + SKILL only; LOOP-226/123/103 each documented their own key) and added the two
-ACs as binding comments. On LOOP-273 I confirmed senior's `--fire-on-start` default of **`due`** (the
-parent's "default to today's behaviour" predates (A) and would have nulled the fix) and required a
-clamp `min(lastFire+cadence, now+cadence)` against the failure mode I named when re-scoping it: a
-seed from bad state suppressing an agent entirely.
-
-**LOOP-235 correction — my last entry is now wrong.** #145 did not wait: junior-dev resolved all 11
-Codex threads itself and it merged. Radius is **two** PRs, not three. And the AC miss above shipped
-*through* those 11 threads — so on the one PR with an outcome, the Codex block was not what caught
-the defect, and the defect merged anyway. That cuts toward option (A).
-
-**Structural — tenth consecutive measurement.** Junior **11**/10 (over cap *because of* the two gate
-promotions); senior **5**/10 with **zero** senior-tier Backlog rows; promotion **0** on both tiers,
-for the two different reasons that keep recurring. §9c: **10** parked, all holding ≥1 live edge, **0
-unparks**. **Filed 1** (LOOP-274). Job C swept `consistency` on the moved diff and filed **nothing** —
-the `wsHubDb`/`hubDbPath` split looked like LOOP-124's family, but `daemon-lifecycle.ts:211` already
-names `hub.ts:wireEnv` as the deliberate exception. Groomed LOOP-228 into an explicit **permanent
-umbrella** with the program's first status roll-up.
+- **A grooming warning that names both the failure and its mechanism is an acceptance criterion in
+  prose** — if the shipped code walks into it anyway, that is an AC miss, not a missed edge case.
+- **A green suite cannot tell you the ORACLE was wrong.** LOOP-111's doubles validated their argv
+  (the LOOP-121 fix) and still asserted the defect as intended. Check the assertion against the AC
+  text, not against the double.
+- **Amend the gate rather than bounce it** when the design is sound and the gaps are additive: ACs
+  added as binding comments cost one fire, a bounce costs two.
+- **`references/` is in scope for a child documenting its own key** — §17's firewall covers
+  conventions + SKILL files only.
 
 ### 2026-08-03 (pm, twenty-first fire) — a green suite, a green CI and a merged PR, and the increment is still a no-op: the fixture hand-supplied the argument the caller never passes
 
@@ -702,6 +670,57 @@ only be fed by escalation. §9c: **11** parked, all holding ≥1 live edge, **0*
 §3 follow-ups. Job C's lens budget went entirely into the LOOP-236 verification, which is where it
 belonged.
 
+### 2026-08-03 (pm, twenty-second fire) — a share cannot falsify a claim about a level, and a fix that ADDS a field instead of repairing one leaves the old field lying beside the new one
+
+`origin/main` moved **twice inside this fire** again — `1f39d66` (my own doc land) → `78378e1`
+(LOOP-276) → `de004d1` (LOOP-221). **Fifth consecutive fire** with another actor writing during mine,
+and the second in a row where an `In Review` item arrived *after* the boot `queue` read: LOOP-221 was
+invisible at boot and was caught only by the end-of-Job-A re-scan. The re-scan is now load-bearing, not
+belt-and-braces. Doc-watch `80f51311` unchanged — **47 fires, no foreign doc edit**.
+
+**LOOP-221 `Done`** — `team remove-project` + `team repair --reap` project reap. Verified by driving
+the merged binary against a hermetic `/tmp` workspace carrying all four fixture shapes; all five AC1
+clauses and all four AC2 clauses pass, exit codes measured **unpiped** (piping through `grep` reports
+grep's status and would have shown every refusal as exit 0). 142 suite assertions green, 20 of them
+LOOP-221's. Its unpark of **LOOP-222** retired both edges.
+
+**The finding, and why it is not a ticket.** LOOP-276 landed 20 minutes before this fire and correctly
+repaired `cost-per-fire` — but it did so by **adding** `costPriced` rather than repairing `costMetered`,
+and the coverage line one row above still labels `costMetered` "priced". So the merged surface now
+prints, in three adjacent lines: `cost: $1198.6833 (276 of 568 fires priced)` … `cost-per-fire:
+$5.1008/priced fire`. **$1198.6833 ÷ 276 = $4.3431.** A reader who divides the two numbers the surface
+hands them lands **17.45 % away** from the rate the same surface publishes, one line down. That is
+LOOP-239's Defect 1 with a repro, not a new row — filed there. Generalizable: **a fix that introduces a
+parallel field instead of repairing the original leaves every existing consumer of the original stating
+a number the fix has just contradicted.** Look at the old field's readers, not only the new field's.
+
+**LOOP-239's Defect 2 has partly shipped and would have been rebuilt.** It says *"metrics has no
+per-agent cost breakdown at all"* — true when filed, false now (`metrics --cost --by agent`, LOOP-125).
+Re-scoped in place. **A ticket's premise decays; re-derive it at promotion, not only at filing.**
+
+**§17 obligation discharged after two days.** LOOP-218's `## Deferred findings` had sat untriaged since
+08-01 — my three prior comments there all ruled on the ticket's own body and never touched the section.
+Both entries resolved, neither filed. Entry 1 claimed the boot-corpus A/B shows "no degradation" off a
+**flat cache-read share** (97.46 % → 97.31 %). Propagating LOOP-211/212's measured degradation (+25 %
+cacheRead, +44 % cacheWrite) through the same ratio predicts **97.09 %** — so the entire distance
+between "no degradation" and "the degradation already measured" is **0.37 pp**, and the observation
+sits between them at n=16. **A metric that is a share cannot falsify a claim about a level**: pinned
+near 97 %, it is nearly invariant to the thing it was used to rule out — while the finding's own cost
+column moved **+25.3 %**, the magnitude it was arguing against. The ON arm is also frozen: exactly 16
+ledger rows carry `bootBytes`, all inside a 66-minute window, unchanged for 2.5 days. LOOP-228's
+standing rule holds unchanged.
+
+**Structural — eleventh consecutive measurement, and the first break in the pattern.** Junior **10**/10
+(the LOOP-222 unpark refilled the one slot LOOP-221 freed). Senior **5**/10 — but the seven-fire drought
+of senior-tier Backlog rows **ended**, and not from a PM design filing: **QA** filed LOOP-280 (`sensitive`
+⇒ senior by §21b) mid-fire, the fail-open in the very feature I was verifying. Promoted it. The lesson
+corrects six of my own entries: the senior tier is fed by **escalations and by other agents' sensitive
+findings**, not only by PM-authored design tickets — an idle senior queue is a fact about what the
+board contains, not proof of a routing bug, and manufacturing senior work to fill it would have been
+the real error. §9c: **11** parked → **1 unpark**, the rest all holding ≥1 live edge. **Filed 1**
+(LOOP-281 — `--force` appears nowhere in `hub/test/team-edit.ts` and the ticket-count refusal has no
+assertion, so inverting the data-loss guard stays green).
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -735,6 +754,34 @@ belonged.
 
 ## Decisions (running log)
 
+
+- **2026-08-03 (pm, twenty-second fire) — a metric that is a SHARE cannot falsify a claim about a
+  LEVEL.** LOOP-218's deferred finding read cache-read share 97.46 % → 97.31 % and concluded the boot
+  corpus causes "no degradation". Propagating the degradation it was arguing against (+25 % cacheRead,
+  +44 % cacheWrite) through that same ratio predicts **97.09 %** — the whole span between the two
+  hypotheses is **0.37 pp**, and the reading sits inside it at n=16. **Rule: before using a ratio as
+  evidence, compute what the ratio would read under the hypothesis you mean to reject.** If the two
+  predictions are closer than the noise, the metric is not evidence — pick a level, not a share.
+- **2026-08-03 (pm, twenty-second fire) — a fix that ADDS a parallel field instead of repairing the
+  original leaves every existing consumer stating a number the fix just contradicted.** LOOP-276
+  correctly repaired `cost-per-fire` by introducing `costPriced`, and left `costMetered` — still
+  labelled "priced" — on the line directly above, so `metrics --flow` now prints a total and a count
+  that divide to $4.3431 immediately above a published rate of $5.1008. **Rule: when a fix introduces
+  a new field rather than correcting the old one, the review is not of the new field's callers but of
+  the OLD field's readers.** Routed to LOOP-239 rather than a new row.
+- **2026-08-03 (pm, twenty-second fire) — a ticket's premise decays; re-derive it at promotion, not
+  only at filing.** LOOP-239 asserts "metrics has no per-agent cost breakdown at all" — true when
+  filed on 08-01, false since LOOP-125 shipped `--cost --by agent`. An implementer taking it at its
+  word would have rebuilt a shipped surface. **Rule: grooming re-checks the premise against the
+  product, not just the wording against the template** — the cheap version is running the one command
+  the ticket claims does not exist.
+- **2026-08-03 (pm, twenty-second fire) — an idle senior queue is a fact about the board, not a
+  routing bug.** Six consecutive entries recorded "zero senior-tier Backlog rows" as a starvation
+  problem and implied PM should feed it. It broke this fire from the other direction: **QA** filed
+  LOOP-280 (`sensitive` ⇒ senior by §21b) against the feature PM was verifying. **Rule: the senior
+  tier is fed by escalations and by other agents' sensitive findings as much as by PM design
+  filings** — re-tier only on §21b's explicit signals, and never manufacture senior work to fill a
+  slot. Two candidates were examined this fire and both correctly stayed junior.
 
 - **2026-08-03 (pm, twenty-first fire) — a fixture that hand-supplies an argument the production
   caller never passes cannot catch a caller bug.** LOOP-236's Fixture E named the real runtime shape
