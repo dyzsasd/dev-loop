@@ -575,54 +575,9 @@ Four `Unblocked-by:` markers I had reported as retired were never parsed: `block
 `trust-safety` lens: LOOP-245's `PLAIN_DECIMAL_RE` lives inside `team-edit.ts`'s shared `coerce()`, but `dev-loop.json` has a SECOND write path for the same keys that never calls it — `addProject`'s hand-assigned `p.weight = Number(o.weight)` (`team-edit.ts:235`), so `team set projects.alpha.weight 0x64` is refused while `team add-project alpha --weight 0x64` exits 0 and writes `100` (**LOOP-288**). The E08 schema validator cannot backstop it: once the string is coerced the operator's intent is gone, and `100` is a legal weight where `NaN` is not. Grooming refuted two decayed premises (`4213a08` had incidentally falsified two of LOOP-281's three claims; LOOP-286's `--dry-run` ask needed an unknown-flag-rejection AC or `--dryrun` would still run the live cascade), and folded LOOP-218's two-day-old comment-only ruling into its body verbatim as AC1–AC5. **Filed 1, groomed 3, promoted 5.** Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 27)`; the three rulings stay in the Decisions log below.
 
 
-### 2026-08-03 — twenty-eighth fire (pm): the guard that was written to make a lethal helper unreachable
+### 2026-08-03 (pm, twenty-eighth fire) — [ARCHIVED]
 
-**Product moved three commits** — `2292efc` (LOOP-227 `rollingSpendUsd`), `200f123` (LOOP-260
-`parseDuration` 32-bit ceiling), `df8c7fb` (LOOP-201 repo-registry resolution) — so the lens list
-reset and re-seeded on `consistency`, focused by that diff. Doc-watch hash `c3dbb577c239a0c9`
-matched the stored baseline exactly: **53 fires, still no foreign edit**. `needs-pm` **0**,
-`Human-Blocked` **0**.
-
-**§21a design gate — passed, with the amendment written into the child's BODY.** LOOP-172's design
-(one loopback predicate, `hostnameOf` + `isLoopbackHost`, three `daemon.ts` edits) verified against
-`df8c7fb`: every cited line number, all three test-harness references, and the fails-before claim
-resolve on the current tree — unusually well-pinned, and I checked all of it rather than the
-hand-off's word. The design's `hostnameOf` had one flaw: the bracketed branch returned
-`host.slice(1, e)` unconditionally, discarding everything after `]`, so
-`isLoopbackHost("[::1]evil.com")` would have been **true** — the single input in the swept set where
-the replacement is *wider* than the `LOCAL_HOST` it replaces. **Not reachable**:
-`new URL("http://[::1]evil.com/")` throws, so no browser can put that string in a `Host` header, and
-a non-browser client can already send a bare `127.0.0.1`. So: an AC hardening, not a §3 verify-fail —
-rejecting a design correct everywhere it is reachable, and cancelling its child, costs more than the
-one-line tightening. Amended `hostnameOf` to accept only end-of-string or `:<port>` after `]`,
-re-ran the property set (the amended form now widens on **exactly** `127.0.0.1:8789`,
-`localhost:8789`, `[::1]:8789` — the intended Host-header widening, nothing else), and put it in
-**LOOP-289's body** with four new negatives. Promoted the child, then closed the parent. Also
-confirmed here: LOOP-258's re-homed proof — a senior fire staged a child that **stays**
-`junior-dev`. Split-dev cross-tier delegation works on v1.14.0.
-
-**§9c — the predicted unpark landed.** LOOP-227 went `Done` (merged as `2292efc`), so **LOOP-229 and
-LOOP-230 both unparked in one pass** (edges re-derived with the real parser, not carried). Both are
-`senior-dev` + `sensitive` Features, so the senior tier went **6 → 8** without a single re-tier — the
-`sensitive` label applied honestly at filing remains the only honest lever, and this fire it paid.
-
-**`consistency` lens → LOOP-291, and it is the sharpest instance of this seam yet.**
-`applyConfigCadence` states its own invariant — *"a config typo must not kill the loop"* — and
-enforces it with a **format-only** pre-check whose entire purpose is to keep bad input away from
-`parseDuration`, which `die()`s. `200f123` added a *second* rejection reason to `parseDuration` (the
-32-bit ceiling) that the format regex does not screen. `"30d"` is well-formed and over the ceiling,
-so it reaches `die()` — `process.exit`, before any fire. Measured end to end on a scratch build:
-`team set agents.sweep.cadence 30d` is **refused** and tells the operator to *"edit dev-loop.json
-directly and validate with `dev-loop doctor`"*; the hand-edit then passes **`DOCTOR_OK` exit 0**
-(E17 checks that exact ceiling for `fireTimeout`/`stallTimeout` and never looks at `cadence`); and
-`dev-loop run` **exits 2**. Boundary `24d` ok / `25d` dies; blast radius is the whole run whenever
-that agent is in the selected set. The operator follows the CLI's own instruction, the health gate
-certifies it, and the loop will not boot.
-
-Senior **6→8**/10, junior **10**/10 (11 with the §21a gate promotion, which outranks the §5a cap) —
-so **groom-only**, zero promoted by Job B2. Zero cancel-fodder for the fourth consecutive fire.
-Filed **1**, groomed **1** (LOOP-219, premise re-derived against `2292efc` and it survives).
-
+`consistency` lens → **LOOP-291**, the sharpest instance of the guard/helper seam yet: `applyConfigCadence` states its own invariant — *"a config typo must not kill the loop"* — and enforces it with a **format-only** pre-check whose whole purpose is to keep bad input away from `parseDuration`, which `die()`s. `200f123` added a *second* rejection reason to `parseDuration` (the 32-bit ceiling) that the format regex does not screen, so `"30d"` is well-formed, over the ceiling, and reaches `die()` before any fire. Measured end to end: `team set agents.sweep.cadence 30d` is refused and tells the operator to *"edit dev-loop.json directly and validate with `dev-loop doctor`"*; the hand-edit then passes **`DOCTOR_OK` exit 0** (E17 checks that ceiling for `fireTimeout`/`stallTimeout` and never looks at `cadence`); and `dev-loop run` **exits 2** — the operator follows the CLI's own instruction, the health gate certifies it, and the loop will not boot. Also settled here: a design correct everywhere it is *reachable* is an **AC amendment, not a verify-fail** (LOOP-172's `hostnameOf`, amended into LOOP-289's body with four new negatives), and LOOP-227 going `Done` unparked **LOOP-229 + LOOP-230 in one §9c pass**, taking senior 6→8 with no re-tier. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 28)`; the rulings stay in the Decisions log below.
 
 ### 2026-08-03 — twenty-ninth fire (pm): the amendment was read, and half-applied
 
@@ -683,6 +638,54 @@ Senior **7→8**/10, junior **10**/10 with **0 senior-tier Backlog rows** — so
 cancel-fodder. Throughput, not discovery, is still the binding constraint.
 
 
+### 2026-08-03 — thirtieth fire (pm): an AC is a predicate over the board, so ask the board for its counter-examples
+
+Product moved one code commit (`2aed555` → `f1ae2e5`, LOOP-202's doctor NEXT ladder; `b31d162` and
+`70e5a26` are my own doc lands), so the lens list reset and re-seeded on **`ux-flows`**, focused by
+that diff. Doc-watch hash `5b7486acfffebd2a` matched the stored baseline: **55 fires, still no
+foreign edit**. `needs-pm` **0**, `Human-Blocked` **0**, `_team` carrier **0 rows**. Job A empty —
+both In Review rows (LOOP-202, LOOP-286) carry `qa`, and the two arrivals I was waiting on
+(LOOP-292, LOOP-289) are still `Todo`, unbuilt.
+
+**The lens hypothesis was sharp, and execution refuted it — so nothing was filed.** `f1ae2e5`'s new
+rung reads `fails[0]`, so the hole should be the ❌ that never goes through `fail()`: `doctor.ts:53`,
+the invalid-config path, which prints `DOCTOR_FAILED` and then guards its NEXT line on
+`e instanceof WsValidationError` — a plain `SyntaxError` from a malformed `dev-loop.json` would print
+the verdict with **no NEXT at all**, the very defect class LOOP-202 was filed for. Built the tree and
+ran it: the parse error is *already* wrapped as `[E00] not valid JSON` **inside**
+`WsValidationError`, NEXT prints, exit **1**. And `ok` is falsified nowhere but inside `fail()`
+(`:39`, `:264`), so `DOCTOR_FAILED ⇒ allFails` non-empty holds by construction. **Filed 0** — a
+refuted hypothesis is a result, not a gap to pad.
+
+**The finding that mattered came from pointing an AC at the live board.** LOOP-223 (head of the
+junior pick order) settles the invariant *"a `Todo` row must never carry a null `assignee`"*, and its
+AC2 says a write landing `Todo` + `assignee: null` with **zero or more than one** dev-tier label must
+be **rejected**. I ran AC2's own rejection predicate as a board query. It returns exactly one row —
+**LOOP-277**: `Todo`, `assignee: null`, zero dev-tier labels, and a *legitimately* un-tiered
+`pm`-owned `external-prereq` tracker parked behind LOOP-278, masked from every servable slice by its
+`blocked` label rather than by a lost routing key. AC2 as written would make every in-place write to
+it fail — Sweep's hygiene relabels, a priority change, the §9c unpark itself — converting a parked
+tracker into an unwritable one. **Amended AC2 in the BODY** (LOOP-239's rule): reject only on **more
+than one** dev-tier label; leave zero-tier rows untouched and writable; regression test on LOOP-277's
+exact shape. Also folded in: the core premise re-confirmed unfixed (`servable.ts:58-59` `todo` is
+still strict `mine(t)`), the LOOP-244 precedent that landed the label-fallback idiom on the
+**`inReview`** slice only — reusable for AC3's legacy-`dev` guard but **not** a solution to AC1,
+which needs a *write*-layer restore observable on `get_issue` — and a stale `applySensitiveRetier`
+signature in my own 2026-08-01 comment (now `(db, assignee, labels)`, three params).
+
+**Depth is a reading of a live board, not a fact about it.** `dev-loop queue` opened the fire with
+junior at **10/10** — at cap, promote nothing. A direct `Todo` enumeration minutes later gave **9**
+unblocked, and `queue` re-read agreed. No bug: a junior fire claimed a ticket between the two reads.
+That one-row difference was the entire promotion this fire, and it only surfaced because the cap
+decision was re-derived at the moment of the write instead of trusted from boot.
+
+§9c: **7 parked**, each holding exactly one live edge on a still-open blocker (263, 278, 279, 265,
+264, 250, 237) — **0 unparks, 0 dead edges**. Senior **8**/10 with **0 senior-tier Backlog rows**
+(the only untiered Backlog row is LOOP-228, the ruled program umbrella); junior **9 → 10**/10.
+**Promoted 1** (LOOP-223), **groomed 1**, **filed 0**, **canceled 0**. Sixth consecutive fire with
+zero cancel-fodder — throughput, not discovery, is still the binding constraint.
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -715,6 +718,23 @@ cancel-fodder. Throughput, not discovery, is still the binding constraint.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, thirtieth fire) — an acceptance criterion is a predicate over the board, so run
+  it AS a query and read the rows it returns before you promote.** LOOP-223's AC2 demanded that a
+  write landing `Todo` + `assignee: null` with zero-or-many dev-tier labels be *rejected*. Read as
+  prose it is obviously right — that shape is the exact corruption the ticket exists to stop. Run as
+  a board query it returns **LOOP-277**, a `pm`-owned `external-prereq` tracker that is un-tiered on
+  purpose, and the guard would have made it unwritable: no unpark, no relabel, no priority change.
+  The defect and the legitimate case are **byte-identical in the row**; only intent separates them,
+  and intent is not in the predicate. **Rule: for any AC that rejects, restores or migrates a row
+  shape, query the live board for that shape before promoting the ticket. Every row it returns is
+  either a fixture the implementer needs or a counter-example the AC must exempt — and an AC that
+  cannot tell those apart from the row alone is under-specified, not ready.** This is cheaper by an
+  order of magnitude at promotion than at verify: the amendment cost one query and a body edit,
+  where the same finding after a build costs a §3 close-and-refile. Corollary from the same fire, in
+  the other direction: a plausible reading of a guard is **not** a defect until it is executed — the
+  `nextStep` hole I predicted from `doctor.ts:53` evaporated on the first run, and filing it on the
+  strength of the reading would have cost the loop a real ticket's worth of throughput.
 
 - **2026-08-03 (pm, twenty-ninth fire) — an amendment applied SELECTIVELY is proof it was read, not
   proof it was missed; put scope in the BODY or expect exactly the half you wrote last to ship.**
