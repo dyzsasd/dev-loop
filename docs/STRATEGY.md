@@ -559,52 +559,9 @@ A share cannot falsify a claim about a level; a fix that adds a parallel field l
 
 A bounding procedure whose residue is monotone sets a slope, not a ceiling; a threshold no surface computes is a suggestion; an enforced corpus freezes while its unenforced twin grows. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 23)`; the three rulings stay in the Decisions log below.
 
-### 2026-08-03 (pm, twenty-fourth fire) — the residue I came to delete was the procedure's output, and the surface told to gate an unattended run never checks what it is looking at
+### 2026-08-03 (pm, twenty-fourth fire) — [ARCHIVED]
 
-**Second quiet fire running.** `origin/main` `2886952` = my own prior doc land; `de004d1..HEAD` holds
-no code commit, so the product SHA stays **`de004d1`** and the lens rotation continues. Doc-watch
-`2d3ed060` unchanged — **49 fires, no foreign edit**. `In Review` **0**, `needs-pm` **0**. §9c:
-**11** parked (282 joined), each holding ≥1 live edge — 282→263 · 277→278 · 237→279 · 31→265 ·
-267→239 · 172→235 · 105→264 · 247→250 · 238→237 · 230/229→227 — **0** unparks.
-
-**The carried plan was wrong and reading the thing refuted it before I edited.** I came in to strip
-the `[ARCHIVED]` stubs as monotone residue (my own prior ruling). **3 of 13 hold the only copy of
-clauses still in force** — the brand two-layer rule, the operator-confirmed LOOP-233 no-tier-change,
-the design-gate MODEL-vs-PROSE axis — and the largest (12 117 B) is not a stub but the
-`STANDING RULES IN FORCE` distillation that made archiving ~54 KB safe. §20 R2 archives *detail* and
-has no home for an archived period's still-in-force *rules*, so every pass must leave one. That
-sharpens **LOOP-282**: its budget must treat the standing-rules home as live, not rollable. Pass 22
-therefore hit only the inert — 10 stubs that each say in their own text that their doctrine lives
-elsewhere, collapsed to true one-line entries, plus the 22nd-fire journal rolled whole.
-
-**`ux-flows` lens — 26 invocations of a `/tmp` build of `origin/main`, clean dir, `DEVLOOP_*` unset.**
-
-- **LOOP-284** — `dev-loop doctor` exits **0** with `DOCTOR_OK` outside a workspace. It falls
-  silently to the machine-global `~/.dev-loop/hub.db`, prints *another* workspace's projects, and
-  **skips W01, W18, repo/build, fires, landing and the identity smoke entirely** — verdict
-  unchanged. LOOP-117/168/199 fixed rungs 1–2 of that db ladder; this is rung 3, the silent
-  fall-through, on the one surface the console names as the pre-flight. **18 of 19**
-  workspace-dependent verbs refuse there; doctor alone returns success.
-- **LOOP-283** — six verbs answer "not in a workspace" with a raw Node stack, and `team repair` does
-  it from **inside** the `try/catch` commented *"NEVER a raw stack trace"*: it is the one async
-  subcommand dispatched without `await`, and a `try` cannot catch a rejection it never awaits.
-  `team import` (sync) is the control proving the catch works. The other five — `metrics` (the
-  console's documented day-2 first command), `next-project`, `hub status`, `doc-land`,
-  `secret list` — have no handler at all. The guidance string is already correct inside the thrown
-  message; only the framing is lost.
-
-**One grooming write.** The carried W18 cluster is now verified, not asserted: **LOOP-250** (the
-version *string*), **LOOP-203** (an unrefreshed `origin/<branch>` ref) and **LOOP-247** (remediation
-that never asks npm what is published) are three axes of one function, `checkInstalledCliSkew`
-(`hub/src/doctor.ts:663-753`). A routing note on LOOP-250 names the anchors and asks for a shape the
-others drop into — explicitly without widening its diff; 247 unparks when 250 lands.
-
-**Structural — thirteenth consecutive measurement.** Junior **10**/10 (at cap, promote nothing);
-senior **6**/10 with **zero** senior-tier Backlog rows for the eighth straight fire. Backlog 69 → 71.
-Filed 2, promoted 0 — the cap, not a shortage of candidates. Junior throughput, not discovery, sets
-this loop's pace.
-
-
+The residue I came to delete was the procedure's own output — 3 of 13 `[ARCHIVED]` stubs held the only live copy of a still-in-force clause, and the largest was the `STANDING RULES IN FORCE` distillation that made archiving ~54 KB safe, so every R2 pass must leave one (sharpening LOOP-282). `ux-flows` on a `/tmp` build: `doctor` exits `DOCTOR_OK` outside a workspace while 18 of 19 sibling verbs refuse (LOOP-284), and six verbs answer with a raw Node stack — `team repair` from inside the try/catch that forbids it, being the one async subcommand dispatched without `await` (LOOP-283). Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 24)`; the three rulings stay in the Decisions log below.
 ### 2026-08-03 (pm, twenty-fifth fire) — the file doctor reads a live credential *from* is the one file it never checks is about to be committed, and a backlog that cannot drain is not therefore stale
 
 **Third quiet fire running.** `origin/main` `dcb9e47` = my own prior doc land; `de004d1..HEAD` holds
@@ -656,6 +613,67 @@ rather than re-specifying it in flight; **LOOP-254** (Todo) is the standing fix.
 2**, Backlog 71 → 70, junior back to **10**/10.
 
 
+### 2026-08-03 (pm, twenty-sixth fire) — the four edges I recorded as retired were never retired, and a seam predicted to blind its next consumer blinded one within the day
+
+**The product moved for the first time in four fires.** `de004d1..origin/main` now holds three code
+commits — `3853f9a` (LOOP-235, W06 scans staged + committed-unpushed bundle artifacts), `a3b5303`
+(LOOP-252, direction-aware daemon semver guard), `63c98ec` (LOOP-261, `ensureHub` ensures per-project
+daemons) — so the lens list reset. Doc-watch: hash moved to `0f3a6315`, but every `docs/STRATEGY.md`
+commit is authored `dev-loop`, so the change is **mine, not foreign** — still no foreign edit.
+`In Review` held only a `qa`-owned row, `needs-pm` **0**, `Human-Blocked` **0**.
+
+**§9c: the retirement I reported last fire did not happen.** Re-deriving every edge from the tickets'
+own comments — not from carried state — turned up all four `Unblocked-by:` markers I wrote at 15:11Z
+still absent from the ledger. `hub/src/blocked-by.ts` anchors the keyword to the **start of a line**:
+
+```
+const MARKER_RE = /^\s*(blocked-by|unblocked-by):\s*(.*)/i;
+```
+
+I had written them as `§9c edge retirement: **Unblocked-by: LOOP-258**` — inline and bold-wrapped,
+so the parser's prose-mention filter (deliberate, and tested at `hub/test/blocked-by.ts:25,30`)
+correctly discarded all four. Two earlier retirements, by the same author under the same spec, used a
+bare line and parsed fine. **4 of the 6 edge retirements ever written on this board were silently
+discarded**, and nothing anywhere — exit code, CLI output, doctor, any report — distinguished the two
+forms. Repaired all four in canonical form this fire.
+
+The cause is structural, not clerical: `ticket create --blocked-by` **emits** the canonical form at
+`cli-agentops.ts:355`, so edge *creation* is correct by construction — while `git grep unblocked-by
+-- hub/src` outside the parser is **empty**. Edge *retirement* has no emitter at all; it is 100%
+hand-typed prose into a `comment add` that validates nothing. The operation with no tooling is
+exactly the one that failed. → **LOOP-287** (junior, P2): warn on a marker that will not parse, and
+give retirement the emitter creation already has.
+
+This also retires last fire's reasoning that a dead edge "can only cause a false *non*-unpark, never
+a false unpark." True of a dead edge — but these were not dead edges. They were live edges I had
+*reported* as dead, which is the state §9c names as the trap: *"a later re-park inherits stale Done
+blockers and instantly self-unparks."*
+
+**`consistency` lens — the seam that blinds its next consumer.** LOOP-271, filed earlier the same
+day, predicted that *"every new consumer of `deliveryProjects()` is scratch-blind by default"*, because
+the helper filters only `_team` and each call site re-applies the real exclusion by hand. `63c98ec`
+landed a new consumer hours later and is scratch-blind: `hub.ts:54` iterates `deliveryProjects(ws)`
+with no filter, unlike its siblings `rotation.ts:31` and `doctor.ts:190`. Measured on a build of
+`origin/main` against this workspace's own config: `deliveryProjects(ws) = ["loop","fixture"]`, and
+`fixture` — `scratch:true` — **is** seeded in the hub DB, which is `daemonUpForKey`'s only gate. So
+`ensureHub()` will start a real daemon, holding a port from the 64-port band, for a scratch project,
+on every `dev-loop run`. Latent today (this box runs v1.14.0, behind main); it arms on the next
+upgrade.
+
+**Not filed — folded into LOOP-271 (§8).** Same cause, same seam, same fix; a second ticket would
+have had to edit the same function. Its AC1 also turned out to be too narrow: it excluded `scratch`
+only, while `enabled:false` — documented as *"removes the project from scheduling entirely"* — would
+still have produced a daemon after the fix landed. Widened AC1 to **schedulable**, added AC6 (the
+daemon path, which AC2/AC3 left untested) and AC7 (`enabled:false` on all three surfaces). Left at
+**P2**: real but latent, and inflating it would buy signalling and cost honesty.
+
+**Structural — senior is idle against an empty senior Backlog.** Senior sat at **6/10** with **zero**
+senior-tier Backlog rows; junior had 2 slots and took **LOOP-260** (rank 3, `edge-case`) then
+**LOOP-201** (rank 3.5, oldest). The lever that ends a senior drought remains the `sensitive` label
+applied honestly at filing (§4 ⇒ senior, always), never a re-tier to balance load — nothing this fire
+qualified. **Filed 1, promoted 2, groomed 1**, junior back to **10**/10.
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -688,6 +706,26 @@ rather than re-specifying it in flight; **LOOP-254** (Todo) is the standing fix.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-03 (pm, twenty-sixth fire) — a machine-readable contract with no emitter is a contract
+  written by hand, and hand-written contracts fail silently.** Edge *creation* has
+  `ticket create --blocked-by`, which emits the canonical `Blocked-by:` line at `cli-agentops.ts:355`;
+  edge *retirement* has no flag anywhere in `hub/src`, so every `Unblocked-by:` is free text typed into
+  a `comment add` that validates nothing. 4 of the 6 retirements ever written on this board were
+  silently discarded as prose — same author, same spec, both forms, zero feedback. **Rule: when a
+  format is machine-parsed, audit which side of it has a generator. The unassisted operation is where
+  the corpus is wrong, and "I recorded it" is not evidence the record parsed — re-derive the ledger
+  with the real parser, never from your own report of having written it.** → LOOP-287.
+
+- **2026-08-03 (pm, twenty-sixth fire) — a shared helper that returns more than its callers want
+  exports its blindness to everyone who arrives later.** `deliveryProjects()` filters only `_team`;
+  every call site re-applies the real exclusion by hand, so LOOP-271 predicted the next consumer would
+  be scratch-blind. One landed hours later and was — and at a worse blast radius than any instance the
+  ticket listed, spawning a daemon and binding a port rather than rendering a wrong row. **Rule: a
+  by-convention filter at N call sites is an N+1 problem; fix the seam so the default is the safe set
+  and inclusion is opt-in. And when a ticket already owns the cause, a new instance is evidence plus an
+  AC gap to close on it, not a new ticket — check whether the existing ACs would actually have covered
+  the surface you just found.** → LOOP-271 (AC1 widened to *schedulable*, AC6/AC7 added).
 
 - **2026-08-03 (pm, twenty-fifth fire) — audit a guard list against what each artifact HOLDS, not
   against what each check was written for.** Doctor's three committability guards hard-fail on
@@ -789,50 +827,8 @@ rather than re-specifying it in flight; **LOOP-254** (Todo) is the standing fix.
   filings** — re-tier only on §21b's explicit signals, and never manufacture senior work to fill a
   slot. Two candidates were examined this fire and both correctly stayed junior.
 
-- **2026-08-03 (pm, twenty-first fire) — a fixture that hand-supplies an argument the production
-  caller never passes cannot catch a caller bug.** LOOP-236's Fixture E named the real runtime shape
-  in its own comment, then invented the `reposRegistry` argument that `toLegacyView` does not emit —
-  so it proved the predicate while the caller stayed broken, through a green suite, a green CI and an
-  approving review. **Rule: a regression test for a caller bug must obtain its arguments the way the
-  caller obtains them** — build the fixture, run it through the real projection, pass the result
-  straight through. If a test constructs an argument by hand, it can only test the callee.
-- **2026-08-03 (pm, twenty-first fire) — verify against the PROJECTION the runtime reads, not the
-  file on disk.** My first pass evaluated `CONDITIONAL_SECTIONS` against raw `dev-loop.json` and
-  produced a confident false finding (§5 broken); `toLegacyView` injects `backend` and the claim
-  evaporated. Re-running through the projection then exposed the real defect, which was worse.
-  **Rule: for any config-driven predicate, find the one projection every runtime consumer reads and
-  drive it from there** — `team-config.ts:627` says outright that `toLegacyView` is that seam.
-- **2026-08-03 (pm, twenty-first fire) — adding a field to a type is not populating it, and
-  `as unknown as` hides the difference.** `cfg?.repos` typechecked at the call site while being
-  structurally absent from `LegacyProjectsConfig`. **Rule: when a fix says "the type gains field X",
-  check what WRITES X on the live path; a cast between two config views suppresses exactly the error
-  that would have caught it.**
-- **2026-08-03 (pm, twenty-first fire) — an AC the handoff does not mention is the AC to check
-  first.** LOOP-243's handoff mapped AC1–AC3 and was silent on AC4 and AC5; those are precisely the
-  two that failed, and AC5 failed by doing the one thing its own text forbade. **Rule: read the
-  handoff as a locator, then check the ACs it did NOT claim** — and require the next handoff to map
-  every AC, so silence stops being cheap.
-
-- **2026-08-03 (pm, twentieth fire) — a prose warning that names both a failure and its mechanism is
-  an ACCEPTANCE CRITERION; and a test can pin the very trap it was written to avoid.** LOOP-111's
-  grooming comment predicted the `no-pr`/`unknown` collapse exactly; the code crossed it and Cases
-  30/30b assert it as correct, Case 30's own parenthetical naming the ambiguity before choosing
-  wrong. Argv-validating doubles (LOOP-121) do not help when the *oracle* is wrong. **Rule: treat a
-  mechanism-naming warning as an AC and re-read it at the line it describes; and for any two-valued
-  negative ask whether the code can tell "no" from "couldn't ask" — if not it reports the confident
-  one.** (LOOP-111 → LOOP-274.)
-- **2026-08-03 (pm, twentieth fire) — a design gate AMENDS spec-edge omissions and BOUNCES only
-  incoherent design.** LOOP-272 dropped two of four operator-ruled items; binding comments cost one
-  write, a bounce would cost a senior fire to re-add two bullets. **Rule: bounce when the design or
-  decomposition is wrong, amend when it is sound and the omission sits at the spec's edge — and say
-  which you did.** Same pass: **`references/config-schema.md` is NOT a §17 governing file** (§17 names
-  `conventions.md` + SKILL files only; LOOP-226/123/103 each documented their own key). A config key
-  that ships undocumented is half-shipped.
-- **2026-08-03 (pm, twentieth fire) — a program umbrella is not a Backlog row.** LOOP-228 sat
-  `Urgent`/untiered/unassigned for two days inside a funnel it can never leave, re-derived as
-  intentional every fire. **Rule: mark an umbrella explicitly and roll its status up on the ticket;
-  do NOT apply §9a's "close the parent" when the parent carries the baseline its children are
-  measured against** — closing it scatters that reference across seven tickets.
+- **2026-08-03 (pm, twenty-first fire) — [ARCHIVED] 4 rulings** (a fixture that hand-supplies an argument the production caller never passes can only test the callee, never catch the caller bug; verify a config-driven predicate against the PROJECTION every runtime consumer reads, not the file on disk; adding a field to a type is not populating it, and a cast between two config views suppresses the error that would have caught it; the AC a handoff does NOT claim is the one to check first) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 24.
+- **2026-08-03 (pm, twentieth fire) — [ARCHIVED] 3 rulings** (a prose warning naming both a failure and its mechanism is an acceptance criterion, and a test can pin the very trap it was written to avoid — argv-validating doubles do not help when the oracle is wrong; a design gate AMENDS spec-edge omissions and BOUNCES only incoherent design, and `references/config-schema.md` is NOT a §17 governing file; a program umbrella is not a Backlog row, and §9a's close-the-parent does not apply when the parent carries the baseline its children are measured against) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 24.
 - **2026-08-03 (pm, nineteenth fire) — [ARCHIVED] 2 rulings** (a cancelled CI run on a superseded SHA is not a red gate — read the conclusion of the tree that CONTAINS the change, not of the commit that introduced it; an exclusion applied at the call site is a convention, only one applied at the seam is a contract) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 23.
 - **2026-08-03 (pm, eighteenth fire) — [ARCHIVED] 3 rulings** (a tracker whose remaining acceptance can only be satisfied by the thing it blocks can never close; a verification step that only proves its worth when it fires still earns its cost; I had been rolling up the second-largest section for fifteen passes) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 23.
 - **2026-08-03 (pm, seventeenth fire) — [ARCHIVED] 3 rulings** (a review thread is closed by an assertion and nothing compares the assertion to the tree; hardening the CONSUMER of a two-ended mechanism without the producer converts a soft failure into a trap; "fail-closed" and "refuses legibly" are independent properties) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 23.
@@ -845,35 +841,7 @@ rather than re-specifying it in flight; **LOOP-254** (Todo) is the standing fix.
 
 - **2026-08-01 (pm, twelfth fire) — [ARCHIVED] 3 rulings** (the age-distribution test for a starving backlog; enumerate what a metric omits before optimising it; name the mechanism and date when betting on an unlanded one) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 13.
 
-- **2026-08-01 (pm, eleventh fire) — while the hub daemon is version-skewed, senior-tier filings are
-  direct-code shaped only.** A stale daemon silently collapses a dev-tier actor's cross-tier
-  assignment to self, so senior-dev can author a design but cannot stage its junior children
-  (observed: LOOP-172's child LOOP-256, canceled by its author). Filing `Mode: design`
-  design-and-delegate work in that state creates tickets that provably cannot complete. Until
-  **LOOP-258** (the operator restart tracker) clears, senior-tier ideation routes to direct-code or
-  waits. This is a routing constraint imposed by infrastructure, **not** a revision of §21b — the
-  tier signals are unchanged, and borderline work still goes junior. Corollary for reading the
-  board: a tier holding open cap slots is not evidence of starvation; check whether its queue is
-  *completable* before concluding PM has under-fed it.
-- **2026-08-01 (pm, eleventh fire) — a doc that misdescribes config is the same defect class as code
-  that drops it, and gets the same verify-fail.** LOOP-103 shipped correct, tested, merged code and
-  still failed AC3, because its schema-doc row inverted two terms of the precedence chain. The
-  ticket existed to stop `config-schema.md` making false claims about what config does; shipping a
-  new false claim in it is not a rounding error on an otherwise-good increment. Recorded because the
-  cheap call was to wave it through on the strength of the code.
-- **2026-08-01 (pm, eleventh fire) — a blocker edge must point at the ticket that RESOLVES the
-  block, not the ticket where it was diagnosed.** LOOP-172 was blocked on LOOP-235 because that is
-  where the daemon root-cause was written up; LOOP-235's own deliverable would never have restarted
-  the daemon, so the edge would have auto-unparked into the identical failure. When correcting such
-  an edge, ADD the true blocker rather than swapping it out — §9c unparks only when every edge is
-  terminal, so an extra edge is strictly safer and does not discard another agent's marker.
-- **2026-08-01 (pm, eleventh fire) — verify a handoff's claim about a shared surface before
-  repeating it, including a negative one.** senior-dev reported that `doctor` was blind to the
-  daemon skew and suggested adding a W-check. The check already existed and had been firing; the
-  real defect was that it is unnumbered and sits in a section explicitly stamped non-gating, so
-  `DOCTOR_OK` prints over it (**LOOP-259**). Filing the suggested ticket as described would have
-  added a duplicate check and left the actual defect in place.
-
+- **2026-08-01 (pm, eleventh fire) — [ARCHIVED] 4 rulings** (while the hub daemon is version-skewed senior filings are direct-code shaped only, and a tier holding open cap slots is not starvation — check whether its queue is *completable*; a doc that misdescribes config is the same defect class as code that drops it and earns the same verify-fail; a blocker edge must point at the ticket that RESOLVES the block, and a correction ADDS the true blocker rather than swapping it out; verify a handoff's claim about a shared surface before repeating it, including a negative one) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 24.
 - **2026-06-14 → 06-27 — [ARCHIVED] the 2026-06 milestone arc** (daemon foundation DL-1..DL-5; standalone-daemon + multi-CLI repositioning P1..P5; hub buildout; the two-tier Dev split) — all Done, superseded by **Current state** → [`2026-06.md`](strategy-archive/2026-06.md).
 - **2026-07-30 — [ARCHIVED] the 2026-07-30 pm fire arc** (lens rotation `strategy-gaps`→`trust-safety`; the metering/landing/observability chains; that day's design-gate + §9c rulings) — superseded by **Current state** → [`2026-07.md`](strategy-archive/2026-07.md).
 
