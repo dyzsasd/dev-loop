@@ -32,7 +32,7 @@ async function getHtml(base: string, path: string): Promise<{ status: number; te
 }
 
 // ─── Test A1: stale daemon → ws-bar-warn + "OLD code" on board page ─────────────
-const staleSrv = createDaemon({ db, projectId, projectKey: "idp", daemonVersion: "0.0.1" });
+const staleSrv = createDaemon({ db, projectId, projectKey: "idp", daemonVersion: "0.0.1", dbPath: DB });
 staleSrv.listen(0, "127.0.0.1");
 await once(staleSrv, "listening");
 const stalePort = (staleSrv.address() as { port: number }).port;
@@ -43,10 +43,11 @@ ok(stalePage.status === 200, "stale daemon: GET /p/idp/ returns 200");
 ok(stalePage.text.includes("OLD code"), "stale daemon: board page contains stale marker 'OLD code'");
 ok(stalePage.text.includes("0.0.1"), "stale daemon: board page shows old daemon version 0.0.1");
 ok(stalePage.text.includes('class="ws-bar ws-bar-warn"'), "stale daemon: ws-bar element carries the warning CSS class");
+ok(stalePage.text.includes(DB), "stale daemon: ws-bar shows the db path passed via dbPath");
 staleSrv.close();
 
 // ─── Test A2: current daemon → ws-bar present, NO stale warning ─────────────────
-const freshSrv = createDaemon({ db, projectId, projectKey: "idp" });
+const freshSrv = createDaemon({ db, projectId, projectKey: "idp", dbPath: DB });
 freshSrv.listen(0, "127.0.0.1");
 await once(freshSrv, "listening");
 const freshPort = (freshSrv.address() as { port: number }).port;
@@ -57,6 +58,7 @@ ok(freshPage.status === 200, "fresh daemon: GET /p/idp/ returns 200");
 ok(!freshPage.text.includes("OLD code"), "fresh daemon: board page does NOT show stale 'OLD code' warning");
 ok(freshPage.text.includes('class="ws-bar"') && !freshPage.text.includes('class="ws-bar ws-bar-warn"'),
   "fresh daemon: ws-bar uses normal (non-warn) CSS class");
+ok(freshPage.text.includes(DB), "fresh daemon: ws-bar shows the db path passed via dbPath");
 
 // ─── Test B: daemonStatusAll() output includes the non-default port ──────────────
 const RUN_DIR = join(BASE_DIR, "run");
@@ -84,6 +86,17 @@ const statusOut = captured.join("\n");
 ok(statusOut.includes(String(freshPort)), `hub status: output includes the non-default port ${freshPort}`);
 ok(statusOut.includes("RUNNING"), "hub status: output reports daemon as RUNNING");
 ok(statusOut.includes("idp"), "hub status: output names the project key 'idp'");
+
+// ─── Test C: dbPath override → ws-bar reflects the override, not wsHubDb(ws) ─────────────────────
+const altDbPath = `${BASE_DIR}/alt.db`;
+const altSrv = createDaemon({ db, projectId, projectKey: "idp", dbPath: altDbPath });
+altSrv.listen(0, "127.0.0.1");
+await once(altSrv, "listening");
+const altPort = (altSrv.address() as { port: number }).port;
+const altPage = await getHtml(`http://127.0.0.1:${altPort}`, "/p/idp/");
+ok(altPage.text.includes(altDbPath), "dbPath override: ws-bar shows the overriding path");
+ok(!altPage.text.includes(DB), "dbPath override: ws-bar does NOT show the original DB path");
+altSrv.close();
 
 freshSrv.close();
 db.close();
