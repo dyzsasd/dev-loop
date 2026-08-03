@@ -246,10 +246,16 @@ export async function fireHealthNotifyTick(opts: {
   const openEpisode = !!lastNotified && (!lastRecovered || lastRecovered < lastNotified);
   const windowH = +(windowMs / 3_600_000).toFixed(2);
   const pct = fm.successRate === null ? "—" : `${Math.round(fm.successRate * 100)}%`;
+  // Cost summary (LOOP-127): one honest fragment — NEVER $0.00.
+  const costFrag = fm.meteredFires === 0
+    ? `; cost: unmetered (0/${fm.fires})`
+    : fm.costUsd !== null
+      ? `; cost: $${fm.costUsd.toFixed(4)} (${fm.meteredFires}/${fm.fires} metered)`
+      : `; cost: unavailable (${fm.meteredFires}/${fm.fires} metered)`;
   // §16 closed-allow-list one-liner: projectKey + window metrics + errorClass tallies + the localhost link.
   if (degraded && !openEpisode) {
     const top = Object.entries(fm.byErrorClass).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k}×${n}`).join(", ");
-    const line = cleanLine(`[${projectKey}] loop health: fire success ${pct} over the last ${windowH}h (${fm.fires} fires${top ? ` — ${top}` : ""}) — check \`dev-loop metrics\` / runner logs · ${baseUrl}/activity`, 200);
+    const line = cleanLine(`[${projectKey}] loop health: fire success ${pct} over the last ${windowH}h (${fm.fires} fires${top ? ` — ${top}` : ""}${costFrag}) — check \`dev-loop metrics\` / runner logs · ${baseUrl}/activity`, 200);
     try {
       if (CHANNEL_DRYRUN) { console.error(`[daemon] [dry-run] would notify fire-health via ${target.label}: ${line}`); }
       else {
@@ -260,7 +266,7 @@ export async function fireHealthNotifyTick(opts: {
     } catch (e) { console.error(`[daemon] fire-health notify failed: ${scrubErr((e as Error).message)}`); return 0; }
   }
   if (healthy && openEpisode) {
-    const line = cleanLine(`[${projectKey}] loop health recovered: fire success ${pct} over the last ${windowH}h (${fm.fires} fires) · ${baseUrl}/activity`, 200);
+    const line = cleanLine(`[${projectKey}] loop health recovered: fire success ${pct} over the last ${windowH}h (${fm.fires} fires${costFrag}) · ${baseUrl}/activity`, 200);
     try {
       if (CHANNEL_DRYRUN) { console.error(`[daemon] [dry-run] would notify fire-health recovery via ${target.label}: ${line}`); }
       else {

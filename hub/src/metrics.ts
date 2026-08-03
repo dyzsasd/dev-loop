@@ -650,6 +650,18 @@ export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<t
       console.log(`decision queue (yours): ${dq.length}, oldest ${lbl(oldest)} waiting ${age(oldest)} — ${items}${dq.length > 6 ? ", …" : ""}`);
     }
   } else console.log(String(out.boardNote));
+  // Cost headline (LOOP-127): one honest line — NEVER $0.00, NEVER omitted.
+  if (fires.meteredFires === 0) {
+    console.log(`cost: unmetered — 0 of ${fires.fires} fires reported usage`);
+  } else {
+    const throughput = out.teamRollup ? (out.teamRollup as { throughput: number }).throughput : null;
+    const perAccepted = fires.costUsd !== null && throughput != null && throughput > 0
+      ? `  ($${(fires.costUsd / throughput).toFixed(4)}/accepted change)` : "";
+    const costStr = fires.costUsd !== null
+      ? `$${fires.costUsd.toFixed(4)} over ${fires.meteredFires} of ${fires.fires} metered fires${perAccepted}`
+      : `unavailable — ${fires.meteredFires} of ${fires.fires} fires metered, none priced`;
+    console.log(`cost: ${costStr}`);
+  }
 }
 
 // ─── usage / cost / flow renderers (LOOP-125) — new flags; renderHuman left untouched ─────────────
