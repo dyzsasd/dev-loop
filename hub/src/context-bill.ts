@@ -13,15 +13,27 @@
 //     unnumbered "Topology at a glance" block is always-read, spans tile the file).
 //   • contextBill() — what `dev-loop metrics --context` prints: per agent, SKILL prose + cheat
 //     block + the UNION of its cited conventions spans (+ the always-read preamble) + the lessons
-//     caps = the estimated per-fire boot load in lines/bytes (+ ~tokens at 4 bytes/token).
+//     caps + (STRATEGY_DOC_READERS only) the project's strategyDoc per §20 R2 = the estimated
+//     per-fire boot load in lines/bytes (+ ~tokens at 4 bytes/token).
+//     Strategy-doc attribution rule (§20 R2): PM re-reads the whole doc-base every fire; other
+//     agents read it selectively on relevant tasks — not a fixed per-fire load. Only agents in
+//     STRATEGY_DOC_READERS are charged. An absent/unreadable doc is reported as absent (0 bytes
+//     added to the total) rather than silently omitted.
 // Lessons budgets stay lessons.ts's (INDEX_MAX_* / SHARD_MAX_* — imported, never duplicated).
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "./lessons.ts";
+import { resolveWorkspace } from "./workspace.ts";
+import { reposOfProject } from "./team-config.ts";
 
 export interface Budget { lines: number; bytes: number }
 export interface Measure { lines: number; bytes: number }
+// The resolved size of a project's strategyDoc when readable (repo file). bytes/lines are 0 when the
+// doc is configured but absent/unreadable (hub doc, Linear doc, or missing file); label says why.
+export interface StrategyDocStat { bytes: number; lines: number; label: string }
+// Agents mandated by §20 R2 to re-read the full strategy doc every fire.
+export const STRATEGY_DOC_READERS = new Set(["pm-agent"]);
 
 // ─── the budget table (template §7 — final numbers; prose = file minus the cheat-block span) ───────
 export const BUDGETS: Record<string, Budget> = {
@@ -207,17 +219,24 @@ export interface BillRow {
   agent: boolean;            // *-agent dirs fire on the loop (cheat block + lessons); setup skills don't
   sections: string[];        // the declared Sections anchors (without §)
   prose: Measure; cheat: Measure; conventions: Measure; lessons: Measure;
+  // null when the agent is not in STRATEGY_DOC_READERS; StrategyDocStat (bytes may be 0) when it is.
+  strategyDoc: StrategyDocStat | null;
   total: Measure; tokens: number;
   budget: Budget; withinBudget: boolean;
 }
-export interface Bill { conventions: { anchors: number; total: Measure; alwaysRead: Measure }; rows: BillRow[] }
+export interface Bill {
+  conventions: { anchors: number; total: Measure; alwaysRead: Measure };
+  // The resolved strategy-doc stat passed to contextBill(); absent when no workspace was available.
+  strategyDoc?: StrategyDocStat;
+  rows: BillRow[];
+}
 
 const ZERO: Measure = { lines: 0, bytes: 0 };
 // Lessons are billed at their worst-case CAPS (lessons.ts W03 budgets: INDEX always + one project
 // shard), not the current file sizes — the bill is the guaranteed ceiling, not today's weather.
 const LESSONS_CAP: Measure = { lines: INDEX_MAX_LINES + SHARD_MAX_LINES, bytes: INDEX_MAX_BYTES + SHARD_MAX_BYTES };
 
-export function contextBill(root = pluginRoot()): Bill {
+export function contextBill(root = pluginRoot(), strategyDoc?: StrategyDocStat): Bill {
   const convText = readFileSync(join(root, "references", "conventions.md"), "utf8");
   const conv = parseConventions(convText);
   const rows: BillRow[] = [];
@@ -230,13 +249,18 @@ export function contextBill(root = pluginRoot()): Bill {
     const prose = measureOf(parts.prose), cheat = measureOf(parts.cheat);
     const conventions = conventionsLoad(conv, sec.anchors);
     const lessons = agent ? LESSONS_CAP : ZERO; // setup skills are operator-attended, no §14 lessons read
+    const isReader = STRATEGY_DOC_READERS.has(dir);
+    const rowStrategyDoc: StrategyDocStat | null = (isReader && strategyDoc) ? strategyDoc : null;
+    const docBytes = rowStrategyDoc?.bytes ?? 0;
+    const docLines = rowStrategyDoc?.lines ?? 0;
     const total: Measure = {
-      lines: prose.lines + cheat.lines + conventions.lines + lessons.lines,
-      bytes: prose.bytes + cheat.bytes + conventions.bytes + lessons.bytes,
+      lines: prose.lines + cheat.lines + conventions.lines + lessons.lines + docLines,
+      bytes: prose.bytes + cheat.bytes + conventions.bytes + lessons.bytes + docBytes,
     };
     const budget = BUDGETS[dir] ?? { lines: 0, bytes: 0 }; // unknown dir → 0-budget (the lint fails it loudly)
     rows.push({
       skill: dir, agent, sections: sec.anchors, prose, cheat, conventions, lessons,
+      strategyDoc: rowStrategyDoc,
       total, tokens: Math.ceil(total.bytes / BYTES_PER_TOKEN),
       budget,
       withinBudget: prose.lines <= budget.lines && prose.bytes <= budget.bytes && cheat.lines <= CHEAT_MAX_LINES,
@@ -245,24 +269,76 @@ export function contextBill(root = pluginRoot()): Bill {
   rows.sort((a, b) => b.total.bytes - a.total.bytes);
   return {
     conventions: { anchors: conv.anchors.size, total: measureOf(conv.lines), alwaysRead: conventionsLoad(conv, []) },
+    strategyDoc,
     rows,
   };
 }
 
+// Resolve a DocRef to a repo-relative path string; returns null for hub/Linear forms (unreadable).
+function strategyDocRelPath(docRef: unknown): string | null {
+  if (typeof docRef === "string") {
+    if (/linear\.app\/.*\/document\//.test(docRef)) return null;
+    return docRef.trim() || null;
+  }
+  if (docRef && typeof docRef === "object") {
+    if ("hubDoc" in (docRef as object)) return null;
+    if ("linearDocument" in (docRef as object)) return null;
+    const p = (docRef as { path?: unknown }).path;
+    if (typeof p === "string" && p.trim()) return p;
+  }
+  return null;
+}
+
+// Best-effort resolution of the workspace's strategy doc for the context bill.
+// Returns undefined when no workspace is available; returns a stat with bytes=0 when the doc
+// is configured but unreadable (hub/Linear form, or file not found).
+function tryResolveStrategyDocStat(): StrategyDocStat | undefined {
+  try {
+    const ws = resolveWorkspace();
+    for (const key of Object.keys(ws.file.projects)) {
+      const project = ws.file.projects[key];
+      const docRef = project?.strategyDoc;
+      if (!docRef) continue;
+      const relPath = strategyDocRelPath(docRef);
+      if (!relPath) {
+        // hub doc or Linear doc — readable only in a live session; report as absent
+        const form = (docRef && typeof docRef === "object" && "hubDoc" in (docRef as object)) ? "hubDoc" : "linearDoc";
+        return { bytes: 0, lines: 0, label: `absent (${form} — readable only in a live session)` };
+      }
+      // Repo file — stat it from the first (primary) repo of this project
+      const repos = reposOfProject(ws, key);
+      const repoPath = (repos.find((r) => r.role === "primary") ?? repos.find((r) => r.role === "docs") ?? repos[0])?.absPath;
+      if (!repoPath) continue;
+      const docPath = join(repoPath, relPath);
+      if (!existsSync(docPath)) {
+        return { bytes: 0, lines: 0, label: `absent (${relPath} not found in ${repos[0]?.ref ?? "??"})` };
+      }
+      const text = readFileSync(docPath, "utf8");
+      const docLines = splitLines(text);
+      return { bytes: measureOf(docLines).bytes, lines: docLines.length, label: relPath };
+    }
+  } catch { /* no workspace or resolution error — absent is fine */ }
+  return undefined;
+}
+
 // `dev-loop metrics --context` — the operator-facing render (kept here so metrics.ts stays thin).
 export function printContextBill(asJson: boolean): number {
+  const strategyDoc = tryResolveStrategyDocStat();
   let bill: Bill;
-  try { bill = contextBill(); }
+  try { bill = contextBill(undefined, strategyDoc); }
   catch (e) { console.error(`metrics --context: ${(e as Error).message}`); return 1; }
   if (asJson) { console.log(JSON.stringify(bill, null, 2)); return 0; }
   const m = (x: Measure) => `${x.lines}L/${x.bytes}B`;
-  console.log(`per-agent per-fire context bill — SKILL prose + cheat sheet + conventions (always-read + cited §-spans) + lessons caps (§14; hub/src/lessons.ts); ~tokens at ${BYTES_PER_TOKEN} B/token`);
-  console.log(`conventions.md: ${bill.conventions.anchors} anchors, ${m(bill.conventions.total)} total; always-read (title/ToC + Topology): ${m(bill.conventions.alwaysRead)}\n`);
+  const docLabel = strategyDoc ? strategyDoc.label : "—";
+  console.log(`per-agent per-fire context bill — SKILL prose + cheat sheet + conventions (always-read + cited §-spans) + lessons caps (§14; hub/src/lessons.ts) + strategyDoc for ${[...STRATEGY_DOC_READERS].join("/")} (§20 R2); ~tokens at ${BYTES_PER_TOKEN} B/token`);
+  console.log(`conventions.md: ${bill.conventions.anchors} anchors, ${m(bill.conventions.total)} total; always-read (title/ToC + Topology): ${m(bill.conventions.alwaysRead)}`);
+  console.log(`strategyDoc: ${docLabel}${strategyDoc && strategyDoc.bytes > 0 ? ` (${strategyDoc.bytes}B / ${strategyDoc.lines}L)` : strategyDoc ? " (0B — absent/unreadable)" : " (no workspace)"}\n`);
   const pad = (s: string, w: number) => s.padEnd(w);
-  console.log(pad("SKILL", 22) + pad("PROSE", 15) + pad("CHEAT", 13) + pad("CONVENTIONS", 22) + pad("LESSONS", 13) + pad("TOTAL", 15) + pad("~TOKENS", 9) + "PROSE BUDGET");
+  console.log(pad("SKILL", 22) + pad("PROSE", 15) + pad("CHEAT", 13) + pad("CONVENTIONS", 22) + pad("LESSONS", 13) + pad("STRATEGY-DOC", 16) + pad("TOTAL", 15) + pad("~TOKENS", 9) + "PROSE BUDGET");
   for (const r of bill.rows) {
+    const sdCol = r.strategyDoc ? `${r.strategyDoc.bytes}B` : "—";
     console.log(pad(r.skill, 22) + pad(m(r.prose), 15) + pad(m(r.cheat), 13) + pad(`${r.sections.length}§ → ${m(r.conventions)}`, 22)
-      + pad(`${r.lessons.bytes}B`, 13) + pad(`${r.total.bytes}B`, 15) + pad(String(r.tokens), 9)
+      + pad(`${r.lessons.bytes}B`, 13) + pad(sdCol, 16) + pad(`${r.total.bytes}B`, 15) + pad(String(r.tokens), 9)
       + `${r.withinBudget ? "OK" : "OVER"} (≤${r.budget.lines}L/${r.budget.bytes}B)`);
   }
   if (bill.conventions.total.bytes > CONVENTIONS_WARN_BYTES)
