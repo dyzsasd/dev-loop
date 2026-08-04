@@ -113,5 +113,57 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
   ok(!/launch refused/.test(aged.out) && rowCount() === beforeA + 1,
     "AC6: costly rows aging out of the 24h window drops the total below the ceiling ⇒ launches resume");
 
+  // ════ Child 4 (LOOP-230) — the perFireUsd in-flight watchdog ════════════════════════════════════
+  // Same harness, one axis down: dailyUsd decides whether a fire LAUNCHES, perFireUsd decides whether a
+  // launched fire SURVIVES. Park dailyUsd far above anything seeded so only the per-fire ceiling can act.
+  ok((team(["set", "team.budget.dailyUsd", "100000"], ws).status ?? 1) === 0, "LOOP-230 setup: dailyUsd parked high (isolate the per-fire axis)");
+  const lastRow = (): Record<string, unknown> => {
+    const lines = readFileSync(ledger, "utf8").trim().split("\n").filter(Boolean);
+    return JSON.parse(lines[lines.length - 1]) as Record<string, unknown>;
+  };
+
+  // ── AC "no false kill on a normal fire" (the control run): a ceiling far above this fire's estimated
+  // cost arms the watchdog (55h deadline at the fallback rate) and never trips it. This runs FIRST because
+  // its ledger row is also how the test learns the exact (codingAgent, model) profile ratePerMsFor keys on —
+  // hard-coding that profile would let the rate lookup silently miss and fall back without the test noticing.
+  seed();
+  ok((team(["set", "team.budget.perFireUsd", "1000"], ws).status ?? 1) === 0, "AC1: team set team.budget.perFireUsd 1000 (through the mutator)");
+  const control = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: fakeBin });
+  const ctlRow = lastRow();
+  ok(/fire ok/.test(control.out) && !/budget perFireUsd/.test(control.out),
+    "AC (control): a fire under the ceiling runs to completion — no budget kill, no budget reason logged");
+  ok(ctlRow.exitCode === 0 && ctlRow.errorClass === undefined && ctlRow.timedOut === false,
+    `AC (control): its ledger row is a clean exit — no errorClass (got ${JSON.stringify({ exitCode: ctlRow.exitCode, errorClass: ctlRow.errorClass })})`);
+
+  // ── AC4: a fire whose ELAPSED time crosses perFireUsd / ratePerMs is terminated, with a reason and a
+  // ledger class DISTINCT from the wall-timeout. The rate is pinned by seeding ONE priced row of the very
+  // profile the control fire just recorded: $1.00 / 1_000_000ms = 1e-6 $/ms, so a $0.002 ceiling ⇒ a 2s
+  // deadline. The stub sleeps 60s, so anything under that is the watchdog, not the stub finishing.
+  const pricedProfileRow = JSON.stringify({
+    ts: new Date().toISOString(), agent: "pm", project: "alpha",
+    codingAgent: ctlRow.codingAgent, model: ctlRow.model, provider: "anthropic", effort: "high",
+    durationMs: 1_000_000, exitCode: 0, timedOut: false, fireId: "00000000-0000-0000-0000-000000000001",
+    usage: { source: "provider", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 1, currency: "USD" },
+  });
+  seed(pricedProfileRow);
+  ok((team(["set", "team.budget.perFireUsd", "0.002"], ws).status ?? 1) === 0, "AC1: team set team.budget.perFireUsd 0.002 (a fractional ceiling is valid config)");
+  const sleeperBin = join(tmp, "sleeper-claude.sh");
+  writeFileSync(sleeperBin, "#!/bin/sh\necho 'fire started'\nsleep 60\necho 'fire finished'\n"); chmodSync(sleeperBin, 0o755);
+  const t0 = Date.now();
+  const killed = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: sleeperBin });
+  const elapsedMs = Date.now() - t0;
+  const killRow = lastRow();
+  ok(elapsedMs < 30_000, `AC4: the 60s fire was terminated early (~2s deadline; took ${Math.round(elapsedMs / 1000)}s)`);
+  ok(/budget perFireUsd \$0\.002/.test(killed.out),
+    "AC4: the kill reason names the perFireUsd ceiling (a sub-cent ceiling is NOT printed as $0.00)");
+  ok(!/fire exceeded/.test(killed.out) && !/looks WEDGED/.test(killed.out),
+    "AC4: the reason is DISTINCT — neither the wall-timeout ('fire exceeded') nor the stall wording");
+  ok(killRow.errorClass === "budget-per-fire",
+    `AC4: the ledger row records errorClass "budget-per-fire" (got ${JSON.stringify(killRow.errorClass)})`);
+  ok(killRow.timedOut === false && killRow.exitCode === 126,
+    `AC4: the row is not a timeout — timedOut false + exit 126, never 124 (got ${JSON.stringify({ timedOut: killRow.timedOut, exitCode: killRow.exitCode })})`);
+  ok(typeof killRow.durationMs === "number" && (killRow.durationMs as number) < 30_000,
+    "AC4: the row carries the (short) durationMs a killed fire always records — the estimate's own input");
+
   process.exit(fails ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
