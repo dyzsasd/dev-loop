@@ -10,7 +10,7 @@ import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb } from "./workspace.ts";
 import { validateTeamFile, referencingProjects, isTeamProject, type TeamFile, type Workspace } from "./team-config.ts";
-import { confirmationToken, isolationVerdict, TOKEN_PREFIX } from "./destructive-guard.ts";
+import { confirmationToken, isolationVerdict, commitBothHalves, TOKEN_PREFIX } from "./destructive-guard.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
 import { provisionClaudePermissions } from "./team-init.ts";
@@ -789,24 +789,52 @@ export function removeProject(argv: string[]): number {
     }
   }
 
+  // ── the two halves, through ONE commit (LOOP-306) ────────────────────────────────────────────
+  // Deliberately NOT through `mutate()`: mutate writes the file itself, so routing the config half
+  // through it would put the write outside the joint commit. It also calls `resolveWorkspace()` a
+  // SECOND time, and `delete file.projects[key]` on that second read is a silent no-op if the key is
+  // already gone — validation passes, the file is rewritten identically, and the success line prints
+  // for a write that changed nothing. Computing from the `ws` we already resolved removes that seam.
+  // `mutate()` is unchanged for every other mutator; this is not a refactor of the config layer.
+  let configText: string | null = null;
   if (inConfig) {
-    mutate((file) => { delete file.projects[key]; });
-    console.log(`removed project '${key}' from dev-loop.json`);
+    const file: TeamFile = JSON.parse(JSON.stringify(ws.file));
+    delete file.projects[key];
+    const { errors } = validateTeamFile(file);
+    // Validation failure still dies before ANYTHING is touched — same precedence as mutate()'s.
+    if (errors.length) { db?.close(); die("the edit would make dev-loop.json invalid:\n" + errors.map((e) => `  [${e.code}] ${e.path}: ${e.message}`).join("\n"), 1); }
+    configText = JSON.stringify(file, null, 2) + "\n";
   }
-  if (db && projectId) {
-    // Cascade delete child rows (FK-safe order) before removing the project row.
-    db.prepare("DELETE FROM channel_messages WHERE channel_id IN (SELECT id FROM channels WHERE project_id=?)").run(projectId);
-    db.prepare("DELETE FROM channels WHERE project_id=?").run(projectId);
-    db.prepare("DELETE FROM labels WHERE project_id=?").run(projectId);
-    db.prepare("DELETE FROM document_versions WHERE doc_id IN (SELECT id FROM documents WHERE project_id=?)").run(projectId);
-    db.prepare("DELETE FROM documents WHERE project_id=?").run(projectId);
-    db.prepare("DELETE FROM events WHERE project_id=?").run(projectId);
-    db.prepare("DELETE FROM mirror_map WHERE project_id=?").run(projectId);
-    db.prepare("DELETE FROM comments WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id=?)").run(projectId);
-    db.prepare("DELETE FROM tickets WHERE project_id=?").run(projectId);
-    db.prepare("DELETE FROM projects WHERE key=?").run(key);
-    console.log(`removed project '${key}' from hub.db`);
+  // Cascade delete child rows (FK-safe order) before removing the project row. Runs INSIDE the
+  // transaction commitBothHalves opens — the ten statements were previously un-transacted, so a
+  // failure partway through left the project row present with its children already gone.
+  const dbWork = db && projectId
+    ? () => {
+        db.prepare("DELETE FROM channel_messages WHERE channel_id IN (SELECT id FROM channels WHERE project_id=?)").run(projectId);
+        db.prepare("DELETE FROM channels WHERE project_id=?").run(projectId);
+        db.prepare("DELETE FROM labels WHERE project_id=?").run(projectId);
+        db.prepare("DELETE FROM document_versions WHERE doc_id IN (SELECT id FROM documents WHERE project_id=?)").run(projectId);
+        db.prepare("DELETE FROM documents WHERE project_id=?").run(projectId);
+        db.prepare("DELETE FROM events WHERE project_id=?").run(projectId);
+        db.prepare("DELETE FROM mirror_map WHERE project_id=?").run(projectId);
+        db.prepare("DELETE FROM comments WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id=?)").run(projectId);
+        db.prepare("DELETE FROM tickets WHERE project_id=?").run(projectId);
+        db.prepare("DELETE FROM projects WHERE key=?").run(key);
+      }
+    : null;
+  try {
+    commitBothHalves({ configPath: ws.filePath, configText, db, dbWork });
+  } catch (e) {
+    // Rethrow the message VERBATIM. commitBothHalves already states what each half's actual state is;
+    // wrapping it in a summary of our own ("nothing was changed") would be a claim this frame cannot
+    // make — the combined-failure arm exists precisely because that claim is sometimes false.
+    db?.close();
+    die(`remove-project '${key}': ${(e as Error).message}`, 1);
   }
+  // Announced only after BOTH halves are durable. Each half printing its own line as it went is the
+  // defect: it let the CLI report a config write that had not happened. (LOOP-302 ②)
+  if (inConfig) console.log(`removed project '${key}' from dev-loop.json`);
+  if (db && projectId) console.log(`removed project '${key}' from hub.db`);
   db?.close();
   if (!inConfig) console.log(`note: '${key}' was db-only (not in dev-loop.json)`);
   return 0;
