@@ -4,6 +4,36 @@
 // Child 1 (LOOP-64): human review-objection axis (§3.1/§3.2/§3.4) via the LOOP-40 landing.ts seam.
 // Child 2 (LOOP-65): --apply path — board-visible objection + deliberate routing (§5.1).
 // Child 4 (LOOP-67): board-state axis (§3.3) — hub-only, no forge access required.
+//
+// ── WHY A SKIP CARRIES A REASON, AND WHY ONE KIND OF SKIP EXITS NON-ZERO (LOOP-300) ──────────────
+// §12c makes this command's EXIT CODE the machine gate on every feature-PR squash ("a non-zero exit
+// HOLDS that merge"). Before LOOP-300 a run that evaluated BOTH axes and found them clean, and a run
+// that evaluated NEITHER, both exited 0 — the difference lived only in prose on stdout. Run from the
+// workspace root instead of the repo, the guard reported two "axis skipped" lines and exit 0, and the
+// caller merged. Both protections it exists to provide — never merge over a human's objection, never
+// merge a Canceled/Duplicate ticket's work — vanished silently from the wrong directory.
+//
+// §3.4's fail-open is deliberate and is PRESERVED: when the evidence is genuinely unreachable (no gh,
+// forge down, no hub db) the guard degrades to a pass, so an outage never becomes a merge freeze. But
+// "unreachable" and "you pointed me at nothing" are different facts and were collapsed into one
+// `skipped: true` boolean. So every skip now carries a REASON, and reasons are classified:
+//
+//   unreachable  — the evidence exists but we could not reach it (outage)      ⇒ fail-open, exit 0
+//   untargeted   — the invocation did not identify what to check (caller can fix) ⇒ EXIT_UNEVALUATED
+//   inapplicable — reached the evidence; this axis has nothing to say about it ⇒ exit 0
+//
+// Under --strict, exit 3 (EXIT_UNEVALUATED) when NO axis was evaluated AND at least one skip is
+// `untargeted`. Of AC1's two options — a distinct exit code, or "--strict requires ≥1 axis to have
+// run" — this is the first, because the second cannot express the difference above: it would hold on
+// a real forge outage too, converting §3.4's deliberate fail-open into a fail-closed. A distinct code
+// also keeps `1 = tripped` meaning what it has always meant, so a caller can tell "a human objected"
+// from "I could not check" without parsing prose. Existing callers that treat any non-zero as HOLD get
+// the correct behaviour for free: a gate that evaluated nothing must not read as clean.
+//
+// The cwd dependency that produced the incident is removed at the source: --pr no longer needs the
+// caller to stand in the repo (resolveGhRepo falls back to the workspace repo registry, which already
+// records each repo's remote). EXIT_UNEVALUATED is the backstop for what that fallback cannot resolve
+// — an unregistered repo, or an ambiguous multi-repo workspace, where guessing would be worse.
 import { execFileSync } from "node:child_process";
 import { isMainEntry } from "./is-entry.ts";
 import { ticketIdScanRe } from "./ticket-id.ts";
@@ -19,16 +49,51 @@ import { addComment, updateTicketRow, type TicketUpdateFields } from "./ticketwr
 // Todo/In Progress are merge-eligible on this axis (no trip).
 const NOT_MERGE_ELIGIBLE = new Set(["In Review", "Canceled", "Duplicate"]);
 
+// Why an axis did not evaluate (LOOP-300). `null` ⇒ it DID evaluate. The set is closed so the
+// classifier below is total: a new reason must be classified, it cannot default into fail-open.
+export type SkipReason =
+  | "no-ticket-input"       // nothing to resolve a ticket from: no --ticket, no --pr, HEAD is not dev-loop/<id>
+  | "no-repo-resolved"      // could not resolve owner/repo from cwd OR the workspace repo registry
+  | "pr-not-a-loop-branch"  // the PR was read; its head branch is not dev-loop/<id>, so there is no ticket
+  | "no-pr-arg"             // the caller did not request the forge axis
+  | "no-hub-db"             // hub db absent (linear/local backend)
+  | "hub-db-unreadable"     // hub db present but would not open
+  | "forge-unreachable";    // gh missing/unauth/offline/timeout, or the PR could not be read
+
+// unreachable  ⇒ §3.4 fail-open: an outage must never become a merge freeze.
+// untargeted   ⇒ the caller pointed the guard at nothing it could identify; must NOT read as clean.
+// inapplicable ⇒ the evidence was reached and this axis simply has nothing to say (or was not asked).
+export type SkipClass = "unreachable" | "untargeted" | "inapplicable";
+
+export function skipClass(reason: SkipReason): SkipClass {
+  switch (reason) {
+    case "no-ticket-input":
+    case "no-repo-resolved":
+      return "untargeted";
+    case "no-hub-db":
+    case "hub-db-unreadable":
+    case "forge-unreachable":
+      return "unreachable";
+    case "pr-not-a-loop-branch":
+    case "no-pr-arg":
+      return "inapplicable";
+  }
+}
+
 export interface MergeGuardBoardStateResult {
   ticketId: string | null;
   ticketState: string | null;
   trip: boolean;
   skipped: boolean; // true when no hub DB or no ticket resolved — axis not evaluated (no false trip)
+  // WHY it was skipped (LOOP-300). null ⇔ !skipped — the two are kept in lock-step so a caller can
+  // key on either; `skipped` stays for the existing --json consumers.
+  skipReason: SkipReason | null;
 }
 
 export interface ForgeReviewResult {
   trip: boolean;
   skipped: boolean; // true when no PR provided or forge failed → no false trip
+  skipReason: SkipReason | null; // LOOP-300 — null ⇔ !skipped
   changeRequesters: string[];        // non-agent logins that CHANGES_REQUESTED
   unresolvedThreadAuthors: string[]; // non-agent logins with ≥1 unresolved thread
 }
@@ -137,13 +202,52 @@ function ticketFromBranch(branch: string): string | null {
 
 // Best-effort: extract owner/repo from the git remote URL of the repo dir.
 // Returns null when the repo has no GitHub remote or git is not available.
+const GH_REMOTE_RE = /github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/;
+
+// owner/repo from a git remote URL (ssh or https); null when it is not a GitHub remote.
+function ghRepoFromRemote(remote: string): string | null {
+  const m = remote.trim().match(GH_REMOTE_RE);
+  return m ? m[1]! : null;
+}
+
+// owner/repo for the forge axis. Tries the caller's directory first, then the WORKSPACE REPO
+// REGISTRY (LOOP-300 AC3).
+//
+// The cwd probe is `git -C <repoDir> config --get remote.origin.url`, so standing anywhere that is
+// not the target repo yielded null — and null took BOTH axes down at once, because --pr resolves its
+// ticket through this same lookup. That is not a forge outage and must not be reported as one: the
+// registry already records every repo's `remote`, so the answer was on disk the whole time.
+//
+// Ambiguity is refused, not guessed. Two registered GitHub repos and a bare `--pr 174` do not
+// identify a PR — picking one would let the guard check a DIFFERENT repo's PR #174 and report it
+// clean. The caller passes --repo; the CLI names the candidates so that is a two-second fix.
 function resolveGhRepo(repoDir: string): string | null {
   try {
     const remote = execFileSync("git", ["-C", repoDir, "config", "--get", "remote.origin.url"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-    const m = remote.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
-    return m ? m[1]! : null;
-  } catch { return null; }
+    const fromCwd = ghRepoFromRemote(remote);
+    if (fromCwd) return fromCwd;
+  } catch { /* not a git repo / no remote — fall through to the registry */ }
+  // Resolved ONCE: two calls would re-read the workspace and could, in principle, disagree.
+  const registry = registryGhRepos(repoDir);
+  return registry.length === 1 ? registry[0]! : null;
+}
+
+// Distinct GitHub owner/repo values in the workspace repo registry, sorted for a stable message.
+// Exported so the CLI can NAME the candidates when it refuses an ambiguous resolve.
+export function registryGhRepos(startDir: string): string[] {
+  try {
+    const ws = tryResolveWorkspace(startDir);
+    if (!ws) return [];
+    const out = new Set<string>();
+    for (const entry of Object.values(ws.file.repos ?? {})) {
+      const remote = (entry as { remote?: string } | null)?.remote;
+      if (!remote) continue;
+      const gh = ghRepoFromRemote(remote);
+      if (gh) out.add(gh);
+    }
+    return [...out].sort();
+  } catch { return []; }
 }
 
 // Best-effort: read team.agentReviewers from workspace config (absent ⇒ []).
@@ -173,6 +277,11 @@ export function mergeGuard(
   // Hub-only: reads tickets table, no forge access needed.
   // Degrades silently (skipped) when the hub DB is absent (linear/local backend).
   let ticketId = opts.ticketId ?? null;
+  // Why the --pr lookup failed to yield a ticket, when it was attempted (LOOP-300). This is the
+  // discriminator PM's note names: "no ticket resolved" from a wrong cwd and "no ticket resolved"
+  // from a dead forge look identical in the output but are opposite verdicts — one the caller can
+  // fix, one must fail open. Counting axes cannot tell them apart; only the cause can.
+  let prLookupFailure: SkipReason | null = null;
 
   // If --pr given and no explicit ticket, resolve from the PR's head branch first.
   // This must run before local HEAD inference so the PR's ticket takes priority over
@@ -181,14 +290,22 @@ export function mergeGuard(
     try {
       const exec = opts.exec ?? defaultGhExec;
       const ghRepo = opts.ghRepo ?? resolveGhRepo(repoDir);
-      if (ghRepo) {
+      if (!ghRepo) {
+        prLookupFailure = "no-repo-resolved";
+      } else {
         const r = exec(["pr", "view", String(opts.pr), "--repo", ghRepo, "--json", "headRefName"]);
-        if (r.ok) {
+        if (!r.ok) {
+          prLookupFailure = "forge-unreachable";
+        } else {
           const parsed = JSON.parse(r.stdout) as { headRefName?: string };
           if (parsed.headRefName) ticketId = ticketFromBranch(parsed.headRefName);
+          // Reached the PR and read its head: if that head is not dev-loop/<id> there IS no ticket
+          // for this PR. The board axis is inapplicable, not un-evaluated — a human's PR is a
+          // legitimate thing to run the forge axis over, and it must not hold on a missing ticket.
+          if (!ticketId) prLookupFailure = "pr-not-a-loop-branch";
         }
       }
-    } catch { /* gh unavailable — degrade to local branch inference */ }
+    } catch { prLookupFailure = "forge-unreachable"; /* gh threw — degrade to local branch inference */ }
   }
 
   // If still no ticket, try to infer from the HEAD branch of the repo.
@@ -204,27 +321,29 @@ export function mergeGuard(
   let boardState: MergeGuardBoardStateResult;
   if (!ticketId) {
     // No ticket resolved — axis not evaluated; report as skipped so callers can
-    // distinguish "no input" from "checked and clean" (LOOP-142, AC5).
-    boardState = { ticketId: null, ticketState: null, trip: false, skipped: true };
+    // distinguish "no input" from "checked and clean" (LOOP-142, AC5). The REASON carries whether
+    // the caller can fix it (LOOP-300): a failed --pr lookup already knows why it failed, and
+    // without --pr at all the caller simply gave nothing to resolve from.
+    boardState = { ticketId: null, ticketState: null, trip: false, skipped: true, skipReason: prLookupFailure ?? "no-ticket-input" };
   } else {
     // Resolve dbPath: explicit > DEVLOOP_HUB_DB env > workspace-inferred
     const dbPath = opts.dbPath ?? process.env.DEVLOOP_HUB_DB ?? resolveHubDbPath(repoDir);
     if (!dbPath || !existsSync(dbPath)) {
-      boardState = { ticketId, ticketState: null, trip: false, skipped: true };
+      boardState = { ticketId, ticketState: null, trip: false, skipped: true, skipReason: "no-hub-db" };
     } else {
       let conn;
       try { conn = openDb(dbPath); }
       catch { conn = null; }
       if (!conn) {
-        boardState = { ticketId, ticketState: null, trip: false, skipped: true };
+        boardState = { ticketId, ticketState: null, trip: false, skipped: true, skipReason: "hub-db-unreadable" };
       } else {
         try {
           const row = conn.prepare("SELECT state FROM tickets WHERE id=?").get(ticketId) as { state: string } | undefined;
           if (!row) {
-            boardState = { ticketId, ticketState: null, trip: false, skipped: false };
+            boardState = { ticketId, ticketState: null, trip: false, skipped: false, skipReason: null };
           } else {
             const trip = NOT_MERGE_ELIGIBLE.has(row.state);
-            boardState = { ticketId, ticketState: row.state, trip, skipped: false };
+            boardState = { ticketId, ticketState: row.state, trip, skipped: false, skipReason: null };
           }
         } finally {
           conn.close();
@@ -238,18 +357,20 @@ export function mergeGuard(
   // No PR ⇒ skipped (can't check without a PR reference).
   let forgeReview: ForgeReviewResult;
   if (opts.pr === undefined || opts.pr === null) {
-    forgeReview = { trip: false, skipped: true, changeRequesters: [], unresolvedThreadAuthors: [] };
+    forgeReview = { trip: false, skipped: true, skipReason: "no-pr-arg", changeRequesters: [], unresolvedThreadAuthors: [] };
   } else {
     const ghRepo = opts.ghRepo ?? resolveGhRepo(repoDir);
     if (!ghRepo) {
-      // Non-GitHub remote or can't resolve → degrade silently (§3.4)
-      forgeReview = { trip: false, skipped: true, changeRequesters: [], unresolvedThreadAuthors: [] };
+      // Neither the cwd nor the workspace registry identified ONE GitHub repo. This is NOT the §3.4
+      // outage case — nothing was unreachable, the invocation just did not say what to check — so it
+      // is `untargeted` and a --strict run with no other evaluated axis exits EXIT_UNEVALUATED.
+      forgeReview = { trip: false, skipped: true, skipReason: "no-repo-resolved", changeRequesters: [], unresolvedThreadAuthors: [] };
     } else {
       const exec = opts.exec ?? defaultGhExec;
       const prState = readPrReviewState(ghRepo, opts.pr, { exec });
       if (!prState) {
         // Forge failure (gh missing/unauth/offline/timeout/no-PR) → degrade (§3.4)
-        forgeReview = { trip: false, skipped: true, changeRequesters: [], unresolvedThreadAuthors: [] };
+        forgeReview = { trip: false, skipped: true, skipReason: "forge-unreachable", changeRequesters: [], unresolvedThreadAuthors: [] };
       } else {
         // Agent-reviewer exclusion (§3.2): ignore any reviewer whose login is in the agent set.
         const agentSet = new Set(opts.agentReviewers ?? resolveAgentReviewers(repoDir));
@@ -259,6 +380,7 @@ export function mergeGuard(
         forgeReview = {
           trip: forgeTrip,
           skipped: false,
+          skipReason: null,
           changeRequesters: humanChangeRequesters,
           unresolvedThreadAuthors: humanThreadAuthors,
         };
@@ -300,8 +422,26 @@ export function mergeGuard(
   return { trip, boardState, forgeReview };
 }
 
+// Exit code for "--strict was asked to gate a merge and could not evaluate anything" (LOOP-300).
+// Distinct from 1 (a real objection) and 2 (usage) so a caller can tell "a human objected" from
+// "I could not check" without parsing prose; both are non-zero, so §12c's "non-zero HOLDS that
+// merge" rule already does the right thing with it at every existing call site.
+export const EXIT_UNEVALUATED = 3;
+
+// Did this run gate anything? Returns the reason to hold when --strict must NOT report a clean pass:
+// no axis evaluated AND at least one skip was `untargeted`. All-unreachable stays a pass — that is
+// §3.4's fail-open and turning it into a hold would make an outage a merge freeze (LOOP-300 AC2).
+export function unevaluatedHold(r: MergeGuardResult): SkipReason | null {
+  if (!r.boardState.skipped || !r.forgeReview.skipped) return null; // ≥1 axis actually ran
+  for (const reason of [r.boardState.skipReason, r.forgeReview.skipReason]) {
+    if (reason && skipClass(reason) === "untargeted") return reason;
+  }
+  return null;
+}
+
 // CLI: dev-loop merge-guard [--repo <dir>] [--pr <n>] [--ticket <id>] [--strict] [--apply] [--json]
-// Exit codes (the write-layer contract): 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.
+// Exit codes (the write-layer contract): 0 clean/advisory/degraded · 1 trip under --strict ·
+// 2 usage · 3 --strict could not evaluate either axis (LOOP-300).
 if (isMainEntry(import.meta.url)) {
   const argv = process.argv.slice(2);
   let repo = process.cwd();
@@ -336,7 +476,14 @@ Board-state axis: trips when the ticket is In Review / Canceled / Duplicate.
   Degrades silently (exit 0) when no hub DB is available (linear/local backend).
 --apply: board writes degrade silently when no hub DB; idempotent (no duplicate comments).
 
-Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.`);
+--repo defaults to the cwd, but --pr no longer NEEDS it: when the cwd is not the target repo the
+  GitHub owner/repo is read from the workspace repo registry. A registry with two or more GitHub
+  repos is ambiguous and is refused (exit 3), never guessed — pass --repo <dir>.
+
+Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage ·
+  3 --strict could not evaluate EITHER axis and the cause was the invocation, not an outage.
+  A genuine outage (no gh / forge down / no hub db) still degrades to 0 — a merge gate must not
+  become a merge freeze.`);
       process.exit(0);
     } else { console.error(`merge-guard: unknown option '${a}'`); process.exit(2); }
   }
@@ -347,12 +494,25 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.`);
 
   const bs = result.boardState;
   const fr = result.forgeReview;
+  // Only consulted when a repo could NOT be resolved, so the refusal can name what it found instead
+  // of leaving the operator to guess whether the registry was empty or ambiguous.
+  const candidates = bs.skipReason === "no-repo-resolved" || fr.skipReason === "no-repo-resolved"
+    ? registryGhRepos(repo) : [];
   if (asJson) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     // Board-state axis output
     if (bs.skipped && !bs.ticketId) {
-      console.log(`merge-guard: board-state axis skipped — no ticket resolved; pass --ticket <id>, use --pr with a dev-loop/<id> head, or run from a dev-loop/<id> branch`);
+      // Name the CAUSE, not just the symptom (LOOP-300): "no ticket resolved" was printed for a
+      // wrong cwd, a dead forge, and a human's non-loop PR alike — three different next actions.
+      const why = bs.skipReason === "no-repo-resolved"
+        ? `could not resolve the GitHub repo for --pr from this directory or the workspace repo registry${candidates.length > 1 ? ` (registry has ${candidates.length}: ${candidates.join(", ")} — pass --repo <dir> to disambiguate)` : ""}`
+        : bs.skipReason === "forge-unreachable"
+          ? "the PR could not be read (gh unavailable, unauth, offline, or no such PR)"
+          : bs.skipReason === "pr-not-a-loop-branch"
+            ? "the PR's head branch is not dev-loop/<id>, so it has no ticket"
+            : "no ticket resolved; pass --ticket <id>, use --pr with a dev-loop/<id> head, or run from a dev-loop/<id> branch";
+      console.log(`merge-guard: board-state axis skipped — ${why}`);
     } else if (bs.skipped) {
       console.log(`merge-guard: board-state axis skipped — no hub DB available (linear/local backend)`);
     } else if (bs.trip) {
@@ -362,7 +522,10 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.`);
     }
     // Forge review axis output
     if (fr.skipped && pr !== undefined) {
-      console.log(`merge-guard: forge review axis skipped — gh unavailable, forge unreachable, or no PR found`);
+      const why = fr.skipReason === "no-repo-resolved"
+        ? `could not resolve the GitHub repo from this directory or the workspace repo registry${candidates.length > 1 ? ` (registry has ${candidates.length}: ${candidates.join(", ")} — pass --repo <dir> to disambiguate)` : ""}`
+        : "gh unavailable, forge unreachable, or no PR found";
+      console.log(`merge-guard: forge review axis skipped — ${why}`);
     } else if (!fr.skipped && fr.trip) {
       const who = [...fr.changeRequesters, ...fr.unresolvedThreadAuthors].filter((v, i, a) => a.indexOf(v) === i);
       console.error(`merge-guard: ⛔ TRIP — PR has unresolved objection from ${who.map((l) => `@${l}`).join(", ")} (CHANGES_REQUESTED or unresolved thread); must be addressed before merging`);
@@ -378,5 +541,16 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage.`);
     }
   }
 
-  process.exit(strict && result.trip ? 1 : 0);
+  // A real objection outranks "could not evaluate": if an axis DID run and tripped, that is the
+  // verdict to report. Otherwise, under --strict, refuse to answer "clean" for a run that gated
+  // nothing it could have gated (LOOP-300 AC1).
+  if (strict && result.trip) process.exit(1);
+  if (strict) {
+    const hold = unevaluatedHold(result);
+    if (hold) {
+      console.error(`merge-guard: ⛔ COULD NOT EVALUATE — neither axis ran (${hold}); --strict will not report a clean pass for a gate that checked nothing. Fix the invocation (--repo <dir> / --ticket <id> / --pr <n>) and re-run; this is NOT a degrade-to-pass case (the evidence was reachable).`);
+      process.exit(EXIT_UNEVALUATED);
+    }
+  }
+  process.exit(0);
 }
