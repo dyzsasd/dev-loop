@@ -6,6 +6,7 @@
 // Child 4 (LOOP-67): board-state axis (§3.3) — hub-only, no forge access required.
 import { execFileSync } from "node:child_process";
 import { isMainEntry } from "./is-entry.ts";
+import { ticketIdScanRe } from "./ticket-id.ts";
 import { existsSync } from "node:fs";
 import { openDb } from "./db.ts";
 import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
@@ -121,7 +122,7 @@ function applyTrip(
 
 // Parse a ticket id from a dev-loop/<id> branch name or a fix/<id>-… branch name.
 // Returns null when the branch shape doesn't carry a recognisable ticket id.
-const TICKET_RE = /\b[A-Z][A-Z0-9]{1,9}-\d+\b/;
+const TICKET_RE = ticketIdScanRe(); // the ONE canonical <PREFIX>-<n> id shape (ticket-id.ts, LOOP-264)
 function ticketFromBranch(branch: string): string | null {
   const m = branch.match(/(?:dev-loop\/|fix\/)([^/\s]+)/);
   if (!m) return null;

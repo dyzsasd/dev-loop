@@ -3,6 +3,7 @@
 // Pure detector: never throws, never mutates the forge; all forge failures collapse to explicit
 // unknown/na (degradation contract §4). Injectable exec seam for unit testing.
 import { spawnSync } from "node:child_process";
+import { ticketIdScanRe } from "./ticket-id.ts";
 import { effectiveRepo, type Workspace } from "./team-config.ts";
 
 export interface LandingState {
@@ -17,9 +18,9 @@ export interface LandingState {
 }
 
 // Regex matching a ticket id in any string (e.g. branch names, PR titles/bodies).
-// Mirrors push-guard.ts's TICKET_RE — kept local to avoid a cross-module dep until a shared
-// constants module is warranted (design merge-review-guard §5.2, LOOP-66).
-const TICKET_RE = /\b[A-Z][A-Z0-9]{1,9}-\d+\b/;
+// The ONE canonical <PREFIX>-<n> id shape (ticket-id.ts, LOOP-264) — this comment used to say "kept
+// local ... until a shared module exists"; it exists now, so this reader stopped hand-copying it.
+const TICKET_RE = ticketIdScanRe();
 
 // Parse the ticket id from a PR head-branch name (primary: dev-loop/<id> or fix/<id>-... convention)
 // or fall back to the TICKET_RE scan over the PR title + body.

@@ -8,6 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
+import { ticketIdScanRe } from "./ticket-id.ts";
 import { existsSync } from "node:fs";
 import { openDb } from "./db.ts";
 import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
@@ -23,7 +24,7 @@ export interface PushGuardPassenger {
 }
 export interface PushGuardResult { branch: string; ahead: number; unknownRefs: string[]; findings: PushGuardFinding[]; passengers: PushGuardPassenger[]; unresolvedDefaultBranch?: string; note?: string }
 
-const TICKET_RE = /\b[A-Z][A-Z0-9]{1,9}-\d+\b/g; // the <PREFIX>-<n> id shape (§3 ticketPrefix)
+const TICKET_RE = ticketIdScanRe("g"); // the ONE canonical <PREFIX>-<n> id shape (§3 ticketPrefix; ticket-id.ts, LOOP-264)
 
 // Extract the ticket id from a dev-loop/<id> branch name. Returns undefined for other branch shapes.
 const branchTicketId = (br: string): string | undefined => {

@@ -5,6 +5,7 @@ import { resolveHubDbPath } from "./workspace.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { openDb, nowIso } from "./db.ts";
 import { isMainEntry } from "./is-entry.ts";
+import { isCanonicalTicketPrefix } from "./ticket-id.ts";
 
 // The live dev-loop agents + the human operator.
 // DL split (senior/junior dev): `senior-dev` + `junior-dev` join as ACTIVE actors; the legacy single
@@ -74,6 +75,18 @@ function backfillLabels(db: DatabaseSync, projectId: string): void {
 export function ensureProject(db: DatabaseSync, key: string, name: string, prefix = "DL"): string {
   const existing = db.prepare("SELECT id FROM projects WHERE key=?").get(key) as { id: string } | undefined;
   if (existing) { backfillLabels(db, existing.id); return existing.id; }
+  // The ticket prefix is what every id reader parses back out (`ticket-id.ts` TICKET_ID_PATTERN), so it is
+  // validated HERE — at the one INSERT that can introduce a new one — rather than assumed downstream
+  // (LOOP-264). An out-of-shape prefix mints ids no reader can parse, and the failure is silent and
+  // permanent: `blocked-by` would drop that project's dependency edges, leaving §9c unable to see a
+  // blocker as terminal. Reachable before this check — `--prefix` was passed through verbatim, so
+  // `--prefix my-proj` or `--prefix loop` seeded happily. Existing rows are untouched (the early return
+  // above), so this constrains new projects only and cannot break a workspace that already has one.
+  if (!isCanonicalTicketPrefix(prefix)) {
+    throw new Error(
+      `ticket prefix '${prefix}' is not a valid <PREFIX> for project '${key}': must be uppercase, start with a letter, and contain only letters and digits (e.g. LOOP, W20PROJ). Ticket ids are '<PREFIX>-<n>' and every reader parses that shape.`,
+    );
+  }
   // ticket ids are a GLOBAL primary key, so two projects sharing one hub.db MUST have distinct
   // prefixes or their tickets collide on insert (the real multi-project bug P3 closes).
   const clash = db.prepare("SELECT key FROM projects WHERE ticket_prefix=?").get(prefix) as { key: string } | undefined;
