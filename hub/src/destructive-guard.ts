@@ -146,19 +146,30 @@ export function commitBothHalves(p: TwoPhase): void {
     if (doDb) p.dbWork!();
     if (doDb) p.db!.exec("COMMIT");
   } catch (e) {
-    // Guarded: a ROLLBACK on a transaction that never began (or that SQLite already unwound) must not
-    // mask the original error — that error is the one the operator needs.
-    if (doDb) { try { p.db!.exec("ROLLBACK"); } catch { /* nothing to roll back */ } }
+    // Guarded: a ROLLBACK that itself fails (a closed connection, or a transaction SQLite already
+    // unwound) must not mask the original error — that error is the one the operator needs. But the
+    // outcome is RETAINED rather than discarded: the combined-failure message below reports each half's
+    // state, and a hard-coded "rolled back" would be a claim this frame never checked. `isTransaction`
+    // is not available on the Node 23.6.0 floor of the CI matrix, so the rollback's own result is the
+    // only evidence there is.
+    let dbState = doDb ? "rolled back (unchanged)" : "not touched (no db half)";
+    if (doDb) {
+      try { p.db!.exec("ROLLBACK"); }
+      catch (rbErr) { dbState = `ROLLBACK FAILED — state UNVERIFIED (${(rbErr as Error).message})`; }
+    }
     if (configWritten) {
       try {
         writeConfigAtomic(p.configPath, priorConfig!);
       } catch (restoreErr) {
         // 7. The compensation itself failed. Report BOTH halves' actual states — never a silent success,
-        //    and never a message that reports one half's outcome as if it were both.
+        //    and never a message that reports one half's outcome as if it were both. Over-reporting an
+        //    unverified db half is the safe direction here: this message is only ever produced on a path
+        //    that already demands manual recovery, whereas a confident "unchanged" that is wrong is the
+        //    exact failure this module exists to prevent.
         throw new Error(
           `destructive write left the two halves INCONSISTENT and manual recovery is required:\n` +
           `  config (${p.configPath}): WRITTEN, and the restore to its prior bytes FAILED — ${(restoreErr as Error).message}\n` +
-          `  hub.db: rolled back (unchanged)\n` +
+          `  hub.db: ${dbState}\n` +
           `  original failure: ${(e as Error).message}`,
         );
       }
