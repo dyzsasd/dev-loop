@@ -145,8 +145,10 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
     }
   }
 
-  // Per-actor activity over the same 30d window.
-  const actors = db.prepare("SELECT actor,count(*) n FROM events WHERE project_id=? AND created_at>=? GROUP BY actor ORDER BY n DESC, actor").all(projectId, since30) as { actor: string; n: number }[];
+  // Per-actor activity over the same 30d window, excluding tool writes (LOOP-218 AC2/AC3):
+  // an `operator` event carrying a non-null data.fireId is a tool write (merge-guard, etc.), not a
+  // human ruling. The `isToolWriteEventData` helper in db.ts is the canonical predicate.
+  const actors = db.prepare("SELECT actor,count(*) n FROM events WHERE project_id=? AND created_at>=? AND NOT (actor='operator' AND json_extract(data,'$.fireId') IS NOT NULL) GROUP BY actor ORDER BY n DESC, actor").all(projectId, since30) as { actor: string; n: number }[];
 
   // Cycle time per recently-Done ticket: elapsed from the ticket's create (else first Todo transition) to
   // its Done transition. When that start anchor is missing (incomplete history), render a graceful fallback.
