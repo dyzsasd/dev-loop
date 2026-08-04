@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { openDb } from "../src/db.ts";
 import { agentOp } from "../src/agentops.ts";
-import { servableSlice } from "../src/servable.ts";
+import { servableSlice, servableTodoDepth } from "../src/servable.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -87,6 +87,23 @@ try {
   const emptySlice = servableSlice(db2, "p2", "senior-dev");   // p2 has only a `dev`-assigned row → senior slice empty
   ok(emptySlice.todo.length === 0 && emptySlice.inProgress.length === 0,
     "servableSlice: a dev tier with no own rows ⇒ empty slice — the queue-depth gate's skip trigger");
+
+  // ── LOOP-251: servableTodoDepth uses the same predicate ──────────────────────
+  const td = servableTodoDepth(db, "p");
+  ok(td.total === 3 && td["junior-dev"] === 1 && td["senior-dev"] === 1 && td.dev === 0,
+    `servableTodoDepth: total=${td.total} junior=${td["junior-dev"]} senior=${td["senior-dev"]} dev=${td.dev} (expected total=3 junior=1 senior=1 dev=0)`);
+  // QS-1 sensitive+junior Todo excluded from junior; QS-3 normal Todo counted; QS-4 senior Todo counted
+  ok(td["junior-dev"] === servableSlice(db, "p", "junior-dev").todo.length,
+    "servableTodoDepth parity: junior-dev count matches servableSlice");
+  ok(td["senior-dev"] === servableSlice(db, "p", "senior-dev").todo.length,
+    "servableTodoDepth parity: senior-dev count matches servableSlice");
+
+  // db2 has a dev-assigned ticket; assert dev key counts it (no sensitive filter for dev)
+  const td2 = servableTodoDepth(db2, "p2");
+  ok(td2.dev === 1 && td2["junior-dev"] === 0 && td2["senior-dev"] === 0,
+    `servableTodoDepth (db2): dev=${td2.dev} junior=${td2["junior-dev"]} senior=${td2["senior-dev"]} (expected dev=1)`);
+  ok(td2.dev === servableSlice(db2, "p2", "dev").todo.length,
+    "servableTodoDepth parity: dev count matches servableSlice");
   db2.close();
 
   db.close();
