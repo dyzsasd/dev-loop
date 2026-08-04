@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { detectRepoFacts, workflowJobNames } from "../src/team-edit.ts";
 import { confirmationToken, isScratchProject, isolationVerdict, TOKEN_PREFIX } from "../src/destructive-guard.ts";
 import type { Workspace } from "../src/team-config.ts";
+import { scrubFireEnv } from "./env-scrub.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -17,7 +18,13 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-team-edit-")));
 const HOME = join(tmp, "home");
-const env = (extra: Record<string, string> = {}) => ({ ...process.env, DEVLOOP_HOME: HOME, ...extra });
+// scrubFireEnv, NOT ...process.env: inside an agent fire the environment carries
+// DEVLOOP_WORKSPACE=<production workspace>, and workspace resolution prefers that env var over
+// the cwd walk-up — so every mutator spawn here (add-project 'a.p.p'/'app'/'clash'/'real-one',
+// team set, remove-project) wrote to the PRODUCTION dev-loop.json when this suite ran inside a
+// fire (2026-08-04). Scrubbing restores the cwd-based resolution every fixture in this file
+// was written against; CI has none of these vars, so CI behavior is byte-identical.
+const env = (extra: Record<string, string> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra });
 const run = (entry: string, args: string[], opts: { cwd?: string; extra?: Record<string, string> } = {}) => {
   const r = spawnSync("node", [join(hubRoot, "src", `${entry}.ts`), ...args], { cwd: opts.cwd ?? hubRoot, env: env(opts.extra), encoding: "utf8" });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };

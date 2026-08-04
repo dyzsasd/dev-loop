@@ -65,11 +65,23 @@ FUNCTION_CONSTRUCTOR_RE = re.compile(
 HORIZONTAL_PADDING_RE = re.compile(rb"[ \t]{128,}(?=\S)")
 RELEASE_SCRIPT_EXACT = {
     "typecheck": "tsc -p tsconfig.check.json",
+    # `build` runs at pack time via prepack, and `build-node` runs via `build` — both are
+    # pack-time injection surface and are pinned byte-exact. Changing either script in
+    # hub/package.json REQUIRES the matching update here in the same commit (LOOP-250's #182
+    # changed `build` alone and turned main red).
     "build": (
+        "npm run build-node && "
         "rm -rf dist .claude-plugin skills references hooks config && "
         "tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/server.js && "
         "cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./ && "
         "cp ../docs/design/quality-gauntlet.md ./references/quality-gauntlet.md"
+    ),
+    "build-node": (
+        "node -e \"const{execFileSync}=require('child_process');"
+        "const{writeFileSync}=require('fs');"
+        "try{writeFileSync('build-commit.json',JSON.stringify({commit:execFileSync('git',"
+        "['rev-parse','HEAD']).toString().trim()}))}"
+        "catch(e){console.error('build-commit stamp failed:',e.message)}\""
     ),
     "test": "node test/run-all.ts",
 }

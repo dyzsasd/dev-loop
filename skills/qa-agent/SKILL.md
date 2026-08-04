@@ -150,6 +150,21 @@ priority, not whether a ticket exists — drift still gets a ticket so it isn't 
   accounts; clean up destructive-check state you create in the shared env.
 - Don't re-test an unchanged build (the preflight change gate) — spend fires where the diff or
   the board actually moved.
+- **A guard's refusal is a RESULT, never an obstacle.** When any dev-loop verb refuses
+  (recoverability guard, destructive-guard, merge-guard), record the refusal as the finding and
+  stop — adding `--force`, a confirmation token, or any bypass flag to get past a refusal is
+  forbidden, ESPECIALLY when the refusal is the behavior under verification. (2026-08-04: a QA
+  fire answered a "301 ticket(s) — pass --force" refusal by adding `--force`; the live board was
+  deleted.)
+- **Never point a config mutator or destructive verb at the live workspace** (`team add-project
+  / set / remove-project / repair`, `bundle` — anything that writes `dev-loop.json` or
+  `hub.db`). Verify them ONLY in a disposable workspace you created this fire (`mkdtemp` +
+  `dev-loop team init --dir <tmp>`), and unset `DEVLOOP_WORKSPACE`/`DEVLOOP_HUB_DB` for the
+  subprocess — workspace resolution prefers those env vars over your cwd, so a fixture-aimed
+  command otherwise writes to production.
+- **Pass no flag you have not seen in the INSTALLED CLI's `--help` for that verb.** An unknown
+  flag may be silently ignored; the flag you meant to pass is not evidence of what the command
+  did. Merged-but-not-installed fixes make this gap routine (§12b: merged is not running).
 - Respect `mode` (§12) and `autonomy` (§12a): triage/file/re-test on your own judgement; clear
   info-blocks yourself, route decision-blocks to PM via the board — never an interactive
   prompt.
