@@ -595,88 +595,13 @@ inherits the commit ordering of every caller that already writes through it · a
 by which edges still resolve, not by which rows came back — and the tier with capacity had no queue
 while the tier with a 65-deep queue had no capacity, an imbalance this fire acted on (LOOP-316).
 
-### 2026-08-04 (pm, thirty-sixth fire): the ship step has no gate, and a gate split across two owners is completed by neither
+### 2026-08-04 (pm, thirty-sixth → thirty-seventh fires) — [ARCHIVED]
 
-**Job A found a correct diff that had never been committed.** LOOP-31 (the `/activity` parked-tile
-reconciliation) was handed to PM `In Review`. The code was good, and that was established by
-measurement rather than by reading the handoff note: its 10 new checks pass, and the suite's
-failure count against a clean `385dab6` tree is 1 both with and without the diff, so it introduced
-no regression. What it did not have was a branch, a commit, or a PR, on a repo whose `landing` is
-`"pr"` with two required checks. The running board still rendered the pre-fix `blocked now` tile,
-and the daemon serves a build tree at `838b19e` that contains none of the new code. The changes
-existed only as uncommitted edits in the shared main checkout.
-
-**The same junior-dev fire (`06bcb943`) did it twice** — LOOP-294 was handed to QA in the same
-condition twelve minutes later, its two files interleaved with LOOP-31's in one `git status`, so
-neither was separable by `git add -A` without capturing the other's unverified work. Both diffs
-were extracted to `.dev-loop/loop/salvage/` and confirmed to apply clean to `385dab6` before
-anything was closed, so the verify-fail cost the loop no work.
-
-**This is the delivery axis, and nothing measures it.** `dev-loop queue` already annotates verify
-items `landing: "no-pr"` — LOOP-111's work, and it was correct on both tickets. It is advisory:
-rendered on the *verifier's* fire, after the fact, with nothing refusing or routing on it. The
-distinction that makes it gateable is that **a commit is a local fact and a PR is a forge fact**:
-`git log --all --grep=<id>` answers offline, so a gate keyed on commits cannot reproduce LOOP-274's
-hazard (a forge outage reported as `no-pr`). Filed as LOOP-309.
-
-**The §21a design gate on LOOP-302 could not be closed by either actor.** Its pass action is
-specified as one sequence — promote the staged children, then close the parent — but on a
-`Bug`-typed parent those halves have different owners: `Backlog → Todo` is a PM-only valve (§5a),
-while `In Review → Done` is refused to anyone but the `qa` owner. PM promoted all three
-`sensitive` children, then took `exit 1` on the close. The refusal is correct and loud; the gate
-is what is under-specified. Senior-dev had anticipated it and written a routing comment, which is
-the only reason three children did not strand. Filed as LOOP-310, product half only — the §21a
-wording is a §17 governing file and rides an operator-applied proposal.
-
-**LOOP-228 had been unpickable for four days at `priority 1`.** The operator's cost-compression
-direction ticket carried a `junior-dev` **label** with a **null assignee**; on this backend the
-tier filter is the assignee, so neither tier could pick it, and it counted as `(none)` in
-`todoDepth` rather than as tier pressure. Re-tiered to `senior-dev` on the operator's own written
-instruction in the ticket body ("route the design through §21a senior") — an explicit signal, not
-an inference.
-
-**The tier imbalance reported last fire has closed, and not by re-tiering.** Last fire recorded
-senior-dev at 6/10 with an all-junior 65-deep Backlog: the tier with capacity had no queue. This
-fire senior-dev reached 10/10 through legitimately senior-tiered work — three `sensitive` design
-children, one §3 escalation, and the operator-routed program ticket. Both tiers are now at
-`intake.todoDepthCap`, so promotion stops until the queue drains, which is the cap working as
-designed rather than a bottleneck.
-
-**Doc size, unresolved:** `docs/STRATEGY.md` is now 126 KB against §20's ~20 KB rollup threshold.
-LOOP-282 (`Backlog`, P1) owns putting a budget and a doctor code on it; noted here as a standing
-fact so the next rollup is not deferred silently again.
-
-
-
-### 2026-08-04 (pm, thirty-seventh fire): a `Done` ticket whose fix is not in the tree, and the residue of the procedure that bounds this doc
-
-**LOOP-294 reached `Done` with its fix absent from `origin/main`.** QA verified all six ACs green
-at 13:24Z and closed the ticket, recording in the same comment that the code was uncommitted and
-classifying that as "a delivery process concern, not a code correctness concern". Measured this
-fire at `origin/main` = `b79f053`: `hub/src/agentops.ts:206` still reads
-`t.description.trimStart().startsWith("Mode: design")`, and `hub/test/queue.ts` carries no LOOP-294
-assertion. The design-parent routing defect the ticket closed is present in the shipped product,
-and the board's terminal state says otherwise.
-
-**Filed LOOP-311** (`Todo`, P1 `Bug`, junior-dev) to land the salvaged patch — the LOOP-294
-counterpart of LOOP-308. Its acceptance criteria are predicates over `origin/main` rather than over
-a working tree, and it carries an `AC-exec` that exits non-zero until the bytes are on the default
-branch. Both landing tickets now name the shared-checkout hazard: the two patch sets are disjoint
-(`agentops.ts` + `test/queue.ts` against `metrics.ts` + `views/activity.ts` + `test/metrics.ts`),
-and `git add -A` in that checkout produces one commit attributing both.
-
-**LOOP-296's block was re-pointed from the ticket to the code.** Its only edge
-(`Blocked-by: LOOP-294`) became terminal when LOOP-294 closed, which by the mechanical §9c rule
-makes it an unpark candidate. It stays parked: its body instructs the implementer to consume
-LOOP-294's predicate rather than author a second one, and that predicate is not in the tree. The
-edge was retired (`Unblocked-by: LOOP-294`) and re-written against LOOP-311. The §9c ledger over
-all five parked tickets was recomputed from the comment markers this fire — every park has at
-least one live edge, and every live blocker is `Todo`, so there were no other unpark candidates.
-
-**§20 R2 pass 28.** The ten settled 2026-08-03 method rulings (fires 26–31, 12,182 bytes) moved to
-[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md); this doc went 131,312 → 119,346
-bytes.
-
+Both fire journals moved to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md)
+under `# Rolled 2026-08-04 (§20 R2 pass 33)`. Their rulings stay in full text in the Decisions log
+below: the ship step has no gate and a gate split across two owners is completed by neither
+(LOOP-308/LOOP-309/LOOP-310); a `Done` ticket whose fix is not in the tree, and a bounding
+procedure accumulates its own residue (LOOP-311/LOOP-282).
 
 ### 2026-08-04 (pm, thirty-ninth fire): a module that declares its own scope has made an auditable claim
 
@@ -720,6 +645,73 @@ gap is not later read as an idle fire.
 **§20 R2 pass 32.** The thirty-fourth- and thirty-fifth-fire journals moved to
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
 
+### 2026-08-04 (pm, fortieth fire): a change boundary no instrument records, and a design whose cited instrument does not produce the quantity
+
+The LOOP-228 design gate. `hubDoc:design/context-compression` **v5** passed on all three §21a
+questions — its arithmetic is checked rather than asserted (the per-token rates are recovered from
+the ledger by least-squares and land on Opus list pricing), it states its one free parameter and its
+bounds, and it corrects its own §4 in both directions including the correction that reduces the
+program's claim. Both staged children were promoted `Backlog → Todo` first, per the crash-safe order.
+Two AC defects were amended at the gate rather than bouncing the design, per the twentieth fire's
+standing rule.
+
+**The metered era is two model regimes, and nothing on the board says so.** Every agent's model
+changed on **2026-08-03T19:36–19:56Z**: junior-dev and qa to `openrouter/deepseek/deepseek-v4-flash`,
+pm and senior-dev to `claude-opus-5`, sweep to deepseek and back to `sonnet` on 08-04T11:36Z.
+Measured across that boundary with zero compression landed (`.dev-loop/team/fires.jsonl`, 279 priced
+fires before / 47 after): board-wide **$5.042 → $3.893/fire (−22.8 %)**, junior-dev 5.582 → **0.005**,
+qa 2.327 → **0.005**, sweep 3.121 → 1.310, pm 7.778 → **8.518 (+9.5 %)**, senior-dev 9.441 →
+**14.317 (+51.7 %)**. LOOP-314's staged AC6 cut the program's pinned baseline from metering onset
+straight across this boundary; it would have frozen a two-regime average as the immovable "before".
+Amended to one regime per agent with the `model` recorded and a loud failure on a mixed era, plus a
+new AC8 warning whenever a closed-era query spans a model change, and LOOP-315 gained AC7: a $/fire
+improvement produced by a model swap may not be reported as this program's result.
+
+**On the two opus agents the bill moved away from the operator's target.** opus-5 is 37 % cheaper per
+token here (`$/Mtok` 1.180 → 0.741) and senior-dev still costs +51.7 % more per fire, because
+`cacheRead`/fire rose **147 %** (7.68M → 18.99M). `cacheWrite` is flat (202K → 237K) and median
+duration is flat (30.3 → 31.1 min) — the same distinct context read roughly 2.4× as many times in the
+same wall-clock. Under `cacheRead ≈ turns × context` the remaining factor is the turn count, which is
+guardrail 4's axis and the one with no instrument. n=6 over 19 h: every post-boundary fire is above
+the old mean and the lowest by +27 %, so the direction is established and the magnitude is not. Filed
+**LOOP-319** (senior, P1, promoted this fire) for the diagnosis, with model choice explicitly left to
+the operator under guardrail 5.
+
+**The design's turn instrument does not exist.** Design §8.4 named LOOP-267 as the ticket that
+resolves §8.2's estimated `n`. LOOP-267 delivers `amplification` = `cacheReadPerFire ÷ modeled boot
+tokens` and carries an AC requiring its doc comment to state it is not a turn count — its denominator
+is the quantity §8.2 is solving for. Confirmed against the ledger: 682 rows, no turn or step field of
+any kind. Filed **LOOP-318** (junior, P1). The ledger keeps only the digested `usage` block, so no
+already-run fire can be back-filled; every fire until it lands is undecomposable.
+
+**Where the program actually stands.** §8.3 projects ~6 % off an opus agent's bill from the full
+conventions cut, against the operator's −30 % suggestion. Most of the board-wide −22.8 % has already
+arrived from a configuration change this program did not make and cannot measure, concentrated on the
+three agents that were already cheap, while the two named in the target rose. LOOP-228 therefore does
+not close: no measured before/after exists, no target has been resolved with post-hoc data, the
+gauntlet/doctor runs are uncited, `context-bill.ts` is unratcheted, and `conventions-to-code.md` is
+unreconciled.
+
+**The twentieth fire's umbrella marking did not hold, and now has a mechanical carrier.** That ruling
+said to mark an umbrella explicitly and roll its status up on the ticket. It was marked, and on
+2026-08-04T10:26Z Sweep's stranded-design-child rule promoted it `Backlog → Todo` anyway, where it sat
+four days as the board's highest-priority row pickable by neither tier. LOOP-228 is now `Backlog` +
+`blocked` behind a real `Blocked-by: LOOP-315` edge and assigned to `pm` — out of both dev pick
+queues and out of the §5a promotion funnel by predicate rather than by prose, and the §9c tracker
+will surface it in front of PM at the moment LOOP-315 closes.
+
+**The §9c ledger, recomputed from the marker corpus.** Eight parked tickets, every one holding ≥1 live
+edge, every live blocker still `Todo` — no unpark candidates, and no ticket carries `blocked` without
+a live edge. LOOP-296 and LOOP-237 had their satisfied edges correctly retired by earlier fires.
+
+**Tier balance at fire-40 close:** senior-dev 8/10 unblocked `Todo`, junior-dev **11/10** — over cap,
+because the gate promotion of LOOP-314 is exempt from §5a and its landing is time-critical (the
+"before" era must be pinned by the instrument before the soak). LOOP-318 is the ranking junior
+promotion candidate and waits. Senior had two free slots and exactly one unblocked Backlog candidate,
+LOOP-319, which was filed and promoted this fire.
+
+**§20 R2 pass 33.** The thirty-sixth- and thirty-seventh-fire journals moved to
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
 
 ## Personas
 
@@ -753,6 +745,28 @@ gap is not later read as an idle fire.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-04 (pm, fortieth fire) — a before/after is a claim about one regime, and a boundary no
+  instrument records silently voids it.** Every agent's model changed on 2026-08-03T19:36–19:56Z. The
+  measured effect on `$/fire` across that boundary, with zero compression landed, was −22.8 %
+  board-wide, −99.9 % on junior-dev, and **+51.7 % on senior-dev** — larger in every direction than
+  anything the compression program projects. The design written 19 h later grouped its cost model by
+  `(agent, model)` and so saw the column, while its headline table, its target call and both
+  children's era definitions treated the metered era as homogeneous. **Rule: before differencing two
+  eras, enumerate the configuration facts that changed inside the span — model, effort, coding agent,
+  cadence — and require the instrument to refuse a mixed-regime aggregate rather than average it. An
+  era boundary the query cannot see produces a wrong number, not a missing feature.**
+
+- **2026-08-04 (pm, fortieth fire) — a design that dedups against an existing ticket must be checked
+  against that ticket's acceptance criteria, not its title.** Design §8.4 named LOOP-267 as the
+  instrument resolving its one free parameter, the turn count, and filed nothing for it. LOOP-267's
+  title is about "the turns half of cacheRead" and its ACs deliver `amplification` — cacheRead
+  normalized by the modeled boot corpus — with an explicit AC that its doc comment must state it is
+  **not** a turn count. The cited ticket's denominator was the quantity the design was solving for, so
+  the dedup left a hole exactly where the program's arithmetic rests. **Rule: when a design or a
+  grooming pass declines to file because an existing ticket "already owns this", open that ticket's
+  ACs and name the one that delivers the quantity. Citing a source and reading it correctly are
+  independent properties, and a dedup is the cheapest place for a gap to become invisible.**
 
 - **2026-08-04 (pm, thirty-ninth fire) — a module that declares its own scope has made a testable claim,
   and the claim is the thing to audit.** `destructive-guard.ts` states that every verb destroying operator
