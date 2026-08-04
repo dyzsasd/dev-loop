@@ -607,72 +607,9 @@ procedure accumulates its own residue (LOOP-311/LOOP-282).
 
 Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 34).
 
-### 2026-08-04 (pm, fortieth fire): a change boundary no instrument records, and a design whose cited instrument does not produce the quantity
+### 2026-08-04 (pm, fortieth fire) — [ARCHIVED]
 
-The LOOP-228 design gate. `hubDoc:design/context-compression` **v5** passed on all three §21a
-questions — its arithmetic is checked rather than asserted (the per-token rates are recovered from
-the ledger by least-squares and land on Opus list pricing), it states its one free parameter and its
-bounds, and it corrects its own §4 in both directions including the correction that reduces the
-program's claim. Both staged children were promoted `Backlog → Todo` first, per the crash-safe order.
-Two AC defects were amended at the gate rather than bouncing the design, per the twentieth fire's
-standing rule.
-
-**The metered era is two model regimes, and nothing on the board says so.** Every agent's model
-changed on **2026-08-03T19:36–19:56Z**: junior-dev and qa to `openrouter/deepseek/deepseek-v4-flash`,
-pm and senior-dev to `claude-opus-5`, sweep to deepseek and back to `sonnet` on 08-04T11:36Z.
-Measured across that boundary with zero compression landed (`.dev-loop/team/fires.jsonl`, 279 priced
-fires before / 47 after): board-wide **$5.042 → $3.893/fire (−22.8 %)**, junior-dev 5.582 → **0.005**,
-qa 2.327 → **0.005**, sweep 3.121 → 1.310, pm 7.778 → **8.518 (+9.5 %)**, senior-dev 9.441 →
-**14.317 (+51.7 %)**. LOOP-314's staged AC6 cut the program's pinned baseline from metering onset
-straight across this boundary; it would have frozen a two-regime average as the immovable "before".
-Amended to one regime per agent with the `model` recorded and a loud failure on a mixed era, plus a
-new AC8 warning whenever a closed-era query spans a model change, and LOOP-315 gained AC7: a $/fire
-improvement produced by a model swap may not be reported as this program's result.
-
-**On the two opus agents the bill moved away from the operator's target.** opus-5 is 37 % cheaper per
-token here (`$/Mtok` 1.180 → 0.741) and senior-dev still costs +51.7 % more per fire, because
-`cacheRead`/fire rose **147 %** (7.68M → 18.99M). `cacheWrite` is flat (202K → 237K) and median
-duration is flat (30.3 → 31.1 min) — the same distinct context read roughly 2.4× as many times in the
-same wall-clock. Under `cacheRead ≈ turns × context` the remaining factor is the turn count, which is
-guardrail 4's axis and the one with no instrument. n=6 over 19 h: every post-boundary fire is above
-the old mean and the lowest by +27 %, so the direction is established and the magnitude is not. Filed
-**LOOP-319** (senior, P1, promoted this fire) for the diagnosis, with model choice explicitly left to
-the operator under guardrail 5.
-
-**The design's turn instrument does not exist.** Design §8.4 named LOOP-267 as the ticket that
-resolves §8.2's estimated `n`. LOOP-267 delivers `amplification` = `cacheReadPerFire ÷ modeled boot
-tokens` and carries an AC requiring its doc comment to state it is not a turn count — its denominator
-is the quantity §8.2 is solving for. Confirmed against the ledger: 682 rows, no turn or step field of
-any kind. Filed **LOOP-318** (junior, P1). The ledger keeps only the digested `usage` block, so no
-already-run fire can be back-filled; every fire until it lands is undecomposable.
-
-**Where the program actually stands.** §8.3 projects ~6 % off an opus agent's bill from the full
-conventions cut, against the operator's −30 % suggestion. Most of the board-wide −22.8 % has already
-arrived from a configuration change this program did not make and cannot measure, concentrated on the
-three agents that were already cheap, while the two named in the target rose. LOOP-228 therefore does
-not close: no measured before/after exists, no target has been resolved with post-hoc data, the
-gauntlet/doctor runs are uncited, `context-bill.ts` is unratcheted, and `conventions-to-code.md` is
-unreconciled.
-
-**The twentieth fire's umbrella marking did not hold, and now has a mechanical carrier.** That ruling
-said to mark an umbrella explicitly and roll its status up on the ticket. It was marked, and on
-2026-08-04T10:26Z Sweep's stranded-design-child rule promoted it `Backlog → Todo` anyway, where it sat
-four days as the board's highest-priority row pickable by neither tier. LOOP-228 is now `Backlog` +
-`blocked` behind a real `Blocked-by: LOOP-315` edge and assigned to `pm` — out of both dev pick
-queues and out of the §5a promotion funnel by predicate rather than by prose, and the §9c tracker
-will surface it in front of PM at the moment LOOP-315 closes.
-
-**The §9c ledger, recomputed from the marker corpus.** Eight parked tickets, every one holding ≥1 live
-edge, every live blocker still `Todo` — no unpark candidates, and no ticket carries `blocked` without
-a live edge. LOOP-296 and LOOP-237 had their satisfied edges correctly retired by earlier fires.
-
-**Tier balance at fire-40 close:** senior-dev 8/10 unblocked `Todo`, junior-dev **11/10** — over cap,
-because the gate promotion of LOOP-314 is exempt from §5a and its landing is time-critical (the
-"before" era must be pinned by the instrument before the soak). LOOP-318 is the ranking junior
-promotion candidate and waits. Senior had two free slots and exactly one unblocked Backlog candidate,
-LOOP-319, which was filed and promoted this fire.
-
-**§20 R2 pass 33.** The thirty-sixth- and thirty-seventh-fire journals moved to
+Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 35).
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
 
 ### 2026-08-04 (pm, forty-first fire): a commit that carries three increments, and every gate passing anyway
@@ -737,6 +674,78 @@ has an operator-declared claim on it.
 **§20 R2 pass 34.** The thirty-ninth-fire journal moved to
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
 
+
+### 2026-08-04 (pm, forty-second fire): a hint ladder ordered by setup sequence, and a refill queue that is empty on one tier
+
+**Nothing to verify and nothing to unblock.** Zero `In Review` board-wide, zero `needs-pm`, and the
+§9c pass returned the same six edges fire 41 closed on, none unpark-eligible — `dependency-graph`
+reproduced the ledger directly. The product moved one code commit since the last reviewed SHA
+(`f1a6b70` → `a4c7e91`): LOOP-225, thirteen lines of `hub/test/merge-guard.ts` fixture. The strategy
+doc's content hash is unchanged, so no foreign direction arrived. Lens rotation reset on the SHA
+move; the lens run was **ux-flows**.
+
+**The operator's one directed action names the least consequential warning in the same report.**
+Running the day-2 flow `CLAUDE.md` prescribes — `metrics --json` → `.decisionQueue`, then `doctor`:
+
+```
+⚠️  [W18] installed v1.14.0 is 46 code commit(s) behind origin/main — dev-loop fixes marked Done are not live
+⚠️  [W08] projects.real-one: config project 'real-one' has no hub.db row
+DOCTOR_OK
+NEXT: dev-loop seed real-one "<Project Name>" <UNIQUE_PREFIX>  (config project with no hub.db row, W08)
+```
+
+`real-one` is a repo-less stub pointed at `example.com`; it runs no fires and blocks nothing. Cutting
+the release that would make 46 landed fixes actually run appears nowhere in `NEXT`.
+
+**The cause is precedence, not detection.** `doctor.ts:187-211`, `nextStep()`, returns the first
+match of a flat if-chain ordered by first-run setup sequence. Six day-1 setup rungs sit above all
+three day-2 operational rungs, and `:194` (unseeded config project) returns unconditionally — so one
+leftover stub makes the decision-queue stall (`:199`), the landing stall (`:207`) and the release
+skew (`:209`) unreachable for as long as it is left unseeded. The chain's own comments describe the
+first two as "the operator is the loop's only unscalable resource" and "the most-blocking state when
+everything else is green". Both statements are accurate and neither hint can print here.
+
+**Three tickets each added a rung; none ranked the ladder.** LOOP-167 added the release hint, LOOP-41
+the landing-aware NEXT, LOOP-74 → LOOP-207 the decision-first NEXT — each appended at the tail, each
+verified on a workspace whose day-1 rungs were clean. LOOP-202 is the only ticket that ever touched
+precedence and it ranked exactly one rung. Filed as **LOOP-322** (junior, P2); the tier follows
+§21b's explicit signals — a scoped change to one function — not the queue balance below.
+
+**A dedupe note is a prediction about code that has not been written yet.** LOOP-265 argued at filing
+that LOOP-31's fix "would not fix this" and asked to be landed first. LOOP-31 shipped `parkedSplit()`,
+which implements every one of LOOP-265's acceptance criteria; `hub/test/metrics.ts` asserts three of
+its four fixture shapes by name, including the one LOOP-265 measured as wrong 15 of 15 times.
+Verified against `origin/main` and by running that suite on a clean archive of it. `Canceled` as
+superseded. The live board does not discriminate the two implementations right now (no `Human-Blocked`
+ticket exists), so the shipped assertion is the evidence and the board reading is not. Shape (d),
+`Human-Blocked` plus a live edge, is implemented and unasserted — recorded on the ticket rather than
+filed, because a one-assertion ticket entering a 68-deep cap-blocked queue displaces better-evidenced
+work.
+
+**A §9c tracker with no owner.** LOOP-277 sat `Todo` with `assignee: null` and priority `0` — which
+is `None` in the §5 scale, not "highest". It is a §17 proposal the operator applies, so carrying no
+dev tier is correct, but nothing routed it to the operator either: both dev pick-queries and the PM
+unblock scan filter on assignee. Its `blocked` label was the only thing keeping that invisible gap
+from mattering; when LOOP-278 closes and §9c strips the label, it becomes a servable ticket no queue
+is watching. Assigned `pm`, priority 2 — the §9a hand-off to the operator runs through PM, so the
+unpark now lands where it can be executed.
+
+**Tier balance at close: junior-dev 10/10, senior-dev 9/10 — and the senior slot cannot be filled.**
+The Backlog holds 69 tickets: 68 junior-tier and one `pm` umbrella (LOOP-228, parked). **Zero are
+senior-tier.** The standing reading of this board is that the junior tier is the throughput ceiling,
+which remains true at the cap; what is new is that the queue behind the senior tier is empty, so the
+senior tier drains without replacement. §21b forbids re-tiering to balance load and the filing lever
+is per-ticket, so this is reported rather than corrected.
+
+**The promotion.** §5 pick order over the junior slice found no `priority=1` Bug or Feature at ranks
+1–2 and no `edge-case` Bug at rank 3, leaving four rank-3.5 Bugs; oldest-first selected **LOOP-231**
+(created 2026-08-01T06:42Z), ahead of 64 rank-5 Improvements. Its premise was re-measured rather than
+trusted: the un-gitignored `.dev-loop/` inside the product repo is still untracked and still not
+ignored (`check-ignore` exit 1), and has grown from 9.2 MB at filing to **17 MB**, while doctor prints
+`✅ data home is outside any git repo` and `DOCTOR_OK` over that same tree.
+
+**§20 R2 pass 35.** The fortieth-fire journal moved to
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -769,6 +778,56 @@ has an operator-declared claim on it.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-04 (pm, forty-second fire) — a hint that names one condition is a ranking, and appending
+  a branch to a chain nobody ranked publishes a ranking by accident.** `doctor`'s `NEXT:` line is the
+  single directed action in the health report; `nextStep()` picks it by returning the first match of
+  a flat if-chain whose order is the first-run setup sequence. Three separate tickets each appended
+  one day-2 operational rung to the tail of that chain — LOOP-167 the release hint, LOOP-41 the
+  landing-aware NEXT, LOOP-74 → LOOP-207 the decision-first NEXT — and each was verified on a
+  workspace whose day-1 rungs were clean, so none of them could observe that an unconditional return
+  six rungs above makes all three unreachable. Live instance: one repo-less config stub kept `NEXT`
+  on "seed `real-one`" while the same report carried 46 unpublished code commits and the words
+  "dev-loop fixes marked Done are not live". **Rule: a surface that must choose ONE item to show is
+  making a precedence claim, and the claim belongs in the source as a declared order, not in the
+  order the branches happened to be written. When adding a branch to such a surface, state where it
+  ranks against every existing branch and test it against the one most likely to mask it — the
+  ranking is the feature, and a branch verified only in isolation has not been verified.**
+  (LOOP-322, filed; LOOP-202 ranked one rung and is preserved.)
+
+- **2026-08-04 (pm, forty-second fire) — a dedupe note is a prediction about code that has not been
+  written, so it expires when the code lands.** LOOP-265's filing argued explicitly that LOOP-31
+  "would not fix this", named a reading of LOOP-31 that would propagate the bug into the web UI, and
+  asked to be landed first. LOOP-31 then shipped `parkedSplit()`, which satisfies every one of
+  LOOP-265's acceptance criteria and is guarded by assertions naming three of its four fixture
+  shapes. The prediction was reasonable when written and wrong once the sibling landed broader than
+  its own title. **Rule: re-derive a ticket's premise against the merged tree before working it or
+  closing it, and treat its dedupe section as dated evidence rather than a standing finding. The
+  check that settles it is the shipped acceptance criteria plus the test that guards them — a live
+  board reading only counts when the board currently contains the discriminating shape, which here it
+  did not.** (LOOP-265 `Canceled` as superseded by LOOP-31.)
+
+- **2026-08-04 (pm, forty-second fire) — a ticket deliberately given no dev tier still needs an
+  owner, or its unpark lands in no queue.** LOOP-277 is a §17 proposal the operator applies, so it
+  correctly carries no `senior-dev`/`junior-dev` marker; it also carried `assignee: null`, which on
+  the `service` backend puts it outside both dev pick-queries and outside PM's own `pm`-owned unblock
+  scan. The only thing hiding that was its `blocked` label: §9c strips the label the moment LOOP-278
+  closes, and the ticket becomes servable with nobody watching. **Rule: "not for Dev" is a routing
+  decision that must name the actor it IS for. When filing or grooming a ticket that intentionally
+  omits the dev tier, set the assignee to the owner who can execute its next transition — for a §17
+  proposal that is `pm`, because the §9a hand-off to the operator runs through PM. Check this at
+  park time, not at unpark time; a park hides the defect for exactly as long as it lasts.**
+
+- **2026-08-04 (pm, forty-second fire) — the senior tier's refill queue is empty, and the cap reading
+  hides it.** Todo depth closed at junior-dev 10/10 and senior-dev 9/10, which reads as one tier at
+  capacity and one nearly there. The Backlog behind them is 69 tickets: 68 junior-tier and one `pm`
+  umbrella, **zero senior-tier**. The junior tier is cap-blocked at promotion nearly every fire, so
+  its depth is a queueing artefact; the senior tier has an open slot and no candidate, so its depth
+  is the whole supply. §21b forbids re-tiering to balance load and routes on explicit signals only —
+  LOOP-322 went junior this fire because a scoped change to one function is junior work — so the
+  lever is per-ticket at filing time and nothing in PM's pass can correct the ratio after the fact.
+  **Recorded as a standing board fact for the operator rather than a proposed action: the split-dev
+  filing rule and the observed supply disagree, and resolving that is a direction call.**
 
 - **2026-08-04 (pm, fortieth fire) — a before/after is a claim about one regime, and a boundary no
   instrument records silently voids it.** Every agent's model changed on 2026-08-03T19:36–19:56Z. The
