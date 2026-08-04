@@ -551,136 +551,30 @@ the source of truth for whether a cited ticket has shipped.** Clauses still in f
   infrastructure problem; filing more tickets is padding.
 - **A correction must travel with the thing it corrects.**
 
-### 2026-08-03 (pm, twenty-second fire) — [ARCHIVED]
+### 2026-08-03 (pm, twenty-second → thirty-first fires) — [ARCHIVED]
 
-A share cannot falsify a claim about a level; a fix that adds a parallel field leaves the old field's readers lying; a ticket's premise decays, so re-derive it at promotion; an idle senior queue is a fact about the board, not a gap to fill. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 22)`; the four rulings stay in the Decisions log below.
+Ten fire journals rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md)
+under `# Rolled 2026-08-04 (§20 R2 pass 30)` — the eight per-fire stubs they had left behind are
+**merged into this one entry**, the same consolidation the tenth → twenty-first entry above
+records: §20 R2 prescribes one index entry per archived *period*, and a stub per *fire* is the
+monotone residue that made twenty-nine rollup passes net-positive (LOOP-282). **Every ruling from
+these ten fires is in the Decisions log below** — as full text where it still backs an unbuilt
+ticket, as an `[ARCHIVED] N rulings` line otherwise. Board status is deliberately omitted: the
+board is the source of truth for whether a cited ticket shipped.
 
-### 2026-08-03 (pm, twenty-third fire) — [ARCHIVED]
+What these ten fires established, in one line each: a share cannot falsify a claim about a level ·
+a bounding procedure with monotone residue sets a slope, not a ceiling · a cleanup procedure's
+residue can be its own output, so every R2 pass must leave one index entry · audit a guard list by
+what each artifact *holds*, not by how alarming its name is · a machine-readable contract with no
+emitter is hand-typed and unvalidated · a validator guards a function, not a field — count the
+doors into it · a guard written to make a `die()`ing helper unreachable is a contract with that
+helper · a design correct everywhere it is *reachable* is an AC amendment, not a verify-fail · an
+amendment applied selectively is proof it was read · an AC is a predicate over the board, so run
+it as a query before promoting · route on a marker that is load-bearing for someone else's work.
 
-A bounding procedure whose residue is monotone sets a slope, not a ceiling; a threshold no surface computes is a suggestion; an enforced corpus freezes while its unenforced twin grows. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 23)`; the three rulings stay in the Decisions log below.
+### 2026-08-04 (pm, thirty-second fire): a label reasoned off at the design gate silenced three enforcement layers at once
 
-### 2026-08-03 (pm, twenty-fourth fire) — [ARCHIVED]
-
-The residue I came to delete was the procedure's own output — 3 of 13 `[ARCHIVED]` stubs held the only live copy of a still-in-force clause, and the largest was the `STANDING RULES IN FORCE` distillation that made archiving ~54 KB safe, so every R2 pass must leave one (sharpening LOOP-282). `ux-flows` on a `/tmp` build: `doctor` exits `DOCTOR_OK` outside a workspace while 18 of 19 sibling verbs refuse (LOOP-284), and six verbs answer with a raw Node stack — `team repair` from inside the try/catch that forbids it, being the one async subcommand dispatched without `await` (LOOP-283). Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 24)`; the three rulings stay in the Decisions log below.
-### 2026-08-03 (pm, twenty-fifth fire) — [ARCHIVED]
-
-The file doctor resolves a live credential *from* is the one file it never checks is about to be committed: on a `/tmp` build, adding exactly the three names doctor's own hard fail demands flips `DOCTOR_FAILED` → `DOCTOR_OK` while `?? .dev-loop/secrets.env` sits untracked, and a third arm prints `✅ webhook resolvable (secrets.env)` in the same passing run — severity inverted to what each artifact holds (`hub.db`, no credentials, hard-fails; plaintext `secrets.env` is named nowhere), and it still reproduces after LOOP-231 and LOOP-235 both land → **LOOP-285**. Grooming tested the attractive "rotted tail" hypothesis against `origin/main` and refuted it — LOOP-132, -44, -82, -88 all still reproduce, **0 canceled**. The eight-fire senior drought broke on a label, not a re-tier (§4: secrets ⇒ senior, mechanically). The §5 pick order sent a P3 `edge-case` bug ahead of three older P2 ordinary bugs because rank 3 outranks rank 3.5 and priority is read at neither — governing prose followed rather than re-specified in flight; **LOOP-254** is the standing fix. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 25)`; the three rulings stay in the Decisions log below.
-
-### 2026-08-03 (pm, twenty-sixth fire) — [ARCHIVED]
-
-Four `Unblocked-by:` markers I had reported as retired were never parsed: `blocked-by.ts` `MARKER_RE` anchors the keyword to the line's first non-whitespace token, and I had written them bold-wrapped behind prose — **4 of the 6 edge retirements ever written on this board were silently discarded**, with no exit code, output or doctor code distinguishing the two forms. Structural, not clerical: `ticket create --blocked-by` *emits* the canonical form, while retirement has no emitter at all and is 100% hand-typed into a validating-nothing `comment add` → **LOOP-287**. `consistency` lens: LOOP-271 predicted every new `deliveryProjects()` consumer would be scratch-blind, and `63c98ec` landed one hours later (`hub.ts:54`) — folded into LOOP-271 rather than filed twice (§8), widening its AC1 from `scratch` to *schedulable*. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 26)`; the rulings stay in the Decisions log below.
-
-### 2026-08-03 (pm, twenty-seventh fire) — [ARCHIVED]
-
-`trust-safety` lens: LOOP-245's `PLAIN_DECIMAL_RE` lives inside `team-edit.ts`'s shared `coerce()`, but `dev-loop.json` has a SECOND write path for the same keys that never calls it — `addProject`'s hand-assigned `p.weight = Number(o.weight)` (`team-edit.ts:235`), so `team set projects.alpha.weight 0x64` is refused while `team add-project alpha --weight 0x64` exits 0 and writes `100` (**LOOP-288**). The E08 schema validator cannot backstop it: once the string is coerced the operator's intent is gone, and `100` is a legal weight where `NaN` is not. Grooming refuted two decayed premises (`4213a08` had incidentally falsified two of LOOP-281's three claims; LOOP-286's `--dry-run` ask needed an unknown-flag-rejection AC or `--dryrun` would still run the live cascade), and folded LOOP-218's two-day-old comment-only ruling into its body verbatim as AC1–AC5. **Filed 1, groomed 3, promoted 5.** Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 27)`; the three rulings stay in the Decisions log below.
-
-
-### 2026-08-03 (pm, twenty-eighth fire) — [ARCHIVED]
-
-`consistency` lens → **LOOP-291**, the sharpest instance of the guard/helper seam yet: `applyConfigCadence` states its own invariant — *"a config typo must not kill the loop"* — and enforces it with a **format-only** pre-check whose whole purpose is to keep bad input away from `parseDuration`, which `die()`s. `200f123` added a *second* rejection reason to `parseDuration` (the 32-bit ceiling) that the format regex does not screen, so `"30d"` is well-formed, over the ceiling, and reaches `die()` before any fire. Measured end to end: `team set agents.sweep.cadence 30d` is refused and tells the operator to *"edit dev-loop.json directly and validate with `dev-loop doctor`"*; the hand-edit then passes **`DOCTOR_OK` exit 0** (E17 checks that ceiling for `fireTimeout`/`stallTimeout` and never looks at `cadence`); and `dev-loop run` **exits 2** — the operator follows the CLI's own instruction, the health gate certifies it, and the loop will not boot. Also settled here: a design correct everywhere it is *reachable* is an **AC amendment, not a verify-fail** (LOOP-172's `hostnameOf`, amended into LOOP-289's body with four new negatives), and LOOP-227 going `Done` unparked **LOOP-229 + LOOP-230 in one §9c pass**, taking senior 6→8 with no re-tier. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 28)`; the rulings stay in the Decisions log below.
-
-### 2026-08-03 (pm, twenty-ninth fire) — [ARCHIVED]
-
-`data-analytics` lens → the **§3 verify-fail on LOOP-239 → LOOP-292**, and the reason it failed is the reason to distrust comment-borne scope: the `FireMetrics` half was correct and stays landed (`costMeteredFires` counts `costUsd > 0` — **264 < 315** on the live ledger — `byAgent[a].usdPerFire` exists, both amended sum invariants exact), and every **body** AC passed. What did not ship is what two **binding amendments** added — the operator's *"Revised scope"* item 2 and my own `renderCostCell`/digest alignment — both of which lived only in comments, leaving `--cost --by agent` printing the retired denominator on merged `origin/main`. §9c: the blocker going terminal retired the board's one dead edge and **unparked LOOP-267** (a `Canceled` blocker otherwise reads as abandoned work, so the unpark comment says which dependency really landed). Senior 7→8/10, junior 10/10, **0** senior-tier Backlog rows ⇒ promoted 0, filed 1, groomed 1, canceled 1. Full journal → [`2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-03 (§20 R2 pass 29)`; the rulings stay in the Decisions log below.
-### 2026-08-03 — thirtieth fire (pm): an AC is a predicate over the board, so ask the board for its counter-examples
-
-Product moved one code commit (`2aed555` → `f1ae2e5`, LOOP-202's doctor NEXT ladder; `b31d162` and
-`70e5a26` are my own doc lands), so the lens list reset and re-seeded on **`ux-flows`**, focused by
-that diff. Doc-watch hash `5b7486acfffebd2a` matched the stored baseline: **55 fires, still no
-foreign edit**. `needs-pm` **0**, `Human-Blocked` **0**, `_team` carrier **0 rows**. Job A empty —
-both In Review rows (LOOP-202, LOOP-286) carry `qa`, and the two arrivals I was waiting on
-(LOOP-292, LOOP-289) are still `Todo`, unbuilt.
-
-**The lens hypothesis was sharp, and execution refuted it — so nothing was filed.** `f1ae2e5`'s new
-rung reads `fails[0]`, so the hole should be the ❌ that never goes through `fail()`: `doctor.ts:53`,
-the invalid-config path, which prints `DOCTOR_FAILED` and then guards its NEXT line on
-`e instanceof WsValidationError` — a plain `SyntaxError` from a malformed `dev-loop.json` would print
-the verdict with **no NEXT at all**, the very defect class LOOP-202 was filed for. Built the tree and
-ran it: the parse error is *already* wrapped as `[E00] not valid JSON` **inside**
-`WsValidationError`, NEXT prints, exit **1**. And `ok` is falsified nowhere but inside `fail()`
-(`:39`, `:264`), so `DOCTOR_FAILED ⇒ allFails` non-empty holds by construction. **Filed 0** — a
-refuted hypothesis is a result, not a gap to pad.
-
-**The finding that mattered came from pointing an AC at the live board.** LOOP-223 (head of the
-junior pick order) settles the invariant *"a `Todo` row must never carry a null `assignee`"*, and its
-AC2 says a write landing `Todo` + `assignee: null` with **zero or more than one** dev-tier label must
-be **rejected**. I ran AC2's own rejection predicate as a board query. It returns exactly one row —
-**LOOP-277**: `Todo`, `assignee: null`, zero dev-tier labels, and a *legitimately* un-tiered
-`pm`-owned `external-prereq` tracker parked behind LOOP-278, masked from every servable slice by its
-`blocked` label rather than by a lost routing key. AC2 as written would make every in-place write to
-it fail — Sweep's hygiene relabels, a priority change, the §9c unpark itself — converting a parked
-tracker into an unwritable one. **Amended AC2 in the BODY** (LOOP-239's rule): reject only on **more
-than one** dev-tier label; leave zero-tier rows untouched and writable; regression test on LOOP-277's
-exact shape. Also folded in: the core premise re-confirmed unfixed (`servable.ts:58-59` `todo` is
-still strict `mine(t)`), the LOOP-244 precedent that landed the label-fallback idiom on the
-**`inReview`** slice only — reusable for AC3's legacy-`dev` guard but **not** a solution to AC1,
-which needs a *write*-layer restore observable on `get_issue` — and a stale `applySensitiveRetier`
-signature in my own 2026-08-01 comment (now `(db, assignee, labels)`, three params).
-
-**Depth is a reading of a live board, not a fact about it.** `dev-loop queue` opened the fire with
-junior at **10/10** — at cap, promote nothing. A direct `Todo` enumeration minutes later gave **9**
-unblocked, and `queue` re-read agreed. No bug: a junior fire claimed a ticket between the two reads.
-That one-row difference was the entire promotion this fire, and it only surfaced because the cap
-decision was re-derived at the moment of the write instead of trusted from boot.
-
-§9c: **7 parked**, each holding exactly one live edge on a still-open blocker (263, 278, 279, 265,
-264, 250, 237) — **0 unparks, 0 dead edges**. Senior **8**/10 with **0 senior-tier Backlog rows**
-(the only untiered Backlog row is LOOP-228, the ruled program umbrella); junior **9 → 10**/10.
-**Promoted 1** (LOOP-223), **groomed 1**, **filed 0**, **canceled 0**. Sixth consecutive fire with
-zero cancel-fodder — throughput, not discovery, is still the binding constraint.
-
-
-### 2026-08-03 — thirty-first fire (pm): the router asked for a marker one workflow branch never writes
-
-Product moved one code commit (`f1ae2e5` → `7beb39a`, LOOP-229's budget-ceiling launch gate; `805c682`
-is my own doc land), so the lens list reset and re-seeded on **`trust-safety`**, focused by that diff.
-Doc-watch hash `fdba94c161190e0a` matched the stored baseline: **56 fires, still no foreign edit**.
-`needs-pm` **0**, `_team` carrier **0 rows**. Job A empty — and empty for a reason that was worth the
-whole fire.
-
-**A design gate had passed three hours earlier and no query on this board could see it.** LOOP-286 —
-a QA-filed `Bug` that senior-dev converted into design-and-delegate, staging child LOOP-290 — sat
-`In Review` while `pm.verify` returned `[]`. Replayed against a read-only copy of the live `hub.db`,
-`agentops.ts:206`'s predicate `description.trimStart().startsWith("Mode: design")` is **false** for
-it, so `pm.verify=false, qa.verify=true`: routed to the one agent whose own code comment says it
-*"must not gate design parents — it has no authority over design coherence."* QA gated it anyway,
-carefully and twice (16:22Z, 19:36Z), and routed the promotion to PM in **prose**, the only channel it
-had. LOOP-290 stalled **3h15m**; Sweep's stranded-child backstop was blind because its predicate wants
-a **`Done`** parent and this one is `In Review`. Promoted LOOP-290 on the §21a gate — §5a exempts
-staged children from the depth cap, which mattered, since junior was at 10/10 — left the parent
-`In Review` (its ACs describe runtime behaviour QA must still re-test against shipped code), and filed
-**LOOP-294** (P1 `Bug`).
-
-**This is LOOP-59 recurring one layer down.** LOOP-59 fixed exactly this failure for LOOP-48 and named
-the fragility precisely: *"correctness depends on every filer's label hygiene at conversion time, not
-on anything the queue itself checks."* Its fix moved the dependency from label hygiene at conversion
-time to **body-prefix** hygiene at conversion time — and §21a's small-feature design form authors the
-design as a **comment** (senior-dev's own words: *"this comment + the ticket body IS the design"*),
-editing no body at all. Measured board-wide: the parent's `Mode: design` prefix is present on **2 of
-7** design parents; the child's `Design: parent <id>` pointer — load-bearing, because the junior must
-read the design before coding — on **7 of 7**. Sibling seam recorded on LOOP-294 and deliberately left
-out of its scope: `opQueue`'s `summary()` blanks `description`, so the `backlog` list hands PM a set it
-is instructed to filter by a field the queue deleted.
-
-**The ceiling shipped disarmed.** `7beb39a` completed LOOP-197's third child and the mechanism is live
-in the *running* scheduler — dist rebuilt 19:31Z, `pid 32051` started 19:32:14Z from it,
-`budgetGateReason` present — but `team.budget` is `null`, so INV-1 short-circuits every tick and four
-tickets of enforcement guard nothing. Measured with the product's own functions against the live
-636-row ledger: rolling 24h **$369.28**, 7d **$2,696.80**, W28's nag number **$385.26/day**; `pm` is
-the largest priced line at **$435.55** of $1,406.86. Parked as **LOOP-295**, `Human-Blocked` to the
-operator, hazard stated — the current window already holds $369.28, so any ceiling ≤ ~$370 halts all
-six agents on the next tick. Two hypotheses off the same diff died on contact and cost nothing:
-`hotReload()` *does* rebind the binding the gate reads (`run-agents.ts:1741`), so AC6's live-tick
-resume holds without a restart; and the legacy `main()` tick's gate call is unreachable by
-construction (`:1368` returns to `teamMain` whenever a workspace resolves) — inert, harmless, and not
-worth a row at 62 Backlog.
-
-§9c: **7 parked**, every live edge still on an open blocker (263 `In Progress`; 278, 279, 264, 250,
-237 `Todo`; 265 `Backlog`) — **0 unparks, 0 dead edges**. Junior **10 → 13**/10 (junior fires
-claiming, not promotion), senior **7**/10 with **0 senior-tier Backlog rows**. **Promoted 1**, **filed
-2**, **groomed 1**, **canceled 0**. Seventh consecutive fire with zero cancel-fodder.
-
-**2026-08-04 (thirty-second fire).** The §21a design gate on **LOOP-286** closed `Done` — the
+The §21a design gate on **LOOP-286** closed `Done` — the
 `remove-project --dry-run` design verified against **current** `main` (`4c25233`), not the
 `3bf51c5` it was authored on. That distinction earned its keep: `1626411` had since shifted
 `removeProject` to `:649`, so every line citation in the design was stale, while every *construct*
@@ -718,6 +612,61 @@ line 983 still asserts "must re-publish" and `npm view` appears nowhere in its p
 only qualified the `behind===0` green). **Canceled 0**, eighth consecutive fire with zero
 cancel-fodder.
 
+### 2026-08-04 (pm, thirty-third fire): a ceiling stated in dollars and enforced in minutes has two headrooms
+
+Both `In Review` items verified `Done`, and the second one arrived **mid-fire** — `LOOP-263` moved
+`In Progress → In Review` between the boot queue read and Job A, which is the third consecutive
+fire where the boot queue was not the complete Job A list. Re-enumerating `In Review` board-wide
+after the queue read is not belt-and-braces; it is the only reliable form of the query.
+
+**LOOP-230** (`sensitive`, the `perFireUsd` in-flight watchdog, ships **ON** at `$12.00`) passed
+spec triage and all three ACs — `budget-ceiling.ts` 30/30, the 60 s stub killed at its 2 s deadline
+with `errorClass "budget-per-fire"` + exit `126`, never `124`. The verification that mattered was
+not in the suite: the derivation reasons in **dollars** (`$12` vs the `$7.46` priciest normal fire
+⇒ "+61 % headroom, a normal fire is never clipped") while the mechanism arms in **time**
+(`perFireUsd / ratePerMs`). Converted against this workspace's measured per-profile rates, the
+governing headroom is much thinner — `claude/opus` (pm, reflect) arms at **27.8 min** against a p95
+of **26.7 min**, and senior-dev's **40.7 min** sits *below* its own 60-min wall, so the budget
+watchdog is now the effective ceiling on senior-dev's long tail. A 7-day backtest legitimated the
+constant anyway: **19 of 644 fires (3.0 %)** would have been terminated and **5 of the 6** priced
+ones among them genuinely cost ≥ $12; the single false kill was pm at $11.50 actual vs $12.10
+estimated. A hypothesis of mine died there and is recorded so it is not re-opened — median-of-ratios
+does **not** systematically over-clip long fires. Filed as **LOOP-297** (nothing prints the
+deadline, so an invisible kill is indistinguishable from a hang).
+
+The suite run needed its own control rather than a memory lookup. `npm run verify` came back 91/93
+with one ❌ in `run-agents-live.ts` — and LOOP-230 *does* edit the stall interval that owns the
+failing detector. Rebuilt the parent tree `4c25233` (`grep -c budgetKilled` ⇒ **0**) and got the
+identical assertion failure: pre-existing, environmental. The other non-pass was a `CRASH` from my
+own harness — `git archive` leaves no `.git`.
+
+**LOOP-263** verified across all six ACs (the completeness axis LOOP-198 exists for), including the
+two that live outside the diff: the design doc's §1 footnote and the LOOP-228 correction note. Its
+result re-prices this document — pm's per-fire bill is **317 003 B**, of which **124 972 B (39.4 %)**
+was `docs/STRATEGY.md`. That number is why R2 pass 30 ran this fire instead of being deferred again.
+
+**§9c:** LOOP-263 going `Done` retired **LOOP-282**'s only edge — **1 unpark**, the first in four
+fires, and the freed ticket is the strategy-doc budget, i.e. the ratchet for the very growth this
+fire hand-corrected. The other four parked rows stay parked on open blockers.
+
+**The idle senior tier finally had a legitimate filler, and it was a label, not a re-tier.**
+**LOOP-281** was `junior-dev` with no `sensitive` label; its **AC1 instructs the builder to run
+`team remove-project <key> --force` against a healthy `hub.db`** — a nine-table cascade delete, on a
+board where suites have repeatedly picked up the live workspace instead of their fixture. The risk
+is in what the test *runs*, not what it *asserts*. Labelled `sensitive`, and the shipped write gate
+(`applySensitiveRetier`) performed the tier swap itself, so the trail carries an `issue.retier`
+event. **Promoted 1** (senior 6 → 7/10); junior stayed **11/10**, over cap, so nothing went there.
+
+**Filed 2** (LOOP-297, LOOP-298), **groomed 2**, **canceled 0** — ninth consecutive fire with zero
+cancel-fodder, which has stopped being noise: the productive grooming on this board is premise
+re-derivation, not stale-idea hunting. LOOP-267's premise was re-run against the corrected context
+model and **strengthens** — the model gained variance (cross-agent span 1.48× → 2.44×) and *lost*
+explanatory power (corr 0.170 → 0.157) while duration holds at 0.758.
+
+**R2 pass 30:** ten fire journals rolled and eight per-fire stubs consolidated into one period
+entry — **124 972 → 110 935 B (−11.2 %)**.
+
+
 
 ## Personas
 
@@ -752,6 +701,45 @@ cancel-fodder.
 
 ## Decisions (running log)
 
+- **2026-08-04 (pm, thirty-third fire) — a quantity stated in one unit and enforced in another has
+  two headrooms, and the surface prints the one that does not bind.** Two instances landed on this
+  board within a day of each other, both on cost governance, both correct in code. **LOOP-230**'s
+  `perFireUsd` ships ON at `$12.00` and documents its headroom in dollars — 1.61× the `$7.46`
+  priciest normal fire, "+61 %, a normal fire is never clipped". The watchdog does not compare
+  dollars; it arms a timer at `perFireUsd / ratePerMs`. In the time domain that actually governs,
+  measured against this workspace's own ledger: `claude/opus` arms at **27.8 min** against a p95 of
+  **26.7 min** (**4 %**, not 61 %), and senior-dev's **40.7 min** is *inside* its 60-min wall, so
+  the ceiling — not `fireTimeout` — now bounds senior-dev's long tail. **LOOP-298** is the same
+  shape one line lower on the same screen: `metrics --cost` prints `overall` (priced rows only,
+  ⇒ $205/day) directly above `budget: rolling 24h … / dailyUsd $500` (`rollingSpendUsd`, which
+  *estimates* unpriced fires ⇒ **$389/day**). The enforcement basis is **1.90×** the reported one,
+  and today's `$330` reads as a spike against the printed baseline when it is a below-average day
+  against the enforced one. **Rule:** when a guard's threshold and its trigger are in different
+  units or on different denominators, the derivation comment and the operator surface must state
+  the *trigger's* quantity. Verifying that a threshold is well-chosen is a separate question from
+  verifying it is legible, and the second one is the one that gets skipped — I passed both tickets'
+  ACs before noticing either gap. Neither is a verify-fail; both are filed (LOOP-297, LOOP-298).
+
+- **2026-08-04 (pm, thirty-third fire) — a ticket's tier follows the failure mode of its own
+  acceptance criteria, not the surface the ticket describes.** **LOOP-281** reads as safe work: it
+  only *pins* `removeProject`'s nine-table cascade with assertions, changes no deletion code, and a
+  wrong assertion destroys nothing. It sat `junior-dev`, unlabelled, while **LOOP-290** — which
+  edits the guard on the same cascade — is `sensitive` + senior. Reading AC1 settles it: the
+  builder is instructed to run `team remove-project <key> --force` **against a healthy `hub.db`**.
+  On this board, suites picking up the live workspace instead of their fixture is a recurring,
+  documented failure; here that mistake does not produce a red test, it deletes the board across
+  nine tables. **The destructive risk was in what the test *runs*, not in what it *asserts*** — and
+  that is invisible from the title, the type, and the surface being described. This is the
+  companion to the thirty-second fire's ruling: that one said do not reason a `sensitive` label
+  *off* when three enforcement layers share it; this one says read the ACs for the label you should
+  have reasoned *on*. Both were fixed the same way — write the label, let `applySensitiveRetier`
+  do the routing, and take the `issue.retier` event as the audit record instead of a hand-set tier.
+  Corollary worth its own line: **senior's queue is fed only by `sensitive` labels, design parents
+  and escalations — never by the ordinary Backlog**, which is 64 of 65 rows junior-tier by §21b's
+  "when borderline, junior" default. Three fires running, senior has had idle slots against a
+  60-row backlog. That is a capacity-allocation property of the tier-routing rule, not a grooming
+  miss, and the only legitimate lever on it is finding rows whose ACs carry a senior-tier failure
+  mode — as this one did.
 - **2026-08-04 (pm, thirty-second fire) — defense-in-depth counted in layers is one layer when the
   layers share a predicate, and the predicate is written by a judgement call.** `sensitive` routing on
   this board is enforced three separate times: a write gate that auto-re-tiers junior→senior
@@ -1300,3 +1288,13 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   does when it varies.** Here: "case (c) diverges origin — with *what kind of file*?" Possible shippable
   form is a §15 convention (a regression case must vary the dimension its assertion depends on) or a
   Reflect lesson; it is a review *method*, not code, so it is banked rather than filed as Dev work.
+
+- **DL-CB1 — `metrics --context` counts only the repo-file form of `strategyDoc`.** LOOP-263 shipped
+  `strategyDocRelPath`, which returns `null` for `{hubDoc}` and `{linearDocument}`; the bill then
+  reports `absent (hubDoc — readable only in a live session)`. Honest and visible rather than a `0`
+  masquerading as a measurement, and inert here (this project's doc is a repo file) — but a hub-doc
+  project gets the same understated baseline LOOP-263 was filed to fix, and the stated reason is
+  inaccurate: a hub doc lives in `.dev-loop/hub.db` and reads fine from disk without a daemon. File
+  when the backlog drains. Second, smaller: `tryResolveStrategyDocStat` returns the FIRST project
+  with a `strategyDoc` (`Object.keys` order) and `metrics --context` has no `--project`, so a
+  multi-project workspace charges every agent one arbitrary project's doc (see LOOP-275).
