@@ -17,6 +17,8 @@
 //
 // Scope note: the recoverability guard (`--force` over ticket/repo counts) keeps its current meaning and this
 // module never widens it. The two gates compose; `--force` must never become the token.
+import { readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import type { Workspace } from "./team-config.ts";
 
 // The token's prefix, exported so the ONE place that must recognise a token-shaped argument naming the WRONG
@@ -74,4 +76,104 @@ export function isolationVerdict(ws: Workspace, key: string, argv: readonly stri
     tokenPresent,
     refusal: scratch || tokenPresent ? null : refusalFor(key),
   };
+}
+
+// ── The two halves commit together (LOOP-306, LOOP-302 ②) ──────────────────────────────────────
+//
+// A destructive verb that removes a project writes TWO stores: the config file and hub.db. Before this,
+// each half ran independently and printed its OWN success line, so a failure in either left the other
+// applied and already announced — in the incident the CLI reported `removed project 'loop' from
+// dev-loop.json` while the file was unchanged, and the surviving config entry is what let the next
+// find-or-create re-seed an empty board and hide the wipe for two hours.
+//
+// WHAT THIS IS: a COMPENSATING two-phase commit, not a distributed transaction. The db half is a real
+// SQLite transaction; the config half is a tmp+rename that is undone by rewriting the retained bytes. A
+// `SIGKILL` (or a power loss) between the rename and the COMMIT is outside any single-process design's
+// reach and WILL leave the halves disagreeing. That window is not closed here, and this comment says so
+// rather than implying an atomicity that is not delivered.
+//
+// WHY CONFIG FIRST: the two possible residues of a half-completed removal are not equally bad.
+//   - db deleted, config kept  → the next find-or-create re-seeds an empty same-key project. THIS IS THE
+//                                INCIDENT: it is what hid the wipe.
+//   - config deleted, db kept  → an orphaned, unreferenced db row. Benign and self-healing: nothing
+//                                re-seeds (there is no config record to seed from) and re-running the
+//                                verb finishes it through the existing db-only path.
+// So the config write goes first and the db transaction second, and the un-closable SIGKILL window above
+// lands on the benign residue. The ordering is a decision, not an accident — do not "improve" it.
+export interface TwoPhase {
+  configPath: string;
+  configText: string | null;    // already-validated, already-serialized (null ⇒ no config half)
+  db: DatabaseSync | undefined;
+  dbWork: (() => void) | null;  // runs INSIDE the transaction; must not BEGIN/COMMIT/ROLLBACK itself
+}
+
+// Write `configPath` through a same-directory tmp + rename, so a reader never observes a partially
+// written file. Same directory is load-bearing: `renameSync` is only atomic within one filesystem, and a
+// half-written `dev-loop.json` is unloadable — it takes the whole workspace down.
+//
+// Takes `string | Buffer` because the COMPENSATING path restores the exact bytes it retained. Passing the
+// retained Buffer straight through keeps the restore byte-exact; decoding it to a string first would round
+// -trip through UTF-8 and silently substitute U+FFFD for any byte sequence that did not decode — turning a
+// rollback that promises "unchanged" into a quiet corruption of the file it was rescuing.
+function writeConfigAtomic(configPath: string, text: string | Buffer): void {
+  const tmp = `${configPath}.tmp-${process.pid}`;
+  try {
+    writeFileSync(tmp, text);
+    renameSync(tmp, configPath);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* never created, or already gone — not the failure worth reporting */ }
+    throw e;
+  }
+}
+
+/** Throws on failure, having restored both halves. Returns only when BOTH halves are durable. */
+export function commitBothHalves(p: TwoPhase): void {
+  const doConfig = p.configText !== null;
+  const doDb = !!(p.db && p.dbWork);
+  // 1. Retain the current bytes BEFORE anything is begun or written, so a failure to read is a failure
+  //    with nothing to undo. A missing config file is a caller bug (it computed a new config from one),
+  //    and it surfaces here untouched rather than as a half-applied removal.
+  const priorConfig = doConfig ? readFileSync(p.configPath) : null;
+
+  // 2. BEGIN IMMEDIATE before the config write: the write lock must be taken NOW, not on the first
+  //    statement, or the lock arrives after the config file has already changed and a concurrent writer
+  //    can interleave between the halves.
+  if (doDb) p.db!.exec("BEGIN IMMEDIATE");
+
+  let configWritten = false;
+  try {
+    if (doConfig) { writeConfigAtomic(p.configPath, p.configText!); configWritten = true; }
+    if (doDb) p.dbWork!();
+    if (doDb) p.db!.exec("COMMIT");
+  } catch (e) {
+    // Guarded: a ROLLBACK that itself fails (a closed connection, or a transaction SQLite already
+    // unwound) must not mask the original error — that error is the one the operator needs. But the
+    // outcome is RETAINED rather than discarded: the combined-failure message below reports each half's
+    // state, and a hard-coded "rolled back" would be a claim this frame never checked. `isTransaction`
+    // is not available on the Node 23.6.0 floor of the CI matrix, so the rollback's own result is the
+    // only evidence there is.
+    let dbState = doDb ? "rolled back (unchanged)" : "not touched (no db half)";
+    if (doDb) {
+      try { p.db!.exec("ROLLBACK"); }
+      catch (rbErr) { dbState = `ROLLBACK FAILED — state UNVERIFIED (${(rbErr as Error).message})`; }
+    }
+    if (configWritten) {
+      try {
+        writeConfigAtomic(p.configPath, priorConfig!);
+      } catch (restoreErr) {
+        // 7. The compensation itself failed. Report BOTH halves' actual states — never a silent success,
+        //    and never a message that reports one half's outcome as if it were both. Over-reporting an
+        //    unverified db half is the safe direction here: this message is only ever produced on a path
+        //    that already demands manual recovery, whereas a confident "unchanged" that is wrong is the
+        //    exact failure this module exists to prevent.
+        throw new Error(
+          `destructive write left the two halves INCONSISTENT and manual recovery is required:\n` +
+          `  config (${p.configPath}): WRITTEN, and the restore to its prior bytes FAILED — ${(restoreErr as Error).message}\n` +
+          `  hub.db: ${dbState}\n` +
+          `  original failure: ${(e as Error).message}`,
+        );
+      }
+    }
+    throw e;
+  }
 }
