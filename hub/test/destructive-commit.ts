@@ -153,6 +153,31 @@ const tmpResidue = (dir: string) => readdirSync(dir).filter((f) => f.includes(".
   f.db.close();
 }
 
+// ── AC5, the unverified case: when the ROLLBACK itself fails, the message must not CLAIM it rolled back ──
+// The arm above exercises a rollback that succeeds, so "hub.db: rolled back (unchanged)" is true there and
+// a hard-coded string would satisfy it. Here dbWork closes the connection before throwing, so the ROLLBACK
+// raises and this frame has no way to learn the db's real state — `isTransaction` does not exist on the
+// Node 23.6.0 floor of the CI matrix. AC5 forbids reporting one half's outcome as if it were both, and an
+// unchecked "unchanged" is exactly that claim, so the message has to say UNVERIFIED instead.
+{
+  const f = fixture();
+  let threw: Error | null = null;
+  try {
+    commitBothHalves({
+      configPath: f.configPath,
+      configText: NEW_CONFIG,
+      db: f.db,
+      dbWork: () => { chmodSync(f.dir, 0o555); f.db.close(); throw new Error("injected db failure"); },
+    });
+  } catch (e) { threw = e as Error; }
+  finally { chmodSync(f.dir, 0o755); }
+  const m = threw?.message ?? "";
+  ok(/manual recovery is required/.test(m), "AC5 unverified: still one combined error demanding manual recovery");
+  ok(/UNVERIFIED/.test(m), `AC5 unverified: the db half is reported as UNVERIFIED, not asserted clean (got: ${m.replace(/\n/g, " | ")})`);
+  ok(!/rolled back \(unchanged\)/.test(m), "AC5 unverified: the message does NOT claim a rollback it could not confirm");
+  ok(/injected db failure/.test(m), "AC5 unverified: the original failure is still reported");
+}
+
 // ── half-present shapes: one store only ────────────────────────────────────────────────────────
 {
   const f = fixture();   // config half only (no db) — the linear/local shape
