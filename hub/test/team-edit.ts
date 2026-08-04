@@ -3,7 +3,7 @@
 // (mock Linear, no live calls), and the doctor NEXT line across staged workspace states.
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, realpathSync, cpSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, rmSync, realpathSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -468,6 +468,90 @@ try {
     `LOOP-305 AC3: a scratch:true project is removed with NO token (got ${isoScratch.code}: ${isoScratch.out.replace(/\n/g, " | ").slice(0, 200)})`);
   const isoScratchDry = run("team", ["remove-project", "iso-nonexistent", "--dry-run"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(isoScratchDry.code !== 0, "LOOP-305: an unknown key still errors before the gate (precedence unchanged)");
+
+  // ═══ LOOP-306 (LOOP-302 ②): the two halves commit together, and no line claims a write that did not happen ═══
+  // End-to-end over the REAL ten-statement cascade. Each arm destroys its own fixture, so each gets a
+  // fresh workspace. `sql()` is the same inline-node shape the arms above use, kept local to this block.
+  const sql = (dbPath: string, body: string) =>
+    spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);${body};db.close()})`, dbPath],
+      { cwd: hubRoot, env: env(), encoding: "utf8" });
+  // A victim project with rows in the cascade tables that are deleted BEFORE the failure point, so a
+  // rollback is observable as data rather than only as an exit code.
+  const halvesWs = (name: string) => {
+    const w = join(tmp, name);
+    run("team", ["init", "--dir", w, "--key", `${name.slice(0, 12)}-tm`, "--backend", "service"]);
+    run("team", ["add-project", "victim"], { cwd: w, extra: { DEVLOOP_HUB_DB: "" } });
+    const dbp = join(w, ".dev-loop", "hub.db");
+    const pid = sql(dbp, `const pid=db.prepare('SELECT id FROM projects WHERE key=?').get('victim').id;` +
+      `for(const i of [1,2])db.prepare("INSERT INTO tickets(id,project_id,title,type,state,priority,labels,created_by,created_at,updated_at)VALUES(?,?,'t','Bug','Todo',0,'[]','test','2026-01-01','2026-01-01')").run('vt'+i,pid);` +
+      `db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at)VALUES('vc1','vt1','test','b','2026-01-01')").run();` +
+      `console.log(pid)`).stdout.trim();
+    return { ws: w, cfg: join(w, "dev-loop.json"), db: dbp, pid };
+  };
+  // The oracle: the config bytes + the victim's OWN rows in the cascade tables the failure straddles.
+  // Scoped to `pid`, not global counts: `add-project` seeds a full label taxonomy per project, so a global
+  // `labels` count is dominated by the sibling `_team` project's rows and would read as "not deleted" on a
+  // perfectly successful cascade. The project id is captured at fixture time because the row that carries
+  // it is itself deleted by statement 10.
+  const halvesState = (f: { cfg: string; db: string; pid: string }) => ({
+    bytes: readFileSync(f.cfg, "utf8"),
+    rows: sql(f.db, `const pid=${JSON.stringify(f.pid)};console.log(JSON.stringify({` +
+      `p:db.prepare('SELECT count(*) c FROM projects WHERE id=?').get(pid).c,` +
+      `t:db.prepare('SELECT count(*) c FROM tickets WHERE project_id=?').get(pid).c,` +
+      `c:db.prepare('SELECT count(*) c FROM comments WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id=?)').get(pid).c,` +
+      `l:db.prepare('SELECT count(*) c FROM labels WHERE project_id=?').get(pid).c}))`).stdout.trim(),
+  });
+
+  // ── AC1 + AC4: a failure PART WAY THROUGH the cascade rolls back the statements already run, and the
+  //    config half is restored. The fault is injected as a BEFORE DELETE trigger on `tickets` (statement 9
+  //    of 10), chosen because a trigger survives openDb's `CREATE TABLE IF NOT EXISTS` schema re-exec —
+  //    dropping a table would simply be re-created out from under the test. Statements 1–8 (through
+  //    `comments`) have really run when the abort fires, so "rolled back" is a claim about data.
+  const hA = halvesWs("halves-db-fail");
+  sql(hA.db, `db.exec("CREATE TRIGGER dl306_boom BEFORE DELETE ON tickets BEGIN SELECT RAISE(ABORT,'injected cascade failure'); END")`);
+  const hABefore = halvesState(hA);
+  // Labels are not seeded by hand: `add-project` already provisions the project's full taxonomy, which is
+  // what statement 3 of the cascade deletes. Asserting it is non-zero keeps the rollback claim honest.
+  ok(/"t":2/.test(hABefore.rows) && /"c":1/.test(hABefore.rows) && !/"l":0/.test(hABefore.rows),
+    `LOOP-306: fixture seeded across the cascade tables the failure straddles (${hABefore.rows})`);
+  const hARun = run("team", ["remove-project", "victim", "--force", "--i-understand-this-deletes-victim"], { cwd: hA.ws, extra: { DEVLOOP_HUB_DB: "" } });
+  const hAAfter = halvesState(hA);
+  ok(hARun.code !== 0, `LOOP-306 AC4: a db-half failure exits non-zero (got ${hARun.code})`);
+  ok(!/removed project/.test(hARun.out),
+    `LOOP-306 AC4: NO 'removed project' line is printed for a removal that did not happen (got: ${hARun.out.replace(/\n/g, " | ").slice(0, 300)})`);
+  ok(hAAfter.bytes === hABefore.bytes,
+    "LOOP-306 AC4: the config half is restored to its original BYTES after the db half failed");
+  ok(hAAfter.rows === hABefore.rows,
+    `LOOP-306 AC1: the whole cascade rolled back — statements 1–8 are undone, not left applied (${hABefore.rows} → ${hAAfter.rows})`);
+
+  // ── AC3: the config half fails, the db half would have succeeded. The WORKSPACE DIRECTORY is made
+  //    read-only, not the file: an atomic write is tmp-create + rename, and a rename over a 0444 file in a
+  //    writable directory succeeds — so `chmod 0444 dev-loop.json` would not exercise this arm at all.
+  const hB = halvesWs("halves-cfg-fail");
+  const hBBefore = halvesState(hB);
+  chmodSync(hB.ws, 0o555);
+  const hBRun = run("team", ["remove-project", "victim", "--force", "--i-understand-this-deletes-victim"], { cwd: hB.ws, extra: { DEVLOOP_HUB_DB: "" } });
+  chmodSync(hB.ws, 0o755);
+  const hBAfter = halvesState(hB);
+  ok(hBRun.code !== 0, `LOOP-306 AC3: a config-half failure exits non-zero (got ${hBRun.code})`);
+  ok(!/removed project/.test(hBRun.out),
+    `LOOP-306 AC3: NO 'removed project' line — the incident's exact symptom was this line for a file that had not changed (got: ${hBRun.out.replace(/\n/g, " | ").slice(0, 300)})`);
+  ok(hBAfter.bytes === hBBefore.bytes, "LOOP-306 AC3: the config file is unchanged");
+  ok(hBAfter.rows === hBBefore.rows,
+    `LOOP-306 AC3: hub.db is unchanged — the db half never ran (${hBBefore.rows} → ${hBAfter.rows})`);
+
+  // ── AC6 discriminator: the happy path still removes both halves and prints both lines. Without this the
+  //    three arms above are satisfied by a command that refuses everything.
+  const hC = halvesWs("halves-happy");
+  const hCBefore = halvesState(hC);
+  const hCRun = run("team", ["remove-project", "victim", "--force", "--i-understand-this-deletes-victim"], { cwd: hC.ws, extra: { DEVLOOP_HUB_DB: "" } });
+  const hCAfter = halvesState(hC);
+  ok(hCRun.code === 0, `LOOP-306 AC6: the happy path still exits 0 (got ${hCRun.code}: ${hCRun.out.replace(/\n/g, " | ").slice(0, 200)})`);
+  ok(/removed project 'victim' from dev-loop\.json/.test(hCRun.out) && /removed project 'victim' from hub\.db/.test(hCRun.out),
+    "LOOP-306 AC6: both success lines print once both halves are durable");
+  ok(!("victim" in JSON.parse(hCAfter.bytes).projects), "LOOP-306 AC6: the config half really applied");
+  ok(/"p":1/.test(hCBefore.rows) && hCAfter.rows === `{"p":0,"t":0,"c":0,"l":0}`,
+    `LOOP-306 AC6: the db cascade really applied across every scoped table (${hCBefore.rows} → ${hCAfter.rows})`);
 
   // AC3: token + --force proceeds — and this is what makes every zero-mutation assertion above non-vacuous.
   const isoGo = run("team", ["remove-project", "real-one", "--force", "--i-understand-this-deletes-real-one"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
