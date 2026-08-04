@@ -584,100 +584,16 @@ stated in one unit and enforced in another has two headrooms, and the surface pr
 does not bind · a ticket's tier follows the failure mode of its own acceptance criteria, not the
 surface it describes.
 
-### 2026-08-04 (pm, thirty-fourth fire): a new precondition inherits its callers' commit ordering
+### 2026-08-04 (pm, thirty-fourth → thirty-fifth fires) — [ARCHIVED]
 
-`In Review` was **empty at boot and not empty in fact**. `LOOP-264` moved `In Progress → In Review`
-at 10:37Z, after the boot `dev-loop queue` read — the **fourth consecutive** fire where the queue
-was not the complete Job A list, and the second where the miss was timing rather than labels. The
-board-wide re-enumeration late in the fire is what produced this fire's only verification; it has
-stopped being a safety net and is simply the query.
+Two fire journals rolled whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md)
+under `# Rolled 2026-08-04 (§20 R2 pass 32)`. Both rulings stay in full text in the Decisions log
+below.
 
-**LOOP-264 verified `Done`** — the canonical `<PREFIX>-<n>` id shape, one module, four former
-hand-copies. Spec triage clean; the three deltas beyond the ACs' literal words (`landing.ts` and
-`merge-guard.ts` also unified, the prefix validator, the `metrics.ts` fixture ids) all sit inside
-their stated intent. Two verification choices earned their keep. **AC7 names a sample** — "re-run
-the 10 parked tickets and confirm the edge sets are byte-identical" — and a sample chosen before a
-change cannot testify about the change; run over the **population** instead, both parsers against
-every row on the board: **25 tickets carry an edge set, 0 differ.** And the **fails-before proof was
-re-run rather than read**: with only `blocked-by.ts` reverted to `596f6dc`, **7 named assertions
-fail**, each printing the defect value. That exercise found the one soft spot in an otherwise strong
-suite — `no reader hand-copies the id shape` **passes** against the pre-fix tree, because it greps
-for a copy of the *new* literal and the old module's literal was a different string. Its companion,
-`every id reader imports the shared pattern module`, is what actually fails. The pair is complete;
-the grep alone would report "no copies" for a tree that has four.
-
-**The premise under the fix was checked against the board, not the argument.** AC3 lets a normalised
-id stand only if `SELECT … WHERE id = ?` still resolves. On this board: 3 of 3 project prefixes
-satisfy `isCanonicalTicketPrefix`, and **300 of 300 ticket ids parse** under `canonicalTicketId`.
-
-**Filed 1 — LOOP-301** (three arms measured in an isolated workspace): the new prefix validator sits
-one step *after* `team add-project` commits `dev-loop.json`, so a rejected `--prefix` strands a
-config-only project. Why that is a filing and not a verify-fail is the ruling below.
-
-**§9c, re-derived with the parser that shipped this fire** rather than the one the last ledger was
-built with: identical results — 4 rows parked on open blockers (237→279, 238→237, 247→250,
-277→278), **0 unparks**. **LOOP-105**'s edge on LOOP-264 went terminal with the verify, and was
-**retired** (`Unblocked-by:`) instead of being left live for the dependency-graph surface LOOP-105
-is staged to render.
-
-**Promoted 1 / groomed 3 / canceled 0.** `LOOP-300` (merge-guard `--strict` exits 0 with both axes
-skipped) was the only senior-tier row in a 68-deep Backlog — senior 7 → **8/10**; junior stayed
-**11/10**, over cap, so nothing went there. Grooming: the ordering dependency LOOP-296 states in
-prose is now a real `Blocked-by: LOOP-294` edge (landed in the other order it would grow a second
-design-parent predicate — the exact drift LOOP-264 just spent a fix removing); LOOP-231 linked to
-LOOP-285, which changes the same committability guard; LOOP-135 given the two measurements this
-fire produced, including a second emitter of the "edit dev-loop.json" instruction the operator
-console forbids. Tenth consecutive fire with zero cancel-fodder.
-
-**One instrument note, since it cost a duplicate comment:** `cp hub.db` **without `-wal`** is a
-stale read — a write made seconds earlier was invisible, so a comment that had already landed was
-written twice. The product does not have this bug: `bundle.ts:159` checkpoints `WAL → TRUNCATE`
-before copying and dies if the checkpoint fails.
-
-**R2 pass 31:** the thirty-second and thirty-third journals rolled and consolidated into one period
-entry.
-
-
-### 2026-08-04 (pm, thirty-fifth fire): the board came back, and a restore is verified by which edges still resolve
-
-First fire after the board wipe (LOOP-302). The previous fire had frozen all board writes pending
-the operator's restore; the freeze condition was met and lifted this fire. **Boot's first job was
-to establish that the restore was real, not another cached view.** `dev-loop queue` answering with
-65 backlog rows proves nothing on its own — the daemon served the *deleted* board for two hours on
-2026-08-04. The discriminator recorded last fire is the one that settles it: the **direct-read**
-verbs bypass the daemon, so `dev-loop tickets` answering (it did, plus `ticket_seq` at 302 and a
-live `projects` row read from a WAL-applied copy) is what proves the rows are on disk.
-
-**283 tickets restored** into the re-seeded project `fb38a4e2` — 282 recovered + LOOP-302, the
-operator's incident ticket. 19 ids are gone for good (LOOP-1, 2, 3, 42, 59, 60, 61, 69, 75, 76,
-79, 80, 178, 184, 233, 262, 285, 291, 292) with 79 of their comments exported to
-`.dev-loop/incident-2026-08-04-board-wipe/orphaned-comments.json`.
-
-**The check that mattered was not the row count.** A restored board can be complete by count and
-still be structurally broken, because the loop's parked work hangs off `Blocked-by:` edges that
-are *comment text*, not foreign keys. An edge naming a ticket that no longer exists can never
-resolve, and §9c will never unpark its ticket — a permanent park that no query reports as broken.
-Audited all 283 rows: **zero live blocking edges dangle.** Every one of the five parked tickets
-(LOOP-277, 296, 237, 238, 247) resolves to a live blocker that is still legitimately open, so the
-§9c pass was clean with no writes. What *did* dangle is kinship: **42 tickets carry a `relatedTo`
-pointing at a deleted id, 14 of them still open** — degraded context for anyone following the
-link, no stalled work. (Not purely an incident artifact: `LOOP-43 → LOOP-99999` predates it, so
-nothing has ever validated that field.) Board hygiene is Sweep's lane; recorded here as a fact,
-not filed as PM work.
-
-**Two gaps the incident exposed that no ticket covered**, both verified before filing rather than
-assumed — LOOP-303 (the board has never been snapshotted once) and LOOP-304 (the daemon never
-re-validates its cached project id). Both are the *other* half of LOOP-302, which is entirely
-about prevention.
-
-**Promotion was zero and that is the correct outcome.** junior-dev sits at 10/10 unblocked Todo —
-exactly at `intake.todoDepthCap` — while senior-dev has 6/10. But all 65 Backlog rows are
-junior-tiered, so there is nothing to promote into the free senior slots. §21b routes on explicit
-signals only; re-tiering junior work upward to fill a slot would be inference, and "when
-borderline, junior" is the rule. The imbalance is real and is reported as a bottleneck rather
-than papered over: **the tier with capacity has no queue, and the tier with a 65-deep queue has
-no capacity.**
-
+What these two fires established, in one line each: a new precondition added to a shared sink
+inherits the commit ordering of every caller that already writes through it · a restore is verified
+by which edges still resolve, not by which rows came back — and the tier with capacity had no queue
+while the tier with a 65-deep queue had no capacity, an imbalance this fire acted on (LOOP-316).
 
 ### 2026-08-04 (pm, thirty-sixth fire): the ship step has no gate, and a gate split across two owners is completed by neither
 
@@ -762,6 +678,49 @@ least one live edge, and every live blocker is `Todo`, so there were no other un
 bytes.
 
 
+### 2026-08-04 (pm, thirty-ninth fire): a module that declares its own scope has made an auditable claim
+
+**LOOP-305 landed the isolation gate, and named the scope it claims.** `hub/src/destructive-guard.ts`
+shipped at `d1e4a83` (PR #177): the naming token `--i-understand-this-deletes-<key>`, matched against argv
+by exact equality, consulted before every write, with `scratch:true` as the sole exemption and the hub.db
+`settings_json.scratch` mirror deliberately not consulted so a target whose config record is already gone
+fails closed. Two verbs call in — `team remove-project` and `team repair`'s reap. Reviewed against the
+running product this fire: both are correct, and the `--dry-run` preview reports the same verdict object
+the live path enforces rather than re-deriving it.
+
+**The docstring is the part that was auditable: _"Every verb that destroys operator data calls in here."_**
+A third verb does not. `dev-loop up --bundle <file> --force-reseed` overwrites the live `dev-loop.json`
+and `.dev-loop/secrets.env` with no token, no preview and no backup. Measured in an isolated `/tmp`
+fixture on the installed CLI, with every `DEVLOOP_*` marker unset: a destination workspace's `secrets.env`
+went 44 bytes → **0 bytes** and its `team.key` went `dstteam` → `srcteam`, while the command printed
+`materialized dev-loop.json + secrets.env`, `DOCTOR_OK`, and `✅ bundle loaded`. `hub.db` was correctly
+untouched — the restore-onto-empty rule (`bundle.ts:344-346`) holds, and this is explicitly not in scope.
+
+Three defects compose there, and only the first is one LOOP-305 would have caught. The gate is absent.
+`--dry-launch` is consulted at `bundle.ts:439`, **109 lines after** the writes at `:330-334`, so the
+safest-sounding invocation is fully destructive — LOOP-290's "a `--dry-run` that deletes" recurring on a
+second verb. And `bundle.ts:332` writes `payload.files["secrets.env"] ?? ""`, so a bundle exported while
+an env name was unresolvable — a condition `bundle.ts:186` only warns about before exporting anyway —
+truncates a populated live `secrets.env` to zero bytes, an outcome nobody selected at any step. Filed
+**LOOP-316** (`Todo`, P1 `Improvement`, `sensitive` ⇒ senior-dev) carrying the repro.
+`skills/operator-console/SKILL.md:105` already lists `--force-reseed` among the moves needing explicit
+human confirmation: the doc had classified it destructive; the code had no gate.
+
+**The §9c ledger, recomputed from the marker corpus rather than carried forward.** All six parked tickets
+hold ≥1 live edge and every live blocker is still open, so there were no unpark candidates. One
+divergence surfaced: LOOP-182 held a live `Blocked-by: LOOP-181` edge whose blocker is `Done`, unretired
+because the 2026-07-31 unpark was recorded in prose. Retired this fire. It was the last live instance of
+either LOOP-190 direction on the board — and the corpus behind LOOP-287 re-measured to 43 bare-line
+markers, 7 prose retirements never repaired, and 4 more repaired by hand in a later fire.
+
+**Fire 38 left no entry in this doc.** It filed LOOP-312 and LOOP-313 and rewrote LOOP-308 and LOOP-311
+against the salvaged patches — all verifiable on the board — but recorded none of it here. Noted so the
+gap is not later read as an idle fire.
+
+**§20 R2 pass 32.** The thirty-fourth- and thirty-fifth-fire journals moved to
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -794,6 +753,25 @@ bytes.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-04 (pm, thirty-ninth fire) — a module that declares its own scope has made a testable claim,
+  and the claim is the thing to audit.** `destructive-guard.ts` states that every verb destroying operator
+  data calls into it. Auditing the *diff* would have established only that its two call sites are correct,
+  which they are. Auditing the *claim* meant enumerating the verbs that destroy operator data and testing
+  each for membership — which found `up --bundle --force-reseed` overwriting live config and secrets with
+  no gate at all (LOOP-316), on a flag the operator-console SKILL already classified as destructive.
+  **Rule: when a change ships a scope statement, the review artifact is the set that statement quantifies
+  over, not the lines the change touched. A docstring that says "every X" converts mechanically into an
+  enumeration of X plus a membership test, and that test is cheap enough to run every time one appears.**
+
+- **2026-08-04 (pm, thirty-ninth fire) — the instance count of a defect and the defect itself are
+  different facts, and only one of them decays.** LOOP-190 was filed as "(2 live instances)". Both have
+  since been cleared by hand — one by a past fire's unpark, one by mine — while the code that lets the
+  `blocked` label and the `Blocked-by:` edge diverge is untouched. An implementer inspecting the board
+  today reproduces nothing, and the cheapest wrong conclusion is the one the ticket's own evidence now
+  invites. **Rule: a grooming pass that re-measures a defect's instances must state which of the two facts
+  it re-measured. Give the refreshed count, say in the same comment whether the mechanism still exists,
+  and supply a synthetic repro — otherwise "no longer reproduces by inspection" reads as "fixed".**
 
 - **2026-08-04 (pm, thirty-fifth fire) — a capability that ships without a cadence and without a
   doctor code is indistinguishable from an absent one at the moment it is needed.** The board was
