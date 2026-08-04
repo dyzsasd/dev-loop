@@ -143,6 +143,14 @@ function parseExportArgs(rest: string[]): ExportOpts {
   if (!o.plaintext && !o.recipients.length && !o.recipientFiles.length)
     die("no encryption target: pass --recipients <age-pubkey> (repeatable) / --recipients-file <path>, or --insecure-plaintext (dev/test ONLY)");
   if (o.move && o.backup) die("--move and --backup are exclusive (a backup never retires the source)");
+  // Validate --run-agents with the SAME parseAgentSpec the LOADER enforces (LOOP-269 AC2). LOOP-184
+  // hardened the load side only, which turned a typo into a trap: `--run-agents bogus --move` wrote a
+  // bundle whose manifest the new loader hard-refuses and THEN stamped the source moved, stranding the
+  // operator between a workspace that will not run and a bundle that will not load. The position is the
+  // point — this is parse time, before the doctor gate, before the payload write, before the --move
+  // marker — so an invalid value exits having written nothing and retired nothing.
+  if (!parseAgentSpec(o.runAgents))
+    die(`--run-agents ${JSON.stringify(o.runAgents)} is not a valid agent spec (comma-separated known agents/groups, e.g. 'core'; no flags) — refusing to export a bundle that could not be loaded back`);
   return o;
 }
 
@@ -294,9 +302,20 @@ export async function bundleLoad(file: string, dir: string, opts: { forceReseed:
   // tokens are a known-safe set (only [a-z-] roster/group names), which also closes the terminal-
   // escape exposure at the two print sites. repos[].remote is already config-sourced (ws.file.repos
   // below), so it needs no manifest guard — confirmed for LOOP-162's stated audit.
-  if (!parseAgentSpec(manifest.run.agents))
-    die(`bundle manifest run.agents ${JSON.stringify(manifest.run.agents)} is not a valid agent spec (comma-separated known agents/groups, e.g. 'core'; no flags) — refusing to load (tampered or corrupt bundle)`, 1);
-  const runAgents = manifest.run.agents.split(",").map((t) => t.trim()).filter(Boolean).join(",");
+  //
+  // `manifest.run?.agents`, not `manifest.run.agents` (LOOP-269, QA's Job-C finding). `manifest` is an
+  // unchecked `JSON.parse(...) as BundleManifest` cast (readBundle above), so its type is an assertion
+  // about UNTRUSTED bytes, not a fact: a tampered manifest with no `run` key, or `run: null`, threw
+  // `TypeError: Cannot read properties of undefined` on this very line — one expression BEFORE the
+  // validator could refuse it. Optional-chaining makes that shape produce `undefined` instead, so it
+  // reaches the refusal below and is named there rather than surfacing as a stack trace. The explicit
+  // `typeof` test is what narrows `unknown` to `string` for the `.split()` on the next line;
+  // parseAgentSpec's own non-string guard would refuse it too, so the two agree by construction.
+  // (`run: {}` and a non-string `run.agents` already reached the guard correctly before this change.)
+  const declaredAgents: unknown = manifest.run?.agents;
+  if (typeof declaredAgents !== "string" || !parseAgentSpec(declaredAgents))
+    die(`bundle manifest run.agents ${JSON.stringify(declaredAgents)} is not a valid agent spec (comma-separated known agents/groups, e.g. 'core'; no flags) — refusing to load (tampered or corrupt bundle)`, 1);
+  const runAgents = declaredAgents.split(",").map((t) => t.trim()).filter(Boolean).join(",");
 
   const root = resolve(dir);
   mkdirSync(join(root, ".dev-loop"), { recursive: true });

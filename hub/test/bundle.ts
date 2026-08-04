@@ -58,9 +58,33 @@ try {
     ok(!!recipient, "setup: age keypair generated");
   }
 
+  // ── SECURITY (LOOP-269 AC2/AC3): an invalid `--run-agents` is refused AT EXPORT, at parse time ──
+  //    LOOP-184 hardened the LOAD side only. That made a typo strictly worse than before it: the effect
+  //    order in bundleExport is write-the-bundle THEN stamp-the-source-moved, so
+  //    `--run-agents bogus --move` produced a bundle the new loader hard-refuses AND retired the source
+  //    workspace — the operator left with neither. These run BEFORE the real export below, while the
+  //    source is still un-stamped, which is what makes the `moved.json`-absent assertion meaningful.
+  {
+    const badOut = join(ROOT, "never-written.bundle");
+    for (const bad of ["bogus-agent", "constructor", "--force", ""]) {
+      const badExp = cli(["bundle", "export", "--out", badOut, "--run-agents", bad, "--move",
+        ...(hasAge ? ["--recipients", recipient] : ["--insecure-plaintext"])], src);
+      const said = `${badExp.stdout}${badExp.stderr}`;
+      ok(badExp.status !== 0, `export --run-agents ${JSON.stringify(bad)}: REFUSES (got ${badExp.status})`);
+      ok(/--run-agents/.test(said), `export refusal NAMES --run-agents (${JSON.stringify(bad)})`);
+      ok(said.includes(JSON.stringify(bad)), `export refusal names the offending VALUE ${JSON.stringify(bad)}`);
+      ok(!existsSync(badOut), `export --run-agents ${JSON.stringify(bad)}: NO bundle written`);
+      ok(!existsSync(join(src, ".dev-loop", "moved.json")),
+        `export --run-agents ${JSON.stringify(bad)} --move: source NOT stamped moved (refusal precedes every FS effect)`);
+    }
+  }
+
   // ── export (encrypted when possible) ──
+  // `--run-agents core` is passed EXPLICITLY (LOOP-269): the default is already "core", so without the
+  // flag the happy path never exercises the new export-side validator at all — the refusals above would
+  // then be unopposed, and a validator that rejected everything would still pass this suite.
   const out = join(ROOT, "move.bundle");
-  const exp = cli(["bundle", "export", "--out", out, "--move", "--git-token-env", "GIT_FAKE_TOKEN", "--include-env", "GIT_FAKE_TOKEN",
+  const exp = cli(["bundle", "export", "--out", out, "--move", "--run-agents", "core", "--git-token-env", "GIT_FAKE_TOKEN", "--include-env", "GIT_FAKE_TOKEN",
     ...(hasAge ? ["--recipients", recipient] : ["--insecure-plaintext"])], src, { GIT_FAKE_TOKEN: "ghp-fake" });
   ok(exp.status === 0, `export: exits 0 (got ${exp.status}: ${(exp.stderr ?? "").split("\n").slice(0, 2).join(" / ")})`);
   ok(existsSync(out) && (statSync(out).mode & 0o777) === 0o600, "export: bundle written chmod 600");
@@ -128,7 +152,12 @@ try {
   //    no `dev-loop run` child was spawned (AC4). ──
   {
     const nl = rawBundle.indexOf(0x0a, 17);
-    for (const [i, bad] of ["--force", "bogus-agent", ""].entries()) {
+    // LOOP-269 extends this arm past the values LOOP-184 covered. `constructor`/`__proto__` are the
+    // prototype-chain class: they used to reach the validator and make it THROW a TypeError, so the
+    // process still exited non-zero (the safety property held) but via a stack trace instead of the
+    // die() below — a refusal that cannot say what it refused. The `refusal names run.agents` assertion
+    // is therefore the fails-before proof for those two, not the exit code.
+    for (const [i, bad] of ["--force", "bogus-agent", "", "constructor", "__proto__", "core,constructor"].entries()) {
       const evilManifest = { ...manifest, run: { agents: bad } };
       const evilBundle = join(ROOT, `evil-agents-${i}.bundle`);
       writeFileSync(evilBundle, Buffer.concat([Buffer.from(`DEVLOOP-BUNDLE/1\n${JSON.stringify(evilManifest)}\n`), rawBundle.subarray(nl + 1)]));
@@ -137,6 +166,24 @@ try {
       ok(evil.status === 1, `security: tampered run.agents ${JSON.stringify(bad)} → load REFUSES (exit 1, got ${evil.status})`);
       ok(/run\.agents|valid agent spec/i.test(`${evil.stdout}${evil.stderr}`), `security: refusal names run.agents (${JSON.stringify(bad)})`);
       ok(!existsSync(join(dstEvil, "dev-loop.json")), `security: NOTHING materialized for tampered run.agents ${JSON.stringify(bad)} (fail-closed before the config write + the run spawn)`);
+    }
+    // QA's Job-C finding on LOOP-269: the `run` OBJECT itself missing or null. `manifest` is an
+    // unchecked JSON.parse cast, so this threw `Cannot read properties of undefined (reading 'agents')`
+    // one expression BEFORE the validator — no own-property fix inside parseAgentSpec could reach it.
+    for (const [i, run] of [undefined, null, "core", 7].entries()) {
+      const evilManifest = { ...manifest, run };   // `undefined` ⇒ JSON.stringify drops the key entirely
+      const evilBundle = join(ROOT, `evil-run-${i}.bundle`);
+      writeFileSync(evilBundle, Buffer.concat([Buffer.from(`DEVLOOP-BUNDLE/1\n${JSON.stringify(evilManifest)}\n`), rawBundle.subarray(nl + 1)]));
+      const dstEvil = join(ROOT, `dst-evil-run-${i}`);
+      const evil = cli(["up", "--bundle", evilBundle, "--dir", dstEvil, "--dry-launch"], ROOT, loadEnv);
+      const said = `${evil.stdout}${evil.stderr}`;
+      ok(evil.status === 1, `security: manifest run=${JSON.stringify(run) ?? "absent"} → load REFUSES (exit 1, got ${evil.status})`);
+      // Match the die()'s OWN wording, not the substring "run.agents": the pre-fix TypeError's stack
+      // trace quotes the source line `manifest.run.agents`, so a /run\.agents/ test passes on the very
+      // crash it is meant to rule out. "is not a valid agent spec" can only come from the die().
+      ok(/is not a valid agent spec/.test(said), `security: refusal is the die() naming run.agents for run=${JSON.stringify(run) ?? "absent"}`);
+      ok(!/Cannot read properties|TypeError/.test(said), `security: run=${JSON.stringify(run) ?? "absent"} refuses via die(), never an uncaught TypeError`);
+      ok(!existsSync(join(dstEvil, "dev-loop.json")), `security: NOTHING materialized for manifest run=${JSON.stringify(run) ?? "absent"}`);
     }
   }
 
