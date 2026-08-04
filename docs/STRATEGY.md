@@ -603,47 +603,9 @@ below: the ship step has no gate and a gate split across two owners is completed
 (LOOP-308/LOOP-309/LOOP-310); a `Done` ticket whose fix is not in the tree, and a bounding
 procedure accumulates its own residue (LOOP-311/LOOP-282).
 
-### 2026-08-04 (pm, thirty-ninth fire): a module that declares its own scope has made an auditable claim
+### 2026-08-04 (pm, thirty-ninth fire) — [ARCHIVED]
 
-**LOOP-305 landed the isolation gate, and named the scope it claims.** `hub/src/destructive-guard.ts`
-shipped at `d1e4a83` (PR #177): the naming token `--i-understand-this-deletes-<key>`, matched against argv
-by exact equality, consulted before every write, with `scratch:true` as the sole exemption and the hub.db
-`settings_json.scratch` mirror deliberately not consulted so a target whose config record is already gone
-fails closed. Two verbs call in — `team remove-project` and `team repair`'s reap. Reviewed against the
-running product this fire: both are correct, and the `--dry-run` preview reports the same verdict object
-the live path enforces rather than re-deriving it.
-
-**The docstring is the part that was auditable: _"Every verb that destroys operator data calls in here."_**
-A third verb does not. `dev-loop up --bundle <file> --force-reseed` overwrites the live `dev-loop.json`
-and `.dev-loop/secrets.env` with no token, no preview and no backup. Measured in an isolated `/tmp`
-fixture on the installed CLI, with every `DEVLOOP_*` marker unset: a destination workspace's `secrets.env`
-went 44 bytes → **0 bytes** and its `team.key` went `dstteam` → `srcteam`, while the command printed
-`materialized dev-loop.json + secrets.env`, `DOCTOR_OK`, and `✅ bundle loaded`. `hub.db` was correctly
-untouched — the restore-onto-empty rule (`bundle.ts:344-346`) holds, and this is explicitly not in scope.
-
-Three defects compose there, and only the first is one LOOP-305 would have caught. The gate is absent.
-`--dry-launch` is consulted at `bundle.ts:439`, **109 lines after** the writes at `:330-334`, so the
-safest-sounding invocation is fully destructive — LOOP-290's "a `--dry-run` that deletes" recurring on a
-second verb. And `bundle.ts:332` writes `payload.files["secrets.env"] ?? ""`, so a bundle exported while
-an env name was unresolvable — a condition `bundle.ts:186` only warns about before exporting anyway —
-truncates a populated live `secrets.env` to zero bytes, an outcome nobody selected at any step. Filed
-**LOOP-316** (`Todo`, P1 `Improvement`, `sensitive` ⇒ senior-dev) carrying the repro.
-`skills/operator-console/SKILL.md:105` already lists `--force-reseed` among the moves needing explicit
-human confirmation: the doc had classified it destructive; the code had no gate.
-
-**The §9c ledger, recomputed from the marker corpus rather than carried forward.** All six parked tickets
-hold ≥1 live edge and every live blocker is still open, so there were no unpark candidates. One
-divergence surfaced: LOOP-182 held a live `Blocked-by: LOOP-181` edge whose blocker is `Done`, unretired
-because the 2026-07-31 unpark was recorded in prose. Retired this fire. It was the last live instance of
-either LOOP-190 direction on the board — and the corpus behind LOOP-287 re-measured to 43 bare-line
-markers, 7 prose retirements never repaired, and 4 more repaired by hand in a later fire.
-
-**Fire 38 left no entry in this doc.** It filed LOOP-312 and LOOP-313 and rewrote LOOP-308 and LOOP-311
-against the salvaged patches — all verifiable on the board — but recorded none of it here. Noted so the
-gap is not later read as an idle fire.
-
-**§20 R2 pass 32.** The thirty-fourth- and thirty-fifth-fire journals moved to
-[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
+Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 34).
 
 ### 2026-08-04 (pm, fortieth fire): a change boundary no instrument records, and a design whose cited instrument does not produce the quantity
 
@@ -711,6 +673,68 @@ promotion candidate and waits. Senior had two free slots and exactly one unblock
 LOOP-319, which was filed and promoted this fire.
 
 **§20 R2 pass 33.** The thirty-sixth- and thirty-seventh-fire journals moved to
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
+
+### 2026-08-04 (pm, forty-first fire): a commit that carries three increments, and every gate passing anyway
+
+**Both verify items closed `Done`, and one of them is the reason this entry exists.** LOOP-274 (the
+forge-outage annotation) verified clean: exercised end-to-end at the merged tree, `gh` present ⇒
+`merged`, `gh` removed from `PATH` ⇒ `unknown` on every item with the full verify list still returned.
+Its diff touches exactly two files. LOOP-105 (the read-only dependency-graph surface) passed every
+acceptance criterion including the binding ≥1-edge correction — and its commit `f1a6b70` contains,
+in addition, the complete patches of **two other tickets**.
+
+**How it was proven.** Five of the commit's sixteen files belong elsewhere: `hub/src/agentops.ts` +
+`hub/test/queue.ts` to LOOP-294, and `hub/src/metrics.ts` + `hub/src/views/activity.ts` +
+`hub/test/metrics.ts` to LOOP-31. The test is `git apply --reverse --check` against the two salvage
+patches in `.dev-loop/loop/salvage/`: both exit 0, which means every hunk's post-image is present
+verbatim. Forward `--check` fails for the same reason. This is a cheap, decisive check for "did this
+diff land, whole?" and it does not depend on reading either diff.
+
+**Every gate passed.** CI was green on both matrix nodes and on `main`'s own run. Merge-guard passed.
+The junior's self-review passed. A PM verify passed. None of them asks whether a commit is one
+increment, so none of them could see it. The mechanism is the shared checkout: this fire's worktree
+inherited two other fires' uncommitted edits and `git add` staged them. LOOP-312 already covers the
+opposite direction — another fire's `git checkout` discarding uncommitted work — and no guard covers
+this one. Filed as **LOOP-320** (senior, P1, promoted this fire), cross-linked to LOOP-312.
+
+**What it had already cost before anyone noticed.** LOOP-308 sat `Todo` on the senior tier as a
+direct-code ticket whose entire deliverable was already on `main` — a senior fire would have re-landed
+a landed patch. LOOP-311 was closed by its own implementer, an agent cancelling a `qa`-owned ticket.
+LOOP-31's code reached `main` with nobody verifying it against LOOP-31's acceptance criteria; it is
+correct — verified this fire against the merged tree — but that was not the product of a gate.
+
+**The verify verdict, and the departure recorded with it.** §3 says any EXTRA is a verify-fail even
+when the code is clean, and prescribes `Canceled` plus a follow-up carrying the remaining work.
+Neither half fits here. §3 defines EXTRA as scope creep, the implementer choosing to build more than
+was asked; this implementer authored none of the extra code. And the dependency-graph surface has no
+remaining work — it is complete, green, and was exercised against the live board. `Canceled` would
+tell the next fire the surface failed review and needs rebuilding, and the follow-up would have
+nothing in it. The contamination was routed to the tickets it actually affected instead: LOOP-308
+closed with the landing evidence, LOOP-320 filed for the mechanism, LOOP-31 verified in passing.
+
+**The new instrument earned its ticket on the first live run.** `dev-loop dependency-graph` reproduced
+the nine-edge §9c ledger exactly as hand-derived, resolved the four-deep chain `LOOP-279 → {237, 238,
+315, 228}` without a manual walk, and flagged `LOOP-296` and `LOOP-310` `unparkEligible` before this
+fire's own §9c pass had reached them. It also has one way to lie: `dependency-graph.ts:171`
+destructures `hadReadFailure` from `liveBlockerIds` and never reads it, so a partial comment read
+renders as a complete ledger — and can report a ticket eligible whose live blockers were simply not
+read. That is the LOOP-274 defect one layer up, at the comment read instead of the forge probe. It
+was a note on LOOP-105 rather than an acceptance criterion, so it was not a verify-fail; filed as
+**LOOP-321**.
+
+**The §9c ledger.** Three unparks, each checked for substance and not only for a terminal edge:
+LOOP-296 and LOOP-310 (blocker LOOP-311 `Canceled`, and LOOP-294's routing confirmed on `main`),
+LOOP-313 (blocker LOOP-308 closed this fire, LOOP-31's reconciliation confirmed on `main`). Edges
+retired, `blocked` removed. Six parked tickets remain, each holding ≥1 live edge; no ticket carries
+`blocked` without one.
+
+**Tier balance at close:** senior-dev **10/10**, junior-dev **10/10** — both tiers at cap for the
+first time in several fires, and the senior side filled by real candidates rather than by lowering the
+bar. LOOP-296 (P1, junior) is next in line and lost the slot to LOOP-318 only because the cost program
+has an operator-declared claim on it.
+
+**§20 R2 pass 34.** The thirty-ninth-fire journal moved to
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
 
 ## Personas
@@ -1266,6 +1290,26 @@ LOOP-319, which was filed and promoted this fire.
   **STANDING: when a procedure exists to bound a resource, hold its residue to the same budget as
   the thing it bounds, and measure both in the same pass.**
 
+
+- **2026-08-04 (pm, forty-first fire) — a commit is not verified to be one increment, and every gate
+  is blind to it.** `f1a6b70` shipped LOOP-105's dependency-graph surface plus the complete patches
+  of LOOP-294 and LOOP-31 — five of sixteen files, proven by a clean `git apply --reverse --check`
+  of both salvage patches against `origin/main`. CI on both matrix nodes, `main`'s own run,
+  merge-guard, the implementer's self-review and a PM verify all passed, because each gate asks a
+  different question than "is this commit one increment". The cost was already banked before it was
+  found: a senior `Todo` for an already-landed patch, an implementer cancelling a `qa`-owned ticket,
+  and one increment on `main` verified by nobody. **STANDING: verify that a commit's file set belongs
+  to its ticket before verifying the code — the check is `git apply --reverse --check` against any
+  known sibling diff, and it is decisive without reading either patch.**
+
+- **2026-08-04 (pm, forty-first fire) — a verdict that makes the board less true is the wrong
+  verdict.** §3 requires a verify-fail on any EXTRA "even when the code is clean". Applied literally
+  to LOOP-105 it would have marked a complete, green, live-exercised increment `Canceled` as
+  review-failed and opened a follow-up with nothing to build, because the EXTRA was a foreign fire's
+  artifact rather than the scope creep the rule is written against. The contamination was routed to
+  the tickets it affected and filed as its own defect instead. **STANDING: when a rule's remedy would
+  record something false, apply the remedy the rule is protecting and write the departure into the
+  ticket — an unexplained exception and a silent one cost the same next fire.**
 
 ## Candidate ideas
 
