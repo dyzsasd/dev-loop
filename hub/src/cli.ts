@@ -55,6 +55,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   doc:              ["cli-agentops", "doc"],       // doc list|get|history|diff|save|publish|archive — doc.* 1:1 (save: CAS, CONFLICT → exit 3)
   mirror:           ["cli-agentops", "mirror"],    // mirror push|poll|status — the one-way Linear mirror + comment→intake poll
   queue:            ["cli-agentops", "queue"],     // LAYER 1: the pre-ranked per-agent work lists (§5/§21b) — every agent's mandated first board read
+  "dependency-graph":["cli-agentops", "dependency_graph"], // LOOP-105: read-only §9c/W5 dependency-graph surface
   "export-desktop-skill": ["export-desktop-skill"],// render a self-contained Claude Desktop skill for an agent + project (P2-12)
   worktree:         ["worktree"],                  // add <id> [--repo <ref>] — create dev worktree off origin/<defaultBranch> (LOOP-54; LOOP-37 adds path + reaper)
   "merge-guard":    ["merge-guard"],               // LOOP-64+67: forge review (§3.1/§3.2) + board-state (§3.3) axes — trip on human CHANGES_REQUESTED or non-merge-eligible ticket (design: merge-review-guard)

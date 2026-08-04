@@ -316,9 +316,34 @@ export interface BoardMetrics {
   throughput: number;         // transitions → Done in the window
   verifyFails: number;        // In Review → Canceled (the §3 verify-fail close edge)
   acceptRate: number | null;  // Done ÷ (Done + verifyFails); null when both are 0
-  blockedNow: number;         // open `blocked` tickets that are parked (need human attention)
+  blockedNow: number;         // parked tickets needing human attention (Human-Blocked ∪ blocked-label w/o live edge)
   sequencedNow: number;       // open `blocked` tickets with a live Blocked-by edge (will self-unpark)
   qa: { bugsFiled: number; escaped: number; escapeRatio: number | null }; // escaped = incident/signal-labelled Bugs
+}
+
+// ─── shared parked-split (LOOP-31) — per-backend human-park population ─────
+// Returns the ticket IDs that are "parked" (need human attention):
+//   • Human-Blocked state tickets (the operator park, service backend)
+//   • blocked-label tickets without a live Blocked-by edge (Dev bail parks)
+// A ticket that is BOTH Human-Blocked AND edge-sequenced counts as parked
+// (a human is the gate; the edge is not what is holding it).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function parkedSplit(db: any, projectId: string): { parkedIds: string[]; sequencedNow: number } {
+  const humanBlocked = db.prepare(
+    "SELECT id FROM tickets WHERE project_id=? AND state='Human-Blocked'",
+  ).all(projectId) as { id: string }[];
+  const blockedTickets = db.prepare(
+    "SELECT id FROM tickets WHERE project_id=? AND state NOT IN ('Done','Canceled','Duplicate') AND labels LIKE '%\"blocked\"%'",
+  ).all(projectId) as { id: string }[];
+  const parked = new Set<string>();
+  for (const { id } of humanBlocked) parked.add(id);
+  let sequencedNow = 0;
+  for (const { id } of blockedTickets) {
+    if (parked.has(id)) continue; // already parked via Human-Blocked state
+    if (hasLiveBlockerEdge(db, id)) sequencedNow++;
+    else parked.add(id);
+  }
+  return { parkedIds: [...parked], sequencedNow };
 }
 
 const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
@@ -357,13 +382,9 @@ export function boardMetrics(db: any, projectId: string, windowMs: number, nowMs
     } catch { /* skip */ }
   }
   // Split blocked tickets into parked (attention-needed) vs sequenced (live dependency edge).
-  const blockedTickets = db.prepare(
-    "SELECT id FROM tickets WHERE project_id=? AND state NOT IN ('Done','Canceled','Duplicate') AND labels LIKE '%\"blocked\"%'",
-  ).all(projectId) as { id: string }[];
-  let blockedNow = 0, sequencedNow = 0;
-  for (const { id } of blockedTickets) {
-    if (hasLiveBlockerEdge(db, id)) sequencedNow++; else blockedNow++;
-  }
+  // Uses shared parkedSplit which also counts Human-Blocked state tickets (LOOP-31).
+  const { parkedIds, sequencedNow } = parkedSplit(db, projectId);
+  const blockedNow = parkedIds.length;
   const bugs = db.prepare(
     "SELECT labels FROM tickets WHERE project_id=? AND type='Bug' AND created_at>=?",
   ).all(projectId, cutoffIso) as { labels: string }[];

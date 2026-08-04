@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -108,6 +108,32 @@ try {
   const dq = decisionQueue(db, "p");
   ok(dq.length === 2 && dq[0].id === "T-3" && dq[1].id === "T-5", `decisionQueue = HB ∪ InReview@operator, oldest first (got ${dq.map((t) => t.id).join(",")})`);
   ok(!dq.some((t) => t.id === "T-4"), "an agent-assigned In Review ticket is not in the operator's queue");
+
+  // ── LOOP-31: shared parkedSplit reconciles metrics + /activity ────────────────
+  // The binding AC: Human-Blocked with no blocked label (LOOP-92 shape) counts as parked.
+  // T-5 is already inserted as Human-Blocked with labels [] — no blocked label.
+  const ps = parkedSplit(db, "p");
+  ok(ps.parkedIds.includes("T-5"), `LOOP-31 AC1: Human-Blocked T-5 (no blocked label) is in parkedIds (got ${ps.parkedIds.join(",")})`);
+  ok(ps.parkedIds.includes("T-1"), "LOOP-31 AC1: blocked-label T-1 (no edge) is in parkedIds");
+  ok(ps.parkedIds.includes("TPAR-2"), "LOOP-31 AC1: blocked-label TPAR-2 (edge to Done) is in parkedIds");
+  ok(!ps.parkedIds.includes("TSEQ-1"), "LOOP-31 AC3: blocked+live-edge TSEQ-1 is NOT in parkedIds (sequenced)");
+  ok(ps.sequencedNow === 1, `LOOP-31 AC3: sequencedNow=1 (TSEQ-1 only; got ${ps.sequencedNow})`);
+  // AC5: boardMetrics uses the same parkedSplit → same numbers
+  const bm31 = boardMetrics(db, "p", 7 * DAY, NOW);
+  ok(bm31.blockedNow === ps.parkedIds.length,
+    `LOOP-31 AC5: boardMetrics.blockedNow (${bm31.blockedNow}) === parkedIds.length (${ps.parkedIds.length})`);
+  ok(bm31.sequencedNow === ps.sequencedNow,
+    `LOOP-31 AC5: boardMetrics.sequencedNow (${bm31.sequencedNow}) === ps.sequencedNow (${ps.sequencedNow})`);
+  // AC4: Human-Blocked distinguishable from Dev bail — parkedIds includes both but
+  // the tile shows "awaiting you · Human-Blocked" separately. Verify the count split.
+  const hbCount = db.prepare("SELECT COUNT(*) as n FROM tickets WHERE project_id=? AND state='Human-Blocked'").get("p") as { n: number };
+  ok(hbCount.n === 1, `LOOP-31 AC4: exactly 1 Human-Blocked ticket (T-5; got ${hbCount.n})`);
+  ok(ps.parkedIds.length - hbCount.n === 2, `LOOP-31 AC4: 2 Dev-bail parks (T-1, TPAR-2) distinguishable from ${hbCount.n} Human-Blocked`);
+  // AC2: a blocked + needs-pm ticket (non-Human-Blocked) is visible as parked
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('L31-DB','p','dev-bail','d','Feature','Todo',NULL,2,?,  '[]','pm',?,?)")
+    .run(JSON.stringify(["dev-loop", "blocked", "needs-pm"]), iso(NOW - DAY), iso(NOW - DAY));
+  const ps2 = parkedSplit(db, "p");
+  ok(ps2.parkedIds.includes("L31-DB"), "LOOP-31 AC2: blocked+needs-pm Dev bail (L31-DB) is in parkedIds");
 
   // ── LOOP-73: renderHuman decision queue age — AC1/AC2/AC3/AC4 ─────────────────────────────────────
   {
