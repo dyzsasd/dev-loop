@@ -274,9 +274,14 @@ function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix
 
 // A unique, derived ticket prefix: the key's alphanumerics uppercased (max 8), de-clashed with a numeric
 // suffix. Deterministic — the same key on the same db always lands the same prefix.
+// The result must satisfy `isCanonicalTicketPrefix` (LOOP-264): `ensureProject` now rejects an out-of-shape
+// prefix at the INSERT, so a derive path that could emit one would turn a previously-working
+// `team add-project` into a hard failure. The one shape it could emit is a DIGIT-LEADING base — a key like
+// `2fa` derives `2FA`, and ids must start with a letter — so a leading `P` is prepended in that case.
 function derivePrefix(db: DatabaseSync, key: string): string {
   const taken = new Set((db.prepare("SELECT ticket_prefix FROM projects").all() as { ticket_prefix: string }[]).map((r) => r.ticket_prefix));
-  const base = (key.replace(/[^a-zA-Z0-9]/g, "").toUpperCase() || "P").slice(0, 8);
+  const alnum = key.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+  const base = (/^[A-Z]/.test(alnum) ? alnum : `P${alnum}`).slice(0, 8) || "P";
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) { const c = `${base}${n}`; if (!taken.has(c)) return c; }
 }

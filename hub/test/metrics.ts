@@ -65,25 +65,30 @@ try {
   ok(bm.qa.bugsFiled === 2 && bm.qa.escaped === 1 && bm.qa.escapeRatio === 0.5, "QA escape ratio = incident/signal Bugs ÷ all Bugs");
 
   // ── LOOP-26: blockedNow/sequencedNow split ─────────────────────────────────
-  // T-SEQ: a ticket with `blocked` + live Blocked-by edge → sequenced (not parked)
-  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-DEP','p','blocker','d','Feature','Todo',2,'[]','[]','pm',?,?)")
+  // Fixture ids are `<PREFIX>-<n>` because that is the only id the hub can mint (`db.ts` nextTicketId:
+  // `${ticket_prefix}-${seq}`) and the only shape a marker parses (`ticket-id.ts`, LOOP-264). These were
+  // `T-DEP`/`T-SEQ`/`T-DONE-DEP`/`T-PAR2` — hyphenated non-numeric tokens, which no project can ever
+  // produce. They only parsed because the old blocked-by copy accepted ANY hyphenated token, i.e. this
+  // suite was passing on the exact defect LOOP-264 repairs. Assertions below are unchanged.
+  // TSEQ-1: a ticket with `blocked` + live Blocked-by edge → sequenced (not parked)
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('TDEP-1','p','blocker','d','Feature','Todo',2,'[]','[]','pm',?,?)")
     .run(iso(NOW - DAY), iso(NOW - DAY));
-  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-SEQ','p','sequenced','d','Feature','Todo',2,?,'[]','pm',?,?)")
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('TSEQ-1','p','sequenced','d','Feature','Todo',2,?,'[]','pm',?,?)")
     .run(JSON.stringify(["dev-loop", "junior-dev", "blocked"]), iso(NOW - DAY), iso(NOW - DAY));
-  db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES('c-seq','T-SEQ','pm',?,?)")
-    .run("Blocked-by: T-DEP", iso(NOW - DAY));  // T-DEP is Todo (open) → live edge
+  db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES('c-seq','TSEQ-1','pm',?,?)")
+    .run("Blocked-by: TDEP-1", iso(NOW - DAY));  // TDEP-1 is Todo (open) → live edge
 
-  // T-DONE-DEP: a ticket with `blocked` + Blocked-by pointing to a Done ticket → parked (AC2)
-  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-DONE-DEP','p','done blocker','d','Feature','Done',2,'[]','[]','pm',?,?)")
+  // TDONE-1: a ticket with `blocked` + Blocked-by pointing to a Done ticket → parked (AC2)
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('TDONE-1','p','done blocker','d','Feature','Done',2,'[]','[]','pm',?,?)")
     .run(iso(NOW - DAY), iso(NOW - DAY));
-  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-PAR2','p','parked2','d','Feature','Todo',2,?,'[]','pm',?,?)")
+  db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('TPAR-2','p','parked2','d','Feature','Todo',2,?,'[]','pm',?,?)")
     .run(JSON.stringify(["dev-loop", "blocked"]), iso(NOW - DAY), iso(NOW - DAY));
-  db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES('c-par2','T-PAR2','pm',?,?)")
-    .run("Blocked-by: T-DONE-DEP", iso(NOW - DAY));  // T-DONE-DEP is Done → satisfied edge → parked
+  db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES('c-par2','TPAR-2','pm',?,?)")
+    .run("Blocked-by: TDONE-1", iso(NOW - DAY));  // TDONE-1 is Done → satisfied edge → parked
 
   const bm2 = boardMetrics(db, "p", 7 * DAY, NOW);
-  // Now: T-1 (parked, no Blocked-by), T-PAR2 (parked, all Blocked-by done) → blockedNow=2
-  //      T-SEQ (sequenced, live Blocked-by) → sequencedNow=1
+  // Now: T-1 (parked, no Blocked-by), TPAR-2 (parked, all Blocked-by done) → blockedNow=2
+  //      TSEQ-1 (sequenced, live Blocked-by) → sequencedNow=1
   ok(bm2.blockedNow === 2, `LOOP-26: blockedNow counts only parked (attention-needed) tickets (got ${bm2.blockedNow})`);
   ok(bm2.sequencedNow === 1, `LOOP-26: sequencedNow counts tickets with live Blocked-by edges (got ${bm2.sequencedNow})`);
   ok(bm2.blockedNow + bm2.sequencedNow === 3, "LOOP-26: blockedNow + sequencedNow = total blocked-labelled open tickets");
@@ -224,7 +229,7 @@ try {
     "LOOP-30 AC1+AC2: Todo with assignee='junior-dev' but no tier label yields a finding — silent-zero path closed");
   // AC3: In Review's assignee is the implementer, NOT the verifier — label wins for In Review.
   // Capture count BEFORE inserting T-7 so the assertion is robust when other fixtures (e.g. LOOP-26
-  // T-SEQ with label "junior-dev") are also in the DB on the merged branch.
+  // TSEQ-1 with label "junior-dev") are also in the DB on the merged branch.
   const jdCountBeforeT7 = olAssigneeOnly.find((f) => f.owner === "junior-dev")?.openTickets ?? 0;
   db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-7','p','in-review-shipped','d','Bug','In Review','junior-dev',2,?,  '[]','pm',?,?)")
     .run(JSON.stringify(["dev-loop", "qa"]), iso(NOW - DAY), iso(NOW - DAY));
