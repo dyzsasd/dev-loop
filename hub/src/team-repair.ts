@@ -11,6 +11,7 @@ import { effectiveRepo, validateTeamFile } from "./team-config.ts";
 import { openDb } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { worktreeReap } from "./worktree.ts";
+import { isolationVerdict } from "./destructive-guard.ts";
 import { ensureCliPermissions, CLI_PERMISSIONS } from "./team-init.ts";
 
 function usage(): void {
@@ -131,6 +132,13 @@ export async function teamRepair(argv = process.argv.slice(2)): Promise<number> 
       .map(([k]) => k);
 
     for (const key of candidates) {
+      // The shared isolation gate (LOOP-305). The candidate filter above is already `scratch === true`, so
+      // this changes NO behaviour today — that is the point of calling it anyway. The invariant "a reap never
+      // destroys a real project" stops resting on one `.filter()` a later edit could widen, and becomes
+      // pinned by the gate plus its test. The reap has no per-project token to offer, so it passes none: a
+      // non-scratch candidate can only ever be skipped here, never reaped.
+      const isolation = isolationVerdict(ws, key, []);
+      if (isolation.refusal) { info(`project '${key}': ${isolation.refusal.replace(/\s+/g, " ")} — skipping`); continue; }
       // Fail closed, gating the WHOLE iteration (before the config writeFileSync below): an unreadable db
       // means the ticket count is unknown, so skip loudly rather than reap on an assumed 0. (LOOP-280)
       if (dbUnreadable) { info(`project '${key}': could not verify ticket count — hub.db present but unreadable, skipping`); continue; }

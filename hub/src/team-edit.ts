@@ -10,6 +10,7 @@ import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb } from "./workspace.ts";
 import { validateTeamFile, referencingProjects, isTeamProject, type TeamFile, type Workspace } from "./team-config.ts";
+import { confirmationToken, isolationVerdict, TOKEN_PREFIX } from "./destructive-guard.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
 import { provisionClaudePermissions } from "./team-init.ts";
@@ -659,15 +660,25 @@ export function addProvider(argv: string[]): number {
 // before an irreversible 10-table cascade delete.
 export function removeProject(argv: string[]): number {
   const [key, ...rest] = argv;
-  const usage = "usage: dev-loop team remove-project <key> [--force] [--dry-run]";
+  const usage = "usage: dev-loop team remove-project <key> [--force] [--dry-run] [--i-understand-this-deletes-<key>]";
   if (!key || key.startsWith("--")) die(usage);
   if (isTeamProject(key)) die(`'${key}' is a reserved project key and cannot be removed`, 1);
   const force = rest.includes("--force");
   const dryRun = rest.includes("--dry-run");
+  const token = confirmationToken(key);
   // Reject anything else rather than ignoring it. Reading only `rest.includes("--force")` meant a typo
   // one keystroke away from the real flag (`--dryrun`, `--dry_run`) fell straight through to the LIVE
   // cascade — the exact hazard that produced LOOP-286. Matches addProject's `else die("unknown option")`.
-  for (const a of rest) if (a !== "--force" && a !== "--dry-run") die(`unknown option '${a}'\n${usage}`);
+  for (const a of rest) {
+    if (a === "--force" || a === "--dry-run" || a === token) continue;
+    // The token is accepted by EXACT equality only. Accepting it by prefix would let
+    // `--i-understand-this-deletes-anything` through and make the naming token name nothing (LOOP-305).
+    // A token-shaped argument for a DIFFERENT project is an operator mistake worth naming precisely —
+    // falling through to the generic `unknown option` would hide which half of it was wrong.
+    if (a.startsWith(TOKEN_PREFIX))
+      die(`confirmation token '${a}' names a different project than '${key}' — expected ${token}`);
+    die(`unknown option '${a}'\n${usage}`);
+  }
 
   const ws = resolveWorkspace();
   const inConfig = key in (ws.file.projects ?? {});
@@ -722,6 +733,12 @@ export function removeProject(argv: string[]): number {
     : (ticketCount ?? 0) > 0 ? `${ticketCount} ticket(s)`
     : repoCount > 0 ? `${repoCount} repo(s)`
     : null;
+  // The ISOLATION gate (LOOP-305), computed here — after the read-only facts, before the dry-run branch —
+  // so the preview and the live path consume ONE verdict object and cannot drift. Everything above this
+  // point is a pure read (config load, findProject, a count(*)), so no effect can precede the gate, and the
+  // existing error precedence (reserved key → unreadable db → not-found) is unchanged: the operator still
+  // gets the most specific message first.
+  const isolation = isolationVerdict(ws, key, rest);
 
   if (dryRun) {
     const dbLine = dbUnverifiable ? "UNREADABLE (would refuse without --force)"
@@ -733,8 +750,20 @@ export function removeProject(argv: string[]): number {
     console.log(`  config : ${inConfig ? "present" : "absent"}`);
     console.log(`  hub.db : ${dbLine}`);
     console.log(`  repos  : ${repoCount}`);
-    if (refuseReason && !force) console.log(`  → WOULD REFUSE (${refuseReason}; needs --force)`);
-    else {
+    // Derived from the same verdict object the live path enforces, never recomputed. The third form
+    // (NOT scratch, token supplied) exists because a preview that said "needs <token>" to an operator who
+    // had already passed it would be misleading in exactly the way this command must never be.
+    console.log(`  isolation : ${isolation.scratch ? "scratch (no token needed)"
+      : isolation.tokenPresent ? `NOT scratch — ${isolation.requiredToken} present`
+      : `NOT scratch — needs ${isolation.requiredToken}`}`);
+    // BOTH refusal reasons are reported, on separate lines, in the order the live path enforces them. An
+    // operator who reads one reason, satisfies it, and re-runs straight into the second has been misled by
+    // the preview — and being trusted before an irreversible cascade is this command's entire reason to exist.
+    const wouldRefuseCount = !!refuseReason && !force;
+    if (isolation.refusal || wouldRefuseCount) {
+      if (isolation.refusal) console.log(`  → WOULD REFUSE (not a scratch project; needs ${isolation.requiredToken})`);
+      if (wouldRefuseCount) console.log(`  → WOULD REFUSE (${refuseReason}; needs --force)`);
+    } else {
       const targets = [inConfig ? "the config key" : null, db && projectId ? "the hub.db rows (10-table cascade)" : null]
         .filter(Boolean).join(" + ");
       console.log(`  → WOULD PROCEED — delete ${targets || "nothing (already absent)"}${refuseReason ? ` [--force overrides: ${refuseReason}]` : ""}`);
@@ -743,6 +772,11 @@ export function removeProject(argv: string[]): number {
     console.log("REMOVE_PROJECT_DRYRUN_OK");
     return 0;   // ← zero writes: no mutate(), no DELETE
   }
+
+  // The isolation gate fires BEFORE the recoverability guard and before every write (LOOP-305). Order is
+  // deliberate: "did you mean this project?" must be answered before "is this project recoverable?", so an
+  // operator who reaches for --force to get past the count guard still has to name the target.
+  if (isolation.refusal) { db?.close(); die(isolation.refusal, 1); }
 
   if (!force) {
     if (db && projectId) {
