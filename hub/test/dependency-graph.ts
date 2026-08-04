@@ -88,10 +88,10 @@ try {
     const rfo = report.reverseFanOut;
     const t3Entry = rfo.find((r) => r.blockerId === "T-3");
     ok(!!t3Entry, "reverseFanOut: T-3 has an entry");
-    ok(t3Entry?.direct.includes("T-1") && t3Entry?.direct.includes("T-2"),
+    ok(t3Entry!.direct.includes("T-1") && t3Entry!.direct.includes("T-2"),
       `reverseFanOut: T-3 directly gates [T-1, T-2] (got direct=${JSON.stringify(t3Entry?.direct)})`);
     // Transitive: T-2 blocks T-1, T-3 blocks T-2, so T-3 transitively gates T-1 via T-2
-    ok(t3Entry?.transitive.includes("T-1"),
+    ok(t3Entry!.transitive.includes("T-1"),
       `reverseFanOut: T-3 transitively gates T-1 via T-2 (got transitive=${JSON.stringify(t3Entry?.transitive)})`);
   }
   {
@@ -100,7 +100,7 @@ try {
     // So T-3 transitively gates T-1 (via T-2) and T-10 (via T-2→T-1).
     const t3Entry = report.reverseFanOut.find((r) => r.blockerId === "T-3");
     ok(t3Entry !== undefined, "AC transitive: T-3 has reverse fan-out entry");
-    ok(t3Entry?.transitive.includes("T-1"),
+    ok(t3Entry!.transitive.includes("T-1"),
       `AC transitive: T-3 transitively gates T-1 (got transitive=${JSON.stringify(t3Entry?.transitive)})`);
   }
 

@@ -626,7 +626,6 @@ const VERBS: Record<string, VerbHandler> = {
   queue: verbQueue,      // LAYER 1: the pre-ranked per-agent work lists (§5/§21b in code)
   dependency_graph: verbDependencyGraph, // LOOP-105: read-only §9c/W5 dependency-graph surface
   ticket: verbTicket,    // create | update (reads stay cli-tickets)
-  ticket: verbTicket,    // create | update (reads stay cli-tickets)
   comment: verbComment,
   comments: verbComments,
   labels: verbLabels,

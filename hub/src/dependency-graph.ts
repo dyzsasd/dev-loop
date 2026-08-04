@@ -198,7 +198,7 @@ export function dependencyGraph(db: any, projectId: string): DependencyGraphRepo
     if (blockers) {
       for (const id of blockers) {
         const state = blockerStates.get(id);
-        if (state === null) {
+        if (state == null) {
           dangling.push(id);
         } else if (!TERMINAL.has(state)) {
           allTerminal = false;
