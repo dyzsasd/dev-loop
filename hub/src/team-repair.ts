@@ -3,7 +3,7 @@
 // Idempotent: repairs git worktrees whose absolute gitdir moved (the machine-migration case, §10.3),
 // prunes stale worktrees, re-registers the convenience index, (service) truncates the hub WAL, and
 // reaps worktrees whose ticket is in a terminal state (Done / Canceled / Duplicate). LOOP-37.
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsHubDb, upsertWorkspaceIndex } from "./workspace.ts";
@@ -11,7 +11,7 @@ import { effectiveRepo, validateTeamFile } from "./team-config.ts";
 import { openDb } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { worktreeReap } from "./worktree.ts";
-import { isolationVerdict } from "./destructive-guard.ts";
+import { isolationVerdict, commitBothHalves } from "./destructive-guard.ts";
 import { ensureCliPermissions, CLI_PERMISSIONS } from "./team-init.ts";
 
 function usage(): void {
@@ -139,7 +139,7 @@ export async function teamRepair(argv = process.argv.slice(2)): Promise<number> 
       // non-scratch candidate can only ever be skipped here, never reaped.
       const isolation = isolationVerdict(ws, key, []);
       if (isolation.refusal) { info(`project '${key}': ${isolation.refusal.replace(/\s+/g, " ")} — skipping`); continue; }
-      // Fail closed, gating the WHOLE iteration (before the config writeFileSync below): an unreadable db
+      // Fail closed, gating the WHOLE iteration (before the config write below): an unreadable db
       // means the ticket count is unknown, so skip loudly rather than reap on an assumed 0. (LOOP-280)
       if (dbUnreadable) { info(`project '${key}': could not verify ticket count — hub.db present but unreadable, skipping`); continue; }
       let projectId: string | null = null;
@@ -155,27 +155,37 @@ export async function teamRepair(argv = process.argv.slice(2)): Promise<number> 
         info(`project '${key}': scratch 0-ticket 0-repo — would be reaped (run \`team repair --reap\` to apply)`);
         continue;
       }
-      // Apply: config first (validated write), then db
+      // Apply through ONE commit (LOOP-306): this had the same two-halves shape as removeProject — a
+      // validated config write, then un-transacted DELETEs — so a db failure left the config key gone
+      // and the rows behind, and a reap that failed halfway still reported per-half. Config half first,
+      // db half second, for the same residue reason documented in commitBothHalves.
+      const file = JSON.parse(JSON.stringify(ws.file)) as typeof ws.file;
+      delete file.projects[key];
+      const { errors } = validateTeamFile(file);
+      if (errors.length) { info(`project '${key}': skipped — config invalid after removal: ${errors[0].message}`); continue; }
       try {
-        const file = JSON.parse(JSON.stringify(ws.file)) as typeof ws.file;
-        delete file.projects[key];
-        const { errors } = validateTeamFile(file);
-        if (errors.length) { info(`project '${key}': skipped — config invalid after removal: ${errors[0].message}`); continue; }
-        writeFileSync(ws.filePath, JSON.stringify(file, null, 2) + "\n");
-        ws.file = file;
-      } catch (e) { info(`project '${key}': config removal failed: ${(e as Error).message}`); continue; }
-      if (db && projectId) {
-        try {
-          db.prepare("DELETE FROM channel_messages WHERE channel_id IN (SELECT id FROM channels WHERE project_id=?)").run(projectId);
-          db.prepare("DELETE FROM channels WHERE project_id=?").run(projectId);
-          db.prepare("DELETE FROM labels WHERE project_id=?").run(projectId);
-          db.prepare("DELETE FROM document_versions WHERE doc_id IN (SELECT id FROM documents WHERE project_id=?)").run(projectId);
-          db.prepare("DELETE FROM documents WHERE project_id=?").run(projectId);
-          db.prepare("DELETE FROM events WHERE project_id=?").run(projectId);
-          db.prepare("DELETE FROM mirror_map WHERE project_id=?").run(projectId);
-          db.prepare("DELETE FROM projects WHERE key=?").run(key);
-        } catch (e2) { info(`project '${key}': db cleanup failed: ${(e2 as Error).message}`); continue; }
-      }
+        commitBothHalves({
+          configPath: ws.filePath,
+          configText: JSON.stringify(file, null, 2) + "\n",
+          db,
+          dbWork: db && projectId
+            ? () => {
+                db.prepare("DELETE FROM channel_messages WHERE channel_id IN (SELECT id FROM channels WHERE project_id=?)").run(projectId);
+                db.prepare("DELETE FROM channels WHERE project_id=?").run(projectId);
+                db.prepare("DELETE FROM labels WHERE project_id=?").run(projectId);
+                db.prepare("DELETE FROM document_versions WHERE doc_id IN (SELECT id FROM documents WHERE project_id=?)").run(projectId);
+                db.prepare("DELETE FROM documents WHERE project_id=?").run(projectId);
+                db.prepare("DELETE FROM events WHERE project_id=?").run(projectId);
+                db.prepare("DELETE FROM mirror_map WHERE project_id=?").run(projectId);
+                db.prepare("DELETE FROM projects WHERE key=?").run(key);
+              }
+            : null,
+        });
+      } catch (e) { info(`project '${key}': reap failed — ${(e as Error).message}`); continue; }
+      // In-memory view advances only after BOTH halves are durable — the later iterations of this loop
+      // read `ws.file`, so advancing it on a half-applied reap would hand them a config that is not
+      // on disk.
+      ws.file = file;
       pass(`project '${key}': reaped (scratch 0-ticket 0-repo)`);
     }
     db?.close();
