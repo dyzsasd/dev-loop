@@ -39,10 +39,18 @@ def valid_release_manifest(**overrides: str | None) -> bytes:
     scripts: dict[str, str] = {
         "typecheck": "tsc -p tsconfig.check.json",
         "build": (
+            "npm run build-node && "
             "rm -rf dist .claude-plugin skills references hooks config && "
             "tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/server.js && "
             "cp -R ../.claude-plugin ../skills ../references ../hooks ../config ./ && "
             "cp ../docs/design/quality-gauntlet.md ./references/quality-gauntlet.md"
+        ),
+        "build-node": (
+            "node -e \"const{execFileSync}=require('child_process');"
+            "const{writeFileSync}=require('fs');"
+            "try{writeFileSync('build-commit.json',JSON.stringify({commit:execFileSync('git',"
+            "['rev-parse','HEAD']).toString().trim()}))}"
+            "catch(e){console.error('build-commit stamp failed:',e.message)}\""
         ),
         "postinstall": "node postinstall.cjs",
         "prepack": "npm run build",

@@ -29,7 +29,13 @@ function buildFixture(): { wsRoot: string; tagCommit: string; headCommit: string
   execFileSync("git", ["-C", repoDir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init"], { stdio: "ignore" });
   execFileSync("git", ["-C", repoDir, "tag", "v1.0.0", "HEAD"], { stdio: "ignore" });
   const tagCommit = execFileSync("git", ["-C", repoDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  execFileSync("git", ["-C", repoDir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "fix: after tag"], { stdio: "ignore" });
+  // The behind-commit must be CODE-BEARING: W18 counts packaged-path commits only (LOOP-151),
+  // and an --allow-empty commit touches no path, so codeBehind stays 0 and W18 never fires —
+  // the original fixture made Arms B/C unpassable by construction (masked while main's CI was
+  // red at the audit step, 2026-08-04).
+  writeFileSync(join(repoDir, "src-fix.ts"), "// code change after tag\n");
+  execFileSync("git", ["-C", repoDir, "add", "src-fix.ts"], { stdio: "ignore" });
+  execFileSync("git", ["-C", repoDir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "fix: after tag"], { stdio: "ignore" });
   execFileSync("git", ["-C", repoDir, "branch", "origin/main", "HEAD"], { stdio: "ignore" });
   const headCommit = execFileSync("git", ["-C", repoDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
