@@ -638,6 +638,47 @@ before copying and dies if the checkpoint fails.
 entry.
 
 
+### 2026-08-04 (pm, thirty-fifth fire): the board came back, and a restore is verified by which edges still resolve
+
+First fire after the board wipe (LOOP-302). The previous fire had frozen all board writes pending
+the operator's restore; the freeze condition was met and lifted this fire. **Boot's first job was
+to establish that the restore was real, not another cached view.** `dev-loop queue` answering with
+65 backlog rows proves nothing on its own — the daemon served the *deleted* board for two hours on
+2026-08-04. The discriminator recorded last fire is the one that settles it: the **direct-read**
+verbs bypass the daemon, so `dev-loop tickets` answering (it did, plus `ticket_seq` at 302 and a
+live `projects` row read from a WAL-applied copy) is what proves the rows are on disk.
+
+**283 tickets restored** into the re-seeded project `fb38a4e2` — 282 recovered + LOOP-302, the
+operator's incident ticket. 19 ids are gone for good (LOOP-1, 2, 3, 42, 59, 60, 61, 69, 75, 76,
+79, 80, 178, 184, 233, 262, 285, 291, 292) with 79 of their comments exported to
+`.dev-loop/incident-2026-08-04-board-wipe/orphaned-comments.json`.
+
+**The check that mattered was not the row count.** A restored board can be complete by count and
+still be structurally broken, because the loop's parked work hangs off `Blocked-by:` edges that
+are *comment text*, not foreign keys. An edge naming a ticket that no longer exists can never
+resolve, and §9c will never unpark its ticket — a permanent park that no query reports as broken.
+Audited all 283 rows: **zero live blocking edges dangle.** Every one of the five parked tickets
+(LOOP-277, 296, 237, 238, 247) resolves to a live blocker that is still legitimately open, so the
+§9c pass was clean with no writes. What *did* dangle is kinship: **42 tickets carry a `relatedTo`
+pointing at a deleted id, 14 of them still open** — degraded context for anyone following the
+link, no stalled work. (Not purely an incident artifact: `LOOP-43 → LOOP-99999` predates it, so
+nothing has ever validated that field.) Board hygiene is Sweep's lane; recorded here as a fact,
+not filed as PM work.
+
+**Two gaps the incident exposed that no ticket covered**, both verified before filing rather than
+assumed — LOOP-303 (the board has never been snapshotted once) and LOOP-304 (the daemon never
+re-validates its cached project id). Both are the *other* half of LOOP-302, which is entirely
+about prevention.
+
+**Promotion was zero and that is the correct outcome.** junior-dev sits at 10/10 unblocked Todo —
+exactly at `intake.todoDepthCap` — while senior-dev has 6/10. But all 65 Backlog rows are
+junior-tiered, so there is nothing to promote into the free senior slots. §21b routes on explicit
+signals only; re-tiering junior work upward to fill a slot would be inference, and "when
+borderline, junior" is the rule. The imbalance is real and is reported as a bottleneck rather
+than papered over: **the tier with capacity has no queue, and the tier with a 65-deep queue has
+no capacity.**
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -670,6 +711,56 @@ entry.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-04 (pm, thirty-fifth fire) — a capability that ships without a cadence and without a
+  doctor code is indistinguishable from an absent one at the moment it is needed.** The board was
+  destroyed on 2026-08-04 and recovered by hand-running `sqlite3 .recover` over pages that
+  happened not to be overwritten yet; 19 tickets and 79 comments were lost permanently. The
+  reflex conclusion — "dev-loop has no backup mechanism" — is **false**, and checking it is what
+  made the resulting ticket worth filing. `dev-loop bundle export --backup` has shipped for some
+  time: live WAL-checkpointed snapshot, age-encrypted, no need to stop the loop
+  (`bundle.ts:160`, `:261`). The measured facts are that it had been invoked **zero times** in
+  this workspace's entire life (no artifact anywhere under the root), and that `doctor` carries
+  **zero** W-codes mentioning backup or snapshot — so `DOCTOR_OK` was a truthful report on a
+  workspace with no recoverable copy of 301 tickets. **Rule: for anything whose value is only
+  realised on a schedule, "does the verb exist" is the wrong question — ask when it last ran and
+  what reports its absence.** Filed as **LOOP-303**, and deliberately *not* as "add a backup
+  feature": the ticket's load-bearing AC is the one that blocks the obvious implementation, since
+  `bundle export` bundles `secrets.env` and the deploy key (LOOP-210, LOOP-162), so putting that
+  artifact on an unattended repeating cadence creates a new secret-at-rest surface. **A recurring
+  invocation of a safe one-shot verb is not automatically safe; re-audit the payload against the
+  new frequency.**
+
+- **2026-08-04 (pm, thirty-fifth fire) — a defect recorded in a ticket's prose but absent from its
+  acceptance criteria will not be built, and the ticket will still close green.** LOOP-302 is a
+  careful, operator-authored incident ticket. Its 附带记录 names the observability half of the
+  incident exactly right — the daemon kept serving the deleted board for ~2h while `doctor`
+  printed `DOCTOR_OK`, and it says outright that the observability gap and the transaction gap are
+  two faces of one accident. **None of its five ACs mention it.** An implementer who satisfies
+  every AC ships isolation, transaction and reseed handling, closes the ticket, and leaves the
+  condition that made the deletion invisible for two hours fully intact — the completeness-of-
+  acceptance failure LOOP-198 already describes, arriving here through sympathetic prose rather
+  than through omission. **Rule: when reading a ticket authored by someone else, diff the prose
+  against the AC list; a finding that appears only in the prose needs its own ticket, and the fix
+  is a new ticket rather than an edit to theirs** — silently re-specing another author's ticket is
+  how a review turns into a re-spec (the failure mode already recorded for Codex threads). Filed
+  as **LOOP-304**, code-verified first: `daemon.ts:56` resolves `projectId` once at boot and every
+  read keys off that cached value, so the row can vanish underneath it with no re-check.
+
+- **2026-08-04 (pm, thirty-fifth fire) — a restore is verified by which edges still resolve, not
+  by how many rows came back.** 283 of 301 tickets returned, which is the number that gets
+  reported and the number that means least. The loop's parked work hangs off `Blocked-by:` edges
+  encoded as **comment text** rather than as foreign keys, so a cascade delete cannot break them
+  loudly: an edge naming a lost id simply never resolves, §9c never unparks that ticket, and no
+  surface reports the ticket as anything but normally parked. That is the failure a restore can
+  silently introduce, and it is invisible to any count-based check. Audited: **zero live blocking
+  edges dangle** — all five parked tickets resolve to live, legitimately-open blockers — while
+  **42 tickets (14 open) carry a `relatedTo` pointing at a deleted id**. The two classes deserve
+  different responses, and conflating them is the error to avoid: the blocking edge is
+  load-bearing for scheduling, `relatedTo` is context. **Rule: after any bulk board mutation,
+  re-resolve the edge set before trusting the row count** — and note the corollary about where
+  the risk lives: an edge that is text in a comment survives exactly as well as the comment does,
+  which is why `LOOP-43 → LOOP-99999` has sat unnoticed since long before this incident.
 
 - **2026-08-04 (pm, thirty-fourth fire) — a new precondition on a shared sink inherits every
   caller's commit ordering; before charging it with the bad end state, check whether a sibling
