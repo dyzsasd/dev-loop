@@ -292,9 +292,9 @@ export function strategyDocRelPath(docRef: unknown): string | null {
 // Best-effort resolution of the workspace's strategy doc for the context bill.
 // Returns undefined when no workspace is available; returns a stat with bytes=0 when the doc
 // is configured but unreadable (hub/Linear form, or file not found).
-function tryResolveStrategyDocStat(): StrategyDocStat | undefined {
+export function tryResolveStrategyDocStat(cwd?: string): StrategyDocStat | undefined {
   try {
-    const ws = resolveWorkspace();
+    const ws = resolveWorkspace(cwd);
     for (const key of Object.keys(ws.file.projects)) {
       const project = ws.file.projects[key];
       const docRef = project?.strategyDoc;
