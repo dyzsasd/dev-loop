@@ -24,8 +24,10 @@ function usage(): void {
                   (E16-validated write + opencode.json sync; store the key VALUE via \`dev-loop secret set\`)
   set-model       one-command model switch: <agent> <model> [--project k] [--effort e] [--team-default]
                   (validated write + opencode.json re-sync for registry providers + restart pointer)
-  remove-project  drop a 0-ticket/0-repo project from config + hub.db [--force bypasses safety guard]
+  remove-project  drop a 0-ticket/0-repo project from config + hub.db
                   (--dry-run reports what it would remove and mutates nothing; unknown flags are refused)
+                  A project not marked scratch needs --i-understand-this-deletes-<key>; --force does NOT
+                  grant that — it only overrides the ticket/repo recoverability guard.
 
 Run \`dev-loop team <sub> --help\` for each.`);
 }

@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectRepoFacts, workflowJobNames } from "../src/team-edit.ts";
+import { confirmationToken, isScratchProject, isolationVerdict, TOKEN_PREFIX } from "../src/destructive-guard.ts";
+import type { Workspace } from "../src/team-config.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -259,7 +261,9 @@ try {
   const rmCfg = readJson(join(rmWs, "dev-loop.json"));
   rmCfg.projects["proj-with-repo"].repos = [{ ref: "some-repo" }];
   writeFileSync(join(rmWs, "dev-loop.json"), JSON.stringify(rmCfg, null, 2) + "\n");
-  const rmRefused = run("team", ["remove-project", "proj-with-repo"], { cwd: rmWs, extra: { DEVLOOP_HUB_DB: "" } });
+  // LOOP-305: 'proj-with-repo' is not scratch, so the isolation gate now fires FIRST. The token is added so
+  // this arm keeps pinning the REPO guard (what it exists for) rather than passing on the isolation refusal.
+  const rmRefused = run("team", ["remove-project", "proj-with-repo", "--i-understand-this-deletes-proj-with-repo"], { cwd: rmWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(rmRefused.code !== 0 && /repo/.test(rmRefused.out), "LOOP-221 AC1: remove-project refuses project with repos without --force");
 
   // AC1: db-only key (key in hub but absent from config)
@@ -270,7 +274,9 @@ try {
   const dbOnlyCfg = readJson(join(dbOnlyWs, "dev-loop.json"));
   delete dbOnlyCfg.projects.ghost;
   writeFileSync(join(dbOnlyWs, "dev-loop.json"), JSON.stringify(dbOnlyCfg, null, 2) + "\n");
-  const dbOnlyRm = run("team", ["remove-project", "ghost"], { cwd: dbOnlyWs, extra: { DEVLOOP_HUB_DB: "" } });
+  // LOOP-305: a db-only key reads as NON-scratch (config is the gate's only authority — fail closed), so the
+  // token is required here too. That is the intended reading for a target whose config record is already gone.
+  const dbOnlyRm = run("team", ["remove-project", "ghost", "--i-understand-this-deletes-ghost"], { cwd: dbOnlyWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(dbOnlyRm.code === 0, "LOOP-221 AC1: remove-project exits 0 for db-only key");
   ok(/db-only/.test(dbOnlyRm.out), "LOOP-221 AC1: remove-project notes the key was db-only");
   const dbOnlyChk = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT id FROM projects WHERE key=?').get('ghost');console.log(r?'found':'gone');db.close()})`, join(dbOnlyWs, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
@@ -312,7 +318,10 @@ try {
     `LOOP-290 AC1+AC5: --dry-run mutated NOTHING — config keys and hub.db projects/tickets counts identical (${before.db} → ${dbCounts(dryDb)})`);
 
   // AC2: --dry-run --force previews the force path, still zero mutation
-  const dr2 = run("team", ["remove-project", "preview-me", "--dry-run", "--force"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  // LOOP-305: the token is added so this arm still reaches WOULD PROCEED and keeps pinning that the preview
+  // NAMES what --force is overriding. Without it the isolation gate would (correctly) refuse — which is a
+  // different behaviour, pinned by its own arm below.
+  const dr2 = run("team", ["remove-project", "preview-me", "--dry-run", "--force", "--i-understand-this-deletes-preview-me"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(dr2.code === 0 && /WOULD PROCEED/.test(dr2.out),
     `LOOP-290 AC2: --dry-run --force previews the FORCE path as WOULD PROCEED (got ${dr2.code}: ${dr2.out.replace(/\n/g, " | ").slice(0, 300)})`);
   ok(/--force overrides: 2 ticket\(s\)/.test(dr2.out), "LOOP-290 AC2: the preview still names what --force is overriding");
@@ -335,11 +344,13 @@ try {
     "LOOP-290: --dry-run of an unknown key still errors (not-found check precedes the dry-run branch)");
 
   // AC3: without --dry-run behaviour is unchanged — the guard still refuses, then --force still deletes.
-  const liveRefuse = run("team", ["remove-project", "preview-me"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  // LOOP-305: token added to both — these two arms pin the ticket-count guard and the --force override,
+  // and must keep reaching them now that the isolation gate stands in front.
+  const liveRefuse = run("team", ["remove-project", "preview-me", "--i-understand-this-deletes-preview-me"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(liveRefuse.code !== 0 && /2 ticket\(s\)/.test(liveRefuse.out),
     `LOOP-290 AC3: live path unchanged — still refuses with the same ticket-count message (got ${liveRefuse.code})`);
   ok(cfgKeys(dryCfgPath) === before.cfg && dbCounts(dryDb) === before.db, "LOOP-290 AC3: a refused live run mutates nothing either");
-  const liveForce = run("team", ["remove-project", "preview-me", "--force"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  const liveForce = run("team", ["remove-project", "preview-me", "--force", "--i-understand-this-deletes-preview-me"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(liveForce.code === 0, `LOOP-290 AC3: live --force still executes the removal (got ${liveForce.code}: ${liveForce.out.slice(0, 200)})`);
   // This is what makes every zero-mutation assertion above meaningful: the same command WITHOUT --dry-run
   // really does destroy this fixture, so "counts identical" was not vacuously true.
@@ -356,10 +367,14 @@ try {
   roCfg.projects["repo-only"].repos = [{ ref: "ro-repo" }];
   writeFileSync(dryCfgPath, JSON.stringify(roCfg, null, 2) + "\n");
   const roBefore = { cfg: cfgKeys(dryCfgPath), db: dbCounts(dryDb) };
-  const roDry = run("team", ["remove-project", "repo-only", "--dry-run"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  // LOOP-305: token added so the repo guard really is previewed/enforced ON ITS OWN — without it the
+  // isolation refusal would also be in the output and the arm would no longer isolate what it names.
+  const roDry = run("team", ["remove-project", "repo-only", "--dry-run", "--i-understand-this-deletes-repo-only"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(roDry.code === 0 && /repos\s*: 1/.test(roDry.out) && /WOULD REFUSE \(1 repo\(s\)/.test(roDry.out),
     `LOOP-290: the repo guard is previewed on its own — 0 tickets, 1 repo → WOULD REFUSE (1 repo(s)) (got: ${roDry.out.replace(/\n/g, " | ").slice(0, 300)})`);
-  const roLive = run("team", ["remove-project", "repo-only"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(!/needs --i-understand-this-deletes/.test(roDry.out),
+    "LOOP-305: with the token supplied the preview reports ONLY the repo guard — no stale 'needs <token>' line");
+  const roLive = run("team", ["remove-project", "repo-only", "--i-understand-this-deletes-repo-only"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(roLive.code !== 0 && /has 1 repo\(s\) — pass --force/.test(roLive.out),
     `LOOP-290: the LIVE repo guard still refuses with its original message (got ${roLive.code}: ${roLive.out.replace(/\n/g, " | ").slice(0, 200)})`);
   ok(cfgKeys(dryCfgPath) === roBefore.cfg && dbCounts(dryDb) === roBefore.db, "LOOP-290: neither the repo-guard preview nor its refusal mutated anything");
@@ -369,6 +384,103 @@ try {
   ok(rmUsage.code !== 0 && /--dry-run/.test(rmUsage.out), "LOOP-290 AC4: the usage string documents --dry-run");
   ok(/--dry-run/.test(run("team", ["--help"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } }).out),
     "LOOP-290 AC4: `team --help` documents --dry-run for remove-project");
+
+  // ═══ LOOP-305 (LOOP-302 ①): the isolation gate — a naming token, not --force ═══
+  // The 2026-08-04 incident: `--force` was added to get past the recoverability guard's refusal and
+  // cascade-deleted 301 live tickets. `--force` answers "is this recoverable?"; nobody was ever asked
+  // "did you mean THIS project?". These arms pin the second question, and — via the scratch arm — pin that
+  // the answer is a GATE and not a blanket refusal.
+
+  // (a) unit: the three exports, on a hand-built Workspace (no fs, the module is pure).
+  const wsOf = (projects: Record<string, { scratch?: boolean }>) =>
+    ({ file: { projects } } as unknown as Workspace);
+  ok(confirmationToken("loop") === "--i-understand-this-deletes-loop",
+    "LOOP-305 AC1: confirmationToken embeds the target key, so a runbook copy-paste cannot name another project");
+  ok(isScratchProject(wsOf({ s: { scratch: true } }), "s") === true
+    && isScratchProject(wsOf({ s: {} }), "s") === false,
+    "LOOP-305 AC1: isScratchProject reads projects.<key>.scratch === true from CONFIG");
+  ok(isScratchProject(wsOf({ other: { scratch: true } }), "dbonly") === false,
+    "LOOP-305 AC1: a key ABSENT from config (db-only) reads as NON-scratch — fail closed");
+  const vNon = isolationVerdict(wsOf({ p: {} }), "p", ["--force"]);
+  ok(vNon.refusal !== null && vNon.scratch === false && vNon.tokenPresent === false,
+    "LOOP-305 AC2: --force alone does NOT satisfy the isolation gate");
+  ok(/--i-understand-this-deletes-p/.test(vNon.refusal ?? "") && /--force does NOT grant this/.test(vNon.refusal ?? ""),
+    "LOOP-305 AC2: the refusal names the required token AND states that --force does not grant it");
+  ok(isolationVerdict(wsOf({ p: {} }), "p", [confirmationToken("p")]).refusal === null,
+    "LOOP-305 AC3: the exact token allows a non-scratch target");
+  ok(isolationVerdict(wsOf({ p: { scratch: true } }), "p", []).refusal === null,
+    "LOOP-305 AC3 discriminator: a scratch project needs NO token — the gate is not 'refuse everything'");
+  // The startsWith trap, at the unit level: a token that merely BEGINS with the required one is not it.
+  ok(isolationVerdict(wsOf({ p: {} }), "p", [`${TOKEN_PREFIX}p-and-more`, `${TOKEN_PREFIX}anything`]).refusal !== null,
+    "LOOP-305 AC4: tokenPresent is an EXACT argv match — a prefix-shaped lookalike does not satisfy the gate");
+
+  // (b) end-to-end, on a fixture that trips BOTH guards (2 tickets + 1 repo) so 'both reasons' is real.
+  const isoWs = join(tmp, "iso-ws");
+  run("team", ["init", "--dir", isoWs, "--key", "iso-team", "--backend", "service"]);
+  run("team", ["add-project", "real-one"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+  run("team", ["add-project", "scratchy", "--scratch"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+  const isoCfgPath = join(isoWs, "dev-loop.json");
+  const isoCfg0 = readJson(isoCfgPath);
+  isoCfg0.repos = { ...(isoCfg0.repos ?? {}), "iso-repo": { path: "iso-repo" } };
+  isoCfg0.projects["real-one"].repos = [{ ref: "iso-repo" }];
+  writeFileSync(isoCfgPath, JSON.stringify(isoCfg0, null, 2) + "\n");
+  const isoDb = join(isoWs, ".dev-loop", "hub.db");
+  spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const pid=db.prepare('SELECT id FROM projects WHERE key=?').get('real-one')?.id;if(pid)for(const i of [1,2])db.prepare("INSERT INTO tickets(id,project_id,title,type,state,priority,labels,created_by,created_at,updated_at)VALUES(?,?,'t','Bug','Todo',0,'[]','test','2026-01-01','2026-01-01')").run('iso-t'+i,pid);db.close()})`, isoDb], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  const isoBefore = { cfg: cfgKeys(isoCfgPath), db: dbCounts(isoDb) };
+  ok(/"t":2/.test(isoBefore.db), `LOOP-305: fixture seeded — the live command really would cascade here (${isoBefore.db})`);
+
+  // AC2: --force WITHOUT the token refuses, and nothing is written.
+  const isoForceNoToken = run("team", ["remove-project", "real-one", "--force"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(isoForceNoToken.code !== 0,
+    `LOOP-305 AC2: --force with no token REFUSES on a non-scratch project (got ${isoForceNoToken.code})`);
+  ok(/--i-understand-this-deletes-real-one/.test(isoForceNoToken.out) && /--force does NOT grant this/.test(isoForceNoToken.out),
+    `LOOP-305 AC2: the refusal names the token and denies that --force grants it (got: ${isoForceNoToken.out.replace(/\n/g, " | ").slice(0, 300)})`);
+  ok(cfgKeys(isoCfgPath) === isoBefore.cfg && dbCounts(isoDb) === isoBefore.db,
+    `LOOP-305 AC2: the refused run mutated NOTHING (${isoBefore.db} → ${dbCounts(isoDb)})`);
+
+  // AC4: a token naming a DIFFERENT project gets its own message, never the generic 'unknown option'.
+  for (const badTok of ["--i-understand-this-deletes-scratchy", "--i-understand-this-deletes-real-one-x", `${TOKEN_PREFIX}anything`]) {
+    const t = run("team", ["remove-project", "real-one", "--force", badTok], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+    ok(t.code !== 0 && /names a different project than 'real-one'/.test(t.out) && !/unknown option/.test(t.out),
+      `LOOP-305 AC4: '${badTok}' dies as a wrong-project token, not 'unknown option' (got ${t.code}: ${t.out.replace(/\n/g, " | ").slice(0, 200)})`);
+    ok(cfgKeys(isoCfgPath) === isoBefore.cfg && dbCounts(isoDb) === isoBefore.db, `LOOP-305 AC4: '${badTok}' mutated nothing`);
+  }
+
+  // AC5: the preview reports the isolation line and BOTH refusal reasons, and mutates nothing.
+  const isoDry = run("team", ["remove-project", "real-one", "--dry-run"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(isoDry.code === 0, `LOOP-305 AC5: --dry-run on a non-scratch project still exits 0 (got ${isoDry.code})`);
+  ok(/isolation\s*: NOT scratch — needs --i-understand-this-deletes-real-one/.test(isoDry.out),
+    `LOOP-305 AC5: the preview prints the isolation line (got: ${isoDry.out.replace(/\n/g, " | ").slice(0, 400)})`);
+  ok(/WOULD REFUSE \(not a scratch project; needs --i-understand-this-deletes-real-one\)/.test(isoDry.out)
+    && /WOULD REFUSE \(2 ticket\(s\); needs --force\)/.test(isoDry.out),
+    `LOOP-305 AC5: BOTH refusal reasons are reported — an operator who satisfies one must not be ambushed by the other (got: ${isoDry.out.replace(/\n/g, " | ").slice(0, 400)})`);
+  ok(cfgKeys(isoCfgPath) === isoBefore.cfg && dbCounts(isoDb) === isoBefore.db,
+    "LOOP-305 AC5: the preview mutated NOTHING (cfg keys + hub.db projects/tickets counts identical)");
+  // …and with the token supplied the preview says so, instead of demanding what it already has.
+  const isoDryTok = run("team", ["remove-project", "real-one", "--dry-run", "--i-understand-this-deletes-real-one"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(/isolation\s*: NOT scratch — --i-understand-this-deletes-real-one present/.test(isoDryTok.out)
+    && !/not a scratch project; needs/.test(isoDryTok.out),
+    `LOOP-305 AC5: with the token present the preview reports it, and drops the isolation refusal (got: ${isoDryTok.out.replace(/\n/g, " | ").slice(0, 400)})`);
+
+  // AC3 discriminator, end to end: a scratch project is removed with NO token at all.
+  const isoScratch = run("team", ["remove-project", "scratchy"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(isoScratch.code === 0 && !("scratchy" in readJson(isoCfgPath).projects),
+    `LOOP-305 AC3: a scratch:true project is removed with NO token (got ${isoScratch.code}: ${isoScratch.out.replace(/\n/g, " | ").slice(0, 200)})`);
+  const isoScratchDry = run("team", ["remove-project", "iso-nonexistent", "--dry-run"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(isoScratchDry.code !== 0, "LOOP-305: an unknown key still errors before the gate (precedence unchanged)");
+
+  // AC3: token + --force proceeds — and this is what makes every zero-mutation assertion above non-vacuous.
+  const isoGo = run("team", ["remove-project", "real-one", "--force", "--i-understand-this-deletes-real-one"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(isoGo.code === 0, `LOOP-305 AC3: token + --force executes the removal (got ${isoGo.code}: ${isoGo.out.slice(0, 200)})`);
+  ok(cfgKeys(isoCfgPath) !== isoBefore.cfg && dbCounts(isoDb) !== isoBefore.db,
+    `LOOP-305 AC3: the gated cascade DID run — the refusals above were blocking a real deletion (${isoBefore.db} → ${dbCounts(isoDb)})`);
+
+  // AC4/usage: the usage string and `team --help` document the token, and say --force is not it.
+  const isoUsage = run("team", ["remove-project"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(isoUsage.code !== 0 && /--i-understand-this-deletes-<key>/.test(isoUsage.out), "LOOP-305: the usage string documents the token");
+  const isoHelp = run("team", ["--help"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } }).out;
+  ok(/--i-understand-this-deletes-<key>/.test(isoHelp) && /--force does NOT/.test(isoHelp),
+    "LOOP-305: `team --help` documents the token and no longer sells --force as the blanket 'safety guard' bypass");
 
   // team repair --reap: project reap (dry-run lists scratch 0/0; spares non-zero)
   const reapWs = join(tmp, "reap-ws");
@@ -395,6 +507,12 @@ try {
   const applyReapCfg = readJson(join(reapWs, "dev-loop.json"));
   ok(!("to-reap" in applyReapCfg.projects), "LOOP-221 AC2: 'to-reap' gone from config after apply");
   ok("real-proj" in applyReapCfg.projects, "LOOP-221 AC2: 'real-proj' still in config (spared)");
+  // LOOP-305 AC6: 'real-proj' is the exact shape a widened candidate filter would sweep up — NON-scratch,
+  // zero tickets, zero repos. It must survive an APPLIED reap, and its hub.db row with it. The reap now
+  // routes this decision through the shared isolation gate, so the invariant no longer rests on one filter.
+  const reapDbChk = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT id FROM projects WHERE key=?').get('real-proj');console.log(r?'found':'gone');db.close()})`, join(reapWs, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  ok(/found/.test(reapDbChk.stdout),
+    "LOOP-305 AC6: an APPLIED `repair --reap` never reaps a non-scratch 0-ticket 0-repo project — its hub.db row survives too");
   ok("with-ticket" in applyReapCfg.projects, "LOOP-221 AC2: 'with-ticket' still in config (has tickets)");
   // hub.db: 'to-reap' row gone
   const applyReapDbChk = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT id FROM projects WHERE key=?').get('to-reap');console.log(r?'found':'gone');db.close()})`, join(reapWs, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
