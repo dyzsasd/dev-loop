@@ -167,15 +167,42 @@ function applySensitiveRetier(
   return { assignee: "senior-dev", labels: newLabels, retiered: { from: "junior-dev", to: "senior-dev" } };
 }
 
-// ─── the raw mechanics: the ONLY tickets/comments writers in the hub ──────────
+// ─── tier restore: write-layer null-assignee fix (LOOP-223) ─────────────────────
+// Called BEFORE applySensitiveRetier so a restored junior-dev on a sensitive ticket still gets
+// escalated. Only acts when a Todo write carries assignee=null (the orphan-reclaim defect:
+// Step-0 reset clears the assignee but the tier label survives).
+//   - Exactly one dev-tier label (junior-dev/senior-dev) → restore assignee from the label.
+//   - More than one dev-tier label → reject (ambiguous — can't pick).
+//   - Zero dev-tier labels → pass through (non-split project or pm/qa-owned tracker, e.g. LOOP-277).
+function applyTierRestore(
+  db: DatabaseSync,
+  state: string,
+  assignee: string | null,
+  labels: string[],
+): { assignee: string | null; labels: string[]; restored: { from: null; to: string } | null; rejection: string | null } {
+  if (state !== "Todo" || assignee !== null) return { assignee, labels, restored: null, rejection: null };
+  const devTierLabels = labels.filter((l) => l === "junior-dev" || l === "senior-dev");
+  if (devTierLabels.length === 1) {
+    return { assignee: devTierLabels[0], labels, restored: { from: null, to: devTierLabels[0] }, rejection: null };
+  }
+  if (devTierLabels.length > 1) {
+    return {
+      assignee, labels, restored: null,
+      rejection: `tier restore: Todo ticket with '${devTierLabels.join("', '")}' labels and no assignee is ambiguous — exactly one dev-tier label required`
+    };
+  }
+  return { assignee, labels, restored: null, rejection: null };
+}
 
-// THE ticket INSERT. Allocates the id, writes all 14 columns, logs issue.create. `createEventData` is passed
-// in so each caller logs exactly what it logged before this convergence (the MCP path logs the RAW {title,type}
-// — type possibly undefined when omitted — which differs from the resolved type written to the row).
+
 export function insertTicket(
   db: DatabaseSync, projectId: string, actor: string, f: NewTicketFields, createEventData: Record<string, unknown>,
 ): string {
-  const retier = applySensitiveRetier(db, f.assignee, f.labels);
+  // Tier restore FIRST (LOOP-223): fix null assignee before sensitive retier
+  const tierRestore = applyTierRestore(db, f.state, f.assignee, f.labels);
+  if (tierRestore.rejection) throw new Error(tierRestore.rejection);
+  // Sensitive re-tier SECOND (design sensitive-routing §2 / LOOP-79 Child A)
+  const retier = applySensitiveRetier(db, tierRestore.assignee, tierRestore.labels);
   const assignee = retier.assignee;
   const labels = retier.labels;
   const id = nextTicketId(db, projectId);
@@ -187,23 +214,27 @@ export function insertTicket(
   if (retier.retiered) {
     logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.retier", data: { from: retier.retiered.from, to: retier.retiered.to, reason: "sensitive" } });
   }
+  if (tierRestore.restored) {
+    logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.restore", data: { from: "null", to: tierRestore.restored.to, reason: "null-assignee" } });
+  }
   return id;
 }
-
-// THE ticket UPDATE — the post-DL-35 converged "applyTicketWrite" path. Enforces the transition gates FIRST
-// (the DL-38 staging-deploy gate + the DL-77 verify gate — so both the MCP save_issue transition and the daemon
-// board-move are covered automatically), then writes the caller-merged `next` row and logs issue.transition (with the resolved assignee) on a real
-// state change else issue.update. TXN-AGNOSTIC: it never BEGINs/COMMITs — the MCP's atomic read-merge-write
-// txn (and the daemon's single-op writes) stay the caller's concern; a gate rejection writes NOTHING.
 export function updateTicketRow(
   db: DatabaseSync, projectId: string, actor: string, id: string, fromState: string, next: TicketUpdateFields,
 ): WriteResult {
-  // Apply sensitive re-tier before transition gates (design sensitive-routing §2, LOOP-79 Child A).
   const labelsArr = JSON.parse(next.labels) as string[];
-  const retier = applySensitiveRetier(db, next.assignee, labelsArr);
-  const resolved: TicketUpdateFields = retier.retiered
-    ? { ...next, assignee: retier.assignee, labels: JSON.stringify(retier.labels) }
+  // Tier restore FIRST (LOOP-223): fix null assignee before sensitive retier
+  const tierRestore = applyTierRestore(db, next.state, next.assignee, labelsArr);
+  if (tierRestore.rejection) return { ok: false, status: 400, error: tierRestore.rejection };
+  // Build intermediate resolved from tier restore (may change assignee, never labels)
+  const tierResolved: TicketUpdateFields = tierRestore.restored
+    ? { ...next, assignee: tierRestore.assignee }
     : next;
+  // Sensitive re-tier SECOND (design sensitive-routing §2 / LOOP-79 Child A) — on potentially restored values
+  const retier = applySensitiveRetier(db, tierRestore.assignee, labelsArr);
+  const resolved: TicketUpdateFields = retier.retiered
+    ? { ...tierResolved, assignee: retier.assignee, labels: JSON.stringify(retier.labels) }
+    : tierResolved;
 
   // LOOP-183 Vector A: the verify gate keys on the ticket's STORED owner labels (read here, pre-write) so dropping
   // the qa/pm owner label in `resolved` cannot unlock a dev-tier self-close. rowFor reads within the caller's txn.
@@ -221,6 +252,9 @@ export function updateTicketRow(
     : { project_id: projectId, ticket_id: id, actor, kind: "issue.update", data: {} });
   if (retier.retiered) {
     logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.retier", data: { from: retier.retiered.from, to: retier.retiered.to, reason: "sensitive" } });
+  }
+  if (tierRestore.restored) {
+    logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.restore", data: { from: "null", to: tierRestore.restored.to, reason: "null-assignee" } });
   }
   return { ok: true, id };
 }
