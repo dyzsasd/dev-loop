@@ -24,8 +24,8 @@ try {
   const dbPath = join(ROOT, "hub.db");
   const conn = openDb(dbPath);
   conn.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','k','n','t')").run();
-  const tk = (id: string, state: string): void => {
-    conn.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,?,0,'[]','[]','pm','t','t')").run(id, "p", "t-" + id, state);
+  const tk = (id: string, state: string, assignee: string | null = null): void => {
+    conn.prepare("INSERT INTO tickets(id,project_id,title,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,?,?,0,'[]','[]','pm','t','t')").run(id, "p", "t-" + id, state, assignee);
   };
   tk("MG-1", "Todo");
   tk("MG-2", "In Progress");
@@ -33,8 +33,8 @@ try {
   tk("MG-4", "Canceled");
   tk("MG-5", "Duplicate");
   // LOOP-65 --apply fixtures: fresh tickets to avoid state pollution from other tests
-  tk("MG-6", "In Progress"); // forge review trip + --apply
-  tk("MG-7", "In Review");   // board-state trip + --apply
+  tk("MG-6", "In Progress", "senior-dev"); // forge review trip + --apply
+  tk("MG-7", "In Review", "senior-dev");   // board-state trip + --apply
   tk("MG-8", "In Progress"); // no-trip path + --apply (should NOT write)
   tk("MG-9", "In Review");   // idempotency: second --apply must not dup comment
   tk("MG-10", "In Review");  // LOOP-130: re-apply-after-external-unblock
@@ -273,7 +273,7 @@ try {
   const rowAfterNoApply = readTicket("MG-6");
   ok(rowAfterNoApply?.state === "In Progress", "apply: no --apply → ticket state unchanged");
 
-  // AC: forge review trip + --apply → comment posted, ticket routed to blocked/Todo/null
+  // AC: forge review trip + --apply → comment posted, ticket routed to Todo with assignee preserved
   const rApplyForge = mergeGuard(repoDir, {
     ticketId: "MG-6", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
     exec: makePrExec(prChangesRequested, gqlNoThreads),
@@ -290,7 +290,7 @@ try {
   const mg6Row = readTicket("MG-6");
   ok(mg6Row?.state === "Todo", `apply: forge trip ticket moved to Todo (got: ${mg6Row?.state})`);
   ok(!mg6Row?.labels.includes("blocked"), "apply: forge trip — 'blocked' NOT added (AC3)");
-  ok(mg6Row?.assignee === null, "apply: forge trip — assignee preserved (null from init) (AC3)");
+  ok(mg6Row?.assignee === "senior-dev", "apply: forge trip — assignee preserved (senior-dev from setup) (AC3)");
 
   // AC: idempotent — re-running --apply with same trip does not duplicate the comment
   const rApplyForge2 = mergeGuard(repoDir, {
@@ -310,6 +310,7 @@ try {
   const mg7Row = readTicket("MG-7");
   ok(mg7Row?.state === "In Review", `apply: board trip — state unchanged (got: ${mg7Row?.state}) (AC2)`);
   ok(!mg7Row?.labels.includes("blocked"), "apply: board trip — 'blocked' NOT added (AC2)");
+  ok(mg7Row?.assignee === "senior-dev", "apply: board trip — assignee preserved (AC2)");
 
   // AC: no trip + --apply → no board write (guard not tripped)
   const rApplyNoTrip = mergeGuard(repoDir, { ticketId: "MG-8", dbPath, apply: true });
