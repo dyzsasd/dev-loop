@@ -42,7 +42,7 @@ export const BUDGETS: Record<string, Budget> = {
   "senior-dev-agent":    { lines: 220, bytes: 16 * 1024 },
   "junior-dev-agent":    { lines: 220, bytes: 16 * 1024 },
   "sweep-agent":         { lines: 220, bytes: 16 * 1024 },
-  "dev-agent":           { lines: 260, bytes: 18 * 1024 }, // hosts the canonical Step 0–7 ship sequence senior/junior inherit by reference (§21a)
+  "dev-agent":           { lines: 266, bytes: 19_968 }, // canonical Step 0–7 ship sequence senior/junior inherit by reference (§21a); raised 260/18K → 266/19.5K for the LOOP-277 stale-re-freshen branch (operator-applied §17, 2026-08-04) — actuals 264/19,467, headroom deliberately thin so regrowth trips here
   "reflect-agent":       { lines: 200, bytes: 14 * 1024 },
   "ops-agent":           { lines: 200, bytes: 14 * 1024 },
   "architect-agent":     { lines: 200, bytes: 14 * 1024 },

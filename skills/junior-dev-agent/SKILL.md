@@ -156,6 +156,11 @@ ticket; never file the senior follow-up yourself.
   the ship like a red build — it decides (fix, or block `fix-exhausted`), never waits for a
   human.
 - Say so in the report when you touch shared infra other in-flight tickets could feel.
+- **Budget the fire's wall clock.** If the implementation is not converging by ~40 minutes
+  (`fireTimeout` is 1h), stop coding: commit WIP to the ticket branch, write a progress comment
+  naming the exact blocker, and block per §9 or hand off. A fire that dies at the timeout ships
+  nothing and reports nothing (2026-08-04: two fires ran the full hour to exit 124 with zero
+  writes back) — a bounded partial with a named blocker is strictly better than that.
 - Respect `mode` (§12) and the git/deploy flags exactly — with `autoDeploy` on you ship to real
   users; the green-gate rule is inviolable. `autonomy` (§12a): decide and act; an irreversible
   prod op you do attended yourself; only missing external inputs stop you — reported as facts.
