@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { worktreeReap } from "../src/worktree.ts";
 import { resolveWorkspace } from "../src/workspace.ts";
+import { confirmationToken, isolationVerdict, TOKEN_PREFIX } from "../src/destructive-guard.ts";
+import type { Workspace } from "../src/team-config.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -237,6 +239,23 @@ try {
   const badSt = repair();
   ok(badSt.status === 0 && /left untouched/.test(badSt.stdout), "AC: team repair prints a 'left untouched' note for a malformed settings.json");
   ok(readFileSync(stFile, "utf8") === "{ not valid json", "AC: team repair does NOT rewrite a malformed settings.json");
+
+  // ── LOOP-305 (LOOP-302 ①): the project-reap arm consults the shared isolation gate ──────────────
+  // Honest framing, because it decides what this block can prove: the reap's candidate filter is already
+  // `scratch === true`, so wiring the gate in changes NO behaviour today and a purely behavioural test here
+  // CANNOT fail against the pre-fix tree. What the gate buys is that "a reap never destroys a real project"
+  // stops resting on a single `.filter()` that a later edit could widen. So this block pins the CONTRACT the
+  // reap now depends on — and it does fail pre-fix, because destructive-guard.ts does not exist there.
+  const gateWs = (projects: Record<string, { scratch?: boolean }>) => ({ file: { projects } } as unknown as Workspace);
+  // The reap offers no token (there is none to offer on `team repair --reap`), so this is the exact call it makes.
+  ok(isolationVerdict(gateWs({ "to-reap": { scratch: true } }), "to-reap", []).refusal === null,
+    "LOOP-305: the reap's own call shape (no token) ALLOWS a scratch candidate — the gate does not break the reaper");
+  ok(isolationVerdict(gateWs({ "real-proj": {} }), "real-proj", []).refusal !== null,
+    "LOOP-305 AC6: the same call REFUSES a non-scratch project — so a widened candidate filter alone can no longer reap one");
+  ok(isolationVerdict(gateWs({ other: { scratch: true } }), "vanished", []).refusal !== null,
+    "LOOP-305 AC6: a candidate key absent from config refuses too (fail closed — config is the only authority)");
+  ok(confirmationToken("real-proj") === `${TOKEN_PREFIX}real-proj` && TOKEN_PREFIX === "--i-understand-this-deletes-",
+    "LOOP-305: the token spelling has ONE definition, shared by every destructive verb that recognises it");
 
   console.log(fails === 0 ? "\nTEAM_REPAIR_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
