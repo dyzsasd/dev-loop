@@ -276,6 +276,100 @@ try {
   const dbOnlyChk = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const r=db.prepare('SELECT id FROM projects WHERE key=?').get('ghost');console.log(r?'found':'gone');db.close()})`, join(dbOnlyWs, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
   ok(/gone/.test(dbOnlyChk.stdout), "LOOP-221 AC1: db-only 'ghost' hub.db row deleted");
 
+  // ═══ remove-project --dry-run + unknown-flag rejection (LOOP-290 / LOOP-286 six ACs) ═══
+  // The fixture deliberately trips BOTH guards (≥1 ticket AND ≥1 repo) so a preview has something real
+  // to refuse, and so the zero-mutation assertions are meaningful — this is a project the live command
+  // would cascade-delete.
+  const dryWs = join(tmp, "dryrun-ws");
+  run("team", ["init", "--dir", dryWs, "--key", "dry-team", "--backend", "service"]);
+  run("team", ["add-project", "preview-me"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  const dryCfg0 = readJson(join(dryWs, "dev-loop.json"));
+  // The repo must be REGISTERED, not just referenced: resolveWorkspace() re-validates the whole file, so a
+  // dangling ref dies [E04] before removeProject ever runs — the command would then be refusing for a
+  // config-validation reason, not because its repo guard fired. (A registry entry needs only a valid
+  // workspace-relative path; no git repo is required for this guard, which reads the array length.)
+  dryCfg0.repos = { ...(dryCfg0.repos ?? {}), "preview-repo": { path: "preview-repo" } };
+  dryCfg0.projects["preview-me"].repos = [{ ref: "preview-repo" }];
+  writeFileSync(join(dryWs, "dev-loop.json"), JSON.stringify(dryCfg0, null, 2) + "\n");
+  const dryDb = join(dryWs, ".dev-loop", "hub.db");
+  spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const pid=db.prepare('SELECT id FROM projects WHERE key=?').get('preview-me')?.id;if(pid)for(const i of [1,2])db.prepare("INSERT INTO tickets(id,project_id,title,type,state,priority,labels,created_by,created_at,updated_at)VALUES(?,?,'t','Bug','Todo',0,'[]','test','2026-01-01','2026-01-01')").run('dry-t'+i,pid);db.close()})`, dryDb], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  // The zero-mutation oracle: config project keys + hub.db projects/tickets row counts.
+  const dbCounts = (p: string) => spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const o={p:db.prepare('SELECT count(*) c FROM projects').get().c,t:db.prepare('SELECT count(*) c FROM tickets').get().c};console.log(JSON.stringify(o));db.close()})`, p], { cwd: hubRoot, env: env(), encoding: "utf8" }).stdout.trim();
+  const cfgKeys = (p: string) => JSON.stringify(Object.keys(readJson(p).projects ?? {}).sort());
+  const dryCfgPath = join(dryWs, "dev-loop.json");
+  const before = { cfg: cfgKeys(dryCfgPath), db: dbCounts(dryDb) };
+  ok(/"t":2/.test(before.db), `LOOP-290: fixture seeded — the guard has something to refuse (${before.db})`);
+
+  // AC1: --dry-run reports and mutates nothing
+  const dr1 = run("team", ["remove-project", "preview-me", "--dry-run"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(dr1.code === 0, `LOOP-290 AC1: remove-project --dry-run exits 0 (got ${dr1.code}: ${dr1.out.slice(0, 200)})`);
+  ok(/dry-run: remove-project 'preview-me' would:/.test(dr1.out), "LOOP-290 AC1: preview names the target and speaks in 'would'");
+  ok(/config\s*: present/.test(dr1.out) && /2 ticket\(s\)/.test(dr1.out) && /repos\s*: 1/.test(dr1.out),
+    `LOOP-290 AC1: preview reports config presence + ticket count + repo count (got: ${dr1.out.replace(/\n/g, " | ").slice(0, 300)})`);
+  ok(/WOULD REFUSE/.test(dr1.out) && /needs --force/.test(dr1.out), "LOOP-290 AC1: preview reports that the guard WOULD REFUSE");
+  ok(/REMOVE_PROJECT_DRYRUN_OK/.test(dr1.out), "LOOP-290 AC1: the dry-run sentinel is printed (mirrors REPAIR_DRYRUN_OK)");
+  ok(cfgKeys(dryCfgPath) === before.cfg && dbCounts(dryDb) === before.db,
+    `LOOP-290 AC1+AC5: --dry-run mutated NOTHING — config keys and hub.db projects/tickets counts identical (${before.db} → ${dbCounts(dryDb)})`);
+
+  // AC2: --dry-run --force previews the force path, still zero mutation
+  const dr2 = run("team", ["remove-project", "preview-me", "--dry-run", "--force"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(dr2.code === 0 && /WOULD PROCEED/.test(dr2.out),
+    `LOOP-290 AC2: --dry-run --force previews the FORCE path as WOULD PROCEED (got ${dr2.code}: ${dr2.out.replace(/\n/g, " | ").slice(0, 300)})`);
+  ok(/--force overrides: 2 ticket\(s\)/.test(dr2.out), "LOOP-290 AC2: the preview still names what --force is overriding");
+  ok(cfgKeys(dryCfgPath) === before.cfg && dbCounts(dryDb) === before.db,
+    `LOOP-290 AC2+AC5: --dry-run --force mutated NOTHING (${before.db} → ${dbCounts(dryDb)})`);
+
+  // AC6: a typo one keystroke from the real flag must NOT fall through to the live cascade.
+  for (const bad of ["--dryrun", "--dry_run", "--forse"]) {
+    const t = run("team", ["remove-project", "preview-me", bad], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+    ok(t.code !== 0 && /unknown option/.test(t.out),
+      `LOOP-290 AC6: '${bad}' is rejected as an unknown option, not silently ignored (got ${t.code})`);
+    ok(cfgKeys(dryCfgPath) === before.cfg && dbCounts(dryDb) === before.db,
+      `LOOP-290 AC6: '${bad}' mutated nothing`);
+  }
+
+  // Preservation: a dry-run errors exactly where the live command errors (checks precede the branch).
+  ok(run("team", ["remove-project", "_team", "--dry-run"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } }).code !== 0,
+    "LOOP-290: --dry-run of a reserved key still errors (reserved check precedes the dry-run branch)");
+  ok(run("team", ["remove-project", "no-such-proj", "--dry-run"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } }).code !== 0,
+    "LOOP-290: --dry-run of an unknown key still errors (not-found check precedes the dry-run branch)");
+
+  // AC3: without --dry-run behaviour is unchanged — the guard still refuses, then --force still deletes.
+  const liveRefuse = run("team", ["remove-project", "preview-me"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(liveRefuse.code !== 0 && /2 ticket\(s\)/.test(liveRefuse.out),
+    `LOOP-290 AC3: live path unchanged — still refuses with the same ticket-count message (got ${liveRefuse.code})`);
+  ok(cfgKeys(dryCfgPath) === before.cfg && dbCounts(dryDb) === before.db, "LOOP-290 AC3: a refused live run mutates nothing either");
+  const liveForce = run("team", ["remove-project", "preview-me", "--force"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(liveForce.code === 0, `LOOP-290 AC3: live --force still executes the removal (got ${liveForce.code}: ${liveForce.out.slice(0, 200)})`);
+  // This is what makes every zero-mutation assertion above meaningful: the same command WITHOUT --dry-run
+  // really does destroy this fixture, so "counts identical" was not vacuously true.
+  ok(cfgKeys(dryCfgPath) !== before.cfg && dbCounts(dryDb) !== before.db,
+    `LOOP-290 AC3: the live cascade DID mutate — the dry-run's zero-mutation proof is not vacuous (${before.db} → ${dbCounts(dryDb)})`);
+
+  // The REPO guard on its own (zero tickets, one repo). Covered explicitly because this diff rewrote that
+  // guard's expression from `inConfig && (repos ?? []).length > 0` to the hoisted `repoCount > 0`, and the
+  // pre-existing LOOP-221 case for it asserts only `code !== 0 && /repo/` against a workspace whose repo ref
+  // is unregistered — so it passes on the [E04] config-validation error and never reaches the guard at all.
+  run("team", ["add-project", "repo-only"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  const roCfg = readJson(dryCfgPath);
+  roCfg.repos = { ...(roCfg.repos ?? {}), "ro-repo": { path: "ro-repo" } };
+  roCfg.projects["repo-only"].repos = [{ ref: "ro-repo" }];
+  writeFileSync(dryCfgPath, JSON.stringify(roCfg, null, 2) + "\n");
+  const roBefore = { cfg: cfgKeys(dryCfgPath), db: dbCounts(dryDb) };
+  const roDry = run("team", ["remove-project", "repo-only", "--dry-run"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(roDry.code === 0 && /repos\s*: 1/.test(roDry.out) && /WOULD REFUSE \(1 repo\(s\)/.test(roDry.out),
+    `LOOP-290: the repo guard is previewed on its own — 0 tickets, 1 repo → WOULD REFUSE (1 repo(s)) (got: ${roDry.out.replace(/\n/g, " | ").slice(0, 300)})`);
+  const roLive = run("team", ["remove-project", "repo-only"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(roLive.code !== 0 && /has 1 repo\(s\) — pass --force/.test(roLive.out),
+    `LOOP-290: the LIVE repo guard still refuses with its original message (got ${roLive.code}: ${roLive.out.replace(/\n/g, " | ").slice(0, 200)})`);
+  ok(cfgKeys(dryCfgPath) === roBefore.cfg && dbCounts(dryDb) === roBefore.db, "LOOP-290: neither the repo-guard preview nor its refusal mutated anything");
+
+  // AC4: usage/help documents --dry-run
+  const rmUsage = run("team", ["remove-project"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(rmUsage.code !== 0 && /--dry-run/.test(rmUsage.out), "LOOP-290 AC4: the usage string documents --dry-run");
+  ok(/--dry-run/.test(run("team", ["--help"], { cwd: dryWs, extra: { DEVLOOP_HUB_DB: "" } }).out),
+    "LOOP-290 AC4: `team --help` documents --dry-run for remove-project");
+
   // team repair --reap: project reap (dry-run lists scratch 0/0; spares non-zero)
   const reapWs = join(tmp, "reap-ws");
   run("team", ["init", "--dir", reapWs, "--key", "reap-team", "--backend", "service"]);

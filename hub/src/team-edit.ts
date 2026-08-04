@@ -643,15 +643,26 @@ export function addProvider(argv: string[]): number {
 }
 
 // ── remove-project ────────────────────────────────────────────────────────────
-// `dev-loop team remove-project <key> [--force]`
+// `dev-loop team remove-project <key> [--force] [--dry-run]`
 // Recoverable-only by default: refuses if the project has tickets or repos. `--force` bypasses.
-// Handles the db-only case (key in hub but absent from config). Never removes _team / reserved.
+// `--dry-run` reports what WOULD happen and mutates nothing. Handles the db-only case (key in hub but
+// absent from config). Never removes _team / reserved.
+//
+// The preview DERIVES from the same facts the live guard consumes — it never re-derives the decision
+// (LOOP-290). A dry-run that computed "would it refuse?" separately would keep reporting the old answer
+// the first time someone edited the guard, and this command's whole reason to exist is being trusted
+// before an irreversible 10-table cascade delete.
 export function removeProject(argv: string[]): number {
   const [key, ...rest] = argv;
-  if (!key || key.startsWith("--"))
-    die("usage: dev-loop team remove-project <key> [--force]");
+  const usage = "usage: dev-loop team remove-project <key> [--force] [--dry-run]";
+  if (!key || key.startsWith("--")) die(usage);
   if (isTeamProject(key)) die(`'${key}' is a reserved project key and cannot be removed`, 1);
   const force = rest.includes("--force");
+  const dryRun = rest.includes("--dry-run");
+  // Reject anything else rather than ignoring it. Reading only `rest.includes("--force")` meant a typo
+  // one keystroke away from the real flag (`--dryrun`, `--dry_run`) fell straight through to the LIVE
+  // cascade — the exact hazard that produced LOOP-286. Matches addProject's `else die("unknown option")`.
+  for (const a of rest) if (a !== "--force" && a !== "--dry-run") die(`unknown option '${a}'\n${usage}`);
 
   const ws = resolveWorkspace();
   const inConfig = key in (ws.file.projects ?? {});
@@ -667,28 +678,75 @@ export function removeProject(argv: string[]): number {
   if (ws.file.team.backend === "service") {
     const dbPath = wsHubDb(ws);
     if (existsSync(dbPath)) {
-      try { db = openDb(dbPath); projectId = findProject(db, key); inDb = projectId !== null; }
+      // Defense in depth on a preview: `query_only=ON` makes "mutates nothing" true at the SQLite layer,
+      // not merely by reaching the early return below. Set before the first read, so no code path between
+      // open and return can write. A failure to set it is treated exactly like an unreadable db.
+      try {
+        db = openDb(dbPath);
+        if (dryRun) db.exec("PRAGMA query_only=ON");
+        projectId = findProject(db, key); inDb = projectId !== null;
+      }
       catch { dbUnverifiable = true; /* present but unreadable — refuse below unless --force */ }
     }
   }
 
   // Fail closed on an unverifiable db BEFORE the not-found check, so the message names the real cause
   // (unreadable, not "not found") and no removal happens without a deliberate --force override. (LOOP-280)
-  if (dbUnverifiable && !force)
+  // A dry-run does not die here — it REPORTS the same refusal below. It must never mask an unreadable db
+  // as "0 tickets", which is the one way a preview could talk an operator into a destructive run.
+  if (!dryRun && dbUnverifiable && !force)
     die(`project '${key}': hub.db is present but could not be opened to verify its ticket count — refusing to remove (pass --force to override); an unreadable db is when a silent removal would orphan live tickets`, 1);
 
+  // Runs for BOTH paths: a preview of a nonexistent key must error where the real thing errors.
   if (!inConfig && !inDb && !dbUnverifiable) { db?.close(); die(`project '${key}' not found in config or hub db`, 1); }
+
+  // ── the read-only facts, computed ONCE and shared by the preview and the live guard ────────────
+  // ticketCount stays null when there is no project row to count, or when the count query itself failed;
+  // countFailed distinguishes the second case, which is a refusal reason and never a zero.
+  let ticketCount: number | null = null;
+  let countFailed = false;
+  if (db && projectId) {
+    try { ticketCount = (db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c; }
+    catch { countFailed = true; }
+  }
+  const repoCount = inConfig ? (ws.file.projects[key].repos ?? []).length : 0;
+  // The guard decision as data. Identical inputs to the live `die`s below, so the preview cannot drift
+  // from them: whatever makes the live path refuse is what makes the preview say WOULD REFUSE.
+  const refuseReason = dbUnverifiable ? "hub.db unreadable"
+    : countFailed ? "hub.db ticket-count query failed"
+    : (ticketCount ?? 0) > 0 ? `${ticketCount} ticket(s)`
+    : repoCount > 0 ? `${repoCount} repo(s)`
+    : null;
+
+  if (dryRun) {
+    const dbLine = dbUnverifiable ? "UNREADABLE (would refuse without --force)"
+      : !db ? "absent"
+      : projectId === null ? "project row absent"
+      : countFailed ? `project_id=${projectId}, ticket count UNVERIFIABLE (would refuse without --force)`
+      : `project_id=${projectId}, ${ticketCount} ticket(s)`;
+    console.log(`dry-run: remove-project '${key}' would:`);
+    console.log(`  config : ${inConfig ? "present" : "absent"}`);
+    console.log(`  hub.db : ${dbLine}`);
+    console.log(`  repos  : ${repoCount}`);
+    if (refuseReason && !force) console.log(`  → WOULD REFUSE (${refuseReason}; needs --force)`);
+    else {
+      const targets = [inConfig ? "the config key" : null, db && projectId ? "the hub.db rows (10-table cascade)" : null]
+        .filter(Boolean).join(" + ");
+      console.log(`  → WOULD PROCEED — delete ${targets || "nothing (already absent)"}${refuseReason ? ` [--force overrides: ${refuseReason}]` : ""}`);
+    }
+    db?.close();
+    console.log("REMOVE_PROJECT_DRYRUN_OK");
+    return 0;   // ← zero writes: no mutate(), no DELETE
+  }
 
   if (!force) {
     if (db && projectId) {
-      let tc: number;
-      try { tc = (db.prepare("SELECT count(*) c FROM tickets WHERE project_id=?").get(projectId) as { c: number }).c; }
-      catch { db.close(); die(`project '${key}': hub.db ticket-count query failed — refusing to remove (pass --force to override)`, 1); }
-      if (tc > 0) { db.close(); die(`project '${key}' has ${tc} ticket(s) — pass --force to remove anyway`, 1); }
+      if (countFailed) { db.close(); die(`project '${key}': hub.db ticket-count query failed — refusing to remove (pass --force to override)`, 1); }
+      if ((ticketCount ?? 0) > 0) { db.close(); die(`project '${key}' has ${ticketCount} ticket(s) — pass --force to remove anyway`, 1); }
     }
-    if (inConfig && (ws.file.projects[key].repos ?? []).length > 0) {
+    if (repoCount > 0) {
       db?.close();
-      die(`project '${key}' has ${ws.file.projects[key].repos.length} repo(s) — pass --force to remove anyway`, 1);
+      die(`project '${key}' has ${repoCount} repo(s) — pass --force to remove anyway`, 1);
     }
   }
 
