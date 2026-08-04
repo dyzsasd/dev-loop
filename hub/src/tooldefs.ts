@@ -20,7 +20,7 @@ export const ok = (data: unknown): McpResult => ({ content: [{ type: "text" as c
 // off), so `extra` can never clobber `message` and the two transports serialize byte-identically.
 export const err = (message: string, extra?: Record<string, unknown>): McpResult => ({ isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: message, ...extra }) }] });
 
-// ─── the canonical tool-name list — whoami (answered locally per transport) + the 25 op-backed tools ────────
+// ─── the canonical tool-name list — whoami (answered locally per transport) + the 26 op-backed tools ────────
 // agentops.ts derives AGENT_OPS = TOOL_NAMES minus "whoami" (the only tool that is NOT an op-API op), so this
 // is the ONE source of the tool/op names. Order matches the historical AGENT_OPS order (registration order is
 // irrelevant to MCP — tools resolve by name — but keeping it stable keeps diffs/feeds readable).

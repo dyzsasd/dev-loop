@@ -115,6 +115,36 @@ ok(!titles(qaDesign.body.verify).includes("design parent stale label"),
 ok(titles(qaDesign.body.verify).includes("qa verify"),
   "LOOP-59: normal qa-labelled ticket still in qa.verify (no regression)");
 
+// ── 4b. Child-pointer design routing (LOOP-294) — reverse link when body-prefix not written ────
+// LOOP-286 shape: In Review, Bug, qa label, NO Mode:design body, plus a Backlog child
+// whose description says `Design: parent <parent-id>`. Today this parent incorrectly routes
+// to qa.verify (and NOT to pm.verify) — the exact inverse of the correct routing.
+const parentId = mk({ title: "design parent via child", state: "In Review",
+  labels: ["dev-loop", "Bug", "qa", "senior-dev"],
+  description: "bug description, not Mode: design" });
+const childId = mk({ title: "staged child", state: "Backlog", assignee: "junior-dev",
+  labels: ["dev-loop", "qa"],
+  description: `Design: parent ${parentId}\n\nbody` });
+// Wire the child's relatedTo to the parent id
+db.prepare("UPDATE tickets SET related_to=? WHERE id=?").run(JSON.stringify([parentId]), childId);
+const pmWithChild = call("pm");
+ok(titles(pmWithChild.body.verify).includes("design parent via child"),
+  "LOOP-294 AC2: child-link design parent routes into pm.verify (reverse link)");
+const qaWithChild = call("qa");
+ok(!titles(qaWithChild.body.verify).includes("design parent via child"),
+  "LOOP-294 AC2: child-link design parent excluded from qa.verify (no QA gate authority)");
+// LOOP-59 regression: Mode:design body still routes correctly (no child needed)
+ok(titles(pmWithChild.body.verify).includes("design parent stale label"),
+  "LOOP-294 AC3: Mode:design parent still routes to pm.verify (LOOP-59 regression guard)");
+ok(!titles(qaWithChild.body.verify).includes("design parent stale label"),
+  "LOOP-294 AC3: Mode:design parent still excluded from qa.verify (LOOP-59 regression guard)");
+// AC4: ordinary tickets untouched
+ok(titles(pmWithChild.body.verify).includes("pm verify"),
+  "LOOP-294 AC4: ordinary pm-labelled ticket still in pm.verify");
+ok(titles(qaWithChild.body.verify).includes("qa verify"),
+  "LOOP-294 AC4: ordinary qa-labelled ticket still in qa.verify");
+ok(!titles(pmWithChild.body.verify).includes("qa verify"),
+  "LOOP-294 AC4: ordinary qa-labelled ticket NOT in pm.verify");
 // ── 5. refusals ───────────────────────────────────────────────────────────────────────────────────
 ok(call("reflect").status === 400, "queue refuses actors without a pick contract (reflect)");
 

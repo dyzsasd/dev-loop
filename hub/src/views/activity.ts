@@ -10,6 +10,7 @@
 // red/warn appears only for genuinely bad states (acceptance <50%, verify-lag, possible-orphan).
 import { DatabaseSync } from "node:sqlite";
 import { esc, href, countPill } from "./ui.ts";
+import { parkedSplit } from "../metrics.ts";
 
 const DAY_MS = 86_400_000;
 // Defensive JSON parse of an event's `data` blob — empty / malformed / non-object → {} instead of throwing.
@@ -193,6 +194,11 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
   // threshold; Human-Blocked is a deliberate park and never warns. A zero-denominator acceptance
   // window renders "—", never a fake 0% (DL-79).
   const openIn = (state: string) => openByState.get(state) ?? [];
+  // LOOP-31: the parked population shared with `dev-loop metrics` — Human-Blocked ∪
+  // blocked-label w/o live edge (Dev bail parks). One helper, both surfaces, so the
+  // tile can never drift from the CLI again. `awaiting you` = Human-Blocked only.
+  const { parkedIds } = parkedSplit(db, projectId);
+  const humanBlockedCount = openIn("Human-Blocked").length;
   const oldestIrMs = openIn("In Review").reduce<number | undefined>((max, t) => {
     const age = nowMs - t.sinceMs;
     return Number.isFinite(age) && (max === undefined || age > max) ? age : max;
@@ -206,7 +212,8 @@ export function activityPage(db: DatabaseSync, projectId: string, projectKey: st
     + tile(`${esc(done30)}`, "done · 30d")
     + tile(acc30 === undefined ? "—" : `${esc(acc30)}%`, "acceptance · 30d", acc30 !== undefined && acc30 < 50)
     + tile(`${esc(openIn("In Progress").length + openIn("In Review").length)}`, "in flight now")
-    + tile(`${esc(openIn("Human-Blocked").length)}`, "blocked now")
+    + tile(`${esc(parkedIds.length)}`, "parked now")
+    + tile(`${esc(humanBlockedCount)}`, "awaiting you · Human-Blocked")
     + tile(oldestIrMs === undefined ? "—" : esc(humanDur(oldestIrMs)), "oldest in review", oldestIrMs !== undefined && oldestIrMs > WIP_VERIFY_LAG_MS)
     + `</div>`;
 

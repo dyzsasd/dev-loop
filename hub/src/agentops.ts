@@ -8,7 +8,7 @@
 // channel/mirror/label families (which also reuse the shared ticketwrite/docstore/channelstore/
 // mirrorstore/labelstore) — has EXACTLY ONE definition. The old "edit both files" drift tripwire is RETIRED:
 // a change to any policy now lands in ONE place, and the differential-parity suite (test/shim.ts +
-// test/agent-api.ts, shim ≡ stdio for all 26 tools) is the structural guard against a future re-divergence.
+// test/agent-api.ts, shim ≡ stdio for all 27 tools) is the structural guard against a future re-divergence.
 //
 // Each function takes a hub connection + the caller's already-resolved+validated actor (server.ts resolves it
 // from DEVLOOP_ACTOR + the G1 phantom-actor guard; the daemon from the X-Devloop-Actor header) and returns an
@@ -54,7 +54,7 @@ const okR = (body: unknown): OpResult => ({ status: 200, body });
 const errR = (status: number, error: string, extra?: Record<string, unknown>): OpResult => ({ status, body: { error, ...extra } });
 
 // The ops served by the op-API: the 5 core ticket ops + (DL-62) the doc/event family + (DL-67) the IM channel
-// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 26 server.ts tools 1:1 (the shim is a
+// + (DL-68) mirror.* + the label/project ops — the op-API mirrors ALL 27 server.ts tools 1:1 (the shim is a
 // 100% drop-in). The op names are the `/api/op/<op>` path segments and the MCP tool names (dotted for the
 // doc/channel/mirror families). DL-85: they are EXACTLY TOOL_NAMES minus "whoami"
 // (the only tool answered locally per-transport, never an op) — DERIVED from the one source so there is no
@@ -202,16 +202,24 @@ function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
     return okR({ agent: actor, inProgress, todo, inReview });
   }
   if (actor === "pm" || actor === "qa") {
+    const open = (db.prepare("SELECT * FROM tickets WHERE project_id=?").all(projectId) as unknown as TicketRow[])
+      .map(toTicket).filter((t) => !TERMINAL_STATES.has(t.state));
     // A Mode:design parent belongs to PM's verify gate regardless of its label set (§21a).
     // QA must not gate design parents — it has no authority over design coherence.
-    const isDesignParent = (t: Ticket): boolean => t.description.trimStart().startsWith("Mode: design");
+    // LOOP-294: also match via child's `Design: parent <id>` pointer (reverse link), which the
+    // small-feature form always writes and the body-prefix path never touches.
+    const designParentIds = new Set<string>();
+    for (const t of open) {
+      const m = t.description.match(/^\s*Design:\s*parent\s+(\S+)\b/im);
+      if (m) designParentIds.add(m[1]);
+    }
+    const isDesignParent = (t: Ticket): boolean =>
+      t.description.trimStart().startsWith("Mode: design") || designParentIds.has(t.id);
     const verify = byState("In Review").filter((t) =>
       actor === "pm"
         ? (isDesignParent(t) || t.labels.includes("pm"))
         : (t.labels.includes(actor) && !isDesignParent(t))
     ).map(summary);
-    const open = (db.prepare("SELECT * FROM tickets WHERE project_id=?").all(projectId) as unknown as TicketRow[])
-      .map(toTicket).filter((t) => !TERMINAL_STATES.has(t.state));
     const blocked = open.filter((t) => t.labels.includes("blocked"));
     if (actor === "qa") return okR({ agent: actor, verify, blocked: blocked.map(summary) });
     const todoOpen = open.filter((t) => t.state === "Todo" && !t.labels.includes("blocked"));
