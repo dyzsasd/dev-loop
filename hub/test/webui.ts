@@ -353,6 +353,23 @@ import { activityPage } from "../src/views/activity.ts";
   const byXss = boardPage(adb, "ap", "k", { q: "snippet-mark" }, false, undefined, { nowMs: A_NOW });
   ok(byXss.includes("AK-3") && byXss.includes("&lt;script&gt;alert(9)&lt;/script&gt; snippet-mark") && !byXss.includes("<script>alert(9)"),
     "P8 search: the snippet esc()s hostile description markup — no tag reaches the card");
+  ok(byXss.includes("AK-3") && byXss.includes("&lt;script&gt;alert(9)&lt;/script&gt; snippet-mark") && !byXss.includes("<script>alert(9)"),
+    "P8 search: the snippet esc()s hostile description markup — no tag reaches the card");
+
+  // ── LOOP-218 AC3: the per-actor count excludes tool writes ──────────────────────
+  // An operator event carrying a non-null data.fireId (a merge-guard trip) is a TOOL write, not a
+  // human ruling; it must NOT inflate the operator's per-actor activity count.
+  adb.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES ('ap','AK-1','operator','issue.transition',?,?)").run(
+    JSON.stringify({ from: "In Review", to: "Todo", fireId: "f-123" }), aIso(A_NOW - 1 * A_DAY));
+  adb.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES ('ap','AK-1','operator','issue.transition',?,?)").run(
+    JSON.stringify({ from: "In Review", to: "Todo" }), aIso(A_NOW - 2 * A_DAY));
+  const actWithTool = activityPage(adb, "ap", "k", A_NOW);
+  // The per-actor count excludes the tool write: only the non-fireId operator event counts.
+  // The fixture has 2 operator events (1 with fireId, 1 without) → operator row must show 1.
+  ok(/rkey">operator<\/span><span><b>1<\/b>\s*event/.test(actWithTool),
+    "LOOP-218 AC3: operator per-actor count excludes the fireId tool write (shows 1, not 2)");
+  ok(!/rkey">operator<\/span><span><b>2<\/b>\s*events/.test(actWithTool),
+    "LOOP-218 AC3: operator tool write is NOT counted (not 2 events)");
   adb.close();
 }
 

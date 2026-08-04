@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "nod
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { openDb } from "../src/db.ts";
+import { openDb, isToolWriteEventData } from "../src/db.ts";
 import { mergeGuard } from "../src/merge-guard.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -36,6 +36,9 @@ try {
   tk("MG-9", "In Review");   // idempotency: second --apply must not dup comment
   tk("MG-10", "In Review");  // LOOP-130: re-apply-after-external-unblock
   tk("MG-11", "In Review");  // LOOP-216: merged-PR check → skipped_merged (AC1)
+  tk("MG-12", "In Review"); // LOOP-218 actor attribution — DEVLOOP_ACTOR set case
+  tk("MG-13", "In Review"); // LOOP-218 actor attribution — DEVLOOP_ACTOR unset case
+
   conn.close();
 
   // A fake repo dir so resolveHubDbPath has something to look at (we pass dbPath explicitly)
@@ -514,6 +517,53 @@ try {
     rmSync(wsDir, { recursive: true, force: true });
   }
 
+  // ── LOOP-218: actor attribution (AC1) ────────────────────────────────────────────
+  // AC1: --apply with DEVLOOP_ACTOR set → event actor is the agent, not "operator"
+  const prevActor = process.env.DEVLOOP_ACTOR;
+  process.env.DEVLOOP_ACTOR = "senior-dev";
+  const rActorSet = mergeGuard(repoDir, { ticketId: "MG-12", dbPath, apply: true });
+  ok(rActorSet.trip, "LOOP-218: MG-12 In Review trips (setup check)");
+  ok(rActorSet.applied?.action === "wrote" || rActorSet.applied?.action === "already_present",
+    `LOOP-218: --apply wrote (got: ${rActorSet.applied?.action})`);
+  {
+    const db = openDb(dbPath);
+    try {
+      const events = db.prepare("SELECT actor,data FROM events WHERE ticket_id=? AND kind='comment.add' ORDER BY id DESC LIMIT 1").all("MG-12") as { actor: string; data: string }[];
+      ok(events.length > 0, "LOOP-218: comment.add event exists");
+      if (events.length > 0) {
+        ok(events[0]!.actor !== "operator", `LOOP-218 AC1: event actor is agent, not operator (got: ${events[0]!.actor})`);
+        ok(events[0]!.actor === "senior-dev", `LOOP-218 AC1: event actor is senior-dev (got: ${events[0]!.actor})`);
+      }
+    } finally { db.close(); }
+  }
+  // AC1: --apply with DEVLOOP_ACTOR unset → event actor is "operator"
+  delete process.env.DEVLOOP_ACTOR;
+  const rActorUnset = mergeGuard(repoDir, { ticketId: "MG-13", dbPath, apply: true });
+  ok(rActorUnset.trip, "LOOP-218: MG-13 still trips (setup check)");
+  {
+    const db = openDb(dbPath);
+    try {
+      const events = db.prepare("SELECT actor,data FROM events WHERE ticket_id=? AND kind='comment.add' ORDER BY id DESC LIMIT 1").all("MG-13") as { actor: string; data: string }[];
+      ok(events.length > 0, "LOOP-218: comment.add event exists (MG-13)");
+      if (events.length > 0) {
+        ok(events[0]!.actor === "operator", `LOOP-218 AC1: event actor is operator when DEVLOOP_ACTOR absent (got: ${events[0]!.actor})`);
+      }
+    } finally { db.close(); }
+  }
+  // Restore
+  if (prevActor === undefined) delete process.env.DEVLOOP_ACTOR; else process.env.DEVLOOP_ACTOR = prevActor;
+
+  // ── LOOP-218 AC2: isToolWriteEventData helper ────────────────────────────────────
+  {
+    // (isToolWriteEventData is already imported at the top of this file)
+    ok(isToolWriteEventData('{"fireId":"abc"}') === true, "LOOP-218 AC2: event with fireId → tool write (true)");
+
+    ok(isToolWriteEventData('{"fireId":""}') === false, "LOOP-218 AC2: event with empty fireId → not tool (false)");
+    ok(isToolWriteEventData('{"actor":"operator"}') === false, "LOOP-218 AC2: operator event without fireId → not tool (false)");
+    ok(isToolWriteEventData(null) === false, "LOOP-218 AC2: null data → false");
+    ok(isToolWriteEventData(undefined) === false, "LOOP-218 AC2: undefined data → false");
+    ok(isToolWriteEventData('not json') === false, "LOOP-218 AC2: malformed JSON → false");
+  }
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }

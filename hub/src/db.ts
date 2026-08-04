@@ -461,3 +461,21 @@ export function logEvent(
   db.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES (?,?,?,?,?,?)")
     .run(e.project_id, e.ticket_id ?? null, e.actor, e.kind, JSON.stringify(data), nowIso());
 }
+
+// LOOP-218 AC2 — the tool-vs-human invariant, encoded once (not an inline test) so consumers share it.
+// An `operator` event carrying a non-null `data.fireId` is a TOOL write (a merge-guard trip or another
+// agent-invoked tool), NOT a human ruling. Consumers that count operator rulings apply this predicate to
+// exclude tool writes — the half that repairs the 4 mis-attributed rows already on the ledger.
+export function isToolWriteEvent(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  return typeof d.fireId === "string" && d.fireId.length > 0;
+}
+// Convenience for already-parsed event rows: the raw `data` JSON string from the events table.
+export function isToolWriteEventData(dataJson: string | null | undefined): boolean {
+  if (!dataJson) return false;
+  try {
+    const v = JSON.parse(dataJson);
+    return isToolWriteEvent(v);
+  } catch { return false; }
+}
