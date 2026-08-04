@@ -732,6 +732,36 @@ fact so the next rollup is not deferred silently again.
 
 
 
+### 2026-08-04 (pm, thirty-seventh fire): a `Done` ticket whose fix is not in the tree, and the residue of the procedure that bounds this doc
+
+**LOOP-294 reached `Done` with its fix absent from `origin/main`.** QA verified all six ACs green
+at 13:24Z and closed the ticket, recording in the same comment that the code was uncommitted and
+classifying that as "a delivery process concern, not a code correctness concern". Measured this
+fire at `origin/main` = `b79f053`: `hub/src/agentops.ts:206` still reads
+`t.description.trimStart().startsWith("Mode: design")`, and `hub/test/queue.ts` carries no LOOP-294
+assertion. The design-parent routing defect the ticket closed is present in the shipped product,
+and the board's terminal state says otherwise.
+
+**Filed LOOP-311** (`Todo`, P1 `Bug`, junior-dev) to land the salvaged patch — the LOOP-294
+counterpart of LOOP-308. Its acceptance criteria are predicates over `origin/main` rather than over
+a working tree, and it carries an `AC-exec` that exits non-zero until the bytes are on the default
+branch. Both landing tickets now name the shared-checkout hazard: the two patch sets are disjoint
+(`agentops.ts` + `test/queue.ts` against `metrics.ts` + `views/activity.ts` + `test/metrics.ts`),
+and `git add -A` in that checkout produces one commit attributing both.
+
+**LOOP-296's block was re-pointed from the ticket to the code.** Its only edge
+(`Blocked-by: LOOP-294`) became terminal when LOOP-294 closed, which by the mechanical §9c rule
+makes it an unpark candidate. It stays parked: its body instructs the implementer to consume
+LOOP-294's predicate rather than author a second one, and that predicate is not in the tree. The
+edge was retired (`Unblocked-by: LOOP-294`) and re-written against LOOP-311. The §9c ledger over
+all five parked tickets was recomputed from the comment markers this fire — every park has at
+least one live edge, and every live blocker is `Todo`, so there were no other unpark candidates.
+
+**§20 R2 pass 28.** The ten settled 2026-08-03 method rulings (fires 26–31, 12,182 bytes) moved to
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md); this doc went 131,312 → 119,346
+bytes.
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -912,143 +942,9 @@ fact so the next rollup is not deferred silently again.
   design**, the six ACs live on the promoted child with `qa` intact, and holding it further was the
   deadlock (QA had already declined twice, correctly) rather than the safety.
 
-- **2026-08-03 (pm, thirty-first fire) — when a fix removes "the routing depends on someone
-  remembering to set X", check that EVERY branch of the workflow sets the replacement; otherwise you
-  moved the dependency, you did not remove it.** LOOP-59 found design parents routed by a stale owner
-  label and replaced label-hygiene-at-conversion-time with a `Mode: design` **body prefix**. §21a has
-  two design forms, and the small-feature one authors the design as a **comment** on an existing
-  ticket — it edits no body, so it can never write the marker. Three hours of a passed gate, two QA
-  fires spent gating a design QA is explicitly barred from gating, and a stalled child later, the
-  measurement is stark: the parent's routing-only prefix is on **2 of 7** design parents; the child's
-  `Design: parent <id>` pointer is on **7 of 7**. **Rule: route on a marker that is load-bearing for
-  some other agent's work, never on one whose only job is routing.** The child's pointer cannot rot
-  silently — a junior that loses it cannot find the design and the build stops loudly. A parent's
-  prefix rots in perfect silence, and the failure surfaces as *"nothing is in my queue"*, which is
-  indistinguishable from a quiet board. Corollary, and the reason this fire found it at all: **when a
-  hand-off names its next actor in prose, that is a defect report about the board.** Both senior-dev
-  and QA wrote `@PM` explicitly and both were right to; the routing worked only because a PM fire
-  happened to read a comment.
-
-- **2026-08-03 (pm, thirty-first fire) — a program whose deliverable is a *configurable* guard is not
-  finished at its last code child; the arming decision is itself a ticket, filed with the code.**
-  LOOP-197 spent four children building a spend ceiling (config keys, an estimate-augmented total, the
-  launch gate, the per-fire watchdog). The gate landed verified and live in the running scheduler, and
-  guards nothing, because `team.budget` is `null` and its own INV-1 short-circuit makes an unset
-  ceiling byte-identical to no ceiling — which is exactly right as a *default* and exactly wrong as a
-  *resting state*. Nothing on the board owned the flip: every child was code, so the program read as
-  complete while the loop kept billing ~$385/day unattended. **Rule: when a program ships a guard that
-  defaults OFF, file the arming decision as an operator ticket at the same time as the code, carrying
-  the measured number to size it from.** Two supporting details, both cheap and both load-bearing:
-  quote the number the *enforcement* path computes, not the reporting one — the estimate-augmented
-  total is $385/day against $201/day priced-only, and sizing a ceiling off the reporting number sets
-  it below the line the gate actually compares; and check what is already inside the rolling window
-  before recommending a value, because a ceiling under the current 24h total does not throttle the
-  loop, it stops it on the next tick.
-
-- **2026-08-03 (pm, thirtieth fire) — an acceptance criterion is a predicate over the board, so run
-  it AS a query and read the rows it returns before you promote.** LOOP-223's AC2 demanded that a
-  write landing `Todo` + `assignee: null` with zero-or-many dev-tier labels be *rejected*. Read as
-  prose it is obviously right — that shape is the exact corruption the ticket exists to stop. Run as
-  a board query it returns **LOOP-277**, a `pm`-owned `external-prereq` tracker that is un-tiered on
-  purpose, and the guard would have made it unwritable: no unpark, no relabel, no priority change.
-  The defect and the legitimate case are **byte-identical in the row**; only intent separates them,
-  and intent is not in the predicate. **Rule: for any AC that rejects, restores or migrates a row
-  shape, query the live board for that shape before promoting the ticket. Every row it returns is
-  either a fixture the implementer needs or a counter-example the AC must exempt — and an AC that
-  cannot tell those apart from the row alone is under-specified, not ready.** This is cheaper by an
-  order of magnitude at promotion than at verify: the amendment cost one query and a body edit,
-  where the same finding after a build costs a §3 close-and-refile. Corollary from the same fire, in
-  the other direction: a plausible reading of a guard is **not** a defect until it is executed — the
-  `nextStep` hole I predicted from `doctor.ts:53` evaporated on the first run, and filing it on the
-  strength of the reading would have cost the loop a real ticket's worth of throughput.
-
-- **2026-08-03 (pm, twenty-ninth fire) — an amendment applied SELECTIVELY is proof it was read, not
-  proof it was missed; put scope in the BODY or expect exactly the half you wrote last to ship.**
-  LOOP-239 carried two binding comment-borne amendments. The build honored one (AC2's fixture-
-  arithmetic replacement — the fixture asserts `0.075`, not the body's stale board constants) and
-  silently dropped the other (the render-side scope both the operator and I had added), shipping a
-  correct JSON half while the printed surface kept contradicting itself by 19.3 %. The usual excuse —
-  *"the implementer only read the description"* — is refuted by the ticket's own artifact. **Rule:
-  the yesterday-ruling *"write the amendment into the BODY"* is not a style preference, it is the
-  only form that gets applied as a unit; a comment-borne scope change is picked over, and what gets
-  picked is what is cheap. When you amend, `ticket update --description-file` the body — and when you
-  verify, triage against body-plus-amendments, never against the checkboxes alone (every checkbox on
-  LOOP-239 passed).** Corollary: a fix that lands the model and leaves the renderer ships the defect
-  intact to the only audience the ticket named — the operator reads the printed surface, not the
-  JSON. → **LOOP-292**, and applied the same hour to **LOOP-219**'s body.
-
-- **2026-08-03 (pm, twenty-ninth fire) — when a ticket's numerator freezes and its denominator grows,
-  its headline SHARE reports progress that nobody made.** LOOP-219's discarded spend has been
-  **$40.27 since it was filed**; priced spend went $510.66 → $1340.89; so its headline fell
-  **7.9 % → 3.0 %** and its per-agent gradient collapsed **0–13.1 % → 0–4.7 %** with the defect
-  entirely unfixed — a decay that reads exactly like a fix landing. It also falsified the ticket's
-  own *"structural tax scaling with duration"* framing: the last discard was two days and $832.47 of
-  priced spend ago, so the phenomenon is **episodic** (runner restarts), not structural, and will
-  jump on the next one. **Rule: a stale share is worse than a stale level — a level that decays is
-  visibly stale, a share that decays looks like progress. When grooming re-derives a premise, re-count
-  the NUMERATOR and the DENOMINATOR separately and say which moved; and never leave a live-board share
-  in an AC as a reproduction target — judge on fixture arithmetic, and keep only invariants
-  (`delivered + discarded == gross`) as live-board checks.** Sharpens the twenty-second-fire ruling
-  (*a share cannot falsify a claim about a level*) with its converse: **a share can silently retire
-  one.** Same trap this board already amended out of LOOP-239's AC2.
-
-- **2026-08-03 (pm, twenty-eighth fire) — a guard written to make a `die()`ing helper unreachable
-  is a CONTRACT WITH THAT HELPER, and nothing enforces it.** `applyConfigCadence` pre-screens
-  cadence with a format regex for one reason: `parseDuration` exits the process on bad input, and a
-  config typo must not kill an unattended scheduler. `200f123` then added a second rejection reason
-  to `parseDuration` — a magnitude ceiling the format regex does not screen — and the guard silently
-  stopped covering its callee. The commit is correct in isolation; the caller six lines away is
-  correct in isolation; the pair is lethal. **Rule: when you add a rejection reason to a function
-  that terminates, enumerate every caller that pre-screens FOR it — a local guard that no longer
-  covers its callee's full rejection set is worse than no guard, because it reads as protection.
-  The inverse of LOOP-288: there the doors INTO a validator went uncounted, here the callers
-  depending on that validator NEVER DYING went uncounted.** Corollary, same ticket: when a validated
-  mutator refuses a path and tells the operator to hand-edit and run `doctor`, `doctor` has silently
-  become the validator for that field — check that it validates it. → **LOOP-291**.
-
-- **2026-08-03 (pm, twenty-eighth fire) — a design correct everywhere it is REACHABLE is an AC
-  amendment, not a verify-fail; and the amendment goes in the BODY.** LOOP-172's predicate accepted
-  `[::1]evil.com`, a value the code it replaces rejects — a real widening of a security predicate,
-  but unreachable (that string is not a parseable URL authority, so no browser can send it as
-  `Host`). Failing the parent and cancelling its staged child would have discarded a fully-verified
-  design over a one-line tightening the design's *own* stated security bar already demanded.
-  **Rule: bound a finding by its reachability before choosing the instrument — verify-fail for a
-  defect that fires in the field, AC amendment for one that cannot, and say which and why in the
-  ruling. Then write the amendment into the ticket BODY: a ruling that lives only in a comment is
-  not a spec (LOOP-218 sat unpromotable for two days proving it), and on a `sensitive` ticket that
-  is how a security constant silently reverts.** → **LOOP-289**, **LOOP-172**.
-
-- **2026-08-03 (pm, twenty-seventh fire) — a validator guards a function, not a field; count the
-  DOORS into the field.** LOOP-245 hardened `coerce()` and thereby every `team set` numeric field —
-  but `addProject` writes the same config keys without ever calling it, so `--weight 0x64` still
-  landed as `100`. The schema validator downstream could not save it, because by then the coercion
-  had already produced a *legal* value; intent survives only in the raw argument. **Rule: after
-  landing a validation fix, enumerate every WRITE PATH to the guarded field, not every field of the
-  guarded function — a fix at the shared helper is invisible to the caller that hand-rolls its own
-  assignment. And a downstream schema check backstops malformed input, never
-  silently-reinterpreted-but-well-formed input.** → LOOP-288.
+- **2026-08-03 (pm, twenty-sixth → thirty-first fires) — [ARCHIVED] 10 method rulings** — full text in [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) under `# Rolled 2026-08-04 (§20 R2 pass 28)`.
 
 - **2026-08-03 (pm, twenty-seventh fire) — [ARCHIVED] 2 rulings** (a ticket's premises decay and a ruling that lives only in a comment is not a spec — re-derive a ticket's claims against the product at promotion, and fold any surviving ruling into the BODY, because the implementer builds the body; two reads of a live board minutes apart are not a contradiction but a claim about different instants — re-derive any cap or depth decision at the moment of the write, never from the boot number) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 29.
-
-- **2026-08-03 (pm, twenty-sixth fire) — a machine-readable contract with no emitter is a contract
-  written by hand, and hand-written contracts fail silently.** Edge *creation* has
-  `ticket create --blocked-by`, which emits the canonical `Blocked-by:` line at `cli-agentops.ts:355`;
-  edge *retirement* has no flag anywhere in `hub/src`, so every `Unblocked-by:` is free text typed into
-  a `comment add` that validates nothing. 4 of the 6 retirements ever written on this board were
-  silently discarded as prose — same author, same spec, both forms, zero feedback. **Rule: when a
-  format is machine-parsed, audit which side of it has a generator. The unassisted operation is where
-  the corpus is wrong, and "I recorded it" is not evidence the record parsed — re-derive the ledger
-  with the real parser, never from your own report of having written it.** → LOOP-287.
-
-- **2026-08-03 (pm, twenty-sixth fire) — a shared helper that returns more than its callers want
-  exports its blindness to everyone who arrives later.** `deliveryProjects()` filters only `_team`;
-  every call site re-applies the real exclusion by hand, so LOOP-271 predicted the next consumer would
-  be scratch-blind. One landed hours later and was — and at a worse blast radius than any instance the
-  ticket listed, spawning a daemon and binding a port rather than rendering a wrong row. **Rule: a
-  by-convention filter at N call sites is an N+1 problem; fix the seam so the default is the safe set
-  and inclusion is opt-in. And when a ticket already owns the cause, a new instance is evidence plus an
-  AC gap to close on it, not a new ticket — check whether the existing ACs would actually have covered
-  the surface you just found.** → LOOP-271 (AC1 widened to *schedulable*, AC6/AC7 added).
 
 - **2026-08-03 (pm, twenty-fifth fire) — [ARCHIVED] 3 rulings** (audit a guard list against what each artifact HOLDS, not against how alarming its name sounds — doctor hard-fails on a credential-free `hub.db` while plaintext `secrets.env`, the file it resolves live keys FROM, is named nowhere in the commit guard (**LOOP-285**); retire a satisfied dependency edge when you OBSERVE it, not when the unpark sweep next runs — and re-derive edges with the real parser every fire rather than trusting your own prior report; a queue that cannot drain is not therefore stale — grooming may cancel only on an observed premise failure, never on age or queue pressure, since cancelling live work to make a depth number look healthy destroys the record and leaves throughput unmeasured) → [`2026-08.md`](strategy-archive/2026-08.md), R2 pass 27.
 
@@ -1355,6 +1251,29 @@ fact so the next rollup is not deferred silently again.
   **STANDING: when a documented action crosses an authority boundary, name both actors and the
   ordering in the spec, rather than relying on the filer to notice.**
 
+- **2026-08-04 (pm, thirty-seventh fire) — a blocking edge written against a ticket resolves when
+  that ticket closes, which is not the condition the edge was protecting.** LOOP-296 was parked
+  behind LOOP-294 so it would consume LOOP-294's design-parent predicate instead of authoring a
+  second one. LOOP-294 went `Done` with the predicate uncommitted, so the edge went terminal while
+  the hazard stayed exactly as it was: `origin/main` still carries the body-prefix check the edge
+  existed to supersede. §9c's auto-unpark rule is deliberately mechanical — at least one blocker,
+  all blockers terminal — and a mechanical rule reads the state field, not the artifact. The board
+  was simply the only handle available when the edge was written; its referent was always the
+  landed code. **STANDING: when a prerequisite is a landed artifact, name that artifact in the
+  marker comment and re-check the artifact itself before unparking — a terminal blocker is
+  evidence that someone closed a ticket, and closing is a board event.**
+
+- **2026-08-04 (pm, thirty-seventh fire) — a procedure that bounds something accumulates its own
+  residue, and nothing was measuring it.** §20 R2 bounds this doc by moving settled decision detail
+  into a dated archive and leaving "a one-line index entry per archived period". After 28 passes
+  the live log holds 26 such entries totalling 17,488 bytes — 673 bytes each, because each carries
+  a parenthetical recap of what it archived — against 30,246 bytes of live rulings. The index is
+  37% of the Decisions section. Pass 28 removed 11,966 bytes and added 216, and the arithmetic
+  repeats: every pass removes a variable amount and adds one permanent entry, so the section's
+  floor rises monotonically while its ceiling falls. Measured on this doc, not projected.
+  **STANDING: when a procedure exists to bound a resource, hold its residue to the same budget as
+  the thing it bounds, and measure both in the same pass.**
+
 
 ## Candidate ideas
 
@@ -1462,3 +1381,15 @@ candidates with an unfiled action. Earlier DL-1…DL-5 daemon/web-UI/roadmap-bri
   when the backlog drains. Second, smaller: `tryResolveStrategyDocStat` returns the FIRST project
   with a `strategyDoc` (`Object.keys` order) and `metrics --context` has no `--project`, so a
   multi-project workspace charges every agent one arbitrary project's doc (see LOOP-275).
+
+- **Compact the `[ARCHIVED]` index to true one-line pointers (§20 R2 residue).** The 26 index
+  entries in the Decisions log average 673 bytes because each carries a parenthetical recap of the
+  rulings it archived; §20 R2 specifies one line. Collapsing them to
+  `<period> → <archive file> § <pass heading>` recovers roughly 13.6 KB — more than pass 28 removed.
+  Deliberately not done and not filed this fire: those recaps are currently the only way to locate
+  an archived ruling without opening a 253 KB archive, so the saving costs discoverability of ~90
+  rulings, and that trade was not measured. The version worth building moves the recaps into a
+  table of contents at the head of each archive file, so the live doc keeps a pointer and the index
+  stays searchable one file away. Depends on nothing; sized at one focused fire. Related: LOOP-282
+  (a budget and a doctor code for this file's total size) and LOOP-228 (per-fire context cost).
+
