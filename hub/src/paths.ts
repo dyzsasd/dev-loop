@@ -15,6 +15,26 @@ export function pkgVersion(): string {
   return cachedVersion;
 }
 
+// LOOP-250: the build commit SHA this package was compiled from (present for source builds,
+// absent for npm-installed packages older than the stamp). Used by W18 and daemon up to compare
+// what code is actually RUNNING rather than inferring it from the version STRING.
+let cachedBuildCommit: string | null | undefined;
+export function pkgBuildCommit(): string | null {
+  if (cachedBuildCommit === undefined) {
+    try {
+      cachedBuildCommit = (JSON.parse(readFileSync(new URL("../build-commit.json", import.meta.url), "utf8")) as { commit?: string }).commit ?? null;
+    } catch { cachedBuildCommit = null; }
+  }
+  return cachedBuildCommit;
+}
+
+// LOOP-250: uncached fresh read — used by daemon lifecycle to detect an on-disk upgrade while
+// a daemon is still running the old code (pkgBuildCommit() is cached at startup).
+export function pkgBuildCommitFresh(): string | null {
+  try { return (JSON.parse(readFileSync(new URL("../build-commit.json", import.meta.url), "utf8")) as { commit?: string }).commit ?? null; }
+  catch { return null; }
+}
+
 // Uncached fresh read — used to detect an on-disk upgrade while a daemon is still running
 // the old code (pkgVersion() is cached at startup; pkgVersionFresh() reads the file each call).
 export function pkgVersionFresh(): string {

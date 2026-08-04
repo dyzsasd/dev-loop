@@ -21,7 +21,7 @@ import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, fireIdStore } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, repoFileStrategyPath } from "./resolve-project.ts"; // + docs P3b: the ONE strategyDoc→repo-file rule (doc-home, §19)
-import { hubDbPath, pkgVersion, pkgVersionFresh } from "./paths.ts";
+import { hubDbPath, pkgVersion, pkgVersionFresh, pkgBuildCommit, pkgBuildCommitFresh } from "./paths.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr, type DocKind } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp, resolveProjectOverride } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
@@ -625,9 +625,10 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
     // so the raw DB path must never appear here; the boolean is sufficient for the reaper (LOOP-95).
     // Use ctx.dbPath (the actual opened path) not workspaceId (which ignores DEVLOOP_HUB_DB overrides).
     const dbPresent = existsSync(ctx.dbPath);
+    const buildCommit = pkgBuildCommit();
     json(res, h.ok ? 200 : 503, h.ok
-      ? { ok: true, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent, entryPath: ctx.entryPath }
-      : { ok: false, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), actor, dbPresent, error: h.error, entryPath: ctx.entryPath });
+      ? { ok: true, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), buildCommit, actor, dbPresent, entryPath: ctx.entryPath }
+      : { ok: false, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), buildCommit, actor, dbPresent, error: h.error, entryPath: ctx.entryPath });
     return true;
   }
   if (path === "/api/tickets") {
@@ -685,13 +686,19 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
   // LOOP-52 board identity: record daemon's startup version + resolve the workspace hub.db path.
   // WS_ID is the authenticated surface's identity affordance — shows which workspace's board you're on.
   const DAEMON_VER = daemonVersionOpt ?? pkgVersion();
+  const DAEMON_BUILD_COMMIT = pkgBuildCommit();
   const WS_ID = daemonDbPath ?? hubDbPath();
   // Per-request: compare DAEMON_VER with the on-disk version to detect an upgrade while the daemon runs.
   // LOOP-252: direction-aware — only set cliVersion (upgrade prompt) when daemon is OLDER; when daemon is
   // NEWER than the on-disk CLI, flag daemonIsNewer so the UI warns against running daemon up.
   const getBasePageOpts = (): { workspaceId: string; daemonVersion: string; cliVersion?: string; daemonIsNewer?: boolean } => {
     const freshVer = pkgVersionFresh();
-    if (DAEMON_VER === freshVer) return { workspaceId: WS_ID, daemonVersion: DAEMON_VER };
+    const freshCommit = pkgBuildCommitFresh();
+    if (DAEMON_VER === freshVer) {
+      if (freshCommit && DAEMON_BUILD_COMMIT && freshCommit !== DAEMON_BUILD_COMMIT)
+        return { workspaceId: WS_ID, daemonVersion: DAEMON_VER, cliVersion: freshVer };
+      return { workspaceId: WS_ID, daemonVersion: DAEMON_VER };
+    }
     if (semverBefore(freshVer, DAEMON_VER)) return { workspaceId: WS_ID, daemonVersion: DAEMON_VER, cliVersion: freshVer, daemonIsNewer: true };
     return { workspaceId: WS_ID, daemonVersion: DAEMON_VER, cliVersion: freshVer };
   };
