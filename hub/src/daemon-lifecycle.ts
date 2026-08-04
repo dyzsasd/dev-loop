@@ -20,10 +20,18 @@ import { openDb } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { findCompatibleNode } from "./node-runtime.ts";
-import { devloopProjectsPath, hubDbPath, pkgVersion } from "./paths.ts";
+import { devloopProjectsPath, hubDbPath, pkgVersion, pkgBuildCommit, pkgBuildCommitFresh } from "./paths.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb } from "./workspace.ts";
 
-interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; version?: string; actor?: string; entryPath?: string; }
+interface RunInfo { project: string; pid: number; port: number; host: string; url: string; startedAt: string; version?: string; buildCommit?: string | null; actor?: string; entryPath?: string; }
+// LOOP-250: returns true when the running daemon runs the same code as the installed CLI.
+// Version equality is not sufficient for source builds (same v1.14.0, different commit).
+// Both present + both match = same code; either absent → fall back to version-only (npm install semantics).
+function sameDaemonCode(installedVer: string, installedCommit: string | null | undefined, runningVer: string | undefined, runningCommit: string | null | undefined): boolean {
+  if ((runningVer ?? "") !== installedVer) return false;
+  if (installedCommit && runningCommit) return installedCommit === runningCommit;
+  return true;
+}
 // semver direction: returns true when a comes strictly before b (a < b). Unparseable strings → false (treat as equal).
 function semverBefore(a: string, b: string): boolean {
   const pa = a.match(/^(\d+)\.(\d+)\.(\d+)/), pb = b.match(/^(\d+)\.(\d+)\.(\d+)/);
@@ -180,15 +188,15 @@ async function lcProbe(url: string, key: string, timeoutMs = 1000): Promise<bool
 // Like lcProbe but returns the health body (version/actor) on success, null otherwise — so `up` can
 // detect a daemon still running PRE-UPGRADE code (version ≠ this CLI's) and restart it (D1). Without
 // this, an `npm i -g` upgrade never takes effect on a running detached daemon until reboot / manual down.
-async function lcHealthInfo(url: string, key: string, timeoutMs = 1000): Promise<{ version?: string; actor?: string; entryPath?: string } | null> {
+async function lcHealthInfo(url: string, key: string, timeoutMs = 1000): Promise<{ version?: string; buildCommit?: string | null; actor?: string; entryPath?: string } | null> {
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), timeoutMs);
     const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
     if (r.status !== 200) return null;
-    const b = (await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; actor?: string; entryPath?: string } | null;
+    const b = (await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; buildCommit?: string | null; actor?: string; entryPath?: string } | null;
     if (!b || b.ok !== true || b.project !== key) return null; // confirm it's OUR project on that port, not a stranger
-    return { version: b.version, actor: b.actor, entryPath: b.entryPath };
+    return { version: b.version, buildCommit: b.buildCommit, actor: b.actor, entryPath: b.entryPath };
   } catch { return null; }
 }
 async function lcWaitHealthy(url: string, key: string, totalMs = 8000): Promise<boolean> {
@@ -246,7 +254,7 @@ export async function daemonUpForKey(key: string): Promise<number> {
   const pre = lcReadRun(key);
   if (pre && lcIsAlive(pre.pid)) {
     const info = await lcHealthInfo(pre.url, key);
-    if (info && (info.version ?? "") === pkgVersion()) {
+    if (info && sameDaemonCode(pkgVersion(), pkgBuildCommit(), info.version, info.buildCommit)) {
       console.log(`[daemon] up: already running for '${key}' → ${pre.url} (pid ${pre.pid})`);
       return 0;
     }
@@ -268,7 +276,7 @@ export async function daemonUpForKey(key: string): Promise<number> {
     const existing = lcReadRun(key);
     if (existing && lcIsAlive(existing.pid)) {
       const info = await lcHealthInfo(existing.url, key);
-      if (info && (info.version ?? "") === pkgVersion()) { console.log(`[daemon] up: already running for '${key}' → ${existing.url} (pid ${existing.pid})`); return 0; }
+      if (info && sameDaemonCode(pkgVersion(), pkgBuildCommit(), info.version, info.buildCommit)) { console.log(`[daemon] up: already running for '${key}' → ${existing.url} (pid ${existing.pid})`); return 0; }
       if (info && info.version && semverBefore(pkgVersion(), info.version)) {
         const runningFrom = info.entryPath ?? existing.entryPath ?? "(unknown tree)";
         process.stderr.write(`[daemon] up: '${key}' daemon is NEWER than this CLI (v${info.version} > v${pkgVersion()}) — this CLI is stale; refusing to downgrade\n  running daemon: ${runningFrom}\n  this caller:    ${lcDaemonEntry()}\n`);
@@ -334,7 +342,7 @@ export async function daemonUpForKey(key: string): Promise<number> {
         : await lcWaitHealthyOrDead(url, key, child.pid);
       if (result === "healthy") {
         const started = await lcHealthInfo(url, key); // record what actually came up (version/actor) for `status` + upgrade detection
-        lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString(), version: started?.version ?? pkgVersion(), actor: started?.actor ?? "operator", entryPath: started?.entryPath ?? self });
+        lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString(), version: started?.version ?? pkgVersion(), buildCommit: started?.buildCommit ?? null, actor: started?.actor ?? "operator", entryPath: started?.entryPath ?? self });
         console.log(`[daemon] up: started '${key}' → ${url} (pid ${child.pid})`);
         return 0;
       }

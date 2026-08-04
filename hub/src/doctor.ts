@@ -8,7 +8,7 @@ import { existsSync, readFileSync, openSync, readSync, closeSync } from "node:fs
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
-import { pkgVersion } from "./paths.ts";
+import { pkgVersion, pkgBuildCommit } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -962,14 +962,22 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
   }
   try {
     let vCommit: string | null = null;
-    const tagR = spawnSync("git", ["-C", matchDir, "rev-parse", "-q", "--verify", `refs/tags/v${V}^{commit}`],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    if (tagR.status === 0 && tagR.stdout.trim()) {
-      vCommit = tagR.stdout.trim();
+    let isSourceBuild = false;
+    // LOOP-250: a build-commit stamp tells us EXACTLY which commit is running (source build).
+    const buildCommit = pkgBuildCommit();
+    if (buildCommit) {
+      vCommit = buildCommit;
+      isSourceBuild = true;
     } else {
-      const logR = spawnSync("git", ["-C", matchDir, "log", `--grep=chore(release): v${V}`, "--format=%H", "-1"],
+      const tagR = spawnSync("git", ["-C", matchDir, "rev-parse", "-q", "--verify", `refs/tags/v${V}^{commit}`],
         { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-      if (logR.status === 0 && logR.stdout.trim()) vCommit = logR.stdout.trim();
+      if (tagR.status === 0 && tagR.stdout.trim()) {
+        vCommit = tagR.stdout.trim();
+      } else {
+        const logR = spawnSync("git", ["-C", matchDir, "log", `--grep=chore(release): v${V}`, "--format=%H", "-1"],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        if (logR.status === 0 && logR.stdout.trim()) vCommit = logR.stdout.trim();
+      }
     }
     if (!vCommit) {
       info(`[${matchRef}] W18: v${V} commit unresolvable (no v${V} tag and no matching release commit) — skipping (best-effort)`);
@@ -1006,7 +1014,10 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
           { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
         const shortSha = shortR.stdout.trim() || "unknown";
         const docNote = docBehind > 0 ? ` (+${docBehind} doc-only)` : "";
-        warn(`[W18] [${matchRef}] installed ${pkgName} v${V} is ${codeBehind} code commit(s) behind origin/${matchBranch} (${shortSha})${docNote} — CLI-behavior fixes merged after v${V} are NOT live: every fire runs the published npm package, not origin/main. An operator must re-publish + agents reinstall, or pin agents to a local build (design landing-observability §9.2).`);
+        const sourceNote = isSourceBuild
+          ? "the installed CLI is a local source build — reinstall from the updated source"
+          : "every fire runs the published npm package, not origin/main. An operator must re-publish + agents reinstall, or pin agents to a local build (design landing-observability §9.2)";
+        warn(`[W18] [${matchRef}] installed ${pkgName} v${V} is ${codeBehind} code commit(s) behind origin/${matchBranch} (${shortSha})${docNote} — CLI-behavior fixes merged after v${V} are NOT live: ${sourceNote}.`);
         return { codeBehind, version: V };
       }
       // codeBehind === 0: all commits are doc-only — silent (no behavior skew)
