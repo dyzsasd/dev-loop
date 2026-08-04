@@ -97,6 +97,35 @@ const tmpResidue = (dir: string) => readdirSync(dir).filter((f) => f.includes(".
   f.db.close();
 }
 
+// ── AC4, byte-exactness: the restore replays the retained BYTES, not a decoded string ──────────
+// The arm above compares an ASCII fixture, so it passes whether the retained Buffer is written back
+// directly or decoded to a string first. This one discriminates: the retained file carries a lone 0x80
+// continuation byte, which is not valid UTF-8. A `Buffer.toString()` round-trip on the compensating path
+// substitutes U+FFFD for it and the restore silently rewrites the file it was rescuing — so the assertion
+// is on the raw bytes, and the fixture is chosen so that a decode is the only way to fail it.
+{
+  const f = fixture();
+  const rawPrior = Buffer.concat([Buffer.from('{"projects":{"keep":{}},"note":"'), Buffer.from([0x80]), Buffer.from('"}\n')]);
+  writeFileSync(f.configPath, rawPrior);
+  ok(Buffer.from(rawPrior.toString(), "utf8").compare(rawPrior) !== 0,
+    "AC4 bytes: the fixture really is undecodable — a string round-trip changes it (guards a vacuous pass)");
+  const rowsBefore = f.rows();
+  let threw: Error | null = null;
+  try {
+    commitBothHalves({
+      configPath: f.configPath,
+      configText: NEW_CONFIG,
+      db: f.db,
+      dbWork: () => { f.db.prepare("DELETE FROM t WHERE k=?").run("doomed"); throw new Error("injected db failure"); },
+    });
+  } catch (e) { threw = e as Error; }
+  ok(threw !== null, "AC4 bytes: the failure still throws");
+  ok(readFileSync(f.configPath).compare(rawPrior) === 0,
+    "AC4 bytes: the config is restored byte-for-byte, with no lossy UTF-8 substitution");
+  ok(f.rows() === rowsBefore, `AC4 bytes: the db half still rolled back (${rowsBefore} rows before, ${f.rows()} after)`);
+  f.db.close();
+}
+
 // ── AC5: the compensating restore ITSELF fails ⇒ one error naming BOTH halves' actual states ────
 // The directory is made read-only from inside dbWork — after the config write has landed, before the
 // throw — so the restore's tmp+rename cannot proceed. This is the one arm where the two halves really do

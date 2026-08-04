@@ -110,7 +110,12 @@ export interface TwoPhase {
 // Write `configPath` through a same-directory tmp + rename, so a reader never observes a partially
 // written file. Same directory is load-bearing: `renameSync` is only atomic within one filesystem, and a
 // half-written `dev-loop.json` is unloadable — it takes the whole workspace down.
-function writeConfigAtomic(configPath: string, text: string): void {
+//
+// Takes `string | Buffer` because the COMPENSATING path restores the exact bytes it retained. Passing the
+// retained Buffer straight through keeps the restore byte-exact; decoding it to a string first would round
+// -trip through UTF-8 and silently substitute U+FFFD for any byte sequence that did not decode — turning a
+// rollback that promises "unchanged" into a quiet corruption of the file it was rescuing.
+function writeConfigAtomic(configPath: string, text: string | Buffer): void {
   const tmp = `${configPath}.tmp-${process.pid}`;
   try {
     writeFileSync(tmp, text);
@@ -146,7 +151,7 @@ export function commitBothHalves(p: TwoPhase): void {
     if (doDb) { try { p.db!.exec("ROLLBACK"); } catch { /* nothing to roll back */ } }
     if (configWritten) {
       try {
-        writeConfigAtomic(p.configPath, priorConfig!.toString());
+        writeConfigAtomic(p.configPath, priorConfig!);
       } catch (restoreErr) {
         // 7. The compensation itself failed. Report BOTH halves' actual states — never a silent success,
         //    and never a message that reports one half's outcome as if it were both.
