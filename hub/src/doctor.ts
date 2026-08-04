@@ -160,6 +160,26 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
     }
     if (!leaked) pass("db files are inside a repo but gitignored");
   }
+  // LOOP-231: also check every configured repo work tree for un-ignored hub.db files.
+  let repoLeakFound = false;
+  if (ws) {
+    for (const [ref, entry] of Object.entries(ws.file.repos)) {
+      const { absPath: repoDir } = effectiveRepo(ws, ref);
+      if (!existsSync(repoDir) || !isGitWorkTree(repoDir)) continue;
+      for (const baseName of ["hub.db", "hub.db-wal", "hub.db-shm"]) {
+        const fullPath = join(repoDir, ".dev-loop", baseName);
+        if (!existsSync(fullPath)) continue;
+        try { execFileSync("git", ["-C", repoDir, "check-ignore", "-q", join(".dev-loop", baseName)], { stdio: "ignore" }); }
+        catch { fail(`${fullPath} is INSIDE a git repo and NOT gitignored — the hub DB must never be committed`); repoLeakFound = true; }
+      }
+    }
+  }
+  // Suppress the reassuring PASS when a repo-level leak was found (a clean data-home does not mean the whole set is safe).
+  if (repoLeakFound && !inRepo) {
+    // Remove the previously printed 'data home is outside any git repo' line by re-printing a warning-level hint.
+    // This is a formatting concession: we can't un-print the pass() line, but we can qualify it.
+    warn(`[W06] the workspace hub.db data home is outside any git repo, but a hub.db was found inside a configured repo — the existing ✅ line above is misleading; follow the ❌ above to fix it.`);
+  }
 
   db.close();
 
@@ -478,7 +498,13 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // artifact carrying every secret VALUE + hub.db (LOOP-210). Extracted to a helper (same pattern as
   // W26) to keep doctorWorkspace's cyclomatic complexity within the CRAP-ratchet budget; see
   // checkGitTreeLeaks.
-  checkGitTreeLeaks(ws.root, warn, info);
+  // LOOP-231: also check every configured repo work tree (same pattern as W19/W26).
+  checkGitTreeLeaks(ws.root, "workspace root", warn, info);
+  for (const ref of Object.keys(ws.file.repos)) {
+    const { absPath: dir } = effectiveRepo(ws, ref);
+    if (existsSync(dir) && isGitWorkTree(dir))
+      checkGitTreeLeaks(dir, `repo '${ref}'`, warn, info);
+  }
 
   // W27 — null-assignee stranded tickets in split-dev (LOOP-244): in a split-dev project a null
   // assignee makes a ticket invisible to every actor's servable slice and to todoDepth. Extracted to
@@ -527,10 +553,10 @@ function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
 // .dev-loop state/reports (I5 neighbor) or an un-ignored bundle artifact (every secret VALUE + hub.db).
 // The reassuring "clean" info line prints ONLY when the whole checked set is ignored — never on a tree it
 // did not measure (the old check asked "is .dev-loop/ ignored?", not "is anything here committable?").
-function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg: string) => void): void {
+function checkGitTreeLeaks(root: string, treeLabel: string, warn: (msg: string) => void, info: (msg: string) => void): void {
   if (!isGitWorkTree(root)) return;
   const devLoopIgnored = isPathIgnored(root, ".dev-loop");
-  if (!devLoopIgnored) warn(`[W06] the workspace root is inside a git work-tree and .dev-loop/ is not gitignored — state/reports could be committed (add .dev-loop/ to .gitignore)`);
+  if (!devLoopIgnored) warn(`[W06] ${treeLabel} is inside a git work-tree and .dev-loop/ is not gitignored — state/reports could be committed (add .dev-loop/ to .gitignore)`);
   // LOOP-210: a bundle artifact (MAGIC header, any --out name, encrypted or plaintext) or the
   // moved.json marker sitting un-ignored in the tree is a secret/state leak a `git add -A` commits.
   const leaks: { path: string; state: "untracked" | "staged" | "committed" | "published" }[] = unignoredBundleArtifacts(root);
@@ -561,9 +587,9 @@ function checkGitTreeLeaks(root: string, warn: (msg: string) => void, info: (msg
     // LOOP-235 review (PRRT_kwDOS6Puk86VoHA7): a marker already in a PUSHED commit must NOT get rewrite
     // advice — rewriting published history won't un-leak it and misdirects the operator; the secret is public.
     if (states.has("published")) fixes.push("for one already in a PUSHED commit, the secret is public — rotate/revoke it and add the path to .gitignore so it is not re-committed; rewriting already-pushed history won't un-leak it");
-    warn(`[W06] the workspace root is inside a git work-tree and these secret/state-bearing artifacts are reachable by the next commit or push (or already pushed): ${names} (a bundle carries every secret VALUE + hub.db — ${fixes.join("; ")})`);
+    warn(`[W06] ${treeLabel} is inside a git work-tree and these secret/state-bearing artifacts are reachable by the next commit or push (or already pushed): ${names} (a bundle carries every secret VALUE + hub.db — ${fixes.join("; ")})`);
   }
-  if (devLoopIgnored && !leaks.length) info("workspace root is inside a git repo but .dev-loop/ is gitignored");
+  if (devLoopIgnored && !leaks.length) info(`${treeLabel} is inside a git repo but .dev-loop/ is gitignored`);
 }
 
 // LOOP-210 — `git check-ignore -q <rel>` inside <root>: exit 0 ⇒ ignored. Best-effort: a non-repo or
