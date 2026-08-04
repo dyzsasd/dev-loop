@@ -3,7 +3,7 @@
 import { realpathSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readLandingState, ticketToPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
+import { readLandingState, ticketToPr, probeTicketPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 
 let fails = 0;
@@ -445,33 +445,79 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ok(annotateTicketLanding("LOOP-28", REPO, exec) === "conflicting", "annotateTicketLanding: CONFLICTING → 'conflicting'");
 }
 
-// Case 29: no PR found → "no-pr"
+// Case 29 (LOOP-274): the GENUINE no-pr — the forge ANSWERED (ok:true) and holds no PR for this
+// ticket. This is the only shape that may yield "no-pr"; cases 30/30b/30c/30d pin the negatives it
+// must NOT be confused with.
 {
   const exec = makeExec([
     [/pr list.*dev-loop\/LOOP-29/, { stdout: "[]" }],
     [/pr list.*--search LOOP-29/, { stdout: "[]" }],
   ]);
-  ok(annotateTicketLanding("LOOP-29", REPO, exec) === "no-pr", "annotateTicketLanding: no PR found → 'no-pr'");
+  ok(annotateTicketLanding("LOOP-29", REPO, exec) === "no-pr", "annotateTicketLanding: forge reachable + empty result → 'no-pr'");
 }
 
-// Case 30: exec returns ok:false → "no-pr" (ticketToPr can't distinguish auth error from absent PR)
+// Case 30 (LOOP-274, was asserting the defect): exec ok:false → "unknown", NOT "no-pr".
+// "no-pr" is what tells a verifier the increment never landed; an auth failure must never say that.
 {
   const failExec: ExecFn = () => ({ stdout: "", stderr: "auth error", ok: false });
   let threw = false;
   let result: string = "threw";
   try { result = annotateTicketLanding("LOOP-30", REPO, failExec); } catch { threw = true; }
   ok(!threw, "annotateTicketLanding: exec ok:false never throws");
-  ok(result === "no-pr", `annotateTicketLanding: exec ok:false → 'no-pr' (ticketToPr returns null, got '${result}')`);
+  ok(result === "unknown", `annotateTicketLanding: exec ok:false → 'unknown' (could not ask ≠ no PR, got '${result}')`);
 }
 
-// Case 30b: exec throws → "no-pr" (ticketToPr's own catch converts throw to null; never propagates)
+// Case 30b (LOOP-274, was asserting the defect): exec throws (gh absent) → "unknown", NOT "no-pr".
 {
   const throwExec: ExecFn = () => { throw new Error("ENOENT: spawn gh"); };
   let threw = false;
   let result: string = "threw";
   try { result = annotateTicketLanding("LOOP-30b", REPO, throwExec); } catch { threw = true; }
   ok(!threw, "annotateTicketLanding: exec throw never propagates");
-  ok(result === "no-pr", `annotateTicketLanding: exec throws → 'no-pr' (ticketToPr catches + returns null, got '${result}')`);
+  ok(result === "unknown", `annotateTicketLanding: exec throws → 'unknown' (could not ask ≠ no PR, got '${result}')`);
+}
+
+// Case 30c (LOOP-274): the MIXED probe — the branch-convention lookup FAILED, the text search
+// answered and found nothing. Not a confident negative: the two probes cover different ground, so a
+// PR named dev-loop/<id> whose text omits the id was never checked. Must be "unknown".
+{
+  const exec: ExecFn = (args) => args.includes("--head")
+    ? { stdout: "", stderr: "server error", ok: false }
+    : { stdout: "[]", stderr: "", ok: true };
+  ok(annotateTicketLanding("LOOP-30c", REPO, exec) === "unknown",
+    "annotateTicketLanding: primary probe failed + search empty → 'unknown' (not a confident negative)");
+}
+
+// Case 30d (LOOP-274): the forge exits 0 with unparseable JSON — we could not read the answer,
+// so it is "unknown", not a negative.
+{
+  const exec: ExecFn = () => ({ stdout: "not json", stderr: "", ok: true });
+  let threw = false;
+  let result: string = "threw";
+  try { result = annotateTicketLanding("LOOP-30d", REPO, exec); } catch { threw = true; }
+  ok(!threw, "annotateTicketLanding: unparseable forge JSON never throws");
+  ok(result === "unknown", `annotateTicketLanding: unparseable forge JSON → 'unknown' (got '${result}')`);
+}
+
+// Case 30e (LOOP-274): probeTicketPr's own contract — the fact ticketToPr projects away.
+// Both callers must agree on the PR itself while only the probe carries reachability.
+{
+  const okEmpty: ExecFn = () => ({ stdout: "[]", stderr: "", ok: true });
+  const p1 = probeTicketPr(REPO, "LOOP-30e", { exec: okEmpty });
+  ok(p1.pr === null && p1.reachable === true, "probeTicketPr: forge answered, no PR → {pr:null, reachable:true}");
+
+  const failExec: ExecFn = () => ({ stdout: "", stderr: "auth error", ok: false });
+  const p2 = probeTicketPr(REPO, "LOOP-30e", { exec: failExec });
+  ok(p2.pr === null && p2.reachable === false, "probeTicketPr: exec ok:false → {pr:null, reachable:false}");
+
+  const throwExec: ExecFn = () => { throw new Error("ENOENT"); };
+  const p3 = probeTicketPr(REPO, "LOOP-30e", { exec: throwExec });
+  ok(p3.pr === null && p3.reachable === false, "probeTicketPr: exec throws → {pr:null, reachable:false}");
+
+  const found = makeExec([[/pr list.*dev-loop\/LOOP-30e/, { stdout: PR_LIST_OPEN }]]);
+  const p4 = probeTicketPr(REPO, "LOOP-30e", { exec: found });
+  ok(p4.pr?.pr === 7 && p4.reachable === true, "probeTicketPr: PR found → {pr:7, reachable:true}");
+  ok(ticketToPr(REPO, "LOOP-30e", { exec: found })?.pr === 7, "ticketToPr: unchanged projection of probeTicketPr.pr");
 }
 
 // Case 31: pr view fails → "unknown"
