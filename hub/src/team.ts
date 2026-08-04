@@ -25,6 +25,7 @@ function usage(): void {
   set-model       one-command model switch: <agent> <model> [--project k] [--effort e] [--team-default]
                   (validated write + opencode.json re-sync for registry providers + restart pointer)
   remove-project  drop a 0-ticket/0-repo project from config + hub.db [--force bypasses safety guard]
+                  (--dry-run reports what it would remove and mutates nothing; unknown flags are refused)
 
 Run \`dev-loop team <sub> --help\` for each.`);
 }
