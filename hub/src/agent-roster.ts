@@ -8,14 +8,23 @@ import { AGENT_HANDLES } from "./seed.ts";
 type Agent = (typeof AGENT_HANDLES)[number];
 
 // Documented `--agents` set aliases (run-agents.ts --help): comma tokens expand through these.
-export const AGENT_GROUPS: Record<string, Agent[]> = {
+//
+// NULL-PROTOTYPE, deliberately (LOOP-269). Both readers look a caller-supplied token up as
+// `AGENT_GROUPS[name]` — here at parseAgentSpec, and at run-agents.ts expandAgentSpec. On an ordinary
+// object literal every `Object.prototype` key (`constructor`, `toString`, `__proto__`, `valueOf`,
+// `hasOwnProperty`, `isPrototypeOf`) resolves truthy to an INHERITED value, and the `push(...)` spread
+// that follows then throws `TypeError: Spread syntax requires ...iterable` instead of refusing. The
+// fix belongs on the TABLE, not on each reader: an own-property check at one call site leaves the
+// other — and the next one — open, whereas a table with no prototype has no inherited key to find.
+// If you ever copy these entries into a plain object, you re-open the hole for that copy's readers.
+export const AGENT_GROUPS: Record<string, Agent[]> = Object.assign(Object.create(null) as Record<string, Agent[]>, {
   core: ["pm", "qa", "senior-dev", "junior-dev", "sweep"],
   split: ["pm", "qa", "senior-dev", "junior-dev", "sweep"],
   legacy: ["pm", "qa", "dev", "sweep"],
   "single-dev": ["pm", "qa", "dev", "sweep"],
   outward: ["ops", "architect", "communication"],
   all: ["pm", "qa", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "communication"],
-};
+} satisfies Record<string, Agent[]>);
 
 const AGENT_SET = new Set<string>(AGENT_HANDLES);
 
@@ -26,6 +35,9 @@ const AGENT_SET = new Set<string>(AGENT_HANDLES);
 // `run --agents <spec>` argv element, and a `--force`/`-x` token must never smuggle an option there,
 // even though the unknown-token check below would also catch it. Mirrors run-agents.ts
 // expandAgentSpec (same expansion, same empty-token tolerance) minus its process-exiting die().
+// TOTAL on its input (LOOP-269): no string makes it throw — every reject is a `null` return. A
+// validator on a tamper boundary that refuses by crashing cannot say WHAT it refused, and the caller's
+// `die()` (bundle.ts, naming `run.agents`) never runs. See AGENT_GROUPS above for how that is held.
 export function parseAgentSpec(spec: string): Agent[] | null {
   if (typeof spec !== "string") return null;
   const out: Agent[] = [];
