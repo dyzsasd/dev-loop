@@ -98,6 +98,76 @@ try {
   ok(r5.assignee === "senior-dev", "insert: null assignee + junior-dev label → retiered assignee to senior-dev");
   ok(retierEvents(id5).length === 1, "insert: issue.retier event logged for null assignee case");
 
+  //
+  // ── LOOP-223: tier restore — null-assignee Todo tickets get assignee from tier label ──
+  //
+  // Helper: query issue.restore events for a ticket
+  const restoreEvents = (id: string): Array<{ data: string }> =>
+    db.prepare("SELECT data FROM events WHERE ticket_id=? AND kind='issue.restore'").all(id) as Array<{ data: string }>;
+
+  // AC1: Todo + null assignee + exactly one dev-tier label → restored from label
+  const ac1Id = insertTicket(db, "p", "pm", newFields({ assignee: null, labels: ["junior-dev"] }), {});
+  const ac1r = row(ac1Id);
+  ok(ac1r.assignee === "junior-dev", "LOOP-223 AC1: insert Todo+null+junior-dev label → assignee restored from label");
+  ok(JSON.parse(ac1r.labels).includes("junior-dev"), "LOOP-223 AC1: junior-dev label preserved after restore");
+  const ac1ev = restoreEvents(ac1Id);
+  ok(ac1ev.length === 1, "LOOP-223 AC1: issue.restore event logged");
+  ok(JSON.parse(ac1ev[0].data).to === "junior-dev", "LOOP-223 AC1: restore event has to=junior-dev");
+
+  // AC1: update path — seed a ticket, then update to Todo+null+junior-dev label
+  const ac1uId = insertTicket(db, "p", "pm", newFields({ assignee: "junior-dev", labels: ["junior-dev"], state: "In Progress" }), {});
+  const ac1u = updateTicketRow(db, "p", "junior-dev", ac1uId, "In Progress",
+    updateFields({ state: "Todo", assignee: null, labels: JSON.stringify(["junior-dev"]) }));
+  ok(ac1u.ok, "LOOP-223 AC1: update to Todo+null+junior-dev label succeeds");
+  const ac1ur = row(ac1uId);
+  ok(ac1ur.assignee === "junior-dev", "LOOP-223 AC1: update Todo assignee restored from label");
+  const ac1uev = restoreEvents(ac1uId);
+  ok(ac1uev.length === 1, "LOOP-223 AC1: update issue.restore event logged");
+
+  // AC1: senior-dev label
+  const ac1sId = insertTicket(db, "p", "pm", newFields({ assignee: null, labels: ["senior-dev"] }), {});
+  ok(row(ac1sId).assignee === "senior-dev", "LOOP-223 AC1: insert Todo+null+senior-dev label → assignee restored to senior-dev");
+  ok(restoreEvents(ac1sId).length === 1, "LOOP-223 AC1: senior-dev restore event logged");
+
+  // AC1: null assignee with no dev-tier labels (pm-owned tracker) → pass through, NOT restored, NOT rejected
+  const ac1pId = insertTicket(db, "p", "pm", newFields({ assignee: null, labels: ["pm"] }), {});
+  ok(row(ac1pId).assignee === null, "LOOP-223 AC1: Todo+null+pm label (no dev tier) → assignee stays null");
+  ok(restoreEvents(ac1pId).length === 0, "LOOP-223 AC1: no restore event for non-dev-tier ticket");
+
+  // AC2 (amended): more than one dev-tier label → rejected with error message
+  const ac2a = updateTicketRow(db, "p", "pm", ac1uId, "Todo",
+    updateFields({ state: "Todo", assignee: null, labels: JSON.stringify(["junior-dev", "senior-dev"]) }));
+  ok(!ac2a.ok, "LOOP-223 AC2: update Todo+null+junior-dev&senior-dev labels → REJECTED (ambiguous)");
+  ok(!ac2a.ok && /junior-dev.*senior-dev/.test(ac2a.error), "LOOP-223 AC2: rejection names the conflicting labels");
+
+  // AC2 (amended): zero dev-tier labels on Todo+null (pm/qa tracker shape → e.g. LOOP-277) → succeeds, assignee stays null
+  const ac2z = updateTicketRow(db, "p", "pm", ac1uId, "Todo",
+    updateFields({ state: "Todo", assignee: null, labels: JSON.stringify(["pm"]) }));
+  ok(ac2z.ok, "LOOP-223 AC2: Todo+null+pm label (zero dev-tier) → succeeds (tracker shape unblocked)");
+  ok(row(ac1uId).assignee === null, "LOOP-223 AC2: assignee stays null for zero-dev-tier tracker");
+
+  // AC3: legacy (non-split) project — null assignee + Todo is servable by dev, so no restoration needed
+  // Create a separate DB without split-dev actors, simulating a legacy project
+  const db3 = openDb(join(ROOT, "hub3.db"));
+  db3.prepare("INSERT INTO actors(id,handle,kind,display_name,created_at) VALUES(?,?,?,?,?)").run("dev", "dev", "agent", "dev", "2024-01-01T00:00:00Z");
+  db3.prepare("INSERT INTO actors(id,handle,kind,display_name,created_at) VALUES(?,?,?,?,?)").run("pm3", "pm", "human", "pm", "2024-01-01T00:00:00Z");
+  db3.prepare("INSERT INTO projects(id,key,name,created_at) VALUES(?,?,?,?)").run("p3", "LG", "legacy", "2024-01-01T00:00:00Z");
+  const ac3Id = insertTicket(db3, "p3", "pm3", newFields({ assignee: null, labels: [] }), {});
+  const ac3r = db3.prepare("SELECT assignee FROM tickets WHERE id=?").get(ac3Id) as { assignee: string | null };
+  ok(ac3r.assignee === null, "LOOP-223 AC3: legacy project — Todo+null+no tier labels → assignee stays null (legacy dev servability)");
+  db3.close();
+
+  // AC4: LOOP-175 reproduction — assign junior-dev, move to In Progress, then orphan-reset to Todo (clear assignee)
+  const ac4Id = insertTicket(db, "p", "pm", newFields({ assignee: "junior-dev", labels: ["junior-dev"], state: "In Progress" }), {});
+  const ac4Reset = updateTicketRow(db, "p", "junior-dev", ac4Id, "In Progress",
+    updateFields({ state: "Todo", assignee: null, labels: JSON.stringify(["junior-dev"]) }));
+  ok(ac4Reset.ok, "LOOP-223 AC4: orphan-reset (Todo+null+junior-dev) succeeds");
+  // After the reset, the ticket must still be servable by junior-dev
+  const { servableSlice } = await import("../src/servable.ts");
+  const slice = servableSlice(db, "p", "junior-dev");
+  const inSlice = slice.todo.find((t) => t.id === ac4Id);
+  ok(!!inSlice, "LOOP-223 AC4: orphan-reset ticket is in junior-dev's servable todo slice");
+  ok(inSlice?.assignee === "junior-dev", "LOOP-223 AC4: servable ticket has assignee=junior-dev");
   // ── updateTicketRow: sensitive + junior-dev → retier to senior-dev ─────────────
   // Seed a ticket first, then update with sensitive+junior-dev labels
   const idU = insertTicket(db, "p", "pm", newFields({ state: "In Progress" }), {});
@@ -132,9 +202,9 @@ try {
   const rU3 = row(idU3);
   ok(rU3.assignee === null, "update: gate rejection writes nothing (row unchanged after gate trip)");
 
+  //
   // ── LOOP-157: the two-hop self-accept — a builder tier cannot self-verify its own qa/pm-owned work ──────────
-  // The DL-77 direct-edge check (In Progress → Done) was defeated by splitting the self-accept into two legal
-  // calls (In Progress → In Review → Done, both from the ticket's own builder). The gate now also rejects the
+
   // In Review → Done close when the acting actor is a dev tier AND the ticket carries a qa/pm verifier-owner label.
   const stateOf = (id: string): string =>
     (db.prepare("SELECT state FROM tickets WHERE id=?").get(id) as { state: string }).state;
