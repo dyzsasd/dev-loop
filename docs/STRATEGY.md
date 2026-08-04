@@ -679,6 +679,59 @@ than papered over: **the tier with capacity has no queue, and the tier with a 65
 no capacity.**
 
 
+### 2026-08-04 (pm, thirty-sixth fire): the ship step has no gate, and a gate split across two owners is completed by neither
+
+**Job A found a correct diff that had never been committed.** LOOP-31 (the `/activity` parked-tile
+reconciliation) was handed to PM `In Review`. The code was good, and that was established by
+measurement rather than by reading the handoff note: its 10 new checks pass, and the suite's
+failure count against a clean `385dab6` tree is 1 both with and without the diff, so it introduced
+no regression. What it did not have was a branch, a commit, or a PR, on a repo whose `landing` is
+`"pr"` with two required checks. The running board still rendered the pre-fix `blocked now` tile,
+and the daemon serves a build tree at `838b19e` that contains none of the new code. The changes
+existed only as uncommitted edits in the shared main checkout.
+
+**The same junior-dev fire (`06bcb943`) did it twice** — LOOP-294 was handed to QA in the same
+condition twelve minutes later, its two files interleaved with LOOP-31's in one `git status`, so
+neither was separable by `git add -A` without capturing the other's unverified work. Both diffs
+were extracted to `.dev-loop/loop/salvage/` and confirmed to apply clean to `385dab6` before
+anything was closed, so the verify-fail cost the loop no work.
+
+**This is the delivery axis, and nothing measures it.** `dev-loop queue` already annotates verify
+items `landing: "no-pr"` — LOOP-111's work, and it was correct on both tickets. It is advisory:
+rendered on the *verifier's* fire, after the fact, with nothing refusing or routing on it. The
+distinction that makes it gateable is that **a commit is a local fact and a PR is a forge fact**:
+`git log --all --grep=<id>` answers offline, so a gate keyed on commits cannot reproduce LOOP-274's
+hazard (a forge outage reported as `no-pr`). Filed as LOOP-309.
+
+**The §21a design gate on LOOP-302 could not be closed by either actor.** Its pass action is
+specified as one sequence — promote the staged children, then close the parent — but on a
+`Bug`-typed parent those halves have different owners: `Backlog → Todo` is a PM-only valve (§5a),
+while `In Review → Done` is refused to anyone but the `qa` owner. PM promoted all three
+`sensitive` children, then took `exit 1` on the close. The refusal is correct and loud; the gate
+is what is under-specified. Senior-dev had anticipated it and written a routing comment, which is
+the only reason three children did not strand. Filed as LOOP-310, product half only — the §21a
+wording is a §17 governing file and rides an operator-applied proposal.
+
+**LOOP-228 had been unpickable for four days at `priority 1`.** The operator's cost-compression
+direction ticket carried a `junior-dev` **label** with a **null assignee**; on this backend the
+tier filter is the assignee, so neither tier could pick it, and it counted as `(none)` in
+`todoDepth` rather than as tier pressure. Re-tiered to `senior-dev` on the operator's own written
+instruction in the ticket body ("route the design through §21a senior") — an explicit signal, not
+an inference.
+
+**The tier imbalance reported last fire has closed, and not by re-tiering.** Last fire recorded
+senior-dev at 6/10 with an all-junior 65-deep Backlog: the tier with capacity had no queue. This
+fire senior-dev reached 10/10 through legitimately senior-tiered work — three `sensitive` design
+children, one §3 escalation, and the operator-routed program ticket. Both tiers are now at
+`intake.todoDepthCap`, so promotion stops until the queue drains, which is the cap working as
+designed rather than a bottleneck.
+
+**Doc size, unresolved:** `docs/STRATEGY.md` is now 126 KB against §20's ~20 KB rollup threshold.
+LOOP-282 (`Backlog`, P1) owns putting a budget and a doctor code on it; noted here as a standing
+fact so the next rollup is not deferred silently again.
+
+
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -1270,6 +1323,37 @@ no capacity.**
   immediately on the other two (LOOP-252, LOOP-253) — so the standing test is now per-axis, and
   "is this host up to date" is not answerable by `dev-loop --version` alone.
 
+
+- **2026-08-04 (pm, thirty-sixth fire) — a commit is a local fact and a PR is a forge fact, so the
+  ship step can be gated without a network.** Two tickets reached `In Review` in one fire with no
+  commit anywhere, under a repo configured `landing: "pr"`. The obvious gate — refuse a handoff
+  with no PR — is unsafe, because LOOP-274 already documents `annotateTicketLanding` reporting a
+  forge outage as `no-pr`; that gate would block every handoff whenever `gh` is unreachable. The
+  usable predicate is the local one: `git log --all --grep=<ticket-id>` is deterministic, offline,
+  and cannot be wrong about whether work was committed. **STANDING: when a check has both a local
+  and a remote formulation, gate on the local one and annotate the remote one.** LOOP-309 is
+  written to that split, and carries an explicit AC that a handoff with a real commit still
+  succeeds with `gh` off `PATH`.
+
+- **2026-08-04 (pm, thirty-sixth fire) — a verified diff and a delivered increment are measured on
+  different axes, and passing one says nothing about the other.** LOOP-31's code passed every
+  check it claimed and introduced no regression; it was still a verify-fail, because no acceptance
+  criterion is observable on a product that never received the change. The correct sequence is to
+  establish the delivery fact first — branch, commit, PR, and what the running env actually serves
+  — and only then spend a fire on the code. Doing it in that order this fire produced a verify-fail
+  comment that explicitly certifies the diff as good, so the escalation (LOOP-308) starts from the
+  salvaged patch rather than re-deriving it. **STANDING: verify delivery before correctness; a
+  handoff note locates the change and never evidences it.**
+
+- **2026-08-04 (pm, thirty-sixth fire) — a workflow step addressed to one actor must be executable
+  by that actor.** §21a tells the design-gate verifier to promote the staged children and then
+  close the parent. On a `Bug`-typed parent, §5a reserves the promotion to PM and the verify gate
+  reserves the close to the `qa` owner, so the instruction is not executable as written by either
+  of them, and each ordering has a distinct failure: PM-first leaves the parent `In Review` after
+  the children are released, QA-first strands the children in `Backlog` with no gate left to fire
+  on them. It held this time only because senior-dev wrote a routing comment by hand.
+  **STANDING: when a documented action crosses an authority boundary, name both actors and the
+  ordering in the spec, rather than relying on the filer to notice.**
 
 
 ## Candidate ideas
