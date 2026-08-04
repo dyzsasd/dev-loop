@@ -9,13 +9,16 @@
 // The budget authority is the BUDGETS table in hub/src/context-bill.ts (not the template doc — see
 // the note there); lessons budgets stay hub/src/lessons.ts's INDEX_MAX_*/SHARD_MAX_* (cited via
 // import by context-bill.ts, deliberately not re-stated here).
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   BUDGETS, CHEAT_MAX_LINES, CONVENTIONS_WARN_BYTES, BYTES_PER_TOKEN, type Bill,
+  STRATEGY_DOC_READERS,
   citedAnchors, contextBill, conventionsLoad, malformedRefs, measureOf, parseConventions,
   parseSectionsLine, pluginRoot, spanMeasure, splitSkill,
+  strategyDocRelPath,
+  tryResolveStrategyDocStat,
 } from "../src/context-bill.ts";
 import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "../src/lessons.ts";
 
@@ -156,16 +159,170 @@ const bill = contextBill(root);
 ok(bill.rows.length === skillDirs.length, `bill has one row per skill (${bill.rows.length})`);
 ok(bill.rows.every((r, i) => i === 0 || bill.rows[i - 1].total.bytes >= r.total.bytes), "bill rows sorted by total bytes, descending");
 for (const r of bill.rows) {
-  const sum = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes;
+  // strategyDoc is null in the no-stat call — include it in sum for generality (0 when null)
+  const sdBytes = r.strategyDoc?.bytes ?? 0;
+  const sdLines = r.strategyDoc?.lines ?? 0;
+  const sum = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes + sdBytes;
   ok(r.total.bytes === sum && r.tokens === Math.ceil(sum / BYTES_PER_TOKEN),
-    `${r.skill}: total = prose+cheat+conventions+lessons (${sum}B), ~tokens at ${BYTES_PER_TOKEN}B/token (${r.tokens})`);
-  ok(r.total.lines === r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines, `${r.skill}: line total adds up`);
+    `${r.skill}: total = prose+cheat+conventions+lessons+strategyDoc (${sum}B), ~tokens at ${BYTES_PER_TOKEN}B/token (${r.tokens})`);
+  ok(r.total.lines === r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines + sdLines, `${r.skill}: line total adds up`);
   ok(r.conventions.bytes < bill.conventions.total.bytes,
     `${r.skill}: section-selective boot loads LESS than whole-file conventions (${r.conventions.bytes} < ${bill.conventions.total.bytes}B)`);
   const wantLessons = r.agent ? INDEX_MAX_LINES + SHARD_MAX_LINES : 0;
   ok(r.lessons.lines === wantLessons && r.lessons.bytes === (r.agent ? INDEX_MAX_BYTES + SHARD_MAX_BYTES : 0),
     `${r.skill}: lessons billed at the lessons.ts caps (${r.agent ? "agent: INDEX+shard" : "setup: none"})`);
   ok(r.withinBudget, `${r.skill}: bill row reports within-budget`);
+  // strategyDoc is null for all agents when no stat is passed (no workspace in test runner)
+  ok(r.strategyDoc === null, `${r.skill}: strategyDoc is null when no stat passed to contextBill()`);
+}
+
+// ── 5b. Strategy-doc attribution (LOOP-263) ─────────────────────────────────────────────────────────
+// Seeds a known-size stat and verifies it is charged to mandated readers, excluded from others.
+// This block MUST FAIL against code that ignores the second contextBill() argument.
+{
+  const FIXTURE_BYTES = 50_000;
+  const FIXTURE_LINES = 1_000;
+  const fixtureDoc = { bytes: FIXTURE_BYTES, lines: FIXTURE_LINES, label: "docs/STRATEGY.md" };
+  const billWithDoc = contextBill(root, fixtureDoc);
+
+  ok(billWithDoc.rows.length === skillDirs.length, `strategy-doc fixture: bill still has one row per skill`);
+  ok(billWithDoc.strategyDoc?.bytes === FIXTURE_BYTES, `strategy-doc fixture: Bill.strategyDoc carries the passed stat`);
+
+  for (const r of billWithDoc.rows) {
+    const isReader = STRATEGY_DOC_READERS.has(r.skill);
+    const baseBytes = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes;
+    const baseLines = r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines;
+    if (isReader) {
+      ok(r.strategyDoc !== null && r.strategyDoc.bytes === FIXTURE_BYTES,
+        `${r.skill} (reader): strategyDoc field is the fixture stat (LOOP-263)`);
+      ok(r.total.bytes === baseBytes + FIXTURE_BYTES,
+        `${r.skill} (reader): total includes strategyDoc bytes (${baseBytes}+${FIXTURE_BYTES}) (LOOP-263)`);
+      ok(r.total.lines === baseLines + FIXTURE_LINES,
+        `${r.skill} (reader): total includes strategyDoc lines (LOOP-263)`);
+    } else {
+      ok(r.strategyDoc === null,
+        `${r.skill} (non-reader): strategyDoc null — not charged the strategy doc (LOOP-263)`);
+      ok(r.total.bytes === baseBytes,
+        `${r.skill} (non-reader): total unchanged by strategy doc fixture (LOOP-263)`);
+    }
+  }
+}
+
+// ── 5c. strategyDocRelPath unit coverage (LOOP-263 quality gate — CRAP threshold) ────────
+// Direct tests for strategyDocRelPath to bring its coverage > 0% (CC=10 → CRAP=110 at 0% cov).
+{
+  const r = strategyDocRelPath; // alias for readability
+  // string cases
+  ok(r("docs/STRATEGY.md") === "docs/STRATEGY.md", "strategyDocRelPath: plain repo-relative path");
+  ok(r("  docs/STRATEGY.md  ") === "docs/STRATEGY.md", "strategyDocRelPath: trims whitespace");
+  ok(r(" \t") === null, "strategyDocRelPath: whitespace-only string → null");
+  ok(r("https://linear.app/team/document/abc123") === null, "strategyDocRelPath: Linear URL → null");
+  // object cases
+  ok(r({ hubDoc: "design/my-design" }) === null, "strategyDocRelPath: hubDoc object → null");
+  ok(r({ linearDocument: "doc-id" }) === null, "strategyDocRelPath: linearDocument object → null");
+  ok(r({ path: "docs/STRATEGY.md" }) === "docs/STRATEGY.md", "strategyDocRelPath: path object → path string");
+  ok(r({ path: "" }) === null, "strategyDocRelPath: path object with empty path → null");
+  ok(r({}) === null, "strategyDocRelPath: object without path → null");
+  // null/unknown cases
+  ok(r(null) === null, "strategyDocRelPath: null → null");
+  ok(r(42) === null, "strategyDocRelPath: number → null");
+  ok(r(undefined) === null, "strategyDocRelPath: undefined → null");
+}
+
+// ── 5d. tryResolveStrategyDocStat integration coverage (LOOP-263 quality gate — CRAP threshold) ────
+// Exercises the full function against a temp workspace fixture to bring branch coverage > 23%.
+{
+  const tmp = join(existsSync("/tmp") ? "/tmp" : "/dev/shm", `context-bill-test-${Date.now()}`);
+  const repoDir = "my-repo";
+  const repoAbs = join(tmp, repoDir);
+  mkdirSync(repoAbs, { recursive: true });
+  const fixtureDocRel = "docs/STRATEGY.md";
+  const fixtureDocAbs = join(repoAbs, fixtureDocRel);
+  mkdirSync(join(repoAbs, "docs"), { recursive: true });
+  const FIXTURE_CONTENT = "# Strategy\nline1\nline2\n";
+  writeFileSync(fixtureDocAbs, FIXTURE_CONTENT, "utf8");
+  const fixtureLines = 3;
+  const fixtureBytes = Buffer.byteLength(FIXTURE_CONTENT, "utf8");
+  writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    workspaceId: "test-fixture",
+    team: { key: "test", backend: "service" },
+    repos: { "my-repo": { path: "my-repo" } },
+    projects: {
+      test: {
+        repos: [{ ref: "my-repo" }],
+        strategyDoc: fixtureDocRel,
+      },
+    },
+  }), "utf8");
+  // 5d-1: file-found path
+  const stat = tryResolveStrategyDocStat(tmp);
+  ok(stat !== undefined && stat !== null, "tryResolveStrategyDocStat: returns a stat (not undefined)");
+  ok(stat!.bytes === fixtureBytes && stat!.lines === fixtureLines,
+    `tryResolveStrategyDocStat: stat matches fixture (${stat!.bytes}B/${stat!.lines}L, expected ${fixtureBytes}B/${fixtureLines}L)`);
+  ok(stat!.label === fixtureDocRel, `tryResolveStrategyDocStat: label is the relPath (${stat!.label})`);
+  // 5d-2: hubDoc form → absent (0 bytes)
+  writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    workspaceId: "test-fixture",
+    team: { key: "test", backend: "service" },
+    repos: { "my-repo": { path: "my-repo" } },
+    projects: {
+      test: {
+        repos: [{ ref: "my-repo" }],
+        strategyDoc: { hubDoc: "design/my-design" },
+      },
+    },
+  }), "utf8");
+  const hubStat = tryResolveStrategyDocStat(tmp);
+  ok(hubStat?.bytes === 0 && hubStat?.lines === 0, "tryResolveStrategyDocStat: hubDoc form → 0 bytes (absent)");
+  ok(hubStat!.label.includes("hubDoc"), "tryResolveStrategyDocStat: hubDoc form label mentions 'hubDoc'");
+  // 5d-3: linearDocument form → absent (0 bytes)
+  writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    workspaceId: "test-fixture",
+    team: { key: "test", backend: "service" },
+    repos: { "my-repo": { path: "my-repo" } },
+    projects: {
+      test: {
+        repos: [{ ref: "my-repo" }],
+        strategyDoc: { linearDocument: "doc-123" },
+      },
+    },
+  }), "utf8");
+  const linStat = tryResolveStrategyDocStat(tmp);
+  ok(linStat?.bytes === 0 && linStat?.label.includes("linearDoc"), "tryResolveStrategyDocStat: linearDocument form → absent");
+  // 5d-4: absent file → absent (0 bytes)
+  writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    workspaceId: "test-fixture",
+    team: { key: "test", backend: "service" },
+    repos: { "my-repo": { path: "my-repo" } },
+    projects: {
+      test: {
+        repos: [{ ref: "my-repo" }],
+        strategyDoc: "docs/NONEXISTENT.md",
+      },
+    },
+  }), "utf8");
+  const notFound = tryResolveStrategyDocStat(tmp);
+  ok(notFound?.bytes === 0 && notFound?.label.includes("not found"), "tryResolveStrategyDocStat: missing file → absent");
+  // 5d-5: no strategyDoc at all → loop falls through → undefined
+  writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    workspaceId: "test-fixture",
+    team: { key: "test", backend: "service" },
+    repos: { "my-repo": { path: "my-repo" } },
+    projects: {
+      test: { repos: [{ ref: "my-repo" }] },
+    },
+  }), "utf8");
+  ok(tryResolveStrategyDocStat(tmp) === undefined, "tryResolveStrategyDocStat: no strategyDoc → undefined");
+  // 5d-6: no workspace → undefined
+  const noWs = tryResolveStrategyDocStat("/tmp/nonexistent-dir-12345");
+  ok(noWs === undefined, "tryResolveStrategyDocStat: no workspace → undefined");
+  // Cleanup
+  rmSync(tmp, { recursive: true, force: true });
 }
 
 // ── 6. CLI e2e: `metrics --context` needs NO workspace (plugin-static; the doctor/metrics call) ────
