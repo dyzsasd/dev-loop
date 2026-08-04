@@ -276,7 +276,7 @@ for (const r of bill.rows) {
   }), "utf8");
   const hubStat = tryResolveStrategyDocStat(tmp);
   ok(hubStat?.bytes === 0 && hubStat?.lines === 0, "tryResolveStrategyDocStat: hubDoc form → 0 bytes (absent)");
-  ok(hubStat?.label.includes("hubDoc"), "tryResolveStrategyDocStat: hubDoc form label mentions 'hubDoc'");
+  ok(hubStat!.label.includes("hubDoc"), "tryResolveStrategyDocStat: hubDoc form label mentions 'hubDoc'");
   // 5d-3: linearDocument form → absent (0 bytes)
   writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
     schemaVersion: 2,
