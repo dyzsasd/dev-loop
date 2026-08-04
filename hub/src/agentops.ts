@@ -44,6 +44,7 @@ import { channelRegister, channelSend, channelPoll, channelAck, channelStatus, s
 // DL-22 reject from labelstore. mirror.push is ASYNC (Linear network / dryrun build) → agentOp returns a Promise.
 import { mirrorPush, mirrorStatus, mirrorPollComments, type MirrorPushArgs, type MirrorPollArgs } from "./mirrorstore.ts";
 import { createLabel, listLabels, getProject } from "./labelstore.ts";
+import { dependencyGraph } from "./dependency-graph.ts";
 
 export interface OpResult { status: number; body: unknown }
 const okR = (body: unknown): OpResult => ({ status: 200, body });
@@ -619,6 +620,12 @@ export function resolveProjectOverride(db: DatabaseSync, bootedProjectId: string
   return { ok: true, projectId: row.id, projectKey: row.key };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function opDependencyGraph(db: any, projectId: string): OpResult {
+  return okR(dependencyGraph(db, projectId));
+}
+
+// Dispatch one op. `db` is the WRITABLE connection for the write ops (save_issue/save_comment) and may be
 // Dispatch one op. `db` is the WRITABLE connection for the write ops (save_issue/save_comment) and may be
 // the daemon's query_only read connection for the read ops — the daemon passes the right one per op. `actor`
 // is already resolved+validated by the daemon (the G1 guard). `args` is the parsed JSON body (a non-object
@@ -657,5 +664,6 @@ export function agentOp(op: AgentOp, db: DatabaseSync, projectId: string, projec
     case "create_issue_label": return opCreateLabel(db, projectId, actor, args as { name?: unknown; kind?: unknown });
     case "get_project": return opGetProject(db, projectId);
     case "queue": return opQueue(db, projectId, actor);
+    case "dependency_graph": return opDependencyGraph(db, projectId);
   }
 }

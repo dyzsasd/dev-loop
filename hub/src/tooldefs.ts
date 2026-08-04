@@ -31,6 +31,7 @@ export const TOOL_NAMES = [
   "channel.register", "channel.send", "channel.poll", "channel.ack", "channel.status",
   "mirror.push", "mirror.pollComments", "mirror.status", "list_issue_labels", "create_issue_label", "get_project",
   "queue",
+  "dependency_graph",
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -73,6 +74,10 @@ const DEFS: Record<ToolName, { description: string; inputSchema: z.ZodRawShape }
     inputSchema: {},
   },
   list_events: { description: "Recent attribution/audit events (who did what). Pass ticketId to get one ticket's history (transitions, comments, label changes) newest-first.", inputSchema: { ticketId: z.string().optional(), limit: z.number().int().positive().max(500).optional() } },
+  dependency_graph: {
+    description: "Read-only dependency-graph surface: for each open `blocked` ticket, its live blockers; reverse transitive fan-out (a blocker → all tickets it gates, directly and transitively); and integrity flags: `dangling` (blocker id nonexistent), `unpark-eligible` (every live blocker terminal), `cyclic` (A→…→A), `no-edge` (blocked label but zero blocker edges). Built on the canonical parser (hub/src/blocked-by.ts) — no new marker regex. Design R3: reported only, no enforcement.",
+    inputSchema: {},
+  },
 
   "doc.list": { description: "List this project's documents (no bodies).", inputSchema: { kind: z.string().optional() } },
   "doc.get": {
