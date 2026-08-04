@@ -36,33 +36,59 @@ export function prToTicket(headRefName: string, opts?: { title?: string; body?: 
   return fallback ? fallback[0]! : null;
 }
 
-// Look up the PR for a given ticket id in a GitHub repo.
-// Primary: gh pr list --head dev-loop/<id> (the branch convention).
-// Fallback: gh pr list --search <id> filtered through prToTicket for a TICKET_RE match.
-// Returns null on any forge failure or when no PR exists — never throws.
-export function ticketToPr(
+// The ticket→PR lookup, with the fact `ticketToPr` throws away: whether the forge ANSWERED.
+// `pr:null` alone is two different facts — "the forge said this ticket has no PR" and "I could not
+// ask the forge" — and collapsing them let a `gh` outage report every ticket as `no-pr`, i.e. as
+// positive evidence its increment never landed (LOOP-274; LOOP-111 AC3). `reachable` separates them:
+//   reachable:true , pr:X    → the forge answered: this is the PR
+//   reachable:true , pr:null → the forge answered: no PR exists (a confident negative)
+//   reachable:false, pr:null → could not ask (exec threw, exited non-zero, or returned unparseable JSON)
+// This is the single authority for the lookup; `ticketToPr` is its pr-only projection, so the two can
+// never drift into disagreeing about what a null means.
+export interface TicketPrProbe {
+  pr: { pr: number; url: string; state: string } | null;
+  reachable: boolean;
+}
+
+export function probeTicketPr(
   ghRepo: string,
   ticketId: string,
   opts?: { exec?: ExecFn },
-): { pr: number; url: string; state: string } | null {
+): TicketPrProbe {
   const exec = opts?.exec ?? defaultGhExec;
   try {
     const primary = exec(["pr", "list", "--repo", ghRepo, "--state", "all", "--head", `dev-loop/${ticketId}`, "--json", "number,url,state"]);
     if (primary.ok) {
       const prs = JSON.parse(primary.stdout) as Array<{ number: number; url: string; state: string }>;
-      if (prs.length > 0) return { pr: prs[0]!.number, url: prs[0]!.url, state: prs[0]!.state };
+      if (prs.length > 0) return { pr: { pr: prs[0]!.number, url: prs[0]!.url, state: prs[0]!.state }, reachable: true };
     }
     // Fallback: search by ticket id text (covers fix/<id>-… and other non-convention branches)
     const search = exec(["pr", "list", "--repo", ghRepo, "--state", "all", "--search", ticketId, "--json", "number,url,state,headRefName,title,body"]);
     if (search.ok) {
       const candidates = JSON.parse(search.stdout) as Array<{ number: number; url: string; state: string; headRefName: string; title: string; body: string }>;
       const match = candidates.find((p) => prToTicket(p.headRefName, { title: p.title, body: p.body }) === ticketId);
-      if (match) return { pr: match.number, url: match.url, state: match.state };
+      if (match) return { pr: { pr: match.number, url: match.url, state: match.state }, reachable: true };
     }
-    return null;
+    // Nothing found. That is only a confident negative when BOTH probes answered: they cover
+    // different ground — primary matches the BRANCH convention, search matches ticket-id TEXT — so a
+    // failed primary leaves branch-named PRs unchecked even when the search came back clean.
+    return { pr: null, reachable: primary.ok && search.ok };
   } catch {
-    return null;
+    return { pr: null, reachable: false };
   }
+}
+
+// Look up the PR for a given ticket id in a GitHub repo.
+// Primary: gh pr list --head dev-loop/<id> (the branch convention).
+// Fallback: gh pr list --search <id> filtered through prToTicket for a TICKET_RE match.
+// Returns null on any forge failure or when no PR exists — never throws. Callers that must tell
+// those two apart use `probeTicketPr` instead; this projection is unchanged by LOOP-274.
+export function ticketToPr(
+  ghRepo: string,
+  ticketId: string,
+  opts?: { exec?: ExecFn },
+): { pr: number; url: string; state: string } | null {
+  return probeTicketPr(ghRepo, ticketId, opts).pr;
 }
 
 export type ExecFn = (args: string[]) => { stdout: string; stderr: string; ok: boolean };
@@ -87,12 +113,15 @@ export const GH_PR_VIEW_ANNOTATION_FIELDS = "state,statusCheckRollup,mergeable";
 // ── Per-ticket landing annotation (LOOP-111, LOOP-89 Child B) ──────────────────
 export type LandingAnnotation = "merged" | "open-green" | "open-red" | "conflicting" | "no-pr" | "unknown";
 
-// Annotate a single ticket's PR landing state: find its PR via ticketToPr, then probe CI + mergeability.
-// Never throws; all forge failures degrade to "unknown". "no-pr" means no PR was found at all.
+// Annotate a single ticket's PR landing state: find its PR via probeTicketPr, then probe CI + mergeability.
+// Never throws; all forge failures degrade to "unknown". "no-pr" is a CONFIDENT negative — the forge
+// answered and holds no PR for this ticket — and is never returned for a forge that could not be
+// asked, because a verifier reads "no-pr" as "this increment never landed" (LOOP-274 / LOOP-111 AC3).
 export function annotateTicketLanding(ticketId: string, ghRepo: string, exec: ExecFn): LandingAnnotation {
   try {
-    const pr = ticketToPr(ghRepo, ticketId, { exec });
-    if (!pr) return "no-pr";
+    const probe = probeTicketPr(ghRepo, ticketId, { exec });
+    const pr = probe.pr;
+    if (!pr) return probe.reachable ? "no-pr" : "unknown";
     if (pr.state === "MERGED") return "merged";
     const r = exec(["pr", "view", String(pr.pr), "--repo", ghRepo, "--json", GH_PR_VIEW_ANNOTATION_FIELDS]);
     if (!r.ok) return "unknown";
