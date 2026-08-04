@@ -65,6 +65,17 @@ ticket), else `gh pr merge --squash --delete-branch`, remove the ticket's worktr
 `In Review`; a FAILED check ⇒ read the CI failure, fix in the worktree, re-push (cap ~2 cycles;
 the 3rd is a `fix-exhausted` block, §9); `DIRTY` ⇒ rebase onto `origin/<defaultBranch>` +
 `--force-with-lease` (unresolvable ⇒ block); pending ⇒ next fire.
+- **Re-freshen a `stale` hold** (`merge-guard --json` `ciFreshness.verdict:"stale"`: green was
+  computed against a base behind the tip, yet CLEAN/`mergeable` — LOOP-242) ⇒ rebase the PR
+  branch onto `origin/<defaultBranch>` + `--force-with-lease` so CI re-runs against the tip;
+  leave it for the next fire. Cap ~2 re-freshens per PR (the 3rd is a `fix-exhausted` block,
+  §9). NEVER re-freshen a PR merge-guard holds for review (`forgeReview.trip`) or `boardState`
+  — a held PR is the author's to resolve, not ours to rebase. If the re-freshen itself fails:
+  rebase CONFLICT ⇒ `git rebase --abort` + block per §9, no retry (the tip only moves further
+  ahead) and no slot consumed; `--force-with-lease` REJECTED ⇒ benign race (that push re-ran CI
+  itself) — re-fetch, `git reset --hard origin/<branch>`, no-op, re-evaluate next fire, no slot
+  consumed (burning the cap on a race would `fix-exhausted` a healthy PR). Either way leave the
+  worktree clean and on a real branch — never strand a detached HEAD for the next fire.
 **Deploy PRs** (`release-pr`): merge only `auto:true` envs' NEWEST open deploy PR (never
 `--delete-branch`; run the env's `healthCheck` after); `auto:false` (prod) is the operator's gate.
 Idempotent + race-safe; these are the ONLY merge/deploy actions (no `deploy.command`, no Step 6.5).
