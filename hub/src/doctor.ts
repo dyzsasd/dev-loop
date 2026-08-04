@@ -835,11 +835,13 @@ function unignoredBundleArtifacts(root: string): { path: string; state: "untrack
 }
 
 // W27 helper — extracted to keep doctorWorkspace CC in budget (LOOP-244). Best-effort; never throws.
-// Flags non-terminal null-assignee tickets unreachable by every actor. Backlog+Todo are only
-// flagged in split-dev (mine() makes null Todo dev's own in legacy; PM's backlog queue is label-blind).
-// In Progress: always flag — mine() only applies to Todo; inProgress keys on strict assignee===actor.
-// InReview: reachable iff (a) qa/pm label (verify slice, both modes) OR (b) dev-tier label AND
-// devSplit:true (servable.ts tier-label fallback, split-dev only; not wired for legacy dev actor).
+// Flags non-terminal null-assignee tickets unreachable by every actor. Backlog is never flagged
+// (PM's backlog queue is label-blind in both modes — LOOP-293). Todo is only flagged in split-dev
+// (mine() makes null Todo dev's own in legacy); owner-labelled rows without a dev-tier get an operator
+// park hint, tier-labelled rows get `--assignee <tier>`. In Progress: flagged when dev-tier label
+// present (mine() only applies to Todo; inProgress keys on strict assignee===actor). InReview:
+// reachable iff (a) qa/pm label (verify slice, both modes) OR (b) dev-tier label AND devSplit:true;
+// genuinely tier-less rows are skipped (no useful remediation — AC4).
 // W29 — tombstoned-project divergence (LOOP-307 AC4, design destructive-verb-safety "Child C").
 // W08 covers the general never-seeded case; W29 fires only when the missing hub row has a
 // removed_projects tombstone — the config still names a project a destructive verb DELETED, which
@@ -855,21 +857,31 @@ function warnTombstonedProjects(db: DatabaseSync, unseededKeys: string[], warn: 
     } catch { /* pre-tombstone db (table absent) — nothing to report; W08 already covered the gap */ }
   }
 }
-
 function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplitOn: boolean, warn: (m: string) => void): void {
   try {
     const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
     const DEV_TIERS = ["junior-dev", "senior-dev"];
     const rows = db.prepare("SELECT id, state, labels FROM tickets WHERE project_id=? AND assignee IS NULL").all(projectId) as { id: string; state: string; labels: string }[];
-    const stranded: { id: string; tier: string | null }[] = [];
+    const stranded: { id: string; hint: string }[] = [];
     for (const row of rows) {
       if (TERMINAL.has(row.state)) continue;
       const labels = JSON.parse(row.labels) as string[];
       const tier = DEV_TIERS.find((t) => labels.includes(t)) ?? null;
-      if (row.state === "Backlog" || row.state === "Todo") {
-        // legacy: mine() makes null Todo dev's own; Backlog is PM-visible via label-blind backlog queue
-        if (!devSplitOn) continue;
-        stranded.push({ id: row.id, tier });
+      if (row.state === "Backlog") {
+        // Backlog is PM-visible via label-blind backlog queue in BOTH modes (agentops.ts:221)
+        // LOOP-293: unconditional exemption — the !devSplitOn guard is removed.
+        continue;
+      }
+      if (row.state === "Todo") {
+        if (!devSplitOn) continue; // legacy: mine() makes null Todo dev's own
+        // split-dev: genuinely unreachable — remediation depends on labelling
+        if (tier) {
+          stranded.push({ id: row.id, hint: `--assignee ${tier}` });
+        } else if (labels.includes("qa") || labels.includes("pm")) {
+          // Owner-labelled (pm/qa) but no dev-tier → operator park, never `--assignee <tier>`
+          stranded.push({ id: row.id, hint: "--state Human-Blocked --assignee operator" });
+        }
+        // else: no dev-tier AND no owner label → no useful remediation; don't flag
         continue;
       }
       if (row.state === "In Review") {
@@ -877,20 +889,26 @@ function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplit
         // (servable.ts tier-label fallback is only wired for non-dev split-dev actors).
         const verifiable = labels.includes("qa") || labels.includes("pm");
         const landable = devSplitOn && tier !== null;
-        // Preserve the resolved tier (LOOP-270): a residual dev-tier label on a legacy-mode
         // stranded ticket must yield a paste-ready `--assignee <tier>` hint, not the literal
-        // `<tier>` placeholder — that fallback is only for the genuinely tier-less case.
-        if (!verifiable && !landable) stranded.push({ id: row.id, tier });
+        // `<tier>` placeholder. LOOP-293: genuinely tier-less (no verifiable, no landable) has no
+        // useful remediation — skip it rather than printing `<tier>` (AC4).
+        if (tier && !verifiable && !landable) {
+          stranded.push({ id: row.id, hint: `--assignee ${tier}` });
+        }
         continue;
       }
       // In Progress — mine() only applies to Todo; inProgress keys on strict assignee===actor in both modes
-      stranded.push({ id: row.id, tier });
+      if (tier) {
+        stranded.push({ id: row.id, hint: `--assignee ${tier}` });
+      } else if (labels.includes("qa") || labels.includes("pm")) {
+        // Owner-labelled but no dev-tier → operator park (LOOP-293 AC4: never print <tier>)
+        stranded.push({ id: row.id, hint: "--state Human-Blocked --assignee operator" });
+      }
+      // else: no dev-tier AND no owner → no useful remediation; skip
     }
     if (stranded.length === 0) return;
-    const idList = stranded.map((s) => s.id).join(", ");
-    const first = stranded[0]!;
-    const tierHint = first.tier ?? "<tier>";
-    warn(`${stranded.length} non-terminal ticket${stranded.length === 1 ? "" : "s"} with null assignee unreachable: ${idList} — fix: dev-loop ticket update ${first.id} --assignee ${tierHint}`);
+    const idList = stranded.map((s) => `dev-loop ticket update ${s.id} ${s.hint}`).join("\n");
+    warn(`${stranded.length} non-terminal ticket${stranded.length === 1 ? "" : "s"} with null assignee unreachable:\n${idList}`);
   } catch { /* best-effort — never fails doctor */ }
 }
 
