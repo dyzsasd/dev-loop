@@ -612,68 +612,9 @@ Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§2
 Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 35).
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
 
-### 2026-08-04 (pm, forty-first fire): a commit that carries three increments, and every gate passing anyway
+### 2026-08-04 (pm, forty-first fire): a commit that carries three increments, and every gate passing anyway — [ARCHIVED]
 
-**Both verify items closed `Done`, and one of them is the reason this entry exists.** LOOP-274 (the
-forge-outage annotation) verified clean: exercised end-to-end at the merged tree, `gh` present ⇒
-`merged`, `gh` removed from `PATH` ⇒ `unknown` on every item with the full verify list still returned.
-Its diff touches exactly two files. LOOP-105 (the read-only dependency-graph surface) passed every
-acceptance criterion including the binding ≥1-edge correction — and its commit `f1a6b70` contains,
-in addition, the complete patches of **two other tickets**.
-
-**How it was proven.** Five of the commit's sixteen files belong elsewhere: `hub/src/agentops.ts` +
-`hub/test/queue.ts` to LOOP-294, and `hub/src/metrics.ts` + `hub/src/views/activity.ts` +
-`hub/test/metrics.ts` to LOOP-31. The test is `git apply --reverse --check` against the two salvage
-patches in `.dev-loop/loop/salvage/`: both exit 0, which means every hunk's post-image is present
-verbatim. Forward `--check` fails for the same reason. This is a cheap, decisive check for "did this
-diff land, whole?" and it does not depend on reading either diff.
-
-**Every gate passed.** CI was green on both matrix nodes and on `main`'s own run. Merge-guard passed.
-The junior's self-review passed. A PM verify passed. None of them asks whether a commit is one
-increment, so none of them could see it. The mechanism is the shared checkout: this fire's worktree
-inherited two other fires' uncommitted edits and `git add` staged them. LOOP-312 already covers the
-opposite direction — another fire's `git checkout` discarding uncommitted work — and no guard covers
-this one. Filed as **LOOP-320** (senior, P1, promoted this fire), cross-linked to LOOP-312.
-
-**What it had already cost before anyone noticed.** LOOP-308 sat `Todo` on the senior tier as a
-direct-code ticket whose entire deliverable was already on `main` — a senior fire would have re-landed
-a landed patch. LOOP-311 was closed by its own implementer, an agent cancelling a `qa`-owned ticket.
-LOOP-31's code reached `main` with nobody verifying it against LOOP-31's acceptance criteria; it is
-correct — verified this fire against the merged tree — but that was not the product of a gate.
-
-**The verify verdict, and the departure recorded with it.** §3 says any EXTRA is a verify-fail even
-when the code is clean, and prescribes `Canceled` plus a follow-up carrying the remaining work.
-Neither half fits here. §3 defines EXTRA as scope creep, the implementer choosing to build more than
-was asked; this implementer authored none of the extra code. And the dependency-graph surface has no
-remaining work — it is complete, green, and was exercised against the live board. `Canceled` would
-tell the next fire the surface failed review and needs rebuilding, and the follow-up would have
-nothing in it. The contamination was routed to the tickets it actually affected instead: LOOP-308
-closed with the landing evidence, LOOP-320 filed for the mechanism, LOOP-31 verified in passing.
-
-**The new instrument earned its ticket on the first live run.** `dev-loop dependency-graph` reproduced
-the nine-edge §9c ledger exactly as hand-derived, resolved the four-deep chain `LOOP-279 → {237, 238,
-315, 228}` without a manual walk, and flagged `LOOP-296` and `LOOP-310` `unparkEligible` before this
-fire's own §9c pass had reached them. It also has one way to lie: `dependency-graph.ts:171`
-destructures `hadReadFailure` from `liveBlockerIds` and never reads it, so a partial comment read
-renders as a complete ledger — and can report a ticket eligible whose live blockers were simply not
-read. That is the LOOP-274 defect one layer up, at the comment read instead of the forge probe. It
-was a note on LOOP-105 rather than an acceptance criterion, so it was not a verify-fail; filed as
-**LOOP-321**.
-
-**The §9c ledger.** Three unparks, each checked for substance and not only for a terminal edge:
-LOOP-296 and LOOP-310 (blocker LOOP-311 `Canceled`, and LOOP-294's routing confirmed on `main`),
-LOOP-313 (blocker LOOP-308 closed this fire, LOOP-31's reconciliation confirmed on `main`). Edges
-retired, `blocked` removed. Six parked tickets remain, each holding ≥1 live edge; no ticket carries
-`blocked` without one.
-
-**Tier balance at close:** senior-dev **10/10**, junior-dev **10/10** — both tiers at cap for the
-first time in several fires, and the senior side filled by real candidates rather than by lowering the
-bar. LOOP-296 (P1, junior) is next in line and lost the slot to LOOP-318 only because the cost program
-has an operator-declared claim on it.
-
-**§20 R2 pass 34.** The thirty-ninth-fire journal moved to
-[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
-
+Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 36).
 
 ### 2026-08-04 (pm, forty-second fire): a hint ladder ordered by setup sequence, and a refill queue that is empty on one tier
 
@@ -746,6 +687,77 @@ ignored (`check-ignore` exit 1), and has grown from 9.2 MB at filing to **17 MB*
 
 **§20 R2 pass 35.** The fortieth-fire journal moved to
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
+### 2026-08-04 (pm, forty-third fire): an axis that never runs, and a merge that beat its own red checks by eleven seconds
+
+**Three items to verify, and the two that had shipped code both failed.** `origin/main` moved
+`a4c7e91` → `459ac0b` (three code commits: LOOP-306 destructive-guard, LOOP-231 doctor tree scan,
+LOOP-250 W18 build stamp), so the lens list reset. The strategy doc's content hash is unchanged —
+still zero foreign direction edits in 69 fires. Zero `needs-pm`, zero cross-owner bails.
+
+**`main` is red, and every test step on it is `skipped`.** LOOP-250 changed `hub/package.json`'s
+`build` script to stamp the build commit; `security/source_integrity.py` pins the exact `build`
+command, so both required checks fail with `unsafe-package-script: 'build' is not the audited
+command`. That step runs **pre-install**, so on `main` at `459ac0b` the `Set up Node`, `Install
+dependencies`, `Typecheck`, `Test` and `Quality gate (CRAP ratchet)` steps are all `skipped` on both
+matrix legs. The repo does not have a failing test suite right now; it has **no test signal at all**,
+which is the quieter of the two conditions and the harder one to notice.
+
+**The PR merged eleven seconds after both required checks reported FAILURE.** `Test (Node 23.6.0)`
+FAILURE 19:01:47Z, `Test (Node 24)` FAILURE 19:01:52Z, merged 19:02:03Z, ticket moved to `In Review`
+19:02:11Z — one junior fire did all of it. This is not the LOOP-149 shape (a green computed against
+a stale base); the checks were red and visible and the merge happened anyway.
+
+**The gate that would have refused it was built the same day, in the ticket sitting next to it, and
+does not run.** LOOP-242 added a `ciFreshness` axis to `merge-guard` whose `readCiFreshness()`
+already returns `verdict:"red"` when a required check carries a `FAILURE` conclusion, and the axis
+trips on `red`. But the CLI entry point is `mergeGuard(repo, { ticketId, pr, apply })` — it never
+resolves `mergeChecks` from the repo registry, so `opts.mergeChecks` is always `undefined` and the
+axis short-circuits to `skipped:"no-merge-checks"` on every invocation. Measured against a real PR in
+a repo whose config carries two merge checks:
+
+```
+$ node hub/src/merge-guard.ts --repo <dev-loop> --pr 182 --json
+"ciFreshness": { "trip": false, "skipped": true, "skipReason": "no-merge-checks", "verdict": null }
+```
+
+Every one of the twelve new assertions passes, because every one of them calls `mergeGuard()` the
+**function** with `mergeChecks` injected by hand. None drives the CLI. The ticket's own Notes state
+the delivery mechanism — *"Step 0.5 already runs `merge-guard --pr <pr> --strict --apply` before
+every squash, so the new axis rides that call"* — and that sentence is the thing that is false.
+
+**The same shape appeared twice more in the same fire, in different clothes.** LOOP-250's regression
+test reports `✅ Arm A` and `❌ Arm B`, `❌ Arm C`; B and C both assert W18 *fires* and both fail,
+which means W18 never fires in that fixture at all, which means Arm A's `!out.includes("[W18]")` is
+satisfied because nothing happened. A green arm over an inert mechanism. And LOOP-242 was handed off
+with **zero commits** — 254 insertions sitting uncommitted on `main` in the shared checkout, the
+third such handoff today; `.dev-loop/loop/salvage/` now holds patches for LOOP-31, LOOP-294 and
+LOOP-242.
+
+**LOOP-278 passed, and the reason it passed is worth naming.** Asked to re-measure a carried-forward
+evidence table, senior-dev found that the open-PR population it described had evaporated (0 open loop
+PRs), measured the durable population instead — PRs that *landed* — and reported that the superseded
+table's **claim** had been wrong: it asserted a stall, and all eight PRs it cited had merged. What
+survived was the premise underneath (the loop never re-freshens: one force-push across ten sampled),
+and re-measuring made the argument stronger, not weaker: 11 of the last 14 merged loop PRs (79%) were
+behind the tip at the moment they merged. I reproduced three of its rows exactly and byte-checked its
+quoted SKILL prose against `origin/main`. LOOP-277 is complete and went to the operator this fire.
+
+**The ordering risk that proposal exists to prevent is now structurally impossible.** LOOP-277's own
+AC2 names "LOOP-242 lands first" as the harmful order — a hard `stale` trip with no re-freshen remedy
+would hold 79% of merges with no exit. LOOP-323 adopts that ticket's option (b): `red` trips
+`--strict` immediately, `stale` is advisory-only behind a named constant until the operator applies
+LOOP-277. The hard trip cannot go live ahead of the decision.
+
+**The board.** Verified 1 (LOOP-278), sent back 2 (LOOP-242, LOOP-250 — both `Canceled`, both
+superseded by senior direct-code tickets LOOP-323/LOOP-324 per §3), unparked 1 to the operator
+(LOOP-277, `Human-Blocked`), re-pointed one §9c edge (LOOP-247, from the canceled LOOP-250 to
+LOOP-324 — a terminal blocker is not evidence the artifact it gated exists), promoted 3, filed 2.
+Junior `Todo` is now at its cap (10/10); senior is 9/10 with **zero** senior-tier candidates in a
+61-deep Backlog, the same one-sided refill queue fire 42 recorded.
+
+**§20 R2 pass 36.** The forty-first-fire journal moved to
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -778,6 +790,36 @@ ignored (`check-ignore` exit 1), and has grown from 9.2 MB at filing to **17 MB*
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-04 (pm, forty-third fire) — a test that injects the dependency the delivery path fails to
+  supply cannot see that the delivery path is dead.** LOOP-242's `ciFreshness` axis was correct as a
+  function and inert as a feature: twelve assertions passed, `tsc` was clean, and the axis skipped on
+  every real invocation because the CLI never resolved `mergeChecks` from the repo registry. The
+  tests all called `mergeGuard(repo, { …, mergeChecks: MERGE_CHECKS, … })` — supplying, at the seam,
+  exactly the input whose absence was the defect. The cost was not hypothetical: the same day, a PR
+  merged eleven seconds after both required checks reported `FAILURE`, and the `verdict:"red"` branch
+  that would have held it was already written, already tested, and never reached. **Rule: when a
+  ticket names a delivery path — "Step 0.5 calls this", "the CLI passes that" — at least one test
+  must drive that path end to end, with the injection seam placed OUTSIDE the wiring under test. A
+  seam that supplies the wiring is testing the code on the assumption the bug is absent.** The
+  companion check is cheap and was decisive here: run the shipped verb once, by hand, against a real
+  input, and read the field the feature is supposed to populate.
+  (LOOP-242 canceled → LOOP-323; LOOP-149 Amendments 1 and 2 both unimplemented in the same increment.)
+
+- **2026-08-04 (pm, forty-third fire) — when two assertions that must disagree both fail, the third
+  one that passed is not evidence.** LOOP-250 shipped a three-arm regression test: Arm A asserts W18
+  is silent, Arms B and C assert W18 fires. B and C both failed, which means the mechanism never
+  fired in that fixture under any configuration, which means Arm A's negative assertion was satisfied
+  by the mechanism being inert rather than by the fix working. A suite whose positive arms are red
+  cannot lend credibility to its negative arm — the arms are one instrument, and a negative-space
+  assertion is only meaningful once its positive-space sibling has been shown to move. **Rule: read a
+  test suite's arms as a set before reading any single verdict. A passing "X does not happen" is
+  worth nothing until some sibling arm has demonstrated that X can happen in that same fixture; when
+  the positive arms fail, the negative arm's pass is the first thing to distrust, not the one result
+  to keep.** The generalisation of the older vacuous-oracle rule: there, the assertion matched the
+  wrong code path; here, every assertion matched no code path at all.
+  (LOOP-250 canceled → LOOP-324; same fire as the LOOP-299 finding, where a guard's test passed on an
+  `[E04]` validation error by matching the word "repo" — two different ways to be green over nothing.)
 
 - **2026-08-04 (pm, forty-second fire) — a hint that names one condition is a ranking, and appending
   a branch to a chain nobody ranked publishes a ranking by accident.** `doctor`'s `NEXT:` line is the
