@@ -267,12 +267,13 @@ try {
   run("team", ["add-project", "proj-with-repo"], { cwd: rmWs });
   // Manually add a repo to the config to trigger the repo-guard (no actual git repo needed for this guard)
   const rmCfg = readJson(join(rmWs, "dev-loop.json"));
+  rmCfg.repos["some-repo"] = { path: "irrelevant" };  // register so config validates (LOOP-299)
   rmCfg.projects["proj-with-repo"].repos = [{ ref: "some-repo" }];
   writeFileSync(join(rmWs, "dev-loop.json"), JSON.stringify(rmCfg, null, 2) + "\n");
   // LOOP-305: 'proj-with-repo' is not scratch, so the isolation gate now fires FIRST. The token is added so
   // this arm keeps pinning the REPO guard (what it exists for) rather than passing on the isolation refusal.
   const rmRefused = run("team", ["remove-project", "proj-with-repo", "--i-understand-this-deletes-proj-with-repo"], { cwd: rmWs, extra: { DEVLOOP_HUB_DB: "" } });
-  ok(rmRefused.code !== 0 && /repo/.test(rmRefused.out), "LOOP-221 AC1: remove-project refuses project with repos without --force");
+  ok(rmRefused.code !== 0 && /has 1 repo\(s\) — pass --force/.test(rmRefused.out), 'LOOP-221 AC1/LOOP-299: refuses project with repos without --force (guard message)');
 
   // AC1: db-only key (key in hub but absent from config)
   const dbOnlyWs = join(tmp, "db-only-ws");
