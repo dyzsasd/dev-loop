@@ -13,6 +13,7 @@ import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
 import { readPrReviewState, defaultGhExec, type ExecFn } from "./landing.ts";
 import { addComment, updateTicketRow, type TicketUpdateFields } from "./ticketwrite.ts";
 
+
 // Board states that are NOT merge-eligible (design §3.3).
 // In Review = PR's verify gate is still open; Canceled/Duplicate = terminal reject.
 // Todo/In Progress are merge-eligible on this axis (no trip).
@@ -97,8 +98,12 @@ function applyTrip(
     const commentBody = buildCommentBody(pr, forgeReview, boardState);
     // Comment dedup: skip re-posting only if the exact objection text already exists (LOOP-65).
     const dup = db.prepare("SELECT id FROM comments WHERE ticket_id=? AND body=?").get(ticketId, commentBody);
+    // LOOP-218: attribute the write to the invoking actor (DEVLOOP_ACTOR when set), falling back to
+    // "operator" ONLY when it is absent (a hand-run from the operator console, where operator is the
+    // truthful actor). AC1 — both invocation modes must become honest.
+    const actor = process.env.DEVLOOP_ACTOR || "operator";
     if (!dup) {
-      addComment(db, projectId, "operator", ticketId, commentBody);
+      addComment(db, projectId, actor, ticketId, commentBody);
     }
     if (tripAxis === "board") {
       // AC2 (LOOP-216): board-state trip — comment only, no mutation of state/assignee/labels.
@@ -110,7 +115,7 @@ function applyTrip(
     const cur = db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?")
       .get(ticketId, projectId) as TicketUpdateFields | undefined;
     if (cur) {
-      updateTicketRow(db, projectId, "operator", ticketId, cur.state, {
+      updateTicketRow(db, projectId, actor, ticketId, cur.state, {
         ...cur, state: "Todo", assignee: cur.assignee, labels: cur.labels,
       });
     }
