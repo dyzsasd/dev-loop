@@ -1,1 +1,5 @@
 .v8cov/
+
+# build-node output (LOOP-250): the build-commit stamp is a BUILD ARTIFACT — a committed copy
+# poisons every checkout's W18 with the stamping machine's HEAD (#182 committed one; 2026-08-04).
+build-commit.json

@@ -964,7 +964,18 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
     let vCommit: string | null = null;
     let isSourceBuild = false;
     // LOOP-250: a build-commit stamp tells us EXACTLY which commit is running (source build).
-    const buildCommit = pkgBuildCommit();
+    // Under DEVLOOP_W18_PKG_JSON the stamp must come from BESIDE the injected package.json —
+    // pkgBuildCommit() reads the running source tree's own stamp via import.meta.url, which is
+    // the wrong tree for an injected fixture (and a committed stale stamp there poisons every
+    // arm: 2026-08-04, doctor-build-commit + team-cli W18 cases).
+    let buildCommit: string | null;
+    if (process.env.DEVLOOP_W18_PKG_JSON) {
+      try {
+        buildCommit = (JSON.parse(readFileSync(join(dirname(pkgFile), "build-commit.json"), "utf8")) as { commit?: string }).commit ?? null;
+      } catch { buildCommit = null; }
+    } else {
+      buildCommit = pkgBuildCommit();
+    }
     if (buildCommit) {
       vCommit = buildCommit;
       isSourceBuild = true;
