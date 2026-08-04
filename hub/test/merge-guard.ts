@@ -9,7 +9,10 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb, isToolWriteEventData } from "../src/db.ts";
-import { mergeGuard } from "../src/merge-guard.ts";
+// LOOP-300 regression: a --strict run that evaluated NEITHER axis must not report a clean pass,
+// while a genuine outage still degrades to one (§3.4). skipClass/unevaluatedHold are the classifier
+// the distinction rests on; registryGhRepos is the cwd-independent repo resolution (AC3).
+import { mergeGuard, skipClass, unevaluatedHold, registryGhRepos } from "../src/merge-guard.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -408,9 +411,17 @@ try {
   ok(!rL142Ac5Clean.boardState.skipped, "LOOP-142 AC5: explicit ticket checked clean → skipped=false");
   ok(rL142Ac5Clean.boardState.ticketId === "MG-1", "LOOP-142 AC5: clean → ticketId preserved in result");
 
-  // CLI: no --ticket, no --pr → board axis skipped, message includes 'skipped', exits 0
+  // CLI: no --ticket, no --pr → board axis skipped, message includes 'skipped'.
+  // EXIT CODE SUPERSEDED BY LOOP-300 (deliberate, not a weakened assertion): this arm used to assert
+  // exit 0, which is precisely the defect LOOP-300 files — a --strict run that evaluated NEITHER axis
+  // reported the same exit code as one that evaluated both and found them clean, and §12c makes that
+  // exit code the machine gate on every feature-PR squash. LOOP-142's own AC5 was about the RESULT
+  // being distinguishable (`boardState.skipped=false` when checked clean — still asserted above); the
+  // exit-0 expectation here was an incidental encoding of the behaviour, not LOOP-142's requirement.
+  // Both halves of LOOP-142's actual intent are preserved: the axis still reports skipped, and the
+  // message still says so.
   const cliL142NoInput = cli(["--repo", repoDir, "--strict"], { DEVLOOP_HUB_DB: dbPath });
-  ok(cliL142NoInput.status === 0, "LOOP-142 CLI: no --ticket no --pr --strict → exit 0 (skipped)");
+  ok(cliL142NoInput.status === 3, `LOOP-300: no --ticket no --pr --strict → exit 3 (gated nothing; was exit 0 pre-fix) (got ${cliL142NoInput.status})`);
   ok(/skipped/.test(cliL142NoInput.stdout), `LOOP-142 CLI: no ticket → mentions 'skipped' (got: ${cliL142NoInput.stdout.trim().slice(0, 120)})`);
 
   // ── LOOP-130: re-apply-after-external-unblock — comment dedup across repeated fires ──
@@ -563,6 +574,153 @@ try {
     ok(isToolWriteEventData(null) === false, "LOOP-218 AC2: null data → false");
     ok(isToolWriteEventData(undefined) === false, "LOOP-218 AC2: undefined data → false");
     ok(isToolWriteEventData('not json') === false, "LOOP-218 AC2: malformed JSON → false");
+  }
+
+  // ══ LOOP-300: a run that evaluated NOTHING must not read as "clean to merge" ══════════════════
+  // §12c makes this command's exit code the machine gate on every feature-PR squash. Pre-fix, a run
+  // from the wrong directory printed two "axis skipped" lines and exited 0 — indistinguishable from
+  // "checked both, all clear". The fix must separate three things that all used to be `skipped:true`:
+  // an outage (fail-open, §3.4), a mis-targeted invocation (hold), and an inapplicable axis.
+  {
+    // HERMETICITY, and it is load-bearing here: resolveWorkspace consults DEVLOOP_WORKSPACE and
+    // DEVLOOP_TEAM *before* the cwd ascent, and an agent fire has both set. Left alone, every arm
+    // below that depends on "no workspace above this dir" or "THIS fixture's registry" would silently
+    // resolve the LIVE workspace instead — the fixture assertions would compare against the real
+    // repo's remote and fail, or worse, pass for the wrong reason. Cleared for the whole block and
+    // restored after, and passed cleared to every cli() call ("" reads as unset).
+    const savedWsEnv = { DEVLOOP_WORKSPACE: process.env.DEVLOOP_WORKSPACE, DEVLOOP_TEAM: process.env.DEVLOOP_TEAM };
+    delete process.env.DEVLOOP_WORKSPACE;
+    delete process.env.DEVLOOP_TEAM;
+    const noWs = { DEVLOOP_WORKSPACE: "", DEVLOOP_TEAM: "" };
+    try {
+    // A REAL git repo with a GitHub remote, so resolveGhRepo succeeds from the cwd and the ONLY
+    // remaining variable is whether gh itself works. Without this the "outage" arm below would pass
+    // for the wrong reason (no repo resolved rather than forge unreachable) — the two are exactly
+    // what this ticket says must stop being conflated.
+    const ghRepoDir = join(ROOT, "gh-repo");
+    mkdirSync(ghRepoDir);
+    for (const args of [["init", "-q"], ["remote", "add", "origin", "git@github.com:test-owner/test-repo.git"]])
+      spawnSync("git", ["-C", ghRepoDir, ...args], { encoding: "utf8" });
+
+    const failExec = (): { ok: false; stdout: string; stderr: string } =>
+      ({ ok: false, stdout: "", stderr: "gh: command not found" });
+
+    // ── AC4(b): evidence genuinely UNREACHABLE ⇒ still a pass (§3.4 fail-open preserved) ──
+    // This is the arm that keeps the fix from turning a forge outage into a merge freeze. It must
+    // stay green: a hold here would mean every agent stops merging the moment GitHub has a blip.
+    const rOutage = mergeGuard(ghRepoDir, { pr: 42, dbPath, exec: failExec });
+    ok(rOutage.boardState.skipReason === "forge-unreachable",
+      `LOOP-300 AC4b: gh down ⇒ board skip reason is the OUTAGE, not 'no-ticket-input' (got ${rOutage.boardState.skipReason})`);
+    ok(rOutage.forgeReview.skipReason === "forge-unreachable",
+      `LOOP-300 AC4b: gh down ⇒ forge skip reason 'forge-unreachable' (got ${rOutage.forgeReview.skipReason})`);
+    ok(unevaluatedHold(rOutage) === null,
+      "LOOP-300 AC2/AC4b: a genuine outage still degrades to a PASS — an outage must never become a merge freeze");
+
+    // ── AC4(a): evidence AVAILABLE, invocation mis-targeted ⇒ NOT a silent clean pass ──
+    // repoDir is the stub (not a git repo, no workspace registry above it): nothing is unreachable,
+    // the command simply cannot tell what to check. This is the incident shape.
+    const rUntargeted = mergeGuard(repoDir, { pr: 42, dbPath, exec: failExec });
+    ok(rUntargeted.forgeReview.skipReason === "no-repo-resolved",
+      `LOOP-300 AC4a: no repo resolvable ⇒ 'no-repo-resolved', NOT 'forge-unreachable' (got ${rUntargeted.forgeReview.skipReason})`);
+    ok(unevaluatedHold(rUntargeted) === "no-repo-resolved",
+      `LOOP-300 AC1/AC4a: both axes skipped with reachable evidence ⇒ HOLD (got ${unevaluatedHold(rUntargeted)})`);
+
+    // The classifier is total and its three classes are distinct — the property the whole fix rests
+    // on. A future reason added without classification would fail to compile, not default to pass.
+    ok(skipClass("no-ticket-input") === "untargeted" && skipClass("no-repo-resolved") === "untargeted",
+      "LOOP-300: caller-fixable causes classify as 'untargeted'");
+    ok(skipClass("no-hub-db") === "unreachable" && skipClass("hub-db-unreadable") === "unreachable"
+      && skipClass("forge-unreachable") === "unreachable",
+      "LOOP-300 AC2: every outage cause classifies as 'unreachable' (fail-open)");
+    ok(skipClass("no-pr-arg") === "inapplicable" && skipClass("pr-not-a-loop-branch") === "inapplicable",
+      "LOOP-300: not-asked / no-such-ticket classify as 'inapplicable' (never a hold)");
+
+    // A PR whose head is not dev-loop/<id> is a real answer, not a failure: the forge axis ran, so
+    // there is no hold, and a human's PR does not become unmergeable for lacking a ticket.
+    const okExec = (args: string[]): { ok: boolean; stdout: string; stderr: string } =>
+      args[0] === "pr" && args[1] === "view"
+        ? { ok: true, stdout: JSON.stringify({ headRefName: "feature/human-branch" }), stderr: "" }
+        : { ok: false, stdout: "", stderr: "" };
+    const rHumanPr = mergeGuard(ghRepoDir, { pr: 43, dbPath, exec: okExec });
+    ok(rHumanPr.boardState.skipReason === "pr-not-a-loop-branch",
+      `LOOP-300: PR head not dev-loop/<id> ⇒ 'pr-not-a-loop-branch' (got ${rHumanPr.boardState.skipReason})`);
+
+    // ── AC4(c): an axis that evaluates normally is unchanged ──
+    const rClean = mergeGuard(repoDir, { ticketId: "MG-1", dbPath });
+    ok(rClean.boardState.skipReason === null && !rClean.boardState.skipped,
+      "LOOP-300 AC4c: an evaluated axis carries skipReason=null (null ⇔ !skipped)");
+    ok(unevaluatedHold(rClean) === null, "LOOP-300 AC4c: one evaluated axis is enough — no hold");
+    const rTrip = mergeGuard(repoDir, { ticketId: "MG-3", dbPath });
+    ok(rTrip.trip && unevaluatedHold(rTrip) === null,
+      "LOOP-300 AC4c: a real trip is still a trip (exit 1 outranks exit 3)");
+
+    // ── CLI: the exit codes are the contract §12c reads ──
+    const cliUntargeted = cli(["--repo", repoDir, "--pr", "42", "--strict"], { ...noWs, DEVLOOP_HUB_DB: dbPath, PATH: "" });
+    ok(cliUntargeted.status === 3,
+      `LOOP-300 AC1: CLI --strict, both axes skipped, evidence available ⇒ exit 3 (was 0 pre-fix) (got ${cliUntargeted.status})`);
+    ok(/COULD NOT EVALUATE/.test(cliUntargeted.stderr),
+      `LOOP-300 AC1: the refusal says it evaluated nothing (got: ${cliUntargeted.stderr.trim().slice(0, 160)})`);
+    // PM's note 2: name the CAUSE, not the symptom — "no ticket resolved" was printed for a wrong
+    // cwd, a dead forge and a human PR alike, three different next actions.
+    ok(/could not resolve the GitHub repo/.test(cliUntargeted.stdout),
+      `LOOP-300: the skip line names the repo-resolution cause (got: ${cliUntargeted.stdout.trim().slice(0, 200)})`);
+
+    // Real trip still exits 1, never 3 — a human objection is a different verdict from "unchecked".
+    ok(cli(["--repo", repoDir, "--ticket", "MG-3", "--strict"], { ...noWs, DEVLOOP_HUB_DB: dbPath }).status === 1,
+      "LOOP-300: a real board-state trip still exits 1 under --strict (not 3)");
+
+    // ── AC3: --pr resolves the repo from the WORKSPACE REGISTRY, not the caller's cwd ──
+    // The incident's mechanism: resolveGhRepo ran `git -C <cwd> config remote.origin.url`, so standing
+    // anywhere but the repo returned null and took BOTH axes down. The registry already knew the answer.
+    const wsDir = join(ROOT, "ws");
+    spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), "team", "init", "--dir", wsDir,
+      "--key", "mg-team", "--backend", "service"], { encoding: "utf8", env: { ...process.env, ...noWs, DEVLOOP_HUB_DB: "" } });
+    const wsCfgPath = join(wsDir, "dev-loop.json");
+    const wsCfg = JSON.parse(readFileSync(wsCfgPath, "utf8")) as { repos?: Record<string, unknown> };
+    wsCfg.repos = { "reg-repo": { path: "reg-repo", remote: "git@github.com:reg-owner/reg-repo.git" } };
+    writeFileSync(wsCfgPath, JSON.stringify(wsCfg, null, 2) + "\n");
+    mkdirSync(join(wsDir, "reg-repo"), { recursive: true });
+
+    ok(registryGhRepos(wsDir).join(",") === "reg-owner/reg-repo",
+      `LOOP-300 AC3: the registry yields owner/repo with no git command and no cwd inside the repo (got ${JSON.stringify(registryGhRepos(wsDir))})`);
+
+    // From the WORKSPACE ROOT (not the repo) the forge axis now resolves and evaluates. Pre-fix this
+    // returned no-repo-resolved and both axes skipped — the exact observed incident.
+    let sawRepo = "";
+    const captureExec = (args: string[]): { ok: boolean; stdout: string; stderr: string } => {
+      const i = args.indexOf("--repo");
+      if (i >= 0) sawRepo = args[i + 1] ?? "";
+      return args[1] === "view"
+        ? { ok: true, stdout: JSON.stringify({ headRefName: "dev-loop/MG-1" }), stderr: "" }
+        : { ok: false, stdout: "", stderr: "" };
+    };
+    const rRegistry = mergeGuard(wsDir, { pr: 7, dbPath, exec: captureExec });
+    ok(sawRepo === "reg-owner/reg-repo",
+      `LOOP-300 AC3: --pr looked the PR up against the REGISTRY's repo from outside it (got '${sawRepo}')`);
+    ok(rRegistry.boardState.ticketId === "MG-1" && !rRegistry.boardState.skipped,
+      `LOOP-300 AC3: the board axis EVALUATES from the workspace root (got ticketId=${rRegistry.boardState.ticketId}, skipped=${rRegistry.boardState.skipped})`);
+
+    // Ambiguity is refused, never guessed: two registered GitHub repos and a bare --pr do not
+    // identify a PR, and picking one would check a DIFFERENT repo's PR #7 and call it clean.
+    wsCfg.repos = {
+      "reg-repo": { path: "reg-repo", remote: "git@github.com:reg-owner/reg-repo.git" },
+      "other-repo": { path: "other-repo", remote: "git@github.com:reg-owner/other-repo.git" },
+    };
+    writeFileSync(wsCfgPath, JSON.stringify(wsCfg, null, 2) + "\n");
+    mkdirSync(join(wsDir, "other-repo"), { recursive: true });
+    ok(registryGhRepos(wsDir).length === 2, "LOOP-300 AC3: both registered GitHub repos are listed as candidates");
+    const rAmbiguous = mergeGuard(wsDir, { pr: 7, dbPath, exec: captureExec });
+    ok(rAmbiguous.forgeReview.skipReason === "no-repo-resolved",
+      `LOOP-300 AC3: an ambiguous registry REFUSES rather than guessing a repo (got ${rAmbiguous.forgeReview.skipReason})`);
+    ok(unevaluatedHold(rAmbiguous) === "no-repo-resolved",
+      "LOOP-300 AC3: the ambiguous refusal is a HOLD, not a silent pass");
+    } finally {
+      // Restore exactly what was there (including "was unset"), so later arms and any suite that
+      // runs after this file see the environment they were written against.
+      for (const [k, v] of Object.entries(savedWsEnv)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
   }
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
