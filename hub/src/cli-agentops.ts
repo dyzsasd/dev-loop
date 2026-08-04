@@ -467,6 +467,14 @@ async function verbProject(rest: string[]): Promise<never> {
   return emit("get_project", await runOp(openHub(), "get_project", args));
 }
 
+async function verbDependencyGraph(rest: string[]): Promise<never> {
+  const { flags, pos } = parseFlags(rest, COMMON);
+  if (pos.length) fail(`unexpected argument '${pos[0]}'`);
+  const args: Record<string, unknown> = {};
+  if (flags["--project"] !== undefined) args.project = str(flags, "--project");
+  return emit("dependency_graph", await runOp(openHub(), "dependency_graph", args));
+}
+
 async function verbEvents(rest: string[]): Promise<never> {
   const { flags, pos } = parseFlags(rest, { "--ticket": "v", "--actor": "v", "--since": "v", "--limit": "v", ...COMMON });
   if (pos.length) fail(`unexpected argument '${pos[0]}'`);
@@ -616,6 +624,7 @@ async function verbMirror(rest: string[]): Promise<never> {
 const VERBS: Record<string, VerbHandler> = {
   op: verbOp,            // LAYER 0: the generic dispatcher
   queue: verbQueue,      // LAYER 1: the pre-ranked per-agent work lists (§5/§21b in code)
+  dependency_graph: verbDependencyGraph, // LOOP-105: read-only §9c/W5 dependency-graph surface
   ticket: verbTicket,    // create | update (reads stay cli-tickets)
   comment: verbComment,
   comments: verbComments,

@@ -315,8 +315,8 @@ import { activityPage } from "../src/views/activity.ts";
 
   const act = activityPage(adb, "ap", "k", A_NOW);
   // (a) the stat-tile row
-  ok((act.match(/class="tile( tile-warn)?"/g) ?? []).length === 6,
-    "P5 tiles: six stat tiles render (done 7d/30d · acceptance · in flight · blocked · oldest in review)");
+  ok((act.match(/class="tile( tile-warn)?"/g) ?? []).length === 7,
+    "P5 tiles: seven stat tiles render (done 7d/30d · acceptance · in flight · parked · awaiting you · oldest in review)");
   ok(act.includes('<span class="tile-v">100%</span>'), "P5 tiles: the acceptance tile shows the computed 30d rate");
   ok(/class="tile tile-warn"><span class="tile-v">5d 0h<\/span><span class="tile-l">oldest in review<\/span>/.test(act)
     && (act.match(/tile tile-warn/g) ?? []).length === 1,
