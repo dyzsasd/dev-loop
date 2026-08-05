@@ -92,6 +92,87 @@ export function ticketToPr(
 }
 
 export type ExecFn = (args: string[]) => { stdout: string; stderr: string; ok: boolean };
+// ── CI-freshness reader (design merge-guard-ci-freshness §3 / LOOP-242 Child A) ──────
+
+export type CiFreshnessVerdict = "fresh-green" | "stale" | "red" | "pending" | "unknown";
+
+export interface CiFreshness {
+  verdict: CiFreshnessVerdict;
+  behindBy: number | null;      // commits origin/<defaultBranch> has that the PR head lacks; null when unknown
+  testedHead: string | null;    // the PR head SHA the checks ran on
+  currentTip: string | null;    // origin/<defaultBranch> tip SHA at read time
+  reason: string;               // human line for the log / --json
+}
+
+// Read CI freshness for a single PR. Returns a verdict based on check conclusions and
+// whether the tested head is behind the current default branch tip.
+// Never throws; all forge failures degrade to `unknown`.
+export function readCiFreshness(
+  exec: ExecFn,
+  ghRepo: string,
+  prNumber: number,
+  mergeChecks: string[],
+  defaultBranch: string,
+): CiFreshness {
+  try {
+    // 1. PR view — get headRefOid + statusCheckRollup
+    const prResult = exec(["pr", "view", String(prNumber), "--repo", ghRepo, "--json", "headRefOid,statusCheckRollup"]);
+    if (!prResult.ok) {
+      return { verdict: "unknown", behindBy: null, testedHead: null, currentTip: null, reason: `gh pr view failed: ${prResult.stderr}` };
+    }
+    const prData = JSON.parse(prResult.stdout) as { headRefOid?: string; statusCheckRollup?: Array<{ name: string; conclusion: string | null }> };
+    const testedHead = prData.headRefOid ?? null;
+    const checks = prData.statusCheckRollup ?? [];
+
+    // 2. Evaluate mergeChecks conclusions
+    if (mergeChecks.length > 0) {
+      const relevant = checks.filter((c) => mergeChecks.includes(c.name));
+      if (relevant.some((c) => c.conclusion === "FAILURE")) {
+        return { verdict: "red", behindBy: null, testedHead, currentTip: null, reason: "required check(s) have FAILURE conclusion" };
+      }
+      const allSuccess = mergeChecks.every((need) => relevant.some((c) => c.name === need && c.conclusion === "SUCCESS"));
+      if (!allSuccess) {
+        return { verdict: "pending", behindBy: null, testedHead, currentTip: null, reason: "not all required checks have SUCCESS conclusion yet" };
+      }
+    }
+
+    // 3. Compare the tested head against the default branch tip
+    const compareResult = exec(["api", `/repos/${ghRepo}/compare/${defaultBranch}...${testedHead}`]);
+    if (!compareResult.ok) {
+      return { verdict: "unknown", behindBy: null, testedHead, currentTip: null, reason: `gh api compare failed: ${compareResult.stderr}` };
+    }
+    const compareData = JSON.parse(compareResult.stdout) as { behind_by?: number; base_commit?: { sha: string } };
+    const behindBy = compareData.behind_by ?? null;
+    const currentTip = compareData.base_commit?.sha ?? null;
+
+    if (behindBy !== null && behindBy > 0) {
+      // Amendment 2 (LOOP-323 AC5, binding per LOOP-149): the reason must name the delta's FILE
+      // COMPOSITION, and the direction matters. The forward compare above
+      // (`compare/<defaultBranch>...<testedHead>`) yields the correct `behind_by` but its `files[]`
+      // is the PR's OWN diff — the trap LOOP-149 measured on PR #135. The REVERSED compare
+      // (`compare/<testedHead>...<defaultBranch>`) yields `ahead_by` = the same number AND the true
+      // delta the PR has not been tested against. Degrades to count-only when the second call fails.
+      let composition = "file composition unavailable";
+      const revResult = exec(["api", `/repos/${ghRepo}/compare/${testedHead}...${defaultBranch}`]);
+      if (revResult.ok) {
+        try {
+          const revData = JSON.parse(revResult.stdout) as { files?: Array<{ filename?: string }> };
+          const names = (revData.files ?? []).map((f) => f.filename).filter((n): n is string => !!n);
+          if (names.length > 0) {
+            const shown = names.slice(0, 5).join(", ");
+            composition = `delta touches ${names.length} file(s): ${shown}${names.length > 5 ? ` (+${names.length - 5} more)` : ""}`;
+          } else {
+            composition = "delta touches 0 files (empty commits)";
+          }
+        } catch { /* keep the degraded composition string */ }
+      }
+      return { verdict: "stale", behindBy, testedHead, currentTip, reason: `checks green but head is ${behindBy} commit(s) behind ${defaultBranch} tip ${currentTip ?? "unknown"} — not re-verified against the current tip; ${composition}` };
+    }
+    return { verdict: "fresh-green", behindBy: behindBy ?? 0, testedHead, currentTip, reason: "checks green and head is up to date with current tip" };
+  } catch (e) {
+    return { verdict: "unknown", behindBy: null, testedHead: null, currentTip: null, reason: `unexpected error: ${(e as Error).message}` };
+  }
+}
 
 // ── Allow-lists (sourced from `gh pr list --json bogus` and `gh pr view --json bogus` — offline, no network) ──
 // Exported so test doubles and callers share one validated field set (LOOP-121 AC3).

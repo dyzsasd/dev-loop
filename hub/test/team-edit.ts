@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectRepoFacts, workflowJobNames } from "../src/team-edit.ts";
-import { confirmationToken, isScratchProject, isolationVerdict, TOKEN_PREFIX } from "../src/destructive-guard.ts";
+import { openDb } from "../src/db.ts";
+import { confirmationToken, isScratchProject, isolationVerdict, TOKEN_PREFIX, commitBothHalves } from "../src/destructive-guard.ts";
 import type { Workspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 
@@ -473,6 +474,109 @@ try {
   const isoScratch = run("team", ["remove-project", "scratchy"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(isoScratch.code === 0 && !("scratchy" in readJson(isoCfgPath).projects),
     `LOOP-305 AC3: a scratch:true project is removed with NO token (got ${isoScratch.code}: ${isoScratch.out.replace(/\n/g, " | ").slice(0, 200)})`);
+  // ══ LOOP-327: settable paths for projects.<key>.scratch + team.agents.<a>.* ══════════════════
+  {
+    const ws327 = join(tmp, "ws327");
+    run("team", ["init", "--dir", ws327, "--key", "w327", "--backend", "service", "--yes"]);
+    run("team", ["add-project", "p327", "--prefix", "PZ7"], { cwd: ws327 });
+    // scratch on an EXISTING project — before LOOP-327 only creation-time --scratch could write it,
+    // so a lost marker (the 2026-08-04 recovery) was unrepairable through mutators.
+    const sScr = run("team", ["set", "projects.p327.scratch", "true"], { cwd: ws327 });
+    ok(sScr.code === 0 && readJson(join(ws327, "dev-loop.json")).projects.p327.scratch === true,
+      `LOOP-327: projects.<key>.scratch is settable on an existing project (got ${sScr.code})`);
+    // team-scope agent launch config — the gap that let _team sweep fall back to the built-in model.
+    run("team", ["set", "team.agents.sweep.codingAgent", "opencode"], { cwd: ws327 });
+    const sMod = run("team", ["set", "team.agents.sweep.model", "openrouter/deepseek/deepseek-v4-flash"], { cwd: ws327 });
+    const cfg327b = readJson(join(ws327, "dev-loop.json"));
+    ok(sMod.code === 0 && cfg327b.team.agents?.sweep?.model === "openrouter/deepseek/deepseek-v4-flash" && cfg327b.team.agents?.sweep?.codingAgent === "opencode",
+      `LOOP-327: team.agents.<a>.{codingAgent,model} are settable (got: ${JSON.stringify(cfg327b.team.agents?.sweep)})`);
+    ok(cfg327b.team.agents?.sweep?.cadence === undefined || typeof cfg327b.team.agents?.sweep === "object",
+      "LOOP-327: existing team.agents keys survive the merge (block-walk, not replace)");
+    const sBad = run("team", ["set", "team.agents.sweep.cadenc", "5m"], { cwd: ws327 });
+    ok(sBad.code !== 0, "LOOP-327: an unknown team.agents leaf is still refused (whitelist holds)");
+    const sBadEnum = run("team", ["set", "team.agents.sweep.codingAgent", "gemini"], { cwd: ws327 });
+    ok(sBadEnum.code !== 0, "LOOP-327: codingAgent outside {claude,codex,opencode} is refused");
+  }
+
+  // ══ LOOP-307 (LOOP-302 ③): a deleted project leaves a tombstone; no silent resurrection ══════
+  {
+    const ws307 = join(tmp, "ws307");
+    run("team", ["init", "--dir", ws307, "--key", "w307", "--backend", "service", "--yes"]);
+    const db307 = join(ws307, ".dev-loop", "hub.db");
+    run("team", ["add-project", "ghost", "--scratch", "--prefix", "GH1"], { cwd: ws307 });
+    {
+      const d = openDb(db307);
+      const pid = (d.prepare("SELECT id FROM projects WHERE key='ghost'").get() as { id: string }).id;
+      for (const i of [1, 2]) d.prepare("INSERT INTO tickets(id,project_id,title,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+        .run(`GH1-${i}`, pid, "t", "Bug", "Todo", 0, "[]", "[]", "test", "2026-01-01", "2026-01-01");
+      d.close();
+    }
+    const rm307 = run("team", ["remove-project", "ghost", "--force"], { cwd: ws307, extra: { DEVLOOP_ACTOR: "qa-307" } });
+    ok(rm307.code === 0, `LOOP-307 setup: scratch project with 2 tickets removed via --force (got ${rm307.code}: ${rm307.out.replace(/\n/g, " | ").slice(0, 200)})`);
+    {
+      const d = openDb(db307);
+      const tomb = d.prepare("SELECT removed_by, ticket_count, verb FROM removed_projects WHERE key='ghost'").get() as { removed_by: string; ticket_count: number; verb: string } | undefined;
+      d.close();
+      ok(!!tomb && tomb.ticket_count === 2 && tomb.removed_by === "qa-307" && tomb.verb === "remove-project",
+        `LOOP-307: the tombstone rode the cascade's transaction — actor + destroyed count + verb recorded (got: ${JSON.stringify(tomb)})`);
+    }
+    // AC1 — a re-seed of the removed key REFUSES, naming the removal's facts + the explicit action.
+    const res1 = run("cli", ["seed", "ghost", "Ghost", "GH1"], { cwd: ws307 });
+    ok(res1.code !== 0 && /was removed on .+ by qa-307 \(2 ticket\(s\) destroyed, via remove-project\)/.test(res1.out) && /DEVLOOP_ALLOW_RESURRECT=1/.test(res1.out),
+      `LOOP-307 AC1: re-seed of a removed key refuses with the removal's facts (got ${res1.code}: ${res1.out.replace(/\n/g, " | ").slice(0, 260)})`);
+    {
+      const d = openDb(db307);
+      ok((d.prepare("SELECT count(*) c FROM projects WHERE key='ghost'").get() as { c: number }).c === 0, "LOOP-307 AC1: the refused re-seed created NO project row");
+      d.close();
+    }
+    // AC4 — doctor W29: config lists the removed key (hand-restored, the 2026-08-04 divergence
+    // shape), hub.db has no row but a tombstone. Warn-only: DOCTOR_OK must hold.
+    const cfg307 = readJson(join(ws307, "dev-loop.json"));
+    cfg307.projects["ghost"] = { repos: [] };
+    writeFileSync(join(ws307, "dev-loop.json"), JSON.stringify(cfg307, null, 2) + "\n");
+    const doc307 = run("server", ["doctor"], { cwd: ws307 });
+    ok(/\[W29\] projects\.ghost: .*REMOVED on .+ by qa-307 \(2 ticket\(s\) destroyed/.test(doc307.out),
+      `LOOP-307 AC4: doctor W29 names the tombstoned divergence with its facts (got: ${(doc307.out.match(/\[W29\][^\n]*/) ?? ["no W29 line"])[0].slice(0, 220)})`);
+    ok(/\[W08\] projects\.ghost/.test(doc307.out), "LOOP-307 AC4: W08 still covers the no-hub-row gap alongside W29");
+    ok(/DOCTOR_OK/.test(doc307.out), "LOOP-307 AC4: W29 is warn-only — DOCTOR_OK holds");
+    delete cfg307.projects["ghost"];
+    writeFileSync(join(ws307, "dev-loop.json"), JSON.stringify(cfg307, null, 2) + "\n");
+    // AC2 — DEVLOOP_ALLOW_RESURRECT=1 proceeds AND clears the tombstone (a second resurrection
+    // must not be silently pre-approved).
+    const res2 = run("cli", ["seed", "ghost", "Ghost", "GH1"], { cwd: ws307, extra: { DEVLOOP_ALLOW_RESURRECT: "1" } });
+    ok(res2.code === 0, `LOOP-307 AC2: resurrection with the env token succeeds (got ${res2.code}: ${res2.out.replace(/\n/g, " | ").slice(0, 200)})`);
+    {
+      const d = openDb(db307);
+      ok((d.prepare("SELECT count(*) c FROM removed_projects WHERE key='ghost'").get() as { c: number }).c === 0,
+        "LOOP-307 AC2: the tombstone row is GONE after an approved resurrection");
+      ok((d.prepare("SELECT count(*) c FROM projects WHERE key='ghost'").get() as { c: number }).c === 1, "LOOP-307 AC2: the project row exists again");
+      d.close();
+    }
+    // AC3 — a key that was never removed seeds normally (the guard is not "refuse all creates").
+    const res3 = run("cli", ["seed", "fresh307", "Fresh", "FR7"], { cwd: ws307 });
+    ok(res3.code === 0, `LOOP-307 AC3: a never-removed key seeds normally (got ${res3.code})`);
+    // AC5 — the tombstone is written in the SAME transaction as the cascade: force the db half to
+    // fail and assert NO removed_projects row was left behind (rides LOOP-306's commitBothHalves).
+    {
+      const failDb = join(tmp, "ws307-fail.db");
+      const d = openDb(failDb);
+      let threw: Error | null = null;
+      try {
+        commitBothHalves({
+          configPath: join(tmp, "ws307-fail-cfg.json"), configText: null, db: d,
+          dbWork: () => {
+            d.prepare("INSERT OR REPLACE INTO removed_projects(key,removed_at,removed_by,ticket_count,verb) VALUES ('doomed','2026-01-01','t',5,'remove-project')").run();
+            throw new Error("injected db failure");
+          },
+        });
+      } catch (e) { threw = e as Error; }
+      ok(!!threw && /injected db failure/.test(threw.message), "LOOP-307 AC5: the injected failure propagates");
+      ok((d.prepare("SELECT count(*) c FROM removed_projects").get() as { c: number }).c === 0,
+        "LOOP-307 AC5: the tombstone rolled back WITH the cascade — no row survives a failed removal");
+      d.close();
+    }
+  }
+
   const isoScratchDry = run("team", ["remove-project", "iso-nonexistent", "--dry-run"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(isoScratchDry.code !== 0, "LOOP-305: an unknown key still errors before the gate (precedence unchanged)");
 

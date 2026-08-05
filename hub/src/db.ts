@@ -222,6 +222,19 @@ CREATE TABLE IF NOT EXISTS mirror_map (
   UNIQUE(project_id, hub_kind, hub_id)
 );
 CREATE INDEX IF NOT EXISTS idx_mirror_project ON mirror_map(project_id, hub_kind);
+
+-- LOOP-307 (LOOP-302 ③, design destructive-verb-safety "Child C"): a deleted project leaves a
+-- tombstone, so ensureProject cannot silently re-create it as an empty board — after the
+-- 2026-08-04 wipe, the find-or-create re-seed made the board look PRESENT-BUT-EMPTY instead of
+-- MISSING, which is why the deletion survived two hours of checks. Retro-added via IF NOT EXISTS
+-- with no user_version bump (precedent documented above at the migration block).
+CREATE TABLE IF NOT EXISTS removed_projects (
+  key          TEXT PRIMARY KEY,
+  removed_at   TEXT NOT NULL,
+  removed_by   TEXT NOT NULL,   -- DEVLOOP_ACTOR at removal time
+  ticket_count INTEGER NOT NULL,-- how much was destroyed; the number that makes a resurrection alarming
+  verb         TEXT NOT NULL    -- 'remove-project' | 'repair --reap'
+);
 `;
 
 // ─── Schema migrations (PRAGMA user_version) ─────────────────────────────────
