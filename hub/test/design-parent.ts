@@ -127,6 +127,49 @@ try {
     ok(!isDesignParent({ id: "DP-ORD", description: "an ordinary bug" }, ids),
       "LOOP-344: …and an ordinary ticket does not");
   }
+  // ── LOOP-296: a designed child INHERITS its parent's `sensitive` label ───────────────────────
+  // Three enforcement layers exist and all key on the LABEL — the write gate's re-tier,
+  // servable.ts's queue defense, and doctor W21 + the Sweep digest. All three are correctly built,
+  // and none is at fault: they share one input, and nothing guaranteed that input was written on a
+  // CHILD. When the filer's judgement said no, all three went silent at once and the work routed to
+  // the cheap tier. That happened on LOOP-290 — the one ticket editing an irreversible
+  // cascade-delete guard.
+  {
+    const create = (id: string, desc: string, labels: string[], assignee: string | null) => {
+      const r = agentOp("save_issue", db, pid, "dp", "senior-dev",
+        { title: id, type: "Improvement", state: "Todo", description: desc, labels, ...(assignee ? { assignee } : {}) }) as OpResult;
+      return r.body as { id: string; labels: string[]; assignee: string | null };
+    };
+    // A sensitive design parent, and a child staged under it WITHOUT the label — LOOP-290's shape.
+    mk("DP-S1", "Mode: design\n\nthe sensitive module", "In Review", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    const child = create("child-of-sensitive", "Design: parent DP-S1\n\nimplements it", ["dev-loop"], "junior-dev");
+    ok(child.labels.includes("sensitive"),
+      `LOOP-296: the child INHERITS sensitive from its design parent (got ${JSON.stringify(child.labels)})`);
+    // …and because inheritance runs BEFORE the tier logic, the existing re-tier escalates it in the
+    // SAME write rather than leaving it on the junior tier until a backstop notices.
+    ok(child.assignee === "senior-dev" || child.labels.includes("senior-dev"),
+      `LOOP-296: …and the existing sensitive re-tier fires on it immediately (assignee ${child.assignee})`);
+
+    // A child of a NON-sensitive parent is untouched — this inherits, it does not label everything.
+    const plain = create("child-of-plain", "Design: parent DP-P1\n\nimplements it", ["dev-loop"], "junior-dev");
+    ok(!plain.labels.includes("sensitive"), `LOOP-296: a child of a NON-sensitive parent is untouched (${JSON.stringify(plain.labels)})`);
+    // A ticket with no design pointer at all is untouched.
+    const orphan = create("no-pointer", "just a ticket", ["dev-loop"], "junior-dev");
+    ok(!orphan.labels.includes("sensitive"), "LOOP-296: a ticket with no Design: pointer is untouched");
+    // An explicit sensitive label is preserved, not duplicated.
+    const explicit = create("explicit", "Design: parent DP-P1\n\nx", ["dev-loop", "sensitive"], null);
+    ok(explicit.labels.filter((l) => l === "sensitive").length === 1,
+      `LOOP-296: an explicit label is kept exactly once, never duplicated (${JSON.stringify(explicit.labels)})`);
+
+    // The DOC-pointer forms inherit too — otherwise two of §21a's three forms would stay exposed,
+    // which is the same shape LOOP-344 fixed one layer up.
+    mk("DP-S2", "the doc-pointer design\n\nhubDoc:design/secure-thing is the doc", "In Review", ["dev-loop", "Bug", "qa", "sensitive"]);
+    mk("DP-S2C", "Design: hubDoc:design/secure-thing\n\nexisting child so the parent resolves", "Todo", ["dev-loop"]);
+    const docChild = create("doc-child", "Design: hubDoc:design/secure-thing\n\nimplements it", ["dev-loop"], "junior-dev");
+    ok(docChild.labels.includes("sensitive"),
+      `LOOP-296: a child using the hubDoc: pointer form inherits too (got ${JSON.stringify(docChild.labels)})`);
+  }
+
   db.close();
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
