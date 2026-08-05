@@ -37,6 +37,7 @@
 import { execFileSync } from "node:child_process";
 import { isMainEntry } from "./is-entry.ts";
 import { ticketIdScanRe } from "./ticket-id.ts";
+import { prTicketIds, ticketFromBranch } from "./pr-tickets.ts"; // LOOP-150: every ticket a PR claims, not just its branch
 import { existsSync, realpathSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { openDb } from "./db.ts";
@@ -119,6 +120,10 @@ export interface MergeGuardBoardStateResult {
   // WHY it was skipped (LOOP-300). null ⇔ !skipped — the two are kept in lock-step so a caller can
   // key on either; `skipped` stays for the existing --json consumers.
   skipReason: SkipReason | null;
+  // LOOP-150 — EVERY ticket this PR claims (branch + commits + title/body), branch-derived first.
+  // Reported so a consumer can see that a PR carries a second ticket's fix; `ticketId` stays the
+  // primary and remains what the board axis gates on.
+  claimedTicketIds?: string[];
 }
 
 export interface ForgeReviewResult {
@@ -279,15 +284,9 @@ function applyTrip(
   }
 }
 
-// Parse a ticket id from a dev-loop/<id> branch name or a fix/<id>-… branch name.
-// Returns null when the branch shape doesn't carry a recognisable ticket id.
+// LOOP-150: the branch parse now lives beside the full PR→ticket resolver, so the two cannot drift
+// on what a "ticket id in a branch" is.
 const TICKET_RE = ticketIdScanRe(); // the ONE canonical <PREFIX>-<n> id shape (ticket-id.ts, LOOP-264)
-function ticketFromBranch(branch: string): string | null {
-  const m = branch.match(/(?:dev-loop\/|fix\/)([^/\s]+)/);
-  if (!m) return null;
-  const hit = m[1].match(TICKET_RE);
-  return hit ? hit[0] : null;
-}
 
 // Best-effort: extract owner/repo from the git remote URL of the repo dir.
 // Returns null when the repo has no GitHub remote or git is not available.
@@ -405,6 +404,9 @@ export function mergeGuard(
   // Hub-only: reads tickets table, no forge access needed.
   // Degrades silently (skipped) when the hub DB is absent (linear/local backend).
   let ticketId = opts.ticketId ?? null;
+  // LOOP-150: every ticket this PR claims, not just the branch-derived one. Reported, not gated on —
+  // see the primary-id note at the resolution site.
+  let claimedTicketIds: string[] = [];
   // Why the --pr lookup failed to yield a ticket, when it was attempted (LOOP-300). This is the
   // discriminator PM's note names: "no ticket resolved" from a wrong cwd and "no ticket resolved"
   // from a dead forge look identical in the output but are opposite verdicts — one the caller can
@@ -421,11 +423,24 @@ export function mergeGuard(
       if (!ghRepo) {
         prLookupFailure = "no-repo-resolved";
       } else {
-        const r = exec(["pr", "view", String(opts.pr), "--repo", ghRepo, "--json", "headRefName"]);
+        // LOOP-150: read the commits and the title/body too, not just the head ref. A PR carrying a
+        // second ticket's fix used to make that ticket read as having NO PR AT ALL — PR #97 shipped
+        // LOOP-148's fix on `dev-loop/LOOP-142` and LOOP-148 read as unlanded while its code was on
+        // main. One `gh` call, the same call, with more fields.
+        const r = exec(["pr", "view", String(opts.pr), "--repo", ghRepo, "--json", "headRefName,commits,title,body"]);
         if (!r.ok) {
           prLookupFailure = "forge-unreachable";
         } else {
-          const parsed = JSON.parse(r.stdout) as { headRefName?: string };
+          const parsed = JSON.parse(r.stdout) as { headRefName?: string; commits?: { messageHeadline?: string; messageBody?: string }[]; title?: string; body?: string };
+          claimedTicketIds = prTicketIds({
+            branch: parsed.headRefName ?? null,
+            commitMessages: (parsed.commits ?? []).flatMap((c) => [c.messageHeadline ?? "", c.messageBody ?? ""]),
+            title: parsed.title ?? null,
+            body: parsed.body ?? null,
+          });
+          // The BRANCH-derived id stays the primary — it is the id the PR was cut for, and the board
+          // axis has always gated on it. Re-pointing that at a passenger would change what
+          // merge-guard blocks on, which this ticket does not ask for.
           if (parsed.headRefName) ticketId = ticketFromBranch(parsed.headRefName);
           // Reached the PR and read its head: if that head is not dev-loop/<id> there IS no ticket
           // for this PR. The board axis is inapplicable, not un-evaluated — a human's PR is a
@@ -452,26 +467,26 @@ export function mergeGuard(
     // distinguish "no input" from "checked and clean" (LOOP-142, AC5). The REASON carries whether
     // the caller can fix it (LOOP-300): a failed --pr lookup already knows why it failed, and
     // without --pr at all the caller simply gave nothing to resolve from.
-    boardState = { ticketId: null, ticketState: null, trip: false, skipped: true, skipReason: prLookupFailure ?? "no-ticket-input" };
+    boardState = { claimedTicketIds, ticketId: null, ticketState: null, trip: false, skipped: true, skipReason: prLookupFailure ?? "no-ticket-input" };
   } else {
     // Resolve dbPath: explicit > DEVLOOP_HUB_DB env > workspace-inferred
     const dbPath = opts.dbPath ?? process.env.DEVLOOP_HUB_DB ?? resolveHubDbPath(repoDir);
     if (!dbPath || !existsSync(dbPath)) {
-      boardState = { ticketId, ticketState: null, trip: false, skipped: true, skipReason: "no-hub-db" };
+      boardState = { claimedTicketIds, ticketId, ticketState: null, trip: false, skipped: true, skipReason: "no-hub-db" };
     } else {
       let conn;
       try { conn = openDb(dbPath); }
       catch { conn = null; }
       if (!conn) {
-        boardState = { ticketId, ticketState: null, trip: false, skipped: true, skipReason: "hub-db-unreadable" };
+        boardState = { claimedTicketIds, ticketId, ticketState: null, trip: false, skipped: true, skipReason: "hub-db-unreadable" };
       } else {
         try {
           const row = conn.prepare("SELECT state FROM tickets WHERE id=?").get(ticketId) as { state: string } | undefined;
           if (!row) {
-            boardState = { ticketId, ticketState: null, trip: false, skipped: false, skipReason: null };
+            boardState = { claimedTicketIds, ticketId, ticketState: null, trip: false, skipped: false, skipReason: null };
           } else {
             const trip = !isMergeEligible(row.state).eligible;
-            boardState = { ticketId, ticketState: row.state, trip, skipped: false, skipReason: null };
+            boardState = { claimedTicketIds, ticketId, ticketState: row.state, trip, skipped: false, skipReason: null };
           }
         } finally {
           conn.close();
