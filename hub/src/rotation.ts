@@ -28,7 +28,7 @@ export function rotationCandidates(ws: Workspace): Candidate[] {
 // mode — delivery rotation pauses, but the stewards (sweep/ops/reflect/communication) keep covering the
 // project; enabled:false or scratch:true removes it from both lists.
 export function stewardProjects(ws: Workspace): string[] {
-  return deliveryProjects(ws).filter((key) => ws.file.projects[key].enabled !== false && ws.file.projects[key].scratch !== true).sort();
+  return deliveryProjects(ws).sort(); // LOOP-271: the enabled/scratch filter moved INTO the seam
 }
 
 // One smooth-WRR step. Mutates + returns `cur` (pruned to the current candidate set) and the pick.

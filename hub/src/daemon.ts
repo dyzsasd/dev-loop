@@ -600,7 +600,9 @@ async function handleWriteRoutes(ctx: RouteCtx): Promise<boolean> {
 function handleViewRoutes(ctx: RouteCtx): boolean {
   const { res, method, url, seg, path, prefixed, projectId, projectKey, db, canWrite, actor, pg, divergenceFor, getBasePageOpts } = ctx;
   if (!prefixed && path === "/") {
-    const real = db.prepare("SELECT key FROM projects WHERE key<>? ORDER BY key").all(TEAM_INTAKE_PROJECT) as { key: string }[];
+    // LOOP-271: the switcher lists what an operator can switch TO. A scratch project can never fire,
+    // so listing it offers a destination that does nothing. Direct navigation still resolves.
+    const real = db.prepare(`SELECT key FROM projects WHERE key<>? AND CASE WHEN json_valid(settings_json) THEN json_extract(settings_json,'$.scratch') ELSE NULL END IS NOT 1 ORDER BY key`).all(TEAM_INTAKE_PROJECT) as { key: string }[];
     if (real.length === 1) {
       res.writeHead(302, { location: href(real[0].key, `/${url.search}`), "content-length": 0 });
       res.end();
