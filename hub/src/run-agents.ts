@@ -156,7 +156,13 @@ const DEFAULT_LAUNCH_PROFILES: Record<Agent, Record<CodingAgent, CodingAgentDefa
 
 type ProjectsConfig = {
   defaultProject?: string;
-  repos?: Record<string, unknown>; // workspace-level repo registry (flat RepoEntry facts; used by boot-prefix)
+  // Workspace-level repo registry (flat RepoEntry facts). ONLY the v1 projects.json path can carry
+  // one: `toLegacyView` returns LegacyProjectsConfig, which has no `repos` field, and the
+  // `as unknown as ProjectsConfig` cast below hides that — so on every v2 workspace this reads
+  // `undefined` at runtime (LOOP-279). boot-prefix therefore resolves repo facts from the INLINE
+  // per-project repos[] the projection does emit, and uses this registry only to resolve a bare
+  // {ref} pointer. Do not add a consumer that depends on this being populated.
+  repos?: Record<string, unknown>;
   projects?: Record<string, {
     devSplit?: boolean;
     // Two-level launch config (conventions §11 / config-schema):
