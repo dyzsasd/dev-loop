@@ -3,7 +3,7 @@
 import { realpathSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readLandingState, ticketToPr, probeTicketPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
+import { deltaIsCiIrrelevant, readCiFreshness, readLandingState, ticketToPr, probeTicketPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 
 let fails = 0;
@@ -631,6 +631,74 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ]);
   const [result] = await readLandingState(ws, { exec, now: NOW });
   ok(result!.state === "stalled", "LOOP-131: UNKNOWN over a RED base still stalls — the day-0 arm is unchanged");
+}
+
+// ── LOOP-335: a delta that cannot change any check result must not stale the PR ──────────────────
+// readCiFreshness already computed the true delta file list and used it ONLY to build the reason
+// string; the verdict was decided one branch earlier from behindBy alone. So a `main` commit that
+// cannot change a check result staled every open PR. Measured: 10 of the last 25 commits on main
+// were docs(strategy), and the union of every file those 10 touch is exactly docs/STRATEGY.md +
+// docs/strategy-archive/2026-08.md — read by no test against the real tree.
+{
+  const IRRELEVANT = ["docs/STRATEGY.md", "docs/strategy-archive/"];
+  // An exec double: green checks, head 2 behind, and a reversed compare we control.
+  const mkExec = (revFiles: string[] | "fail" | "unparseable", extra: Record<string, unknown> = {}): ExecFn => (args) => {
+    if (args[0] === "pr" && args[1] === "view") {
+      return { ok: true, stdout: JSON.stringify({ headRefOid: "abc123", statusCheckRollup: [{ name: "Test", conclusion: "SUCCESS", status: "COMPLETED" }] }), stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1]).includes("/compare/main...")) {
+      return { ok: true, stdout: JSON.stringify({ behind_by: 2, base_commit: { sha: "tip999" } }), stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1]).includes("/compare/abc123...")) {
+      if (revFiles === "fail") return { ok: false, stdout: "", stderr: "compare failed" };
+      if (revFiles === "unparseable") return { ok: true, stdout: "{not json", stderr: "" };
+      return { ok: true, stdout: JSON.stringify({ files: revFiles.map((f) => ({ filename: f })), ...extra }), stderr: "" };
+    }
+    return { ok: false, stdout: "", stderr: "unexpected" };
+  };
+  const read = (revFiles: string[] | "fail" | "unparseable", irrelevant?: string[], extra: Record<string, unknown> = {}) =>
+    readCiFreshness(mkExec(revFiles, extra), "o/r", 1, ["Test"], "main", irrelevant);
+
+  // AC1 — the whole delta is exempt.
+  const a1 = read(["docs/STRATEGY.md", "docs/strategy-archive/2026-08.md"], IRRELEVANT);
+  ok(a1.verdict === "stale-exempt", `LOOP-335 AC1: an all-exempt delta yields stale-exempt (got ${a1.verdict})`);
+  ok(a1.behindBy === 2, `LOOP-335 AC1: …and behindBy still reports the TRUE count (got ${a1.behindBy})`);
+  ok(/CI-irrelevant/.test(a1.reason ?? "") && /STRATEGY\.md/.test(a1.reason ?? ""),
+    `LOOP-335 AC7: …with a reason naming the exempt files and the count (${a1.reason?.slice(0, 110)})`);
+
+  // AC2 — ONE relevant file makes the whole delta relevant. This is the assertion the ticket
+  // requires a mutation run for (`every` → `some`); see the hand-off comment for the red output.
+  const a2 = read(["docs/STRATEGY.md", "hub/src/landing.ts"], IRRELEVANT);
+  ok(a2.verdict === "stale", `LOOP-335 AC2: a MIXED delta stays stale (got ${a2.verdict})`);
+  ok(/delta touches 2 file/.test(a2.reason ?? "") && !/CI-irrelevant/.test(a2.reason ?? ""),
+    "LOOP-335 AC7: …and its reason still names the composition, unchanged");
+
+  // AC3 — fail-closed, three ways. (i) and (ii) are `stale` today too, so this preserves direction.
+  ok(read("fail", IRRELEVANT).verdict === "stale", "LOOP-335 AC3(i): a reversed compare that fails ⇒ stale");
+  ok(read("unparseable", IRRELEVANT).verdict === "stale", "LOOP-335 AC3(ii): …that does not parse ⇒ stale");
+  ok(read([], IRRELEVANT).verdict === "stale", "LOOP-335 AC3(iii): …or reports NO files while behindBy>0 ⇒ stale — 'we could not see it' must not read as 'it was harmless'");
+
+  // AC4 — truncation beats the exempt rule. A truncated list of exempt files says nothing about
+  // the files that were cut.
+  const many = Array.from({ length: 300 }, (_, i) => `docs/strategy-archive/f${i}.md`);
+  ok(read(many, IRRELEVANT).verdict === "stale",
+    "LOOP-335 AC4: 300 files (GitHub's files[] cap) ⇒ stale even when every one is exempt");
+  ok(read(["docs/STRATEGY.md"], IRRELEVANT, { total_commits: 400, commits: [1, 2, 3] }).verdict === "stale",
+    "LOOP-335 AC4: …and total_commits > commits.length (the 250 cap) likewise");
+
+  // AC6 — with the config ABSENT, v1 behaviour is unchanged.
+  ok(read(["docs/STRATEGY.md"], undefined).verdict === "stale",
+    "LOOP-335 AC6: with ciIrrelevantPaths ABSENT the same delta is stale — v1 verdicts unchanged");
+  ok(read(["docs/STRATEGY.md"], []).verdict === "stale", "LOOP-335 AC6: …and an EMPTY list exempts nothing");
+
+  // The predicate's own edges.
+  ok(deltaIsCiIrrelevant(["docs/strategy-archive/2026-08.md"], ["docs/strategy-archive/"]),
+    "LOOP-335: a trailing-slash entry is a directory PREFIX match");
+  ok(!deltaIsCiIrrelevant(["docs/strategy-archive-other/x.md"], ["docs/strategy-archive/"]),
+    "LOOP-335: …and does not match a sibling whose name merely starts the same way");
+  ok(!deltaIsCiIrrelevant(["docs/STRATEGY.md.bak"], ["docs/STRATEGY.md"]),
+    "LOOP-335: a non-slash entry is an EXACT match, not a prefix");
+  ok(!deltaIsCiIrrelevant([], ["docs/STRATEGY.md"]), "LOOP-335: an empty delta is never exempt");
 }
 
 console.log(fails === 0 ? "\nLANDING_OK" : `\n${fails} CHECK(S) FAILED`);
