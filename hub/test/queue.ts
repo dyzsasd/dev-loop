@@ -89,8 +89,10 @@ const pm = call("pm");
 ok(titles(pm.body.verify).includes("pm verify") && !titles(pm.body.verify).includes("qa verify"), "pm verify = In Review + pm label only");
 ok(JSON.stringify(titles(pm.body.unblock)) === JSON.stringify(["pm unblock"]), "pm unblock = blocked+needs-pm, terminal states excluded");
 ok(titles(pm.body.backlog).includes("idea"), "pm backlog = the groom queue");
-const depth = pm.body.todoDepth as { total: number; "junior-dev": number };
-ok(depth["junior-dev"] === 7 && depth.total >= 8, `todoDepth counts unblocked Todo per tier (junior=${depth["junior-dev"]}, total=${depth.total})`);
+const depth = pm.body.todoDepth as { total: number; "senior-dev": number; "junior-dev": number; dev: number };
+ok(depth["junior-dev"] === 7 && depth.total >= 8 && depth.dev >= 0,
+  `todoDepth counts unblocked Todo per tier (junior=${depth["junior-dev"]}, total=${depth.total}, dev=${depth.dev})`);
+ok("dev" in depth, "todoDepth carries a `dev` key (LOOP-251)");
 
 // ── 4. qa lists ───────────────────────────────────────────────────────────────────────────────────
 const qa = call("qa");

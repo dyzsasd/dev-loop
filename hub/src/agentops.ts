@@ -23,7 +23,7 @@ import { TOOL_NAMES, type ToolName } from "./tooldefs.ts"; // DL-85: the ONE too
 import { STEWARD_HANDLES } from "./seed.ts"; // D1: the steward roster (ONE definition, next to AGENT_HANDLES) the override matrix grants cross-project access to
 import { TEAM_INTAKE_PROJECT } from "./team-config.ts"; // D1: the reserved "_team" intake key — the only override pm may pass
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
-import { isDevTierActor, servableSlice } from "./servable.ts"; // LOOP-144: the shared dev-tier servable predicate (a lean, zod-free leaf so run-agents can consume it too)
+import { isDevTierActor, servableSlice, servableTodoDepth } from "./servable.ts"; // LOOP-144/LOOP-251: shared dev-tier servable predicate + todoDepth from the same predicate
 import { insertTicket, updateTicketRow, insertComment, loadRelease, verifyCreateGateRejection } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
 // gate) + the docstore-error→HTTP-status map are reused VERBATIM from the shared, side-effect-free docstore
@@ -228,11 +228,7 @@ function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
       verify,
       unblock: blocked.filter((t) => t.labels.includes("needs-pm")).map(summary),
       backlog: open.filter((t) => t.state === "Backlog").map(summary).slice(0, 100),
-      todoDepth: {
-        total: todoOpen.length,
-        "senior-dev": todoOpen.filter((t) => t.assignee === "senior-dev").length,
-        "junior-dev": todoOpen.filter((t) => t.assignee === "junior-dev").length,
-      },
+      todoDepth: servableTodoDepth(db, projectId),
     });
   }
   return errR(400, `queue is defined for pm, qa, dev, senior-dev, junior-dev (got '${actor}')`);
