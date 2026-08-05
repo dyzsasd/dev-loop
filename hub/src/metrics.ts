@@ -37,9 +37,11 @@ export interface UsageAdapter {
   // killed fire still shows something, never zero output.
   resultText?(stdout: string): string | null;
 }
-export interface FireRow { ts: string; agent: string; project: string; codingAgent?: string; provider?: string; model?: string; effort?: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; errorClass?: string; bootBytes?: number; fireId?: string; usage?: FireUsage }
+export interface FireRow { ts: string; agent: string; project: string; codingAgent?: string; provider?: string; model?: string; effort?: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; interrupted?: boolean; errorClass?: string; bootBytes?: number; fireId?: string; usage?: FireUsage }
 export interface FireMetrics {
-  windowMs: number; fires: number; failures: number; timeouts: number; suspectErrors: number;
+  windowMs: number; fires: number; failures: number; timeouts: number; suspectErrors: number; interrupted: number;
+  discardedFires: number;            // LOOP-219: fires that produced nothing (suspectError | interrupted)
+  discardedCostUsd: number | null;   // their priced spend; null when nothing is priced at all
   byErrorClass: Record<string, number>;            // P0-1b taxonomy (spend-limit/rate-limit/auth/network/timeout/…); infra failures split from task failures
   successRate: number | null;                      // (fires - failures - suspect) / fires; null when no fires
   byAgent: Record<string, { fires: number; failures: number; medianMs: number | null; costUsd: number | null; costMeteredFires: number; usdPerFire: number | null }>;
@@ -60,6 +62,8 @@ export interface UsageCell {
   cacheReadTokens: number | null;
   cacheWriteTokens: number | null;
   costUsd: number | null;         // summed over rows whose usage.costUsd!=null; null when costMetered===0
+  discardedUsd: number | null;    // LOOP-219: the priced spend of fires that produced nothing
+  discardedFires: number;
   costMetered: number;            // rows contributing a costUsd (money coverage)
   costPriced: number;             // rows with costUsd > 0 (excludes zero-cost rate-limit failures)
 }
@@ -95,17 +99,22 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
   // this field makes the onset boundary visible in --json output.
   const meteringOnsetTs = allRows.reduce<string | null>(
     (min, r) => (r.usage ? (min === null || r.ts < min ? r.ts : min) : min), null);
+  // LOOP-314: BOTH bounds. `ts >= cutoff` alone is a trailing-to-now window, so setting nowMs to a
+  // past instant still admitted every later row and a "before" era silently contained the "after".
+  // With the upper bound, [nowMs-windowMs, nowMs] is a genuine closed era — and for the default
+  // nowMs=Date.now() the only rows it newly excludes are future-dated ones, which are corrupt anyway.
   const cutoff = nowMs - windowMs;
-  const rows = allRows.filter((r) => Date.parse(r.ts) >= cutoff);
+  const rows = allRows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= nowMs; });
   const byAgent: FireMetrics["byAgent"] = {};
   const byProject: FireMetrics["byProject"] = {};
-  let failures = 0, timeouts = 0, suspect = 0;
+  let failures = 0, timeouts = 0, suspect = 0, interrupted = 0;
   const byErrorClass: Record<string, number> = {};
   for (const r of rows) {
     const failed = (r.exitCode ?? 0) !== 0;
     if (failed) failures++;
     if (r.timedOut) timeouts++;
     if (r.suspectError) suspect++;
+    if (r.interrupted) interrupted++;
     if (r.errorClass) byErrorClass[r.errorClass] = (byErrorClass[r.errorClass] ?? 0) + 1;
     const a = (byAgent[r.agent] ??= { fires: 0, failures: 0, medianMs: null, costUsd: null, costMeteredFires: 0, usdPerFire: null });
     a.fires++; if (failed) a.failures++;
@@ -115,14 +124,25 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
   for (const [agent, a] of Object.entries(byAgent)) {
     a.medianMs = median(rows.filter((r) => r.agent === agent && typeof r.durationMs === "number").map((r) => r.durationMs as number));
   }
+  // LOOP-219 — every money surface summed costUsd over ALL metered rows, including fires that were
+  // killed mid-flight and produced nothing, and then divided that inflated total by an outcome those
+  // fires never generated (cost-per-accepted-change). The one metric built to expose inefficiency was
+  // itself inflated by exactly the waste it exists to surface. A fire is DISCARDED iff it carries the
+  // flag — read the flag, never re-derive kill-detection from clustering. Both flags qualify:
+  // suspectError (exit 0, output looks like a failure) and interrupted (LOOP-155, the operator's own
+  // stop). Neither produced a delivered increment; both cost real money.
   let meteredFires = 0, costMeteredFires = 0, costUsdAcc = 0, hasCost = false;
+  let discardedFires = 0, discardedCostAcc = 0;
   for (const r of rows) {
+    const discarded = !!(r.suspectError || r.interrupted);
+    if (discarded) discardedFires++;
     if (r.usage) {
       meteredFires++;
       // costMeteredFires counts only rows with costUsd > 0 — zero-cost rate-limit failures (exitCode:1,
       // source:"provider", costUsd:0) have usage but no billable spend and must not inflate the denominator.
       if (r.usage.costUsd !== null && r.usage.costUsd > 0) {
         costMeteredFires++; costUsdAcc += r.usage.costUsd; hasCost = true;
+        if (discarded) discardedCostAcc += r.usage.costUsd;
         const a = byAgent[r.agent];
         if (a) { a.costUsd = (a.costUsd ?? 0) + r.usage.costUsd; a.costMeteredFires++; }
       }
@@ -132,8 +152,19 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
     a.usdPerFire = a.costMeteredFires > 0 && a.costUsd !== null ? a.costUsd / a.costMeteredFires : null;
   }
   const fires = rows.length;
-  const successRate = fires ? (fires - failures - suspect) / fires : null;
-  return { windowMs, fires, failures, timeouts, suspectErrors: suspect, byErrorClass, successRate, byAgent, byProject, meteredFires, costMeteredFires, costUsd: hasCost ? costUsdAcc : null, meteringOnsetTs };
+  // LOOP-155 — an operator-initiated stop is not an agent failure. `dev-loop run` forwards SIGINT to
+  // its in-flight agents; each exits 0 with a trailing "Execution error", which the old classifier
+  // bucketed as suspectError and then SUBTRACTED from the success rate. Every suspectError on the
+  // board that found this was such a kill — 10 of 10, zero true positives — so the loop reported
+  // itself 3.4 points sicker than it was, by exactly the amount the operator themselves caused, and
+  // it had already put a phantom "failure pattern #3" into a retrospective.
+  // Excluded from BOTH numerator and denominator: a discarded fire is not evidence either way.
+  const scored = fires - interrupted;
+  const successRate = scored > 0 ? (scored - failures - suspect) / scored : null;
+  return { windowMs, fires, failures, timeouts, suspectErrors: suspect, interrupted, discardedFires,
+    // null when NOTHING is priced (never a number we did not measure); a real 0.00 is legitimate.
+    discardedCostUsd: costMeteredFires > 0 ? discardedCostAcc : null,
+    byErrorClass, successRate, byAgent, byProject, meteredFires, costMeteredFires, costUsd: hasCost ? costUsdAcc : null, meteringOnsetTs };
 }
 
 // ─── rollingSpendUsd (LOOP-227) — enforcement spend total ────────────────────
@@ -148,8 +179,8 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
 const FALLBACK_RATE_PER_MS = 18.21 / 3_600_000; // ≈ 5.058e-6 $/ms (~$18.21/hr) conservative floor
 
 export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number): number {
-  const cutoff = nowMs - windowMs;
-  const inWindow = rows.filter((r) => Date.parse(r.ts) >= cutoff);
+  const cutoff = nowMs - windowMs;                                   // LOOP-314: closed era, both bounds
+  const inWindow = rows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= nowMs; });
 
   // Collect per-(codingAgent, model) rates from priced rows for median derivation
   const ratesByProfile: Record<string, number[]> = {};
@@ -183,7 +214,8 @@ export function ratePerMsFor(rows: FireRow[], codingAgent: string | null | undef
   const key = `${codingAgent ?? ""}/${model ?? ""}`;
   const rates: number[] = [];
   for (const r of rows) {
-    if (Date.parse(r.ts) < cutoff) continue;
+    const t = Date.parse(r.ts);
+    if (t < cutoff || t > nowMs) continue;                            // LOOP-314: closed era, both bounds
     if (`${r.codingAgent ?? ""}/${r.model ?? ""}` !== key) continue;
     if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
       rates.push(r.usage.costUsd / r.durationMs);
@@ -236,27 +268,42 @@ export function pruneFireLedger(ledgerPath: string, keepMs = 90 * 86_400_000, no
 // (CLI, web /usage, digest) call this ONE function so numbers are never computed twice.
 // Honest-null rules: a summed metric is null, NEVER 0, when metered===0 (no measurement at all).
 // bootBytes is never read into any usage/cost field — this function never touches it.
-const sumNull = (a: number | null, b: number | null): number | null =>
-  a === null && b === null ? null : (a ?? 0) + (b ?? 0);
+// LOOP-268 — `b` is `number | null | undefined`, deliberately. A ledger row is parsed with a bare
+// `JSON.parse(t) as FireRow` and zero runtime validation, so a `usage` object from a future schema
+// version, a hand-edited/legacy line, or a third-party writer can be MISSING a key rather than
+// carrying an explicit null. `a ?? 0` collapsed that absence to 0, which silently violates this
+// function's own documented invariant ("null, NEVER 0, when unmetered") — the one contract the
+// --usage flag's --help promises. Absent and null must mean the same thing: no measurement.
+const sumNull = (a: number | null, b: number | null | undefined): number | null =>
+  a === null && (b === null || b === undefined) ? null : (a ?? 0) + (b ?? 0);
 
 function emptyCell(): UsageCell {
-  return { fires: 0, metered: 0, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null, costMetered: 0, costPriced: 0 };
+  return { fires: 0, metered: 0, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null, discardedUsd: null, discardedFires: 0, costMetered: 0, costPriced: 0 };
 }
 
 function addToCell(cell: UsageCell, r: FireRow): void {
   cell.fires++;
+  const discarded = !!(r.suspectError || r.interrupted); // LOOP-219: read the flag, never re-derive it
+  if (discarded) cell.discardedFires++;
   if (!r.usage) return;                                              // no measurement → only fires counter touched
   cell.metered++;
   cell.inputTokens = sumNull(cell.inputTokens, r.usage.inputTokens);
   cell.outputTokens = sumNull(cell.outputTokens, r.usage.outputTokens);
   cell.cacheReadTokens = sumNull(cell.cacheReadTokens, r.usage.cacheReadTokens);
   cell.cacheWriteTokens = sumNull(cell.cacheWriteTokens, r.usage.cacheWriteTokens);
-  if (r.usage.costUsd !== null) { cell.costUsd = (cell.costUsd ?? 0) + r.usage.costUsd; cell.costMetered++; if (r.usage.costUsd > 0) cell.costPriced++; }
+  // LOOP-268: `!= null` (loose) — an ABSENT costUsd key is not a $0 fire, it is an unpriced one.
+  if (r.usage.costUsd != null) {
+    cell.costUsd = (cell.costUsd ?? 0) + r.usage.costUsd; cell.costMetered++;
+    if (r.usage.costUsd > 0) cell.costPriced++;
+    if (discarded) cell.discardedUsd = (cell.discardedUsd ?? 0) + r.usage.costUsd;
+    else cell.discardedUsd = cell.discardedUsd ?? 0; // priced rows exist ⇒ 0.00 is a MEASURED zero
+  }
 }
 
 export function usageReport(rows: FireRow[], windowMs: number, opts: { groupBy?: UsageDimension; nowMs?: number } = {}): UsageReport {
-  const cutoff = (opts.nowMs ?? Date.now()) - windowMs;
-  const inWindow = rows.filter((r) => Date.parse(r.ts) >= cutoff);
+  const until = opts.nowMs ?? Date.now();
+  const cutoff = until - windowMs;                                   // LOOP-314: closed era, both bounds
+  const inWindow = rows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= until; });
   const overall = emptyCell();
   const dimMap: Record<string, UsageCell> | undefined = opts.groupBy ? {} : undefined;
   for (const r of inWindow) {
@@ -311,14 +358,85 @@ export function fireRowsFromEvents(db: any, projectId: string, sinceIso: string)
   return out;
 }
 
+// ─── the per-fire budget watchdog's deadline (LOOP-230 / LOOP-297) ───────────
+// Lives HERE, beside ratePerMsFor — its only input — rather than in run-agents.ts, so the surface that
+// DISPLAYS the armed deadline and the watchdog that ENFORCES it are the same function and cannot drift
+// (LOOP-297 AC2). run-agents.ts imports it; nothing may import run-agents.ts (it calls main()
+// unconditionally, LOOP-58), which is exactly why the display had no way to reuse the enforcer before.
+//
+// Provenance of the default (LOOP-230 AC4), from the observed distribution: the worst runaway was
+// $18.21 over ~60 min, a NORMAL fire costs pm $6.43 / senior $7.46, so $12.00 sits above the priciest
+// normal fire (1.61x) and below the runaway.
+// AND — the part the dollar figure hides (LOOP-297 AC4) — the MECHANISM ACTS IN TIME, not dollars:
+// $12.00 divided by each profile's measured $/hr arms at ~28-61 min depending on profile. For the
+// pricier opus profiles that is INSIDE the 60-min wall, so the budget ceiling, not `fireTimeout`, is
+// what actually bounds those fires. That conversion moves as the ledger moves; nothing printed it,
+// so no operator could answer "how long may a senior-dev fire run today?" from any command.
+export const DEFAULT_PER_FIRE_USD = 12.00;
+export const RATE_WINDOW_MS = 7 * 86_400_000; // window for the per-profile $/ms median
+
+export function perFireDeadline(
+  ceilingUsd: number | null,
+  rows: FireRow[] | null,
+  codingAgent: string | null | undefined,
+  model: string | null | undefined,
+  nowMs: number,
+): { deadlineMs: number; ratePerMs: number } | null {
+  if (ceilingUsd == null || !(ceilingUsd > 0)) return null;   // unset/invalid => no watchdog
+  try {
+    const ratePerMs = ratePerMsFor(rows ?? [], codingAgent, model, RATE_WINDOW_MS, nowMs);
+    const budgetMs = ceilingUsd / ratePerMs;                  // ms of runtime whose estimated spend == the ceiling
+    // Bounds are deliberately ASYMMETRIC. Past the 32-bit setTimeout limit (LOOP-260) the ceiling is
+    // unreachable inside any real fire, so nothing arms and the wall timeout owns it. Below 1ms it
+    // CLAMPS rather than disarming: that ceiling is crossed instantly, so killing at once IS its meaning.
+    if (!Number.isFinite(budgetMs) || budgetMs > 2_147_483_647) return null;
+    return { deadlineMs: Math.max(1, budgetMs), ratePerMs };
+  } catch { return null; }                                    // any read error => fail open, never break a launch
+}
+
+// LOOP-297 — the profiles present in the window, with the deadline each one's ceiling actually arms.
+export interface ProfileDeadline { codingAgent: string; model: string; usdPerHour: number; deadlineMinutes: number | null; priced: boolean; fires: number }
+export function profileDeadlines(rows: FireRow[], ceilingUsd: number | null, windowMs: number, nowMs: number): ProfileDeadline[] {
+  const cutoff = nowMs - windowMs;
+  const seen = new Map<string, { codingAgent: string; model: string; fires: number; priced: number }>();
+  for (const r of rows) {
+    const t = Date.parse(r.ts);
+    if (t < cutoff || t > nowMs) continue;
+    const codingAgent = r.codingAgent ?? "";
+    const model = r.model ?? "";
+    const k = `${codingAgent}/${model}`;
+    const e = seen.get(k) ?? { codingAgent, model, fires: 0, priced: 0 };
+    e.fires++;
+    if (r.usage != null && r.usage.costUsd != null && r.usage.costUsd > 0 && typeof r.durationMs === "number" && r.durationMs > 0) e.priced++;
+    seen.set(k, e);
+  }
+  const out: ProfileDeadline[] = [];
+  for (const e of seen.values()) {
+    const d = perFireDeadline(ceilingUsd, rows, e.codingAgent, e.model, nowMs);
+    const ratePerMs = d?.ratePerMs ?? ratePerMsFor(rows, e.codingAgent, e.model, RATE_WINDOW_MS, nowMs);
+    out.push({
+      codingAgent: e.codingAgent || "(unset)",
+      model: e.model || "(cli default)",
+      usdPerHour: ratePerMs * 3_600_000,
+      deadlineMinutes: d ? d.deadlineMs / 60_000 : null,
+      priced: e.priced > 0,
+      fires: e.fires,
+    });
+  }
+  return out.sort((a, b) => b.fires - a.fires);
+}
+
 // ─── board KPIs (service backend — from `issue.transition` events) ───────────
 export interface BoardMetrics {
-  throughput: number;         // transitions → Done in the window
+  throughput: number;         // transitions → Done in the window (board-wide; LOOP-42's contract, unchanged)
   verifyFails: number;        // In Review → Canceled (the §3 verify-fail close edge)
-  acceptRate: number | null;  // Done ÷ (Done + verifyFails); null when both are 0
+  acceptRate: number | null;  // LOOP-98: In Review→Done ÷ ALL In Review exits; null when there are none
+  inReviewExits: Record<string, number>; // LOOP-98: every In Review exit edge, keyed by destination state
   blockedNow: number;         // parked tickets needing human attention (Human-Blocked ∪ blocked-label w/o live edge)
   sequencedNow: number;       // open `blocked` tickets with a live Blocked-by edge (will self-unpark)
-  qa: { bugsFiled: number; escaped: number; escapeRatio: number | null }; // escaped = incident/signal-labelled Bugs
+  historyFloor: string | null; // LOOP-313: earliest `events` row for the project — null when there are none
+  historyIncomplete: boolean;  // LOOP-313: true when the floor is INSIDE the window (aggregates are partial)
+  qa: { bugsFiled: number; escaped: number | null; escapeRatio: number | null }; // LOOP-122: null = unmeasurable
 }
 
 // ─── shared parked-split (LOOP-31) — per-backend human-park population ─────
@@ -368,30 +486,70 @@ function hasLiveBlockerEdge(db: any, ticketId: string): boolean {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function boardMetrics(db: any, projectId: string, windowMs: number, nowMs = Date.now()): BoardMetrics {
+export function boardMetrics(db: any, projectId: string, windowMs: number, nowMs = Date.now(), opts: { escapeSourceConfigured?: boolean } = {}): BoardMetrics {
   const cutoffIso = new Date(nowMs - windowMs).toISOString();
+  const untilIso = new Date(nowMs).toISOString();                    // LOOP-314: closed era, both bounds
   const transitions = db.prepare(
-    "SELECT data FROM events WHERE project_id=? AND kind='issue.transition' AND created_at>=?",
-  ).all(projectId, cutoffIso) as { data: string }[];
+    "SELECT data FROM events WHERE project_id=? AND kind='issue.transition' AND created_at>=? AND created_at<=?",
+  ).all(projectId, cutoffIso, untilIso) as { data: string }[];
+  // LOOP-98 — `throughput` and `acceptRate` are DIFFERENT populations and the code used one count for
+  // both. `done` is board-wide (every `→ Done`, whatever the source state) and is correct for
+  // throughput, its actual job; reused as an ACCEPT numerator it counts work nothing ever verified.
+  // The denominator was `done + verifyFails`, where verifyFails is only `In Review → Canceled` — so
+  // two of four In Review exit edges were missing. Both errors push the same way, so they compound:
+  // 86.5% shown vs 75.0% true on the board that found this.
+  //
+  // The denominator is derived as "every transition whose `from` is In Review", NEVER a hard-coded
+  // list of destinations: a new exit target added later must widen it, not silently shrink it.
   let done = 0, verifyFails = 0;
+  const inReviewExits: Record<string, number> = {};
   for (const t of transitions) {
     try {
       const d = JSON.parse(t.data) as { from?: string; to?: string };
       if (d.to === "Done") done++;
-      if (d.from === "In Review" && d.to === "Canceled") verifyFails++;
+      if (d.from === "In Review") {
+        const to = d.to ?? "(unknown)";
+        inReviewExits[to] = (inReviewExits[to] ?? 0) + 1;
+        if (to === "Canceled") verifyFails++;
+      }
     } catch { /* skip */ }
   }
+  const reviewExitTotal = Object.values(inReviewExits).reduce((a, b) => a + b, 0);
+  const acceptRate = reviewExitTotal ? (inReviewExits["Done"] ?? 0) / reviewExitTotal : null;
+
   // Split blocked tickets into parked (attention-needed) vs sequenced (live dependency edge).
   // Uses shared parkedSplit which also counts Human-Blocked state tickets (LOOP-31).
   const { parkedIds, sequencedNow } = parkedSplit(db, projectId);
   const blockedNow = parkedIds.length;
   const bugs = db.prepare(
-    "SELECT labels FROM tickets WHERE project_id=? AND type='Bug' AND created_at>=?",
-  ).all(projectId, cutoffIso) as { labels: string }[];
-  let escaped = 0;
-  for (const b of bugs) if (/"incident"|"signal"/.test(b.labels)) escaped++;
-  const qa = { bugsFiled: bugs.length, escaped, escapeRatio: bugs.length ? escaped / bugs.length : null };
-  return { throughput: done, verifyFails, acceptRate: done + verifyFails ? done / (done + verifyFails) : null, blockedNow, sequencedNow, qa };
+    "SELECT labels FROM tickets WHERE project_id=? AND type='Bug' AND created_at>=? AND created_at<=?",
+  ).all(projectId, cutoffIso, untilIso) as { labels: string }[];
+  // LOOP-122 — `escaped` counts `incident`/`signal` labels, and BOTH are written only by agents
+  // (ops, communication) that may not run at all. On a loop running neither, the field is 0 by
+  // construction and renders as "0 escaped to prod" — a confident production-quality claim from a
+  // measurement that cannot exist. null means "no measurement exists"; a real 0 keeps its meaning.
+  // Same contract LOOP-42 set for `landed`: unknown renders as unknown, NEVER as 0-as-healthy.
+  const escapeSource = opts.escapeSourceConfigured ?? true;
+  let escapedCount = 0;
+  for (const b of bugs) if (/"incident"|"signal"/.test(b.labels)) escapedCount++;
+  const escaped = escapeSource ? escapedCount : null;
+  const qa = {
+    bugsFiled: bugs.length,
+    escaped,
+    escapeRatio: escaped !== null && bugs.length ? escaped / bugs.length : null,
+  };
+
+  // LOOP-313 — every windowed aggregate here is computed over `events`, and that table can begin
+  // LATER than the window (the 2026-08-04 cascade delete took every board-mutation row with it, so
+  // "6 done · 30d" printed on a board holding 174 Done tickets). Expose the floor so no surface has
+  // to guess whether a number it is about to print covers the window it labels.
+  const floorRow = db.prepare(
+    "SELECT MIN(created_at) AS floor FROM events WHERE project_id=?",
+  ).get(projectId) as { floor: string | null } | undefined;
+  const historyFloor = floorRow?.floor ?? null;
+  const historyIncomplete = historyFloor !== null && Date.parse(historyFloor) > nowMs - windowMs;
+
+  return { throughput: done, verifyFails, acceptRate, inReviewExits, blockedNow, sequencedNow, historyFloor, historyIncomplete, qa };
 }
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
@@ -403,7 +561,10 @@ function parseWindow(s: string): number {
 
 // P1-3: the operator's decision queue as ONE queryable set — Human-Blocked ∪ In Review assigned to the
 // operator. The daemon reminder pings it; the §22a digest carries it; this is the shared read.
-export interface DecisionItem { id: string; title: string; state: string; updatedAt: string }
+// `enteredAt` (LOOP-108) is the transition INTO the queue state — the operator's real wait. It is
+// optional on the interface because decisionQueue() itself does not compute it (one extra query per
+// row); collectBoardMetrics fills it in. Renderers must prefer it and fall back to updatedAt.
+export interface DecisionItem { id: string; title: string; state: string; updatedAt: string; enteredAt?: string }
 export function decisionQueue(db: import("node:sqlite").DatabaseSync, projectId: string): DecisionItem[] {
   return (db.prepare(
     "SELECT id,title,state,updated_at FROM tickets WHERE project_id=? AND (state='Human-Blocked' OR (state='In Review' AND assignee='operator')) ORDER BY updated_at",
@@ -456,17 +617,31 @@ export function ownerLiveness(
   const out: OwnerLivenessFinding[] = [];
   for (const h of handles) {
     const owned = db.prepare(
-      "SELECT assignee, labels, state, updated_at FROM tickets WHERE project_id=? AND state IN ('Todo','In Review') ORDER BY updated_at",
+      "SELECT assignee, labels, state, updated_at FROM tickets WHERE project_id=? AND state IN ('Todo','In Review','In Progress') ORDER BY updated_at",
     ).all(projectId) as { assignee: string | null; labels: string; state: string; updated_at: string }[];
-    // Ownership rule: In Review → label only (the label names the verifier, not the implementer whose
-    // assignee field still points at the dev who shipped it); Todo → union(assignee, label) so tickets
-    // routed by assignee alone (no tier label) are not invisible to the liveness detector (LOOP-30).
+    // Ownership rules — ONE statement of them, for the whole owned set (LOOP-30 + LOOP-102):
+    //   Todo        → union(assignee, label): tickets routed by assignee alone (no tier label) must
+    //                 not be invisible to the detector (LOOP-30).
+    //   In Review   → label only: the label names the VERIFIER, while assignee still points at the
+    //                 dev who shipped it.
+    //   In Progress → assignee only: a claim is held by the actor that moved it, never by a label.
+    //                 This is the state whose ONLY recovery is the claimant firing again, so a dead
+    //                 claimant strands it hardest — and it was the one open state W16 could not see.
+    //   blocked     → EXCLUDED in every state: every serving path filters the label out
+    //                 (agentops.ts opQueue and todoDepth both do), so W16's remedy — "re-owner them,
+    //                 or mark the role manual" — is a no-op for a blocked ticket: re-owning it makes
+    //                 no router serve it. Counting them inflated the number by ~26% with work the
+    //                 fix could not release.
+    //   Human-Blocked → deliberately NOT in the set. It is a park awaiting a HUMAN, not owner
+    //                 stranding, and it already has its own surface in the operator decision queue
+    //                 (W20). Do not "fix" it into the set.
     const mine = owned.filter((t) => {
-      if (t.state === "In Review") {
-        try { return (JSON.parse(t.labels) as string[]).includes(h); } catch { return false; }
-      }
-      if (t.assignee === h) return true;
-      try { return (JSON.parse(t.labels) as string[]).includes(h); } catch { return false; }
+      let labels: string[] = [];
+      try { labels = JSON.parse(t.labels) as string[]; } catch { labels = []; }
+      if (labels.includes("blocked")) return false;
+      if (t.state === "In Review") return labels.includes(h);
+      if (t.state === "In Progress") return t.assignee === h;
+      return t.assignee === h || labels.includes(h);
     });
     if (!mine.length) continue;
     const last = lastFire.get(h) ?? null;
@@ -512,14 +687,25 @@ export interface KaizenReport {
   showHeaderLine: boolean;        // selfFixed >= 1, computed once so both surfaces agree
 }
 
-function parseLessons(lessonsDir: string): KaizenReport["lessons"] {
+// LOOP-266 — `projectKey` scopes the file set to what a fire for THAT project actually receives.
+// This stat is rendered under a per-project `[key]` heading but was computed over EVERY `*.md` in
+// the lessons dir, so a three-project workspace showed all three the same total and told a project
+// with no shard that it had 8 lessons when 6 ever reach its fires. The authority is six lines away
+// in lessons.ts: `lessonsForFire(ws, project)` loads INDEX.md plus that ONE project's shard.
+// projectKey omitted ⇒ the old whole-directory behaviour, for callers with no project in hand.
+function parseLessons(lessonsDir: string, projectKey?: string): KaizenReport["lessons"] {
   if (!existsSync(lessonsDir)) return { entries: 0, byMonth: {}, present: false };
   const files: string[] = [];
   try {
     const index = join(lessonsDir, "INDEX.md");
     if (existsSync(index)) files.push(index);
-    for (const f of readdirSync(lessonsDir)) {
-      if (f !== "INDEX.md" && f !== "archive.md" && f.endsWith(".md")) files.push(join(lessonsDir, f));
+    if (projectKey !== undefined) {
+      const shard = join(lessonsDir, `${projectKey}.md`);
+      if (existsSync(shard)) files.push(shard);
+    } else {
+      for (const f of readdirSync(lessonsDir)) {
+        if (f !== "INDEX.md" && f !== "archive.md" && f.endsWith(".md")) files.push(join(lessonsDir, f));
+      }
     }
   } catch { return { entries: 0, byMonth: {}, present: false }; }
   let entries = 0;
@@ -571,7 +757,7 @@ function parseRatchet(pkgJsonPath: string, gauntletDocPath: string): KaizenRepor
 export function kaizenReport(
   db: any,
   projectId: string,
-  opts: { nowMs: number; windowMs?: number; lessonsDir?: string; ratchetSources?: { pkgJson: string; gauntletDoc: string } },
+  opts: { nowMs: number; windowMs?: number; lessonsDir?: string; projectKey?: string; ratchetSources?: { pkgJson: string; gauntletDoc: string } },
 ): KaizenReport {
   const windowMs = opts.windowMs ?? 7 * 86_400_000;
   // Stat 1 — self-filed → self-fixed
@@ -588,7 +774,8 @@ export function kaizenReport(
   const selfFixRate = selfFiled > 0 ? selfFixed / selfFiled : null;
   const selfSlice = totalDone > 0 ? selfFixed / totalDone : null;
   // Stat 2 — lessons
-  const lessons = opts.lessonsDir ? parseLessons(opts.lessonsDir) : { entries: 0, byMonth: {}, present: false };
+  // LOOP-266: scoped to the project the panel is rendered under, matching lessonsForFire.
+  const lessons = opts.lessonsDir ? parseLessons(opts.lessonsDir, opts.projectKey) : { entries: 0, byMonth: {}, present: false };
   // Stat 3 — quality ratchet
   const ratchet = opts.ratchetSources
     ? parseRatchet(opts.ratchetSources.pkgJson, opts.ratchetSources.gauntletDoc)
@@ -676,7 +863,7 @@ async function runKaizenCli(ws: Workspace, boardDb: string, windowMs: number, as
       for (const key of keys) {
         const pid = findProject(db, key);
         if (!pid) continue;
-        reports.push({ key, ...kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } }) });
+        reports.push({ key, ...kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, projectKey: key, ratchetSources: { pkgJson, gauntletDoc } }) });
       }
       console.log(JSON.stringify(reports, null, 2));
     } else {
@@ -684,7 +871,7 @@ async function runKaizenCli(ws: Workspace, boardDb: string, windowMs: number, as
         const pid = findProject(db, key);
         if (!pid) continue;
         if (keys.length > 1) console.log(`\n[${key}]`);
-        renderKaizen(kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, ratchetSources: { pkgJson, gauntletDoc } }));
+        renderKaizen(kaizenReport(db, pid, { nowMs: Date.now(), windowMs, lessonsDir, projectKey: key, ratchetSources: { pkgJson, gauntletDoc } }));
       }
     }
   } finally { db.close(); }
@@ -693,28 +880,62 @@ async function runKaizenCli(ws: Workspace, boardDb: string, windowMs: number, as
 
 // Service-backend board rollup: per-project board KPIs + the operator decision queue folded into
 // `out` (1.8.1 quality-gauntlet drain: metricsCli CC 22 → collect/render phases).
-async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>, boardDb: string): Promise<void> {
+// LOOP-122 — does an escape SIGNAL SOURCE exist at all? `escaped` counts the `incident` and `signal`
+// labels, and both are written only by the ops and communication agents. Config presence is not the
+// test — this workspace configures a cadence for both and runs neither, because neither is in the
+// `core` run set. The ledger is the honest record of what actually ran in the window, so that is
+// what decides whether a 0 means "measured, nothing escaped" or "nothing could ever have said so".
+export function escapeSignalSourceRan(fires: { byAgent: Record<string, { fires: number }> }): boolean {
+  return (fires.byAgent["ops"]?.fires ?? 0) > 0 || (fires.byAgent["communication"]?.fires ?? 0) > 0;
+}
+
+async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>, boardDb: string, escapeSourceConfigured = true, nowMs = Date.now()): Promise<void> {
   if (ws.file.team.backend === "service" && existsSync(boardDb)) {
     const { openDb } = await import("./db.ts");
     const { findProject } = await import("./seed.ts");
     const db = openDb(boardDb);
     try {
       const board: Record<string, BoardMetrics> = {};
-      const roll = { throughput: 0, verifyFails: 0, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
+      const roll = { throughput: 0, verifyFails: 0, blockedNow: 0, sequencedNow: 0, bugsFiled: 0 };
+      // LOOP-122: null-preserving across the rollup — one unmeasurable project makes the TEAM total
+      // unmeasurable too. Summing it as 0 would re-introduce the exact reassuring-zero this fixes.
+      let escapedRoll: number | null = null;
+      // LOOP-98: the team accept rate is re-derived from the same In Review exit population, not from
+      // the throughput/verifyFails pair (which are different populations — see boardMetrics).
+      const exitsRoll: Record<string, number> = {};
+      let historyIncompleteAny = false;
+      let historyFloorMin: string | null = null;
       let sensitiveMistierCount = 0;
       const queue: Array<DecisionItem & { project: string }> = [];
       for (const key of deliveryProjects(ws)) {
         const pid = findProject(db, key);
         if (!pid) continue;
-        const m = boardMetrics(db, pid, windowMs);
+        const m = boardMetrics(db, pid, windowMs, nowMs, { escapeSourceConfigured });
         board[key] = m;
         roll.throughput += m.throughput; roll.verifyFails += m.verifyFails; roll.blockedNow += m.blockedNow; roll.sequencedNow += m.sequencedNow;
-        roll.bugsFiled += m.qa.bugsFiled; roll.escaped += m.qa.escaped;
+        roll.bugsFiled += m.qa.bugsFiled;
+        if (m.qa.escaped !== null) escapedRoll = (escapedRoll ?? 0) + m.qa.escaped;
+        for (const [to, n] of Object.entries(m.inReviewExits)) exitsRoll[to] = (exitsRoll[to] ?? 0) + n;
+        if (m.historyIncomplete) historyIncompleteAny = true;
+        if (m.historyFloor && (historyFloorMin === null || m.historyFloor < historyFloorMin)) historyFloorMin = m.historyFloor;
         sensitiveMistierCount += sensitiveMistier(db, pid).length;
-        queue.push(...decisionQueue(db, pid).map((t) => ({ ...t, project: key }))); // P1-3
+        // LOOP-108: the wait is measured from the transition INTO the queue state, never from
+        // tickets.updated_at — an unrelated later write (Sweep's own hygiene comment did exactly
+        // this: 1h10m → 1m on LOOP-101) must not reset the operator's oldest-item age.
+        queue.push(...decisionQueue(db, pid).map((t) => ({ ...t, project: key, enteredAt: decisionEnteredAt(db, t.id, t.state) })));
       }
+      queue.sort((a, b) => (a.enteredAt ?? a.updatedAt).localeCompare(b.enteredAt ?? b.updatedAt)); // oldest WAIT first
       out.board = board;
-      out.teamRollup = { ...roll, acceptRate: roll.throughput + roll.verifyFails ? roll.throughput / (roll.throughput + roll.verifyFails) : null, sensitiveMistierCount };
+      const exitTotal = Object.values(exitsRoll).reduce((a, b) => a + b, 0);
+      out.teamRollup = {
+        ...roll,
+        escaped: escapedRoll,
+        acceptRate: exitTotal ? (exitsRoll["Done"] ?? 0) / exitTotal : null,
+        inReviewExits: exitsRoll,
+        historyIncomplete: historyIncompleteAny,
+        historyFloor: historyFloorMin,
+        sensitiveMistierCount,
+      };
       out.decisionQueue = queue;
     } finally { db.close(); }
   } else {
@@ -752,20 +973,34 @@ function fmtWindow(ms: number): string {
 export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<typeof fireMetrics>, out: Record<string, unknown>, nowMs = Date.now()): void {
   const pct = (x: number | null) => x === null ? "—" : `${Math.round(x * 100)}%`;
   console.log(`team '${ws.file.team.key}' — last ${fmtWindow(windowMs)}`);
-  console.log(`fires: ${fires.fires} (success ${pct(fires.successRate)}, ${fires.failures} failed, ${fires.timeouts} timeout, ${fires.suspectErrors} suspect)`);
+  // LOOP-155: the interrupted count is NAMED as excluded — a redefined rate that does not say so is
+  // a second way to mislead the same reader.
+  const interruptedNote = fires.interrupted ? `, ${fires.interrupted} interrupted — excluded` : "";
+  console.log(`fires: ${fires.fires} (success ${pct(fires.successRate)}, ${fires.failures} failed, ${fires.timeouts} timeout, ${fires.suspectErrors} suspect${interruptedNote})`);
   if (Object.keys(fires.byErrorClass).length) // P0-1b: infra failure classes split from task failures
     console.log(`errors: ${Object.entries(fires.byErrorClass).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join(", ")}`);
   for (const [agent, a] of Object.entries(fires.byAgent))
     console.log(`  ${agent.padEnd(14)} ${String(a.fires).padStart(4)} fires  ${String(a.failures).padStart(3)} failed  median ${a.medianMs === null ? "—" : Math.round(a.medianMs / 1000) + "s"}`);
   if (out.teamRollup) {
-    const r = out.teamRollup as { throughput: number; verifyFails: number; acceptRate: number | null; blockedNow: number; sequencedNow: number; bugsFiled: number; escaped: number };
+    const r = out.teamRollup as { throughput: number; verifyFails: number; acceptRate: number | null; blockedNow: number; sequencedNow: number; bugsFiled: number; escaped: number | null; historyIncomplete?: boolean; historyFloor?: string | null };
     const landedCount = typeof out.landed === "number" ? out.landed : null;
     const landedStr = landedCount === null ? "unknown" : String(landedCount);
-    console.log(`board: ${r.throughput} done, landed ${landedStr}, accept ${pct(r.acceptRate)} (${r.verifyFails} verify-fail), ${r.blockedNow} parked, ${r.sequencedNow} sequenced, QA bugs ${r.bugsFiled} (${r.escaped} escaped to prod)`);
-    const dq = (out.decisionQueue ?? []) as Array<{ id: string; state: string; project: string; updatedAt: string }>;
+    // LOOP-122: `0 escaped to prod` is a production-quality claim; on a loop running neither agent
+    // that can write the label it was 0 by construction. Follows LOOP-42's `landed unknown` shape.
+    const escapeStr = r.escaped === null ? "escapes unmeasured — no ops/communication fire in window" : `${r.escaped} escaped to prod`;
+    console.log(`board: ${r.throughput} done, landed ${landedStr}, accept ${pct(r.acceptRate)} (${r.verifyFails} verify-fail), ${r.blockedNow} parked, ${r.sequencedNow} sequenced, QA bugs ${r.bugsFiled} (${escapeStr})`);
+    // LOOP-313: every figure on the line above is derived from `events`. When that table begins
+    // INSIDE the window, the numbers do not cover the period they are labelled with — say so rather
+    // than let "6 done · 30d" stand on a board holding 174 Done tickets.
+    if (r.historyIncomplete && r.historyFloor)
+      console.log(`  ⚠ incomplete history: the event ledger begins ${r.historyFloor.slice(0, 10)}, inside this window — every board figure above covers only that shorter period`);
+    const dq = (out.decisionQueue ?? []) as Array<{ id: string; state: string; project: string; updatedAt: string; enteredAt?: string }>;
     if (dq.length) {
       const lbl = (t: { id: string; state: string }) => `${t.id}[${t.state === "Human-Blocked" ? "blocked" : "approve"}]`;
-      const age = (t: { updatedAt: string }) => fmtDur(nowMs - Date.parse(t.updatedAt));
+      // LOOP-108: enteredAt (the transition INTO the queue state) — updatedAt is bumped by EVERY
+      // write, so an agent's own hygiene comment reset the operator's displayed wait to zero. The
+      // sibling surface (/activity) already answered this from the event ledger; the two disagreed 42×.
+      const age = (t: { updatedAt: string; enteredAt?: string }) => fmtDur(nowMs - Date.parse(t.enteredAt ?? t.updatedAt));
       const oldest = dq[0]!;
       const items = dq.slice(0, 6).map((t) => `${lbl(t)} ${age(t)}`).join(", ");
       console.log(`decision queue (yours): ${dq.length}, oldest ${lbl(oldest)} waiting ${age(oldest)} — ${items}${dq.length > 6 ? ", …" : ""}`);
@@ -798,12 +1033,30 @@ function renderCell(label: string, cell: UsageCell, indent = ""): void {
   console.log(`${indent}${label}: in=${dash(cell.inputTokens)} out=${dash(cell.outputTokens)} cacheR=${dash(cell.cacheReadTokens)} cacheW=${dash(cell.cacheWriteTokens)}  [${cov}]`);
 }
 
+// LOOP-332 — `UsageCell` carries BOTH counts, correctly computed and correctly named in the type:
+//   costMetered = rows contributing a costUsd (money COVERAGE — includes $0 rate-limit failures)
+//   costPriced  = rows with costUsd > 0    (the rows that actually cost money)
+// Every render site printed `costMetered` under the word "priced", so the coverage count was read as
+// the priced count and the implied $/fire came out low ($3.88 off the screen vs $4.55 true).
+// Choice: print BOTH and label each with its own word, rather than dropping one. The distance
+// between them is itself the useful signal — it is exactly the zero-cost failure count.
+// AC1: the per-fire rate is divided here rather than left to the reader, on the priced denominator.
 function renderCostCell(label: string, cell: UsageCell, indent = ""): void {
   if (cell.costMetered === 0) {
     console.log(`${indent}${label}: cost: unavailable — 0 of ${cell.fires} fires reported cost`);
     return;
   }
-  console.log(`${indent}${label}: ${usd(cell.costUsd)}  [${cell.costMetered} of ${cell.fires} priced]`);
+  // AC4: costPriced can be 0 while costMetered > 0 (every row zero-cost). That is not $0.00/fire and
+  // it is not a divide-by-zero — it is "no priced fire to divide by".
+  const perFire = cell.costUsd !== null && cell.costPriced > 0
+    ? `$${(cell.costUsd / cell.costPriced).toFixed(4)}/priced fire`
+    : "—/priced fire";
+  // LOOP-219: the gross total stays visible and unchanged — this ADDS the decomposition. The
+  // per-agent gradient is the actionable half: discarded share is not spread evenly across tiers.
+  const disc = cell.discardedUsd !== null && cell.costUsd !== null && cell.costUsd > 0
+    ? `  discarded $${cell.discardedUsd.toFixed(4)} (${((cell.discardedUsd / cell.costUsd) * 100).toFixed(1)}%, ${cell.discardedFires} fires)`
+    : "";
+  console.log(`${indent}${label}: ${usd(cell.costUsd)}  ${perFire}  [${cell.costPriced} priced, ${cell.costMetered} metered, of ${cell.fires} fires]${disc}`);
 }
 
 export function renderUsage(report: UsageReport, byDim?: UsageDimension): void {
@@ -817,36 +1070,69 @@ export function renderUsage(report: UsageReport, byDim?: UsageDimension): void {
   }
 }
 
-export function renderCost(report: UsageReport, byDim?: UsageDimension, budget?: { dailyUsd: number; rollingUsd: number }): void {
+export function renderCost(report: UsageReport, byDim?: UsageDimension, budget?: { dailyUsd: number; rollingUsd: number; windowUsd?: number }, deadlines?: { ceilingUsd: number; wallMinutes: number; rows: ProfileDeadline[] }): void {
   const days = report.windowMs / 86_400_000;
   console.log(`cost — last ${days}d  (${report.meteredFires} of ${report.totalFires} fires metered)`);
   renderCostCell("overall", report.overall);
+  // LOOP-298 — this surface prints a REPORTING total and an ENFORCEMENT total two lines apart on
+  // different bases, and the gate uses the one that was never labelled. `overall` sums provider-priced
+  // rows and drops the rest; `rollingSpendUsd` deliberately ESTIMATES killed and unpriced fires, so a
+  // ceiling cannot be evaded by exactly the fires most likely to have blown it. Both are correct.
+  // Printing them adjacently without naming the difference is not: an operator sized headroom at
+  // $205/day against a $500 ceiling while the scheduler was gating on $389/day — 41% vs 78%, same
+  // screen, same command. Nothing computed changes here; the two bases are named, and the enforcement
+  // basis is also shown over the REPORTED window so the two are finally comparable (AC2).
+  console.log(`  ↑ reporting basis: provider-priced rows only — unpriced and killed fires are excluded`);
   if (budget) {
-    // The dailyUsd ceiling line (LOOP-229), shown only when a ceiling is set. The rolling total is the
-    // estimate-augmented rollingSpendUsd — a killed/unpriced fire counts, never $0 (INV-5) — so it matches
-    // exactly what the launch gate refuses on. Always a fixed 24h window, independent of --window; distinct
-    // from the honest-null reporting cost above (which sums only provider-priced rows).
     const over = budget.rollingUsd > budget.dailyUsd;
     console.log(`  budget: rolling 24h $${budget.rollingUsd.toFixed(2)} / dailyUsd $${budget.dailyUsd.toFixed(2)} — ${over ? "OVER ceiling, launches refused" : "under ceiling"}`);
+    if (budget.windowUsd !== undefined) {
+      const perDay = days > 0 ? budget.windowUsd / days : budget.windowUsd;
+      console.log(`  ↑ enforcement basis (what the launch gate counts): $${budget.windowUsd.toFixed(2)} over the same ${days}d = $${perDay.toFixed(2)}/day — unpriced and killed fires ESTIMATED, never $0`);
+    }
   }
   if (report.byDimension) {
     const dim = byDim ?? "agent";
     for (const [k, cell] of Object.entries(report.byDimension))
       renderCostCell(`  ${dim}:${k}`, cell, "");
   }
+  // LOOP-297 — the per-fire ceiling ships ON, and it is now the enforcer that decides whether a
+  // launched fire survives. It is stated in DOLLARS while the mechanism acts in TIME, and the
+  // conversion is a moving 7-day median per (codingAgent, model). Nothing printed it, so nobody
+  // could answer "how long may a senior-dev fire run today?". These come from the same
+  // perFireDeadline() the watchdog arms, so the display cannot drift from the enforcer.
+  if (deadlines && deadlines.rows.length) {
+    console.log(`  per-fire ceiling: $${deadlines.ceilingUsd.toFixed(2)} — the deadline it ARMS, by profile:`);
+    for (const d of deadlines.rows) {
+      const mins = d.deadlineMinutes === null ? "never (beyond the timer limit)" : `${d.deadlineMinutes.toFixed(1)} min`;
+      const basis = d.priced ? "measured" : "FALLBACK rate — no priced history for this profile";
+      // AC3: when the budget deadline lands inside the wall timeout, the ceiling — not fireTimeout —
+      // is what actually bounds the fire. Legitimate, but it must be legible.
+      const undercuts = d.deadlineMinutes !== null && deadlines.wallMinutes > 0 && d.deadlineMinutes < deadlines.wallMinutes
+        ? `  ⚠ INSIDE the ${deadlines.wallMinutes} min wall — the budget, not fireTimeout, bounds this profile` : "";
+      console.log(`    ${d.codingAgent}/${d.model}: $${d.usdPerHour.toFixed(2)}/hr → ${mins}  [${d.fires} fires, ${basis}]${undercuts}`);
+    }
+  }
 }
 
 export function renderFlow(report: UsageReport, throughput: number | null, boardNote: string | null): void {
   const days = report.windowMs / 86_400_000;
   const cell = report.overall;
-  const cpa = cell.costUsd !== null && throughput !== null && throughput > 0
-    ? usd(cell.costUsd / throughput) + "/accepted-change"
+  // LOOP-219 — cost-per-accepted-change divided GROSS spend (which includes fires killed mid-flight)
+  // by an outcome those fires could not produce. Delivered spend is the honest numerator, and the
+  // basis is NAMED on the line: an unlabelled ratio is what this ticket is about.
+  const deliveredUsd = cell.costUsd !== null && cell.discardedUsd !== null ? cell.costUsd - cell.discardedUsd : cell.costUsd;
+  const cpa = deliveredUsd !== null && throughput !== null && throughput > 0
+    ? usd(deliveredUsd / throughput) + "/accepted-change (delivered spend ÷ throughput; discarded fires excluded)"
     : "unavailable";
   const perFire = cell.costUsd !== null && cell.costPriced > 0
     ? usd(cell.costUsd / cell.costPriced) + "/priced fire"
     : "unavailable";
   console.log(`flow — last ${days}d`);
-  console.log(`cost: ${usd(cell.costUsd)}  (${cell.costMetered} of ${cell.fires} fires priced)`);
+  // LOOP-332 AC2/AC3: `cost-per-fire` divides by costPriced, so the coverage count printed here must
+  // not be labelled "priced" — dividing the two numbers on screen has to land on the rate on screen.
+  console.log(`cost: ${usd(cell.costUsd)} gross  (${cell.costPriced} priced, ${cell.costMetered} metered, of ${cell.fires} fires)`);
+  if (cell.discardedUsd !== null) console.log(`  of which discarded (produced nothing): $${cell.discardedUsd.toFixed(4)} over ${cell.discardedFires} fires`);
   console.log(`cost-per-accepted-change: ${cpa}`);
   console.log(`cost-per-fire: ${perFire}`);
   if (throughput !== null) console.log(`board throughput: ${throughput} →Done in window`);
@@ -854,17 +1140,35 @@ export function renderFlow(report: UsageReport, throughput: number | null, board
 }
 
 interface MetricsOpts {
-  windowMs: number; asJson: boolean; context: boolean;
+  windowMs: number; nowMs: number; asJson: boolean; context: boolean;
   showUsage: boolean; showCost: boolean; showFlow: boolean; showKaizen: boolean;
   byDim: UsageDimension | undefined;
 }
+
+// LOOP-314 — a CLOSED era. Every report here computed `cutoff = now - window` and filtered
+// `ts >= cutoff`, so the only question askable was "the last N days ENDING NOW". That blocks any
+// before/after across a change boundary: the "after" window always still contains the "before"
+// fires, and on a board where one agent fires 14–37×/day a short soak is swamped by same-window
+// pre-soak rows. The ledger keeps 90 days, so the rows were always there — only the query was
+// missing. `[since, until]` maps onto the existing math as windowMs = until - since, nowMs = until;
+// the upper bounds added at each filter site are what make that a real era rather than a relabel.
+function parseIso(flag: string, raw: string | undefined): number | null {
+  const t = Date.parse(raw ?? "");
+  if (!raw || Number.isNaN(t)) { console.error(`metrics: invalid ${flag} '${raw ?? ""}' (use an ISO instant, e.g. 2026-08-01T00:00:00Z)`); return null; }
+  return t;
+}
+
 function parseMetricsArgs(argv: string[]): MetricsOpts | number {
   let windowMs = 7 * 86_400_000;
+  let nowMs = Date.now();
+  let sinceMs: number | null = null, untilMs: number | null = null;
   let asJson = false, context = false;
   let showUsage = false, showCost = false, showFlow = false, showKaizen = false;
   let byDim: UsageDimension | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--window") windowMs = parseWindow(argv[++i] ?? "7d");
+    else if (argv[i] === "--since") { const t = parseIso("--since", argv[++i]); if (t === null) return 2; sinceMs = t; }
+    else if (argv[i] === "--until") { const t = parseIso("--until", argv[++i]); if (t === null) return 2; untilMs = t; }
     else if (argv[i] === "--json") asJson = true;
     else if (argv[i] === "--context") context = true;
     else if (argv[i] === "--usage") showUsage = true;
@@ -879,7 +1183,10 @@ function parseMetricsArgs(argv: string[]): MetricsOpts | number {
       }
       byDim = dim;
     } else if (argv[i] === "--help" || argv[i] === "-h") {
-      console.log("usage: dev-loop metrics [--window 7d|24h|30d] [--json] [--context]\n" +
+      console.log("usage: dev-loop metrics [--window 7d|24h|30d | --since ISO [--until ISO]] [--json] [--context]\n" +
+        "                        [--usage] [--cost] [--flow] [--kaizen] [--by agent|project|provider|model]\n" +
+        "  --since/--until: a CLOSED era instead of a trailing-to-now window — the before/after query\n" +
+        "                   (--until defaults to now; composable with --usage/--cost/--flow/--kaizen)\n" +
         "                        [--usage] [--cost] [--flow] [--kaizen] [--by agent|project|provider|model]\n" +
         "  default: team KPIs from fires.jsonl (+ hub board on service)\n" +
         "  --usage: token flow per group (metered N-of-M; null=unmeasured, never 0)\n" +
@@ -891,13 +1198,23 @@ function parseMetricsArgs(argv: string[]): MetricsOpts | number {
       return 0;
     }
   }
-  return { windowMs, asJson, context, showUsage, showCost, showFlow, showKaizen, byDim };
+  // --since/--until resolve LAST so the two spellings cannot half-apply. --since alone means
+  // "from then until now"; --until alone would be ambiguous about how far back to reach, so it is
+  // refused rather than silently paired with the default 7d.
+  if (untilMs !== null && sinceMs === null) { console.error("metrics: --until requires --since (a closed era needs both ends; use --window for a trailing window)"); return 2; }
+  if (sinceMs !== null) {
+    const until = untilMs ?? Date.now();
+    if (until <= sinceMs) { console.error(`metrics: --until (${new Date(until).toISOString()}) must be after --since (${new Date(sinceMs).toISOString()})`); return 2; }
+    windowMs = until - sinceMs;
+    nowMs = until;
+  }
+  return { windowMs, nowMs, asJson, context, showUsage, showCost, showFlow, showKaizen, byDim };
 }
 
 export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
   const parsed = parseMetricsArgs(argv);
   if (typeof parsed === "number") return parsed;
-  const { windowMs, asJson, context, showUsage, showCost, showFlow, showKaizen, byDim } = parsed;
+  const { windowMs, nowMs, asJson, context, showUsage, showCost, showFlow, showKaizen, byDim } = parsed;
   // --context: the per-agent context bill (task #8 — SKILL prose + cheat sheet + the conventions
   // §-spans its Sections line cites + lessons caps). It lives under `metrics`, not `doctor`: the
   // bill is a director-view NUMBER over the plugin's static sources (skills/ + conventions.md) that
@@ -920,12 +1237,16 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   if (showUsage || showCost || showFlow) {
     const rows = readFireRows(wsFireLedger(ws));
     const groupBy = byDim ?? "agent";
-    const report = usageReport(rows, windowMs, { groupBy, nowMs: Date.now() });
+    const report = usageReport(rows, windowMs, { groupBy, nowMs: nowMs });
     // Budget-ceiling view (LOOP-229): shown only when a dailyUsd ceiling is set (so `--cost` is unchanged when
     // unset). Always the 24h rolling enforcement total (rollingSpendUsd — the same number the launch gate and
     // doctor use), independent of --window.
     const dailyUsd = ws.file.team.budget?.dailyUsd;
-    const budgetView = dailyUsd != null ? { dailyUsd, rollingUsd: rollingSpendUsd(rows, 86_400_000, Date.now()) } : undefined;
+    // LOOP-298: windowUsd is the SAME enforcement basis (rollingSpendUsd) evaluated over the reported
+    // window, so the reader can compare it against `overall` directly instead of against a 24h number.
+    const budgetView = dailyUsd != null
+      ? { dailyUsd, rollingUsd: rollingSpendUsd(rows, 86_400_000, nowMs), windowUsd: rollingSpendUsd(rows, windowMs, nowMs) }
+      : undefined;
     let throughput: number | null = null;
     let flowBoardNote: string | null = null;
     if (showFlow) {
@@ -937,7 +1258,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
           let tp = 0;
           for (const key of deliveryProjects(ws)) {
             const pid = findProject(db, key);
-            if (pid) tp += boardMetrics(db, pid, windowMs).throughput;
+            if (pid) tp += boardMetrics(db, pid, windowMs, nowMs).throughput; // LOOP-314: honour the era
           }
           throughput = tp;
         } finally { db.close(); }
@@ -949,7 +1270,8 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
       const out: Record<string, unknown> = { windowDays: windowMs / 86_400_000 };
       if (showUsage || showCost) out.usage = report;
       if (showCost && budgetView) // budget is a cost surface — mirror renderCost (human --cost) exactly
-        out.budget = { dailyUsd: budgetView.dailyUsd, rollingUsd: budgetView.rollingUsd, windowMs: 86_400_000, overCeiling: budgetView.rollingUsd > budgetView.dailyUsd };
+        out.budget = { dailyUsd: budgetView.dailyUsd, rollingUsd: budgetView.rollingUsd, windowMs: 86_400_000, overCeiling: budgetView.rollingUsd > budgetView.dailyUsd,
+          enforcementWindowUsd: budgetView.windowUsd, enforcementWindowMs: windowMs }; // LOOP-298: additive
       if (showFlow) {
         const c = report.overall;
         out.flow = {
@@ -965,7 +1287,12 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
       return 0;
     }
     if (showUsage) renderUsage(report, groupBy);
-    if (showCost) renderCost(report, groupBy, budgetView);
+    if (showCost) {
+      // LOOP-297: the ceiling resolves exactly as run-agents resolves it, and the wall is the same
+      // 60-min default the scheduler ships (opts.fireTimeoutMs) unless config overrides it per agent.
+      const ceilingUsd = ws.file.team.budget?.perFireUsd ?? DEFAULT_PER_FIRE_USD;
+      renderCost(report, groupBy, budgetView, { ceilingUsd, wallMinutes: 60, rows: profileDeadlines(rows, ceilingUsd, windowMs, nowMs) });
+    }
     if (showFlow) renderFlow(report, throughput, flowBoardNote);
     return 0;
   }
@@ -974,10 +1301,10 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   const fires = fireMetrics(wsFireLedger(ws), windowMs);
   const out: Record<string, unknown> = { team: ws.file.team.key, windowDays: windowMs / 86_400_000, fires };
 
-  await collectBoardMetrics(ws, windowMs, out, boardDb);
+  await collectBoardMetrics(ws, windowMs, out, boardDb, escapeSignalSourceRan(fires), nowMs);
 
   if (asJson) { console.log(JSON.stringify(out, null, 2)); return 0; }
-  renderHuman(ws, windowMs, fires, out, Date.now());
+  renderHuman(ws, windowMs, fires, out, nowMs);
   return 0;
 }
 
