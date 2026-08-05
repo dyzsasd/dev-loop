@@ -43,6 +43,8 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   // Schema v2: when a workspace is discoverable, run its (READ-ONLY) checks first and point the DB checks
   // below at the workspace hub.db. Library callers (init-service) pass an explicit dbPath and skip this.
   let ws: Workspace | null = null;
+  let announceNoWorkspace = false; // LOOP-284: no workspace resolved — say so either way
+  let noWorkspace = false;          // …and, when the db was not explicitly named, fail the verdict
   const unseeded: string[] = []; // W08 hits, collected for the NEXT line
   let stalledRepo: string | undefined;
   let skewResult: { codeBehind: number; version: string } | null | undefined;
@@ -55,6 +57,15 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
       if (e instanceof WsValidationError && e.errors.length) console.log(`NEXT: ${nextStep(null, e.errors, [])}`);
       return false;
     }
+    // LOOP-284 — two different situations, and only one of them is the defect.
+    //   • no workspace AND no explicit db  ⇒ ACCIDENTAL. This is the measured harm: an operator one
+    //     directory too high was shown a green pre-flight over an unrelated board. Announce it, give
+    //     it a distinct verdict token, and exit non-zero.
+    //   • no workspace BUT DEVLOOP_HUB_DB set ⇒ DELIBERATE. The caller named the db; the db checks
+    //     are exactly what was asked for. Still announce that the workspace checks were skipped —
+    //     that is AC4's "a legitimate global-db run is still possible, it is merely announced" — but
+    //     do not fail it, or every isolated/library invocation that pins a db starts failing.
+    if (!ws) { announceNoWorkspace = true; noWorkspace = !process.env.DEVLOOP_HUB_DB; }
     if (ws) {
       // Finalize boardDb before doctorWorkspace so header + W16/W21 always name the same db (AC6, LOOP-199).
       // Prefer workspace hub.db unless DEVLOOP_HUB_DB is explicitly set (test isolation, LOOP-117).
@@ -76,12 +87,20 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
     }
   }
 
+  if (announceNoWorkspace) reportNoWorkspace(dbPath, noWorkspace);
+
+  // Every early return in the db section below predates the verdict line and prints no token at all.
+  // That is unchanged for a normal run (AC5), but a workspace-less run MUST still be distinguishable
+  // — and its most likely shape is exactly one of these: no workspace ⇒ the global db often does not
+  // exist either. bail() adds the token on that path only.
+  const bail = (): boolean => { if (noWorkspace) console.log("\nDOCTOR_NO_WORKSPACE"); return false; };
+
   console.log(`dev-loop-hub doctor — ${dbPath}`);
 
   // 1. Exists (never create on doctor)
   if (!existsSync(dbPath)) {
     fail(`db MISSING — nothing to check (create it: node src/seed.ts <key> "<name>" <PREFIX>). NOT auto-creating.`);
-    return false;
+    return bail();
   }
 
   // 2. Open the db READ-ONLY. doctor's whole contract is to be non-destructive (§17/§18): it must
@@ -90,7 +109,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   //    destroyed SoR (DL-54). Read-only mode makes create-if-not-exists impossible for ANY input.
   let db: DatabaseSync;
   try { db = new DatabaseSync(dbPath, { readOnly: true }); db.exec("PRAGMA busy_timeout=5000"); db.exec("PRAGMA foreign_keys=ON"); }
-  catch (e) { fail(`db not openable (read-only): ${(e as Error).message}`); return false; }
+  catch (e) { fail(`db not openable (read-only): ${(e as Error).message}`); return bail(); }
 
   // 2b. A 0-byte file IS a valid (empty) SQLite db, so the read-only open above SUCCEEDS on a
   //     truncated / zeroed / placeholder file — it just carries no schema; a non-SQLite file throws
@@ -100,11 +119,11 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   try {
     const present = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((r) => r.name));
     missing = HUB_TABLES.filter((t) => !present.has(t));
-  } catch (e) { fail(`db INVALID — not a readable SQLite database: ${(e as Error).message}`); db.close(); return false; }
+  } catch (e) { fail(`db INVALID — not a readable SQLite database: ${(e as Error).message}`); db.close(); return bail(); }
   if (missing.length) {
     fail(`db INVALID — empty / truncated / non-hub file (missing hub tables: ${missing.join(", ")}); not a system-of-record`);
     db.close();
-    return false;
+    return bail();
   }
   pass("db opens read-only and carries the hub schema");
 
@@ -203,9 +222,27 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
     allFails.push("daemon running old code — restart it: DEVLOOP_PROJECT=<key> dev-loop daemon up (W28)");
   }
 
+  // LOOP-284 — a workspace-less run checked NONE of W01/W18/repo/build/fires/landing/identity, so it
+  // cannot answer the question `DOCTOR_OK` is read as answering ("this workspace is ready to run
+  // unattended"). A DISTINCT token, not a qualified DOCTOR_OK: a scripted reader greps for the string,
+  // and `DOCTOR_OK (…)` would still match. Exit non-zero for the same reason — every wrapper in this
+  // repo either passes an explicit dbPath without `reconcile` (init-service) or runs inside a workspace
+  // it just created (init-wizard, deploy/Dockerfile), so none regresses. The db-selection ladder is
+  // untouched: DEVLOOP_HUB_DB still wins and the global-db run still happens — it is merely announced.
+  if (noWorkspace) { console.log("\nDOCTOR_NO_WORKSPACE"); return false; }
+
   console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
   if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded, stalledRepo, decisionStall, skewResult, allFails)}`);
   return ok;
+}
+
+// LOOP-284 helper — extracted, not inlined in runDoctor, to keep its cyclomatic complexity inside the
+// CRAP-90 ratchet (the LOOP-115/LOOP-159 trap: green locally, red in CI).
+function reportNoWorkspace(dbPath: string, fatal: boolean): void {
+  console.log(`⚠️  no dev-loop workspace found from ${process.cwd()} upward — every workspace check was SKIPPED`);
+  console.log(`   (config validity, W01/W18, repo + build gates, the fire summary, landing, and the identity smoke all need a workspace)`);
+  console.log(`   ${fatal ? "reading the machine-global board instead" : "checking the db named by DEVLOOP_HUB_DB"}: ${dbPath}`);
+  if (fatal) console.log(`   cd into a workspace, or run \`dev-loop team init\` here to create one.`);
 }
 
 // ── the NEXT line — the single most-blocking next step, in fix order ──────────────────────────────
@@ -564,7 +601,7 @@ function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
 // did not measure (the old check asked "is .dev-loop/ ignored?", not "is anything here committable?").
 function checkGitTreeLeaks(root: string, treeLabel: string, warn: (msg: string) => void, info: (msg: string) => void): void {
   if (!isGitWorkTree(root)) return;
-  const devLoopIgnored = isPathIgnored(root, ".dev-loop");
+  const devLoopIgnored = isDirIgnored(root, ".dev-loop");
   if (!devLoopIgnored) warn(`[W06] ${treeLabel} is inside a git work-tree and .dev-loop/ is not gitignored — state/reports could be committed (add .dev-loop/ to .gitignore)`);
   // LOOP-210: a bundle artifact (MAGIC header, any --out name, encrypted or plaintext) or the
   // moved.json marker sitting un-ignored in the tree is a secret/state leak a `git add -A` commits.
@@ -606,6 +643,17 @@ function checkGitTreeLeaks(root: string, treeLabel: string, warn: (msg: string) 
 function isPathIgnored(root: string, rel: string): boolean {
   try { execFileSync("git", ["-C", root, "check-ignore", "-q", rel], { stdio: "ignore" }); return true; }
   catch { return false; }
+}
+
+// LOOP-328: a gitignore DIRECTORY rule (`.dev-loop/` — the canonical spelling) only matches a path
+// git can establish IS a directory. For a path that does not exist on disk it cannot, so probing the
+// bare name misses a rule that is present, and W06 fired on a repo whose .gitignore already carried
+// the rule — precisely in the window right after the leaked directory was cleaned up, when the alarm
+// least belongs. A sentinel CHILD path is matched by a directory rule AND by a bare-name rule, and
+// needs nothing to exist. Keep this separate from isPathIgnored: the bundle-artifact callers probe
+// FILES, where appending a segment would ask git about the wrong path.
+function isDirIgnored(root: string, rel: string): boolean {
+  return isPathIgnored(root, `${rel}/x`) || isPathIgnored(root, rel);
 }
 
 // LOOP-235 — the commits the next `git push` would transfer, as a `rev-list`/`diff` range. Prefer the

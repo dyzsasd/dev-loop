@@ -38,7 +38,10 @@ export async function team(argv = process.argv.slice(2)): Promise<number> {
     switch (sub) {
       case "init": return teamInit(rest);
       case "import": return teamImport(rest);
-      case "repair": return teamRepair(rest);
+      // `await`, not a bare return: teamRepair is async, and a `try` does not catch a rejection it
+      // never awaited — without it the WsNotFound below escaped to the top level and `team repair`
+      // outside a workspace printed a raw stack while every sibling printed one clean line (LOOP-283).
+      case "repair": return await teamRepair(rest);
       case "add-project": return await addProject(rest);
       case "add-repo": return addRepo(rest);
       case "set": return await teamSet(rest);

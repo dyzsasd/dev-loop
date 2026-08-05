@@ -60,7 +60,10 @@ export async function ensureHub(ws: Workspace): Promise<number> {
 
 export async function hubCmd(argv = process.argv.slice(2)): Promise<number> {
   const sub = argv[0] ?? "status";
-  if (sub === "--help" || sub === "-h" || sub === "help") {
+  // LOOP-154: `--help` is checked across the WHOLE argv, not just argv[0]. `hub start --help` used to
+  // fall past an argv[0]-only test and EXECUTE the start — a documented discovery flag with a real
+  // side effect. Help is a request for text; it must never be answered with an action.
+  if (argv.some((a) => a === "--help" || a === "-h" || a === "help")) {
     console.log("usage: dev-loop hub start|stop|status|ensure  — manage the workspace hub daemon (service backend)\n\n`hub status` lists every project daemon in the workspace. Run `dev-loop hub status` to find the board URL.");
     return 0;
   }

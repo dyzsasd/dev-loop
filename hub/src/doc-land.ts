@@ -43,6 +43,25 @@ function gitErrText(e: unknown): { summary: string; detail: string } {
   return { summary, detail };
 }
 
+// LOOP-326 — `git status --porcelain` output → the paths blocking a rebase.
+//
+// The bug this replaces was a COMPOSITION bug, which is why the parsing is its own exported
+// function now: two individually-correct lines. The shared `git()` helper ends in `.trim()` (right
+// for `rev-parse`/`rev-list` and every other single-value call in this file), and the caller then
+// did `l.slice(3)` per line. Porcelain v1 emits `XY<space>PATH`, and for an unstaged-only change
+// column X is a SPACE — ` M hub/src/agentops.ts`. Trimming the whole BUFFER strips that leading
+// space from the first line only, so line 1 became `M hub/src/agentops.ts` and `slice(3)` ate
+// `M h`: the refusal that tells you which paths to resolve named `ub/src/agentops.ts`, a path that
+// does not exist. Every later line kept its space and parsed correctly, which is how it survived —
+// the defect is conditional on the FIRST entry being unstaged-only.
+export function parseDirtyPaths(porcelain: string): string[] {
+  return porcelain
+    .split("\n")
+    .filter((l) => l.trim())        // drop blank lines — NEVER trim the buffer or a line's prefix
+    .map((l) => l.slice(3).trim())  // XY<space> is exactly 3 columns; the path is what follows
+    .filter(Boolean);
+}
+
 export async function docLand(argv: string[]): Promise<number> {
   let repoRef: string | undefined;
   let dryRun = false;
@@ -181,8 +200,12 @@ Design: landing-discipline §4.6 (LOOP-57).`);
           // Retry for up to DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS (default 30s) before blocking.
           const getDirtyPaths = (): string[] => {
             try {
-              const out = git(["status", "--porcelain", "--untracked-files=no"]);
-              return out.split("\n").filter(l => l.trim()).map(l => l.slice(3).trim()).filter(Boolean);
+              // NOT the shared `git()` helper: it ends in .trim(), which is right for every
+              // single-value call in this file and wrong here (LOOP-326). Parsing lives in the
+              // exported pure function below so the composition itself is testable.
+              const out = execFileSync("git", ["-C", repoDir, "status", "--porcelain", "--untracked-files=no"],
+                { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+              return parseDirtyPaths(out);
             } catch { return []; }
           };
           const dirtyTimeoutMs = Math.max(0, parseInt(process.env.DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS ?? "30000", 10));
