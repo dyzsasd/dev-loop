@@ -17,6 +17,11 @@ import { createServer, type Server, type ServerResponse, type IncomingMessage } 
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
+
+// LOOP-96: the same cap list_issues uses (agentops.ts LIST_ISSUES_DEFAULT_LIMIT). db.ts already names
+// list_issues / /api/tickets / the board as ONE family sorted by (project_id, updated_at DESC); one of
+// the three was bounded and two were not, so they now share one number.
+const API_TICKETS_DEFAULT_LIMIT = 250;
 import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, fireIdStore } from "./db.ts";
 import { findProject } from "./seed.ts";
@@ -632,12 +637,36 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
     return true;
   }
   if (path === "/api/tickets") {
-    let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC").all(projectId) as Record<string, any>[]).map(toTicket);
+    // LOOP-96 — this path and the HTML board were the only two of the four board-list reads with no
+    // bound at all: SELECT * of every ticket, full descriptions included, on every request. Measured
+    // on a 95-ticket board: 433.6 KiB per call, of which 92% was description text — and
+    // `?fields=summary` was accepted and SILENTLY IGNORED, so the documented way to ask for a cheap
+    // read returned the expensive one. `db.ts` already names all three ticket paths as one family;
+    // one of the three got the cap (list_issues, 250) and two did not. Same cap, same summary shape.
+    //
+    // The bound is in SQL (LIMIT), not a .slice() after loading the table — a slice still pays for
+    // every row's read and JSON.parse, which is the cost this exists to remove.
+    const rawLimit = url.searchParams.get("limit");
+    let limit = API_TICKETS_DEFAULT_LIMIT;
+    if (rawLimit !== null) {
+      const n = Number(rawLimit);
+      // An unparseable/negative/zero limit is a caller mistake. Follow the list_events precedent — a
+      // clean 400 — rather than the old ignore-and-default, which silently answered a different
+      // question than the one asked.
+      if (!Number.isInteger(n) || n <= 0) { json(res, 400, { error: `limit must be a positive integer (got ${JSON.stringify(rawLimit)})` }); return true; }
+      limit = n;
+    }
+    const total = (db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE project_id=?").get(projectId) as { n: number }).n;
+    let out = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY updated_at DESC LIMIT ?").all(projectId, limit) as Record<string, any>[]).map(toTicket);
     const state = url.searchParams.get("state"); if (state) out = out.filter((t) => t.state === state);
     const type = url.searchParams.get("type"); if (type) out = out.filter((t) => t.type === type);
     const label = url.searchParams.get("label"); if (label) out = out.filter((t) => t.labels.includes(label));
     const assignee = url.searchParams.get("assignee"); if (assignee) out = out.filter((t) => t.assignee === assignee);
-    const limit = Number(url.searchParams.get("limit")); if (Number.isFinite(limit) && limit > 0) out = out.slice(0, limit);
+    // The summary shape list_issues already serves: drop the description body, which is the bulk of
+    // the bytes. It was accepted and ignored here, which is worse than not supporting it.
+    if (url.searchParams.get("fields") === "summary") out = out.map((t) => { const { description: _drop, ...rest } = t as Record<string, unknown>; return rest; }) as typeof out;
+    res.setHeader("X-Total-Count", String(total));      // truncation is detectable without changing the body shape
+    res.setHeader("X-Returned-Count", String(out.length));
     json(res, 200, out);
     return true;
   }
