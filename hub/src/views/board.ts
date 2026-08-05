@@ -4,6 +4,7 @@
 // state-dot headers, the full card spec (semantic label chips, relative updated-at), guided
 // empty states · ui P8 search upgrade: q matches description via a server-side WHERE + a card
 // match-context snippet. Pure read-only rendering through the query_only db.
+import { ticketSearchClause, SEARCH_CORPUS_LABEL } from "../ticket-search.ts"; // LOOP-97: the ONE search predicate, shared with agentops
 import { DatabaseSync } from "node:sqlite";
 import { isTeamProject } from "../team-config.ts";
 import { esc, href, toTicket, ownerOf, prioOf, noticeHtml, countPill, stateDot } from "./ui.ts";
@@ -80,7 +81,6 @@ function relTime(iso: string | null | undefined, nowMs: number): string {
 // ui P8: cap on how many description chars the q LIKE scans per row (see the boardPage q comment).
 // LOOP-96: the same 250 the other three ticket-list paths use (list_issues / /api/tickets).
 const BOARD_ROW_CAP = 250;
-const Q_DESC_CAP = 5000;
 // ui P8: when the free-text q matched only the DESCRIPTION (not the visible id/title), the card
 // shows a one-line match-context snippet — otherwise the operator sees a card with no visible reason
 // it matched. ±~30/50 chars around the first hit, whitespace collapsed; esc() at interpolation.
@@ -151,14 +151,16 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
   // LIKE only case-folds ASCII; lower() shares that ASCII limit — the old JS toLowerCase folded full
   // Unicode, an accepted tradeoff for pushing the scan into the engine). LIKE metacharacters in the
   // query are escaped so the search text is always literal (%/_ can't wildcard). A leading-wildcard
-  // LIKE can never use an index, so the description scan is CAPPED at the first Q_DESC_CAP chars per
+  // LIKE can never use an index, so the description scan is CAPPED at SEARCH_DESC_CAP chars per
   // row, bounding the per-row cost on pathological multi-hundred-KB agent-authored descriptions —
   // the tradeoff: a phrase appearing ONLY beyond the cap misses (id/title always match in full, and
   // per-project ticket sets are small, so the scan stays cheap).
-  const qWhere = f.q
-    ? ` AND (lower(id) LIKE ? ESCAPE '\\' OR lower(title) LIKE ? ESCAPE '\\' OR lower(substr(description,1,${Q_DESC_CAP})) LIKE ? ESCAPE '\\')`
-    : "";
-  const qArgs: string[] = f.q ? Array(3).fill(`%${f.q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`) : [];
+  // LOOP-97: the ONE shared predicate, so this surface and the agent `query` cannot answer the same
+  // query differently. This side gained COMMENT BODIES (a phrase appearing only in a comment used to
+  // return nothing, reading as "no such ticket") and whitespace-split AND-ed terms.
+  const qClause = ticketSearchClause(f.q, "tickets");
+  const qWhere = qClause ? ` AND ${qClause.sql}` : "";
+  const qArgs: string[] = qClause ? qClause.binds : [];
   // LOOP-96 — the operator's own board was the other unbounded read: SELECT * of every ticket, full
   // descriptions included, on every page load (83.7 KiB / 374 cards when measured). The bound is in
   // SQL, not a .slice() after loading, so the cost of the hidden rows is not paid at all.
@@ -207,7 +209,7 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
     ? `<p class="note">showing ${tickets.length} of ${boardTotal} tickets (newest first within each priority) — narrow with a filter or search to reach the rest.</p>`
     : "";
   const controls = `<form class="filterbar" method="get" action="${esc(href(projectKey, "/"))}">${hidden}`
-    + `<span class="search"><input type="text" name="q" value="${esc(f.q ?? "")}" placeholder="search id / title / description" aria-label="search tickets by id, title, or description" spellcheck="false"></span>`
+    + `<span class="search"><input type="text" name="q" value="${esc(f.q ?? "")}" placeholder="search ${SEARCH_CORPUS_LABEL}" aria-label="search tickets by ${SEARCH_CORPUS_LABEL}" spellcheck="false"></span>`
     + `<button type="submit" class="btn-brand">search</button>`
     + (active.length ? `<a class="lbl clearall" href="${esc(clearHref)}">clear all</a>` : "")
     + groupToggle
