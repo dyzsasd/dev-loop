@@ -113,3 +113,77 @@ export function takeBoardSnapshot(opts: { dbPath: string; dir: string; keep: num
   pruneSnapshots(opts.dir, opts.keep);
   return dest;
 }
+
+// ─── restore (LOOP-341, Child E) ────────────────────────────────────────────────────────────────
+// A backup that has never been restored from is not a backup. Children A–D produce an artifact and
+// warn about its absence; none of them proves it can be turned back into a board. The 2026-08-04
+// recovery path was an improvised `sqlite3 .recover` run under pressure two hours after the loss,
+// and it still lost 19 tickets and 79 comments permanently.
+//
+// This is the one child in the module that WRITES OVER a live board — the other four only read —
+// which is why it is gated by the EXISTING destructive-guard token rather than a new mechanism, and
+// why it takes its own `pre-restore` snapshot first.
+
+// The tables doctor already treats as "carries the hub schema". Named here so a truncated or foreign
+// file is refused BEFORE anything is overwritten, rather than discovered after.
+const HUB_SCHEMA_TABLES = ["projects", "tickets", "documents", "actors", "events"] as const;
+
+export interface RestoreVerification { ok: boolean; error?: string; tickets?: number; comments?: number }
+
+/**
+ * Verify a snapshot is a usable board WITHOUT touching anything. AC3: a truncated, corrupt or
+ * non-SQLite file is refused with the existing board untouched, so this runs before every write.
+ */
+export function verifySnapshot(path: string): RestoreVerification {
+  if (!existsSync(path)) return { ok: false, error: `snapshot not found: ${path}` };
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(path, { readOnly: true });
+    const present = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name));
+    const missing = HUB_SCHEMA_TABLES.filter((t) => !present.has(t));
+    if (missing.length) return { ok: false, error: `not a hub board — missing table(s): ${missing.join(", ")}` };
+    const tickets = (db.prepare("SELECT COUNT(*) AS n FROM tickets").get() as { n: number }).n;
+    const comments = (db.prepare("SELECT COUNT(*) AS n FROM comments").get() as { n: number }).n;
+    return { ok: true, tickets, comments };
+  } catch (e) {
+    return { ok: false, error: `not a readable SQLite database: ${(e as Error)?.message ?? String(e)}` };
+  } finally {
+    try { db?.close(); } catch { /* already closed */ }
+  }
+}
+
+/**
+ * Replace the live board with a snapshot. Throws on any refusal, having written nothing.
+ *
+ * AC5 — the restore is itself UNDOABLE: the current board is snapshotted as `pre-restore` before it
+ * is overwritten, so restoring from the wrong generation is recoverable. That copy is taken through
+ * the same primitive, so it inherits the same consistency guarantees.
+ */
+export function restoreBoard(opts: { from: string; dbPath: string; dir: string; keep: number }): { restored: string; preRestore: string | null; tickets: number; comments: number } {
+  const v = verifySnapshot(opts.from);
+  if (!v.ok) throw new Error(`refusing to restore: ${v.error}. The existing board is untouched.`);
+
+  // The undo copy FIRST — before anything is overwritten. If the live board cannot be copied we
+  // refuse rather than proceed: an un-undoable restore over a live board is the shape that turns a
+  // recovery tool into a second incident.
+  let preRestore: string | null = null;
+  if (existsSync(opts.dbPath)) {
+    const probe = verifySnapshot(opts.dbPath);
+    if (probe.ok) preRestore = takeBoardSnapshot({ dbPath: opts.dbPath, dir: opts.dir, keep: opts.keep, reason: "pre-restore" });
+    // An UNREADABLE live board is exactly what a restore is for — nothing to preserve, proceed.
+  }
+
+  // Land it through the same temp+rename shape the snapshot uses, so a reader never sees a
+  // half-written board and a failure leaves the original in place.
+  const tmp = `${opts.dbPath}.restore-${process.pid}`;
+  try {
+    snapshotBoardDb(opts.from, tmp);   // normalises + proves the copy one more time
+    renameSync(tmp, opts.dbPath);
+    // WAL/SHM from the OLD board would be replayed over the NEW file and corrupt it.
+    for (const sfx of ["-wal", "-shm"]) { try { rmSync(`${opts.dbPath}${sfx}`, { force: true }); } catch { /* best-effort */ } }
+  } catch (e) {
+    try { rmSync(tmp, { force: true }); } catch { /* best-effort */ }
+    throw new Error(`restore failed (${opts.from} → ${opts.dbPath}): ${(e as Error)?.message ?? String(e)}. The existing board is untouched.`);
+  }
+  return { restored: opts.dbPath, preRestore, tickets: v.tickets ?? 0, comments: v.comments ?? 0 };
+}
