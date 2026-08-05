@@ -305,5 +305,35 @@ ok(assembleBootCorpus(root, dataDir, "no-such-agent", "proj1", "service") === nu
 ok(assembleBootCorpus(root, dataDir, "pm", "", "linear") !== null,
   "team-scope fire (empty project) still assembles — lessons simply absent");
 
+// ── LOOP-275: a TEAM-SCOPED steward fire spans every enabled project ──────────────────────────────
+// The §19 predicate ("multi-repo model") evaluated only the representative project — the FIRST
+// enabled one — so a team fire whose first enabled project is single-repo had §19 pruned even with a
+// later enabled project holding two. The steward then reasoned about a workspace it had been told
+// was single-repo. Corroborated by LOOP-236's Codex P2 review, deferred from that ticket.
+{
+  // Entries must carry an inline FACT key, or resolveRepos treats them as bare pointers and looks
+  // them up in a registry we do not pass — which is a legitimate resolution path, not this test's
+  // subject. `landing` is the cheapest fact that makes them resolvable the way a real entry is.
+  const single = { repos: [{ name: "only", path: "only", landing: "pr" }] };
+  const multi = { repos: [{ name: "a", path: "a", landing: "pr" }, { name: "b", path: "b", landing: "pr" }] };
+
+  const has19 = (cfg: Record<string, unknown>, extras?: Record<string, unknown>[]): boolean => {
+    const c = assembleBootCorpus(root, dataDir, "sweep", "p", "service", cfg, undefined, extras);
+    return !!c && !/§19 — single-repo project/.test(c.text);
+  };
+
+  // The control first: single-repo alone genuinely prunes §19, so the assertion below is not vacuous.
+  ok(!has19(single), "LOOP-275 control: a single-repo project prunes §19 — the pruning itself still works");
+  ok(has19(multi), "LOOP-275 control: a multi-repo project keeps §19");
+
+  // The measured shape: representative project single-repo, a LATER enabled project multi-repo.
+  ok(has19(single, [multi]),
+    "LOOP-275: a team-scoped fire whose FIRST enabled project is single-repo still keeps §19 when a later enabled project has ≥2 repos");
+  ok(!has19(single, [single]),
+    "LOOP-275: a team scope where EVERY enabled project is single-repo still PRUNES §19 — the count is the max of any one project, not the union, because §19 is about coordinating a change ACROSS repos and that never arises inside a single-repo project");
+  ok(has19(multi, [single]),
+    "LOOP-275: order does not matter — the union is over every enabled project, not just the first two");
+}
+
 console.log(fails === 0 ? "\nBOOT_PREFIX_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
