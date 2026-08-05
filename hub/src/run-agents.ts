@@ -24,7 +24,7 @@ import { AGENT_GROUPS } from "./agent-roster.ts"; // LOOP-184: group aliases sha
 import { preflightTreeSnapshot } from "./tree-snapshot.ts"; // LOOP-312: pre-fire copy of the shared checkout — a zod-free leaf, for the same LOOP-58 reason as servable.ts below
 import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
-import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
+import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker, formatBreakerMsg, providerOf, classifyFireError } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
@@ -328,6 +328,30 @@ Per-agent launch is two-level (projects.json): agents{}.<agent> picks { codingAg
 codingAgentDefaults{}.<codingAgent> sets per-coding-agent default { model, effort }. The legacy
 models{}/efforts{} maps still apply. Resolution: agents{} > models/efforts > codingAgentDefaults > built-in.
 Use --agents legacy (or --agents pm,qa,dev,sweep) for the old single-dev loop.`);
+}
+
+/**
+ * Wait for stdout/stderr to reach the OS before exiting.
+ *
+ * `process.exit()` DISCARDS whatever is still queued for an asynchronous stdio target. Writes to a
+ * FILE are synchronous, so a redirected run never showed this; writes to a PIPE are not, so the last
+ * lines vanish exactly when output is being captured — `| tee`, CI, a test harness's spawnSync.
+ *
+ * Measured (LOOP-346): a `--once` fire killed as a retry loop wrote its ledger event correctly and
+ * printed nothing. The `sweep: exit … (retry-loop)` line — the only human-visible carrier of the
+ * error class — was queued and dropped, so the run read as though it ended silently. It survived
+ * whenever the pipe happened to drain before the exit, which is why it passed on CI and failed on a
+ * loaded workstation.
+ *
+ * The same hazard is already recorded one layer down at the runner-log stream ("--once's
+ * process.exit() truncated the un-flushed tail"); that fix covered the log FILE and left stdout.
+ *
+ * A zero-length write's callback fires after everything queued ahead of it has been handed off, which
+ * is exactly the ordering guarantee needed — no delay, no polling.
+ */
+async function flushStdio(): Promise<void> {
+  await Promise.all([process.stdout, process.stderr].map((s) =>
+    new Promise<void>((res) => { s.write("", () => res()); })));
 }
 
 function die(msg: string, code = 2): never {
@@ -1177,11 +1201,16 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       if (!silent && !looping) return;
       stalled = true;
       retryLoop = looping;
+      // Both ages, always. Which watchdog arm tripped is the first question a reader has, and
+      // deriving it from the message alone is guesswork: "no new content" and "no output" are
+      // different causes with different remedies, and the two arms share one timer.
+      const ageOut = Date.now() - lastOutputAt, ageNew = Date.now() - lastNewContentAt;
+      const ages = `[silent ${formatDuration(ageOut)} · no-new-content ${formatDuration(ageNew)} · window ${seenLines.size}/${RETRY_LOOP_LINE_WINDOW}]`;
       if (retryLoop) {
-        console.error(`[${agent}] output arriving but no NEW content for ${formatDuration(stallMs)} — fire looks STUCK in a retry loop; SIGTERM (SIGKILL in 10s)`);
+        console.error(`[${agent}] output arriving but no NEW content for ${formatDuration(stallMs)} ${ages} — fire looks STUCK in a retry loop; SIGTERM (SIGKILL in 10s)`);
         log.write(`\n===== retry-loop: output arriving but no new content for ${formatDuration(stallMs)}: SIGTERM =====\n`);
       } else {
-        console.error(`[${agent}] no output for ${formatDuration(stallMs)} — fire looks WEDGED (hung provider call / silent retry loop); SIGTERM (SIGKILL in 10s)`);
+        console.error(`[${agent}] no output for ${formatDuration(stallMs)} ${ages} — fire looks WEDGED (hung provider call / silent retry loop); SIGTERM (SIGKILL in 10s)`);
         log.write(`\n===== stalled: no output for ${formatDuration(stallMs)}: SIGTERM =====\n`);
       }
       killGroup("SIGTERM");
@@ -1481,6 +1510,7 @@ async function main(): Promise<void> {
 
   if (opts.once) {
     const results = await Promise.all(opts.agents.map((a) => runAgent(opts, cfg, a, project, cwd)));
+    await flushStdio();
     process.exit(results.every((c) => c === 0) ? 0 : 1);
   }
 

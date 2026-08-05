@@ -246,6 +246,13 @@ done
     { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
   const satData = (JSON.parse(satRows) as { data: string }[]).map((r) => JSON.parse(r.data) as Record<string, unknown>);
   ok(satData.some((x) => x.errorClass === "retry-loop"), "the saturated-then-looping fire records errorClass \"retry-loop\" in the ledger");
+  // LOOP-346 — the class must reach the HUMAN too, not only the ledger. `satRun.out` is captured
+  // through a PIPE, and `process.exit()` discards whatever is still queued for an async stdio target:
+  // the ledger row was written correctly while this line was dropped, so a captured run read as
+  // though the fire ended silently. It survived only when the pipe happened to drain first, which is
+  // why it passed on CI and failed on a loaded workstation. Assert the line itself, not just the row.
+  ok(/sweep: exit .*\(retry-loop\)/.test(satRun.out),
+    "LOOP-346: the fire's exit line reaches CAPTURED stdout carrying the class — process.exit() must not drop it");
 
   // ── 11. No false positive: genuinely-new content then quiet trips "stalled", never "retry-loop" ──
   // The rolling window must never turn slow-but-healthy output into a false loop. A fire that emits
