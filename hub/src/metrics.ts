@@ -1158,57 +1158,69 @@ function parseIso(flag: string, raw: string | undefined): number | null {
   return t;
 }
 
+const METRICS_HELP = `usage: dev-loop metrics [--window 7d|24h|30d | --since ISO [--until ISO]] [--json] [--context]
+                        [--usage] [--cost] [--flow] [--kaizen] [--by agent|project|provider|model]
+  default: team KPIs from fires.jsonl (+ hub board on service)
+  --since/--until: a CLOSED era instead of a trailing-to-now window — the before/after query
+                   (--until defaults to now; composable with --usage/--cost/--flow/--kaizen)
+  --usage: token flow per group (metered N-of-M; null=unmeasured, never 0)
+  --cost:  money (provider-reported costUsd only; 'unavailable' when none priced — never $0.00)
+  --flow:  spend→outcome view: cost-per-accepted-change = costUsd÷throughput (service-only)
+  --kaizen: self-improvement panel (board+ledger only; —=no data, never 0; composable with --window --json)
+  --by:    grouping dimension for --usage/--cost (default: agent)
+  --context: per-agent context bill (plugin-static, needs no workspace)`;
+
+const USAGE_DIMENSIONS = ["agent", "project", "provider", "model"] as const;
+
+// The boolean flags, as a TABLE. They were nine `else if` arms, which is nine branches in one
+// function for no decision at all — and with --since/--until added, parseMetricsArgs hit CRAP 130.6
+// against the ratchet's 90 and red-lined the merge check on a branch whose local `verify` was green.
+// (That green-local/red-CI gap is LOOP-159, fixed alongside: `verify` now runs the ratchet too.)
+const METRICS_BOOL_FLAGS: Record<string, keyof Pick<MetricsOpts, "asJson" | "context" | "showUsage" | "showCost" | "showFlow" | "showKaizen">> = {
+  "--json": "asJson",
+  "--context": "context",
+  "--usage": "showUsage",
+  "--cost": "showCost",
+  "--flow": "showFlow",
+  "--kaizen": "showKaizen",
+};
+
+// --since/--until resolve LAST so the two spellings cannot half-apply. --since alone means "from
+// then until now"; --until alone would be ambiguous about how far back to reach, so it is refused
+// rather than silently paired with the default 7d.
+function resolveEra(windowMs: number, sinceMs: number | null, untilMs: number | null): { windowMs: number; nowMs: number } | number {
+  if (untilMs !== null && sinceMs === null) { console.error("metrics: --until requires --since (a closed era needs both ends; use --window for a trailing window)"); return 2; }
+  if (sinceMs === null) return { windowMs, nowMs: Date.now() };
+  const until = untilMs ?? Date.now();
+  if (until <= sinceMs) { console.error(`metrics: --until (${new Date(until).toISOString()}) must be after --since (${new Date(sinceMs).toISOString()})`); return 2; }
+  return { windowMs: until - sinceMs, nowMs: until };
+}
+
 function parseMetricsArgs(argv: string[]): MetricsOpts | number {
+  const flags = { asJson: false, context: false, showUsage: false, showCost: false, showFlow: false, showKaizen: false };
   let windowMs = 7 * 86_400_000;
-  let nowMs = Date.now();
   let sinceMs: number | null = null, untilMs: number | null = null;
-  let asJson = false, context = false;
-  let showUsage = false, showCost = false, showFlow = false, showKaizen = false;
   let byDim: UsageDimension | undefined;
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--window") windowMs = parseWindow(argv[++i] ?? "7d");
-    else if (argv[i] === "--since") { const t = parseIso("--since", argv[++i]); if (t === null) return 2; sinceMs = t; }
-    else if (argv[i] === "--until") { const t = parseIso("--until", argv[++i]); if (t === null) return 2; untilMs = t; }
-    else if (argv[i] === "--json") asJson = true;
-    else if (argv[i] === "--context") context = true;
-    else if (argv[i] === "--usage") showUsage = true;
-    else if (argv[i] === "--cost") showCost = true;
-    else if (argv[i] === "--flow") showFlow = true;
-    else if (argv[i] === "--kaizen") showKaizen = true;
-    else if (argv[i] === "--by") {
-      const dim = argv[++i] as UsageDimension;
-      if (!["agent", "project", "provider", "model"].includes(dim)) {
-        console.error(`metrics: invalid --by '${dim}' (use agent|project|provider|model)`);
-        return 2;
+    const a = argv[i] ?? "";
+    const boolField = METRICS_BOOL_FLAGS[a];
+    if (boolField) { flags[boolField] = true; continue; }
+    switch (a) {
+      case "--window": windowMs = parseWindow(argv[++i] ?? "7d"); continue;
+      case "--since": { const t = parseIso("--since", argv[++i]); if (t === null) return 2; sinceMs = t; continue; }
+      case "--until": { const t = parseIso("--until", argv[++i]); if (t === null) return 2; untilMs = t; continue; }
+      case "--by": {
+        const dim = argv[++i] as UsageDimension;
+        if (!(USAGE_DIMENSIONS as readonly string[]).includes(dim)) { console.error(`metrics: invalid --by '${dim}' (use ${USAGE_DIMENSIONS.join("|")})`); return 2; }
+        byDim = dim; continue;
       }
-      byDim = dim;
-    } else if (argv[i] === "--help" || argv[i] === "-h") {
-      console.log("usage: dev-loop metrics [--window 7d|24h|30d | --since ISO [--until ISO]] [--json] [--context]\n" +
-        "                        [--usage] [--cost] [--flow] [--kaizen] [--by agent|project|provider|model]\n" +
-        "  --since/--until: a CLOSED era instead of a trailing-to-now window — the before/after query\n" +
-        "                   (--until defaults to now; composable with --usage/--cost/--flow/--kaizen)\n" +
-        "                        [--usage] [--cost] [--flow] [--kaizen] [--by agent|project|provider|model]\n" +
-        "  default: team KPIs from fires.jsonl (+ hub board on service)\n" +
-        "  --usage: token flow per group (metered N-of-M; null=unmeasured, never 0)\n" +
-        "  --cost:  money (provider-reported costUsd only; 'unavailable' when none priced — never $0.00)\n" +
-        "  --flow:  spend→outcome view: cost-per-accepted-change = costUsd÷throughput (service-only)\n" +
-        "  --kaizen: self-improvement panel (board+ledger only; —=no data, never 0; composable with --window --json)\n" +
-        "  --by:    grouping dimension for --usage/--cost (default: agent)\n" +
-        "  --context: per-agent context bill (plugin-static, needs no workspace)");
-      return 0;
+      case "--help": case "-h": console.log(METRICS_HELP); return 0;
+      default: continue;
     }
   }
-  // --since/--until resolve LAST so the two spellings cannot half-apply. --since alone means
-  // "from then until now"; --until alone would be ambiguous about how far back to reach, so it is
-  // refused rather than silently paired with the default 7d.
-  if (untilMs !== null && sinceMs === null) { console.error("metrics: --until requires --since (a closed era needs both ends; use --window for a trailing window)"); return 2; }
-  if (sinceMs !== null) {
-    const until = untilMs ?? Date.now();
-    if (until <= sinceMs) { console.error(`metrics: --until (${new Date(until).toISOString()}) must be after --since (${new Date(sinceMs).toISOString()})`); return 2; }
-    windowMs = until - sinceMs;
-    nowMs = until;
-  }
-  return { windowMs, nowMs, asJson, context, showUsage, showCost, showFlow, showKaizen, byDim };
+  const era = resolveEra(windowMs, sinceMs, untilMs);
+  if (typeof era === "number") return era;
+  return { ...era, ...flags, byDim };
 }
 
 export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
