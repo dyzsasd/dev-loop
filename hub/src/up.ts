@@ -144,7 +144,7 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
   // ── MOVE: headless bundle load (design §4.5) ──────────────────────────────
   if (o.bundle) {
     const { bundleLoad } = await import("./bundle.ts");
-    return bundleLoad(o.bundle, o.dir, { forceReseed: o.forceReseed, noRun: o.dryLaunch }); // --dry-launch on this leg = load, verify, don't start the loop
+    return bundleLoad(o.bundle, o.dir, { forceReseed: o.forceReseed, noRun: o.dryLaunch, argv }); // LOOP-316: argv carries the isolation token // --dry-launch on this leg = load, verify, don't start the loop
   }
 
   // Mixed-state guard (review finding): a bare `up` under an exported DEVLOOP_HUB_URL would scaffold
