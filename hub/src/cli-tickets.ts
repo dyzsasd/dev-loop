@@ -15,7 +15,7 @@ import { resolveHubDbPath } from "./workspace.ts";
 // A1 (--json): the JSON mode dispatches the SAME list_issues/get_issue ops the MCP transports serve, so
 // `tickets --json` is byte-identical to `dev-loop op list_issues` / the stdio ok() body (the parity contract).
 // Reads stay reads: both ops only SELECT, so the query_only connection below still holds (AC5).
-import { agentOp, type AgentOp, type OpResult } from "./agentops.ts";
+import { agentOp, LIST_ISSUES_DEFAULT_LIMIT, type AgentOp, type OpResult } from "./agentops.ts";
 
 const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]); // §3 terminal states — hidden unless --all
 const PRIORITY: Record<number, string> = { 1: "Urgent", 2: "High", 3: "Medium", 4: "Low", 0: "None" }; // §5 (mirrors daemonviews)
@@ -33,9 +33,26 @@ interface DetailRow extends ListRow { description: string; created_at: string; d
 // list_issues/get_issue are the SYNC read ops (only channel/mirror ops are async), so the cast is safe.
 function emitJson(db: DatabaseSync, projectId: string, projectKey: string, actor: string, op: AgentOp, args: Record<string, unknown>): number {
   const r = agentOp(op, db, projectId, projectKey, actor, args) as OpResult;
-  if (r.status >= 200 && r.status < 300) { console.log(JSON.stringify(r.body)); return 0; }
+  if (r.status >= 200 && r.status < 300) {
+    console.log(JSON.stringify(r.body));
+    warnIfTruncated(op, args, r.body);
+    return 0;
+  }
   console.error(JSON.stringify(r.body));
   return 1;
+}
+
+// LOOP-342 — the second truncation channel, on the surface a human or an agent actually reads.
+// The default body stays a bare array (the cheat-sheets pin it as "EXACTLY the op list_issues body"),
+// so the fact that a read was capped has to arrive some other way. A returned count that exactly
+// equals the effective cap is the tell; stdout is untouched, so no consumer's parse changes.
+// Ordering is updated_at DESC, so the rows a capped read hides are the STALEST — exactly the ones a
+// hygiene or census scan is looking for, which is why silence here produced wrong board-wide answers.
+function warnIfTruncated(op: AgentOp, args: Record<string, unknown>, body: unknown): void {
+  if (op !== "list_issues" || !Array.isArray(body)) return;
+  const cap = typeof args.limit === "number" ? args.limit : LIST_ISSUES_DEFAULT_LIMIT;
+  if (body.length < cap) return;
+  console.error(`dev-loop tickets: returned exactly ${body.length} rows, the ${typeof args.limit === "number" ? "requested" : "DEFAULT"} cap — this read may be TRUNCATED, and the hidden rows are the stalest (order is updated_at DESC). Pass a higher --limit for a board-wide census, or {"envelope":true} to op list_issues for total/hasMore.`);
 }
 
 // `dev-loop tickets [--all] [--state S] [--type T] [--owner O] [--label L] [--q TEXT|TEXT] [--assignee A]

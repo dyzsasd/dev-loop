@@ -42,6 +42,11 @@ Query `project` + `label:"dev-loop"` in non-terminal states and inspect each tic
 against the §4 taxonomy:
 - **Stranded design child** — a `Backlog` ticket that carries a `Design:` pointer (§21a step 4)
   AND whose `relatedTo` design parent is `Done` ⇒
+  The pointer binds ONLY as a bare line whose first non-whitespace token is `Design:` — the same
+  rule `Blocked-by:`/`Unblocked-by:` already follow. A ticket that merely *mentions* `Design:` in
+  prose (quoting the marker syntax while discussing it, e.g. inside backticks or mid-sentence) is
+  NOT a design child. Without this, one surviving false positive remains: LOOP-296 quotes
+  `` `Design: parent <id>` `` twice while all three of its `relatedTo` parents are `Done`.
   finish the crashed promotion: move it `Backlog → Todo` (§21a design-gate crash residue;
   Backlog is invisible to every dev pick-query). Parent `Canceled` ⇒ cancel the child too
   (it references a superseded design).
