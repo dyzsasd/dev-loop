@@ -140,5 +140,43 @@ const BAD_SAMPLES = [
 ok(BAD_SAMPLES.every((s) => scanEntryGuards(s).length > 0) && scanEntryGuards("if (isMainEntry(import.meta.url)) {").length === 0,
   "the entry-guard scanner catches all three legacy idioms and accepts isMainEntry() (self-test)");
 
+// ── LOOP-214: the reports tree is dated in UTC, like everything it describes ───────────────────
+// §22's period keys were computed with a bare `date +%F`, i.e. the machine's LOCAL zone — while
+// every artifact those keys FILE is stamped in UTC (fires.jsonl ts, the board's created_at/
+// updated_at, the strategy doc; all toISOString()). On a UTC+2 box that split is not theoretical:
+// measured at 2026-07-31T23:30Z, qa and sweep filed that day's work into 2026-08-01.md while pm
+// filed the same day's work into 2026-07-31.md — three reports, 26 minutes apart, same fires, two
+// files. It also strands a finalize, because a daily whose date can never be "today" again cannot
+// be rolled up by a rule that only finalizes a PRIOR period.
+//
+// Prose alone regresses. This is the mechanical half: any date-key derivation in a governing file
+// must carry -u.
+{
+  const govFiles = [join(repoRoot, "references", "conventions.md")];
+  const skillsDir = join(repoRoot, "skills");
+  for (const d of readdirSync(skillsDir)) {
+    const f = join(skillsDir, d, "SKILL.md");
+    if (existsSync(f)) govFiles.push(f);
+  }
+  // `date` invocations producing a PERIOD KEY (%F day, %G-W%V ISO week, %Y-%m month). A bare
+  // `date +%s` or a human-facing timestamp is not this rule's business.
+  const KEY_FMT = /date\s+([^)`\n]*?)\+%(F|G-W%V|Y-%m)\b/g;
+  const offenders: string[] = [];
+  for (const f of govFiles) {
+    const text = readFileSync(f, "utf8");
+    for (const m of text.matchAll(KEY_FMT)) {
+      if (!/-u\b/.test(m[1] ?? "")) offenders.push(`${f.replace(repoRoot + "/", "")}: ${m[0]}`);
+    }
+  }
+  ok(offenders.length === 0,
+    offenders.length === 0
+      ? "LOOP-214: every §22 period-key derivation in a governing file uses `date -u` (UTC, matching the ledger/board/doc it files against)"
+      : `LOOP-214: ${offenders.length} period key(s) derived in LOCAL time — the reports tree would disagree with the UTC artifacts it describes:\n  ${offenders.join("\n  ")}`);
+  // Self-test: the scanner must actually catch the shape it exists to catch.
+  const probe = "TODAY=$(date +%F)";
+  ok([...probe.matchAll(KEY_FMT)].some((m) => !/-u\b/.test(m[1] ?? "")), "LOOP-214: the scanner catches a bare `date +%F` (self-test)");
+  ok(![...("TODAY=$(date -u +%F)").matchAll(KEY_FMT)].some((m) => !/-u\b/.test(m[1] ?? "")), "LOOP-214: …and accepts `date -u +%F` (self-test)");
+}
+
 console.log(fails === 0 ? "\nCONSISTENCY_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
