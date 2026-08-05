@@ -1274,12 +1274,17 @@ try {
     g(checkout, "remote", "add", "origin", originDir);
     g(checkout, "fetch", "-q", "origin");
 
-    // The precondition the whole ticket rests on: this checkout has NO origin/HEAD, so the first
-    // rung cannot answer. Asserted, not assumed — if a future git starts setting it on fetch, this
-    // test would otherwise silently go back to covering the rung it already covers.
+    // The precondition the whole ticket rests on: NO origin/HEAD, so the first rung cannot answer.
+    //
+    // The ticket assumed `remote add` + `fetch` never sets it. That was true on the git this was
+    // filed against and is NOT true on CI's — my precondition assertion caught exactly that, which
+    // is why it is written as an assertion rather than a comment. Since the point is to exercise the
+    // FALLBACK, the state it exists for is now guaranteed rather than inherited from a git version:
+    // delete the ref if the local git created one. The assertion stays, now verifying the SETUP.
+    g(checkout, "update-ref", "-d", "refs/remotes/origin/HEAD");
     const sym = g(checkout, "symbolic-ref", "--short", "refs/remotes/origin/HEAD");
     ok(sym.status !== 0,
-      "LOOP-255 precondition: a remote-add + fetch checkout has NO refs/remotes/origin/HEAD (the symbolic-ref rung cannot answer)");
+      "LOOP-255 precondition: the checkout under test has NO refs/remotes/origin/HEAD, so the symbolic-ref rung cannot answer and the fallback is what runs");
 
     const facts = detectRepoFacts(checkout);
     ok(facts.defaultBranch === "trunk",
