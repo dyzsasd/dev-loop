@@ -18,6 +18,8 @@ export interface IntegrityFlags {
   dangling: string[];
   /** ≥1 live blocker edge AND every live blocker is terminal (Done/Canceled/Duplicate). */
   unparkEligible: boolean;
+  /** LOOP-321: a comment read was partial, so this ticket's edge set is INCOMPLETE — never unpark on it. */
+  hadReadFailure: boolean;
   /** This ticket is part of a dependency cycle (A→B→A). */
   cyclic: boolean;
   /** `blocked` label present but zero blocker edges (e.g. Human-Blocked or pre-step-1). */
@@ -153,6 +155,9 @@ export function dependencyGraph(db: any, projectId: string): DependencyGraphRepo
   const forward = new Map<string, Set<string>>();
   // Track ALL blocker ids referenced across the project.
   const allReferencedBlockerIds = new Set<string>();
+  // LOOP-321: tickets whose comment read was PARTIAL — their edge set is incomplete, so they can
+  // never be reported unpark-eligible (the direction that would release work whose blocker is live).
+  const readFailures = new Set<string>();
   const blockedTickets: string[] = [];
 
   for (const t of allTickets) {
@@ -169,6 +174,14 @@ export function dependencyGraph(db: any, projectId: string): DependencyGraphRepo
     ).all(t.id) as { body: string }[];
 
     const { live, hadReadFailure } = liveBlockerIds(comments);
+    // LOOP-321 — hadReadFailure was destructured and then never used. liveBlockerIds returns it
+    // precisely so a consumer can tell "this ticket has no blockers" from "I could not READ this
+    // ticket's blockers", and this surface — whose entire job is to be the authority on what is
+    // blocked — discarded it. Its output is consumed as a DECISION, not a report: unparkEligible is
+    // what a PM fire acts on to strip a `blocked` label. A dropped read failure flows straight into
+    // that decision and can release work whose prerequisite has not happened.
+    // Fail-safe direction: a ticket whose blockers could not be read is NEVER unpark-eligible.
+    if (hadReadFailure) readFailures.add(t.id);
     if (live.size > 0) {
       forward.set(t.id, live);
       for (const id of live) allReferencedBlockerIds.add(id);
@@ -208,9 +221,9 @@ export function dependencyGraph(db: any, projectId: string): DependencyGraphRepo
 
     // PM binding AC: unpark-eligible requires ≥1 live blocker edge.
     // A blocked ticket with zero live edges is NOT unpark-eligible.
-    const unparkEligible = !noEdge && allTerminal && dangling.length === 0;
+    const unparkEligible = !noEdge && allTerminal && dangling.length === 0 && !readFailures.has(ticketId);
 
-    integrity[ticketId] = { dangling, unparkEligible, cyclic: false, noEdge };
+    integrity[ticketId] = { dangling, unparkEligible, cyclic: false, noEdge, hadReadFailure: readFailures.has(ticketId) };
     for (const d of dangling) allDangling.add(d);
   }
 
