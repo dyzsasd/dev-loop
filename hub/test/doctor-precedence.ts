@@ -7,7 +7,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { nextStep, checkFailureTaxonomyBlind, checkLessonsLiveness } from "../src/doctor.ts";
+import { nextStep, checkFailureTaxonomyBlind, checkLessonsLiveness, checkBoardSnapshotW32 } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-doc-prec-")));
@@ -94,6 +94,74 @@ try {
   }
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
+}
+
+// ── LOOP-340: W32 names the ABSENCE of a snapshot, and a cadence that stopped ──────────────────
+// On 2026-08-04 the board was destroyed and doctor printed DOCTOR_OK before, during and after —
+// there were ZERO W-codes mentioning backup or snapshot, so the health check could not say that the
+// board had never once been copied. Two arms, because they fail differently: never-taken is the
+// state that lost the data; stale-by-2x is a STOPPED timer, which is otherwise indistinguishable
+// from a healthy one and is what makes the Child C cadence trustworthy rather than assumed.
+{
+  const swsRoot = join(tmp, "snapws");
+  mkdirSync(join(swsRoot, ".dev-loop"), { recursive: true });
+  const writeCfg = (backup?: Record<string, unknown>) =>
+    writeFileSync(join(swsRoot, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "snap", backend: "service", mode: "live", ...(backup ? { backup } : {}) },
+      repos: {}, projects: {},
+    }));
+
+  // Arm 1 — nothing has ever been taken.
+  writeCfg();
+  const never: string[] = [];
+  checkBoardSnapshotW32(loadWorkspace(swsRoot), (m) => never.push(m));
+  ok(never.length === 1 && /\[W32\]/.test(never[0]) && /NEVER been snapshotted/.test(never[0]),
+    `LOOP-340 AC1: W32 names the never-taken case (got ${JSON.stringify((never[0] ?? "").slice(0, 70))})`);
+  ok(/dev-loop board snapshot/.test(never[0] ?? ""), "LOOP-340 AC1: …with the exact remedy command");
+
+  // A fresh generation ⇒ silent.
+  const snapDir = join(swsRoot, ".dev-loop", "snapshots");
+  mkdirSync(snapDir, { recursive: true });
+  const NOW = Date.parse("2026-08-05T12:00:00Z");
+  const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  writeFileSync(join(snapDir, `board-${stamp(new Date(NOW - 60 * 60_000))}-cadence.db`), "x");
+  const fresh: string[] = [];
+  checkBoardSnapshotW32(loadWorkspace(swsRoot), (m) => fresh.push(m), NOW);
+  ok(fresh.length === 0, `LOOP-340: a snapshot inside the cadence is SILENT (got ${JSON.stringify(fresh)})`);
+
+  // Arm 2 — older than 2x the cadence ⇒ the timer stopped, not merely slipped.
+  rmSync(snapDir, { recursive: true, force: true });
+  mkdirSync(snapDir, { recursive: true });
+  writeFileSync(join(snapDir, `board-${stamp(new Date(NOW - 20 * 3_600_000))}-cadence.db`), "x"); // 20h vs 6h cadence
+  const stale: string[] = [];
+  checkBoardSnapshotW32(loadWorkspace(swsRoot), (m) => stale.push(m), NOW);
+  ok(stale.length === 1 && /timer has stopped/.test(stale[0]),
+    `LOOP-340 AC1: a cadence that STOPPED is named as such (got ${JSON.stringify((stale[0] ?? "").slice(0, 70))})`);
+
+  // One missed cycle is a blip, not a fault — the discriminator that keeps the warning meaningful.
+  rmSync(snapDir, { recursive: true, force: true });
+  mkdirSync(snapDir, { recursive: true });
+  writeFileSync(join(snapDir, `board-${stamp(new Date(NOW - 8 * 3_600_000))}-cadence.db`), "x"); // 8h vs 6h
+  const blip: string[] = [];
+  checkBoardSnapshotW32(loadWorkspace(swsRoot), (m) => blip.push(m), NOW);
+  ok(blip.length === 0, "LOOP-340: ONE missed cycle is a blip and stays silent — only two is a stopped cadence");
+
+  // Cadence deliberately OFF ⇒ staleness is not a fault (but never-taken still warns).
+  writeCfg({ everyHours: 0 });
+  const off: string[] = [];
+  checkBoardSnapshotW32(loadWorkspace(swsRoot), (m) => off.push(m), NOW + 90 * 86_400_000);
+  ok(off.length === 0, "LOOP-340: with the cadence off, an old snapshot is not a fault");
+
+  // A linear team has no hub.db to snapshot at all.
+  const linRoot = join(tmp, "linws");
+  mkdirSync(linRoot, { recursive: true });
+  writeFileSync(join(linRoot, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2, team: { key: "lin", backend: "linear", linearTeam: "T" }, repos: {}, projects: {},
+  }));
+  const lin: string[] = [];
+  checkBoardSnapshotW32(loadWorkspace(linRoot), (m) => lin.push(m));
+  ok(lin.length === 0, "LOOP-340: a linear team has no hub.db — W32 does not apply and says nothing");
 }
 
 console.log(fails ? `\n${fails} CHECK(S) FAILED` : "\nDOCTOR_PRECEDENCE_OK");
