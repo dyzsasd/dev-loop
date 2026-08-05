@@ -24,7 +24,7 @@ import { AGENT_GROUPS } from "./agent-roster.ts"; // LOOP-184: group aliases sha
 import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
-import { breaker, formatBreakerMsg } from "./breaker.ts";
+import { breaker, formatBreakerMsg, providerOf, classifyFireError } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
 import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, DEFAULT_PER_FIRE_USD, type FireUsage } from "./metrics.ts";
@@ -245,29 +245,11 @@ function opencodeProviderEntry(opts: Options, model: string | undefined): Provid
 // failures, every one the same stderr line, indistinguishable in the ledger from real task failures.
 // The breaker (P0-1a) keys on repeated identical classes; metrics/doctor split them out. exit-0 shapes
 // stay the suspectError flag's job; a non-zero exit with no pattern match is a plain task failure (null).
-function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false): string | null {
-  if (budgetKilled) return "budget-per-fire"; // LOOP-230: the perFireUsd watchdog killed this fire — DISTINCT from a wall-timeout (never "timeout")
-  if (retryLoop) return "retry-loop"; // liveness watchdog kill — visible retry loop (output arriving but no new content)
-  if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
-  if (timedOut) return "timeout";
-  if (exitCode === 0) return null;
-  const t = tail.toLowerCase();
-  if (/spend limit|usage limit|monthly limit|credit balance too low|quota exceeded/.test(t)) return "spend-limit";
-  if (/rate limit|too many requests|overloaded_error|\b429\b|\b529\b/.test(t)) return "rate-limit";
-  if (/invalid api key|authentication_error|unauthorized|not logged in|please run \/login|oauth token|\b401\b/.test(t)) return "auth";
-  if (/enotfound|econnrefused|econnreset|etimedout|eai_again|fetch failed|network error|socket hang up/.test(t)) return "network";
-  return null;
-}
+// classifyFireError moved to breaker.ts (importable) — LOOP-114 needs a regression test that
+// asserts the exact provider tails, and nothing may import run-agents.ts (main() is unconditional).
 
-// The fire-ledger provider dimension (metrics cost attribution): opencode fires carry their model-string
-// prefix; claude/codex fires run their native endpoints until the Appendix-A route ships.
-function providerOf(profile: LaunchProfile): string | null {
-  if (profile.codingAgent === "opencode") {
-    const m = profile.model;
-    return m && m.includes("/") ? m.split("/")[0] : null;
-  }
-  return profile.codingAgent === "claude" ? "anthropic" : "openai";
-}
+// providerOf moved to breaker.ts (an importable leaf) so the breaker can resolve a provider for an
+// agent that has not yet completed a fire — LOOP-72. Imported above; ONE definition, both callers.
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (build)
 const EXT = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts"; // server sibling: .ts source / .js published
@@ -1471,6 +1453,7 @@ async function main(): Promise<void> {
   console.log(`dev-loop run: agents=${opts.agents.map((a) => `${a}@${formatDuration(opts.intervals[a])}`).join(", ")}`);
   console.log(`dev-loop run: launch=${opts.agents.map((a) => {
     const p = resolveLaunchProfile(opts, cfg, project, a);
+    breaker.seedProvider(a, providerOf(p)); // LOOP-72: close the cold-start window before any fire runs
     return `${a}:${p.codingAgent}:${p.model ?? "cli-default"}/${p.effort ?? "cli-default"}`;
   }).join(", ")}`);
 
