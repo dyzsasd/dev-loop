@@ -23,6 +23,7 @@ import { TOOL_NAMES, type ToolName } from "./tooldefs.ts"; // DL-85: the ONE too
 import { STEWARD_HANDLES } from "./seed.ts"; // D1: the steward roster (ONE definition, next to AGENT_HANDLES) the override matrix grants cross-project access to
 import { TEAM_INTAKE_PROJECT } from "./team-config.ts"; // D1: the reserved "_team" intake key — the only override pm may pass
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
+import { ticketSearchClause } from "./ticket-search.ts"; // LOOP-97: the ONE search predicate, shared with views/board.ts
 import { isDevTierActor, servableSlice, servableTodoDepth } from "./servable.ts"; // LOOP-144/LOOP-251: shared dev-tier servable predicate + todoDepth from the same predicate
 import { designParentIds, isDesignParent } from "./design-parent.ts"; // LOOP-344: ONE definition, shared with the write layer's verify gate (LOOP-345)
 import { insertTicket, updateTicketRow, insertComment, loadRelease, verifyCreateGateRejection } from "./ticketwrite.ts";
@@ -194,13 +195,11 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   // Whitespace splits the query into AND-ed terms (a multi-noun query like "daemon health probe" matches only
   // tickets hitting every term). SQLite LIKE is case-insensitive for ASCII; %/_/\ in a term are escaped so a
   // literal % can't act as a wildcard.
-  if (a.query && a.query.trim()) {
-    for (const term of a.query.trim().split(/\s+/)) {
-      const like = `%${term.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
-      where.push("(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR EXISTS(SELECT 1 FROM comments c WHERE c.ticket_id=tickets.id AND c.body LIKE ? ESCAPE '\\'))");
-      binds.push(like, like, like);
-    }
-  }
+  // LOOP-97: the ONE shared predicate, so this path and the web `?q=` cannot answer the same query
+  // differently. This side gained ticket-id matching (an agent searching for "LOOP-96" used to get
+  // nothing) and the description cap; the web side gained comments and AND-ed terms.
+  const qc = ticketSearchClause(a.query);
+  if (qc) { where.push(qc.sql); binds.push(...qc.binds); }
   let out = (db.prepare(`SELECT * FROM tickets WHERE ${where.join(" AND ")} ORDER BY updated_at DESC`).all(...binds) as unknown as TicketRow[]).map(toTicket);
   const want = [...(a.labels ?? []), ...(a.label ? [a.label] : [])];
   if (want.length) out = out.filter((t) => want.every((l) => t.labels.includes(l)));
