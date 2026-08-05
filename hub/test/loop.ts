@@ -7,6 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 // DL-21: a UNIQUE temp dir per invocation (mkdtempSync), not a fixed `/tmp/hub-loop/hub.db`. The old
 // fixed path was rm'd at start and reopened by 5 concurrent server connections — but a still-terminating
@@ -22,7 +23,7 @@ async function as(actor: string): Promise<Client> {
   const c = new Client({ name: `t-${actor}`, version: "0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "monpick", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1" },
+    env: { ...scrubFireEnv(), DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "monpick", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1" },
   }));
   return c;
 }

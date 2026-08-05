@@ -6,6 +6,7 @@ import { registerDaemonPid } from "./daemon-harness.ts";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -14,7 +15,7 @@ const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-hublc-")));
 const HOME = join(tmp, "home");
 // Scrub workspace-specific vars that an ambient dev-loop fire exports: inheriting them causes hub
 // start/stop/status to resolve the wrong project or hub.db (LOOP-6 regression guard).
-const env: Record<string, string | undefined> = { ...process.env, DEVLOOP_HOME: HOME };
+const env: Record<string, string | undefined> = { ...scrubFireEnv(), DEVLOOP_HOME: HOME };
 delete env.DEVLOOP_HUB_DB;
 delete env.DEVLOOP_PROJECT;
 delete env.DEVLOOP_DEV_SPLIT;

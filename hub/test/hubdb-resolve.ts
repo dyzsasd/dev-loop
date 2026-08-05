@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveHubDbPath, wsHubDb, tryResolveWorkspace } from "../src/workspace.ts";
 import { hubDbPath } from "../src/paths.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -20,7 +21,7 @@ try {
   const cli = (args: string[], cwd: string, env: Record<string, string | undefined> = {}) =>
     spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), ...args], {
       cwd, encoding: "utf8",
-      env: { ...process.env, DEVLOOP_HUB_DB: undefined, ...env } as NodeJS.ProcessEnv, // the ladder must work WITHOUT the env crutch
+      env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: undefined, ...env } as NodeJS.ProcessEnv, // the ladder must work WITHOUT the env crutch
     });
 
   // workspace for the e2e legs

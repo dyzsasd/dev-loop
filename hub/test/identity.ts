@@ -6,6 +6,7 @@ import { rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const DB = "/tmp/hub-identity/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -17,7 +18,7 @@ const ok = (cond: boolean, m: string) => { console.log((cond ? "✅ " : "❌ ") 
 execFileSync("node", ["src/seed.ts", "idp", "Identity Project", "ID", DB], { encoding: "utf8" });
 
 function check(actor: string | null): { code: number; data: any } {
-  const env: Record<string, string> = { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "idp" };
+  const env: Record<string, string> = { ...scrubFireEnv(), DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "idp" };
   if (actor) env.DEVLOOP_ACTOR = actor; else delete env.DEVLOOP_ACTOR;
   try {
     const out = execFileSync("node", ["src/server.ts", "identity-check"], { env, encoding: "utf8" });
@@ -45,7 +46,7 @@ ok(!JSON.stringify(dev.data).match(/token|secret|key/i), "identity-check output 
 
 // --expect catches a WRONG-but-VALID actor (the mis-attribution gap Codex named) — not just unknown/unset
 function checkExpect(actor: string, expect: string): { code: number; data: any } {
-  const env: Record<string, string> = { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "idp", DEVLOOP_ACTOR: actor };
+  const env: Record<string, string> = { ...scrubFireEnv(), DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "idp", DEVLOOP_ACTOR: actor };
   try { return { code: 0, data: JSON.parse(execFileSync("node", ["src/server.ts", "identity-check", "--expect", expect], { env, encoding: "utf8" })) }; }
   catch (e) { const err = e as { status?: number; stdout?: string }; return { code: err.status ?? -1, data: JSON.parse(err.stdout || "{}") }; }
 }
@@ -67,7 +68,7 @@ async function hub(actor: string): Promise<Client> {
   const c = new Client({ name: `idtest-${actor}`, version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "idp", DEVLOOP_HUB_DB: DB },
+    env: { ...scrubFireEnv(), DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "idp", DEVLOOP_HUB_DB: DB },
   }));
   return c;
 }

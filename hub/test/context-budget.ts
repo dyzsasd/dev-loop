@@ -21,6 +21,7 @@ import {
   tryResolveStrategyDocStat,
 } from "../src/context-bill.ts";
 import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "../src/lessons.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const root = pluginRoot();
 let fails = 0;
@@ -327,7 +328,7 @@ for (const r of bill.rows) {
 
 // ── 6. CLI e2e: `metrics --context` needs NO workspace (plugin-static; the doctor/metrics call) ────
 const r = spawnSync(process.execPath, [join(root, "hub", "src", "metrics.ts"), "--context", "--json"],
-  { cwd: "/", env: { ...process.env, DEVLOOP_HOME: undefined as unknown as string }, encoding: "utf8" });
+  { cwd: "/", env: { ...scrubFireEnv(), DEVLOOP_HOME: undefined as unknown as string }, encoding: "utf8" });
 ok(r.status === 0, `metrics --context exits 0 outside any workspace (got ${r.status}: ${(r.stderr ?? "").slice(0, 120)})`);
 let cliBill: Bill | null = null;
 try { cliBill = JSON.parse((r.stdout ?? "").trim()) as Bill; } catch { /* fails below */ }

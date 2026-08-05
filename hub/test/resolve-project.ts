@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { resolveProjectFromCwd, loadProjectsConfig, repoFileStrategyPath } from "../src/resolve-project.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -36,7 +37,7 @@ ok(resolveProjectFromCwd(R("work/repo/sub"), tieCfg) === null, "two distinct pro
 
 // ── `resolve-project` subcommand integration (the launcher reuses THIS matcher) ──
 writeFileSync(join(ROOT, "projects.json"), JSON.stringify(cfg));
-const sub = (cwd: string): string => { try { return execFileSync("node", ["src/server.ts", "resolve-project", "--cwd", cwd], { env: { ...process.env, DEVLOOP_PROJECTS_JSON: join(ROOT, "projects.json") }, encoding: "utf8" }).trim(); } catch { return "<exit1>"; } };
+const sub = (cwd: string): string => { try { return execFileSync("node", ["src/server.ts", "resolve-project", "--cwd", cwd], { env: { ...scrubFireEnv(), DEVLOOP_PROJECTS_JSON: join(ROOT, "projects.json") }, encoding: "utf8" }).trim(); } catch { return "<exit1>"; } };
 ok(sub(R("work/repo/sub")) === "alpha", "resolve-project subcommand → prints the cwd project (exit 0)");
 ok(sub(R("work/outside")) === "<exit1>", "resolve-project subcommand on a non-match → non-zero exit, no output");
 
@@ -48,7 +49,7 @@ execFileSync("node", ["src/seed.ts", "beta", "Beta", "BE", DB], { encoding: "utf
 const SERVER = realpathSync("src/server.ts"); // absolute — the spawn cwd is a repo dir, not hub/
 async function whoamiFrom(project: string, cwd: string): Promise<any> {
   const c = new Client({ name: "rp", version: "0" });
-  await c.connect(new StdioClientTransport({ command: "node", args: [SERVER], cwd, env: { ...process.env, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECTS_JSON: join(ROOT, "projects.json"), DEVLOOP_ACTOR: "dev" } }));
+  await c.connect(new StdioClientTransport({ command: "node", args: [SERVER], cwd, env: { ...scrubFireEnv(), DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECTS_JSON: join(ROOT, "projects.json"), DEVLOOP_ACTOR: "dev" } }));
   const r: any = await c.callTool({ name: "whoami", arguments: {} });
   const who = JSON.parse(r.content?.[0]?.text ?? "{}");
   await c.close();

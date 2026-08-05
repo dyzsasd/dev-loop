@@ -11,6 +11,7 @@ import { worktreeReap } from "../src/worktree.ts";
 import { resolveWorkspace } from "../src/workspace.ts";
 import { confirmationToken, isolationVerdict, TOKEN_PREFIX } from "../src/destructive-guard.ts";
 import type { Workspace } from "../src/team-config.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -107,7 +108,7 @@ try {
 
   // ── 8. CLI: dev-loop worktree path prints the canonical path ────────────────
   const pathResult = spawnSync(process.execPath, [join(hubRoot, "src", "worktree.ts"), "path", "TEST-42", "--repo", "repo"],
-    { encoding: "utf8", env: { ...process.env, DEVLOOP_WORKSPACE: wsRoot } });
+    { encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: wsRoot } });
   const expectedPath = join(wsRoot, ".dev-loop", "wt", "TEST-42", "repo");
   ok(pathResult.status === 0 && pathResult.stdout.trim() === expectedPath,
     `worktree path prints the canonical path (expected ${expectedPath}, got ${pathResult.stdout.trim()})`);
@@ -122,7 +123,7 @@ try {
   db2.close();
 
   const cliDry = spawnSync(process.execPath, [join(hubRoot, "src", "worktree.ts"), "reap", "--repo", "repo", "--dry-run"],
-    { encoding: "utf8", env: { ...process.env, DEVLOOP_WORKSPACE: wsRoot } });
+    { encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: wsRoot } });
   ok(cliDry.status === 0 && cliDry.stdout.includes("CANCEL-2"), "worktree reap --dry-run identifies CANCEL-2");
   ok(existsSync(wtCanceled2), "worktree reap --dry-run does not remove CANCEL-2");
 
@@ -188,7 +189,7 @@ try {
 
   // Hermetic subprocess env: read the fixture db explicitly, contain the index write to a temp
   // DEVLOOP_HOME, and drop inherited project/actor identity so a live fire can't leak in.
-  const trEnv: NodeJS.ProcessEnv = { ...process.env, DEVLOOP_WORKSPACE: wsRoot, DEVLOOP_HUB_DB: dbPath, DEVLOOP_HOME: join(ROOT, ".home") };
+  const trEnv: NodeJS.ProcessEnv = { ...scrubFireEnv(), DEVLOOP_WORKSPACE: wsRoot, DEVLOOP_HUB_DB: dbPath, DEVLOOP_HOME: join(ROOT, ".home") };
   delete trEnv.DEVLOOP_DATA_DIR; delete trEnv.DEVLOOP_PROJECT; delete trEnv.DEVLOOP_ACTOR;
   const trPath = join(hubRoot, "src", "team-repair.ts");
 

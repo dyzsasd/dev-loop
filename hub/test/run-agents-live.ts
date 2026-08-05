@@ -11,6 +11,7 @@ import { RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
 import { openDb } from "../src/db.ts";                 // LOOP-144: seed servable rows to drive the queue-depth gate
 import { findProject } from "../src/seed.ts";
 import { insertTicket } from "../src/ticketwrite.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -39,7 +40,7 @@ exit 0
   const runLive = (args: string[], env: Record<string, string> = {}, timeout = 90_000) => {
     const r = spawnSync("node", ["src/run-agents.ts", ...args], {
       cwd: hubRoot, encoding: "utf8", timeout,
-      env: { ...process.env, DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: stubOut, DEVLOOP_RUN_DIR: tmp, ...env },
+      env: { ...scrubFireEnv(), DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: stubOut, DEVLOOP_RUN_DIR: tmp, ...env },
     });
     return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
   };
@@ -100,7 +101,7 @@ exit 0
   ok(tel.code === 0, `telemetry fire exits 0 (got ${tel.code})`);
   const rows = execFileSync("node", ["--input-type=module", "-e",
     `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${hubDb}'); const pid=findProject(db,'tel'); const r=db.prepare("SELECT actor,data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
-    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+    { cwd: hubRoot, encoding: "utf8", env: { ...scrubFireEnv() } });
   const events = JSON.parse(rows) as { actor: string; data: string }[];
   ok(events.length === 1 && events[0].actor === "sweep", "P1: one fire.completed event, attributed to the fired agent");
   const d = events.length ? JSON.parse(events[0].data) as Record<string, unknown> : {};
@@ -122,7 +123,7 @@ exit 1
   ok(telFail.code === 1, `spend-limit fire propagates exit 1 (got ${telFail.code})`);
   const rows2 = execFileSync("node", ["--input-type=module", "-e",
     `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${hubDb}'); const pid=findProject(db,'tel'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
-    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+    { cwd: hubRoot, encoding: "utf8", env: { ...scrubFireEnv() } });
   const datas = (JSON.parse(rows2) as { data: string }[]).map((r) => JSON.parse(r.data) as Record<string, unknown>);
   ok(datas.some((x) => x.errorClass === "spend-limit" && x.exitCode === 1),
     "P0-1b: the spend-limit failure carries errorClass:'spend-limit' in fire.completed");
@@ -201,7 +202,7 @@ done
   // Verify the errorClass reaches the fire ledger
   const retryRows = execFileSync("node", ["--input-type=module", "-e",
     `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${retryDb}'); const pid=findProject(db,'tel'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
-    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+    { cwd: hubRoot, encoding: "utf8", env: { ...scrubFireEnv() } });
   const retryData = (JSON.parse(retryRows) as { data: string }[]).map((r) => JSON.parse(r.data) as Record<string, unknown>);
   ok(retryData.some((x) => x.errorClass === "retry-loop"), "retry-loop errorClass reaches the fire.completed ledger event");
   // Verify fireMetrics still parses retry-loop in byErrorClass — it is a free-form string dimension, so
@@ -210,7 +211,7 @@ done
   writeFileSync(metricsLedger, JSON.stringify({ ts: new Date().toISOString(), agent: "sweep", project: "tel", exitCode: 125, timedOut: false, errorClass: "retry-loop", durationMs: 5000 }) + "\n");
   const metricsOut = execFileSync("node", ["--input-type=module", "-e",
     `import {fireMetrics} from './src/metrics.ts'; process.stdout.write(JSON.stringify(fireMetrics('${metricsLedger}', 86400000)));`],
-    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+    { cwd: hubRoot, encoding: "utf8", env: { ...scrubFireEnv() } });
   const metricsJson = JSON.parse(metricsOut) as { byErrorClass?: Record<string, number> };
   ok(typeof metricsJson.byErrorClass?.["retry-loop"] === "number",
     "retry-loop appears under byErrorClass in fireMetrics (free-form dimension — dev-loop metrics --json still parses)");
@@ -243,7 +244,7 @@ done
   ok(/retry-loop/.test(satRun.out), "retry-loop is detected AFTER the seen-line window saturated (the frozen-200 detector missed this)");
   const satRows = execFileSync("node", ["--input-type=module", "-e",
     `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${satDb}'); const pid=findProject(db,'sat'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
-    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+    { cwd: hubRoot, encoding: "utf8", env: { ...scrubFireEnv() } });
   const satData = (JSON.parse(satRows) as { data: string }[]).map((r) => JSON.parse(r.data) as Record<string, unknown>);
   ok(satData.some((x) => x.errorClass === "retry-loop"), "the saturated-then-looping fire records errorClass \"retry-loop\" in the ledger");
   // LOOP-346 — the class must reach the HUMAN too, not only the ledger. `satRun.out` is captured
@@ -274,7 +275,7 @@ sleep 600
     "genuinely-new-then-quiet fire classifies as stalled, never retry-loop");
   const slowRows = execFileSync("node", ["--input-type=module", "-e",
     `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${slowDb}'); const pid=findProject(db,'slow'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed'").all(pid); process.stdout.write(JSON.stringify(r));`],
-    { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+    { cwd: hubRoot, encoding: "utf8", env: { ...scrubFireEnv() } });
   const slowData = (JSON.parse(slowRows) as { data: string }[]).map((r) => JSON.parse(r.data) as Record<string, unknown>);
   ok(slowData.some((x) => x.errorClass === "stalled") && !slowData.some((x) => x.errorClass === "retry-loop"),
     "the slow-but-healthy fire records \"stalled\", never \"retry-loop\"");
@@ -293,7 +294,7 @@ sleep 600
   // Without this, backend comes back undefined (gate project not in real config) → gateActive=false.
   const runLoop = (extra: string[], outDir: string, sleepSec: string, agent = "pm", interval = "1s"): number => {
     const child = spawn("node", ["src/run-agents.ts", "--root", repoRoot, "--data", gateData, "--hub-db", gateDb, "--project", "gate", "--cwd", repo, "--cli", "claude", "--agents", agent, "--interval", `${agent}=${interval}`, "--stagger", "0", ...extra],
-      { cwd: hubRoot, stdio: "ignore", env: { ...process.env, DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: outDir, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECTS_JSON: join(gateData, "projects.json") } });
+      { cwd: hubRoot, stdio: "ignore", env: { ...scrubFireEnv(), DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: outDir, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECTS_JSON: join(gateData, "projects.json") } });
     spawnSync("sleep", [sleepSec]);          // let it tick for the window
     child.kill("SIGTERM");
     spawnSync("sleep", ["1"]);               // let it drain/exit
@@ -308,7 +309,7 @@ sleep 600
   // wall-clock window ("6.5s") was fragile on loaded CI — startup overhead on Node 23.6.0 caused
   // only 2 fires to fit, failing the >= 3 assertion intermittently.
   spawnSync("node", ["src/run-agents.ts", "--root", repoRoot, "--data", gateData, "--hub-db", gateDb, "--project", "gate", "--cwd", repo, "--cli", "claude", "--agents", "pm", "--interval", "pm=1s", "--stagger", "0", "--max-fires", "3"],
-    { cwd: hubRoot, stdio: "ignore", timeout: 30_000, env: { ...process.env, DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: openOut, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECTS_JSON: join(gateData, "projects.json") } });
+    { cwd: hubRoot, stdio: "ignore", timeout: 30_000, env: { ...scrubFireEnv(), DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: openOut, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECTS_JSON: join(gateData, "projects.json") } });
   const ungatedFires = readdirSync(openOut).filter((f) => f.startsWith("rec-")).length;
   ok(ungatedFires === 3, `no gate: pm fires on every tick (exactly ${ungatedFires}/3 with --max-fires 3)`);
 
@@ -382,7 +383,7 @@ sleep 600
     // kernel regardless of the parent's event loop, exactly like the rec-* fire files this harness already reads.
     const logFile = join(outDir, "sched.log"); const fd = openSync(logFile, "w");
     const child = spawn("node", ["src/run-agents.ts", "--root", repoRoot, "--data", qgData, "--hub-db", qgDb, "--project", "qg", "--cwd", repo, "--cli", "claude", "--agents", "senior-dev", "--interval", "senior-dev=3s", "--stagger", "0", "--change-gate"],
-      { cwd: hubRoot, stdio: ["ignore", fd, fd], env: { ...process.env, DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: outDir, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECTS_JSON: join(qgData, "projects.json") } });
+      { cwd: hubRoot, stdio: ["ignore", fd, fd], env: { ...scrubFireEnv(), DEVLOOP_CLAUDE_BIN: stub, STUB_OUT: outDir, DEVLOOP_RUN_DIR: tmp, DEVLOOP_PROJECTS_JSON: join(qgData, "projects.json") } });
     spawnSync("sleep", ["4.2"]);
     child.kill("SIGTERM"); spawnSync("sleep", ["1"]); try { child.kill("SIGKILL"); } catch { /* already gone */ }
     closeSync(fd);
@@ -416,7 +417,7 @@ sleep 600
   const latestFireData = (): Record<string, unknown> => {
     const rows = execFileSync("node", ["--input-type=module", "-e",
       `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${ocDb}'); const pid=findProject(db,'oc'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed' ORDER BY rowid DESC LIMIT 1").all(pid); process.stdout.write(JSON.stringify(r));`],
-      { cwd: hubRoot, encoding: "utf8", env: { ...process.env } });
+      { cwd: hubRoot, encoding: "utf8", env: { ...scrubFireEnv() } });
     const arr = JSON.parse(rows) as { data: string }[];
     return arr.length ? (JSON.parse(arr[0].data) as Record<string, unknown>) : {};
   };

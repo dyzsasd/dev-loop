@@ -16,6 +16,8 @@ const DB = "/tmp/hub-iso/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
 
 async function as(actor: string, project: string, opts: { create?: boolean; prefix?: string } = {}): Promise<Client> {
+  // env-scrub-exempt: this suite's SUBJECT is fire-marker inheritance — it sets the markers on
+  // purpose and asserts the guard's response. Scrubbing here would delete what it measures.
   const env: Record<string, string> = { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB };
   if (opts.create) { env.DEVLOOP_CREATE_PROJECT = "1"; if (opts.prefix) env.DEVLOOP_TICKET_PREFIX = opts.prefix; }
   const c = new Client({ name: `iso-${actor}-${project}`, version: "0" });
@@ -91,6 +93,7 @@ ok(mr.code !== 0 && mr.out.includes("MISSING") && !existsSync(MISS), "doctor on 
 // execFileSync would deadlock (the stub can't answer while the loop is parked in the sync child).
 function doctorEnv(extra: Record<string, string>): Promise<{ out: string; code: number }> {
   return new Promise((resolve) => {
+    // env-scrub-exempt: same reason — the ambient markers are the input under test.
     const p = spawn("node", ["src/server.ts", "doctor"], { env: { ...process.env, DEVLOOP_HUB_DB: DB, ...extra } });
     let out = ""; p.stdout.on("data", (d) => (out += d)); p.stderr.on("data", (d) => (out += d));
     p.on("close", (code) => resolve({ out, code: code ?? 1 }));

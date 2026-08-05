@@ -17,6 +17,7 @@ import { once } from "node:events";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, ensureProject, findProject } from "../src/seed.ts";
 import { createDaemon } from "../src/daemon.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const ROOT = "/tmp/hub-cli-agentops-test";
 rmSync(ROOT, { recursive: true, force: true });
@@ -42,7 +43,7 @@ const ok = (cond: boolean, m: string) => { console.log((cond ? "✅ " : "❌ ") 
 // run the REAL unified CLI (src/cli.ts routes to cli-agentops/cli-tickets) with an isolated env. Fire-marker
 // vars are STRIPPED from the base env (the build-artifact leak lesson) so only an explicit override sets them.
 function cliEnv(env: Record<string, string | undefined>): NodeJS.ProcessEnv {
-  const base: Record<string, string | undefined> = { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "cwt", DEVLOOP_ACTOR: "pm" };
+  const base: Record<string, string | undefined> = { ...scrubFireEnv(), DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "cwt", DEVLOOP_ACTOR: "pm" };
   delete base.DEVLOOP_TEAM_SCOPE; delete base.DEVLOOP_DEV_SPLIT; delete base.DEVLOOP_HUB_PORT; delete base.DEVLOOP_PROJECTS_JSON;
   return { ...base, ...env } as NodeJS.ProcessEnv;
 }
@@ -320,7 +321,7 @@ async function stdioCall(actor: string, name: string, args: Record<string, unkno
   const c = new Client({ name: `cliaop-${actor}`, version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "cwt", DEVLOOP_HUB_DB: DB },
+    env: { ...scrubFireEnv(), DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "cwt", DEVLOOP_HUB_DB: DB },
   }));
   const r: any = await c.callTool({ name, arguments: args });
   await c.close();

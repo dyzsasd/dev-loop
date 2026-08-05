@@ -13,6 +13,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 import { createIssue, updateIssue, findByMarker, createDocument, updateDocument, findDocByMarker,
   getDocumentContent, listDocComments, type FetchImpl } from "../src/linear.ts";
 
@@ -188,7 +189,7 @@ const MOCK_URL = `http://127.0.0.1:${(mockLinear.address() as { port: number }).
 
 async function as(actor: string, project: string, opts: { dryrun?: boolean; prefix?: string } = {}): Promise<Client> {
   const env: Record<string, string> = {
-    ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB,
+    ...scrubFireEnv(), DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB,
     DEVLOOP_CREATE_PROJECT: "1", DEVLOOP_LINEAR_TOKEN: "lin_api_SECRET", DEVLOOP_LINEAR_API_URL: MOCK_URL,
     DEVLOOP_DATA_DIR: DATA, // D5: the poller's acted-ledger stays in the test sandbox
   };

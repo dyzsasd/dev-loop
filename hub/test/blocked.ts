@@ -10,6 +10,7 @@ import { resolveBlockedReminderHours, DEFAULT_BLOCKED_REMINDER_HOURS } from "../
 import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import type { FetchImpl } from "../src/channel.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -105,7 +106,7 @@ const base = (db: ReturnType<typeof openDb>) =>
     db.close();
   `;
   execFileSync("node", ["--input-type=module", "-e", childSeedAndDryTick],
-    { env: { ...process.env, DDB, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
+    { env: { ...scrubFireEnv(), DDB, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
   const db = openDb(DDB); // parent is LIVE (DEVLOOP_CHANNEL_DRYRUN unset)
   ok(evc(db) === 0, "DL-34: dry-run wrote NO human_blocked.notified marker (write-free)");
   const live = await blockedNotifyTick({ ...base(db), nowMs: Date.now() });
@@ -160,7 +161,7 @@ const base = (db: ReturnType<typeof openDb>) =>
     db.close();
   `;
   const out = execFileSync("node", ["--input-type=module", "-e", childWebhookDry],
-    { env: { ...process.env, DDB: WDB, DEVLOOP_CHANNEL_DRYRUN: "1", HOOKURL: "https://hooks.test/xyz" }, encoding: "utf8" });
+    { env: { ...scrubFireEnv(), DDB: WDB, DEVLOOP_CHANNEL_DRYRUN: "1", HOOKURL: "https://hooks.test/xyz" }, encoding: "utf8" });
   const res = JSON.parse(out.trim().split("\n").pop() as string);
   ok(res.markers === 0 && res.fetched === false, "DL-52/DL-34: a webhook channel under dry-run → NO network call, NO marker (write-free)");
   ok(res.previewHasWebhook && res.previewHasId, "DL-52: the dry-run preview names the transport (webhook) + the ticket id (the intended POST)");
@@ -238,7 +239,7 @@ const base = (db: ReturnType<typeof openDb>) =>
     db.close();
   `;
   const out = execFileSync("node", ["--input-type=module", "-e", childNotifyDry],
-    { env: { ...process.env, DDB: NDB, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
+    { env: { ...scrubFireEnv(), DDB: NDB, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
   const res = JSON.parse(out.trim().split("\n").pop() as string);
   ok(res.markers === 0 && res.fetched === false, "DL-59/DL-34: a notify-only project under dry-run → NO network, NO marker (write-free)");
   ok(res.previewHasNotify && res.previewHasId, "DL-59: the dry-run preview names the §9 notify target + the ticket id");

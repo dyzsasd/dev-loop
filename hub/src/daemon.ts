@@ -197,6 +197,11 @@ function readBodyBytes(req: IncomingMessage): Promise<Buffer> {
 const parseFormBody = (req: IncomingMessage): Promise<URLSearchParams> =>
   readBodyBytes(req).then((b) => new URLSearchParams(b.toString("utf8")));
 
+// LOOP-289: an IPv6 literal must be bracketed before it goes into a URL, or `new URL()` throws on it —
+// `http://::1:8789` is not parseable. Only for URL construction; the loopback DECISION is
+// isLoopbackHost's, which accepts either spelling.
+const hostForUrl = (h: string): string => (h.includes(":") && !h.startsWith("[") ? `[${h}]` : h);
+
 function redirect(res: ServerResponse, location: string): void {
   res.writeHead(303, { location, "content-length": 0 }); // 303 See Other — POST→GET (Post/Redirect/Get)
   res.end();
@@ -224,7 +229,7 @@ function redirect(res: ServerResponse, location: string): void {
 // the token, and a token-authed request bypasses this Host heuristic entirely (a bearer is strictly
 // stronger: a browser cannot attach cross-site Authorization headers, so the CSRF/rebinding vector
 // this guard exists for cannot reach a tokened surface).
-const LOCAL_HOST = /^(127\.0\.0\.1|localhost)(:\d+)?$/;
+
 // F2: the grammar a PATH-derived /p/<key> project key must satisfy before any DB lookup or filesystem
 // use — one safe segment, no "/", no leading dot (kills "." / ".." traversal). Slightly wider than the
 // config KEY_RE (allows "_team" and uppercase) so every legitimately-seeded key stays reachable.
@@ -233,7 +238,10 @@ const LOCAL_HOST = /^(127\.0\.0\.1|localhost)(:\d+)?$/;
 const SAFE_KEY = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 function writeOriginOk(req: IncomingMessage): boolean {
   const host = req.headers.host;
-  if (!host || !LOCAL_HOST.test(host)) return false;            // (a) foreign/rebound Host → refuse before any write
+  // LOOP-289: the SHARED predicate, not a second hand-rolled regex. The two used to disagree on
+  // IPv6 loopback, and this guard was the half that refused it — so a ::1 bind 403'd every write.
+  // They can no longer drift, because there is only one of them.
+  if (!host || !isLoopbackHost(host)) return false;            // (a) foreign/rebound Host → refuse before any write
   const allowed = `http://${host}`;                             // the daemon is http localhost-only (the served page's origin)
   const origin = req.headers.origin;
   if (origin !== undefined) return origin === allowed;          // (b) Origin present → must be same-origin
@@ -376,7 +384,7 @@ async function handleAgentOp(op: string, req: IncomingMessage, res: ServerRespon
   // (1) CSRF / DNS-rebinding wall FIRST — uniform over every op. A non-browser agent client (the shim, curl,
   //     tests) sends no Origin ⇒ allowed; a browser cross-origin / foreign-Host POST is refused before anything.
   //     A bearer-authed request (attach / a reverse proxy injecting the token) bypasses the Host heuristic —
-  //     see the LOCAL_HOST invariant note (§6.2): a bearer is strictly stronger than locality.
+  //     see the loopback-Host invariant note (§6.2): a bearer is strictly stronger than locality.
   if (!authedByToken && !writeOriginOk(req)) return json(res, 403, { error: "op refused: cross-origin or non-localhost Host (CSRF / DNS-rebinding guard)" });
   // (2) actor from the header, validated against `actors` (the G1 phantom-actor guard — every write/comment
   //     must be attributable, exactly like the stdio server's DEVLOOP_ACTOR start guard).
@@ -873,13 +881,13 @@ if (isMainEntry(import.meta.url)) {
   const PROJECT_KEY = process.env.DEVLOOP_PROJECT?.trim();
   // One-click P1 (§1.5/§6.2): the bind knob. Default stays the v4 loopback (§16). Widening it beyond
   // loopback (a container/pod must — probes and published ports reach the pod IP, never the container's
-  // loopback) REQUIRES the bearer token: the LOCAL_HOST write guard is only sufficient on a loopback
+  // loopback) REQUIRES the bearer token: the loopback-Host write guard is only sufficient on a loopback
   // bind (its own invariant), so a widened, token-less daemon refuses to boot — fail closed, never a
   // silently weakened write surface.
   const HOST = process.env.DEVLOOP_DAEMON_HOST?.trim() || "127.0.0.1";
   const PORT = Number(process.env.DEVLOOP_DAEMON_PORT ?? 8787);
   if (!isLoopbackHost(HOST) && resolveUiToken() === null) {
-    console.error(`[daemon] refusing to bind ${HOST}: DEVLOOP_DAEMON_HOST widens the bind beyond loopback without DEVLOOP_UI_TOKEN(_FILE) — the Host-allowlist write guard would silently weaken (see daemon.ts LOCAL_HOST invariant). Set a token, or drop the bind override.`);
+    console.error(`[daemon] refusing to bind ${HOST}: DEVLOOP_DAEMON_HOST widens the bind beyond loopback without DEVLOOP_UI_TOKEN(_FILE) — the Host-allowlist write guard would silently weaken (see the isLoopbackHost invariant in ui-token.ts). Set a token, or drop the bind override.`);
     process.exit(1);
   }
   if (!PROJECT_KEY) {
@@ -946,8 +954,8 @@ if (isMainEntry(import.meta.url)) {
   server.listen(PORT, HOST, () => {
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : PORT;
-    console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${HOST}:${port}/  (reads read-only; /roadmap editable${isLoopbackHost(HOST) ? ", localhost-only" : ", bearer-token required (§6.2)"})`);
-    const baseUrl = `http://${isLoopbackHost(HOST) ? HOST : "127.0.0.1"}:${port}`; // notifier links stay reachable from the host itself
+    console.log(`[daemon] dev-loop-hub for '${PROJECT_KEY}' (actor=${ACTOR}${ACTOR === "operator" ? ", can publish" : ", drafts only"}) → http://${hostForUrl(HOST)}:${port}/  (reads read-only; /roadmap editable${isLoopbackHost(HOST) ? ", localhost-only" : ", bearer-token required (§6.2)"})`);
+    const baseUrl = `http://${hostForUrl(isLoopbackHost(HOST) ? HOST : "127.0.0.1")}:${port}`; // notifier links stay reachable from the host itself
     startProjectNotifiers({ writeDb, projectId, projectKey: PROJECT_KEY, baseUrl, dbPath: DB_PATH,
       cadenceHours, noProgressWindowHours, fhWindowHours, fhMinFires, fhThreshold,
       projCfg: projCfg as Record<string, unknown> | undefined, notify });

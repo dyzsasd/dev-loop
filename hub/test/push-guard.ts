@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { pushGuard } from "../src/push-guard.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -58,7 +59,7 @@ try {
   // CLI: advisory exit 0; --strict exit 1 with findings; clean --strict exit 0
   // Pass --default-branch main explicitly — the temp work dir is not a registered workspace.
   const cli = (args: string[]) => spawnSync(process.execPath, [join(hubRoot, "src", "push-guard.ts"), ...args],
-    { encoding: "utf8", env: { ...process.env, DEVLOOP_HUB_DB: db } });
+    { encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: db } });
   const adv = cli(["--repo", work, "--branch", "main", "--default-branch", "main"]);
   ok(adv.status === 0 && /ride-along: .*CERT-1 \(Canceled\)/.test(adv.stdout), "CLI advisory: prints the finding, exits 0");
   const strict = cli(["--repo", work, "--branch", "main", "--strict", "--default-branch", "main"]);
@@ -162,7 +163,7 @@ try {
 
     // CLI: hard passenger still causes --strict exit 1; output distinguishes hard from warning
     const pgCancelStrict = spawnSync(process.execPath, [join(hubRoot, "src", "push-guard.ts"), "--repo", work, "--branch", "dev-loop/CERT-60", "--strict", "--default-branch", "main"],
-      { encoding: "utf8", env: { ...process.env, DEVLOOP_HUB_DB: db } });
+      { encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: db } });
     ok(pgCancelStrict.status === 1, "LOOP-87 AC2 CLI --strict: hard (Canceled) passenger ⇒ exit 1");
     ok(/⛔/.test(pgCancelStrict.stdout), "LOOP-87 AC2 CLI: hard passenger uses ⛔ icon");
     ok(/CERT-1 is Canceled/.test(pgCancelStrict.stdout), "LOOP-87 AC2 CLI: names the Canceled ticket and its state");
@@ -185,7 +186,7 @@ try {
 
     // CLI: output reports unattributable
     const cli2 = (args: string[]) => spawnSync(process.execPath, [join(hubRoot, "src", "push-guard.ts"), ...args],
-      { encoding: "utf8", env: { ...process.env, DEVLOOP_HUB_DB: db } });
+      { encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: db } });
     const pgUnattribCli = cli2(["--repo", work, "--branch", "dev-loop/CERT-70", "--default-branch", "main"]);
     ok(/unattributable/.test(pgUnattribCli.stdout), "LOOP-87 AC4 CLI: output reports unattributable");
     ok(/re-cut or re-target/.test(pgUnattribCli.stdout), "LOOP-87 AC4 CLI: output suggests remedy");

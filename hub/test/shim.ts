@@ -24,6 +24,7 @@ import { createServer } from "node:net";
 import { openDb } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
 import { createDaemon } from "../src/daemon.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const ROOT = "/tmp/hub-shim";
 const DB = `${ROOT}/hub.db`;
@@ -45,7 +46,7 @@ async function stdio(actor: string): Promise<Client> { // the direct-db server.t
   const c = new Client({ name: `shimtest-stdio-${actor}`, version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "shm", DEVLOOP_HUB_DB: DB },
+    env: { ...scrubFireEnv(), DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "shm", DEVLOOP_HUB_DB: DB },
   }));
   clients.push(c);
   return c;
@@ -54,7 +55,7 @@ async function shim(env: Record<string, string>): Promise<Client> { // the shim 
   const c = new Client({ name: "shimtest-shim", version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/shim.ts"],
-    env: { ...process.env, DEVLOOP_PROJECT: "shm", DEVLOOP_HUB_DB: DB, ...env },
+    env: { ...scrubFireEnv(), DEVLOOP_PROJECT: "shm", DEVLOOP_HUB_DB: DB, ...env },
   }));
   clients.push(c);
   return c;

@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { smoothWRRStep, rotationCandidates, stewardProjects, pickAndAdvance, loadSchedulerState, type SchedulerState } from "../src/rotation.ts";
 import type { Workspace, TeamFile } from "../src/team-config.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -83,7 +84,7 @@ try {
     projects: { alpha: { weight: 2, repos: [{ ref: "ra", role: "primary" }] }, beta: { weight: 1, repos: [{ ref: "rb", role: "primary" }] } },
   }));
   const next = (agent: string) => {
-    const r = spawnSync("node", [join(hubRoot, "src", "rotation.ts"), "--agent", agent], { cwd: root, env: { ...process.env, DEVLOOP_HOME: HOME }, encoding: "utf8" });
+    const r = spawnSync("node", [join(hubRoot, "src", "rotation.ts"), "--agent", agent], { cwd: root, env: { ...scrubFireEnv(), DEVLOOP_HOME: HOME }, encoding: "utf8" });
     return (r.stdout ?? "").trim();
   };
   // pm fires 6 times (2:1) → alpha beta alpha alpha beta alpha; cursor persisted across processes.
