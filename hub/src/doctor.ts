@@ -17,6 +17,7 @@ import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts"
 import { tryResolveWorkspace, wsHubDb, wsStateRoot, resolveHubDbPath } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
+import { listSnapshots, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-340: W32 reads the same artifact convention Child B writes
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
 import { opencodeSyncDrift } from "./opencode-sync.ts";
 import { openDb as openHubDbConn } from "./db.ts";
@@ -589,6 +590,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   warnUnmergedPaths(ws, warn);
   checkDirtySharedTree(ws, warn);   // W33 (LOOP-312)
   checkLessonsLiveness(ws, warn);   // W30 (LOOP-91)
+  checkBoardSnapshotW32(ws, warn);  // W32 (LOOP-340)
   await checkDaemonPortBand(warn);  // W25 (LOOP-137)
 
   // W06 — git-work-tree leak checks: committable .dev-loop state/reports (I5 neighbor) or a bundle
@@ -697,6 +699,44 @@ async function checkDaemonPortBand(warn: (m: string) => void): Promise<void> {
     for (let i = 0; i < W25_BAND_TRIES; i++) if (await tryBind(W25_BAND_START + i)) return;
     warn(`[W25] every port in the daemon allocation band ${W25_BAND_START}..${W25_BAND_START + W25_BAND_TRIES - 1} is occupied — the next \`dev-loop daemon up\` for a project without an existing runfile CANNOT start and will die on EADDRINUSE. Reclaim them: \`dev-loop daemon reap --dry-run\` (then without --dry-run), or stop the workspaces holding them.`);
   } catch { /* best-effort — never fails doctor */ }
+}
+
+// ── W32 (LOOP-340) — the board has never been snapshotted, or the cadence stopped ──────────────
+// On 2026-08-04 the board was destroyed and doctor printed DOCTOR_OK before, during and after. There
+// were ZERO W-codes mentioning backup or snapshot: an operator running the workspace's own health
+// check got no signal that the board had never once been copied. 19 tickets and 79 comments were
+// lost permanently because no copy existed.
+//
+// TWO arms, because they fail differently and an operator acts on them differently:
+//   1. no snapshot exists AT ALL — the state that lost the data;
+//   2. the newest is older than everyHours x 2 — one missed cycle is a blip (a daemon restart, a
+//      busy checkpoint); two is a STOPPED cadence. Without this arm a silently-stopped timer (daemon
+//      down, unwritable dir, a team.backup.dir typo) is indistinguishable from a healthy one, which
+//      is what makes Child C's timer trustworthy rather than merely assumed.
+//
+// Extracted to a named helper, not inlined in doctorWorkspace — a new inline branch there has
+// produced a green local diff and a red CI before (LOOP-115 / LOOP-159 / the CRAP ratchet).
+// Best-effort: any throw is swallowed, and it NEVER flips DOCTOR_OK (the W08/W18 class).
+export function checkBoardSnapshotW32(ws: Workspace, warn: (m: string) => void, nowMs = Date.now()): void {
+  try {
+    if (ws.file.team.backend !== "service") return; // a linear team has no hub.db to snapshot
+    const cfg = resolveBackupConfig(ws.file.team as Parameters<typeof resolveBackupConfig>[0], wsStateRoot(ws));
+    const gens = listSnapshots(cfg.dir);
+    if (!gens.length) {
+      warn(`[W32] this board has NEVER been snapshotted (${cfg.dir} is empty) — a single hub.db file holds every ticket, comment, document version and event, and there is no copy to restore from. Take one now: \`dev-loop board snapshot\`${cfg.intervalMs > 0 ? " (the cadence is configured; it may not have run yet)" : ", and turn on the cadence: `dev-loop team set team.backup.everyHours 6`"}`);
+      return;
+    }
+    if (!(cfg.intervalMs > 0)) return; // cadence deliberately off ⇒ staleness is not a fault
+    const newest = gens[0]!;
+    const iso = `${newest.takenAt.slice(0, 4)}-${newest.takenAt.slice(4, 6)}-${newest.takenAt.slice(6, 11)}:${newest.takenAt.slice(11, 13)}:${newest.takenAt.slice(13, 15)}Z`;
+    const ageMs = nowMs - Date.parse(iso);
+    if (!Number.isFinite(ageMs)) return;
+    // One missed cycle is a blip; two is a stopped cadence.
+    if (ageMs > cfg.intervalMs * 2) {
+      const ageH = Math.floor(ageMs / 3_600_000);
+      warn(`[W32] the newest board snapshot is ${ageH >= 48 ? `${Math.floor(ageH / 24)}d` : `${ageH}h`} old, more than twice the configured ${Math.round(cfg.intervalMs / 3_600_000)}h cadence — the timer has stopped, not merely slipped. Check the daemon is up (\`dev-loop hub status\`) and that ${cfg.dir} is writable; take one by hand meanwhile: \`dev-loop board snapshot\``);
+    }
+  } catch { /* best-effort — never fails doctor, never masks another check */ }
 }
 
 // ── W30 (LOOP-91) — the lessons library has no liveness check ───────────────────────────────────
