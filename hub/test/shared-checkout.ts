@@ -8,7 +8,7 @@
 //   LOOP-320  a ship commit SWEEPS another fire's edits into itself      → refuse the staged overlap
 //   LOOP-309  a dev hands off In Review having COMMITTED NOTHING at all  → require a local commit
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -218,14 +218,23 @@ try {
 
     // LOOP-274's failure mode must not be reintroduced. The check reads LOCAL git only, so a handoff
     // whose commit exists succeeds with `gh` entirely absent from PATH and no network.
-    const noGh = { ...process.env, PATH: "/usr/bin:/bin" } as NodeJS.ProcessEnv;
+    // A PATH carrying `git` and NOTHING else. Stripping PATH to /usr/bin:/bin was not enough — the
+    // GitHub runner ships `gh` at /usr/bin/gh, so the control below caught the probe proving nothing.
+    // That is exactly what the control is for; keeping it honest costs one symlink.
+    const binDir = join(tmp, "only-git-bin");
+    mkdirSync(binDir, { recursive: true });
+    const gitPath = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    symlinkSync(gitPath, join(binDir, "git"));
+    const noGh = { ...process.env, PATH: binDir } as NodeJS.ProcessEnv;
     const probe = execFileSync(process.execPath, ["-e", `
       import("${join(import.meta.dirname, "..", "src", "handoff-gate.ts")}").then(m =>
         console.log(m.handoffGateRejection({ id: "LOOP-31", fromState: "In Progress", toState: "In Review",
           actor: "junior-dev", repoRoot: ${JSON.stringify(root)}, landing: "pr" }) === null ? "PASS" : "REFUSED"));
     `], { encoding: "utf8", env: noGh, stdio: ["ignore", "pipe", "pipe"] });
     ok(/PASS/.test(probe), `LOOP-309: with 'gh' off PATH the local-only check still passes a committed handoff (${probe.trim()})`);
-    ok(execFileSync("sh", ["-c", "command -v gh || true"], { encoding: "utf8", env: noGh }).trim() === "",
+    // /bin/sh absolutely: `sh` is not on the stripped PATH either, and resolving it through PATH
+    // would make the control fail for a reason that has nothing to do with `gh`.
+    ok(execFileSync("/bin/sh", ["-c", "command -v gh || true"], { encoding: "utf8", env: noGh }).trim() === "",
       "LOOP-309 control: …and `gh` really was unreachable in that probe's environment");
 
     // Scope: a `direct` repo gains no new refusal path, and the operator is never gated.
