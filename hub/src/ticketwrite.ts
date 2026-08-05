@@ -222,6 +222,33 @@ function terminalExitRejection(actor: string, fromState: string, next: TicketUpd
 // Applied in both insertTicket and updateTicketRow so every write path is covered by construction.
 // Rule: sensitive+junior-dev present AND senior-dev actor exists → silently correct to senior-dev
 // and log issue.retier. Strict no-op otherwise (incl. legacy no-senior-dev projects).
+// LOOP-296 — resolve this ticket's design parent (all three §21a pointer forms, via the shared
+// predicate) and inherit `sensitive` from it. Returns the ORIGINAL array when nothing changes, so
+// the caller can skip the copy.
+function inheritSensitiveFromDesignParent(db: DatabaseSync, projectId: string, description: string, labels: string[]): string[] {
+  if (labels.includes("sensitive")) return labels;             // already carried explicitly
+  try {
+    const ptr = designPointerOf(description ?? "");
+    if (!ptr) return labels;
+    const rows = db.prepare("SELECT id, description, labels FROM tickets WHERE project_id=?")
+      .all(projectId) as unknown as Array<{ id: string; description: string; labels: string }>;
+    // The direct form names the parent; the two doc forms name the DOC, so the parent is the ticket
+    // that owns that slug. designParentIds already resolves all three — reuse it rather than
+    // re-deriving, which is how the LOOP-344 inversion happened in the first place.
+    const parentIds = designParentIds(db, projectId, rows);
+    const direct = /^parent\s+(\S+)/i.exec(ptr);
+    const slug = direct ? null : docSlugOf(ptr);
+    const parent = direct
+      ? rows.find((r) => r.id === direct[1])
+      : rows.find((r) => parentIds.has(r.id) && slug !== null && (r.description ?? "").includes(slug));
+    if (!parent) return labels;
+    let parentLabels: string[] = [];
+    try { parentLabels = JSON.parse(parent.labels) as string[]; } catch { return labels; }
+    if (!parentLabels.includes("sensitive")) return labels;
+    return [...labels, "sensitive"];
+  } catch { return labels; } // never block a create on this — the backstops still exist
+}
+
 function applySensitiveRetier(
   db: DatabaseSync,
   assignee: string | null,
@@ -265,6 +292,25 @@ function applyTierRestore(
 export function insertTicket(
   db: DatabaseSync, projectId: string, actor: string, f: NewTicketFields, createEventData: Record<string, unknown>,
 ): string {
+  // LOOP-296 — `sensitive` is INHERITED from the design parent, BEFORE the tier logic runs.
+  //
+  // Three enforcement layers exist and all three key on the LABEL: the write gate's re-tier here,
+  // servable.ts's notSensitiveForJunior queue defense, and doctor W21 + the Sweep digest backstop.
+  // Every one is correctly built and none is at fault — they share one input, and nothing guaranteed
+  // that input was written on a CHILD. A staged child of a sensitive parent is sensitive work BY
+  // CONSTRUCTION, yet whether it carried the label was left to the filer's judgement at staging time.
+  //
+  // When that judgement said no, all three layers went silent at once and the work routed to the
+  // cheap tier. That is not hypothetical: it happened on LOOP-290, the one ticket on this board that
+  // edits an irreversible cascade-delete guard. The gate reasoned the label off explicitly —
+  // "sensitive-adjacent but not itself sensitive-labeled since the guard bar is inherited from the
+  // parent, not new surface" — which is exactly the inference this makes unnecessary.
+  //
+  // Inheritance runs FIRST so the re-tier below sees the inherited label and escalates the child in
+  // the same write, rather than leaving a sensitive ticket sitting on the junior tier until a
+  // backstop notices.
+  const inherited = inheritSensitiveFromDesignParent(db, projectId, f.description, f.labels);
+  f = inherited === f.labels ? f : { ...f, labels: inherited };
   // Tier restore FIRST (LOOP-223): fix null assignee before sensitive retier
   const tierRestore = applyTierRestore(db, f.state, f.assignee, f.labels);
   if (tierRestore.rejection) throw new Error(tierRestore.rejection);
