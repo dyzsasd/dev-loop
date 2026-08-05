@@ -4,6 +4,8 @@
 // Step-3 finding split: reference findings (Canceled/Duplicate ticket refs in commit prose) →
 // WARN + land with annotation; passenger findings → hard stop, unchanged.
 import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { isMainEntry } from "./is-entry.ts";
 import { dirname, join } from "node:path";
 import { resolveWorkspace, wsLockPath, resolveHubDbPath, resolveRepoFromCwd } from "./workspace.ts";
@@ -54,6 +56,47 @@ function gitErrText(e: unknown): { summary: string; detail: string } {
 // `M h`: the refusal that tells you which paths to resolve named `ub/src/agentops.ts`, a path that
 // does not exist. Every later line kept its space and parsed correctly, which is how it survived —
 // the defect is conditional on the FIRST entry being unstaged-only.
+/**
+ * Rebase onto origin WITHOUT touching the shared checkout (LOOP-325).
+ *
+ * A temp worktree detached at HEAD does the rebase, and the shared branch ref is fast-forwarded
+ * afterwards with `update-ref`. That call moves the ref only — no working-tree write, no index
+ * write — so the unrelated modifications the caller measured stay byte-identical on disk. Their
+ * staged/HEAD content is identical either side of the rebase (the rebase did not touch those paths),
+ * so `git status` reports exactly what it reported before.
+ *
+ * The worktree is removed on EVERY exit path. Leaving one behind would itself be the LOOP-132 defect
+ * this session just added a doctor code for.
+ */
+function isolatedRebase(
+  repoDir: string, defaultBranch: string, gitIdArgs: string[], dirtyPaths: string[],
+): { ok: true } | { ok: false; blockedMsg: string } {
+  const g = (dir: string, args: string[]): string =>
+    execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const wt = join(tmpdir(), `dev-loop-docland-${process.pid}-${Math.trunc(performance.now() * 1000)}`);
+  try {
+    g(repoDir, ["worktree", "add", "--detach", "-q", wt, "HEAD"]);
+  } catch (e) {
+    return { ok: false, blockedMsg: `could not create an isolated worktree to rebase in (the shared checkout has ${dirtyPaths.length} unrelated dirty path(s), so rebasing in place would destroy them): ${gitErrText(e).summary}` };
+  }
+  try {
+    try {
+      g(wt, [...gitIdArgs, "rebase", `origin/${defaultBranch}`]);
+    } catch (e) {
+      try { g(wt, ["rebase", "--abort"]); } catch { /* best-effort */ }
+      return { ok: false, blockedMsg: `rebase onto origin/${defaultBranch} failed in an isolated worktree — the shared checkout was never written and its ${dirtyPaths.length} unrelated dirty path(s) are untouched. git says: ${gitErrText(e).summary}` };
+    }
+    const rebased = g(wt, ["rev-parse", "HEAD"]);
+    // Move the shared branch ref to the rebased commit. Ref-only: no checkout, no reset, no index.
+    try { g(repoDir, ["update-ref", `refs/heads/${defaultBranch}`, rebased]); }
+    catch (e) { return { ok: false, blockedMsg: `rebased cleanly but could not fast-forward ${defaultBranch}: ${gitErrText(e).summary}` }; }
+    return { ok: true };
+  } finally {
+    try { g(repoDir, ["worktree", "remove", "--force", wt]); } catch { /* best-effort */ }
+    try { rmSync(wt, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+}
+
 export function parseDirtyPaths(porcelain: string): string[] {
   return porcelain
     .split("\n")
@@ -196,8 +239,18 @@ Design: landing-discipline §4.6 (LOOP-57).`);
             };
           }
 
-          // AC6: unstaged/uncommitted changes may be from a concurrent fire and can clear in seconds.
-          // Retry for up to DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS (default 30s) before blocking.
+          // LOOP-325 — the preflight used to block on ANY dirty tracked path, so PM's strategy-doc
+          // commit sat unlandable for two fires while the doc ITSELF was clean and the shared
+          // checkout cycled 7–9 unrelated dirty files mid-fire. Those paths have nothing to do with
+          // this rebase, and waiting 30s for a shared tree that is dirty by design is a wait that
+          // never ends.
+          //
+          // Three populations, three answers:
+          //   • the DOC or its archive sibling is dirty  ⇒ REFUSE. That is an unlanded edit, and
+          //     landing around it would silently drop someone's work.
+          //   • unrelated tracked paths are dirty        ⇒ rebase in a TEMPORARY WORKTREE, so the
+          //     shared checkout is never written and those edits survive byte-identical.
+          //   • clean                                     ⇒ the in-place rebase, unchanged.
           const getDirtyPaths = (): string[] => {
             try {
               // NOT the shared `git()` helper: it ends in .trim(), which is right for every
@@ -208,22 +261,24 @@ Design: landing-discipline §4.6 (LOOP-57).`);
               return parseDirtyPaths(out);
             } catch { return []; }
           };
-          const dirtyTimeoutMs = Math.max(0, parseInt(process.env.DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS ?? "30000", 10));
-          const dirtyDeadline = Date.now() + dirtyTimeoutMs;
-          let dirtyPaths = getDirtyPaths();
-          while (dirtyPaths.length > 0 && Date.now() < dirtyDeadline) {
-            await new Promise<void>(r => setTimeout(r, 500));
-            dirtyPaths = getDirtyPaths();
-          }
-          if (dirtyPaths.length > 0) {
-            const waited = Math.round((Date.now() - (dirtyDeadline - dirtyTimeoutMs)) / 1000);
+          const dirtyPaths = getDirtyPaths();
+          const dirtyDoc = dirtyPaths.filter((p) => p === docRel || p.startsWith(archivePrefix));
+          if (dirtyDoc.length > 0) {
             return {
               ok: false,
-              blockedMsg: `tree still dirty after ${waited}s — unstaged or uncommitted changes block the rebase (rebase not attempted): ${dirtyPaths.join(", ")}`,
+              blockedMsg: `'${dirtyDoc.join(", ")}' has uncommitted changes — that is an unlanded doc edit, and landing around it would silently drop it. Commit or discard it, then re-run. (Distinct from an unmerged-index wedge: nothing is conflicted, the edit simply is not committed.)`,
             };
           }
+          const rebaseInWorktree = dirtyPaths.length > 0;
 
-          try {
+          // The isolated path: never write the shared checkout. A temp worktree detached at HEAD
+          // rebases onto origin, the result is pushed from there, and the shared branch ref is
+          // fast-forwarded with update-ref — which touches neither the working tree nor the index,
+          // so the unrelated edits stay exactly as they are on disk.
+          if (rebaseInWorktree) {
+            const iso = isolatedRebase(repoDir, defaultBranch, gitIdArgs, dirtyPaths);
+            if (!iso.ok) return { ok: false, blockedMsg: iso.blockedMsg };
+          } else try {
             git([...gitIdArgs, "rebase", `origin/${defaultBranch}`]);
           } catch (e) {
             // Check which paths are conflicted BEFORE aborting (abort clears the index state).
