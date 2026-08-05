@@ -8,12 +8,13 @@ import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync } 
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
+import { dirtyTrackedFiles, listTreeSnapshots } from "./tree-snapshot.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
-import { tryResolveWorkspace, wsHubDb, resolveHubDbPath } from "./workspace.ts";
+import { tryResolveWorkspace, wsHubDb, wsStateRoot, resolveHubDbPath } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
@@ -586,6 +587,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // W26 — unmerged paths in the shared checkout (LOOP-215). Extracted to helper to keep doctorWorkspace
   // CC in budget. Best-effort; never flips DOCTOR_OK.
   warnUnmergedPaths(ws, warn);
+  checkDirtySharedTree(ws, warn);   // W33 (LOOP-312)
   checkLessonsLiveness(ws, warn);   // W30 (LOOP-91)
   await checkDaemonPortBand(warn);  // W25 (LOOP-137)
 
@@ -742,6 +744,36 @@ function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
         warn(`[W26] repo '${ref}' (${dir}) has ${paths.length} unmerged path${paths.length === 1 ? "" : "s"}: ${paths.join(", ")} — conflict markers may block direct tsc/build/test runs (per-ticket worktrees are unaffected). Resolve: edit each file, \`git add <file>\`, THEN commit (or \`git rebase --continue\`) — staging alone leaves the rebase just as blocked. Likely cause: an interrupted \`git stash pop\` or \`git merge\`.`);
       else if (stagedPaths.length)
         warn(`[W26] repo '${ref}' (${dir}) has ${stagedPaths.length} staged-but-uncommitted path${stagedPaths.length === 1 ? "" : "s"}: ${stagedPaths.join(", ")} — \`git rebase\` refuses in this state exactly as it does on unmerged paths, so doc-land and every direct-checkout build stay blocked. Finish it: commit them, or \`git rebase --continue\` if a rebase is in progress.`);
+    }
+  } catch { /* best-effort — never fails doctor */ }
+}
+
+// W33 helper (LOOP-312) — extracted rather than inlined for the reason the ticket names explicitly:
+// doctorWorkspace already sits at the CRAP-90 merge-gate boundary, and one more inline branch
+// red-lines the ratchet on an otherwise green diff.
+//
+// A DIFFERENT population from W26, which is why it is a different code. W26 asks "would `git rebase`
+// refuse?" — unmerged or staged-but-uncommitted paths. This asks "is there tracked work here that
+// another fire's `git checkout` would silently destroy?" — modified-but-unstaged files. On 2026-08-04
+// that population was five files and all five were lost with no stash entry and no event.
+//
+// WARN ONLY, and deliberately: a dirty shared tree is the normal mid-flight state, so flipping
+// DOCTOR_OK on it would make ❌ the resting state and train the operator to ignore it.
+export function checkDirtySharedTree(ws: Workspace, warn: (msg: string) => void): void {
+  try {
+    for (const ref of Object.keys(ws.file.repos)) {
+      const { absPath: dir } = effectiveRepo(ws, ref);
+      if (!existsSync(dir) || !isGitWorkTree(dir)) continue;
+      const dirty = dirtyTrackedFiles(dir);
+      if (!dirty.length) continue;
+      // Name the newest snapshot, so the operator's next question ("is it recoverable?") is already
+      // answered. Its ABSENCE is the more important half: it means `dev-loop run` has not started
+      // since the tree got dirty, so nothing has copied this work at all.
+      const snaps = listTreeSnapshots(join(wsStateRoot(ws), "tree-snapshots"));
+      const where = snaps.length
+        ? `newest snapshot: ${snaps[0].path}`
+        : `NO snapshot exists — nothing has copied this work; \`dev-loop run\` takes one at startup, or commit/stash it now`;
+      warn(`[W33] repo '${ref}' (${dir}) has ${dirty.length} uncommitted tracked modification${dirty.length === 1 ? "" : "s"}: ${dirty.slice(0, 6).join(", ")}${dirty.length > 6 ? `, +${dirty.length - 6} more` : ""} — the shared checkout is written by every non-worktree fire, and another fire's \`git checkout\` discards these silently (2026-08-04: 5 files, no stash, no event). ${where}`);
     }
   } catch { /* best-effort — never fails doctor */ }
 }
