@@ -68,7 +68,10 @@ const resolveRepos = (cfg: ProjectCfg, reg: ReposRegistry): Record<string, unkno
 };
 const anyRepo = (repos: Record<string, unknown>[], pick: (o: Record<string, unknown>) => boolean): boolean =>
   repos.some(pick);
-export const CONDITIONAL_SECTIONS: Record<string, { why: string; active: (cfg: ProjectCfg, backend: string, repos: Record<string, unknown>[]) => boolean }> = {
+// `repos` is the UNION across every project in scope — the anyRepo predicates ask "does any repo in
+// scope have this fact?", and a union answers that. `maxPerProject` is the largest repo count of any
+// SINGLE project, which is a different question and the one §19 asks.
+export const CONDITIONAL_SECTIONS: Record<string, { why: string; active: (cfg: ProjectCfg, backend: string, repos: Record<string, unknown>[], maxPerProject: number) => boolean }> = {
   "5": { // the pick ranking — the `queue` op computes it server-side on the hub backend
     why: "the queue op pre-ranks on service",
     active: (_cfg, backend) => backend !== "service",
@@ -83,7 +86,12 @@ export const CONDITIONAL_SECTIONS: Record<string, { why: string; active: (cfg: P
   },
   "19": { // multi-repo model — strictly for projects with ≥2 repos
     why: "single-repo project",
-    active: (_cfg, _backend, repos) => repos.length > 1,
+    // MAX per project, not the union count (LOOP-275). §19 is about coordinating one change ACROSS
+    // repos, which only arises when a single project is itself multi-repo. A team-scoped fire
+    // spanning two SINGLE-repo projects touches two repos and still never faces that problem — and
+    // the union count would say it does. The ticket permits either reading; this is the one that
+    // matches what the section is for.
+    active: (_cfg, _backend, _repos, maxPerProject) => maxPerProject > 1,
   },
   "24": { // Codex accelerant — opt-in via codex.enabled
     why: "codex not enabled",
@@ -160,14 +168,32 @@ export function conventionsUnionText(convText: string, anchors: readonly string[
 export function assembleBootCorpus(
   root: string, dataDir: string, agent: string, project: string, backend: string,
   projectCfg?: ProjectCfg, reposRegistry?: ReposRegistry,
+  // LOOP-275 — a TEAM-SCOPED steward fire spans every enabled project, but the caller can only pass
+  // one `projectCfg` (the representative first-enabled one), so the repo-shaped predicates saw a
+  // single project's repos. §19 ("multi-repo model") was therefore pruned from a team-scoped fire
+  // whenever the FIRST enabled project happened to be single-repo — even with a later enabled
+  // project holding two. The steward then reasoned about a workspace it had been told was
+  // single-repo. Corroborated by LOOP-236's Codex P2 review and deferred from that ticket as
+  // out of scope.
+  //
+  // Repos only, deliberately. The cfg-shaped predicates (§24 reads codex.enabled) still resolve
+  // against the representative project; widening those is a different question about which
+  // project's settings govern a team fire, and this ticket does not answer it.
+  teamScopeCfgs?: ProjectCfg[],
 ): BootCorpus | null {
   try {
     const skillRaw = readFileSync(join(root, "skills", `${agent}-agent`, "SKILL.md"), "utf8");
     const sec = parseSectionsLine(splitSkill(skillRaw.replace(/^---\n[\s\S]*?\n---\n/, "")).prose);
     if (sec.errors.length) return null; // malformed Sections line ⇒ pull mode
     // config-aware selection: drop declared spans whose feature is off in THIS project
-    const repos = resolveRepos(projectCfg, reposRegistry);
-    const pruned = sec.anchors.filter((a) => CONDITIONAL_SECTIONS[a] && !CONDITIONAL_SECTIONS[a].active(projectCfg, backend, repos));
+    // The union across every enabled project for a team-scoped fire; just this project otherwise.
+    // A union rather than a max: the predicates ask "does ANY repo have this fact?", so aggregating
+    // the objects answers §12c/§12d correctly too, where a count alone would not.
+    const repoGroups = (teamScopeCfgs?.length ? [projectCfg, ...teamScopeCfgs] : [projectCfg])
+      .map((c) => resolveRepos(c, reposRegistry));
+    const repos = repoGroups.flat();
+    const maxPerProject = repoGroups.reduce((m, g) => Math.max(m, g.length), 0);
+    const pruned = sec.anchors.filter((a) => CONDITIONAL_SECTIONS[a] && !CONDITIONAL_SECTIONS[a].active(projectCfg, backend, repos, maxPerProject));
     const conv = conventionsUnionText(readFileSync(join(root, "references", "conventions.md"), "utf8"), sec.anchors, new Set(pruned));
 
     const parts: string[] = [];
