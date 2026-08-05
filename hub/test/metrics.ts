@@ -1124,6 +1124,46 @@ try {
     d102.close();
   }
 
+  // ── LOOP-115 sibling: the `--kaizen` CLI path had ZERO coverage ─────────────────────────────
+  // Same shape as codexUsageAdapter.isError: a CC-9 function at 0% coverage scores exactly 90.0
+  // against the ratchet's threshold of 90, so the repo passed its required merge check by a margin
+  // of 0.0 and one added branch anywhere in it would red-line every PR. These invocations are real
+  // subprocesses, so NODE_V8_COVERAGE (inherited from the test run) counts them.
+  {
+    const kws = join(tmp, "kaizen-ws");
+    mkdirSync(join(kws, ".dev-loop"), { recursive: true });
+    mkdirSync(join(kws, "repo"), { recursive: true });
+    writeFileSync(join(kws, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "kz", backend: "service", mode: "live" },
+      repos: { repo: { path: "repo" } },
+      projects: { kzp: { repos: [{ ref: "repo" }] } },
+    }, null, 2));
+    const kdb = openDb(join(kws, ".dev-loop", "hub.db"));
+    kdb.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('kp','kzp','KZ','t')").run();
+    kdb.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('K-1','kp','t','d','Improvement','Done',2,'[]','[]','pm',?,?)")
+      .run(iso(NOW - DAY), iso(NOW - DAY));
+    kdb.close();
+    const kenv = { ...process.env, DEVLOOP_HOME: join(tmp, "khome"), DEVLOOP_PROJECT: "kzp" };
+    const kj = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen", "--json"], { cwd: kws, env: kenv, encoding: "utf8" });
+    ok(kj.status === 0, `LOOP-115 sibling: metrics --kaizen --json exits 0 (got ${kj.status}) ${(kj.stderr ?? "").slice(-160)}`);
+    let parsed: unknown = null;
+    try { parsed = JSON.parse(kj.stdout ?? ""); } catch { /* asserted below */ }
+    ok(Array.isArray(parsed) && (parsed as unknown[]).length === 1,
+      "LOOP-115 sibling: --kaizen --json emits ONE parseable array regardless of project count");
+    const kh = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen"], { cwd: kws, env: kenv, encoding: "utf8" });
+    ok(kh.status === 0 && /self/i.test(kh.stdout ?? ""), `LOOP-115 sibling: the human --kaizen panel renders (got ${kh.status})`);
+    // The refusal path: a linear-backend workspace has no hub.db and must say so, not throw.
+    const lws = join(tmp, "kaizen-linear");
+    mkdirSync(lws, { recursive: true });
+    writeFileSync(join(lws, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2, team: { key: "kzl", backend: "linear", linearTeam: "T" }, repos: {}, projects: {},
+    }, null, 2));
+    const kl = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen"], { cwd: lws, env: kenv, encoding: "utf8" });
+    ok(kl.status === 1 && /requires service backend/.test(kl.stderr ?? ""),
+      `LOOP-115 sibling: --kaizen on a linear workspace refuses cleanly with exit 1 (got ${kl.status})`);
+  }
+
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
