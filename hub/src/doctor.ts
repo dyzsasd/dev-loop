@@ -301,7 +301,7 @@ export function nextStep(ws: Workspace | null, errors: WsError[], unseeded: stri
   const hasDay2 = (decisionStall != null && decisionStall.count > 0) || !!stalledRepo || (skewResult != null && skewResult.codeBehind > 0);
   // ── 2. cannot fire ──
   if (t.backend === "linear" && !(t.linearTeam ?? "").trim()) return `dev-loop team set team.linearTeam "<Team Name>"  (fires refuse to launch on a blank Linear team)`;
-  if (!deliveryProjects(ws).filter(k => ws.file.projects[k]?.scratch !== true).length) return `dev-loop team add-project <key>  (or /dev-loop:add-project in a coding CLI)`;
+  if (!deliveryProjects(ws).length) return `dev-loop team add-project <key>  (or /dev-loop:add-project in a coding CLI)`; // LOOP-271: the seam excludes scratch now
   // W08 keeps its ORIGINAL position in the chain — the only change is that it stands down when a
   // day-2 condition is live below it. Reordering the surrounding rungs instead would have moved
   // "add a repo" and the go-live flip too, which LOOP-322 explicitly did not ask for.
