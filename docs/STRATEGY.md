@@ -639,79 +639,9 @@ Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§2
 
 Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 39).
 
-### 2026-08-05 (pm, forty-sixth fire): correct counts shipped with both superseded locals left in place, and a comment carrying text from another file
+### 2026-08-05 (pm, forty-sixth fire): correct counts shipped with both superseded locals left in place, and a comment carrying text from another file — [ARCHIVED]
 
-**One item to verify. Its behaviour passed and its review failed.** `origin/main` moved `8c79447` →
-`7323e09` — two code commits (`9df4b89`, LOOP-299's fixture registration; `359fc7b`, LOOP-251's
-`todoDepth` unification) plus the forty-fifth-fire doc commit — so the lens list reset. The strategy
-doc's content hash is unchanged at `9163508ff3365f8d` on both `origin/main` and the working tree:
-zero foreign direction edits in 72 fires. Zero `needs-pm`, zero cross-owner bails, zero
-`Human-Blocked`.
-
-**The installed binary does not contain the increment under verification.** `doctor` reports the
-installed v1.14.0 one code commit behind `origin/main`, and `dev-loop queue` returns a `todoDepth`
-carrying no `dev` key — the field LOOP-251 adds. §12b permits a wait-state here, but verifying from
-the diff was avoidable: `git archive origin/main` into an isolated tree, then `servableTodoDepth`
-called directly against the live `hub.db` opened read-only. Measured on the real board:
-`{"total":17,"senior-dev":7,"junior-dev":10,"dev":0}`, every per-tier count equal to its
-`servableSlice(…).todo.length`, `total` equal to the 17 non-blocked `Todo` rows. All four behaviour
-criteria pass.
-
-**The regression test discriminates, and the assertion carrying the coverage is not the obvious
-one.** Two mutations were run against the shipped predicate. Removing the `sensitive` exclusion
-yielded `junior=2` against an asserted 1 — caught. Reverting `servableTodoDepth` to the raw
-`assignee ===` filter, the exact LOOP-169 defect, was caught by both the absolute count and the
-parity assertion. Under the first mutation all three **parity** assertions still passed: both sides
-of a parity check move together when the shared predicate changes, so the absolute `junior=1`
-assertion carries that coverage alone. A parity-only rewrite of this suite would be a silent
-regression.
-
-**AC5 failed by reading, and it was the criterion the design gate named in advance.** LOOP-169
-exists because two computations of "what is servable" drifted; LOOP-251's decisive criterion was
-that the predicate end up in exactly one place, verified by reading. `isTodoServableFor` was added
-correctly — and the `mine` it was extracted from is still at `servable.ts:57`, with zero call sites.
-The same commit left the same residue in the other file: `agentops.ts:225`'s `todoOpen` had three
-consumers before `359fc7b` and has none after, while still running a full filter over every open
-ticket on each `pm` and `qa` queue call. The pattern in both files is that the new call was
-substituted in place and the value it superseded was left declared.
-
-**A comment now carries text copied from an unrelated file.** `servable.ts:68` reads *"is landable
-by Step 0.5 even if the flag off (default-off, zero new surface)"*. No flag exists anywhere in that
-file; the parenthetical is verbatim boilerplate from `hub/test/agent-api.ts:77/81/84`, and
-`git log -S` attributes its arrival to `359fc7b` itself. It replaced the sentence documenting the
-LOOP-244 label-fallback rule and left the following line a fragment with no antecedent. In the same
-commit `servableSlice`'s seven-line documentation block was deleted with nothing put back, against a
-pinned approach that specified no change to that function.
-
-**Four deltas, and every automated gate is blind to all four by construction.** Two dead locals and
-two comments pass `tsc`, the suite, the CRAP ratchet and both CI legs. `noUnusedLocals` is evidently
-off for this project. LOOP-251 `Canceled`, superseded by LOOP-330 (senior-dev, `Mode: direct-code`)
-per §3's junior-to-senior routing on a real criterion miss; the merged behaviour stays on `main` and
-the follow-up is a deletion plus two comments.
-
-**The consistency sweep found no third instance.** Every consumer of the shared predicate was
-enumerated: `run-agents.ts`'s queue-depth gate and `agentops.ts`'s `opQueue` both import it, and the
-only other tier-keyed assignee test in `hub/src/` is `ticketwrite.ts:164`, the Layer-1 sensitive
-write gate, which is deliberately broader (it also matches the tier label). The LOOP-144/LOOP-169
-single-source program is otherwise complete; what remains of it is the two dead residues above.
-
-**Promoted zero, for the fourth consecutive fire, on the same two-sided cause.** junior is at its cap
-(10/10 servable `Todo`) against 67 junior-assigned `Backlog` tickets; senior holds 8/10 with two idle
-slots and zero senior-assigned `Backlog` candidates, so §5a permits nothing on either tier. The only
-mechanism currently adding to senior's `Todo` is the §3 verify-fail carve-out, which supplied
-LOOP-330 this fire. That signal gap is filed as LOOP-329 and is not re-derived here. Grooming ran
-instead: LOOP-283 re-confirmed against the running CLI (all six verbs still emit raw stack traces,
-`team import` still clean — accurate as filed), LOOP-284 reproduced including its fall-through to an
-unrelated machine-global board, and LOOP-325 annotated because its instance count has decayed to zero
-while its mechanism is untouched — the shared checkout is quiescent and `doc-land` succeeded
-unassisted last fire, which is the property the ticket says cannot be relied upon.
-
-**§9c pass.** Four edges, unchanged: 228←315←238←237←279. Every blocker open, zero auto-unparks due,
-no dangling edges. LOOP-279 sits first in senior-dev's pick order, so the chain gating the operator's
-stated top priority is at the front of the queue it depends on.
-
-**§20 R2 pass 38.** The forty-third-fire journal moved to
-[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
+Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 40).
 
 ### 2026-08-05 (pm, forty-seventh fire): a follow-up that was destroyed and kept being referenced, and 45 references that resolve to nothing while the integrity surface reports zero
 
@@ -787,6 +717,86 @@ explicitly, and LOOP-331 — the root-cause fix — is now first in senior-dev's
 the journal to dodge the guard would treat the symptom. LOOP-279's ticket is still `In Progress`, so
 the §9c edge gating LOOP-237 does not retire yet: an edge resolves when its ticket closes, not when
 its prerequisite lands.
+
+### 2026-08-05 (pm, forty-eighth fire): a board read that returns 250 of 322 rows and looks complete, and a SKILL predicate wider than the convention it implements
+
+**Three items verified, all passing; the product moved three code commits.** `origin/main` went
+`4c127b7` → `1a63fa7` → `0b301bf` (LOOP-279) at boot, then `2b84f61` (LOOP-293) and `8e86767`
+(LOOP-281) landed inside this fire. The lens list reset. The strategy doc's content hash is
+`30007f87a4305693` on both `origin/main` and the working tree, matching the stored pair: still zero
+foreign direction edits in 74 fires. Zero `needs-pm`, zero cross-owner bails.
+
+**LOOP-279 (boot-prefix, `Done`).** Re-measured on this workspace through the real `toLegacyView`
+projection rather than reading the diff: `pruned = ["5","12d","19","24"]`, §12c kept. The fixture was
+mutation-tested — reverting only `hub/src/boot-prefix.ts` turns three of its ten assertions red, and
+the seven that stay green are the ones that measure the projection's shape rather than the fix. The
+discriminator the fix depends on was checked at its source: `toLegacyView` builds each repo entry as
+an object literal setting all six fact keys (`team-config.ts:638-642`), so they are own properties
+even when undefined, while a raw `ProjectRepoRef` carries none. The engine remains dormant —
+`--assemble-boot` is not on the running scheduler's argv — so its value is as LOOP-237's unblocker.
+
+**LOOP-281 (remove-project cascade coverage, `Done`).** Test-only. 249 checks green from a /tmp copy.
+The reported mutation was re-run rather than accepted: unscoping the events `DELETE` produces exactly
+one red in 249, and it is the bystander assertion. That single line is what makes "deleted too much"
+checkable — `count WHERE project=victim == 0` also holds for a `DELETE` that lost its `WHERE`.
+
+**LOOP-331 (merge-guard ciFreshness, design gate, `Done`; child LOOP-335 promoted).** The design's
+premise was re-derived instead of taken on report: 10 of the last 25 commits on main are
+`docs(strategy)`, their file union is exactly `docs/STRATEGY.md` + `docs/strategy-archive/2026-08.md`,
+and both counter-examples hold — `docs/DAEMON.md` is a real-tree input at `consistency.ts:45`, and
+`conventions.md` + `skills/*/SKILL.md` at `:57-58`. The no-globs decision is the measured answer for
+this repository. Every consumer of `CiFreshnessVerdict` outside `landing.ts` was enumerated before
+accepting the new `stale-exempt` value: `merge-guard.ts:497` and `:172`, and nothing else.
+
+**The close was refused, and the refusal is the second instance of LOOP-310.** `pm` is not the `qa`
+verifier-owner of a `Bug`-typed design parent, so the write layer blocked the gate's own documented
+pass action. `opQueue` routes design parents to PM by content (`isDesignParent`) while the write gate
+authorises by label; the two disagree. Resolved on this ticket by correcting its owner labels to
+`qa`+`pm` — once the `Mode: design` marker went in at hand-off, §21a made PM its verifier and
+`qa`-alone had stopped describing it — and recorded on LOOP-310 as a manual compensation that should
+not become a habit. Two instances in two days, both parents filed as defect `Bug`s that became design
+parents later, which is the normal path for a defect that turns out to need a design.
+
+**The operator's LOOP-334 ruling executed in one fire.** LOOP-291's identity was recovered from
+`run.log` (it has zero entries in `orphaned-comments.json`): a `cadence` validator gap, subject matter
+unrelated to LOOP-219's killed-fire spend, and `LOOP-291` appears zero times in LOOP-219's 11,802-char
+description — the link exists only as a `relatedTo` entry. Assessment branch: annotate, do not
+reconstruct. All 39 referrers of a destroyed id are now annotated (11 non-terminal, 30 terminal), so
+the traversal is complete rather than incremental.
+
+**A board read that silently returns 250 of 322 rows.** Mid-traversal, the census measured 25 dangling
+references and appeared to contradict three rows of LOOP-334's own table. `dev-loop tickets --json`
+defaults to the newest 250 rows as a bare array with no total and no `hasMore`, so a truncated board
+is byte-identical to a complete one. Re-run with `--limit 1000`: 44 references across 41 referrers,
+and the operator's table correct in every row. The tell that caught it was incidental — a per-id fetch
+returned a ticket the list had just implied was absent. Ordering is `updated_at DESC`, so the hidden
+rows are the stalest, which is what a hygiene or dedupe scan is looking for. Filed as **LOOP-342**,
+sibling of LOOP-143 (same defect class on `list_events`, which hard-rejects a higher limit where this
+one silently defaults).
+
+**A hygiene rule wider than the convention it implements.** Sweep promoted 11 tickets `Backlog → Todo`
+in 20 seconds citing §21a design-gate crash residue. Ten carry no `Design:` pointer — only a
+`relatedTo` entry naming a `Done` ticket. Junior-dev's unblocked `Todo` depth went 11 → 22 against a
+cap of 10. Root cause is one sentence: `skills/sweep-agent/SKILL.md:43` tests "`relatedTo` design
+parent is `Done`", while `conventions.md:459-460` limits the rule to design children. §21a step 4
+defines a staged child by its `Design:` pointer plus `relatedTo`; the SKILL dropped the first half.
+Sweep executed its instructions correctly. The ten were returned to `Backlog` with their label sets
+preserved; LOOP-321 (`Design: doc dependency-graph`, parent LOOP-105 `Done`) is a true positive and
+stays. Parked as **LOOP-343** (`Human-Blocked`, operator) with the one-line edit drafted — a SKILL
+edit is §17, surfaced and not executed. Sweep made this identical move on three of the same tickets on
+2026-08-01 and self-reverted it within a minute; the correction lived only in a comment on the tickets
+it corrected, so it could not bind the next fire.
+
+**Board state at close.** LOOP-237 unparked (both blocker edges terminal, and the chain head was
+re-measured before retiring the edge rather than trusted). Filed 3: LOOP-336 (cadence validator gap,
+measured today — the same string yields `E17` at `fireTimeout` and zero errors at `cadence`, three
+lines apart in one loop), LOOP-342, LOOP-343. Promoted 1 (LOOP-335, design gate). Tier depths:
+senior-dev 5/10 with no non-child Backlog candidate, junior-dev 12/10 — over cap, so nothing further
+was promoted. Both LOOP-342 and LOOP-343 are trust-safety findings by the lens rubric: a surface that
+reports a result it did not establish, and a guard bypassed by a rule that reads wider than its spec.
+
+**§20 R2 pass 40.** The forty-sixth-fire journal moved to
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
 
 ## Personas
 
