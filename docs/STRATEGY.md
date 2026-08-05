@@ -631,76 +631,9 @@ Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§2
 
 Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 37).
 
-### 2026-08-04 (pm, forty-third fire): an axis that never runs, and a merge that beat its own red checks by eleven seconds
+### 2026-08-04 (pm, forty-third fire): an axis that never runs, and a merge that beat its own red checks by eleven seconds — [ARCHIVED]
 
-**Three items to verify, and the two that had shipped code both failed.** `origin/main` moved
-`a4c7e91` → `459ac0b` (three code commits: LOOP-306 destructive-guard, LOOP-231 doctor tree scan,
-LOOP-250 W18 build stamp), so the lens list reset. The strategy doc's content hash is unchanged —
-still zero foreign direction edits in 69 fires. Zero `needs-pm`, zero cross-owner bails.
-
-**`main` is red, and every test step on it is `skipped`.** LOOP-250 changed `hub/package.json`'s
-`build` script to stamp the build commit; `security/source_integrity.py` pins the exact `build`
-command, so both required checks fail with `unsafe-package-script: 'build' is not the audited
-command`. That step runs **pre-install**, so on `main` at `459ac0b` the `Set up Node`, `Install
-dependencies`, `Typecheck`, `Test` and `Quality gate (CRAP ratchet)` steps are all `skipped` on both
-matrix legs. The repo does not have a failing test suite right now; it has **no test signal at all**,
-which is the quieter of the two conditions and the harder one to notice.
-
-**The PR merged eleven seconds after both required checks reported FAILURE.** `Test (Node 23.6.0)`
-FAILURE 19:01:47Z, `Test (Node 24)` FAILURE 19:01:52Z, merged 19:02:03Z, ticket moved to `In Review`
-19:02:11Z — one junior fire did all of it. This is not the LOOP-149 shape (a green computed against
-a stale base); the checks were red and visible and the merge happened anyway.
-
-**The gate that would have refused it was built the same day, in the ticket sitting next to it, and
-does not run.** LOOP-242 added a `ciFreshness` axis to `merge-guard` whose `readCiFreshness()`
-already returns `verdict:"red"` when a required check carries a `FAILURE` conclusion, and the axis
-trips on `red`. But the CLI entry point is `mergeGuard(repo, { ticketId, pr, apply })` — it never
-resolves `mergeChecks` from the repo registry, so `opts.mergeChecks` is always `undefined` and the
-axis short-circuits to `skipped:"no-merge-checks"` on every invocation. Measured against a real PR in
-a repo whose config carries two merge checks:
-
-```
-$ node hub/src/merge-guard.ts --repo <dev-loop> --pr 182 --json
-"ciFreshness": { "trip": false, "skipped": true, "skipReason": "no-merge-checks", "verdict": null }
-```
-
-Every one of the twelve new assertions passes, because every one of them calls `mergeGuard()` the
-**function** with `mergeChecks` injected by hand. None drives the CLI. The ticket's own Notes state
-the delivery mechanism — *"Step 0.5 already runs `merge-guard --pr <pr> --strict --apply` before
-every squash, so the new axis rides that call"* — and that sentence is the thing that is false.
-
-**The same shape appeared twice more in the same fire, in different clothes.** LOOP-250's regression
-test reports `✅ Arm A` and `❌ Arm B`, `❌ Arm C`; B and C both assert W18 *fires* and both fail,
-which means W18 never fires in that fixture at all, which means Arm A's `!out.includes("[W18]")` is
-satisfied because nothing happened. A green arm over an inert mechanism. And LOOP-242 was handed off
-with **zero commits** — 254 insertions sitting uncommitted on `main` in the shared checkout, the
-third such handoff today; `.dev-loop/loop/salvage/` now holds patches for LOOP-31, LOOP-294 and
-LOOP-242.
-
-**LOOP-278 passed, and the reason it passed is worth naming.** Asked to re-measure a carried-forward
-evidence table, senior-dev found that the open-PR population it described had evaporated (0 open loop
-PRs), measured the durable population instead — PRs that *landed* — and reported that the superseded
-table's **claim** had been wrong: it asserted a stall, and all eight PRs it cited had merged. What
-survived was the premise underneath (the loop never re-freshens: one force-push across ten sampled),
-and re-measuring made the argument stronger, not weaker: 11 of the last 14 merged loop PRs (79%) were
-behind the tip at the moment they merged. I reproduced three of its rows exactly and byte-checked its
-quoted SKILL prose against `origin/main`. LOOP-277 is complete and went to the operator this fire.
-
-**The ordering risk that proposal exists to prevent is now structurally impossible.** LOOP-277's own
-AC2 names "LOOP-242 lands first" as the harmful order — a hard `stale` trip with no re-freshen remedy
-would hold 79% of merges with no exit. LOOP-323 adopts that ticket's option (b): `red` trips
-`--strict` immediately, `stale` is advisory-only behind a named constant until the operator applies
-LOOP-277. The hard trip cannot go live ahead of the decision.
-
-**The board.** Verified 1 (LOOP-278), sent back 2 (LOOP-242, LOOP-250 — both `Canceled`, both
-superseded by senior direct-code tickets LOOP-323/LOOP-324 per §3), unparked 1 to the operator
-(LOOP-277, `Human-Blocked`), re-pointed one §9c edge (LOOP-247, from the canceled LOOP-250 to
-LOOP-324 — a terminal blocker is not evidence the artifact it gated exists), promoted 3, filed 2.
-Junior `Todo` is now at its cap (10/10); senior is 9/10 with **zero** senior-tier candidates in a
-61-deep Backlog, the same one-sided refill queue fire 42 recorded.
-
-**§20 R2 pass 36.** The forty-first-fire journal moved to
-[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
+Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 38).
 
 ### 2026-08-05 (pm, forty-fifth fire): a deviation ratified by re-checking its premise, and three suspected defects that were all correct as built
 
@@ -774,6 +707,80 @@ auto-unparks due — the chain roots at LOOP-279, which senior-dev picked up dur
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md), and a stray link fragment left in
 the fortieth-fire stub by pass 35 was removed.
 
+### 2026-08-05 (pm, forty-sixth fire): correct counts shipped with both superseded locals left in place, and a comment carrying text from another file
+
+**One item to verify. Its behaviour passed and its review failed.** `origin/main` moved `8c79447` →
+`7323e09` — two code commits (`9df4b89`, LOOP-299's fixture registration; `359fc7b`, LOOP-251's
+`todoDepth` unification) plus the forty-fifth-fire doc commit — so the lens list reset. The strategy
+doc's content hash is unchanged at `9163508ff3365f8d` on both `origin/main` and the working tree:
+zero foreign direction edits in 72 fires. Zero `needs-pm`, zero cross-owner bails, zero
+`Human-Blocked`.
+
+**The installed binary does not contain the increment under verification.** `doctor` reports the
+installed v1.14.0 one code commit behind `origin/main`, and `dev-loop queue` returns a `todoDepth`
+carrying no `dev` key — the field LOOP-251 adds. §12b permits a wait-state here, but verifying from
+the diff was avoidable: `git archive origin/main` into an isolated tree, then `servableTodoDepth`
+called directly against the live `hub.db` opened read-only. Measured on the real board:
+`{"total":17,"senior-dev":7,"junior-dev":10,"dev":0}`, every per-tier count equal to its
+`servableSlice(…).todo.length`, `total` equal to the 17 non-blocked `Todo` rows. All four behaviour
+criteria pass.
+
+**The regression test discriminates, and the assertion carrying the coverage is not the obvious
+one.** Two mutations were run against the shipped predicate. Removing the `sensitive` exclusion
+yielded `junior=2` against an asserted 1 — caught. Reverting `servableTodoDepth` to the raw
+`assignee ===` filter, the exact LOOP-169 defect, was caught by both the absolute count and the
+parity assertion. Under the first mutation all three **parity** assertions still passed: both sides
+of a parity check move together when the shared predicate changes, so the absolute `junior=1`
+assertion carries that coverage alone. A parity-only rewrite of this suite would be a silent
+regression.
+
+**AC5 failed by reading, and it was the criterion the design gate named in advance.** LOOP-169
+exists because two computations of "what is servable" drifted; LOOP-251's decisive criterion was
+that the predicate end up in exactly one place, verified by reading. `isTodoServableFor` was added
+correctly — and the `mine` it was extracted from is still at `servable.ts:57`, with zero call sites.
+The same commit left the same residue in the other file: `agentops.ts:225`'s `todoOpen` had three
+consumers before `359fc7b` and has none after, while still running a full filter over every open
+ticket on each `pm` and `qa` queue call. The pattern in both files is that the new call was
+substituted in place and the value it superseded was left declared.
+
+**A comment now carries text copied from an unrelated file.** `servable.ts:68` reads *"is landable
+by Step 0.5 even if the flag off (default-off, zero new surface)"*. No flag exists anywhere in that
+file; the parenthetical is verbatim boilerplate from `hub/test/agent-api.ts:77/81/84`, and
+`git log -S` attributes its arrival to `359fc7b` itself. It replaced the sentence documenting the
+LOOP-244 label-fallback rule and left the following line a fragment with no antecedent. In the same
+commit `servableSlice`'s seven-line documentation block was deleted with nothing put back, against a
+pinned approach that specified no change to that function.
+
+**Four deltas, and every automated gate is blind to all four by construction.** Two dead locals and
+two comments pass `tsc`, the suite, the CRAP ratchet and both CI legs. `noUnusedLocals` is evidently
+off for this project. LOOP-251 `Canceled`, superseded by LOOP-330 (senior-dev, `Mode: direct-code`)
+per §3's junior-to-senior routing on a real criterion miss; the merged behaviour stays on `main` and
+the follow-up is a deletion plus two comments.
+
+**The consistency sweep found no third instance.** Every consumer of the shared predicate was
+enumerated: `run-agents.ts`'s queue-depth gate and `agentops.ts`'s `opQueue` both import it, and the
+only other tier-keyed assignee test in `hub/src/` is `ticketwrite.ts:164`, the Layer-1 sensitive
+write gate, which is deliberately broader (it also matches the tier label). The LOOP-144/LOOP-169
+single-source program is otherwise complete; what remains of it is the two dead residues above.
+
+**Promoted zero, for the fourth consecutive fire, on the same two-sided cause.** junior is at its cap
+(10/10 servable `Todo`) against 67 junior-assigned `Backlog` tickets; senior holds 8/10 with two idle
+slots and zero senior-assigned `Backlog` candidates, so §5a permits nothing on either tier. The only
+mechanism currently adding to senior's `Todo` is the §3 verify-fail carve-out, which supplied
+LOOP-330 this fire. That signal gap is filed as LOOP-329 and is not re-derived here. Grooming ran
+instead: LOOP-283 re-confirmed against the running CLI (all six verbs still emit raw stack traces,
+`team import` still clean — accurate as filed), LOOP-284 reproduced including its fall-through to an
+unrelated machine-global board, and LOOP-325 annotated because its instance count has decayed to zero
+while its mechanism is untouched — the shared checkout is quiescent and `doc-land` succeeded
+unassisted last fire, which is the property the ticket says cannot be relied upon.
+
+**§9c pass.** Four edges, unchanged: 228←315←238←237←279. Every blocker open, zero auto-unparks due,
+no dangling edges. LOOP-279 sits first in senior-dev's pick order, so the chain gating the operator's
+stated top priority is at the front of the queue it depends on.
+
+**§20 R2 pass 38.** The forty-third-fire journal moved to
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -806,6 +813,18 @@ the fortieth-fire stub by pass 35 was removed.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-05 (pm, forty-sixth fire) — an increment whose behaviour is correct can still fail
+  review, and the criterion that decides it is the one the design gate named in advance.** LOOP-251
+  shipped correct counts: every per-tier number matched `servableSlice` against the live board, and
+  its regression test survived two mutations. It was `Canceled` anyway, because the criterion it
+  failed was *"the servable-Todo predicate lives in exactly one place — verified by reading, not just
+  behavior"*, and that criterion is the whole reason LOOP-169 was filed. Two copies with one dead is
+  a weaker end state than two copies both live: no test can ever fail on a divergence between a live
+  computation and an unreachable one. The design-gate comment had already written down that this
+  criterion, not the counts, would decide the ticket — which is what made the verdict a measurement
+  rather than a judgement call at review time. Where a criterion is the point of the ticket, name it
+  as such at the gate, before there is an implementation to weigh it against.
 
 - **2026-08-05 (pm, forty-fifth fire) — a deviation from an acceptance criterion is ratified by
   re-checking the criterion's premise, never by weighing the implementer's argument.** LOOP-323 AC6
