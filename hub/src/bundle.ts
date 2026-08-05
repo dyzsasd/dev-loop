@@ -24,6 +24,7 @@ import { tryResolveWorkspace, wsHubDb, wsLockPath } from "./workspace.ts";
 import type { TeamFile, Workspace } from "./team-config.ts";
 import { doctorWorkspace, isGitWorkTree } from "./doctor.ts";
 import { openDb } from "./db.ts";
+import { snapshotBoardDb } from "./board-snapshot.ts"; // LOOP-337: the consistent-copy primitive
 import { ensureSeed } from "./seed.ts";
 import { TEAM_INTAKE_PROJECT } from "./team-config.ts";
 import { provisionClaudePermissions } from "./team-init.ts";
@@ -162,11 +163,21 @@ function buildExportPayload(ws: Workspace, o: ExportOpts): { payload: Payload; h
   const hubDbPath = wsHubDb(ws);
   let hubDb: BundleManifest["hubDb"] = { included: false };
   if (!o.noHubDb && existsSync(hubDbPath)) {
+    // LOOP-337 — the checkpoint-then-readFileSync path could emit an UNOPENABLE db with nothing
+    // detecting it: `exec("PRAGMA wal_checkpoint(TRUNCATE)")` does not RAISE on a busy checkpoint
+    // (it returns {busy:1} and the surrounding catch was therefore unreachable dead code), and
+    // readFileSync of a live SQLite main file is not an atomic read. The `console.warn(…); copy
+    // crash-consistent bytes` degradation is DELETED rather than left beside the fix — silently
+    // producing a corrupt backup is worse than failing to produce one.
+    const tmpSnap = join(tmpdir(), `dev-loop-bundle-${process.pid}-${Date.now()}.db`);
     try {
-      const db = openDb(hubDbPath);
-      try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } finally { db.close(); }
-    } catch (e) { if (!o.backup) die(`hub.db checkpoint failed (${(e as Error).message}) — is something still writing?`, 1); console.warn(`backup: checkpoint failed (${(e as Error).message}); copying crash-consistent bytes`); }
-    payload.hubDbB64 = readFileSync(hubDbPath).toString("base64");
+      snapshotBoardDb(hubDbPath, tmpSnap);
+      payload.hubDbB64 = readFileSync(tmpSnap).toString("base64");
+    } catch (e) {
+      die(`hub.db snapshot failed (${(e as Error).message}) — the board could not be copied consistently; refusing to write a bundle that may not open`, 1);
+    } finally {
+      try { rmSync(tmpSnap, { force: true }); } catch { /* best-effort */ }
+    }
     hubDb = { included: true, checkpointedAt: new Date().toISOString(), mode: o.backup ? "backup" : "move" };
   }
 
