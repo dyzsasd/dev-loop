@@ -118,9 +118,30 @@ function htmlOut(res: ServerResponse, status: number, body: string): void {
 // healthy and the lifecycle's `up`/`status` (which probe this endpoint) recover it instead of no-op'ing
 // onto a dead process. A read-only daemon (no writeDb) verifies reachability only — it has no write
 // surface to probe. §16-safe: no mutation persists (BEGIN IMMEDIATE → ROLLBACK), errors are scrubbed.
-function healthLiveness(db: DatabaseSync, writeDb?: DatabaseSync): { ok: boolean; error?: string } {
+// LOOP-304 — `projectId` is resolved ONCE at boot and carried as a field; every later read is
+// `WHERE project_id=?` against that cached id. Nothing re-checks that the `projects` row still
+// exists, so after a cascade delete the daemon kept answering from a connection whose target was
+// gone: during the 2026-08-04 board wipe it served the pre-delete board for roughly TWO HOURS,
+// `dev-loop queue` returned 68 backlog rows 115 minutes after the data was destroyed, and doctor
+// printed DOCTOR_OK throughout. The cached view is what made the deletion unobservable.
+//
+// The tell existed and nothing surfaced it: the DIRECT-read verbs refused with "project is not
+// seeded in the hub DB" while the DAEMON-backed verbs answered normally. That split — direct read
+// refuses, daemon answers — is a precise, machine-checkable signature, and it is now checked on
+// every health probe, which is the one call the lifecycle already makes on a cadence.
+function projectRowGone(db: DatabaseSync, projectId: string): boolean {
+  try { return db.prepare("SELECT 1 FROM projects WHERE id=?").get(projectId) === undefined; }
+  catch { return false; } // an unreadable db is the EXISTING wedge path below — not this one
+}
+
+function healthLiveness(db: DatabaseSync, writeDb?: DatabaseSync, projectId?: string): { ok: boolean; error?: string } {
   try {
     db.prepare("SELECT 1").get(); // read liveness: the connection + DB file are reachable & not corrupt
+    // A live connection to a board that no longer exists is NOT healthy. Reported through the same
+    // ok:false channel the wedged-SoR case uses, so the lifecycle's existing reaper acts on it
+    // without a second mechanism — and so a scripted reader polling /api/health cannot miss it.
+    if (projectId !== undefined && projectRowGone(db, projectId))
+      return { ok: false, error: `project row ${projectId} no longer exists in this db — the board was deleted underneath this daemon; it is serving a CACHED view. Restart it: dev-loop daemon up` };
     if (writeDb) {
       // BEGIN IMMEDIATE takes the reserved write lock; ROLLBACK releases it — nothing persists. A
       // SQLITE_BUSY means another writer holds it ⇒ the SoR IS writable (just momentarily contended) ⇒
@@ -625,7 +646,7 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
   }
   if (path === "/api/stream") { serveStream(ctx); return true; }
   if (path === "/api/health") {
-    const h = healthLiveness(db, writeDb);
+    const h = healthLiveness(db, writeDb, projectId);
     // §16: expose dbPresent as a BOOLEAN only — /api/health bypasses the UI token (daemon.ts:471)
     // so the raw DB path must never appear here; the boolean is sufficient for the reaper (LOOP-95).
     // Use ctx.dbPath (the actual opened path) not workspaceId (which ignores DEVLOOP_HUB_DB overrides).
