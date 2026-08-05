@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -139,7 +139,7 @@ try {
   {
     // Minimal Workspace stub (renderHuman reads only ws.file.team.key).
     const fakeWs = { file: { team: { key: "test-key" }, repos: {}, projects: {} } } as any;
-    const fakeFires = { windowMs: 7 * DAY, fires: 0, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
+    const fakeFires = { windowMs: 7 * DAY, fires: 0, failures: 0, timeouts: 0, suspectErrors: 0, interrupted: 0, discardedFires: 0, discardedCostUsd: null, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
     const fakeRollup = { throughput: 0, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
 
     // AC1: decision queue line shows age per item and names the oldest — oldest-first (T-3 at 4d, T-5 at 2d)
@@ -185,7 +185,7 @@ try {
     const fakeRollup = { throughput: 0, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
 
     // AC2: no metered fires → "unmetered — 0 of N", never "$0.00", never omitted
-    const noUsageFires = { windowMs: 7 * DAY, fires: 12, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
+    const noUsageFires = { windowMs: 7 * DAY, fires: 12, failures: 0, timeouts: 0, suspectErrors: 0, interrupted: 0, discardedFires: 0, discardedCostUsd: null, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
     const linesNoUsage: string[] = [];
     const origLogA = console.log;
     console.log = (...args: unknown[]) => linesNoUsage.push(String(args[0] ?? ""));
@@ -199,7 +199,7 @@ try {
       `LOOP-127 AC2: cost line never contains '$0' in no-data state (got: ${costLineNoUsage})`);
 
     // AC1: metered fires with cost → "$X.XXXX over N of M metered fires"
-    const meteredFires = { windowMs: 7 * DAY, fires: 20, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 5, costMeteredFires: 3, costUsd: 0.12, meteringOnsetTs: null };
+    const meteredFires = { windowMs: 7 * DAY, fires: 20, failures: 0, timeouts: 0, suspectErrors: 0, interrupted: 0, discardedFires: 0, discardedCostUsd: null, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 5, costMeteredFires: 3, costUsd: 0.12, meteringOnsetTs: null };
     const linesMetered: string[] = [];
     const origLogB = console.log;
     console.log = (...args: unknown[]) => linesMetered.push(String(args[0] ?? ""));
@@ -939,6 +939,189 @@ try {
     // senior-dev: null-cost usage row → 0 costMeteredFires, usdPerFire=null
     ok(sd239 !== undefined && sd239.costMeteredFires === 0 && sd239.usdPerFire === null,
       `LOOP-239: senior-dev costMeteredFires=0, usdPerFire=null (null costUsd; got cmf=${sd239?.costMeteredFires}, upf=${sd239?.usdPerFire})`);
+  }
+
+  // ══ the measurement-honesty batch ══════════════════════════════════════════════════════════
+  // Each block below pins an ABSOLUTE expected value, not a parity between two surfaces: LOOP-251
+  // shipped three parity assertions that all stayed green under a mutated shared predicate because
+  // both sides moved together.
+
+  // ── LOOP-98: acceptRate's numerator and denominator are ONE population ──────────────────────
+  // The census from the ticket: 30 In Review→Done, 5 →Canceled, 3 →In Progress, 2 →Human-Blocked,
+  // plus 2 →Done that never passed through In Review. Old code returned 32/(32+5) = 0.865; the
+  // true In-Review accept rate is 30/40 = 0.75. throughput must stay 32 (LOOP-42's contract).
+  {
+    const d98 = openDb(join(tmp, "l98.db"));
+    d98.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    const t98 = (from: string, to: string) =>
+      d98.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('p','x','dev','issue.transition',?,?)")
+        .run(JSON.stringify({ from, to }), iso(NOW - DAY));
+    for (let i = 0; i < 30; i++) t98("In Review", "Done");
+    for (let i = 0; i < 5; i++) t98("In Review", "Canceled");
+    for (let i = 0; i < 3; i++) t98("In Review", "In Progress");   // hand-back — invisible before
+    for (let i = 0; i < 2; i++) t98("In Review", "Human-Blocked");  // hand-back — invisible before
+    t98("Backlog", "Done"); t98("Todo", "Done");                    // never verified by anyone
+    const b98 = boardMetrics(d98, "p", 7 * DAY, NOW);
+    ok(b98.throughput === 32, `LOOP-98: throughput is UNCHANGED at 32 board-wide →Done (got ${b98.throughput})`);
+    ok(b98.acceptRate !== null && Math.abs(b98.acceptRate - 30 / 40) < 1e-9,
+      `LOOP-98: acceptRate = 30/40 = 0.75, not the old 32/37 = 0.865 (got ${b98.acceptRate})`);
+    ok(b98.inReviewExits["In Progress"] === 3 && b98.inReviewExits["Human-Blocked"] === 2,
+      "LOOP-98: every In Review exit edge is reported, so a hand-back is never invisible again");
+    ok(b98.verifyFails === 5, `LOOP-98: verifyFails still means In Review→Canceled only (got ${b98.verifyFails})`);
+    const empty98 = openDb(join(tmp, "l98b.db"));
+    empty98.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    ok(boardMetrics(empty98, "p", 7 * DAY, NOW).acceptRate === null,
+      "LOOP-98: acceptRate is null — never 0, never 1 — when the window holds no In Review exit");
+    empty98.close(); d98.close();
+  }
+
+  // ── LOOP-122: measured-zero vs unmeasurable ─────────────────────────────────────────────────
+  {
+    const d122 = openDb(join(tmp, "l122.db"));
+    d122.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    const bug = (id: string, labels: string[]) =>
+      d122.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,'p','t','d','Bug','Todo',2,?,'[]','qa',?,?)")
+        .run(id, JSON.stringify(labels), iso(NOW - DAY), iso(NOW - DAY));
+    bug("B-1", ["dev-loop", "Bug", "qa"]);
+    bug("B-2", ["dev-loop", "Bug", "qa"]);
+    const noSource = boardMetrics(d122, "p", 7 * DAY, NOW, { escapeSourceConfigured: false });
+    ok(noSource.qa.escaped === null && noSource.qa.escapeRatio === null,
+      `LOOP-122: no ops/communication source ⇒ escaped is null, NOT 0 (got ${noSource.qa.escaped})`);
+    ok(noSource.qa.bugsFiled === 2, "LOOP-122: bugsFiled is measured and unchanged");
+    const measuredZero = boardMetrics(d122, "p", 7 * DAY, NOW, { escapeSourceConfigured: true });
+    ok(measuredZero.qa.escaped === 0 && measuredZero.qa.escapeRatio === 0,
+      "LOOP-122: with a source present, a real 0 keeps its meaning");
+    bug("B-3", ["dev-loop", "Bug", "qa", "incident"]);
+    ok(boardMetrics(d122, "p", 7 * DAY, NOW, { escapeSourceConfigured: true }).qa.escaped === 1,
+      "LOOP-122: a real escape counts");
+    ok(!escapeSignalSourceRan({ byAgent: { pm: { fires: 3 }, qa: { fires: 9 } } }),
+      "LOOP-122: the source predicate reads the LEDGER — a loop running neither agent has no source");
+    ok(escapeSignalSourceRan({ byAgent: { ops: { fires: 1 } } }), "LOOP-122: one ops fire is a source");
+    d122.close();
+  }
+
+  // ── LOOP-313: an aggregate whose event history is shorter than its window says so ───────────
+  {
+    const d313 = openDb(join(tmp, "l313.db"));
+    d313.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    d313.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('p','x','dev','issue.transition',?,?)")
+      .run(JSON.stringify({ from: "In Review", to: "Done" }), iso(NOW - 2 * DAY));
+    const short = boardMetrics(d313, "p", 30 * DAY, NOW);
+    ok(short.historyIncomplete === true && short.historyFloor === iso(NOW - 2 * DAY),
+      `LOOP-313: a 30d window over 2d of history is flagged incomplete and names the floor (got ${short.historyFloor})`);
+    const full = boardMetrics(d313, "p", 1 * DAY, NOW);
+    ok(full.historyIncomplete === false,
+      "LOOP-313: a window INSIDE the available history carries no qualifier — output unchanged");
+    d313.close();
+  }
+
+  // ── LOOP-314: --since/--until is a CLOSED era, both bounds ──────────────────────────────────
+  // The trap: setting nowMs alone leaves `ts >= cutoff` unbounded above, so a "before" query still
+  // contains the entire "after" era. These assertions fail against that shape.
+  {
+    const l314 = join(tmp, "l314.jsonl");
+    writeFileSync(l314, [
+      row({ ts: iso(NOW - 10 * DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1 }),  // before the era
+      row({ ts: iso(NOW - 5 * DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1 }),   // INSIDE
+      row({ ts: iso(NOW - 4 * DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1 }),   // INSIDE
+      row({ ts: iso(NOW - 1 * DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1 }),   // after the era
+    ].join("\n") + "\n");
+    const era = fireMetrics(l314, 3 * DAY, NOW - 3 * DAY); // era = [NOW-6d, NOW-3d]
+    ok(era.fires === 2, `LOOP-314: a closed era counts ONLY its own rows (got ${era.fires}, want 2)`);
+    const rows314 = readFireRows(l314);
+    ok(usageReport(rows314, 3 * DAY, { nowMs: NOW - 3 * DAY }).totalFires === 2,
+      "LOOP-314: usageReport honours the upper bound too");
+    ok(fireMetrics(l314, 30 * DAY, NOW).fires === 4, "LOOP-314: a trailing window is unchanged — all 4 rows");
+  }
+
+  // ── LOOP-268: an ABSENT usage key is not a measured zero ────────────────────────────────────
+  {
+    const rows268 = [
+      { ts: iso(NOW - DAY), agent: "qa", project: "w", usage: { source: "provider", inputTokens: 10, outputTokens: 5, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null, currency: null } },
+      { ts: iso(NOW - DAY), agent: "qa", project: "w", usage: { source: "provider", inputTokens: 20, outputTokens: 8, cacheWriteTokens: null, costUsd: null, currency: null } }, // cacheReadTokens KEY ABSENT
+    ] as unknown as Parameters<typeof usageReport>[0];
+    const u268 = usageReport(rows268, 7 * DAY, { nowMs: NOW });
+    ok(u268.overall.cacheReadTokens === null,
+      `LOOP-268: a missing key sums to null, never 0 — the never-0 honest-null contract (got ${u268.overall.cacheReadTokens})`);
+    ok(u268.overall.inputTokens === 30, "LOOP-268: present values still sum normally");
+    ok(u268.overall.costMetered === 0, "LOOP-268: an absent/null costUsd is unpriced, not a $0 fire");
+  }
+
+  // ── LOOP-155 + LOOP-219: an operator stop is not an agent failure, and discarded ≠ delivered ─
+  {
+    const l155 = join(tmp, "l155.jsonl");
+    writeFileSync(l155, [
+      row({ ts: iso(NOW - DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 1.00, currency: "USD" } }),
+      row({ ts: iso(NOW - DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 3.00, currency: "USD" } }),
+      row({ ts: iso(NOW - DAY), agent: "qa", project: "w", exitCode: 0, durationMs: 1, interrupted: true, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 2.00, currency: "USD" } }),
+      row({ ts: iso(NOW - DAY), agent: "qa", project: "w", exitCode: 0, durationMs: 1, suspectError: true, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 4.00, currency: "USD" } }),
+    ].join("\n") + "\n");
+    const f155 = fireMetrics(l155, 7 * DAY, NOW);
+    // 4 fires, 1 interrupted (excluded entirely), 1 suspectError → scored = 3, success = (3-0-1)/3.
+    ok(f155.interrupted === 1, `LOOP-155: the interrupted fire is counted as its own class (got ${f155.interrupted})`);
+    ok(f155.suspectErrors === 1, "LOOP-155: the genuine suspectError is untouched — this NARROWS the class");
+    ok(f155.successRate !== null && Math.abs(f155.successRate - 2 / 3) < 1e-9,
+      `LOOP-155: successRate excludes the interrupted fire from BOTH sides = 2/3 (got ${f155.successRate})`);
+    ok(f155.discardedFires === 2 && f155.discardedCostUsd !== null && Math.abs(f155.discardedCostUsd - 6.00) < 1e-9,
+      `LOOP-219: discarded = interrupted + suspectError = $6.00 over 2 fires (got $${f155.discardedCostUsd})`);
+    ok(f155.costUsd !== null && Math.abs(f155.costUsd - 10.00) < 1e-9,
+      "LOOP-219: the GROSS total is unchanged — this adds a decomposition, it does not restate the bill");
+    const u219 = usageReport(readFireRows(l155), 7 * DAY, { nowMs: NOW, groupBy: "agent" });
+    const sumDisc = Object.values(u219.byDimension ?? {}).reduce((a, c) => a + (c.discardedUsd ?? 0), 0);
+    ok(Math.abs(sumDisc - 6.00) < 1e-9, `LOOP-219 invariant: Σ per-agent discarded == total discarded (got ${sumDisc})`);
+    ok((u219.byDimension?.pm.discardedUsd ?? -1) === 0,
+      "LOOP-219: an agent with priced rows and no discards reports a MEASURED 0.00, not null");
+  }
+
+  // ── LOOP-297: the displayed deadline IS the enforcer's own output ───────────────────────────
+  {
+    const l297 = join(tmp, "l297.jsonl");
+    const priced = (agent: string, ca: string, model: string, cost: number, ms: number) =>
+      row({ ts: iso(NOW - DAY), agent, project: "w", codingAgent: ca, model, exitCode: 0, durationMs: ms, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: cost, currency: "USD" } });
+    writeFileSync(l297, [
+      priced("pm", "claude", "fast", 1.0, 3_600_000),    // $1/hr  → $12 ceiling arms at 12h
+      priced("sd", "claude", "slow", 12.0, 3_600_000),   // $12/hr → arms at 60 min exactly
+      row({ ts: iso(NOW - DAY), agent: "qa", project: "w", codingAgent: "claude", model: "unpriced", exitCode: 0, durationMs: 1000 }),
+    ].join("\n") + "\n");
+    const rows297 = readFireRows(l297);
+    const pds = profileDeadlines(rows297, 12.0, 7 * DAY, NOW);
+    const slow = pds.find((d) => d.model === "slow");
+    const unpriced = pds.find((d) => d.model === "unpriced");
+    ok(slow !== undefined && Math.abs(slow.deadlineMinutes! - 60) < 1e-6,
+      `LOOP-297: a $12/hr profile against a $12 ceiling arms at exactly 60 min (got ${slow?.deadlineMinutes})`);
+    ok(unpriced !== undefined && unpriced.priced === false,
+      "LOOP-297: a profile with no priced history is LABELLED as using the fallback, not shown as measured");
+    // AC2 — the display can never drift from the enforcer, because it is the same function.
+    const enforced = perFireDeadline(12.0, rows297, "claude", "slow", NOW);
+    ok(enforced !== null && Math.abs(enforced.deadlineMs / 60_000 - slow!.deadlineMinutes!) < 1e-9,
+      "LOOP-297 AC2: the printed deadline equals perFireDeadline()'s own output");
+  }
+
+  // ── LOOP-102: W16's owned set matches what the routers actually serve ───────────────────────
+  {
+    const d102 = openDb(join(tmp, "l102.db"));
+    d102.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    const tk = (id: string, state: string, assignee: string | null, labels: string[]) =>
+      d102.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,'p','t','d','Improvement',?,?,2,?,'[]','pm',?,?)")
+        .run(id, state, assignee, JSON.stringify(labels), iso(NOW - DAY), iso(NOW - DAY));
+    const emptyLedger = join(tmp, "l102.jsonl");
+    writeFileSync(emptyLedger, "");
+    const find = (h: string) => ownerLiveness(d102, "p", emptyLedger, { nowMs: NOW, handles: [h] });
+
+    tk("A-1", "Todo", "junior-dev", ["dev-loop", "blocked"]);
+    ok(find("junior-dev").length === 0,
+      "LOOP-102: a handle whose only open ticket is `blocked` produces NO finding — no router would serve it");
+    tk("A-2", "Todo", "junior-dev", ["dev-loop"]);
+    ok(find("junior-dev")[0]?.openTickets === 1,
+      "LOOP-102: …and an unblocked sibling still produces one, counting only the servable row");
+
+    tk("B-1", "In Progress", "senior-dev", ["dev-loop"]);  // assignee only — NO senior-dev label
+    ok(find("senior-dev")[0]?.openTickets === 1,
+      "LOOP-102: In Progress is owned by its ASSIGNEE — the state whose only recovery is that actor firing again");
+    tk("C-1", "Human-Blocked", "pm", ["dev-loop", "pm"]);
+    ok(find("pm").length === 0,
+      "LOOP-102: Human-Blocked stays OUT — it is a park awaiting a human, not owner stranding");
+    d102.close();
   }
 
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
