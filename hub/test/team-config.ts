@@ -460,15 +460,15 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
 
   const typo = base();
   typo.team.agents = { "junoir-dev": { fireTimeout: "30m" } };
-  ok(warnCodes(typo).includes("W02") && warnAt(typo, "team.agents.junoir-dev"),
-    "LOOP-82: a typo'd team.agents.<name> key raises W02 naming the exact path");
+  ok(warnCodes(typo).includes("W04") && warnAt(typo, "team.agents.junoir-dev"),
+    "LOOP-82: a typo'd team.agents.<name> key raises W04 naming the exact path");
   ok(!has(typo, "E17"), "LOOP-82: it stays a WARNING — an unknown agent name never hard-fails the config");
-  ok(/junoir-dev/.test(validateTeamFile(typo).warnings.find((w) => w.code === "W02")?.message ?? ""),
+  ok(/junoir-dev/.test(validateTeamFile(typo).warnings.find((w) => w.code === "W04")?.message ?? ""),
     "LOOP-82: the warning quotes the offending name so the operator can find the typo");
 
   const good = base();
   good.team.agents = { "junior-dev": { fireTimeout: "30m" }, pm: { model: "claude-opus-5" } };
-  ok(!warnCodes(good).includes("W02"), "LOOP-82: every real agent name is accepted silently");
+  ok(!warnCodes(good).includes("W04"), "LOOP-82: every real agent name is accepted silently");
 
   const projTypo = base();
   projTypo.projects.devplatform.agents = { "qaa": { model: "m" } };

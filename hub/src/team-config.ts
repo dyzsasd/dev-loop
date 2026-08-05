@@ -291,7 +291,7 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectS
     // so a misspelled key is simply never consulted. A warning, not an error — a config carrying a
     // retired agent name must not lock the operator out of the commands that repair it (the E09 shape).
     if (W && !AGENT_HANDLE_SET.has(agent))
-      W("W02", apath, `'${agent}' is not a known agent — this block is never applied (known: ${AGENT_HANDLES.join(", ")}). Check the spelling.`);
+      W("W04", apath, `'${agent}' is not a known agent — this block is never applied (known: ${AGENT_HANDLES.join(", ")}). Check the spelling.`);
     if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) { E("E17", apath, "agent config must be an object"); continue; }
     const a = cfg as Record<string, unknown>;
     for (const field of ["fireTimeout", "stallTimeout"] as const) {
