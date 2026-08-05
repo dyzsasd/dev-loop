@@ -958,7 +958,11 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const boot = opts.assembleBoot && profile.codingAgent === "claude"
     ? assembleBootCorpus(opts.root, opts.dataDir, agent, project, backend,
         cfg?.projects?.[profileProject] as Record<string, unknown> | undefined,
-        cfg?.repos as Record<string, unknown> | undefined) // config-aware selection: feature-off spans never ship
+        cfg?.repos as Record<string, unknown> | undefined, // config-aware selection: feature-off spans never ship
+        // LOOP-275: a team-scoped steward fire spans EVERY enabled project, so the repo-shaped
+        // predicates must see all of them. Passing only the representative project pruned §19 from a
+        // team fire whenever the first enabled project happened to be single-repo.
+        teamScope ? teamScope.enabledProjects.slice(1).map((k) => cfg?.projects?.[k] as Record<string, unknown> | undefined).filter(Boolean) as Record<string, unknown>[] : undefined)
     : null;
   if (opts.assembleBoot && profile.codingAgent === "claude" && !boot)
     console.warn(`[${agent}] --assemble-boot: corpus assembly unavailable — firing in §0a pull mode`);
