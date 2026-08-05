@@ -40,7 +40,8 @@ verify each state/label move with a re-fetch).
 
 Query `project` + `label:"dev-loop"` in non-terminal states and inspect each ticket's labels
 against the §4 taxonomy:
-- **Stranded design child** — a `Backlog` ticket whose `relatedTo` design parent is `Done` ⇒
+- **Stranded design child** — a `Backlog` ticket that carries a `Design:` pointer (§21a step 4)
+  AND whose `relatedTo` design parent is `Done` ⇒
   finish the crashed promotion: move it `Backlog → Todo` (§21a design-gate crash residue;
   Backlog is invisible to every dev pick-query). Parent `Canceled` ⇒ cancel the child too
   (it references a superseded design).
