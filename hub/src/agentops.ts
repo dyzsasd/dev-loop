@@ -135,8 +135,37 @@ function prodPromotionRejection(db: DatabaseSync, projectId: string, actor: stri
 // two ops share so they can't drift (DL-65 hoisted opSaveIssue's original local helper to module scope).
 const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
-export interface ListIssuesArgs { state?: string; assignee?: string; type?: string; label?: string; labels?: string[]; query?: string; relatedTo?: string; updatedSince?: string; fields?: string; limit?: number }
+// ─── LOOP-165 / LOOP-143: unknown args are REFUSED, never ignored ────────────────────────────────
+// `op list_issues` validated the TYPES of six known args meticulously and then ignored anything else,
+// returning the whole board with exit 0 — byte-indistinguishable from a legitimate broad search. Four
+// different search terms returned an identical full board; the arg that was dropped was `q`, the name
+// of the CLI flag itself. The same hole let `until` be silently dropped by list_events, so a caller
+// reaching for the obvious escape hatch got a wrong answer instead of an error.
+//
+// The CLI layer already refuses unknown FLAGS (LOOP-143's rule); this is the same rule one layer down,
+// on the transport every agent actually uses. It applies at the op, so it reaches every transport —
+// CLI `op`, daemon HTTP and stdio/MCP alike — rather than only the flag parser.
+function unknownArgErr(a: Record<string, unknown>, known: readonly string[], op: string): OpResult | null {
+  const extra = Object.keys(a ?? {}).filter((k) => !known.includes(k));
+  if (!extra.length) return null;
+  return errR(400, `${op}: unknown argument${extra.length > 1 ? "s" : ""} ${extra.map((k) => `'${k}'`).join(", ")} — known args: ${known.join(", ")}. An ignored filter returns the UNFILTERED set, which reads exactly like a legitimate result.`);
+}
+
+// `project` rides every op as the routing key (resolveProjectOverride consumes it before dispatch), so
+// it is legal on every op and is never the caller's mistake.
+const ALWAYS_OK_ARGS = ["project"] as const;
+
+export interface ListIssuesArgs { state?: string; assignee?: string; type?: string; label?: string; labels?: string[]; query?: string; q?: string; relatedTo?: string; updatedSince?: string; fields?: string; limit?: number; envelope?: boolean }
+export const LIST_ISSUES_ARGS = ["state", "assignee", "type", "label", "labels", "query", "q", "relatedTo", "updatedSince", "fields", "limit", "envelope", ...ALWAYS_OK_ARGS] as const;
+export const LIST_ISSUES_DEFAULT_LIMIT = 250;
 function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: ListIssuesArgs): OpResult {
+  const unknown = unknownArgErr(a as Record<string, unknown>, LIST_ISSUES_ARGS, "list_issues");
+  if (unknown) return unknown;
+  // `q` is ACCEPTED as an alias for `query` rather than rejected (LOOP-165 asks for one or the other,
+  // stated). The flag an agent sees is `--q`, so refusing the same spelling at the op would be a
+  // papercut we would then have to document everywhere; accepting it removes the failure mode instead
+  // of relabelling it. An explicit `query` still wins if somehow both are passed.
+  if (a.q !== undefined && a.query === undefined) a = { ...a, query: a.q };
   // Re-validate the raw-JSON arg shapes the stdio path gets from zod (server.ts: query/assignee
   // z.string().optional(), labels z.array(z.string()).optional()). Without this a non-string `query`
   // (.toLowerCase() below), a non-array `labels` (the [...] spread below), or a non-string truthy `assignee`
@@ -179,8 +208,23 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
   // realistic board (which returned everything before); an explicit limit still wins. fields:"summary" drops
   // the description body — the bulk of the bytes (a 26-ticket board was ~100KB of descriptions) — for a
   // cheap board scan; the full body stays on get_issue.
-  out = out.slice(0, a.limit ?? 250);
+  // LOOP-342 — the cap is a DEFAULT, and 250 returned rows were byte-indistinguishable from a
+  // 250-ticket board: no total, no hasMore, and because the order is updated_at DESC the hidden rows
+  // are the STALEST — precisely the population a hygiene or census scan exists to find. Sweep, PM's
+  // §8 dedupe and every tier/state census were silently wrong once the board passed 250.
+  //
+  // The bare array stays the DEFAULT shape: `dev-loop tickets --json` is documented in the agent
+  // cheat-sheets as "EXACTLY the op list_issues body", and its byte-check test pins that. Truncation
+  // is surfaced two ways instead, neither of which moves the default shape:
+  //   • `envelope:true` → { items, total, returned, limit, hasMore } for a caller that wants the fact
+  //     in-band (the shape LOOP-143 suggests for list_events too);
+  //   • the CLI prints a stderr line when the returned count hits the cap, so a human or an agent
+  //     that ignores the envelope still cannot mistake a truncated read for a complete one.
+  const total = out.length;
+  const limit = a.limit ?? LIST_ISSUES_DEFAULT_LIMIT;
+  out = out.slice(0, limit);
   if (a.fields === "summary") out = out.map((t) => ({ ...t, description: "" }));
+  if (a.envelope === true) return okR({ items: out, total, returned: out.length, limit, hasMore: total > out.length });
   return okR(out);
 }
 
@@ -353,7 +397,10 @@ function opListComments(db: DatabaseSync, projectId: string, projectKey: string,
 // to the stdio ok() body — the differential-parity tripwire). The doc WRITES delegate to the shared
 // docstore (docSave/docPublish), so the CAS + the single operator-publish gate live in ONE place.
 
-function opListEvents(db: DatabaseSync, projectId: string, a: { ticketId?: string; actor?: string; since?: string; limit?: number }): OpResult {
+export const LIST_EVENTS_ARGS = ["ticketId", "actor", "since", "until", "limit", "envelope", ...ALWAYS_OK_ARGS] as const;
+function opListEvents(db: DatabaseSync, projectId: string, a: { ticketId?: string; actor?: string; since?: string; until?: string; limit?: number; envelope?: boolean }): OpResult {
+  const unknown = unknownArgErr(a as Record<string, unknown>, LIST_EVENTS_ARGS, "list_events");
+  if (unknown) return unknown;
   // mirror server.ts's zod (limit: int 1..500) — the op-API parses raw JSON, so a bad limit must be a clean
   // 400 here, never bound into LIMIT (a non-int bind throws in node:sqlite → a 500; an uncapped limit drifts).
   if (a.limit !== undefined && (!Number.isInteger(a.limit) || (a.limit as number) <= 0 || (a.limit as number) > 500)) return errR(400, "limit must be an integer 1..500");
@@ -362,6 +409,14 @@ function opListEvents(db: DatabaseSync, projectId: string, a: { ticketId?: strin
   if (a.since !== undefined) {
     if (typeof a.since !== "string") return errR(400, "since must be a string");
     if (isNaN(Date.parse(a.since))) return errR(400, "since must be a valid ISO 8601 timestamp");
+  }
+  // LOOP-143 — the missing UPPER bound. `since` raises the lower bound, which cannot reach further
+  // back, so the newest 500 rows were the only rows any caller could ever retrieve: the §18 evidence
+  // feed could not reach one day on this board. `until` makes the cap a PAGE SIZE rather than a
+  // ceiling on the whole corpus — walk backwards by passing the oldest row's created_at.
+  if (a.until !== undefined) {
+    if (typeof a.until !== "string") return errR(400, "until must be a string");
+    if (isNaN(Date.parse(a.until))) return errR(400, "until must be a valid ISO 8601 timestamp");
   }
   // Build the WHERE clause from the active filters. idx_events_ticket(ticket_id,kind,created_at)
   // serves the ticketId path; actor is a scan within the filtered set (no actor index); since on
@@ -372,8 +427,15 @@ function opListEvents(db: DatabaseSync, projectId: string, a: { ticketId?: strin
   if (a.ticketId) { conds.push("ticket_id=?"); params.push(a.ticketId); }
   if (a.actor) { conds.push("actor=?"); params.push(a.actor); }
   if (a.since) { conds.push("created_at>=?"); params.push(a.since); }
-  params.push(limit);
-  return okR(db.prepare(`SELECT actor,kind,ticket_id,data,created_at FROM events WHERE ${conds.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params));
+  if (a.until) { conds.push("created_at<=?"); params.push(a.until); }
+  // LIMIT+1 probes for a further page without a second query, then the extra row is dropped.
+  params.push(limit + 1);
+  const rows = db.prepare(`SELECT actor,kind,ticket_id,data,created_at FROM events WHERE ${conds.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params) as Array<{ created_at: string }>;
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  if (a.envelope === true)
+    return okR({ items: page, returned: page.length, limit, hasMore, oldest: page.length ? page[page.length - 1]!.created_at : null });
+  return okR(page);
 }
 
 // Mirror server.ts's zod (the doc tools' `slug`/`kind` are OPTIONAL STRINGS). The op-API parses raw JSON
