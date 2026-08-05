@@ -13,6 +13,7 @@ import { request as httpRequest } from "node:http";
 import { openDb, logEvent } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
 import { createDaemon } from "../src/daemon.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const DB = "/tmp/hub-agent-api/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -28,7 +29,7 @@ async function as(actor: string, project = "agp"): Promise<Client> { // project:
   const c = new Client({ name: `aaptest-${actor}`, version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB },
+    env: { ...scrubFireEnv(), DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB },
   }));
   return c;
 }

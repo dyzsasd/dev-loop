@@ -13,6 +13,7 @@ import { openDb, isToolWriteEventData } from "../src/db.ts";
 // while a genuine outage still degrades to one (§3.4). skipClass/unevaluatedHold are the classifier
 // the distinction rests on; registryGhRepos is the cwd-independent repo resolution (AC3).
 import { mergeGuard, skipClass, unevaluatedHold, registryGhRepos, buildCommentBody } from "../src/merge-guard.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -95,7 +96,7 @@ try {
   const cli = (args: string[], env?: Record<string, string>): { status: number; stdout: string; stderr: string } => {
     const r = spawnSync(process.execPath, [join(hubRoot, "src", "merge-guard.ts"), ...args], {
       encoding: "utf8",
-      env: { ...process.env, ...env },
+      env: { ...scrubFireEnv(), ...env },
     });
     return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   };
@@ -502,7 +503,7 @@ try {
 
     // 2. Use the team set MUTATOR to write agentReviewers (the real write path, not injected opts)
     const setR = spawnSync(process.execPath, [join(hubRoot, "src", "team.ts"), "set", "team.agentReviewers", "alice-bot,renovate[bot]"],
-      { cwd: wsDir, encoding: "utf8", env: { ...process.env } });
+      { cwd: wsDir, encoding: "utf8", env: { ...scrubFireEnv() } });
     ok(setR.status === 0, `LOOP-123 setup: team set team.agentReviewers exits 0 (got ${setR.status}: ${(setR.stderr ?? "").trim().slice(0, 120)})`);
     const cfgAfter = JSON.parse(readFileSync(join(wsDir, "dev-loop.json"), "utf8"));
     ok(Array.isArray(cfgAfter.team.agentReviewers) && cfgAfter.team.agentReviewers.includes("alice-bot"),
@@ -675,7 +676,7 @@ try {
     // anywhere but the repo returned null and took BOTH axes down. The registry already knew the answer.
     const wsDir = join(ROOT, "ws");
     spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), "team", "init", "--dir", wsDir,
-      "--key", "mg-team", "--backend", "service"], { encoding: "utf8", env: { ...process.env, ...noWs, DEVLOOP_HUB_DB: "" } });
+      "--key", "mg-team", "--backend", "service"], { encoding: "utf8", env: { ...scrubFireEnv(), ...noWs, DEVLOOP_HUB_DB: "" } });
     const wsCfgPath = join(wsDir, "dev-loop.json");
     const wsCfg = JSON.parse(readFileSync(wsCfgPath, "utf8")) as { repos?: Record<string, unknown> };
     wsCfg.repos = { "reg-repo": { path: "reg-repo", remote: "git@github.com:reg-owner/reg-repo.git" } };
@@ -887,7 +888,7 @@ exit 0
     chmodSync(join(shimDir, "gh"), 0o755);
     const cliRed = spawnSync("node", [join(hubRoot, "src", "merge-guard.ts"), "--repo", repo323, "--pr", "182", "--strict", "--json"], {
       encoding: "utf8",
-      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, DEVLOOP_HUB_DB: join(ROOT, "absent-hub.db") },
+      env: { ...scrubFireEnv(), PATH: `${shimDir}:${process.env.PATH}`, DEVLOOP_HUB_DB: join(ROOT, "absent-hub.db") },
     });
     let cliRedJson: { ciFreshness?: { skipped?: boolean; verdict?: string | null; skipReason?: string | null } } = {};
     try { cliRedJson = JSON.parse(cliRed.stdout || "{}"); } catch { /* leave empty — assertions below fail with detail */ }
@@ -907,7 +908,7 @@ exit 0
     }));
     const cliDirect = spawnSync("node", [join(hubRoot, "src", "merge-guard.ts"), "--repo", repoDirect, "--pr", "7", "--json"], {
       encoding: "utf8",
-      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, DEVLOOP_HUB_DB: join(ROOT, "absent-hub.db") },
+      env: { ...scrubFireEnv(), PATH: `${shimDir}:${process.env.PATH}`, DEVLOOP_HUB_DB: join(ROOT, "absent-hub.db") },
     });
     let cliDirectJson: { ciFreshness?: { skipReason?: string | null } } = {};
     try { cliDirectJson = JSON.parse(cliDirect.stdout || "{}"); } catch { /* assertions carry detail */ }

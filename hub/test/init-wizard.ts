@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -14,7 +15,7 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-init-wizard-")));
 const HOME = join(tmp, "home");
 const env = (extra: Record<string, string> = {}) => {
-  const e: Record<string, string | undefined> = { ...process.env, DEVLOOP_HOME: HOME };
+  const e: Record<string, string | undefined> = { ...scrubFireEnv(), DEVLOOP_HOME: HOME };
   // The wizard resolves everything from --dir; an ambient identity from THIS suite's shell must not leak
   // in. Deletes run BEFORE the extra spread so test 7 can leak an identity DELIBERATELY.
   delete e.DEVLOOP_WORKSPACE; delete e.DEVLOOP_TEAM; delete e.DEVLOOP_PROJECT; delete e.DEVLOOP_HUB_DB;

@@ -20,7 +20,7 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-team-edit-")));
 const HOME = join(tmp, "home");
-// scrubFireEnv, NOT ...process.env: inside an agent fire the environment carries
+// scrubFireEnv, NOT a raw ambient spread: inside an agent fire the environment carries
 // DEVLOOP_WORKSPACE=<production workspace>, and workspace resolution prefers that env var over
 // the cwd walk-up — so every mutator spawn here (add-project 'a.p.p'/'app'/'clash'/'real-one',
 // team set, remove-project) wrote to the PRODUCTION dev-loop.json when this suite ran inside a

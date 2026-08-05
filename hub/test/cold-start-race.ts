@@ -9,6 +9,7 @@ import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerDaemonPid } from "./daemon-harness.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const N = 4; // concurrent cold starts — high enough to reliably trigger the race
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -34,7 +35,7 @@ const dirs = Array.from({ length: N }, (_, i) => {
 const procs = dirs.map(({ base, run, key }) => {
   const p = spawn("node", [join(hubRoot, "src", "init-service.ts"), key, `Race ${key}`, "RC"], {
     env: {
-      ...process.env,
+      ...scrubFireEnv(),
       DEVLOOP_HUB_DB: join(base, "hub.db"),
       DEVLOOP_RUN_DIR: run,
       DEVLOOP_PROJECTS_JSON: join(base, "projects.json"),

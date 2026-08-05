@@ -19,6 +19,7 @@ import { evaluateStaged, stagedFiles } from "../src/stage-guard.ts";
 import { hasLocalWorkFor, handoffGateRejection } from "../src/handoff-gate.ts";
 import { doctorWorkspace } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-sharedco-")));
 let fails = 0;
@@ -225,7 +226,7 @@ try {
     mkdirSync(binDir, { recursive: true });
     const gitPath = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     symlinkSync(gitPath, join(binDir, "git"));
-    const noGh = { ...process.env, PATH: binDir } as NodeJS.ProcessEnv;
+    const noGh = { ...scrubFireEnv(), PATH: binDir } as NodeJS.ProcessEnv;
     const probe = execFileSync(process.execPath, ["-e", `
       import("${join(import.meta.dirname, "..", "src", "handoff-gate.ts")}").then(m =>
         console.log(m.handoffGateRejection({ id: "LOOP-31", fromState: "In Progress", toState: "In Review",
@@ -283,7 +284,7 @@ try {
         console.log(JSON.stringify({ status: r.status, body: r.body }));
       `;
       const r = spawnSync(process.execPath, ["--input-type=module", "-e", script],
-        { encoding: "utf8", env: { ...process.env, DEVLOOP_WORKSPACE: wsRoot, DEVLOOP_HUB_DB: join(wsRoot, "hub.db") } });
+        { encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: wsRoot, DEVLOOP_HUB_DB: join(wsRoot, "hub.db") } });
       return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
     };
 
@@ -362,7 +363,7 @@ try {
     const run = (args: string[]): { code: number; out: string; err: string } => {
       const r = spawnSync(process.execPath,
         [join(import.meta.dirname, "..", "src", "stage-guard.ts"), "--repo", root, ...args],
-        { encoding: "utf8", env: { ...process.env, DEVLOOP_WORKSPACE: join(tmp, "cli-ws") } });
+        { encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: join(tmp, "cli-ws") } });
       return { code: r.status ?? -1, out: r.stdout ?? "", err: r.stderr ?? "" };
     };
     // The workspace resolves to a directory with no dev-loop.json, so the CLI falls back to

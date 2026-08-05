@@ -11,6 +11,7 @@ import { once } from "node:events";
 import { openDb } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
 import { createDaemon } from "../src/daemon.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 import { moveTicket } from "../src/ticketwrite.ts"; // DL-38: the daemon's move primitive (shares the gate)
 
 const DB = "/tmp/hub-release/hub.db";
@@ -23,7 +24,7 @@ async function as(actor: string): Promise<Client> {
   const c = new Client({ name: `test-${actor}`, version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "monpick", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1" },
+    env: { ...scrubFireEnv(), DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "monpick", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1" },
   }));
   return c;
 }

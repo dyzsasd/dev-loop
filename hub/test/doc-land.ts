@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { parseDirtyPaths } from "../src/doc-land.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -28,7 +29,7 @@ const run = (args: string[], wsRoot: string, extra?: Record<string, string>): { 
   const r = spawnSync(process.execPath, [join(hubRoot, "src", "doc-land.ts"), ...args], {
     encoding: "utf8",
     cwd: wsRoot,
-    env: { ...process.env, ...extra },
+    env: { ...scrubFireEnv(), ...extra },
   });
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 };

@@ -17,6 +17,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import type { FetchImpl } from "../src/channel.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -345,7 +346,7 @@ const dBase = (db: DB) => ({ writeDb: db, projectId: "p", projectKey: "k", baseU
     db.close();
   `;
   const out = execFileSync("node", ["--input-type=module", "-e", child],
-    { env: { ...process.env, DDB, SFILE, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
+    { env: { ...scrubFireEnv(), DDB, SFILE, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
   const res = JSON.parse(out.trim().split("\n").pop() as string);
   ok(res.markers === 0 && res.fetched === false, "DL-34: dry-run is write-free for all three doc ticks — NO marker, NO network");
   ok(res.baselines === 1, "DL-34: a COLD dry-run strategy-file tick writes NO baseline either (only the seeded one exists)");

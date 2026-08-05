@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -362,17 +363,17 @@ try {
   // ── CLI e2e on a real workspace (linear → fire metrics + boardNote) ──
   const HOME = join(tmp, "home");
   const ws = join(tmp, "ws");
-  spawnSync("node", [join(hubRoot, "src", "team.ts"), "init", "--dir", ws, "--key", "met-team", "--backend", "linear", "--linear-team", "L"], { env: { ...process.env, DEVLOOP_HOME: HOME }, encoding: "utf8" });
+  spawnSync("node", [join(hubRoot, "src", "team.ts"), "init", "--dir", ws, "--key", "met-team", "--backend", "linear", "--linear-team", "L"], { env: { ...scrubFireEnv(), DEVLOOP_HOME: HOME }, encoding: "utf8" });
   mkdirSync(join(ws, ".dev-loop", "team"), { recursive: true });
   writeFileSync(join(ws, ".dev-loop", "team", "fires.jsonl"), row({ ts: new Date().toISOString(), agent: "pm", project: "web", durationMs: 1000, exitCode: 0 }) + "\n");
-  const r = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d", "--json"], { cwd: ws, env: { ...process.env, DEVLOOP_HOME: HOME }, encoding: "utf8" });
+  const r = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d", "--json"], { cwd: ws, env: { ...scrubFireEnv(), DEVLOOP_HOME: HOME }, encoding: "utf8" });
   const out = JSON.parse((r.stdout ?? "").trim());
   ok(r.status === 0 && out.team === "met-team" && out.fires.fires === 1, "CLI --json reports team + fire metrics from the workspace ledger");
   ok(typeof out.boardNote === "string" && /linear/.test(out.boardNote), "linear backend: boardNote says the digest agent owns board KPIs (no guessing)");
   // Mutation-killer (quality --mutate survivor, 1.7.1): `let asJson = false` flipped to true made
   // every run emit JSON and nothing asserted the HUMAN default. Without --json the output must be
   // the human render, not a parsable JSON object.
-  const rh = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d"], { cwd: ws, env: { ...process.env, DEVLOOP_HOME: HOME }, encoding: "utf8" });
+  const rh = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d"], { cwd: ws, env: { ...scrubFireEnv(), DEVLOOP_HOME: HOME }, encoding: "utf8" });
   const humanOut = (rh.stdout ?? "").trim();
   const parsesAsJson = (() => { try { JSON.parse(humanOut); return true; } catch { return false; } })();
   ok(rh.status === 0 && !parsesAsJson && /met-team/.test(humanOut), "CLI without --json renders the HUMAN report (not JSON)");
@@ -390,7 +391,7 @@ try {
     repos: {}, projects: { "svc-team": { repos: [] } },
   }));
   spawnSync("node", [join(hubRoot, "src", "seed.ts"), "svc-team", "Svc Team", "SVC", svcHubDb], { cwd: hubRoot, encoding: "utf8" });
-  const rSvc = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d", "--json"], { cwd: ws2, env: { ...process.env }, encoding: "utf8" });
+  const rSvc = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d", "--json"], { cwd: ws2, env: { ...scrubFireEnv() }, encoding: "utf8" });
   const svcOut = (() => { try { return JSON.parse((rSvc.stdout ?? "").trim()); } catch { return {}; } })();
   ok(rSvc.status === 0, `LOOP-26 AC3: service metrics CLI exits 0 (stderr: ${(rSvc.stderr ?? "").replace(/\(node:.*?\)\n/g, "").slice(0, 200)})`);
   const svcBoard = svcOut.board?.["svc-team"] as Record<string, unknown> | undefined;
@@ -398,7 +399,7 @@ try {
     `LOOP-26 AC3: board JSON includes both blockedNow and sequencedNow (got ${JSON.stringify(svcBoard)})`);
   ok(!!(svcOut.teamRollup && typeof (svcOut.teamRollup as Record<string, unknown>).sequencedNow === "number"),
     "LOOP-26 AC3: teamRollup includes sequencedNow");
-  const rSvcHuman = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d"], { cwd: ws2, env: { ...process.env }, encoding: "utf8" });
+  const rSvcHuman = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d"], { cwd: ws2, env: { ...scrubFireEnv() }, encoding: "utf8" });
   const svcHumanOut = (rSvcHuman.stdout ?? "").trim();
   ok(/parked/.test(svcHumanOut) && /sequenced/.test(svcHumanOut),
     `LOOP-26 AC4: human render contains both 'parked' and 'sequenced' (got: ${svcHumanOut.slice(0, 300)})`);
@@ -433,7 +434,7 @@ try {
 
   const pathWithFakeGh = `${ghBin}:${process.env.PATH ?? ""}`;
   const rLand = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d", "--json"], {
-    cwd: wsLand, env: { ...process.env, PATH: pathWithFakeGh }, encoding: "utf8",
+    cwd: wsLand, env: { ...scrubFireEnv(), PATH: pathWithFakeGh }, encoding: "utf8",
   });
   const landOut = (() => { try { return JSON.parse((rLand.stdout ?? "").trim()); } catch { return {}; } })() as Record<string, unknown>;
   ok(rLand.status === 0, `LOOP-42 AC1: metrics CLI with landing repo exits 0 (stderr: ${(rLand.stderr ?? "").replace(/\(node:.*?\)\n/g, "").slice(0, 200)})`);
@@ -456,7 +457,7 @@ try {
 
   // AC4: human render board line contains "done" and "landed"
   const rLandHuman = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "7d"], {
-    cwd: wsLand, env: { ...process.env, PATH: pathWithFakeGh }, encoding: "utf8",
+    cwd: wsLand, env: { ...scrubFireEnv(), PATH: pathWithFakeGh }, encoding: "utf8",
   });
   const landHumanOut = (rLandHuman.stdout ?? "").trim();
   ok(/\bdone\b/.test(landHumanOut), `LOOP-42 AC4: human board line contains "done" (got: ${landHumanOut.slice(0, 300)})`);
@@ -561,7 +562,7 @@ try {
 
     // CLI --usage --by provider --json
     const rUJ = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--usage", "--by", "provider", "--json"],
-      { cwd: usageWs, env: { ...process.env }, encoding: "utf8" });
+      { cwd: usageWs, env: { ...scrubFireEnv() }, encoding: "utf8" });
     const uJOut = (() => { try { return JSON.parse((rUJ.stdout ?? "").trim()); } catch { return null; } })();
     ok(rUJ.status === 0, `LOOP-125: --usage --json exits 0 (stderr: ${(rUJ.stderr ?? "").slice(0, 200)})`);
     ok(uJOut?.usage?.meteredFires === 2, `LOOP-125 AC1: --json meteredFires=2 (got ${uJOut?.usage?.meteredFires})`);
@@ -571,7 +572,7 @@ try {
 
     // CLI --cost --json: overall.costUsd sums only priced rows; never a string "$0.00"
     const rCJ = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--cost", "--json"],
-      { cwd: usageWs, env: { ...process.env }, encoding: "utf8" });
+      { cwd: usageWs, env: { ...scrubFireEnv() }, encoding: "utf8" });
     const cJOut = (() => { try { return JSON.parse((rCJ.stdout ?? "").trim()); } catch { return null; } })();
     ok(rCJ.status === 0, `LOOP-125: --cost --json exits 0`);
     ok(typeof (cJOut?.usage?.overall?.costUsd ?? null) !== "string",
@@ -581,7 +582,7 @@ try {
 
     // CLI --flow --json: linear backend → throughput:null, boardNote mentions linear
     const rFJ = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--flow", "--json"],
-      { cwd: usageWs, env: { ...process.env }, encoding: "utf8" });
+      { cwd: usageWs, env: { ...scrubFireEnv() }, encoding: "utf8" });
     const fJOut = (() => { try { return JSON.parse((rFJ.stdout ?? "").trim()); } catch { return null; } })();
     ok(rFJ.status === 0, `LOOP-125: --flow --json exits 0`);
     ok(fJOut?.flow?.throughput === null, `LOOP-125 AC3: --flow on linear → throughput:null (got ${fJOut?.flow?.throughput})`);
@@ -708,7 +709,7 @@ try {
     // AC1: DEVLOOP_HUB_DB=B → doctor emits [W21] AND B's path in header
     const docB = spawnSync("node", [join(hubRoot, "src", "server.ts"), "doctor"], {
       cwd: wsA, encoding: "utf8",
-      env: { ...process.env, DEVLOOP_HUB_DB: dbBPath },
+      env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: dbBPath },
     });
     const docBOut = (docB.stdout ?? "") + (docB.stderr ?? "");
     ok(/\[W21\]/.test(docBOut), "LOOP-199 AC1: DEVLOOP_HUB_DB=B → W21 fires (selected db has the row)");
@@ -725,7 +726,7 @@ try {
     // AC3b: metrics --json throughput differs between B (1) and A (0)
     const metB = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", "365d", "--json"], {
       cwd: wsA, encoding: "utf8",
-      env: { ...process.env, DEVLOOP_HUB_DB: dbBPath },
+      env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: dbBPath },
     });
     const metBOut = (() => { try { return JSON.parse((metB.stdout ?? "").trim()); } catch { return {}; } })() as Record<string, unknown>;
     ok((metBOut.teamRollup as Record<string, unknown> | undefined)?.throughput === 1, "LOOP-199 AC3b: DEVLOOP_HUB_DB=B → metrics throughput=1 (Done ticket in B)");
@@ -740,7 +741,7 @@ try {
     const wsNew = join(tmp, "ws-l199-new");
     spawnSync("node", [join(hubRoot, "src", "team.ts"), "init", "--dir", wsNew, "--key", "l199-new", "--backend", "service"], {
       cwd: hubRoot, encoding: "utf8",
-      env: { ...process.env, DEVLOOP_HUB_DB: dbBPath, DEVLOOP_HOME: join(tmp, "home-l199") },
+      env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: dbBPath, DEVLOOP_HOME: join(tmp, "home-l199") },
     });
     ok(existsSync(join(wsNew, ".dev-loop", "hub.db")), "LOOP-199 AC5: team init creates hub.db at workspace path even when DEVLOOP_HUB_DB points elsewhere");
   }
@@ -868,7 +869,7 @@ try {
     })();
     if (isServiceWorkspace) {
       const kRes = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen", "--json"], {
-        cwd: wsEnv, encoding: "utf8", timeout: 10_000, env: { ...process.env },
+        cwd: wsEnv, encoding: "utf8", timeout: 10_000, env: { ...scrubFireEnv() },
       });
       ok(kRes.status === 0, `metrics --kaizen --json exits 0 (got ${kRes.status}; stderr: ${(kRes.stderr ?? "").slice(0, 200)})`);
       const parsed = (() => { try { return JSON.parse(kRes.stdout ?? ""); } catch { return null; } })();
@@ -1144,7 +1145,7 @@ try {
     kdb.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('K-1','kp','t','d','Improvement','Done',2,'[]','[]','pm',?,?)")
       .run(iso(NOW - DAY), iso(NOW - DAY));
     kdb.close();
-    const kenv = { ...process.env, DEVLOOP_HOME: join(tmp, "khome"), DEVLOOP_PROJECT: "kzp" };
+    const kenv = { ...scrubFireEnv(), DEVLOOP_HOME: join(tmp, "khome"), DEVLOOP_PROJECT: "kzp" };
     const kj = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen", "--json"], { cwd: kws, env: kenv, encoding: "utf8" });
     ok(kj.status === 0, `LOOP-115 sibling: metrics --kaizen --json exits 0 (got ${kj.status}) ${(kj.stderr ?? "").slice(-160)}`);
     let parsed: unknown = null;

@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -29,6 +30,7 @@ const SUITE_ENV: Record<string, Record<string, string>> = {
 // as helpers are identified (e.g. daemon-harness.ts under LOOP-138).
 const NON_SUITES: Record<string, string> = {
   "daemon-harness.ts": "shared helper — exports startTestDaemon/registerDaemonPid/runDaemonCli/launchDaemonCli; no assertions, not a standalone suite (LOOP-138)",
+  "env-scrub.ts": "shared helper — exports FIRE_MARKER_VARS/scrubFireEnv, the ONE fire-marker union (LOOP-156); no assertions, not a standalone suite. Its BEHAVIOUR is asserted by env-scrub-guard.ts, which is a real suite and stays discovered.",
 };
 
 const suites = readdirSync(here)
@@ -51,7 +53,7 @@ type Status = "pass" | "fail" | "crash";
 const results: { file: string; status: Status }[] = [];
 
 for (const file of suites) {
-  const env = { ...process.env, ...(SUITE_ENV[file] ?? {}) };
+  const env = { ...scrubFireEnv(), ...(SUITE_ENV[file] ?? {}) };
   const res = spawnSync("node", [join(here, file)], {
     env,
     // stdout: inherit so test output streams in real-time

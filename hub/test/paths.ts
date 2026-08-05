@@ -7,6 +7,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, readdirSync, realpathSync } from "node:fs";
 import { devloopHome, devloopDataDir, devloopProjectsPath, projectConfigCandidates, hubDbPath, guardCliPath } from "../src/paths.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -60,7 +61,7 @@ const TMP = "/tmp/hub-paths-e2e";
 type Run = { code: number; stderr: string };
 function boot(extraArgs: string[], env: Record<string, string>): Run {
   try {
-    execFileSync("node", [SERVER, ...extraArgs], { cwd: TMP, env: { ...process.env, ...env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("node", [SERVER, ...extraArgs], { cwd: TMP, env: { ...scrubFireEnv(), ...env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return { code: 0, stderr: "" };
   } catch (e) {
     const err = e as { status?: number; stderr?: string };
