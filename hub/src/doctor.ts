@@ -5,10 +5,10 @@
 // .mcp.json / daemon runfile / autostart/hook presence + a localhost /api/health GET) — still READ-ONLY (no writes,
 // no auto-create); daemon version skew (W28) is gating, the rest is non-fatal. See serviceReconcile. Library callers (init-service) skip it.
 import { existsSync, readFileSync, openSync, readSync, closeSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
-import { pkgVersion, pkgBuildCommit } from "./paths.ts";
+import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -65,7 +65,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
     //     are exactly what was asked for. Still announce that the workspace checks were skipped —
     //     that is AC4's "a legitimate global-db run is still possible, it is merely announced" — but
     //     do not fail it, or every isolated/library invocation that pins a db starts failing.
-    if (!ws) { announceNoWorkspace = true; noWorkspace = !process.env.DEVLOOP_HUB_DB; }
+    if (!ws) { announceNoWorkspace = true; noWorkspace = isGlobalFallbackDb(dbPath); }
     if (ws) {
       // Finalize boardDb before doctorWorkspace so header + W16/W21 always name the same db (AC6, LOOP-199).
       // Prefer workspace hub.db unless DEVLOOP_HUB_DB is explicitly set (test isolation, LOOP-117).
@@ -238,6 +238,19 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
 
 // LOOP-284 helper — extracted, not inlined in runDoctor, to keep its cyclomatic complexity inside the
 // CRAP-90 ratchet (the LOOP-115/LOOP-159 trap: green locally, red in CI).
+// LOOP-284 — is this run the ACCIDENT the ticket measured, or a deliberate one?
+// The defect was specifically the SILENT fall-through: no workspace resolved, and the db path was
+// nobody's choice — it defaulted to the machine-global `~/.dev-loop/hub.db`, so the operator was
+// shown a green pre-flight over an unrelated board. Anyone who NAMED a db (via DEVLOOP_HUB_DB, or by
+// passing an explicit path as a library caller — init-service, and the doctor test suites) chose
+// their target and gets the announcement without the failing verdict. Keying this on the env var
+// alone was wrong: it made every explicit-path library caller fatal the moment the process happened
+// to run outside a workspace, which is the normal case in CI.
+function isGlobalFallbackDb(dbPath: string): boolean {
+  if (process.env.DEVLOOP_HUB_DB) return false;
+  try { return resolve(dbPath) === resolve(hubDbPath()); } catch { return false; }
+}
+
 function reportNoWorkspace(dbPath: string, fatal: boolean): void {
   console.log(`⚠️  no dev-loop workspace found from ${process.cwd()} upward — every workspace check was SKIPPED`);
   console.log(`   (config validity, W01/W18, repo + build gates, the fire summary, landing, and the identity smoke all need a workspace)`);
@@ -455,8 +468,8 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
           if (!pid) continue;
           for (const f of ownerLiveness(db, pid, join(ws.root, ".dev-loop", "team", "fires.jsonl"), { manualHandles: manual })) {
             const age = f.lastFireTs ? `last fire ${f.lastFireTs.slice(0, 10)}` : "no fire on record";
-            if (f.manual) info(`[${key}] manual owner '${f.owner}': ${f.openTickets} open Todo/In Review ticket(s) awaiting a human (oldest ${f.oldestUpdatedAt.slice(0, 10)})`);
-            else warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open Todo/In Review ticket(s) (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.${f.owner}.manual true is a config edit)`);
+            if (f.manual) info(`[${key}] manual owner '${f.owner}': ${f.openTickets} open servable ticket(s) awaiting a human (oldest ${f.oldestUpdatedAt.slice(0, 10)})`);
+            else warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.${f.owner}.manual true is a config edit)`);
           }
         }
       } finally { db.close(); }

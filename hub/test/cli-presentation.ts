@@ -78,8 +78,17 @@ ok((wsRaw.stderr ?? "").split("\n").some((l) => l.startsWith("dev-loop metrics: 
 const SQLITE_WARN = /SQLite is an experimental feature/;
 const docSqlite = cli(["doctor"]); // reaches server.ts → node:sqlite, the exact path LOOP-44 measured
 ok(!SQLITE_WARN.test(docSqlite.err), `LOOP-44: 'dev-loop doctor' no longer opens with the node:sqlite ExperimentalWarning (got ${JSON.stringify(docSqlite.err.slice(0, 140))})`);
+// The control is CONDITIONAL on the runtime: node:sqlite's ExperimentalWarning exists on 23.6 and is
+// gone on newer majors where the API graduated. Asserting it unconditionally would make this suite
+// fail on exactly the node version where the underlying problem no longer exists — a test that
+// breaks when reality improves. So: when the runtime still warns, prove the suppression is OURS;
+// when it does not, say so rather than silently claiming a pass we did not earn.
 const rawSqlite = spawnSync(process.execPath, ["-e", "require('node:sqlite')"], { encoding: "utf8", env: baseEnv() });
-ok(SQLITE_WARN.test(rawSqlite.stderr ?? ""), "LOOP-44 control: node itself still emits the warning — the suppression is ours, not a runtime change");
+if (SQLITE_WARN.test(rawSqlite.stderr ?? "")) {
+  ok(true, `LOOP-44 control: node ${process.versions.node} still emits the warning — the suppression above is ours, not a runtime change`);
+} else {
+  console.log(`•  LOOP-44 control skipped: node ${process.versions.node} no longer emits the node:sqlite ExperimentalWarning at all`);
+}
 const optedIn = cli(["version"], bare, { DEVLOOP_NODE_WARNINGS: "1" });
 ok(optedIn.code === 0, "LOOP-44: DEVLOOP_NODE_WARNINGS=1 is an opt-back-in escape hatch, not a crash");
 // A NON-runtime warning must still get through — the filter is two exact texts, not a mute button.
