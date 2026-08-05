@@ -2,6 +2,7 @@
 // Each AC from the ticket is named as a test, plus the PM binding AC for zero-edge.
 import { dependencyGraph } from "../src/dependency-graph.ts";
 import { openDb } from "../src/db.ts";
+import { ensureSeed, findProject } from "../src/seed.ts";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,4 +183,39 @@ try {
 }
 
 if (fails) { console.log(`\n${fails} CHECK(S) FAILED`); process.exit(1); }
-else console.log("\nDEPENDENCY_GRAPH_OK");
+else // ── LOOP-333: relatedTo / duplicateOf are validated by something now ───────────────────────────
+// `allDangling` covered `Blocked-by:` edges ONLY, so dependency-graph reported allDangling:[] on a
+// board carrying 45 dangling relatedTo references. Verified on the live loop board while writing
+// this: allDangling 0, danglingRefIds 19, rows 42 — and the 19 are the ids destroyed in the
+// 2026-08-04 wipe, including LOOP-292, which the strategy doc named as the binding precondition of
+// the operator's top-priority program and which was gone for two days before anyone noticed.
+{
+  const d = openDb(join(tmp, "loop333.db"));
+  ensureSeed(d, "dr", "DanglingRefs", "DR");
+  const pid = findProject(d, "dr")!;
+  const mk = (id: string, related: string[], dup: string | null, state = "Todo") =>
+    d.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,duplicate_of,created_by,created_at,updated_at) VALUES(?,?,'t','d','Improvement',?,2,'[]',?,?,'pm','t','t')")
+      .run(id, pid, state, JSON.stringify(related), dup);
+  mk("DR-1", [], null);
+  mk("DR-2", ["DR-1"], null);                       // resolvable — must NOT be reported
+  mk("DR-3", ["DR-1", "DR-999"], null);             // one dangling
+  mk("DR-4", ["DR-888", "DR-777"], null);           // two dangling
+  mk("DR-5", [], "DR-666");                         // dangling duplicateOf
+  mk("DR-6", ["DR-555"], null, "Done");             // TERMINAL — still scanned
+
+  const g = dependencyGraph(d, pid);
+  ok(g.danglingRefIds.length === 5 && g.danglingRefIds.join(",") === "DR-555,DR-666,DR-777,DR-888,DR-999",
+    `LOOP-333: every unresolvable id is reported, sorted and de-duped (got ${g.danglingRefIds.join(",")})`);
+  ok(!g.danglingRefIds.includes("DR-1"), "LOOP-333: a RESOLVABLE reference is not reported");
+  ok(g.danglingRefs.some((r) => r.ticketId === "DR-4" && r.field === "relatedTo" && r.missing.length === 2),
+    "LOOP-333: a ticket with two dangling refs reports both on one row");
+  ok(g.danglingRefs.some((r) => r.ticketId === "DR-5" && r.field === "duplicateOf"),
+    "LOOP-333: duplicateOf is checked too — it was equally unvalidated");
+  ok(g.danglingRefs.some((r) => r.ticketId === "DR-6"),
+    "LOOP-333: TERMINAL tickets are scanned — a Done ticket pointing at a destroyed id is exactly the trace worth keeping");
+  ok(g.allDangling.length === 0,
+    "LOOP-333: the Blocked-by dangling set is UNCHANGED — this adds a second axis, it does not redefine the first");
+  d.close();
+}
+
+console.log("\nDEPENDENCY_GRAPH_OK");
