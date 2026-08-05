@@ -78,6 +78,41 @@ export function isolationVerdict(ws: Workspace, key: string, argv: readonly stri
   };
 }
 
+// ── The WORKSPACE-scoped verdict (LOOP-316) ────────────────────────────────────────────────────
+//
+// This module's own docstring states its scope: "A guard implemented at one call site leaves the next
+// destructive verb exactly as exposed as `remove-project` was. EVERY verb that destroys operator data
+// calls in here." Two verbs called in; a THIRD destroyed operator data and did not —
+// `dev-loop up --bundle <f> --force-reseed`, which overwrites the live dev-loop.json AND the live
+// .dev-loop/secrets.env, i.e. every key in the workspace.
+//
+// The gap is worth closing on this module's OWN reasoning rather than as a new argument: it exists
+// because `--force` "READS as the switch that gets past a prompt", and the token was designed so the
+// gate "cannot be reached by adding one more generic flag". `--force-reseed` is precisely one more
+// generic flag, and it is the whole consent for destroying an operator's config and every secret.
+//
+// A workspace-level target has NO PROJECT KEY. Passing a fabricated one would put a second spelling
+// of the token in a caller — exactly the drift this module exists to prevent — so the verdict is
+// extended explicitly instead. The token names the WORKSPACE key, which is what the operator would
+// have to type and which cannot be copy-pasted from a runbook onto a different workspace.
+//
+// Scope note, so this is not read as wider than it is: hub.db is ALREADY protected and stays that
+// way (bundle.ts is restore-onto-empty; the live board wins and the bundle copy is ignored). The
+// unprotected data was config + secrets only.
+export function workspaceIsolationVerdict(ws: Workspace, argv: readonly string[]): IsolationVerdict {
+  const key = ws.file.team.key;
+  const requiredToken = confirmationToken(key);
+  const tokenPresent = argv.includes(requiredToken);
+  // A workspace has no `scratch` field — the concept is per-project. A workspace-level destroy is
+  // therefore ALWAYS token-gated, which is the fail-safe direction.
+  return {
+    scratch: false,
+    requiredToken,
+    tokenPresent,
+    refusal: tokenPresent ? null : `refusing to overwrite the live workspace '${key}': --force-reseed replaces dev-loop.json AND .dev-loop/secrets.env (every key in this workspace). --force-reseed does NOT grant this — pass ${requiredToken} to confirm you mean THIS workspace. Nothing has been written.`,
+  };
+}
+
 // ── The two halves commit together (LOOP-306, LOOP-302 ②) ──────────────────────────────────────
 //
 // A destructive verb that removes a project writes TWO stores: the config file and hub.db. Before this,

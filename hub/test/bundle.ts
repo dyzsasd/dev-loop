@@ -120,7 +120,49 @@ try {
       ok(t.c === 1, "load: the board's MEMORY traveled (the ticket is on the new home)");
       const s = JSON.parse((db.prepare("SELECT settings_json FROM projects WHERE id=?").get(pid) as { settings_json?: string }).settings_json ?? "{}");
       ok(s.hub?.transport === "daemon", "load: op-API gate seeded (attach/board writes live behind the token)");
-    } finally { db.close(); }
+      // ── LOOP-316: --force-reseed destroys the live config and EVERY workspace secret, ungated ─────
+  // destructive-guard.ts's own docstring claims "every verb that destroys operator data calls in
+  // here". Two did; this third one overwrote dev-loop.json AND .dev-loop/secrets.env with no gate at
+  // all, and `--force-reseed` was the whole consent — precisely "one more generic flag", which is the
+  // shape the naming token was designed to be unreachable by.
+  {
+    const live = join(ROOT, "loop316-live"); mkdirSync(live, { recursive: true });
+    // Materialize the bundle once so this is a POPULATED workspace (the destructive case).
+    const first = cli(["up", "--bundle", out, "--dir", live, "--dry-launch"], ROOT, loadEnv);
+    ok(first.status === 0, `LOOP-316 fixture: first materialization succeeds (${first.status}) ${(first.stderr ?? "").slice(-160)}`);
+
+    // Put a live secret in place that the bundle does NOT carry — the truncation repro.
+    const liveSecrets = join(live, ".dev-loop", "secrets.env");
+    writeFileSync(liveSecrets, "BUNDLE_KEY=from-bundle\nLOCAL_ONLY_KEY=only-here\n", { mode: 0o600 });
+    const before = readFileSync(liveSecrets, "utf8");
+    const cfgBefore = readFileSync(join(live, "dev-loop.json"), "utf8");
+
+    // 1. UNGATED --force-reseed is REFUSED, and nothing is written.
+    const refused = cli(["up", "--bundle", out, "--dir", live, "--force-reseed", "--dry-launch"], ROOT, loadEnv);
+    const refusedOut = `${refused.stdout ?? ""}${refused.stderr ?? ""}`;
+    ok(/REFUSED|refusing to overwrite/.test(refusedOut),
+      `LOOP-316: an ungated --force-reseed over a LIVE workspace is refused (${refusedOut.slice(-200)})`);
+    ok(/--i-understand-this-deletes-/.test(refusedOut), "LOOP-316: …and the refusal names the token that would grant it");
+    ok(readFileSync(liveSecrets, "utf8") === before, "LOOP-316: …and secrets.env is byte-unchanged");
+    ok(readFileSync(join(live, "dev-loop.json"), "utf8") === cfgBefore, "LOOP-316: …and dev-loop.json is byte-unchanged");
+
+    // 2. --dry-launch writes NOTHING and previews from the same verdict the live path enforces.
+    ok(/NOTHING is written/.test(refusedOut) && /would be OVERWRITTEN/.test(refusedOut),
+      "LOOP-316: --dry-launch previews what WOULD change and states it wrote nothing");
+
+    // 3. The empty/reduced-secrets truncation: even WITH the token, dropping live keys is refused,
+    //    naming the keys. Names may be printed; values never (§16).
+    const tok = `--i-understand-this-deletes-${JSON.parse(cfgBefore).team.key}`;
+    const tokened = cli(["up", "--bundle", out, "--dir", live, "--force-reseed", tok, "--dry-launch"], ROOT, loadEnv);
+    const tokenedOut = `${tokened.stdout ?? ""}${tokened.stderr ?? ""}`;
+    ok(/allowed \(token present\)/.test(tokenedOut) || !/REFUSED/.test(tokenedOut),
+      `LOOP-316: the token clears the isolation gate (${tokenedOut.slice(-160)})`);
+    ok(readFileSync(liveSecrets, "utf8") === before,
+      "LOOP-316: --dry-launch STILL writes nothing even with the token present");
+    ok(!tokenedOut.includes("only-here"), "LOOP-316 §16: a secret VALUE never appears in any output");
+  }
+
+} finally { db.close(); }
   }
   ok(/dev-loop run --agents core/.test(load.stdout), "load --dry-launch: stops before the loop and prints the run step");
   ok(existsSync(join(dst, "CLAUDE.md")) && existsSync(join(dst, ".claude", "settings.json")), "load: briefs + claude permission re-derived (never trusted from the bundle)");
