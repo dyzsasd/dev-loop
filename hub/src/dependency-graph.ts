@@ -45,6 +45,9 @@ export interface DependencyGraphReport {
   integrity: Record<string, IntegrityFlags>;
   /** Non-terminal blocker ids that resolved to no ticket row (dangling — cross-project or deleted). */
   allDangling: string[];
+  /** LOOP-333: relatedTo/duplicateOf references pointing at ids that do not exist, board-wide. */
+  danglingRefs: Array<{ ticketId: string; field: "relatedTo" | "duplicateOf"; missing: string[] }>;
+  danglingRefIds: string[];
   /** Non-terminal blocker ids that gate tickets (for operator triage). */
   gatingOpen: string[];
 }
@@ -227,6 +230,36 @@ export function dependencyGraph(db: any, projectId: string): DependencyGraphRepo
     for (const d of dangling) allDangling.add(d);
   }
 
+  // 4b. LOOP-333 — relatedTo / duplicateOf are validated by NOTHING: not at write time, not by any
+  // read surface, not by doctor, not by Sweep. `allDangling` above covers `Blocked-by:` edges ONLY,
+  // so `dependency-graph` reported allDangling:[] on a board carrying 45 dangling relatedTo refs.
+  //
+  // That is not cosmetic. The 2026-08-04 wipe destroyed 19 ticket ids, and 8 of them were still
+  // referenced by non-terminal tickets — those references were the ONLY trace those tickets ever
+  // existed. Because nothing read them, LOOP-292 (named by the strategy doc as the binding
+  // precondition of the top-priority program) was gone for two days before anyone noticed, and was
+  // then re-derived from scratch as LOOP-332.
+  //
+  // Board-wide, NOT limited to blocked tickets: a dangling reference is an integrity fact about the
+  // board, not about a park. Terminal tickets are scanned too — a Done ticket pointing at a
+  // destroyed id is exactly the trace worth keeping.
+  const danglingRefs: Array<{ ticketId: string; field: "relatedTo" | "duplicateOf"; missing: string[] }> = [];
+  {
+    const allRows = db.prepare("SELECT id, related_to, duplicate_of FROM tickets WHERE project_id=?")
+      .all(projectId) as Array<{ id: string; related_to: string | null; duplicate_of: string | null }>;
+    const exists = new Set(allRows.map((r) => r.id));
+    for (const r of allRows) {
+      let related: string[] = [];
+      try { const v = JSON.parse(r.related_to ?? "[]"); related = Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; }
+      catch { related = []; } // a malformed column is its own defect, not a dangling reference
+      const missingRelated = related.filter((id) => !exists.has(id));
+      if (missingRelated.length) danglingRefs.push({ ticketId: r.id, field: "relatedTo", missing: missingRelated.sort() });
+      if (r.duplicate_of && !exists.has(r.duplicate_of))
+        danglingRefs.push({ ticketId: r.id, field: "duplicateOf", missing: [r.duplicate_of] });
+    }
+    danglingRefs.sort((a, b) => a.ticketId.localeCompare(b.ticketId) || a.field.localeCompare(b.field));
+  }
+
   // 5. Detect cycles across the full forward graph (not just blocked tickets).
   const cyclicSet = findCyclic(forward);
   for (const id of cyclicSet) {
@@ -273,6 +306,9 @@ export function dependencyGraph(db: any, projectId: string): DependencyGraphRepo
     reverseFanOut,
     integrity,
     allDangling: [...allDangling].sort(),
+    danglingRefs,
+    // The ids no ticket in this project can resolve — the flat set a census or a doctor check wants.
+    danglingRefIds: [...new Set(danglingRefs.flatMap((d) => d.missing))].sort(),
     gatingOpen: [...gatingOpen].sort(),
   };
 }
