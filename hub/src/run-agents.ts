@@ -24,10 +24,10 @@ import { AGENT_GROUPS } from "./agent-roster.ts"; // LOOP-184: group aliases sha
 import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
-import { breaker, formatBreakerMsg } from "./breaker.ts";
+import { breaker, formatBreakerMsg, providerOf, classifyFireError } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
-import { rollingSpendUsd, ratePerMsFor, readFireRows, type FireUsage } from "./metrics.ts";
+import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, DEFAULT_PER_FIRE_USD, type FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -245,29 +245,11 @@ function opencodeProviderEntry(opts: Options, model: string | undefined): Provid
 // failures, every one the same stderr line, indistinguishable in the ledger from real task failures.
 // The breaker (P0-1a) keys on repeated identical classes; metrics/doctor split them out. exit-0 shapes
 // stay the suspectError flag's job; a non-zero exit with no pattern match is a plain task failure (null).
-function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false): string | null {
-  if (budgetKilled) return "budget-per-fire"; // LOOP-230: the perFireUsd watchdog killed this fire — DISTINCT from a wall-timeout (never "timeout")
-  if (retryLoop) return "retry-loop"; // liveness watchdog kill — visible retry loop (output arriving but no new content)
-  if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
-  if (timedOut) return "timeout";
-  if (exitCode === 0) return null;
-  const t = tail.toLowerCase();
-  if (/spend limit|usage limit|monthly limit|credit balance too low|quota exceeded/.test(t)) return "spend-limit";
-  if (/rate limit|too many requests|overloaded_error|\b429\b|\b529\b/.test(t)) return "rate-limit";
-  if (/invalid api key|authentication_error|unauthorized|not logged in|please run \/login|oauth token|\b401\b/.test(t)) return "auth";
-  if (/enotfound|econnrefused|econnreset|etimedout|eai_again|fetch failed|network error|socket hang up/.test(t)) return "network";
-  return null;
-}
+// classifyFireError moved to breaker.ts (importable) — LOOP-114 needs a regression test that
+// asserts the exact provider tails, and nothing may import run-agents.ts (main() is unconditional).
 
-// The fire-ledger provider dimension (metrics cost attribution): opencode fires carry their model-string
-// prefix; claude/codex fires run their native endpoints until the Appendix-A route ships.
-function providerOf(profile: LaunchProfile): string | null {
-  if (profile.codingAgent === "opencode") {
-    const m = profile.model;
-    return m && m.includes("/") ? m.split("/")[0] : null;
-  }
-  return profile.codingAgent === "claude" ? "anthropic" : "openai";
-}
+// providerOf moved to breaker.ts (an importable leaf) so the breaker can resolve a provider for an
+// agent that has not yet completed a fire — LOOP-72. Imported above; ONE definition, both callers.
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/src (dev) | dist (build)
 const EXT = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts"; // server sibling: .ts source / .js published
@@ -745,6 +727,11 @@ function displayCommand(command: string, args: string[], prompt: string): string
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
 let perFireCeilingUsd: number | null = null;                         // team mode: the resolved per-fire $ ceiling (LOOP-230); null ⇒ watchdog inert (legacy path, mirrors fireLedgerPath)
+// LOOP-155: latched by the scheduler's SIGINT/SIGTERM forwarding path. Module scope, not a parameter,
+// because the classifier runs inside runAgent while the signal arrives in the scheduler loop — and it
+// is one-way on purpose: once the operator has asked to stop, every fire still in flight is being
+// discarded, so none of them is evidence about the agent's health.
+let schedulerInterrupted = false;
 // Internal (not exported): main() is unconditional, so nothing may import this module without running the
 // scheduler. recordFire's ledger + event writes are covered by real-fire subprocess harnesses instead —
 // the fires.jsonl row in test/team-scheduler.ts and the fire.completed event in test/run-agents-live.ts.
@@ -767,7 +754,7 @@ function hardenLedgerPerms(p: string, existedBefore: boolean, mode: number, chmo
   } catch { /* raced away between the write and the stat — nothing to warn about */ }
 }
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
-  extra?: { suspectError?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number; usage?: FireUsage }): void {
+  extra?: { suspectError?: boolean; interrupted?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number; usage?: FireUsage }): void {
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail, provider); // P0-1a/P0-1b — every completed fire feeds the streak
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
@@ -784,6 +771,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
       const row = { ts: new Date().toISOString(), agent, project, codingAgent: profile.codingAgent, provider,
         model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId,
         ...(extra?.suspectError ? { suspectError: true } : {}),
+        ...(extra?.interrupted ? { interrupted: true } : {}),
         ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}),
         ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}),
         // usage is numeric-only (FireUsage: tokens + cost + source/currency) — §16-safe for disk, and it's the
@@ -802,7 +790,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}), ...(extra?.usage ? { usage: extra.usage } : {}) } });
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.interrupted ? { interrupted: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}), ...(extra?.usage ? { usage: extra.usage } : {}) } });
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -900,8 +888,8 @@ const DAY_MS = 86_400_000; // rolling window for the dailyUsd ceiling (the 24h c
 // +61% headroom, so a normal fire is never clipped) yet well below the runaway ($18.21), catching that class
 // at ~66% of its runtime (~40 min of a 60-min runaway ⇒ ~$6 / ~20 min saved). perFireUsd bounds ONE fire, so
 // unlike dailyUsd it can never refuse EVERY launch (no deadlock risk); team.budget.perFireUsd overrides it.
-const DEFAULT_PER_FIRE_USD = 12.00;
-const RATE_WINDOW_MS = 7 * DAY_MS; // window for the watchdog's per-profile $/ms median (7d ⇒ enough priced samples; matches checkBudget's burn-rate lookback)
+// DEFAULT_PER_FIRE_USD / RATE_WINDOW_MS / perFireDeadline now live in metrics.ts beside ratePerMsFor —
+// the surface that DISPLAYS the armed deadline must be the same function that ENFORCES it (LOOP-297).
 // The ONE shared budget predicate both schedulers (legacy tick + team --once/tick) route through so they
 // cannot drift — a sibling of devTierQueueSkip above. Returns the refusal REASON when today's rolling spend is
 // over team.budget.dailyUsd, else null.
@@ -920,26 +908,6 @@ function budgetGateReason(dailyUsd: number | null | undefined, ledgerPath: strin
       ? `budget dailyUsd $${dailyUsd.toFixed(2)} reached (rolling $${rolling.toFixed(2)}/$${dailyUsd.toFixed(2)})`
       : null;
   } catch { return null; }                                    // any read error ⇒ fail open (never deadlock the loop)
-}
-// The per-fire sibling of budgetGateReason (LOOP-230, Child 4): the deadline (+ the rate it came from) at which this fire's ESTIMATED
-// spend crosses team.budget.perFireUsd, or null to arm no watchdog. Cost is known only post-hoc, so the
-// mid-flight signal is elapsed time: perFireUsd / ratePerMs, the rate being THIS (codingAgent, model)'s median
-// $/ms over the window's priced ledger rows (Child 2's derivation; a conservative floor when unpriced).
-//   • Fails open on a missing ledger or ANY read error, exactly like budgetGateReason — this runs on the spawn
-//     path of EVERY fire (the ceiling ships ON), so a broken ledger read must cost the loop nothing.
-//   • Bounds are deliberately ASYMMETRIC. Past the 32-bit setTimeout limit (LOOP-260 — a larger delay coerces
-//     to 1ms and would kill every fire on the spot) the ceiling is unreachable inside any real fire, so nothing
-//     arms and the wall-timeout owns it. Below 1ms it CLAMPS rather than disarming: that ceiling is crossed
-//     instantly, so killing at once is its meaning, and silently ceasing to enforce is the very failure this
-//     guard exists to prevent (the repeated identical class then trips the P0-1a breaker).
-function perFireDeadline(ceilingUsd: number | null, ledgerPath: string | null, profile: LaunchProfile, nowMs: number): { deadlineMs: number; ratePerMs: number } | null {
-  if (ceilingUsd == null || !(ceilingUsd > 0)) return null;   // unset/invalid ⇒ no watchdog (legacy path, mirrors fireLedgerPath)
-  try {
-    const ratePerMs = ratePerMsFor(ledgerPath ? readFireRows(ledgerPath) : [], profile.codingAgent, profile.model, RATE_WINDOW_MS, nowMs);
-    const budgetMs = ceilingUsd / ratePerMs;                  // ms of runtime whose estimated spend == the ceiling
-    if (!Number.isFinite(budgetMs) || budgetMs > 2_147_483_647) return null;
-    return { deadlineMs: Math.max(1, budgetMs), ratePerMs };  // ratePerMs returned, not re-derived from the (possibly clamped) deadline
-  } catch { return null; }                                    // any read error ⇒ fail open (never break a launch to enforce a ceiling)
 }
 function gateStatePath(opts: Options, project: string): string { return join(opts.dataDir, project, "scheduler-gate.json"); }
 function loadGateState(opts: Options, project: string): GateState {
@@ -1228,7 +1196,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     // "budget-per-fire" with a distinct console reason + exit 126 (finalize below), never confused with a timeout.
     // (`budgetKilled` is declared with `timedOut` above — the other two watchdogs read it.)
     let budgetTimer: NodeJS.Timeout | undefined;
-    const budget = perFireDeadline(perFireCeilingUsd, fireLedgerPath, profile, startedAt); // null ⇒ arm nothing
+    const budget = perFireDeadline(perFireCeilingUsd, fireLedgerPath ? readFireRows(fireLedgerPath) : null, profile.codingAgent, profile.model, startedAt); // null ⇒ arm nothing
     if (budget) {
       const { deadlineMs: budgetMs, ratePerMs } = budget;
       const ceiling = perFireCeilingUsd as number;
@@ -1288,13 +1256,20 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       // output at all (whitespace-only counts as none). Bare "Error:" is deliberately NOT matched — an
       // agent's own prose can legitimately end that way. Telemetry only; the exit code stays untouched.
       const lastLine = outTail.trimEnd().split("\n").pop()?.trim() ?? "";
-      let suspectError = exitCode === 0 && !timedOut && (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine));
+      // LOOP-155 — an operator-initiated stop is not an agent failure. `dev-loop run`'s SIGINT
+      // forwarding leaves the agent exiting 0 with a trailing "Execution error", which is
+      // BYTE-IDENTICAL to the genuine exit-0-looks-like-a-failure case the heuristic exists for.
+      // The discriminator is not in the output at all — it is that WE sent the signal. Classify on
+      // that, so the heuristic keeps catching real cases and stops charging the operator's own
+      // restarts to the agents (10 of 10 suspectErrors on the board that found this were kills).
+      const interrupted = schedulerInterrupted && exitCode === 0 && !timedOut;
+      let suspectError = !interrupted && exitCode === 0 && !timedOut && (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine));
       // Structured lanes ADD the adapter's isError signal ON TOP of the tail-regex — never a replacement.
       // The text/empty arm above still catches a crash/kill/timeout that leaves an UNPARSEABLE buffer (claude
       // printing "Execution error" and exiting 0, or emitting nothing at all); the JSON signal additionally
       // catches an exit-0 fire whose terminal object reports is_error / subtype!=="success". Replacing the
       // text arm (LOOP-83) let a fake-success on the one lane the loop runs, and a silent fire, record healthy.
-      if (!suspectError && isStructuredLane && exitCode === 0 && !timedOut) {
+      if (!suspectError && !interrupted && isStructuredLane && exitCode === 0 && !timedOut) {
         try { if (usageAdapter?.isError?.(fullStdout)) suspectError = true; } catch { /* isError is best-effort */ }
       }
       if (suspectError) {
@@ -1307,8 +1282,10 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         try { const parsed = usageAdapter.parse(fullStdout); if (parsed) usage = parsed; } catch { /* usage is best-effort */ }
       }
       const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop, budgetKilled); // P0-1b taxonomy (+ liveness "stalled"/"retry-loop" + LOOP-230 "budget-per-fire")
+      if (interrupted) log.write(`\n===== interrupted: operator stop (SIGINT forwarded) — not charged to the agent =====\n`);
       const fireExtras = {
         ...(suspectError ? { suspectError: true } : {}),
+        ...(interrupted ? { interrupted: true } : {}),   // LOOP-155: excluded from successRate entirely
         ...(errorClass ? { errorClass } : {}),
         // every failure carries its tail — the breaker keys on it
         ...(suspectError || errorClass || exitCode !== 0 ? { outputTail: outTail.slice(-400) } : {}),
@@ -1476,6 +1453,7 @@ async function main(): Promise<void> {
   console.log(`dev-loop run: agents=${opts.agents.map((a) => `${a}@${formatDuration(opts.intervals[a])}`).join(", ")}`);
   console.log(`dev-loop run: launch=${opts.agents.map((a) => {
     const p = resolveLaunchProfile(opts, cfg, project, a);
+    breaker.seedProvider(a, providerOf(p)); // LOOP-72: close the cold-start window before any fire runs
     return `${a}:${p.codingAgent}:${p.model ?? "cli-default"}/${p.effort ?? "cli-default"}`;
   }).join(", ")}`);
 
@@ -1528,6 +1506,7 @@ async function main(): Promise<void> {
   // stop is LOOP-19's concern — runner-side ticket release — not a reason to make this signal forceful.)
   const interrupt = () => {
     const first = !stopping;
+    schedulerInterrupted = true; // LOOP-155: from here on, an exit-0 fire is OUR kill, not its failure
     drain();
     if (first) console.log("dev-loop run: stopping; forwarding SIGINT to active agent processes");
     for (const child of activeChildren) child.kill("SIGINT"); // direct child only — see the LOOP-23 decision above
