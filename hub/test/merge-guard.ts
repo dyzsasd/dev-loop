@@ -4,7 +4,7 @@
 // LOOP-65 regression: merge-guard --apply path writes objection comment + routes ticket on trip;
 // read path (no --apply) writes nothing; no-DB degrades silently; idempotent on re-run.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { openDb, isToolWriteEventData } from "../src/db.ts";
 // LOOP-300 regression: a --strict run that evaluated NEITHER axis must not report a clean pass,
 // while a genuine outage still degrades to one (§3.4). skipClass/unevaluatedHold are the classifier
 // the distinction rests on; registryGhRepos is the cwd-independent repo resolution (AC3).
-import { mergeGuard, skipClass, unevaluatedHold, registryGhRepos } from "../src/merge-guard.ts";
+import { mergeGuard, skipClass, unevaluatedHold, registryGhRepos, buildCommentBody } from "../src/merge-guard.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -722,6 +722,196 @@ try {
         if (v === undefined) delete process.env[k]; else process.env[k] = v;
       }
     }
+  }
+  // ══ LOOP-242: CI-freshness axis (design merge-guard-ci-freshness §4 / Child A) ════════════
+  {
+    // All tests use the injected exec seam — no real gh calls.
+    const GHREPO = "owner/repo";
+    const repoDir = join(ROOT, "gh-repo");
+    const MERGE_CHECKS = ["Test Check"];
+    const DEFAULT_BRANCH = "main";
+    // Helper: create an exec that returns canned responses for pr view and compare API
+    const makeFreshExec = (behindBy: number, checkPass: boolean): ExecFn => {
+      let callCount = 0;
+      return (args: string[]) => {
+        callCount++;
+        if (args[0] === "pr" && args[1] === "view") {
+          return {
+            ok: true,
+            stdout: JSON.stringify({ headRefOid: "abc123", statusCheckRollup: [{ name: "Test Check", conclusion: checkPass ? "SUCCESS" : "FAILURE" }] }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "api" && args[1].startsWith("/repos/")) {
+          return {
+            ok: true,
+            stdout: JSON.stringify({ behind_by: behindBy, base_commit: { sha: "tip789" } }),
+            stderr: "",
+          };
+        }
+        return { ok: false, stdout: "", stderr: "unexpected gh call" };
+      };
+    };
+
+    // AC2/AC4(i): two-PR scenario — B is stale after A merges
+    // behindBy > 0 after merge, despite green checks → stale → trip
+    const rStaleTwoPr = mergeGuard(repoDir, {
+      pr: 101, ghRepo: GHREPO, mergeChecks: MERGE_CHECKS, defaultBranch: DEFAULT_BRANCH,
+      exec: makeFreshExec(2, true), // behind_by = 2 → stale
+    });
+    ok(rStaleTwoPr.ciFreshness.trip, "LOOP-242 AC2: B stale after A merges → trip");
+    ok(rStaleTwoPr.ciFreshness.verdict === "stale", `LOOP-242 AC2: verdict is stale (got: ${rStaleTwoPr.ciFreshness.verdict})`);
+    ok(rStaleTwoPr.ciFreshness.behindBy === 2, "LOOP-242 AC2: behindBy reported correctly");
+    ok(rStaleTwoPr.trip, "LOOP-242 AC2: overall trip=true");
+
+    // AC2/AC4(ii): single PR whose base moved (behind_by > 0) → stale → trip
+    const rStaleSingle = mergeGuard(repoDir, {
+      pr: 102, ghRepo: GHREPO, mergeChecks: MERGE_CHECKS, defaultBranch: DEFAULT_BRANCH,
+      exec: makeFreshExec(1, true), // behind_by = 1 → stale
+    });
+    ok(rStaleSingle.ciFreshness.trip, "LOOP-242 AC2: single PR behind base → stale → trip");
+    ok(rStaleSingle.ciFreshness.verdict === "stale", `LOOP-242 AC2: single stale verdict (got: ${rStaleSingle.ciFreshness.verdict})`);
+
+    // AC3: --json output must show ciFreshness.verdict === "stale"
+    ok(rStaleTwoPr.ciFreshness.verdict === "stale", "LOOP-242 AC3: JSON ciFreshness.verdict is 'stale'");
+
+    // AC5: fresh-green PR (behind_by === 0) → no trip
+    const rFresh = mergeGuard(repoDir, {
+      pr: 103, ghRepo: GHREPO, mergeChecks: MERGE_CHECKS, defaultBranch: DEFAULT_BRANCH,
+      exec: makeFreshExec(0, true), // behind_by = 0 → fresh-green
+    });
+    ok(!rFresh.ciFreshness.trip, "LOOP-242 AC5: fresh-green PR → no trip");
+    ok(rFresh.ciFreshness.verdict === "fresh-green", `LOOP-242 AC5: verdict is fresh-green (got: ${rFresh.ciFreshness.verdict})`);
+    ok(!rFresh.trip, "LOOP-242 AC5: overall trip=false");
+
+    // AC5: red check → trip (verdict=red)
+    const rRed = mergeGuard(repoDir, {
+      pr: 104, ghRepo: GHREPO, mergeChecks: MERGE_CHECKS, defaultBranch: DEFAULT_BRANCH,
+      exec: makeFreshExec(0, false), // check fails → red
+    });
+    ok(rRed.ciFreshness.trip, "LOOP-242: red check → trip");
+    ok(rRed.ciFreshness.verdict === "red", `LOOP-242: verdict is red (got: ${rRed.ciFreshness.verdict})`);
+
+    // Degrade: gh unavailable → ciFreshness eval'd, verdict=unknown (no false trip)
+    const rDegrade = mergeGuard(repoDir, {
+      pr: 105, ghRepo: GHREPO, mergeChecks: MERGE_CHECKS, defaultBranch: DEFAULT_BRANCH,
+      exec: () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }); },
+    });
+    ok(!rDegrade.ciFreshness.trip, "LOOP-242: gh unavailable → degrade, no trip");
+    ok(!rDegrade.ciFreshness.skipped, "LOOP-242: gh unavailable → axis evaluated (degraded to unknown)");
+    ok(rDegrade.ciFreshness.verdict === "unknown", `LOOP-242: degraded verdict is 'unknown' (got: ${rDegrade.ciFreshness.verdict})`);
+
+    // No mergeChecks → ciFreshness skipped (no trip)
+    const rNoChecks = mergeGuard(repoDir, {
+      pr: 106, ghRepo: GHREPO, dbPath: join(ROOT, "hub.db"),
+    });
+    ok(!rNoChecks.ciFreshness.trip, "LOOP-242: no mergeChecks → skip, no trip");
+    ok(rNoChecks.ciFreshness.skipped, "LOOP-242: no mergeChecks → ciFreshness skipped");
+
+    // No --pr → ciFreshness skipped (no trip)
+    const rNoPr = mergeGuard(repoDir, { ghRepo: GHREPO, mergeChecks: MERGE_CHECKS });
+    ok(!rNoPr.ciFreshness.trip, "LOOP-242: no --pr → skip, no trip");
+    ok(rNoPr.ciFreshness.skipped, "LOOP-242: no --pr → ciFreshness skipped");
+  }
+
+  // ══ LOOP-323: the axis runs from the CLI, and a red required check HOLDS the merge ═══════════
+  {
+    // AC2 — the three distinct skipReasons, asserted at the function seam.
+    const GHREPO = "owner/r323";
+    const repoDir = join(ROOT, "gh-repo");
+    const rNoPr323 = mergeGuard(repoDir, { ghRepo: GHREPO, mergeChecks: ["c"], repoEligible: true });
+    ok(rNoPr323.ciFreshness.skipReason === "no-pr-arg", "LOOP-323 AC2: no --pr → skipReason no-pr-arg");
+    const rNotAm = mergeGuard(repoDir, { pr: 9, ghRepo: GHREPO, mergeChecks: ["c"], repoEligible: false });
+    ok(rNotAm.ciFreshness.skipReason === "repo-not-automerge", `LOOP-323 AC2: repoEligible:false → skipReason repo-not-automerge (got: ${rNotAm.ciFreshness.skipReason})`);
+    ok(!rNotAm.ciFreshness.trip, "LOOP-323 AC2: repo-not-automerge never trips");
+    const rNoChecks323 = mergeGuard(repoDir, { pr: 9, ghRepo: GHREPO, mergeChecks: [], repoEligible: true });
+    ok(rNoChecks323.ciFreshness.skipReason === "no-merge-checks", "LOOP-323 AC2: empty mergeChecks → skipReason no-merge-checks");
+
+    // AC5 (Amendment 2) — the reason names the delta's file composition from the REVERSED compare.
+    // The forward compare's files[] is deliberately DIFFERENT from the reversed one so the assertion
+    // discriminates direction: reporting pr-own-diff.ts would be the LOOP-149 trap.
+    const composeExec: ExecFn = (args: string[]) => {
+      if (args[0] === "pr" && args[1] === "view") {
+        return { ok: true, stdout: JSON.stringify({ headRefOid: "aaa111", statusCheckRollup: [{ name: "c", conclusion: "SUCCESS" }] }), stderr: "" };
+      }
+      if (args[0] === "api" && String(args[1]).includes("/compare/main...aaa111")) {
+        return { ok: true, stdout: JSON.stringify({ behind_by: 3, base_commit: { sha: "tip42" }, files: [{ filename: "pr-own-diff.ts" }] }), stderr: "" };
+      }
+      if (args[0] === "api" && String(args[1]).includes("/compare/aaa111...main")) {
+        return { ok: true, stdout: JSON.stringify({ ahead_by: 3, files: [{ filename: "tip-delta-1.ts" }, { filename: "tip-delta-2.md" }] }), stderr: "" };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected gh call" };
+    };
+    const rCompose = mergeGuard(repoDir, { pr: 11, ghRepo: GHREPO, mergeChecks: ["c"], defaultBranch: "main", repoEligible: true, exec: composeExec });
+    ok(rCompose.ciFreshness.verdict === "stale", `LOOP-323 AC5: stale verdict (got: ${rCompose.ciFreshness.verdict})`);
+    ok(/tip-delta-1\.ts/.test(rCompose.ciFreshness.reason ?? ""), `LOOP-323 AC5: reason names the tip delta's files (got: ${rCompose.ciFreshness.reason})`);
+    ok(!/pr-own-diff\.ts/.test(rCompose.ciFreshness.reason ?? ""), "LOOP-323 AC5: reason does NOT report the PR's own diff (the LOOP-149 trap)");
+    ok(/delta touches 2 file/.test(rCompose.ciFreshness.reason ?? ""), "LOOP-323 AC5: reason carries the file count");
+
+    // AC6 — stale trips under the named constant (LOOP-277's remedy is live, so the trip ships ON);
+    // red always trips regardless of the constant.
+    ok(rCompose.ciFreshness.trip && rCompose.trip, "LOOP-323 AC6: stale trips (CI_FRESHNESS_STALE_TRIPS is on; LOOP-277 remedy live)");
+
+    // AC4 (Amendment 1) — the stale objection comment names the remedy in the ratified wording.
+    const staleBody = buildCommentBody(11, rCompose.forgeReview, rCompose.boardState, rCompose.ciFreshness);
+    ok(/Step 0\.5/.test(staleBody) && /--force-with-lease/.test(staleBody), "LOOP-323 AC4: stale objection names Step 0.5 (authoritative) + the manual rebase fallback");
+    ok(/already actioned/.test(staleBody), "LOOP-323 AC4: stale objection names the already-actioned discriminator");
+
+    // AC1 + AC3 — the CLI resolves mergeChecks/defaultBranch from the workspace repo registry, and a
+    // red required check (PR #182's real shape) HOLDS the merge end to end: exit 1 under --strict.
+    // Driven through the CLI with a PATH-shimmed `gh`, NOT mergeGuard() — the exact seam LOOP-242
+    // missed. This test FAILS against the unwired tree (skipped:"no-merge-checks", exit 0).
+    const ws323 = join(ROOT, "ws323");
+    const repo323 = join(ws323, "repo323");
+    mkdirSync(repo323, { recursive: true });
+    writeFileSync(join(ws323, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "w323", backend: "service" },
+      repos: { r323: { path: "repo323", landing: "pr", autoMerge: true, remote: "https://github.com/o/r323", mergeChecks: ["Test (Node 23.6.0)", "Test (Node 24)"] } },
+      projects: {},
+    }));
+    const shimDir = join(ROOT, "gh-shim");
+    mkdirSync(shimDir, { recursive: true });
+    // The shim answers exactly the calls the guard makes; PR #182's real check shape (both FAILURE).
+    writeFileSync(join(shimDir, "gh"), `#!/bin/sh
+case "$*" in
+  *"--json headRefName"*) echo '{"headRefName":"dev-loop/LOOP-999"}';;
+  *"--json headRefOid,statusCheckRollup"*) echo '{"headRefOid":"deadbeef","statusCheckRollup":[{"name":"Test (Node 23.6.0)","conclusion":"FAILURE"},{"name":"Test (Node 24)","conclusion":"FAILURE"}]}';;
+  *"--json state"*) echo '{"state":"OPEN"}';;
+  *"--json number,reviewDecision"*) echo '{"number":182,"reviewDecision":"","latestReviews":[]}';;
+  *"api graphql"*) echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;
+  *) echo '{}' ;;
+esac
+exit 0
+`);
+    chmodSync(join(shimDir, "gh"), 0o755);
+    const cliRed = spawnSync("node", [join(hubRoot, "src", "merge-guard.ts"), "--repo", repo323, "--pr", "182", "--strict", "--json"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, DEVLOOP_HUB_DB: join(ROOT, "absent-hub.db") },
+    });
+    let cliRedJson: { ciFreshness?: { skipped?: boolean; verdict?: string | null; skipReason?: string | null } } = {};
+    try { cliRedJson = JSON.parse(cliRed.stdout || "{}"); } catch { /* leave empty — assertions below fail with detail */ }
+    ok(cliRedJson.ciFreshness?.skipped === false, `LOOP-323 AC1: CLI resolves mergeChecks from the registry — axis evaluated (skipped:${cliRedJson.ciFreshness?.skipped}, skipReason:${cliRedJson.ciFreshness?.skipReason})`);
+    ok(cliRedJson.ciFreshness?.verdict === "red", `LOOP-323 AC3: CLI sees PR #182's FAILURE checks as verdict red (got: ${cliRedJson.ciFreshness?.verdict})`);
+    ok(cliRed.status === 1, `LOOP-323 AC3: red required checks HOLD the merge — exit 1 under --strict (got: ${cliRed.status})`);
+
+    // AC2 (CLI face) — a registered repo with landing:"direct" gets repo-not-automerge from the CLI.
+    const wsDirect = join(ROOT, "ws323d");
+    const repoDirect = join(wsDirect, "repod");
+    mkdirSync(repoDirect, { recursive: true });
+    writeFileSync(join(wsDirect, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "w323d", backend: "service" },
+      repos: { rd: { path: "repod", landing: "direct", remote: "https://github.com/o/rd", mergeChecks: ["Test (Node 23.6.0)"] } },
+      projects: {},
+    }));
+    const cliDirect = spawnSync("node", [join(hubRoot, "src", "merge-guard.ts"), "--repo", repoDirect, "--pr", "7", "--json"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, DEVLOOP_HUB_DB: join(ROOT, "absent-hub.db") },
+    });
+    let cliDirectJson: { ciFreshness?: { skipReason?: string | null } } = {};
+    try { cliDirectJson = JSON.parse(cliDirect.stdout || "{}"); } catch { /* assertions carry detail */ }
+    ok(cliDirectJson.ciFreshness?.skipReason === "repo-not-automerge", `LOOP-323 AC2: CLI on a landing:"direct" repo → repo-not-automerge (got: ${cliDirectJson.ciFreshness?.skipReason})`);
   }
 } finally {
   rmSync(ROOT, { recursive: true, force: true });

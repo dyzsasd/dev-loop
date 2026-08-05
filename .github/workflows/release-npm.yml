@@ -194,6 +194,15 @@ jobs:
             git tag -a "v$VERSION" -m "Release v$VERSION"
           fi
 
+      # LOOP-324 follow-up: the earlier "Build package" step ran BEFORE the release commit existed,
+      # so its build-commit.json stamps the release commit's PARENT — and `npm publish
+      # --ignore-scripts` below packs dist/ as-is (prepack does NOT re-run). Re-stamp here, after
+      # the release commit, so the shipped tarball's stamp names the exact released commit and
+      # doctor's stamp-based W18 reads npm installs as 0-behind at release.
+      - name: Re-stamp build commit after the release commit
+        working-directory: hub
+        run: npm run build-node
+
       - name: Verify final release refs and source integrity
         shell: bash
         run: |

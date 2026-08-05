@@ -75,6 +75,26 @@ function backfillLabels(db: DatabaseSync, projectId: string): void {
 export function ensureProject(db: DatabaseSync, key: string, name: string, prefix = "DL"): string {
   const existing = db.prepare("SELECT id FROM projects WHERE key=?").get(key) as { id: string } | undefined;
   if (existing) { backfillLabels(db, existing.id); return existing.id; }
+  // LOOP-307 (LOOP-302 ③): find-or-create must not silently resurrect a DELETED project as an
+  // empty board — after the 2026-08-04 wipe this exact path re-seeded 'loop' (same key, new uuid,
+  // ticket_seq 0), making the board read present-but-empty for two hours. The tombstone is written
+  // by the destructive verb in the same transaction as its cascade; consulting it here guards the
+  // TABLE, not one caller — which seeder re-created the project was 原因未查明, and this holds for
+  // all of them. The existing-row early return above is untouched (idempotent re-seeds unaffected).
+  const tomb = db.prepare("SELECT removed_at, removed_by, ticket_count, verb FROM removed_projects WHERE key=?").get(key) as
+    | { removed_at: string; removed_by: string; ticket_count: number; verb: string } | undefined;
+  if (tomb) {
+    if (process.env.DEVLOOP_ALLOW_RESURRECT === "1") {
+      // An approved resurrection is no longer a divergence — clear the tombstone so the NEXT
+      // removal starts a fresh record (a second resurrection must not be silently pre-approved).
+      db.prepare("DELETE FROM removed_projects WHERE key=?").run(key);
+    } else {
+      throw new Error(
+        `project '${key}' was removed on ${tomb.removed_at} by ${tomb.removed_by} (${tomb.ticket_count} ticket(s) destroyed, via ${tomb.verb}) — ` +
+        `refusing to silently re-create it as an empty project. If this is a deliberate re-creation, set DEVLOOP_ALLOW_RESURRECT=1; that clears the tombstone and proceeds.`,
+      );
+    }
+  }
   // The ticket prefix is what every id reader parses back out (`ticket-id.ts` TICKET_ID_PATTERN), so it is
   // validated HERE — at the one INSERT that can introduce a new one — rather than assumed downstream
   // (LOOP-264). An out-of-shape prefix mints ids no reader can parse, and the failure is silent and

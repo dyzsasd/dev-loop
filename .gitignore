@@ -37,3 +37,7 @@ devloop-*-*/
 # covers the .age (age-encrypted) name — the export-time stderr warning + doctor W06 catch arbitrarily
 # -named and --insecure-plaintext bundles by their MAGIC header regardless of --out.
 *.age
+
+# workspace-local runtime state a fire may create inside the repo checkout (doctor W06):
+# state/reports must never be committable from a repo tree.
+.dev-loop/

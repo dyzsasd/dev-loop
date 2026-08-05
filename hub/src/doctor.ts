@@ -141,6 +141,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
     for (const key of deliveryProjects(ws)) {
       if (!hubKeys.has(key)) { unseeded.push(key); warn(`[W08] projects.${key}: config project '${key}' has no hub.db row — its fires get no board access; seed it once: dev-loop seed ${key} "<Project Name>" <UNIQUE_PREFIX>`); }
     }
+    warnTombstonedProjects(db, unseeded, warn);
     for (const p of projects) {
       if (!isTeamProject(p.key) && !Object.hasOwn(ws.file.projects, p.key)) info(`hub project '${p.key}' has no dev-loop.json entry (unscheduled; historical or hand-seeded)`);
     }
@@ -839,6 +840,22 @@ function unignoredBundleArtifacts(root: string): { path: string; state: "untrack
 // In Progress: always flag — mine() only applies to Todo; inProgress keys on strict assignee===actor.
 // InReview: reachable iff (a) qa/pm label (verify slice, both modes) OR (b) dev-tier label AND
 // devSplit:true (servable.ts tier-label fallback, split-dev only; not wired for legacy dev actor).
+// W29 — tombstoned-project divergence (LOOP-307 AC4, design destructive-verb-safety "Child C").
+// W08 covers the general never-seeded case; W29 fires only when the missing hub row has a
+// removed_projects tombstone — the config still names a project a destructive verb DELETED, which
+// is the 2026-08-04 shape (deletion masked for two hours by a silent find-or-create re-seed).
+// Warn-only, never flips DOCTOR_OK; a named helper, not inline, per the CRAP-90 ratchet.
+function warnTombstonedProjects(db: DatabaseSync, unseededKeys: string[], warn: (m: string) => void): void {
+  for (const key of unseededKeys) {
+    try {
+      const tomb = db.prepare("SELECT removed_at, removed_by, ticket_count, verb FROM removed_projects WHERE key=?").get(key) as
+        | { removed_at: string; removed_by: string; ticket_count: number; verb: string } | undefined;
+      if (!tomb) continue;
+      warn(`[W29] projects.${key}: config still lists '${key}', but it was REMOVED on ${tomb.removed_at} by ${tomb.removed_by} (${tomb.ticket_count} ticket(s) destroyed, via ${tomb.verb}) — a re-seed would resurrect it as an empty board. Either delete the config entry (dev-loop team remove-project ${key}) or re-create deliberately with DEVLOOP_ALLOW_RESURRECT=1.`);
+    } catch { /* pre-tombstone db (table absent) — nothing to report; W08 already covered the gap */ }
+  }
+}
+
 function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplitOn: boolean, warn: (m: string) => void): void {
   try {
     const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);

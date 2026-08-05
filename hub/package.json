@@ -36,6 +36,7 @@
     "kaizen-hub": "dist/server.js"
   },
   "files": [
+    "build-commit.json",
     "dist/",
     ".claude-plugin/",
     "skills/",
