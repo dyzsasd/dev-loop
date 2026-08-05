@@ -21,6 +21,7 @@ import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { AGENT_GROUPS } from "./agent-roster.ts"; // LOOP-184: group aliases shared with the bundle-load validator — a zod-free leaf (roster still sourced from seed.ts AGENT_HANDLES)
+import { writeSchedulerBuild, teamDirOf } from "./scheduler-build.ts"; // LOOP-253: which build is orchestrating this loop — a zod-free leaf, same LOOP-58 reason
 import { preflightTreeSnapshot } from "./tree-snapshot.ts"; // LOOP-312: pre-fire copy of the shared checkout — a zod-free leaf, for the same LOOP-58 reason as servable.ts below
 import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
@@ -1709,6 +1710,14 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   // (a) another fire's `git checkout` cannot silently destroy it, and (b) the ship guard (LOOP-320)
   // can tell a fire's own edits from ones that were already sitting in the tree.
   preflightTreeSnapshot(ws.root, wsStateRoot(ws), (m) => console.log(m));
+  // LOOP-253 — record WHICH BUILD is orchestrating this loop. Node caches every module at import
+  // time and never reloads, so a reinstall mid-run leaves this process executing the code it loaded
+  // at boot while `doctor` (a fresh process each invocation) reports the new one. Measured: four
+  // landed fixes were live for doctor and dead in the orchestrator, with DOCTOR_OK printing.
+  {
+    const rec = writeSchedulerBuild(teamDirOf(wsStateRoot(ws)));
+    if (rec) console.log(`dev-loop run: build ${rec.version} (pid ${rec.pid}) from ${rec.modulePath}`);
+  }
   // Prod-monitoring guard: a team with health probes but no scheduled ops agent runs blind.
   const hasProbes = Object.values(ws.file.repos).some((r) => !!(r.ops?.checks?.length) || !!r.deploy?.healthCheck || Object.values(r.deploy?.environments ?? {}).some((e) => !!e?.healthCheck));
   if (hasProbes && !opts.agents.includes("ops")) console.warn(`dev-loop run: WARNING health probes are configured but 'ops' is not scheduled — prod incidents will go unnoticed. Launch with --agents core,ops (or all).`);
