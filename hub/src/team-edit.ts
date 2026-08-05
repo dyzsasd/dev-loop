@@ -13,6 +13,7 @@ import { validateTeamFile, referencingProjects, isTeamProject, type TeamFile, ty
 import { confirmationToken, isolationVerdict, commitBothHalves, TOKEN_PREFIX } from "./destructive-guard.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
+import { isCanonicalTicketPrefix } from "./ticket-id.ts";
 import { provisionClaudePermissions } from "./team-init.ts";
 import { syncOpencodeConfig } from "./opencode-sync.ts";
 
@@ -119,13 +120,32 @@ function coerce(kind: SetKind, raw: string, path: string): unknown {
   return raw;
 }
 
+// LOOP-135 — the rejection an operator reads at the exact moment they need guidance used to end in
+// "edit dev-loop.json directly", which is the ONE action the shipped operator console forbids as its
+// hard rule 1. Route by class, honestly: name the mutator that does write the path; say plainly when a
+// field is create-time-only; and when nothing can write it yet, say THAT rather than implying a route
+// exists. `doctor` may still be named as the way to VALIDATE config — never as a blessing for editing it.
+const OTHER_MUTATOR: ReadonlyArray<{ re: RegExp; how: string }> = [
+  { re: /^repos\.[^.]+\.(path|remote|defaultBranch|landing|mergeChecks|autoMerge|build|ci)/, how: "`dev-loop team add-repo <ref> --project <key> --path <rel> --detect` re-registers a repo and re-detects its build/CI facts" },
+  { re: /^projects\.[^.]+\.repos/, how: "`dev-loop team add-repo <ref> --project <key> …` adds a repo reference to a project" },
+  { re: /^team\.providers\./, how: "`dev-loop team add-provider <id> --base-url <url> --auth-env <NAME> --models …` (the key VALUE goes through `dev-loop secret set`, never config)" },
+  { re: /^team\.agents\.[^.]+\.(codingAgent|model|effort)$/, how: "`dev-loop team set-model <agent> <model> [--effort e] [--team-default]`" },
+];
+const CREATE_TIME_ONLY = /^(team\.key|team\.backend|projects\.[^.]+\.(linearProject|linearProjectId))$/;
+
+function unsettableGuidance(path: string): string {
+  const hit = OTHER_MUTATOR.find((m) => m.re.test(path));
+  if (hit) return `  a different mutator owns this path: ${hit.how}`;
+  if (CREATE_TIME_ONLY.test(path)) return `  this field is create-time only — it is fixed by \`dev-loop team init\` / \`team add-project\` and there is no supported way to change it in place.`;
+  return `  no operator-settable writer exists for this path yet — there is no supported route to change it from the CLI.\n  Field reference: references/config-schema.md. \`dev-loop doctor\` validates the config; it does not authorize hand-editing it.`;
+}
+
 export async function teamSet(argv: string[]): Promise<number> {
   const [path, value, ...extra] = argv;
   if (!path || path === "--help" || path === "-h" || value === undefined || extra.length)
     die(`usage: dev-loop team set <path> <value>\n  settable paths: ${SETTABLE_SUMMARY}`);
   const entry = SETTABLE.find((s) => s.re.test(path));
-  if (!entry)
-    die(`'${path}' is not an operator-settable path.\n  settable: ${SETTABLE_SUMMARY}\n  Anything else is structural (dev-loop team add-project / add-repo) or an interview field — edit dev-loop.json directly and validate with \`dev-loop doctor\`. Field reference: references/config-schema.md`);
+  if (!entry) die(`'${path}' is not an operator-settable path.\n  settable: ${SETTABLE_SUMMARY}\n${unsettableGuidance(path)}`);
 
   const coerced = coerce(entry.kind, value, path);
   const segs = path.split(".");
@@ -236,15 +256,26 @@ export async function addProject(argv: string[]): Promise<number> {
     if (isAbsolute(sd)) die(`--strategy-doc must be a repo-relative path, not an absolute path (got '${sd}')`);
     if (/linear\.app\/.*\/document\//.test(sd)) die(`--strategy-doc must be a repo-relative file path; Linear document URLs are not accepted here`);
   }
+  // LOOP-301 — every precondition `seedHubRow` will enforce is checked BEFORE `mutate()` writes
+  // dev-loop.json. Previously `--prefix` was not looked at until three steps later, so a rejected
+  // prefix left a config project the same command could no longer complete (`project already exists`)
+  // with no hub row behind it. Route chosen: FRONT DOOR (pre-flight), not rollback-on-failure — on a
+  // service backend the hub db is readable here, which makes the check exact; `ensureProject`'s own
+  // check stays as the backstop for `dev-loop seed` and any future caller.
+  preflightHubRow(key, o.prefix as string | undefined);
+
   const ws = mutate((file) => {
-    if (file.projects[key]) die(`project '${key}' already exists — tune it with \`dev-loop team set projects.${key}.<field> <value>\` or edit dev-loop.json`);
+    if (file.projects[key]) die(dupProjectMessage(key));
     const p: TeamFile["projects"][string] = { repos: [] };
     if (o.linearProject) p.linearProject = o.linearProject as string;
     if (o.linearProjectId) p.linearProjectId = o.linearProjectId as string;
     if (o.testUrl) p.testEnv = { baseUrl: o.testUrl as string };
     if (o.devSplit) p.devSplit = true;
     if (o.scratch) p.scratch = true;
-    if (o.weight !== undefined) p.weight = Number(o.weight);
+    // LOOP-288: through the SHARED coerce, not a bare Number(). `Number("0x64") === 100`, so the
+    // operator asked for 0x64 and the config silently recorded 100 — while `team set` on the very
+    // same key refused it. One field, two write paths, one contract now.
+    if (o.weight !== undefined) p.weight = coerce("number", String(o.weight), `projects.${key}.weight`) as number;
     if (o.enabled !== undefined) p.enabled = o.enabled === "true" || o.enabled === true;
     if (o.intakeMode !== undefined) p.intake = { mode: o.intakeMode as "autonomous" | "passive" }; // E12 validates the value
     if (o.strategyDoc !== undefined) p.strategyDoc = o.strategyDoc as string;
@@ -260,6 +291,47 @@ export async function addProject(argv: string[]): Promise<number> {
   // Linear backend: stamp the workspace fingerprint when the operator handed us the backend id.
   if (ws.file.team.backend === "linear" && o.linearProjectId) await stampFingerprint(ws, key, o.linearProjectId as string);
   return 0;
+}
+
+// LOOP-135 second emitter — the duplicate-key refusal must route the operator to a SANCTIONED action.
+// It used to end in "or edit dev-loop.json", the one thing the shipped operator console forbids as its
+// hard rule 1; and on a config-only project (config row present, hub row absent — the exact state the
+// LOOP-301 bug used to leave behind) the "tune it" hint is the wrong recovery anyway.
+function dupProjectMessage(key: string): string {
+  let hubRowMissing = false;
+  try {
+    const ws = resolveWorkspace();
+    if (ws.file.team.backend === "service") {
+      const db = openDb(wsHubDb(ws));
+      try { hubRowMissing = !findProject(db, key); } finally { db.close(); }
+    }
+  } catch { /* best-effort: an unreadable db must not change WHICH error the operator gets */ }
+  return hubRowMissing
+    ? `project '${key}' is in dev-loop.json but has NO hub row — finish it with \`dev-loop seed ${key} "<Project Name>" <UNIQUE_PREFIX>\` (doctor reports the gap as W08)`
+    : `project '${key}' already exists — tune it with \`dev-loop team set projects.${key}.<field> <value>\``;
+}
+
+// LOOP-301 — the front door for every precondition `seedHubRow` enforces, run BEFORE the config write.
+// Only shape + uniqueness are checkable here; both are the ones `ensureProject` refuses on, and on a
+// service backend the db is readable at this point so the answer is exact rather than a guess. On any
+// other backend (or an unreadable db) this is a no-op and `ensureProject` remains the only guard —
+// there is no config write to protect there, because seedHubRow does not run.
+function preflightHubRow(key: string, prefix: string | undefined): void {
+  if (prefix !== undefined && !isCanonicalTicketPrefix(prefix))
+    die(`ticket prefix '${prefix}' is not a valid <PREFIX> for project '${key}': must be uppercase, start with a letter, and contain only letters/digits (e.g. LOOP, WEB2) — nothing was written`);
+  let ws: Workspace;
+  try { ws = resolveWorkspace(); } catch { return; } // no workspace ⇒ mutate() raises the real error
+  if (ws.file.team.backend !== "service" || prefix === undefined) return;
+  try {
+    const db = openDb(wsHubDb(ws));
+    try {
+      const clash = db.prepare("SELECT key FROM projects WHERE ticket_prefix=? AND key<>?").get(prefix, key) as { key: string } | undefined;
+      if (clash) die(`ticket prefix '${prefix}' is already held by project '${clash.key}' — pick another; nothing was written`);
+    } finally { db.close(); }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("dev-loop team:")) throw e; // die() already exited; belt-and-braces
+    /* unreadable db: fall through — seedHubRow reports it with its own by-hand remedy */
+  }
 }
 
 function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix: string | undefined, scratch = false): void {

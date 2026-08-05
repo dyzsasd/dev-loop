@@ -776,6 +776,25 @@ export {
 
 // DL-41 dispatch — a lifecycle subcommand handles itself and exits; ANY other invocation (incl. the
 // bare `npm run daemon`) falls through to today's foreground boot below, byte-for-byte unchanged.
+// LOOP-154: `--help` must never be a daemon-spawn vector. `--help` is not a LIFECYCLE_SUB, so it fell
+// straight through to the foreground boot below and started a REAL daemon on the surface the operator
+// docs teach as the way to explore this CLI — then died on an unhandled EADDRINUSE. Answered here,
+// before any bind, because the boot block is a top-level statement with no earlier exit.
+if (isMainEntry(import.meta.url) && ["--help", "-h", "help"].includes(process.argv[2] ?? "")) {
+  console.log(`usage: dev-loop daemon <${LIFECYCLE_SUBS.join("|")}>  — per-project daemon lifecycle (localhost web UI + agent op-API)
+
+  up                 start (or adopt) the daemon for DEVLOOP_PROJECT; idempotent
+  up-all             up every delivery project in the workspace
+  down               stop this project's daemon and remove its runfile
+  status             report pid/port/health for this project's daemon
+  reap [--dry-run]   stop orphaned daemons (dbPresent:false) across the port band
+  install-autostart | uninstall-autostart   manage the login autostart entry
+
+Env: DEVLOOP_PROJECT (which board), DEVLOOP_DAEMON_HOST/PORT (bind), DEVLOOP_UI_TOKEN(_FILE) (non-loopback binds).
+Running \`dev-loop daemon\` with no subcommand boots a FOREGROUND daemon — that is the server itself, not this help.`);
+  process.exit(0);
+}
+
 if (isMainEntry(import.meta.url)
     && LIFECYCLE_SUBS.includes(process.argv[2] as LifecycleSub)) {
   await daemonLifecycle(process.argv[2] as LifecycleSub); // calls process.exit — never returns

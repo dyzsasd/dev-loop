@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
-import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry } from "./team-config.ts";
+import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { notify } from "./comms.ts";
 import { secretsInjectedKeys } from "./secrets.ts"; // Q9: the per-fire secret-scoping strip set
@@ -1348,7 +1348,9 @@ function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string 
     if (opts.intervalsExplicit.has(agent)) continue;              // --interval wins
     const cad = cadenceFor(agent);
     if (!cad) continue;
-    if (!/^\d+(?:\.\d+)?(ms|s|m|h|d)?$/.test(cad.trim())) { console.warn(`dev-loop run: ignoring malformed cadence '${cad}' for ${agent} (use e.g. "10m", "1h")`); continue; }
+    // CADENCE_DUR_RE, not a hand-copied literal: the schema validator (E17, LOOP-336) refuses exactly
+    // what this ignores, so the two cannot disagree about which spellings are legal.
+    if (!CADENCE_DUR_RE.test(cad.trim())) { console.warn(`dev-loop run: ignoring malformed cadence '${cad}' for ${agent} (use e.g. "10m", "1h")`); continue; }
     opts.intervals[agent] = parseDuration(cad.trim());
     console.log(`dev-loop run: cadence ${agent}=${formatDuration(opts.intervals[agent])} (from config)`);
   }

@@ -4,6 +4,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, rmSync, realpathSync, cpSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,8 +96,11 @@ try {
 
   // ═══ team set — whitelist, coercion, re-validation ═══
   const badPath = run("team", ["set", "team.key", "other"], { cwd: lin });
-  ok(badPath.code === 2 && /not an operator-settable path/.test(badPath.out) && /config-schema\.md/.test(badPath.out),
-    "team set rejects a non-whitelisted path with the doc pointer");
+  // The doc pointer moved to the no-writer class (LOOP-135). `team.key` is genuinely create-time
+  // only, so it now gets that answer instead — the assertion still proves the path is refused with
+  // guidance, and the guidance is no longer "edit dev-loop.json directly".
+  ok(badPath.code === 2 && /not an operator-settable path/.test(badPath.out) && /create-time only/.test(badPath.out),
+    "team set rejects a non-whitelisted path and says why it cannot be changed");
   const badProj = run("team", ["set", "projects.nope.weight", "2"], { cwd: lin });
   ok(badProj.code === 2 && /unknown project 'nope'/.test(badProj.out), "team set refuses to invent a project");
   const badEnum = run("team", ["set", "team.mode", "yolo"], { cwd: lin });
@@ -218,11 +222,22 @@ try {
   ok(a2.code === 0 && /prefix APP2/.test(a2.out), "a derived-prefix clash de-clashes deterministically (APP → APP2)");
   const rows = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);console.log(JSON.stringify(db.prepare('SELECT key,name,ticket_prefix FROM projects ORDER BY key').all()));db.close()})`, join(svc, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
   ok(/"key":"a\.p\.p","name":"The App","ticket_prefix":"APP"/.test(rows.stdout), "--name lands on the hub row");
+  // LOOP-301 flipped this contract deliberately: the clash is now caught BEFORE the config write,
+  // so the old "config already written, seed it by hand" outcome is exactly the defect that was
+  // fixed. What must still hold is that the clash is refused and named.
   const a3 = run("team", ["add-project", "clash", "--prefix", "APP"], { cwd: svc });
-  ok(a3.code === 1 && /already used by project/.test(a3.out) && /dev-loop seed clash/.test(a3.out),
-    "an EXPLICIT clashing --prefix fails cleanly with the by-hand seed command (config already written)");
+  ok(a3.code !== 0 && /already held by project 'a\.p\.p'/.test(a3.out),
+    "an EXPLICIT clashing --prefix is refused and names the holder");
+  ok(readJson(join(svc, "dev-loop.json")).projects.clash === undefined,
+    "LOOP-301: the clashing add-project left NO project behind in dev-loop.json");
+
+  // doctor's W08 NEXT rung still works — staged deliberately now (a config project with no hub row)
+  // rather than harvested from the bug above.
+  const svcCfg = readJson(join(svc, "dev-loop.json"));
+  svcCfg.projects.clash = { repos: [] };
+  writeFileSync(join(svc, "dev-loop.json"), JSON.stringify(svcCfg, null, 2) + "\n");
   const dSvc = run("server", ["doctor"], { cwd: svc });
-  ok(/NEXT: dev-loop seed clash/.test(dSvc.out), "doctor NEXT picks up the unseeded remainder");
+  ok(/NEXT: dev-loop seed clash/.test(dSvc.out), "doctor NEXT picks up an unseeded config project (W08)");
 
   // ═══ add-project --scratch: marker + hub.db mirror + count exclusion (LOOP-220) ═══
   const scr = join(tmp, "scr");
@@ -1165,6 +1180,65 @@ try {
     run("team", ["set", "projects.web.strategyDoc", "docs/STRATEGY.md"], { cwd: lin });
     const dW17Clear = run("doctor", [], { cwd: lin });
     ok(!/\[W17\] projects\.web:/.test(dW17Clear.out), "doctor W17 is silent once strategyDoc is set");
+  }
+
+  // ── LOOP-288 / LOOP-301 / LOOP-135: the add-project write path ───────────────────────────────
+  // One config key with two write paths had two validation contracts (`--weight 0x64` wrote 100
+  // while `team set` on the same key refused it), and `--prefix` was not looked at until AFTER
+  // dev-loop.json had been mutated — so a rejected prefix left a project the same command could no
+  // longer complete. Both assert on the FILE, not on the message: an assertion on the message alone
+  // passes against the old code, which also printed an error — after writing.
+  {
+    const gws = join(tmp, "guards-ws");
+    const gcfg = join(gws, "dev-loop.json");
+    const initG = run("team", ["init", "--dir", gws, "--key", "guards", "--backend", "service", "--yes"], { cwd: tmp });
+    ok(initG.code === 0, `guards fixture: service workspace created (${initG.code})`);
+    const hash = () => createHash("sha256").update(readFileSync(gcfg)).digest("hex");
+
+    // (a) LOOP-288 — every non-plain-decimal literal is refused, and NOTHING is written.
+    for (const lit of ["0x64", "0o144", "0b1100100", "1e2"]) {
+      const before = hash();
+      const r = run("team", ["add-project", `w-${lit}`, "--prefix", "WGT", "--weight", lit], { cwd: gws });
+      ok(r.code !== 0, `LOOP-288: --weight ${lit} exits non-zero (${r.code})`);
+      ok(hash() === before, `LOOP-288: --weight ${lit} writes NOTHING to dev-loop.json`);
+      ok(/plain decimal/.test(r.out), `LOOP-288: --weight ${lit} gives the same answer \`team set\` gives`);
+    }
+    // Plain decimals are unchanged.
+    const wOk = run("team", ["add-project", "wgood", "--prefix", "WGOOD", "--weight", "2.5"], { cwd: gws });
+    ok(wOk.code === 0 && readJson(gcfg).projects.wgood?.weight === 2.5, "LOOP-288: a plain-decimal --weight still writes the same value");
+
+    // (b) LOOP-301 — an out-of-shape --prefix is refused BEFORE the config write.
+    const beforeShape = hash();
+    const badShape = run("team", ["add-project", "shop", "--prefix", "loop"], { cwd: gws });
+    ok(badShape.code !== 0, `LOOP-301: an out-of-shape --prefix exits non-zero (${badShape.code})`);
+    ok(hash() === beforeShape, "LOOP-301: dev-loop.json is byte-unchanged after the rejection");
+    ok(readJson(gcfg).projects.shop === undefined, "LOOP-301: no half-created project is left behind");
+    // …and the SAME command can still complete afterwards — the point of the whole ticket.
+    const retry = run("team", ["add-project", "shop", "--prefix", "SHOP"], { cwd: gws });
+    ok(retry.code === 0 && readJson(gcfg).projects.shop !== undefined, "LOOP-301: the retry with a valid prefix succeeds (no 'already exists' wedge)");
+
+    // (c) LOOP-301 — a CLASHING prefix is caught in the same place, on a service backend.
+    const beforeClash = hash();
+    const clash = run("team", ["add-project", "shop2", "--prefix", "SHOP"], { cwd: gws });
+    ok(clash.code !== 0 && /already held by/.test(clash.out), `LOOP-301: a clashing --prefix is refused (${clash.code})`);
+    ok(hash() === beforeClash, "LOOP-301: a clashing --prefix writes nothing either");
+
+    // (d) LOOP-135 — no refusal on this path may tell the operator to hand-edit dev-loop.json.
+    const HAND_EDIT = /edit dev-loop\.json/i;
+    const dup = run("team", ["add-project", "shop", "--prefix", "SHOP3"], { cwd: gws });
+    ok(dup.code !== 0 && !HAND_EDIT.test(dup.out), "LOOP-135: the duplicate-key refusal no longer says 'edit dev-loop.json'");
+    const unsettable = run("team", ["set", "projects.shop.strategyDoc.nope", "x"], { cwd: gws });
+    ok(unsettable.code !== 0 && !HAND_EDIT.test(unsettable.out), "LOOP-135: `team set`'s unsettable-path refusal no longer says 'edit dev-loop.json'");
+    ok(/no operator-settable writer exists/.test(unsettable.out), "LOOP-135: it states plainly that no writer exists rather than implying a route");
+    const otherMutator = run("team", ["set", "repos.rr.remote", "git@x:y.git"], { cwd: gws });
+    ok(/team add-repo/.test(otherMutator.out) && !HAND_EDIT.test(otherMutator.out), "LOOP-135: a path another mutator owns names that exact command");
+
+    // (e) LOOP-301 — a config-only project (no hub row) gets the recovery that actually applies.
+    const cfgOnly = readJson(gcfg);
+    cfgOnly.projects.orphan = { repos: [] };
+    writeFileSync(gcfg, JSON.stringify(cfgOnly, null, 2) + "\n");
+    const orphanDup = run("team", ["add-project", "orphan", "--prefix", "ORPH"], { cwd: gws });
+    ok(/dev-loop seed orphan/.test(orphanDup.out), "LOOP-301: a config project with NO hub row is told to `dev-loop seed`, not to 'tune it'");
   }
 
   console.log(fails === 0 ? "\nTEAM_EDIT_OK" : `\n${fails} CHECK(S) FAILED`);
