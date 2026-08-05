@@ -67,7 +67,7 @@ export interface TeamBlock {
   docs?: { vision?: DocRef | null; lessons?: { mirror?: boolean } };
   autonomy?: string;
   mode?: string;
-  intake?: { mode?: "autonomous" | "passive"; todoDepthCap?: number };
+  intake?: { mode?: "autonomous" | "passive"; todoDepthCap?: number; acCompletenessGate?: boolean };
   comms?: { provider: "slack" | "lark"; webhookEnv: string };
   reports?: unknown;
   agents?: Record<string, AgentLaunchConfig>;
@@ -109,7 +109,7 @@ export interface ProjectEntry {
   syncedAt?: string;
   strategyDoc?: DocRef;
   testEnv?: { baseUrl?: string; authConstraint?: string };
-  intake?: { mode?: "autonomous" | "passive"; todoDepthCap?: number };
+  intake?: { mode?: "autonomous" | "passive"; todoDepthCap?: number; acCompletenessGate?: boolean };
   devSplit?: boolean;
   blockedStateName?: string | null;   // a real Linear "Blocked" column name; null → the `blocked` label park (§9)
   notify?: unknown;                   // per-project §9 notify webhook override (E15; team.comms is canonical on v2 and bridges into it)
