@@ -1281,6 +1281,11 @@ try {
     // is why it is written as an assertion rather than a comment. Since the point is to exercise the
     // FALLBACK, the state it exists for is now guaranteed rather than inherited from a git version:
     // delete the ref if the local git created one. The assertion stays, now verifying the SETUP.
+    // origin/HEAD is a SYMBOLIC ref, so `update-ref -d` does not remove it — that was my first
+    // attempt and CI caught it a second time. `symbolic-ref -d` is the one that does; the
+    // `remote set-head --delete` is belt-and-braces for git versions that spell it differently.
+    g(checkout, "symbolic-ref", "-d", "refs/remotes/origin/HEAD");
+    g(checkout, "remote", "set-head", "origin", "--delete");
     g(checkout, "update-ref", "-d", "refs/remotes/origin/HEAD");
     const sym = g(checkout, "symbolic-ref", "--short", "refs/remotes/origin/HEAD");
     ok(sym.status !== 0,
