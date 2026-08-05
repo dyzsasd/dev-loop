@@ -26,7 +26,11 @@ function relLabel(iso: string | null | undefined, nowMs: number): { label: strin
 }
 
 export function projectIndexPage(db: DatabaseSync, nowMs: number): string {
-  const projects = db.prepare("SELECT id,key,name FROM projects ORDER BY key").all() as { id: string; key: string; name: string }[];
+  // LOOP-271: a scratch project can never fire, so it does not belong in the index. HIDDEN, not
+  // deleted — navigating directly to /p/<scratch-key>/ still works, the same rule §21a D6 applies to
+  // doc version history. The predicate is the one doctor.ts already uses; json_valid guards a row
+  // whose settings_json is not JSON, which json_extract would otherwise throw on.
+  const projects = db.prepare(`SELECT id,key,name FROM projects WHERE CASE WHEN json_valid(settings_json) THEN json_extract(settings_json,'$.scratch') ELSE NULL END IS NOT 1 ORDER BY key`).all() as { id: string; key: string; name: string }[];
   const openByState = db.prepare(`SELECT state, COUNT(*) AS n FROM tickets WHERE project_id=? AND state IN (${OPEN_STATES.map(() => "?").join(",")}) GROUP BY state`);
   const lastEvent = db.prepare("SELECT MAX(created_at) AS m FROM events WHERE project_id=?");
 

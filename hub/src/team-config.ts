@@ -157,7 +157,27 @@ export const TEAM_INTAKE_PROJECT = "_team";
 // reporting must route through these, so the exclusion cannot drift across call sites — and stays correct
 // even for hand-built Workspace objects that never passed validation.
 export function isTeamProject(key: string): boolean { return key === TEAM_INTAKE_PROJECT; }
-export function deliveryProjects(ws: Workspace): string[] { return Object.keys(ws.file.projects).filter((k) => !isTeamProject(k)); }
+/**
+ * The SCHEDULABLE delivery projects (LOOP-271).
+ *
+ * This used to return every configured project, so every new consumer was scratch/enabled-blind BY
+ * DEFAULT and had to remember to re-filter. Two call sites did remember (rotation.ts, doctor.ts's
+ * NEXT ladder); the rest did not, so `metrics` rendered panels for a project that can never fire and
+ * `ensureHub` started a real daemon for one.
+ *
+ * Excluding at the SEAM rather than at each call site is the whole fix. The excluded pair is the one
+ * `stewardProjects` already filtered and that config-schema.md defines as removing a project from
+ * scheduling entirely: `scratch: true` and `enabled: false`.
+ *
+ * A caller that genuinely needs the full set asks for it — opt-IN, never opt-out. Getting that
+ * direction wrong is what produced this ticket: the default has to be the safe answer, because the
+ * unsafe one is what a new consumer gets for free.
+ */
+export function deliveryProjects(ws: Workspace, opts: { includeUnschedulable?: boolean } = {}): string[] {
+  const keys = Object.keys(ws.file.projects).filter((k) => !isTeamProject(k));
+  if (opts.includeUnschedulable) return keys;
+  return keys.filter((k) => ws.file.projects[k]?.enabled !== false && ws.file.projects[k]?.scratch !== true);
+}
 const KEY_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const TEAM_KEY_RE = /^[a-z0-9-]{2,32}$/;
