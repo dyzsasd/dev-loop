@@ -44,6 +44,9 @@ if (process.argv.includes("--list")) {
   process.exit(0);
 }
 
+// A per-suite wall-clock bound. Overridable for a slow machine, but never unbounded.
+const SUITE_TIMEOUT_MS = Number(process.env.DEVLOOP_SUITE_TIMEOUT_MS) || 300_000;
+
 type Status = "pass" | "fail" | "crash";
 const results: { file: string; status: Status }[] = [];
 
@@ -54,13 +57,28 @@ for (const file of suites) {
     // stdout: inherit so test output streams in real-time
     // stderr: pipe so we can detect uncaught-exception crashes
     stdio: ["inherit", "inherit", "pipe"],
+    // A HANGING suite must fail, not stall the run. Without this the loop waits forever: one suite
+    // that never returns burned an 80-minute CI job with no output past its last assertion and no
+    // indication of which suite was at fault, until the 6h GitHub ceiling or a human cancelled it.
+    // The cause there was `mkdirSync(recursive)` under /proc on Linux — a platform difference no
+    // amount of local macOS testing would have surfaced, which is precisely why the runner needs a
+    // bound rather than trusting every suite to terminate.
+    // 5 min is ~10x the slowest suite (the daemon lifecycle ones run ~30s); it catches a hang
+    // without ever firing on a merely slow machine.
+    timeout: SUITE_TIMEOUT_MS,
+    killSignal: "SIGKILL",  // SIGTERM is catchable, and a wedged suite may not be handling signals
   });
 
   const stderr = res.stderr?.toString() ?? "";
   if (stderr) process.stderr.write(stderr);
 
   let status: Status;
-  if (res.error || res.signal != null) {
+  // spawnSync reports a timeout as error.code ETIMEDOUT (and/or the kill signal). Name it, so the
+  // summary says which suite hung instead of leaving a bare "crash" for a human to bisect.
+  if ((res.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    process.stderr.write(`\n⏱  ${file} exceeded ${SUITE_TIMEOUT_MS / 1000}s and was killed — treat this as a HANG, not a slow test.\n`);
+    status = "crash";
+  } else if (res.error || res.signal != null) {
     status = "crash";
   } else if (res.status === 0) {
     status = "pass";

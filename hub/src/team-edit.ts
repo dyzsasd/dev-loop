@@ -37,7 +37,7 @@ function mutate(apply: (file: TeamFile, ws: Workspace) => void): Workspace {
 // (registry paths, owners, agent launch maps, …) is either structural — add-project/add-repo territory —
 // or an interview field: edit dev-loop.json directly and let doctor validate.
 type SetKind = "string" | "boolean" | "number" | "int" | "string-list" | "nullable-pos-number" | readonly string[];
-const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
+export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.mode$/, kind: ["dry-run", "live"] as const },
   { re: /^team\.linearTeam$/, kind: "string" },
   { re: /^team\.git\.defaultBranch$/, kind: "string" },
@@ -52,11 +52,6 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.budget\.perFireUsd$/, kind: "number" },
   // LOOP-339 — the board-snapshot cadence goes through the validated mutator like every other
   // tunable (the operator console's hard rule 1: config through mutators only, never a hand-edit).
-  { re: /^team\.backup\.everyHours$/, kind: "number" },
-  { re: /^team\.backup\.keep$/, kind: "int" },
-  { re: /^team\.backup\.dir$/, kind: "string" },
-  // LOOP-339 — the board-snapshot cadence, through the validated mutator like every other tunable
-  // (the operator console's hard rule 1: config through mutators only, never a hand-edit).
   { re: /^team\.backup\.everyHours$/, kind: "number" },
   { re: /^team\.backup\.keep$/, kind: "int" },
   { re: /^team\.backup\.dir$/, kind: "string" },

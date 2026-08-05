@@ -42,6 +42,12 @@ export function snapshotBoardDb(srcPath: string, destPath: string): void {
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(srcPath, { readOnly: true });        // R1
+    // A BOUNDED wait, never an indefinite one. VACUUM INTO takes a read lock on the source, and a
+    // concurrent writer can hold it — without a timeout this call can block for as long as that
+    // writer runs, which turns a best-effort backup into a hang. 5s matches openDb's busy_timeout;
+    // past that the caller's own posture decides (the cadence logs and moves on, the pre-verb copy
+    // refuses), and either is better than waiting forever.
+    try { db.exec("PRAGMA busy_timeout=5000"); } catch { /* older builds: the default applies */ }
     db.prepare("VACUUM INTO ?").run(tmp);                       // R2
     renameSync(tmp, destPath);                                  // R3
   } catch (e) {

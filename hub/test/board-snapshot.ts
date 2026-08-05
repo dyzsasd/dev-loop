@@ -338,8 +338,17 @@ try {
     ok(snapshotBeforeDestructive({ dbPath: corrupt, dir, keep: 5, verb: "remove-project" }) === null,
       "LOOP-339: an UNREADABLE board likewise — that is the state --force exists for");
     // But a REAL board that cannot be written to its destination still refuses (the fail-closed half).
+    //
+    // The unwritable destination is a path UNDER A REGULAR FILE, which mkdir(2) rejects with ENOTDIR
+    // on every POSIX platform. It was `/proc/<nonexistent>` first, and that HUNG the whole CI job:
+    // procfs answers a nonexistent entry with ENOENT, and Node's recursive mkdirSync treats ENOENT as
+    // "create the parent and retry" — the parent /proc already exists, so it retried forever inside a
+    // synchronous call. Passing on macOS (where /proc does not exist at all, so the first mkdir fails
+    // outright) is what hid it. ENOTDIR is in Node's terminal-error set, so it can never recurse.
+    const notADir = join(tmp, "a-regular-file");
+    writeFileSync(notADir, "x");
     let hardFail = "";
-    try { snapshotBeforeDestructive({ dbPath: src, dir: "/proc/nonexistent-dir-refused", keep: 5, verb: "remove-project" }); }
+    try { snapshotBeforeDestructive({ dbPath: src, dir: join(notADir, "snapshots"), keep: 5, verb: "remove-project" }); }
     catch (e) { hardFail = (e as Error).message; }
     ok(hardFail !== "", "LOOP-339: a READABLE board that cannot be copied DOES throw — the fail-closed half is intact");
 
