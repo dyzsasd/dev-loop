@@ -454,8 +454,21 @@ export async function readLandingState(
     const hasDayZeroStall = baseChecks === "red" && openLoopPRs > 0;
     const hasThresholdStall = loopOpen.some((p) => {
       const ageDays = (now - Date.parse(p.createdAt)) / (24 * 60 * 60 * 1000);
-      // stalled at threshold: old enough AND not fully unblocked (MERGEABLE + green base)
-      return ageDays > LANDING_STALL_DAYS && !(p.mergeable === "MERGEABLE" && baseChecks === "green");
+      // LOOP-131 — `gh pr list --json mergeable` returns UNKNOWN on a COLD read: mergeability is
+      // computed lazily and the first request only TRIGGERS the computation. UNKNOWN had no branch
+      // here, so it collapsed into "not MERGEABLE" — a stall verdict. Measured: three PRs read
+      // UNKNOWN at 06:24Z while `gh pr view` returned MERGEABLE/CLEAN for the same PRs, untouched,
+      // one minute earlier; minutes later the same list call returned the truth. So the exemption
+      // for a healthy old PR was unreachable for exactly the PRs it selects — an old PR is precisely
+      // the one whose mergeability has aged out of the cache.
+      //
+      // UNKNOWN is "not yet computed", not "not mergeable". It is treated as NOT-a-stall so the
+      // guard does not manufacture a stall out of a cold cache; a genuinely CONFLICTING PR still
+      // reports its true value and still stalls. The direction is deliberate: a missed stall is
+      // re-detected on the next poll (this runs on a cadence), while a false stall wakes the
+      // operator for nothing and trains them to ignore the signal.
+      const mergeUnblocked = p.mergeable === "MERGEABLE" || p.mergeable === "UNKNOWN" || p.mergeable == null;
+      return ageDays > LANDING_STALL_DAYS && !(mergeUnblocked && baseChecks === "green");
     });
 
     if (hasDayZeroStall || hasThresholdStall) {

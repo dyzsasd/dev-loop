@@ -161,6 +161,17 @@ export interface MergeGuardResult {
 // Stable marker prefix used for idempotency detection across re-runs.
 const APPLY_MARKER = "⛔ merge-guard:";
 
+// LOOP-241 — carried by every forge-review objection. Spells out the step devs get wrong, because
+// this string is what a dev reads at the MOMENT of the failure; the SKILL's Step 0.5 already says
+// green is not sufficient, but nobody re-reads a SKILL when a guard just spoke to them.
+const REVIEW_REMEDY = [
+  "   Pushing a fix does NOT resolve a review thread, and CI going green does not either — thread",
+  "   resolution is a separate action a human or the reviewer must take on the PR.",
+  "   Do both: push the fix, THEN resolve each thread (GitHub: 'Resolve conversation' on each, or",
+  "   `gh api -X PATCH /repos/{owner}/{repo}/pulls/comments/{id}` per thread). The guard re-checks on",
+  "   the next run; it will keep holding until the thread count reaches zero.",
+].join("\n");
+
 // LOOP-323 AC6: whether a "stale" verdict (green computed against a base behind the tip) HOLDS the
 // merge under --strict, or reports advisory-only. "red" always trips regardless of this constant.
 // AC6 was written 2026-08-04 while its precondition — LOOP-277's Step 0.5 re-freshen remedy — was
@@ -181,10 +192,17 @@ export function buildCommentBody(
   if (forgeReview.trip) {
     const cr = forgeReview.changeRequesters;
     const ut = forgeReview.unresolvedThreadAuthors;
+    // LOOP-241 — the objection said THAT the merge was held and not WHAT to do, and the omitted step
+    // is the one devs actually get wrong: PUSHING A FIX DOES NOT RESOLVE A THREAD. Measured across
+    // three simultaneously-stranded PRs, two devs had pushed a correct fix (with tests) and left
+    // every thread open; one handoff comment stated the misconception verbatim — "CI re-triggered;
+    // merge-guard will clear on green." It will not: green is orthogonal to thread resolution.
+    //
+    // The verdict logic is correct and unchanged. This is the message only.
     if (cr.length > 0) {
-      return `${APPLY_MARKER}${prRef} carries CHANGES_REQUESTED from ${cr.map((l) => `@${l}`).join(", ")} (unresolved). Not merged.`;
+      return `${APPLY_MARKER}${prRef} carries CHANGES_REQUESTED from ${cr.map((l) => `@${l}`).join(", ")} (unresolved). Not merged.\n${REVIEW_REMEDY}`;
     }
-    return `${APPLY_MARKER}${prRef} has unresolved review threads from ${ut.map((l) => `@${l}`).join(", ")}. Not merged.`;
+    return `${APPLY_MARKER}${prRef} has unresolved review threads from ${ut.map((l) => `@${l}`).join(", ")}. Not merged.\n${REVIEW_REMEDY}`;
   }
   if (boardState.trip) {
     const state = boardState.ticketState ?? "non-merge-eligible state";

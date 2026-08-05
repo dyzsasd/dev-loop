@@ -917,5 +917,24 @@ exit 0
   rmSync(ROOT, { recursive: true, force: true });
 }
 
+// ── LOOP-241: the objection carries its own remedy ─────────────────────────────────────────────
+// The comment said THAT the merge was held and not WHAT to do, and the omitted step is the one devs
+// actually get wrong. Measured across three simultaneously-stranded PRs: two devs had pushed a
+// correct fix WITH tests and left every thread open, and one handoff comment stated the
+// misconception verbatim — "CI re-triggered; merge-guard will clear on green." It will not.
+{
+  const src = readFileSync(join(hubRoot, "src", "merge-guard.ts"), "utf8");
+  ok(/Pushing a fix does NOT resolve a review thread/.test(src),
+    "LOOP-241: the forge-review objection states that pushing a fix does not resolve a thread");
+  ok(/CI going green does not either/.test(src),
+    "LOOP-241: …and that green is orthogonal — the exact misconception a stranded dev wrote down");
+  ok(/Resolve conversation/.test(src),
+    "LOOP-241: …and names the concrete action, not just the fact of the hold");
+  // The remedy rides BOTH forge-review branches (CHANGES_REQUESTED and unresolved-threads), because
+  // a dev hitting either one has the same next step.
+  const remedyUses = (src.match(/\$\{REVIEW_REMEDY\}/g) ?? []).length;
+  ok(remedyUses === 2, `LOOP-241: both forge-review objections carry it (got ${remedyUses})`);
+}
+
 console.log(fails ? `${fails} CHECK(S) FAILED` : "merge-guard: all checks passed");
 process.exit(fails ? 1 : 0);

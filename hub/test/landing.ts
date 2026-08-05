@@ -587,5 +587,51 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ok(result!.state === "healthy", "dotted repo name 'service.api' resolves to healthy state");
 }
 
+// ── LOOP-131: gh's COLD-CACHE mergeable:UNKNOWN is not a stall ─────────────────────────────────
+// `gh pr list --json mergeable` returns UNKNOWN on a cold read — mergeability is computed lazily and
+// the first request only TRIGGERS the computation. UNKNOWN had no branch in the predicate, so it
+// collapsed into "not MERGEABLE" and became a stall verdict. The exemption for a healthy OLD PR was
+// therefore unreachable for exactly the PRs it selects: an old PR is precisely the one whose
+// mergeability has aged out of the cache. Measured live — three PRs read UNKNOWN while `gh pr view`
+// returned MERGEABLE/CLEAN for the same PRs, untouched, one minute earlier.
+{
+  const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["CI / test"] }));
+  const oldDate = new Date(NOW - 3 * DAY_MS).toISOString(); // older than the 2d threshold
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: prJson([{ headRefName: "dev-loop/LOOP-131", createdAt: oldDate, mergeable: "UNKNOWN" }]) }],
+    [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI / test", conclusion: "success" }]) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(result!.state === "healthy",
+    `LOOP-131: an OLD PR reading mergeable:UNKNOWN over a green base is NOT a stall (got ${result!.state})`);
+}
+
+// The discriminator — without it, "treat UNKNOWN as fine" would be indistinguishable from
+// "never stall". A genuinely CONFLICTING PR of the same age still stalls.
+{
+  const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["CI / test"] }));
+  const oldDate = new Date(NOW - 3 * DAY_MS).toISOString();
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: prJson([{ headRefName: "dev-loop/LOOP-131b", createdAt: oldDate, mergeable: "CONFLICTING" }]) }],
+    [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI / test", conclusion: "success" }]) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(result!.state === "stalled", "LOOP-131 discriminator: a CONFLICTING PR of the same age still stalls");
+}
+
+// A red base still stalls regardless of mergeability — the day-0 arm is untouched.
+{
+  const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["CI / test"] }));
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: prJson([{ headRefName: "dev-loop/LOOP-131c", createdAt: new Date(NOW - 3 * DAY_MS).toISOString(), mergeable: "UNKNOWN" }]) }],
+    [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI / test", conclusion: "failure" }]) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(result!.state === "stalled", "LOOP-131: UNKNOWN over a RED base still stalls — the day-0 arm is unchanged");
+}
+
 console.log(fails === 0 ? "\nLANDING_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
