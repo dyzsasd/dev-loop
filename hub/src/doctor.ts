@@ -9,6 +9,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { dirtyTrackedFiles, listTreeSnapshots } from "./tree-snapshot.ts";
+import { readSchedulerBuild, schedulerAlive, schedulerSkew, pkgVersionOf, teamDirOf } from "./scheduler-build.ts"; // LOOP-253: W36
 import { reportTrailGaps } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
 import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
@@ -593,6 +594,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   checkDirtySharedTree(ws, warn);   // W33 (LOOP-312)
   checkInRepoWorktrees(ws, warn);   // W34 (LOOP-132)
   checkReportTrail(ws, warn);       // W35 (LOOP-28)
+  checkSchedulerBuild(ws, warn);    // W36 (LOOP-253)
   checkLessonsLiveness(ws, warn);   // W30 (LOOP-91)
   checkBoardSnapshotW32(ws, warn);  // W32 (LOOP-340)
   await checkDaemonPortBand(warn);  // W25 (LOOP-137)
@@ -874,6 +876,28 @@ export function checkReportTrail(ws: Workspace, warn: (msg: string) => void): vo
         warn(`[W35] [${key}] agent '${f.agent}' fired ${f.fires}x in ${f.windowDays}d but wrote no report under ${f.expectedDir} — its work left no durable trail (§22), so those fires are invisible in the only record the operator reads.`);
       }
     }
+  } catch { /* best-effort — never fails doctor */ }
+}
+
+// W36 helper (LOOP-253) — the third upgrade axis.
+//
+// The installed package is checked, and a running daemon is checked (W28). The long-lived
+// `run-agents` scheduler was not. Node resolves and caches every module at import time and never
+// reloads them, so a reinstall ten hours into a run leaves the orchestrator executing the code it
+// loaded at boot. Fixes that land in that window are live for `doctor` — a fresh process every
+// invocation — and dead in the loop. That is how DOCTOR_OK printed while four landed fixes were inert.
+//
+// Extracted, not inlined: doctorWorkspace is at the CRAP-90 ratchet edge and an inline branch tips it
+// green locally and red in CI. The ticket says so explicitly, having watched it happen.
+export function checkSchedulerBuild(ws: Workspace, warn: (msg: string) => void): void {
+  try {
+    const dir = teamDirOf(wsStateRoot(ws));
+    const rec = readSchedulerBuild(dir);
+    if (!rec) return;                 // no scheduler has ever run here — nothing to compare
+    if (!schedulerAlive(rec)) return; // the record outlived its process; a stale file is not a finding
+    const skew = schedulerSkew(rec, pkgVersionOf());
+    if (!skew) return;
+    warn(`[W36] the running scheduler (pid ${skew.pid}, started ${skew.startedAt}) loaded build ${skew.running}, which is ${skew.direction} than the installed ${skew.installed} — node caches modules at import time and never reloads them, so every fix that landed since is inert IN THE LOOP while doctor reports it live. Restart it: stop the \`dev-loop run\` process and relaunch (\`dev-loop run --agents core\`).`);
   } catch { /* best-effort — never fails doctor */ }
 }
 
