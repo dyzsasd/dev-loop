@@ -11,8 +11,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
-import { deliveryProjects, type Workspace, type WsWarning } from "./team-config.ts";
+import { deliveryProjects, effectiveProject, resolveTodoDepthCap, type Workspace, type WsWarning } from "./team-config.ts";
 import { AGENT_HANDLES } from "./seed.ts";
+import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP-329: the SAME tier predicate the queue uses
 import { liveBlockerIds } from "./blocked-by.ts";
 import { lessonsPaths } from "./lessons.ts";
 
@@ -437,7 +438,12 @@ export interface BoardMetrics {
   historyFloor: string | null; // LOOP-313: earliest `events` row for the project — null when there are none
   historyIncomplete: boolean;  // LOOP-313: true when the floor is INSIDE the window (aggregates are partial)
   qa: { bugsFiled: number; escaped: number | null; escapeRatio: number | null }; // LOOP-122: null = unmeasurable
+  // LOOP-329 — the BACKLOG side per tier, which no surface reported. Without it a tier with capacity
+  // and nothing it may pull is invisible, and PM re-derived it by hand on every fire.
+  tiers?: { cap: number; todo: TierDepth; backlog: TierDepth };
 }
+
+export type TierDepth = { total: number; "senior-dev": number; "junior-dev": number; dev: number };
 
 // ─── shared parked-split (LOOP-31) — per-backend human-park population ─────
 // Returns the ticket IDs that are "parked" (need human attention):
@@ -967,6 +973,11 @@ async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<
         const pid = findProject(db, key);
         if (!pid) continue;
         const m = boardMetrics(db, pid, windowMs, nowMs, { escapeSourceConfigured });
+        // LOOP-329 — the per-tier Todo/Backlog pair. Attached here rather than inside boardMetrics
+        // because it needs the WORKSPACE (for the §5a cap), and boardMetrics takes only a db handle.
+        if (effectiveProject(ws, key).devSplit ?? false) {
+          m.tiers = { cap: resolveTodoDepthCap(ws, key), todo: servableTodoDepth(db, pid), backlog: servableBacklogDepth(db, pid) };
+        }
         board[key] = m;
         roll.throughput += m.throughput; roll.verifyFails += m.verifyFails; roll.blockedNow += m.blockedNow; roll.sequencedNow += m.sequencedNow;
         roll.bugsFiled += m.qa.bugsFiled;
@@ -1045,6 +1056,15 @@ export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<t
     // that can write the label it was 0 by construction. Follows LOOP-42's `landed unknown` shape.
     const escapeStr = r.escaped === null ? "escapes unmeasured — no ops/communication fire in window" : `${r.escaped} escaped to prod`;
     console.log(`board: ${r.throughput} done, landed ${landedStr}, accept ${pct(r.acceptRate)} (${r.verifyFails} verify-fail), ${r.blockedNow} parked, ${r.sequencedNow} sequenced, QA bugs ${r.bugsFiled} (${escapeStr})`);
+    // LOOP-329: the Todo side alone cannot show a starved tier — 6/10 with 0 promotable reads
+    // IDENTICAL to 6/10 with 60 waiting. Both numbers, or the line answers the wrong question.
+    // Per PROJECT, because the §5a cap is per-project and summing two different caps would produce a
+    // ratio that describes no real queue.
+    for (const [key, b] of Object.entries((out.board ?? {}) as Record<string, BoardMetrics>)) {
+      if (!b.tiers) continue;
+      const t = b.tiers;
+      console.log(`tiers[${key}]: ${(["senior-dev", "junior-dev"] as const).map((k) => `${k} ${t.todo[k]}/${t.cap} todo · ${t.backlog[k]} backlog`).join("  |  ")}`);
+    }
     // LOOP-313: every figure on the line above is derived from `events`. When that table begins
     // INSIDE the window, the numbers do not cover the period they are labelled with — say so rather
     // than let "6 done · 30d" stand on a board holding 174 Done tickets.

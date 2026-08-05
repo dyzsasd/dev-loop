@@ -659,6 +659,25 @@ export function primaryRepo(ws: Workspace, key: string): string | null {
   return (repos.find((r) => r.role === "primary") ?? repos.find((r) => r.role === "docs") ?? repos[0])?.absPath ?? null;
 }
 
+/**
+ * The §5a Todo-depth cap for a project — NEAREST WINS, as conventions §5a states: a project's own
+ * `intake.todoDepthCap` overrides the team's, and the shipped default is 10.
+ *
+ * Written here because there was no code-side resolver at all (LOOP-329): the knob existed in config
+ * and in the PM agent's prose, and every reader that wanted it had to re-derive the precedence. One
+ * resolver means the doctor check, the metrics line and any future consumer cannot disagree about
+ * what "at cap" means.
+ */
+export const DEFAULT_TODO_DEPTH_CAP = 10;
+
+export function resolveTodoDepthCap(ws: Workspace, key: string): number {
+  const p = ws.file.projects[key]?.intake?.todoDepthCap;
+  if (typeof p === "number" && Number.isInteger(p) && p >= 1) return p;
+  const t = ws.file.team.intake?.todoDepthCap;
+  if (typeof t === "number" && Number.isInteger(t) && t >= 1) return t;
+  return DEFAULT_TODO_DEPTH_CAP;
+}
+
 export function referencingProjects(ws: Workspace, ref: string): string[] {
   return Object.entries(ws.file.projects).filter(([, p]) => (p.repos ?? []).some((r) => r.ref === ref)).map(([k]) => k);
 }

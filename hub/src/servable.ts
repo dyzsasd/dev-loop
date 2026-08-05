@@ -85,6 +85,34 @@ export function servableSlice(db: DatabaseSync, projectId: string, actor: string
   return { todo, inProgress, inReview };
 }
 
+/**
+ * The BACKLOG side, per tier (LOOP-329) — the count no surface reported.
+ *
+ * Every surface that reports dev-tier load reported only the Todo side. A tier that HAS CAPACITY AND
+ * NOTHING IT IS ALLOWED TO PULL was therefore invisible to the operator and re-derived by hand by PM
+ * on every fire. Measured on this board 2026-08-05: senior-dev sat at 6/10 Todo — 4 idle slots —
+ * with ZERO promotable Backlog anywhere, while 66 junior tickets queued at a tier already over cap.
+ *
+ * Deliberately the SAME predicate `servableTodoDepth` uses, not a fourth hand-rolled `assignee ===`
+ * filter — that duplication is what LOOP-169 exists to stop. The one difference is the state, so the
+ * two counts can never disagree about who may pull what.
+ *
+ * `blocked` is excluded from every count: a blocked row is not promotable, and counting it would
+ * report candidates that no promotion can reach.
+ */
+export function servableBacklogDepth(db: DatabaseSync, projectId: string): { total: number; "senior-dev": number; "junior-dev": number; dev: number } {
+  const allBacklog = (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state='Backlog' ORDER BY created_at").all(projectId) as unknown as TicketRow[]).map(toTicket);
+  let total = 0, senior = 0, junior = 0, dev = 0;
+  for (const t of allBacklog) {
+    if (t.labels.includes("blocked")) continue;  // not promotable ⇒ not a candidate
+    total++;
+    if (isTodoServableFor(t, "senior-dev")) senior++;
+    if (isTodoServableFor(t, "junior-dev")) junior++;
+    if (isTodoServableFor(t, "dev")) dev++;
+  }
+  return { total, "senior-dev": senior, "junior-dev": junior, dev };
+}
+
 // servableTodoDepth — the §5a todoDepth cap input, computed from the SAME servable-Todo
 // predicate as `servableSlice`, not a raw `assignee ===` filter over non-blocked Todo.
 // Makes a SINGLE pass over all non-blocked Todo rows and counts per tier through the shared
