@@ -27,8 +27,44 @@ export function bearerOk(header: string | string[] | undefined, token: string): 
   return timingSafeEqual(got, want);
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+/**
+ * The hostname from a bare bind address OR a Host-header authority.
+ *
+ *   [::1]:8789 → ::1 · [::1] → ::1 · 127.0.0.1:8789 → 127.0.0.1 · ::1 → ::1 · localhost → localhost
+ *
+ * After `]` only end-of-string or `:<port>` is accepted. `[::1]evil.com` is returned VERBATIM, so it
+ * fails the set lookup and is rejected. That case is not reachable from a browser — `new URL(
+ * "http://[::1]evil.com/")` throws, so no browser can put it in a Host header — but a loopback
+ * predicate that tolerates a trailing-garbage suffix is exactly the shape that becomes a hole the
+ * moment its next consumer feeds it a string from somewhere other than a Host header. Closed at the
+ * source rather than at each call site.
+ */
+export function hostnameOf(host: string): string {
+  if (host.startsWith("[")) {
+    const e = host.indexOf("]");
+    if (e === -1) return host;                             // unterminated bracket → verbatim → rejected
+    const rest = host.slice(e + 1);
+    if (rest !== "" && !/^:\d+$/.test(rest)) return host;  // "[::1]evil.com" → verbatim → rejected
+    return host.slice(1, e);
+  }
+  // A bare IPv6 literal has >1 colon and carries no port (a bracket is required to add one), so the
+  // only colon-splitting case is host:port. Splitting a bare "::1" on ":" would yield "" and reject
+  // the very address this widens for.
+  const colons = (host.match(/:/g) ?? []).length;
+  return colons === 1 ? host.slice(0, host.indexOf(":")) : host;
+}
+
+/**
+ * The ONE loopback predicate (LOOP-172 / LOOP-289).
+ *
+ * `daemon.ts` used to decide this twice, with two regexes that DISAGREED on IPv6 loopback: the boot
+ * gate accepted `::1`, the write guard did not. A `DEVLOOP_DAEMON_HOST=::1` bind therefore booted
+ * token-less AND 403'd every write — each half individually defensible, the pair unusable.
+ */
 export function isLoopbackHost(host: string): boolean {
-  return /^(127\.0\.0\.1|localhost|::1|\[::1\])$/.test(host);
+  return LOOPBACK_HOSTS.has(hostnameOf(host));
 }
 
 // One-click §6.0 ATTACH egress guard (LOOP-173). The §6.2 bearer is the SOLE credential for a remote

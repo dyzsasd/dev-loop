@@ -14,6 +14,7 @@ import { doctorWorkspace } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import { openDb } from "../src/db.ts";
 import { secretCli } from "../src/secret-cli.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -235,7 +236,7 @@ try {
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const port = (server.address() as { port: number }).port;
     const root = mkWs("e2e-ws", "DL_SECTEST_E2E", `DL_SECTEST_E2E=http://127.0.0.1:${port}/hook\n`);
-    const childEnv = { ...process.env } as Record<string, string | undefined>;
+    const childEnv = { ...scrubFireEnv() } as Record<string, string | undefined>;
     delete childEnv.DL_SECTEST_E2E; // the clean shell: the value exists NOWHERE but secrets.env
     const child = spawn("node", [join(hubRoot, "src", "comms.ts"), "--title", "test", "hello"], { cwd: root, env: childEnv as NodeJS.ProcessEnv });
     let childOut = "";

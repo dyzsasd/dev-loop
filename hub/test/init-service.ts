@@ -15,6 +15,7 @@ import { spawnSync, execFileSync, type SpawnSyncReturns } from "node:child_proce
 import { registerDaemonPid } from "./daemon-harness.ts";
 import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const ROOT = "/tmp/hub-init-service";
 const DB = join(ROOT, "hub.db");
@@ -49,7 +50,7 @@ function cfg(projects: Record<string, { backend?: string; mode?: string; repoPat
 function is(args: string[], pluginRoot = PLUGIN_PRESENT): SpawnSyncReturns<string> {
   return spawnSync("node", ["src/init-service.ts", ...args], {
     encoding: "utf8", timeout: 30000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: CFG, DEVLOOP_PLUGIN_ROOT: pluginRoot, DEVLOOP_ACTOR: "operator" },
+    env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: CFG, DEVLOOP_PLUGIN_ROOT: pluginRoot, DEVLOOP_ACTOR: "operator" },
   });
 }
 
@@ -121,7 +122,7 @@ try {
   // ── 8. the `npm run init-service` convenience script resolves to the same standalone entry (idempotent) ──
   const via = spawnSync("npm", ["run", "--silent", "init-service", "--", "iscv", "Isc Project", "ISV"], {
     encoding: "utf8", timeout: 30000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: CFG, DEVLOOP_PLUGIN_ROOT: PLUGIN_PRESENT, DEVLOOP_ACTOR: "operator" },
+    env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: DB, DEVLOOP_RUN_DIR: RUN, DEVLOOP_PROJECTS_JSON: CFG, DEVLOOP_PLUGIN_ROOT: PLUGIN_PRESENT, DEVLOOP_ACTOR: "operator" },
   });
   ok(via.status === 0 && /already running/.test(via.stdout), "`npm run init-service` resolves to the same standalone entry (idempotent no-op)");
 

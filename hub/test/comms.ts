@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPayload, notify } from "../src/comms.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -22,7 +23,7 @@ const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-comms-")));
 }
 
 const notifyCli = (args: string[], cwd: string, extra: Record<string, string> = {}) => {
-  const r = spawnSync("node", [join(hubRoot, "src", "comms.ts"), ...args], { cwd, env: { ...process.env, ...extra }, encoding: "utf8" });
+  const r = spawnSync("node", [join(hubRoot, "src", "comms.ts"), ...args], { cwd, env: { ...scrubFireEnv(), ...extra }, encoding: "utf8" });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 };
 
@@ -30,7 +31,7 @@ const notifyCli = (args: string[], cwd: string, extra: Record<string, string> = 
 try {
   // workspace with lark comms → env name DEVLOOP_TEST_HOOK
   const ws = join(tmp, "ws");
-  spawnSync("node", [join(hubRoot, "src", "team.ts"), "init", "--dir", ws, "--key", "comms-team", "--backend", "linear", "--linear-team", "L", "--comms", "lark:DEVLOOP_TEST_HOOK"], { env: { ...process.env, DEVLOOP_HOME: join(tmp, "home") }, encoding: "utf8" });
+  spawnSync("node", [join(hubRoot, "src", "team.ts"), "init", "--dir", ws, "--key", "comms-team", "--backend", "linear", "--linear-team", "L", "--comms", "lark:DEVLOOP_TEST_HOOK"], { env: { ...scrubFireEnv(), DEVLOOP_HOME: join(tmp, "home") }, encoding: "utf8" });
   const env = { DEVLOOP_HOME: join(tmp, "home") };
 
   // ── DRYRUN: prints provider + env NAME + payload, never the URL ──

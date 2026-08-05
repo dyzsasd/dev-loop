@@ -10,6 +10,7 @@ import { mkdtempSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNNER = join(here, "run-all.ts");        // the real runner under test
@@ -20,15 +21,22 @@ let fails = 0;
 const ok = (cond: boolean, m: string): void => { console.log((cond ? "✅ " : "❌ ") + m); if (!cond) fails++; };
 
 // Run a COPY of the real run-all.ts against a temp dir of synthetic suites and capture its output.
-// run-all.ts is dependency-free (node builtins only), so the copy runs standalone; it globs its own
-// dir, so it discovers exactly the synthetic files we write. The env strips the SUITE_ENV carve-out
-// vars so AC5 observes only what run-all.ts itself injects, never an ambient value.
+// It globs its own dir, so it discovers exactly the synthetic files we write. The env strips the
+// SUITE_ENV carve-out vars so AC5 observes only what run-all.ts itself injects, never an ambient one.
+//
+// The copy carries `env-scrub.ts` with it (LOOP-193). run-all.ts was previously dependency-free and
+// this harness relied on that; it now imports the ONE fire-marker union, because scrubbing at the
+// runner protects the suite PROCESSES themselves — a suite that resolves a workspace in-process picks
+// up an ambient DEVLOOP_WORKSPACE no matter how carefully it scrubs its own child spawns. Copying the
+// leaf is the honest way to keep both properties. Inlining the var list here instead would recreate
+// the duplicated union that LOOP-156 wrote env-scrub.ts to remove.
 function runSynthetic(files: Record<string, string>): { status: number | null; stdout: string; stderr: string } {
   const dir = mkdtempSync(join(tmpdir(), "run-all-runner-"));
   try {
     copyFileSync(RUNNER, join(dir, "run-all.ts"));
+    copyFileSync(join(dirname(RUNNER), "env-scrub.ts"), join(dir, "env-scrub.ts")); // run-all.ts's one import
     for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
-    const env = { ...process.env };
+    const env = { ...scrubFireEnv() };
     delete env.DEVLOOP_CHANNEL_DRYRUN; delete env.DEVLOOP_CHANNEL_TOKEN; delete env.DEVLOOP_MIRROR_DRYRUN;
     const r = spawnSync(NODE, [join(dir, "run-all.ts")], { encoding: "utf8", timeout: 30_000, env });
     return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };

@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, realpa
 import { tmpdir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -20,7 +21,7 @@ if (platform() === "win32") { console.log("✅ LOOP-93: win32 has no POSIX mode 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-logperms-")));
 const HOME = join(tmp, "home");
 const ws = join(tmp, "ws");
-const env = (extra: Record<string, string> = {}) => ({ ...process.env, DEVLOOP_HOME: HOME, ...extra });
+const env = (extra: Record<string, string> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra });
 const team = (args: string[], cwd: string) => spawnSync("node", [join(hubRoot, "src", "team.ts"), ...args], { cwd, env: env(), encoding: "utf8" });
 const run = (args: string[], extra: Record<string, string> = {}, timeoutMs = 60_000) => {
   const r = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), ...args], { cwd: ws, env: env(extra), encoding: "utf8", timeout: timeoutMs });

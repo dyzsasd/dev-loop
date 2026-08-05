@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { deriveTeamKey, preseedClaudeTrust, interactiveCommandFor, resolvedBoardUrl } from "../src/up.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -63,7 +64,7 @@ try {
   const up = (args: string[], env: Record<string, string | undefined> = {}) =>
     spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), "up", ...args], {
       cwd: ws, encoding: "utf8",
-      env: { ...process.env, HOME: join(ROOT, "home"), DEVLOOP_RUNNER_CLI: undefined, ...env } as NodeJS.ProcessEnv,
+      env: { ...scrubFireEnv(), HOME: join(ROOT, "home"), DEVLOOP_RUNNER_CLI: undefined, ...env } as NodeJS.ProcessEnv,
     });
   mkdirSync(join(ROOT, "home"), { recursive: true });
 
@@ -101,9 +102,9 @@ try {
 
   // attach leg: URL validation + env injection, no local workspace required.
   const bare = join(ROOT, "bare"); mkdirSync(bare, { recursive: true });
-  const bad = spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), "up", "--attach", "not a url", "--dry-launch"], { cwd: bare, encoding: "utf8", env: { ...process.env, HOME: join(ROOT, "home") } });
+  const bad = spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), "up", "--attach", "not a url", "--dry-launch"], { cwd: bare, encoding: "utf8", env: { ...scrubFireEnv(), HOME: join(ROOT, "home") } });
   ok(bad.status === 2 && /not a valid URL/.test(bad.stderr), "attach: a garbled URL is a usage error");
-  const att = spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), "up", "--attach", "https://hub.example:8787", "--dry-launch"], { cwd: bare, encoding: "utf8", env: { ...process.env, HOME: join(ROOT, "home") } });
+  const att = spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), "up", "--attach", "https://hub.example:8787", "--dry-launch"], { cwd: bare, encoding: "utf8", env: { ...scrubFireEnv(), HOME: join(ROOT, "home") } });
   const attLaunch = JSON.parse(att.stdout.slice(att.stdout.search(/\{/)));
   ok(att.status === 0 && attLaunch.envAdded.DEVLOOP_HUB_URL === "https://hub.example:8787" && !existsSync(join(bare, "dev-loop.json")),
     "attach: DEVLOOP_HUB_URL rides the console env; NO local workspace is scaffolded (the home is remote)");
@@ -114,7 +115,7 @@ try {
   // in the base env so an ambient opt-in can't mask the refusal (LOOP-156 hermeticity).
   const upAttach = (url: string, extraEnv: Record<string, string | undefined> = {}) =>
     spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), "up", "--attach", url, "--dry-launch"],
-      { cwd: bare, encoding: "utf8", env: { ...process.env, HOME: join(ROOT, "home"), DEVLOOP_ATTACH_ALLOW_PLAINTEXT: undefined, ...extraEnv } as NodeJS.ProcessEnv });
+      { cwd: bare, encoding: "utf8", env: { ...scrubFireEnv(), HOME: join(ROOT, "home"), DEVLOOP_ATTACH_ALLOW_PLAINTEXT: undefined, ...extraEnv } as NodeJS.ProcessEnv });
   const leak = upAttach("http://hub.remote:8787", { DEVLOOP_UI_TOKEN: "up-canary-not-a-real-secret" });
   ok(leak.status !== 0 && /cleartext|non-loopback/.test(leak.stderr), `attach guard: plaintext + remote + token ⇒ refused before launch (got ${leak.status})`);
   ok(/https:\/\//.test(leak.stderr) && /ssh -L|loopback/.test(leak.stderr), "attach guard: the refusal names BOTH remedies (https + tunnel), not a bare 'invalid URL'");

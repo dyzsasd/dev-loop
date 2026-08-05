@@ -7,6 +7,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams, type SpawnSyncReturns } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const registry = new Set<number>();
@@ -36,7 +37,7 @@ export async function startTestDaemon(
   ensureHook();
   const pattern = opts?.detectPattern ?? /http:\/\/127\.0\.0\.1:(\d+)\//;
   const child = spawn(process.execPath, [join(hubRoot, "src", "daemon.ts")], {
-    env: { ...process.env, ...env },
+    env: { ...scrubFireEnv(), ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const pid = child.pid!;
@@ -90,7 +91,7 @@ function daemonCliArgv(entry: DaemonCliEntry, sub: string): string[] {
 
 /** Blocking lifecycle-CLI invocation — the `spawnSync` form lifecycle.ts uses.
  *  `cwd` overrides the default `hubRoot` (useful when testing workspace ascent from outside the repo).
- *  `rawEnv` skips the `{ ...process.env, ...env }` merge — use when the caller has already built a
+ *  `rawEnv` skips the `{ ...scrubFireEnv(), ...env }` merge — use when the caller has already built a
  *  fully-scrubbed env (e.g. via scrubFireEnv()) and must not re-introduce ambient fire markers. */
 export function runDaemonCli(
   entry: DaemonCliEntry,
@@ -102,7 +103,7 @@ export function runDaemonCli(
     cwd: opts?.cwd ?? hubRoot,
     encoding: "utf8",
     timeout: opts?.timeout ?? 25_000,
-    env: (opts?.rawEnv ? env : { ...process.env, ...env }) as NodeJS.ProcessEnv,
+    env: (opts?.rawEnv ? env : { ...scrubFireEnv(), ...env }) as NodeJS.ProcessEnv,
   });
 }
 
@@ -112,5 +113,5 @@ export function launchDaemonCli(
   sub: string,
   env: Record<string, string>,
 ): ChildProcessWithoutNullStreams {
-  return spawn(NODE, daemonCliArgv(entry, sub), { cwd: hubRoot, env: { ...process.env, ...env } });
+  return spawn(NODE, daemonCliArgv(entry, sub), { cwd: hubRoot, env: { ...scrubFireEnv(), ...env } });
 }

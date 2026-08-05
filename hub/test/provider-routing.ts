@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { validateTeamFile, type ProviderEntry } from "../src/team-config.ts";
 import { renderProviderEntry, syncOpencodeConfig, opencodeSyncDrift, opencodeConfigPath } from "../src/opencode-sync.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -113,7 +114,7 @@ try {
   writeFileSync(fakeBin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(join(dumpDir, "args.txt"))}\nprintf '%s' "$OPENCODE_PERMISSION" > ${JSON.stringify(join(dumpDir, "perm.json"))}\nprintf '%s' "$DEVLOOP_ACTOR/$DEVLOOP_PROJECT" > ${JSON.stringify(join(dumpDir, "identity.txt"))}\nexit 0\n`);
   chmodSync(fakeBin, 0o755);
   const runSched = (args: string[], env: Record<string, string | undefined>) =>
-    spawnSync(process.execPath, [join(hubRoot, "src", "run-agents.ts"), ...args], { cwd: ws, encoding: "utf8", env: { ...process.env, DEVLOOP_OPENCODE_BIN: fakeBin, ...env } as NodeJS.ProcessEnv });
+    spawnSync(process.execPath, [join(hubRoot, "src", "run-agents.ts"), ...args], { cwd: ws, encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_OPENCODE_BIN: fakeBin, ...env } as NodeJS.ProcessEnv });
   const ledgerPath = join(ws, ".dev-loop", "team", "fires.jsonl");
   const ledgerRows = () => (existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 

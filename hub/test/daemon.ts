@@ -16,6 +16,7 @@ import { createDaemon, roadmapDivergenceDoc } from "../src/daemon.ts";
 import { ticketPage, boardPage } from "../src/daemonviews.ts"; // DL-86: unit-check the failed-write re-render input preservation
 import { startTestDaemon, runDaemonCli } from "./daemon-harness.ts";
 import { daemonReap } from "../src/daemon-lifecycle.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const DB = "/tmp/hub-daemon/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -31,7 +32,7 @@ async function as(actor: string, project = "dmn"): Promise<Client> {
   const c = new Client({ name: `dtest-${actor}`, version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB },
+    env: { ...scrubFireEnv(), DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: project, DEVLOOP_HUB_DB: DB },
   }));
   return c;
 }

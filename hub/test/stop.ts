@@ -8,6 +8,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -69,7 +70,7 @@ exit 0
   await (async () => {
     box.sched = spawn("node", [join(hubRoot, "src", "run-agents.ts"), "--cli", "opencode", "--agents", "pm",
       "--interval", "pm=2s", "--stagger", "0"], {
-      cwd: ws, env: { ...process.env, DEVLOOP_OPENCODE_BIN: stub }, stdio: ["ignore", "pipe", "pipe"] });
+      cwd: ws, env: { ...scrubFireEnv(), DEVLOOP_OPENCODE_BIN: stub }, stdio: ["ignore", "pipe", "pipe"] });
     box.sched.stdout!.on("data", (d) => { captured += d.toString(); });
     box.sched.stderr!.on("data", (d) => { captured += d.toString(); });
     const waitFor = async (re: RegExp, ms: number): Promise<boolean> => {

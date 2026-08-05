@@ -6,6 +6,7 @@ import { rmSync, mkdirSync, existsSync, mkdtempSync, cpSync, realpathSync, write
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb } from "../src/db.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const ROOT = "/tmp/hub-seed-test";
 rmSync(ROOT, { recursive: true, force: true });
@@ -19,7 +20,7 @@ function seed(dbName: string, args: string[]): { status: number | null; stdout: 
   const db = join(ROOT, dbName);
   const r = spawnSync("node", ["src/seed.ts", ...args], {
     encoding: "utf8", timeout: 30000,
-    env: { ...process.env, DEVLOOP_HUB_DB: db },
+    env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: db },
   });
   return { status: r.status, stdout: r.stdout ?? "", db };
 }
@@ -77,7 +78,7 @@ ok(bare.status === 0 && projectCount(bare.db) === 1, "bare `seed` still seeds th
   writeFileSync(join(spaceRoot, "package.json"), JSON.stringify({ type: "module" })); // ESM for the copied .ts
   const db = join(ROOT, "spaced.db");
   const r = spawnSync("node", [join(spaceRoot, "src", "seed.ts"), "sp", "Spaced Project", "SP"], {
-    encoding: "utf8", timeout: 30000, env: { ...process.env, DEVLOOP_HUB_DB: db },
+    encoding: "utf8", timeout: 30000, env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: db },
   });
   const out = r.stdout ?? "";
   ok(out.length > 0 && projectCount(db) === 1,

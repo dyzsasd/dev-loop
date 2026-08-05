@@ -10,7 +10,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
-import { bearerOk, isLoopbackHost } from "../src/ui-token.ts";
+import { bearerOk, isLoopbackHost, hostnameOf } from "../src/ui-token.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -21,8 +21,28 @@ ok(bearerOk("Bearer s3cret", "s3cret"), "bearerOk: exact match passes");
 ok(!bearerOk("Bearer wrong1", "s3cret"), "bearerOk: wrong token fails");
 ok(!bearerOk("s3cret", "s3cret") && !bearerOk(undefined, "s3cret") && !bearerOk("Basic s3cret", "s3cret"),
   "bearerOk: non-Bearer shapes fail");
-ok(isLoopbackHost("127.0.0.1") && isLoopbackHost("localhost") && !isLoopbackHost("0.0.0.0") && !isLoopbackHost("10.0.0.5"),
-  "isLoopbackHost: loopback vs routable");
+// LOOP-289 — a PROPERTY, not four literals. `daemon.ts` decided loopback twice with two regexes that
+// disagreed on IPv6: the boot gate accepted `::1`, the write guard did not, so a
+// DEVLOOP_DAEMON_HOST=::1 bind booted token-less AND 403'd every write. Now that `writeOriginOk`
+// calls this predicate, one iterated block covers BOTH the boot gate and the write guard by
+// construction — which is the point of collapsing them.
+for (const h of ["127.0.0.1", "localhost", "::1"]) {
+  ok(isLoopbackHost(h), `isLoopbackHost: ${h} bare`);
+  // A Host header carries the port. The old regex had no port branch, so `127.0.0.1:8789` was FALSE
+  // — the write guard's own regex had to carry a separate `(:\d+)?` to work at all.
+  const authority = h.includes(":") ? `[${h}]:8789` : `${h}:8789`;
+  ok(isLoopbackHost(authority), `isLoopbackHost: ${authority} (Host-header authority form)`);
+}
+ok(isLoopbackHost("[::1]"), "isLoopbackHost: bracketed ::1 with no port");
+ok(hostnameOf("[::1]:8789") === "::1" && hostnameOf("127.0.0.1:8789") === "127.0.0.1" && hostnameOf("::1") === "::1",
+  "hostnameOf: brackets and ports come off, a bare IPv6 literal survives intact");
+
+// The security bar: exact match, no prefix or substring slack.
+for (const bad of ["0.0.0.0", "0.0.0.0:8789", "10.0.0.5", "127.0.0.1.evil.com", "localhost.evil.com",
+                   "127.0.0.1@evil.com", "[::1]evil.com", "[evil.com]", "::ffff:127.0.0.1", "LOCALHOST",
+                   "[::1", "evil.com:8789"]) {
+  ok(!isLoopbackHost(bad), `isLoopbackHost REJECTS ${JSON.stringify(bad)}`);
+}
 
 const DB = "/tmp/dl-ui-token/hub.db";
 rmSync("/tmp/dl-ui-token", { recursive: true, force: true });

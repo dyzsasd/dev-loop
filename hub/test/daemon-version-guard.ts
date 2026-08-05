@@ -70,7 +70,7 @@ srv.listen(${FAKE_PORT}, "127.0.0.1", () => { process.stdout.write("READY\\n"); 
 `;
 const serverChild = spawn(NODE, ["--input-type=module"], {
   stdio: ["pipe", "pipe", "pipe"],
-  env: { ...process.env },
+  env: { ...scrubFireEnv() },
 });
 serverChild.stdin!.end(serverScript);
 const serverPid = serverChild.pid!;

@@ -13,6 +13,7 @@ import { noProgressNotifyTick, startNoProgressNotifier } from "../src/daemon.ts"
 import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import type { FetchImpl } from "../src/channel.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -174,7 +175,7 @@ const capturing = () => {
     db.close();
   `;
   const out = execFileSync("node", ["--input-type=module", "-e", child],
-    { env: { ...process.env, DDB, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
+    { env: { ...scrubFireEnv(), DDB, DEVLOOP_CHANNEL_DRYRUN: "1" }, encoding: "utf8" });
   const res = JSON.parse(out.trim().split("\n").pop() as string);
   ok(res.markers === 0 && res.fetched === false, "DL-34: dry-run is write-free — NO marker, NO network (a later live tick still fires the first ping)");
   ok(res.previewHasNoProgress && res.previewHasTarget, "DL-34: the dry-run preview names the no-progress alert + the channel target");

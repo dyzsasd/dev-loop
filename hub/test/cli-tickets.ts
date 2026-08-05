@@ -8,6 +8,7 @@ import { rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const ROOT = "/tmp/hub-cli-tickets-test";
 rmSync(ROOT, { recursive: true, force: true });
@@ -44,7 +45,7 @@ db.close();
 function cli(args: string[], project = "clitest"): { status: number | null; out: string } {
   const r = spawnSync("node", ["src/cli-tickets.ts", ...args], {
     encoding: "utf8", timeout: 30000,
-    env: { ...process.env, DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: project },
+    env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: project },
   });
   return { status: r.status, out: (r.stdout ?? "") + (r.stderr ?? "") };
 }
@@ -173,7 +174,7 @@ ok(tcount === 6 && ecount === 0, `read-only: tickets unchanged (6) + zero events
   function bigCli(args: string[]): { status: number | null; stdout: string } {
     const r = spawnSync("node", ["src/cli-tickets.ts", ...args], {
       encoding: "utf8", timeout: 30000,
-      env: { ...process.env, DEVLOOP_HUB_DB: bigDb, DEVLOOP_PROJECT: "flushtest" },
+      env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: bigDb, DEVLOOP_PROJECT: "flushtest" },
     });
     return { status: r.status, stdout: r.stdout ?? "" };
   }

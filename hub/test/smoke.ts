@@ -3,6 +3,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync } from "node:fs";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const DB = "/tmp/hub-smoke/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -11,7 +12,7 @@ async function as(actor: string): Promise<Client> {
   const c = new Client({ name: `test-${actor}`, version: "0.0.0" });
   await c.connect(new StdioClientTransport({
     command: "node", args: ["src/server.ts"],
-    env: { ...process.env, DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "monpick", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1" },
+    env: { ...scrubFireEnv(), DEVLOOP_ACTOR: actor, DEVLOOP_PROJECT: "monpick", DEVLOOP_HUB_DB: DB, DEVLOOP_CREATE_PROJECT: "1" },
   }));
   return c;
 }
