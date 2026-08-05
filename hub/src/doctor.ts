@@ -4,7 +4,7 @@
 // DL-81: the `doctor` COMMAND additionally runs a service runtime-wiring reconcile (reads the product
 // .mcp.json / daemon runfile / autostart/hook presence + a localhost /api/health GET) — still READ-ONLY (no writes,
 // no auto-create); daemon version skew (W28) is gating, the rest is non-fatal. See serviceReconcile. Library callers (init-service) skip it.
-import { existsSync, readFileSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
@@ -15,7 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsHubDb, resolveHubDbPath } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
-import { checkLessonsBudget } from "./lessons.ts";
+import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
 import { opencodeSyncDrift } from "./opencode-sync.ts";
 import { openDb as openHubDbConn } from "./db.ts";
@@ -263,18 +263,49 @@ function reportNoWorkspace(dbPath: string, fatal: boolean): void {
 // an invalid config blocks everything → a blank linearTeam blocks every fire → no projects/repos blocks
 // scheduling → an unseeded service project silently starves its fires → dry-run is the last gate before
 // live. All green ⇒ run the team.
-function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null, skewResult?: { codeBehind: number; version: string } | null, fails?: string[]): string {
+// LOOP-322 — the ladder is ordered by DECLARED PRECEDENCE, not by first-run setup sequence.
+//
+// It used to be a flat if-chain that happened to run in the order a workspace is set up, so ONE
+// unseeded config stub (W08) — a project with no repos, no tickets, no fires, blocking nothing —
+// made the decision-stall, landing-stall and release-skew hints unreachable. Measured live: the
+// operator's single directed action was "seed real-one" while the same run reported 46 shipped-code
+// commits unpublished, i.e. "dev-loop fixes marked Done are not live". Cutting that release was
+// named nowhere.
+//
+// Precedence, highest first. Each rung names its W-code so the table can be checked against the
+// warnings above it:
+//   1. CANNOT RUN     config errors · no workspace · any ❌ hard fail (LOOP-202)
+//   2. CANNOT FIRE    blank linearTeam · no delivery project · no repo · dead comms webhook (W12)
+//   3. DAY-2 BLOCKING decision-queue stall (W20) > landing stall (W22) > release skew (W18)
+//                     — relative order unchanged: the operator is the loop's only unscalable
+//                       resource, a wedged queue blocks every merge, and skew makes merged fixes dead
+//   4. DAY-1 RESIDUE  unseeded config project (W08) and the dry-run flip — both real, both blocking
+//                     nothing that is RUNNING, so both stand down when a day-2 condition is live
+//   5. nothing to say ⇒ run the loop
+//
+// Implemented as a `!hasDay2` guard on those two rungs rather than by moving them, so every other
+// rung keeps its exact position: reordering would have moved "add a repo" and the go-live flip too,
+// which LOOP-322 explicitly did not ask for.
+export function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null, skewResult?: { codeBehind: number; version: string } | null, fails?: string[]): string {
+  // ── 1. cannot run ──
   if (errors.length) { const e = errors[0]; return `fix dev-loop.json — [${e.code}] ${e.path ? e.path + ": " : ""}${e.message}`; }
   if (!ws) return "dev-loop run";
   if (fails && fails.length) return `fix the ❌ first: ${fails[0]}`;
   const t = ws.file.team;
+  // The three DAY-2 conditions, resolved once: their presence is what stands the W08 rung down.
+  const hasDay2 = (decisionStall != null && decisionStall.count > 0) || !!stalledRepo || (skewResult != null && skewResult.codeBehind > 0);
+  // ── 2. cannot fire ──
   if (t.backend === "linear" && !(t.linearTeam ?? "").trim()) return `dev-loop team set team.linearTeam "<Team Name>"  (fires refuse to launch on a blank Linear team)`;
   if (!deliveryProjects(ws).filter(k => ws.file.projects[k]?.scratch !== true).length) return `dev-loop team add-project <key>  (or /dev-loop:add-project in a coding CLI)`;
-  if (unseeded.length) return `dev-loop seed ${unseeded[0]} "<Project Name>" <UNIQUE_PREFIX>  (config project with no hub.db row, W08)`;
+  // W08 keeps its ORIGINAL position in the chain — the only change is that it stands down when a
+  // day-2 condition is live below it. Reordering the surrounding rungs instead would have moved
+  // "add a repo" and the go-live flip too, which LOOP-322 explicitly did not ask for.
+  if (unseeded.length && !hasDay2) return `dev-loop seed ${unseeded[0]} "<Project Name>" <UNIQUE_PREFIX>  (config project with no hub.db row, W08)`;
   if (!Object.keys(ws.file.repos).length) return `dev-loop team add-repo <ref> --project <key> --path <rel> --detect  (or /dev-loop:add-repo)`;
   if (t.comms?.webhookEnv && process.env[t.comms.webhookEnv] === undefined) return `put ${t.comms.webhookEnv}=<webhook-url> in ${wsSecretsPath(ws.root)} (or export it) — the whole reminder layer is silently dead without it (W12)`;
-  if (t.mode === "dry-run") return `dev-loop team set team.mode live  (everything is wired; flip when ready to go live)`;
-  // W20 NEXT flip: decision queue stall outranks landing stall — operator is the loop's only unscalable resource
+  if (t.mode === "dry-run" && !hasDay2) return `dev-loop team set team.mode live  (everything is wired; flip when ready to go live)`;
+  // ── 3. day-2 blocking, in the order the operator should act ──
+  // decision queue first: the operator is the loop's only unscalable resource
   if (decisionStall != null && decisionStall.count > 0) {
     const oldest = decisionStall.oldest;
     const ageMs = Date.now() - Date.parse(oldest.enteredAt);
@@ -282,10 +313,12 @@ function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], s
     const ageStr = h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ageMs / 60_000))}m`;
     return `rule on the oldest decision ${oldest.id} (${ageStr}): http://127.0.0.1:8787/ticket/${oldest.id}`;
   }
-  // W22 NEXT flip: a landing stall is the most-blocking state when everything else is green
+  // then a landing stall — the most-blocking state when everything else is green
   if (stalledRepo) return `clear the landing stall: fix the red base / land the wedged PRs — gh pr list --repo ${stalledRepo}`;
-  // §9.8 release-readiness hint: when shipped-code skew > 0, tell the operator to cut a release
+  // then release skew (§9.8): merged fixes that no fire is running
   if (skewResult != null && skewResult.codeBehind > 0) return `cut a release — ${skewResult.codeBehind} shipped-code commit(s) merged after v${skewResult.version} are not published; dev-loop fixes marked Done are not live. Dispatch release-npm.yml.`;
+  // ── 4. the W08 rung deferred from above, now that no day-2 condition claimed the line ──
+  if (unseeded.length) return `dev-loop seed ${unseeded[0]} "<Project Name>" <UNIQUE_PREFIX>  (config project with no hub.db row, W08)`;
   return "dev-loop run";
 }
 
@@ -397,6 +430,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     if (fm.fires > 0) {
       const cls = Object.entries((fm.byErrorClass ?? {}) as Record<string, number>).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k}×${n}`).join(", ");
       info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect${cls ? ` — top errors: ${cls}` : ""}`);
+      checkFailureTaxonomyBlind(fm, warn); // W24 (LOOP-204) — say when the line above is NOT complete
     }
   } catch { /* metrics are informational */ }
 
@@ -552,6 +586,8 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // W26 — unmerged paths in the shared checkout (LOOP-215). Extracted to helper to keep doctorWorkspace
   // CC in budget. Best-effort; never flips DOCTOR_OK.
   warnUnmergedPaths(ws, warn);
+  checkLessonsLiveness(ws, warn);   // W30 (LOOP-91)
+  await checkDaemonPortBand(warn);  // W25 (LOOP-137)
 
   // W06 — git-work-tree leak checks: committable .dev-loop state/reports (I5 neighbor) or a bundle
   // artifact carrying every secret VALUE + hub.db (LOOP-210). Extracted to a helper (same pattern as
@@ -589,6 +625,96 @@ export function isGitWorkTree(dir: string): boolean {
   catch { return false; }
 }
 
+// LOOP-247 — W18 conflated two independent gaps with different fixes, and asserted BOTH
+// unconditionally. There are two distances between origin/main and what a fire executes:
+//   1. origin/main -> npm      merged but never published   ⇒ cut a release
+//   2. npm         -> this host published but not installed ⇒ npm i -g @dyzsasd/dev-loop@latest
+// W18 measures only `installed vs origin/main`, so it cannot tell them apart. Measured on the day it
+// was filed, gap 1 was already closed (1.14.0 was on npm) and only the reinstall was outstanding — an
+// operator following the text literally would have gone to cut a release that already existed. Ask npm.
+// Best-effort and OFFLINE-SAFE: if the registry cannot be reached the answer degrades to today's
+// both-actions text rather than a wrong one-action claim.
+function publishRemedy(pkgName: string, installedVersion: string): string {
+  const both = "An operator must re-publish + agents reinstall, or pin agents to a local build";
+  try {
+    const r = spawnSync("npm", ["view", pkgName, "version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 });
+    const published = (r.stdout ?? "").trim();
+    if (r.status !== 0 || !/^\d+\.\d+\.\d+/.test(published)) return `${both} (could not reach npm to tell which)`;
+    if (published === installedVersion)
+      return `npm already has ${published} and this host is on it — the merged commits are NOT released yet: an operator must cut a release, then agents reinstall`;
+    return `npm already publishes ${published} while this host runs ${installedVersion} — no release is needed, only the install: \`npm i -g ${pkgName}@latest\``;
+  } catch { return `${both} (could not reach npm to tell which)`; }
+}
+
+
+// ── W24 (LOOP-204) — the failure taxonomy is blind ──────────────────────────────────────────────
+// The taxonomy's whole failure mode is SILENT: an unmatched provider string yields errorClass=null,
+// the row lands in no bucket, and every downstream consumer behaves as if the failure had no cause.
+// The `top errors:` line then NAMES the few it knows and says nothing about the rest, so it reads as
+// a complete breakdown. That is not cosmetic: the LOOP-8 provider breaker keys on errorClass, so at
+// a high blind share it is inert for most failures. LOOP-114 adds the one pattern this workspace
+// needs today; this is the GENERIC guard, because the taxonomy will always lag the next provider's
+// wording and the lag is otherwise undetectable.
+// Threshold rationale: below half, a few exotic tails are ordinary noise; at or above half the
+// taxonomy is no longer describing the failure population and the breaker is more off than on.
+const W24_BLIND_SHARE = 0.5;
+const W24_MIN_FAILURES = 4; // below this, one odd tail swings the share — not enough signal to warn on
+export function checkFailureTaxonomyBlind(fires: { failures: number; timeouts: number; suspectErrors: number; byErrorClass: Record<string, number> }, warn: (m: string) => void): void {
+  try {
+    const failureish = fires.failures + fires.timeouts + fires.suspectErrors;
+    if (failureish < W24_MIN_FAILURES) return;                       // zero rows ⇒ silent, never 0%/NaN
+    const classified = Object.values(fires.byErrorClass).reduce((a, b) => a + b, 0);
+    const unclassified = Math.max(0, failureish - classified);
+    const share = unclassified / failureish;
+    if (share < W24_BLIND_SHARE) return;                             // healthy ⇒ nothing at all, not an info line
+    warn(`[W24] ${unclassified} of ${failureish} failure-ish fires (${Math.round(share * 100)}%) carry no errorClass — the taxonomy is blind here, so the 'top errors' line above is NOT a complete breakdown and the provider breaker (which keys on errorClass) cannot engage on them. Read a few tails: grep '"exitCode":1' .dev-loop/team/fires.jsonl | tail`);
+  } catch { /* best-effort — never fails doctor */ }
+}
+
+// ── W25 (LOOP-137) — the daemon port band is exhausted ──────────────────────────────────────────
+// doctor is the designated pre-flight ("fix every ❌ and read every W-code before an unattended
+// run"), and it printed DOCTOR_OK on a machine where every port the allocator can hand out was
+// already taken. Its only daemon-related line probes the CURRENT project's health, which passes
+// precisely because that project already holds a port. The next `daemon up` for any project without
+// a runfile then dies on a raw EADDRINUSE with no pointer to a remedy.
+// The band mirrors lcFreePort's own: 64 consecutive ports from the base.
+const W25_BAND_START = 8787;
+const W25_BAND_TRIES = 64;
+async function checkDaemonPortBand(warn: (m: string) => void): Promise<void> {
+  try {
+    const { createServer } = await import("node:net");
+    const tryBind = (port: number): Promise<boolean> => new Promise((resolve) => {
+      const srv = createServer();
+      srv.once("error", () => resolve(false));
+      srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
+    });
+    // EARLY EXIT on the first free port — this mirrors lcFreePort's own loop, which also stops at
+    // the first success. It matters twice over: in the healthy case doctor makes ONE bind attempt
+    // instead of 64, and it never holds a sweep of the band that the product's own daemon tests (and
+    // a concurrent `daemon up`) are trying to bind into.
+    for (let i = 0; i < W25_BAND_TRIES; i++) if (await tryBind(W25_BAND_START + i)) return;
+    warn(`[W25] every port in the daemon allocation band ${W25_BAND_START}..${W25_BAND_START + W25_BAND_TRIES - 1} is occupied — the next \`dev-loop daemon up\` for a project without an existing runfile CANNOT start and will die on EADDRINUSE. Reclaim them: \`dev-loop daemon reap --dry-run\` (then without --dry-run), or stop the workspaces holding them.`);
+  } catch { /* best-effort — never fails doctor */ }
+}
+
+// ── W30 (LOOP-91) — the lessons library has no liveness check ───────────────────────────────────
+// The lessons library is the loop's ONLY cross-fire learning mechanism and is loaded into every
+// single fire. Its one health check (W03) fires when the library is too BIG; a library that has
+// never been written produces no warning anywhere, because budgetOf() returns null for a missing
+// file and null short-circuits both guards. Absent and healthy were the same output — on the board
+// that found this, empty for 120 fires with every surface reporting healthy.
+export function checkLessonsLiveness(ws: Workspace, warn: (m: string) => void): void {
+  try {
+    const P = lessonsPaths(ws);
+    if (existsSync(P.index)) return;
+    const shards = existsSync(P.dir)
+      ? readdirSync(P.dir).filter((f) => f.endsWith(".md") && f !== "archive.md")
+      : [];
+    if (shards.length) return; // a shard without an INDEX is unusual but not ABSENT — W03's lane
+    warn(`[W30] the lessons library has never been written (${P.dir} has no INDEX.md) — it is loaded into every fire and is the loop's only cross-fire learning mechanism, so every fire is starting from zero. \`reflect\` is its only writer: check that it is in the run set (\`dev-loop run --agents core,reflect\`) and that its fires are landing.`);
+  } catch { /* best-effort — never fails doctor */ }
+}
+
 // W26 helper — extracted to keep doctorWorkspace CC in budget (LOOP-215). Best-effort; never throws.
 function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
   try {
@@ -601,8 +727,21 @@ function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
       const paths = [...new Set(
         r.stdout.split("\0").filter(Boolean).map(line => line.split("\t")[1]).filter(Boolean)
       )];
+      // LOOP-224 — following W26's OWN remediation used to make it go silent while the hazard stayed.
+      // `git add` moves the repo from UNMERGED to STAGED-BUT-UNCOMMITTED; `git rebase` refuses in both
+      // states, but `ls-files --unmerged` only sees the first. The guard's advice therefore converted a
+      // detected wedge into an undetected one — measured live: doc-land failed every attempt for hours
+      // while doctor printed DOCTOR_OK. The predicate is now "rebase would refuse", which is what the
+      // check is actually about, and the remediation names the COMMIT that finishes the job.
+      const staged = spawnSync("git", ["-C", dir, "diff", "--cached", "--name-only"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      const stagedPaths = staged.status === 0 && !staged.error
+        ? [...new Set(staged.stdout.split("\n").map((l) => l.trim()).filter(Boolean))].filter((p) => !paths.includes(p))
+        : [];
       if (paths.length)
-        warn(`[W26] repo '${ref}' (${dir}) has ${paths.length} unmerged path${paths.length === 1 ? "" : "s"}: ${paths.join(", ")} — conflict markers may block direct tsc/build/test runs (per-ticket worktrees are unaffected). Resolve: edit each file, then \`git add <file>\`. Likely cause: an interrupted \`git stash pop\` or \`git merge\`.`);
+        warn(`[W26] repo '${ref}' (${dir}) has ${paths.length} unmerged path${paths.length === 1 ? "" : "s"}: ${paths.join(", ")} — conflict markers may block direct tsc/build/test runs (per-ticket worktrees are unaffected). Resolve: edit each file, \`git add <file>\`, THEN commit (or \`git rebase --continue\`) — staging alone leaves the rebase just as blocked. Likely cause: an interrupted \`git stash pop\` or \`git merge\`.`);
+      else if (stagedPaths.length)
+        warn(`[W26] repo '${ref}' (${dir}) has ${stagedPaths.length} staged-but-uncommitted path${stagedPaths.length === 1 ? "" : "s"}: ${stagedPaths.join(", ")} — \`git rebase\` refuses in this state exactly as it does on unmerged paths, so doc-land and every direct-checkout build stay blocked. Finish it: commit them, or \`git rebase --continue\` if a rebase is in progress.`);
     }
   } catch { /* best-effort — never fails doctor */ }
 }
@@ -1131,7 +1270,7 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
         const docNote = docBehind > 0 ? ` (+${docBehind} doc-only)` : "";
         const sourceNote = isSourceBuild
           ? "the installed CLI is a local source build — reinstall from the updated source"
-          : "every fire runs the published npm package, not origin/main. An operator must re-publish + agents reinstall, or pin agents to a local build (design landing-observability §9.2)";
+          : `every fire runs the published npm package, not origin/main. ${publishRemedy(pkgName, V)} (design landing-observability §9.2)`;
         warn(`[W18] [${matchRef}] installed ${pkgName} v${V} is ${codeBehind} code commit(s) behind origin/${matchBranch} (${shortSha})${docNote} — CLI-behavior fixes merged after v${V} are NOT live: ${sourceNote}.`);
         return { codeBehind, version: V };
       }

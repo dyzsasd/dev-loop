@@ -4,7 +4,45 @@ import { AGENT_HANDLES } from "./seed.ts";
 export type Agent = (typeof AGENT_HANDLES)[number];
 
 type BreakerEntry = { key: string | null; streak: number; open: boolean };
-export const PROVIDER_SCOPED_CLASSES = new Set<string>(["spend-limit", "rate-limit", "auth"]);
+// LOOP-114 adds "session-limit". It is provider-scoped for the same reason the other three are: the
+// cap belongs to the KEY, so when it is hit every agent on that provider fails identically, and the
+// streak must accumulate per (provider, class) rather than per agent. It is kept DISTINCT from
+// "spend-limit" because the remedies differ — a session limit states its own reset time and clears
+// itself, while a spend limit needs a human to raise or refill something.
+export const PROVIDER_SCOPED_CLASSES = new Set<string>(["spend-limit", "rate-limit", "auth", "session-limit"]);
+
+// The fire-ledger provider dimension. Lives HERE rather than in run-agents.ts (which calls main()
+// unconditionally, so nothing may import it — LOOP-58) precisely so the breaker can resolve a provider
+// for an agent that has NOT yet completed a fire (LOOP-72). run-agents imports it back.
+export function providerOf(profile: { codingAgent: string; model?: string }): string | null {
+  if (profile.codingAgent === "opencode") {
+    const m = profile.model;
+    return m && m.includes("/") ? m.split("/")[0] : null;
+  }
+  return profile.codingAgent === "claude" ? "anthropic" : "openai";
+}
+
+export function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false): string | null {
+  if (budgetKilled) return "budget-per-fire"; // LOOP-230: the perFireUsd watchdog killed this fire — DISTINCT from a wall-timeout (never "timeout")
+  if (retryLoop) return "retry-loop"; // liveness watchdog kill — visible retry loop (output arriving but no new content)
+  if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
+  if (timedOut) return "timeout";
+  if (exitCode === 0) return null;
+  const t = tail.toLowerCase();
+  // LOOP-114 — Claude Code emits "You've hit your session limit · resets 12:20am (Europe/Paris)".
+  // It matched NOTHING: not "usage limit", not "rate limit". Every single non-timeout failure this
+  // workspace had ever recorded was that one string (25 of 26), so the taxonomy was blind exactly
+  // where its failures lived, the `errors:` line accounted for 1 of 26, and the LOOP-8 provider
+  // breaker — which keys on errorClass — could never engage on any of them. Matched WITHOUT the
+  // "· resets …" clause and case-insensitively (the tail is lowercased above), so it does not
+  // depend on wording the provider may change.
+  if (/session limit/.test(t)) return "session-limit";
+  if (/spend limit|usage limit|monthly limit|credit balance too low|quota exceeded/.test(t)) return "spend-limit";
+  if (/rate limit|too many requests|overloaded_error|\b429\b|\b529\b/.test(t)) return "rate-limit";
+  if (/invalid api key|authentication_error|unauthorized|not logged in|please run \/login|oauth token|\b401\b/.test(t)) return "auth";
+  if (/enotfound|econnrefused|econnreset|etimedout|eai_again|fetch failed|network error|socket hang up/.test(t)) return "network";
+  return null;
+}
 
 // ─── P0-1a failure-streak circuit breaker ────────────────────────────────────────────────────────────
 // The field incident: a spent subscription turned every fire into the same ~2s failure for 48 hours while
@@ -25,6 +63,16 @@ export const breaker = {
   byProvider: new Map<string, BreakerEntry>(), // key = "${provider}:${errorClass}" for PROVIDER_SCOPED_CLASSES
   _agentProvider: new Map<Agent, string | null>(), // cached provider per agent (updated in record())
   onEvent: undefined as ((agent: Agent, ev: "open" | "close", key: string, streak: number) => void) | undefined,
+  // LOOP-72 — the cold-start window. `_agentProvider` was populated ONLY by a completed fire, so an
+  // agent that had not yet fired since scheduler start was invisible to an open provider breaker and
+  // made one full-cadence fire into a provider already known to be exhausted. It bit widest for the
+  // long-cadence agents (sweep 30m, ops 10m, reflect 1d), which are most often still unfired when a
+  // breaker trips. Seeding at scheduler boot closes it WITHOUT breaker.ts importing run-agents.ts:
+  // the scheduler already resolves every selected agent's launch profile at boot to print its
+  // `launch=` line, so it hands the resolution in rather than the breaker reaching out for it.
+  seedProvider(agent: Agent, provider: string | null): void {
+    if (!this._agentProvider.has(agent)) this._agentProvider.set(agent, provider);
+  },
   record(agent: Agent, exitCode: number, errorClass: string | null | undefined, tail: string | undefined, provider?: string | null): void {
     if (!this.threshold) return;
     if (provider !== undefined) this._agentProvider.set(agent, provider);

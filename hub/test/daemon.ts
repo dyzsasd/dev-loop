@@ -224,6 +224,51 @@ ok(detail.status === 200 && detail.body.id === feat.id && Array.isArray(detail.b
 const missing = await get("/api/tickets/DMN-999");
 ok(missing.status === 404, "GET /api/tickets/<unknown> → 404");
 
+// ── LOOP-96: the two human-facing board reads are BOUNDED, and say when they truncated ─────────
+// /api/tickets and GET / were the only two of the four board-list paths with no bound at all —
+// SELECT * of every ticket, full descriptions, on every request (433.6 KiB / 95 rows measured, 92%
+// of it description text), while `?fields=summary` was accepted and silently IGNORED.
+{
+  const bigDb = openDb(DB);
+  const before = (bigDb.prepare("SELECT COUNT(*) AS n FROM tickets WHERE project_id=?").get(projectId) as { n: number }).n;
+  const seed = bigDb.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,?,'Improvement','Backlog',3,'[]','[]','pm',?,?)");
+  const LONG = "x".repeat(4000);
+  const NEED = 260 - before; // comfortably past the 250 cap
+  for (let i = 0; i < NEED; i++) {
+    const ts = new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
+    seed.run(`DMN-B${i}`, projectId, `bulk ${i}`, LONG, ts, ts);
+  }
+  bigDb.close();
+  const total = before + NEED;
+
+  const capped = await get("/api/tickets");
+  ok(capped.status === 200 && capped.body.length === 250, `LOOP-96: /api/tickets caps at 250 on a ${total}-ticket board (got ${capped.body.length})`);
+  const explicit = await get("/api/tickets?limit=500");
+  ok(explicit.body.length === total, `LOOP-96: an explicit ?limit still wins (got ${explicit.body.length} of ${total})`);
+  const summary = await get("/api/tickets?fields=summary");
+  ok(summary.body.length && !("description" in summary.body[0]), "LOOP-96: ?fields=summary DROPS description — it used to be accepted and ignored");
+  const fullBytes = JSON.stringify(capped.body).length, summaryBytes = JSON.stringify(summary.body).length;
+  ok(summaryBytes < fullBytes / 2, `LOOP-96: …and the summary response is materially smaller (${summaryBytes} vs ${fullBytes} bytes)`);
+  for (const bad of ["abc", "-1", "0"]) {
+    const r = await get(`/api/tickets?limit=${bad}`);
+    ok(r.status === 400, `LOOP-96: ?limit=${bad} → a clean 400 (the list_events precedent), not ignore-and-default (got ${r.status})`);
+  }
+  // The HTML board is capped by the SAME number and SAYS so — a silent truncation on the operator's
+  // own board would be strictly worse than the honest slowness it replaces.
+  const html = await fetch(base + "/");
+  const body = await html.text();
+  ok(/showing 250 of \d+ tickets/.test(body), "LOOP-96: GET / states plainly that it is showing a truncated set");
+
+  // Remove the bulk rows: this suite shares ONE fixture db, and the DL-45 summary-band assertions
+  // below count the board's type/owner/priority composition. Leaving 260 synthetic Improvements
+  // behind fails them — which it did, on the first run of this block.
+  const cleanup = openDb(DB);
+  cleanup.prepare("DELETE FROM tickets WHERE project_id=? AND id LIKE 'DMN-B%'").run(projectId);
+  cleanup.close();
+  const after = await get("/api/tickets");
+  ok(after.body.length === before, `LOOP-96 cleanup: the shared fixture is restored to ${before} tickets (got ${after.body.length})`);
+}
+
 // ─── DL-36: an unknown NON-API path → friendly HTML 404; an unknown /api/* path → JSON 404 (unchanged) ───
 const htmlMiss = await getHtml("/totally/bogus");
 ok(htmlMiss.status === 404 && htmlMiss.type.includes("text/html") && htmlMiss.text.includes("No page") && htmlMiss.text.includes("/totally/bogus"), "DL-36: unknown non-API path → 404 text/html friendly page (not a raw-JSON dead-end)");

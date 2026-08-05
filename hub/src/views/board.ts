@@ -78,6 +78,8 @@ function relTime(iso: string | null | undefined, nowMs: number): string {
 }
 
 // ui P8: cap on how many description chars the q LIKE scans per row (see the boardPage q comment).
+// LOOP-96: the same 250 the other three ticket-list paths use (list_issues / /api/tickets).
+const BOARD_ROW_CAP = 250;
 const Q_DESC_CAP = 5000;
 // ui P8: when the free-text q matched only the DESCRIPTION (not the visible id/title), the card
 // shows a one-line match-context snippet — otherwise the operator sees a card with no visible reason
@@ -157,8 +159,17 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
     ? ` AND (lower(id) LIKE ? ESCAPE '\\' OR lower(title) LIKE ? ESCAPE '\\' OR lower(substr(description,1,${Q_DESC_CAP})) LIKE ? ESCAPE '\\')`
     : "";
   const qArgs: string[] = f.q ? Array(3).fill(`%${f.q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`) : [];
-  let tickets = (db.prepare(`SELECT * FROM tickets WHERE project_id=?${qWhere} ORDER BY priority ASC, updated_at DESC`)
-    .all(projectId, ...qArgs) as Record<string, any>[]).map(toTicket);
+  // LOOP-96 — the operator's own board was the other unbounded read: SELECT * of every ticket, full
+  // descriptions included, on every page load (83.7 KiB / 374 cards when measured). The bound is in
+  // SQL, not a .slice() after loading, so the cost of the hidden rows is not paid at all.
+  //
+  // The cap is deliberately paired with an HONEST NOTICE below: a silent truncation on the surface
+  // the operator uses to see their own board would be strictly worse than the current honest
+  // slowness. LIMIT+1 probes for a further page without a second count query.
+  const boardTotal = (db.prepare(`SELECT COUNT(*) AS n FROM tickets WHERE project_id=?${qWhere}`).get(projectId, ...qArgs) as { n: number }).n;
+  let tickets = (db.prepare(`SELECT * FROM tickets WHERE project_id=?${qWhere} ORDER BY priority ASC, updated_at DESC LIMIT ?`)
+    .all(projectId, ...qArgs, BOARD_ROW_CAP) as Record<string, any>[]).map(toTicket);
+  const boardTruncated = boardTotal > tickets.length;
   // mirror /api/tickets: each present (non-empty) filter narrows the set
   if (f.state) tickets = tickets.filter((t) => t.state === f.state);
   if (f.type) tickets = tickets.filter((t) => t.type === f.type);
@@ -191,6 +202,10 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
   const groupToggle = `<span class="group-tg">group:`
     + `<a class="lbl${swim ? "" : " on"}" href="${esc(qstr({ group: null }))}">state</a>`
     + `<a class="lbl${swim ? " on" : ""}" href="${esc(qstr({ group: "assignee" }))}">assignee</a></span>`;
+  // The notice rides the control row so it is impossible to read the card set without it.
+  const truncNotice = boardTruncated
+    ? `<p class="note">showing ${tickets.length} of ${boardTotal} tickets (newest first within each priority) — narrow with a filter or search to reach the rest.</p>`
+    : "";
   const controls = `<form class="filterbar" method="get" action="${esc(href(projectKey, "/"))}">${hidden}`
     + `<span class="search"><input type="text" name="q" value="${esc(f.q ?? "")}" placeholder="search id / title / description" aria-label="search tickets by id, title, or description" spellcheck="false"></span>`
     + `<button type="submit" class="btn-brand">search</button>`
@@ -269,5 +284,5 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
       + `</div>`
     : "";
   // DL-86: an inline error notice on a failed create, rendered above the create form (mirrors roadmapPage's notice).
-  return `<h1 class="vh">${esc(projectKey)} board</h1>` + noticeHtml(opts.notice) + controls + newForm + summary + boardHtml + empty;
+  return `<h1 class="vh">${esc(projectKey)} board</h1>` + noticeHtml(opts.notice) + controls + truncNotice + newForm + summary + boardHtml + empty;
 }
