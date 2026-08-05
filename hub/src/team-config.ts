@@ -21,6 +21,10 @@ export interface AgentLaunchConfig { codingAgent?: string; model?: string; effor
 // (the scheduler-injected dev-loop-hub MCP server). `docs` + the index signature keep operator
 // passthrough fields (e.g. the DL-83 `hub.docs` flag the daemon reads off the projected view) type-legal.
 export type AgentInterface = "cli" | "mcp";
+// LOOP-339 — the board-snapshot cadence, through the validated mutator like every other tunable.
+// everyHours 0 disables it; the defaults (6h, keep 10) are the ones resolveBackupConfig applies.
+export interface BackupBlock { everyHours?: number; keep?: number; dir?: string }
+
 export interface HubBlock { agentInterface?: Record<string, AgentInterface>; docs?: unknown; [key: string]: unknown }
 
 // D9 (direct full rollout): claude flips to the CLI interface everywhere immediately; codex flipped
@@ -76,6 +80,7 @@ export interface TeamBlock {
   opencodePermission?: Record<string, unknown>;
   git?: { defaultBranch?: string }; // top-level default (§19 fallback chain — per-repo wins, else this, else "main")
   agentReviewers?: string[]; // GitHub logins excluded from forge-review merge-guard trips (§3.2); set via `dev-loop team set team.agentReviewers`
+  backup?: BackupBlock;                                       // LOOP-339: board-snapshot cadence/retention (everyHours 0 = OFF)
   budget?: { dailyUsd?: number | null; perFireUsd?: number }; // cost-governance ceilings (design budget-ceiling); dailyUsd = rolling 24h cap (null/unset = OFF), perFireUsd = per-fire cap
 }
 
@@ -327,6 +332,23 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectS
   }
 }
 
+// LOOP-339 — team.backup: everyHours >= 0 (0 disables), keep >= 1, dir a non-empty string. Validated
+// on the same E18 channel as its sibling scalar block, so a malformed value is refused at load rather
+// than silently disabling the only thing standing between this board and the next cascade delete.
+const BACKUP_KEYS = new Set(["everyHours", "keep", "dir"]);
+function validateBackup(backup: unknown, E: Emit): void {
+  const b = backup as { everyHours?: unknown; keep?: unknown; dir?: unknown } | null;
+  if (b === null || typeof b !== "object" || Array.isArray(b)) { E("E18", "team.backup", "backup must be an object"); return; }
+  for (const k of Object.keys(b as object))
+    if (!BACKUP_KEYS.has(k)) E("E18", `team.backup.${k}`, `unknown backup key '${k}' (expected ${[...BACKUP_KEYS].join(", ")})`);
+  if (b.everyHours !== undefined && (typeof b.everyHours !== "number" || !Number.isFinite(b.everyHours) || b.everyHours < 0))
+    E("E18", "team.backup.everyHours", `backup.everyHours must be a non-negative number (0 disables the cadence) (got ${JSON.stringify(b.everyHours)})`);
+  if (b.keep !== undefined && (typeof b.keep !== "number" || !Number.isInteger(b.keep) || b.keep < 1))
+    E("E18", "team.backup.keep", `backup.keep must be an integer >= 1 — keeping zero generations is a backup system that deletes its own output (got ${JSON.stringify(b.keep)})`);
+  if (b.dir !== undefined && (typeof b.dir !== "string" || !b.dir.trim()))
+    E("E18", "team.backup.dir", `backup.dir must be a non-empty string (got ${JSON.stringify(b.dir)})`);
+}
+
 // E18 — team.budget: dailyUsd must be a positive number or null/unset; perFireUsd must be a positive number.
 const BUDGET_KEYS = new Set(["dailyUsd", "perFireUsd"]);
 function validateBudget(budget: unknown, E: Emit): void {
@@ -353,6 +375,7 @@ function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   // fire would actually launch on the blank value: toLegacyView (the runtime projection) throws E09.
   if (team.backend === "linear" && (typeof team.linearTeam !== "string" || !team.linearTeam.trim()))
     W("E09", "team.linearTeam", `backend:"linear" has a blank team.linearTeam — fires cannot target a Linear team until it is filled: dev-loop team set team.linearTeam "<Team Name>"`);
+  if (team.backup !== undefined) validateBackup((team as { backup?: unknown }).backup, E); // LOOP-339
   if (team.intake !== undefined) checkIntake(team.intake, "team.intake", E);
   if (team.hub !== undefined) checkHub(team.hub, "team.hub", E);
 
