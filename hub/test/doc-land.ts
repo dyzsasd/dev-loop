@@ -3,7 +3,7 @@
 // downgrade push-guard reference findings (Canceled/Duplicate refs in prose) to WARN
 // while hard-stopping on actual non-doc content. Bare-origin + clone harness (§15).
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -352,15 +352,67 @@ try {
     writeFileSync(join(repoDir, "hub", "src", "dirty-l.ts"), "// dirty\n");
     git(repoDir, ["add", "hub/src/dirty-l.ts"]);  // staged but not committed
 
+    // LOOP-325 SUPERSEDES LOOP-217's dirty-tree BLOCK for this population. LOOP-217 was right that a
+    // dirty tree must not be mislabelled as a prose conflict; it was wrong to make an unrelated path
+    // block the land at all. PM's strategy-doc commit sat unlandable for two fires while the doc
+    // itself was clean and the shared checkout cycled 7–9 unrelated dirty files — a tree that is
+    // dirty by design is a wait that never ends.
+    //
+    // The rebase now happens in an ISOLATED WORKTREE, so the land completes and those edits survive.
+    // LOOP-217 AC1 (unmerged index blocks immediately) is unchanged and asserted at (k).
+    const dirtyBefore = readFileSync(join(repoDir, "hub", "src", "dirty-l.ts"), "utf8");
     const t0 = Date.now();
     const resL = run(["--repo", "dev-loop"], wsRoot, { DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS: "2000" });
     const elapsed = Date.now() - t0;
-    ok(resL.status !== 0, `(l) dirty tree → exits non-zero (LOOP-217)`);
-    ok(elapsed >= 2000, `(l) waited at least 2s before blocking (retried within budget: ${elapsed}ms) (LOOP-217)`);
-    ok(/dirty/.test(resL.stderr), `(l) message mentions 'dirty' (LOOP-217)`);
-    ok(!/prose merge|reconcile.*hand|must be reconciled/i.test(resL.stderr),
-      `(l) does NOT blame a prose conflict for a dirty working tree (LOOP-217)`);
-    ok(/hub\/src\/dirty-l\.ts/.test(resL.stderr), `(l) names the dirty non-doc path (LOOP-217)`);
+    ok(resL.status === 0, `(l) LOOP-325 AC1: an unrelated dirty path no longer blocks the land (status ${resL.status}: ${resL.stderr.slice(0, 160)})`);
+    ok(elapsed < 2000, `(l) LOOP-325: …and it does not WAIT on a tree that is dirty by design (${elapsed}ms)`);
+    ok(readFileSync(join(repoDir, "hub", "src", "dirty-l.ts"), "utf8") === dirtyBefore,
+      "(l) LOOP-325 AC2: the unrelated modification survives BYTE-IDENTICAL — no stash, no checkout, no add");
+    ok(git(repoDir, ["status", "--porcelain", "--untracked-files=no"]).includes("dirty-l.ts"),
+      "(l) LOOP-325 AC2: …and is still uncommitted, exactly as the fire left it");
+    ok(git(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]) === "main",
+      "(l) LOOP-325 AC3: the shared checkout is left on its normal branch, never detached");
+    ok(!existsSync(join(repoDir, ".git", "rebase-merge")) && !existsSync(join(repoDir, ".git", "rebase-apply")),
+      "(l) LOOP-325 AC3: …with no rebase in progress");
+    ok(git(repoDir, ["rev-parse", "main"]) === git(repoDir, ["rev-parse", "origin/main"]),
+      "(l) LOOP-325 AC3: …and local main is NOT diverged from origin/main after the land");
+    ok(!git(repoDir, ["worktree", "list"]).includes("docland"),
+      "(l) LOOP-325: the isolated worktree is removed — leaving one behind is the LOOP-132 defect");
+
+    // AC4 — the DOC itself dirty must STILL refuse. That is an unlanded edit, and landing around it
+    // would silently drop someone's work. Distinct message from the unmerged-index wedge (k).
+    {
+      // Start from a clean base: (l)'"'"'s assertions have all run, and its leftover code files would
+      // otherwise trip Step 1'"'"'s docs-only path assertion before this check is ever reached.
+      git(repoDir, ["reset", "--hard", "origin/main"]);
+      const docAbs = join(repoDir, "docs", "STRATEGY.md");
+      const before = readFileSync(docAbs, "utf8");
+      // A LOCAL doc commit to land …
+      writeFileSync(docAbs, before + "\ncommitted l2 edit\n");
+      git(repoDir, ["add", "docs/STRATEGY.md"]);
+      git(repoDir, ["commit", "-qm", "docs(strategy): l2 (LOOP-325 test)"]);
+      // … and origin moving ahead, so the rebase preflight actually runs.
+      git(clone2, ["fetch", "-q", "origin", "main"]);
+      git(clone2, ["reset", "--hard", "origin/main"]);
+      writeFileSync(join(clone2, "hub", "src", "code-l2.ts"), "// code l2\n");
+      git(clone2, ["add", "hub/src/code-l2.ts"]);
+      git(clone2, ["commit", "-qm", "fix: code l2 (LOOP-325 test)"]);
+      git(clone2, ["push", "-qu", "origin", "main"]);
+      git(repoDir, ["fetch", "-q", "origin", "main"]);
+      // …then an UNCOMMITTED edit on top of the doc: the unlanded work AC4 protects.
+      const committed = readFileSync(docAbs, "utf8");
+      writeFileSync(docAbs, committed + "\nAN UNCOMMITTED DOC EDIT\n");
+      const resDoc = run(["--repo", "dev-loop"], wsRoot, { DEVLOOP_DOCLAND_DIRTY_TIMEOUT_MS: "2000" });
+      ok(resDoc.status !== 0, `(l2) LOOP-325 AC4: a dirty strategyDoc still REFUSES (status ${resDoc.status})`);
+      ok(/unlanded doc edit|uncommitted changes/.test(resDoc.stderr),
+        `(l2) LOOP-325 AC4: …naming it as an unlanded edit (${resDoc.stderr.slice(-180)})`);
+      ok(!/unmerged index/.test(resDoc.stderr),
+        "(l2) LOOP-325 AC4: …with a message DISTINCT from the LOOP-217 unmerged-index refusal");
+      ok(readFileSync(docAbs, "utf8").includes("AN UNCOMMITTED DOC EDIT"),
+        "(l2) LOOP-325 AC4: …and the edit is untouched — refusing must not discard it either");
+      git(repoDir, ["checkout", "-q", "--", "docs/STRATEGY.md"]);
+      git(repoDir, ["reset", "--hard", "origin/main"]);
+    }
   }
   git(repoDir, ["reset", "--hard", "origin/main"]);
 
