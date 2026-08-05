@@ -47,8 +47,8 @@ Sections: §0 §0a §2 §12 §12a §14 §16 §18 §20a §21 §22 §22a §23 §26
 
 ### Job 0 — Cadence + duplicate check
 
-Compute today's key with a shell call (`TODAY=$(date +%F)`), never by reasoning about the
-date. Resolve the intended output file for TODAY; if it already exists and the user did
+Compute today's key with a shell call (`TODAY=$(date -u +%F)`), never by reasoning about the
+date. `-u` matters: every artifact this key files against is stamped in UTC (§22). Resolve the intended output file for TODAY; if it already exists and the user did
 not explicitly ask for a rewrite ⇒ no-op and report the existing path (a daily agent never
 generates competing articles for one date). In `dry-run` (§12): print the title, outline,
 source list, and target path — write nothing.
