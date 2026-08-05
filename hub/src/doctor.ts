@@ -4,17 +4,19 @@
 // DL-81: the `doctor` COMMAND additionally runs a service runtime-wiring reconcile (reads the product
 // .mcp.json / daemon runfile / autostart/hook presence + a localhost /api/health GET) — still READ-ONLY (no writes,
 // no auto-create); daemon version skew (W28) is gating, the rest is non-fatal. See serviceReconcile. Library callers (init-service) skip it.
-import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
-import { dirtyTrackedFiles, listTreeSnapshots } from "./tree-snapshot.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
+import { dirtyTrackedFiles, listTreeSnapshots } from "./tree-snapshot.ts";
+import { reportTrailGaps } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
+import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
-import { tryResolveWorkspace, wsHubDb, wsStateRoot, resolveHubDbPath } from "./workspace.ts";
+import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { listSnapshots, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-340: W32 reads the same artifact convention Child B writes
@@ -589,6 +591,8 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   // CC in budget. Best-effort; never flips DOCTOR_OK.
   warnUnmergedPaths(ws, warn);
   checkDirtySharedTree(ws, warn);   // W33 (LOOP-312)
+  checkInRepoWorktrees(ws, warn);   // W34 (LOOP-132)
+  checkReportTrail(ws, warn);       // W35 (LOOP-28)
   checkLessonsLiveness(ws, warn);   // W30 (LOOP-91)
   checkBoardSnapshotW32(ws, warn);  // W32 (LOOP-340)
   await checkDaemonPortBand(warn);  // W25 (LOOP-137)
@@ -814,6 +818,61 @@ export function checkDirtySharedTree(ws: Workspace, warn: (msg: string) => void)
         ? `newest snapshot: ${snaps[0].path}`
         : `NO snapshot exists — nothing has copied this work; \`dev-loop run\` takes one at startup, or commit/stash it now`;
       warn(`[W33] repo '${ref}' (${dir}) has ${dirty.length} uncommitted tracked modification${dirty.length === 1 ? "" : "s"}: ${dirty.slice(0, 6).join(", ")}${dirty.length > 6 ? `, +${dirty.length - 6} more` : ""} — the shared checkout is written by every non-worktree fire, and another fire's \`git checkout\` discards these silently (2026-08-04: 5 files, no stash, no event). ${where}`);
+    }
+  } catch { /* best-effort — never fails doctor */ }
+}
+
+// W34 helper (LOOP-132) — a worktree living INSIDE the repo it belongs to.
+//
+// `wsWorktree` puts every worktree under <workspace>/.dev-loop/wt/<ticket>/<ref>, deliberately
+// OUTSIDE any repo checkout. A worktree created inside the product repo instead makes `git status`
+// permanently non-empty — measured once at 5 worktrees, 73 MB, 5009 files — which trains everyone to
+// ignore a dirty tree, and a dirty tree is what LOOP-312 and LOOP-320 both depend on being readable.
+//
+// Detection only. Reaping a live worktree is `team repair`'s destructive path: two of the five found
+// originally backed open PRs, so removing them here would have destroyed in-flight work.
+export function checkInRepoWorktrees(ws: Workspace, warn: (msg: string) => void): void {
+  try {
+    for (const ref of Object.keys(ws.file.repos)) {
+      const { absPath: dir } = effectiveRepo(ws, ref);
+      if (!existsSync(dir) || !isGitWorkTree(dir)) continue;
+      const r = spawnSync("git", ["-C", dir, "worktree", "list", "--porcelain"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      if (r.status !== 0 || r.error) continue;
+      const paths = r.stdout.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9).trim());
+      const root = realpathIfPossible(dir);
+      // The repo's OWN entry is `dir` itself and is not a finding. Everything else must live outside.
+      const inside = paths.filter((p) => {
+        const rp = realpathIfPossible(p);
+        return rp !== root && (rp === root || rp.startsWith(root + sep));
+      });
+      if (inside.length)
+        warn(`[W34] repo '${ref}' has ${inside.length} worktree(s) INSIDE its own working tree: ${inside.join(", ")} — \`git status\` in that repo can never be clean, which hides the uncommitted work W33 and the ship guard both read. Create them outside instead: \`dev-loop worktree add <ticket>\` places them under <workspace>/.dev-loop/wt/. Not removed here: a live worktree may back an open PR, and reaping one is \`team repair\`'s destructive path.`);
+    }
+  } catch { /* best-effort — never fails doctor */ }
+}
+
+// realpath so a symlinked checkout (/tmp → /private/tmp on macOS) does not read as "outside".
+function realpathIfPossible(p: string): string { try { return realpathSync(p); } catch { return p; } }
+
+// W35 helper (LOOP-28) — an agent that FIRED and left no report.
+//
+// §22: "every agent leaves a durable, human-readable trail of what it did", and the README sells the
+// reports tree as a core value prop. Measured: 7 of 21 fires left no trail and nothing noticed.
+//
+// Silent unless reports.sink is `files` — with any other sink the filesystem tree is not where the
+// trail lives, and warning about an empty directory would be wrong rather than merely noisy.
+export function checkReportTrail(ws: Workspace, warn: (msg: string) => void): void {
+  try {
+    // `team.reports` is typed `unknown` in the schema (it carries more shapes than doctor needs), so
+    // narrow it here rather than widening the schema for one read. Anything that is not an explicit
+    // non-`files` sink is treated as `files`, which is the shipped default.
+    const sink = (ws.file.team.reports as { sink?: unknown } | undefined)?.sink;
+    if (typeof sink === "string" && sink !== "files") return;
+    for (const key of deliveryProjects(ws)) {
+      for (const f of reportTrailGaps(wsFireLedger(ws), reportsRoot(key))) {
+        warn(`[W35] [${key}] agent '${f.agent}' fired ${f.fires}x in ${f.windowDays}d but wrote no report under ${f.expectedDir} — its work left no durable trail (§22), so those fires are invisible in the only record the operator reads.`);
+      }
     }
   } catch { /* best-effort — never fails doctor */ }
 }
