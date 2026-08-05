@@ -387,7 +387,11 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
 }
 // LOOP-103: cadence rejected at project scope (E17), allowed at team scope
 { const f = base(); f.projects.devplatform.agents = { pm: { cadence: "daily" } }; ok(has(f, "E17"), "E17: projects.<key>.agents.<a>.cadence is rejected at project scope"); }
-{ const f = base(); f.team.agents = { pm: { cadence: "daily" } }; ok(codes(f).length === 0, "E17: team.agents.<a>.cadence is allowed at team scope"); }
+// The fixture value is "1d", not "daily": LOOP-103's point is that cadence is legal at TEAM scope
+// and illegal at PROJECT scope, and that distinction is unchanged. "daily" was never a cadence the
+// scheduler could read — applyConfigCadence ignores it and runs the built-in default — so asserting
+// it validated clean was asserting the LOOP-336 defect. Same intent, a value the read site accepts.
+{ const f = base(); f.team.agents = { pm: { cadence: "1d" } }; ok(codes(f).length === 0, "E17: team.agents.<a>.cadence is allowed at team scope"); }
 {
   const f = base(); f.projects.devplatform.agents = { pm: { cadence: "daily" } };
   const paths = validateTeamFile(f).errors.filter((e) => e.code === "E17").map((e) => e.path);
@@ -443,6 +447,60 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
     ok(resolveDefaultBranchForPath(ws, "/ws/unregistered-dir") === undefined,
       "resolveDefaultBranchForPath: returns undefined for an unregistered dir (caller must fail loud)");
   }
+}
+
+// ── LOOP-82: the agents{} KEY is validated, not only its fields ────────────────────────────────
+// A schema that checks a field's VALUE says nothing about whether the key it hangs off is real, so
+// `junoir-dev` passed with zero errors AND zero warnings and then silently never applied — every
+// read site looks the REAL name up. A WARNING, not an error: a config naming a retired agent must
+// not lock the operator out of the commands that repair it (the E09 shape).
+{
+  const warnCodes = (f: unknown): string[] => validateTeamFile(f).warnings.map((w) => w.code);
+  const warnAt = (f: unknown, path: string): boolean => validateTeamFile(f).warnings.some((w) => w.path === path);
+
+  const typo = base();
+  typo.team.agents = { "junoir-dev": { fireTimeout: "30m" } };
+  ok(warnCodes(typo).includes("W04") && warnAt(typo, "team.agents.junoir-dev"),
+    "LOOP-82: a typo'd team.agents.<name> key raises W04 naming the exact path");
+  ok(!has(typo, "E17"), "LOOP-82: it stays a WARNING — an unknown agent name never hard-fails the config");
+  ok(/junoir-dev/.test(validateTeamFile(typo).warnings.find((w) => w.code === "W04")?.message ?? ""),
+    "LOOP-82: the warning quotes the offending name so the operator can find the typo");
+
+  const good = base();
+  good.team.agents = { "junior-dev": { fireTimeout: "30m" }, pm: { model: "claude-opus-5" } };
+  ok(!warnCodes(good).includes("W04"), "LOOP-82: every real agent name is accepted silently");
+
+  const projTypo = base();
+  projTypo.projects.devplatform.agents = { "qaa": { model: "m" } };
+  ok(warnAt(projTypo, "projects.devplatform.agents.qaa"), "LOOP-82: project-scope agent keys are checked on the same rule");
+}
+
+// ── LOOP-336: cadence is format-checked like its two siblings in the same E17 loop ─────────────
+// A malformed cadence produced a clean `dev-loop doctor` and an agent silently running at its
+// built-in default — the operator's intent discarded, with the only trace one console.warn line on
+// a 51 MB run.log. The validator must accept exactly what applyConfigCadence accepts, nothing more.
+{
+  const withCadence = (v: unknown): TeamFile => {
+    const f = base();
+    f.team.agents = { sweep: { cadence: v as string } };
+    return f;
+  };
+  const cadenceErr = (v: unknown): boolean =>
+    validateTeamFile(withCadence(v)).errors.some((e) => e.path === "team.agents.sweep.cadence");
+
+  for (const good of ["10m", "1h", "1d", "30s", "1.5h", "500ms"])
+    ok(!cadenceErr(good), `LOOP-336: '${good}' is accepted (the read site accepts it)`);
+  for (const bad of ["10min", "every 10 minutes", "", "-5m", "0m", "1000d"])
+    ok(cadenceErr(bad), `LOOP-336: '${bad}' is refused (the read site ignores it and runs the default)`);
+  ok(cadenceErr(600000 as unknown), "LOOP-336: a non-string cadence is refused too");
+
+  // The pre-existing PROJECT-scope rule is untouched: cadence there is not honoured at all, and its
+  // message must stay the 'set it under team.agents' guidance rather than a format complaint.
+  const proj = base();
+  proj.projects.devplatform.agents = { sweep: { cadence: "10m" } };
+  const projErr = validateTeamFile(proj).errors.find((e) => e.path === "projects.devplatform.agents.sweep.cadence");
+  ok(!!projErr && /not honoured in team mode/.test(projErr.message),
+    "LOOP-336: a WELL-FORMED project-scope cadence still raises the original 'not honoured' E17, not a format error");
 }
 
 console.log(fails === 0 ? "\nTEAM_CONFIG_OK" : `\n${fails} CHECK(S) FAILED`);

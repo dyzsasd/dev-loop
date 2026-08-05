@@ -60,6 +60,29 @@ try {
   const out2 = await capture(() => doctorWorkspace(loadWorkspace(wsRoot)));
   ok(!out2.includes("[W06]"),
     "clean: no W06 warning when repo .dev-loop/ is gitignored");
+
+  // ── LOOP-328: the rule is present but the DIRECTORY does not exist ──────────────────────────
+  // `.dev-loop/` is a gitignore DIRECTORY rule, and `git check-ignore` can only match one when it
+  // can establish the path IS a directory — which it cannot for a path that is not on disk. Arm B
+  // above only ever probed with the directory present, so the false positive was invisible: W06
+  // fired on a repo whose .gitignore already carried the rule, in exactly the window right after
+  // the leaked directory was cleaned up. Three arms, because a fix that just stops warning is
+  // indistinguishable from a fix that stopped detecting.
+  rmSync(join(repoDir, ".dev-loop"), { recursive: true, force: true });
+  const outAbsent = await capture(() => doctorWorkspace(loadWorkspace(wsRoot)));
+  ok(!outAbsent.includes("[W06]"),
+    "LOOP-328: rule present + directory ABSENT ⇒ no W06 (the false positive)");
+
+  mkdirSync(join(repoDir, ".dev-loop"), { recursive: true });
+  writeFileSync(join(repoDir, ".dev-loop", "hub.db"), "fake db content");
+  const outPresent = await capture(() => doctorWorkspace(loadWorkspace(wsRoot)));
+  ok(!outPresent.includes("[W06]"),
+    "LOOP-328: rule present + directory PRESENT ⇒ still no W06 (unchanged)");
+
+  writeFileSync(join(repoDir, ".gitignore"), "node_modules/\n"); // rule REMOVED
+  const outNoRule = await capture(() => doctorWorkspace(loadWorkspace(wsRoot)));
+  ok(outNoRule.includes("[W06]"),
+    "LOOP-328: rule MISSING ⇒ W06 still fires — detection did not regress");
 } catch (e) {
   console.error("unexpected test error:", e);
   fails++;

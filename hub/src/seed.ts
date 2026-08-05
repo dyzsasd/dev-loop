@@ -14,12 +14,11 @@ import { isCanonicalTicketPrefix } from "./ticket-id.ts";
 // Communication is an active outward actor for public article drafts; it writes drafts, not tickets.
 // The ONE agent roster (A2): the scheduler's VALID_AGENTS derives from this, and the consistency test
 // asserts skills/<agent>-agent dirs match it — so adding an agent is a single edit, not three in lock-step.
-export const AGENT_HANDLES = ["pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "communication"] as const;
-// The team-scope STEWARD roles (M4): the scheduler fires these once for the whole team (project `_team`),
-// and the D1 hub project-override matrix (agentops.resolveProjectOverride) lets exactly these actors cross
-// project boundaries server-side. ONE definition next to the roster (the A2 pattern) — run-agents.ts's
-// STEWARD_AGENTS and the agentops guard both derive from it, so the two lists cannot drift.
-export const STEWARD_HANDLES = ["sweep", "ops", "reflect", "communication"] as const;
+// The list itself now lives in the zero-import leaf agent-handles.ts so the SCHEMA VALIDATOR can read it
+// too (LOOP-82); importing seed.ts from team-config.ts would close a cycle. Re-exported here because
+// seed.ts is the historical import site and every existing caller names it.
+export { AGENT_HANDLES, STEWARD_HANDLES } from "./agent-handles.ts";
+import { AGENT_HANDLES } from "./agent-handles.ts";
 // `signal` is a RETIRED actor: kept as an INACTIVE actor so its historical comment/event
 // attribution stays readable, but refused for NEW writes (actorExists/G1 filter active=1).
 const RETIRED_HANDLES = ["signal"];

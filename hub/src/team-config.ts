@@ -7,6 +7,7 @@
 // config through here, and legacy consumers get an unchanged view via `toLegacyView` (the M1 de-risk).
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { AGENT_HANDLES, AGENT_HANDLE_SET } from "./agent-handles.ts";
 
 // ─── Types (impl §2.1) ───────────────────────────────────────────────────────
 export type DocRef = string | { linearDocument: string } | { hubDoc: string } | { path: string };
@@ -268,6 +269,9 @@ function checkNotify(raw: unknown, path: string, E: Emit): void {
 // --fire-timeout/--stall-timeout flags) or "0" to disable. Validated at load time so a typo surfaces as a
 // clear schema error naming the agent+field, never a silent runtime ignore.
 const TIMEOUT_DUR_RE = /^\d+(?:\.\d+)?(ms|s|m|h|d)?$/;
+// LOOP-336 — exported so run-agents.ts's applyConfigCadence tests the SAME expression the validator
+// accepts. Two hand-copied regexes for one contract is exactly how a validator and its read site drift.
+export const CADENCE_DUR_RE = /^\d+(?:\.\d+)?(ms|s|m|h|d)?$/;
 function parsedDurationMs(s: string): number {
   const m = s.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/);
   if (!m) return 0;
@@ -276,10 +280,18 @@ function parsedDurationMs(s: string): number {
   const mult = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : unit === "h" ? 60 * 60_000 : 24 * 60 * 60_000;
   return Math.round(n * mult);
 }
-function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectScope = false): void {
+function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectScope = false, W?: Emit): void {
   if (agents === null || typeof agents !== "object" || Array.isArray(agents)) { E("E17", path, "agents must be an object"); return; }
   for (const [agent, cfg] of Object.entries(agents as Record<string, unknown>)) {
     const apath = `${path}.${agent}`;
+    // LOOP-82 — validate the KEY, not only its fields. A schema that checks a field's VALUE says
+    // nothing about whether the key it hangs off is a real agent, so `junoir-dev` passed with zero
+    // errors AND zero warnings and then silently never applied: every read site (applyConfigCadence,
+    // applyConfigTimeouts, the per-fire codingAgent/model/effort resolution) looks the REAL name up,
+    // so a misspelled key is simply never consulted. A warning, not an error — a config carrying a
+    // retired agent name must not lock the operator out of the commands that repair it (the E09 shape).
+    if (W && !AGENT_HANDLE_SET.has(agent))
+      W("W04", apath, `'${agent}' is not a known agent — this block is never applied (known: ${AGENT_HANDLES.join(", ")}). Check the spelling.`);
     if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) { E("E17", apath, "agent config must be an object"); continue; }
     const a = cfg as Record<string, unknown>;
     for (const field of ["fireTimeout", "stallTimeout"] as const) {
@@ -293,6 +305,22 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectS
         else if (t !== "0" && parsedDurationMs(t) > 2_147_483_647)
           E("E17", `${apath}.${field}`, `agents.${agent}.${field} exceeds Node's 32-bit timer limit (~24.8d); setTimeout coerces it to 1ms, killing the fire immediately (got ${JSON.stringify(v)})`);
       }
+    }
+    // LOOP-336 — cadence had no format check while its two siblings three lines up did, so a malformed
+    // value produced a clean `doctor` and an agent silently running at its built-in default. The read
+    // site (run-agents.ts applyConfigCadence) accepts exactly CADENCE_DUR_RE and warns-and-ignores
+    // anything else; the validator must accept exactly what the read site accepts and nothing more,
+    // or the two spellings drift. Unlike fireTimeout there is no "0" disable form: a zero cadence is
+    // not a disable, it is a hot loop, so it is refused with the other non-positive values.
+    if (!isProjectScope && a.cadence !== undefined) {
+      const v = a.cadence;
+      const t = typeof v === "string" ? v.trim() : "";
+      if (typeof v !== "string" || !CADENCE_DUR_RE.test(t))
+        E("E17", `${apath}.cadence`, `agents.${agent}.cadence must be a duration string (e.g. "10m", "1h", "1d") — the scheduler ignores anything else and runs the built-in default (got ${JSON.stringify(v)})`);
+      else if (parsedDurationMs(t) <= 0)
+        E("E17", `${apath}.cadence`, `agents.${agent}.cadence must be a POSITIVE duration — a zero cadence is a hot loop, not a disable (got ${JSON.stringify(v)})`);
+      else if (parsedDurationMs(t) > 2_147_483_647)
+        E("E17", `${apath}.cadence`, `agents.${agent}.cadence exceeds Node's 32-bit timer limit (~24.8d); setTimeout coerces it to 1ms, firing the agent continuously (got ${JSON.stringify(v)})`);
     }
     if (isProjectScope && a.cadence !== undefined)
       E("E17", `${apath}.cadence`, `projects.<key>.agents.<agent>.cadence is not honoured in team mode — the team runs one scheduler that rotates across projects by weight; set cadence under team.agents instead, or express per-project frequency with the project's rotation weight`);
@@ -339,7 +367,7 @@ function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   // E16 — team.providers (the custom-endpoint registry) + team.opencodePermission. Strictly validated:
   // a typo'd entry renders a DEAD opencode provider block (fires on it would 404/401 a whole turn), and
   // authTokenEnv is name-only (§16 — a copied workspace folder must never carry a credential).
-  if (team.agents !== undefined) validateAgentConfigs(team.agents, "team.agents", E);
+  if (team.agents !== undefined) validateAgentConfigs(team.agents, "team.agents", E, false, W);
   if (team.providers !== undefined) validateProviders(team.providers, E);
   if (team.opencodePermission !== undefined) {
     const op = team.opencodePermission as unknown;
@@ -411,7 +439,7 @@ function validateProjects(projects: Record<string, ProjectEntry>, repos: Record<
     if (p?.hub !== undefined) checkHub(p.hub, `projects.${key}.hub`, E);
     if (p?.communication !== undefined) checkCommunication(p.communication, `projects.${key}.communication`, E);
     if (p?.notify !== undefined) checkNotify(p.notify, `projects.${key}.notify`, E);
-    if (p?.agents !== undefined) validateAgentConfigs(p.agents, `projects.${key}.agents`, E, true);
+    if (p?.agents !== undefined) validateAgentConfigs(p.agents, `projects.${key}.agents`, E, true, W);
     if (p?.scratch !== undefined && typeof p.scratch !== "boolean") E("E08", `projects.${key}.scratch`, "scratch must be a boolean");
     const refs = Array.isArray(p?.repos) ? p.repos : [];
     if (!refs.length && p?.scratch !== true) W("W01", `projects.${key}.repos`, `project '${key}' references no repos`);
