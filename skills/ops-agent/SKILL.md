@@ -195,12 +195,13 @@ dev-loop op <op-name> [--args-json '<JSON>']
 # save_issue (create)
 dev-loop ticket create --title T --type Bug|Feature|Improvement [--state S] [--description TEXT|'-'] [--description-file F]
                        [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
-    --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes §9c marker comment ('Blocked-by: <id>') after create.
+    --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes the §9c marker comment ('Blocked-by: <id>') AND sets the 'blocked' label (LOOP-190).
 
 # save_issue (update)
 dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|'']
+                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--unblocked-by ids]
     HAZARD: labels REPLACE the full set (re-pass all).
+    --unblocked-by writes the §9c retirement marker ('Unblocked-by: <id>') in the ONE bare-line form the parser reads (LOOP-287).
     HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
 
 # save_comment
