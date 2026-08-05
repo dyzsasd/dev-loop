@@ -13,7 +13,8 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
 import { designParentIds, isDesignParent, designPointerOf, docSlugOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
-import { handoffGateRejection } from "./handoff-gate.ts"; // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
+import { handoffGateRejection } from "./handoff-gate.ts";
+import { acCompletenessRejection } from "./ac-gate.ts"; // LOOP-198: the COMPLETENESS axis of acceptance // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
 import { tryResolveWorkspace } from "./workspace.ts";
 import { effectiveRepo, reposOfProject } from "./team-config.ts";
 
@@ -196,6 +197,33 @@ function landingContextFor(db: DatabaseSync, projectId: string): { repoRoot?: st
     const r = effectiveRepo(ws, primary.ref);
     return { repoRoot: r.absPath, landing: r.landing };
   } catch { return {}; }
+}
+
+/**
+ * The ticket's comment bodies, for the LOOP-198 waiver check.
+ *
+ * Best-effort: an unreadable comments table must not refuse a close. The gate's whole justification
+ * is that it catches an omission mechanically, and a gate that fails closed on its own read error
+ * would block every transition the moment that read breaks.
+ */
+/**
+ * Is the LOOP-198 completeness gate enabled for this workspace?
+ *
+ * Off unless `team.intake.acCompletenessGate` is true — see the AC5 measurement in ac-gate.ts.
+ * Resolved here rather than threaded, and best-effort: a library caller with no workspace gets the
+ * default (off), which is the same posture landingContextFor takes for the same reason.
+ */
+function acGateEnabled(): boolean {
+  try {
+    const ws = tryResolveWorkspace();
+    return (ws?.file.team.intake as { acCompletenessGate?: unknown } | undefined)?.acCompletenessGate === true;
+  } catch { return false; }
+}
+
+function commentBodiesFor(db: DatabaseSync, ticketId: string): string[] {
+  try {
+    return (db.prepare("SELECT body FROM comments WHERE ticket_id=?").all(ticketId) as unknown as { body: string }[]).map((r) => r.body ?? "");
+  } catch { return []; }
 }
 
 function verifyGateRejection(actor: string, fromState: string, next: TicketUpdateFields, storedLabels: string[]): string | null {
@@ -386,6 +414,11 @@ export function updateTicketRow(
     ?? stagingDeployRejection(db, projectId, fromState, resolved)
     ?? designParentGate(db, projectId, id, actor, fromState, resolved, storedRow)   // LOOP-345 (R1+R2)
     ?? handoffGateRejection({ id, fromState, toState: resolved.state, actor, ...landingContextFor(db, projectId) })  // LOOP-309
+    ?? acCompletenessRejection({                                                                    // LOOP-198
+      id, description: resolved.description ?? "", toState: resolved.state, fromState, actor,
+      commentBodies: commentBodiesFor(db, id),
+      enabled: acGateEnabled(),
+    })
     ?? verifyGateRejection(actor, fromState, resolved, storedLabels);
   // LOOP-345 R1: on a design parent the §21a rule is the WHOLE decision — a pass here means the
   // ownership gate must not also refuse pm for the qa label the ticket carries from its type.
