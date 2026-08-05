@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { detectRepoFacts, workflowJobNames } from "../src/team-edit.ts";
+import { detectRepoFacts, workflowJobNames, SETTABLE } from "../src/team-edit.ts";
 import { openDb } from "../src/db.ts";
 import { confirmationToken, isScratchProject, isolationVerdict, TOKEN_PREFIX, commitBothHalves } from "../src/destructive-guard.ts";
 import type { Workspace } from "../src/team-config.ts";
@@ -1302,6 +1302,18 @@ try {
       "LOOP-255 control: a CLONED checkout does have origin/HEAD — which is why the fallback was never exercised");
     ok(detectRepoFacts(cloned).defaultBranch === "trunk",
       "LOOP-255 control: both rungs agree on the same repo");
+  }
+
+  // The `team set` whitelist is matched FIRST-WINS, so a duplicated pattern is silent: the second
+  // entry is unreachable and the table still behaves correctly. I shipped `team.backup.*` twice in
+  // LOOP-339 and nothing caught it — a later edit to the shadowed copy would then have no effect at
+  // all, with the table reading as though it did. Uniqueness is cheap to assert and it is the only
+  // thing standing between a duplicate and a change that silently does nothing.
+  {
+    const seen = new Map<string, number>();
+    for (const e of SETTABLE) seen.set(e.re.source, (seen.get(e.re.source) ?? 0) + 1);
+    const dupes = [...seen].filter(([, n]) => n > 1).map(([p]) => p);
+    ok(dupes.length === 0, `SETTABLE has no duplicate pattern — a shadowed entry is unreachable and edits to it do nothing (dupes: ${dupes.join(", ") || "none"})`);
   }
 
   console.log(fails === 0 ? "\nTEAM_EDIT_OK" : `\n${fails} CHECK(S) FAILED`);

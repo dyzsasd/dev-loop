@@ -24,11 +24,17 @@ try {
     projCfg: undefined, log: (l: string) => lines.push(l),
   };
 
-  // 1. no send target anywhere → every notifier no-ops; only the WAL checkpoint arms.
+  // 1. no send target anywhere → every NOTIFIER no-ops. The MAINTENANCE timers are a different
+  // class and arm regardless: they do not send anything, so a missing comms target is irrelevant to
+  // them. wal-checkpoint has always been in this class; LOOP-339's board snapshot joins it, because
+  // a backup that only runs when a Slack webhook happens to be configured is not a backup.
+  const MAINTENANCE = new Set(["wal-checkpoint", "board-snapshot"]);
   const bare = startProjectNotifiers({ ...base, notify: undefined });
-  ok(bare.active.length === 1 && bare.active[0] === "wal-checkpoint",
-    `no channel + no notify ⇒ only wal-checkpoint arms (got ${bare.active.join(", ")})`);
-  ok(bare.timers.length === 0, "no timers armed when everything no-ops");
+  const bareNotifiers = bare.active.filter((a) => !MAINTENANCE.has(a));
+  ok(bareNotifiers.length === 0,
+    `no channel + no notify ⇒ no NOTIFIER arms (got ${bare.active.join(", ")}; maintenance timers are exempt)`);
+  ok(bare.active.includes("wal-checkpoint"), "…and the WAL checkpoint still arms unconditionally");
+  ok(bare.timers.length <= 1, `no notifier timers armed when everything no-ops (got ${bare.timers.length}; the board-snapshot cadence may hold one)`);
 
   // 2. a §9 notify config arms the timer-backed notifiers (blocked + fire-health need a target;
   //    no-progress stays off at windowHours 0 — the explicit opt-out).

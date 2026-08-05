@@ -140,6 +140,11 @@ export interface TwoPhase {
   configText: string | null;    // already-validated, already-serialized (null ⇒ no config half)
   db: DatabaseSync | undefined;
   dbWork: (() => void) | null;  // runs INSIDE the transaction; must not BEGIN/COMMIT/ROLLBACK itself
+  // LOOP-339 trigger 2 — a board copy taken IMMEDIATELY BEFORE this commits. The cadence alone
+  // bounds the worst case to `everyHours`; this bounds it to SECONDS, and it is the trigger that
+  // would have turned the 2026-08-04 cascade delete into a five-minute restore instead of a
+  // two-hour hand-run `sqlite3 .recover` that still lost 19 tickets.
+  preSnapshot?: () => string | null;  // throws ⇒ the verb REFUSES (fail-closed); null ⇒ no board to copy
 }
 
 // Write `configPath` through a same-directory tmp + rename, so a reader never observes a partially
@@ -163,6 +168,17 @@ function writeConfigAtomic(configPath: string, text: string | Buffer): void {
 
 /** Throws on failure, having restored both halves. Returns only when BOTH halves are durable. */
 export function commitBothHalves(p: TwoPhase): void {
+  // FAIL-CLOSED, and deliberately so. Every other snapshot path in this codebase is best-effort,
+  // because a failed periodic backup must not take the daemon down. This one is the opposite: its
+  // ENTIRE purpose is to exist before an irreversible write, so "the snapshot failed, proceeding
+  // anyway" would remove the only guarantee it offers. It runs FIRST — before anything is begun or
+  // written — so a refusal here leaves nothing to undo.
+  if (p.preSnapshot) {
+    try { p.preSnapshot(); }
+    catch (e) {
+      throw new Error(`refusing the destructive write: the pre-verb board snapshot failed (${(e as Error)?.message ?? String(e)}). Nothing was changed. Fix the snapshot path, or take one by hand with \`dev-loop board snapshot\` and retry.`);
+    }
+  }
   const doConfig = p.configText !== null;
   const doDb = !!(p.db && p.dbWork);
   // 1. Retain the current bytes BEFORE anything is begun or written, so a failure to read is a failure
