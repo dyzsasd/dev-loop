@@ -53,7 +53,37 @@ export function identityDot(handle: string): string {
 // Per-ticket lifecycle from the append-only events ledger — the /activity HIST_SQL adapted to carry
 // the actor (who moved it). comment.add events are deliberately NOT selected: their bodies live in
 // the comments table, which the timeline interleaves below (selecting both would double-render).
-const TL_SQL = "SELECT kind,actor,data,created_at FROM events WHERE project_id=? AND ticket_id=? AND (kind='issue.create' OR kind='issue.transition') ORDER BY id";
+// LOOP-68 — issue.update joins the timeline. The page renders "what happened to this ticket, in
+// order", and the loop's most consequential moves are issue.updates: a §9c park/unpark is the
+// `blocked` label going on or off; a cross-tier re-route and Sweep's §21b label repairs are
+// assignee/label changes. A ticket could sit parked for six fires and then be released with the page
+// showing NOTHING between the last transition and the next one.
+// comment.add stays excluded, and that exclusion is DIFFERENT in kind: comment bodies live in the
+// `comments` table and are interleaved separately below, so selecting both would double-render them.
+// issue.update had no such reason — it simply was not selected.
+const TL_SQL = "SELECT kind,actor,data,created_at FROM events WHERE project_id=? AND ticket_id=? AND (kind='issue.create' OR kind='issue.transition' OR kind='issue.update') ORDER BY id";
+
+// An issue.update's data blob carries only the fields that CHANGED. Render the ones an operator
+// steers with, and say nothing when an update carried none of them (a bare row is noise, not history).
+function updateSummary(d: Record<string, any>): string | null {
+  const parts: string[] = [];
+  const before: string[] = Array.isArray(d.labelsBefore) ? d.labelsBefore : [];
+  const after: string[] = Array.isArray(d.labels) ? d.labels : [];
+  if (Array.isArray(d.labels)) {
+    const added = after.filter((l) => !before.includes(l));
+    const removed = before.filter((l) => !after.includes(l));
+    if (added.length) parts.push(`+${added.map((l) => `<span class="lbl">${esc(l)}</span>`).join(" +")}`);
+    if (removed.length) parts.push(`−${removed.map((l) => `<span class="lbl">${esc(l)}</span>`).join(" −")}`);
+    if (!added.length && !removed.length && before.length === 0) parts.push(`labels <span class="lbl">${after.map((l) => esc(l)).join(", ") || "none"}</span>`);
+  }
+  if (d.assignee !== undefined) parts.push(`assignee → <b>${esc(d.assignee ?? "unassigned")}</b>`);
+  if (d.priority !== undefined) parts.push(`priority → <b>${esc(String(d.priority))}</b>`);
+  if (d.relatedTo !== undefined) parts.push("relations updated");
+  if (d.duplicateOf !== undefined) parts.push(`duplicate of <b>${esc(String(d.duplicateOf))}</b>`);
+  if (d.title !== undefined) parts.push("title edited");
+  if (d.description !== undefined) parts.push("description edited");
+  return parts.length ? parts.join(", ") : null;
+}
 // Defensive parse of an event's data blob (mirrors activity.ts eventData; kept local so the two view
 // modules stay independently editable) — empty / malformed / non-object → {}.
 function tlData(s: unknown): Record<string, any> {
@@ -83,6 +113,9 @@ export function ticketPage(db: DatabaseSync, projectId: string, projectKey: stri
   for (const e of events) {
     if (e.kind === "issue.create") {
       items.push({ at: e.created_at, html: `<li class="tl-item tl-create">${identityDot(e.actor)}<div class="tl-body"><b>${esc(e.actor)}</b> created this ticket ${timeHtml(e.created_at, nowMs)}</div></li>` });
+    } else if (e.kind === "issue.update") { // LOOP-68 — label/assignee/priority/relation changes
+      const summary = updateSummary(tlData(e.data));
+      if (summary) items.push({ at: e.created_at, html: `<li class="tl-item tl-update">${identityDot(e.actor)}<div class="tl-body"><b>${esc(e.actor)}</b> updated ${summary} ${timeHtml(e.created_at, nowMs)}</div></li>` });
     } else { // issue.transition — who moved what state when (malformed data → "?", never a broken row)
       const d = tlData(e.data);
       items.push({ at: e.created_at, html: `<li class="tl-item tl-move">${identityDot(e.actor)}<div class="tl-body"><b>${esc(e.actor)}</b> moved <span class="lbl">${esc(d.from ?? "?")}</span> → <span class="lbl">${esc(d.to ?? "?")}</span> ${timeHtml(e.created_at, nowMs)}</div></li>` });

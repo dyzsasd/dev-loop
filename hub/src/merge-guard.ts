@@ -45,10 +45,36 @@ import { readPrReviewState, defaultGhExec, type ExecFn, readCiFreshness, type Ci
 import { addComment, updateTicketRow, type TicketUpdateFields } from "./ticketwrite.ts";
 
 
-// Board states that are NOT merge-eligible (design §3.3).
-// In Review = PR's verify gate is still open; Canceled/Duplicate = terminal reject.
-// Todo/In Progress are merge-eligible on this axis (no trip).
-const NOT_MERGE_ELIGIBLE = new Set(["In Review", "Canceled", "Duplicate"]);
+// Board states and their merge-eligibility, ENUMERATED (LOOP-113).
+//
+// This used to be a 3-member deny-set against db.ts's EIGHT declared states, so the other five were
+// merge-eligible BY OMISSION — never enumerated, never reasoned about. One of them is
+// `Human-Blocked`, which is the loop's only explicit "a human must rule on this before anything
+// else happens" state: the board form of the §9 park and the entire content of the operator's
+// decision queue. A guard whose stated purpose is to stop a human's most deliberate act of steering
+// from being discarded silently treated a ticket parked FOR that ruling as fine to merge. It was not
+// a considered trade-off — `Human-Blocked` appears zero times in the design, which reasoned only
+// about "In Review" and "terminal reject", and it is neither.
+//
+// A total map, not a set: adding a ninth state to db.ts now fails the exhaustiveness test in
+// hub/test/merge-guard.ts rather than silently defaulting to merge-eligible.
+const MERGE_ELIGIBILITY: Record<string, { eligible: boolean; why: string }> = {
+  "Backlog":       { eligible: true,  why: "not started — a PR against it is early, not wrong" },
+  "Todo":          { eligible: true,  why: "queued for a dev tier" },
+  "In Progress":   { eligible: true,  why: "claimed and being built — this is the normal merge path" },
+  "In Review":     { eligible: false, why: "the PR's verify gate is still open — merging pre-empts the owner's verdict" },
+  "Human-Blocked": { eligible: false, why: "parked for the operator's ruling — this is the decision queue itself; merging discards the steering the park exists to wait for" },
+  "Done":          { eligible: true,  why: "already accepted — a follow-up PR against it is legitimate" },
+  "Canceled":      { eligible: false, why: "terminal reject — the work was refused" },
+  "Duplicate":     { eligible: false, why: "terminal reject — superseded by another ticket" },
+};
+// An UNKNOWN state fails open (eligible), consistent with §3.4: "you pointed me at something I do
+// not understand" must never become a merge freeze. The exhaustiveness test is what keeps the map
+// honest, not a runtime refusal.
+export function isMergeEligible(state: string): { eligible: boolean; why: string } {
+  return MERGE_ELIGIBILITY[state] ?? { eligible: true, why: `unknown state '${state}' — failing open (§3.4)` };
+}
+export const MERGE_ELIGIBILITY_STATES = Object.keys(MERGE_ELIGIBILITY);
 
 // Why an axis did not evaluate (LOOP-300). `null` ⇒ it DID evaluate. The set is closed so the
 // classifier below is total: a new reason must be classified, it cannot default into fail-open.
@@ -426,7 +452,7 @@ export function mergeGuard(
           if (!row) {
             boardState = { ticketId, ticketState: null, trip: false, skipped: false, skipReason: null };
           } else {
-            const trip = NOT_MERGE_ELIGIBLE.has(row.state);
+            const trip = !isMergeEligible(row.state).eligible;
             boardState = { ticketId, ticketState: row.state, trip, skipped: false, skipReason: null };
           }
         } finally {
