@@ -4,10 +4,11 @@
 // EXACTLY what context-bill's conventionsLoad bills (one span authority, two consumers);
 // (3) the §0a lessons slice (own + Shared, + Dev for split tiers); (4) per-backend
 // contract-file selection; (5) fail-open on a malformed/missing SKILL.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assembleBootCorpus, conventionsUnionText, lessonsSlice } from "../src/boot-prefix.ts";
+import { loadWorkspace, toLegacyView } from "../src/team-config.ts";
 import { parseConventions, parseSectionsLine, splitSkill, conventionsLoad, pluginRoot } from "../src/context-bill.ts";
 
 const root = pluginRoot();
@@ -129,15 +130,83 @@ ok(!!realSingleAutoMerge && !!realSingle2 && realSingleAutoMerge.text === realSi
 ok(!!bare && !!realSingleAutoMerge && bare.hash !== realSingleAutoMerge.hash,
   "LOOP-236: pruned-bare vs auto-merge-on have different hashes");
 
-// Fixture E: legacy-view shape ({name} not {ref}) — toLegacyView projects repos as {name, flat facts}
-// Without the name-fallback fix, all entries resolve to null → empty repos → §12c pruned incorrectly.
-const legacyViewShape = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
-  { repos: [{ name: "dev-loop", path: "/tmp/dev-loop", autoMerge: true, landing: "pr" }] },
-  { "dev-loop": { autoMerge: true, landing: "pr" } });
-ok(!!legacyViewShape && !legacyViewShape.pruned.includes("12c"),
-  "LOOP-236: legacy-view shape ({name} not {ref}) with autoMerge:true → §12c NOT pruned");
-ok(!!legacyViewShape && legacyViewShape.pruned.includes("19"),
-  "LOOP-236: legacy-view shape single repo → §19 pruned");
+// ── Fixture E (LOOP-279) — drive the REAL toLegacyView projection, not a hand-built argument ─────
+// The production caller is run-agents.ts:959-961: `cfg = toLegacyView(ws)`, then
+// `assembleBootCorpus(…, cfg.projects[key], cfg.repos)`. LegacyProjectsConfig declares NO
+// workspace-level `repos` registry, so that 7th argument is structurally `undefined` on every v2
+// workspace. The previous fixture hand-supplied a registry instead, asserting an input shape the
+// runtime cannot produce — which is how LOOP-236 shipped green while §12c was pruned on the very
+// workspace it was meant to fix. Build a workspace file, project it, pass BOTH arguments through.
+const lvTmpDirs: string[] = [];
+function legacyViewArgs(repos: Record<string, object>, projectRepos: { ref: string }[]) {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "devloop-bootlv-")));
+  lvTmpDirs.push(tmp);
+  for (const r of Object.values(repos)) mkdirSync(join(tmp, (r as { path: string }).path), { recursive: true });
+  writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    workspaceId: "test",
+    team: { key: "test", backend: "service", mode: "live", autonomy: "full" },
+    repos,
+    projects: { proj1: { repos: projectRepos } },
+  }));
+  const cfg = toLegacyView(loadWorkspace(tmp)) as unknown as
+    { projects: Record<string, Record<string, unknown>>; repos?: Record<string, unknown> };
+  const projectCfg = cfg.projects.proj1;
+  return {
+    projectCfg,
+    registry: cfg.repos,   // undefined at runtime — passing it through IS the point of this fixture
+    backend: (projectCfg as { backend?: string }).backend ?? "linear",
+  };
+}
+
+const lvSingle = legacyViewArgs(
+  { "dev-loop": { path: "clone", landing: "pr", autoMerge: true, mergeChecks: ["Test (Node 24)"] } },
+  [{ ref: "dev-loop" }]);
+ok(lvSingle.registry === undefined,
+  "LOOP-279: toLegacyView emits no workspace-level repos registry — the 7th argument is undefined at runtime");
+ok(Array.isArray((lvSingle.projectCfg as { repos?: unknown }).repos)
+  && ((lvSingle.projectCfg as { repos: Record<string, unknown>[] }).repos[0]!).autoMerge === true,
+  "LOOP-279: the projection inlines autoMerge:true into projects.proj1.repos[0] (the facts are already there)");
+const lvBoot = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", lvSingle.backend,
+  lvSingle.projectCfg, lvSingle.registry);
+ok(!!lvBoot && !lvBoot.pruned.includes("12c"),
+  "LOOP-279 AC1: real projection + autoMerge:true ⇒ §12c KEPT (pruned before the fix)");
+ok(!!lvBoot && lvBoot.pruned.includes("19"),
+  "LOOP-279 AC1: real projection, single repo ⇒ §19 pruned (one resolved repo, not zero)");
+ok(!!lvBoot && lvBoot.pruned.includes("12d"),
+  "LOOP-279 AC1: real projection, no deploy configured ⇒ §12d pruned");
+
+// AC5 — a genuine ≥2-repo project must KEEP §19, asserted through the real projection too. Before
+// the fix this pruned §19 for the wrong reason: zero repos resolved, so `length > 1` was vacuously
+// false. Neither knob set here, so §12c/§12d must still prune.
+const lvMulti = legacyViewArgs(
+  { "repo-a": { path: "a", landing: "direct" }, "repo-b": { path: "b", landing: "direct" } },
+  [{ ref: "repo-a" }, { ref: "repo-b" }]);
+const lvMultiBoot = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", lvMulti.backend,
+  lvMulti.projectCfg, lvMulti.registry);
+ok(!!lvMultiBoot && !lvMultiBoot.pruned.includes("19"),
+  "LOOP-279 AC5: real projection, 2 repos ⇒ §19 KEPT");
+ok(!!lvMultiBoot && lvMultiBoot.pruned.includes("12c") && lvMultiBoot.pruned.includes("12d"),
+  "LOOP-279 AC5: real projection, neither knob ⇒ §12c AND §12d pruned");
+
+// AC5 — the deploy half of the §12c predicate resolves through the projection as well.
+const lvDeploy = legacyViewArgs(
+  { "repo-d": { path: "d", landing: "pr", deploy: { style: "release-pr" } } },
+  [{ ref: "repo-d" }]);
+const lvDeployBoot = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", lvDeploy.backend,
+  lvDeploy.projectCfg, lvDeploy.registry);
+ok(!!lvDeployBoot && !lvDeployBoot.pruned.includes("12c") && !lvDeployBoot.pruned.includes("12d"),
+  "LOOP-279 AC5: real projection, deploy.style:release-pr ⇒ §12c AND §12d KEPT");
+
+// AC6 — fail open on entries that resolve to nothing: no throw, and no pruning decision drawn from
+// them (the assembler still returns a corpus).
+const malformedRepos = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service",
+  { repos: [null, 42, "dev-loop", {}, { ref: "absent-from-registry" }] }, undefined);
+ok(!!malformedRepos,
+  "LOOP-279 AC6: malformed/unresolvable repos entries ⇒ corpus still assembles, no throw");
+ok(!!malformedRepos && malformedRepos.pruned.includes("12c"),
+  "LOOP-279 AC6: nothing resolvable ⇒ §12c pruned, fail open");
+for (const d of lvTmpDirs) rmSync(d, { recursive: true, force: true });
 
 const featured = realMultiRepo; // alias for assertions below that use the 'featured' name
 ok(!!featured && featured.text.includes("## 19. Multiple repos"),

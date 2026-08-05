@@ -35,8 +35,20 @@ export interface BootCorpus {
 type ProjectCfg = Record<string, unknown> | null | undefined;
 type ReposRegistry = Record<string, unknown> | null | undefined;
 const asObj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? v as Record<string, unknown> : {});
-// Resolve the project's repos[] (ProjectRepoRef pointers) through the workspace repos registry.
-// Falls OPEN: a ref not found in the registry ⇒ omit it (no throw, no pruning for that anchor).
+// The repo facts every predicate below reads. They are the discriminator between the two entry
+// shapes: a raw workspace `ProjectRepoRef` is `{ref, role?}` and carries NONE of them, while the
+// legacy view builds an object literal with all of them — so the keys are OWN properties there even
+// when the value is undefined, which is what makes presence (not truthiness) the correct test.
+const REPO_FACT_KEYS = ["landing", "autoMerge", "mergeChecks", "build", "deploy", "ops"] as const;
+const hasInlineFacts = (e: Record<string, unknown>): boolean =>
+  REPO_FACT_KEYS.some((k) => Object.prototype.hasOwnProperty.call(e, k));
+// Resolve the project's repos[] to the fact-bearing objects the predicates read, from EITHER shape.
+// The runtime caller (run-agents.ts) passes `toLegacyView(ws)`, whose LegacyProjectsConfig has no
+// workspace-level `repos` registry at all — so the registry argument is `undefined` on every v2
+// workspace and a registry-only resolution yields [] and prunes §12c with autoMerge:true sitting
+// inline in the entry (LOOP-279). Hence: prefer the entry's own facts, use the registry only to
+// resolve a bare pointer.
+// Falls OPEN: an unresolvable ref ⇒ omit it (no throw, no pruning decision drawn from that entry).
 const resolveRepos = (cfg: ProjectCfg, reg: ReposRegistry): Record<string, unknown>[] => {
   const r = asObj(cfg).repos;
   if (!Array.isArray(r)) return [];
@@ -44,7 +56,10 @@ const resolveRepos = (cfg: ProjectCfg, reg: ReposRegistry): Record<string, unkno
   return r
     .map((entry) => {
       const e = asObj(entry);
-      // Support both raw workspace shape ({ref}) and legacy-view shape ({name: ref, flat facts}).
+      // Legacy-view shape ({name, path, flat facts}) — the facts are already here; the registry
+      // the production caller would have to synthesize for them does not exist.
+      if (hasInlineFacts(e)) return e;
+      // Bare pointer (raw workspace {ref} / a {name}-only entry) ⇒ resolve through the registry.
       const ref = typeof e.ref === "string" ? e.ref : (typeof e.name === "string" ? e.name : undefined);
       if (ref !== undefined && registry[ref]) return asObj(registry[ref]);
       return null;
