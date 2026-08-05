@@ -94,7 +94,29 @@ export function ticketToPr(
 export type ExecFn = (args: string[]) => { stdout: string; stderr: string; ok: boolean };
 // ── CI-freshness reader (design merge-guard-ci-freshness §3 / LOOP-242 Child A) ──────
 
-export type CiFreshnessVerdict = "fresh-green" | "stale" | "red" | "pending" | "unknown";
+// LOOP-335: `stale-exempt` — genuinely behind, but the delta cannot change any check result.
+// NOT folded into "fresh-green": the head really IS behind, and the dev-agent SKILL keys its
+// re-freshen trigger on verdict:"stale". A new name keeps that trigger correct with no §17 edit.
+export type CiFreshnessVerdict = "fresh-green" | "stale" | "stale-exempt" | "red" | "pending" | "unknown";
+
+/**
+ * Is every file in the delta CI-irrelevant? (LOOP-335)
+ *
+ * `every`, not `some` — one relevant file makes the whole delta relevant, and a PR that has not been
+ * tested against it must stale. That distinction is the entire ticket, and its mutation (`every` →
+ * `some`) is the specified acceptance bar.
+ *
+ * Prefix match on a trailing-slash entry (a directory), exact match otherwise. No globs, per the
+ * design: a glob language is a second thing to get wrong, and every case this exists for is a file
+ * or a directory.
+ *
+ * An EMPTY delta is never exempt. `files[]` empty while behindBy > 0 means the compare told us
+ * nothing about composition, and "we could not see it" must not read as "it was harmless".
+ */
+export function deltaIsCiIrrelevant(files: string[], irrelevant: string[] | undefined): boolean {
+  if (!irrelevant?.length || !files.length) return false;
+  return files.every((f) => irrelevant.some((p) => (p.endsWith("/") ? f.startsWith(p) : f === p)));
+}
 
 export interface CiFreshness {
   verdict: CiFreshnessVerdict;
@@ -113,6 +135,7 @@ export function readCiFreshness(
   prNumber: number,
   mergeChecks: string[],
   defaultBranch: string,
+  ciIrrelevantPaths?: string[], // LOOP-335: paths whose change cannot alter any check result
 ): CiFreshness {
   try {
     // 1. PR view — get headRefOid + statusCheckRollup
@@ -153,18 +176,40 @@ export function readCiFreshness(
       // (`compare/<testedHead>...<defaultBranch>`) yields `ahead_by` = the same number AND the true
       // delta the PR has not been tested against. Degrades to count-only when the second call fails.
       let composition = "file composition unavailable";
+      // LOOP-335 — the delta file list is ALREADY in hand here; it was used only to build the reason
+      // string while the verdict was decided one branch earlier from `behindBy` alone. So a `main`
+      // commit that cannot change any check result staled every open PR. Measured: 10 of the last 25
+      // commits on main were docs(strategy), and the union of every file those 10 touch is exactly
+      // docs/STRATEGY.md + docs/strategy-archive/2026-08.md — read by no test against the real tree.
+      //
+      // FAIL-CLOSED on every uncertainty. The compare not running, not parsing, reporting no files,
+      // or being TRUNCATED all mean the composition is unknown, and unknown must stale. Truncation
+      // beats the exempt rule specifically: a truncated list of exempt files says nothing about the
+      // files that were cut.
+      let exempt = false;
       const revResult = exec(["api", `/repos/${ghRepo}/compare/${testedHead}...${defaultBranch}`]);
       if (revResult.ok) {
         try {
-          const revData = JSON.parse(revResult.stdout) as { files?: Array<{ filename?: string }> };
+          const revData = JSON.parse(revResult.stdout) as { files?: Array<{ filename?: string }>; total_commits?: number; commits?: unknown[] };
           const names = (revData.files ?? []).map((f) => f.filename).filter((n): n is string => !!n);
+          // GitHub's compare API caps files[] at 300 and commits[] at 250. Either cap means we are
+          // looking at a PREFIX of the delta, not the delta.
+          const truncated = names.length >= 300
+            || (typeof revData.total_commits === "number" && Array.isArray(revData.commits) && revData.total_commits > revData.commits.length);
           if (names.length > 0) {
             const shown = names.slice(0, 5).join(", ");
             composition = `delta touches ${names.length} file(s): ${shown}${names.length > 5 ? ` (+${names.length - 5} more)` : ""}`;
+            if (!truncated && deltaIsCiIrrelevant(names, ciIrrelevantPaths)) {
+              exempt = true;
+              composition = `delta touches ${names.length} CI-irrelevant file(s): ${shown}${names.length > 5 ? ` (+${names.length - 5} more)` : ""}`;
+            }
           } else {
             composition = "delta touches 0 files (empty commits)";
           }
-        } catch { /* keep the degraded composition string */ }
+        } catch { /* keep the degraded composition string — and stay non-exempt */ }
+      }
+      if (exempt) {
+        return { verdict: "stale-exempt", behindBy, testedHead, currentTip, reason: `head is ${behindBy} commit(s) behind ${defaultBranch} tip ${currentTip ?? "unknown"}, but every file in the delta is configured CI-irrelevant (repos.<ref>.ciIrrelevantPaths) — re-verifying could not change a check result; ${composition}` };
       }
       return { verdict: "stale", behindBy, testedHead, currentTip, reason: `checks green but head is ${behindBy} commit(s) behind ${defaultBranch} tip ${currentTip ?? "unknown"} — not re-verified against the current tip; ${composition}` };
     }

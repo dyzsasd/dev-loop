@@ -329,14 +329,14 @@ function resolveGhRepo(repoDir: string): string | null {
 // is not a registered repo — the axis then skips exactly as before this wiring existed.
 export function registryCiFreshnessConfig(
   repoDir: string,
-): { mergeChecks: string[]; defaultBranch: string; repoEligible: boolean } | null {
+): { mergeChecks: string[]; defaultBranch: string; repoEligible: boolean; ciIrrelevantPaths?: string[] } | null {
   try {
     const ws = tryResolveWorkspace(repoDir);
     if (!ws) return null;
     let real: string;
     try { real = realpathSync(repoDir); } catch { real = resolvePath(repoDir); }
     for (const entry of Object.values(ws.file.repos ?? {})) {
-      const e = entry as { path?: string; landing?: string; autoMerge?: boolean; mergeChecks?: string[]; defaultBranch?: string } | null;
+      const e = entry as { path?: string; landing?: string; autoMerge?: boolean; mergeChecks?: string[]; defaultBranch?: string; ciIrrelevantPaths?: string[] } | null;
       if (!e?.path) continue;
       const abs = resolvePath(ws.root, e.path);
       let absReal = abs;
@@ -349,6 +349,7 @@ export function registryCiFreshnessConfig(
         defaultBranch: e.defaultBranch ?? teamBranch ?? "main",
         // AC2: the axis applies only where Step 0.5 merges — landing:"pr" + autoMerge (design §3).
         repoEligible: e.landing === "pr" && e.autoMerge === true,
+        ciIrrelevantPaths: Array.isArray(e.ciIrrelevantPaths) ? e.ciIrrelevantPaths : undefined, // LOOP-335
       };
     }
     return null;
@@ -393,6 +394,7 @@ export function mergeGuard(
     apply?: boolean;           // when true + trip: post comment + route ticket (§5.1)
     // CI-freshness axis (Child A / LOOP-242, wired by LOOP-323):
     mergeChecks?: string[];    // check names to validate; absent/empty → axis skipped
+    ciIrrelevantPaths?: string[]; // LOOP-335: paths whose change cannot alter a check result
     defaultBranch?: string;    // default branch name (default: "main")
     // LOOP-323 AC2: the CLI resolves this from the workspace repo registry — false when the repo
     // is not landing:"pr" + autoMerge, making the axis inapplicable with its own skipReason.
@@ -552,7 +554,7 @@ export function mergeGuard(
       if (isNaN(prNumber)) {
         ciFreshness = { trip: false, skipped: true, skipReason: "forge-unreachable", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
       } else {
-        const fr = readCiFreshness(exec, ghRepo, prNumber, mergeChecks, defaultBranch);
+        const fr = readCiFreshness(exec, ghRepo, prNumber, mergeChecks, defaultBranch, opts.ciIrrelevantPaths);
         const trip = fr.verdict === "red" || (fr.verdict === "stale" && CI_FRESHNESS_STALE_TRIPS);
         ciFreshness = {
           trip,
@@ -680,7 +682,7 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage ·
   try {
     result = mergeGuard(repo, {
       ticketId, pr, apply,
-      ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible } : {}),
+      ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible, ciIrrelevantPaths: cfCfg.ciIrrelevantPaths } : {}),
     });
   }
   catch (e) { console.error(`merge-guard: ${(e as Error).message.split("\n")[0]}`); process.exit(2); }

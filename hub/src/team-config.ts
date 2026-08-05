@@ -92,6 +92,7 @@ export interface RepoEntry {
   landing?: "pr" | "direct";
   autoMerge?: boolean;
   mergeChecks?: string[];
+  ciIrrelevantPaths?: string[]; // LOOP-335: paths whose change cannot alter a check result (exact file, or dir with a trailing /)
   build?: { typecheck?: string; build?: string; test?: string; quality?: string }; // Step-5 gate order: typecheck → build → test → quality (quality = the optional CRAP/mutation gate, quality-gauntlet design)
   deploy?: { style?: string; healthCheck?: string; environments?: Record<string, { auto?: boolean; deployPrPrefix?: string; command?: string; healthCheck?: string }> };
   ops?: { checks?: string[]; criticalRoutes?: string[]; logsCommand?: string };
@@ -459,6 +460,23 @@ function validateRepoRegistry(repos: Record<string, RepoEntry>, E: Emit): void {
       const prev = canonPaths.get(rel);
       if (prev) E("E10", `repos.${ref}.path`, `two repo refs resolve to the same path '${rel}': ${prev} and ${ref}`);
       else canonPaths.set(rel, ref);
+    }
+    // LOOP-335 — ciIrrelevantPaths decides whether a PR is exempted from a staleness trip, so a
+    // malformed entry silently widens what gets merged without re-verification. Refused at load,
+    // where every other repo fact is.
+    const cip = (r as { ciIrrelevantPaths?: unknown } | null)?.ciIrrelevantPaths;
+    if (cip !== undefined) {
+      if (!Array.isArray(cip) || cip.some((v) => typeof v !== "string")) {
+        E("E08", `repos.${ref}.ciIrrelevantPaths`, "ciIrrelevantPaths must be an array of strings");
+      } else {
+        for (const raw of cip as string[]) {
+          const v = raw.trim();
+          if (!v) E("E08", `repos.${ref}.ciIrrelevantPaths`, "an entry must be a non-empty path");
+          else if (isAbsolute(v) || /^[A-Za-z]:[\\/]/.test(v)) E("E08", `repos.${ref}.ciIrrelevantPaths`, `'${raw}' must be repo-relative, not absolute`);
+          else if (v.split("/").includes("..")) E("E08", `repos.${ref}.ciIrrelevantPaths`, `'${raw}' must not traverse outside the repo ('..')`);
+          else if (/[*?\[\]]/.test(v)) E("E08", `repos.${ref}.ciIrrelevantPaths`, `'${raw}' must be an exact file or a directory prefix ending in '/', not a glob — a glob language is a second thing to get wrong`);
+        }
+      }
     }
   }
 }

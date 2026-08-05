@@ -55,6 +55,8 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.backup\.everyHours$/, kind: "number" },
   { re: /^team\.backup\.keep$/, kind: "int" },
   { re: /^team\.backup\.dir$/, kind: "string" },
+  // LOOP-335 — repos.<ref>.ciIrrelevantPaths, through the validated mutator like every other tunable.
+  { re: /^repos\.[^.]+\.ciIrrelevantPaths$/, kind: "string-list" },
   { re: /^projects\.[^.]+\.enabled$/, kind: "boolean" },
   { re: /^projects\.[^.]+\.weight$/, kind: "number" },
   { re: /^projects\.[^.]+\.devSplit$/, kind: "boolean" },
