@@ -635,77 +635,9 @@ Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§2
 
 Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 38).
 
-### 2026-08-05 (pm, forty-fifth fire): a deviation ratified by re-checking its premise, and three suspected defects that were all correct as built
+### 2026-08-05 (pm, forty-fifth fire): a deviation ratified by re-checking its premise, and three suspected defects that were all correct as built — [ARCHIVED]
 
-**Both items to verify passed, and the doc-land block cleared on its own.** `origin/main` moved
-`459ac0b` → `8c79447` (three commits: LOOP-277's Step 0.5 edit + release-audit fix `42fdbc6`, the
-forty-third-fire journal `70bb56c`, and the operator's LOOP-323/307/327 close-out `8c79447`), so the
-lens list reset. Zero `needs-pm`, zero cross-owner bails, zero `Human-Blocked`. The forty-fourth fire
-wrote no journal — it was spent on the landing attempt described below — so this entry follows the
-forty-third directly.
-
-**The strategy-doc commit stranded for three fires landed intact.** Commit `518bba4` was blocked twice
-by `doc-land`'s dirty-tree preflight (LOOP-325). It reached `origin/main` as `70bb56c`, and the content
-is byte-identical: `git show 518bba4:docs/STRATEGY.md` and `git show 70bb56c:docs/STRATEGY.md` both
-hash `fac984c861322992`, which is also the current working file. The doc-watch cursor therefore
-advanced on self-authored content — still **zero foreign direction edits in 71 fires**. LOOP-325 and
-LOOP-326 stay filed; the block cleared because the shared checkout went quiescent, not because either
-defect was fixed.
-
-**`main` is green and the three release axes agree for the first time.** `gh run list --branch main`
-reports `success | Test | 8c79447`. The installed CLI stamps `8c794474` = `origin/main`, so
-merged / installed / running are the same tree — the §12b skew that made ACs unverifiable in the
-previous several fires is absent this fire, and every verification below ran against the real binary.
-
-**LOOP-323 — the axis now runs on the path that merges.** The check the ticket exists to force:
-
-```
-$ dev-loop merge-guard --repo <dev-loop> --pr 187 --json
-"ciFreshness": { "skipped": false, "verdict": "stale", "behindBy": 1, "reason": "… delta touches 11 file(s): …" }
-```
-
-Against `origin/main` before the wiring the same command emitted `skipped:true / "no-merge-checks"`.
-All seven ACs carry evidence; `hub/test/merge-guard.ts` re-run in an isolated `git archive` tree passes,
-including all fifteen new assertions. AC6 was **deviated from deliberately** and the deviation was
-ratified — see the Decisions entries.
-
-**LOOP-327 — both mutator paths exist, and the refusals refuse without mutating.** `team set` now lists
-`projects.<key>.scratch` and `team.agents.<a>.{codingAgent,model,effort}`. Exercised live on the real
-workspace config: an out-of-enum `codingAgent` and an unknown leaf are both refused by name, and
-`dev-loop.json` was verified unchanged after each. The `scratch` path matters beyond configuration
-convenience — `isScratchProject` is the destructive-guard's isolation predicate and fails closed, so
-before this change a lost `scratch` marker was a safety field with no repair path.
-
-**Three suspected defects, investigated, all correct as built.** Each was measured rather than filed:
-
-| suspicion | measurement | outcome |
-|---|---|---|
-| `metrics` reports `blockedNow: 0` while four tickets carry `blocked` | the field is documented as *parked* (`Human-Blocked` ∪ `blocked` without a live edge); all four hold live edges and are counted in `sequencedNow: 4` | correct by its own semantics |
-| the four sequenced tickets are one chain four deep, and the operator cannot see the depth | `dev-loop dependency-graph` `reverseFanOut` reports `LOOP-279` transitively gating `{228, 237, 238, 315}` | LOOP-105 already surfaces it |
-| the provider breaker never trips on `rate-limit×85` | threshold is five **consecutive identical** failures; at a 76% success rate the streak resets constantly, which is the designed behaviour for intermittent limiting rather than a 48-hour outage | correct by design |
-
-Filing none of the three is the result. The rate-limit volume itself (85 of 155 failed fires over 7d)
-is real and remains unattributed to a product defect; the classification gap is narrower than when
-LOOP-204 was filed — 47 of 155 failures now carry no `errorClass` (30%), against the 78% that ticket
-records.
-
-**Tier starvation measured for a third consecutive fire, and filed rather than carried.** senior-dev
-`Todo` 6/10 with four idle slots and **zero** senior candidates in a 67-deep Backlog; junior-dev 11/10,
-over cap, with 66 candidates. senior-dev ran 109 fires in the 7-day window at a 1554s median. Fires 42
-and 43 both recorded this shape in journal prose and carried the number forward in `pm-state.json`.
-This fire filed **LOOP-329** instead: no surface reports the Backlog side per tier, so the operator
-cannot see it at all and PM re-derives it by hand every fire. The ticket adds a signal and explicitly
-forbids an actuator — §21b's ban on load-based re-tiering is correct and is restated in the ticket.
-
-**Promoted zero, and that is the honest number.** junior is over its cap and senior has no candidates,
-so the §5a gate permits nothing on either tier. Grooming ran instead: LOOP-247's premise was
-re-verified against `8c79447` before its turn comes (nothing in `hub/src/` queries the npm registry, so
-the defect stands, and both its §9c edges are retired). §9c pass: four edges, all live, zero
-auto-unparks due — the chain roots at LOOP-279, which senior-dev picked up during this fire.
-
-**§20 R2 pass 37.** The forty-second-fire journal moved to
-[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md), and a stray link fragment left in
-the fortieth-fire stub by pass 35 was removed.
+Rolled to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 39).
 
 ### 2026-08-05 (pm, forty-sixth fire): correct counts shipped with both superseded locals left in place, and a comment carrying text from another file
 
@@ -781,6 +713,81 @@ stated top priority is at the front of the queue it depends on.
 **§20 R2 pass 38.** The forty-third-fire journal moved to
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
 
+### 2026-08-05 (pm, forty-seventh fire): a follow-up that was destroyed and kept being referenced, and 45 references that resolve to nothing while the integrity surface reports zero
+
+**Nothing to verify, nothing blocked, and two tiers with room for the first time in five fires.**
+`origin/main` moved `7323e09` → `4c127b7`, which is this PM's own doc commit and nothing else, so the
+product did not move and the lens list was NOT reset — the rotation continued to `strategy-gaps`. The
+strategy doc's content hash is `656a42782c8710e1` on both `origin/main` and the working tree, matching
+the stored pair exactly: still zero foreign direction edits. Zero `needs-pm`, zero cross-owner bails,
+zero `Human-Blocked` at boot.
+
+**Promoted two, after four consecutive zero-promotion fires.** Both tiers had room and a candidate:
+senior-dev 6/10 with **LOOP-331** (the `ciFreshness` content-blindness defect senior-dev filed against
+itself during its own landing attempt), junior-dev 9/10 with **LOOP-328** (W06's slashless directory
+probe, re-confirmed firing this fire before it was promoted). Neither needed a priority change: both
+are `Bug`s in tier slices otherwise composed entirely of `Improvement`s, so §5's rank 3.5 already puts
+them first — LOOP-331 ahead of four P1 `Improvement`s. Raising a priority that changes no pick order is
+churn, and it was not done.
+
+**The `strategy-gaps` lens found the top priority's precondition sitting unowned.** `docs/STRATEGY.md`
+names LOOP-239's per-agent cost surface as the binding precondition of the cost-compression program:
+*"a figure no shipped surface can reproduce is unfalsifiable."* LOOP-239 is `Canceled`, superseded by
+LOOP-292 — and **LOOP-292 did not exist**. Nor did LOOP-291, nor LOOP-233, which `docs/STRATEGY.md`
+cites by name and LOOP-228 still points at.
+
+The defect was still live and was re-measured on today's tree rather than inherited:
+
+```
+$ dev-loop metrics --flow
+cost: $1744.1987  (450 of 746 fires priced)     <- 450 is costMetered, mislabelled "priced"
+cost-per-fire: $4.5540/priced fire              <- divides by costPriced = 383
+```
+
+$1744.1987 ÷ 450 = **$3.8760** against a printed **$4.5540** — 14.9 % apart, two adjacent lines of one
+command. `--cost --by agent` never divides at all and offers the inflated count as the divisor:
+senior-dev reads $7.76 against a true $9.96 (−22.1 %), the fleet $3.88 against $4.55. The doc's
+baseline is $4.79/fire and nothing from the compression program has landed, so an acceptance verdict
+computed off that screen would have reported a **19 % cut that did not happen** — the same
+unfalsifiable-table failure this program already paid for once, arriving by the same route. Re-filed as
+**LOOP-332** (senior, `Mode: direct-code`, the §3 route-up LOOP-239's own closing comment recorded),
+and wired to **LOOP-315** as a real second blocker edge so the acceptance ticket cannot unpark on
+LOOP-238 alone while its instrument is missing.
+
+**The first explanation was wrong, and the correction is on the ticket.** LOOP-292's absence from
+`restore-candidate.db` was read as proof it had never been created. That artifact is a *partial*
+`.recover` reconstruction — 282 of 301 cascaded tickets — so absence from it proves nothing.
+`INCIDENT.md` in the same directory states the fact plainly: **19 ticket ids did not survive**, and
+LOOP-291, 292 and 233 are all named. LOOP-292 existed, was filed on 08-03 as the §3 follow-up, and was
+destroyed on 08-04. `orphaned-comments.json` holds 79 recovered comments belonging to 15 of the 19 —
+the content survives even where the tickets do not.
+
+**Nothing reads the only trace those tickets left.** `dependency-graph` reports `allDangling: []` while
+**45 dangling `relatedTo` references** exist board-wide, because its integrity check covers `Blocked-by:`
+edges only; `relatedTo` and `duplicateOf` are validated at no point by anything. Eight of the 19
+destroyed ids are still referenced by non-terminal tickets — LOOP-1, 3, 42, 69, 76, 233, 291, 292 —
+and LOOP-298 spends a paragraph reasoning about its relationship to LOOP-292, a dependency that had not
+existed for a day when it was written. Detection filed as **LOOP-333** (junior); the question of which
+destroyed tickets to reconstruct is not PM's to decide and is parked as **LOOP-334**, `Human-Blocked`,
+with the inventory and a recommendation.
+
+**§9c pass: five edges now, zero auto-unparks due.** LOOP-228 ← LOOP-315 ← {LOOP-238, **LOOP-332**},
+LOOP-238 ← LOOP-237 ← LOOP-279; every blocker open, zero dangling blocker edges. **§20 R2 pass 39:**
+the forty-fifth-fire journal moved to
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md).
+
+**Landing this journal costs something, and the cost is now named.** `origin/main` moved once more
+inside this fire — `4c127b7` → `0b301bf`, PR #188 merging **LOOP-279**, the head-blocker of the
+top-priority chain, whose re-freshen cap was the exhausted one. That risk retired itself. Three PRs
+remain open as this fire closes: #190 (LOOP-254) and #184 (LOOP-293) `CLEAN`, #189 (LOOP-281) still
+running checks; #184 is already one behind from the previous fire's doc commit. This commit
+false-stales all three on a docs-only delta, costing each a re-freshen. It is landed anyway: §20
+requires the record, senior-dev's standing instruction on LOOP-279 covers the docs-only case
+explicitly, and LOOP-331 — the root-cause fix — is now first in senior-dev's pick order. Suppressing
+the journal to dodge the guard would treat the symptom. LOOP-279's ticket is still `In Progress`, so
+the §9c edge gating LOOP-237 does not retire yet: an edge resolves when its ticket closes, not when
+its prerequisite lands.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -813,6 +820,25 @@ stated top priority is at the front of the queue it depends on.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-05 (pm, forty-seventh fire) — a close that names a successor is not evidence the successor
+  exists; the reference and the filing are two separate writes and only one of them was verified.**
+  LOOP-239 was `Canceled` with *"superseded by LOOP-292"*, and `relatedTo` accepted `LOOP-292`
+  unvalidated. LOOP-292 was destroyed the next day and never re-filed, so for two days the board
+  carried a §3 obligation that resolved to nothing — while `docs/STRATEGY.md` named its content the
+  binding precondition of the top priority, and LOOP-298 reasoned in detail about its relationship to
+  it. The board-wide count is 45 such references against a `dependency-graph` that reports
+  `allDangling: []`, because its integrity check covers `Blocked-by:` edges and no other kind. Where a
+  close hands work forward, the hand-off is complete only when the successor id resolves to a ticket —
+  verify it in the same fire that writes it.
+
+- **2026-08-05 (pm, forty-seventh fire) — absence from a recovery artifact is not evidence of
+  non-existence, and the artifact's own record says which.** LOOP-292's absence from
+  `restore-candidate.db` was first read as proof it had never been created, and that reading was
+  published on the re-filed ticket before it was checked. `restore-candidate.db` is a partial
+  `.recover` reconstruction — 282 of 301 cascaded tickets — so it cannot distinguish "never existed"
+  from "not recovered". `INCIDENT.md`, in the same directory, names all 19 unrecovered ids outright.
+  A recovery artifact answers what was recovered; only the incident record answers what was lost.
 
 - **2026-08-05 (pm, forty-sixth fire) — an increment whose behaviour is correct can still fail
   review, and the criterion that decides it is the one the design gate named in advance.** LOOP-251
