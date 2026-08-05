@@ -37,10 +37,11 @@
 import { execFileSync } from "node:child_process";
 import { isMainEntry } from "./is-entry.ts";
 import { ticketIdScanRe } from "./ticket-id.ts";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { openDb } from "./db.ts";
 import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
-import { readPrReviewState, defaultGhExec, type ExecFn } from "./landing.ts";
+import { readPrReviewState, defaultGhExec, type ExecFn, readCiFreshness, type CiFreshness } from "./landing.ts";
 import { addComment, updateTicketRow, type TicketUpdateFields } from "./ticketwrite.ts";
 
 
@@ -58,7 +59,9 @@ export type SkipReason =
   | "no-pr-arg"             // the caller did not request the forge axis
   | "no-hub-db"             // hub db absent (linear/local backend)
   | "hub-db-unreadable"     // hub db present but would not open
-  | "forge-unreachable";    // gh missing/unauth/offline/timeout, or the PR could not be read
+  | "forge-unreachable"     // gh missing/unauth/offline/timeout, or the PR could not be read
+  | "no-merge-checks"       // CI-freshness axis not configured: mergeChecks empty (inapplicable)
+  | "repo-not-automerge";   // CI-freshness axis inapplicable: repo is not landing:"pr" + autoMerge (LOOP-323 AC2)
 
 // unreachable  ⇒ §3.4 fail-open: an outage must never become a merge freeze.
 // untargeted   ⇒ the caller pointed the guard at nothing it could identify; must NOT read as clean.
@@ -76,6 +79,8 @@ export function skipClass(reason: SkipReason): SkipClass {
       return "unreachable";
     case "pr-not-a-loop-branch":
     case "no-pr-arg":
+    case "no-merge-checks":
+    case "repo-not-automerge":
       return "inapplicable";
   }
 }
@@ -98,9 +103,20 @@ export interface ForgeReviewResult {
   unresolvedThreadAuthors: string[]; // non-agent logins with ≥1 unresolved thread
 }
 
+export interface CiFreshnessResult {
+  trip: boolean;
+  skipped: boolean; // true when no --pr, no mergeChecks, or exec degraded — axis not evaluated
+  skipReason: SkipReason | null; // LOOP-300 — null ⇔ !skipped
+  verdict: CiFreshness["verdict"] | null;
+  behindBy: number | null;
+  testedHead: string | null;
+  currentTip: string | null;
+  reason: string | null;
+}
+
 // Result of --apply when the guard trips (§5.1 / LOOP-65).
 export interface MergeGuardApplyResult {
-  // "wrote": comment posted + ticket routed (forge axis) or comment-only (board axis);
+  // "wrote": comment posted + ticket routed (forge axis) or comment-only (board/ciFreshness axis);
   // "already_present": marker existed, no dup posted;
   // "skipped_no_db": no hub DB available (degrade); "skipped_no_ticket": ticket not in hub;
   // "skipped_merged": PR is already merged — no board write (AC1 / LOOP-216).
@@ -112,17 +128,28 @@ export interface MergeGuardResult {
   trip: boolean;
   boardState: MergeGuardBoardStateResult;
   forgeReview: ForgeReviewResult;
-  applied?: MergeGuardApplyResult; // present when --apply was set and the guard tripped
+  ciFreshness: CiFreshnessResult;
+  applied?: MergeGuardApplyResult;
 }
 
 // Stable marker prefix used for idempotency detection across re-runs.
 const APPLY_MARKER = "⛔ merge-guard:";
 
+// LOOP-323 AC6: whether a "stale" verdict (green computed against a base behind the tip) HOLDS the
+// merge under --strict, or reports advisory-only. "red" always trips regardless of this constant.
+// AC6 was written 2026-08-04 while its precondition — LOOP-277's Step 0.5 re-freshen remedy — was
+// still an unapplied proposal, and prescribed advisory-only to avoid holding green PRs with no
+// exit. That precondition has since landed: the remedy merged in 42fdbc6 (PR #186, 2026-08-04),
+// so the harmful order AC6 guards against cannot occur and the trip ships ON. This constant stays
+// as the deliberate one-line rollback the AC asked for; the deviation is recorded on LOOP-323.
+const CI_FRESHNESS_STALE_TRIPS = true;
+
 // Build the comment body describing the objection.
-function buildCommentBody(
+export function buildCommentBody(
   pr: number | string | undefined,
   forgeReview: ForgeReviewResult,
   boardState: MergeGuardBoardStateResult,
+  ciFreshness?: CiFreshnessResult,
 ): string {
   const prRef = pr !== undefined ? ` PR #${pr}` : "";
   if (forgeReview.trip) {
@@ -133,14 +160,30 @@ function buildCommentBody(
     }
     return `${APPLY_MARKER}${prRef} has unresolved review threads from ${ut.map((l) => `@${l}`).join(", ")}. Not merged.`;
   }
-  const state = boardState.ticketState ?? "non-merge-eligible state";
-  return `${APPLY_MARKER} ticket is ${state} (not merge-eligible). Not merged.`;
+  if (boardState.trip) {
+    const state = boardState.ticketState ?? "non-merge-eligible state";
+    return `${APPLY_MARKER} ticket is ${state} (not merge-eligible). Not merged.`;
+  }
+  if (ciFreshness?.trip) {
+    // Amendment 1 (binding, LOOP-149 → LOOP-323 AC4): a "stale" objection must name its remedy,
+    // in the softened wording ratified in LOOP-277 §"Amendment 1 interaction" — Step 0.5's
+    // re-freshen is authoritative; the manual rebase is the fallback; an already-current tip means
+    // the hold is already actioned. "red" has a different remedy (fix the failing checks).
+    const remedy = ciFreshness.verdict === "stale"
+      ? " Remedy: Step 0.5's re-freshen rebases this PR automatically at the next fire start (authoritative). Manually: rebase onto `origin/<defaultBranch>` and push with `--force-with-lease`; a pushed rebase clears this hold. If the PR tip is no longer behind `origin/<defaultBranch>`, treat this hold as already actioned."
+      : ciFreshness.verdict === "red"
+        ? " Remedy: read the failing check's log, fix in the worktree, re-push (Step 0.5's FAILED-check branch; cap ~2 cycles)."
+        : "";
+    return `${APPLY_MARKER}${prRef} ciFreshness: ${ciFreshness.reason ?? "stale/red"}. Not merged.${remedy}`;
+  }
+  return `${APPLY_MARKER}${prRef} objection (no axis details). Not merged.`;
 }
 
 // Post objection comment and, for forge-review trips, route the ticket.
 // tripAxis determines the routing behaviour (LOOP-216):
 //   "board": comment only — state/assignee/labels are left untouched (AC2).
 //   "forge": comment + route to Todo with existing assignee, without adding "blocked" (AC3).
+//   "ciFreshness": comment only — staleness is transient (a rebase clears it).
 // Degrades silently when the hub DB is absent (no throw, returns skipped_no_db).
 // Idempotent on the comment: if the exact body already exists, skips re-posting (LOOP-65).
 // Routing still re-enforces on every call regardless of comment dedup (LOOP-130).
@@ -150,7 +193,8 @@ function applyTrip(
   pr: number | string | undefined,
   forgeReview: ForgeReviewResult,
   boardState: MergeGuardBoardStateResult,
-  tripAxis: "forge" | "board",
+  tripAxis: "forge" | "board" | "ciFreshness",
+  ciFreshness?: CiFreshnessResult,
 ): MergeGuardApplyResult {
   if (!dbPath || !existsSync(dbPath)) return { action: "skipped_no_db" };
   let db;
@@ -160,7 +204,7 @@ function applyTrip(
     const trow = db.prepare("SELECT project_id FROM tickets WHERE id=?").get(ticketId) as { project_id: string } | undefined;
     if (!trow) return { action: "skipped_no_ticket" };
     const projectId = trow.project_id;
-    const commentBody = buildCommentBody(pr, forgeReview, boardState);
+    const commentBody = buildCommentBody(pr, forgeReview, boardState, ciFreshness);
     // Comment dedup: skip re-posting only if the exact objection text already exists (LOOP-65).
     const dup = db.prepare("SELECT id FROM comments WHERE ticket_id=? AND body=?").get(ticketId, commentBody);
     // LOOP-218: attribute the write to the invoking actor (DEVLOOP_ACTOR when set), falling back to
@@ -170,9 +214,10 @@ function applyTrip(
     if (!dup) {
       addComment(db, projectId, actor, ticketId, commentBody);
     }
-    if (tripAxis === "board") {
-      // AC2 (LOOP-216): board-state trip — comment only, no mutation of state/assignee/labels.
+    if (tripAxis === "board" || tripAxis === "ciFreshness") {
+      // AC2 (LOOP-216): board-state/ciFreshness trip — comment only, no mutation of state/assignee/labels.
       // The ticket is already in the state the guard is objecting about; moving it reduces reachability.
+      // For ciFreshness: staleness is transient (a rebase clears it), so the ticket stays where it is.
       return { action: dup ? "already_present" : "wrote", commentBody };
     }
     // AC3 (LOOP-216): forge-review trip — route to Todo with existing assignee, without "blocked".
@@ -235,6 +280,38 @@ function resolveGhRepo(repoDir: string): string | null {
 
 // Distinct GitHub owner/repo values in the workspace repo registry, sorted for a stable message.
 // Exported so the CLI can NAME the candidates when it refuses an ambiguous resolve.
+// LOOP-323 AC1: the CI-freshness config for the repo the CLI is gating, from the workspace repo
+// registry. Matches repoDir against each registered entry's absolute path (realpath-normalized on
+// both sides so a symlinked cwd still matches). Returns null when no workspace resolves or the dir
+// is not a registered repo — the axis then skips exactly as before this wiring existed.
+export function registryCiFreshnessConfig(
+  repoDir: string,
+): { mergeChecks: string[]; defaultBranch: string; repoEligible: boolean } | null {
+  try {
+    const ws = tryResolveWorkspace(repoDir);
+    if (!ws) return null;
+    let real: string;
+    try { real = realpathSync(repoDir); } catch { real = resolvePath(repoDir); }
+    for (const entry of Object.values(ws.file.repos ?? {})) {
+      const e = entry as { path?: string; landing?: string; autoMerge?: boolean; mergeChecks?: string[]; defaultBranch?: string } | null;
+      if (!e?.path) continue;
+      const abs = resolvePath(ws.root, e.path);
+      let absReal = abs;
+      try { absReal = realpathSync(abs); } catch { /* keep abs */ }
+      if (absReal !== real && abs !== real) continue;
+      // §19 defaultBranch chain: repo entry → team.git.defaultBranch → "main" (LOOP-188 pattern).
+      const teamBranch = (ws.file.team as { git?: { defaultBranch?: string } }).git?.defaultBranch;
+      return {
+        mergeChecks: e.mergeChecks ?? [],
+        defaultBranch: e.defaultBranch ?? teamBranch ?? "main",
+        // AC2: the axis applies only where Step 0.5 merges — landing:"pr" + autoMerge (design §3).
+        repoEligible: e.landing === "pr" && e.autoMerge === true,
+      };
+    }
+    return null;
+  } catch { return null; }
+}
+
 export function registryGhRepos(startDir: string): string[] {
   try {
     const ws = tryResolveWorkspace(startDir);
@@ -271,6 +348,13 @@ export function mergeGuard(
     exec?: ExecFn;             // injectable gh exec for tests (defaults to defaultGhExec)
     // Board-visible objection path (Child 2 / LOOP-65):
     apply?: boolean;           // when true + trip: post comment + route ticket (§5.1)
+    // CI-freshness axis (Child A / LOOP-242, wired by LOOP-323):
+    mergeChecks?: string[];    // check names to validate; absent/empty → axis skipped
+    defaultBranch?: string;    // default branch name (default: "main")
+    // LOOP-323 AC2: the CLI resolves this from the workspace repo registry — false when the repo
+    // is not landing:"pr" + autoMerge, making the axis inapplicable with its own skipReason.
+    // undefined (direct function callers, tests) ⇒ treated as eligible (back-compat).
+    repoEligible?: boolean;
   } = {},
 ): MergeGuardResult {
   // ── Board-state axis (§3.3) ────────────────────────────────────────────────
@@ -388,7 +472,44 @@ export function mergeGuard(
     }
   }
 
-  const trip = boardState.trip || forgeReview.trip;
+  // ── CI-freshness axis (design merge-guard-ci-freshness §4 / LOOP-242 Child A, wired LOOP-323) ──
+  // Runs readCiFreshness() when --pr is given AND the repo is eligible AND mergeChecks is non-empty.
+  let ciFreshness: CiFreshnessResult;
+  const mergeChecks = opts.mergeChecks;
+  if (opts.pr === undefined || opts.pr === null) {
+    ciFreshness = { trip: false, skipped: true, skipReason: "no-pr-arg", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
+  } else if (opts.repoEligible === false) {
+    ciFreshness = { trip: false, skipped: true, skipReason: "repo-not-automerge", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
+  } else if (!mergeChecks || mergeChecks.length === 0) {
+    ciFreshness = { trip: false, skipped: true, skipReason: "no-merge-checks", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
+  } else {
+    const ghRepo = opts.ghRepo ?? resolveGhRepo(repoDir);
+    if (!ghRepo) {
+      ciFreshness = { trip: false, skipped: true, skipReason: "no-repo-resolved", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
+    } else {
+      const exec = opts.exec ?? defaultGhExec;
+      const defaultBranch = opts.defaultBranch ?? "main";
+      const prNumber = typeof opts.pr === "number" ? opts.pr : parseInt(String(opts.pr), 10);
+      if (isNaN(prNumber)) {
+        ciFreshness = { trip: false, skipped: true, skipReason: "forge-unreachable", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
+      } else {
+        const fr = readCiFreshness(exec, ghRepo, prNumber, mergeChecks, defaultBranch);
+        const trip = fr.verdict === "red" || (fr.verdict === "stale" && CI_FRESHNESS_STALE_TRIPS);
+        ciFreshness = {
+          trip,
+          skipped: false,
+          skipReason: null,
+          verdict: fr.verdict,
+          behindBy: fr.behindBy,
+          testedHead: fr.testedHead,
+          currentTip: fr.currentTip,
+          reason: fr.reason,
+        };
+      }
+    }
+  }
+
+  const trip = boardState.trip || forgeReview.trip || ciFreshness.trip;
   if (trip && opts.apply && (boardState.ticketId ?? ticketId)) {
     const applyTicketId = boardState.ticketId ?? ticketId!;
     const dbPath = opts.dbPath ?? process.env.DEVLOOP_HUB_DB ?? resolveHubDbPath(repoDir);
@@ -411,15 +532,15 @@ export function mergeGuard(
       }
       if (prMerged !== false) {
         // merged (true) or unknown (null) → skip apply; report moot
-        return { trip, boardState, forgeReview, applied: { action: "skipped_merged" } };
+        return { trip, boardState, forgeReview, ciFreshness, applied: { action: "skipped_merged" } };
       }
     }
 
-    const tripAxis: "forge" | "board" = forgeReview.trip ? "forge" : "board";
-    const applied = applyTrip(applyTicketId, dbPath, opts.pr, forgeReview, boardState, tripAxis);
-    return { trip, boardState, forgeReview, applied };
+    const tripAxis: "forge" | "board" | "ciFreshness" = forgeReview.trip ? "forge" : boardState.trip ? "board" : "ciFreshness";
+    const applied = applyTrip(applyTicketId, dbPath, opts.pr, forgeReview, boardState, tripAxis, ciFreshness);
+    return { trip, boardState, forgeReview, ciFreshness, applied };
   }
-  return { trip, boardState, forgeReview };
+  return { trip, boardState, forgeReview, ciFreshness };
 }
 
 // Exit code for "--strict was asked to gate a merge and could not evaluate anything" (LOOP-300).
@@ -432,8 +553,8 @@ export const EXIT_UNEVALUATED = 3;
 // no axis evaluated AND at least one skip was `untargeted`. All-unreachable stays a pass — that is
 // §3.4's fail-open and turning it into a hold would make an outage a merge freeze (LOOP-300 AC2).
 export function unevaluatedHold(r: MergeGuardResult): SkipReason | null {
-  if (!r.boardState.skipped || !r.forgeReview.skipped) return null; // ≥1 axis actually ran
-  for (const reason of [r.boardState.skipReason, r.forgeReview.skipReason]) {
+  if (!r.boardState.skipped || !r.forgeReview.skipped || !r.ciFreshness.skipped) return null; // ≥1 axis actually ran
+  for (const reason of [r.boardState.skipReason, r.forgeReview.skipReason, r.ciFreshness.skipReason]) {
     if (reason && skipClass(reason) === "untargeted") return reason;
   }
   return null;
@@ -441,7 +562,7 @@ export function unevaluatedHold(r: MergeGuardResult): SkipReason | null {
 
 // CLI: dev-loop merge-guard [--repo <dir>] [--pr <n>] [--ticket <id>] [--strict] [--apply] [--json]
 // Exit codes (the write-layer contract): 0 clean/advisory/degraded · 1 trip under --strict ·
-// 2 usage · 3 --strict could not evaluate either axis (LOOP-300).
+// 2 usage · 3 --strict could not evaluate any axis (LOOP-300).
 if (isMainEntry(import.meta.url)) {
   const argv = process.argv.slice(2);
   let repo = process.cwd();
@@ -466,7 +587,7 @@ Design: hubDoc:design/merge-review-guard §3.1/§3.2/§3.3/§3.4/§5.1 (LOOP-64 
 Usage: dev-loop merge-guard [--repo <dir>] [--pr <n>] [--ticket <id>] [--strict] [--apply] [--json]
   --pr <n>        PR number (enables forge review axis — §3.1: CHANGES_REQUESTED / unresolved threads)
   --ticket <id>   explicit ticket id (default: inferred from HEAD branch dev-loop/<id>)
-  --strict        exit 1 when either axis trips (the merge-pass gate)
+  --strict        exit 1 when any axis trips (the merge-pass gate)
   --apply         on a trip: post objection comment + route ticket to blocked/Todo/unassigned (§5.1)
   --json          emit result as JSON
 
@@ -474,6 +595,8 @@ Forge review axis (--pr): trips when a non-agent reviewer has CHANGES_REQUESTED 
   review thread. Degrades silently (exit 0) when gh is unavailable, unauth, offline, or no PR found.
 Board-state axis: trips when the ticket is In Review / Canceled / Duplicate.
   Degrades silently (exit 0) when no hub DB is available (linear/local backend).
+CI-freshness axis (--pr): trips when a PR's green checks were computed against a base behind the
+  current tip (stale), or checks are red. Requires mergeChecks to be configured.
 --apply: board writes degrade silently when no hub DB; idempotent (no duplicate comments).
 
 --repo defaults to the cwd, but --pr no longer NEEDS it: when the cwd is not the target repo the
@@ -481,19 +604,31 @@ Board-state axis: trips when the ticket is In Review / Canceled / Duplicate.
   repos is ambiguous and is refused (exit 3), never guessed — pass --repo <dir>.
 
 Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage ·
-  3 --strict could not evaluate EITHER axis and the cause was the invocation, not an outage.
+  3 --strict could not evaluate ANY axis and the cause was the invocation, not an outage.
   A genuine outage (no gh / forge down / no hub db) still degrades to 0 — a merge gate must not
   become a merge freeze.`);
       process.exit(0);
     } else { console.error(`merge-guard: unknown option '${a}'`); process.exit(2); }
   }
 
+  // LOOP-323 AC1: resolve the CI-freshness config from the workspace repo registry so the axis
+  // actually runs on the one path that invokes it (Step 0.5 / operators). Before this wiring,
+  // opts.mergeChecks was always undefined from the CLI and the axis short-circuited to
+  // skipped:"no-merge-checks" on every real invocation — measured on PR #182, which merged with
+  // both required checks FAILURE while the axis reported itself not configured.
+  const cfCfg = registryCiFreshnessConfig(repo);
   let result: MergeGuardResult;
-  try { result = mergeGuard(repo, { ticketId, pr, apply }); }
+  try {
+    result = mergeGuard(repo, {
+      ticketId, pr, apply,
+      ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible } : {}),
+    });
+  }
   catch (e) { console.error(`merge-guard: ${(e as Error).message.split("\n")[0]}`); process.exit(2); }
 
   const bs = result.boardState;
   const fr = result.forgeReview;
+  const cf = result.ciFreshness;
   // Only consulted when a repo could NOT be resolved, so the refusal can name what it found instead
   // of leaving the operator to guess whether the registry was empty or ambiguous.
   const candidates = bs.skipReason === "no-repo-resolved" || fr.skipReason === "no-repo-resolved"
@@ -532,6 +667,20 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage ·
     } else if (!fr.skipped && !fr.trip) {
       console.log(`merge-guard: forge review axis clean — no non-agent CHANGES_REQUESTED or unresolved threads`);
     }
+    // CI-freshness axis output
+    if (cf.skipped && pr !== undefined) {
+      const why = cf.skipReason === "no-merge-checks"
+        ? "no mergeChecks configured — axis not applicable"
+        : cf.skipReason === "no-repo-resolved"
+          ? `could not resolve the GitHub repo from this directory or the workspace repo registry${candidates.length > 1 ? ` (registry has ${candidates.length}: ${candidates.join(", ")} — pass --repo <dir> to disambiguate)` : ""}`
+          : "gh unavailable, forge unreachable, or no PR found";
+      console.log(`merge-guard: CI-freshness axis skipped — ${why}`);
+    } else if (!cf.skipped && cf.trip) {
+      const verdict = cf.verdict ?? "unknown";
+      console.error(`merge-guard: ⛔ TRIP — PR ciFreshness verdict=${verdict}${cf.reason ? ` (${cf.reason})` : ""}; do not merge until the gate clears`);
+    } else if (!cf.skipped && !cf.trip) {
+      console.log(`merge-guard: CI-freshness axis clean — ${cf.reason ?? "fresh-green"}`);
+    }
     // --apply output
     if (result.applied) {
       const ap = result.applied;
@@ -548,7 +697,7 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage ·
   if (strict) {
     const hold = unevaluatedHold(result);
     if (hold) {
-      console.error(`merge-guard: ⛔ COULD NOT EVALUATE — neither axis ran (${hold}); --strict will not report a clean pass for a gate that checked nothing. Fix the invocation (--repo <dir> / --ticket <id> / --pr <n>) and re-run; this is NOT a degrade-to-pass case (the evidence was reachable).`);
+      console.error(`merge-guard: ⛔ COULD NOT EVALUATE — no axis ran (${hold}); --strict will not report a clean pass for a gate that checked nothing. Fix the invocation (--repo <dir> / --ticket <id> / --pr <n>) and re-run; this is NOT a degrade-to-pass case (the evidence was reachable).`);
       process.exit(EXIT_UNEVALUATED);
     }
   }

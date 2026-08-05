@@ -51,6 +51,17 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^projects\.[^.]+\.enabled$/, kind: "boolean" },
   { re: /^projects\.[^.]+\.weight$/, kind: "number" },
   { re: /^projects\.[^.]+\.devSplit$/, kind: "boolean" },
+  // scratch (LOOP-327): `add-project --scratch` writes it only at creation; without a settable
+  // path an existing project's lost marker is UNREPAIRABLE through mutators — and destructive-guard
+  // keys its isolation verdict on this field, so unrepairable is a safety problem (the 2026-08-04
+  // recovery had to hand-edit it back).
+  { re: /^projects\.[^.]+\.scratch$/, kind: "boolean" },
+  // team-scope per-agent launch config (LOOP-327): set-model writes projects.<key>.agents only, so
+  // _team-scope fires (sweep/ops/…) fell back to the built-in default — one sweep night on the
+  // fallback model billed $20.34 against an intended ~$0.003/fire lane.
+  { re: /^team\.agents\.[^.]+\.codingAgent$/, kind: ["claude", "codex", "opencode"] as const },
+  { re: /^team\.agents\.[^.]+\.model$/, kind: "string" },
+  { re: /^team\.agents\.[^.]+\.effort$/, kind: "string" },
   { re: /^projects\.[^.]+\.testEnv\.baseUrl$/, kind: "string" },
   { re: /^projects\.[^.]+\.testEnv\.authConstraint$/, kind: "string" },
   { re: /^projects\.[^.]+\.intake\.mode$/, kind: ["autonomous", "passive"] as const },
@@ -76,8 +87,8 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
-  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd}, " +
-  "projects.<key>.{enabled,weight,devSplit,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
+  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,agents.<a>.{codingAgent,model,effort}}, " +
+  "projects.<key>.{enabled,weight,devSplit,scratch,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
   "repos.<ref>.deploy.{style,healthCheck,environments.<env>.{auto,deployPrPrefix,command,healthCheck}}, " +
@@ -820,6 +831,12 @@ export function removeProject(argv: string[]): number {
         db.prepare("DELETE FROM comments WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id=?)").run(projectId);
         db.prepare("DELETE FROM tickets WHERE project_id=?").run(projectId);
         db.prepare("DELETE FROM projects WHERE key=?").run(key);
+        // LOOP-307 (design Child C): the tombstone rides THIS closure so it commits or rolls back
+        // with the cascade — a tombstone without the deletion, or a deletion without the tombstone,
+        // would each be worse than neither. ensureProject consults it before any re-INSERT.
+        db.prepare(
+          "INSERT OR REPLACE INTO removed_projects(key,removed_at,removed_by,ticket_count,verb) VALUES (?,?,?,?,?)",
+        ).run(key, new Date().toISOString(), process.env.DEVLOOP_ACTOR ?? "unknown", ticketCount ?? 0, "remove-project");
       }
     : null;
   try {
