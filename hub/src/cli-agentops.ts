@@ -46,10 +46,10 @@ LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; erro
       pm { verify, unblock, backlog, todoDepth }; qa { verify, blocked }. Summaries — 'ticket <id>' fetches the one you pick.
   dev-loop ticket create --title T --type Bug|Feature|Improvement [--state S] [--description TEXT|'-'] [--description-file F]
                          [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
-      --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes §9c marker comment ('Blocked-by: <id>') after create.
+      --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes the §9c marker comment ('Blocked-by: <id>') AND sets the 'blocked' label (LOOP-190).
   dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                         [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|'']
-      HAZARD: labels REPLACE the full set (re-pass all).
+                         [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--unblocked-by ids]
+      HAZARD: labels REPLACE the full set (re-pass all). --unblocked-by writes the §9c retirement marker ('Unblocked-by: <id>'), bare-line form.
       HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
   dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)
   dev-loop comments <id>
@@ -343,6 +343,19 @@ async function ticketCreate(targs: string[]): Promise<never> {
   if (flags["--related-to"] !== undefined) args.relatedTo = csv(str(flags, "--related-to")!);
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
   const blockedBy = flags["--blocked-by"] !== undefined ? csv(str(flags, "--blocked-by")!) : [];
+  // LOOP-190 — `--blocked-by` wrote the §9c LEDGER edge and never set the `blocked` ENFORCEMENT
+  // label, so the ticket it had just recorded as blocked was fully servable to its dev tier: every
+  // serving path filters on the label (servable.ts, opQueue, todoDepth) and none of them reads the
+  // marker comment. Twice on this board, both times on staged design children, both caught by hand.
+  //
+  // The label/marker split itself is DELIBERATE and is preserved — the label stays the enforcement
+  // gate and the marker stays the parseable ledger the §9c tracker walks. This is not deriving one
+  // from the other; it is the CREATE path writing both halves of the thing it was asked to record.
+  if (blockedBy.length) {
+    const labels = new Set<string>(Array.isArray(args.labels) ? (args.labels as string[]) : []);
+    labels.add("blocked");
+    args.labels = [...labels];
+  }
   const hub = openHub();
   const r = await runOp(hub, "save_issue", args);
   if (!(r.status >= 200 && r.status < 300) || blockedBy.length === 0) return emit("save_issue", r);
@@ -364,11 +377,11 @@ async function ticketUpdate(targs: string[]): Promise<never> {
   const { flags, pos } = parseFlags(targs, {
     "--state": "v", "--title": "v", "--description": "v", "--description-file": "v",
     "--labels": "v", "--assignee": "v", "--priority": "v",
-    "--related-to": "v", "--duplicate-of": "v", ...COMMON,
+    "--related-to": "v", "--duplicate-of": "v", "--unblocked-by": "v", ...COMMON,
   });
   iAmTheOperator = flags["--i-am-the-operator"] === true;
   const id = pos[0];
-  if (!id) fail("usage: dev-loop ticket update <id> [--state S] [--title T] [--description TEXT|'-'] [--description-file F] [--labels FULL,SET] [--assignee A] [--priority N] [--related-to +ids] [--duplicate-of ID]");
+  if (!id) fail("usage: dev-loop ticket update <id> [--state S] [--title T] [--description TEXT|'-'] [--description-file F] [--labels FULL,SET] [--assignee A] [--priority N] [--related-to +ids] [--duplicate-of ID] [--unblocked-by ids]");
   if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
   if (flags["--description"] !== undefined && flags["--description-file"] !== undefined) fail("pass --description OR --description-file, not both");
   const descFlag = str(flags, "--description");
@@ -384,8 +397,10 @@ async function ticketUpdate(targs: string[]): Promise<never> {
   if (flags["--related-to"] !== undefined) args.relatedTo = csv(str(flags, "--related-to")!); // HAZARD: APPEND-ONLY union (§18) — adds, never removes
   if (flags["--duplicate-of"] !== undefined) { const d = str(flags, "--duplicate-of")!; args.duplicateOf = d === "" ? null : d; }
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
-  if (Object.keys(args).length === 1 + (args.project !== undefined ? 1 : 0))
-    fail("nothing to update — pass at least one of --state/--title/--description/--description-file/--labels/--assignee/--priority/--related-to/--duplicate-of");
+  // LOOP-287: `--unblocked-by` alone is a legitimate call — retiring an edge is a real update to the
+  // §9c ledger even though it writes no ticket FIELD. Excluding it here is what made the flag exit 2.
+  if (Object.keys(args).length === 1 + (args.project !== undefined ? 1 : 0) && flags["--unblocked-by"] === undefined)
+    fail("nothing to update — pass at least one of --state/--title/--description/--description-file/--labels/--assignee/--priority/--related-to/--duplicate-of/--unblocked-by");
   const hub = openHub();
   // Review-admission gate (LOOP-110): refuse In Progress→In Review for pr+autoMerge tickets
   // whose PR is not MERGED. Fail-open on every error path — never a false refusal.
@@ -404,7 +419,26 @@ async function ticketUpdate(targs: string[]): Promise<never> {
     });
     if (!result.admitted) { console.error(result.message!); process.exit(1); }
   }
-  return emit("save_issue", await runOp(hub, "save_issue", args));
+  // LOOP-287 — edge CREATION has had a canonical emitter since §9c shipped (`ticket create
+  // --blocked-by` writes `Blocked-by: <id>` per line, correct BY CONSTRUCTION). Edge RETIREMENT had
+  // none: every retirement on this board was hand-typed prose through `comment add`, which validates
+  // nothing. blocked-by.ts anchors the keyword to the START of a line — deliberately, and asserted:
+  // a mention inside a sentence or inside `**bold**` must not bind — so a marker written mid-sentence
+  // is silently discarded and the edge stays live. 4 of the 6 retirements ever written were lost that
+  // way, leaving dead edges live and their tickets parked.
+  //
+  // Symmetric with create: the flag emits the marker in the ONE form the parser reads.
+  const unblockedBy = flags["--unblocked-by"] !== undefined ? csv(str(flags, "--unblocked-by")!) : [];
+  const res = await runOp(hub, "save_issue", args);
+  if (!(res.status >= 200 && res.status < 300) || unblockedBy.length === 0) return emit("save_issue", res);
+  console.log(JSON.stringify(res.body));
+  const c = await runOp(hub, "save_comment", {
+    issueId: id, body: unblockedBy.map((b) => `Unblocked-by: ${b}`).join("\n"),
+    ...(flags["--project"] !== undefined ? { project: str(flags, "--project") } : {}),
+  });
+  if (c.status < 200 || c.status >= 300) { console.error(JSON.stringify(c.body)); process.exit(1); }
+  await flushStdout();
+  process.exit(0);
 }
 
 async function verbTicket(rest: string[]): Promise<never> {
