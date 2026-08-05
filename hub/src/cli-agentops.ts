@@ -49,8 +49,7 @@ LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; erro
       --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes the §9c marker comment ('Blocked-by: <id>') AND sets the 'blocked' label (LOOP-190).
   dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
                          [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--unblocked-by ids]
-      HAZARD: labels REPLACE the full set (re-pass all).
-      --unblocked-by writes the §9c retirement marker ('Unblocked-by: <id>') in the ONE bare-line form the parser reads (LOOP-287).
+      HAZARD: labels REPLACE the full set (re-pass all). --unblocked-by writes the §9c retirement marker ('Unblocked-by: <id>'), bare-line form.
       HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
   dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)
   dev-loop comments <id>
