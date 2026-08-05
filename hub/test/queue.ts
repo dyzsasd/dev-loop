@@ -230,5 +230,34 @@ ok(create({ title: "was done once", labels: ["dev-loop"] }).status === 200,
     "LOOP-112: qa queue has no inReview key (pm/qa branch untouched, AC5)");
 }
 
+// ── 9. LOOP-254: urgent Improvement gets a rank slot above ordinary Improvements ────────────────
+// The §5 pick order read `priority` in only 2 of 6 ranks (both gated on `type`); every servable
+// Improvement was rank 5, served pure created_at FIFO. Operator ruling (2026-08-01): a p1
+// Improvement ranks strictly above ordinary Improvements and strictly below Features.
+{
+  // AC4: a LATER-created p1 Improvement must serve BEFORE an EARLIER-created p2 Improvement.
+  // Create the p2 first (older), then the p1 (newer) — under today's rank-5-only both fall to
+  // pure created_at FIFO, so the newer p1 sorts AFTER the older p2 → this assertion fails before
+  // the fix (verify that before fixing, LOOP-254 AC4).
+  mk({ title: "urgent improvement p2 (older)", type: "Improvement", assignee: "junior-dev", priority: 2 });
+  mk({ title: "urgent improvement p1 (newer)", type: "Improvement", assignee: "junior-dev", priority: 1 });
+  const order = titles(call("junior-dev").body.todo);
+  ok(order.indexOf("urgent improvement p1 (newer)") < order.indexOf("urgent improvement p2 (older)"),
+    "LOOP-254 AC4: a later-created p1 Improvement serves before an earlier-created p2 Improvement");
+  // AC2 guard: ranks 0–4 relative order unchanged — the existing exact-order assertion above
+  // (urgent bug → urgent feature → edge bug → plain bug → feature) still holds with the new rows:
+  ok(order.indexOf("urgent bug") < order.indexOf("urgent feature")
+    && order.indexOf("urgent feature") < order.indexOf("edge bug")
+    && order.indexOf("edge bug") < order.indexOf("plain bug")
+    && order.indexOf("plain bug") < order.indexOf("feature")
+    && order.indexOf("feature") < order.indexOf("urgent improvement p1 (newer)"),
+    "LOOP-254 AC2: ranks 0–4 relative order unchanged; urgent Improvement sits below Feature");
+  // AC3: FIFO within the new rank — two p1 Improvements sort by created_at
+  mk({ title: "urgent improvement p1 second", type: "Improvement", assignee: "junior-dev", priority: 1 });
+  const order2 = titles(call("junior-dev").body.todo);
+  ok(order2.indexOf("urgent improvement p1 (newer)") < order2.indexOf("urgent improvement p1 second"),
+    "LOOP-254 AC3: FIFO within the new urgent-Improvement rank (oldest first)");
+}
+
 console.log(fails === 0 ? "\nQUEUE_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

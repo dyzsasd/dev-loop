@@ -25,13 +25,16 @@ const toTicket = (r: TicketRow): Ticket => ({
   created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at,
 });
 
-// §5 pick rank: urgent bug → urgent feature → edge-case bug → bug → feature → improvement (FIFO within a rank).
+// §5 pick rank: urgent bug → urgent feature → edge-case bug → bug → feature → urgent improvement → improvement (FIFO within a rank).
+// LOOP-254: a priority=1 Improvement ranks strictly above ordinary Improvements and below Features
+// (operator ruling 2026-08-01 — the urgency field PM/QA set must not be discarded for Improvements).
 const PICK_RANK = (t: Ticket): number =>
   t.priority === 1 && t.type === "Bug" ? 0
   : t.priority === 1 && t.type === "Feature" ? 1
   : t.type === "Bug" && t.labels.includes("edge-case") ? 2
   : t.type === "Bug" ? 3            // §5 rank 3.5 — defects beat features
   : t.type === "Feature" ? 4
+  : t.priority === 1 ? 4.5   // LOOP-254: urgent Improvement — above ordinary Improvements, below Features
   : 5;                              // Improvement and anything else
 
 // The shared servable-Todo predicate — is this Todo ticket servable by the given actor?
