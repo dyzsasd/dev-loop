@@ -3,7 +3,7 @@
 // data home is machine-local + never committed, the SoR is intact.
 // DL-81: the `doctor` COMMAND additionally runs a service runtime-wiring reconcile (reads the product
 // .mcp.json / daemon runfile / autostart/hook presence + a localhost /api/health GET) — still READ-ONLY (no writes,
-// no auto-create) and NON-FATAL; see serviceReconcile. Library callers (init-service) skip it.
+// no auto-create); daemon version skew (W28) is gating, the rest is non-fatal. See serviceReconcile. Library callers (init-service) skip it.
 import { existsSync, readFileSync, openSync, readSync, closeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -191,9 +191,17 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   if (ws) cliInterfaceChecks(ws, projects.map((p) => p.key), dbPath, { pass, warn, info });
 
   // DL-81: optional, additive service runtime-wiring reconcile (only for the `doctor` COMMAND, not library
-  // callers like init-service). READ-ONLY + NON-FATAL — it never touches `ok`, so the verdict below is still
-  // decided SOLELY by the DB-integrity checks above (§18 SoR contract preserved).
-  if (opts.reconcile) await serviceReconcile(projects.map((p) => p.key), dbPath);
+  // callers like init-service). Daemon version skew (W28) flips the verdict — it silently corrupts writes.
+  let versionSkew = false;
+  if (opts.reconcile) {
+    const sr = await serviceReconcile(projects.map((p) => p.key), dbPath);
+    versionSkew = sr.versionSkew;
+  }
+
+  if (versionSkew) {
+    ok = false;
+    allFails.push("daemon running old code — restart it: DEVLOOP_PROJECT=<key> dev-loop daemon up (W28)");
+  }
 
   console.log(ok ? "\nDOCTOR_OK" : "\nDOCTOR_FAILED");
   if (ws) console.log(`NEXT: ${nextStep(ws, [], unseeded, stalledRepo, decisionStall, skewResult, allFails)}`);
@@ -1163,7 +1171,7 @@ function cliInterfaceChecks(ws: Workspace, hubKeys: string[], dbPath: string,
 // checklist inherits these lines with no SKILL change. Every line is PASS/WARN, NEVER a fail: a stopped daemon
 // / absent .mcp.json / missing hook is operator-actionable info, not a broken SoR. With NO service context
 // this prints NOTHING — the DB-only verdict stays byte-for-byte today's.
-async function serviceReconcile(dbProjectKeys: string[], dbPath: string): Promise<void> {
+async function serviceReconcile(dbProjectKeys: string[], dbPath: string): Promise<{ versionSkew: boolean }> {
   const pass = (m: string) => console.log("✅ " + m);
   const warn = (m: string) => console.log("⚠️  " + m);
 
@@ -1174,9 +1182,9 @@ async function serviceReconcile(dbProjectKeys: string[], dbPath: string): Promis
   // The reconcile is about the wiring of a project that lives in the db doctor just checked. A key resolved
   // from cwd/env but ABSENT from this db (doctor pointed at a temp/other db, or cwd resolved a SIBLING project)
   // is not this db's context — skip silently, keeping the DB-only verdict byte-for-byte unchanged.
-  if (!key || !dbProjectKeys.includes(key)) return;
+  if (!key || !dbProjectKeys.includes(key)) return { versionSkew: false };
 
-  console.log(`\nservice runtime wiring — '${key}' (best-effort; informational, not a hard-fail gate):`);
+  console.log(`\nservice runtime wiring — '${key}':`);
 
   // (1) the product repo .mcp.json registers dev-loop-hub with a real server path + DEVLOOP_ACTOR wiring.
   // D8 scope: this is an MCP-interface concern only — when every coding agent configured for this project
@@ -1188,11 +1196,13 @@ async function serviceReconcile(dbProjectKeys: string[], dbPath: string): Promis
   else reconcileMcpJson(join(pcfg.repoPath, ".mcp.json"), pass, warn);
 
   // (2) the per-project daemon /api/health is reachable (url from the lifecycle runfile beside the db).
-  await reconcileDaemonHealth(key, dbPath, pass, warn);
+  const health = await reconcileDaemonHealth(key, dbPath, pass, warn);
 
   // (3) standalone autostart and optional Claude hook compatibility.
   reconcileAutostart(pass, warn);
   reconcileSessionStartHook(pass);
+
+  return { versionSkew: health.versionSkew };
 }
 
 function reconcileMcpJson(mcpJsonPath: string, pass: (m: string) => void, warn: (m: string) => void): void {
@@ -1221,12 +1231,12 @@ function reconcileMcpJson(mcpJsonPath: string, pass: (m: string) => void, warn: 
   pass(`.mcp.json registers dev-loop-hub → ${serverArg} (DEVLOOP_ACTOR wired)`);
 }
 
-async function reconcileDaemonHealth(key: string, dbPath: string, pass: (m: string) => void, warn: (m: string) => void): Promise<void> {
+async function reconcileDaemonHealth(key: string, dbPath: string, pass: (m: string) => void, warn: (m: string) => void): Promise<{ versionSkew: boolean }> {
   const runDir = process.env.DEVLOOP_RUN_DIR ?? dirname(dbPath); // mirrors the lifecycle's lcRunDir (DL-41)
   const runfile = join(runDir, `daemon-${key}.json`);
   let url: string | undefined;
   try { url = (JSON.parse(readFileSync(runfile, "utf8")) as { url?: string }).url; } catch { /* no runfile ⇒ not running */ }
-  if (!url) { warn(`daemon — not running (no lifecycle runfile ${runfile}); start it with \`DEVLOOP_PROJECT=${key} dev-loop daemon up\``); return; }
+  if (!url) { warn(`daemon — not running (no lifecycle runfile ${runfile}); start it with \`DEVLOOP_PROJECT=${key} dev-loop daemon up\``); return { versionSkew: false }; }
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 1500); // short bound — doctor is a one-shot liveness probe, never a wait
@@ -1234,12 +1244,15 @@ async function reconcileDaemonHealth(key: string, dbPath: string, pass: (m: stri
     const b = r.status === 200 ? ((await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; actor?: string } | null) : null;
     if (b && b.ok === true && b.project === key) {
       pass(`daemon /api/health reachable → ${url} (project '${key}')`);
-      if (b.version !== undefined && b.version !== pkgVersion())
-        warn(`daemon — running old code v${b.version}, CLI is v${pkgVersion()}; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart`);
+      if (b.version !== undefined && b.version !== pkgVersion()) {
+        warn(`[W28] daemon — running old code v${b.version}, CLI is v${pkgVersion()}; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart`);
+        return { versionSkew: true };
+      }
       if (b.actor !== undefined && b.actor !== "operator")
         warn(`daemon — actor='${b.actor}' (not operator; publish/attribution may be mis-gated)`);
     } else warn(`daemon — ${url}/api/health did not return {ok:true} for '${key}' (wedged/restarting? \`DEVLOOP_PROJECT=${key} dev-loop daemon up\`)`);
   } catch { warn(`daemon — ${url}/api/health unreachable (not running?); start it with \`DEVLOOP_PROJECT=${key} dev-loop daemon up\``); }
+  return { versionSkew: false };
 }
 
 function reconcileSessionStartHook(pass: (m: string) => void): void {
