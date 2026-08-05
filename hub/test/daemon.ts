@@ -224,6 +224,28 @@ ok(detail.status === 200 && detail.body.id === feat.id && Array.isArray(detail.b
 const missing = await get("/api/tickets/DMN-999");
 ok(missing.status === 404, "GET /api/tickets/<unknown> → 404");
 
+// ── LOOP-304: a daemon whose project row was deleted is NOT healthy ────────────────────────────
+// During the 2026-08-04 wipe the daemon served the pre-delete board for ~2 hours from its open
+// connection while doctor printed DOCTOR_OK throughout. projectId is resolved once at boot and
+// nothing re-checked that the row still exists.
+{
+  const wdb = openDb(DB);
+  const gone = openDb(DB); gone.exec("PRAGMA query_only=ON");
+  const srv = createDaemon({ db: gone, projectId: "no-such-project-id", projectKey: "dmn" });
+  srv.listen(0, "127.0.0.1");
+  await once(srv, "listening");
+  const p = (srv.address() as { port: number }).port;
+  const r = await fetch(`http://127.0.0.1:${p}/api/health`);
+  const b = await r.json().catch(() => ({})) as { ok?: boolean; error?: string };
+  ok(r.status === 503 && b.ok === false, `LOOP-304: a daemon whose project row is gone reports UNHEALTHY (got ${r.status}, ok=${b.ok})`);
+  ok(/no longer exists/.test(b.error ?? ""), `LOOP-304: …and says WHY — it is serving a cached view (got ${JSON.stringify(b.error ?? "")})`);
+  ok(/daemon up/.test(b.error ?? ""), "LOOP-304: …with the remedy, so the reaper and a human both act on the same line");
+  srv.close(); gone.close(); wdb.close();
+  // The control: the LIVE daemon in this same suite, whose row DOES exist, stays healthy.
+  const live = await fetch(base + "/api/health");
+  ok((await live.json() as { ok: boolean }).ok === true, "LOOP-304 control: a daemon whose project row exists is unaffected");
+}
+
 // ── LOOP-96: the two human-facing board reads are BOUNDED, and say when they truncated ─────────
 // /api/tickets and GET / were the only two of the four board-list paths with no bound at all —
 // SELECT * of every ticket, full descriptions, on every request (433.6 KiB / 95 rows measured, 92%
