@@ -604,6 +604,62 @@ export function decisionEnteredAt(db: import("node:sqlite").DatabaseSync, ticket
 // that role by hand) still surface, flagged manual:true, so the digest can say "awaiting a human <h>"
 // instead of warning. Doctor renders these as W16; Sweep quotes them in the board-health digest.
 export interface OwnerLivenessFinding { owner: string; openTickets: number; oldestUpdatedAt: string; lastFireTs: string | null; manual: boolean }
+/**
+ * Agents that FIRED in the window and left no report (LOOP-28, §22).
+ *
+ * §22 states the contract plainly — "every agent leaves a durable, human-readable trail of what it
+ * did" — and the README sells the reports tree as a core value prop. Measured in this workspace:
+ * 7 of 21 fires left no trail, and nothing noticed. A fire with no report is an invisible hole in
+ * the operator's only record of what the loop did.
+ *
+ * DISTINCT from ownerLiveness (W16), which reports an owner whose actor NEVER FIRES — that is a
+ * routing problem. This one reports an agent that fires and produces no record, which is a trail
+ * problem, and an agent with zero fires is deliberately not this check's business.
+ *
+ * Best-effort throughout: a missing ledger, a missing reports tree or an unreadable directory
+ * produces no finding and never throws. A doctor check that can fail is a doctor check that gets
+ * removed.
+ */
+export interface ReportTrailFinding { agent: string; fires: number; expectedDir: string; windowDays: number }
+
+export function reportTrailGaps(
+  ledgerPath: string,
+  reportsRootDir: string,
+  opts: { windowMs?: number; nowMs?: number; handles?: readonly string[] } = {},
+): ReportTrailFinding[] {
+  const windowMs = opts.windowMs ?? 7 * 86_400_000;
+  const nowMs = opts.nowMs ?? Date.now();
+  const since = new Date(nowMs - windowMs).toISOString();
+  const handles = opts.handles ?? AGENT_HANDLES;
+  let rows: ReturnType<typeof readFireRows>;
+  try { rows = readFireRows(ledgerPath); } catch { return []; }
+
+  // The days each agent actually fired, so the check asks "was there a report for a day this agent
+  // worked?" rather than "is the directory non-empty?" — an agent with one stale report from a month
+  // ago has still left this window's fires untraced.
+  const firedDays = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (!r.ts || r.ts < since) continue;
+    if (!firedDays.has(r.agent)) firedDays.set(r.agent, new Set());
+    firedDays.get(r.agent)!.add(r.ts.slice(0, 10));
+  }
+
+  const out: ReportTrailFinding[] = [];
+  for (const h of handles) {
+    const days = firedDays.get(h);
+    if (!days?.size) continue;                       // zero fires in the window is W16's business
+    // §22's tree is <reports>/<handle>-agent/daily/<YYYY-MM-DD>.md. The `-agent` suffix is the
+    // mapping, and getting it wrong would make every agent look untraced.
+    const dir = join(reportsRootDir, `${h}-agent`, "daily");
+    let present: Set<string>;
+    try { present = new Set(readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3))); }
+    catch { present = new Set(); }                   // no tree yet ⇒ nothing reported, which IS the finding
+    if ([...days].some((d) => present.has(d))) continue;
+    out.push({ agent: h, fires: [...rows].filter((r) => r.agent === h && r.ts >= since).length, expectedDir: dir, windowDays: Math.round(windowMs / 86_400_000) });
+  }
+  return out;
+}
+
 export function ownerLiveness(
   db: import("node:sqlite").DatabaseSync, projectId: string, ledgerPath: string,
   opts: { windowMs?: number; nowMs?: number; manualHandles?: Set<string>; handles?: readonly string[] },

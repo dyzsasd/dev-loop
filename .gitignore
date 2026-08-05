@@ -40,4 +40,14 @@ devloop-*-*/
 
 # workspace-local runtime state a fire may create inside the repo checkout (doctor W06):
 # state/reports must never be committable from a repo tree.
-.dev-loop/
+#
+# NO trailing slash, deliberately (LOOP-132): a directory-only pattern is not matched by
+# `git check-ignore .dev-loop` unless the path already exists as a directory, so the documented
+# verification reported "not ignored" for the very artifact this line exists to cover.
+.dev-loop
+# LOOP-132: a literal `undefined` segment — a caller that joins an undefined path variable creates
+# one at the repo root, and it then reads as legitimate untracked content forever.
+undefined
+# python bytecode from the security/ tooling; never committed, and its presence makes `git status`
+# permanently non-empty, which trains everyone to ignore a dirty tree.
+__pycache__/
