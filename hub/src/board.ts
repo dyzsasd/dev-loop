@@ -13,7 +13,8 @@
 // It is also the RIGHT artifact: the incident wiped a board inside an otherwise intact workspace.
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
-import { listSnapshots, takeBoardSnapshot } from "./board-snapshot.ts";
+import { listSnapshots, takeBoardSnapshot, restoreBoard, verifySnapshot } from "./board-snapshot.ts";
+import { workspaceIsolationVerdict } from "./destructive-guard.ts"; // LOOP-341: the EXISTING gate, reused
 import { join } from "node:path";
 
 const DEFAULT_KEEP = 10;
@@ -25,6 +26,9 @@ function usage(): void {
                                                      board (hub.db only — never a secret), prune to
                                                      the newest <n> generations, print its path
   snapshots [--dir <d>]                              list generations, newest first
+  restore --from <snapshot> [--dir <d>]              REPLACE this workspace's board with a snapshot
+                                                     (gated: needs the confirmation token; takes a
+                                                     'pre-restore' copy first so it is undoable)
 
   --dir     default <workspace>/.dev-loop/snapshots/
   --keep    default ${DEFAULT_KEEP}; 0 disables pruning
@@ -47,10 +51,11 @@ export function boardCmd(argv = process.argv.slice(2)): number {
   const [sub, ...rest] = argv;
   if (!sub || sub === "--help" || sub === "-h" || sub === "help") { usage(); return 0; }
 
-  let dir: string | undefined, keep = DEFAULT_KEEP, reason = "manual";
+  let dir: string | undefined, keep = DEFAULT_KEEP, reason = "manual", from: string | undefined;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === "--dir") dir = rest[++i];
+    else if (a === "--from") from = rest[++i];
     else if (a === "--keep") {
       const n = Number(rest[++i]);
       if (!Number.isInteger(n) || n < 0) { console.error("dev-loop board: --keep must be a non-negative integer"); return 2; }
@@ -59,7 +64,8 @@ export function boardCmd(argv = process.argv.slice(2)): number {
       const r = rest[++i] ?? "";
       if (!/^[A-Za-z0-9._-]+$/.test(r)) { console.error("dev-loop board: --reason must match [A-Za-z0-9._-]+ (it rides the filename)"); return 2; }
       reason = r;
-    } else { console.error(`dev-loop board: unknown flag '${a}'`); return 2; }
+    } else if (a.startsWith("--i-understand-this-deletes-")) { /* the isolation token — read from argv by the verdict */ }
+    else { console.error(`dev-loop board: unknown flag '${a}'`); return 2; }
   }
 
   const ws = resolveWorkspace();
@@ -81,7 +87,28 @@ export function boardCmd(argv = process.argv.slice(2)): number {
       console.log(`  ${r.takenAt}  ${fmtAge(r.takenAt, now).padStart(4)} ago  ${(r.bytes / 1024).toFixed(0).padStart(7)} KB  ${r.reason}`);
     return 0;
   }
-  console.error(`dev-loop board: unknown subcommand '${sub}' (snapshot|snapshots)`);
+  if (sub === "restore") {
+    // The ONE child in this module that writes over a live board. Gated by the EXISTING
+    // destructive-guard token — no new gate, and `--force` is untouched (it answers the
+    // recoverability question and must never become the isolation token).
+    if (!from) { console.error("dev-loop board restore: --from <snapshot> is required (list them: dev-loop board snapshots)"); return 2; }
+    const verdict = workspaceIsolationVerdict(ws, argv);
+    const live = verifySnapshot(wsHubDb(ws));
+    // A NON-EMPTY board is protected: refuse without the token. An absent or already-broken board is
+    // exactly what a restore is for, so it is not gated — there is nothing to lose.
+    if (live.ok && (live.tickets ?? 0) > 0 && verdict.refusal) {
+      console.error(`dev-loop board restore: this board still holds ${live.tickets} ticket(s) and ${live.comments} comment(s) — restoring REPLACES them. Pass ${verdict.requiredToken} to confirm. Nothing has been written.`);
+      return 4;
+    }
+    const check = verifySnapshot(from);
+    if (!check.ok) { console.error(`dev-loop board restore: ${check.error}. The existing board is untouched.`); return 1; }
+    const r = restoreBoard({ from, dbPath: wsHubDb(ws), dir: snapDir, keep });
+    console.log(`restored ${r.tickets} ticket(s) and ${r.comments} comment(s) from ${from}`);
+    if (r.preRestore) console.log(`the board it replaced is kept at ${r.preRestore} — restore that generation to undo`);
+    console.log(`restart the daemon so it stops serving the old board from its open connection: dev-loop daemon up`);
+    return 0;
+  }
+  console.error(`dev-loop board: unknown subcommand '${sub}' (snapshot|snapshots|restore)`);
   usage();
   return 2;
 }

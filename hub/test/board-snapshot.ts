@@ -12,8 +12,10 @@ import { spawnSync } from "node:child_process";
 import { tmpdir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { snapshotBoardDb, takeBoardSnapshot, listSnapshots, pruneSnapshots, snapshotName } from "../src/board-snapshot.ts";
+import { snapshotBoardDb, takeBoardSnapshot, listSnapshots, pruneSnapshots, snapshotName, restoreBoard, verifySnapshot } from "../src/board-snapshot.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { openDb } from "../src/db.ts";
+import { ensureSeed, findProject } from "../src/seed.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -176,6 +178,40 @@ try {
     sdb.close();
     ok(projects >= 1, `LOOP-338 AC4: …and it opens as a SQLite board carrying the project rows (got ${projects})`);
 
+    // ── LOOP-341 AC1/AC4: the restore verb is gated by the EXISTING token ─────────────────────
+    // This is the one child in the module that writes over a live board, so it reuses
+    // destructive-guard's confirmation token rather than inventing a gate — and `--force` is
+    // untouched, because --force answers the recoverability question and must never become the
+    // isolation token.
+    {
+      // Give the live board rows so it is the PROTECTED case.
+      const liveDb = openDb(join(ws, ".dev-loop", "hub.db"));
+      // "snapws" is the TEAM key; the project added above is "alpha". The isolation TOKEN names the
+      // workspace (team) key, which is what workspaceIsolationVerdict gates on — they are different keys.
+      const lpid = findProject(liveDb, "alpha")!;
+      for (let i = 0; i < 3; i++)
+        liveDb.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,'t','d','Improvement','Todo',2,'[]','[]','pm','t','t')").run(`SNAP-${i}`, lpid);
+      liveDb.close();
+      const src2 = run(["board", "snapshot", "--reason", "manual"]);
+      const gen = src2.out.trim().split("\n").pop() ?? "";
+      const beforeBytes = readFileSync(join(ws, ".dev-loop", "hub.db"));
+
+      const ungated = run(["board", "restore", "--from", gen]);
+      ok(ungated.code === 4 && /--i-understand-this-deletes-/.test(`${ungated.out}${ungated.err}`),
+        `LOOP-341 AC1/AC4: restoring onto a NON-EMPTY board without the token is refused, naming it (code ${ungated.code})`);
+      ok(Buffer.compare(readFileSync(join(ws, ".dev-loop", "hub.db")), beforeBytes) === 0,
+        "LOOP-341 AC4: …and the existing board is BYTE-identical afterwards — not merely the same row count");
+
+      const gated = run(["board", "restore", "--from", gen, "--i-understand-this-deletes-snapws"]);
+      ok(gated.code === 0 && /restored 3 ticket/.test(gated.out),
+        `LOOP-341 AC1: the existing token clears it (code ${gated.code}) ${gated.err.slice(-140)}`);
+      ok(/restore that generation to undo/.test(gated.out),
+        "LOOP-341 AC5: …and it tells the operator where the replaced board went");
+      const bad = run(["board", "restore", "--from", join(tmp, "not-sqlite.db"), "--i-understand-this-deletes-snapws"]);
+      ok(bad.code !== 0, `LOOP-341 AC3: a bad --from is refused at the CLI too (code ${bad.code})`);
+      ok(run(["board", "restore"]).code === 2, "LOOP-341: --from is required");
+    }
+
     const list = run(["board", "snapshots"]);
     ok(list.code === 0 && /newest first/.test(list.out) && /manual/.test(list.out),
       `LOOP-338 AC2: 'board snapshots' lists generations with age and size (code ${list.code})`);
@@ -184,6 +220,79 @@ try {
     ok(badFlag.code === 2, `LOOP-338: a reason that would break the filename contract is refused (got ${badFlag.code})`);
     const badKeep = run(["board", "snapshot", "--keep", "-1"]);
     ok(badKeep.code === 2, `LOOP-338: a negative --keep is refused (got ${badKeep.code})`);
+  }
+
+  // ── LOOP-341: the RESTORE — a backup never restored from is not a backup ─────────────────────
+  // Children A-D produce an artifact and warn about its absence; none of them proves it can be
+  // turned back into a board. The 2026-08-04 recovery was an improvised `sqlite3 .recover` run under
+  // pressure two hours after the loss, and it still lost 19 tickets and 79 comments permanently.
+  {
+    const boardPath = join(tmp, "restore-live.db");
+    const dir = join(tmp, "restore-gens");
+    const db = openDb(boardPath);
+    ensureSeed(db, "rst", "Restore", "RST");
+    const pidR = findProject(db, "rst")!;
+    const ins = db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,'d','Improvement','Todo',2,'[]','[]','pm','t','t')");
+    for (let i = 0; i < 12; i++) ins.run(`RST-${i}`, pidR, `ticket ${i}`);
+    const MARKER = "the one comment body that must survive verbatim - LOOP-341 AC2";
+    db.prepare("INSERT INTO comments(ticket_id,author,body,created_at) VALUES(?,?,?,?)").run("RST-0", "pm", MARKER, "t");
+    for (let i = 1; i < 5; i++) db.prepare("INSERT INTO comments(ticket_id,author,body,created_at) VALUES(?,?,?,?)").run(`RST-${i}`, "qa", `c${i}`, "t");
+    db.prepare("INSERT INTO documents(id,project_id,kind,slug,title,created_by,created_at,updated_at) VALUES('d1',?,'design','x','X','pm','t','t')").run(pidR);
+    db.close();
+
+    const snap = takeBoardSnapshot({ dbPath: boardPath, dir, keep: 10, reason: "manual" });
+
+    // DESTROY the board — the incident's shape.
+    const wiped = openDb(boardPath);
+    wiped.exec("DELETE FROM comments"); wiped.exec("DELETE FROM tickets"); wiped.exec("DELETE FROM documents");
+    wiped.close();
+    const after = openDb(boardPath);
+    ok((after.prepare("SELECT COUNT(*) AS n FROM tickets").get() as { n: number }).n === 0, "LOOP-341 fixture: the board is wiped");
+    after.close();
+
+    // AC2 — the round trip: counts AND content. Counts alone are satisfied by a restore that
+    // scrambles what it puts back.
+    const r = restoreBoard({ from: snap, dbPath: boardPath, dir, keep: 10 });
+    const back = new DatabaseSync(boardPath, { readOnly: true });
+    const t2 = (back.prepare("SELECT COUNT(*) AS n FROM tickets").get() as { n: number }).n;
+    const c2 = (back.prepare("SELECT COUNT(*) AS n FROM comments").get() as { n: number }).n;
+    const d2 = (back.prepare("SELECT COUNT(*) AS n FROM documents").get() as { n: number }).n;
+    const body = (back.prepare("SELECT body FROM comments WHERE ticket_id='RST-0'").get() as { body: string }).body;
+    back.close();
+    ok(t2 === 12 && c2 === 5 && d2 === 1, `LOOP-341 AC2: tickets/comments/documents all restored (${t2}/${c2}/${d2}, want 12/5/1)`);
+    ok(body === MARKER, "LOOP-341 AC2: ...and one specific comment body survives VERBATIM - counts alone prove nothing");
+
+    // AC5 - the restore is itself undoable.
+    ok(r.preRestore !== null && existsSync(r.preRestore), `LOOP-341 AC5: a pre-restore copy of the replaced board exists (${r.preRestore})`);
+    ok(/-pre-restore\.db$/.test(r.preRestore ?? ""), "LOOP-341 AC5: ...reasoned pre-restore, so it is findable in the listing");
+
+    // AC3 - verify BEFORE landing: three bad inputs, existing board untouched each time.
+    const good = readFileSync(boardPath);
+    const truncated = join(tmp, "truncated.db");
+    writeFileSync(truncated, readFileSync(snap).subarray(0, 200));
+    const notSqlite = join(tmp, "not-sqlite.db");
+    writeFileSync(notSqlite, "this is plainly not a database");
+    const emptyFile = join(tmp, "empty.db");
+    writeFileSync(emptyFile, "");
+    for (const [label, bad] of [["truncated", truncated], ["non-SQLite", notSqlite], ["zero-length", emptyFile]] as const) {
+      let err = "";
+      try { restoreBoard({ from: bad, dbPath: boardPath, dir, keep: 10 }); } catch (e) { err = (e as Error).message; }
+      ok(err !== "" && /refusing to restore/.test(err), `LOOP-341 AC3: a ${label} --from is REFUSED (${err.slice(0, 60)})`);
+      ok(Buffer.compare(readFileSync(boardPath), good) === 0, `LOOP-341 AC3: ...and the existing board is BYTE-identical after the ${label} refusal`);
+    }
+    ok(!verifySnapshot(join(tmp, "no-such-file.db")).ok, "LOOP-341 AC3: a missing --from is refused too");
+
+    // The schema probe's DISCRIMINATING case. The three bad inputs above are each caught twice over
+    // — the open throws, or the COUNT throws — so removing the probe leaves them all still refused
+    // (mutation-checked: 0 red). What the probe uniquely buys is the MESSAGE for a file that is a
+    // perfectly valid SQLite database and simply is not a board: without it the operator gets
+    // "no such table: tickets" instead of a named diagnosis. Asserted here so the probe is
+    // load-bearing for something rather than defence-in-depth nobody checks.
+    const validNonBoard = join(tmp, "valid-but-not-a-board.db");
+    { const other = new DatabaseSync(validNonBoard); other.exec("CREATE TABLE unrelated(x TEXT)"); other.close(); }
+    const nb = verifySnapshot(validNonBoard);
+    ok(!nb.ok && /not a hub board/.test(nb.error ?? "") && /projects/.test(nb.error ?? ""),
+      `LOOP-341 AC3: a VALID SQLite db that is not a board is refused by NAME, not by a stray "no such table" (${nb.error})`);
   }
 
   // snapshotName is the one place the filename contract lives.
