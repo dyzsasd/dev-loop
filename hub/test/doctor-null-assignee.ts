@@ -124,19 +124,20 @@ try {
     ok(!out.includes("[W27]"), "AC3: W27 does NOT fire on terminal tickets (Done/Canceled/Duplicate)");
   }
 
-  // ── Backlog + null assignee → W27 fires regardless of tier label (promotion queue is assignee-keyed) ──
+  // ── LOOP-293 AC1: Backlog + null assignee → W27 does NOT fire (PM backlog queue is label-blind in both modes) ──
   {
     const root = join(tmp, "backlog");
     seedWs(root, true);
     const dbPath = join(root, ".dev-loop", "hub.db");
     seedDb(dbPath, [
-      { id: "LOOP-4a", state: "Backlog", labels: ["dev-loop", "Bug", "qa", "junior-dev"], assignee: null },
-      { id: "LOOP-4b", state: "Backlog", labels: ["dev-loop", "Feature"], assignee: null },
+      { id: "LOOP-4a", state: "Backlog", labels: ["dev-loop", "Bug", "pm"], assignee: null }, // pm owner, no dev-tier
+      { id: "LOOP-4b", state: "Backlog", labels: ["dev-loop", "Feature"], assignee: null },           // no owner, no dev-tier
     ]);
     const ws = loadWorkspace(root);
     const out = await capture(() => doctorWorkspace(ws, { boardDb: dbPath }));
-    ok(out.includes("[W27]") && out.includes("LOOP-4a"), "Backlog + tier label fires W27 (unreachable from promotion queue)");
-    ok(out.includes("LOOP-4b"), "Backlog + no tier label also fires W27 (promotion queue is assignee-keyed, not label-keyed)");
+    ok(!out.includes("[W27]"), "LOOP-293 AC1: Backlog + null assignee — W27 silent (unconditional exemption)");
+    ok(!out.includes("LOOP-4a"), "LOOP-293 AC1: LOOP-4a (pm-owned Backlog) not flagged");
+    ok(!out.includes("LOOP-4b"), "LOOP-293 AC1: LOOP-4b (no-owner Backlog) not flagged");
   }
 
   // ── InReview + null: W27 predicate — reachable via dev-tier label OR qa/pm owner label ──
@@ -155,9 +156,8 @@ try {
     const out = await capture(() => doctorWorkspace(ws, { boardDb: dbPath }));
     ok(!out.includes("LOOP-5a"), "InReview + null + tier label: W27 silent (servable.ts fix makes it landable)");
     ok(!out.includes("LOOP-5b"), "InReview + null + qa label: W27 silent (reachable via opQueue verify slice)");
-    ok(out.includes("[W27]") && out.includes("LOOP-5c"), "InReview + null + no tier + no qa/pm: W27 fires (truly stuck)");
-    // LOOP-270 AC3: the genuinely tier-less case has no better hint — the <tier> placeholder must stand.
-    ok(out.includes("--assignee <tier>"), "AC3/LOOP-270: tier-less stranded ticket still falls back to the <tier> placeholder (don't regress)");
+    // LOOP-293 AC4: genuinely tier-less (no verifiable, no landable) has no useful remediation — skip
+    ok(!out.includes("LOOP-5c"), "LOOP-293 AC4: InReview + null + no tier + no qa/pm — W27 silent (no useful remediation)");
 
     // Verify servable.ts inReview fix: LOOP-5a now appears in junior-dev's inReview slice
     const db = openDb(dbPath);
@@ -185,9 +185,31 @@ try {
     ok(srSlice.inReview.some((t) => t.id === "LOOP-6a"), "P1 fix: that same ticket IS in senior-dev inReview (assignee match)");
   }
 
-  // ── AC5 proof: current main has no W27 check (must fail-before, pass-after) ──
-  // The above tests ARE the regression; if they pass against old main, the check didn't exist.
-  // The seedDb approach creates a board with the exact failing shape. If W27 fires, we're good.
+  // ── LOOP-293: regression tests for the three shapes ──
+  {
+    const root = join(tmp, "loop293");
+    seedWs(root, true);
+    const dbPath = join(root, ".dev-loop", "hub.db");
+    seedDb(dbPath, [
+      // LOOP-293 shape (a): LOOP-228's shape — Backlog, null assignee, owner pm, no dev-tier
+      { id: "LOOP-293a", state: "Backlog", labels: ["dev-loop", "Improvement", "pm"], assignee: null },
+      // LOOP-293 shape (b): LOOP-277's shape — Todo, null assignee, owner pm, no dev-tier
+      { id: "LOOP-293b", state: "Todo", labels: ["dev-loop", "Improvement", "pm"], assignee: null },
+      // LOOP-293 shape (c): Todo, null assignee, dev-tier label present
+      { id: "LOOP-293c", state: "Todo", labels: ["dev-loop", "Bug", "qa", "junior-dev"], assignee: null },
+    ]);
+    const ws = loadWorkspace(root);
+    const out = await capture(() => doctorWorkspace(ws, { boardDb: dbPath }));
+    // AC1: Backlog exempt unconditionally
+    ok(!out.includes("LOOP-293a"), "LOOP-293 AC1: Backlog + null + pm owner — NOT flagged (unconditional exemption)");
+    // AC2: Todo + owner label + no dev-tier → flagged with operator park hint
+    ok(out.includes("LOOP-293b"), "LOOP-293 AC2: Todo + null + pm owner — flagged (genuinely stranded)");
+    ok(out.includes("--state Human-Blocked --assignee operator"), "LOOP-293 AC2: remediation is operator park");
+    ok(!out.includes("<tier>"), "LOOP-293 AC2: no literal <tier> in output");
+    // AC3: Todo + dev-tier label → flagged with tier hint
+    ok(out.includes("LOOP-293c"), "LOOP-293 AC3: Todo + null + dev-tier — flagged");
+    ok(out.includes("--assignee junior-dev"), "LOOP-293 AC3: remediation is paste-ready tier assignment");
+  }
 
 } catch (e) {
   console.error("unexpected test error:", e);
