@@ -169,7 +169,7 @@ ok(okR.code === 0 && okR.out.includes("DOCTOR_OK")
   const staleVer = await withStub({ ok: true, project: "alpha", version: "0.0.1" });
   ok(staleVer.out.includes("daemon /api/health reachable"), "LOOP-195 AC1: pass line present even when version is stale");
   ok(staleVer.out.includes("running old code v0.0.1"), "LOOP-195 AC1: version mismatch surfaces in doctor output");
-  ok(staleVer.code === 0 && staleVer.out.includes("DOCTOR_OK"), "LOOP-195 AC5: version warn does not flip exit status — DOCTOR_OK holds");
+  ok(staleVer.code !== 0 && staleVer.out.includes("DOCTOR_FAILED"), "LOOP-195 AC5: version warn flips exit status — DOCTOR_FAILED (LOOP-259)");
 
   // Case 2 (AC1): version present and current → no stale warning
   const curVer = await withStub({ ok: true, project: "alpha", version: pkgVersion() });
