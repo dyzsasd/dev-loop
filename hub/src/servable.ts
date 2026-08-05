@@ -34,19 +34,22 @@ const PICK_RANK = (t: Ticket): number =>
   : t.type === "Feature" ? 4
   : 5;                              // Improvement and anything else
 
+// The shared servable-Todo predicate — is this Todo ticket servable by the given actor?
+// Encapsulates: assignee match (`mine`), `blocked` exclusion, and the Layer-2 defense
+// (sensitive+junior exclusion per LOOP-80 Child B). Used by BOTH `servableSlice` AND
+// `servableTodoDepth` so the two can't drift on "what is servable for this actor".
+// LOOP-251: extracted from the inline filter in `servableSlice` into a single shared function.
+function isTodoServableFor(t: Ticket, actor: string): boolean {
+  if (t.labels.includes("blocked")) return false;
+  const mine = actor === "dev" ? (t.assignee === null || t.assignee === "dev") : t.assignee === actor;
+  const notSensitiveForJunior = actor !== "junior-dev" || !t.labels.includes("sensitive");
+  return mine && notSensitiveForJunior;
+}
 // The dev tiers (§21b): the legacy single `dev` plus the split pair. ONE membership test so the `queue` op, the
 // servable-slice predicate below, and the scheduler's queue-gate can't drift on "who has an assignee-based Todo
 // slice". pm/qa/architect/stewards are NOT dev tiers.
 export const isDevTierActor = (actor: string): boolean =>
   actor === "dev" || actor === "senior-dev" || actor === "junior-dev";
-
-// servableSlice — a dev tier's SERVABLE work: its §5-ranked Todo slice (own assignee, `blocked` excluded, and —
-// for junior — `sensitive` excluded per LOOP-80 Child B) PLUS its own In Progress (the Step-0 orphan-resume
-// input) PLUS its own In Review (landing/repair only — a §12c fire-start pass: merge green, fix+repush red,
-// leave merged-but-unverified alone; LOOP-112). This is the SINGLE source both `opQueue` and the
-// scheduler's queue-depth fire-gate (LOOP-144) consume, so the gate can't grow a second, drifting copy of
-// "what is servable". Callers pass a dev-tier actor (isDevTierActor); a non-dev actor yields empty slices.
-// Output is summarized (no bodies). Hub issues NO network/gh calls — landing state is CLI-side only.
 export function servableSlice(db: DatabaseSync, projectId: string, actor: string): { todo: Ticket[]; inProgress: Ticket[]; inReview: Ticket[] } {
   const summary = (t: Ticket): Ticket => ({ ...t, description: "" });
   const byState = (state: string): Ticket[] =>
@@ -56,13 +59,13 @@ export function servableSlice(db: DatabaseSync, projectId: string, actor: string
   // row (written before the Layer-1 write gate or via a raw path) must never be served to junior-dev.
   const notSensitiveForJunior = (t: Ticket): boolean => actor !== "junior-dev" || !t.labels.includes("sensitive");
   const todo = byState("Todo")
-    .filter((t) => mine(t) && !t.labels.includes("blocked") && notSensitiveForJunior(t))
+    .filter((t) => isTodoServableFor(t, actor))
     .sort((x, y) => PICK_RANK(x) - PICK_RANK(y) || x.created_at.localeCompare(y.created_at))
     .map(summary);
   const inProgress = byState("In Progress").filter((t) => t.assignee === actor && notSensitiveForJunior(t)).map(summary);
   // inReview: landing/repair only — NOT a pick list (LOOP-112). Keyed on assignee===actor OR, for split-dev
   // tiers, the tier label (LOOP-244): a null-assignee InReview ticket whose tier label still names the actor
-  // is landable by Step 0.5 even if the assignee was cleared on handoff. The label fallback only applies
+  // is landable by Step 0.5 even if the flag off (default-off, zero new surface)
   // when assignee IS NULL — an explicitly-assigned ticket stays in its owner's slice only. Legacy `dev`
   // actor uses assignee only (actor==="dev" excluded from label-match) so null-assignee "dev" never bleeds in.
   const tierLabel = isDevTierActor(actor) && actor !== "dev";
@@ -70,4 +73,23 @@ export function servableSlice(db: DatabaseSync, projectId: string, actor: string
     .filter((t) => (t.assignee === actor || (tierLabel && t.assignee === null && t.labels.includes(actor))) && notSensitiveForJunior(t))
     .map(summary);
   return { todo, inProgress, inReview };
+}
+
+// servableTodoDepth — the §5a todoDepth cap input, computed from the SAME servable-Todo
+// predicate as `servableSlice`, not a raw `assignee ===` filter over non-blocked Todo.
+// Makes a SINGLE pass over all non-blocked Todo rows and counts per tier through the shared
+// `isTodoServableFor` predicate. `total` is the count of ALL non-blocked Todo rows (the
+// board-wide funnel number, unchanged from the previous inline computation — LOOP-169).
+// LOOP-251: replaces the inline todoDepth object literal in `agentops.ts` `opQueue`.
+export function servableTodoDepth(db: DatabaseSync, projectId: string): { total: number; "senior-dev": number; "junior-dev": number; dev: number } {
+  const allTodo = (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state='Todo' ORDER BY created_at").all(projectId) as unknown as TicketRow[]).map(toTicket);
+  let total = 0, senior = 0, junior = 0, dev = 0;
+  for (const t of allTodo) {
+    if (t.labels.includes("blocked")) continue;  // total excludes blocked
+    total++;
+    if (isTodoServableFor(t, "senior-dev")) senior++;
+    if (isTodoServableFor(t, "junior-dev")) junior++;
+    if (isTodoServableFor(t, "dev")) dev++;
+  }
+  return { total, "senior-dev": senior, "junior-dev": junior, dev };
 }
