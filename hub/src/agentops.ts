@@ -24,6 +24,7 @@ import { STEWARD_HANDLES } from "./seed.ts"; // D1: the steward roster (ONE defi
 import { TEAM_INTAKE_PROJECT } from "./team-config.ts"; // D1: the reserved "_team" intake key — the only override pm may pass
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { isDevTierActor, servableSlice, servableTodoDepth } from "./servable.ts"; // LOOP-144/LOOP-251: shared dev-tier servable predicate + todoDepth from the same predicate
+import { designParentIds, isDesignParent } from "./design-parent.ts"; // LOOP-344: ONE definition, shared with the write layer's verify gate (LOOP-345)
 import { insertTicket, updateTicketRow, insertComment, loadRelease, verifyCreateGateRejection } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
 // gate) + the docstore-error→HTTP-status map are reused VERBATIM from the shared, side-effect-free docstore
@@ -250,19 +251,18 @@ function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
       .map(toTicket).filter((t) => !TERMINAL_STATES.has(t.state));
     // A Mode:design parent belongs to PM's verify gate regardless of its label set (§21a).
     // QA must not gate design parents — it has no authority over design coherence.
-    // LOOP-294: also match via child's `Design: parent <id>` pointer (reverse link), which the
-    // small-feature form always writes and the body-prefix path never touches.
-    const designParentIds = new Set<string>();
-    for (const t of open) {
-      const m = t.description.match(/^\s*Design:\s*parent\s+(\S+)\b/im);
-      if (m) designParentIds.add(m[1]);
-    }
-    const isDesignParent = (t: Ticket): boolean =>
-      t.description.trimStart().startsWith("Mode: design") || designParentIds.has(t.id);
+    // LOOP-344: the predicate is the SHARED one in design-parent.ts, which recognises all three §21a
+    // pointer forms. The inline version here saw only `Design: parent <id>`, so the two DOC-pointer
+    // forms (hubDoc:design/<slug>, docs/design/<slug>.md) named the doc rather than the parent,
+    // resolved to nothing, and routed their parents to QA — two of the three documented forms
+    // reaching the wrong verifier. It is shared rather than fixed in place because LOOP-345 keys an
+    // AUTHORIZATION decision on the same question, and two copies of that is how a gate ends up
+    // enforcing something different from what the queue displays.
+    const parentIds = designParentIds(db, projectId, open);
     const verify = byState("In Review").filter((t) =>
       actor === "pm"
-        ? (isDesignParent(t) || t.labels.includes("pm"))
-        : (t.labels.includes(actor) && !isDesignParent(t))
+        ? (isDesignParent(t, parentIds) || t.labels.includes("pm"))
+        : (t.labels.includes(actor) && !isDesignParent(t, parentIds))
     ).map(summary);
     const blocked = open.filter((t) => t.labels.includes("blocked"));
     if (actor === "qa") return okR({ agent: actor, verify, blocked: blocked.map(summary) });

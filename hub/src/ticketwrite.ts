@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
+import { designParentIds, isDesignParent, designPointerOf, docSlugOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
 
 export type WriteResult = { ok: true; id: string } | { ok: false; status: number; error: string };
 
@@ -101,6 +102,72 @@ function stagingDeployRejection(db: DatabaseSync, projectId: string, fromState: 
 // ticket carrying one. Deduped so a doubled label never inflates the refusal message.
 const VERIFIER_OWNER_LABELS = new Set<string>(["qa", "pm"]);
 const ownerLabelsOf = (labels: string[]): string[] => [...new Set(labels.filter((l) => VERIFIER_OWNER_LABELS.has(l)))];
+
+// LOOP-345 — R1 and R2 land TOGETHER, deliberately. With R1 alone, PM could close a design parent
+// AND strand its children in Backlog — strictly worse than the old behaviour, where PM could not
+// close it at all. They are one rule with two halves and must not be split.
+//
+// The defect the two halves fix is an INVERSION between the layers: the layer that SHOWS the work
+// (opQueue) put a design parent in pm.verify, and the layer that PERMITS the write refused pm and
+// allowed qa — so the only ordering the write layer permitted was the one that strands the children,
+// and it stranded them silently with rc=0. Measured on a `Bug` design parent with three staged
+// Backlog children: `pm` → REFUSED, `qa` → ALLOWED, parent Done, three children left in Backlog.
+//
+// Both halves resolve "is this a design parent?" through the SAME shared predicate the queue uses
+// (design-parent.ts, LOOP-344) — a second copy here is how a gate ends up enforcing something
+// different from what the queue displays, which is the bug itself.
+function designParentGate(
+  db: DatabaseSync, projectId: string, id: string, actor: string, fromState: string, next: TicketUpdateFields,
+  storedRow: { description?: string } | undefined,
+): string | null {
+  if (!(fromState === "In Review" && next.state === "Done")) return null;
+  if (actor === "operator") return null; // the operator is never gated by §21a routing
+  const rows = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
+    .all(projectId) as unknown as Array<{ id: string; description: string; state: string }>;
+  const parentIds = designParentIds(db, projectId, rows);
+  const me = { id, description: next.description ?? storedRow?.description ?? "" };
+  if (!isDesignParent(me, parentIds)) return null;
+  // From here the §21a design rule DECIDES — see the DESIGN_PARENT_DECIDED sentinel at the call
+  // site. It cannot merely layer on top of the ownership gate: R1's whole content is that PM may
+  // close a design parent DESPITE the qa owner label the ticket carries from its type. Returning
+  // null here would let that owner gate refuse pm two lines later, which is the bug.
+
+  // R1 — PM may close a design parent. §21a gives design-parent verification to PM, and opQueue has
+  // always shown it in pm.verify; the write layer refused it because the ticket carried a `qa` owner
+  // label from its TYPE. Ownership does not decide a design gate; §21a does.
+  if (actor !== "pm")
+    return `verify gate: In Review → Done blocked — ${id} is a DESIGN PARENT (§21a), so only 'pm' or the operator may close it (got '${actor}'). PM owns design coherence; the type's qa/pm owner label does not decide this gate.`;
+
+  // R2 — …but not while its staged children sit in Backlog. Closing the parent is the design gate's
+  // PASS action, and §21a's pass action is "promote every staged child Backlog → Todo FIRST, THEN
+  // move the parent Done". Backlog is invisible to every dev pick-query, so a parent closed over
+  // Backlog children strands them with no owner and no signal.
+  const stranded = rows.filter((t) => t.state === "Backlog" && isChildOf(t, id, rows));
+  if (stranded.length)
+    return `verify gate: In Review → Done blocked — ${id} is a design parent with ${stranded.length} staged child(ren) still in Backlog (${stranded.map((t) => t.id).join(", ")}). §21a's pass action promotes every child Backlog → Todo FIRST, then closes the parent; Backlog is invisible to every dev pick-query, so closing now strands them.`;
+  return DESIGN_PARENT_DECIDED;
+}
+
+// A sentinel, not a message: "this is a design parent, pm is closing it, both rules passed — the
+// ownership gate must NOT also run." It never reaches a caller (the call site turns it into a pass).
+const DESIGN_PARENT_DECIDED = "\u0000design-parent-ok";
+
+// A child of `parentId`: it carries a Design: pointer that resolves to this parent — either directly
+// (`Design: parent <id>`) or through the doc slug the parent owns.
+function isChildOf(t: { id: string; description: string }, parentId: string, rows: Array<{ id: string; description: string }>): boolean {
+  const ptr = designPointerOf(t.description ?? "");
+  if (!ptr) return false;
+  const direct = /^parent\s+(\S+)/i.exec(ptr);
+  if (direct) return direct[1] === parentId;
+  const slug = docSlugOf(ptr);
+  if (!slug) return false;
+  const parent = rows.find((r) => r.id === parentId);
+  if (!parent) return false;
+  const parentPtr = designPointerOf(parent.description ?? "");
+  const parentSlug = (parentPtr ? docSlugOf(parentPtr) : null)
+    ?? (/(?:hubDoc:design\/|docs\/design\/)([A-Za-z0-9._-]+?)(?:\.md)?\b/i.exec(parent.description ?? "")?.[1] ?? null);
+  return parentSlug === slug;
+}
 
 function verifyGateRejection(actor: string, fromState: string, next: TicketUpdateFields, storedLabels: string[]): string | null {
   if (fromState === "In Progress" && next.state === "Done")
@@ -242,8 +309,11 @@ export function updateTicketRow(
   const storedLabels = storedRow ? (JSON.parse(storedRow.labels) as string[]) : [];
   const gate = terminalExitRejection(actor, fromState, resolved)
     ?? stagingDeployRejection(db, projectId, fromState, resolved)
+    ?? designParentGate(db, projectId, id, actor, fromState, resolved, storedRow)   // LOOP-345 (R1+R2)
     ?? verifyGateRejection(actor, fromState, resolved, storedLabels);
-  if (gate) return { ok: false, status: 400, error: gate };
+  // LOOP-345 R1: on a design parent the §21a rule is the WHOLE decision — a pass here means the
+  // ownership gate must not also refuse pm for the qa label the ticket carries from its type.
+  if (gate && gate !== DESIGN_PARENT_DECIDED) return { ok: false, status: 400, error: gate };
   const t = nowIso();
   db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
     .run(resolved.title, resolved.description, resolved.type, resolved.state, resolved.assignee, resolved.priority, resolved.labels, resolved.duplicate_of, resolved.related_to, t, id, projectId);
