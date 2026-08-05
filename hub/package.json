@@ -91,7 +91,7 @@
     "lifecycle-race": "node test/lifecycle-race.ts",
     "test": "node test/run-all.ts",
     "source-integrity": "node -e \"const cp=require('child_process');try{cp.execFileSync('python3',['../security/source_integrity.py','--whole-tree'],{stdio:'inherit'})}catch(e){if(e.code==='ENOENT'){console.warn('[source-integrity] python3 not found — check skipped');process.exit(0)}process.exit(e.status!=null?e.status:1)}\"",
-    "verify": "npm run typecheck && npm test && npm run source-integrity",
+    "verify": "node verify.mjs",
     "cli-tickets": "node test/cli-tickets.ts",
     "cli-agentops": "node test/cli-agentops.ts",
     "open-wip": "node test/open-wip.ts",
