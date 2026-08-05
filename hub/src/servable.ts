@@ -53,11 +53,18 @@ function isTodoServableFor(t: Ticket, actor: string): boolean {
 // slice". pm/qa/architect/stewards are NOT dev tiers.
 export const isDevTierActor = (actor: string): boolean =>
   actor === "dev" || actor === "senior-dev" || actor === "junior-dev";
+
+// servableSlice — a dev tier's SERVABLE work: its §5-ranked Todo slice (own assignee, `blocked` excluded, and —
+// for junior — `sensitive` excluded per LOOP-80 Child B) PLUS its own In Progress (the Step-0 orphan-resume
+// input) PLUS its own In Review (landing/repair only — a §12c fire-start pass: merge green, fix+repush red,
+// leave merged-but-unverified alone; LOOP-112). This is the SINGLE source both `opQueue` and the
+// scheduler's queue-depth fire-gate (LOOP-144) consume, so the gate can't grow a second, drifting copy of
+// "what is servable". Callers pass a dev-tier actor (isDevTierActor); a non-dev actor yields empty slices.
+// Output is summarized (no bodies). Hub issues NO network/gh calls — landing state is CLI-side only.
 export function servableSlice(db: DatabaseSync, projectId: string, actor: string): { todo: Ticket[]; inProgress: Ticket[]; inReview: Ticket[] } {
   const summary = (t: Ticket): Ticket => ({ ...t, description: "" });
   const byState = (state: string): Ticket[] =>
     (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state=? ORDER BY created_at").all(projectId, state) as unknown as TicketRow[]).map(toTicket);
-  const mine = (t: Ticket): boolean => actor === "dev" ? (t.assignee === null || t.assignee === "dev") : t.assignee === actor;
   // Layer-2 queue defense (design sensitive-routing §2 / LOOP-80 Child B): a residual sensitive+junior
   // row (written before the Layer-1 write gate or via a raw path) must never be served to junior-dev.
   const notSensitiveForJunior = (t: Ticket): boolean => actor !== "junior-dev" || !t.labels.includes("sensitive");
@@ -68,7 +75,7 @@ export function servableSlice(db: DatabaseSync, projectId: string, actor: string
   const inProgress = byState("In Progress").filter((t) => t.assignee === actor && notSensitiveForJunior(t)).map(summary);
   // inReview: landing/repair only — NOT a pick list (LOOP-112). Keyed on assignee===actor OR, for split-dev
   // tiers, the tier label (LOOP-244): a null-assignee InReview ticket whose tier label still names the actor
-  // is landable by Step 0.5 even if the flag off (default-off, zero new surface)
+  // is landable by Step 0.5 even if the assignee was cleared on handoff. The label fallback only applies
   // when assignee IS NULL — an explicitly-assigned ticket stays in its owner's slice only. Legacy `dev`
   // actor uses assignee only (actor==="dev" excluded from label-match) so null-assignee "dev" never bleeds in.
   const tierLabel = isDevTierActor(actor) && actor !== "dev";
