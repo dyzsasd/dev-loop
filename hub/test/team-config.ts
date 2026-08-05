@@ -425,6 +425,20 @@ ok(has(bk({ dir: "" }), "E18"), "E18: an empty dir is rejected");
 ok(has(bk({ dir: "   " }), "E18"), "E18: …as is a whitespace-only dir, which would resolve to the cwd");
 ok(has(bk({ dir: 7 }), "E18"), "E18: a non-string dir is rejected");
 
+// ── E08 repos.<ref>.ciIrrelevantPaths (LOOP-335) ──
+// This list decides whether a PR is EXEMPTED from a staleness trip, so a malformed entry silently
+// widens what gets merged without re-verification. Refused at load, where every other repo fact is.
+const cip = (v: unknown) => { const f = base(); (f.repos.portal as unknown as Record<string, unknown>).ciIrrelevantPaths = v; return f; };
+ok(!has(cip(["docs/STRATEGY.md", "docs/strategy-archive/"]), "E08"), "E08: a well-formed ciIrrelevantPaths is valid");
+ok(!has(cip([]), "E08"), "E08: an empty list is valid — it simply exempts nothing");
+ok(has(cip("docs/STRATEGY.md"), "E08"), "E08: a bare string (not an array) is rejected");
+ok(has(cip([1]), "E08"), "E08: a non-string element is rejected");
+ok(has(cip([""]), "E08"), "E08: an empty-string element is rejected");
+ok(has(cip(["   "]), "E08"), "E08: …as is a whitespace-only one");
+ok(has(cip(["/etc/passwd"]), "E08"), "E08: an absolute path is rejected — entries are repo-relative");
+ok(has(cip(["../outside/x.md"]), "E08"), "E08: a '..' traversal is rejected");
+ok(has(cip(["docs/**/*.md"]), "E08"), "E08: a glob is rejected — a glob language is a second thing to get wrong");
+
 // ── AC1: defaultBranch resolution — effectiveRepo fallback chain + resolveDefaultBranchForPath ──
 {
   const mkWsDb = (overrides: Partial<ReturnType<typeof base>["team"]>, repoOverrides?: Record<string, unknown>): Workspace => {
