@@ -2087,10 +2087,24 @@ date** — LLMs mis-compute ISO weeks at year boundaries (`2026-12-31` is ISO `2
 not `2026-W53`):
 
 ```
-TODAY=$(date +%F)          # 2026-06-19   — daily key
-WEEK=$(date +%G-W%V)       # 2026-W25     — ISO week-YEAR + ISO week (boundary-safe)
-MONTH=$(date +%Y-%m)       # 2026-06      — month key
+TODAY=$(date -u +%F)       # 2026-06-19   — daily key
+WEEK=$(date -u +%G-W%V)    # 2026-W25     — ISO week-YEAR + ISO week (boundary-safe)
+MONTH=$(date -u +%Y-%m)    # 2026-06      — month key
 ```
+
+**`-u` is load-bearing, not a style choice.** Every artifact these keys FILE is stamped in
+UTC — the fire ledger (`fires.jsonl` `ts`), the board (`created_at`/`updated_at`), and the
+strategy doc all use `toISOString()`. Without `-u` the reports tree is the only thing dated
+in the machine's LOCAL zone, so on any box east of UTC the two disagree for part of every
+day. Measured on a UTC+2 box at `2026-07-31T23:30Z`: qa and sweep filed that day's work
+into `2026-08-01.md` while pm filed the same day's work into `2026-07-31.md` — three
+reports written within 26 minutes of each other, describing the same fires, in two
+different files. The misfiled reports say so themselves (`## 2026-08-01 (fire timestamps
+~22:0x UTC per ticket writes)`).
+
+It also strands a finalize: a daily whose date can never be "today" again cannot be rolled
+up by the cadence rule below, because that rule only ever finalizes a PRIOR period relative
+to a `TODAY` the local clock will not produce twice.
 
 **Cold start / empty tree.** If a level dir is empty or absent (first fire ever, or no
 prior file), there is **no prior period to roll up** — just create today's daily and

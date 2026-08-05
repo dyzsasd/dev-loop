@@ -1241,6 +1241,69 @@ try {
     ok(/dev-loop seed orphan/.test(orphanDup.out), "LOOP-301: a config project with NO hub row is told to `dev-loop seed`, not to 'tune it'");
   }
 
+  // ── LOOP-255: the remote-show-origin fallback finally gets exercised ─────────────────────────
+  // LOOP-100 added defaultBranch detection with two rungs: `git symbolic-ref refs/remotes/origin/HEAD`
+  // first, falling back to parsing `HEAD branch:` out of `git remote show origin`. All eight of its
+  // tests drive it through `add-repo --detect --remote <url>`, which runs `git clone` — and clone
+  // ALWAYS populates refs/remotes/origin/HEAD. So every existing test takes the symbolic-ref rung and
+  // the fallback has never been executed by the suite.
+  //
+  // It is not a dead path: a repo created with `git remote add` + `git fetch` (rather than clone)
+  // never gets origin/HEAD, which is a plausible onboarding shape — `add-repo --detect` against an
+  // already-existing local checkout. Behaviour was verified correct by hand when the ticket was
+  // filed; this is the coverage, so a refactor cannot silently delete the rung.
+  {
+    const fbRoot = join(tmp, "loop255");
+    const originDir = join(fbRoot, "origin.git");
+    const checkout = join(fbRoot, "checkout");
+    mkdirSync(originDir, { recursive: true });
+    mkdirSync(checkout, { recursive: true });
+    const g = (dir: string, ...args: string[]) =>
+      spawnSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args], { encoding: "utf8" });
+
+    // A bare origin whose HEAD is a NON-default name, so a passing test cannot be explained by a
+    // hardcoded "main"/"master" guess.
+    spawnSync("git", ["init", "--bare", "-q", "-b", "trunk", originDir], { encoding: "utf8" });
+    // Seed it through a throwaway clone, then build the real checkout WITHOUT clone.
+    const seedDir = join(fbRoot, "seed");
+    spawnSync("git", ["clone", "-q", originDir, seedDir], { encoding: "utf8" });
+    g(seedDir, "commit", "--allow-empty", "-qm", "base");
+    g(seedDir, "push", "-q", "origin", "trunk");
+
+    spawnSync("git", ["init", "-q", "-b", "trunk", checkout], { encoding: "utf8" });
+    g(checkout, "remote", "add", "origin", originDir);
+    g(checkout, "fetch", "-q", "origin");
+
+    // The precondition the whole ticket rests on: NO origin/HEAD, so the first rung cannot answer.
+    //
+    // The ticket assumed `remote add` + `fetch` never sets it. That was true on the git this was
+    // filed against and is NOT true on CI's — my precondition assertion caught exactly that, which
+    // is why it is written as an assertion rather than a comment. Since the point is to exercise the
+    // FALLBACK, the state it exists for is now guaranteed rather than inherited from a git version:
+    // delete the ref if the local git created one. The assertion stays, now verifying the SETUP.
+    // origin/HEAD is a SYMBOLIC ref, so `update-ref -d` does not remove it — that was my first
+    // attempt and CI caught it a second time. `symbolic-ref -d` is the one that does; the
+    // `remote set-head --delete` is belt-and-braces for git versions that spell it differently.
+    g(checkout, "symbolic-ref", "-d", "refs/remotes/origin/HEAD");
+    g(checkout, "remote", "set-head", "origin", "--delete");
+    g(checkout, "update-ref", "-d", "refs/remotes/origin/HEAD");
+    const sym = g(checkout, "symbolic-ref", "--short", "refs/remotes/origin/HEAD");
+    ok(sym.status !== 0,
+      "LOOP-255 precondition: the checkout under test has NO refs/remotes/origin/HEAD, so the symbolic-ref rung cannot answer and the fallback is what runs");
+
+    const facts = detectRepoFacts(checkout);
+    ok(facts.defaultBranch === "trunk",
+      `LOOP-255: the 'git remote show origin' fallback reads the real HEAD branch (got ${JSON.stringify(facts.defaultBranch)}, want "trunk")`);
+
+    // And the control: the SAME helper on a cloned checkout still answers from the fast first rung.
+    const cloned = join(fbRoot, "cloned");
+    spawnSync("git", ["clone", "-q", originDir, cloned], { encoding: "utf8" });
+    ok(g(cloned, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").status === 0,
+      "LOOP-255 control: a CLONED checkout does have origin/HEAD — which is why the fallback was never exercised");
+    ok(detectRepoFacts(cloned).defaultBranch === "trunk",
+      "LOOP-255 control: both rungs agree on the same repo");
+  }
+
   console.log(fails === 0 ? "\nTEAM_EDIT_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
