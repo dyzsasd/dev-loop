@@ -12,6 +12,7 @@ import { openDb, isToolWriteEventData } from "../src/db.ts";
 // LOOP-300 regression: a --strict run that evaluated NEITHER axis must not report a clean pass,
 // while a genuine outage still degrades to one (§3.4). skipClass/unevaluatedHold are the classifier
 // the distinction rests on; registryGhRepos is the cwd-independent repo resolution (AC3).
+import { prTicketIds } from "../src/pr-tickets.ts"; // LOOP-150
 import { mergeGuard, skipClass, unevaluatedHold, registryGhRepos, buildCommentBody } from "../src/merge-guard.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
@@ -204,6 +205,38 @@ try {
   // AC2: agent thread author → no trip
   const rAgentThread = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: ["bob"], exec: makePrExec(prEmpty, gqlUnresolvedThread("bob")) });
   ok(!rAgentThread.forgeReview.trip, "forge: unresolved thread by agent login → no trip (AC2)");
+
+  // …then through mergeGuard itself, with the injected exec (no live network).
+  const prTwo = {
+    headRefName: "dev-loop/LOOP-142",
+    commits: [{ messageHeadline: "fix(x): something (LOOP-142)", messageBody: "" },
+              { messageHeadline: "fix(y): the other", messageBody: "Also closes LOOP-148." }],
+    title: "fix: two things", body: "",
+    reviews: [], reviewDecision: "APPROVED", statusCheckRollup: [], mergeStateStatus: "CLEAN",
+  };
+  const rTwo = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prTwo, gqlNoThreads) });
+  ok((rTwo.boardState.claimedTicketIds ?? []).join(",") === "LOOP-142,LOOP-148",
+    `LOOP-150: mergeGuard reports every claimed id (got ${(rTwo.boardState.claimedTicketIds ?? []).join(",")})`);
+  ok(rTwo.boardState.ticketId === "LOOP-142",
+    "LOOP-150: …and the PRIMARY stays the branch-derived id — the board axis gates on what it always did");
+
+  // A branch with no parseable id: [] and skipped, distinguishable from a clean axis.
+  const prNone = { ...prTwo, headRefName: "feat/shortdrama-devloop", commits: [{ messageHeadline: "chore: no ids here", messageBody: "" }] };
+  const rNone = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prNone, gqlNoThreads) });
+  ok((rNone.boardState.claimedTicketIds ?? []).length === 0, "LOOP-150: a PR claiming nothing resolves to []");
+  ok(rNone.boardState.skipped === true && rNone.boardState.trip === false,
+    "LOOP-150: …and the board axis is SKIPPED, not tripped — inapplicable is not a failure");
+  ok(rNone.boardState.skipReason === "pr-not-a-loop-branch",
+    `LOOP-150: …with the reason named, so skipped is distinguishable from clean (${rNone.boardState.skipReason})`);
+
+  // gh erroring ⇒ degrade, never throw.
+  const failExec: ExecFn = () => ({ ok: false, stdout: "", stderr: "gh: command not found" });
+  let threw = "";
+  let rFail: ReturnType<typeof mergeGuard> | undefined;
+  try { rFail = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: failExec }); } catch (e) { threw = (e as Error).message; }
+  ok(threw === "", `LOOP-150: gh failing does not throw (${threw})`);
+  ok((rFail?.boardState.claimedTicketIds ?? []).length === 0 && rFail?.boardState.skipped === true,
+    "LOOP-150: …it degrades to no claims and a skipped axis, exactly as before this change");
 
   // AC5: gh exec throws (ENOENT — gh not on PATH) → skip, no trip
   const rEnoent = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }); } });
@@ -935,6 +968,31 @@ exit 0
   // a dev hitting either one has the same next step.
   const remedyUses = (src.match(/\$\{REVIEW_REMEDY\}/g) ?? []).length;
   ok(remedyUses === 2, `LOOP-241: both forge-review objections carry it (got ${remedyUses})`);
+}
+
+// ── LOOP-150: a PR claims every ticket in its branch, commits AND title/body ─────────────────────
+// Every PR→ticket resolution here was one-branch-one-ticket, so a PR carrying a second ticket's fix
+// made that ticket read as having NO PR AT ALL. PR #97 shipped LOOP-148's fix on
+// `dev-loop/LOOP-142` and LOOP-148 read as unlanded while its code was already on main.
+{
+  // The pure resolver first, where every axis is unambiguous.
+  ok(prTicketIds({ branch: "dev-loop/LOOP-142" }).join(",") === "LOOP-142",
+    "LOOP-150: a branch-only PR resolves to its one id");
+  const real = prTicketIds({
+    branch: "dev-loop/LOOP-142",
+    commitMessages: ["fix(x): something (LOOP-142)", "fix(y): the other thing\n\nAlso closes LOOP-148."],
+  });
+  ok(real.join(",") === "LOOP-142,LOOP-148",
+    `LOOP-150: PR #97's real shape resolves to BOTH ids, branch-derived FIRST (got ${real.join(",")})`);
+  ok(prTicketIds({ branch: "feat/shortdrama-devloop" }).length === 0,
+    "LOOP-150: a branch carrying no parseable id resolves to [] — not a guess");
+  ok(prTicketIds({ branch: "dev-loop/LOOP-1", commitMessages: ["LOOP-1 again", "LOOP-1 once more"] }).join(",") === "LOOP-1",
+    "LOOP-150: repeated mentions dedupe");
+  ok(prTicketIds({ branch: "chore/none", title: "carries LOOP-9", body: "and LOOP-10" }).join(",") === "LOOP-9,LOOP-10",
+    "LOOP-150: title and body are read too, in order");
+  ok(prTicketIds({ branch: "dev-loop/LOOP-2", commitMessages: ["LOOP-3"], title: "LOOP-2 in the title" }).join(",") === "LOOP-2,LOOP-3",
+    "LOOP-150: the branch id stays FIRST even when a commit names another — it is the id the PR was cut for");
+
 }
 
 console.log(fails ? `${fails} CHECK(S) FAILED` : "merge-guard: all checks passed");
