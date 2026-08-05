@@ -59,6 +59,8 @@ export const DOCTOR_CODES: readonly DoctorCode[] = [
   { code: "W29", name: "tombstoned-project divergence", source: "doctor.ts" },
   { code: "W30", name: "lessons library never written — no cross-fire learning reaches any fire", source: "doctor.ts" },
   { code: "W31", name: "dev tier starved — idle Todo slots with zero promotable Backlog", source: "doctor.ts" },
+  { code: "W32", name: "board never snapshotted, or the snapshot cadence stopped", source: "doctor.ts" },
+  { code: "W33", name: "shared checkout has uncommitted tracked modifications — destroyable by another fire", source: "doctor.ts" },
 ] as const;
 
 export const DOCTOR_CODE_SET: ReadonlySet<string> = new Set(DOCTOR_CODES.map((c) => c.code));

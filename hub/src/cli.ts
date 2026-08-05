@@ -33,6 +33,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "with-repo-lock": ["with-repo-lock"],            // serialize base-clone mutations on a shared repo
   notify:           ["comms"],                     // push a message to the team's slack/lark channel
   "push-guard":     ["push-guard"],                // P1-2: pre-push ride-along check (canceled-ticket commits)
+  "stage-guard":    ["stage-guard"],               // LOOP-320: pre-COMMIT check — refuse another fire's edits in the staged set
   metrics:          ["metrics"],                   // team KPIs from fires.jsonl (+ hub board on service)
   quality:          ["quality"],                   // per-function CRAP report/gate + mutation probe (quality-gauntlet)
   doctor:           ["server", "doctor"],
@@ -98,6 +99,8 @@ Usage: dev-loop <command> [args]
   notify [--level info|warn|error] [--title T] <text>   push to the team's slack/lark channel (team.comms)
   next-project --agent <a>    print the agent's next rotation pick (shared cursor with run; for /loop rows)
   with-repo-lock <ref> -- <cmd>   run a command holding a shared repo's base-clone lock
+  stage-guard [--repo <d>] [--override "<why>"]         pre-COMMIT check: refuse staged files that were
+                                                        already uncommitted before this run started
   push-guard [--repo <dir>] [--branch <b>] [--strict]   pre-push ride-along check: flag unpushed commits
                               whose referenced tickets are Canceled/Duplicate (P1-2; --strict exits 1 on findings)
   worktree add <id> [--repo <ref>]   create a dev worktree on branch dev-loop/<id> based at origin/<defaultBranch>

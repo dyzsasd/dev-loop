@@ -13,6 +13,9 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
 import { designParentIds, isDesignParent, designPointerOf, docSlugOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
+import { handoffGateRejection } from "./handoff-gate.ts"; // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
+import { tryResolveWorkspace } from "./workspace.ts";
+import { effectiveRepo, reposOfProject } from "./team-config.ts";
 
 export type WriteResult = { ok: true; id: string } | { ok: false; status: number; error: string };
 
@@ -167,6 +170,32 @@ function isChildOf(t: { id: string; description: string }, parentId: string, row
   const parentSlug = (parentPtr ? docSlugOf(parentPtr) : null)
     ?? (/(?:hubDoc:design\/|docs\/design\/)([A-Za-z0-9._-]+?)(?:\.md)?\b/i.exec(parent.description ?? "")?.[1] ?? null);
   return parentSlug === slug;
+}
+
+/**
+ * The repo the handoff gate (LOOP-309) measures against: the project's primary checkout and its
+ * `landing` mode.
+ *
+ * Returns an empty object on ANY failure — no workspace, no repo, an unreadable config. The gate is
+ * then silent, which is the right posture for a check whose input is missing: library callers pass a
+ * bare dbPath with no workspace at all (the LOOP-284 lesson), and refusing every handoff for them
+ * would break the write layer for everyone who is not running a loop.
+ */
+function landingContextFor(db: DatabaseSync, projectId: string): { repoRoot?: string; landing?: "pr" | "direct" } {
+  try {
+    const ws = tryResolveWorkspace();
+    if (!ws) return {};
+    // The gate is configured per REPO, and repos are attached to a project by its config KEY — the
+    // write layer only carries the row's UUID, so translate here rather than threading a second
+    // identifier through every caller.
+    const row = db.prepare("SELECT key FROM projects WHERE id=?").get(projectId) as { key?: string } | undefined;
+    if (!row?.key) return {};
+    const repos = reposOfProject(ws, row.key);
+    const primary = repos.find((r) => r.role === "primary") ?? repos[0];
+    if (!primary) return {};
+    const r = effectiveRepo(ws, primary.ref);
+    return { repoRoot: r.absPath, landing: r.landing };
+  } catch { return {}; }
 }
 
 function verifyGateRejection(actor: string, fromState: string, next: TicketUpdateFields, storedLabels: string[]): string | null {
@@ -356,6 +385,7 @@ export function updateTicketRow(
   const gate = terminalExitRejection(actor, fromState, resolved)
     ?? stagingDeployRejection(db, projectId, fromState, resolved)
     ?? designParentGate(db, projectId, id, actor, fromState, resolved, storedRow)   // LOOP-345 (R1+R2)
+    ?? handoffGateRejection({ id, fromState, toState: resolved.state, actor, ...landingContextFor(db, projectId) })  // LOOP-309
     ?? verifyGateRejection(actor, fromState, resolved, storedLabels);
   // LOOP-345 R1: on a design parent the §21a rule is the WHOLE decision — a pass here means the
   // ownership gate must not also refuse pm for the qa label the ticket carries from its type.

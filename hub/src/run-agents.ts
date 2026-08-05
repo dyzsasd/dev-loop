@@ -21,6 +21,7 @@ import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { AGENT_GROUPS } from "./agent-roster.ts"; // LOOP-184: group aliases shared with the bundle-load validator — a zod-free leaf (roster still sourced from seed.ts AGENT_HANDLES)
+import { preflightTreeSnapshot } from "./tree-snapshot.ts"; // LOOP-312: pre-fire copy of the shared checkout — a zod-free leaf, for the same LOOP-58 reason as servable.ts below
 import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
@@ -1673,6 +1674,11 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence, agentsWithCadence(ws.file.team.agents as Record<string, { cadence?: string }> | undefined));
   applyConfigTimeouts(opts, (agent) => ws.file.team.agents?.[agent]);
   preflightOpencodeModels(opts, cfg, ws.root, candidates.map((c) => c.key)); // zero-token: catch dead models/providers before the first fire
+  // LOOP-312 — the shared checkout is a mutable global that no fire owns. Copy its uncommitted
+  // TRACKED work before the first fire launches, and record which paths were already dirty, so
+  // (a) another fire's `git checkout` cannot silently destroy it, and (b) the ship guard (LOOP-320)
+  // can tell a fire's own edits from ones that were already sitting in the tree.
+  preflightTreeSnapshot(ws.root, wsStateRoot(ws), (m) => console.log(m));
   // Prod-monitoring guard: a team with health probes but no scheduled ops agent runs blind.
   const hasProbes = Object.values(ws.file.repos).some((r) => !!(r.ops?.checks?.length) || !!r.deploy?.healthCheck || Object.values(r.deploy?.environments ?? {}).some((e) => !!e?.healthCheck));
   if (hasProbes && !opts.agents.includes("ops")) console.warn(`dev-loop run: WARNING health probes are configured but 'ops' is not scheduled — prod incidents will go unnoticed. Launch with --agents core,ops (or all).`);
