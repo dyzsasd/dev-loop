@@ -303,6 +303,57 @@ function readBundle(file: string): { manifest: BundleManifest; payload: Payload 
   return { manifest, payload };
 }
 
+
+// LOOP-316 — the force-reseed gate, extracted from bundleLoad so the ratchet stays green.
+// Returns TRUE when the caller must stop (dry-launch preview). Refusals exit via die().
+function gateForceReseed(
+  root: string, cfgPath: string, secretsPath: string, ocPath: string,
+  incomingCfg: string, payload: Payload, opts: { forceReseed: boolean; noRun?: boolean; argv?: readonly string[] },
+): boolean {
+  const liveWs = tryResolveWorkspace(root);
+  const verdict = liveWs ? workspaceIsolationVerdict(liveWs, opts.argv ?? process.argv.slice(2)) : null;
+
+  // --dry-launch performs ZERO writes and reports what WOULD change, derived from the SAME verdict
+  // object the live path enforces (LOOP-290: a preview computed differently from the thing it
+  // previews is not a preview).
+  if (opts.noRun) {
+    console.log("--dry-launch: bundle load preview — NOTHING is written");
+    for (const [label, path, incoming] of [
+      ["dev-loop.json", cfgPath, incomingCfg],
+      ["secrets.env", secretsPath, payload.files["secrets.env"] ?? ""],
+      ["opencode.json", ocPath, payload.files["opencode.json"]],
+    ] as const) {
+      if (incoming === undefined) continue;
+      console.log(`  ${label}: ${existsSync(path) ? "PRESENT → would be OVERWRITTEN" : "absent → would be created"}`);
+    }
+    console.log(`  isolation: ${verdict?.refusal ? `REFUSED — ${verdict.refusal}` : "allowed (token present)"}`);
+    return true;
+  }
+  if (verdict?.refusal) die(verdict.refusal, 4);
+
+  // Never REDUCE live secrets to nothing without saying so. Measured: an empty bundle truncates a
+  // populated secrets.env to 0 bytes. Key NAMES may be printed; values never (§16).
+  const incomingSecrets = payload.files["secrets.env"] ?? "";
+  const liveSecrets = existsSync(secretsPath) ? readFileSync(secretsPath, "utf8") : "";
+  const namesOf = (t: string) => t.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).map((l) => l.split("=")[0]!.trim()).filter(Boolean);
+  const dropped = namesOf(liveSecrets).filter((n) => !namesOf(incomingSecrets).includes(n));
+  if (dropped.length)
+    die(`refusing --force-reseed: it would DROP ${dropped.length} live secret key(s) that the bundle does not carry — ${dropped.join(", ")} (names only; values are never printed, §16). Nothing has been written. Re-export the bundle with those keys, or remove them deliberately first.`, 4);
+
+  // A --force-reseed that proceeds keeps a timestamped copy of everything it replaces.
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const backups: string[] = [];
+  for (const [label, path] of [["dev-loop.json", cfgPath], ["secrets.env", secretsPath], ["opencode.json", ocPath]] as const) {
+    if (!existsSync(path)) continue;
+    const dest = join(root, ".dev-loop", `${label}.pre-reseed-${stamp}`);
+    writeFileSync(dest, readFileSync(path), { mode: label === "secrets.env" ? 0o600 : 0o644 });
+    if (label === "secrets.env") chmodSync(dest, 0o600);
+    backups.push(dest);
+  }
+  if (backups.length) console.log(`--force-reseed: kept a copy of what is being replaced —\n  ${backups.join("\n  ")}`);
+  return false;
+}
+
 export async function bundleLoad(file: string, dir: string, opts: { forceReseed: boolean; noRun?: boolean; argv?: readonly string[] }): Promise<number> {
   const { manifest, payload } = readBundle(file);
 
@@ -343,51 +394,11 @@ export async function bundleLoad(file: string, dir: string, opts: { forceReseed:
   const ocPath = join(root, "opencode.json");
   const firstMaterialization = !existsSync(cfgPath);
 
-  // LOOP-316 — an OVERWRITE of a live workspace is a destructive verb and is gated like one. First
-  // materialization (no dev-loop.json) is not destructive and is untouched: there is nothing to lose.
-  if (!firstMaterialization && opts.forceReseed) {
-    const liveWs = tryResolveWorkspace(root);
-    const verdict = liveWs ? workspaceIsolationVerdict(liveWs, opts.argv ?? process.argv.slice(2)) : null;
-
-    // --dry-launch performs ZERO writes on this leg and reports what WOULD change, derived from the
-    // SAME verdict object the live path enforces (LOOP-290's rule: a preview computed differently
-    // from the thing it previews is not a preview).
-    if (opts.noRun) {
-      console.log("--dry-launch: bundle load preview — NOTHING is written");
-      for (const [label, path, incoming] of [
-        ["dev-loop.json", cfgPath, incomingCfg],
-        ["secrets.env", secretsPath, payload.files["secrets.env"] ?? ""],
-        ["opencode.json", ocPath, payload.files["opencode.json"]],
-      ] as const) {
-        if (incoming === undefined) continue;
-        console.log(`  ${label}: ${existsSync(path) ? "PRESENT → would be OVERWRITTEN" : "absent → would be created"}`);
-      }
-      console.log(`  isolation: ${verdict?.refusal ? `REFUSED — ${verdict.refusal}` : "allowed (token present)"}`);
-      return 0;
-    }
-    if (verdict?.refusal) die(verdict.refusal, 4);
-
-    // Never REDUCE live secrets to nothing without saying so. Measured: an empty bundle truncates a
-    // populated secrets.env to 0 bytes. Key NAMES may be printed; values never (§16).
-    const incomingSecrets = payload.files["secrets.env"] ?? "";
-    const liveSecrets = existsSync(secretsPath) ? readFileSync(secretsPath, "utf8") : "";
-    const namesOf = (t: string) => t.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).map((l) => l.split("=")[0]!.trim()).filter(Boolean);
-    const dropped = namesOf(liveSecrets).filter((n) => !namesOf(incomingSecrets).includes(n));
-    if (dropped.length)
-      die(`refusing --force-reseed: it would DROP ${dropped.length} live secret key(s) that the bundle does not carry — ${dropped.join(", ")} (names only; values are never printed, §16). Nothing has been written. Re-export the bundle with those keys, or remove them deliberately first.`, 4);
-
-    // A --force-reseed that proceeds keeps a timestamped copy of everything it replaces.
-    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-    const backups: string[] = [];
-    for (const [label, path] of [["dev-loop.json", cfgPath], ["secrets.env", secretsPath], ["opencode.json", ocPath]] as const) {
-      if (!existsSync(path)) continue;
-      const dest = join(root, ".dev-loop", `${label}.pre-reseed-${stamp}`);
-      writeFileSync(dest, readFileSync(path), { mode: label === "secrets.env" ? 0o600 : 0o644 });
-      if (label === "secrets.env") chmodSync(dest, 0o600);
-      backups.push(dest);
-    }
-    if (backups.length) console.log(`--force-reseed: kept a copy of what is being replaced —\n  ${backups.join("\n  ")}`);
-  }
+  // LOOP-316 — extracted, not inlined: adding this gate inline took bundleLoad to CC 63 / CRAP 128.1
+  // and red-lined the ratchet. Returns true when the caller should STOP (a dry-launch preview, which
+  // writes nothing by definition); refusals die() inside.
+  if (!firstMaterialization && opts.forceReseed
+      && gateForceReseed(root, cfgPath, secretsPath, ocPath, incomingCfg, payload, opts)) return 0;
 
   if (firstMaterialization || opts.forceReseed) {
     writeFileSync(cfgPath, incomingCfg);
