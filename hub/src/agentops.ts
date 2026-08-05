@@ -222,7 +222,6 @@ function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
     ).map(summary);
     const blocked = open.filter((t) => t.labels.includes("blocked"));
     if (actor === "qa") return okR({ agent: actor, verify, blocked: blocked.map(summary) });
-    const todoOpen = open.filter((t) => t.state === "Todo" && !t.labels.includes("blocked"));
     return okR({
       agent: actor,
       verify,
