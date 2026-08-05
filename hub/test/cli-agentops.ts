@@ -111,6 +111,42 @@ const parkedComments = cli(["comments", parkedId]);
 ok(parkedComments.status === 0 && j(parkedComments.stdout).some((c: any) => c.body === "Blocked-by: CW-1\nBlocked-by: CW-2" && c.author === "pm"),
   "ticket create --blocked-by → writes the machine-parseable 'Blocked-by: <id>' marker comment (one line per id, §9c)");
 
+// ── LOOP-190: the create path writes BOTH halves of what it was asked to record ────────────────
+// `--blocked-by` wrote the §9c LEDGER edge and never set the `blocked` ENFORCEMENT label, so the
+// ticket it had just recorded as blocked was fully servable to its dev tier — every serving path
+// filters on the label and none reads the marker. Twice on this board, both on staged design
+// children, both caught by hand at a gate. The split itself is deliberate and preserved; this is
+// the create path writing both halves.
+ok(parked.status === 0 && (j(parked.stdout).labels as string[]).includes("blocked"),
+  `LOOP-190: --blocked-by ALSO sets the 'blocked' label (got ${JSON.stringify(j(parked.stdout).labels)})`);
+const notParked = cli(["ticket", "create", "--title", "No edge", "--type", "Improvement"]);
+ok(notParked.status === 0 && !(j(notParked.stdout).labels as string[]).includes("blocked"),
+  "LOOP-190: a create WITHOUT --blocked-by is untouched — the label is not added unconditionally");
+const parkedWithLabels = cli(["ticket", "create", "--title", "Edge plus labels", "--type", "Improvement", "--labels", "dev-loop,qa", "--blocked-by", "CW-9"]);
+const pwl = j(parkedWithLabels.stdout).labels as string[];
+ok(parkedWithLabels.status === 0 && pwl.includes("blocked") && pwl.includes("dev-loop") && pwl.includes("qa"),
+  `LOOP-190: it ADDS to an explicit --labels set rather than replacing it (got ${JSON.stringify(pwl)})`);
+
+// ── LOOP-287: edge RETIREMENT finally has an emitter ───────────────────────────────────────────
+// Creation has been correct by construction since §9c shipped; retirement was 100% hand-typed prose
+// through `comment add`, which validates nothing. blocked-by.ts anchors the keyword to the START of
+// a line — deliberately, and asserted in its own suite — so a marker written mid-sentence or inside
+// **bold** is silently discarded and the edge stays live. 4 of the 6 retirements ever written on
+// this board were lost exactly that way.
+const retire = cli(["ticket", "update", parkedId, "--unblocked-by", "CW-1,CW-2"]);
+ok(retire.status === 0, `LOOP-287: ticket update --unblocked-by → exit 0 (got ${retire.status}) ${retire.stderr.slice(0, 160)}`);
+const retireComments = cli(["comments", parkedId]);
+const bodies = retireComments.status === 0 ? j(retireComments.stdout).map((c: any) => c.body) : [];
+ok(bodies.some((b: string) => b === "Unblocked-by: CW-1\nUnblocked-by: CW-2"),
+  `LOOP-287: it writes the marker in the ONE bare-line form the parser reads (got ${JSON.stringify(bodies)})`);
+// The form is what matters: every line must START with the keyword, or blocked-by.ts ignores it.
+const retiredBody = bodies.find((b: string) => /Unblocked-by/.test(b)) ?? "";
+ok(retiredBody.split("\n").every((l: string) => /^Unblocked-by: /.test(l)),
+  "LOOP-287: every emitted line is keyword-first — a mid-sentence marker is what the parser discards");
+const noRetire = cli(["ticket", "update", parkedId, "--priority", "3"]);
+ok(noRetire.status === 0 && j(cli(["comments", parkedId]).stdout).filter((c: any) => /Unblocked-by/.test(c.body)).length === 1,
+  "LOOP-287: an update WITHOUT --unblocked-by writes no marker");
+
 // LOOP-11: ticket create --state default (Backlog) and explicit override
 const noState = cli(["ticket", "create", "--title", "Default state test", "--type", "Improvement"]);
 ok(noState.status === 0 && j(noState.stdout).state === "Backlog",

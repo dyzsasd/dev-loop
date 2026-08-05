@@ -183,7 +183,7 @@ dev-loop ticket <id> [--json]        read-only: show one ticket — detail + com
 # save_issue (create)
 dev-loop ticket create --title T --type Bug|Feature|Improvement [--state S] [--description TEXT|'-'] [--description-file F]
                        [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
-    --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes §9c marker comment ('Blocked-by: <id>') after create.
+    --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes the §9c marker comment ('Blocked-by: <id>') AND sets the 'blocked' label (LOOP-190).
 
 # save_comment
 dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)
