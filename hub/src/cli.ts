@@ -27,6 +27,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   up:               ["up"],                        // one-click: local operator console / --bundle headless load / --attach remote hub
   attach:           ["up", "--attach"],            // sugar: `dev-loop attach <url>` ≡ `dev-loop up --attach <url>` (§6.0)
   bundle:           ["bundle"],                    // export — the encrypted move/backup artifact (one-click §4)
+  board:            ["board"],                     // LOOP-338: the board-only snapshot artifact + retention
   hub:              ["hub"],                        // start | stop | status | ensure — the workspace hub daemon (service)
   "next-project":   ["rotation"],                  // print the next project for an agent's fire (shared WRR cursor)
   "with-repo-lock": ["with-repo-lock"],            // serialize base-clone mutations on a shared repo
@@ -90,6 +91,7 @@ Usage: dev-loop <command> [args]
                               interactive operator-console chat (setup happens by talking, not shell);
                               --bundle <f> = headless remote load → run; --attach <url> = console → remote hub
   bundle export …             author the encrypted move/backup artifact (config+secrets+hub.db; age)
+  board snapshot|snapshots    the BOARD-only backup (hub.db, never a secret) + retention by embedded timestamp
   hub start|stop|status|ensure   workspace hub daemon lifecycle (service backend; stop checkpoints the WAL)
   metrics [--window 7d] [--json] [--context]   team KPIs — fire success from fires.jsonl (+ board KPIs
                               on service); --context = the per-agent per-fire context bill (§0a)
