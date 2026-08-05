@@ -1320,7 +1320,16 @@ const activeChildren = new Set<RunnerChild>();
 // built-in DEFAULT_INTERVALS. Previously `cadence` was seeded by `team init` and documented but NEVER
 // read — a dead knob whose silent default (10m ops) contradicted the seeded value. A malformed cadence
 // warns and keeps the default (a config typo must not kill the loop).
-function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string | undefined): void {
+// LOOP-90 — `configured` is the FULL set of agents carrying a cadence in config, not just the ones
+// in the run set. The loop below iterates only the SELECTED agents, so a cadence configured for any
+// other agent was dropped with no log line and no warning — and `team init` seeds FOUR cadences into
+// every new workspace while the default run set (`core`) contains exactly one of them. The config was
+// well-formed, correctly spelled, semantically meaningful, and written by the product's own `init`.
+//
+// The output asymmetry IS the bug's whole surface: an applied cadence is confirmed on stdout, a
+// malformed one is warned about, and a DROPPED one said nothing at all — the one case where the
+// operator's intent was discarded silently.
+function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string | undefined, configured: readonly string[] = []): void {
   for (const agent of opts.agents) {
     if (opts.intervalsExplicit.has(agent)) continue;              // --interval wins
     const cad = cadenceFor(agent);
@@ -1331,6 +1340,17 @@ function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string 
     opts.intervals[agent] = parseDuration(cad.trim());
     console.log(`dev-loop run: cadence ${agent}=${formatDuration(opts.intervals[agent])} (from config)`);
   }
+  // The third case, previously silent. Named once, with the remedy, so the operator can tell a
+  // cadence that is RUNNING from one that merely exists in the file.
+  const selected = new Set<string>(opts.agents);
+  const dropped = configured.filter((a) => !selected.has(a));
+  if (dropped.length)
+    console.warn(`dev-loop run: ${dropped.length} configured cadence(s) NOT APPLIED — ${dropped.join(", ")} ${dropped.length === 1 ? "is" : "are"} outside this run's agent set (${opts.agents.join(",")}), so ${dropped.length === 1 ? "it" : "they"} will never fire. Add ${dropped.length === 1 ? "it" : "them"} with --agents, or remove the cadence from config.`);
+}
+
+// The agents carrying a cadence in a config block — the input LOOP-90's dropped-cadence warning needs.
+function agentsWithCadence(agents: Record<string, { cadence?: string }> | undefined): string[] {
+  return Object.entries(agents ?? {}).filter(([, c]) => typeof c?.cadence === "string" && c.cadence.trim() !== "").map(([a]) => a);
 }
 
 // Config-driven per-agent fire/stall timeouts: per-agent config > explicit CLI flag > per-lane default.
@@ -1418,7 +1438,8 @@ async function main(): Promise<void> {
 
   const cfg = readProjects(opts);
   const project = resolveProject(opts, cfg);
-  applyConfigCadence(opts, (agent) => (cfg?.projects?.[project] as { agents?: Record<string, { cadence?: string }> } | undefined)?.agents?.[agent]?.cadence);
+  const projAgents = (cfg?.projects?.[project] as { agents?: Record<string, { cadence?: string }> } | undefined)?.agents;
+  applyConfigCadence(opts, (agent) => projAgents?.[agent]?.cadence, agentsWithCadence(projAgents));
   applyConfigTimeouts(opts, (agent) => (cfg?.projects?.[project] as { agents?: Record<string, AgentLaunchConfig> } | undefined)?.agents?.[agent]);
   const cwd = resolveCwd(opts, cfg, project);
   if (!existsSync(cwd)) die(`cwd does not exist: ${cwd}`, 1);
@@ -1649,7 +1670,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   }
 
   console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
-  applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence);
+  applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence, agentsWithCadence(ws.file.team.agents as Record<string, { cadence?: string }> | undefined));
   applyConfigTimeouts(opts, (agent) => ws.file.team.agents?.[agent]);
   preflightOpencodeModels(opts, cfg, ws.root, candidates.map((c) => c.key)); // zero-token: catch dead models/providers before the first fire
   // Prod-monitoring guard: a team with health probes but no scheduled ops agent runs blind.
