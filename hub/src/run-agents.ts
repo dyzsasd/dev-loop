@@ -29,6 +29,7 @@ import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "./seen-lines.ts"; //
 import { breaker, formatBreakerMsg, providerOf, classifyFireError } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
+import { lastFirePerAgent, seedSlotNextAt } from "./run-agents-seed.ts"; // LOOP-273: a restart must not be a cadence reset
 import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, DEFAULT_PER_FIRE_USD, type FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -1536,7 +1537,24 @@ async function main(): Promise<void> {
   // Boot stagger: every slot used to start at nextAt=now, so a cold `core` boot fired 5 CLI processes
   // simultaneously against one checkout and one hub. Space the initial fires; steady-state cadence is
   // then completion-relative per slot as before.
-  const slots: Slot[] = opts.agents.map((agent, i) => ({ agent, nextAt: Date.now() + i * opts.staggerMs, running: false }));
+  // LOOP-273 — a runner RESTART must not be a cadence reset. Seeding every slot from process start
+  // meant each restart fired every selected slot regardless of when it last ran: reflect, on a 1d
+  // cadence, fired 5x in 13h (~$18) because the runner restarted five times. `scheduler-gate.json`
+  // records firedAt only for the four gated slots, so sweep/reflect had nothing to schedule from —
+  // but the per-fire LEDGER records every fire of every agent, and that is the right anchor.
+  //
+  // Fail-open in every direction: no ledger, an unreadable one, a torn line, or no prior fire for
+  // this agent all mean "fire on boot", which is today's behaviour. A scheduler that refuses to
+  // start because it cannot read a history file is worse than one that fires early.
+  const bootNow = Date.now();
+  // The legacy (workspace-less) path has no per-fire ledger, so there is nothing to anchor to and
+  // the seed stays exactly as it was — fire on boot, staggered.
+  const lastFireAt = lastFirePerAgent(null);
+  const slots: Slot[] = opts.agents.map((agent, i) => {
+    const d = seedSlotNextAt(agent, i, lastFireAt, opts.intervals[agent] ?? 0, bootNow, opts.staggerMs);
+    console.log(d.log);
+    return { agent, nextAt: d.nextAt, running: false };
+  });
   let stopping = false;
   let fired = 0; // total fires started; --max-fires caps it (0 = unlimited)
   // Two distinct stop shapes (they were one function, and --max-fires "drain" SIGINT'd the fire it had
@@ -1866,7 +1884,22 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     } catch (e) { console.error(`dev-loop run: dev-loop.json reload failed (${(e as Error).message}); keeping the last-good config`); }
   };
 
-  const slots: Slot[] = opts.agents.map((agent, i) => ({ agent, nextAt: Date.now() + i * opts.staggerMs, running: false }));
+  // LOOP-273 — a runner RESTART must not be a cadence reset. Seeding every slot from process start
+  // meant each restart fired every selected slot regardless of when it last ran: reflect, on a 1d
+  // cadence, fired 5x in 13h (~$18) because the runner restarted five times. `scheduler-gate.json`
+  // records firedAt only for the four gated slots, so sweep/reflect had nothing to schedule from —
+  // but the per-fire LEDGER records every fire of every agent, and that is the right anchor.
+  //
+  // Fail-open in every direction: no ledger, an unreadable one, a torn line, or no prior fire for
+  // this agent all mean "fire on boot", which is today's behaviour. A scheduler that refuses to
+  // start because it cannot read a history file is worse than one that fires early.
+  const bootNow = Date.now();
+  const lastFireAt = lastFirePerAgent(fireLedger);
+  const slots: Slot[] = opts.agents.map((agent, i) => {
+    const d = seedSlotNextAt(agent, i, lastFireAt, opts.intervals[agent] ?? 0, bootNow, opts.staggerMs);
+    console.log(d.log);
+    return { agent, nextAt: d.nextAt, running: false };
+  });
   let stopping = false;
   let fired = 0;
   const drain = () => { if (stopping) return; stopping = true; clearInterval(timer); if (activeChildren.size === 0) process.exit(0); };
