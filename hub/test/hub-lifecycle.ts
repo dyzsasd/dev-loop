@@ -1,7 +1,8 @@
 // `dev-loop hub start|stop|status` — workspace hub daemon lifecycle (service backend): start is
 // idempotent, status reports RUNNING, stop truncates the WAL + removes the runfile, linear teams refuse.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, existsSync, statSync, readdirSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, existsSync, statSync, readdirSync, readFileSync } from "node:fs";
+import { registerDaemonPid } from "./daemon-harness.ts";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +19,28 @@ delete env.DEVLOOP_HUB_DB;
 delete env.DEVLOOP_PROJECT;
 delete env.DEVLOOP_DEV_SPLIT;
 const team = (args: string[], cwd = tmp) => spawnSync("node", [join(hubRoot, "src", "team.ts"), ...args], { cwd, env, encoding: "utf8" });
-const hub = (sub: string, cwd: string) => { const r = spawnSync("node", [join(hubRoot, "src", "hub.ts"), sub], { cwd, env, encoding: "utf8", timeout: 20000 }); return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` }; };
+// LOOP-146 — these are REAL daemons (the assertions below count runfiles and assert RUNNING), started
+// through a third entry file with a VARIABLE subcommand, which is why daemon-guard's three predicates
+// all missed them. This file stays exempt from the spawn predicate — its whole subject IS
+// `dev-loop hub start|stop|status|ensure`, so routing it through the harness would test something
+// other than the verb under test — but its daemons must not sit outside the ONE exit sweep.
+//
+// The `finally` below is not enough on its own: process.exit() sits INSIDE the try, and finally does
+// not run after process.exit(). Registering each started pid puts them on the harness's
+// process.on("exit") SIGKILL sweep, which covers every termination path including that one.
+const hub = (sub: string, cwd: string) => {
+  const r = spawnSync("node", [join(hubRoot, "src", "hub.ts"), sub], { cwd, env, encoding: "utf8", timeout: 20000 });
+  if (sub === "start" || sub === "ensure") {
+    // The daemon detaches, so its pid is in the runfile rather than in `r`.
+    try {
+      for (const f of readdirSync(join(cwd, ".dev-loop")).filter((n) => /^daemon-.*\.json$/.test(n))) {
+        const pid = (JSON.parse(readFileSync(join(cwd, ".dev-loop", f), "utf8")) as { pid?: number }).pid;
+        if (typeof pid === "number") registerDaemonPid(pid);
+      }
+    } catch { /* best-effort: registration must never fail the verb under test */ }
+  }
+  return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+};
 
 const ws = join(tmp, "ws");
 try {
