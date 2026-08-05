@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
+import { parseDirtyPaths } from "../src/doc-land.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -427,6 +428,36 @@ try {
     const resI = run(["--repo", "dev-loop"], wsT);
     ok(resI.status === 0, `(i) non-main defaultBranch (trunk) → lands (exit 0; stderr: ${resI.stderr.trim().slice(0, 160)})`);
     ok(git(repoT, ["rev-parse", "origin/trunk"]) === beforeI, `(i) origin/trunk has the commit — defaultBranch honoured, no hardcoded 'main'`);
+  }
+
+  // ── LOOP-326: the dirty-tree refusal must name paths that EXIST ─────────────────────────────
+  // Reproduced against real `git status --porcelain` output, then asserted through the parser the
+  // refusal message is built from. The defect was conditional on the FIRST entry being
+  // unstaged-only (` M`), which is why the fixture stages the second file and not the first.
+  {
+    const lp = join(ROOT, "loop326");
+    mkdirSync(lp, { recursive: true });
+    execFileSync("git", ["init", "-q", "-b", "main", lp]);
+    writeFileSync(join(lp, "a-first.txt"), "one\n");
+    writeFileSync(join(lp, "b-second.txt"), "two\n");
+    git(lp, ["add", "-A"]);
+    git(lp, ["commit", "-qm", "base"]);
+    writeFileSync(join(lp, "a-first.txt"), "one changed\n");   // ` M` — unstaged only, sorts FIRST
+    writeFileSync(join(lp, "b-second.txt"), "two changed\n");
+    git(lp, ["add", "b-second.txt"]);                          // `M ` — staged
+
+    const porcelain = execFileSync("git", ["-C", lp, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" });
+    ok(/^ M a-first\.txt/m.test(porcelain), "LOOP-326 fixture: the first porcelain entry really is unstaged-only (' M')");
+
+    const parsed = parseDirtyPaths(porcelain);
+    ok(parsed.includes("a-first.txt"), `LOOP-326: the FIRST path survives intact (got ${JSON.stringify(parsed)})`);
+    ok(!parsed.some((p) => p === "-first.txt" || p === "a-first.tx"), "LOOP-326: no character is eaten off the first entry");
+    ok(parsed.every((p) => existsSync(join(lp, p))), `LOOP-326: every path the refusal would name EXISTS on disk (${JSON.stringify(parsed)})`);
+
+    // The trimmed-buffer shape the bug produced, asserted directly so a future refactor that
+    // reintroduces a buffer-level trim() fails here rather than in a rebase refusal months later.
+    ok(!parseDirtyPaths(porcelain.trim()).includes("a-first.txt") || porcelain[0] !== " ",
+      "LOOP-326: a buffer-level trim() is exactly what breaks it — the parser must receive raw output");
   }
 
 } finally {

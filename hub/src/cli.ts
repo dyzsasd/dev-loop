@@ -6,7 +6,7 @@
 // >=23.6 type-strips the .ts entries directly; the bin shebang runs THIS file the same way.
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
 import { findCompatibleNode, MIN_NODE_VERSION, nodeVersionOk } from "./node-runtime.ts";
 
@@ -179,5 +179,11 @@ if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {
 }
 
 const [entryBase, ...prefix] = route;
-const r = spawnSync(process.execPath, [join(here, entryBase + EXT), ...prefix, ...rest], { stdio: "inherit" });
+// EVERY entry is spawned through this one line, which makes it the single install site for the CLI's
+// presentation contract — the runtime's own ExperimentalWarning noise (LOOP-44) and the one-line
+// framing of a missing/broken workspace (LOOP-283 AC3), both in cli-bootstrap.ts. DEVLOOP_CLI_VERB
+// lets that framing name the verb the operator actually typed.
+const bootstrap = pathToFileURL(join(here, "cli-bootstrap" + EXT)).href;
+const r = spawnSync(process.execPath, ["--import", bootstrap, join(here, entryBase + EXT), ...prefix, ...rest],
+  { stdio: "inherit", env: { ...process.env, DEVLOOP_CLI_VERB: cmd } });
 process.exit(r.status ?? 1);

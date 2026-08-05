@@ -220,7 +220,7 @@ async function runOp(hub: Hub, op: AgentOp, args: Record<string, unknown>): Prom
     const out = await postOp(port, op, args, hub.actor);
     if (out.kind === "refused") { console.error(`dev-loop: ${out.detail}`); process.exit(5); } // exhaustiveness: a loopback base never trips the LOOP-173 egress guard
     if (out.kind === "down") { console.error(`dev-loop: hub daemon for '${hub.projectKey}' is not reachable on 127.0.0.1${out.detail}.`); process.exit(5); }
-    if (out.kind === "dormant") { console.error(`dev-loop: the daemon is running but its agent op-API is dormant for '${hub.projectKey}' — the project's settings_json says hub.transport:"daemon" here but the daemon disagrees. Restart it (dev-loop daemon up) or check settings_json.`); process.exit(5); }
+    if (out.kind === "dormant") { console.error(`dev-loop: the daemon is running but its agent op-API is dormant for '${hub.projectKey}' — the project's settings_json says hub.transport:"daemon" here but the daemon disagrees. Restart it (DEVLOOP_PROJECT=${hub.projectKey} dev-loop daemon up) or check settings_json.`); process.exit(5); }
     return { status: out.status, body: out.body };
   }
   try { return await agentOp(op, hub.db!, hub.projectId!, hub.projectKey, hub.actor, args); }
