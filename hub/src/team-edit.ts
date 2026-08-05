@@ -8,12 +8,13 @@ import { spawnSync } from "node:child_process";
 import { join, isAbsolute } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
-import { resolveWorkspace, wsHubDb } from "./workspace.ts";
+import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import { validateTeamFile, referencingProjects, isTeamProject, type TeamFile, type Workspace } from "./team-config.ts";
 import { confirmationToken, isolationVerdict, commitBothHalves, TOKEN_PREFIX } from "./destructive-guard.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
 import { isCanonicalTicketPrefix } from "./ticket-id.ts";
+import { snapshotBeforeDestructive, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-339 trigger 2
 import { provisionClaudePermissions } from "./team-init.ts";
 import { syncOpencodeConfig } from "./opencode-sync.ts";
 
@@ -36,7 +37,7 @@ function mutate(apply: (file: TeamFile, ws: Workspace) => void): Workspace {
 // (registry paths, owners, agent launch maps, …) is either structural — add-project/add-repo territory —
 // or an interview field: edit dev-loop.json directly and let doctor validate.
 type SetKind = "string" | "boolean" | "number" | "int" | "string-list" | "nullable-pos-number" | readonly string[];
-const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
+export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.mode$/, kind: ["dry-run", "live"] as const },
   { re: /^team\.linearTeam$/, kind: "string" },
   { re: /^team\.git\.defaultBranch$/, kind: "string" },
@@ -49,6 +50,11 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   // budget: rolling 24h spend ceiling (dailyUsd, null=OFF) and per-fire ceiling (perFireUsd, must be positive)
   { re: /^team\.budget\.dailyUsd$/, kind: "nullable-pos-number" as const },
   { re: /^team\.budget\.perFireUsd$/, kind: "number" },
+  // LOOP-339 — the board-snapshot cadence goes through the validated mutator like every other
+  // tunable (the operator console's hard rule 1: config through mutators only, never a hand-edit).
+  { re: /^team\.backup\.everyHours$/, kind: "number" },
+  { re: /^team\.backup\.keep$/, kind: "int" },
+  { re: /^team\.backup\.dir$/, kind: "string" },
   { re: /^projects\.[^.]+\.enabled$/, kind: "boolean" },
   { re: /^projects\.[^.]+\.weight$/, kind: "number" },
   { re: /^projects\.[^.]+\.devSplit$/, kind: "boolean" },
@@ -88,7 +94,7 @@ const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
-  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,agents.<a>.{codingAgent,model,effort}}, " +
+  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},agents.<a>.{codingAgent,model,effort}}, " +
   "projects.<key>.{enabled,weight,devSplit,scratch,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
@@ -912,7 +918,13 @@ export function removeProject(argv: string[]): number {
       }
     : null;
   try {
-    commitBothHalves({ configPath: ws.filePath, configText, db, dbWork });
+    // LOOP-339 trigger 2 — remove-project is the verb that destroyed the board on 2026-08-04.
+    // Fail-closed: if the copy cannot be taken, the delete does not happen.
+    const backupCfg = resolveBackupConfig(ws.file.team as Parameters<typeof resolveBackupConfig>[0], wsStateRoot(ws));
+    commitBothHalves({
+      configPath: ws.filePath, configText, db, dbWork,
+      preSnapshot: () => snapshotBeforeDestructive({ dbPath: wsHubDb(ws), dir: backupCfg.dir, keep: backupCfg.keep, verb: "remove-project" }),
+    });
   } catch (e) {
     // Rethrow the message VERBATIM. commitBothHalves already states what each half's actual state is;
     // wrapping it in a summary of our own ("nothing was changed") would be a claim this frame cannot

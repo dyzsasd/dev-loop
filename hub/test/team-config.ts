@@ -403,6 +403,28 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
 { const f = base(); (f.team as unknown as Record<string, unknown>).budget = { dailyUsd: 50, extraKey: 1 }; ok(has(f, "E18"), "E18: unknown extra budget key is rejected"); }
 { const f = base(); (f.team as unknown as Record<string, unknown>).budget = { dailyUsd: 50, perFireUsd: 5 }; ok(!has(f, "E18"), "E18: known keys dailyUsd + perFireUsd are valid"); }
 
+// ── E18 team.backup validation (LOOP-339) ──
+// The cadence is the only thing standing between this board and the next cascade delete, so a
+// malformed value has to be REFUSED at load rather than silently disabling it. Each case below is a
+// value that would otherwise read as "backups are on" while producing nothing.
+const bk = (v: unknown) => { const f = base(); (f.team as unknown as Record<string, unknown>).backup = v; return f; };
+ok(!has(bk({ everyHours: 6, keep: 10, dir: "/snaps" }), "E18"), "E18: a fully-specified backup block is valid");
+ok(!has(bk({}), "E18"), "E18: an empty backup block is valid — every field has a shipped default");
+ok(!has(bk({ everyHours: 0 }), "E18"), "E18: everyHours 0 is VALID — it is the documented way to disable the cadence");
+ok(has(bk(null), "E18"), "E18: backup must be an object, not null");
+ok(has(bk([]), "E18"), "E18: …nor an array");
+ok(has(bk("6h"), "E18"), "E18: …nor a string");
+ok(has(bk({ everyHour: 6 }), "E18"), "E18: a misspelled key (everyHour) is rejected rather than silently ignored");
+ok(has(bk({ everyHours: -1 }), "E18"), "E18: a negative everyHours is rejected");
+ok(has(bk({ everyHours: "6" }), "E18"), "E18: a stringly-typed everyHours is rejected");
+ok(has(bk({ everyHours: Number.NaN }), "E18"), "E18: NaN everyHours is rejected — it would resolve to a disabled cadence that reads as enabled");
+ok(has(bk({ keep: 0 }), "E18"), "E18: keep 0 is rejected — a retention that keeps zero generations deletes its own output");
+ok(has(bk({ keep: 2.5 }), "E18"), "E18: a fractional keep is rejected");
+ok(has(bk({ keep: -3 }), "E18"), "E18: a negative keep is rejected");
+ok(has(bk({ dir: "" }), "E18"), "E18: an empty dir is rejected");
+ok(has(bk({ dir: "   " }), "E18"), "E18: …as is a whitespace-only dir, which would resolve to the cwd");
+ok(has(bk({ dir: 7 }), "E18"), "E18: a non-string dir is rejected");
+
 // ── AC1: defaultBranch resolution — effectiveRepo fallback chain + resolveDefaultBranchForPath ──
 {
   const mkWsDb = (overrides: Partial<ReturnType<typeof base>["team"]>, repoOverrides?: Record<string, unknown>): Workspace => {

@@ -17,6 +17,7 @@ import { createServer, type Server, type ServerResponse, type IncomingMessage } 
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
+import { startBoardSnapshot, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-339: the cadence trigger
 
 // LOOP-96: the same cap list_issues uses (agentops.ts LIST_ISSUES_DEFAULT_LIMIT). db.ts already names
 // list_issues / /api/tickets / the board as ONE family sorted by (project_id, updated_at DESC); one of
@@ -51,7 +52,7 @@ import { // A3: extracted timers; imported for the foreground boot, re-exported 
   startStrategyFileEditNotifier, // docs P3b: the passive-mode repo-FILE strategy-doc watch
   fireHealthNotifyTick, startFireHealthNotifier, // P0-1c: the loop fire-health self-monitor
 } from "./daemon-notifiers.ts";
-import { tryResolveWorkspace, wsFireLedger } from "./workspace.ts";
+import { tryResolveWorkspace, wsFireLedger, wsStateRoot } from "./workspace.ts";
 import { resolveUiToken, bearerOk, isLoopbackHost } from "./ui-token.ts"; // one-click P1 §6.2: the bearer gate + bind knob
 
 export interface DaemonOpts {
@@ -459,6 +460,21 @@ export function startProjectNotifiers(deps: {
   startWalCheckpoint(deps.dbPath);
   active.push("wal-checkpoint");
   log(`[daemon] WAL checkpoint active (periodic TRUNCATE on a dedicated non-blocking connection)`);
+  // LOOP-339 trigger 1 — the cadence. AC1 of LOOP-303 is "a snapshot the operator does not have to
+  // remember to take"; a verb nobody invokes is exactly the state that lost 19 tickets on
+  // 2026-08-04. everyHours: 0 ⇒ not started at all, the same posture every other notifier has.
+  try {
+    const ws = tryResolveWorkspace();
+    if (ws) {
+      const cfg = resolveBackupConfig(ws.file.team as Parameters<typeof resolveBackupConfig>[0], wsStateRoot(ws));
+      const snapTimer = startBoardSnapshot({ dbPath: deps.dbPath, dir: cfg.dir, keep: cfg.keep, intervalMs: cfg.intervalMs, log });
+      if (snapTimer) {
+        timers.push(snapTimer);
+        active.push("board-snapshot");
+        log(`[daemon] board snapshot active (every ${Math.round(cfg.intervalMs / 60_000)} min, keep ${cfg.keep} → ${cfg.dir})`);
+      } else log(`[daemon] board snapshot DISABLED (team.backup.everyHours = 0)`);
+    }
+  } catch (e) { log(`[daemon] board snapshot not started: ${(e as Error)?.message ?? String(e)}`); }
   return { active, timers };
 }
 

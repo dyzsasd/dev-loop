@@ -42,6 +42,12 @@ export function snapshotBoardDb(srcPath: string, destPath: string): void {
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(srcPath, { readOnly: true });        // R1
+    // A BOUNDED wait, never an indefinite one. VACUUM INTO takes a read lock on the source, and a
+    // concurrent writer can hold it — without a timeout this call can block for as long as that
+    // writer runs, which turns a best-effort backup into a hang. 5s matches openDb's busy_timeout;
+    // past that the caller's own posture decides (the cadence logs and moves on, the pre-verb copy
+    // refuses), and either is better than waiting forever.
+    try { db.exec("PRAGMA busy_timeout=5000"); } catch { /* older builds: the default applies */ }
     db.prepare("VACUUM INTO ?").run(tmp);                       // R2
     renameSync(tmp, destPath);                                  // R3
   } catch (e) {
@@ -186,4 +192,78 @@ export function restoreBoard(opts: { from: string; dbPath: string; dir: string; 
     throw new Error(`restore failed (${opts.from} → ${opts.dbPath}): ${(e as Error)?.message ?? String(e)}. The existing board is untouched.`);
   }
   return { restored: opts.dbPath, preRestore, tickets: v.tickets ?? 0, comments: v.comments ?? 0 };
+}
+
+// ─── the triggers (LOOP-339, Child C) ───────────────────────────────────────────────────────────
+// AC1 of LOOP-303 is "a snapshot the operator does not have to remember to take". A verb nobody
+// invokes is exactly the state that lost 19 tickets on 2026-08-04.
+//
+// TWO triggers, because they cover different loss modes:
+//   • a CADENCE covers every loss mode, including the ones nobody predicted;
+//   • a copy taken immediately BEFORE a destructive verb commits bounds the worst case to SECONDS
+//     instead of up to `everyHours`. That is the trigger that would have turned the 2026-08-04 loss
+//     into a five-minute restore.
+//
+// The timer follows startWalCheckpoint (daemon-notifiers.ts) exactly — it is the established
+// precedent for a periodic maintenance timer on this db: its OWN connection (the shared read
+// connection is PRAGMA query_only=ON, which VACUUM INTO refuses outright — measured), setInterval +
+// unref so the timer never keeps the process alive, an env override for tests, and
+// `everyHours: 0 ⇒ not started at all`, the same cadence<=0 ⇒ no-op posture every other notifier has.
+export interface BoardSnapshotTimerOpts { dbPath: string; dir: string; keep: number; intervalMs: number; log?: (m: string) => void }
+
+export function boardSnapshotTick(opts: { dbPath: string; dir: string; keep: number; log?: (m: string) => void }): string | null {
+  try {
+    return takeBoardSnapshot({ dbPath: opts.dbPath, dir: opts.dir, keep: opts.keep, reason: "cadence" });
+  } catch (e) {
+    // Best-effort like every other daemon timer: a failed snapshot must never take the daemon down.
+    // It is NOT silent — W-code coverage for a cadence that has stopped is Child D's job, and this
+    // line is what an operator greps when it warns.
+    opts.log?.(`[daemon] board snapshot FAILED: ${(e as Error)?.message ?? String(e)}`);
+    return null;
+  }
+}
+
+export function startBoardSnapshot(opts: BoardSnapshotTimerOpts): ReturnType<typeof setInterval> | null {
+  if (!(opts.intervalMs > 0)) return null; // everyHours: 0 ⇒ disabled, not started at all
+  const timer = setInterval(() => boardSnapshotTick(opts), opts.intervalMs);
+  timer.unref?.();
+  return timer;
+}
+
+/**
+ * The pre-destructive-verb copy (LOOP-339 trigger 2), FAIL-CLOSED.
+ *
+ * Unlike the cadence timer this must NOT be best-effort: its entire purpose is to exist before an
+ * irreversible write, so "the snapshot failed, proceeding anyway" would remove the only guarantee it
+ * offers. Throws, and the destructive verb refuses.
+ */
+export function snapshotBeforeDestructive(opts: { dbPath: string; dir: string; keep: number; verb: string }): string | null {
+  // The one carve-out, and it is narrow: if there is NO READABLE BOARD there is nothing to protect,
+  // and refusing would wedge the operator's only escape. `team remove-project --force` exists
+  // precisely to clean up config when the db is already broken (LOOP-280 AC4) — making that refuse
+  // because an unreadable db cannot be copied would turn a recovery tool into a dead end.
+  //
+  // "Fail-closed" means: if there IS a board and we cannot copy it, refuse. Not: refuse when there
+  // is nothing to copy.
+  if (!existsSync(opts.dbPath)) return null;
+  // `SELECT 1` is NOT a sufficient probe — it never touches the file's schema, so it succeeds on a
+  // corrupt db that VACUUM INTO then rejects with "file is not a database". Reading sqlite_master is
+  // what actually establishes "this is a readable SQLite database".
+  try {
+    const probe = new DatabaseSync(opts.dbPath, { readOnly: true });
+    try { probe.prepare("SELECT COUNT(*) FROM sqlite_master").get(); } finally { probe.close(); }
+  } catch { return null; } // unreadable/corrupt: nothing to snapshot, and the verb must stay usable
+  return takeBoardSnapshot({ dbPath: opts.dbPath, dir: opts.dir, keep: opts.keep, reason: `pre-${opts.verb}` });
+}
+
+/** Resolve `team.backup.*` with the shipped defaults. everyHours 0 ⇒ the cadence is off. */
+export function resolveBackupConfig(team: { backup?: { everyHours?: number; keep?: number; dir?: string } } | undefined, stateRoot: string): { intervalMs: number; keep: number; dir: string } {
+  const b = team?.backup ?? {};
+  const everyHours = typeof b.everyHours === "number" ? b.everyHours : 6;
+  const keep = typeof b.keep === "number" ? b.keep : 10;
+  return {
+    intervalMs: Number(process.env.DEVLOOP_BOARD_SNAPSHOT_MS) || Math.max(0, everyHours) * 3_600_000,
+    keep,
+    dir: b.dir ?? join(stateRoot, "snapshots"),
+  };
 }

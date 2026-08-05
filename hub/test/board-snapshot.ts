@@ -12,7 +12,12 @@ import { spawnSync } from "node:child_process";
 import { tmpdir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { snapshotBoardDb, takeBoardSnapshot, listSnapshots, pruneSnapshots, snapshotName, restoreBoard, verifySnapshot } from "../src/board-snapshot.ts";
+import {
+  snapshotBoardDb, takeBoardSnapshot, listSnapshots, pruneSnapshots, snapshotName,
+  restoreBoard, verifySnapshot,                                          // LOOP-341, Child E
+  boardSnapshotTick, startBoardSnapshot, snapshotBeforeDestructive, resolveBackupConfig, // LOOP-339, Child C
+} from "../src/board-snapshot.ts";
+import { commitBothHalves } from "../src/destructive-guard.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
@@ -293,6 +298,84 @@ try {
     const nb = verifySnapshot(validNonBoard);
     ok(!nb.ok && /not a hub board/.test(nb.error ?? "") && /projects/.test(nb.error ?? ""),
       `LOOP-341 AC3: a VALID SQLite db that is not a board is refused by NAME, not by a stray "no such table" (${nb.error})`);
+  }
+
+  // ── LOOP-339: the TRIGGERS — the whole point of AC1, "a snapshot nobody has to remember" ─────
+  {
+    const src = join(tmp, "trig.db");
+    makeWalDb(src, 4);
+    const dir = join(tmp, "trig-gens");
+
+    // Trigger 1 — the cadence tick, best-effort by design: a failed periodic backup must never take
+    // the daemon down. It writes a `cadence`-reasoned generation.
+    const made = boardSnapshotTick({ dbPath: src, dir, keep: 5 });
+    ok(made !== null && /-cadence\.db$/.test(made), `LOOP-339: the cadence tick writes a cadence-reasoned generation (${made})`);
+    const logged: string[] = [];
+    const failed = boardSnapshotTick({ dbPath: join(tmp, "gone.db"), dir, keep: 5, log: (m) => logged.push(m) });
+    ok(failed === null && logged.some((l) => /board snapshot FAILED/.test(l)),
+      "LOOP-339: a failing cadence tick returns null and LOGS — best-effort, but never silent");
+
+    // everyHours: 0 ⇒ not started at all, the same posture every other daemon notifier has.
+    ok(startBoardSnapshot({ dbPath: src, dir, keep: 5, intervalMs: 0 }) === null,
+      "LOOP-339: intervalMs 0 (everyHours 0) does not start a timer at all");
+    const timer = startBoardSnapshot({ dbPath: src, dir, keep: 5, intervalMs: 60_000 });
+    ok(timer !== null, "LOOP-339: a positive interval starts one");
+    if (timer) clearInterval(timer);
+
+    // Trigger 2 — the pre-destructive-verb copy is FAIL-CLOSED, which is the opposite posture from
+    // trigger 1 and deliberately so: its entire purpose is to exist before an irreversible write.
+    const pre = snapshotBeforeDestructive({ dbPath: src, dir, keep: 5, verb: "remove-project" });
+    ok(pre !== null && /-pre-remove-project\.db$/.test(pre), `LOOP-339: the pre-verb copy is reasoned pre-<verb> (${pre})`);
+    // Fail-closed means "if there IS a board and we cannot copy it, refuse" — NOT "refuse when there
+    // is nothing to copy". An ABSENT or UNREADABLE db returns null so the verb stays usable:
+    // `remove-project --force` exists to clean up config when the db is already broken (LOOP-280
+    // AC4), and wedging that would turn a recovery tool into a dead end. My first version threw
+    // here and broke exactly that test.
+    ok(snapshotBeforeDestructive({ dbPath: join(tmp, "gone.db"), dir, keep: 5, verb: "remove-project" }) === null,
+      "LOOP-339: an ABSENT board returns null — there is nothing to protect, so the verb stays usable");
+    const corrupt = join(tmp, "corrupt.db");
+    writeFileSync(corrupt, "this is not a sqlite database");
+    ok(snapshotBeforeDestructive({ dbPath: corrupt, dir, keep: 5, verb: "remove-project" }) === null,
+      "LOOP-339: an UNREADABLE board likewise — that is the state --force exists for");
+    // But a REAL board that cannot be written to its destination still refuses (the fail-closed half).
+    //
+    // The unwritable destination is a path UNDER A REGULAR FILE, which mkdir(2) rejects with ENOTDIR
+    // on every POSIX platform. It was `/proc/<nonexistent>` first, and that HUNG the whole CI job:
+    // procfs answers a nonexistent entry with ENOENT, and Node's recursive mkdirSync treats ENOENT as
+    // "create the parent and retry" — the parent /proc already exists, so it retried forever inside a
+    // synchronous call. Passing on macOS (where /proc does not exist at all, so the first mkdir fails
+    // outright) is what hid it. ENOTDIR is in Node's terminal-error set, so it can never recurse.
+    const notADir = join(tmp, "a-regular-file");
+    writeFileSync(notADir, "x");
+    let hardFail = "";
+    try { snapshotBeforeDestructive({ dbPath: src, dir: join(notADir, "snapshots"), keep: 5, verb: "remove-project" }); }
+    catch (e) { hardFail = (e as Error).message; }
+    ok(hardFail !== "", "LOOP-339: a READABLE board that cannot be copied DOES throw — the fail-closed half is intact");
+
+    // The two-phase commit refuses the destructive write when the snapshot fails, and changes NOTHING.
+    const cfgPath = join(tmp, "twophase.json");
+    writeFileSync(cfgPath, '{"before":true}');
+    let commitErr = "";
+    try {
+      commitBothHalves({
+        configPath: cfgPath, configText: '{"after":true}', db: undefined, dbWork: null,
+        preSnapshot: () => { throw new Error("disk full"); },
+      });
+    } catch (e) { commitErr = (e as Error).message; }
+    ok(/refusing the destructive write/.test(commitErr) && /disk full/.test(commitErr),
+      `LOOP-339: commitBothHalves REFUSES when the pre-snapshot fails, naming the cause (${commitErr.slice(0, 70)})`);
+    ok(readFileSync(cfgPath, "utf8") === '{"before":true}',
+      "LOOP-339: …and nothing was written — the refusal happens BEFORE anything is begun");
+
+    // Trigger 3 — config. everyHours 0 disables; the defaults are 6h / keep 10.
+    const off = resolveBackupConfig({ backup: { everyHours: 0 } }, join(tmp, "sr"));
+    ok(off.intervalMs === 0, "LOOP-339: team.backup.everyHours 0 resolves to a disabled cadence");
+    const dflt = resolveBackupConfig(undefined, join(tmp, "sr"));
+    ok(dflt.intervalMs === 6 * 3_600_000 && dflt.keep === 10 && dflt.dir.endsWith("snapshots"),
+      `LOOP-339: the shipped defaults are 6h / keep 10 / <state>/snapshots (got ${dflt.intervalMs}, ${dflt.keep})`);
+    const tuned = resolveBackupConfig({ backup: { everyHours: 2, keep: 3, dir: "/custom" } }, join(tmp, "sr"));
+    ok(tuned.intervalMs === 2 * 3_600_000 && tuned.keep === 3 && tuned.dir === "/custom",
+      "LOOP-339: config overrides every field");
   }
 
   // snapshotName is the one place the filename contract lives.
