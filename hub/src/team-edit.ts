@@ -45,6 +45,7 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.comms\.webhookEnv$/, kind: "string" },
   { re: /^team\.intake\.mode$/, kind: ["autonomous", "passive"] as const },
   { re: /^team\.intake\.todoDepthCap$/, kind: "int" },
+  { re: /^team\.intake\.acCompletenessGate$/, kind: "boolean" }, // LOOP-198: opt-in, see the AC5 measurement
   // agentReviewers: comma-separated GitHub logins to exclude from forge-review trips (§3.2); stores as string[]
   { re: /^team\.agentReviewers$/, kind: "string-list" as const },
   // budget: rolling 24h spend ceiling (dailyUsd, null=OFF) and per-fire ceiling (perFireUsd, must be positive)
