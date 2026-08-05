@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { dirtyTrackedFiles, listTreeSnapshots } from "./tree-snapshot.ts";
 import { readSchedulerBuild, schedulerAlive, schedulerSkew, pkgVersionOf, teamDirOf } from "./scheduler-build.ts"; // LOOP-253: W36
+import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP-329: W31 shares the tier predicate with the queue
 import { reportTrailGaps } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
 import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
@@ -18,7 +19,7 @@ import { homedir, platform } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
-import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
+import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { listSnapshots, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-340: W32 reads the same artifact convention Child B writes
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
@@ -595,6 +596,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   checkInRepoWorktrees(ws, warn);   // W34 (LOOP-132)
   checkReportTrail(ws, warn);       // W35 (LOOP-28)
   checkSchedulerBuild(ws, warn);    // W36 (LOOP-253)
+  checkTierStarvation(ws, boardDb, warn); // W31 (LOOP-329)
   checkLessonsLiveness(ws, warn);   // W30 (LOOP-91)
   checkBoardSnapshotW32(ws, warn);  // W32 (LOOP-340)
   await checkDaemonPortBand(warn);  // W25 (LOOP-137)
@@ -898,6 +900,44 @@ export function checkSchedulerBuild(ws: Workspace, warn: (msg: string) => void):
     const skew = schedulerSkew(rec, pkgVersionOf());
     if (!skew) return;
     warn(`[W36] the running scheduler (pid ${skew.pid}, started ${skew.startedAt}) loaded build ${skew.running}, which is ${skew.direction} than the installed ${skew.installed} — node caches modules at import time and never reloads them, so every fix that landed since is inert IN THE LOOP while doctor reports it live. Restart it: stop the \`dev-loop run\` process and relaunch (\`dev-loop run --agents core\`).`);
+  } catch { /* best-effort — never fails doctor */ }
+}
+
+// W31 helper (LOOP-329) — a dev tier with capacity and nothing it may pull.
+//
+// Every surface that reported dev-tier load reported only the TODO side, so a starved tier was
+// invisible to the operator and re-derived by hand by PM on every fire. Measured 2026-08-05:
+// senior-dev at 6/10 Todo — 4 idle slots — with ZERO promotable Backlog anywhere, while 66 junior
+// tickets queued at a tier already over its cap.
+//
+// The two silences are what make it a signal rather than noise:
+//   • AT CAP is not starvation — a full queue is the healthy state, not a finding.
+//   • IDLE SLOTS *with* candidates available is not starvation either — that is just a PM fire that
+//     has not run yet, and warning on it would fire on every board between grooming passes.
+// That second one is the discriminator LOOP-250 and LOOP-242 both shipped without.
+//
+// Extracted, not inline: doctorWorkspace is at the CRAP-90 ratchet edge.
+export function checkTierStarvation(ws: Workspace, boardDb: string, warn: (msg: string) => void): void {
+  try {
+    if (ws.file.team.backend !== "service" || !existsSync(boardDb)) return;
+    const db = openHubDbConn(boardDb);
+    try {
+      for (const key of deliveryProjects(ws)) {
+        const pid = findHubProject(db, key);
+        if (!pid) continue;
+        if (!(effectiveProject(ws, key).devSplit ?? false)) continue; // one tier ⇒ no starved sibling to name
+        const cap = resolveTodoDepthCap(ws, key);
+        const todo = servableTodoDepth(db, pid);
+        const backlog = servableBacklogDepth(db, pid);
+        for (const tier of ["senior-dev", "junior-dev"] as const) {
+          const idle = cap - todo[tier];
+          if (idle < 1) continue;              // at or over cap — a full queue is not starvation
+          if (backlog[tier] > 0) continue;     // candidates exist — that is a grooming pass, not starvation
+          const sibling = tier === "senior-dev" ? "junior-dev" : "senior-dev";
+          warn(`[W31] [${key}] '${tier}' has ${idle} idle Todo slot(s) (${todo[tier]}/${cap}) and ZERO promotable Backlog — it can neither pull nor be given work, while '${sibling}' holds ${backlog[sibling]} Backlog candidate(s). Promote or re-tier: a tier with capacity and nothing it may pull is idle capacity nobody is charged for noticing.`);
+        }
+      }
+    } finally { db.close(); }
   } catch { /* best-effort — never fails doctor */ }
 }
 
