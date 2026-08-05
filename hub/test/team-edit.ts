@@ -274,6 +274,13 @@ try {
   // this arm keeps pinning the REPO guard (what it exists for) rather than passing on the isolation refusal.
   const rmRefused = run("team", ["remove-project", "proj-with-repo", "--i-understand-this-deletes-proj-with-repo"], { cwd: rmWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(rmRefused.code !== 0 && /has 1 repo\(s\) — pass --force/.test(rmRefused.out), 'LOOP-221 AC1/LOOP-299: refuses project with repos without --force (guard message)');
+  // LOOP-281 AC2: the same guard in the OTHER direction. Only the refusal was pinned, so a repo guard that
+  // refused unconditionally — ignoring --force entirely — passed the whole suite. The token rides along
+  // because 'proj-with-repo' is not scratch and the two flags answer different questions (LOOP-305).
+  const rmForced = run("team", ["remove-project", "proj-with-repo", "--force", "--i-understand-this-deletes-proj-with-repo"], { cwd: rmWs, extra: { DEVLOOP_HUB_DB: "" } });
+  ok(rmForced.code === 0, `LOOP-281 AC2: --force bypasses the repo guard (got ${rmForced.code}: ${rmForced.out.replace(/\n/g, " | ").slice(0, 200)})`);
+  ok(!("proj-with-repo" in readJson(join(rmWs, "dev-loop.json")).projects),
+    "LOOP-281 AC2: 'proj-with-repo' gone from config after the --force bypass");
 
   // AC1: db-only key (key in hub but absent from config)
   const dbOnlyWs = join(tmp, "db-only-ws");
@@ -727,6 +734,21 @@ try {
   // control (healthy db): remove-project correctly refuses because the guard reads tc=1
   const fcControl = run("team", ["remove-project", "victim"], { cwd: fcWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(fcControl.code !== 0 && /ticket/.test(fcControl.out), "LOOP-280 control: healthy db refuses remove-project with a live ticket");
+  // LOOP-281 AC3: a refusal must also WRITE NOTHING. Exit code + message alone stay green even if the guard
+  // died AFTER the config half had already been rewritten — the 2026-08-04 shape, where the CLI printed a
+  // result that disagreed with what the two stores actually held.
+  ok("victim" in readJson(join(fcWs, "dev-loop.json")).projects,
+    "LOOP-281 AC3: the refused remove-project leaves the config entry intact");
+  {
+    const d = openDb(fcDb);
+    const row = d.prepare("SELECT id FROM projects WHERE key='victim'").get() as { id: string } | undefined;
+    // Counted through the project row that must still exist; if the row were gone this reads 0 and the
+    // assertion below fails, which is the correct signal either way.
+    const tc = (d.prepare("SELECT count(*) c FROM tickets WHERE project_id=(SELECT id FROM projects WHERE key='victim')").get() as { c: number }).c;
+    d.close();
+    ok(!!row, "LOOP-281 AC3: the refused remove-project leaves the hub.db projects row intact");
+    ok(tc === 1, `LOOP-281 AC3: the refused remove-project leaves the project's ticket row intact (got ${tc})`);
+  }
   // corrupt hub.db so openDb() throws; drop the WAL/shm sidecars so there is no recovery path
   for (const sfx of ["-wal", "-shm"]) rmSync(fcDb + sfx, { force: true });
   writeFileSync(fcDb, Buffer.from("this is not a sqlite database ".repeat(16)));
@@ -744,6 +766,93 @@ try {
   const fcForce = run("team", ["remove-project", "victim", "--force"], { cwd: fcWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(fcForce.code === 0, "LOOP-280 AC4: --force still removes 'victim' from config despite the unreadable db");
   ok(!("victim" in readJson(join(fcWs, "dev-loop.json")).projects), "LOOP-280 AC4: 'victim' gone from config after --force");
+
+  // ══ LOOP-281: the cascade itself, pinned on a READABLE db — and pinned as SCOPED ═════════════
+  // LOOP-280's --force arm runs against a deliberately corrupted hub.db, so it structurally cannot read a
+  // single row count: the ten statements removeProject() runs were asserted nowhere. Dropping or mis-scoping
+  // any one of them left rows keyed to a project id that no longer exists and passed the entire suite.
+  //
+  // Two properties, and the bystander project is why the second is checkable: "count WHERE project=victim is
+  // 0" is ALSO satisfied by a DELETE that lost its WHERE clause and emptied the table for every project. The
+  // bystander's rows must survive byte-for-byte, so BOTH "deleted too little" and "deleted too much" are red.
+  //
+  // Child rows are counted by their OWN key (ticket_id / doc_id), never through a join back to tickets or
+  // documents: after the cascade those parents are gone, so a join-based count reads 0 for orphans that are
+  // still sitting in the table — it would report success for precisely the failure being tested.
+  //
+  // Invocation is the POST-LOOP-302 form: 'cascade-victim' is NOT scratch, so the isolation gate requires the
+  // naming token in addition to --force (LOOP-305 — the two flags answer different questions).
+  {
+    const casWs = join(tmp, "cascade-ws");
+    run("team", ["init", "--dir", casWs, "--key", "cas-team", "--backend", "service", "--yes"]);
+    const casDb = join(casWs, ".dev-loop", "hub.db");
+    run("team", ["add-project", "cascade-victim", "--prefix", "CV"], { cwd: casWs });
+    run("team", ["add-project", "cascade-bystander", "--prefix", "CB"], { cwd: casWs });
+
+    // Seed one row into every table the cascade touches, for BOTH projects.
+    const seed = (key: string, tag: string): string => {
+      const d = openDb(casDb);
+      const pid = (d.prepare("SELECT id FROM projects WHERE key=?").get(key) as { id: string }).id;
+      d.prepare("INSERT INTO tickets(id,project_id,title,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+        .run(`${tag}-1`, pid, "t", "Bug", "Todo", 0, "[]", "[]", "test", "2026-01-01", "2026-01-01");
+      d.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES (?,?,?,?,?)")
+        .run(`${tag}-c1`, `${tag}-1`, "test", "body", "2026-01-01");
+      d.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES (?,?,?,?,?,?)")
+        .run(pid, `${tag}-1`, "test", "issue.create", "{}", "2026-01-01");
+      d.prepare("INSERT INTO documents(id,project_id,kind,slug,title,status,current_version,archived,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+        .run(`${tag}-d1`, pid, "design", `${tag}-slug`, "T", "draft", 0, 0, "test", "2026-01-01", "2026-01-01");
+      d.prepare("INSERT INTO document_versions(id,doc_id,version,body,status,summary,base_version,author,created_at) VALUES (?,?,?,?,?,?,?,?,?)")
+        .run(`${tag}-dv1`, `${tag}-d1`, 1, "b", "draft", "", 0, "test", "2026-01-01");
+      d.prepare("INSERT INTO channels(id,project_id,provider,config_ref,channel_ref,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)")
+        .run(`${tag}-ch1`, pid, "slack", "SLACK_BOT_TOKEN_ENV", "C123", 1, "2026-01-01", "2026-01-01");
+      d.prepare("INSERT INTO channel_messages(id,channel_id,project_id,direction,body,created_at) VALUES (?,?,?,?,?,?)")
+        .run(`${tag}-cm1`, `${tag}-ch1`, pid, "outbound", "m", "2026-01-01");
+      d.prepare("INSERT INTO mirror_map(id,project_id,hub_kind,hub_id,created_at) VALUES (?,?,?,?,?)")
+        .run(`${tag}-mm1`, pid, "ticket", `${tag}-1`, "2026-01-01");
+      d.close();
+      return pid;
+    };
+    const victimPid = seed("cascade-victim", "CV");
+    const bystanderPid = seed("cascade-bystander", "CB");
+
+    const counts = (pid: string, tag: string): Record<string, number> => {
+      const d = openDb(casDb);
+      const n = (sql: string, ...a: string[]): number => (d.prepare(sql).get(...a) as { c: number }).c;
+      const out = {
+        projects: n("SELECT count(*) c FROM projects WHERE id=?", pid),
+        tickets: n("SELECT count(*) c FROM tickets WHERE project_id=?", pid),
+        comments: n("SELECT count(*) c FROM comments WHERE ticket_id=?", `${tag}-1`),
+        events: n("SELECT count(*) c FROM events WHERE project_id=?", pid),
+        documents: n("SELECT count(*) c FROM documents WHERE project_id=?", pid),
+        document_versions: n("SELECT count(*) c FROM document_versions WHERE doc_id=?", `${tag}-d1`),
+        channels: n("SELECT count(*) c FROM channels WHERE project_id=?", pid),
+        channel_messages: n("SELECT count(*) c FROM channel_messages WHERE project_id=?", pid),
+        labels: n("SELECT count(*) c FROM labels WHERE project_id=?", pid),
+        mirror_map: n("SELECT count(*) c FROM mirror_map WHERE project_id=?", pid),
+      };
+      d.close();
+      return out;
+    };
+
+    const victimBefore = counts(victimPid, "CV");
+    const bystanderBefore = counts(bystanderPid, "CB");
+    // Every table must actually carry a row before the cascade, or a "0 after" assertion proves nothing.
+    const emptyBefore = Object.entries(victimBefore).filter(([, v]) => v === 0).map(([k]) => k);
+    ok(emptyBefore.length === 0, `LOOP-281 AC1 setup: every cascade table seeded for the victim (empty: ${emptyBefore.join(",") || "none"})`);
+
+    const casRm = run("team", ["remove-project", "cascade-victim", "--force", "--i-understand-this-deletes-cascade-victim"], { cwd: casWs });
+    ok(casRm.code === 0, `LOOP-281 AC1: remove-project --force + token exits 0 on a READABLE db (got ${casRm.code}: ${casRm.out.replace(/\n/g, " | ").slice(0, 220)})`);
+
+    const victimAfter = counts(victimPid, "CV");
+    const leftBehind = Object.entries(victimAfter).filter(([, v]) => v !== 0).map(([k, v]) => `${k}=${v}`);
+    ok(leftBehind.length === 0, `LOOP-281 AC1: the cascade leaves NO rows for the removed project (orphans: ${leftBehind.join(" ") || "none"})`);
+
+    const bystanderAfter = counts(bystanderPid, "CB");
+    const collateral = Object.keys(bystanderBefore)
+      .filter((k) => bystanderBefore[k] !== bystanderAfter[k])
+      .map((k) => `${k}: ${bystanderBefore[k]}→${bystanderAfter[k]}`);
+    ok(collateral.length === 0, `LOOP-281 AC1: the cascade is SCOPED — the bystander project is untouched (changed: ${collateral.join(" ") || "none"})`);
+  }
 
   // ═══ add-repo --detect: deterministic detection, no LLM ═══
   // unit: the workflow job-name extractor never confuses step/with-level `name:` lines
