@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the sixty-sixth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the sixty-seventh fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–57. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–58. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -209,26 +209,25 @@ is precisely how the withdrawn one survived a day steering the top priority.
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, sixty-sixth fire): a projection with two writers and one call site
+### 2026-08-06 (pm, sixty-eighth fire): the scope filter that reached the predicate and not the count
 
-Product SHA unchanged at `a8c8e28` — `origin/main` moved only by my own pass-55 doc land — so the
-rotation advanced to `ux-flows`, run by walking the operator's first load against the running daemon.
+Product SHA moved `62178e6` → `a51afc7` — LOOP-363 merged mid-outage — so the lens list reset and
+this fire's review ran on the surface that had just moved.
 
-**A workspace with one real project still renders a chooser.** `dev-loop.json` marks `fixture`
-`"scratch": true`; its hub row carries `{}`. `NOT_SCRATCH_SQL` — the predicate LOOP-349 consolidated
-for exactly three surfaces — reads that row, so `views/projects.ts:34` lists `/p/fixture/` and
-`daemon.ts:625` computes `real` as `['fixture','loop']`, length 2, which suppresses the
-single-real-project 302. Counterfactual on an in-memory copy of the real table: writing
-`{"scratch":true}` into that one row returns `['loop']` and the redirect fires. `doctor` prints two
-counts of the same concept in one run — `1 projects` from config at `:393`, `projects=3` from the DB
-at `:149`. Root cause: `seedHubRow` projects the flag and is called from one site,
-`team add-project --scratch`; the settable path LOOP-327 added for the un-repairable-marker case
-writes `dev-loop.json` alone (**LOOP-420**, junior). Visibility only —
-`destructive-guard.ts:77` reads config deliberately, so the isolation gate is unaffected.
+**LOOP-363 verified at rung three, in both directions.** `checkReportTrail` driven against this
+workspace from the merged tree emits zero W35 lines; from `62178e6` it emits exactly the reported
+`[W35] [loop] agent 'reflect' fired 6x`. AC5 asked for a regression test that fails against the
+pre-fix tree, so that claim was executed rather than read: the new `trail-and-firewall.ts` grafted
+onto `62178e6` fails 4 checks, with the defect legible in the failure output. The `[W35] [_team]`
+tag was confirmed by pointing a synthetic workspace at an empty `_team` reports root.
 
-**The §9c pass retired its first edge in four fires:** LOOP-356 reached `Done` after fire 65 closed,
-leaving LOOP-357 in `Todo` behind a cleared blocker. Board: senior 4/10 → 5/10 (**LOOP-418**
-promoted, the only senior-tier row in the Backlog), junior 10/10 → 11/10 when that label retired.
+**The residual the six ACs did not cover** (**LOOP-425**): the finding's `fires` count is still
+computed from the unfiltered ledger. Measured — an agent firing 5× on project A (traced) and 1× on
+project B (untraced) yields a B-scoped finding reading `fires: 6`.
+
+Board: junior 10/10 at the cap, senior 3/10 with no senior-tier row in the Backlog, so neither slice
+had a promotable ticket. Actions in `major_outage` for a seventh hour; LOOP-373's blocker unchanged,
+LOOP-366 still the operator's to execute.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -262,26 +261,23 @@ promoted, the only senior-tier row in the Backlog), junior 10/10 → 11/10 when 
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, sixty-seventh fire) — a status line can assert a value its own struct measured
-  and it did not read; and "the check never reported" has no representation, so each consumer
-  re-invents it as *fine*.** `doctor`'s single landing line printed `✅ landing: 10 open loop PR(s),
-  base green — nothing wedged` while GitHub Actions sat in `major_outage`, 8 of 10 open PRs carried
-  zero of the two required checks, and `main`'s tip carried none (**LOOP-424**). Two mechanisms.
-  First, `doctor.ts:1388` hardcodes the words *base green* in its `pass()` string while
-  `readBaseChecks` had already returned `unknown` into `s.baseChecks`, one field away — RULE 8's
-  newest form, and not the code leaving the guard's field of view but the REPORT asserting a
-  constant where the measurement was present and unread. **Render a clean line from the struct,
-  then read it back field by field.** Second, the classifier behind *nothing wedged* keys on base
-  checks, PR age >2d, and `mergeable` — and `mergeable` reads MERGEABLE precisely BECAUSE the
-  required checks are absent, so all three inputs read benign for up to 48 h of total landing
-  outage. **Absence needs its own value: a predicate holding only green and red will spend an
-  outage answering green.** The same inversion was already filed on the WRITE path (**LOOP-407**)
-  and neither fix reaches the other — the tell that this is one missing shared concept, not two
-  bugs. Not theoretical: `c3454b7` and `62178e6` merged untested inside the window
-  (`autoMergeRequest: None` — fires chose to merge, no forge race), the first broke `main`'s
-  typecheck (**LOOP-423**), and the second landed 9 min after senior-dev held four PRs for exactly
-  this reason. **A hold that lives in one tier's judgement is not a gate** — LOOP-407's AC3
-  (enforce it in the Step 0.5 path) is load-bearing, not AC1.
+- **2026-08-06 (pm, sixty-eighth fire) — a filter that decides WHETHER to report has to compute WHAT
+  the report says; and a fixture written to vary the one variable a ticket names can still hold the
+  second one constant.** LOOP-363 scoped W35 by project: `reportTrailGaps` filters the ledger rows,
+  and the filtered set builds `firedDays`, which decides whether an agent is reported at all. The
+  `fires` value carried in the finding is recomputed from the unfiltered `rows` one expression
+  later, so a project-scoped warning counts fires that happened — and are traced — on other
+  projects (**LOOP-425**). Before the fix both halves read the whole ledger and agreed; the fix
+  scoped one of them. RULE 1's population clause in the form a partial fix produces: **when a filter
+  is introduced, the audit is every value downstream that reads the same rows, not only the
+  predicate that motivated it.** Second, the test half, which is the same shape one level up.
+  LOOP-363 existed because the prior fixture held `project` constant — *"the one variable that
+  decides the answer never varies"* is the ticket's own diagnosis — and the fixture it shipped gives
+  each agent exactly one scope, so the scoped and unscoped counts are equal on every row and the
+  residual cannot fail a test. **A fixture earns nothing by varying the variable the TICKET names;
+  it has to vary the one the FIX touched.** Both findings came from reading the diff after all six
+  ACs had passed: a §3 stage-1 triage that returns clean against the spec still leaves open whether
+  the increment is complete against its own stated root cause.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -505,13 +501,13 @@ promoted, the only senior-tier row in the Backlog), junior 10/10 → 11/10 when 
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → sixty-sixth fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → sixty-seventh fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
-    **LOOP-420**), rolled by **§20 R2 passes 50–57** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AD. Findings still open from that
+    **LOOP-420**), rolled by **§20 R2 passes 50–58** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AE. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-420**.
 
