@@ -1170,9 +1170,15 @@ export function renderHuman(
   if (fires.meteredFires === 0) {
     console.log(`cost: unmetered — 0 of ${fires.fires} fires reported usage`);
   } else {
-    const throughput = out.teamRollup ? (out.teamRollup as { throughput: number }).throughput : null;
+    const r = out.teamRollup as { throughput: number; historyIncomplete?: boolean; historyFloor?: string | null } | undefined;
+    const throughput = r?.throughput ?? null;
+    const historyIncomplete = r?.historyIncomplete ?? false;
+    const historyFloor = r?.historyFloor ?? null;
     const perAccepted = fires.costUsd !== null && throughput != null && throughput > 0
-      ? `  ($${(fires.costUsd / throughput).toFixed(4)}/accepted change)` : "";
+      ? historyIncomplete && historyFloor
+        ? `  ($${(fires.costUsd / throughput).toFixed(4)}/accepted change — incomplete history: ledger begins ${historyFloor.slice(0, 10)}, ${Math.round((Date.now() - Date.parse(historyFloor)) / 86_400_000)}d)`
+        : `  ($${(fires.costUsd / throughput).toFixed(4)}/accepted change)`
+      : "";
     const costStr = fires.costUsd !== null
       ? `$${fires.costUsd.toFixed(4)} over ${fires.meteredFires} of ${fires.fires} metered fires${perAccepted}`
       : `unavailable — ${fires.meteredFires} of ${fires.fires} fires metered, none priced`;
@@ -1275,7 +1281,7 @@ export function renderCost(report: UsageReport, byDim?: UsageDimension, budget?:
   }
 }
 
-export function renderFlow(report: UsageReport, throughput: number | null, boardNote: string | null): void {
+export function renderFlow(report: UsageReport, throughput: number | null, boardNote: string | null, historyIncomplete = false, historyFloor: string | null = null): void {
   const days = report.windowMs / 86_400_000;
   const cell = report.overall;
   // LOOP-219 — cost-per-accepted-change divided GROSS spend (which includes fires killed mid-flight)
@@ -1283,7 +1289,9 @@ export function renderFlow(report: UsageReport, throughput: number | null, board
   // basis is NAMED on the line: an unlabelled ratio is what this ticket is about.
   const deliveredUsd = cell.costUsd !== null && cell.discardedUsd !== null ? cell.costUsd - cell.discardedUsd : cell.costUsd;
   const cpa = deliveredUsd !== null && throughput !== null && throughput > 0
-    ? usd(deliveredUsd / throughput) + "/accepted-change (delivered spend ÷ throughput; discarded fires excluded)"
+    ? historyIncomplete && historyFloor
+      ? usd(deliveredUsd / throughput) + "/accepted-change (incomplete history — ledger begins " + historyFloor.slice(0, 10) + ", " + Math.round((Date.now() - Date.parse(historyFloor)) / 86_400_000) + "d)"
+      : usd(deliveredUsd / throughput) + "/accepted-change (delivered spend ÷ throughput; discarded fires excluded)"
     : "unavailable";
   const perFire = cell.costUsd !== null && cell.costPriced > 0
     ? usd(cell.costUsd / cell.costPriced) + "/priced fire"
@@ -1421,6 +1429,8 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
       : undefined;
     let throughput: number | null = null;
     let flowBoardNote: string | null = null;
+    let flowHistoryIncomplete = false;
+    let flowHistoryFloor: string | null = null;
     if (showFlow) {
       if (ws.file.team.backend === "service" && existsSync(boardDb)) {
         const { openDb } = await import("./db.ts");
@@ -1428,9 +1438,17 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
         const db = openDb(boardDb);
         try {
           let tp = 0;
+          // flowHistoryIncomplete/Floor hoisted to outer scope
           for (const key of deliveryProjects(ws)) {
             const pid = findProject(db, key);
-            if (pid) tp += boardMetrics(db, pid, windowMs, nowMs).throughput; // LOOP-314: honour the era
+            if (pid) {
+              const bm = boardMetrics(db, pid, windowMs, nowMs);
+              tp += bm.throughput; // LOOP-314: honour the era
+              if (bm.historyIncomplete) {
+                flowHistoryIncomplete = true;
+                if (bm.historyFloor && (flowHistoryFloor === null || bm.historyFloor < flowHistoryFloor)) flowHistoryFloor = bm.historyFloor;
+              }
+            }
           }
           throughput = tp;
         } finally { db.close(); }
@@ -1450,6 +1468,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
           costUsd: c.costUsd,
           tokens: { inputTokens: c.inputTokens, outputTokens: c.outputTokens, cacheReadTokens: c.cacheReadTokens, cacheWriteTokens: c.cacheWriteTokens },
           throughput,
+          historyIncomplete: flowHistoryIncomplete,
           costPerAccepted: c.costUsd !== null && throughput !== null && throughput > 0 ? c.costUsd / throughput : null,
           perFire: c.costUsd !== null && c.costPriced > 0 ? c.costUsd / c.costPriced : null,
           boardNote: flowBoardNote,
@@ -1465,7 +1484,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
       const ceilingUsd = ws.file.team.budget?.perFireUsd ?? DEFAULT_PER_FIRE_USD;
       renderCost(report, groupBy, budgetView, { ceilingUsd, wallMinutes: 60, rows: profileDeadlines(rows, ceilingUsd, windowMs, nowMs) });
     }
-    if (showFlow) renderFlow(report, throughput, flowBoardNote);
+    if (showFlow) renderFlow(report, throughput, flowBoardNote, flowHistoryIncomplete, flowHistoryFloor);
     return 0;
   }
 
