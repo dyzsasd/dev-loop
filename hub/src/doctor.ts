@@ -1385,7 +1385,8 @@ async function checkLandingW22Stall(
       } else if (s.state === "unknown") {
         info(`landing: ${s.reason ?? "forge unreachable"} (best-effort; not a failure)`);
       } else if (s.state === "healthy" && (s.openLoopPRs ?? 0) > 0) {
-        pass(`landing: ${s.openLoopPRs} open loop PR(s), base green — nothing wedged`);
+        const healthyBase = s.baseChecks ?? "unknown";
+        pass(`landing: ${s.openLoopPRs} open loop PR(s), base '${effectiveRepo(ws, s.repo).defaultBranch}' required checks ${healthyBase} — nothing wedged`);
       }
     }
   } catch { /* W22 is best-effort — never fails doctor */ }

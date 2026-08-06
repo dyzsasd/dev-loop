@@ -441,7 +441,7 @@ export async function readLandingState(
         "--repo", ghRepo,
         "--state", "open",
         "--limit", "100",
-        "--json", "number,headRefName,createdAt,mergeable,url",
+        "--json", "number,headRefName,createdAt,mergeable,url,statusCheckRollup",
       ]);
     } catch (e) {
       const code = (e as { code?: string }).code;
@@ -463,7 +463,7 @@ export async function readLandingState(
       continue;
     }
 
-    type PRItem = { number: number; headRefName: string; createdAt: string; mergeable: string; url: string };
+    type PRItem = { number: number; headRefName: string; createdAt: string; mergeable: string; url: string; statusCheckRollup?: Array<{ name: string; conclusion: string | null }> };
     let allOpen: PRItem[];
     try {
       allOpen = JSON.parse(openResult.stdout) as PRItem[];
@@ -495,7 +495,7 @@ export async function readLandingState(
     // 3. Merged in window (best-effort)
     const mergedInWindow = readMergedInWindow(exec, ghRepo, now, windowMs);
 
-    // 4. Classify per §3: stalled (day-0 red-base, or age threshold), else healthy
+    // 4. Classify per §3: stalled (day-0 red-base, age threshold, or PRs missing required checks), else healthy
     const hasDayZeroStall = baseChecks === "red" && openLoopPRs > 0;
     const hasThresholdStall = loopOpen.some((p) => {
       const ageDays = (now - Date.parse(p.createdAt)) / (24 * 60 * 60 * 1000);
@@ -515,10 +515,32 @@ export async function readLandingState(
       const mergeUnblocked = p.mergeable === "MERGEABLE" || p.mergeable === "UNKNOWN" || p.mergeable == null;
       return ageDays > LANDING_STALL_DAYS && !(mergeUnblocked && baseChecks === "green");
     });
+    // LOOP-424 AC1: stalled when any open dev-loop/* PR's statusCheckRollup omits a required check
+    const hasPrMissingChecks = mergeChecks.length > 0 && loopOpen.some((p) => {
+      // AC5: a MISSING statusCheckRollup field (forge didn't return it) is not evidence of absence
+      const rollup = p.statusCheckRollup;
+      if (!rollup) return false;
+      const names = new Set(rollup.map((c) => c.name));
+      return mergeChecks.some((need) => !names.has(need));
+    });
 
-    if (hasDayZeroStall || hasThresholdStall) {
+    if (hasDayZeroStall || hasThresholdStall || hasPrMissingChecks) {
       const reason = hasDayZeroStall
         ? `base '${defaultBranch}' required checks red — autoMerge structurally blocked`
+        : hasPrMissingChecks
+          ? (() => {
+            const missing = new Set<string>();
+            for (const p of loopOpen) {
+              const rollup = p.statusCheckRollup;
+              if (rollup) {
+                const names = new Set(rollup.map((c) => c.name));
+                for (const need of mergeChecks) {
+                  if (!names.has(need)) missing.add(need);
+                }
+              }
+            }
+            return `${openLoopPRs} PR(s) open missing required checks: ${[...missing].join(", ")} — autoMerge cannot fire`;
+          })()
         : `${openLoopPRs} PR(s) open >${LANDING_STALL_DAYS}d without MERGEABLE+green status`;
       results.push({ repo: ref, state: "stalled", openLoopPRs, oldestAgeDays, baseChecks, mergedInWindow, prs, reason });
     } else {
