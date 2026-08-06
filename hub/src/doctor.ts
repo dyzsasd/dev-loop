@@ -873,15 +873,20 @@ function realpathIfPossible(p: string): string { try { return realpathSync(p); }
 // trail lives, and warning about an empty directory would be wrong rather than merely noisy.
 export function checkReportTrail(ws: Workspace, warn: (msg: string) => void): void {
   try {
-    // `team.reports` is typed `unknown` in the schema (it carries more shapes than doctor needs), so
-    // narrow it here rather than widening the schema for one read. Anything that is not an explicit
-    // non-`files` sink is treated as `files`, which is the shipped default.
     const sink = (ws.file.team.reports as { sink?: unknown } | undefined)?.sink;
     if (typeof sink === "string" && sink !== "files") return;
+    const ledger = wsFireLedger(ws);
+    // Delivery-project scope: each project's fires checked against its own reports root.
     for (const key of deliveryProjects(ws)) {
-      for (const f of reportTrailGaps(wsFireLedger(ws), reportsRoot(key))) {
+      for (const f of reportTrailGaps(ledger, reportsRoot(key), { project: key })) {
         warn(`[W35] [${key}] agent '${f.agent}' fired ${f.fires}x in ${f.windowDays}d but wrote no report under ${f.expectedDir} — its work left no durable trail (§22), so those fires are invisible in the only record the operator reads.`);
       }
+    }
+    // Team scope: team-scoped fires and legacy rows (no project field) checked
+    // against the _team reports root, tagged with [_team] rather than a project key.
+    const teamReportsRoot = reportsRoot("_team");
+    for (const f of reportTrailGaps(ledger, teamReportsRoot, { project: "_team" })) {
+      warn(`[W35] [_team] agent '${f.agent}' fired ${f.fires}x in ${f.windowDays}d but wrote no report under ${f.expectedDir} — its work left no durable trail (§22), so those fires are invisible in the only record the operator reads.`);
     }
   } catch { /* best-effort — never fails doctor */ }
 }

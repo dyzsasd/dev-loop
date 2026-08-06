@@ -84,6 +84,56 @@ try {
       "LOOP-28: a missing REPORTS tree is itself the finding — nothing was reported");
     ok(reportTrailGaps(ledger, reports, { windowMs: 1 }).length === 0, "LOOP-28: an empty window yields nothing");
   }
+  // ── LOOP-363 / W35: project-scoped report trail gaps ──────────────────────────────────────
+  {
+    const ledger = join(tmp, "fires-scoped.jsonl");
+    const teamReports = join(tmp, "_team", "reports");
+    const projectAReports = join(tmp, "projectA", "reports");
+    const HOUR = 3_600_000;
+    // Varying project values: _team, a delivery project, and an older row with no project field.
+    writeFileSync(ledger, [
+      // Team-scoped fires (all have reports in _team)
+      JSON.stringify({ ts: new Date(Date.now() - 1 * HOUR).toISOString(), agent: "reflect", project: "_team", fireId: "r1", exitCode: 0 }),
+      JSON.stringify({ ts: new Date(Date.now() - 2 * HOUR).toISOString(), agent: "reflect", project: "_team", fireId: "r2", exitCode: 0 }),
+      // Delivery project A fire (no report → finding)
+      JSON.stringify({ ts: new Date(Date.now() - 1 * HOUR).toISOString(), agent: "pm", project: "projectA", fireId: "p1", exitCode: 0 }),
+      // Delivery project B fire (no report → finding)
+      JSON.stringify({ ts: new Date(Date.now() - 1 * HOUR).toISOString(), agent: "qa", project: "projectB", fireId: "q1", exitCode: 0 }),
+      // Legacy row with no project field (treated as team-scoped)
+      JSON.stringify({ ts: new Date(Date.now() - 1 * HOUR).toISOString(), agent: "sweep", fireId: "s1", exitCode: 0 }),
+    ].join("\n") + "\n");
+    // _team has reports for reflect, not for sweep (legacy)
+    mkdirSync(join(teamReports, "reflect-agent", "daily"), { recursive: true });
+    writeFileSync(join(teamReports, "reflect-agent", "daily", `${new Date(Date.now() - 1 * HOUR).toISOString().slice(0, 10)}.md`), "# reflect\n");
+
+    // AC 1: team-scoped fires with reports present → 1 finding for legacy sweep (no _team reports for sweep)
+    const teamPresentGaps = reportTrailGaps(ledger, teamReports, { project: "_team" });
+    ok(teamPresentGaps.length === 1 && teamPresentGaps[0].agent === "sweep",
+      `LOOP-363: team-scoped — reflect reports present, sweep legacy untraced → 1 finding (sweep), got ${teamPresentGaps.length} (${JSON.stringify(teamPresentGaps.map((g) => g.agent))})`);
+
+    // AC 2: team-scoped fires with EMPTY _team → exactly ONE finding
+    const emptyTeam = join(tmp, "_team-empty", "reports");
+    const teamGaps = reportTrailGaps(ledger, emptyTeam, { project: "_team" });
+    ok(teamGaps.length === 2,
+      `LOOP-363: empty _team reports yields 2 findings (reflect + legacy sweep), got ${teamGaps.length}`);
+
+    // AC 3: delivery project A fire — reported against A, not B
+    const projectAGaps = reportTrailGaps(ledger, projectAReports, { project: "projectA" });
+    ok(projectAGaps.length === 1 && projectAGaps[0].agent === "pm",
+      `LOOP-363: project A untraced fire yields one finding for pm (got ${JSON.stringify(projectAGaps.map((g) => `${g.agent}:${g.fires}`))})`);
+
+    // AC 4: delivery project B fire — reported against B, not A
+    const projectBGaps = reportTrailGaps(ledger, join(tmp, "projectB", "reports"), { project: "projectB" });
+    ok(projectBGaps.length === 1 && projectBGaps[0].agent === "qa",
+      `LOOP-363: project B untraced fire yields one finding for qa (got ${JSON.stringify(projectBGaps.map((g) => `${g.agent}:${g.fires}`))})`);
+
+    // AC 5: no project filter = legacy (pre-LOOP-363) behavior — includes ALL rows
+    const allGaps = reportTrailGaps(ledger, emptyTeam);
+    ok(allGaps.some((g) => g.agent === "reflect"), "LOOP-363: unfiltered includes reflect");
+    ok(allGaps.some((g) => g.agent === "pm"), "LOOP-363: unfiltered includes pm");
+    ok(allGaps.some((g) => g.agent === "qa"), "LOOP-363: unfiltered includes qa");
+    ok(allGaps.some((g) => g.agent === "sweep"), "LOOP-363: unfiltered includes sweep (legacy row)");
+  }
 
   // ── LOOP-132 / W34: a worktree inside the repo ────────────────────────────────────────────────
   {
