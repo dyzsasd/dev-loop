@@ -17,8 +17,7 @@ import { STRATEGY_DOC_MAX_BYTES, STRATEGY_DOC_WARN_FRACTION } from "./lessons.ts
 import { reportTrailGaps } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
 import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
-import { execFileSync, spawnSync } from "node:child_process";
-import { homedir, platform } from "node:os";
+import { sameDaemonCode } from "./daemon-lifecycle.ts";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
@@ -1688,10 +1687,10 @@ async function reconcileDaemonHealth(key: string, dbPath: string, pass: (m: stri
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 1500); // short bound — doctor is a one-shot liveness probe, never a wait
     const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
-    const b = r.status === 200 ? ((await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; actor?: string } | null) : null;
+    const b = r.status === 200 ? ((await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; buildCommit?: string; actor?: string } | null) : null;
     if (b && b.ok === true && b.project === key) {
       pass(`daemon /api/health reachable → ${url} (project '${key}')`);
-      if (b.version !== undefined && b.version !== pkgVersion()) {
+      if (b.version !== undefined && !sameDaemonCode(pkgVersion(), pkgBuildCommit(), b.version, b.buildCommit)) {
         warn(`[W28] daemon — running old code v${b.version}, CLI is v${pkgVersion()}; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart`);
         return { versionSkew: true };
       }
