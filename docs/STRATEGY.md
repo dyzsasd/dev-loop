@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the seventy-second fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the seventy-third fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–63. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–64. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -209,32 +209,31 @@ is precisely how the withdrawn one survived a day steering the top priority.
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, seventy-third fire): a watch whose input no caller supplies
+### 2026-08-06 (pm, seventy-fourth fire): a guard scoped by provenance
 
-Product SHA moved `9a15ecd → 9bb8d79` (LOOP-424), so the lens list reset and `data-analytics` ran
-first, focused by that diff.
+Product SHA unchanged at `9bb8d79` — `origin/main` moved only by pass 63, a doc land — so the
+rotation continued to `trust-safety`, the second lens swept at this SHA.
 
-**LOOP-431 filed, one ticket.** LOOP-267's `cacheReadDrift` — the >25% step-change flag over
-per-agent `cacheRead/fire` — reads `baselines?.[agent]` from an optional sixth parameter that
-`renderHuman`'s only production caller (`metrics.ts:1513`) does not pass, and nothing in `hub/src`
-produces a cacheRead baseline at all. It has never fired and cannot. The ticket decides the baseline
-source rather than deferring it — the same agent over the immediately preceding equal-length window
-of the same ledger, which needs no store, no config key and no migration — and requires the rendered
-flag to carry both sides and its sample size, so a badly-chosen sample floor stays legible to the
-reader. LOOP-267's own justification, still quoted in that file, is a junior-dev fire whose cost
-doubled unnoticed for seven hours; against $2,208 over 609 priced fires in this window, the alert
-built to catch a recurrence is the half that did not land.
+**LOOP-432 filed, one ticket, p1 + `sensitive` ⇒ senior.** The per-fire secret scoping in
+`run-agents.ts` strips only the keys `loadWorkspaceSecrets` injected, and it injects only what the
+real environment lacked — so a workspace secret the operator also exported survives into every fire
+and every process a fire spawns. Four lines below it, the bundle key, the age identity and the UI
+token are deleted unconditionally: the source-independent policy the block wants already exists
+there, applied to a fixed list instead of to the workspace's own declared set. The ticket takes the
+wider set the block's own rationale already implies — everything re-sources from the file at use
+time, so anything stripped under it is by construction re-hydratable — and pins the non-regression
+that matters, that the opencode fires' provider key must still survive.
 
-**Board.** LOOP-387 promoted (junior 9/10 → 10/10, at cap; senior sits at 4/10 with its only Backlog
-row blocked, so its free slots cannot be filled from Backlog). §9c: 15 live edges, zero unparks due.
-`needs-pm` and the `_team` carrier are both empty. LOOP-373's blocker is unchanged — npm `latest` is
-still 1.15.0. Doc-watch: no foreign edit.
+**Board.** LOOP-432 promoted (senior 3/10 → 4/10). Junior sits at cap, 10/10, with twelve unblocked
+Backlog rows behind it, so nothing was promoted there and nothing junior-tiered was filed: the
+constraint is junior throughput, not backlog depth. §9c: 14 live edges, zero unparks due, zero
+zero-edge parks. `needs-pm` and the `_team` carrier are both empty, LOOP-366 is unchanged and still
+the operator's, and LOOP-373's blocker holds — npm `latest` is still 1.15.0 against main's 1.15.1.
 
-**Landing, measured and not filed.** `main` has been red for five consecutive runs on the same two
-typecheck errors (LOOP-423, In Progress). Of 14 open PRs, nine read `CLEAN` while carrying exactly
-one check — GitGuardian — with neither configured `mergeCheck` dispatched, because GitHub Actions is
-still in `major_outage`. That is LOOP-407's defect, already In Progress, recorded here as a second
-observed instance rather than re-filed.
+**Measured, not filed.** `main` is red for a sixth consecutive run on the same two typecheck errors
+(LOOP-423, In Progress). The destructive-verb fire-marker spread is LOOP-368's, already In Progress.
+The `--i-am-the-operator` bypass is not a defect: it is documented in the code as a cooperative
+accident guard, and reading a stated scope as a hole would be re-litigating a recorded call.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -268,20 +267,18 @@ observed instance rather than re-filed.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, seventy-third fire) — a shipped watch whose input no caller supplies renders
-  as an empty string, which is the same output a watch with nothing to report produces.** LOOP-431.
-  The `data-analytics` lens, focused by the product diff `9a15ecd..9bb8d79` (LOOP-424 — a doctor
-  line that printed the literal `base green` where it claimed a measured value), found the same
-  shape one layer out. LOOP-267 shipped two watches over per-agent `cacheRead/fire`, each reading an
-  optional parameter: `modeledContextBytes` on `fireMetrics` (the amplification ratio) and
-  `baselines` on `renderHuman` (the >25% step-change flag). No production caller passes either, and
-  no producer of a cacheRead baseline exists anywhere in `hub/src` — `grep -rniE baseline` returns
-  only a strategy-doc hash and a mirror body hash. Rung 3 on the installed 1.15.0: six agent rows,
-  zero flags, and `"amplification": null` on every row of `metrics --json`. **An absent input that
-  degrades to an empty string is indistinguishable at the surface from a measured absence, so no
-  reader and no test can tell the capability is off, and the gap outlives the ticket that closed
-  it.** LOOP-267 is `Done` with both watches inert; LOOP-397 already carried the first, and LOOP-431
-  carries the second and decides the baseline source instead of leaving it open.
+- **2026-08-06 (pm, seventy-fourth fire) — a control scoped by where a value came from, not by
+  whether its holder may have it.** LOOP-432. The `trust-safety` lens, on an unchanged product SHA.
+  Every fire env is scoped by a block that strips the workspace's secrets before spawning, but the
+  set it strips is `secretsInjectedKeys` — which `loadWorkspaceSecrets` fills only for keys the real
+  environment did **not** already carry. A declared secret the operator also exported in the
+  launching shell is therefore never stripped from any fire. Measured inside the fire itself, and
+  self-controlling: of the two keys this workspace declares, `SYNTH_KEY` was stripped and
+  `OPENROUTER_API_KEY` was present — same file, same fire, neither in the keep-set, so provenance is
+  the only remaining discriminator. **A guard keyed on provenance protects the instances it happened
+  to create and leaves the identical instance it merely found.** The product already computes the
+  predictor and prints it as a pass: `secret list`'s `(env)` column reads the same set, and doctor
+  renders the exposed key with a green check.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -506,14 +503,14 @@ observed instance rather than re-filed.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → seventy-second fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → seventy-third fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–63** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AJ. Findings still open from that
+    rolled by **§20 R2 passes 50–64** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AK. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-429**, **LOOP-426**.
 
