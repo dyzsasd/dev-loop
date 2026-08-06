@@ -151,22 +151,24 @@ try {
   // A genuine outside invocation (no DEVLOOP_* env, no resolvable workspace) must emit the
   // superset and warn on stderr, not prune silently.
   {
+    const { spawnSync } = await import("node:child_process");
     const noEnv = scrubFireEnv() as NodeJS.ProcessEnv;
+    const outsideDir2 = mkdtempSync(join(tmpdir(), "dl-ac2-"));
     let stdout = "", stderr = "", code = 0;
     try {
-      const r = execFileSync(process.execPath, [join(hubRoot, "src", "conventions-verb.ts"), "--agent", "senior-dev", "--root", root, "--json"],
-        { encoding: "utf8", env: noEnv, maxBuffer: 64 * 1024 * 1024 });
-      stdout = r;
-    } catch (e) {
-      const c = e as { stdout?: string; stderr?: string; status?: number };
-      stdout = c.stdout ?? ""; stderr = c.stderr ?? ""; code = c.status ?? 1;
+      const r = spawnSync(process.execPath, [join(hubRoot, "src", "conventions-verb.ts"), "--agent", "senior-dev", "--root", root, "--json"],
+        { encoding: "utf8", cwd: outsideDir2, env: noEnv, maxBuffer: 64 * 1024 * 1024 });
+      stdout = r.stdout ?? "";
+      stderr = r.stderr ?? "";
+      code = r.status ?? 1;
+    } finally {
+      try { rmSync(outsideDir2, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
     const j = JSON.parse(stdout) as { pruned: string[]; bytes: number };
     ok(code === 0, `LOOP-371 AC2: exit 0 on genuine outside invocation (got ${code})`);
     ok(j.pruned.length === 0, `LOOP-371 AC2: no pruning when no workspace resolved (got ${j.pruned.length} pruned: ${j.pruned.join(",")})`);
     ok(stderr.includes("no workspace resolved"), `LOOP-371 AC2: stderr warns about unresolved workspace`);
   }
-
   // ── LOOP-371 AC3: a resolvable workspace whose config genuinely has a feature off still prunes it
   // The fail-open path must not blanket-disable pruning. Already covered by AC1 above:
   // the synthetic workspace prunes §12d/§19/§24, and AC1 confirmed the outside-cwd path matches.
