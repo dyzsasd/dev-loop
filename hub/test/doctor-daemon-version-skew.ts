@@ -1,7 +1,7 @@
 // doctor-daemon-version-skew.ts — LOOP-259 regression: daemon version skew (W28) flips DOCTOR_OK
 // to DOCTOR_FAILED. A matching version stays clean.
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
@@ -75,7 +75,11 @@ try {
   // ── Arm B: daemon version MATCHES → no W28, DOCTOR_OK ──
   {
     const { wsRoot, dbPath } = buildFixture();
-    const { server, port } = await startServer("1.14.0");
+    // The MATCHING arm must match by CONSTRUCTION, not by a version literal — a hardcoded "1.14.0"
+    // made this suite fail on the 1.15.0 release stamp, which is exactly a fixture depending on the
+    // ambient environment (here: the current release number) rather than pinning its own inputs.
+    const pkgVersion = (JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")) as { version: string }).version;
+    const { server, port } = await startServer(pkgVersion);
     const url = `http://127.0.0.1:${port}`;
     const runDir = join(wsRoot, ".dev-loop");
     writeFileSync(join(runDir, "daemon-loop.json"), JSON.stringify({ url }));
