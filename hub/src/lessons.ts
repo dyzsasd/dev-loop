@@ -36,13 +36,25 @@ function budgetOf(path: string): { lines: number; bytes: number } | null {
 export function checkLessonsBudget(ws: Workspace): WsWarning[] {
   const P = lessonsPaths(ws);
   const out: WsWarning[] = [];
+  // LOOP-272 AC(C) — W03 polices the byte budget of the §0a PUSH path, which is OFF by default and
+  // was, until this ticket, unreachable from config at all. A green or absent W03 therefore read as
+  // "the push-path budget is honoured" when in truth NOTHING WAS EVER PUSHED. Doctor cannot see a
+  // fire's env or flag, so it resolves from CONFIG ONLY — `opts.assembleBoot` is invisible here and
+  // depending on it would make doctor's answer depend on how a fire happened to be launched.
+  const corpusEnabled = ws.file.team?.bootCorpus === true;
+  const modeNote = corpusEnabled ? "" : " (note: team.bootCorpus is OFF — this budget governs the §0a PUSH path, which is not delivering; the INDEX still costs on the pull read)";
   const idx = budgetOf(P.index);
   if (idx && (idx.lines > INDEX_MAX_LINES || idx.bytes > INDEX_MAX_BYTES))
-    out.push({ code: "W03", path: "lessons/INDEX.md", message: `lessons INDEX over budget (${idx.lines} lines / ${idx.bytes} B; limit ${INDEX_MAX_LINES} lines / ${INDEX_MAX_BYTES} B) — reflect should demote entries to shards/archive` });
+    out.push({ code: "W03", path: "lessons/INDEX.md", message: `lessons INDEX over budget (${idx.lines} lines / ${idx.bytes} B; limit ${INDEX_MAX_LINES} lines / ${INDEX_MAX_BYTES} B) — reflect should demote entries to shards/archive${modeNote}` });
   for (const key of Object.keys(ws.file.projects)) {
     const s = budgetOf(P.shard(key));
     if (s && (s.lines > SHARD_MAX_LINES || s.bytes > SHARD_MAX_BYTES))
-      out.push({ code: "W03", path: `lessons/${key}.md`, message: `lessons shard '${key}' over budget (${s.lines} lines / ${s.bytes} B; limit ${SHARD_MAX_LINES} lines / ${SHARD_MAX_BYTES} B) — reflect should archive old entries` });
+      out.push({ code: "W03", path: `lessons/${key}.md`, message: `lessons shard '${key}' over budget (${s.lines} lines / ${s.bytes} B; limit ${SHARD_MAX_LINES} lines / ${SHARD_MAX_BYTES} B) — reflect should archive old entries${modeNote}` });
   }
+  // The invariant: an ABSENT W03 must not read as "the push budget is honoured". When the corpus is
+  // off, say so once — the over-budget checks above stay, because an oversized INDEX costs on the
+  // pull read too, so silencing them would trade one wrong reading for another.
+  if (!corpusEnabled)
+    out.push({ code: "W03", path: "team.bootCorpus", message: `§0a boot corpus is OFF (team.bootCorpus unset/false) — fires run in PULL mode and the push-path byte budget below is not being delivered against. Turn it on with: dev-loop team set team.bootCorpus true` });
   return out;
 }

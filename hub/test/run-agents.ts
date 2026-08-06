@@ -124,8 +124,14 @@ try {
   ok(/pm: claude .* -p <stdin:\d+ chars>/.test(boot.out),
     "assemble-boot renders -p with the prompt on stdin, never as an argv");
   const bootOff = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
-  ok(!/boot corpus/.test(bootOff.out) && /pm: claude .* -p '?<prompt:\d+ chars>'?/.test(bootOff.out),
-    "without the flag the prompt stays an argv and no corpus is assembled (default unchanged)");
+  // LOOP-272 AC(B) — the NEGATIVE is now observable, so "boot corpus" DOES appear when it is off;
+  // what must not appear is an assembled corpus. The old assertion keyed on the substring, which
+  // could not tell "never assembled" from "assembled and reported" — that indistinguishability is
+  // the defect this ticket fixes, so the assertion moves to the size line.
+  ok(!/boot corpus \d+KB/.test(bootOff.out) && /pm: claude .* -p '?<prompt:\d+ chars>'?/.test(bootOff.out),
+    "LOOP-272: without config or flag, no corpus is assembled and the prompt stays an argv (default unchanged)");
+  ok(/\[pm\] boot corpus: OFF — §0a pull mode/.test(bootOff.out),
+    `LOOP-272 AC(B): …and the OFF state is STATED, not merely absent (${bootOff.out.split("\n").filter((l) => /boot corpus/.test(l))[0] ?? "no line"})`);
 
   // P1-6: a LINEAR (default-backend) project must NOT inject the hub or --strict-mcp-config — the
   // operator's own Claude config (incl. the Linear MCP) must apply, or the agents are starved of the board.

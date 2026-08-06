@@ -80,6 +80,9 @@ export interface TeamBlock {
   opencodePermission?: Record<string, unknown>;
   git?: { defaultBranch?: string }; // top-level default (§19 fallback chain — per-repo wins, else this, else "main")
   agentReviewers?: string[]; // GitHub logins excluded from forge-review merge-guard trips (§3.2); set via `dev-loop team set team.agentReviewers`
+  // LOOP-272 — the §0a PUSH path (assembleBootCorpus). Team-level, default OFF: today it is
+  // reachable only by a hand-typed --assemble-boot, so it never runs from config at all.
+  bootCorpus?: boolean;
   backup?: BackupBlock;                                       // LOOP-339: board-snapshot cadence/retention (everyHours 0 = OFF)
   budget?: { dailyUsd?: number | null; perFireUsd?: number }; // cost-governance ceilings (design budget-ceiling); dailyUsd = rolling 24h cap (null/unset = OFF), perFireUsd = per-fire cap
 }
@@ -389,6 +392,11 @@ function validateBudget(budget: unknown, E: Emit): void {
 function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   if (typeof team.key !== "string" || !TEAM_KEY_RE.test(team.key)) E("E02", "team.key", `team.key must match ${TEAM_KEY_RE}`);
   if (team.backend !== "linear" && team.backend !== "service") E("E02", "team.backend", `team.backend must be "linear" or "service" (got ${JSON.stringify(team.backend)})`);
+  // LOOP-272 — the §0a push path is reachable today ONLY by a hand-typed flag, so it never runs from
+  // config and its absence is unobservable. A non-boolean here would silently resolve OFF, which is
+  // exactly the failure this knob exists to make visible.
+  if (team.bootCorpus !== undefined && typeof team.bootCorpus !== "boolean")
+    E("E18", "team.bootCorpus", `team.bootCorpus must be a boolean (got ${JSON.stringify(team.bootCorpus)})`);
   // E09 is a load-time WARNING, not an error: `team init --backend linear --yes` legitimately writes a
   // blank linearTeam to fill later, and a hard load failure would lock the operator out of the very
   // commands that repair it (team set / add-project / doctor). The HARD failure lives where a linear
