@@ -2,8 +2,9 @@
 //
 // A workspace is a directory holding a `dev-loop.json` (schema v2). Discovery precedence:
 //   1. DEVLOOP_WORKSPACE (absolute path — a bad/missing value is a HARD error, no fall-through)
-//   2. DEVLOOP_TEAM (key) → ~/.dev-loop/workspaces.json index → path
-//   3. cwd realpath walked upward to the first dir that has a valid dev-loop.json
+//   2. DEVLOOP_HUB_DB → derive workspace root (<ws>/.dev-loop/hub.db)
+//   3. DEVLOOP_TEAM (key) → ~/.dev-loop/workspaces.json index → path
+//   4. cwd realpath walked upward to the first dir that has a valid dev-loop.json
 // All run/state paths live UNDER the workspace (I4: copy the folder = migrate the machine); the only thing
 // in ~/.dev-loop is a NON-authoritative convenience index that any in-workspace run rebuilds.
 import { realpathSync, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
@@ -27,7 +28,15 @@ export function findWorkspaceRoot(cwd = process.cwd()): string | null {
     if (!existsSync(join(explicit, "dev-loop.json"))) throw new WsNotFound(`DEVLOOP_WORKSPACE=${explicit} has no dev-loop.json`);
     return canon(explicit);
   }
-  // 2. team key via the index
+  // 2. DEVLOOP_HUB_DB — derive workspace root from the hub database path
+  // Mirrors the env-then-cwd ladder resolveHubDbPath already establishes (LOOP-371).
+  // hub.db lives at <workspace>/.dev-loop/hub.db, so the workspace root is two dirs up.
+  const hubDb = process.env.DEVLOOP_HUB_DB?.trim();
+  if (hubDb) {
+    const candidate = dirname(dirname(hubDb));
+    if (existsSync(join(candidate, "dev-loop.json"))) return candidate;
+  }
+  // 3. team key via the index
   const teamKey = process.env.DEVLOOP_TEAM?.trim();
   if (teamKey) {
     const root = readWorkspaceIndex()[teamKey];
