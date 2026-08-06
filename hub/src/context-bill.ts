@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { STRATEGY_DOC_MAX_BYTES, INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "./lessons.ts";
 import { resolveWorkspace, wsHubDb } from "./workspace.ts";
-import { reposOfProject } from "./team-config.ts";
+import { reposOfProject, type Workspace } from "./team-config.ts";
 
 export interface Budget { lines: number; bytes: number }
 export interface Measure { lines: number; bytes: number }
@@ -332,7 +332,7 @@ function hubDocSlug(docRef: unknown): string | null {
 // Lean hub-doc reader: reads a strategy doc body from the hub.db on disk.
 // Does NOT load the daemon or MCP layer — direct SQLite query only.
 // Returns the published body text, or null if the doc doesn't exist or isn't published.
-function readHubDocBody(ws: { root: string }, projectKey: string, slug: string): string | null {
+function readHubDocBody(ws: Workspace, projectKey: string, slug: string): string | null {
   const dbPath = wsHubDb(ws);
   if (!existsSync(dbPath)) return null;
   const db = new DatabaseSync(dbPath);
