@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the sixty-seventh fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the sixty-eighth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–58. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–59. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -209,25 +209,29 @@ is precisely how the withdrawn one survived a day steering the top priority.
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, sixty-eighth fire): the scope filter that reached the predicate and not the count
+### 2026-08-06 (pm, sixty-ninth fire): the fixture that reads outside itself
 
-Product SHA moved `62178e6` → `a51afc7` — LOOP-363 merged mid-outage — so the lens list reset and
-this fire's review ran on the surface that had just moved.
+Product SHA unchanged at `a51afc7` (`origin/main` moved only by pass 58, doc-only), so the lens list
+stood and the review ran the next unswept lens, `strategy-gaps`.
 
-**LOOP-363 verified at rung three, in both directions.** `checkReportTrail` driven against this
-workspace from the merged tree emits zero W35 lines; from `62178e6` it emits exactly the reported
-`[W35] [loop] agent 'reflect' fired 6x`. AC5 asked for a regression test that fails against the
-pre-fix tree, so that claim was executed rather than read: the new `trail-and-firewall.ts` grafted
-onto `62178e6` fails 4 checks, with the defect legible in the failure output. The `[W35] [_team]`
-tag was confirmed by pointing a synthetic workspace at an empty `_team` reports root.
+**LOOP-426, groomed p3 → p1.** QA reported LOOP-356's golden harness drifting whenever the strategy
+doc changes size, and recommended periodic `--update-golden`. Both fixtures configure no
+`strategyDoc`, and both goldens carry a `docs/STRATEGY.md is 47.3 KB` line anyway: W37 is registered
+`scope: "workspace"`, is handed `ctx.ws`, drops it, and calls `tryResolveStrategyDocStat()` with no
+argument, so it measures whichever workspace the PROCESS is in. Under the fire env the output names
+this workspace's doc; scrubbed, as `npm test` runs it, the line is absent. No committed byte
+satisfies both. It also fails both contexts in `repos.dev-loop.mergeChecks` under `autoMerge: true`
+— invisibly, because the same job typechecks first and dies on LOOP-423's 2 errors.
 
-**The residual the six ACs did not cover** (**LOOP-425**): the finding's `fires` count is still
-computed from the unfiltered ledger. Measured — an agent firing 5× on project A (traced) and 1× on
-project B (untraced) yields a B-scoped finding reading `fires: 6`.
+**`strategy-gaps` found `Vision` naming a withdrawn direction.** The rebrand was ruled off
+2026-08-05 with all three children canceled, while `Vision:13-23` and `Glossary:253-260` still state
+it as current; the ruling's premise that no ticket ever created a `kaizen` bin is false (LOOP-181
+`Done`, `kaizen --version` → 1.15.0). Carried to the operator on LOOP-366, no direction byte touched.
 
-Board: junior 10/10 at the cap, senior 3/10 with no senior-tier row in the Backlog, so neither slice
-had a promotable ticket. Actions in `major_outage` for a seventh hour; LOOP-373's blocker unchanged,
-LOOP-366 still the operator's to execute.
+Board: junior 10/10 at the cap, senior 3/10 with no senior-tier Backlog row — promoted 0 in both
+slices for a second fire. Zero filed: every other candidate deduped into LOOP-416, LOOP-373 or
+LOOP-426.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -261,23 +265,21 @@ LOOP-366 still the operator's to execute.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, sixty-eighth fire) — a filter that decides WHETHER to report has to compute WHAT
-  the report says; and a fixture written to vary the one variable a ticket names can still hold the
-  second one constant.** LOOP-363 scoped W35 by project: `reportTrailGaps` filters the ledger rows,
-  and the filtered set builds `firedDays`, which decides whether an agent is reported at all. The
-  `fires` value carried in the finding is recomputed from the unfiltered `rows` one expression
-  later, so a project-scoped warning counts fires that happened — and are traced — on other
-  projects (**LOOP-425**). Before the fix both halves read the whole ledger and agreed; the fix
-  scoped one of them. RULE 1's population clause in the form a partial fix produces: **when a filter
-  is introduced, the audit is every value downstream that reads the same rows, not only the
-  predicate that motivated it.** Second, the test half, which is the same shape one level up.
-  LOOP-363 existed because the prior fixture held `project` constant — *"the one variable that
-  decides the answer never varies"* is the ticket's own diagnosis — and the fixture it shipped gives
-  each agent exactly one scope, so the scoped and unscoped counts are equal on every row and the
-  residual cannot fail a test. **A fixture earns nothing by varying the variable the TICKET names;
-  it has to vary the one the FIX touched.** Both findings came from reading the diff after all six
-  ACs had passed: a §3 stage-1 triage that returns clean against the spec still leaves open whether
-  the increment is complete against its own stated root cause.
+- **2026-08-06 (pm, sixty-ninth fire) — a gate that fails at step 1 leaves every later step
+  UNMEASURED, not passing; and a fixture asserting a whole surface is hermetic only if EVERY check
+  in it resolves from the fixture.** LOOP-426. The golden harness pins doctor's whole output against
+  committed fixtures, and one row of ~23 resolves its subject from the ambient process environment
+  rather than the workspace it is handed. That row converts the assertion from *output of the
+  fixture* to *output of the environment*: same commit, same fixture, a live-doc line under a fire
+  env and no line at all under `scrubFireEnv`, the mode CI uses. **The tell is cheap and general —
+  the fixture configures nothing that could produce the line, and the line appears anyway.** Ask it
+  of any golden: for each line, what in the fixture produced it? Second, the remedy shape: the
+  report recommended periodic re-baselining, which cannot converge because the two invocation modes
+  demand different bytes — **before accepting any "just update the baseline", run it in a second
+  environment; if the two disagree the baseline was never the defect.** Third, why it stayed
+  invisible: the CI job typechecks before it tests and main's typecheck is red, so **a red step 1 is
+  not a measurement of step 2** — landing the visible fix uncovers the next blocker instead of
+  restoring green, and reading that as a regression is the trap.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -501,13 +503,14 @@ LOOP-366 still the operator's to execute.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → sixty-seventh fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → sixty-eighth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
-    **LOOP-420**), rolled by **§20 R2 passes 50–58** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AE. Findings still open from that
+    **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
+    rolled by **§20 R2 passes 50–59** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AF. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-420**.
 
@@ -517,30 +520,22 @@ becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verba
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block J).)_
 
 
-- **`Non-goals`' closing sentence will read as contradicted by the approvals module** (**LOOP-383**,
-  design verified, six children promoted in the sixty-first fire). *"dev-loop is not a human-approval
-  workflow tool"* summarises the two clauses before it — no **default** step-by-step gating, no
-  interactive prompts — and the design keeps both: enforcement is a per-class enable list defaulting
-  to EMPTY, no prompt is issued, no fire waits inline. Nothing is breached and no direction change is
-  needed; but a reader who meets `dev-loop approve` in the verb list without the design's §1 will
-  fairly read a contradiction, so it wants one qualifying clause. `Non-goals` is a direction section
-  (§20 D4) — the operator's to write. **CONDITION LAPSED:** LOOP-366 was ruled on 2026-08-06T18:53Z;
-  carried to the operator on that ticket in the sixty-sixth fire, together with the two claims below.
+- **[DISCHARGED] the three D4 direction-text corrections whose reversal condition lapsed on the
+  2026-08-06T18:53Z ruling** — the `Non-goals`/approvals qualifying clause, the `Hard invariants`
+  §16 loopback claim the product relaxed, and the `Vision`'s present-tense "chat bridge" over a
+  one-way channel. All three are carried verbatim on **LOOP-366**, whose commit the operator owns;
+  full text rolled to [`2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 59, block AF).
 
-
-- **The `Hard invariants` list in `Goals (north star)` still states "§16 (binds 127.0.0.1 only)",
-  which the product deliberately relaxed.** `daemon.ts:913` reads `DEVLOOP_DAEMON_HOST` and 915–917
-  permit a non-loopback bind whenever `DEVLOOP_UI_TOKEN(_FILE)` is set, refusing only the token-less
-  widening; the accurate invariant is in that same file at 243–249. The doc inherited the stale form
-  from the module header LOOP-375 corrects. **A second stale claim rides the same proposal:** the
-  Vision has the daemon serving humans via "web UI, roadmap edit, chat bridge". The `channel.*`
-  module is real and DL-1–DL-4 are Done, but the 2026-06-28 Director removal kept only the OUTBOUND
-  half in use and recorded the inbound half (`channel.poll`/`ack` + the DL-4 roadmap bridge inside
-  it) as deliberately agent-unused — no agent calls it, no CLI verb exposes it, no config registers a
-  channel, `skills/`+`references/` never name it. Present-tense "chat bridge" overstates a one-way
-  channel. Both sit in `Goals`/`Vision` D4 direction text. **CONDITION LAPSED for both** — carried to
-  the operator on LOOP-366 in the sixty-sixth fire.
-
+- **`Vision` and `Glossary` state the Kaizen Factory rebrand as current direction; the operator
+  ruled it off 2026-08-05 and canceled LOOP-176/177/182 as a set.** `Vision:13-23` also carries a
+  standing *"must not be brand-swept"* instruction that presumes an active rename. Two facts the
+  revival path needs: the cancellation's premise that no ticket ever created a `kaizen` bin is false
+  — **LOOP-181** is `Done`, `hub/package.json:32-36` ships `kaizen` + `kaizen-hub`, and
+  `kaizen --version` returns 1.15.0, satisfying LOOP-182's Phase A gate; and `kaizen` is therefore a
+  shipped, installed command named in **zero** user-facing surfaces (`README.md`, `dev-loop --help`,
+  `docs/INDEX.md`, `docs/RUNNING.md` — all 0). Docs gap or deliberate silence is brand-gated, so it
+  is named rather than filed (the LOOP-416 shape). Both sections are D4. **REVERSAL CONDITION: the
+  operator rules on the brand** — carried on **LOOP-366** in the sixty-ninth fire.
 
 - **Close the config-mutator gap wholesale — an operator capability call, deliberately not filed.**
   `references/config-schema.md` marks each field with its `dev-loop team set` path: 13 rows carry a
