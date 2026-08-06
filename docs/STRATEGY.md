@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the sixty-eighth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the sixty-ninth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–59. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–60. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -209,28 +209,27 @@ is precisely how the withdrawn one survived a day steering the top priority.
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, sixty-ninth fire): the fixture that reads outside itself
+### 2026-08-06 (pm, seventieth fire): the citation the router read as ownership
 
-Product SHA unchanged at `a51afc7` (`origin/main` moved only by pass 58, doc-only), so the lens list
-stood and the review ran the next unswept lens, `strategy-gaps`.
+Product SHA moved to `9a15ecd` (LOOP-420's `team-edit.ts`), so the lens list reset and `consistency`
+ran over that delta and over the routing it exposed.
 
-**LOOP-426, groomed p3 → p1.** QA reported LOOP-356's golden harness drifting whenever the strategy
-doc changes size, and recommended periodic `--update-golden`. Both fixtures configure no
-`strategyDoc`, and both goldens carry a `docs/STRATEGY.md is 47.3 KB` line anyway: W37 is registered
-`scope: "workspace"`, is handed `ctx.ws`, drops it, and calls `tryResolveStrategyDocStat()` with no
-argument, so it measures whichever workspace the PROCESS is in. Under the fire env the output names
-this workspace's doc; scrubbed, as `npm test` runs it, the line is absent. No committed byte
-satisfies both. It also fails both contexts in `repos.dev-loop.mergeChecks` under `autoMerge: true`
-— invisibly, because the same job typechecks first and dies on LOOP-423's 2 errors.
+**LOOP-379 ruled — the back-link replaces the body scan.** `queue` handed PM a `qa`-owned Bug:
+`designParentIds` returned `{LOOP-420}` as the only design parent on the board, because LOOP-420
+cites `hubDoc:design/project-config-projection` once, in backticks, while explaining its own root
+cause. §21a's rule then fired both ways — into `pm.verify`, and out of `qa.verify`, where its owner
+cannot reach it through `queue` at all. Scored against PR #242's own tree (LOOP-372, held on the
+Actions outage): all three of its bounds pass over the case, 25 parents either way. Ruled: derive a
+slug's owner from the §21a `relatedTo` link and delete the body scan — 27 parents, none
+non-terminal, each of the four open slugs resolving to its true owner, including
+`project-config-projection` → LOOP-399, which no route reached. LOOP-379 p3 → p2, senior +
+`sensitive`; the LOOP-372 edge stays.
 
-**`strategy-gaps` found `Vision` naming a withdrawn direction.** The rebrand was ruled off
-2026-08-05 with all three children canceled, while `Vision:13-23` and `Glossary:253-260` still state
-it as current; the ruling's premise that no ticket ever created a `kaizen` bin is false (LOOP-181
-`Done`, `kaizen --version` → 1.15.0). Carried to the operator on LOOP-366, no direction byte touched.
+**LOOP-427 filed.** LOOP-420's own fix prints `projected scratch=… to hub row '<key>'` after a
+`void` helper whose `if (!row) return` writes nothing, and swallows every db error bare. Measured on
+the merged helper over a temp db: identical output, one write.
 
-Board: junior 10/10 at the cap, senior 3/10 with no senior-tier Backlog row — promoted 0 in both
-slices for a second fire. Zero filed: every other candidate deduped into LOOP-416, LOOP-373 or
-LOOP-426.
+Board: promoted LOOP-424 (junior 9/10 → 10/10); senior 2/10, its only Backlog row blocked.
 
 ## Personas
 
@@ -265,21 +264,27 @@ LOOP-426.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, sixty-ninth fire) — a gate that fails at step 1 leaves every later step
-  UNMEASURED, not passing; and a fixture asserting a whole surface is hermetic only if EVERY check
-  in it resolves from the fixture.** LOOP-426. The golden harness pins doctor's whole output against
-  committed fixtures, and one row of ~23 resolves its subject from the ambient process environment
-  rather than the workspace it is handed. That row converts the assertion from *output of the
-  fixture* to *output of the environment*: same commit, same fixture, a live-doc line under a fire
-  env and no line at all under `scrubFireEnv`, the mode CI uses. **The tell is cheap and general —
-  the fixture configures nothing that could produce the line, and the line appears anyway.** Ask it
-  of any golden: for each line, what in the fixture produced it? Second, the remedy shape: the
-  report recommended periodic re-baselining, which cannot converge because the two invocation modes
-  demand different bytes — **before accepting any "just update the baseline", run it in a second
-  environment; if the two disagree the baseline was never the defect.** Third, why it stayed
-  invisible: the CI job typechecks before it tests and main's typecheck is red, so **a red step 1 is
-  not a measurement of step 2** — landing the visible fix uncovers the next blocker instead of
-  restoring green, and reading that as a regression is the trap.
+- **2026-08-06 (pm, seventieth fire) — when a link has two sides, the defect is that they read the
+  same evidence at different strictness, and no bound on one side reaches it; and a finding is
+  "inert" only for as long as its instance stays terminal.** LOOP-379/LOOP-372/LOOP-420. One reverse
+  link, two readers: the child side binds a `Design:` pointer only as a bare line, with a comment
+  explaining that a marker QUOTED in prose is not a marker; the parent side scanned the same doc
+  name anywhere it appeared. Three bounds were added to the parent side (on-board id, mode
+  contradiction, ambiguity) and none of the three reaches a ticket that simply cites the neighbouring
+  design once. **Ask of any two-sided rule: do both sides accept the same evidence at the same
+  strictness? A bound added to one side treats the asymmetry as a tuning problem.** The remedy that
+  held was to change what the side reads — a `relatedTo` link the board is REQUIRED to write
+  (conventions.md:1892) in place of a sentence it happens to contain — and that also resolved a
+  parent no text rule could reach, because it never reads text. Second, the deferral: this ticket
+  recorded *"current impact: none"* on the true observation that its one instance was `Done` and all
+  three consumers filter terminal rows. **That is a measurement of the row set on the day it was
+  written.** Within a day the same shape appeared on an `In Review` ticket and the routing fired.
+  Ask what makes a deferred finding inert, and whether that fact is about the defect or about
+  today's data. Third, the block: it was parked for a measurement produced by an unmerged PR, and
+  `git fetch origin pull/<n>/head` produces that measurement now — **a decision waiting on a number
+  is waiting on an action, not on a merge.** Fourth, the cost model: a routing predicate that both
+  admits and excludes doubles a false positive — it adds a reader who has no authority and removes
+  the one who does, so the work is invisible rather than merely misfiled.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -503,16 +508,16 @@ LOOP-426.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → sixty-eighth fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → sixty-ninth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–59** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AF. Findings still open from that
+    rolled by **§20 R2 passes 50–60** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AG. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
-    **LOOP-420**.
+    **LOOP-420**, **LOOP-426**.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
