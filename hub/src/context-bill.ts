@@ -23,8 +23,9 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import { STRATEGY_DOC_MAX_BYTES, INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "./lessons.ts";
-import { resolveWorkspace } from "./workspace.ts";
+import { resolveWorkspace, wsHubDb } from "./workspace.ts";
 import { reposOfProject } from "./team-config.ts";
 
 export interface Budget { lines: number; bytes: number }
@@ -318,22 +319,67 @@ export function strategyDocRelPath(docRef: unknown): string | null {
   return null;
 }
 
+// Extract the hubDoc slug from a docRef like { hubDoc: "design/my-design" }.
+// Returns null when the docRef is not a hubDoc form or the slug is empty.
+function hubDocSlug(docRef: unknown): string | null {
+  if (docRef && typeof docRef === "object" && "hubDoc" in (docRef as object)) {
+    const v = (docRef as Record<string, unknown>).hubDoc;
+    return typeof v === "string" && v.trim() ? v.trim() : null;
+  }
+  return null;
+}
+
+// Lean hub-doc reader: reads a strategy doc body from the hub.db on disk.
+// Does NOT load the daemon or MCP layer — direct SQLite query only.
+// Returns the published body text, or null if the doc doesn't exist or isn't published.
+function readHubDocBody(ws: { root: string }, projectKey: string, slug: string): string | null {
+  const dbPath = wsHubDb(ws);
+  if (!existsSync(dbPath)) return null;
+  const db = new DatabaseSync(dbPath);
+  try {
+    const proj = db.prepare("SELECT id FROM projects WHERE key=?").get(projectKey) as { id: string } | undefined;
+    if (!proj) return null;
+    const doc = db.prepare("SELECT id, current_version FROM documents WHERE project_id=? AND slug=? AND kind='strategy'").get(proj.id, slug) as { id: string; current_version: number } | undefined;
+    if (!doc || doc.current_version === 0) return null;
+    const v = db.prepare("SELECT body FROM document_versions WHERE doc_id=? AND version=?").get(doc.id, doc.current_version) as { body: string } | undefined;
+    return v?.body ?? null;
+  } finally {
+    db.close();
+  }
+}
+
 // Best-effort resolution of the workspace's strategy doc for the context bill.
+// When projectKey is given, resolves only that project's doc; otherwise uses the first project
+// that has a strategyDoc configured (the legacy behaviour, except hub docs are now read from disk).
 // Returns undefined when no workspace is available; returns a stat with bytes=0 when the doc
-// is configured but unreadable (hub/Linear form, or file not found).
-export function tryResolveStrategyDocStat(cwd?: string): StrategyDocStat | undefined {
+// is configured but unreadable (Linear form, missing hub db, or file not found).
+export function tryResolveStrategyDocStat(cwd?: string, projectKey?: string): StrategyDocStat | undefined {
   try {
     const ws = resolveWorkspace(cwd);
-    for (const key of Object.keys(ws.file.projects)) {
+    const keys = projectKey ? [projectKey] : Object.keys(ws.file.projects);
+    for (const key of keys) {
       const project = ws.file.projects[key];
       const docRef = project?.strategyDoc;
       if (!docRef) continue;
-      const relPath = strategyDocRelPath(docRef);
-      if (!relPath) {
-        // hub doc or Linear doc — readable only in a live session; report as absent
-        const form = (docRef && typeof docRef === "object" && "hubDoc" in (docRef as object)) ? "hubDoc" : "linearDoc";
-        return { bytes: 0, lines: 0, label: `absent (${form} — readable only in a live session)` };
+      // Check for hubDoc form — read from hub.db on disk (no daemon needed)
+      const hubSlug = hubDocSlug(docRef);
+      if (hubSlug) {
+        const body = readHubDocBody(ws, key, hubSlug);
+        if (body === null) {
+          return { bytes: 0, lines: 0, label: `absent (hubDoc — not found in hub store)` };
+        }
+        const docLines = splitLines(body);
+        return { bytes: measureOf(docLines).bytes, lines: docLines.length, label: `hubDoc:${hubSlug} (${key})` };
       }
+      // Check for Linear form — always absent (requires live session)
+      if (docRef && typeof docRef === "object" && "linearDocument" in (docRef as object)) {
+        return { bytes: 0, lines: 0, label: "absent (linearDoc — readable only in a live session)" };
+      }
+      if (typeof docRef === "string" && /linear\.app\/.*\/document\//.test(docRef)) {
+        return { bytes: 0, lines: 0, label: "absent (linearDoc — readable only in a live session)" };
+      }
+      const relPath = strategyDocRelPath(docRef);
+      if (!relPath) continue;
       // Repo file — stat it from the first (primary) repo of this project
       const repos = reposOfProject(ws, key);
       const repoPath = (repos.find((r) => r.role === "primary") ?? repos.find((r) => r.role === "docs") ?? repos[0])?.absPath;
@@ -351,8 +397,9 @@ export function tryResolveStrategyDocStat(cwd?: string): StrategyDocStat | undef
 }
 
 // `dev-loop metrics --context` — the operator-facing render (kept here so metrics.ts stays thin).
-export function printContextBill(asJson: boolean): number {
-  const strategyDoc = tryResolveStrategyDocStat();
+// Accepts an optional projectKey to resolve that project's strategy doc (LOOP-355).
+export function printContextBill(asJson: boolean, projectKey?: string): number {
+  const strategyDoc = tryResolveStrategyDocStat(undefined, projectKey);
   let bill: Bill;
   try { bill = contextBill(undefined, strategyDoc); }
   catch (e) { console.error(`metrics --context: ${(e as Error).message}`); return 1; }
