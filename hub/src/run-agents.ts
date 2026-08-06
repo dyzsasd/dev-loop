@@ -800,7 +800,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
         ...(extra?.suspectError ? { suspectError: true } : {}),
         ...(extra?.interrupted ? { interrupted: true } : {}),
         ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}),
-        ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}),
+        bootBytes: extra?.bootBytes ?? 0, // LOOP-272: ALWAYS numeric — an omitted field cannot be distinguished from a zero
         // usage is numeric-only (FireUsage: tokens + cost + source/currency) — §16-safe for disk, and it's the
         // backend-agnostic soak/cost metric's ONLY source on linear (no fire.completed event there). Mirrors the
         // logEvent sibling below; the codex wiring stamped the event but missed this row (LOOP-83).
@@ -817,7 +817,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.interrupted ? { interrupted: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), ...(extra?.bootBytes ? { bootBytes: extra.bootBytes } : {}), ...(extra?.usage ? { usage: extra.usage } : {}) } });
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.interrupted ? { interrupted: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), bootBytes: extra?.bootBytes ?? 0, ...(extra?.usage ? { usage: extra.usage } : {}) } }); // LOOP-272: bootBytes always present
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -956,7 +956,11 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const backend = (cfg?.projects?.[profileProject] as { backend?: string } | undefined)?.backend ?? "linear";
   // boot-prefix: a deterministic §0a corpus appended to the prompt (claude lane only — the prompt then
   // rides stdin, see commandFor). Assembly failure fails OPEN: the fire boots in classic pull mode.
-  const boot = opts.assembleBoot && profile.codingAgent === "claude"
+  // LOOP-272 — the ONE predicate. Config OR the existing runtime override, so `dev-loop run` can
+  // turn the §0a push path on WITHOUT a hand-typed flag. Default OFF is unchanged: absent config and
+  // no flag resolves false. Claude-lane only, as before (the prompt rides stdin there).
+  const bootCorpusOn = ((cfg as unknown as { team?: { bootCorpus?: unknown } } | undefined)?.team?.bootCorpus === true) || !!opts.assembleBoot;
+  const boot = bootCorpusOn && profile.codingAgent === "claude"
     ? assembleBootCorpus(opts.root, opts.dataDir, agent, project, backend,
         cfg?.projects?.[profileProject] as Record<string, unknown> | undefined,
         cfg?.repos as Record<string, unknown> | undefined, // config-aware selection: feature-off spans never ship
@@ -965,8 +969,14 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         // team fire whenever the first enabled project happened to be single-repo.
         teamScope ? teamScope.enabledProjects.slice(1).map((k) => cfg?.projects?.[k] as Record<string, unknown> | undefined).filter(Boolean) as Record<string, unknown>[] : undefined)
     : null;
-  if (opts.assembleBoot && profile.codingAgent === "claude" && !boot)
-    console.warn(`[${agent}] --assemble-boot: corpus assembly unavailable — firing in §0a pull mode`);
+  // AC(B): one notice per claude-lane fire, three DISTINGUISHABLE states. Paired with an always-
+  // numeric bootBytes, this separates "never assembled" (0 + OFF) from "assembled empty"
+  // (0 + unavailable) from outside, without reading dist/.
+  if (profile.codingAgent === "claude") {
+    if (!bootCorpusOn) console.log(`[${agent}] boot corpus: OFF — §0a pull mode`);
+    else if (boot) console.log(`[${agent}] boot corpus: ON — ${boot.bytes} B`);
+    else console.warn(`[${agent}] --assemble-boot: corpus assembly unavailable — firing in §0a pull mode`);
+  }
   const prompt = boot ? basePrompt + boot.text : basePrompt;
   // D8 agent interface (service only; meaningless elsewhere): "cli" fires get no hub MCP injection.
   const iface = agentInterfaceFor((cfg?.projects?.[profileProject] as { hub?: HubBlock } | undefined)?.hub, profile.codingAgent);
@@ -1325,7 +1335,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         ...(errorClass ? { errorClass } : {}),
         // every failure carries its tail — the breaker keys on it
         ...(suspectError || errorClass || exitCode !== 0 ? { outputTail: outTail.slice(-400) } : {}),
-        ...(boot ? { bootBytes: boot.bytes } : {}), // boot-prefix: the assembled-corpus size rides every ledger row
+        bootBytes: boot ? boot.bytes : 0, // LOOP-272: ALWAYS present — 0 means never assembled, which is a fact worth recording
         ...(usage ? { usage } : {}),
       };
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut, fireId,
