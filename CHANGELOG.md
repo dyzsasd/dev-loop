@@ -3,6 +3,100 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## 1.15.0
+
+**The board drain, and what it hardened.** This release is one operator session resolving the
+entire open board — 99 tickets — with every fix landing through the same 5-step merge gate it was
+strengthening. The through-line of 1.14.0 holds: most of what follows is a guard that existed and
+could not see, or a number that was on screen and meant nothing.
+
+**Data safety — the board finally has a backup.**
+
+- **`dev-loop board snapshot | snapshots | restore`** — a consistent live copy of `hub.db` via
+  `VACUUM INTO` (the checkpoint+`readFileSync` path could emit an unopenable file with nothing
+  detecting it), timestamped filenames so retention never trusts mtime, pruning only after a
+  successful write, and a restore proven by round trip — tickets, comments and a verbatim body
+  back, behind the existing destructive-guard token (LOOP-303/337/338/341).
+- **Two automatic triggers**: a daemon cadence (`team.backup.everyHours`, default 6h) and a
+  fail-closed copy before every destructive verb — the trigger that would have turned the
+  2026-08-04 cascade delete into a five-minute restore (LOOP-339). **W32** says when the board has
+  never been snapshotted or the cadence stopped (LOOP-340).
+
+**The shared checkout — the tree no fire owns.**
+
+- Pre-fire **tree snapshots** of uncommitted tracked work, content-hash keyed; another fire's
+  `git checkout` destroyed two verified diffs with no record (LOOP-312). **W33** names dirty
+  tracked state; **W34** names a worktree living inside its own repo (LOOP-132).
+- **`dev-loop stage-guard`** refuses a ship commit that sweeps another fire's edits under your
+  ticket id — decided from a fact recorded at fire start, never a path heuristic, because the
+  measured incident had both fires' edits in the same file (LOOP-320).
+- **The handoff gate**: `In Progress → In Review` under `landing: "pr"` requires a local commit or
+  branch naming the ticket. Local git only — a forge outage can never refuse a handoff
+  (LOOP-309).
+- **doc-land rebases in an isolated worktree** when unrelated tracked paths are dirty — a
+  strategy-doc landing was blocked for two fires by files it never touched. A dirty doc still
+  refuses: that is unlanded work (LOOP-325).
+
+**The daemon lifecycle orphan, root-caused.**
+
+- `/api/health` always returned the serving pid; `lcHealthInfo` dropped it. A port held by another
+  process answered "healthy" for the same project, `up` recorded its own dead child's pid, and
+  `down` killed the wrong process while the real daemon served on. `up` now refuses to record a
+  runfile for a listener it did not spawn (LOOP-317).
+- **`--once` no longer loses its final output lines**: `process.exit()` discards queued pipe
+  writes, so the one line carrying a fire's error class vanished exactly when output was captured
+  (LOOP-346). The suite runner also gained a per-suite timeout — one hanging suite used to burn
+  the whole CI job with no name attached.
+
+**Cost — the LOOP-228 program, instrumented and ratcheted.**
+
+- **Turns are recorded per fire** (claude `num_turns`; opencode `step_finish` count) — null when
+  unknown, never 0 (LOOP-318). **cacheRead/fire, amplification and a >25 % drift flag** watch the
+  half of cost that modeled context never explained (LOOP-267).
+- **`dev-loop conventions --agent <a>`** — the §0a slice on demand, same prune as the push path;
+  21 KB/fire smaller than the unpruned union for senior-dev. Per-agent directive, default OFF
+  (LOOP-237). The push path is config-driven at last (`team.bootCorpus`, default OFF) and W03 is
+  delivery-mode aware (LOOP-272).
+- **Per-agent conventions ceilings** seeded from measurement with ≤1 KB headroom — a ratchet with
+  slack records a number nobody trips (LOOP-238). **The strategy doc gets a budget and W37**: it
+  was the only per-fire input with neither, measured at 144.5 KB against the new 48 KB ceiling
+  (LOOP-282).
+
+**Gates and verdicts.**
+
+- **`stale-exempt`**: a PR behind only by commits that cannot change any check result no longer
+  stales — fail-closed on truncation, `every` not `some`, config through the validated mutator
+  (LOOP-335).
+- **AC-completeness gate, shipped inert**: the write layer can refuse a `→ Done` with unchecked
+  acceptance boxes — measured retroactively, it would have refused 247 of 253 closes, so
+  enforcement waits on the convention behind `team.intake.acCompletenessGate` (LOOP-198).
+- **PR→ticket resolution reads commits and body**, not just the branch — a PR carrying a second
+  ticket's fix made that ticket read as unlanded (LOOP-150). §17 governing-file edits now trip
+  push-guard, with the generated cheat-sheet range exempt by line position (LOOP-35).
+- **W35** names an agent that fired and wrote no report (LOOP-28); **W36** names a scheduler
+  running a different build than the installed CLI (LOOP-253); **W31** names a starved dev tier —
+  idle Todo slots with zero promotable Backlog (LOOP-329).
+
+**One predicate, not two.**
+
+- **One loopback predicate** — the boot gate accepted `::1`, the write guard did not, so an IPv6
+  bind booted token-less and 403'd every write (LOOP-289). **One ticket-search predicate** — the
+  web search could not see comments, the agent search could not match ids, and both failed
+  silently (LOOP-97). **`deliveryProjects` excludes scratch/disabled at the seam**, not per call
+  site (LOOP-271).
+- The scheduler **seeds each slot from its last recorded fire**, so a runner restart is no longer
+  a full-cadence reset — reflect fired 5× in 13h against a 1d cadence across five restarts
+  (LOOP-273).
+
+**Hygiene.**
+
+- `scrubFireEnv()` adopted across all 43 spawning suites plus a source-level guard, so a new suite
+  cannot leak fire markers into a fixture — the leak once wrote test projects into the production
+  config (LOOP-193). Team-scoped steward fires aggregate every enabled project's repos, so §19 is
+  no longer pruned by whichever project happened to be first (LOOP-275).
+- **Dependencies: `npm audit` is clean** — was 2 high (`fast-uri`, `ip-address`) + 3 moderate
+  (LOOP-347).
+
 ## 1.14.0
 
 **The gates that were supposed to catch things, and didn't.** Almost every entry below is a guard
