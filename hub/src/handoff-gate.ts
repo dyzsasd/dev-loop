@@ -56,6 +56,14 @@ export interface HandoffGateInput {
   actor: string;
   repoRoot?: string;               // absent ⇒ nothing to check against; the gate stays silent
   landing?: "pr" | "direct";
+  /**
+   * LOOP-360 — this ticket is a §21a DESIGN PARENT, so the commit witness below can never exist.
+   *
+   * The caller resolves it (this module stays db-free) through the ONE shared predicate in
+   * design-parent.ts that `opQueue` and the `In Review → Done` gate already use — never a second
+   * copy of the rule, which is the defect LOOP-344 exists to prevent.
+   */
+  isDesignParent?: boolean;
 }
 
 /**
@@ -64,11 +72,19 @@ export interface HandoffGateInput {
  * Scope is deliberately narrow. Only `landing: "pr"` repos are gated: under `direct` there is no
  * intermediate artifact to require, so a refusal there would be inventing a rule the config does not
  * imply. The operator is never gated — the console reopens and re-routes tickets by hand.
+ *
+ * LOOP-360 — a DESIGN PARENT is exempt, and the exemption keys on what the ticket IS, never on the
+ * absence of a commit. A design parent's verified increment is the design doc plus the staged
+ * children (§21a); on `backend:"service"` that doc lives in the hub db, not the repo, so no commit
+ * or branch can reference the id however correctly the work was done. Exempting "has no commit"
+ * instead would readmit LOOP-31 and LOOP-294 — the two zero-commit handoffs this gate exists to
+ * catch — so a junior code ticket with nothing committed is still refused.
  */
 export function handoffGateRejection(inp: HandoffGateInput): string | null {
   if (inp.fromState !== "In Progress" || inp.toState !== "In Review") return null;
   if (inp.landing !== "pr") return null;
   if (inp.actor === "operator") return null;
+  if (inp.isDesignParent) return null;
   if (!inp.repoRoot) return null;
   if (hasLocalWorkFor(inp.repoRoot, inp.id)) return null;
   return `verify gate: In Progress → In Review blocked — no commit or branch in ${inp.repoRoot} references ${inp.id}, so there is nothing to review. `

@@ -156,6 +156,31 @@ function designParentGate(
 // ownership gate must NOT also run." It never reaches a caller (the call site turns it into a pass).
 const DESIGN_PARENT_DECIDED = "\u0000design-parent-ok";
 
+// LOOP-360 — the LOOP-309 handoff gate refuses `In Progress → In Review` without a commit or branch
+// naming the ticket. A §21a design parent can never satisfy that: its verified increment is the
+// design doc plus the staged children, and on `backend:"service"` the doc lives in the hub db rather
+// than the repo. designParentGate above covers only the `In Review → Done` edge — it returns null for
+// every other transition — so the design hand-off fell straight through to a gate with no notion of
+// design parents, and the senior design tier could not deliver at all on a landing:"pr" repo.
+//
+// Resolved through the SAME shared predicate opQueue and designParentGate use (design-parent.ts,
+// LOOP-344); a second copy of the rule here is exactly how a gate ends up enforcing something other
+// than what the queue displays. Extracted rather than inlined at the call site for the reason the
+// rest of this file is written the same way: updateTicketRow is the choke point every write path
+// runs through, and a branch added inline lands on the module's hottest function (the CRAP-ratchet
+// trap — green diff, red CI). The transition guard lives here too, so the extra db read happens only
+// on the one edge that needs it rather than on every ticket write.
+function designParentHandoffExemption(
+  db: DatabaseSync, projectId: string, id: string, fromState: string, next: TicketUpdateFields,
+  storedRow: { description?: string } | undefined,
+): boolean {
+  if (!(fromState === "In Progress" && next.state === "In Review")) return false;
+  const rows = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
+    .all(projectId) as unknown as Array<{ id: string; description: string; state: string }>;
+  const me = { id, description: next.description ?? storedRow?.description ?? "" };
+  return isDesignParent(me, designParentIds(db, projectId, rows));
+}
+
 // A child of `parentId`: it carries a Design: pointer that resolves to this parent — either directly
 // (`Design: parent <id>`) or through the doc slug the parent owns.
 function isChildOf(t: { id: string; description: string }, parentId: string, rows: Array<{ id: string; description: string }>): boolean {
@@ -413,7 +438,8 @@ export function updateTicketRow(
   const gate = terminalExitRejection(actor, fromState, resolved)
     ?? stagingDeployRejection(db, projectId, fromState, resolved)
     ?? designParentGate(db, projectId, id, actor, fromState, resolved, storedRow)   // LOOP-345 (R1+R2)
-    ?? handoffGateRejection({ id, fromState, toState: resolved.state, actor, ...landingContextFor(db, projectId) })  // LOOP-309
+    ?? handoffGateRejection({ id, fromState, toState: resolved.state, actor, ...landingContextFor(db, projectId),   // LOOP-309
+      isDesignParent: designParentHandoffExemption(db, projectId, id, fromState, resolved, storedRow) })            // LOOP-360
     ?? acCompletenessRejection({                                                                    // LOOP-198
       id, description: resolved.description ?? "", toState: resolved.state, fromState, actor,
       commentBodies: commentBodiesFor(db, id),
