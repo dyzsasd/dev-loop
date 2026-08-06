@@ -701,5 +701,84 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ok(!deltaIsCiIrrelevant([], ["docs/STRATEGY.md"]), "LOOP-335: an empty delta is never exempt");
 }
 
+// ── LOOP-424: W22 landing-health line blind to missing PR checks ──────────────────
+
+function rollupJson(checks: Array<{ name: string; conclusion: string | null }>): Array<{ name: string; conclusion: string | null }> {
+  return checks;
+}
+
+// AC3: PR with statusCheckRollup missing mergeChecks → stalled (must FAIL against today's code)
+{
+  const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["Test (Node 23.6.0)", "Test (Node 24)"] }));
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: JSON.stringify([{
+      number: 1,
+      headRefName: "dev-loop/LOOP-424",
+      createdAt: new Date(NOW - 1 * DAY_MS).toISOString(),
+      mergeable: "MERGEABLE",
+      url: "https://github.com/test-org/test-repo/pull/1",
+      statusCheckRollup: [{ name: "GitGuardian Security Checks", conclusion: "SUCCESS" }],
+    }]) }],
+    [/api.*check-runs/, { stdout: JSON.stringify({ total_count: 0, check_runs: [] }) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(result!.state === "stalled",
+    `LOOP-424 AC3: PR missing mergeChecks in rollup → stalled (got ${result!.state})`);
+  ok(result!.reason?.includes("missing required checks") === true,
+    "LOOP-424 AC3: stalled reason names missing checks");
+  ok(result!.reason?.includes("Test (Node 23.6.0)") === true,
+    "LOOP-424 AC3: stalled reason includes specific missing check name");
+}
+
+// AC4: Healthy path unchanged — PR with complete rollup + green base → healthy
+{
+  const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["CI / test"] }));
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: JSON.stringify([{
+      number: 2,
+      headRefName: "dev-loop/LOOP-424b",
+      createdAt: new Date(NOW - 1 * DAY_MS).toISOString(),
+      mergeable: "MERGEABLE",
+      url: "https://github.com/test-org/test-repo/pull/2",
+      statusCheckRollup: [{ name: "CI / test", conclusion: "SUCCESS" }],
+    }]) }],
+    [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI / test", conclusion: "success" }]) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(result!.state === "healthy",
+    `LOOP-424 AC4: complete rollup + green base → healthy (got ${result!.state})`);
+  ok(result!.baseChecks === "green", "LOOP-424 AC4: baseChecks=green (measured, not literal)");
+}
+
+// AC5: Missing statusCheckRollup field (forge didn't return it) → NOT treated as evidence of absence
+{
+  const ws = makeWorkspace(qualifyingRepo({ mergeChecks: ["CI / test"] }));
+  const exec = makeExec([
+    [/pr list.*--state open/, { stdout: JSON.stringify([{
+      number: 3,
+      headRefName: "dev-loop/LOOP-424c",
+      createdAt: new Date(NOW - 1 * DAY_MS).toISOString(),
+      mergeable: "MERGEABLE",
+      url: "https://github.com/test-org/test-repo/pull/3",
+      // statusCheckRollup intentionally omitted — forge didn't return it
+    }]) }],
+    [/api.*check-runs/, { stdout: checkRunsJson([{ name: "CI / test", conclusion: "success" }]) }],
+    [/pr list.*--state merged/, { stdout: "[]" }],
+  ]);
+  const [result] = await readLandingState(ws, { exec, now: NOW });
+  ok(result!.state === "healthy",
+    `LOOP-424 AC5: missing statusCheckRollup field is not evidence of absence → healthy (got ${result!.state})`);
+}
+
+// AC5 (forge-unreachable): forge-unreachable exec still collapses to state:unknown
+{
+  const ws = makeWorkspace(qualifyingRepo());
+  const execFail: ExecFn = () => ({ stdout: "", stderr: "not logged in", ok: false });
+  const [result] = await readLandingState(ws, { exec: execFail, now: NOW });
+  ok(result!.state === "unknown", "LOOP-424 AC5: forge failure → state=unknown (unchanged)");
+}
+
 console.log(fails === 0 ? "\nLANDING_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
