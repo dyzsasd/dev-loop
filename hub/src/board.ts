@@ -14,7 +14,7 @@
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import { listSnapshots, takeBoardSnapshot, restoreBoard, verifySnapshot } from "./board-snapshot.ts";
-import { workspaceIsolationVerdict } from "./destructive-guard.ts"; // LOOP-341: the EXISTING gate, reused
+import { workspaceIsolationVerdict, activeFireMarker } from "./destructive-guard.ts"; // LOOP-341: the EXISTING gate, reused
 import { join } from "node:path";
 
 const DEFAULT_KEEP = 10;
@@ -92,6 +92,14 @@ export function boardCmd(argv = process.argv.slice(2)): number {
     // destructive-guard token — no new gate, and `--force` is untouched (it answers the
     // recoverability question and must never become the isolation token).
     if (!from) { console.error("dev-loop board restore: --from <snapshot> is required (list them: dev-loop board snapshots)"); return 2; }
+    // LOOP-367: a FIRE may not destroy the live board, token or no token. Checked before --from is even
+    // validated, so no ordering of arguments reaches the restore. See activeFireMarker() for why there is
+    // no bypass flag.
+    const marker = activeFireMarker();
+    if (marker) {
+      console.error(`dev-loop board restore: refusing inside an agent fire (${marker} is set). Replacing a live board is an operator action — the confirmation token answers "did you mean this project?", not "may a fire do this at all". Nothing has been written. If a restore is genuinely needed, file it on the board for the operator; to verify this verb, do it in a disposable workspace (mkdtemp + dev-loop team init --dir <tmp>) with the fire markers unset.`);
+      return 4;
+    }
     const verdict = workspaceIsolationVerdict(ws, argv);
     const live = verifySnapshot(wsHubDb(ws));
     // A NON-EMPTY board is protected: refuse without the token. An absent or already-broken board is

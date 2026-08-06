@@ -3,7 +3,7 @@
 // the same WAL db and asserts every read endpoint, the 404s, the read-only 405, and the 127.0.0.1 bind.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { rmSync, mkdirSync, writeFileSync, unlinkSync, mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { rmSync, mkdirSync, writeFileSync, unlinkSync, mkdtempSync, existsSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
@@ -11,7 +11,7 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { createServer as netCreateServer } from "node:net";
 import { openDb } from "../src/db.ts";
-import { findProject } from "../src/seed.ts";
+import { findProject, ensureSeed } from "../src/seed.ts";
 import { createDaemon, roadmapDivergenceDoc } from "../src/daemon.ts";
 import { ticketPage, boardPage } from "../src/daemonviews.ts"; // DL-86: unit-check the failed-write re-render input preservation
 import { startTestDaemon, runDaemonCli } from "./daemon-harness.ts";
@@ -245,6 +245,44 @@ ok(missing.status === 404, "GET /api/tickets/<unknown> → 404");
   // The control: the LIVE daemon in this same suite, whose row DOES exist, stays healthy.
   const live = await fetch(base + "/api/health");
   ok((await live.json() as { ok: boolean }).ok === true, "LOOP-304 control: a daemon whose project row exists is unaffected");
+}
+
+// ── LOOP-367: a daemon whose db FILE was replaced is NOT healthy ───────────────────────────────
+// The second shape of the same failure, and the one LOOP-304's check cannot see: `board restore`
+// swaps hub.db for a new inode, so the orphaned file the daemon still holds open carries a
+// perfectly valid `projects` row. On 2026-08-06 a qa fire did exactly this and the UI served a
+// board frozen at the moment of the swap for 69 minutes, reporting healthy, while every
+// direct-read verb answered correctly.
+{
+  const swapDir = mkdtempSync(join(tmpdir(), "dmn-swap-"));
+  const swapDb = join(swapDir, "hub.db");
+  const seedDb = openDb(swapDb);
+  ensureSeed(seedDb, "swp", "Swap", "SWP");
+  const pid = findProject(seedDb, "swp")!;
+  seedDb.close();
+  const held = openDb(swapDb); held.exec("PRAGMA query_only=ON");
+  const srv = createDaemon({ db: held, projectId: pid, projectKey: "swp", dbPath: swapDb });
+  srv.listen(0, "127.0.0.1");
+  await once(srv, "listening");
+  const p = (srv.address() as { port: number }).port;
+
+  const before = await (await fetch(`http://127.0.0.1:${p}/api/health`)).json() as { ok?: boolean };
+  ok(before.ok === true, "LOOP-367 control: before any swap the daemon is healthy");
+
+  // Replace the file the way a restore does — a NEW inode at the same path, not an in-place write.
+  // An in-place write is visible to the open connection and is deliberately NOT what this catches.
+  const replacement = join(swapDir, "replacement.db");
+  const rdb = openDb(replacement); ensureSeed(rdb, "swp", "Swap", "SWP"); rdb.close();
+  rmSync(swapDb, { force: true });
+  renameSync(replacement, swapDb);
+
+  const after = await fetch(`http://127.0.0.1:${p}/api/health`);
+  const ab = await after.json().catch(() => ({})) as { ok?: boolean; error?: string };
+  ok(after.status === 503 && ab.ok === false, `LOOP-367: a daemon whose db file was REPLACED reports UNHEALTHY (got ${after.status}, ok=${ab.ok})`);
+  ok(/REPLACED since this daemon opened it/.test(ab.error ?? ""), `LOOP-367: …and says WHY (got ${JSON.stringify(ab.error ?? "")})`);
+  ok(/daemon up/.test(ab.error ?? ""), "LOOP-367: …with the same remedy line the reaper and a human both act on");
+  srv.close(); held.close();
+  rmSync(swapDir, { recursive: true, force: true });
 }
 
 // ── LOOP-96: the two human-facing board reads are BOUNDED, and say when they truncated ─────────
