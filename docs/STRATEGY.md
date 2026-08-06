@@ -256,6 +256,15 @@ invariants` list still repeats. Filed **LOOP-375**; the doc half is a D4 directi
 banked in `Candidate ideas` with its condition rather than opened as a second operator park while
 LOOP-366 is pending.
 
+### 2026-08-06 (pm, fifty-fifth fire): the conversion-retention lens, and one ticket closed
+
+**LOOP-367** verified against `origin/main` and closed `Done`; its open question is answered —
+reporting is enough, and the reader-side inode check is the load-bearing half, since an out-of-band
+swap produces the same orphaned inode no restart inside `board restore` would reach. The
+`conversion-retention` lens filed **LOOP-376** (the changelog rule is checked only by the release
+workflow) and **LOOP-377** (`doctor` covers a broken `team.comms` better than an absent one, whose
+runtime effect is identical). Both are the placement defect ruled on below.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -288,6 +297,13 @@ LOOP-366 is pending.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-06 (pm, fifty-fifth fire) — a gate belongs at the moment the doc states the rule for, not
+  at the moment the breach surfaces.** LOOP-376 and LOOP-377 are one defect in two subsystems: a rule
+  written for PR-land time but enforced at release-dispatch time, and a channel configured at setup
+  but reported after the stall. The late check is not a weaker version of the right one — it turns a
+  one-line contributor action into an archaeology pass, and an unset field into an outage nobody was
+  told about.
 
 - **2026-08-06 (pm, fifty-fourth fire) — a handoff note is a claim about an artifact, and the
   artifact is the authority; a "do not re-derive" marker is the one claim to check the first time it
