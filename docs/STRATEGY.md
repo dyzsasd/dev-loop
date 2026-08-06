@@ -199,29 +199,30 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the sixty-first fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the sixty-second fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–52. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–53. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
   (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so a lessons rule scored before
   that timestamp measured a different regime.
 
-### 2026-08-06 (pm, sixty-second fire): the instrument the top-priority mandate rests on undercounts the gap it names
+### 2026-08-06 (pm, sixty-third fire): the second product surface the doc names has no discovery path
 
-The 2026-08-06 ruling made **"MAKE THE LOOP OBSERVABLE AND SAFE"** the north star and grounded it in
-*"zero daily reports written (W35 ×4)"*. Measured against the ledger this fire, W35 reports **one** of
-the four agents that actually have an untraced trail: `reportTrailGaps` clears an agent when ANY ONE
-day of the window has a report (`metrics.ts:721`, `.some()`), so junior-dev (5 untraced fire-days),
-qa (2) and sweep (2) are silent and only reflect — whose count is zero — warns. **Nine untraced
-fire-days are invisible, and the comment directly above the operator states the per-day intent it
-does not implement.** Compounding it: junior-dev's reports are not missing, they are one directory
-away — written to `reports/junior-dev/daily/` while §22 fixes the directory as the full skill name,
-so a near-miss path is indistinguishable from an absent report (**LOOP-412**). This does not weaken
-the mandate; it widens it. Also this fire: the **LOOP-399** design gate passed, releasing
-**LOOP-408/409/410** — the config→hub projection for `mode`/`autonomy`, with `guarded` aliased to
-`ask` (fail-closed) at resolution.
+Product SHA unchanged since the sixty-first fire (`1673c9b` — the only commits since are this doc's
+own passes 51–52), so this fire ran the `strategy-gaps` lens: check the doc's own stated fronts
+against the shipped product. `Goals` names the code-quality gauntlet **a deliberate second surface**
+— *"useful to a repo that never runs the loop, and 1.7.0→1.10.0 was spent making it so"* — adoptable
+outward "in three lines". The surface is built and sound: `dev-loop quality` runs in a fresh
+non-workspace git repo with every `DEVLOOP_*` cleared, and `--threshold` with no scorable rows
+**refuses** (exit 1) instead of passing, so the LOOP-407 shape the outward story is most exposed to
+is already closed there. It is only invisible: `quality` occurs **0** times in `dev-loop --help` (70
+lines, ~40 verbs), **0** in `README.md`, **0** in `docs/INDEX.md`, and its design doc is filed under
+*Historical Design Records* while being current policy (**LOOP-416**). Every other key of the
+`cli.ts:39` lazy-load map appears in the usage string; `quality` is the only one that does not.
+Board: senior depth 5/10 against a Backlog that is entirely junior-tier — the throughput ceiling sits
+at filing time, not at promotion.
 
 ## Personas
 
@@ -256,22 +257,22 @@ the mandate; it widens it. Also this fire: the **LOOP-399** design gate passed, 
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, sixty-second fire) — a check that clears on ANY match is a presence check, not a
-  coverage check, and the two are indistinguishable until the population is uneven.** W35 asks "did
-  this agent report?" and answers it with `.some()` over the window's fire-days, so one report clears
-  every untraced day beside it (**LOOP-412**). It read correct for a year because the agents it was
-  tuned against reported either always or never; the moment one reported *sometimes*, the check
-  reported the shape of its own operator rather than the state of the trail. **Ask of any health
-  check: does it aggregate with `some` or with `every`, and is the population it aggregates over
-  actually uniform?** A corollary for this doc's own numbers: **a count of warning LINES is not a
-  count of the condition** — the ruling that cites "W35 ×4" was counting the instrument's output, and
-  the instrument was lossy. Second, from the **LOOP-399** gate: **two governing rules can be jointly
-  unsatisfiable, and the honest move is to name it, not to pick one silently.** §21a stages design
-  children as junior; §21b makes `sensitive` senior ALWAYS. For module-scale sensitive work the board
-  enforces §21b mechanically (`ticketwrite.ts:310` inherits `sensitive` down the `Design:` pointer,
-  `:334` re-tiers it) — so a junior filing is a write the system corrects and an event log implying a
-  mis-tier. senior-dev filed at the enforced tier and flagged the conflict as a §17 question rather
-  than papering over it; that is the correct handling, and the conflict is the operator's to resolve.
+- **2026-08-06 (pm, sixty-third fire) — a hand-maintained inventory drifts from the dispatched one,
+  and only ONE direction of the drift can raise an error.** `dev-loop --help` is written by hand;
+  `cli.ts:39` dispatches from a map. A verb in the help but not in the map fails loudly the first
+  time anyone runs it. A verb in the map but not in the help fails never — it is used by whoever
+  already knew it existed, and the people who would report it missing are exactly the people who
+  cannot find it. The two halves therefore need a test in one direction only, and it is the
+  direction that generates no error to write the test from (**LOOP-416** AC4). **Ask of any
+  hand-kept list mirroring a machine-readable one: which direction of the drift throws, and who is
+  positioned to notice the other?** Second, the reason this one survived two minor releases:
+  **when a doc claims an outward audience, the discovery path is part of the deliverable, and it is
+  the part no internal user exercises.** The loop's own fires reach `quality` through the Step-5
+  ship gate, which names the verb in the SKILL — every internal consumer is immune to the gap by
+  construction, so dogfooding cannot surface it. Third, it is distinct from both neighbours of its
+  family: LOOP-400 was a knob with a reader and no writer, LOOP-412 a report written one directory
+  from where the check looks, this a verb that works and is named nowhere. Three shapes of *shipped
+  but unreachable* in three fires — only this one costs nothing but naming to close.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -495,11 +496,12 @@ the mandate; it widens it. Also this fire: the **LOOP-399** design gate passed, 
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → sixty-first fires)** — those fires' journals and full-text rulings
-    (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES ruling and
-    the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**), rolled by **§20 R2
-    passes 50–52** → [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Y. The sixty-first
-    fire's own findings (**LOOP-406**, **LOOP-407**) stay open.
+  - **2026-08-06 (pm, fifty-ninth → sixty-second fires)** — those fires' journals and full-text
+    rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
+    ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
+    presence-vs-coverage check behind **LOOP-412**), rolled by **§20 R2 passes 50–53** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z. Findings still open from that span:
+    **LOOP-406**, **LOOP-407**, **LOOP-412**.
 
 ## Candidate ideas
 
