@@ -90,25 +90,58 @@ export function designParentIds(db: DatabaseSync, projectId: string, rows?: Desi
   return out;
 }
 
+// ONE slug-token rule, shared by the pointer side (docSlugOf) and the body side (docSlugOfBody) —
+// so the two can never resolve different slugs from the same doc name. That divergence IS LOOP-344's
+// defect, and keeping the rule in two places is how it came back (LOOP-361).
+//
+// Two properties have to hold at once, and each of the obvious one-liners holds only one of them:
+//   • `.` is legal INSIDE a slug — `v1.2-module` must survive whole — so `.` cannot leave the class.
+//   • a `.` that ENDS the token is sentence punctuation, not slug: `… hubDoc:design/beta-mod.` names
+//     `beta-mod`. The old pattern captured `beta-mod.`, which matched no child's slug, so a parent
+//     that named its doc at the end of a sentence was invisible (LOOP-361).
+// Requiring the LAST character to be a non-dot slug char draws that line inside the pattern: a `.`
+// with more slug characters after it is consumed as slug, a `.` with anything else after it is left
+// behind for the prose. A trailing-dot strip applied afterwards would get today's cases right too,
+// but it decides on `.` without looking at what follows, so it eats a dot the slug would have
+// continued through the moment a slug is allowed to end in one.
+//
+// GREEDY, deliberately — both regressions this file records trace to a lazy quantifier and the
+// guard that had to steer it. `\b` let the lazy `+?` stop at the first word boundary, splitting
+// `hubDoc:design/widget-engine` into `widget` here while the child side resolved `widget-engine`
+// (hence the hyphenated fixture slugs). Replacing `\b` with `(?![A-Za-z0-9._-])` fixed that but
+// counted `.` as a slug character, so it then refused to let the match END before a full stop and
+// drove the lazy `+?` PAST it — LOOP-361.
+// Greedy plus a required non-dot tail needs no trailing guard at all: the match already runs to the
+// last non-dot slug char, so the next character can only be a `.` or a non-slug character, and a
+// guard asserting exactly that can never fire (verified by differential fuzz before removing it).
+// Do NOT re-introduce a lazy quantifier here without restoring one.
+const SLUG_TOKEN = "[A-Za-z0-9._-]*[A-Za-z0-9_-]";
+
+/** `<slug>.md` and `<slug>` name the same doc. Applied once, to both sides' captures. */
+const stripMdSuffix = (slug: string): string => slug.replace(/\.md$/i, "");
+
+// The pointer side keeps its original anchoring exactly: `hubDoc:` matches a prefix of the pointer,
+// `docs/design/` must span the whole of it. The `\.?` lets a pointer written at the end of a
+// sentence resolve rather than fail the `$` — the same full stop the body side now steps over.
+const HUB_POINTER_RE = new RegExp(`^hubDoc:design/(${SLUG_TOKEN})`, "i");
+const FILE_POINTER_RE = new RegExp(`^docs/design/(${SLUG_TOKEN})\\.?$`, "i");
+
 /** `hubDoc:design/<slug>` and `docs/design/<slug>.md` normalise to the same slug. */
 export function docSlugOf(pointer: string): string | null {
-  const hub = /^hubDoc:design\/([A-Za-z0-9._-]+)/i.exec(pointer);
-  if (hub) return hub[1].replace(/\.md$/i, "");
-  const file = /^docs\/design\/([A-Za-z0-9._-]+?)(?:\.md)?$/i.exec(pointer);
-  return file ? file[1] : null;
+  const hub = HUB_POINTER_RE.exec(pointer);
+  if (hub) return stripMdSuffix(hub[1]);
+  const file = FILE_POINTER_RE.exec(pointer);
+  return file ? stripMdSuffix(file[1]) : null;
 }
 
 // A design PARENT's own body may name its doc anywhere (the slug line, a `doc:` reference), not as a
-// `Design:` pointer — that pointer is the CHILD's marker. Scan for the same slug shapes in the body.
-//
-// The trailing guard is a NEGATIVE LOOKAHEAD, not `\b`. With `\b` the lazy quantifier stops at the
-// first word boundary, and `-` is a non-word character: `hubDoc:design/widget-engine` resolved to
-// `widget` here while the child side resolved `widget-engine`, so the two never matched and the
-// parent stayed invisible. That is the same defect this ticket exists to fix, reintroduced one layer
-// down — caught by the fixture, which is why the fixture uses hyphenated slugs.
+// `Design:` pointer — that pointer is the CHILD's marker. Scan for the same slug shapes in the body,
+// through the same SLUG_TOKEN rule the pointer side uses.
+const BODY_SLUG_RE = new RegExp(`(?:hubDoc:design/|docs/design/)(${SLUG_TOKEN})`, "i");
+
 function docSlugOfBody(description: string): string | null {
-  const m = /(?:hubDoc:design\/|docs\/design\/)([A-Za-z0-9._-]+?)(?:\.md)?(?![A-Za-z0-9._-])/i.exec(description ?? "");
-  return m ? m[1] : null;
+  const m = BODY_SLUG_RE.exec(description ?? "");
+  return m ? stripMdSuffix(m[1]) : null;
 }
 
 export function isDesignModeBody(description: string): boolean {
