@@ -199,30 +199,30 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the fifty-eighth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the sixtieth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–49. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–51. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
   (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so a lessons rule scored before
   that timestamp measured a different regime.
 
-### 2026-08-06 (pm, sixtieth fire): a knob with a reader, a default and no writer is indistinguishable from a configured one
+### 2026-08-06 (pm, sixty-first fire): three complete designs were frozen behind a gate that never read their state
 
-The SHA moved twice inside the fire — `9977462` (**LOOP-349**) then `d5da6f6` (**LOOP-352**) — so the
-lens list reset and the first sweep was `consistency`. Both findings are the same shape. `dev-loop
-project --json` — the CLI whoami every `interface:"cli"` fire runs FIRST — reports `mode` and
-`autonomy` from hub columns that carry CHECK constraints, defaults, and exactly one reader, and that
-**no code path has ever written**: `seed.ts:115` omits them from its INSERT and no `UPDATE projects
-SET mode|autonomy` exists. Probed on a throwaway db: a project seeded with no config at all is
-byte-identical to a configured one. Worse, the two stores do not share a vocabulary — `team init`
-defaults `autonomy` to `guarded`, which the column's CHECK cannot hold (**LOOP-399**, senior +
-`sensitive`, promoted). The DL-24 `assignTo` directive is the same defect one layer up: implemented
-on both write paths, tested, named in the design doc as the recommended opt-in — and
-`workflow.transitions` lives in `settings_json`, which no mutator, settable path, or schema entry can
-reach (**LOOP-400**). Its absence showed the same hour: **LOOP-349** was handed to `assignee: pm` on a
-`qa`-labelled ticket, and `opQueue` routes on the label alone.
+**LOOP-382**, **LOOP-383** and **LOOP-348** all sat blocked on the merged-but-unpublished LOOP-360
+design-parent exemption — the oldest for five fires. `handoffGateRejection` opens
+`if (fromState !== "In Progress" || toState !== "In Review") return null`, so the refusal keys on the
+SOURCE state: LOOP-382/383 were parked `Human-Blocked` and LOOP-348 sat in `Todo`, and the gate reads
+neither edge. **Recording the block is what cleared it.** All three passed the §21a gate this fire,
+releasing fourteen children (LOOP-391..396, LOOP-401..404, LOOP-356..359); senior depth went 1 → 3
+after fires 58–60 each reported that tier starved. LOOP-382's children stated their sequencing in
+prose only, so I wrote the three `Blocked-by: LOOP-401` edges at promotion rather than failing an
+otherwise sound design. Verify: **LOOP-353**'s W37 warning band shipped correct on AC1/2/3/5 and
+verify-failed on AC4 — its three fixtures assert constants (`x + 1 > x`), and disabling the soft band
+leaves the suite green (**LOOP-406**). Separately, PR #246 merged on zero test signal: both required
+checks never dispatched during a GitHub Actions outage, and a PR with no queued checks reads `CLEAN`
+to a `main` that has no branch protection (**LOOP-407**).
 
 ## Personas
 
@@ -257,23 +257,23 @@ reach (**LOOP-400**). Its absence showed the same hour: **LOOP-349** was handed 
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, sixtieth fire) — an acceptance criterion pins what a ticket ADDS; nothing pins
-  what it may not REMOVE.** **LOOP-352** passed all four ACs against the running product — I ran both
-  trees and re-measured the fail-before claim rather than reading it — and still verify-failed on
-  stage-1 triage. Its `renderFlow` branch **substituted** LOOP-219's basis annotation (`delivered
-  spend ÷ throughput; discarded fires excluded`) for the new incomplete-history qualifier instead of
-  extending it, so this board now publishes `$15.3983/accepted change` and `$14.8438/accepted-change`
-  3.7% apart, both labelled only "incomplete history" — the text that explained the difference is the
-  text that was deleted (**LOOP-405**). Its AC2 said *byte-identical* and was written for the
-  complete-history branch; the live branch was the other one. **A byte-identity AC protects only the
-  branch it names — write it against the branch the product is actually in, and pin the annotation
-  you are editing around.** Second rule, from the same fire's lens sweep: **a config knob is
-  verified by finding its WRITER, not its reader.** `projects.mode`/`autonomy` (**LOOP-399**) and
-  `workflow.transitions` (**LOOP-400**) each have a complete, correct, tested reading side; the value
-  is simply always the default, so every consumer works and nothing looks broken. Extending STANDING
-  RULE 28 and the shipped-≠-wired family: for any knob, grep the write path in the fire that ships
-  it, and let a test set it through the SUPPORTED path — an assertion that writes the store directly
-  is the wiring gap's alibi.
+- **2026-08-06 (pm, sixty-first fire) — a block is a measurement of a predicate in ONE state, not a
+  property of the ticket.** Three design parents (**LOOP-382**, **LOOP-383**, **LOOP-348**) waited on
+  the unpublished LOOP-360 exemption; the oldest waited five fires, and I wrote the last of those
+  edges myself. `handoffGateRejection` returns null unless `fromState === "In Progress" && toState ===
+  "In Review"` — so parking a ticket `Human-Blocked`, or leaving it `Todo`, moves it off the only edge
+  the gate reads. Re-read the predicate against the state the ticket is in NOW, not the state it was
+  in when the refusal was measured. Second, from the same three: **a park with no `Blocked-by:` edge
+  is not tracked, it is remembered** — §9c unparks only tickets with ≥1 edge all closed, so a
+  zero-edge park waits on a human noticing prose. Write the edge at park time or the park is
+  permanent. Third, from verify: **a regression test is worth nothing until the mutation is run.**
+  LOOP-353's fixtures were arithmetic over constants and the suite stayed green with the feature
+  deleted (**LOOP-406**); the hand-off's flat claim that the middle fixture fails-before was true only
+  of a missing import, which is a compile dependency, not a discriminator. Where an AC asks for
+  fixtures against a function that resolves its own input, **the injection seam is the ticket**.
+  Fourth: **the absence of a check is not a passing check** — PR #246 landed with neither required
+  check dispatched, because an unqueued PR reads `CLEAN` and `main` is unprotected (**LOOP-407**). The
+  safer a PR looks, the less was measured.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -497,9 +497,10 @@ reach (**LOOP-400**). Its absence showed the same hour: **LOOP-349** was handed 
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth fire)** — that fire's journal and full-text ruling (the
-    deleted-handler and asserted-null pair behind **LOOP-397**), rolled by **§20 R2 pass 50** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–W2.
+  - **2026-08-06 (pm, fifty-ninth → sixtieth fires)** — those fires' journals and full-text rulings
+    (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES ruling and
+    the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**), rolled by **§20 R2
+    passes 50–51** → [`2026-08.md`](strategy-archive/2026-08.md), blocks W–X2.
 
 ## Candidate ideas
 
@@ -508,6 +509,18 @@ becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verba
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block J). Two
 entries left this list by being FILED as the reversal condition they named had lapsed, and one by
 being discharged: the `[ARCHIVED]`-index compaction it designed is this very pass.)_
+
+  - **`Non-goals`' closing sentence will read as contradicted by the approvals module** (**LOOP-383**,
+    design verified and its six children promoted in the sixty-first fire). *"dev-loop is not a
+    human-approval workflow tool"* summarises the two clauses before it — no **default** step-by-step
+    gating, no interactive prompts — and the design keeps both: enforcement is a per-class enable list
+    defaulting to EMPTY, no prompt is issued, and no fire ever waits inline. So nothing is breached
+    and no direction change is needed. But a reader who meets `dev-loop approve` in the verb list
+    without reading the design's §1 will fairly read a contradiction. Wants one qualifying clause.
+    `Non-goals` is a direction section (§20 D4), so this is the operator's to write, not mine.
+    **Condition:** LOOP-366 ruled on — the operator closed that lane and instructed that no competing
+    park be opened, so this queues behind it alongside the stale '127.0.0.1 only' Hard invariant and
+    the Vision's present-tense 'chat bridge' claim.
 
 - **The `Hard invariants` list in `Goals (north star)` still states "§16 (binds 127.0.0.1 only)",
   which the product deliberately relaxed.** `daemon.ts:913` reads `DEVLOOP_DAEMON_HOST` and 915–917
@@ -564,10 +577,3 @@ being discharged: the `[ARCHIVED]`-index compaction it designed is this very pas
   remainder of six DL-era candidates rolled at R2 pass 18; the rest were filed or landed on the
   retired **DL-prefix** board.)
 
-- **DISCHARGED 2026-08-06 (fire 50), both loop-cost-governance banks.** *Daemon serves stale VIEW
-  code* → its condition lapsed (LOOP-195 Done, the operator still told by hand); re-verified against
-  `origin/main` and filed as **LOOP-364**, which is the sharper form: `/api/health` already serves
-  `buildCommit` and only `daemon up` reads it. *Accept-rate in the Reflect daily digest* → **no
-  ticket needed**: reflect pastes `metrics --window 7d --json` verbatim, so LOOP-98's fix arrived by
-  construction (`verifyFails / acceptRate | 11 / 0.9141`, 2026-08-01 digest). The bank is now empty
-  of cost-governance entries.
