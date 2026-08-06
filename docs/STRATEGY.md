@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the seventy-first fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the seventy-second fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–62. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–63. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -209,30 +209,32 @@ is precisely how the withdrawn one survived a day steering the top priority.
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, seventy-second fire): the direction section nothing can falsify
+### 2026-08-06 (pm, seventy-third fire): a watch whose input no caller supplies
 
-Product SHA unchanged at `9a15ecd` — both commits since are my own doc lands — so the lens list
-stood and `strategy-gaps` ran.
+Product SHA moved `9a15ecd → 9bb8d79` (LOOP-424), so the lens list reset and `data-analytics` ran
+first, focused by that diff.
 
-**A fifth D4 item carried to LOOP-366, and zero tickets filed.** `Non-goals` asserts the loop "must
-keep working on the `local` and `service` backends"; `backend:"local"` has not loaded since the 1.x
-schema — E02 at validation, measured rung 3 on the installed CLI. `config-schema.md`,
-`ARCHITECTURE.md` and `INDEX.md` all already describe `local` as legacy/unsupported, so `Non-goals`
-is the last surface still asserting the constraint — the same shape as the `Hard invariants` §16
-item carried at 20:46Z. Filing nothing was the ruling, not a shortfall: the residue
-(`boot-prefix.ts:230` branches on a value the validator rejects) can be fixed two opposite ways and
-choosing one pre-empts the operator's edit, which is already open over these sections.
+**LOOP-431 filed, one ticket.** LOOP-267's `cacheReadDrift` — the >25% step-change flag over
+per-agent `cacheRead/fire` — reads `baselines?.[agent]` from an optional sixth parameter that
+`renderHuman`'s only production caller (`metrics.ts:1513`) does not pass, and nothing in `hub/src`
+produces a cacheRead baseline at all. It has never fired and cannot. The ticket decides the baseline
+source rather than deferring it — the same agent over the immediately preceding equal-length window
+of the same ledger, which needs no store, no config key and no migration — and requires the rendered
+flag to carry both sides and its sample size, so a badly-chosen sample floor stays legible to the
+reader. LOOP-267's own justification, still quoted in that file, is a junior-dev fire whose cost
+doubled unnoticed for seven hours; against $2,208 over 609 priced fires in this window, the alert
+built to catch a recurrence is the half that did not land.
 
-**LOOP-384 groomed and promoted** (junior 9/10 → 10/10, at cap). Wrote ACs for the two `Scope`
-items that had none, made AC2 name a fixture that can fail (three kinds, three ages, mutate one)
-per the LOOP-420 lesson, and extended AC1 to a *change* of kind — the operator re-classified
-LOOP-373 mid-day because there is no field, which is the behaviour the AC exists to protect.
-**LOOP-412 ↔ LOOP-425 cross-linked**: two separately-ticketed defects on consecutive lines of
-`reportTrailGaps`, and the one a junior picks first had no pointer to the other.
+**Board.** LOOP-387 promoted (junior 9/10 → 10/10, at cap; senior sits at 4/10 with its only Backlog
+row blocked, so its free slots cannot be filled from Backlog). §9c: 15 live edges, zero unparks due.
+`needs-pm` and the `_team` carrier are both empty. LOOP-373's blocker is unchanged — npm `latest` is
+still 1.15.0. Doc-watch: no foreign edit.
 
-Board: §9c 14 live edges, zero unparks due, zero zero-edge parks; `needs-pm` and the `_team`
-carrier both empty; LOOP-373's blocker unchanged (npm `latest` still 1.15.0). Doc-watch: no foreign
-edit.
+**Landing, measured and not filed.** `main` has been red for five consecutive runs on the same two
+typecheck errors (LOOP-423, In Progress). Of 14 open PRs, nine read `CLEAN` while carrying exactly
+one check — GitGuardian — with neither configured `mergeCheck` dispatched, because GitHub Actions is
+still in `major_outage`. That is LOOP-407's defect, already In Progress, recorded here as a second
+observed instance rather than re-filed.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -266,25 +268,20 @@ edit.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, seventy-second fire) — a `Non-goals` line states a constraint the product can
-  stop honouring without anything failing; and a ticket whose ACs cover a subset of its own Scope
-  can be verified complete while delivering neither unpinned item.** LOOP-366/LOOP-384. The
-  `strategy-gaps` lens re-read `Non-goals`' *"the loop must keep working on the `local` and
-  `service` (hub) backends"* against the shipped validator: `team.backend` is typed
-  `"linear" | "service"` (`team-config.ts:66`), anything else is **E02** (`:399`), and `:618`
-  throws on a non-empty error list — so a `local` workspace does not lose a feature, it fails to
-  load, and every verb refuses. Measured at rung 3 on installed 1.15.0 in a fixture:
-  `DOCTOR_FAILED`, and `team init --backend local` dies before writing. Four other documents
-  already record the retirement (`config-schema.md:29,184`, `ARCHITECTURE.md:229`, `INDEX.md:34`,
-  and README's silence). **A direction section has no consumer that can fail: code drifts from it
-  and every gate stays green, so the section keeps steering the loop after the product stopped
-  obeying it.** The correction is D4 and routes to the operator; the fix *direction* — delete the
-  unreachable `boot-prefix.ts:230` branch, or make the validator accept the value — is theirs, so
-  nothing was filed rather than guess ACs for one of the two. Second, LOOP-384: its `Scope` named
-  five deliverables and its ACs pinned three, leaving the `external` probe hint and the metrics
-  split with no checkbox at all. A prior fire's comment noting one of them as *"worth folding into
-  the ACs"* had sat unacted for a fire. **Verification reads the AC list; a scope item recorded
-  anywhere else is not delivered by the ticket that names it.**
+- **2026-08-06 (pm, seventy-third fire) — a shipped watch whose input no caller supplies renders
+  as an empty string, which is the same output a watch with nothing to report produces.** LOOP-431.
+  The `data-analytics` lens, focused by the product diff `9a15ecd..9bb8d79` (LOOP-424 — a doctor
+  line that printed the literal `base green` where it claimed a measured value), found the same
+  shape one layer out. LOOP-267 shipped two watches over per-agent `cacheRead/fire`, each reading an
+  optional parameter: `modeledContextBytes` on `fireMetrics` (the amplification ratio) and
+  `baselines` on `renderHuman` (the >25% step-change flag). No production caller passes either, and
+  no producer of a cacheRead baseline exists anywhere in `hub/src` — `grep -rniE baseline` returns
+  only a strategy-doc hash and a mirror body hash. Rung 3 on the installed 1.15.0: six agent rows,
+  zero flags, and `"amplification": null` on every row of `metrics --json`. **An absent input that
+  degrades to an empty string is indistinguishable at the surface from a measured absence, so no
+  reader and no test can tell the capability is off, and the gap outlives the ticket that closed
+  it.** LOOP-267 is `Done` with both watches inert; LOOP-397 already carried the first, and LOOP-431
+  carries the second and decides the baseline source instead of leaving it open.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -509,14 +506,14 @@ edit.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → seventy-first fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → seventy-second fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–62** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AI. Findings still open from that
+    rolled by **§20 R2 passes 50–63** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AJ. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-429**, **LOOP-426**.
 
