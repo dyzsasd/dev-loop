@@ -12,7 +12,9 @@ import { fileURLToPath } from "node:url";
 import { conventionsSlice } from "../src/conventions-verb.ts";
 import { conventionsUnionText } from "../src/boot-prefix.ts";
 import { tryResolveWorkspace } from "../src/workspace.ts";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { loadWorkspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -20,19 +22,35 @@ const root = join(hubRoot, "..");           // the plugin root: skills/ + refere
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
+let wsRoot = "";
 try {
-  const ws = tryResolveWorkspace();
+  // A SYNTHETIC workspace, not the ambient one. The prune is decided by repo/project config, so an
+  // assertion written against whatever workspace happens to be resolvable passes for a different
+  // reason on every host — and on CI, where nothing resolves, EVERY conditional span prunes and the
+  // "is it pruned?" checks go green while measuring nothing. This fixture pins both directions.
+  wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-conv-")));
+  mkdirSync(join(wsRoot, "repo"), { recursive: true });
+  writeFileSync(join(wsRoot, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    team: { key: "conv", backend: "service" },
+    // autoMerge:true is what keeps §12c ON. No deploy block, one repo, no codex ⇒ §12d/§19/§24 off.
+    repos: { repo: { path: "repo", landing: "pr", autoMerge: true } },
+    projects: { p: { repos: [{ ref: "repo", role: "primary" }] } },
+  }));
+  const ws = loadWorkspace(wsRoot);
 
   // ── AC1: the slice is always-read + cited spans MINUS the config-off anchors ──────────────────
-  const senior = conventionsSlice(root, "senior-dev", ws);
+  const senior = conventionsSlice(root, "senior-dev", ws, "p");
   ok(senior.anchors.length > 0, `LOOP-237 AC1: senior-dev declares ${senior.anchors.length} anchors`);
-  for (const off of ["5", "12d", "19", "24"]) {
-    ok(senior.pruned.includes(off), `LOOP-237 AC1: §${off} is config-pruned in this workspace`);
+  for (const off of ["12d", "19", "24"]) {
+    ok(senior.pruned.includes(off), `LOOP-237 AC1: §${off} is config-pruned (no deploy / single repo / no codex)`);
     ok(!senior.kept.includes(off), `LOOP-237 AC1: …and absent from the kept set`);
   }
-  // The kept control: a span whose feature IS on must survive, or "pruned everything" would pass above.
-  ok(senior.anchors.includes("12c") ? senior.kept.includes("12c") : true,
-    "LOOP-237 AC1: §12c (autoMerge/release-pr — ON here) is KEPT, so the prune is selective, not total");
+  // THE DISCRIMINATOR: §12c's feature (autoMerge) is ON in this fixture, so it must be KEPT. Without
+  // it, "prune everything" passes every assertion above — which is exactly what happened on CI when
+  // the fixture was the ambient workspace and nothing resolved.
+  ok(senior.anchors.includes("12c") && senior.kept.includes("12c") && !senior.pruned.includes("12c"),
+    "LOOP-237 AC1: §12c is KEPT because autoMerge is on here — the prune is SELECTIVE, not total");
   ok(senior.kept.length > 0 && senior.kept.length < senior.anchors.length,
     `LOOP-237 AC1: the prune removes SOME anchors, not none and not all (${senior.kept.length} of ${senior.anchors.length})`);
 
@@ -63,7 +81,7 @@ try {
   // ── the CLI surface ──────────────────────────────────────────────────────────────────────────
   const run = (args: string[]): { code: number; out: string; err: string } => {
     const r = execFileSync(process.execPath, [join(hubRoot, "src", "conventions-verb.ts"), ...args],
-      { encoding: "utf8", env: scrubFireEnv() as NodeJS.ProcessEnv, maxBuffer: 64 * 1024 * 1024 });
+      { encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: wsRoot } as NodeJS.ProcessEnv, maxBuffer: 64 * 1024 * 1024 });
     return { code: 0, out: r, err: "" };
   };
   {
@@ -87,7 +105,9 @@ try {
     catch (e) { unknown = (e as { status?: number }).status ?? 0; }
     ok(unknown === 1, `LOOP-237: an unknown agent fails cleanly rather than emitting a partial slice (exit ${unknown})`);
   }
-} finally { /* nothing to clean up — the verb is read-only */ }
+} finally {
+  try { rmSync(wsRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+}
 
 console.log(fails ? `\n${fails} CHECK(S) FAILED` : "\nCONVENTIONS_VERB_OK");
 process.exit(fails ? 1 : 0);
