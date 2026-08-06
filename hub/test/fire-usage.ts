@@ -10,7 +10,7 @@
 // So this file is not busywork: it converts the repo's merge margin from luck into headroom, and it
 // exercises a detector that decides whether a fire is recorded as a success.
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter } from "../src/fire-usage.ts";
-import { fireMetrics } from "../src/metrics.ts"; // LOOP-318: the aggregation half
+import { fireMetrics, cacheReadDrift } from "../src/metrics.ts"; // LOOP-318 / LOOP-267
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -119,6 +119,56 @@ ok(!codexUsageAdapter.isError!('{"type":"item","text":"the build printed: error:
       "LOOP-318 AC5: an ALL-NULL agent reports NO mean rather than 0 — the LOOP-268 null contract survives the aggregation hop");
     ok(m2.byAgent.qa.turnsCoveredFires === 0, "LOOP-318 AC5: …with a covered count of 0, so the absence is legible");
   }
+}
+
+// ── LOOP-267: the TURNS half of cacheRead ────────────────────────────────────────────────────────
+// Modeled context correlates 0.14 with a fire's bill while duration correlates 0.78 — so the modeled
+// number was never the thing driving cost. A fire that takes more turns re-reads its whole context
+// on each one. junior-dev's median fire doubled to 40.5 min / 14.23M cacheRead and NO SURFACE
+// NOTICED FOR 7 HOURS, because no surface carried the number at all.
+{
+  const now = Date.now();
+  const at = (m: number) => new Date(now - m * 60_000).toISOString();
+  const u = (cacheRead: number, cost: number) => ({ source: "provider", inputTokens: 100, outputTokens: 200, cacheReadTokens: cacheRead, cacheWriteTokens: 50, costUsd: cost, currency: "USD" });
+  // TWO agents with IDENTICAL modeled context and 3x different cacheRead per fire. If the surface
+  // cannot separate these two, it is not measuring the thing the ticket is about.
+  const rows = [
+    { ts: at(5), agent: "senior-dev", project: "p", durationMs: 1000, exitCode: 0, usage: u(3_000_000, 1.0) },
+    { ts: at(4), agent: "senior-dev", project: "p", durationMs: 1000, exitCode: 0, usage: u(3_000_000, 1.0) },
+    { ts: at(3), agent: "junior-dev", project: "p", durationMs: 1000, exitCode: 0, usage: u(9_000_000, 3.0) },
+    { ts: at(2), agent: "junior-dev", project: "p", durationMs: 1000, exitCode: 0, usage: u(9_000_000, 3.0) },
+    // A zero-cost row: it has usage but no billable spend, so it must not enter the denominator.
+    { ts: at(1), agent: "senior-dev", project: "p", durationMs: 1000, exitCode: 1, usage: u(1_000_000, 0) },
+  ];
+  const ledger = join(mkdtempSync(join(tmpdir(), "dl-cr-")), "fires.jsonl");
+  writeFileSync(ledger, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  const MODEL = { "senior-dev": 400_000, "junior-dev": 400_000 }; // identical modeled context, in BYTES
+  const fm = fireMetrics(ledger, 3_600_000, now, MODEL);
+  const sd = fm.byAgent["senior-dev"], jd = fm.byAgent["junior-dev"];
+
+  ok(sd.cacheReadPerFire === 3_000_000 && jd.cacheReadPerFire === 9_000_000,
+    `LOOP-267: cacheReadPerFire distinguishes two agents at IDENTICAL modeled context (${sd.cacheReadPerFire} vs ${jd.cacheReadPerFire})`);
+  ok(jd.cacheReadPerFire! / sd.cacheReadPerFire! === 3,
+    "LOOP-267: …by exactly the 3x the fixture encodes — the surface measures the difference, it does not merely report a number");
+
+  // The DENOMINATOR must equal usdPerFire's, asserted rather than assumed.
+  ok(sd.usdPerFire === 1.0, `LOOP-267: usdPerFire excludes the zero-cost row (${sd.usdPerFire})`);
+  ok(sd.cacheReadPerFire === 3_000_000,
+    "LOOP-267: …and cacheReadPerFire excludes the SAME row — the denominators are equal by construction, not by a parallel filter");
+  ok(sd.cacheWritePerFire === 50 && sd.outputPerFire === 200, "LOOP-267: cacheWritePerFire and outputPerFire ride the same denominator");
+
+  // amplification = cacheRead/fire ÷ modeled context in tokens. 400,000 B / 4 = 100,000 tokens.
+  ok(sd.amplification === 30 && jd.amplification === 90,
+    `LOOP-267: amplification normalizes by MODELED context (${sd.amplification} vs ${jd.amplification}) — same context, 3x the re-reads`);
+  ok(fireMetrics(ledger, 3_600_000, now).byAgent["senior-dev"].amplification === null,
+    "LOOP-267: …and is NULL without a model — a ratio against a denominator we lack invites being read as one we have");
+
+  // The >25% drift flag, both directions.
+  ok(cacheReadDrift(3_000_000, 2_000_000) !== "", "LOOP-267: +50% over baseline is FLAGGED");
+  ok(cacheReadDrift(2_400_000, 2_000_000) === "", "LOOP-267: …+20% is not — the threshold is a step change, not any movement");
+  ok(cacheReadDrift(2_500_000, 2_000_000) === "", "LOOP-267: …and exactly +25% is not, so the boundary is stated not guessed");
+  ok(cacheReadDrift(3_000_000, undefined) === "" && cacheReadDrift(null, 2_000_000) === "",
+    "LOOP-267: a missing baseline or a missing current value produces NO flag — not a comparison against zero");
 }
 
 console.log(fails ? `\n${fails} CHECK(S) FAILED` : "\nFIRE_USAGE_OK");
