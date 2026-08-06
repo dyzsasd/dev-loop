@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the sixty-ninth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the seventieth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–60. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–61. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -209,28 +209,31 @@ is precisely how the withdrawn one survived a day steering the top priority.
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, seventieth fire): the citation the router read as ownership
+### 2026-08-06 (pm, seventy-first fire): the assertion that copies what it guards
 
-Product SHA moved to `9a15ecd` (LOOP-420's `team-edit.ts`), so the lens list reset and `consistency`
-ran over that delta and over the routing it exposed.
+Product SHA unchanged at `9a15ecd` — both commits since are my own doc lands — so the lens list
+stood and `trust-safety` ran, the first sweep of the credential surface under the
+observable-and-safe mandate.
 
-**LOOP-379 ruled — the back-link replaces the body scan.** `queue` handed PM a `qa`-owned Bug:
-`designParentIds` returned `{LOOP-420}` as the only design parent on the board, because LOOP-420
-cites `hubDoc:design/project-config-projection` once, in backticks, while explaining its own root
-cause. §21a's rule then fired both ways — into `pm.verify`, and out of `qa.verify`, where its owner
-cannot reach it through `queue` at all. Scored against PR #242's own tree (LOOP-372, held on the
-Actions outage): all three of its bounds pass over the case, 25 parents either way. Ruled: derive a
-slug's owner from the §21a `relatedTo` link and delete the body scan — 27 parents, none
-non-terminal, each of the four open slugs resolving to its true owner, including
-`project-config-projection` → LOOP-399, which no route reached. LOOP-379 p3 → p2, senior +
-`sensitive`; the LOOP-372 edge stays.
+**LOOP-420 verify-FAILED on AC4; LOOP-429 supersedes it.** QA ruled it Fixed on two fires and could
+not execute the close — the design-parent gate admits only pm/operator to a terminal transition,
+and the same misclassification had removed the row from `qa.verify`. Verified independently before
+ruling (detached worktree at `a19f426`, fire env scrubbed): `TEAM_EDIT_OK`, six assertions green,
+diff scope-clean — QA's verdict on the product was right. The production fix stays on `main`;
+`Canceled` records the increment, not the code. Follow-up routed up to senior per §3 and widened to
+the second inlined copy (`schedulable-seam.ts:96`) and the `includes("NOT_SCRATCH_SQL")` text check
+at `:114`, which together leave LOOP-349's one-definition guarantee with no test able to detect
+drift.
 
-**LOOP-427 filed.** LOOP-420's own fix prints `projected scratch=… to hub row '<key>'` after a
-`void` helper whose `if (!row) return` writes nothing, and swallows every db error bare. Measured on
-the merged helper over a temp db: identical output, one write.
+**LOOP-430 filed and promoted** (senior, `sensitive`). Measured on a fixture at mode 644: `doctor`
+exits 0, prints no row, carries W03/W30/W32 only. The four product writers are correct (`0o600` plus
+an explicit `chmodSync`); the gap is the reporting channel.
 
-Board: promoted LOOP-424 (junior 9/10 → 10/10); senior 2/10, its only Backlog row blocked.
+**LOOP-366** stays the operator's — the LOOP-351 measurement their ruling waits on is recorded
+there, as far as it goes without the published artifact.
 
+Board: promoted LOOP-430 (senior 4/10 → 5/10); junior held at cap 10/10. §9c: 14 live edges, zero
+unparks due, zero zero-edge parks.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -264,27 +267,27 @@ Board: promoted LOOP-424 (junior 9/10 → 10/10); senior 2/10, its only Backlog 
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, seventieth fire) — when a link has two sides, the defect is that they read the
-  same evidence at different strictness, and no bound on one side reaches it; and a finding is
-  "inert" only for as long as its instance stays terminal.** LOOP-379/LOOP-372/LOOP-420. One reverse
-  link, two readers: the child side binds a `Design:` pointer only as a bare line, with a comment
-  explaining that a marker QUOTED in prose is not a marker; the parent side scanned the same doc
-  name anywhere it appeared. Three bounds were added to the parent side (on-board id, mode
-  contradiction, ambiguity) and none of the three reaches a ticket that simply cites the neighbouring
-  design once. **Ask of any two-sided rule: do both sides accept the same evidence at the same
-  strictness? A bound added to one side treats the asymmetry as a tuning problem.** The remedy that
-  held was to change what the side reads — a `relatedTo` link the board is REQUIRED to write
-  (conventions.md:1892) in place of a sentence it happens to contain — and that also resolved a
-  parent no text rule could reach, because it never reads text. Second, the deferral: this ticket
-  recorded *"current impact: none"* on the true observation that its one instance was `Done` and all
-  three consumers filter terminal rows. **That is a measurement of the row set on the day it was
-  written.** Within a day the same shape appeared on an `In Review` ticket and the routing fired.
-  Ask what makes a deferred finding inert, and whether that fact is about the defect or about
-  today's data. Third, the block: it was parked for a measurement produced by an unmerged PR, and
-  `git fetch origin pull/<n>/head` produces that measurement now — **a decision waiting on a number
-  is waiting on an action, not on a merge.** Fourth, the cost model: a routing predicate that both
-  admits and excludes doubles a false positive — it adds a reader who has no authority and removes
-  the one who does, so the work is invisible rather than merely misfiled.
+- **2026-08-06 (pm, seventy-first fire) — a regression test that copies the value it protects
+  cannot fail when that value changes; a gate deciding who may write and a gate deciding who can see
+  must be checked against each other; and a detected condition with no reporting channel is
+  unreported.** LOOP-420/LOOP-429/LOOP-430. LOOP-420's AC4 required the test to IMPORT
+  `NOT_SCRATCH_SQL` from `sql-predicates.ts` and stated that an inlined copy does not satisfy it.
+  The shipped test inlined a character-for-character copy. Inverting the shared constant —
+  `IS NOT 1` to `IS 1`, which reverses the meaning for all three production consumers — left the
+  suite at `TEAM_EDIT_OK` with the AC4 line printing the same two numbers. Two verifications had
+  already passed it: the implementer's Step 5.5, and QA's stage-1 triage run on two separate fires.
+  Reading an assertion does not separate "asserts the shipped value" from "asserts a copy of it";
+  the check that separates them is to change the value and re-run. **For any AC whose purpose is
+  that an assertion be capable of failing, the required evidence is the mutated run.** Second: QA
+  reached the correct verdict twice and could not execute it — the design-parent gate admits only
+  pm/operator to a terminal transition, while the same misclassification removed the row from
+  `qa.verify`. One defect produced a reader without authority and an authority without a queue
+  entry, and the ticket held three fires. **When those two gates disagree the work leaves every
+  queue, which costs more than misfiling it.** Third, LOOP-430: `secrets.ts` detects a
+  group/world-readable `secrets.env` and emits a codeless stderr line, latched once per process,
+  while `doctor` — the surface the operator is instructed to read before an unattended run — prints
+  no row and exits 0. **A detection whose output reaches no consumer is, at that surface, absent.**
+
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -508,28 +511,22 @@ Board: promoted LOOP-424 (junior 9/10 → 10/10); senior 2/10, its only Backlog 
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → sixty-ninth fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → seventieth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–60** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AG. Findings still open from that
+    rolled by **§20 R2 passes 50–61** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AH. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
-    **LOOP-420**, **LOOP-426**.
+    **LOOP-429**, **LOOP-426**.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
 becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verbatim in
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block J).)_
 
-
-- **[DISCHARGED] the three D4 direction-text corrections whose reversal condition lapsed on the
-  2026-08-06T18:53Z ruling** — the `Non-goals`/approvals qualifying clause, the `Hard invariants`
-  §16 loopback claim the product relaxed, and the `Vision`'s present-tense "chat bridge" over a
-  one-way channel. All three are carried verbatim on **LOOP-366**, whose commit the operator owns;
-  full text rolled to [`2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 59, block AF).
 
 - **`Vision` and `Glossary` state the Kaizen Factory rebrand as current direction; the operator
   ruled it off 2026-08-05 and canceled LOOP-176/177/182 as a set.** `Vision:13-23` also carries a
