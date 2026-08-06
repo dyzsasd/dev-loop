@@ -83,6 +83,7 @@ export type ApprovalErrorCode =
   | "extra-component"        // the key supplied more components than the class declares
   | "empty-component"        // a component was present but empty (`push::sha`)
   | "bad-expiry"             // --expires was neither a duration nor `never`
+  | "ambiguous-grant"        // both a requestId and an actionKey — which key is being authorised?
   | "not-found"              // no approval row with that id
   | "not-grantable"          // the row is already granted or already terminal
   | "not-revocable"          // the row is already terminal
@@ -330,6 +331,16 @@ export function grantApproval(db: DatabaseSync, input: GrantInput): ApprovalRow 
   const at = nowIso();
 
   if (input.requestId) {
+    // Both shapes at once is refused rather than resolved by precedence. Silently ignoring the
+    // supplied actionKey would let a caller believe it authorised one end state while the stored
+    // request named another — and the whole module rests on the operator knowing exactly what they
+    // granted.
+    if (input.actionKey !== undefined) {
+      throw new ApprovalError(
+        "ambiguous-grant",
+        `grantApproval got both requestId ${JSON.stringify(input.requestId)} and actionKey ${JSON.stringify(input.actionKey)} — pass one: the request already names its key`,
+      );
+    }
     const row = requireRow(db, input.requestId);
     const state = deriveState(row, at);
     if (state !== "requested") {

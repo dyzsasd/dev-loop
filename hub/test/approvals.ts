@@ -248,6 +248,8 @@ try {
     ok(refuses(() => revokeApproval(d, r3.id, "operator"), "not-revocable").hit, "AC6: a revoked approval cannot be revoked again");
     ok(refuses(() => dischargeApproval(d, r3.id, "ops"), "not-dischargeable").hit, "AC6: …nor discharged");
     ok(refuses(() => grantApproval(d, { requestId: g2.id, grantor: "operator" }), "not-grantable").hit, "AC6: a discharged approval cannot be re-granted");
+    ok(refuses(() => grantApproval(d, { requestId: g2.id, actionKey: "reopen:AP-1", grantor: "operator" }), "ambiguous-grant").hit,
+      "AC6: requestId + actionKey together is REFUSED, not resolved by precedence — the operator must know which end state they granted");
     ok(refuses(() => revokeApproval(d, "no-such-id", "operator"), "not-found").hit, "AC6: an unknown id is a typed not-found, never a silent no-op");
 
     ok(listApprovals(d, { projectId: pid }).length >= 4, "AC6: listApprovals returns the project's rows");
