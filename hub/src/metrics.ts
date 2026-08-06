@@ -14,6 +14,7 @@ import { resolveWorkspace, wsFireLedger, resolveHubDbPath } from "./workspace.ts
 import { deliveryProjects, effectiveProject, resolveTodoDepthCap, type Workspace, type WsWarning } from "./team-config.ts";
 import { AGENT_HANDLES } from "./seed.ts";
 import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP-329: the SAME tier predicate the queue uses
+import { BYTES_PER_TOKEN } from "./context-bill.ts"; // LOOP-267: one token model, shared with the bill
 import { liveBlockerIds } from "./blocked-by.ts";
 import { lessonsPaths } from "./lessons.ts";
 
@@ -57,7 +58,20 @@ export interface FireMetrics {
   // that subset's size, reported alongside it. Without the count a partially-instrumented window
   // reads as a complete one, which is the failure LOOP-268 named: a number with no denominator
   // invites being taken for the whole population.
-  byAgent: Record<string, { fires: number; failures: number; medianMs: number | null; costUsd: number | null; costMeteredFires: number; usdPerFire: number | null; turnsPerFire: number | null; turnsCoveredFires: number }>;
+  byAgent: Record<string, { fires: number; failures: number; medianMs: number | null; costUsd: number | null; costMeteredFires: number; usdPerFire: number | null; turnsPerFire: number | null; turnsCoveredFires: number;
+    // LOOP-267 — the TURNS half of cacheRead. Modeled context correlates 0.14 with a fire's bill
+    // while duration correlates 0.78, so the modeled number was never the thing driving cost: a fire
+    // that takes more TURNS re-reads its whole context on each one. junior-dev's median fire doubled
+    // to 40.5 min / 14.23M cacheRead and no surface noticed for 7 hours.
+    //
+    // Over the SAME row set as usdPerFire (costMeteredFires), so the denominators are comparable —
+    // asserted, not assumed.
+    cacheReadPerFire: number | null; cacheWritePerFire: number | null; outputPerFire: number | null;
+    // `amplification` = cacheRead per fire ÷ the agent's MODELED boot context. It is NOT a turn
+    // count: it is how many times a fire re-read its own context, which is what a turn count would
+    // imply but does not measure. A fire with 10 turns over a small context and one with 2 turns
+    // over a huge one can land on the same number, and that is the intended reading.
+    amplification: number | null }>;
   byProject: Record<string, { fires: number; failures: number }>;
   meteredFires: number;                            // fires carrying usage (coverage numerator)
   costMeteredFires: number;                        // fires at/after meteringOnsetTs whose usage.costUsd > 0
@@ -105,7 +119,13 @@ const median = (xs: number[]): number | null => {
   return s[Math.floor(s.length / 2)];
 };
 
-export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.now()): FireMetrics {
+export function fireMetrics(
+  ledgerPath: string, windowMs: number, nowMs = Date.now(),
+  // LOOP-267 — the modeled per-fire context per agent, for `amplification`. Injected rather than
+  // imported: contextBill reads SKILL/conventions files off disk, and fireMetrics must stay usable
+  // against a bare ledger with no plugin root (every existing caller does exactly that).
+  modeledContextBytes?: Record<string, number>,
+): FireMetrics {
   const allRows = readFireRows(ledgerPath);
   // meteringOnsetTs: earliest ts of any row carrying usage across the full ledger.
   // Pre-onset rows carry no usage, so they're already excluded by `if (r.usage)` below;
@@ -129,7 +149,7 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
     if (r.suspectError) suspect++;
     if (r.interrupted) interrupted++;
     if (r.errorClass) byErrorClass[r.errorClass] = (byErrorClass[r.errorClass] ?? 0) + 1;
-    const a = (byAgent[r.agent] ??= { fires: 0, failures: 0, medianMs: null, costUsd: null, costMeteredFires: 0, usdPerFire: null, turnsPerFire: null, turnsCoveredFires: 0 });
+    const a = (byAgent[r.agent] ??= { fires: 0, failures: 0, medianMs: null, costUsd: null, costMeteredFires: 0, usdPerFire: null, turnsPerFire: null, turnsCoveredFires: 0, cacheReadPerFire: null, cacheWritePerFire: null, outputPerFire: null, amplification: null });
     a.fires++; if (failed) a.failures++;
     const p = (byProject[r.project || "(team)"] ??= { fires: 0, failures: 0 });
     p.fires++; if (failed) p.failures++;
@@ -163,12 +183,32 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
         costMeteredFires++; costUsdAcc += r.usage.costUsd; hasCost = true;
         if (discarded) discardedCostAcc += r.usage.costUsd;
         const a = byAgent[r.agent];
-        if (a) { a.costUsd = (a.costUsd ?? 0) + r.usage.costUsd; a.costMeteredFires++; }
+        if (a) {
+          a.costUsd = (a.costUsd ?? 0) + r.usage.costUsd; a.costMeteredFires++;
+          // LOOP-267 — accumulated INSIDE the same branch as costUsd, so the denominator is the same
+          // row set by construction rather than by a parallel filter that could drift from it.
+          a.cacheReadPerFire = (a.cacheReadPerFire ?? 0) + (r.usage.cacheReadTokens ?? 0);
+          a.cacheWritePerFire = (a.cacheWritePerFire ?? 0) + (r.usage.cacheWriteTokens ?? 0);
+          a.outputPerFire = (a.outputPerFire ?? 0) + (r.usage.outputTokens ?? 0);
+        }
       }
     }
   }
-  for (const a of Object.values(byAgent)) {
+  for (const [agentKey, a] of Object.entries(byAgent)) {
     a.usdPerFire = a.costMeteredFires > 0 && a.costUsd !== null ? a.costUsd / a.costMeteredFires : null;
+    // Same denominator as usdPerFire, deliberately — a per-fire cost and a per-fire cacheRead that
+    // divide by different row sets cannot be compared, which is the whole point of putting them side
+    // by side.
+    const n = a.costMeteredFires;
+    a.cacheReadPerFire = n > 0 && a.cacheReadPerFire !== null ? a.cacheReadPerFire / n : null;
+    a.cacheWritePerFire = n > 0 && a.cacheWritePerFire !== null ? a.cacheWritePerFire / n : null;
+    a.outputPerFire = n > 0 && a.outputPerFire !== null ? a.outputPerFire / n : null;
+    // cacheRead per fire ÷ modeled context, in TOKENS on both sides. Null when the model is absent
+    // or zero: a ratio against a denominator we do not have is a number that invites being read as
+    // one we do.
+    const modelBytes = modeledContextBytes?.[agentKey];
+    const modelTokens = typeof modelBytes === "number" && modelBytes > 0 ? modelBytes / BYTES_PER_TOKEN : null;
+    a.amplification = a.cacheReadPerFire !== null && modelTokens !== null ? a.cacheReadPerFire / modelTokens : null;
   }
   const fires = rows.length;
   // LOOP-155 — an operator-initiated stop is not an agent failure. `dev-loop run` forwards SIGINT to
@@ -965,6 +1005,19 @@ async function runKaizenCli(ws: Workspace, boardDb: string, windowMs: number, as
 // test — this workspace configures a cadence for both and runs neither, because neither is in the
 // `core` run set. The ledger is the honest record of what actually ran in the window, so that is
 // what decides whether a 0 means "measured, nothing escaped" or "nothing could ever have said so".
+/**
+ * Is this agent's cacheRead/fire more than 25% above its baseline? (LOOP-267)
+ *
+ * A THRESHOLD, not a trend line: the failure it exists to catch is a step change — junior-dev's
+ * median fire doubling inside one window — not a slow drift. Null baseline or null current ⇒ no
+ * flag, because a comparison against a number we do not have is not a finding.
+ */
+export function cacheReadDrift(current: number | null, baseline: number | undefined): string {
+  if (current === null || typeof baseline !== "number" || baseline <= 0) return "";
+  const ratio = current / baseline;
+  return ratio > 1.25 ? `  ⚠ +${Math.round((ratio - 1) * 100)}% vs baseline` : "";
+}
+
 export function escapeSignalSourceRan(fires: { byAgent: Record<string, { fires: number }> }): boolean {
   return (fires.byAgent["ops"]?.fires ?? 0) > 0 || (fires.byAgent["communication"]?.fires ?? 0) > 0;
 }
@@ -1055,7 +1108,12 @@ function fmtWindow(ms: number): string {
   return `${Math.round(h)}h`;
 }
 
-export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<typeof fireMetrics>, out: Record<string, unknown>, nowMs = Date.now()): void {
+export function renderHuman(
+  ws: Workspace, windowMs: number, fires: ReturnType<typeof fireMetrics>, out: Record<string, unknown>, nowMs = Date.now(),
+  // LOOP-267 — per-agent cacheRead/fire baselines, for the >25% drift flag. Absent ⇒ no flag: a
+  // comparison against a number we do not have is not a finding.
+  baselines?: Record<string, number>,
+): void {
   const pct = (x: number | null) => x === null ? "—" : `${Math.round(x * 100)}%`;
   console.log(`team '${ws.file.team.key}' — last ${fmtWindow(windowMs)}`);
   // LOOP-155: the interrupted count is NAMED as excluded — a redefined rate that does not say so is
@@ -1064,8 +1122,16 @@ export function renderHuman(ws: Workspace, windowMs: number, fires: ReturnType<t
   console.log(`fires: ${fires.fires} (success ${pct(fires.successRate)}, ${fires.failures} failed, ${fires.timeouts} timeout, ${fires.suspectErrors} suspect${interruptedNote})`);
   if (Object.keys(fires.byErrorClass).length) // P0-1b: infra failure classes split from task failures
     console.log(`errors: ${Object.entries(fires.byErrorClass).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join(", ")}`);
-  for (const [agent, a] of Object.entries(fires.byAgent))
-    console.log(`  ${agent.padEnd(14)} ${String(a.fires).padStart(4)} fires  ${String(a.failures).padStart(3)} failed  median ${a.medianMs === null ? "—" : Math.round(a.medianMs / 1000) + "s"}`);
+  for (const [agent, a] of Object.entries(fires.byAgent)) {
+    // LOOP-267 — cacheRead per fire, and the DRIFT flag. Modeled context correlates 0.14 with a
+    // fire's bill while duration correlates 0.78, so the modeled number never was the thing driving
+    // cost. junior-dev's median fire doubled to 40.5 min / 14.23M cacheRead and no surface noticed
+    // for 7 hours — because no surface carried the number at all.
+    const cr = a.cacheReadPerFire === null ? "" : `  cacheRead/fire ${(a.cacheReadPerFire / 1e6).toFixed(2)}M`;
+    const amp = a.amplification === null ? "" : `  ×${a.amplification.toFixed(1)} ctx`;
+    const drift = cacheReadDrift(a.cacheReadPerFire, baselines?.[agent]);
+    console.log(`  ${agent.padEnd(14)} ${String(a.fires).padStart(4)} fires  ${String(a.failures).padStart(3)} failed  median ${a.medianMs === null ? "—" : Math.round(a.medianMs / 1000) + "s"}${cr}${amp}${drift}`);
+  }
   if (out.teamRollup) {
     const r = out.teamRollup as { throughput: number; verifyFails: number; acceptRate: number | null; blockedNow: number; sequencedNow: number; bugsFiled: number; escaped: number | null; historyIncomplete?: boolean; historyFloor?: string | null };
     const landedCount = typeof out.landed === "number" ? out.landed : null;
