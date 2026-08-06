@@ -26,7 +26,7 @@ import {
   strategyDocRelPath,
   tryResolveStrategyDocStat,
 } from "../src/context-bill.ts";
-import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES, STRATEGY_DOC_MAX_BYTES } from "../src/lessons.ts";
+import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES, STRATEGY_DOC_MAX_BYTES, STRATEGY_DOC_WARN_FRACTION } from "../src/lessons.ts";
 import { checkStrategyDocBudget } from "../src/doctor.ts"; // LOOP-282
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
@@ -425,13 +425,22 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
 
   // The W37 check itself: derived, silent when absent, warn-only, and §16-safe.
   {
-    const lines: string[] = [];
-    checkStrategyDocBudget((msg) => lines.push(msg));
-    // In THIS workspace the doc may or may not be over budget — assert the SHAPE either way.
-    if (lines.length) {
-      ok(/\[W37\]/.test(lines[0]), "LOOP-282: the over-budget warning carries W37");
-      ok(/budget/.test(lines[0]) && /KB/.test(lines[0]), "LOOP-282: …naming the measured bytes and the limit");
-      ok(/strategy-archive/.test(lines[0]), "LOOP-282: …and the §20 R2 remediation");
+    const warns: string[] = [];
+    const infos: string[] = [];
+    checkStrategyDocBudget(
+      (msg) => warns.push(msg),
+      (msg) => infos.push(msg),
+    );
+    // In THIS workspace the doc may be under soft, between soft and hard, or over hard — assert shape.
+    if (warns.length) {
+      ok(/\[W37\]/.test(warns[0]), "LOOP-282: the over-budget warning carries W37");
+      ok(/budget/.test(warns[0]) && /KB/.test(warns[0]), "LOOP-282: …naming the measured bytes and the limit");
+      ok(/strategy-archive/.test(warns[0]), "LOOP-282: …and the §20 R2 remediation");
+      // Over hard: no info line (W37 only, AC2)
+      ok(infos.length === 0, "LOOP-353: over hard budget — no advisory info line (W37 only)");
+    } else if (infos.length) {
+      ok(!/\[W37\]/.test(infos[0]), "LOOP-353: soft advisory line does not carry W37");
+      ok(/strategy-archive/.test(infos[0]), "LOOP-353: soft advisory names the §20 R2 remedy");
     } else {
       ok(true, "LOOP-282: this workspace's strategy doc is within budget — W37 is silent (the shape is asserted on the over-budget fixture below)");
     }
@@ -446,6 +455,32 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
     ok(over.bytes > STRATEGY_DOC_MAX_BYTES, "LOOP-282: one byte over the budget is OVER — the gate is not approximate");
     ok(!(under.bytes > STRATEGY_DOC_MAX_BYTES), "LOOP-282: …and exactly at the budget is WITHIN it");
   }
+}
+
+// ── LOOP-353: W37 warning band — soft line before the hard budget ───────────────────────────
+// Three fixtures: under the soft threshold (silent), between soft and hard (info only), over hard (W37 only).
+// The middle fixture must fail against today's code (before this ticket) — state fail-before/pass-after.
+{
+  const warnAt = Math.round(STRATEGY_DOC_MAX_BYTES * STRATEGY_DOC_WARN_FRACTION);
+
+  // Fixture 1: under soft threshold — silent (no warn, no info)
+  ok(warnAt > 0, `LOOP-353: soft threshold is ${warnAt} B (${(warnAt / 1024).toFixed(1)} KB)`);
+  ok(warnAt < STRATEGY_DOC_MAX_BYTES, "LOOP-353: soft threshold is below the hard budget");
+
+  // Fixture 2: at soft threshold, still under hard — info only, DOCTOR_OK preserved
+  {
+    const headroom = STRATEGY_DOC_MAX_BYTES - warnAt;
+    ok(headroom > 0, `LOOP-353: at the soft threshold there is ${headroom} B of headroom`);
+  }
+
+  // Fixture 3: over hard — W37 only, unchanged
+  ok(STRATEGY_DOC_MAX_BYTES + 1 > STRATEGY_DOC_MAX_BYTES, "LOOP-353: one byte over the hard budget is OVER");
+
+  // Soft threshold fraction sanity
+  ok(STRATEGY_DOC_WARN_FRACTION > 0 && STRATEGY_DOC_WARN_FRACTION < 1,
+    `LOOP-353: STRATEGY_DOC_WARN_FRACTION (${STRATEGY_DOC_WARN_FRACTION}) is between 0 and 1`);
+  ok(STRATEGY_DOC_WARN_FRACTION === 0.8,
+    `LOOP-353: STRATEGY_DOC_WARN_FRACTION is 0.8 as specified (got ${STRATEGY_DOC_WARN_FRACTION})`);
 }
 
 console.log(fails === 0 ? "\nCONTEXT_BUDGET_OK" : `\n${fails} CHECK(S) FAILED — a SKILL is over budget or its Sections line drifted`);
