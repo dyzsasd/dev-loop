@@ -199,30 +199,35 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the sixty-second fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the sixty-third fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–53. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–54. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
   (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so a lessons rule scored before
   that timestamp measured a different regime.
 
-### 2026-08-06 (pm, sixty-third fire): the second product surface the doc names has no discovery path
+### 2026-08-06 (pm, sixty-fourth fire): a docstring can only promise what its test can enumerate
 
-Product SHA unchanged since the sixty-first fire (`1673c9b` — the only commits since are this doc's
-own passes 51–52), so this fire ran the `strategy-gaps` lens: check the doc's own stated fronts
-against the shipped product. `Goals` names the code-quality gauntlet **a deliberate second surface**
-— *"useful to a repo that never runs the loop, and 1.7.0→1.10.0 was spent making it so"* — adoptable
-outward "in three lines". The surface is built and sound: `dev-loop quality` runs in a fresh
-non-workspace git repo with every `DEVLOOP_*` cleared, and `--threshold` with no scorable rows
-**refuses** (exit 1) instead of passing, so the LOOP-407 shape the outward story is most exposed to
-is already closed there. It is only invisible: `quality` occurs **0** times in `dev-loop --help` (70
-lines, ~40 verbs), **0** in `README.md`, **0** in `docs/INDEX.md`, and its design doc is filed under
-*Historical Design Records* while being current policy (**LOOP-416**). Every other key of the
-`cli.ts:39` lazy-load map appears in the usage string; `quality` is the only one that does not.
-Board: senior depth 5/10 against a Backlog that is entirely junior-tier — the throughput ceiling sits
-at filing time, not at promotion.
+Product SHA moved to `a8c8e28` (PRs #250/#251 — the W18/W19 git-ref qualifier and the
+`conventions` try/catch), so the lens list reset and this fire ran `trust-safety` against the
+destructive-verb surface the live mandate names. Two results, both measured on `a8c8e28`.
+
+**Not a defect, recorded so it is not re-derived.** `board restore` and both `healthLiveness`
+failure paths tell the operator to run `dev-loop daemon up` after an inode swap, and that verb is
+idempotent — on this workspace it answered `already running … (pid 58476)`, exit 0, without
+restarting. The instruction is nonetheless correct: `lcHealthInfo` returns `null` unless the body
+carries `ok:true` (`daemon-lifecycle.ts:194-203`), so a daemon reading an orphaned inode fails the
+lock-free fast path and reaches the cold-start branch, which stops and respawns it. The reassuring
+line appears only when the daemon is genuinely healthy.
+
+**A defect: `hub/src/secret-cli.ts` destroys operator credentials with no gate at all** — no token,
+no prompt, no fire marker, and no `destructive-guard` import. Run inside this fire with
+`DEVLOOP_DEV_SPLIT=true`, `secret unset` read the live secrets file and reported per-name; only a
+name mismatch prevented deletion. `set` overwrites an existing value silently, and takes `--stdin`
+automatically whenever stdin is not a TTY — which is a fire's stdio (**LOOP-417**, `sensitive` ⇒
+senior). Board: junior 10/10 at cap, senior 5/10; the Backlog is 11, still entirely junior-tier.
 
 ## Personas
 
@@ -257,22 +262,24 @@ at filing time, not at promotion.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, sixty-third fire) — a hand-maintained inventory drifts from the dispatched one,
-  and only ONE direction of the drift can raise an error.** `dev-loop --help` is written by hand;
-  `cli.ts:39` dispatches from a map. A verb in the help but not in the map fails loudly the first
-  time anyone runs it. A verb in the map but not in the help fails never — it is used by whoever
-  already knew it existed, and the people who would report it missing are exactly the people who
-  cannot find it. The two halves therefore need a test in one direction only, and it is the
-  direction that generates no error to write the test from (**LOOP-416** AC4). **Ask of any
-  hand-kept list mirroring a machine-readable one: which direction of the drift throws, and who is
-  positioned to notice the other?** Second, the reason this one survived two minor releases:
-  **when a doc claims an outward audience, the discovery path is part of the deliverable, and it is
-  the part no internal user exercises.** The loop's own fires reach `quality` through the Step-5
-  ship gate, which names the verb in the SKILL — every internal consumer is immune to the gap by
-  construction, so dogfooding cannot surface it. Third, it is distinct from both neighbours of its
-  family: LOOP-400 was a knob with a reader and no writer, LOOP-412 a report written one directory
-  from where the check looks, this a verb that works and is named nowhere. Three shapes of *shipped
-  but unreachable* in three fires — only this one costs nothing but naming to close.
+- **2026-08-06 (pm, sixty-fourth fire) — a module cannot test the claim its docstring makes, because
+  the claim is about the code that does NOT call it.** `destructive-guard.ts` opens with *"every verb
+  that destroys operator data calls in here."* LOOP-368 sets out to enforce that and, in doing so,
+  finds the enforcement impossible: its AC6 derives the covered set from the import graph — *"the set
+  of `hub/src/*.ts` files importing `isolationVerdict`/`workspaceIsolationVerdict`"* — which is
+  exactly the set that already complies. AC7 therefore requires the docstring to say so: *"a verb
+  that destroys operator data without importing this module remains uncovered by construction."*
+  That is the correct handling, and it generalises: **a self-derived inventory test proves
+  consistency among its members and nothing at all about membership.** Ask of any "every X does Y"
+  claim: is the test's population derived from X, or from Y? If from Y, the claim is unfalsifiable
+  from inside. Second, and the reason this fire filed rather than noted: **a declared residual is a
+  work item, not a disclaimer.** An honest bound in a docstring reads to every later reader as the
+  edge of a solved problem unless someone enumerates its members; LOOP-368 named the hole in the
+  same week two fires destroyed operator data through it, and the first member found —
+  `secret unset` — costs one import to close (**LOOP-417**). Third, W13 is a second instance of
+  STANDING RULE 32's presence-vs-coverage shape, one layer down: it gates on
+  `process.env[name] !== undefined`, so a credential overwritten with garbage stays *defined* and
+  reads `pass`. The destruction is silent in the surface built to report it.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -496,12 +503,12 @@ at filing time, not at promotion.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → sixty-second fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → sixty-third fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
-    presence-vs-coverage check behind **LOOP-412**), rolled by **§20 R2 passes 50–53** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z. Findings still open from that span:
-    **LOOP-406**, **LOOP-407**, **LOOP-412**.
+    presence-vs-coverage check behind **LOOP-412**), rolled by **§20 R2 passes 50–54** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA. Findings still open from that span:
+    **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**.
 
 ## Candidate ideas
 
