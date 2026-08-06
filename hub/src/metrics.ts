@@ -1308,7 +1308,7 @@ export function renderFlow(report: UsageReport, throughput: number | null, board
 }
 
 interface MetricsOpts {
-  windowMs: number; nowMs: number; asJson: boolean; context: boolean;
+  windowMs: number; nowMs: number; asJson: boolean; context: boolean; projectKey: string | undefined;
   showUsage: boolean; showCost: boolean; showFlow: boolean; showKaizen: boolean;
   byDim: UsageDimension | undefined;
 }
@@ -1327,10 +1327,11 @@ function parseIso(flag: string, raw: string | undefined): number | null {
 }
 
 const METRICS_HELP = `usage: dev-loop metrics [--window 7d|24h|30d | --since ISO [--until ISO]] [--json] [--context]
-                        [--usage] [--cost] [--flow] [--kaizen] [--by agent|project|provider|model]
+                        [--project <k>] [--usage] [--cost] [--flow] [--kaizen] [--by agent|project|provider|model]
   default: team KPIs from fires.jsonl (+ hub board on service)
   --since/--until: a CLOSED era instead of a trailing-to-now window — the before/after query
                    (--until defaults to now; composable with --usage/--cost/--flow/--kaizen)
+  --project <k>:  project key scope (only for --context: resolve that project's strategy doc)
   --usage: token flow per group (metered N-of-M; null=unmeasured, never 0)
   --cost:  money (provider-reported costUsd only; 'unavailable' when none priced — never $0.00)
   --flow:  spend→outcome view: cost-per-accepted-change = costUsd÷throughput (service-only)
@@ -1369,6 +1370,7 @@ function parseMetricsArgs(argv: string[]): MetricsOpts | number {
   let windowMs = 7 * 86_400_000;
   let sinceMs: number | null = null, untilMs: number | null = null;
   let byDim: UsageDimension | undefined;
+  let projectKey: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? "";
     const boolField = METRICS_BOOL_FLAGS[a];
@@ -1377,6 +1379,7 @@ function parseMetricsArgs(argv: string[]): MetricsOpts | number {
       case "--window": windowMs = parseWindow(argv[++i] ?? "7d"); continue;
       case "--since": { const t = parseIso("--since", argv[++i]); if (t === null) return 2; sinceMs = t; continue; }
       case "--until": { const t = parseIso("--until", argv[++i]); if (t === null) return 2; untilMs = t; continue; }
+      case "--project": { projectKey = argv[++i]; if (!projectKey) { console.error("metrics: --project needs a project key"); return 2; } continue; }
       case "--by": {
         const dim = argv[++i] as UsageDimension;
         if (!(USAGE_DIMENSIONS as readonly string[]).includes(dim)) { console.error(`metrics: invalid --by '${dim}' (use ${USAGE_DIMENSIONS.join("|")})`); return 2; }
@@ -1388,7 +1391,7 @@ function parseMetricsArgs(argv: string[]): MetricsOpts | number {
   }
   const era = resolveEra(windowMs, sinceMs, untilMs);
   if (typeof era === "number") return era;
-  return { ...era, ...flags, byDim };
+  return { ...era, ...flags, byDim, projectKey };
 }
 
 export async function metricsCli(argv = process.argv.slice(2)): Promise<number> {
@@ -1403,7 +1406,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   // reason — the bill must print anywhere, including a machine with no team at all.
   if (context) {
     const { printContextBill } = await import("./context-bill.ts");
-    return printContextBill(asJson);
+    return printContextBill(asJson, parsed.projectKey);
   }
   const ws: Workspace = resolveWorkspace();
   // Route board reads through the DEVLOOP_HUB_DB ladder (LOOP-199). Own-db callers (hub.ts:21,29
