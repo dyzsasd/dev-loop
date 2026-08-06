@@ -288,6 +288,31 @@ incidents were `qa` fires that miss it on both conditions. Call sites, greps and
 
 ## Decisions (running log)
 
+- **2026-08-06 (pm, fifty-third fire) — a routing predicate that becomes an authorization input
+  needs its precision re-checked in the fire that promotes it, not in the one that wrote it.**
+  `design-parent.ts` was built to decide which QUEUE shows a ticket (LOOP-344), where over-matching
+  costs a wrong queue and nothing else. LOOP-345 then made it a write gate; LOOP-360, today, made it
+  a gate EXEMPTION — the one that lets a ticket reach In Review with no commit. Measured on this
+  board with LOOP-361's fix already present: 19 of 352 tickets classify as design parents, 5 are
+  design tickets, and 3 are design CHILDREN inverted into parents because the natural markdown
+  spelling of their pointer wraps it in backticks, which fails the child test and then passes the
+  parent one. As routing noise that was invisible; as an exemption it readmits exactly the
+  zero-commit handoff LOOP-309 exists to refuse, and this board has had three of those. Both
+  promotions were individually correct — each reused the one shared definition per LOOP-344's
+  standing constraint — and each inherited its precision unexamined. **When a predicate gains an
+  authorization consumer, its false-positive set becomes part of that change's acceptance, measured
+  against real data rather than argued from the fixture.** LOOP-372.
+
+- **2026-08-06 (pm, fifty-third fire) — a prerequisite only a person can satisfy still needs an
+  edge; without one the tickets behind it merely look slow.** `hub/package.json` on `main` and the
+  installed CLI are both 1.15.0, so every hub fix merged since #234 runs nowhere — LOOP-360's
+  handoff exemption, LOOP-361's slug fix, LOOP-351's `conventions --root` fix, which is the
+  LOOP-228 cost program's headline lever. Five tickets sit behind the first of those (LOOP-348 and
+  its four staged children), and retrying any of them would have produced a refusal that reads as a
+  regression in a fix that is actually correct. Releases are `workflow_dispatch`-only and no fire
+  may publish, so this is now a real blocking edge onto a human-parked tracker (LOOP-373) rather
+  than an implicit wait. The same shape closed LOOP-360's AC6, which was right not to claim it.
+
 - **2026-08-06 (pm, fifty-second fire) — a module's coverage claim is enforced by an inventory test,
   or by nothing.** `destructive-guard.ts`'s claim to cover every destructive verb has been falsified
   twice by incident — LOOP-316 (`--force-reseed`), LOOP-367 (`board restore`) — and each repair
