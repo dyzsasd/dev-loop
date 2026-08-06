@@ -230,30 +230,31 @@ is precisely how the withdrawn one survived a day steering the top priority.
   §12b applies the moment any of them moves. The daemon axis is only checked at version
   granularity today: **LOOP-364**.
 
-### 2026-08-06 (pm, fifty-first fire): a feature that shipped, passed its tests, and has never once run
+- **[ARCHIVED] the fifty-first and fifty-second fire journals (2026-08-06).** `stale-exempt` shipped
+  inert because nothing carried its switch to a reader (**LOOP-365**), and `destructive-guard.ts`'s
+  every-destructive-verb claim held at one of four call sites (**LOOP-368**). Both findings left as
+  those tickets; what still governs is STANDING RULES 28–29 below. Rolled to
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 45, block O).
 
-`stale-exempt` — LOOP-335, in `main` since `434a125` — has never fired on this workspace and cannot,
-because `deltaIsCiIrrelevant()` reads `repos.<ref>.ciIrrelevantPaths`, which is unset here and named
-in no doc, no `--help`, and no failure message. The gating itself is correct and was specified that
-way (an unconfigured repo keeps v1 behaviour byte-for-byte); nothing carried the switch to a reader.
-Measured this fire: 8 of the last 60 commits on `origin/main` are `docs(strategy)`, and the union of
-every file they touch is exactly `docs/STRATEGY.md` + `docs/strategy-archive/2026-08.md` — the delta
-LOOP-335 was built to exempt. At 14:01Z merge-guard staled PR #236 (LOOP-360, the fix that unblocks
-the LOOP-348 design chain) on that exact two-file delta; its head has since been force-rebased from
-`b054d51` to `27e1774`, discarding a green two-job matrix. Filed **LOOP-365**. The immediate remedy
-is one operator `team set` and is recorded in the ticket, not executed here — config mutators refuse
-agent writes inside a fire.
+### 2026-08-06 (pm, fifty-fourth fire): a handoff that reported an edit the doc never received
 
-### 2026-08-06 (pm, fifty-second fire): a scope claim that only a docstring enforces
+`pm-state.json` closed the fifty-third fire asserting that a `Candidate ideas` entry — *should a
+successful `board restore` restart the daemon?* — had been resolved and removed, and marked it **DO
+NOT RE-DERIVE**. The entry was still the first item in that section on `origin/main` @ `1cf5ab8`,
+which is that same fire's own land. The answer it recorded was correct and was re-verified here
+against the code rather than against the note (`board.ts:116` prints the restart remedy;
+`daemon.ts:148` `dbFileReplaced()` fails health `ok:false` on an inode swap, so the 69-minute silent
+window that motivated the question cannot recur) — but a suppressor is read by every later fire and
+this one had already outlived the edit it claimed. Removed for real this pass.
 
-`hub/src/destructive-guard.ts` has stated since LOOP-305 that every verb destroying operator data
-calls into it. Four do, and all four ask one question: did you mean this target? LOOP-367 established
-that a fire answers that question by supplying the token the refusal names, and adds the second
-question — may a fire destroy at all — to `board restore` alone. The verb that cascade-deleted 301
-tickets on 2026-08-04 is `remove-project`, whose path is unchanged. The product's only fire-marker
-refusal (`cli-agentops.ts:196`) is scoped to `AGENT_WRITE_OPS` and actor `operator`, and both
-incidents were `qa` fires that miss it on both conditions. Call sites, greps and dates: **LOOP-368**
-(senior, `sensitive`), blocked on LOOP-367 and consuming its `activeFireMarker()` relocation.
+The fire's filing came from the `strategy-gaps` lens and has the same shape one layer down:
+`daemon.ts`'s header still describes a READ-ONLY, GET-only, loopback-only module, while its own body
+serves three POST route families, holds a second writable connection, and widens the bind under
+`DEVLOOP_DAEMON_HOST`. The file states each correct invariant 240–900 lines further down, beside the
+stale one rather than in place of it. That header's version of §16 is also the one this doc's `Hard
+invariants` list still repeats. Filed **LOOP-375**; the doc half is a D4 direction section and is
+banked in `Candidate ideas` with its condition rather than opened as a second operator park while
+LOOP-366 is pending.
 
 ## Personas
 
@@ -288,67 +289,15 @@ incidents were `qa` fires that miss it on both conditions. Call sites, greps and
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, fifty-third fire) — a routing predicate that becomes an authorization input
-  needs its precision re-checked in the fire that promotes it, not in the one that wrote it.**
-  `design-parent.ts` was built to decide which QUEUE shows a ticket (LOOP-344), where over-matching
-  costs a wrong queue and nothing else. LOOP-345 then made it a write gate; LOOP-360, today, made it
-  a gate EXEMPTION — the one that lets a ticket reach In Review with no commit. Measured on this
-  board with LOOP-361's fix already present: 19 of 352 tickets classify as design parents, 5 are
-  design tickets, and 3 are design CHILDREN inverted into parents because the natural markdown
-  spelling of their pointer wraps it in backticks, which fails the child test and then passes the
-  parent one. As routing noise that was invisible; as an exemption it readmits exactly the
-  zero-commit handoff LOOP-309 exists to refuse, and this board has had three of those. Both
-  promotions were individually correct — each reused the one shared definition per LOOP-344's
-  standing constraint — and each inherited its precision unexamined. **When a predicate gains an
-  authorization consumer, its false-positive set becomes part of that change's acceptance, measured
-  against real data rather than argued from the fixture.** LOOP-372.
-
-- **2026-08-06 (pm, fifty-third fire) — a prerequisite only a person can satisfy still needs an
-  edge; without one the tickets behind it merely look slow.** `hub/package.json` on `main` and the
-  installed CLI are both 1.15.0, so every hub fix merged since #234 runs nowhere — LOOP-360's
-  handoff exemption, LOOP-361's slug fix, LOOP-351's `conventions --root` fix, which is the
-  LOOP-228 cost program's headline lever. Five tickets sit behind the first of those (LOOP-348 and
-  its four staged children), and retrying any of them would have produced a refusal that reads as a
-  regression in a fix that is actually correct. Releases are `workflow_dispatch`-only and no fire
-  may publish, so this is now a real blocking edge onto a human-parked tracker (LOOP-373) rather
-  than an implicit wait. The same shape closed LOOP-360's AC6, which was right not to claim it.
-
-- **2026-08-06 (pm, fifty-second fire) — a module's coverage claim is enforced by an inventory test,
-  or by nothing.** `destructive-guard.ts`'s claim to cover every destructive verb has been falsified
-  twice by incident — LOOP-316 (`--force-reseed`), LOOP-367 (`board restore`) — and each repair
-  extended the module by one call site, leaving the claim exactly as unenforced. Standing rule: a
-  guard claiming to cover a SET ships a test that derives that set from the source and asserts
-  membership, and names in its docstring the residual case the test cannot reach. LOOP-368 AC6/AC7
-  carry the two halves.
-
-- **2026-08-06 (pm, fifty-first fire) — a default-off feature is not delivered until something
-  names the switch, and the failure it prevents is the cheapest place to name it.** LOOP-335 was
-  right to default `ciIrrelevantPaths` off, right to validate it, test it, and give it a mutator.
-  What no acceptance criterion covered is that the knob reached no reader: absent from the
-  repo-field table in `references/config-schema.md` that documents both its siblings, absent from
-  `--help`, and unnamed by the very branch that would have taken it. So the feature sat inert while
-  the case it was built for recurred 8 times in 60 commits. **When a change ships default-off, its
-  discovery path is part of the increment** — and the branch that would have used it is the one
-  place a reader is already looking when it matters.
-
-- **2026-08-06 (pm, fiftieth fire) — when several surfaces answer one question, the defect is
-  usually in which of them was upgraded, not in whether the datum exists.** Three consumers asked
-  *is the running daemon my installed code?* and gave three answers, because the finer datum
-  (`buildCommit`) reached the wire and then only ONE consumer. Same shape in W35: `r.project` is on
-  every ledger row and the grouping never reads it. Neither is a missing capability — both are a
-  capability that landed at one call site and was never propagated to its siblings. **When a shared
-  fact gains precision, the work is not done until every consumer of the coarser form is enumerated
-  and moved.** The cheap version of that audit is a grep for the OLD predicate, run in the same fire
-  that introduces the new one.
-
-- **2026-08-06 (pm, fiftieth fire) — a cap that is disclosed is not thereby made honest: every
-  figure computed downstream of it must be re-derived, or it silently reports the page as the
-  world.** The web board discloses its truncation correctly ("showing 250 of 333") and, beside that
-  notice, prints per-state counts and "nothing here" hints taken from the truncated array — so the
-  disclosure sits next to numbers it does not govern. The tell was arithmetic, not inspection: the
-  column counts summed to exactly the cap. **After adding a bound, list what else reads the bounded
-  set** — counts, empty states, aggregates, "is there any?" checks — because each of them silently
-  changes meaning from *about the board* to *about the page*.
+- **2026-08-06 (pm, fifty-fourth fire) — a handoff note is a claim about an artifact, and the
+  artifact is the authority; a "do not re-derive" marker is the one claim to check the first time it
+  is used.** `pm-state.json` recorded a `Candidate ideas` entry as resolved and removed and marked it
+  DO NOT RE-DERIVE; the entry was still there, in the very land that fire produced. The recorded
+  ANSWER was right — re-verified here against `board.ts:116` and `daemon.ts:148` rather than against
+  the note — and that is the hazard: a suppressor correct on its merits and false about its state
+  reads exactly like a true one, while instructing every later fire not to look. STANDING RULE 8
+  says to check the block rather than the entry when a fold is CITED; this extends it to the
+  carry-over file, which is read earlier and trusted harder than the doc it describes.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -413,8 +362,12 @@ incidents were `qa` fires that miss it on both conditions. Call sites, greps and
      distillation claimed and not performed. Check the block, not the entry, when a fold is cited.)
   9. **Tier at FILING time; never re-tier to balance load (§21b).** Assigning a tier to a ticket
      that arrived `assignee: null` is not a re-tier — it is the filer's job left undone.
-  10. **§9c: prose is not a marker.** An edge is retired by a machine-parseable `Unblocked-by:`
-     line, never by a ✅ in a table cell; a protocol with a parseable form must be written in it.
+  10. **§9c: prose is not a marker, and an edge needs a clock.** An edge is retired by a
+     machine-parseable `Unblocked-by:` line, never by a ✅ in a table cell. A prerequisite only a
+     person can satisfy still needs the edge — it states the wait instead of letting it read as a
+     regression (LOOP-373). **And an edge keyed on a ticket no agent's queue contains has no clock:**
+     LOOP-367 merged, passed QA, then moved *backwards* to `Backlog` under `operator`. Retire that
+     edge against the artifact — the merged code — and name the fact you keyed on.
   11. **A gate that decides WHO may act is `sensitive`, even when its diff looks small.**
   12. **A P1 `Improvement` is not a prioritised ticket** — §5 ranks type first, and priority only
      elevates at rank 1 (`priority=1` + `Bug`).
@@ -483,6 +436,27 @@ incidents were `qa` fires that miss it on both conditions. Call sites, greps and
      actually about before treating the bundle as settled.** §9.7 retired auto-publish and the
      local-source build together on arguments that only applied to the first; the second was
      reinstated on its own merits three days later.
+  27. **A predicate that gains an authorization consumer needs its false-positive set re-measured
+     against real data, in the fire that promotes it.** `design-parent.ts` went from choosing a
+     QUEUE to gating writes to granting a gate EXEMPTION; at 19 of 352 tickets matched against 5 real
+     design tickets, that is invisible as routing noise and readmits the zero-commit handoff as an
+     exemption. Every promotion was correct and inherited its precision unexamined (**LOOP-372**).
+  28. **A module's claim about itself — coverage of a set, or a property like "read-only" — is
+     enforced by a test that derives the set from the source, or by nothing.** `destructive-guard.ts`
+     claimed every destructive verb calls in; incident falsified it twice and each repair added one
+     call site (**LOOP-368** AC6/AC7: the inventory test plus the named residual). Where no test can
+     reach the claim it decays silently — `daemon.ts`'s header still says READ-ONLY, GET-only and
+     loopback-only (**LOOP-375**) — so an untestable claim is corrected in the diff that falsifies
+     it, or not at all.
+  29. **When a change ships default-off, its discovery path is part of the increment.** LOOP-335
+     validated, tested and mutator-ised `ciIrrelevantPaths` and reached no reader — absent from the
+     schema table carrying both its siblings, from `--help`, and from the failure message that would
+     have taken it — so it sat inert while its case recurred 8 times in 60 commits (**LOOP-365**).
+  30. **A change to a shared datum — new precision OR a new bound — is not done until every consumer
+     of the old form is enumerated and moved.** `buildCommit` reached the wire and then one of three
+     consumers (**LOOP-364**); the board's 250-row cap is disclosed correctly beside per-state counts
+     computed from the truncated array (**LOOP-370**, caught by the columns summing to exactly the
+     cap). The cheap audit is a grep for the OLD form in the fire that introduces the new one.
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
@@ -530,6 +504,10 @@ incidents were `qa` fires that miss it on both conditions. Call sites, greps and
     pin retirement record, and the release-axes-agree entry, rolled by **§20 R2 pass 42** →
     [`2026-08.md`](strategy-archive/2026-08.md), blocks A–D. What still governs is STANDING RULES
     **23–26** above; the pin's second clause is superseded by W36.
+  - **2026-08-06 (pm, fiftieth → fifty-third fires)** — the fifty-first and fifty-second fire
+    journals and the six full-text rulings of the fiftieth through fifty-third fires, rolled by
+    **§20 R2 pass 45** → [`2026-08.md`](strategy-archive/2026-08.md), blocks O–P. What still governs
+    is STANDING RULES **27–30** above, plus the two clauses folded into RULE 10.
 
 ## Candidate ideas
 
@@ -539,11 +517,15 @@ becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verba
 entries left this list by being FILED as the reversal condition they named had lapsed, and one by
 being discharged: the `[ARCHIVED]`-index compaction it designed is this very pass.)_
 
-- **Should a successful `board restore` restart the daemon, or is reporting enough?** LOOP-367's own
-  open question, recorded here so it does not close with that ticket. LOOP-367 makes the daemon
-  REPORT the inode swap (503 + remedy); the verb itself still only prints advice, and the 2026-08-06
-  incident ran 69 minutes because advice was ignored. **REVERSAL CONDITION: LOOP-367 lands** — decide
-  it against the shipped health check rather than against a description of it.
+- **The `Hard invariants` list in `Goals (north star)` still states "§16 (binds 127.0.0.1 only)",
+  which the product deliberately relaxed.** `daemon.ts:913` reads `DEVLOOP_DAEMON_HOST` and 915–917
+  permit a non-loopback bind whenever `DEVLOOP_UI_TOKEN(_FILE)` is set, refusing only the token-less
+  widening; the accurate invariant is written in that same file at 243–249. The doc inherited the
+  stale form from the module header LOOP-375 corrects. Not filed as a second operator park while
+  **LOOP-366** is pending a direction ruling — `Goals` is a D4 direction section, so the change
+  routes through the §9a investigation protocol, not through a dev ticket or an autonomous edit.
+  **REVERSAL CONDITION: LOOP-366 is ruled on** — carry this with whatever §9a proposal follows it,
+  rather than opening a competing one.
 
 - **Close the config-mutator gap wholesale — an operator capability call, deliberately not filed.**
   `references/config-schema.md` marks each field with its `dev-loop team set` path: 13 rows carry a
