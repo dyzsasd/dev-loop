@@ -11,6 +11,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { isTeamProject } from "../team-config.ts";
 import { esc, href, stateDot } from "./ui.ts";
+import { NOT_SCRATCH_SQL } from "../sql-predicates.ts";
 
 // The non-terminal board states, in board order — "open" work for the per-project state counts
 // (Done/Canceled/Duplicate are outcomes, not open work; matches boardPage's TERMINAL_STATES complement).
@@ -30,7 +31,7 @@ export function projectIndexPage(db: DatabaseSync, nowMs: number): string {
   // deleted — navigating directly to /p/<scratch-key>/ still works, the same rule §21a D6 applies to
   // doc version history. The predicate is the one doctor.ts already uses; json_valid guards a row
   // whose settings_json is not JSON, which json_extract would otherwise throw on.
-  const projects = db.prepare(`SELECT id,key,name FROM projects WHERE CASE WHEN json_valid(settings_json) THEN json_extract(settings_json,'$.scratch') ELSE NULL END IS NOT 1 ORDER BY key`).all() as { id: string; key: string; name: string }[];
+  const projects = db.prepare(`SELECT id,key,name FROM projects WHERE ${NOT_SCRATCH_SQL} ORDER BY key`).all() as { id: string; key: string; name: string }[];
   const openByState = db.prepare(`SELECT state, COUNT(*) AS n FROM tickets WHERE project_id=? AND state IN (${OPEN_STATES.map(() => "?").join(",")}) GROUP BY state`);
   const lastEvent = db.prepare("SELECT MAX(created_at) AS m FROM events WHERE project_id=?");
 
