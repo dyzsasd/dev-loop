@@ -513,6 +513,190 @@ try {
       "LOOP-326: a buffer-level trim() is exactly what breaks it — the parser must receive raw output");
   }
 
+  // ══ LOOP-369: the shared checkout's HEAD is NOT the branch being landed ═══════════════════════
+  // Every fixture above holds the checkout on `main`, so `HEAD == <defaultBranch>` is the one
+  // variable this suite held constant — and the only one that mattered. isolatedRebase() built its
+  // worktree from HEAD while every check around it read origin/main...main, so with the checkout on
+  // a feature branch the verb rebased THAT branch and wrote the result over refs/heads/main,
+  // destroying the doc commit it was invoked to land, then reported "landed".
+  {
+    const o3 = join(ROOT, "origin3.git");
+    const ws3 = join(ROOT, "ws3");
+    const r3 = join(ws3, "dev-loop");
+    mkdirSync(o3, { recursive: true });
+    mkdirSync(ws3, { recursive: true });
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", o3]);
+    execFileSync("git", ["clone", "-q", o3, r3]);
+    writeFileSync(join(ws3, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      workspaceId: "test-doc-land-369",
+      team: { key: "test", backend: "service", mode: "live", autonomy: "ask" },
+      repos: { "dev-loop": { path: "dev-loop", remote: o3, landing: "pr" } },
+      projects: { test: { repos: [{ ref: "dev-loop" }], strategyDoc: { path: STRATEGY_PATH } } },
+    }, null, 2));
+    mkdirSync(join(ws3, ".dev-loop", "locks"), { recursive: true });
+    openDb(join(ws3, ".dev-loop", "hub.db")).close();
+
+    mkdirSync(join(r3, "docs"), { recursive: true });
+    writeFileSync(join(r3, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n");
+    git(r3, ["add", "docs/STRATEGY.md"]);
+    git(r3, ["commit", "-qm", "docs(strategy): base"]);
+    git(r3, ["push", "-qu", "origin", "main"]);
+
+    // main gains the doc commit that must land …
+    writeFileSync(join(r3, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n\nPM's fire-53 journal entry.\n");
+    git(r3, ["add", "docs/STRATEGY.md"]);
+    git(r3, ["commit", "-qm", "docs(strategy): fire 53 journal (LOOP-369 fixture)"]);
+    const mainDocSubject = "docs(strategy): fire 53 journal (LOOP-369 fixture)";
+
+    // … origin advances underneath, so the rebase path is actually taken …
+    const c3 = join(ROOT, "clone3");
+    execFileSync("git", ["clone", "-q", o3, c3]);
+    mkdirSync(join(c3, "docs", "strategy-archive"), { recursive: true });
+    writeFileSync(join(c3, "docs", "strategy-archive", "2026-08.md"), "# archive\n");
+    git(c3, ["add", "docs/strategy-archive/2026-08.md"]);
+    git(c3, ["commit", "-qm", "docs(strategy): another agent's archive"]);
+    git(c3, ["push", "-q", "origin", "main"]);
+
+    // … and the shared checkout sits on a FEATURE branch, exactly as a dev fire leaves it.
+    // Cut from origin/main, NOT from main: the feature branch must NOT contain the doc commit, or
+    // rebasing HEAD would happen to carry it along and the clobber would be survivable. In the real
+    // incident the branch was `dev-loop/LOOP-367-…`, cut earlier, and rebasing it produced a tree
+    // with no trace of `915496c` — which is what `update-ref` then wrote over refs/heads/main.
+    git(r3, ["fetch", "-q", "origin", "main"]);
+    git(r3, ["checkout", "-q", "-b", "dev-loop/LOOP-999", "origin/main"]);
+    writeFileSync(join(r3, "feature.ts"), "// a dev fire's work\n");
+    git(r3, ["add", "feature.ts"]);
+    git(r3, ["commit", "-qm", "feat: unrelated dev work (LOOP-999)"]);
+    const featureSha = git(r3, ["rev-parse", "HEAD"]);
+
+    const res369 = run(["--repo", "dev-loop"], ws3);
+
+    ok(res369.status === 0,
+      `(369-a) AC1: the land succeeds with the checkout on a feature branch (status ${res369.status}: ${res369.stderr.slice(0, 200)})`);
+    ok(pathOnRef(r3, "origin/main", "docs/STRATEGY.md")
+      && git(r3, ["show", "origin/main:docs/STRATEGY.md"]).includes("fire-53 journal"),
+      "(369-a) AC1: the doc commit actually REACHED origin/main — the content is there, not merely a clean exit");
+    ok(git(r3, ["log", "origin/main", "--format=%s"]).split("\n").includes(mainDocSubject),
+      "(369-a) AC2: main's pre-existing commit SURVIVES, reachable from origin/main — it was the clobber's victim");
+    ok(git(r3, ["rev-parse", "HEAD"]) === featureSha,
+      "(369-a) AC1: the feature branch is UNMOVED — the verb rebased the ref, not the checkout's HEAD");
+    ok(git(r3, ["rev-parse", "--abbrev-ref", "HEAD"]) === "dev-loop/LOOP-999",
+      "(369-a) AC1: …and the shared checkout is still on it (LOOP-325's property holds)");
+    ok(/landed 1 commit\(s\) to origin\/main/.test(res369.stdout),
+      `(369-a) AC5: the success line states WHAT WAS PUSHED, not that the range ended up empty (got: ${res369.stdout.trim().slice(0, 200)})`);
+    ok(!/is up to date/.test(res369.stdout),
+      "(369-a) AC5: …and never the old post-state phrasing, which the clobber satisfied by destroying the work");
+    ok(!git(r3, ["worktree", "list"]).includes("docland"),
+      "(369-a) the isolated worktree is removed (LOOP-132)");
+
+    // ── AC2: a rebase that would DROP a commit must refuse and leave the ref untouched ──────────
+    // Constructed without an injected fault: main's commit adds an archive file whose exact content
+    // arrives upstream inside a DIFFERENT commit. The rebase empties it, but `git cherry` cannot
+    // mark it patch-equivalent (the upstream patch is not the same patch), so it is a genuine
+    // "went missing" as far as the verb can tell — and the honest answer is to refuse and name it.
+    {
+      git(r3, ["checkout", "-q", "main"]);
+      git(r3, ["reset", "--hard", "-q", "origin/main"]);
+      mkdirSync(join(r3, "docs", "strategy-archive"), { recursive: true });
+      writeFileSync(join(r3, "docs", "strategy-archive", "2026-09.md"), "# september\n");
+      git(r3, ["add", "docs/strategy-archive/2026-09.md"]);
+      git(r3, ["commit", "-qm", "docs(strategy): september archive"]);
+
+      // the SAME content upstream, carried by a different (larger) commit ⇒ different patch-id
+      git(c3, ["fetch", "-q", "origin", "main"]);
+      git(c3, ["reset", "--hard", "-q", "origin/main"]);
+      writeFileSync(join(c3, "docs", "strategy-archive", "2026-09.md"), "# september\n");
+      writeFileSync(join(c3, "docs", "strategy-archive", "2026-10.md"), "# october\n");
+      git(c3, ["add", "docs/strategy-archive"]);
+      git(c3, ["commit", "-qm", "docs(strategy): september + october archives"]);
+      git(c3, ["push", "-q", "origin", "main"]);
+
+      git(r3, ["checkout", "-q", "dev-loop/LOOP-999"]);   // back on the feature branch
+      const mainBefore = git(r3, ["rev-parse", "refs/heads/main"]);
+      const res2 = run(["--repo", "dev-loop"], ws3);
+
+      ok(res2.status !== 0,
+        `(369-b) AC2: a rebase that would drop a commit REFUSES (status ${res2.status})`);
+      ok(git(r3, ["rev-parse", "refs/heads/main"]) === mainBefore,
+        "(369-b) AC2: refs/heads/main is left EXACTLY as it was — the ref never moved");
+      ok(/september archive/.test(res2.stderr),
+        `(369-b) AC2: the refusal NAMES the commit that would have gone missing (got: ${res2.stderr.slice(0, 300)})`);
+      ok(/drop|missing/i.test(res2.stderr) && !/already upstream/.test(res2.stderr),
+        "(369-b) AC4: the refusal is distinguishable from the already-upstream case, which is not an error");
+      ok(!/landed/.test(res2.stdout),
+        "(369-b) AC5: a run that pushed nothing prints no success line");
+    }
+
+    // ── AC3: a writer that moves the branch between the read and the write must lose the race ──
+    // Simulated with a real `post-checkout` hook rather than a wall-clock race: `git worktree add`
+    // fires it, so the branch genuinely moves after isolatedRebase() has read its value and before
+    // it writes one back — exactly the window the compare-and-swap exists to close.
+    {
+      git(r3, ["checkout", "-q", "main"]);
+      git(r3, ["reset", "--hard", "-q", "origin/main"]);
+      writeFileSync(join(r3, "docs", "strategy-archive", "2026-12.md"), "# december\n");
+      git(r3, ["add", "docs/strategy-archive/2026-12.md"]);
+      git(r3, ["commit", "-qm", "docs(strategy): december archive"]);
+
+      git(c3, ["fetch", "-q", "origin", "main"]);
+      git(c3, ["reset", "--hard", "-q", "origin/main"]);
+      writeFileSync(join(c3, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n\nmoved on\n");
+      git(c3, ["add", "docs/STRATEGY.md"]);
+      git(c3, ["commit", "-qm", "docs(strategy): origin moves so the rebase path is taken"]);
+      git(c3, ["push", "-q", "origin", "main"]);
+
+      git(r3, ["checkout", "-q", "dev-loop/LOOP-999"]);
+      // the interloper: one commit appended to refs/heads/main from OUTSIDE this verb
+      const interloper = git(r3, ["commit-tree", `${git(r3, ["rev-parse", "refs/heads/main^{tree}"])}`,
+        "-p", git(r3, ["rev-parse", "refs/heads/main"]), "-m", "docs(strategy): a concurrent writer's commit"]);
+      const hookDir = join(r3, ".git", "hooks");
+      mkdirSync(hookDir, { recursive: true });
+      writeFileSync(join(hookDir, "post-checkout"),
+        `#!/bin/sh\ngit --git-dir="${join(r3, ".git")}" update-ref refs/heads/main ${interloper}\nrm -f "${join(hookDir, "post-checkout")}"\nexit 0\n`);
+      execFileSync("chmod", ["+x", join(hookDir, "post-checkout")]);
+
+      const res4 = run(["--repo", "dev-loop"], ws3);
+      ok(res4.status !== 0,
+        `(369-d) AC3: a branch that moved under us makes the ref write REFUSE (status ${res4.status})`);
+      ok(git(r3, ["rev-parse", "refs/heads/main"]) === interloper,
+        "(369-d) AC3: the concurrent writer's commit SURVIVES — a lost update is what the CAS prevents");
+      ok(/moved underneath us|re-run/.test(res4.stderr),
+        `(369-d) AC3: …and the refusal explains the race rather than reporting a land (got: ${res4.stderr.replace(/\(node:.*/g, "").slice(0, 240)})`);
+      ok(!/landed \d+ commit/.test(res4.stdout),
+        "(369-d) AC3/AC5: a lost race never prints a success line");
+      rmSync(join(hookDir, "post-checkout"), { force: true });
+    }
+
+    // ── AC4: a genuinely patch-equivalent commit reports THAT, and is not a land ────────────────
+    {
+      git(r3, ["checkout", "-q", "main"]);
+      git(r3, ["reset", "--hard", "-q", "origin/main"]);
+      writeFileSync(join(r3, "docs", "strategy-archive", "2026-11.md"), "# november\n");
+      git(r3, ["add", "docs/strategy-archive/2026-11.md"]);
+      git(r3, ["commit", "-qm", "docs(strategy): november archive"]);
+
+
+      // the identical patch lands upstream on its own ⇒ git cherry marks it '-'
+      git(c3, ["fetch", "-q", "origin", "main"]);
+      git(c3, ["reset", "--hard", "-q", "origin/main"]);
+      writeFileSync(join(c3, "docs", "strategy-archive", "2026-11.md"), "# november\n");
+      git(c3, ["add", "docs/strategy-archive/2026-11.md"]);
+      git(c3, ["commit", "-qm", "docs(strategy): november archive (landed by another agent)"]);
+      git(c3, ["push", "-q", "origin", "main"]);
+
+      git(r3, ["checkout", "-q", "dev-loop/LOOP-999"]);
+      const res3 = run(["--repo", "dev-loop"], ws3);
+
+      ok(res3.status === 0,
+        `(369-c) AC4: an already-upstream commit is not an error (status ${res3.status}: ${res3.stderr.slice(0, 200)})`);
+      ok(/already upstream/.test(res3.stdout),
+        `(369-c) AC4: …it says so in its own words (got: ${res3.stdout.trim().slice(0, 200)})`);
+      ok(!/landed \d+ commit/.test(res3.stdout),
+        "(369-c) AC4/AC5: …and does NOT claim to have landed anything");
+    }
+  }
+
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
