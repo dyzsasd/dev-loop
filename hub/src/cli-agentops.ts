@@ -18,6 +18,7 @@
 //   actor / G2 unresolved-or-unseeded project / the operator-in-a-fire write guard) · 5 hub unavailable
 //   (daemon down or dormant; hub.db busy past the 5s busy_timeout).
 import type { DatabaseSync } from "node:sqlite";
+import { activeFireMarker } from "./destructive-guard.ts"; // LOOP-367: ONE fire-marker list, owned there
 import { readFileSync } from "node:fs";
 import { openDb, actorExists, listActorHandles, STATES } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
@@ -192,11 +193,10 @@ function openHub(): Hub {
 // fires) or DEVLOOP_DEV_SPLIT (every run-agents fire env + both MCP injections) — so a WRITE arriving as
 // 'operator' inside one means DEVLOOP_ACTOR was stripped/lost and the write would be MIS-ATTRIBUTED to the
 // human. Refuse (exit 4) unless --i-am-the-operator says otherwise. Cooperative like G1 (§18) — not anti-spoof.
-const FIRE_MARKERS = ["DEVLOOP_TEAM_SCOPE", "DEVLOOP_DEV_SPLIT"] as const;
 let iAmTheOperator = false; // set from the parsed --i-am-the-operator of the active verb
 async function runOp(hub: Hub, op: AgentOp, args: Record<string, unknown>): Promise<OpResult> {
   if (AGENT_WRITE_OPS.has(op) && hub.actor === "operator" && !iAmTheOperator) {
-    const marker = FIRE_MARKERS.find((m) => (process.env[m] ?? "") !== "");
+    const marker = activeFireMarker();
     if (marker) {
       console.error(`dev-loop: refusing to write as 'operator' inside an agent fire (${marker} is set): DEVLOOP_ACTOR resolved to 'operator', so this write would be mis-attributed to the human. Set DEVLOOP_ACTOR to your agent handle, or pass --i-am-the-operator if you really are the operator.`);
       process.exit(4);

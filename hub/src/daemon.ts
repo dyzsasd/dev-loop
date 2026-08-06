@@ -14,7 +14,7 @@
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
 import { createServer, type Server, type ServerResponse, type IncomingMessage } from "node:http";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { startBoardSnapshot, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-339: the cadence trigger
@@ -135,9 +135,27 @@ function projectRowGone(db: DatabaseSync, projectId: string): boolean {
   catch { return false; } // an unreadable db is the EXISTING wedge path below — not this one
 }
 
-function healthLiveness(db: DatabaseSync, writeDb?: DatabaseSync, projectId?: string): { ok: boolean; error?: string } {
+// LOOP-367 — the SECOND way a daemon serves a board that is no longer the board. `projectRowGone` catches a
+// row DELETED underneath the connection; it cannot catch the file being REPLACED, because the orphaned inode
+// still holds a perfectly valid `projects` row. On 2026-08-06 a `qa` fire ran `board restore` against the live
+// workspace: the restore swapped hub.db for a new inode, this daemon kept its open fd on the old one, and the
+// UI served a board frozen at the moment of the swap for 69 minutes while every direct-read verb answered
+// correctly. Same signature as 2026-08-04 (direct read disagrees with daemon read), same invisibility.
+//
+// The check is the path's inode versus the inode this daemon opened. `stat` is cheap, runs on the probe the
+// lifecycle already makes on a cadence, and needs no fd introspection. A missing file is NOT this case — an
+// unlinked-and-not-yet-recreated db is the existing wedge path below, which reports through the same channel.
+export function dbFileReplaced(opened: { path: string; ino: number } | undefined): boolean {
+  if (opened === undefined) return false; // nothing to compare ⇒ never a false alarm
+  try { return statSync(opened.path).ino !== opened.ino; }
+  catch { return false; } // absent/unstattable ⇒ the wedged-SoR path owns it, not this one
+}
+
+export function healthLiveness(db: DatabaseSync, writeDb?: DatabaseSync, projectId?: string, opened?: { path: string; ino: number }): { ok: boolean; error?: string } {
   try {
     db.prepare("SELECT 1").get(); // read liveness: the connection + DB file are reachable & not corrupt
+    if (dbFileReplaced(opened))
+      return { ok: false, error: `${opened?.path} has been REPLACED since this daemon opened it (different inode) — this connection is reading an orphaned file and every view it serves is stale, however healthy it looks. A \`board restore\` or an out-of-band file swap does this. Restart it: dev-loop daemon up` };
     // A live connection to a board that no longer exists is NOT healthy. Reported through the same
     // ok:false channel the wedged-SoR case uses, so the lifecycle's existing reaper acts on it
     // without a second mechanism — and so a scripted reader polling /api/health cannot miss it.
@@ -516,6 +534,7 @@ interface RouteCtx {
   divergenceFor: (key: string) => string | undefined;
   getBasePageOpts: () => { workspaceId: string; daemonVersion: string; cliVersion?: string; daemonIsNewer?: boolean };
   dbPath: string;
+  opened?: { path: string; ino: number };  // LOOP-367: the path+inode this daemon opened; a later mismatch = swapped
   entryPath?: string;
   stream: { count: number; max: number };
 }
@@ -672,7 +691,7 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
   }
   if (path === "/api/stream") { serveStream(ctx); return true; }
   if (path === "/api/health") {
-    const h = healthLiveness(db, writeDb, projectId);
+    const h = healthLiveness(db, writeDb, projectId, ctx.opened);
     // §16: expose dbPresent as a BOOLEAN only — /api/health bypasses the UI token (daemon.ts:471)
     // so the raw DB path must never appear here; the boolean is sufficient for the reaper (LOOP-95).
     // Use ctx.dbPath (the actual opened path) not workspaceId (which ignores DEVLOOP_HUB_DB overrides).
@@ -764,6 +783,11 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
   const DAEMON_VER = daemonVersionOpt ?? pkgVersion();
   const DAEMON_BUILD_COMMIT = pkgBuildCommit();
   const WS_ID = daemonDbPath ?? hubDbPath();
+  // LOOP-367: the inode this daemon actually opened. Captured here rather than accepted as an option so no
+  // caller can forget to pass it — every daemon, including the ones tests spawn, gets the swap check.
+  const OPENED = ((): { path: string; ino: number } | undefined => {
+    try { return { path: WS_ID, ino: statSync(WS_ID).ino }; } catch { return undefined; }
+  })();
   // Per-request: compare DAEMON_VER with the on-disk version to detect an upgrade while the daemon runs.
   // LOOP-252: direction-aware — only set cliVersion (upgrade prompt) when daemon is OLDER; when daemon is
   // NEWER than the on-disk CLI, flag daemonIsNewer so the UI warns against running daemon up.
@@ -816,7 +840,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
       const { seg, path, projectId, projectKey, prefixed } = rp;
       const ctx: RouteCtx = {
         req, res, method, url, rawPath, seg, path, projectId, projectKey, prefixed, authedByToken,
-        db, writeDb, canWrite, actor, pg, divergenceFor, getBasePageOpts, dbPath: daemonDbPath ?? "", entryPath: daemonEntryPath, stream: streamGate,
+        db, writeDb, canWrite, actor, pg, divergenceFor, getBasePageOpts, dbPath: daemonDbPath ?? "", opened: OPENED, entryPath: daemonEntryPath, stream: streamGate,
       };
 
       // Under a /p/<key>/ prefix only the HTML views, write routes, and the project SSE stream are mounted;

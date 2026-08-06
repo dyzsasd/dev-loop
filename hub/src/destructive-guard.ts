@@ -27,6 +27,30 @@ import type { Workspace } from "./team-config.ts";
 // module exists to prevent.
 export const TOKEN_PREFIX = "--i-understand-this-deletes-";
 
+// The env vars a fire ALWAYS carries: DEVLOOP_TEAM_SCOPE (steward fires) or DEVLOOP_DEV_SPLIT (every
+// run-agents fire env + both MCP injections). One list, here, because this module owns destructive-verb
+// policy and cli-agentops.ts already needed the same names for its operator-attribution guard — two copies
+// of a load-bearing predicate is the drift this module exists to prevent.
+export const FIRE_MARKERS = ["DEVLOOP_TEAM_SCOPE", "DEVLOOP_DEV_SPLIT"] as const;
+
+// LOOP-367. On 2026-08-06 the `qa` fire ran, against the LIVE workspace and 44 seconds after reading the
+// verb's --help:
+//
+//     dev-loop board restore --from <a cadence snapshot it had just taken> --i-understand-this-deletes-loop
+//
+// The isolation gate WORKED — it refused, named its token, and qa supplied the token. That is the failure:
+// the token answers "did you mean THIS project?", and nobody had asked the prior question "should a FIRE be
+// doing this at all?". The answer is no, for every destructive verb: destroying operator data is an operator
+// action by definition, and an agent that believes it needs one asks for it on the board.
+//
+// Deliberately NOT bypassable. A `--yes-i-am-really-sure` escape hatch would be reached the same way the
+// token was — the guard would document its own bypass to the party being guarded. The suppressor is the
+// ABSENCE of a fire marker, which a fire cannot arrange for itself and a test harness gets for free from
+// scrubFireEnv().
+export function activeFireMarker(env: NodeJS.ProcessEnv = process.env): string | null {
+  return FIRE_MARKERS.find((m) => (env[m] ?? "") !== "") ?? null;
+}
+
 export interface IsolationVerdict {
   scratch: boolean;         // target is marked scratch:true in config
   requiredToken: string;    // `--i-understand-this-deletes-<key>`

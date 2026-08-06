@@ -215,6 +215,25 @@ try {
       const bad = run(["board", "restore", "--from", join(tmp, "not-sqlite.db"), "--i-understand-this-deletes-snapws"]);
       ok(bad.code !== 0, `LOOP-341 AC3: a bad --from is refused at the CLI too (code ${bad.code})`);
       ok(run(["board", "restore"]).code === 2, "LOOP-341: --from is required");
+
+      // ── LOOP-367: a FIRE may not restore a live board, token or no token ───────────────────
+      // On 2026-08-06 the qa fire read `board restore --help`, hit the isolation gate, and supplied
+      // `--i-understand-this-deletes-loop` 44 seconds later — against the LIVE workspace. The token
+      // was never the question a fire needed answered. Every assertion below runs with the token
+      // PRESENT, because a guard that only holds when the caller forgot the token is not a guard.
+      for (const marker of ["DEVLOOP_DEV_SPLIT", "DEVLOOP_TEAM_SCOPE"]) {
+        const fired = spawnSync("node", [join(hubRoot, "src", "cli.ts"), "board", "restore", "--from", gen, "--i-understand-this-deletes-snapws"],
+          { cwd: ws, env: { ...env, [marker]: "1" }, encoding: "utf8" });
+        const said = `${fired.stdout ?? ""}${fired.stderr ?? ""}`;
+        ok(fired.status === 4, `LOOP-367: 'board restore' WITH the token is refused inside a fire (${marker} set) — code ${fired.status}`);
+        ok(said.includes(marker), `LOOP-367: …and the refusal names the marker that triggered it (${marker})`);
+        ok(!/^restored \d+ ticket/m.test(said), `LOOP-367: …and nothing was restored (${marker})`);
+      }
+      // The suppressor is the ABSENCE of a marker — an empty value must not read as "in a fire",
+      // or every non-fire caller with a stale exported empty var loses the verb.
+      const emptyMarker = spawnSync("node", [join(hubRoot, "src", "cli.ts"), "board", "restore", "--from", gen, "--i-understand-this-deletes-snapws"],
+        { cwd: ws, env: { ...env, DEVLOOP_DEV_SPLIT: "" }, encoding: "utf8" });
+      ok(emptyMarker.status === 0, `LOOP-367: an EMPTY marker is not a fire — the operator's restore still works (code ${emptyMarker.status})`);
     }
 
     const list = run(["board", "snapshots"]);
