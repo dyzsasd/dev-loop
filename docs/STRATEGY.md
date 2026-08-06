@@ -199,35 +199,35 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the sixty-third fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the sixty-fourth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–54. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–55. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
   (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so a lessons rule scored before
   that timestamp measured a different regime.
 
-### 2026-08-06 (pm, sixty-fourth fire): a docstring can only promise what its test can enumerate
 
-Product SHA moved to `a8c8e28` (PRs #250/#251 — the W18/W19 git-ref qualifier and the
-`conventions` try/catch), so the lens list reset and this fire ran `trust-safety` against the
-destructive-verb surface the live mandate names. Two results, both measured on `a8c8e28`.
+### 2026-08-06 (pm, sixty-fifth fire): two surfaces called "one family" can be consistent with each other and wrong together
 
-**Not a defect, recorded so it is not re-derived.** `board restore` and both `healthLiveness`
-failure paths tell the operator to run `dev-loop daemon up` after an inode swap, and that verb is
-idempotent — on this workspace it answered `already running … (pid 58476)`, exit 0, without
-restarting. The instruction is nonetheless correct: `lcHealthInfo` returns `null` unless the body
-carries `ok:true` (`daemon-lifecycle.ts:194-203`), so a daemon reading an orphaned inode fails the
-lock-free fast path and reaches the cold-start branch, which stops and respawns it. The reassuring
-line appears only when the daemon is genuinely healthy.
+Product SHA unchanged at `a8c8e28` — `origin/main` moved only by my own pass-54 doc land — so the
+rotation advanced to `consistency`, run against the board, the surface the mandate's *observable*
+half rests on.
 
-**A defect: `hub/src/secret-cli.ts` destroys operator credentials with no gate at all** — no token,
-no prompt, no fire marker, and no `destructive-guard` import. Run inside this fire with
-`DEVLOOP_DEV_SPLIT=true`, `secret unset` read the live secrets file and reported per-name; only a
-name mismatch prevented deletion. `set` overwrites an existing value silently, and takes `--stdin`
-automatically whenever stdin is not a TTY — which is a fire's stdio (**LOOP-417**, `sensitive` ⇒
-senior). Board: junior 10/10 at cap, senior 5/10; the Backlog is 11, still entirely junior-tier.
+**The board's four filters narrow the rendered page, not the query.** `state`/`type`/`label`/
+`assignee` are applied in JS after the SQL `LIMIT 250`; only `q` rides the `WHERE`. Measured on the
+running daemon against a read-only `GROUP BY` of `hub.db`: `?state=Backlog` renders 3 of 11,
+`?state=Todo` 12 of 27, `?assignee=junior-dev` 139 of 221 — while the truncation notice the cap was
+deliberately paired with tells the operator to *"narrow with a filter or search to reach the rest."*
+That same notice prints `showing 3 of 398` under the filter: numerator counted after it, denominator
+before (**LOOP-419**, blocked on LOOP-370 — same expression block, and LOOP-370's recovery stash has
+to keep applying).
+
+**What made it findable was two surfaces disagreeing.** `/api/tickets?state=Backlog` returns 11
+where the board renders 3. Board: junior 10/10 at cap, senior 4/10 with nothing senior-tier
+promotable, Backlog 12 — and **LOOP-384**, an item of the operator's own first program under the
+live mandate, is one of the 12 the cap holds back.
 
 ## Personas
 
@@ -262,24 +262,24 @@ senior). Board: junior 10/10 at cap, senior 5/10; the Backlog is 11, still entir
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, sixty-fourth fire) — a module cannot test the claim its docstring makes, because
-  the claim is about the code that does NOT call it.** `destructive-guard.ts` opens with *"every verb
-  that destroys operator data calls in here."* LOOP-368 sets out to enforce that and, in doing so,
-  finds the enforcement impossible: its AC6 derives the covered set from the import graph — *"the set
-  of `hub/src/*.ts` files importing `isolationVerdict`/`workspaceIsolationVerdict`"* — which is
-  exactly the set that already complies. AC7 therefore requires the docstring to say so: *"a verb
-  that destroys operator data without importing this module remains uncovered by construction."*
-  That is the correct handling, and it generalises: **a self-derived inventory test proves
-  consistency among its members and nothing at all about membership.** Ask of any "every X does Y"
-  claim: is the test's population derived from X, or from Y? If from Y, the claim is unfalsifiable
-  from inside. Second, and the reason this fire filed rather than noted: **a declared residual is a
-  work item, not a disclaimer.** An honest bound in a docstring reads to every later reader as the
-  edge of a solved problem unless someone enumerates its members; LOOP-368 named the hole in the
-  same week two fires destroyed operator data through it, and the first member found —
-  `secret unset` — costs one import to close (**LOOP-417**). Third, W13 is a second instance of
-  STANDING RULE 32's presence-vs-coverage shape, one layer down: it gates on
-  `process.env[name] !== undefined`, so a credential overwritten with garbage stays *defined* and
-  reads `pass`. The destruction is silent in the surface built to report it.
+- **2026-08-06 (pm, sixty-fifth fire) — a documented parity claim is a defect detector, and it earns
+  its keep by being checkable, not by being true.** `daemon.ts:23` names `list_issues`,
+  `/api/tickets` and the board as "ONE family"; `board.ts:176` says the board's filters "mirror
+  /api/tickets". They disagree — `?state=Backlog` is 11 on the API and 3 on the board — and **both
+  members are wrong**: the API misses 82 of 221 on `?assignee=junior-dev`, and the two differ only
+  because each sorts differently before the same 250-row cut. An undocumented pair would have gone
+  on quietly disagreeing, since each is self-consistent from inside; the written claim is what
+  pointed at the defect. **Ask of any "X mirrors Y" comment whether anything executes it** — where
+  nothing does, it is a hypothesis with a citation, and its value is as a lead, not as evidence.
+  Second, the sharper half: **a bound that is honestly disclosed can still make its own disclosure
+  false.** The cap ships a deliberate notice — the code argues a silent truncation "would be
+  strictly worse" — and the remediation that notice offers, *narrow with a filter*, is the one
+  action that cannot work, because the filters sit outside the bound the notice describes. The
+  instinct was right and stopped one step short: **the remediation a notice offers is part of the
+  claim and needs the same check as the number in it.** Third, the notice's arithmetic is STANDING
+  RULE 1's population mismatch again — numerator taken after the filters, denominator before — and
+  `/api/tickets` emits the identical pair as `X-Total-Count`/`X-Returned-Count`, so a client
+  comparing them reads 387 rows truncated where nothing was truncated at all.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -503,12 +503,13 @@ senior). Board: junior 10/10 at cap, senior 5/10; the Backlog is 11, still entir
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → sixty-third fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → sixty-fourth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
-    presence-vs-coverage check behind **LOOP-412**), rolled by **§20 R2 passes 50–54** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA. Findings still open from that span:
-    **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**.
+    presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
+    **LOOP-417**), rolled by **§20 R2 passes 50–55** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA, AB. Findings still open from that
+    span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**.
 
 ## Candidate ideas
 
