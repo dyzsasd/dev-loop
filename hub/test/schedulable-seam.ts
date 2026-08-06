@@ -16,6 +16,7 @@ import { stewardProjects } from "../src/rotation.ts";
 import { projectIndexPage } from "../src/views/projects.ts";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
+import { NOT_SCRATCH_SQL } from "../src/sql-predicates.ts";
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-seam-")));
 let fails = 0;
@@ -93,7 +94,9 @@ try {
     ins.run("b", JSON.stringify({ scratch: false }));
     ins.run("c", "{}");
     ins.run("d", "not json");
-    const rows = db.prepare("SELECT key FROM projects WHERE CASE WHEN json_valid(settings_json) THEN json_extract(settings_json,'$.scratch') ELSE NULL END IS NOT 1 ORDER BY key")
+    // LOOP-429: the SHARED constant, not a second copy of it. An inlined duplicate made this
+    // assertion blind to exactly the drift LOOP-349 extracted the constant to prevent.
+    const rows = db.prepare(`SELECT key FROM projects WHERE ${NOT_SCRATCH_SQL} ORDER BY key`)
       .all() as { key: string }[];
     ok(rows.map((r) => r.key).join(",") === "b,c,d",
       `LOOP-271: the SQL predicate excludes only scratch:true — false, absent and unparseable all stay visible (got ${rows.map((r) => r.key).join(",")})`);
@@ -111,8 +114,21 @@ try {
       ok(!inline.test(content), `LOOP-349: ${f} has no inline scratch SQL predicate left`);
       ok(content.includes("NOT_SCRATCH_SQL"), `LOOP-349: ${f} imports the shared NOT_SCRATCH_SQL`);
     }
-    const shared = readFileSync(join(src, "sql-predicates.ts"), "utf8");
-    ok(shared.includes("NOT_SCRATCH_SQL"), "LOOP-349: sql-predicates.ts exports NOT_SCRATCH_SQL");
+    // LOOP-429: the export is asserted by RUNNING it, not by finding its name in the file's text.
+    // `readFileSync(sql-predicates.ts).includes("NOT_SCRATCH_SQL")` passed while the predicate said
+    // anything at all — its own inverse included — so it could not detect the drift it was here to
+    // catch. Executing the imported binding can: under `IS NOT 1` → `IS 1` this keeps the scratch
+    // row and drops the real one, and the check fails.
+    const probe = new DatabaseSync(":memory:");
+    probe.exec("CREATE TABLE projects(key TEXT, settings_json TEXT)");
+    const pins = probe.prepare("INSERT INTO projects(key,settings_json) VALUES(?,?)");
+    pins.run("real", JSON.stringify({ scratch: false }));
+    pins.run("scratchy", JSON.stringify({ scratch: true }));
+    const kept = (probe.prepare(`SELECT key FROM projects WHERE ${NOT_SCRATCH_SQL} ORDER BY key`)
+      .all() as { key: string }[]).map((r) => r.key);
+    ok(kept.join(",") === "real",
+      `LOOP-349: the EXPORTED NOT_SCRATCH_SQL keeps the real project and drops the scratch one (got ${kept.join(",") || "none"})`);
+    probe.close();
   }
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
