@@ -32,6 +32,7 @@ import { resolveDoc, docSave, docPublish, statusForDocErr, type DocKind } from "
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp, resolveProjectOverride } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
 import { scrubErr } from "./channel.ts"; // the notifier's channel deps moved to daemon-notifiers.ts (A3); scrubErr stays for /api/health + the unhandledRejection guard
+import { NOT_SCRATCH_SQL } from "./sql-predicates.ts";
 // DL-74/F1: the HTML view layer lives in src/views/* (ui/board/ticket/roadmap/activity/reports) with
 // daemonviews.ts as the compat façade; the HTML GET routes are dispatched off the typed registry
 // (views/registry.ts). The per-project process-lifecycle subsystem lives in daemon-lifecycle.ts. This
@@ -621,7 +622,7 @@ function handleViewRoutes(ctx: RouteCtx): boolean {
   if (!prefixed && path === "/") {
     // LOOP-271: the switcher lists what an operator can switch TO. A scratch project can never fire,
     // so listing it offers a destination that does nothing. Direct navigation still resolves.
-    const real = db.prepare(`SELECT key FROM projects WHERE key<>? AND CASE WHEN json_valid(settings_json) THEN json_extract(settings_json,'$.scratch') ELSE NULL END IS NOT 1 ORDER BY key`).all(TEAM_INTAKE_PROJECT) as { key: string }[];
+    const real = db.prepare(`SELECT key FROM projects WHERE key<>? AND ${NOT_SCRATCH_SQL} ORDER BY key`).all(TEAM_INTAKE_PROJECT) as { key: string }[];
     if (real.length === 1) {
       res.writeHead(302, { location: href(real[0].key, `/${url.search}`), "content-length": 0 });
       res.end();
