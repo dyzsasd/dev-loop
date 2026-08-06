@@ -133,6 +133,15 @@ try {
   ok(/\[pm\] boot corpus: OFF — §0a pull mode/.test(bootOff.out),
     `LOOP-272 AC(B): …and the OFF state is STATED, not merely absent (${bootOff.out.split("\n").filter((l) => /boot corpus/.test(l))[0] ?? "no line"})`);
 
+
+  // ── LOOP-237 AC3: the PULL directive is per-agent and DEFAULT OFF ────────────────────────────
+  // With it off the fire prompt must be byte-identical to today — the compression lever must not
+  // change a single fire until a team opts in, or "before/after" measures two different things.
+  const pullOff = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
+  ok(!/devloop-conventions-pull/.test(pullOff.out),
+    "LOOP-237 AC3: with conventionsPull unset, NO directive is injected — the prompt is unchanged");
+  ok(!/dev-loop conventions --agent/.test(pullOff.out),
+    "LOOP-237 AC3: …and the fire is never told to pull");
   // P1-6: a LINEAR (default-backend) project must NOT inject the hub or --strict-mcp-config — the
   // operator's own Claude config (incl. the Linear MCP) must apply, or the agents are starved of the board.
   const linear = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "fallback"]);

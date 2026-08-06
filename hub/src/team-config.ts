@@ -14,7 +14,11 @@ export type DocRef = string | { linearDocument: string } | { hubDoc: string } | 
 
 // `manual:true` (P1-4): the operator runs this role by hand (no scheduled fires) — owner-liveness
 // (doctor W16 / the Sweep digest) reports its stranded tickets as "awaiting a human", never as a warn.
-export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string; manual?: boolean; fireTimeout?: string; stallTimeout?: string }
+export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string; manual?: boolean; fireTimeout?: string; stallTimeout?: string;
+  // LOOP-237 — point THIS agent at the on-demand conventions slice instead of pushing the corpus.
+  // Per-agent and default OFF: with it off the fire prompt is byte-identical to today.
+  conventionsPull?: boolean;
+}
 
 // The hub block (D8): `agentInterface` maps a coding agent → how its fires reach the hub board on
 // backend:"service" — "cli" (the dev-loop write-layer verbs; identity rides the fire env) or "mcp"

@@ -952,7 +952,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   // enabled one) since `project` is "" / "_team"; delivery fires resolve against their own project.
   const profileProject = teamScope && teamScope.enabledProjects.length ? teamScope.enabledProjects[0] : project;
   const profile = resolveLaunchProfile(opts, cfg, profileProject, agent);
-  const basePrompt = readPrompt(opts, agent, project, profile, teamScope);
+  const rawPrompt = readPrompt(opts, agent, project, profile, teamScope);
+  // LOOP-237 — the PULL half of §0a delivery. Instead of pushing the whole union into every prompt
+  // (75% of context at a measured $4.79/fire), point the agent at the same config-pruned slice on
+  // demand. PER-AGENT and DEFAULT OFF: absent config ⇒ no directive ⇒ the prompt is byte-identical
+  // to today. It injects NO boot corpus and does not touch the push path.
+  const conventionsPull = (cfg as unknown as { team?: { agents?: Record<string, { conventionsPull?: unknown }> } } | undefined)?.team?.agents?.[agent]?.conventionsPull === true;
+  const basePrompt = conventionsPull
+    ? `${rawPrompt}\n\n<!-- devloop-conventions-pull -->\n§0a delivery for this fire is PULL, not push: no conventions corpus is attached. Read the slice you need with \`dev-loop conventions --agent ${agent}\` (add \`--json\` for the anchor/prune accounting). It returns always-read plus your cited spans, minus every span whose feature is off in this workspace — the same prune a pushed corpus would have applied.\n`
+    : rawPrompt;
   const backend = (cfg?.projects?.[profileProject] as { backend?: string } | undefined)?.backend ?? "linear";
   // boot-prefix: a deterministic §0a corpus appended to the prompt (claude lane only — the prompt then
   // rides stdin, see commandFor). Assembly failure fails OPEN: the fire boots in classic pull mode.
