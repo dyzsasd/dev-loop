@@ -233,11 +233,11 @@ is precisely how the withdrawn one survived a day steering the top priority.
   delivered — 7.9% / 40.27 USD (**LOOP-219**), so a cost-per-change figure is an over-estimate and a
   floor on waste.
 
-- **[ARCHIVED] fire journals, tenth through forty-ninth fire (2026-08-01 → 2026-08-06).** Rolled
+- **[ARCHIVED] fire journals, tenth through fiftieth fire (2026-08-01 → 2026-08-06).** Rolled
   whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41 block
-  D; the forty-ninth is pass 42 block A), replacing the thirteen per-period stubs they had left
-  behind. §20 R2 prescribes one index entry per archived period; thirteen stubs for one archive is
-  the residue pass 41 removed.
+  D; the forty-ninth is pass 42 block A, the fiftieth is pass 43 block M), replacing the thirteen
+  per-period stubs they had left behind. §20 R2 prescribes one index entry per archived period;
+  thirteen stubs for one archive is the residue pass 41 removed.
 
 - **2026-08-06 — the release axes agree, and the agreement is no longer a property of a hand-built
   pin.** Install is a real npm directory at `/opt/homebrew/lib/node_modules/@dyzsasd/dev-loop`
@@ -248,36 +248,19 @@ is precisely how the withdrawn one survived a day steering the top priority.
   §12b applies the moment any of them moves. The daemon axis is only checked at version
   granularity today: **LOOP-364**.
 
-### 2026-08-06 (pm, fiftieth fire): three surfaces answer the same question at three different granularities, and the operator's board says "Nothing in flight" while two tickets are in flight
+### 2026-08-06 (pm, fifty-first fire): a feature that shipped, passed its tests, and has never once run
 
-**The board the operator watches is under-reporting itself, and the arithmetic says so.** The web
-board at `/p/loop/` rendered `Backlog 1 · Todo 1 · In Progress 0 ("Nothing in flight") · Done 217 ·
-Canceled 31`. Those six numbers sum to **250 — exactly the row cap.** The real board held 4 / 6 / 2 /
-292 / 37. `views/board.ts` counts a column by `cards.length` over the *capped* array and renders its
-empty-state hint from the same array, while `ORDER BY priority ASC` — blind to state — decides which
-rows survive, so the 3.5% of the board that is open work falls off the end behind a wall of Urgent
-`Done`. The truncation notice beside it is correct and honest; the counts next to it are not. Filed
-as **LOOP-362**, and the thing that makes it worth a P1 is that it worsens monotonically: every
-ticket the loop closes widens the gap.
-
-**Three surfaces, one question, three answers.** *Is the running daemon the code I have installed?*
-`daemon up` compares build commits (`sameDaemonCode`, LOOP-250's residue). `daemon status` and
-doctor's W28 compare version strings. `/api/health` has served `buildCommit` all along —
-`doctor.ts:1666` types the response body without the field and drops it before comparing. So the one
-surface the operator is *told* to run pre-flight is the coarsest of the three, and same-version
-commit skew reads as `DOCTOR_OK` (**LOOP-364**). Related shape in the report-trail check: W35 groups
-the fire ledger by agent and never reads `r.project`, so reflect's six `_team`-scoped fires are
-charged to every delivery project and reported untraced while their reports sit one directory over
-(**LOOP-363**). The ledger, the health body, and the lifecycle predicate each already carry the
-datum that settles the question; in all three cases the consumer discards it.
-
-**What the parking lot was worth this fire.** Two banked entries named reversal conditions that had
-lapsed. One (`daemon serves stale VIEW code` — *"file when LOOP-195 ships and the operator still has
-to be told by hand"*) was re-verified against `origin/main` and became LOOP-364. The other
-(`accept-rate in the Reflect daily digest` — *"file when LOOP-98 reaches Done"*) was **discharged
-without a ticket**: reflect pastes `metrics --window 7d --json` verbatim, so LOOP-98's fix reached
-the digest by construction — observed at `verifyFails / acceptRate | 11 / 0.9141` in the
-2026-08-01 report. A cleared condition is a prompt to check, not a licence to file.
+`stale-exempt` — LOOP-335, in `main` since `434a125` — has never fired on this workspace and cannot,
+because `deltaIsCiIrrelevant()` reads `repos.<ref>.ciIrrelevantPaths`, which is unset here and named
+in no doc, no `--help`, and no failure message. The gating itself is correct and was specified that
+way (an unconfigured repo keeps v1 behaviour byte-for-byte); nothing carried the switch to a reader.
+Measured this fire: 8 of the last 60 commits on `origin/main` are `docs(strategy)`, and the union of
+every file they touch is exactly `docs/STRATEGY.md` + `docs/strategy-archive/2026-08.md` — the delta
+LOOP-335 was built to exempt. At 14:01Z merge-guard staled PR #236 (LOOP-360, the fix that unblocks
+the LOOP-348 design chain) on that exact two-file delta; its head has since been force-rebased from
+`b054d51` to `27e1774`, discarding a green two-job matrix. Filed **LOOP-365**. The immediate remedy
+is one operator `team set` and is recorded in the ticket, not executed here — config mutators refuse
+agent writes inside a fire.
 
 ## Personas
 
@@ -311,6 +294,16 @@ the digest by construction — observed at `verifyFails / acceptRate | 11 / 0.91
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-06 (pm, fifty-first fire) — a default-off feature is not delivered until something
+  names the switch, and the failure it prevents is the cheapest place to name it.** LOOP-335 was
+  right to default `ciIrrelevantPaths` off, right to validate it, test it, and give it a mutator.
+  What no acceptance criterion covered is that the knob reached no reader: absent from the
+  repo-field table in `references/config-schema.md` that documents both its siblings, absent from
+  `--help`, and unnamed by the very branch that would have taken it. So the feature sat inert while
+  the case it was built for recurred 8 times in 60 commits. **When a change ships default-off, its
+  discovery path is part of the increment** — and the branch that would have used it is the one
+  place a reader is already looking when it matters.
 
 - **2026-08-06 (pm, fiftieth fire) — when several surfaces answer one question, the defect is
   usually in which of them was upgraded, not in whether the datum exists.** Three consumers asked
