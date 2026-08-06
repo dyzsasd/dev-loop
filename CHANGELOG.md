@@ -3,7 +3,7 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
-## Unreleased
+## 1.15.1
 
 **Four guards that could not see, and one that a fire walked straight through.** Every entry here is
 a live-loop failure observed while the agents ran, then hardened.
