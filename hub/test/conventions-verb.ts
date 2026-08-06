@@ -179,6 +179,58 @@ try {
     ok(senior.pruned.includes("24"), `LOOP-371 AC3: §24 pruned (no codex)`);
     ok(senior.kept.includes("12c"), `LOOP-371 AC3: §12c kept (autoMerge enabled)`);
   }
+  // ── LOOP-398 AC5: error inputs produce exit 1 with one-line message, no stack trace ────
+  // Both a malformed Sections line and an unknown agent must produce exit 1 with the composed
+  // error message on stderr, never a raw stack trace. Driven through the CLI, not conventionsSlice.
+  {
+    const { spawnSync } = await import("node:child_process");
+    const noEnv = scrubFireEnv() as NodeJS.ProcessEnv;
+    const noPruneEnv = { ...noEnv, DEVLOOP_WORKSPACE: '' } as NodeJS.ProcessEnv;
+    // AC5.1: malformed Sections line
+    const malRoot = mkdtempSync(join(tmpdir(), "dl-ac5-mal-"));
+    const agentDir = join(malRoot, "skills", "junior-dev-agent");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "SKILL.md"), `---
+name: junior-dev
+---
+
+# Junior Dev
+
+Sections: §0 §NOPE
+`);
+    const refsDir = join(malRoot, "references");
+    mkdirSync(refsDir, { recursive: true });
+    writeFileSync(join(refsDir, "conventions.md"), "# conventions\n");
+    let err1 = { code: -1, stderr: "", stdout: "" };
+    try {
+      const r = spawnSync(process.execPath, [join(hubRoot, "src", "conventions-verb.ts"), "--agent", "junior-dev", "--root", malRoot],
+        { encoding: "utf8", env: noPruneEnv, maxBuffer: 64 * 1024 * 1024 });
+      err1 = { code: r.status ?? -1, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
+    } finally {
+      try { rmSync(malRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+    ok(err1.code === 1, `LOOP-398 AC5.1: malformed Sections line exits 1 (got ${err1.code})`);
+    ok(!err1.stderr.includes("Error:"), `LOOP-398 AC5.1: no stack trace on stderr — got: ${err1.stderr.slice(0, 200)}`);
+    ok(err1.stderr.includes("malformed Sections line"), `LOOP-398 AC5.1: error message on stderr`);
+    ok(err1.stdout === "", `LOOP-398 AC5.1: stdout stays empty (got ${err1.stdout.length} chars)`);
+  }
+  // AC5.2: unknown agent
+  {
+    const { spawnSync } = await import("node:child_process");
+    const noEnv = scrubFireEnv() as NodeJS.ProcessEnv;
+    const noPruneEnv = { ...noEnv, DEVLOOP_WORKSPACE: '' } as NodeJS.ProcessEnv;
+    let err2 = { code: -1, stderr: "", stdout: "" };
+    try {
+      const r = spawnSync(process.execPath,
+        [join(hubRoot, "src", "conventions-verb.ts"), "--agent", "definitely-not-a-real-agent", "--root", root],
+        { encoding: "utf8", env: noPruneEnv, maxBuffer: 64 * 1024 * 1024 });
+      err2 = { code: r.status ?? -1, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
+    } finally { /* no cleanup needed — using real root */ }
+    ok(err2.code === 1, `LOOP-398 AC5.2: unknown agent exits 1 (got ${err2.code})`);
+    ok(!err2.stderr.includes("Error:"), `LOOP-398 AC5.2: no stack trace on stderr — got: ${err2.stderr.slice(0, 200)}`);
+    ok(err2.stderr.includes("ENOENT") || err2.stderr.includes("no such file"), `LOOP-398 AC5.2: error message on stderr: ${err2.stderr.slice(0, 200)}`);
+    ok(err2.stdout === "", `LOOP-398 AC5.2: stdout stays empty (got ${err2.stdout.length} chars)`);
+  }
 } finally {
   try { rmSync(wsRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
 }
