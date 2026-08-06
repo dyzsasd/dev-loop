@@ -12,7 +12,9 @@
 // so consecutive fires of one agent present an identical prompt prefix (cacheable).
 // Fail-open: ANY assembly error returns null and the fire falls back to §0a pull mode.
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { selfDriftLine, installedRootOf } from "./self-drift.ts"; // LOOP-249: does the source this fire reads describe the code it runs?
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { parseConventions, parseSectionsLine, splitSkill, splitLines } from "./context-bill.ts";
 
@@ -229,6 +231,17 @@ export function assembleBootCorpus(
     if (backendFile) {
       const p = join(root, "references", backendFile);
       if (existsSync(p)) parts.push(`### references/${backendFile} — the §18 backend contract (pre-read)`, readFileSync(p, "utf8"));
+
+    // LOOP-249 — one advisory line when the repo this fire READS is not the code it is RUNNING.
+    // An agent diagnosing dev-loop's own behaviour reads the workspace source while executing the
+    // installed package; three verdicts named the wrong writer because of that gap. Emitted ONLY
+    // when the content actually differs, so a non-self-hosting workspace pays nothing and says
+    // nothing, and a repo merely AHEAD of the installed version with identical built output is
+    // silent. Advisory: it never fails a fire and costs no network call.
+    {
+      const drift = selfDriftLine(root, installedRootOf(dirname(fileURLToPath(import.meta.url))));
+      if (drift) parts.push(drift);
+    }
     }
 
     // Split tiers inherit dev's ship sequence (§21c) — ship the marker-delimited slice IN the

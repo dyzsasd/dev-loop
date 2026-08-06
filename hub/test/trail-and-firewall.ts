@@ -37,23 +37,29 @@ try {
   {
     const ledger = join(tmp, "fires.jsonl");
     const reports = join(tmp, "reports");
+    // Timestamps relative to NOW, never at a fixed clock time. My first version pinned them at
+    // T09:00 "today", which is in the FUTURE whenever the suite runs before 09:00 UTC — and a future
+    // row falls inside every window, so the empty-window assertion failed on a date roll-over. A
+    // fixture that depends on the time of day is flaky by construction.
+    const ago = (ms: number): string => new Date(Date.now() - ms).toISOString();
+    const HOUR = 3_600_000;
     const today = new Date().toISOString().slice(0, 10);
     const yday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
     writeFileSync(ledger, [
-      fireRow("junior-dev", `${today}T09:00:00.000Z`),
-      fireRow("junior-dev", `${today}T10:00:00.000Z`),
-      fireRow("junior-dev", `${yday}T09:00:00.000Z`),
-      fireRow("junior-dev", `${yday}T11:00:00.000Z`),
-      fireRow("qa", `${today}T09:00:00.000Z`),
-      fireRow("sweep", `${today}T09:00:00.000Z`),
+      fireRow("junior-dev", ago(1 * HOUR)),
+      fireRow("junior-dev", ago(2 * HOUR)),
+      fireRow("junior-dev", ago(25 * HOUR)),
+      fireRow("junior-dev", ago(27 * HOUR)),
+      fireRow("qa", ago(1 * HOUR)),
+      fireRow("sweep", ago(1 * HOUR)),
     ].join("\n") + "\n");
 
     // qa reported today; sweep reported today; junior-dev never did. The `<handle>-agent` mapping is
     // the thing most likely to be wrong, and getting it wrong makes EVERY agent look untraced.
     mkdirSync(join(reports, "qa-agent", "daily"), { recursive: true });
-    writeFileSync(join(reports, "qa-agent", "daily", `${today}.md`), "# qa\n");
+    writeFileSync(join(reports, "qa-agent", "daily", `${ago(1 * HOUR).slice(0, 10)}.md`), "# qa\n");
     mkdirSync(join(reports, "sweep-agent", "daily"), { recursive: true });
-    writeFileSync(join(reports, "sweep-agent", "daily", `${today}.md`), "# sweep\n");
+    writeFileSync(join(reports, "sweep-agent", "daily", `${ago(1 * HOUR).slice(0, 10)}.md`), "# sweep\n");
 
     const gaps = reportTrailGaps(ledger, reports);
     ok(gaps.length === 1 && gaps[0].agent === "junior-dev" && gaps[0].fires === 4,
