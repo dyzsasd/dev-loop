@@ -11,6 +11,8 @@ import { isMainEntry } from "./is-entry.ts";
 import { dirtyTrackedFiles, listTreeSnapshots } from "./tree-snapshot.ts";
 import { readSchedulerBuild, schedulerAlive, schedulerSkew, pkgVersionOf, teamDirOf } from "./scheduler-build.ts"; // LOOP-253: W36
 import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP-329: W31 shares the tier predicate with the queue
+import { tryResolveStrategyDocStat } from "./context-bill.ts"; // LOOP-282: the §20 form-rule resolver, shared with the bill
+import { STRATEGY_DOC_MAX_BYTES } from "./lessons.ts";
 import { reportTrailGaps } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
 import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
@@ -597,6 +599,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   checkReportTrail(ws, warn);       // W35 (LOOP-28)
   checkSchedulerBuild(ws, warn);    // W36 (LOOP-253)
   checkTierStarvation(ws, boardDb, warn); // W31 (LOOP-329)
+  checkStrategyDocBudget(warn);     // W37 (LOOP-282)
   checkLessonsLiveness(ws, warn);   // W30 (LOOP-91)
   checkBoardSnapshotW32(ws, warn);  // W32 (LOOP-340)
   await checkDaemonPortBand(warn);  // W25 (LOOP-137)
@@ -938,6 +941,30 @@ export function checkTierStarvation(ws: Workspace, boardDb: string, warn: (msg: 
         }
       }
     } finally { db.close(); }
+  } catch { /* best-effort — never fails doctor */ }
+}
+
+// W37 helper (LOOP-282) — the strategy doc was the ONLY per-fire agent input with no budget and no
+// doctor code. Measured 2026-08-05: 114 KB, 14x the lessons INDEX cap W03 does enforce, growing
+// +1,036 B per fire, and 20 rollup passes had not bounded it. Every §20 R2 reader pays that on every
+// fire, forever, until someone happens to look.
+//
+// DERIVED, never hard-coded to docs/STRATEGY.md: it resolves the doc by the §20 form rule, the same
+// way the bill does, so a workspace that points strategyDoc elsewhere is measured and a Linear-hosted
+// doc is correctly not measurable from here.
+//
+// SILENT, not zero-valued, when the doc is absent or unreadable — a 0 would read as "well within
+// budget" for a doc nobody can find, which is the reassuring-zero this codebase keeps removing.
+//
+// Warn-only, exactly like W03: an over-budget doc is a cost problem, not a broken workspace.
+// §16: the message names bytes, the limit and the PATH — never doc content.
+export function checkStrategyDocBudget(warn: (msg: string) => void): void {
+  try {
+    const stat = tryResolveStrategyDocStat();
+    if (!stat) return;                                   // absent / unreadable / not a repo file ⇒ no opinion
+    if (stat.bytes <= STRATEGY_DOC_MAX_BYTES) return;
+    const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
+    warn(`[W37] strategy doc ${stat.label} is ${kb(stat.bytes)} (${stat.lines} lines), over its ${kb(STRATEGY_DOC_MAX_BYTES)} budget — every §20 R2 reader re-reads the WHOLE file on EVERY fire, so this is a per-fire cost paid forever until it is rolled. Remedy (§20 R2): move superseded sections into the strategy-archive/ sibling; the budget covers what a fire actually loads, and an un-archived section is one it still pays for.`);
   } catch { /* best-effort — never fails doctor */ }
 }
 
