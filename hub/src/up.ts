@@ -37,13 +37,14 @@ interface UpOpts {
   dir: string; cli?: "claude" | "opencode"; model?: string; effort?: string;
   key?: string; backend: "service" | "linear"; noDaemon: boolean; dryLaunch: boolean;
   bundle?: string; attach?: string; forceReseed: boolean;
+  dirExplicit: boolean; // LOOP-418: did the operator actually pass --dir?
 }
 
 export function parseUpArgs(argv: string[]): UpOpts {
-  const o: UpOpts = { dir: process.cwd(), backend: "service", noDaemon: false, dryLaunch: false, forceReseed: false };
+  const o: UpOpts = { dir: process.cwd(), dirExplicit: false, backend: "service", noDaemon: false, dryLaunch: false, forceReseed: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]; const next = () => argv[++i] ?? die(`${a} requires a value`);
-    if (a === "--dir") o.dir = resolve(next());
+    if (a === "--dir") { o.dir = resolve(next()); o.dirExplicit = true; }
     else if (a === "--cli") { const v = next(); if (v !== "claude" && v !== "opencode") die("--cli must be claude or opencode (the interactive console targets)"); o.cli = v; }
     else if (a === "--model") o.model = next();
     else if (a === "--effort") o.effort = next();
@@ -165,9 +166,9 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
     // open a session that would leak it in cleartext to a non-loopback host, so the operator learns
     // BEFORE the session starts (op-client.ts backstops an exported DEVLOOP_HUB_URL that skips this).
     if (plaintextBearerToRemote(u, resolveUiToken() !== null)) die(plaintextBearerRefusal(u));
-    ws = tryResolveWorkspace(o.dir);
+    ws = tryResolveWorkspace(o.dirExplicit ? o.dir : undefined); // LOOP-418
   } else {
-    ws = tryResolveWorkspace(o.dir);
+    ws = tryResolveWorkspace(o.dirExplicit ? o.dir : undefined); // LOOP-418
     if (!ws) {
       const key = o.key ?? deriveTeamKey(o.dir);
       console.log(`no workspace at ${o.dir} — scaffolding one (team '${key}', backend ${o.backend})`);
