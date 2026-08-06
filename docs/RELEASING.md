@@ -52,3 +52,39 @@ failed publish leaves the tag + release commit on `main` with nothing on npm. Fi
 issue, then re-run the workflow with `bump: explicit` and the SAME version — the validation step
 detects the pushed tag, skips re-tagging, and resumes the publish. (Do NOT re-run with a bump type:
 the manifests already carry the new version, so a bump would compute the version after it.)
+
+### The resume contract: a resume publishes the TAG, not the branch tip
+
+**`main` may advance freely after the tag is pushed. It does not affect the resume.** A resume
+dispatch checks out `refs/tags/v<version>` and publishes that tree; the branch tip is never
+consulted, never compared, and never required to still equal the tag.
+
+That is worth stating because the opposite used to be true and cost a release. `actions/checkout@v4`
+checks out the branch at its current tip, and two steps asserted `HEAD == tag`. When a docs commit
+landed 40 minutes after `v1.15.1`'s tag, every subsequent `bump: explicit` dispatch failed on that
+assertion regardless of the npm state, and the only way through was a hand-pushed
+`release/v1.15.1-resume` branch parked at the tag commit. **Do not re-invent that branch** — if a
+resume fails today, the cause is not the branch tip, and pushing a resume branch will not help.
+
+Mechanically (LOOP-385): `Validate release target` probes git + npm and calls
+`hub/src/release-mode.ts`, which returns `fresh` or `resume` once for the whole job and exports
+`RELEASE_MODE` / `PUBLISH_REF`. On `resume` the tag is checked out and every step whose job was to
+*produce* what the tag already holds is skipped — changelog stamping, version stamping, the release
+commit and tag, and the push. Everything that *proves* the artifact still runs: install, typecheck,
+the full test suite, build, source integrity, and the pre-publish check that the remote tag is the
+commit being published. The `HEAD == tag` assertions were kept, not deleted — after the tag checkout
+they are true by construction, which is a stronger guarantee than "the branch happens to still match".
+
+### The residual race on a FRESH release
+
+A fresh release still has a window: the version is computed and the tests run (~9 minutes) before the
+release commit and tag are pushed. If someone lands on `main` inside that window, the push is
+rejected.
+
+**This is bounded, not fixed, and deliberately so.** The push is a single
+`git push --atomic origin "HEAD:<branch>" "v<version>"`, so a non-fast-forward branch update takes
+the tag down with it: the job fails at the push step with git's own `fetch first` message, having
+left **no half-tagged state** — nothing on the remote, nothing on npm. Re-run the workflow from the
+start; there is nothing to clean up. Do not split that push into two commands, and do not pause the
+loop for a release window on account of this race — the atomic push is what makes the window safe to
+lose.
