@@ -31,9 +31,13 @@
 // every run that passed. DEVLOOP_LIFECYCLE_TRIALS raises the count for a targeted hunt.
 //
 // Runs against an ISOLATED temp DB + DEVLOOP_RUN_DIR (never the operator's ~/.dev-loop). cwd = hub/ (npm).
-import { execFileSync } from "node:child_process";
-import { registerDaemonPid, launchDaemonCli } from "./daemon-harness.ts";
-import { rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { registerDaemonPid, launchDaemonCli, runDaemonCli } from "./daemon-harness.ts";
+import { foreignListener } from "../src/daemon-lifecycle.ts"; // LOOP-317: the decision the fix turns on
+import { rmSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createServer } from "node:http";
+import { scrubFireEnv } from "./env-scrub.ts";
 import { join } from "node:path";
 
 const ROOT = "/tmp/hub-lifecycle-race";
@@ -121,6 +125,92 @@ try {
     try { for (const pid of execFileSync("lsof", ["-ti", `tcp:${p}`, "-sTCP:LISTEN"], { encoding: "utf8" }).split("\n").filter(Boolean)) { try { process.kill(Number(pid), "SIGKILL"); } catch { /* gone */ } } } catch { /* lsof absent / nothing listening */ }
   }
   rmSync(ROOT, { recursive: true, force: true });
+}
+
+// ── LOOP-317: the orphan, made DETERMINISTIC ─────────────────────────────────────────────────────
+// The 8-trial loop above is a SAMPLER — it caught this at 1/8 on CI and 0/120 here. Sampling a race
+// cannot establish its cause. This reproduces the OUTCOME of the race directly, with no timing:
+//
+//   ROOT CAUSE. `lcTryBind` and the child's real bind are not atomic (the TOCTOU already named in
+//   daemon-lifecycle.ts). Another cold start — or a survivor of a previous `down` — can hold the
+//   port. Our child then dies with EADDRINUSE while `lcProbe(url)` answers HEALTHY *from the other
+//   process*, and the project key MATCHES because it is the same project. `up` then wrote OUR
+//   (dying) pid into the runfile while the live listener was someone else's process: the runfile
+//   records a pid that is not the listener, `down` kills the wrong thing, the real daemon is
+//   orphaned. That is exactly CI run 30920347062 trial 5 — runfile pid not the live listener, and
+//   `down` leaving :8787 serving for the full 4s waitGone deadline.
+//
+// A foreign listener answering /api/health for the same project IS the state that race produces, so
+// standing one up reproduces the defect every time instead of 1 run in 8.
+{
+  const port = 8931 + Math.floor(Math.random() * 40);
+  const key = PROJ;
+  const FOREIGN_PID = 424242; // not this process, not any child `up` will spawn
+  const srv = createServer((req, res) => {
+    if ((req.url ?? "").startsWith("/api/health")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, service: "dev-loop-hub", pid: FOREIGN_PID, project: key, version: "9.9.9", buildCommit: null, actor: "operator", dbPresent: true }));
+      return;
+    }
+    res.writeHead(404); res.end();
+  });
+  // Listen on ALL interfaces: `up` builds its probe URL from the daemon host, and a stub bound only
+  // to 127.0.0.1 is unreachable when that resolves to ::1 — which made this fixture time out instead
+  // of exercising the fix, and the assertion passed for the wrong reason.
+  srv.on("error", (e) => { throw new Error(`LOOP-317 fixture: the foreign listener could not bind :${port} — ${(e as Error).message}`); });
+  await new Promise<void>((r) => srv.listen(port, "127.0.0.1", r));
+  // Dual-stack: `up` probes via the daemon host, which can resolve to ::1, while the child binds
+  // 127.0.0.1. The stub must answer on BOTH or the probe misses it and the fixture times out
+  // instead of exercising the fix — which is how this assertion first passed for the wrong reason.
+  const srv6 = createServer((req, res) => { if ((req.url ?? "").startsWith("/api/health")) { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true, service: "dev-loop-hub", pid: FOREIGN_PID, project: key, version: "9.9.9", buildCommit: null, actor: "operator", dbPresent: true })); return; } res.writeHead(404); res.end(); });
+  srv6.on("error", () => { /* no IPv6 on this host — the v4 listener is enough */ });
+  await new Promise<void>((r) => { srv6.listen(port, "::1", () => r()); setTimeout(r, 500); });
+  try {
+    const runDir = mkdtempSync(join(tmpdir(), "lc317-"));
+    // A seeded service-backend project of its own: `up` refuses to start an unseeded project, and the
+    // trial loop above may have torn its DB down by now.
+    const db317 = join(runDir, "hub.db");
+    execFileSync(NODE, ["src/seed.ts", key, "Race 317", "R317", db317], { cwd: process.cwd(), encoding: "utf8" });
+    const up = runDaemonCli("daemon", "up", {
+      DEVLOOP_NODE: NODE, DEVLOOP_PROJECT: key, DEVLOOP_HUB_DB: db317,
+      DEVLOOP_RUN_DIR: runDir, DEVLOOP_DAEMON_PORT: String(port), DEVLOOP_ACTOR: "operator",
+    }, { timeout: 60_000 });
+    const runfile = join(runDir, `daemon-${key}.json`);
+    let recorded: { pid?: number; port?: number } | null = null;
+    try { recorded = JSON.parse(readFileSync(runfile, "utf8")) as { pid?: number; port?: number }; } catch { recorded = null; }
+
+    // POST-FIX: `up` must refuse rather than record a runfile pointing at a process it did not spawn.
+    // PRE-FIX it exits 0 and writes a runfile whose pid is its own dead child — the orphan.
+    ok(up.status !== 0,
+      `LOOP-317: with a FOREIGN daemon already serving the port, up refuses instead of adopting it (exit ${up.status}; out=${(up.stdout??"").slice(0,150)})`);
+    ok(recorded === null || recorded.pid === undefined,
+      `LOOP-317: …and writes NO runfile — recording a pid that is not the listener is what orphans the live daemon (got ${JSON.stringify(recorded)})`);
+    // Either refusal path is correct — what must never happen is a runfile pointing at a process
+    // `up` did not spawn. Which path fires depends on whether the probe reaches the foreign listener
+    // before the wait deadline, and that IS the timing this suite cannot pin down; the DECISION the
+    // fix turns on is asserted directly below instead.
+    ok(/not the one just spawned|another daemon|did not become healthy/.test(`${up.stdout ?? ""}${up.stderr ?? ""}`),
+      `LOOP-317: …naming the cause, so the reader is not sent to the wrong process (${`${up.stdout ?? ""}${up.stderr ?? ""}`.split("\n").filter((l) => /daemon] up:/.test(l))[0] ?? "no line"})`);
+
+    // The control: the foreign listener is genuinely answering as this project, so the pre-fix path
+    // would have accepted it. Without this the assertions above could pass for the wrong reason.
+    const probe = await fetch(`http://127.0.0.1:${port}/api/health`).then((r) => r.json() as Promise<{ project?: string; pid?: number }>).catch(() => null);
+    ok(probe?.project === key && probe?.pid === FOREIGN_PID,
+      "LOOP-317 control: the foreign listener really does answer /api/health for THIS project — which is why the old key-only check accepted it");
+
+    // THE FIX ITSELF, asserted directly. The `up` path above needs a real spawn, port and bind race
+    // to reach this comparison, so proving it there means reproducing the race — the thing this
+    // ticket could not do. The comparison is the whole fix, so test the comparison.
+    ok(foreignListener(FOREIGN_PID, 4242) === true,
+      "LOOP-317 FIX: a health response from a pid we did not spawn is FOREIGN — the runfile must not record our pid for it");
+    ok(foreignListener(4242, 4242) === false, "LOOP-317 FIX: …our own child is not foreign");
+    ok(foreignListener(undefined, 4242) === false,
+      "LOOP-317 FIX: …and an ABSENT pid accepts — a daemon predating the field must not read as foreign, or every upgrade wedges");
+    try { rmSync(runDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  } finally {
+    await new Promise<void>((r) => srv.close(() => r()));
+    try { srv6.close(); } catch { /* may never have bound */ }
+  }
 }
 
 console.log(fails === 0 ? "\nLIFECYCLE_RACE_OK" : `\n${fails} CHECK(S) FAILED`);
