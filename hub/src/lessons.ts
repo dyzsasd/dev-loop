@@ -12,6 +12,25 @@ export const INDEX_MAX_BYTES = 8 * 1024;
 export const SHARD_MAX_LINES = 200;
 export const SHARD_MAX_BYTES = 16 * 1024;
 
+/**
+ * The strategy doc's byte ceiling (LOOP-282).
+ *
+ * Defined HERE, beside the lessons budgets it is modelled on, and exported so the bill and doctor
+ * share ONE authority. Two literals is how a budget and the thing that reports it drift.
+ *
+ * §20 R2 says "~20KB", and that applies to the ROLLABLE sections — the current-cycle strategy an
+ * agent must actually re-read every fire. This budget covers the WHOLE resolved file, because the
+ * whole file is what a §20 R2 reader loads: an archived section that has not been moved out to
+ * `strategy-archive/` is a section a fire still pays for. So the number is set at 48 KB — well above
+ * the ~20 KB of live strategy, with room for the surrounding structure, and far below the 114 KB
+ * measured on 2026-08-05 that motivated this. It is a ceiling on NEGLECT, not a target.
+ *
+ * The measured problem it exists to catch: the strategy doc was the only per-fire agent input with
+ * no budget and no doctor code — 114 KB, 14x the lessons INDEX cap W03 does enforce — and 20 rollup
+ * passes did not bound it (+1,036 B/fire measured).
+ */
+export const STRATEGY_DOC_MAX_BYTES = 48 * 1024;
+
 export function lessonsPaths(ws: Workspace): { dir: string; index: string; archive: string; shard: (project: string) => string } {
   const dir = wsLessonsDir(ws);
   return { dir, index: join(dir, "INDEX.md"), archive: join(dir, "archive.md"), shard: (p: string) => join(dir, `${p}.md`) };
