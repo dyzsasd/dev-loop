@@ -34,6 +34,7 @@ import { claudeCliPermissions, DEVLOOP_PERMISSION, KAIZEN_PERMISSION } from "./t
 import * as metricsMod from "./metrics.ts";
 import { readLandingState } from "./landing.ts";
 const require_metrics = () => metricsMod;
+import { DOCTOR_CHECKS, runScoped, type DoctorCtx, type DoctorReport } from "./doctor-registry.ts";
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
 // the service runtime wiring (below). Library callers that only want the DB-integrity verdict (init-service
@@ -334,7 +335,7 @@ export function nextStep(ws: Workspace | null, errors: WsError[], unseeded: stri
 // ── W20 helper — extracted to keep doctorWorkspace CC under the CRAP gate threshold ─────────────────────
 // Reads the per-project decisionQueue and emits [W20] when non-empty. Best-effort; swallows all exceptions.
 // Returns the stall descriptor (oldest + count) for NEXT-line threading, or null when clean/unavailable.
-function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { oldest: { id: string; enteredAt: string; state: string }; count: number } | null {
+export function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { oldest: { id: string; enteredAt: string; state: string }; count: number } | null {
   if (ws.file.team.backend !== "service" || !existsSync(wsHubDb(ws))) return null;
   try {
     const { decisionQueue, decisionEnteredAt } = require_metrics();
@@ -381,6 +382,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
   let stalledRepo: string | undefined;
   let decisionStall: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null = null;
   const fails: string[] = [];
+  const report: DoctorReport = {};
   const pass = (m: string) => console.log("✅ " + m);
   const fail = (m: string) => { console.log("❌ " + m); ok = false; fails.push(m); };
   const warn = (m: string) => console.log("⚠️  " + m);
@@ -494,6 +496,8 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
 
   // W16 + W21 share the same db path; compute once to avoid repeated ?? (CC budget, LOOP-199).
   const boardDb = opts.boardDb ?? wsHubDb(ws);
+  // Build the registry context (design §4/§5). Shared by the DOCTOR_CHECKS loop below.
+  const regCtx: DoctorCtx = { ws, opts, boardDb, out: { pass, fail, warn, info } };
 
   // W16 — owner-liveness (P1-4, the field's MP-156): an owner label whose actor never fires strands its
   // Todo/In Review tickets forever, and nothing notices. Service-backend only (needs the local board).
@@ -519,11 +523,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     } catch { /* owner-liveness is best-effort — a missing ledger/db never fails doctor */ }
   }
 
-  // W20 — operator decision queue stall (design decision-queue-observability §5.1): a non-empty operator
-  // decision queue means a human-gated unblock or approval is waiting, yet NEXT says "dev-loop run" — the
-  // operator is the loop's only unscalable resource; a waiting decision is more urgent than a landing stall.
-  // Extracted to helper to keep doctorWorkspace CC in budget. Best-effort; never flips DOCTOR_OK.
-  decisionStall = checkDecisionQueueStall(ws, warn);
+  // W20 — operator decision queue stall: migrated to DOCTOR_CHECKS (row 11).
 
   // W21 — sensitive mis-tier backstop (design sensitive-routing §§3-4): non-terminal tickets whose
   // labels include `sensitive` AND are routed to the junior-dev tier (assignee or label). Layer-1/2
@@ -584,7 +584,7 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
 
   // W23 — CLI-rename permission drift (LOOP-181 / Phase A): a workspace whose .claude/settings.json was
   // provisioned before the `kaizen` bin landed allows Bash(dev-loop *) but not Bash(kaizen *). Harmless
-  // today (prose still types `dev-loop`), but the instant prose flips to `kaizen` (Phase B) that
+  // today (still types `dev-loop`), but the instant prose flips to `kaizen` (Phase B) that
   // workspace's fires are denied board access. Pre-emptive + warn-only (never flips DOCTOR_OK); the
   // top-up is one command. Best-effort — a missing/malformed settings.json is not a drift finding.
   try {
@@ -593,18 +593,17 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
       warn(`[W23] ${join(ws.root, ".claude", "settings.json")} allows ${DEVLOOP_PERMISSION} but not ${KAIZEN_PERMISSION} — the CLI is gaining a \`kaizen\` alias (LOOP-181); top up the allow-list so fires keep board access when prose flips: dev-loop team repair`);
   } catch { /* W23 is best-effort — never fails doctor */ }
 
-  // W26 — unmerged paths in the shared checkout (LOOP-215). Extracted to helper to keep doctorWorkspace
-  // CC in budget. Best-effort; never flips DOCTOR_OK.
-  warnUnmergedPaths(ws, warn);
-  checkDirtySharedTree(ws, warn);   // W33 (LOOP-312)
-  checkInRepoWorktrees(ws, warn);   // W34 (LOOP-132)
-  checkReportTrail(ws, warn);       // W35 (LOOP-28)
-  checkSchedulerBuild(ws, warn);    // W36 (LOOP-253)
-  checkTierStarvation(ws, boardDb, warn); // W31 (LOOP-329)
-  checkStrategyDocBudget(warn, info);     // W37 (LOOP-282)
-  checkLessonsLiveness(ws, warn);   // W30 (LOOP-91)
-  checkBoardSnapshotW32(ws, warn);  // W32 (LOOP-340)
-  await checkDaemonPortBand(warn);  // W25 (LOOP-137)
+  // ── DOCTOR_CHECKS-driven rows (design §4/§5) ──────────────────────────────────────
+  // 11 migrated rows: W20 (row 11) + rows 17-26. Every other check stays inline and runs
+  // after the table so the printed output order is unchanged (the golden proves it).
+  // Child C migrates the remaining 18 inline checks into the table.
+  for (const check of DOCTOR_CHECKS) {
+    try {
+      Object.assign(report, await runScoped(check, regCtx) ?? {});
+    } catch (e) {
+      if (check.bestEffort === false) throw e;
+    }
+  }
 
   // W06 — git-work-tree leak checks: committable .dev-loop state/reports (I5 neighbor) or a bundle
   // artifact carrying every secret VALUE + hub.db (LOOP-210). Extracted to a helper (same pattern as
@@ -634,7 +633,8 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
     } catch { /* W27 is best-effort — never fails doctor */ }
   }
 
-  return { ok, stalledRepo, decisionStall, skewResult, fails };
+  // Object.assign spread from W20 (via DOCTOR_CHECKS) + inline W22/W18 assignments
+  return { ok, stalledRepo: stalledRepo ?? report.stalledRepo, decisionStall: report.decisionStall ?? decisionStall, skewResult: skewResult ?? report.skewResult, fails };
 }
 
 export function isGitWorkTree(dir: string): boolean {
@@ -697,7 +697,7 @@ export function checkFailureTaxonomyBlind(fires: { failures: number; timeouts: n
 // The band mirrors lcFreePort's own: 64 consecutive ports from the base.
 const W25_BAND_START = 8787;
 const W25_BAND_TRIES = 64;
-async function checkDaemonPortBand(warn: (m: string) => void): Promise<void> {
+export async function checkDaemonPortBand(warn: (m: string) => void): Promise<void> {
   try {
     const { createServer } = await import("node:net");
     const tryBind = (port: number): Promise<boolean> => new Promise((resolve) => {
@@ -771,7 +771,7 @@ export function checkLessonsLiveness(ws: Workspace, warn: (m: string) => void): 
 }
 
 // W26 helper — extracted to keep doctorWorkspace CC in budget (LOOP-215). Best-effort; never throws.
-function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
+export function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
   try {
     for (const ref of Object.keys(ws.file.repos)) {
       const { absPath: dir } = effectiveRepo(ws, ref);
