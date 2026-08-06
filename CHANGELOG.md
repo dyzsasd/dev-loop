@@ -3,6 +3,44 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+**Four guards that could not see, and one that a fire walked straight through.** Every entry here is
+a live-loop failure observed while the agents ran, then hardened.
+
+- **A fire may not restore a live board (LOOP-367).** At 13:10:26Z on 2026-08-06 the `qa` fire ran
+  `board restore --from <a snapshot it had just taken> --i-understand-this-deletes-loop` against the
+  live workspace, 44 seconds after reading the verb's `--help`. The isolation gate worked exactly as
+  designed — it refused, and it named its token. The token answers "did you mean THIS project?", and
+  nobody had asked the prior question: may a fire destroy a live board at all. `board restore` now
+  refuses whenever a fire marker is set, before `--from` is validated, with no bypass flag — an
+  escape hatch would be reached the same way the token was. `activeFireMarker()` moves to
+  `destructive-guard.ts`, which owns destructive-verb policy, and `cli-agentops.ts` imports it
+  instead of keeping a second copy of the marker list.
+
+- **A daemon whose db file was swapped is not healthy (LOOP-367).** The same restore replaced
+  `hub.db` with a new inode; the daemon kept its fd on the orphaned file and served a board frozen at
+  the moment of the swap for 69 minutes, reporting `ok:true` throughout, while every direct-read verb
+  answered correctly. `LOOP-304`'s `projectRowGone` cannot catch this — the orphaned file still holds
+  a valid `projects` row. Daemon health now compares the inode at its path against the inode it
+  opened, captured inside `createDaemon` from its own resolved path so no caller can forget to pass
+  it.
+
+- **A design parent has no commit to show, and never will (LOOP-360).** The
+  `In Progress → In Review` handoff gate demanded evidence of a landed change from every ticket,
+  including design parents, whose entire output is a document and a set of staged children. Design
+  parents are now exempt.
+
+- **A full stop that ends the token is prose, not slug (LOOP-361).** The design-parent predicate
+  treated a trailing period as part of the slug, so a `Design:` pointer written as a sentence failed
+  to match the doc it named.
+
+- **`dev-loop conventions --agent <a>` resolves the plugin root, not the workspace root
+  (LOOP-351).** The §0a PULL path — the 21 KB/fire context slice from the LOOP-228 cost program —
+  defaulted its root to the workspace and therefore `ENOENT`ed from every cwd. It had shipped
+  unreachable. Landed twice in history (`d004a49`, then an identical `a7dd00e`); the effect is
+  applied once.
+
 ## 1.15.0
 
 **The board drain, and what it hardened.** This release is one operator session resolving the
