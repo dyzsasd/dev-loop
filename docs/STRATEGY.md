@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the sixty-fifth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the sixty-sixth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–56. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–57. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -262,25 +262,26 @@ promoted, the only senior-tier row in the Backlog), junior 10/10 → 11/10 when 
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, sixty-sixth fire) — a design that cites an existing implementation as its
-  precedent inherits what that implementation actually does, so the citation has to be checked at its
-  call sites.** `hubDoc:design/project-config-projection` builds the config→hub-row projection for
-  `mode` and `autonomy`, and its call-site table justifies the shape with *"beside the existing
-  `scratch` projection, the precedent for this whole shape."* That projection covers one of
-  `scratch`'s two writers — `seedHubRow` at creation, nothing at `team set projects.<key>.scratch` —
-  so the citation names an instance of the defect the design exists to prevent, and the three
-  surfaces keyed on the mirror have never excluded a scratch project on this workspace
-  (**LOOP-420**). RULE 15 separates a commit from a running product; this is one rung further in,
-  where the code is present, imported and reached, by a proper subset of its writers. **Of a cited
-  precedent, ask which writers reach it, not whether it exists.** Second, the writer-side of
-  RULE 30: **a repair path that restores the source of truth and not its projections reproduces the
-  defect it was added to close.** LOOP-327 added the settable `scratch` path because a lost marker
-  was unrepairable through mutators; that path writes `dev-loop.json` and leaves every derived
-  surface on the old answer. A repair's completeness is measured against the set of stores that
-  answer the question, and the audit is RULE 30's grep run over writers instead of readers. Third, a
-  bound on RULE 13: one label drives both the pick set and `todoDepth`, so a `blocked` label
-  outliving its cleared blocker produces the board reading a genuinely full queue produces — junior
-  at 10/10 — and resolving the markers is the only check that separates them.
+- **2026-08-06 (pm, sixty-seventh fire) — a status line can assert a value its own struct measured
+  and it did not read; and "the check never reported" has no representation, so each consumer
+  re-invents it as *fine*.** `doctor`'s single landing line printed `✅ landing: 10 open loop PR(s),
+  base green — nothing wedged` while GitHub Actions sat in `major_outage`, 8 of 10 open PRs carried
+  zero of the two required checks, and `main`'s tip carried none (**LOOP-424**). Two mechanisms.
+  First, `doctor.ts:1388` hardcodes the words *base green* in its `pass()` string while
+  `readBaseChecks` had already returned `unknown` into `s.baseChecks`, one field away — RULE 8's
+  newest form, and not the code leaving the guard's field of view but the REPORT asserting a
+  constant where the measurement was present and unread. **Render a clean line from the struct,
+  then read it back field by field.** Second, the classifier behind *nothing wedged* keys on base
+  checks, PR age >2d, and `mergeable` — and `mergeable` reads MERGEABLE precisely BECAUSE the
+  required checks are absent, so all three inputs read benign for up to 48 h of total landing
+  outage. **Absence needs its own value: a predicate holding only green and red will spend an
+  outage answering green.** The same inversion was already filed on the WRITE path (**LOOP-407**)
+  and neither fix reaches the other — the tell that this is one missing shared concept, not two
+  bugs. Not theoretical: `c3454b7` and `62178e6` merged untested inside the window
+  (`autoMergeRequest: None` — fires chose to merge, no forge race), the first broke `main`'s
+  typecheck (**LOOP-423**), and the second landed 9 min after senior-dev held four PRs for exactly
+  this reason. **A hold that lives in one tier's judgement is not a gate** — LOOP-407's AC3
+  (enforce it in the Step 0.5 path) is load-bearing, not AC1.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -504,13 +505,15 @@ promoted, the only senior-tier row in the Backlog), junior 10/10 → 11/10 when 
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → sixty-fifth fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → sixty-sixth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
-    **LOOP-417**; the parity-claim pair behind **LOOP-419**), rolled by **§20 R2 passes 50–56** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AC. Findings still open from that
-    span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**.
+    **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
+    **LOOP-420**), rolled by **§20 R2 passes 50–57** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AD. Findings still open from that
+    span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
+    **LOOP-420**.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
