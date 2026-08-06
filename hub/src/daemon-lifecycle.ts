@@ -188,15 +188,18 @@ async function lcProbe(url: string, key: string, timeoutMs = 1000): Promise<bool
 // Like lcProbe but returns the health body (version/actor) on success, null otherwise — so `up` can
 // detect a daemon still running PRE-UPGRADE code (version ≠ this CLI's) and restart it (D1). Without
 // this, an `npm i -g` upgrade never takes effect on a running detached daemon until reboot / manual down.
-async function lcHealthInfo(url: string, key: string, timeoutMs = 1000): Promise<{ version?: string; buildCommit?: string | null; actor?: string; entryPath?: string } | null> {
+// LOOP-317: `pid` is carried through. The payload has always included it; dropping it here is what let
+// a caller confirm "a daemon for MY project is on this port" while the process answering was not the
+// one it just spawned.
+async function lcHealthInfo(url: string, key: string, timeoutMs = 1000): Promise<{ version?: string; buildCommit?: string | null; actor?: string; entryPath?: string; pid?: number } | null> {
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), timeoutMs);
     const r = await fetch(`${url}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(t));
     if (r.status !== 200) return null;
-    const b = (await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; buildCommit?: string | null; actor?: string; entryPath?: string } | null;
+    const b = (await r.json().catch(() => null)) as { ok?: boolean; project?: string; version?: string; buildCommit?: string | null; actor?: string; entryPath?: string; pid?: number } | null;
     if (!b || b.ok !== true || b.project !== key) return null; // confirm it's OUR project on that port, not a stranger
-    return { version: b.version, buildCommit: b.buildCommit, actor: b.actor, entryPath: b.entryPath };
+    return { version: b.version, buildCommit: b.buildCommit, actor: b.actor, entryPath: b.entryPath, pid: b.pid };
   } catch { return null; }
 }
 async function lcWaitHealthy(url: string, key: string, totalMs = 8000): Promise<boolean> {
@@ -209,6 +212,20 @@ async function lcWaitHealthy(url: string, key: string, totalMs = 8000): Promise<
 }
 // Like lcWaitHealthy but returns "dead" the moment the child is no longer alive, so a bind-race
 // loser (EADDRINUSE → immediate child exit) is detected in ≤150ms instead of 8s. LOOP-76.
+/**
+ * Is the process answering /api/health someone OTHER than the child we just spawned? (LOOP-317)
+ *
+ * Exported so the decision is testable without standing up a daemon — the surrounding `up` path
+ * needs a real spawn, a real port and a real bind race to reach it, and a test that has to reproduce
+ * a race to check a comparison is a test that will one day pass for the wrong reason.
+ *
+ * An ABSENT pid accepts: an older daemon predating this field must not read as foreign, or every
+ * upgrade wedges. The field has shipped in /api/health all along, so that window is narrow.
+ */
+export function foreignListener(answeringPid: number | undefined, ourPid: number | undefined): boolean {
+  return answeringPid !== undefined && ourPid !== undefined && answeringPid !== ourPid;
+}
+
 async function lcWaitHealthyOrDead(url: string, key: string, pid: number, totalMs = 8000): Promise<"healthy" | "dead" | "timeout"> {
   const deadline = Date.now() + totalMs;
   while (Date.now() < deadline) {
@@ -342,6 +359,30 @@ export async function daemonUpForKey(key: string): Promise<number> {
         : await lcWaitHealthyOrDead(url, key, child.pid);
       if (result === "healthy") {
         const started = await lcHealthInfo(url, key); // record what actually came up (version/actor) for `status` + upgrade detection
+        // LOOP-317 — HEALTH AT A URL IS NOT PROOF THAT OUR CHILD IS SERVING IT.
+        //
+        // The root cause of the orphan this suite exists to catch: lcTryBind and the child's real bind
+        // are not atomic (the TOCTOU the comment above already names), so another cold start — or a
+        // survivor of a previous `down` — can hold this port. Our child then dies with EADDRINUSE
+        // while `lcProbe(url)` answers HEALTHY from the OTHER process. The project key matched,
+        // because it is the same project. We would then write OUR (dying) pid into the runfile while
+        // the live listener is someone else's process: the runfile records a pid that is not the
+        // listener, `down` kills the wrong thing, and the real daemon is orphaned.
+        //
+        // Measured shape, CI run 30920347062 trial 5: the runfile pid was not the live listener, and
+        // `down` left :8787 serving for the full 4s waitGone deadline.
+        //
+        // So: require the ANSWERING pid to be the child we spawned. Absent pid ⇒ accept, because an
+        // older daemon predating this field must not be treated as foreign (it would wedge every
+        // upgrade); the field has shipped in /api/health all along, so that window is narrow.
+        if (foreignListener(started?.pid, child.pid)) {
+          await lcStop(child.pid); // our child lost the bind race — never leave it running
+          if (envPort > 0) {
+            console.error(`[daemon] up: port ${port} is served by another daemon for '${key}' (pid ${started?.pid}), not the one just spawned — refusing to record a runfile that would orphan it.`);
+            return 1;
+          }
+          continue; // auto-port: walk to the next candidate rather than record a foreign listener
+        }
         lcWriteRun({ project: key, pid: child.pid, port, host, url, startedAt: new Date().toISOString(), version: started?.version ?? pkgVersion(), buildCommit: started?.buildCommit ?? null, actor: started?.actor ?? "operator", entryPath: started?.entryPath ?? self });
         console.log(`[daemon] up: started '${key}' → ${url} (pid ${child.pid})`);
         return 0;
