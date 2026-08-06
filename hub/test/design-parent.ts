@@ -71,6 +71,47 @@ try {
   ok(docSlugOf("hubDoc:design/widget-engine") === docSlugOf("docs/design/widget-engine.md"),
     "LOOP-344: both doc spellings normalise to the same slug");
 
+  // ── LOOP-361: a slug named at the END OF A SENTENCE is the same slug ─────────────────────────
+  // `.` is legal INSIDE a slug, so it lives in the token's character class — and the lazy pattern
+  // therefore refused to stop before a trailing full stop and captured `beta-mod.`. That equals no
+  // child's slug, so a parent naming its doc at the end of an ordinary sentence resolved to nothing
+  // and fell out of pm.verify into qa.verify — LOOP-344's inversion, returning through the body-slug
+  // path. Triggering it needs no unusual input, only prose that ends a sentence.
+  //
+  // The three shapes are asserted TOGETHER because each one alone is passable by a wrong fix: the
+  // end-of-sentence case alone is satisfied by stripping trailing dots, which then eats the dot in
+  // `v1.2-module`; the dotted case alone is satisfied by doing nothing at all.
+  mk("DP-P6a", "Design doc: hubDoc:design/alpha-mod (the module doc)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+  mk("DP-C6a", "Design: hubDoc:design/alpha-mod\n\nchild", "Todo", ["dev-loop"]);
+  mk("DP-P6b", "The design lives at hubDoc:design/beta-mod.", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+  mk("DP-C6b", "Design: hubDoc:design/beta-mod\n\nchild", "Todo", ["dev-loop"]);
+  mk("DP-P6c", "The dotted design is hubDoc:design/v1.2-module (in full)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+  mk("DP-C6c", "Design: hubDoc:design/v1.2-module\n\nchild", "Todo", ["dev-loop"]);
+  for (const [p, shape] of [
+    ["DP-P6a", "mid-sentence"], ["DP-P6b", "at the end of a sentence"], ["DP-P6c", "with a dot INSIDE the slug"],
+  ] as const) {
+    ok(inVerify("pm", p), `LOOP-361: a parent naming its doc ${shape} reaches pm.verify`);
+    ok(!inVerify("qa", p), `LOOP-361: …and ${shape}, not qa.verify`);
+  }
+
+  // Both halves of the reverse link resolve through ONE token rule, so the pointer side is asserted
+  // on the same shapes: a body that agrees with a pointer that is itself wrong still resolves
+  // nothing. These check LITERAL slugs on purpose — `docSlugOf(a) === docSlugOf(b)` (above) cannot
+  // discriminate here, because both sides share the predicate and a mutation corrupting them equally
+  // keeps it green.
+  for (const [ptr, want] of [
+    ["hubDoc:design/beta-mod.", "beta-mod"],           // a full stop that ENDS the token is prose
+    ["docs/design/beta-mod.", "beta-mod"],
+    ["hubDoc:design/v1.2-module", "v1.2-module"],      // …a dot with slug after it is slug
+    ["docs/design/v1.2-module.md", "v1.2-module"],
+    ["hubDoc:design/widget-engine", "widget-engine"],  // LOOP-344: hyphenated slugs resolve in full
+    ["docs/design/widget-engine.md", "widget-engine"], // …and the `.md` strip is unchanged
+    ["docs/design/gadget-core.md", "gadget-core"],
+  ] as const) {
+    ok(docSlugOf(ptr) === want,
+      `LOOP-361: docSlugOf(${JSON.stringify(ptr)}) → ${JSON.stringify(want)} (got ${JSON.stringify(docSlugOf(ptr))})`);
+  }
+
   // ── LOOP-345 R1: PM may close a design parent ────────────────────────────────────────────────
   // Before: pm was REFUSED ("not the qa verifier-owner") and qa was ALLOWED — the layer that showed
   // the work refused the write, and the layer that permitted it hid the work.
