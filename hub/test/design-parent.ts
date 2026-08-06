@@ -211,6 +211,139 @@ try {
       `LOOP-296: a child using the hubDoc: pointer form inherits too (got ${JSON.stringify(docChild.labels)})`);
   }
 
+  // ── LOOP-372: the doc-slug route OVER-matched — a mention is not ownership ────────────────────
+  // LOOP-344 made the parent side reachable through the doc slug; it did so with an UNANCHORED body
+  // scan, while the child side was deliberately anchored to a bare line. Reading the two halves of
+  // one line two different ways classified 19 of this board's 352 tickets as design parents when 5
+  // were design tickets — and `isDesignParent` decides pm/qa routing, the LOOP-345 close gate and
+  // the LOOP-360 zero-commit handoff exemption, so nine ordinary code tickets held all three.
+  //
+  // Asserted directly on the predicate rather than through the queue: it is the shared input to
+  // three gates, and each gate's own routing is already covered above.
+  {
+    const parents = (): Set<string> => designParentIds(db, pid,
+      db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
+        .all(pid) as unknown as Array<{ id: string; description: string; state: string }>);
+
+    // The three-ticket fixture from the ticket: an owner, a child, and a bystander that merely
+    // quotes the doc in a sentence. Before the fix all THREE came back as parents.
+    mk("L372-P", "Mode: design\n\nDesign doc: hubDoc:design/quota-engine (v1)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L372-C", "Design: hubDoc:design/quota-engine\n\nbuild it", "Todo", ["dev-loop"]);
+    mk("L372-U", "## Root cause\n\nThe regression traces to hubDoc:design/quota-engine, which the\nprevious fire cited while explaining the failure.", "In Review", ["dev-loop", "Bug", "qa"]);
+    {
+      const p = parents();
+      ok(p.has("L372-P"), "LOOP-372: the design's OWNER still resolves through the doc-slug route");
+      ok(!p.has("L372-U"), "LOOP-372: a bystander that merely MENTIONS the doc in prose is not its parent");
+      ok(!p.has("L372-C"), "LOOP-372: …and the child that points AT the doc is not its parent either");
+      // The routing consequence, since that is what the over-match actually cost: two consecutive
+      // fires sent a qa-labelled Bug to PM's verify queue and QA handed the close away.
+      ok(inVerify("qa", "L372-U") && !inVerify("pm", "L372-U"),
+        "LOOP-372: …so the bystander keeps its own qa verifier instead of being re-routed to PM");
+    }
+
+    // The sharp case: the natural markdown spelling of a pointer. `docSlugOf` refused the capture
+    // (it starts with a backtick) so the ticket failed the CHILD test, and the unanchored body scan
+    // then found the same token and passed it the PARENT test — one line, read two ways.
+    //
+    // The live shape, and it is load-bearing: the wrapped child has a SIBLING whose pointer parses,
+    // so the slug has children whichever way the wrapped one is read. Without the sibling the slug
+    // has no children at all before the fix, the parent branch never runs, and the fixture passes
+    // against the very defect it is meant to catch. Neither ticket has a `Mode: design` owner
+    // either — with one, these would pass on the RANKING and could not see the child rule go.
+    mk("L372-BT-SIB", "Design: hubDoc:design/ledger-core\n\nsibling, pointer parses either way", "Todo", ["dev-loop"]);
+    mk("L372-BT-C", "Design: `hubDoc:design/ledger-core` (§5). Parent: L372-NOBODY.\n\nbuild it", "Todo", ["dev-loop"]);
+    mk("L372-PL-C", "Design: hubDoc:design/plain-core\n\nbuild it", "Todo", ["dev-loop"]);
+    {
+      const p = parents();
+      ok(!p.has("L372-BT-C"), "LOOP-372: a child whose pointer is BACKTICK-wrapped is not the parent of the doc it points at");
+      ok(!p.has("L372-PL-C"), "LOOP-372: …nor is one whose pointer parses — the rule is the `Design:` line, not whether it parses");
+      ok(!p.has("L372-BT-SIB"), "LOOP-372: …nor the sibling that shares the slug");
+      // Decided deliberately, per the ticket: the wrapped form BINDS as a child rather than binding
+      // to nothing on either side. The strip lives beside the `.md` strip and both sides read it.
+      ok(docSlugOf("`hubDoc:design/ledger-core`") === "ledger-core",
+        `LOOP-372: the wrapped pointer resolves to the same slug as the bare one (got ${JSON.stringify(docSlugOf("`hubDoc:design/ledger-core`"))})`);
+      ok(docSlugOf("**`docs/design/ledger-core.md`**") === "ledger-core",
+        "LOOP-372: …in the repo-file spelling too, through emphasis as well as the code span");
+      ok(docSlugOf("hubDoc:design/ledger-core") === "ledger-core",
+        "LOOP-372: …and the bare form is untouched by the strip");
+    }
+    // "Regardless of whether the pointer parses" needs a pointer that still does NOT parse once the
+    // code span is stripped, or the claim rides on the strip and the rule itself is never exercised.
+    // The repo-file form is `$`-anchored, so a trailing section reference — the spelling three live
+    // children use — leaves it unparseable while the line plainly names the slug. It is a CHILD of
+    // that slug either way; that is the rule, and it is not a statement about parsing.
+    mk("L372-UP-SIB", "Design: docs/design/shelf-core.md\n\nsibling whose pointer parses", "Todo", ["dev-loop"]);
+    mk("L372-UP-C", "Design: docs/design/shelf-core.md (§5). Parent: L372-NOBODY.\n\nbuild it", "Todo", ["dev-loop"]);
+    ok(docSlugOf("docs/design/shelf-core.md (§5). Parent: L372-NOBODY.") === null,
+      "LOOP-372: (the pointer genuinely does not parse — otherwise the next assertion proves nothing)");
+    ok(!parents().has("L372-UP-C"),
+      "LOOP-372: a `Design:` line that NAMES the slug makes its ticket a child even when the pointer form does not parse");
+    // Binding it means the wrapped child is REACHABLE as a child, not merely excluded as a parent —
+    // the difference between the form meaning something and the form meaning nothing. Asserted on a
+    // slug whose ONLY child is wrapped: if the form did not bind, the slug would have no children
+    // and its owner would resolve to nobody.
+    mk("L372-WO-C", "Design: `hubDoc:design/wrapped-only`\n\nthe only child, wrapped", "Todo", ["dev-loop"]);
+    mk("L372-WO-P", "the wrapped doc's owner\n\nhubDoc:design/wrapped-only is the doc", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    ok(parents().has("L372-WO-P"),
+      "LOOP-372: a wrapped pointer BINDS as a child, so its doc's owner resolves through the reverse link");
+
+    // A ticket that DECLARES a non-design mode is not a design parent, whatever its prose says.
+    // §21a defines exactly two modes; `Mode: direct-code` is the ticket stating it is code work.
+    mk("L372-MODE-C", "Design: hubDoc:design/cache-tier\n\nbuild it", "Todo", ["dev-loop"]);
+    mk("L372-MODE", "Mode: direct-code\n\nSupersedes L372-X. Parent design: L372-Y · `hubDoc:design/cache-tier`, Layer 1.", "In Review", ["dev-loop", "Improvement", "pm"]);
+    ok(!parents().has("L372-MODE"),
+      "LOOP-372: a `Mode: direct-code` ticket naming a doc is code work by its own declaration, not that doc's parent");
+    // The two mode reads must not contradict each other: the disqualifier reads any bare `Mode:`
+    // line, `isDesignModeBody` reads only the top of the body, and a body that one calls a design
+    // must never be one the other throws out. Asserted on a marker `isDesignModeBody` accepts by
+    // prefix, which is exactly where the two rules can drift apart.
+    mk("L372-MODEX-C", "Design: hubDoc:design/prefix-mod\n\nbuild it", "Todo", ["dev-loop"]);
+    mk("L372-MODEX", "Mode: design-and-delegate\n\nDesign doc: hubDoc:design/prefix-mod (v1)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    ok(parents().has("L372-MODEX"),
+      "LOOP-372: a body `isDesignModeBody` accepts is never thrown out by the non-design-mode disqualifier");
+
+    // Two tickets naming one slug is an AMBIGUOUS link. Returning both would hand the gate to a
+    // ticket that is certainly wrong; picking one by id order would settle an authorization question
+    // by an accident of numbering. It resolves to nobody.
+    mk("L372-AMB-C", "Design: hubDoc:design/router-mesh\n\nbuild it", "Todo", ["dev-loop"]);
+    mk("L372-AMB-1", "we adopted hubDoc:design/router-mesh here", "In Review", ["dev-loop", "Bug", "qa"]);
+    mk("L372-AMB-2", "and hubDoc:design/router-mesh is cited here too", "In Review", ["dev-loop", "Bug", "qa"]);
+    {
+      const p = parents();
+      ok(!p.has("L372-AMB-1") && !p.has("L372-AMB-2"),
+        "LOOP-372: two tickets naming one slug with nothing to separate them resolve to NEITHER — never silently both");
+    }
+    // …but a `Mode: design` declaration among them settles it, deterministically and without
+    // REQUIRING the marker (which would un-fix LOOP-344 — see DP-P2/DP-P6b above, still green).
+    mk("L372-RANK-C", "Design: hubDoc:design/audit-trail\n\nbuild it", "Todo", ["dev-loop"]);
+    mk("L372-RANK-P", "Mode: design\n\nDesign doc: hubDoc:design/audit-trail (v1)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L372-RANK-U", "the fix is written back into hubDoc:design/audit-trail §8", "In Review", ["dev-loop", "Bug", "qa"]);
+    {
+      const p = parents();
+      ok(p.has("L372-RANK-P"), "LOOP-372: a declared design OUTRANKS a mention of the same slug");
+      ok(!p.has("L372-RANK-U"), "LOOP-372: …and the mention loses rather than joining it");
+    }
+
+    // The body scan reads EVERY occurrence. First-match-only hid a ticket naming a second doc, so
+    // the tie-break could not see that a link was contested at all.
+    mk("L372-MULTI-C", "Design: hubDoc:design/shard-map\n\nbuild it", "Todo", ["dev-loop"]);
+    mk("L372-MULTI-1", "follows hubDoc:design/quota-engine and also hubDoc:design/shard-map", "In Review", ["dev-loop", "Bug", "qa"]);
+    mk("L372-MULTI-2", "hubDoc:design/shard-map is named here as well", "In Review", ["dev-loop", "Bug", "qa"]);
+    {
+      const p = parents();
+      ok(!p.has("L372-MULTI-1") && !p.has("L372-MULTI-2"),
+        "LOOP-372: a slug named SECOND in a body still counts as a candidate, so the contest is seen and neither wins");
+    }
+
+    // An id no ticket on this board holds is not an authorization subject. `LOOP-2` reached the live
+    // set this way — a parent nobody can hold and nobody can audit.
+    mk("L372-GHOST-C", "Design: parent L372-NOSUCH\n\nbuild it", "Todo", ["dev-loop"]);
+    ok(!parents().has("L372-NOSUCH"),
+      "LOOP-372: a `Design: parent <id>` naming no ticket on this board is not returned");
+    ok(parents().has("DP-P1"),
+      "LOOP-372: …while a `parent <id>` that DOES name a real ticket still resolves (the check bounds the route, it does not remove it)");
+  }
+
   db.close();
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
