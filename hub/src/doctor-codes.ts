@@ -66,6 +66,7 @@ export const DOCTOR_CODES: readonly DoctorCode[] = [
   { code: "W36", name: "running scheduler loaded a different build than the installed CLI", source: "doctor.ts" },
   { code: "W37", name: "strategy doc over its byte budget — every §20 R2 reader pays it each fire", source: "doctor.ts" },
   { code: "W38", name: "mergeChecks configured on an unprotected default branch — only merge-guard enforces them", source: "doctor.ts" },
+  { code: "W39", name: "secrets.env readable by group/others — live provider keys exposed to every local account", source: "doctor.ts" },
 ] as const;
 
 export const DOCTOR_CODE_SET: ReadonlySet<string> = new Set(DOCTOR_CODES.map((c) => c.code));

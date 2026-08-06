@@ -96,7 +96,7 @@ export function loadWorkspaceSecrets(root: string): void {
   const p = wsSecretsPath(root);
   let content: string;
   try { content = readFileSync(p, "utf8"); } catch { return; } // absent ⇒ no-op
-  warnLoosePerms(p);
+  warnLoosePerms(root);
   const injected = injectedByRoot.get(root) ?? new Set<string>();
   injectedByRoot.set(root, injected);
   for (const [k, v] of Object.entries(parseSecretsEnv(content))) {
@@ -104,16 +104,30 @@ export function loadWorkspaceSecrets(root: string): void {
   }
 }
 
+// The ONE place the exposure condition and its mode arithmetic live (LOOP-430). Returns the
+// observation — the path and the observed octal mode — or null when there is nothing to report:
+// an absent file (a legitimate state: the workspace may resolve every key from the process env),
+// owner-only bits, or a platform without POSIX mode bits.
+//
+// Deliberately unlatched and side-effect free, so BOTH reporters can share it: the stderr line below
+// (once per path per process) and doctor's W39 row in doctor.ts (every run). It never opens the file
+// — a finding carries the path and the mode, never a secret VALUE (§16).
+export function loosePermsFinding(root: string): { path: string; mode: string } | null {
+  const p = wsSecretsPath(root);
+  if (platform() === "win32") return null;
+  let mode: number;
+  try { mode = statSync(p).mode; } catch { return null; } // absent, or raced away between read and stat
+  if (!(mode & 0o077)) return null;
+  return { path: p, mode: (mode & 0o777).toString(8) };
+}
+
 // The file holds live credentials: warn (never fail) when group/world bits are set. stderr only —
 // stdout is the MCP protocol channel for some callers. Once per path per process (the daemon and the
-// run loop re-resolve constantly).
-function warnLoosePerms(p: string): void {
-  if (platform() === "win32" || permsWarned.has(p)) return;
-  try {
-    const mode = statSync(p).mode;
-    if (mode & 0o077) {
-      permsWarned.add(p);
-      console.error(`[dev-loop] ${p} is readable by group/others (mode ${(mode & 0o777).toString(8)}) — it holds secrets; tighten it: chmod 600 ${p}`);
-    }
-  } catch { /* raced away between read and stat — nothing to warn about */ }
+// run loop re-resolve constantly), which is why this is NOT the operator's reporting surface: doctor
+// reports the same condition as W39 on every run (LOOP-430).
+function warnLoosePerms(root: string): void {
+  const finding = loosePermsFinding(root);
+  if (!finding || permsWarned.has(finding.path)) return;
+  permsWarned.add(finding.path);
+  console.error(`[dev-loop] ${finding.path} is readable by group/others (mode ${finding.mode}) — it holds secrets; tighten it: chmod 600 ${finding.path}`);
 }
