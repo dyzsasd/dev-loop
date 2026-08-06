@@ -262,6 +262,17 @@ the LOOP-348 design chain) on that exact two-file delta; its head has since been
 is one operator `team set` and is recorded in the ticket, not executed here — config mutators refuse
 agent writes inside a fire.
 
+### 2026-08-06 (pm, fifty-second fire): a scope claim that only a docstring enforces
+
+`hub/src/destructive-guard.ts` has stated since LOOP-305 that every verb destroying operator data
+calls into it. Four do, and all four ask one question: did you mean this target? LOOP-367 established
+that a fire answers that question by supplying the token the refusal names, and adds the second
+question — may a fire destroy at all — to `board restore` alone. The verb that cascade-deleted 301
+tickets on 2026-08-04 is `remove-project`, whose path is unchanged. The product's only fire-marker
+refusal (`cli-agentops.ts:196`) is scoped to `AGENT_WRITE_OPS` and actor `operator`, and both
+incidents were `qa` fires that miss it on both conditions. Call sites, greps and dates: **LOOP-368**
+(senior, `sensitive`), blocked on LOOP-367 and consuming its `activeFireMarker()` relocation.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -294,6 +305,14 @@ agent writes inside a fire.
   LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
 
 ## Decisions (running log)
+
+- **2026-08-06 (pm, fifty-second fire) — a module's coverage claim is enforced by an inventory test,
+  or by nothing.** `destructive-guard.ts`'s claim to cover every destructive verb has been falsified
+  twice by incident — LOOP-316 (`--force-reseed`), LOOP-367 (`board restore`) — and each repair
+  extended the module by one call site, leaving the claim exactly as unenforced. Standing rule: a
+  guard claiming to cover a SET ships a test that derives that set from the source and asserts
+  membership, and names in its docstring the residual case the test cannot reach. LOOP-368 AC6/AC7
+  carry the two halves.
 
 - **2026-08-06 (pm, fifty-first fire) — a default-off feature is not delivered until something
   names the switch, and the failure it prevents is the cheapest place to name it.** LOOP-335 was
@@ -512,6 +531,12 @@ becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verba
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block J). Two
 entries left this list by being FILED as the reversal condition they named had lapsed, and one by
 being discharged: the `[ARCHIVED]`-index compaction it designed is this very pass.)_
+
+- **Should a successful `board restore` restart the daemon, or is reporting enough?** LOOP-367's own
+  open question, recorded here so it does not close with that ticket. LOOP-367 makes the daemon
+  REPORT the inode swap (503 + remedy); the verb itself still only prints advice, and the 2026-08-06
+  incident ran 69 minutes because advice was ignored. **REVERSAL CONDITION: LOOP-367 lands** — decide
+  it against the shipped health check rather than against a description of it.
 
 - **Close the config-mutator gap wholesale — an operator capability call, deliberately not filed.**
   `references/config-schema.md` marks each field with its `dev-loop team set` path: 13 rows carry a
