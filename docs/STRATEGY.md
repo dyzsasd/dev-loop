@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the seventieth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the seventy-first fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–61. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–62. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -209,31 +209,30 @@ is precisely how the withdrawn one survived a day steering the top priority.
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, seventy-first fire): the assertion that copies what it guards
+### 2026-08-06 (pm, seventy-second fire): the direction section nothing can falsify
 
 Product SHA unchanged at `9a15ecd` — both commits since are my own doc lands — so the lens list
-stood and `trust-safety` ran, the first sweep of the credential surface under the
-observable-and-safe mandate.
+stood and `strategy-gaps` ran.
 
-**LOOP-420 verify-FAILED on AC4; LOOP-429 supersedes it.** QA ruled it Fixed on two fires and could
-not execute the close — the design-parent gate admits only pm/operator to a terminal transition,
-and the same misclassification had removed the row from `qa.verify`. Verified independently before
-ruling (detached worktree at `a19f426`, fire env scrubbed): `TEAM_EDIT_OK`, six assertions green,
-diff scope-clean — QA's verdict on the product was right. The production fix stays on `main`;
-`Canceled` records the increment, not the code. Follow-up routed up to senior per §3 and widened to
-the second inlined copy (`schedulable-seam.ts:96`) and the `includes("NOT_SCRATCH_SQL")` text check
-at `:114`, which together leave LOOP-349's one-definition guarantee with no test able to detect
-drift.
+**A fifth D4 item carried to LOOP-366, and zero tickets filed.** `Non-goals` asserts the loop "must
+keep working on the `local` and `service` backends"; `backend:"local"` has not loaded since the 1.x
+schema — E02 at validation, measured rung 3 on the installed CLI. `config-schema.md`,
+`ARCHITECTURE.md` and `INDEX.md` all already describe `local` as legacy/unsupported, so `Non-goals`
+is the last surface still asserting the constraint — the same shape as the `Hard invariants` §16
+item carried at 20:46Z. Filing nothing was the ruling, not a shortfall: the residue
+(`boot-prefix.ts:230` branches on a value the validator rejects) can be fixed two opposite ways and
+choosing one pre-empts the operator's edit, which is already open over these sections.
 
-**LOOP-430 filed and promoted** (senior, `sensitive`). Measured on a fixture at mode 644: `doctor`
-exits 0, prints no row, carries W03/W30/W32 only. The four product writers are correct (`0o600` plus
-an explicit `chmodSync`); the gap is the reporting channel.
+**LOOP-384 groomed and promoted** (junior 9/10 → 10/10, at cap). Wrote ACs for the two `Scope`
+items that had none, made AC2 name a fixture that can fail (three kinds, three ages, mutate one)
+per the LOOP-420 lesson, and extended AC1 to a *change* of kind — the operator re-classified
+LOOP-373 mid-day because there is no field, which is the behaviour the AC exists to protect.
+**LOOP-412 ↔ LOOP-425 cross-linked**: two separately-ticketed defects on consecutive lines of
+`reportTrailGaps`, and the one a junior picks first had no pointer to the other.
 
-**LOOP-366** stays the operator's — the LOOP-351 measurement their ruling waits on is recorded
-there, as far as it goes without the published artifact.
-
-Board: promoted LOOP-430 (senior 4/10 → 5/10); junior held at cap 10/10. §9c: 14 live edges, zero
-unparks due, zero zero-edge parks.
+Board: §9c 14 live edges, zero unparks due, zero zero-edge parks; `needs-pm` and the `_team`
+carrier both empty; LOOP-373's blocker unchanged (npm `latest` still 1.15.0). Doc-watch: no foreign
+edit.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -267,26 +266,25 @@ unparks due, zero zero-edge parks.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, seventy-first fire) — a regression test that copies the value it protects
-  cannot fail when that value changes; a gate deciding who may write and a gate deciding who can see
-  must be checked against each other; and a detected condition with no reporting channel is
-  unreported.** LOOP-420/LOOP-429/LOOP-430. LOOP-420's AC4 required the test to IMPORT
-  `NOT_SCRATCH_SQL` from `sql-predicates.ts` and stated that an inlined copy does not satisfy it.
-  The shipped test inlined a character-for-character copy. Inverting the shared constant —
-  `IS NOT 1` to `IS 1`, which reverses the meaning for all three production consumers — left the
-  suite at `TEAM_EDIT_OK` with the AC4 line printing the same two numbers. Two verifications had
-  already passed it: the implementer's Step 5.5, and QA's stage-1 triage run on two separate fires.
-  Reading an assertion does not separate "asserts the shipped value" from "asserts a copy of it";
-  the check that separates them is to change the value and re-run. **For any AC whose purpose is
-  that an assertion be capable of failing, the required evidence is the mutated run.** Second: QA
-  reached the correct verdict twice and could not execute it — the design-parent gate admits only
-  pm/operator to a terminal transition, while the same misclassification removed the row from
-  `qa.verify`. One defect produced a reader without authority and an authority without a queue
-  entry, and the ticket held three fires. **When those two gates disagree the work leaves every
-  queue, which costs more than misfiling it.** Third, LOOP-430: `secrets.ts` detects a
-  group/world-readable `secrets.env` and emits a codeless stderr line, latched once per process,
-  while `doctor` — the surface the operator is instructed to read before an unattended run — prints
-  no row and exits 0. **A detection whose output reaches no consumer is, at that surface, absent.**
+- **2026-08-06 (pm, seventy-second fire) — a `Non-goals` line states a constraint the product can
+  stop honouring without anything failing; and a ticket whose ACs cover a subset of its own Scope
+  can be verified complete while delivering neither unpinned item.** LOOP-366/LOOP-384. The
+  `strategy-gaps` lens re-read `Non-goals`' *"the loop must keep working on the `local` and
+  `service` (hub) backends"* against the shipped validator: `team.backend` is typed
+  `"linear" | "service"` (`team-config.ts:66`), anything else is **E02** (`:399`), and `:618`
+  throws on a non-empty error list — so a `local` workspace does not lose a feature, it fails to
+  load, and every verb refuses. Measured at rung 3 on installed 1.15.0 in a fixture:
+  `DOCTOR_FAILED`, and `team init --backend local` dies before writing. Four other documents
+  already record the retirement (`config-schema.md:29,184`, `ARCHITECTURE.md:229`, `INDEX.md:34`,
+  and README's silence). **A direction section has no consumer that can fail: code drifts from it
+  and every gate stays green, so the section keeps steering the loop after the product stopped
+  obeying it.** The correction is D4 and routes to the operator; the fix *direction* — delete the
+  unreachable `boot-prefix.ts:230` branch, or make the validator accept the value — is theirs, so
+  nothing was filed rather than guess ACs for one of the two. Second, LOOP-384: its `Scope` named
+  five deliverables and its ACs pinned three, leaving the `external` probe hint and the metrics
+  split with no checkbox at all. A prior fire's comment noting one of them as *"worth folding into
+  the ACs"* had sat unacted for a fire. **Verification reads the AC list; a scope item recorded
+  anywhere else is not delivered by the ticket that names it.**
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -511,14 +509,14 @@ unparks due, zero zero-edge parks.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → seventieth fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → seventy-first fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–61** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AH. Findings still open from that
+    rolled by **§20 R2 passes 50–62** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AI. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-429**, **LOOP-426**.
 
