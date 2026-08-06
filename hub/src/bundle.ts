@@ -311,6 +311,10 @@ function gateForceReseed(
   incomingCfg: string, payload: Payload, opts: { forceReseed: boolean; noRun?: boolean; argv?: readonly string[] },
 ): boolean {
   const liveWs = tryResolveWorkspace(root);
+  // LOOP-368: no change was needed here, and that is the point — the fire refusal ("may a FIRE
+  // overwrite the live config and every secret at all?") arrives INSIDE this verdict and flows
+  // through the `die` and the `--dry-launch` line below, both of which already report `refusal`
+  // verbatim. A fifth destructive verb inherits it the same way.
   const verdict = liveWs ? workspaceIsolationVerdict(liveWs, opts.argv ?? process.argv.slice(2)) : null;
 
   // --dry-launch performs ZERO writes and reports what WOULD change, derived from the SAME verdict

@@ -432,17 +432,23 @@ try {
     "LOOP-305 AC1: isScratchProject reads projects.<key>.scratch === true from CONFIG");
   ok(isScratchProject(wsOf({ other: { scratch: true } }), "dbonly") === false,
     "LOOP-305 AC1: a key ABSENT from config (db-only) reads as NON-scratch — fail closed");
-  const vNon = isolationVerdict(wsOf({ p: {} }), "p", ["--force"]);
+  // LOOP-368: these assert the TOKEN half of the gate, so they must state which side of the FIRE half
+  // they stand on — the verdict now reads the env, and `scrubFireEnv()` is this codebase's one
+  // definition of "an env with no fire markers". Left implicit, every assertion below would pass in
+  // CI and fail inside a fire, which is the CI/fire split scrubFireEnv exists to prevent for
+  // subprocesses and cannot cover for an in-process read of process.env.
+  const noFire = scrubFireEnv();
+  const vNon = isolationVerdict(wsOf({ p: {} }), "p", ["--force"], noFire);
   ok(vNon.refusal !== null && vNon.scratch === false && vNon.tokenPresent === false,
     "LOOP-305 AC2: --force alone does NOT satisfy the isolation gate");
   ok(/--i-understand-this-deletes-p/.test(vNon.refusal ?? "") && /--force does NOT grant this/.test(vNon.refusal ?? ""),
     "LOOP-305 AC2: the refusal names the required token AND states that --force does not grant it");
-  ok(isolationVerdict(wsOf({ p: {} }), "p", [confirmationToken("p")]).refusal === null,
+  ok(isolationVerdict(wsOf({ p: {} }), "p", [confirmationToken("p")], noFire).refusal === null,
     "LOOP-305 AC3: the exact token allows a non-scratch target");
-  ok(isolationVerdict(wsOf({ p: { scratch: true } }), "p", []).refusal === null,
+  ok(isolationVerdict(wsOf({ p: { scratch: true } }), "p", [], noFire).refusal === null,
     "LOOP-305 AC3 discriminator: a scratch project needs NO token — the gate is not 'refuse everything'");
   // The startsWith trap, at the unit level: a token that merely BEGINS with the required one is not it.
-  ok(isolationVerdict(wsOf({ p: {} }), "p", [`${TOKEN_PREFIX}p-and-more`, `${TOKEN_PREFIX}anything`]).refusal !== null,
+  ok(isolationVerdict(wsOf({ p: {} }), "p", [`${TOKEN_PREFIX}p-and-more`, `${TOKEN_PREFIX}anything`], noFire).refusal !== null,
     "LOOP-305 AC4: tokenPresent is an EXACT argv match — a prefix-shaped lookalike does not satisfy the gate");
 
   // (b) end-to-end, on a fixture that trips BOTH guards (2 tickets + 1 repo) so 'both reasons' is real.
