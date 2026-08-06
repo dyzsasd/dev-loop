@@ -603,6 +603,46 @@ try {
   const isoScratchDry = run("team", ["remove-project", "iso-nonexistent", "--dry-run"], { cwd: isoWs, extra: { DEVLOOP_HUB_DB: "" } });
   ok(isoScratchDry.code !== 0, "LOOP-305: an unknown key still errors before the gate (precedence unchanged)");
 
+  // ══ LOOP-420: team set projects.<key>.scratch projects to hub row ═══════════════════
+  {
+    const ws420 = join(tmp, "ws420");
+    run("team", ["init", "--dir", ws420, "--key", "w420", "--backend", "service", "--yes"]);
+    run("team", ["add-project", "p420", "--prefix", "P42"], { cwd: ws420 });
+    const db420 = join(ws420, ".dev-loop", "hub.db");
+    const sql420 = (body: string) =>
+      spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);${body};db.close()})`, db420],
+        { cwd: hubRoot, env: env(), encoding: "utf8" }).stdout.trim();
+
+    // AC1: set scratch=true → hub row has scratch:true
+    const sTrue = run("team", ["set", "projects.p420.scratch", "true"], { cwd: ws420 });
+    ok(sTrue.code === 0 && readJson(join(ws420, "dev-loop.json")).projects.p420.scratch === true,
+      `LOOP-420 AC1: team set projects.p420.scratch true exits 0 (got ${sTrue.code})`);
+    const sc1 = sql420(`const r=db.prepare('SELECT settings_json FROM projects WHERE key=?').get('p420');console.log(r?JSON.parse(r.settings_json).scratch:null)`);
+    ok(/true/.test(sc1), "LOOP-420 AC1: hub row settings_json.scratch === true after set");
+
+    // AC1 reverse: set scratch=false → scratch key removed from hub row
+    const sFalse = run("team", ["set", "projects.p420.scratch", "false"], { cwd: ws420 });
+    ok(sFalse.code === 0 && readJson(join(ws420, "dev-loop.json")).projects.p420.scratch === false,
+      `LOOP-420 AC1: team set projects.p420.scratch false exits 0 (got ${sFalse.code})`);
+    const sc0 = sql420(`const r=db.prepare('SELECT settings_json FROM projects WHERE key=?').get('p420');const s=r?JSON.parse(r.settings_json):{};console.log(s.scratch===undefined?'undefined':s.scratch)`);
+    ok(sc0 === "undefined", "LOOP-420 AC1: hub row scratch key removed after set false");
+
+    // AC3: additive to settings_json (other keys preserved)
+    sql420(`const r=db.prepare('SELECT settings_json FROM projects WHERE key=?').get('p420');const s=r?JSON.parse(r.settings_json):{};s.other_key='preserve-me';db.prepare('UPDATE projects SET settings_json=?' + ' WHERE key=?').run(JSON.stringify(s),'p420')`);
+    run("team", ["set", "projects.p420.scratch", "true"], { cwd: ws420 });
+    const row = sql420(`const r=db.prepare('SELECT settings_json FROM projects WHERE key=?').get('p420');console.log(r?r.settings_json:'null')`);
+    ok(JSON.parse(row).other_key === 'preserve-me' && JSON.parse(row).scratch === true,
+      `LOOP-420 AC3: other keys preserved after scratch projection`);
+
+    // AC4: NOT_SCRATCH_SQL predicate excludes scratch project
+    sql420('db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify({scratch:true}),"p420")');
+    const total = sql420('const a=db.prepare("SELECT count(*) as cnt FROM projects").get();console.log(JSON.stringify(a.cnt))');
+    const nonScratch = sql420('const r=db.prepare("SELECT count(*) as cnt FROM projects WHERE CASE WHEN json_valid(settings_json) THEN json_extract(settings_json,\x27$.scratch\x27) ELSE NULL END IS NOT 1").get();console.log(JSON.stringify(r.cnt))');
+    ok(Number(total) === 2 && Number(nonScratch) === 1,
+      `LOOP-420 AC4: NOT_SCRATCH_SQL excludes scratch project (total=${total}, nonScratch=${nonScratch})`);
+  }
+
+
   // ═══ LOOP-306 (LOOP-302 ②): the two halves commit together, and no line claims a write that did not happen ═══
   // End-to-end over the REAL ten-statement cascade. Each arm destroys its own fixture, so each gets a
   // fresh workspace. `sql()` is the same inline-node shape the arms above use, kept local to this block.
