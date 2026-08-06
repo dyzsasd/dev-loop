@@ -3,7 +3,7 @@
 // Design §4 contracts verbatim. Not appended to doctor.ts (already 1,700+ lines).
 // New file — the registry is introduced here and grows in Children C/D.
 
-import type { Workspace, EffectiveRepo } from "./team-config.ts";
+import type { Workspace, ResolvedRepo } from "./team-config.ts";
 
 // ── Contracts (design §4) ────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ export interface DoctorCtx {
 /** Extra ctx for scope: "repo" rows — the driver iterates repos and supplies these. */
 export interface RepoCtx extends DoctorCtx {
   ref: string;
-  repo: EffectiveRepo;
+  repo: ResolvedRepo;
   dir: string;
 }
 
