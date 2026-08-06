@@ -95,6 +95,21 @@ export const claudeAdapter: UsageAdapter = {
       return typeof obj?.["result"] === "string" ? (obj["result"] as string) : null;
     } catch { return null; }
   },
+
+  // LOOP-318 AC1 — claude reports it directly as `num_turns` on the result event.
+  turns(stdout: string): number | null {
+    try {
+      for (const line of stdout.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        let ev: Record<string, unknown>;
+        try { ev = JSON.parse(t) as Record<string, unknown>; } catch { continue; }
+        const n = ev["num_turns"];
+        if (typeof n === "number" && Number.isFinite(n) && n > 0) return Math.trunc(n);
+      }
+    } catch { /* best-effort */ }
+    return null; // AC3: unrecoverable ⇒ null, never 0
+  },
 };
 
 // claude's usage object → the numeric FireUsage core (cost/currency layered on by the caller). Distinct from
@@ -188,6 +203,26 @@ export const opencodeAdapter: UsageAdapter = {
       }
     } catch { /* outer guard */ }
     return false;
+  },
+
+  // LOOP-318 AC2 — opencode has no num_turns; it emits one `step_finish` PER model turn, which the
+  // parse() walk above already relies on. Counting those events reuses the same walk shape rather
+  // than parsing the result a second time.
+  turns(stdout: string): number | null {
+    let n = 0;
+    try {
+      for (const line of stdout.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        let ev: Record<string, unknown>;
+        try { ev = JSON.parse(t) as Record<string, unknown>; } catch { continue; }
+        const part = ev["part"] && typeof ev["part"] === "object" ? (ev["part"] as Record<string, unknown>) : undefined;
+        // Match on either spelling, exactly as parse() tolerates both: the event type on the envelope
+        // and the `type` on the nested part disagree between opencode versions.
+        if (ev["type"] === "step_finish" || part?.["type"] === "step-finish") n++;
+      }
+    } catch { /* best-effort */ }
+    return n > 0 ? n : null; // AC3: nothing recoverable ⇒ null, never 0
   },
 };
 
