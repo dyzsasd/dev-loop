@@ -105,6 +105,29 @@ try {
     catch (e) { unknown = (e as { status?: number }).status ?? 0; }
     ok(unknown === 1, `LOOP-237: an unknown agent fails cleanly rather than emitting a partial slice (exit ${unknown})`);
   }
+
+  // ── LOOP-351 AC4: CLI with NO --root exits 0 (the default-root branch) ──────────────
+  // The runner directive that agents actually use spells `dev-loop conventions --agent <a>` with no
+  // `--root`. The existing tests all pass `--root` so they never hit the default-root branch.
+  // The synthetic workspace root contains no skills/ dir, so ws.root must NOT be the fallback.
+  {
+    let code = 0;
+    try {
+      execFileSync(process.execPath, [join(hubRoot, "src", "conventions-verb.ts"), "--agent", "senior-dev", "--json"],
+        { encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: wsRoot } as NodeJS.ProcessEnv, maxBuffer: 64 * 1024 * 1024 });
+    } catch (e) { code = (e as { status?: number }).status ?? 1; }
+    ok(code === 0, `LOOP-351 AC4: CLI with no --root exits 0 (got ${code}) — the default-root branch must resolve the plugin root`);
+  }
+
+  // ── LOOP-351 AC4 (mutation check): pluginRoot() must resolve, not ws.root ───────────
+  // If the fix were reverted to `root ?? ws?.root ?? process.cwd()`, the synthetic workspace
+  // root (which has no skills/ dir) would be the fallback and the verb would ENOENT.
+  // Prove the synthetic ws root has no skills/:
+  {
+    let skillsExists = false;
+    try { readFileSync(join(wsRoot, "skills", "senior-dev-agent", "SKILL.md"), "utf8"); skillsExists = true; } catch { /* expected */ }
+    ok(!skillsExists, `LOOP-351 AC4: synthetic ws root (${wsRoot}/skills/) has no SKILL.md — confirms ws.root is NOT the fallback resolver`);
+  }
 } finally {
   try { rmSync(wsRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
 }

@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
-import { splitSkill, parseSectionsLine } from "./context-bill.ts";
+import { splitSkill, parseSectionsLine, pluginRoot } from "./context-bill.ts";
 import { CONDITIONAL_SECTIONS, conventionsUnionText } from "./boot-prefix.ts";
 import { tryResolveWorkspace } from "./workspace.ts";
 import { effectiveRepo, effectiveProject, deliveryProjects, type Workspace } from "./team-config.ts";
@@ -101,7 +101,7 @@ export function conventionsCmd(argv = process.argv.slice(2)): number {
   }
   if (!agent) { console.error("dev-loop conventions: --agent <agent> is required"); usage(); return 2; }
   const ws = tryResolveWorkspace();
-  const r = root ?? ws?.root ?? process.cwd();
+  const r = root ?? pluginRoot();
   let slice: ConventionsSlice;
   try { slice = conventionsSlice(r, agent, ws, project); }
   catch (e) { console.error(`dev-loop conventions: ${(e as Error).message}`); return 1; }
