@@ -30,6 +30,14 @@ export interface FireUsage {
 export interface UsageAdapter {
   extraArgs: string[];
   parse(stdout: string): FireUsage | null;
+  // LOOP-318 — how many model TURNS the fire took. Recorded nowhere before this: the ledger kept only
+  // the digested usage block, so LOOP-228's own cost decomposition rested on an estimated n that no
+  // instrument could resolve, and no already-run fire could be back-filled.
+  //
+  // Returns null when the payload carries no recoverable count. NEVER 0 — a fire that ran took at
+  // least one turn, so a zero here would be a measurement claiming something false rather than
+  // admitting it does not know (the LOOP-268 contract).
+  turns?(stdout: string): number | null;
   isError?(stdout: string): boolean;
   // Human-readable result text pulled from the structured output, for the operator echo (console + run.log).
   // Present only on a lane whose raw stdout is a single non-streamed blob (claude --output-format json): its
@@ -38,14 +46,18 @@ export interface UsageAdapter {
   // killed fire still shows something, never zero output.
   resultText?(stdout: string): string | null;
 }
-export interface FireRow { ts: string; agent: string; project: string; codingAgent?: string; provider?: string; model?: string; effort?: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; interrupted?: boolean; errorClass?: string; bootBytes?: number; fireId?: string; usage?: FireUsage }
+export interface FireRow { ts: string; agent: string; project: string; codingAgent?: string; provider?: string; model?: string; effort?: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; interrupted?: boolean; errorClass?: string; bootBytes?: number; fireId?: string; usage?: FireUsage; turns?: number | null }
 export interface FireMetrics {
   windowMs: number; fires: number; failures: number; timeouts: number; suspectErrors: number; interrupted: number;
   discardedFires: number;            // LOOP-219: fires that produced nothing (suspectError | interrupted)
   discardedCostUsd: number | null;   // their priced spend; null when nothing is priced at all
   byErrorClass: Record<string, number>;            // P0-1b taxonomy (spend-limit/rate-limit/auth/network/timeout/…); infra failures split from task failures
   successRate: number | null;                      // (fires - failures - suspect) / fires; null when no fires
-  byAgent: Record<string, { fires: number; failures: number; medianMs: number | null; costUsd: number | null; costMeteredFires: number; usdPerFire: number | null }>;
+  // LOOP-318 — `turnsPerFire` is the MEAN over the non-null subset only, and `turnsCoveredFires` is
+  // that subset's size, reported alongside it. Without the count a partially-instrumented window
+  // reads as a complete one, which is the failure LOOP-268 named: a number with no denominator
+  // invites being taken for the whole population.
+  byAgent: Record<string, { fires: number; failures: number; medianMs: number | null; costUsd: number | null; costMeteredFires: number; usdPerFire: number | null; turnsPerFire: number | null; turnsCoveredFires: number }>;
   byProject: Record<string, { fires: number; failures: number }>;
   meteredFires: number;                            // fires carrying usage (coverage numerator)
   costMeteredFires: number;                        // fires at/after meteringOnsetTs whose usage.costUsd > 0
@@ -117,13 +129,19 @@ export function fireMetrics(ledgerPath: string, windowMs: number, nowMs = Date.n
     if (r.suspectError) suspect++;
     if (r.interrupted) interrupted++;
     if (r.errorClass) byErrorClass[r.errorClass] = (byErrorClass[r.errorClass] ?? 0) + 1;
-    const a = (byAgent[r.agent] ??= { fires: 0, failures: 0, medianMs: null, costUsd: null, costMeteredFires: 0, usdPerFire: null });
+    const a = (byAgent[r.agent] ??= { fires: 0, failures: 0, medianMs: null, costUsd: null, costMeteredFires: 0, usdPerFire: null, turnsPerFire: null, turnsCoveredFires: 0 });
     a.fires++; if (failed) a.failures++;
     const p = (byProject[r.project || "(team)"] ??= { fires: 0, failures: 0 });
     p.fires++; if (failed) p.failures++;
   }
   for (const [agent, a] of Object.entries(byAgent)) {
     a.medianMs = median(rows.filter((r) => r.agent === agent && typeof r.durationMs === "number").map((r) => r.durationMs as number));
+    // LOOP-318 — over the SAME row set as every other per-agent field, restricted to rows that
+    // actually carry a count. `null` turns are excluded rather than coerced to 0: an un-instrumented
+    // row must not drag the mean toward a number no fire produced. An all-null agent reports NO mean.
+    const t = rows.filter((r) => r.agent === agent && typeof r.turns === "number" && r.turns > 0).map((r) => r.turns as number);
+    a.turnsCoveredFires = t.length;
+    a.turnsPerFire = t.length ? t.reduce((x, y) => x + y, 0) / t.length : null;
   }
   // LOOP-219 — every money surface summed costUsd over ALL metered rows, including fires that were
   // killed mid-flight and produced nothing, and then divided that inflated total by an outcome those
