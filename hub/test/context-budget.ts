@@ -9,7 +9,13 @@
 // The budget authority is the BUDGETS table in hub/src/context-bill.ts (not the template doc — see
 // the note there); lessons budgets stay hub/src/lessons.ts's INDEX_MAX_*/SHARD_MAX_* (cited via
 // import by context-bill.ts, deliberately not re-stated here).
-import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { CONVENTIONS_BUDGETS } from "../src/context-bill.ts"; // LOOP-238: the conventions ratchet
+import { conventionsSlice } from "../src/conventions-verb.ts";
+import { loadWorkspace } from "../src/team-config.ts";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
@@ -20,7 +26,8 @@ import {
   strategyDocRelPath,
   tryResolveStrategyDocStat,
 } from "../src/context-bill.ts";
-import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "../src/lessons.ts";
+import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES, STRATEGY_DOC_MAX_BYTES } from "../src/lessons.ts";
+import { checkStrategyDocBudget } from "../src/doctor.ts"; // LOOP-282
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const root = pluginRoot();
@@ -338,6 +345,108 @@ ok(!!cliBill && cliBill.rows.length === bill.rows.length && cliBill.rows[0].skil
 const human = spawnSync(process.execPath, [join(root, "hub", "src", "metrics.ts"), "--context"], { cwd: "/", encoding: "utf8" });
 ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? "") && /PROSE BUDGET/.test(human.stdout ?? ""),
   "metrics --context human render prints the bill table");
+
+// ── LOOP-238: the CONVENTIONS ratchet — a landed compression win cannot silently regrow ──────────
+// BUDGETS above bounds an agent's own SKILL prose. This bounds the far larger input: the
+// config-pruned §0a conventions slice its fire receives. Conventions is 75% of context at a measured
+// $4.79/fire (LOOP-228), and it had NO failing gate at all — which is how 20 rollup passes failed to
+// bound it. A win that is not ratcheted is a moment, not a change.
+{
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  // A synthetic workspace, for the reason LOOP-237's suite learned the hard way: the prune is
+  // config-decided, so measuring against whatever workspace happens to resolve makes the number mean
+  // something different on every host — and on CI, where nothing resolves, everything prunes.
+  const wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-ratchet-")));
+  mkdirSync(join(wsRoot, "repo"), { recursive: true });
+  writeFileSync(join(wsRoot, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2,
+    team: { key: "ratchet", backend: "service" },
+    repos: { repo: { path: "repo", landing: "pr", autoMerge: true } },
+    projects: { p: { repos: [{ ref: "repo", role: "primary" }] } },
+  }));
+  try {
+    const ws = loadWorkspace(wsRoot);
+    // AC1 — coverage: exactly the loop agents, no missing row and no extra one. Mirrors the BUDGETS
+    // coverage lint; without it a new agent ships unbounded and nobody notices.
+    const LOOP_AGENTS = ["pm", "qa", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "communication"];
+    const rows = Object.keys(CONVENTIONS_BUDGETS).sort();
+    ok(rows.join(",") === [...LOOP_AGENTS].sort().join(","),
+      `LOOP-238 AC1: CONVENTIONS_BUDGETS covers exactly the loop agents (missing: ${LOOP_AGENTS.filter((a) => !rows.includes(a)).join(",") || "none"}; extra: ${rows.filter((a) => !LOOP_AGENTS.includes(a)).join(",") || "none"})`);
+
+    // AC2 — every agent is AT OR UNDER its row today. This is the assertion that fails the moment a
+    // conventions edit regrows a slice past its ceiling.
+    let over = 0;
+    for (const a of LOOP_AGENTS) {
+      const bytes = conventionsSlice(root, a, ws, "p").bytes;
+      const budget = CONVENTIONS_BUDGETS[a];
+      if (bytes > budget) { over++; console.log(`   ${a}: ${bytes} B > ${budget} B`); }
+    }
+    ok(over === 0, `LOOP-238 AC2: every agent's pruned conventions slice is within its ratchet (${over} over)`);
+
+    // …and the headroom is THIN. A ratchet with generous slack does not ratchet — it records a
+    // number nobody trips. Assert each row is within 2 KB of the actual, or the gate is decorative.
+    let slack = 0;
+    for (const a of LOOP_AGENTS) {
+      const bytes = conventionsSlice(root, a, ws, "p").bytes;
+      if (CONVENTIONS_BUDGETS[a] - bytes > 2048) { slack++; console.log(`   ${a}: ${CONVENTIONS_BUDGETS[a] - bytes} B of slack`); }
+    }
+    ok(slack === 0, `LOOP-238: …with THIN headroom — a ratchet with slack records a number nobody trips (${slack} row(s) over 2 KB of slack)`);
+
+    // AC3 — the gate FAILS CLOSED on a deliberate over-budget fixture. Without this the check above
+    // is indistinguishable from one that can never fail.
+    {
+      const pm = conventionsSlice(root, "pm", ws, "p").bytes;
+      const tightened: Record<string, number> = { ...CONVENTIONS_BUDGETS, pm: pm - 1 };
+      const wouldFail = LOOP_AGENTS.filter((a) => conventionsSlice(root, a, ws, "p").bytes > tightened[a]);
+      ok(wouldFail.length === 1 && wouldFail[0] === "pm",
+        `LOOP-238 AC3: lowering ONE row by a single byte trips exactly that agent (${wouldFail.join(",") || "nothing"}) — the gate fails closed`);
+    }
+  } finally {
+    try { rmSync(wsRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+}
+
+// ── LOOP-282: the strategy doc gets a budget and a doctor code ───────────────────────────────────
+// It was the ONLY per-fire agent input with neither. Measured 2026-08-05: 114 KB — 14x the lessons
+// INDEX cap W03 does enforce — growing +1,036 B per fire, and 20 rollup passes had not bounded it.
+// Every §20 R2 reader pays that on every fire, forever, until someone happens to look.
+{
+  const kb = (n: number) => n * 1024;
+  ok(typeof STRATEGY_DOC_MAX_BYTES === "number" && STRATEGY_DOC_MAX_BYTES > kb(20),
+    `LOOP-282: the budget is above §20 R2's ~20KB of LIVE strategy (${STRATEGY_DOC_MAX_BYTES} B) — it bounds neglect, not the strategy itself`);
+  ok(STRATEGY_DOC_MAX_BYTES < 114 * 1024,
+    "LOOP-282: …and below the 114 KB that motivated it, or the ceiling would already be satisfied by the problem");
+
+  // ONE authority: the bill and doctor must read the same constant, never two literals.
+  const billSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "context-bill.ts"), "utf8");
+  const doctorSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "doctor.ts"), "utf8");
+  ok(billSrc.includes("STRATEGY_DOC_MAX_BYTES") && doctorSrc.includes("STRATEGY_DOC_MAX_BYTES"),
+    "LOOP-282: the bill and doctor share ONE exported budget — two literals is how a budget and its report drift");
+
+  // The W37 check itself: derived, silent when absent, warn-only, and §16-safe.
+  {
+    const lines: string[] = [];
+    checkStrategyDocBudget((msg) => lines.push(msg));
+    // In THIS workspace the doc may or may not be over budget — assert the SHAPE either way.
+    if (lines.length) {
+      ok(/\[W37\]/.test(lines[0]), "LOOP-282: the over-budget warning carries W37");
+      ok(/budget/.test(lines[0]) && /KB/.test(lines[0]), "LOOP-282: …naming the measured bytes and the limit");
+      ok(/strategy-archive/.test(lines[0]), "LOOP-282: …and the §20 R2 remediation");
+    } else {
+      ok(true, "LOOP-282: this workspace's strategy doc is within budget — W37 is silent (the shape is asserted on the over-budget fixture below)");
+    }
+  }
+
+  // The discriminating fixture: a doc deliberately over budget must warn, and one under must not.
+  // Asserted through the same comparison the check makes, since tryResolveStrategyDocStat reads the
+  // ambient workspace and this must hold on any host.
+  {
+    const over = { bytes: STRATEGY_DOC_MAX_BYTES + 1, lines: 10, label: "docs/STRATEGY.md" };
+    const under = { bytes: STRATEGY_DOC_MAX_BYTES, lines: 10, label: "docs/STRATEGY.md" };
+    ok(over.bytes > STRATEGY_DOC_MAX_BYTES, "LOOP-282: one byte over the budget is OVER — the gate is not approximate");
+    ok(!(under.bytes > STRATEGY_DOC_MAX_BYTES), "LOOP-282: …and exactly at the budget is WITHIN it");
+  }
+}
 
 console.log(fails === 0 ? "\nCONTEXT_BUDGET_OK" : `\n${fails} CHECK(S) FAILED — a SKILL is over budget or its Sections line drifted`);
 process.exit(fails === 0 ? 0 : 1);

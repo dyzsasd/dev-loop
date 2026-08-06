@@ -23,7 +23,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "./lessons.ts";
+import { STRATEGY_DOC_MAX_BYTES, INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "./lessons.ts";
 import { resolveWorkspace } from "./workspace.ts";
 import { reposOfProject } from "./team-config.ts";
 
@@ -53,6 +53,35 @@ export const BUDGETS: Record<string, Budget> = {
   "sync-repo":           { lines: 150, bytes: 10 * 1024 },
   "operator-console":    { lines: 160, bytes: 11 * 1024 }, // one-click §3: the conversational cockpit (operator-present, no cheat block)
 };
+/**
+ * Per-agent CONVENTIONS ceilings (LOOP-238) — the ratchet, so a landed compression win cannot
+ * silently regrow.
+ *
+ * Distinct from BUDGETS above, which bounds an agent's own SKILL prose. This bounds the far larger
+ * input: the config-pruned §0a conventions slice that agent's fire receives. Conventions is 75% of
+ * context at a measured $4.79/fire (LOOP-228), so it is the number worth a failing gate — and it had
+ * none, which is how 20 rollup passes failed to bound it.
+ *
+ * SEEDED FROM MEASUREMENT, not from a target. These are today's actual pruned bytes on this
+ * workspace, rounded up to the next KB. Headroom is deliberately ~1 KB: a ratchet with generous
+ * slack does not ratchet, it just records a number nobody trips. A compression win LOWERS its row in
+ * the same commit that lands it — that is what makes the win permanent rather than a moment.
+ *
+ * Measured 2026-08-06 via `dev-loop conventions --agent <a> --json` (LOOP-237's verb, which shares
+ * the prune with the boot corpus, so this bounds what a fire actually receives).
+ */
+export const CONVENTIONS_BUDGETS: Record<string, number> = {
+  "pm":            129 * 1024,  // actual 131,441 —   655 B headroom
+  "qa":            121 * 1024,  // actual 123,587 —   317 B
+  "senior-dev":    109 * 1024,  // actual 111,086 —   530 B
+  "junior-dev":    107 * 1024,  // actual 109,402 —   166 B
+  "sweep":         116 * 1024,  // actual 118,050 —   734 B
+  "reflect":        81 * 1024,  // actual  82,447 —   497 B
+  "ops":           101 * 1024,  // actual 102,693 —   731 B
+  "architect":      79 * 1024,  // actual  79,895 — 1,001 B
+  "communication":  64 * 1024,  // actual  65,502 —    34 B
+};
+
 // Cheat-sheet blocks are generator-owned (gen-cheatsheets.ts); growth past this = trim the
 // generator template, never the budget (sweep's block is already 91 lines).
 export const CHEAT_MAX_LINES = 95;
@@ -332,7 +361,13 @@ export function printContextBill(asJson: boolean): number {
   const docLabel = strategyDoc ? strategyDoc.label : "—";
   console.log(`per-agent per-fire context bill — SKILL prose + cheat sheet + conventions (always-read + cited §-spans) + lessons caps (§14; hub/src/lessons.ts) + strategyDoc for ${[...STRATEGY_DOC_READERS].join("/")} (§20 R2); ~tokens at ${BYTES_PER_TOKEN} B/token`);
   console.log(`conventions.md: ${bill.conventions.anchors} anchors, ${m(bill.conventions.total)} total; always-read (title/ToC + Topology): ${m(bill.conventions.alwaysRead)}`);
-  console.log(`strategyDoc: ${docLabel}${strategyDoc && strategyDoc.bytes > 0 ? ` (${strategyDoc.bytes}B / ${strategyDoc.lines}L)` : strategyDoc ? " (0B — absent/unreadable)" : " (no workspace)"}\n`);
+  // LOOP-282 — show the doc AGAINST its budget, in the same OK / over-budget shape the SKILL rows
+  // use. A byte count with no ceiling beside it is what let 114 KB read as unremarkable for 20 rollup
+  // passes: the number was on screen the whole time and nothing said it was too big.
+  const sdVerdict = !strategyDoc ? "" : strategyDoc.bytes > STRATEGY_DOC_MAX_BYTES
+    ? `  ⚠ OVER by ${strategyDoc.bytes - STRATEGY_DOC_MAX_BYTES}B (budget ${STRATEGY_DOC_MAX_BYTES}B — §20 R2: roll superseded sections into strategy-archive/)`
+    : `  OK (budget ${STRATEGY_DOC_MAX_BYTES}B)`;
+  console.log(`strategyDoc: ${docLabel}${strategyDoc && strategyDoc.bytes > 0 ? ` (${strategyDoc.bytes}B / ${strategyDoc.lines}L)` : strategyDoc ? " (0B — absent/unreadable)" : " (no workspace)"}${sdVerdict}\n`);
   const pad = (s: string, w: number) => s.padEnd(w);
   console.log(pad("SKILL", 22) + pad("PROSE", 15) + pad("CHEAT", 13) + pad("CONVENTIONS", 22) + pad("LESSONS", 13) + pad("STRATEGY-DOC", 16) + pad("TOTAL", 15) + pad("~TOKENS", 9) + "PROSE BUDGET");
   for (const r of bill.rows) {
