@@ -9,7 +9,26 @@
 // HALF the trials pre-seed a STALE lock (a crashed `up`'s leftover) so the concurrent stale-break path is
 // exercised too — DL-51 serializes that break under a dedicated O_EXCL break-mutex and re-confirms staleness
 // while holding it, so two racers can't both "break" a stale lock and clobber each other's fresh re-take (the
-// DL-46 TOCTOU the rename-aside break re-admitted). Deterministic-pass post-fix.
+// DL-46 TOCTOU the rename-aside break re-admitted).
+//
+// NOT "deterministic-pass post-fix" (LOOP-317). CI run 30920347062, job Test (Node 24), 2026-08-04:
+// trial 5 failed — the runfile pid was not the live listener and `down` left :8787 serving for the
+// full 4s waitGone deadline. Node 23.6.0 passed all 8 trials on the SAME commit and run. Whether the
+// Node version is causal or incidental is NOT established: one observation cannot separate a
+// version-specific behaviour from a load-dependent race.
+//
+// Reproduction attempt, 2026-08-06, recorded so the next one starts from evidence rather than from
+// this comment: 120 trials (600 assertions) on Node 23.6.0 with the CPU oversubscribed — 12 spinners
+// on 10 cores — 0 failures. CI's 1/8 does not reproduce on this hardware, so the rate here is below
+// what 120 trials can see, and the ROOT CAUSE IS NOT ESTABLISHED. No fix is proposed on that basis:
+// this seam has already taken two landed fixes, and a third guess would be the same mistake again.
+//
+// (An earlier attempt of mine reported "96 trials, 0 failures" and was worthless — it ran the suite
+// from the repo root, where it cannot resolve src/seed.ts, so every run CRASHED and the failure grep
+// counted zero. A crash and a pass look identical to `grep -c "^❌"`. Run it from hub/.)
+//
+// This loop is a SAMPLER, not a proof: a race that shows at 1/8 was equally present, unobserved, in
+// every run that passed. DEVLOOP_LIFECYCLE_TRIALS raises the count for a targeted hunt.
 //
 // Runs against an ISOLATED temp DB + DEVLOOP_RUN_DIR (never the operator's ~/.dev-loop). cwd = hub/ (npm).
 import { execFileSync } from "node:child_process";
@@ -63,7 +82,9 @@ async function waitGone(url: string, totalMs = 4000): Promise<boolean> {
 // No daemon has started yet so the runfile doesn't exist — confirms the null-safe path.
 ok(readRun() === null, "readRun returns null for a missing runfile (LOOP-145: no uncaught ENOENT)");
 
-const TRIALS = 8;
+// LOOP-317: overridable, so a hunt for a low-rate race does not need a code edit. 8 is the shipped
+// count (the CI budget); a reproduction attempt should use hundreds.
+const TRIALS = Math.max(1, Number(process.env.DEVLOOP_LIFECYCLE_TRIALS) || 8);
 try {
   for (let i = 0; i < TRIALS; i++) {
     const seedStale = i % 2 === 0; // half the trials start from a crashed `up`'s leftover lock (a dead pid)
