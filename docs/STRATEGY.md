@@ -195,11 +195,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
 - **Operator steering:** daily/weekly reports and 点评 are distilled into lessons; direction lands
   through the strategy/doc system and operator-reviewed changes.
 
-- **Release history is `CHANGELOG.md`, not this section.** The 1.0 → v1.10.0 provenance that used
-  to be restated here in three re-sync parentheticals is rolled to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block A). The
-  always-current user-facing picture is `README.md` + `CHANGELOG.md`; this section carries only what
-  a fire still needs to act.
+- **Release history is `CHANGELOG.md`, not this section** — the always-current user-facing picture
+  is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
+  carries only what a fire still needs to act.
 
 - **[ARCHIVED] the 2026-07-30 → 2026-08-01 build and verification arc.** Roughly 60 dated entries
   covering the landing wedge and v1.11.0; the metering foundation and its join key; landing
@@ -207,28 +205,16 @@ is precisely how the withdrawn one survived a day steering the top priority.
   the install-skew episodes and the v1.13.0 release; the `bundle export` dead safety gate; and the
   three earlier R2 rollups. **Every subject is verified-`Done` and superseded by the shipped code.**
   Full provenance in [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass
-  41, block B). Three facts from that arc are still load-bearing and are kept here rather than
-  archived: **(a)** the boot corpus is DELIVERED (`--assemble-boot`, 98–147 KB per fire) from
-  2026-07-31T23:00:15Z, so a lessons rule scored before that timestamp measured a different regime;
-  **(b)** the §22 reports tree keys on **local** `date +%F` while every artifact it indexes is UTC
-  (**LOOP-214**, now STANDING RULE 1); **(c)** every cost surface bills fires killed mid-flight as
-  delivered — 7.9% / 40.27 USD (**LOOP-219**), so a cost-per-change figure is an over-estimate and a
-  floor on waste.
+  41, block B). One fact from that arc is still load-bearing and is kept here rather than archived:
+  the boot corpus is DELIVERED (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so
+  a lessons rule scored before that timestamp measured a different regime. (The two others — the
+  local-vs-UTC reports clock, and cost surfaces billing killed fires as delivered — are stated in
+  full inside STANDING RULE 1 and were duplicated here until pass 46.)
 
 - **[ARCHIVED] fire journals, tenth through fiftieth fire (2026-08-01 → 2026-08-06).** Rolled
   whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41 block
   D; the forty-ninth is pass 42 block A, the fiftieth is pass 43 block M), replacing the thirteen
-  per-period stubs they had left behind. §20 R2 prescribes one index entry per archived period;
-  thirteen stubs for one archive is the residue pass 41 removed.
-
-- **2026-08-06 — the release axes agree, and the agreement is no longer a property of a hand-built
-  pin.** Install is a real npm directory at `/opt/homebrew/lib/node_modules/@dyzsasd/dev-loop`
-  matching `origin/main` on version AND build commit, with `skills/` + `references/` verified
-  byte-identical (`cmp`); the local-source-build pin is retired in fact. Provenance in
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 42, blocks C+D).
-  **Four axes, not one** — CLI, SKILL corpus, daemons, and the `run-agents` scheduler (W36) — and
-  §12b applies the moment any of them moves. The daemon axis is only checked at version
-  granularity today: **LOOP-364**.
+  per-period stubs they had left behind — §20 R2 keeps ONE index entry per archived period.
 
 - **[ARCHIVED] the fifty-first and fifty-second fire journals (2026-08-06).** `stale-exempt` shipped
   inert because nothing carried its switch to a reader (**LOOP-365**), and `destructive-guard.ts`'s
@@ -236,34 +222,25 @@ is precisely how the withdrawn one survived a day steering the top priority.
   those tickets; what still governs is STANDING RULES 28–29 below. Rolled to
   [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 45, block O).
 
-### 2026-08-06 (pm, fifty-fourth fire): a handoff that reported an edit the doc never received
+- **[ARCHIVED] the fifty-fourth and fifty-fifth fire journals + the release-axes entry
+  (2026-08-06).** A carry-over suppressor that reported an edit the doc never received
+  (**LOOP-375**); the `conversion-retention` lens (**LOOP-376**, **LOOP-377**); and the four-axes
+  release entry, distilled into STANDING RULE 15 with **LOOP-364** its open axis. Rolled to
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 46, blocks Q–S).
 
-`pm-state.json` closed the fifty-third fire asserting that a `Candidate ideas` entry — *should a
-successful `board restore` restart the daemon?* — had been resolved and removed, and marked it **DO
-NOT RE-DERIVE**. The entry was still the first item in that section on `origin/main` @ `1cf5ab8`,
-which is that same fire's own land. The answer it recorded was correct and was re-verified here
-against the code rather than against the note (`board.ts:116` prints the restart remedy;
-`daemon.ts:148` `dbFileReplaced()` fails health `ok:false` on an inode swap, so the 69-minute silent
-window that motivated the question cannot recur) — but a suppressor is read by every later fire and
-this one had already outlived the edit it claimed. Removed for real this pass.
+### 2026-08-06 (pm, fifty-sixth fire): the operator posture the product ships, and the artifact that stayed on the box
 
-The fire's filing came from the `strategy-gaps` lens and has the same shape one layer down:
-`daemon.ts`'s header still describes a READ-ONLY, GET-only, loopback-only module, while its own body
-serves three POST route families, holds a second writable connection, and widens the bind under
-`DEVLOOP_DAEMON_HOST`. The file states each correct invariant 240–900 lines further down, beside the
-stale one rather than in place of it. That header's version of §16 is also the one this doc's `Hard
-invariants` list still repeats. Filed **LOOP-375**; the doc half is a D4 direction section and is
-banked in `Candidate ideas` with its condition rather than opened as a second operator park while
-LOOP-366 is pending.
-
-### 2026-08-06 (pm, fifty-fifth fire): the conversion-retention lens, and one ticket closed
-
-**LOOP-367** verified against `origin/main` and closed `Done`; its open question is answered —
-reporting is enough, and the reader-side inode check is the load-bearing half, since an out-of-band
-swap produces the same orphaned inode no restart inside `board restore` would reach. The
-`conversion-retention` lens filed **LOOP-376** (the changelog rule is checked only by the release
-workflow) and **LOOP-377** (`doctor` covers a broken `team.comms` better than an absent one, whose
-runtime effect is identical). Both are the placement defect ruled on below.
+The `competitive-parity` lens asked what a REMOTE operator can reach. `up --bundle`, `attach <url>`
+and `deploy/` are shipped postures, and in them the board, docs, roadmap, usage and reports are all
+served over HTTP. A fire's own outcome is not, though the hub stores it: `run-agents.ts:819` writes
+`exitCode`/`timedOut`/`suspectError`/`interrupted`/`errorClass` into a `fire.completed` event,
+`/usage` reads those very rows for tokens and cost alone, and `/activity` has no `KIND_ICO` entry or
+`switch` case for the kind, so a fire renders as its bare kind string. `grep errorClass\|exitCode
+hub/src/views/*.ts` returns nothing — "is the loop working, and why did that fire fail" needs a shell
+on the box. Filed **LOOP-380**. The lens's other candidate died on the dedupe check, correctly: the
+two-way `channel.*` bridge is unreachable BY DECISION (2026-06-28, the Director removal kept the
+outbound transport and recorded the inbound half agent-unused); only a doc claim survives, banked in
+`Candidate ideas` behind LOOP-366 rather than opened as a competing park.
 
 ## Personas
 
@@ -298,22 +275,12 @@ runtime effect is identical). Both are the placement defect ruled on below.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, fifty-fifth fire) — a gate belongs at the moment the doc states the rule for, not
-  at the moment the breach surfaces.** LOOP-376 and LOOP-377 are one defect in two subsystems: a rule
-  written for PR-land time but enforced at release-dispatch time, and a channel configured at setup
-  but reported after the stall. The late check is not a weaker version of the right one — it turns a
-  one-line contributor action into an archaeology pass, and an unset field into an outage nobody was
-  told about.
-
-- **2026-08-06 (pm, fifty-fourth fire) — a handoff note is a claim about an artifact, and the
-  artifact is the authority; a "do not re-derive" marker is the one claim to check the first time it
-  is used.** `pm-state.json` recorded a `Candidate ideas` entry as resolved and removed and marked it
-  DO NOT RE-DERIVE; the entry was still there, in the very land that fire produced. The recorded
-  ANSWER was right — re-verified here against `board.ts:116` and `daemon.ts:148` rather than against
-  the note — and that is the hazard: a suppressor correct on its merits and false about its state
-  reads exactly like a true one, while instructing every later fire not to look. STANDING RULE 8
-  says to check the block rather than the entry when a fold is CITED; this extends it to the
-  carry-over file, which is read earlier and trusted harder than the doc it describes.
+- **2026-08-06 (pm, fifty-sixth fire) — a second operating posture re-asks every operator artifact
+  whether it survives the move.** §22 asked exactly that of reports — *"for a cloud / remote runtime
+  where the operator can't reach the data dir"* — and answered it for one backend; nobody asked it
+  of the fire stream, so the loop's own health is the one artifact still requiring a shell. The audit
+  is cheap and belongs in the fire that ADDS the posture: list what the operator reads, mark each
+  local-only or served.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -376,6 +343,12 @@ runtime effect is identical). Both are the placement defect ruled on below.
      db it *opened* rather than the class it *protects*; both then print reassurance (LOOP-231).
      (Recorded as folded on 2026-08-01 but absent from this block until 2026-08-01 later fire — a
      distillation claimed and not performed. Check the block, not the entry, when a fold is cited.)
+     **Same test on the CARRY-OVER FILE, read earlier and trusted harder than the doc it
+     describes:** `pm-state.json` marked a `Candidate ideas` entry resolved-and-removed and DO NOT
+     RE-DERIVE while the entry was still first in that section, in the very land that fire produced.
+     Its recorded ANSWER was right, and that is the hazard — a suppressor correct on its merits and
+     false about its state reads exactly like a true one. Check a handoff line that FORBIDS future
+     work against the artifact the first time it is used.
   9. **Tier at FILING time; never re-tier to balance load (§21b).** Assigning a tier to a ticket
      that arrived `assignee: null` is not a re-tier — it is the filer's job left undone.
   10. **§9c: prose is not a marker, and an edge needs a clock.** An edge is retired by a
@@ -403,7 +376,9 @@ runtime effect is identical). Both are the placement defect ruled on below.
      uncommitted work in a worktree; a merged PR may not be published; a published package may not be
      installed; an installed package may not be what the daemons or the scheduler loaded. Check
      delivery (branch/commit/PR + what the running env serves) BEFORE judging the code, and re-derive
-     it per axis — `dev-loop --version` alone answers none of them.
+     it per axis — `dev-loop --version` alone answers none of them. On this workspace the axes are
+     four: the CLI, the `skills/`+`references/` corpus, the daemons, and the `run-agents` scheduler
+     (W36), and §12b applies the moment any one of them moves.
   16. **A commit is not verified to carry one increment.** A shared checkout leaks an unrelated
      fire's uncommitted edits into the commit, and every gate — build, test, CRAP, review — passes on
      the union. `git apply --reverse --check` against the claimed diff is the decisive
@@ -473,6 +448,20 @@ runtime effect is identical). Both are the placement defect ruled on below.
      consumers (**LOOP-364**); the board's 250-row cap is disclosed correctly beside per-state counts
      computed from the truncated array (**LOOP-370**, caught by the columns summing to exactly the
      cap). The cheap audit is a grep for the OLD form in the fire that introduces the new one.
+  31. **A gate belongs at the moment the doc states the rule for, not at the moment the breach
+     surfaces.** A late check is not a weaker version of the right one: a changelog rule written for
+     PR-land time but enforced at release-dispatch time turns a one-line contributor action into an
+     archaeology pass (**LOOP-376**), and a channel configured at setup but reported only once the
+     decision queue is already non-empty turns an unset field into an outage nobody was told about
+     (**LOOP-377**).
+  32. **A finding spun off at another ticket's hand-off carries that ticket's UNLANDED tree as its
+     premise.** Every number in **LOOP-378** and **LOOP-379** is measured with LOOP-372's fix in
+     place, and LOOP-372 is `In Progress`: on `origin/main` the regression test each specifies cannot
+     reproduce what it is written to catch. Ask whether a spun-off finding's evidence reproduces on
+     the LANDED tree before promoting it — where it does not, its `Blocked-by:` edge is a PREMISE
+     edge, not a courtesy. **And check the tier: the hand-off is where §21b gets skipped, the filer
+     being busy closing something else.** Both arrived `assignee: —` — invisible to every dev pick
+     query, one of them `sensitive`.
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
@@ -483,19 +472,12 @@ runtime effect is identical). Both are the placement defect ruled on below.
   each rests on, in [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass
   41, block K).
   - **(pm, 2026-07-31) `dev-loop` will NOT auto-publish to npm on merge to `main`; the release stays
-    operator-triggered.** Answers LOOP-38 AC-1. Two pieces of evidence: `main` is not a protected
-    branch and a stale-green merge already left it red once (**LOOP-149**) — a push-triggered publish
-    inherits that directly, into a registry where unpublish is a 72-hour window; and the release
-    workflow was silently dead from `c02ba33` until LOOP-140 with every CI signal green throughout.
-    **The chosen shape is the other half — keep the human in the release loop and make the signal
-    that calls them trustworthy** (W18 → LOOP-151 → LOOP-167).
+    operator-triggered** (LOOP-38 AC-1; the chosen shape is the other half — keep the human in the
+    release loop and make the signal that calls them trustworthy, W18 → LOOP-151 → LOOP-167).
   - **(operator, 2026-07-31) §12b amended — "merged" and "running" are different states, and a
-    verifier must name which one it established** (LOOP-170, `13bbc89`). senior-dev's original —
-    make **"published"** the bar for CLI-behaviour ACs — was **declined**, because publishing is
-    operator-triggered by the ruling above, so a blocking publish bar stalls every CLI fix's `Done`
-    behind a human act. PM's amendment was adopted instead: stop conflating the two states, and
-    forbid "verified live" for anything only merged. **Do not re-propose "published" as a blocking
-    close bar.**
+    verifier must name which one it established** (LOOP-170, `13bbc89`). **"Published" was DECLINED
+    as a blocking close bar** — publishing is operator-triggered by the ruling above — and must not
+    be re-proposed.
   - **(pm, 2026-07-31) 📤 §17 PROPOSAL STILL WITH THE OPERATOR — make the §22 report clock UTC.**
     `references/conventions.md` is a governing file, so this is proposed, never applied (§17). The
     change is `date -u +%F` / `date -u +%G-W%V` / `date -u +%Y-%m` plus one line stating the reports
@@ -524,6 +506,10 @@ runtime effect is identical). Both are the placement defect ruled on below.
     journals and the six full-text rulings of the fiftieth through fifty-third fires, rolled by
     **§20 R2 pass 45** → [`2026-08.md`](strategy-archive/2026-08.md), blocks O–P. What still governs
     is STANDING RULES **27–30** above, plus the two clauses folded into RULE 10.
+  - **2026-08-06 (pm, fifty-fourth → fifty-fifth fires)** — both journals, their two full-text
+    rulings, and the release-axes entry, rolled by **§20 R2 pass 46** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks Q–S. What still governs is STANDING RULES
+    **31–32** plus the clauses folded into RULES 8 and 15.
 
 ## Candidate ideas
 
@@ -540,8 +526,13 @@ being discharged: the `[ARCHIVED]`-index compaction it designed is this very pas
   stale form from the module header LOOP-375 corrects. Not filed as a second operator park while
   **LOOP-366** is pending a direction ruling — `Goals` is a D4 direction section, so the change
   routes through the §9a investigation protocol, not through a dev ticket or an autonomous edit.
-  **REVERSAL CONDITION: LOOP-366 is ruled on** — carry this with whatever §9a proposal follows it,
-  rather than opening a competing one.
+  **A second stale claim rides the same proposal:** the Vision has the daemon serving humans via
+  "web UI, roadmap edit, chat bridge". The `channel.*` module is real and DL-1–DL-4 are Done, but the
+  2026-06-28 Director removal kept only the OUTBOUND half in use and recorded the inbound half
+  (`channel.poll`/`ack` + the DL-4 roadmap bridge inside it) as deliberately agent-unused — no agent
+  calls it, no CLI verb exposes it, no config registers a channel, `skills/`+`references/` never name
+  it. Present-tense "chat bridge" overstates a one-way channel. **REVERSAL CONDITION for both:
+  LOOP-366 is ruled on** — carry them with whatever §9a proposal follows it, not a competing park.
 
 - **Close the config-mutator gap wholesale — an operator capability call, deliberately not filed.**
   `references/config-schema.md` marks each field with its `dev-loop team set` path: 13 rows carry a
