@@ -47,7 +47,7 @@ function reposOf(ws: Workspace, key: string): Record<string, unknown>[] {
  * span that is off for a fire is off here, and a span that is kept is kept. A drift between the two
  * would mean an agent reading conventions that its own fire was told not to have.
  */
-export function conventionsSlice(root: string, agent: string, ws: Workspace | null, projectKey?: string): ConventionsSlice {
+export function conventionsSlice(root: string, agent: string, ws: Workspace | null, projectKey?: string, noPrune = false): ConventionsSlice {
   const skillRaw = readFileSync(join(root, "skills", `${agent}-agent`, "SKILL.md"), "utf8");
   const sec = parseSectionsLine(splitSkill(skillRaw.replace(/^---\n[\s\S]*?\n---\n/, "")).prose);
   if (sec.errors.length) throw new Error(`${agent}: malformed Sections line — ${sec.errors.join("; ")}`);
@@ -60,7 +60,7 @@ export function conventionsSlice(root: string, agent: string, ws: Workspace | nu
   const repos = groups.flat();
   const maxPerProject = groups.reduce((m, g) => Math.max(m, g.length), 0);
 
-  const pruned = sec.anchors.filter((a) => CONDITIONAL_SECTIONS[a] && !CONDITIONAL_SECTIONS[a].active(cfg, backend, repos, maxPerProject));
+  const pruned = noPrune ? [] : sec.anchors.filter((a) => CONDITIONAL_SECTIONS[a] && !CONDITIONAL_SECTIONS[a].active(cfg, backend, repos, maxPerProject));
   const conv = conventionsUnionText(readFileSync(join(root, "references", "conventions.md"), "utf8"), sec.anchors, new Set(pruned));
   return {
     agent,
@@ -101,14 +101,15 @@ export function conventionsCmd(argv = process.argv.slice(2)): number {
   }
   if (!agent) { console.error("dev-loop conventions: --agent <agent> is required"); usage(); return 2; }
   const ws = tryResolveWorkspace();
+  const noPrune = ws === null;
   const r = root ?? pluginRoot();
   let slice: ConventionsSlice;
-  try { slice = conventionsSlice(r, agent, ws, project); }
-  catch (e) { console.error(`dev-loop conventions: ${(e as Error).message}`); return 1; }
+  try { slice = conventionsSlice(r, agent, ws, project, noPrune); }
   if (asJson) { console.log(JSON.stringify(slice, null, 2)); return 0; }
   console.log(slice.text);
   // The accounting goes to stderr so `dev-loop conventions --agent x > slice.md` stays clean.
-  console.error(`\n[conventions] ${slice.agent}: ${slice.effectiveSpans} span(s), ${slice.bytes} B${slice.pruned.length ? ` (config-pruned: ${slice.pruned.map((a) => `§${a}`).join(" ")})` : ""}`);
+  console.error(`\n[conventions] ${slice.agent}: ${slice.effectiveSpans} span(s), ${slice.bytes} B${slice.pruned.length ? ` (config-pruned: ${slice.pruned.map((a) => `\xa7${a}`).join(" ")})` : ""}`);
+  if (noPrune) console.error("[conventions] warning: no workspace resolved — all spans emitted without config pruning (stdout clean for piping)");
   return 0;
 }
 
