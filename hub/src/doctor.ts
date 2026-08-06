@@ -17,6 +17,8 @@ import { STRATEGY_DOC_MAX_BYTES, STRATEGY_DOC_WARN_FRACTION } from "./lessons.ts
 import { reportTrailGaps } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
 import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
+import { execFileSync, spawnSync } from "node:child_process";
+import { homedir, platform } from "node:os";
 import { sameDaemonCode } from "./daemon-lifecycle.ts";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
