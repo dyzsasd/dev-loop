@@ -689,7 +689,7 @@ export interface ReportTrailFinding { agent: string; fires: number; expectedDir:
 export function reportTrailGaps(
   ledgerPath: string,
   reportsRootDir: string,
-  opts: { windowMs?: number; nowMs?: number; handles?: readonly string[] } = {},
+  opts: { windowMs?: number; nowMs?: number; handles?: readonly string[]; project?: string } = {},
 ): ReportTrailFinding[] {
   const windowMs = opts.windowMs ?? 7 * 86_400_000;
   const nowMs = opts.nowMs ?? Date.now();
@@ -704,6 +704,18 @@ export function reportTrailGaps(
   const firedDays = new Map<string, Set<string>>();
   for (const r of rows) {
     if (!r.ts || r.ts < since) continue;
+    // LOOP-363: scope filter. When `project` is set, keep only rows matching
+    // that scope. Legacy rows with no project field (absent in older ledger
+    // lines before per-project attribution) are attributed to the team scope.
+    const rp = r.project as string | undefined;
+    if (opts.project !== undefined) {
+      if (opts.project === "_team") {
+        // Team scope: explicit _team rows + legacy rows with no project field
+        if (rp !== "_team" && rp !== undefined) continue;
+      } else if (rp !== opts.project) {
+        continue;
+      }
+    }
     if (!firedDays.has(r.agent)) firedDays.set(r.agent, new Set());
     firedDays.get(r.agent)!.add(r.ts.slice(0, 10));
   }
