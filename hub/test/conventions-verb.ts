@@ -128,6 +128,55 @@ try {
     try { readFileSync(join(wsRoot, "skills", "senior-dev-agent", "SKILL.md"), "utf8"); skillsExists = true; } catch { /* expected */ }
     ok(!skillsExists, `LOOP-351 AC4: synthetic ws root (${wsRoot}/skills/) has no SKILL.md — confirms ws.root is NOT the fallback resolver`);
   }
+  // ── LOOP-371 AC1: outside cwd with DEVLOOP_HUB_DB set → same prune as in-workspace ──────
+  // The fix must resolve the workspace from env even when the cwd is outside it.
+  {
+    const hubDbPath = join(wsRoot, ".dev-loop", "hub.db");
+    const outsideDir = mkdtempSync(join(tmpdir(), "dl-outside-"));
+    try {
+      const env = { ...scrubFireEnv(), DEVLOOP_HUB_DB: hubDbPath, DEVLOOP_WORKSPACE: wsRoot } as NodeJS.ProcessEnv;
+      const r = execFileSync(process.execPath, [join(hubRoot, "src", "conventions-verb.ts"), "--agent", "senior-dev", "--root", root, "--project", "p", "--json"],
+        { encoding: "utf8", cwd: outsideDir, env, maxBuffer: 64 * 1024 * 1024 });
+      const fromOutside = JSON.parse(r) as { pruned: string[]; bytes: number };
+      ok(JSON.stringify(fromOutside.pruned.sort()) === JSON.stringify(senior.pruned.sort()),
+        `LOOP-371 AC1: outside-cwd pruned set matches in-workspace (${fromOutside.pruned.sort()} vs ${senior.pruned.sort()})`);
+      ok(fromOutside.bytes === senior.bytes,
+        `LOOP-371 AC1: outside-cwd bytes match in-workspace (${fromOutside.bytes} vs ${senior.bytes})`);
+    } finally {
+      try { rmSync(outsideDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  }
+
+  // ── LOOP-371 AC2: no env, no workspace → fail open (no pruning, stderr warning) ─────────
+  // A genuine outside invocation (no DEVLOOP_* env, no resolvable workspace) must emit the
+  // superset and warn on stderr, not prune silently.
+  {
+    const noEnv = scrubFireEnv() as NodeJS.ProcessEnv;
+    let stdout = "", stderr = "", code = 0;
+    try {
+      const r = execFileSync(process.execPath, [join(hubRoot, "src", "conventions-verb.ts"), "--agent", "senior-dev", "--root", root, "--json"],
+        { encoding: "utf8", env: noEnv, maxBuffer: 64 * 1024 * 1024 });
+      stdout = r;
+    } catch (e) {
+      const c = e as { stdout?: string; stderr?: string; status?: number };
+      stdout = c.stdout ?? ""; stderr = c.stderr ?? ""; code = c.status ?? 1;
+    }
+    const j = JSON.parse(stdout) as { pruned: string[]; bytes: number };
+    ok(code === 0, `LOOP-371 AC2: exit 0 on genuine outside invocation (got ${code})`);
+    ok(j.pruned.length === 0, `LOOP-371 AC2: no pruning when no workspace resolved (got ${j.pruned.length} pruned: ${j.pruned.join(",")})`);
+    ok(stderr.includes("no workspace resolved"), `LOOP-371 AC2: stderr warns about unresolved workspace`);
+  }
+
+  // ── LOOP-371 AC3: a resolvable workspace whose config genuinely has a feature off still prunes it
+  // The fail-open path must not blanket-disable pruning. Already covered by AC1 above:
+  // the synthetic workspace prunes §12d/§19/§24, and AC1 confirmed the outside-cwd path matches.
+  // Explicit confirmation here:
+  {
+    ok(senior.pruned.includes("12d"), `LOOP-371 AC3: §12d pruned (no deploy configured)`);
+    ok(senior.pruned.includes("19"), `LOOP-371 AC3: §19 pruned (single repo)`);
+    ok(senior.pruned.includes("24"), `LOOP-371 AC3: §24 pruned (no codex)`);
+    ok(senior.kept.includes("12c"), `LOOP-371 AC3: §12c kept (autoMerge enabled)`);
+  }
 } finally {
   try { rmSync(wsRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
 }
