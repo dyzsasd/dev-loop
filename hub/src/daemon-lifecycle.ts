@@ -27,7 +27,7 @@ interface RunInfo { project: string; pid: number; port: number; host: string; ur
 // LOOP-250: returns true when the running daemon runs the same code as the installed CLI.
 // Version equality is not sufficient for source builds (same v1.14.0, different commit).
 // Both present + both match = same code; either absent → fall back to version-only (npm install semantics).
-function sameDaemonCode(installedVer: string, installedCommit: string | null | undefined, runningVer: string | undefined, runningCommit: string | null | undefined): boolean {
+export function sameDaemonCode(installedVer: string, installedCommit: string | null | undefined, runningVer: string | undefined, runningCommit: string | null | undefined): boolean {
   if ((runningVer ?? "") !== installedVer) return false;
   if (installedCommit && runningCommit) return installedCommit === runningCommit;
   return true;
@@ -40,8 +40,11 @@ function semverBefore(a: string, b: string): boolean {
   return false;
 }
 // Direction-aware version status suffix for daemon status output.
-function formatVersionStatus(runningVer: string, cliVer: string, key: string): string {
-  if (runningVer === "?" || runningVer === cliVer) return "";
+export function formatVersionStatus(runningVer: string, runningCommit: string | null | undefined, cliVer: string, cliCommit: string | null | undefined, key: string): string {
+  if (sameDaemonCode(cliVer, cliCommit, runningVer, runningCommit)) return "";
+  if (runningVer === "?" || runningVer === cliVer) {
+    return ` — running OLD code (commit differs); run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart`;
+  }
   if (semverBefore(cliVer, runningVer))
     return ` — daemon is NEWER than this CLI (v${runningVer} > v${cliVer}) — this CLI is stale; do NOT run \`dev-loop daemon up\``;
   return ` — running OLD code v${runningVer}, CLI is v${cliVer}; run \`DEVLOOP_PROJECT=${key} dev-loop daemon up\` to restart`;
@@ -449,7 +452,8 @@ async function daemonStatus(): Promise<number> {
     const live = await lcHealthInfo(info.url, key);
     if (live) {
       const ver = live.version || info.version || "?";
-      const stale = formatVersionStatus(ver, pkgVersion(), key);
+      const buildCommit = live.buildCommit ?? info.buildCommit ?? null;
+      const stale = formatVersionStatus(ver, buildCommit, pkgVersion(), pkgBuildCommit(), key);
       const actor = live.actor || info.actor;
       const misId = actor && actor !== "operator" ? ` — WARNING actor='${actor}' (not operator; publish/attribution may be mis-gated)` : "";
       const ep = live.entryPath ?? info.entryPath;
@@ -652,7 +656,8 @@ export async function daemonStatusAll(): Promise<number> {
       const live = await lcHealthInfo(info.url, key);
       if (live) {
         const ver = live.version || info.version || "?";
-        const stale = formatVersionStatus(ver, pkgVersion(), key);
+        const buildCommit = live.buildCommit ?? info.buildCommit ?? null;
+        const stale = formatVersionStatus(ver, buildCommit, pkgVersion(), pkgBuildCommit(), key);
         const actor = live.actor || info.actor;
         const misId = actor && actor !== "operator" ? ` — WARNING actor='${actor}' (not operator; publish/attribution may be mis-gated)` : "";
         const ep = live.entryPath ?? info.entryPath;
