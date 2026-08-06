@@ -7,7 +7,7 @@ import { existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
-import { validateTeamFile, TEAM_INTAKE_PROJECT, type TeamFile, type Workspace } from "./team-config.ts";
+import { validateTeamFile, TEAM_INTAKE_PROJECT, normalizeAutonomy, type TeamFile, type Workspace, type Mode, type AutonomyInput } from "./team-config.ts";
 import { ensureStateDirs, upsertWorkspaceIndex, wsHubDb } from "./workspace.ts";
 import { scaffoldOperatorBriefs } from "./operator-brief.ts";
 import { openDb } from "./db.ts";
@@ -33,7 +33,8 @@ Options:
   --comms lark|slack[:ENV_NAME]   outward channel + its webhook ENV-VAR NAME (default env: DEVLOOP_COMMS_WEBHOOK)
   --reports files|linear|hub      report sink default (default: files)
   --mode live|dry-run             team mode default (default: dry-run for first contact)
-  --autonomy full|guarded         team autonomy default (default: guarded)
+  --autonomy ask|full             team autonomy default (default: ask; "guarded" is accepted as a
+                                  legacy alias and is stored as "ask")
   --intake-mode autonomous|passive  team intake default (§5a; default: autonomous — passive means
                                   PM originates nothing and only responds to explicit needs-pm intake)
   --yes                     accept defaults for anything not passed (non-interactive)
@@ -123,8 +124,11 @@ export function teamInit(argv = process.argv.slice(2), opts: { next?: boolean } 
     deployPolicy: parseDeploy(o.deploy),
     docSystem: (o.docSystem as "backend" | "local") ?? "backend",
     docs: { vision: null, lessons: { mirror: false } },
-    autonomy: o.autonomy ?? "guarded",
-    mode: o.mode ?? "dry-run",
+    // LOOP-408 — `team init` emits the CANONICAL token. `--autonomy guarded` stays accepted (it is in
+    // the input alias set) and lands as "ask", so no workspace is minted carrying a token §12a does
+    // not define. An out-of-set value falls through to E19 in the validation below, like --mode.
+    autonomy: normalizeAutonomy(o.autonomy as AutonomyInput | undefined) ?? "ask",
+    mode: (o.mode as Mode | undefined) ?? "dry-run",
     ...(o.intakeMode ? { intake: { mode: o.intakeMode as "autonomous" | "passive" } } : {}), // E12 validates the value below
 
     ...(parseComms(o.comms) ? { comms: parseComms(o.comms) } : {}),

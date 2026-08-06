@@ -186,9 +186,9 @@ single-field mutator; see [Operator-tunable fields](#operator-tunable-fields-dev
 | `deployPolicy` | Per-environment ceiling. `manual` means no repo may auto-deploy that environment. | — |
 | `docSystem` / `docs` | Where team/product docs live. | — |
 | `comms` | Slack/Lark channel config (`dev-loop notify`). Store env var names only — the values live in `<workspace>/.dev-loop/secrets.env` or the process env (env wins; loaded automatically at workspace resolution). Its presence is also the **§22a team-digest gate**: with `team.comms` set, the team-scope communication fire composes and pushes the daily director digest — a per-project `communication` block never gates the digest. `dev-loop doctor` checks resolvability (`W12`). | ✓ `team.comms.provider`, `team.comms.webhookEnv` |
-| `mode` | Default `"live"` / `"dry-run"` for projects that do not override. | ✓ `team.mode` |
+| `mode` | Default `"live"` / `"dry-run"` for projects that do not override. Validated by `E19`. | ✓ `team.mode` |
 | `git.defaultBranch` | Team-wide integration branch for repos that do not set their own. Resolution: `repos.<ref>.defaultBranch ?? team.git.defaultBranch ?? "main"` (§19). | ✓ `team.git.defaultBranch` |
-| `autonomy` | Default autonomy posture for projects that do not override. | — |
+| `autonomy` | Default autonomy posture for projects that do not override: `"ask"` (escalate genuine ambiguity, §12a) or `"full"`. `"guarded"` — what `team init` wrote before 1.15.1 — is accepted as a legacy **input alias** and resolves to `"ask"`; it is never stored by any current writer and never resolves to `"full"`. Validated by `E19`. | ✓ `team.autonomy` |
 | `intake` | Team-wide default intake block (`mode`, `todoDepthCap`); seeded by `team init --intake-mode`. Projects override **field-wise** (nearest wins per field), so a project tuning only `todoDepthCap` keeps a team-level `"passive"`. | ✓ `team.intake.mode`, `team.intake.todoDepthCap` |
 | `agentReviewers` | Comma-separated list of GitHub login names that belong to bots/agents and should be **excluded** from merge-guard's forge-review axis (§3.2). A reviewer in this list whose `CHANGES_REQUESTED` review or unresolved thread would otherwise block a merge is silently ignored — only human objections halt the guard. Example: `"github-actions[bot],renovate[bot]"`. Set with `dev-loop team set team.agentReviewers "login1,login2"`; stored as a JSON string array in `dev-loop.json`. | ✓ `team.agentReviewers` |
 | `budget.dailyUsd` | Rolling 24 h spend ceiling in USD. When set to a positive number, the scheduler refuses to launch a new fire if the past 24 h ledger total exceeds this amount. `null` or unset = **OFF** (no ceiling, the default). Set via `dev-loop team set team.budget.dailyUsd <n\|null>`. Enforcement lands with Child 3 of the budget-ceiling design. | ✓ `team.budget.dailyUsd` |
@@ -242,7 +242,7 @@ agent behavior.
 | `intake.mode` | `"autonomous"` (default): PM proactively reviews the product/strategy doc and files its own work. `"passive"`: PM originates nothing — it only responds to explicit `needs-pm` intake (conventions §5a); verification, unblocking, and grooming are unchanged. Falls back to `team.intake` field-wise. | ✓ `projects.<key>.intake.mode` |
 | `intake.todoDepthCap` | PM keeps committed `Todo` depth under this cap; default 10. | ✓ `projects.<key>.intake.todoDepthCap` |
 | `devSplit` | `true` uses senior-dev + junior-dev. | ✓ `projects.<key>.devSplit` |
-| `mode` / `autonomy` | Project overrides for team defaults. | — |
+| `mode` / `autonomy` | Project overrides for team defaults; same token sets and same `E19` validation as the `team` block. `autonomy` normalizes the legacy `guarded` → `ask` at resolution. | ✓ `projects.<key>.mode`, `projects.<key>.autonomy` |
 | `hub.agentInterface` | Project override of `team.hub.agentInterface`, merged **per coding agent** (a project flipping only `claude` keeps the team-level `codex` setting). | — |
 | `agents` | Per-agent overrides. Fields: `codingAgent`, `model`, `effort`, `cadence` (**team-scope only** — rejected by `E17` at project scope; use `team.agents` or tune the project's rotation `weight` instead), `fireTimeout` (**delivery fires only**; max wall-clock per fire; `"0"` = off; default `"1h"`), `stallTimeout` (**delivery fires only**; kill if no stdout for this long; `"0"` = off; default `"10m"` for opencode, off for claude/codex). Duration strings: `"30m"`, `"1h"`, `"10s"`. Resolution order for timeouts: project-scope per-agent config (delivery fires only) > team-scope per-agent config > explicit `--fire-timeout`/`--stall-timeout` CLI flag > per-lane/global default. Validated by `E17` — a bad value names the offending agent + field. | — |
 | `reports` | Report sink and review-channel config. | — |
@@ -359,14 +359,16 @@ A validated single-field update: the value is type-checked (enum/boolean/number/
 edit is applied to a copy, and the WHOLE file is re-validated before writing — `team set` can never
 leave `dev-loop.json` invalid. Only the whitelisted paths above (`team set` ✓ columns) are accepted:
 
-- `team.mode` (`dry-run`|`live`) · `team.linearTeam` · `team.git.defaultBranch` ·
+- `team.mode` (`dry-run`|`live`) · `team.autonomy` (`ask`|`full`; `guarded` accepted, stored as `ask`) ·
+  `team.linearTeam` · `team.git.defaultBranch` ·
   `team.comms.provider` (`slack`|`lark`) ·
   `team.comms.webhookEnv` · `team.intake.mode` (`autonomous`|`passive`) · `team.intake.todoDepthCap` ·
   `team.agentReviewers` (comma-separated logins; stored as string array) ·
   `team.budget.dailyUsd` (positive number USD or `null` to disable; rolling 24 h ceiling) ·
   `team.budget.perFireUsd` (positive number USD; per-fire estimated spend ceiling — ON by default at `$12.00`)
-- `projects.<key>.enabled` · `.weight` · `.devSplit` · `.testEnv.baseUrl` · `.testEnv.authConstraint` ·
-  `.intake.mode` · `.intake.todoDepthCap`
+- `projects.<key>.enabled` · `.weight` · `.devSplit` · `.mode` (`dry-run`|`live`) ·
+  `.autonomy` (`ask`|`full`; `guarded` accepted, stored as `ask`) ·
+  `.testEnv.baseUrl` · `.testEnv.authConstraint` · `.intake.mode` · `.intake.todoDepthCap`
 - `projects.<key>.communication.{cadence,language,audience,tone,outputDir,repoOutputDir}` (strings) ·
   `.communication.{maxWords,sourceWindowDays}` (integers) · `.communication.output` (`data`|`repo`) ·
   `.communication.includeUnreleased` (boolean)
@@ -401,6 +403,7 @@ workspace-fingerprint mismatch check against every mapped Linear project.
 | `E14` | Bad `projects.<key>.communication` block: an unknown key (strict — a typo would silently change what a communication fire does), a wrong type, or `output` not `"data"`/`"repo"`. |
 | `E15` | Bad `projects.<key>.notify` block: an unknown key, missing/bad `type` or `webhookEnv`, an env name that looks like a URL, or an **inline `webhook`/`secret` literal** (§16 — export the value in an env var and store its NAME). |
 | `E16` | Bad `team.providers` entry (an unknown key, `kind` other than `"openai-compatible"`, a non-URL `baseUrl`, an `authTokenEnv` that is not an env-var NAME, an empty `models` list) or a non-object `team.opencodePermission`. Strict — a typo'd entry renders a dead opencode provider block. |
+| `E19` | Bad `mode` or `autonomy` token, at `team` or `projects.<key>` scope — the message names the exact path. `mode` ∈ `dry-run`\|`live` (§12); `autonomy` ∈ `ask`\|`full` (§12a), plus the legacy input alias `guarded` which resolves to `ask`. Before 1.15.1 a typo here was accepted in silence and reached agent-facing prose as a posture no section defines. |
 
 Common warnings:
 
