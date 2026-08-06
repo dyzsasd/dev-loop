@@ -1468,7 +1468,7 @@ function wireBreakerEvents(ws: Workspace | null): void {
 // gate/lock/log roots). A workspace found-but-invalid is a hard stop (fix it, don't run stale).
 function resolveWs(opts: Options): Workspace | null {
   let ws;
-  try { ws = tryResolveWorkspace(opts.cwd ?? process.cwd()); }
+  try { ws = tryResolveWorkspace(opts.cwd); } // LOOP-418: undefined ⇒ no --cwd ⇒ env ladder still applies
   catch (e) { if (e instanceof WsValidationError) die(e.message, 1); throw e; }
   if (!ws) return null;
   if (!opts.dataDirExplicit) opts.dataDir = wsStateRoot(ws);
@@ -1483,7 +1483,7 @@ async function main(): Promise<void> {
   // the workspace run log, and `dev-loop stop` is the matching off switch. Deliberately BEFORE workspace
   // resolution: the child re-resolves everything itself; the parent only needs the log path.
   if (opts.background && !opts.dryRun && !opts.once) {
-    const bgWs = tryResolveWorkspace(opts.cwd ?? process.cwd());
+    const bgWs = tryResolveWorkspace(opts.cwd); // LOOP-418: see resolveWs
     const logPath = bgWs ? join(bgWs.root, ".dev-loop", "run.log") : join(opts.dataDir, "run.log");
     mkdirSync(dirname(logPath), { recursive: true });
     // §16 (LOOP-93): run.log holds the FULL unredacted detached fire stream (every agent's stdout+stderr) in the

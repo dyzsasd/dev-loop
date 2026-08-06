@@ -20,7 +20,25 @@ export class WsNotFound extends Error {
 const guidance = "Run `dev-loop team init` in a directory to create a workspace, or `cd` into an existing one.";
 
 // ─── Discovery ────────────────────────────────────────────────────────────────
-export function findWorkspaceRoot(cwd = process.cwd()): string | null {
+// Walk `from` upward to the first directory holding a dev-loop.json. No env consulted.
+function ascendToWorkspace(from: string): string | null {
+  let dir = canon(from);
+  if (!dir) return null;
+  for (;;) {
+    if (existsSync(join(dir, "dev-loop.json"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+// `cwd` is OPTIONAL on purpose (LOOP-418): only `undefined` means "the caller named no root", and
+// that is the one case the env ladder below exists to answer (the bare CLI invocation, LOOP-371).
+// A caller that DID name a root gets that root — an explicit argument is the most specific
+// statement of intent available, so it outranks ambient env. A default parameter cannot express
+// this: `findWorkspaceRoot(process.cwd())` would be indistinguishable from `findWorkspaceRoot()`.
+export function findWorkspaceRoot(cwd?: string): string | null {
+  if (cwd !== undefined) return ascendToWorkspace(cwd);
   // 1. explicit workspace path
   const explicit = process.env.DEVLOOP_WORKSPACE?.trim();
   if (explicit) {
@@ -43,22 +61,17 @@ export function findWorkspaceRoot(cwd = process.cwd()): string | null {
     if (!root || !existsSync(join(root, "dev-loop.json"))) throw new WsNotFound(`DEVLOOP_TEAM='${teamKey}' is not in the workspace index (or its path is gone). cd into the workspace once to re-register it.`);
     return canon(root);
   }
-  // 3. cwd ascent
-  let dir = canon(cwd);
-  if (!dir) return null;
-  for (;;) {
-    if (existsSync(join(dir, "dev-loop.json"))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
+  // 4. cwd ascent
+  return ascendToWorkspace(process.cwd());
 }
 
 // Resolve + load + validate the workspace for this cwd/env. Throws WsNotFound (no workspace) or
 // WsValidationError (bad config). On success best-effort registers the index (self-heal).
-export function resolveWorkspace(cwd = process.cwd()): Workspace {
+// `cwd` optional for the same reason as findWorkspaceRoot — it forwards the distinction, and a
+// caller that defaults it to process.cwd() ITSELF silently opts out of the env ladder (LOOP-418).
+export function resolveWorkspace(cwd?: string): Workspace {
   const root = findWorkspaceRoot(cwd);
-  if (!root) throw new WsNotFound(`no dev-loop.json found from ${cwd} upward. ${guidance}`);
+  if (!root) throw new WsNotFound(`no dev-loop.json found from ${cwd ?? process.cwd()} upward. ${guidance}`);
   // §16 secrets: hydrate `<root>/.dev-loop/secrets.env` into process.env (real env ALWAYS wins) the
   // moment the root is known — cli/daemon/run-agents all resolve through here, and the agent fires
   // they spawn inherit process.env, so this ONE hook makes every env-var NAME in dev-loop.json
@@ -69,7 +82,7 @@ export function resolveWorkspace(cwd = process.cwd()): Workspace {
   return ws;
 }
 
-export function tryResolveWorkspace(cwd = process.cwd()): Workspace | null {
+export function tryResolveWorkspace(cwd?: string): Workspace | null {
   try { return resolveWorkspace(cwd); } catch (e) { if (e instanceof WsNotFound) return null; throw e; }
 }
 
@@ -87,7 +100,11 @@ export function wsHubDb(ws: Workspace): string { return join(wsStateRoot(ws), "h
 // workspace's .dev-loop/hub.db > the machine-global default. op/tickets/seed/doctor used to jump
 // straight to the global default (seed even to ./hub.db in cwd), silently reading or CREATING a
 // different board than the workspace the operator was standing in — the day-1 double-db split.
-export function resolveHubDbPath(startDir = process.cwd()): string {
+// `startDir` optional (LOOP-418): defaulting it to process.cwd() here would hand tryResolveWorkspace
+// an "explicit" root and so silently drop DEVLOOP_WORKSPACE/DEVLOOP_TEAM from this ladder. Forwarding
+// undefined keeps LOOP-371's env-then-cwd behaviour byte-for-byte; a caller that names a dir still
+// gets that dir's workspace.
+export function resolveHubDbPath(startDir?: string): string {
   if (process.env.DEVLOOP_HUB_DB?.trim()) return hubDbPath();
   const ws = tryResolveWorkspace(startDir);
   return ws ? wsHubDb(ws) : hubDbPath();
