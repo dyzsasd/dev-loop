@@ -18,6 +18,7 @@ import { isMainEntry } from "./is-entry.ts";
 import { resolveUiToken, plaintextBearerToRemote, plaintextBearerRefusal } from "./ui-token.ts"; // LOOP-173: refuse a plaintext bearer to a remote at the entry point
 import { tryResolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import { TEAM_INTAKE_PROJECT, type Workspace } from "./team-config.ts";
+import { TOKEN_PREFIX } from "./destructive-guard.ts"; // LOOP-368: ONE spelling of the token, shared with the gate that consumes it
 import { teamInit } from "./team-init.ts";
 import { scaffoldOperatorBriefs } from "./operator-brief.ts";
 
@@ -55,6 +56,18 @@ export function parseUpArgs(argv: string[]): UpOpts {
     else if (a === "--bundle") o.bundle = resolve(next());
     else if (a === "--attach") o.attach = next();
     else if (a === "--force-reseed") o.forceReseed = true;
+    // LOOP-368. The isolation token is consumed by the GATE (bundle.ts reads it out of argv), not
+    // here — but this parser ran first and killed it with `unknown option`, so the refusal
+    // `--force-reseed` prints ("pass --i-understand-this-deletes-<key> to confirm you mean THIS
+    // workspace") named a remedy the CLI rejected. A refusal whose stated remedy does not parse is
+    // not a gate with a key; it is a gate with none, and LOOP-316's test could not see it because
+    // "unknown option" also contains no "REFUSED".
+    //
+    // Shape only, deliberately: WHICH workspace the token names is settled downstream by
+    // `workspaceIsolationVerdict`'s exact `argv.includes(requiredToken)` match. This parser cannot
+    // do that check — the workspace is not resolved until --dir and the bundle are read — and a
+    // startsWith accepted HERE grants nothing, because the gate still demands the exact string.
+    else if (a.startsWith(TOKEN_PREFIX)) { /* consumed by the isolation gate, from argv */ }
     else if (a === "--help" || a === "-h") { usage(); process.exit(0); }
     else die(`unknown option '${a}'`);
   }
