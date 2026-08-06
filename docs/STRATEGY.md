@@ -216,31 +216,26 @@ is precisely how the withdrawn one survived a day steering the top priority.
   D; the forty-ninth is pass 42 block A, the fiftieth is pass 43 block M), replacing the thirteen
   per-period stubs they had left behind — §20 R2 keeps ONE index entry per archived period.
 
-- **[ARCHIVED] the fifty-first and fifty-second fire journals (2026-08-06).** `stale-exempt` shipped
-  inert because nothing carried its switch to a reader (**LOOP-365**), and `destructive-guard.ts`'s
-  every-destructive-verb claim held at one of four call sites (**LOOP-368**). Both findings left as
-  those tickets; what still governs is STANDING RULES 28–29 below. Rolled to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 45, block O).
+- **[ARCHIVED] the fifty-first through fifty-sixth fire journals (2026-08-06).** Rolled to
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 passes 45–47, blocks O,
+  Q–T): `stale-exempt` shipped inert because nothing carried its switch to a reader (**LOOP-365**);
+  `destructive-guard.ts`'s every-destructive-verb claim held at one of four call sites
+  (**LOOP-368**); a carry-over suppressor that reported an edit the doc never received
+  (**LOOP-375**); the `conversion-retention` lens (**LOOP-376**, **LOOP-377**); the four-axes
+  release entry, distilled into STANDING RULE 15 with **LOOP-364** its open axis; and the
+  `competitive-parity` lens, which found a fire's own outcome stored by the hub and served by no
+  view (**LOOP-380**). What still governs is STANDING RULES 28–29 below.
 
-- **[ARCHIVED] the fifty-fourth and fifty-fifth fire journals + the release-axes entry
-  (2026-08-06).** A carry-over suppressor that reported an edit the doc never received
-  (**LOOP-375**); the `conversion-retention` lens (**LOOP-376**, **LOOP-377**); and the four-axes
-  release entry, distilled into STANDING RULE 15 with **LOOP-364** its open axis. Rolled to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 46, blocks Q–S).
+### 2026-08-06 (pm, fifty-seventh fire): five operator tickets, two ACs no fire could have met
 
-### 2026-08-06 (pm, fifty-sixth fire): the operator posture the product ships, and the artifact that stayed on the box
-
-The `competitive-parity` lens asked what a REMOTE operator can reach. `up --bundle`, `attach <url>`
-and `deploy/` are shipped postures, and in them the board, docs, roadmap, usage and reports are all
-served over HTTP. A fire's own outcome is not, though the hub stores it: `run-agents.ts:819` writes
-`exitCode`/`timedOut`/`suspectError`/`interrupted`/`errorClass` into a `fire.completed` event,
-`/usage` reads those very rows for tokens and cost alone, and `/activity` has no `KIND_ICO` entry or
-`switch` case for the kind, so a fire renders as its bare kind string. `grep errorClass\|exitCode
-hub/src/views/*.ts` returns nothing — "is the loop working, and why did that fire fail" needs a shell
-on the box. Filed **LOOP-380**. The lens's other candidate died on the dedupe check, correctly: the
-two-way `channel.*` bridge is unreachable BY DECISION (2026-06-28, the Director removal kept the
-outbound transport and recorded the inbound half agent-unused); only a doc claim survives, banked in
-`Candidate ideas` behind LOOP-366 rather than opened as a competing park.
+The operator filed **LOOP-382..386** off today's incidents — pause/resume as board state, typed
+approval objects, a `Human-Blocked` waiting-on discriminator, release resilience, a stale-board
+banner. All five arrived un-tiered, so none was pickable; grooming tiered each (§21b) and promoted
+three to senior, whose unblocked `Todo` depth was **0/10** while junior sat at **10/10**. Two
+carried ACs no fire could satisfy — see the ruling below. The `consistency` lens filed **LOOP-387**:
+the board-read verbs reject an unknown flag with exit 2 while `doctor`/`metrics`/`daemon status`
+accept anything and exit 0, so `doctor --json` prints human text and reports success — the
+CLI-layer instance of the defect LOOP-165 fixed at the op layer.
 
 ## Personas
 
@@ -275,12 +270,18 @@ outbound transport and recorded the inbound half agent-unused); only a doc claim
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, fifty-sixth fire) — a second operating posture re-asks every operator artifact
-  whether it survives the move.** §22 asked exactly that of reports — *"for a cloud / remote runtime
-  where the operator can't reach the data dir"* — and answered it for one backend; nobody asked it
-  of the fire stream, so the loop's own health is the one artifact still requiring a shell. The audit
-  is cheap and belongs in the fire that ADDS the posture: list what the operator reads, mark each
-  local-only or served.
+- **2026-08-06 (pm, fifty-seventh fire) — an acceptance criterion that the system's own governance
+  forbids the implementer from meeting is a filing defect, and grooming is the only place it can be
+  caught cheaply.** STANDING RULE 5 already covers an AC contradicted by its ticket's own "Out of
+  scope"; this is the harder form — LOOP-385's AC3 was contradicted by the §17 firewall, and the
+  filer was the OPERATOR, whose tickets are the ones least likely to be re-read for feasibility.
+  Left standing it fails at verification, against an implementer who could not have complied.
+  **Check every AC against who is PERMITTED to perform it, not only whether it is testable.**
+  Corollary from the same fire: a 7-day aggregate is not a live condition. `rate-limit×85` has led
+  `metrics` all week and was banked as unfiled work; the last instance is `2026-08-04T17:32Z`, all
+  85 on `anthropic` at a median 2.5s (they die at launch, costing slots not tokens), and
+  `--window 1d` shows none. The model reconfiguration closed it. Re-date a standing number before
+  filing against it.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -510,6 +511,10 @@ outbound transport and recorded the inbound half agent-unused); only a doc claim
     rulings, and the release-axes entry, rolled by **§20 R2 pass 46** →
     [`2026-08.md`](strategy-archive/2026-08.md), blocks Q–S. What still governs is STANDING RULES
     **31–32** plus the clauses folded into RULES 8 and 15.
+  - **2026-08-06 (pm, fifty-sixth fire)** — its journal and its full-text ruling (a second
+    operating posture re-asks every operator artifact whether it survives the move), rolled by
+    **§20 R2 pass 47** → [`2026-08.md`](strategy-archive/2026-08.md), blocks T–T2. The finding it
+    produced is **LOOP-380**; nothing from it was promoted to a STANDING RULE.
 
 ## Candidate ideas
 
