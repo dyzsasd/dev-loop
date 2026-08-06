@@ -1,0 +1,19 @@
+
+dev-loop workspace — 'golden-findings' @ <WS> (backend:service)
+✅ dev-loop.json valid (1 repos, 1 projects)
+⚠️  [W01] projects.loop.repos: project 'loop' references no repos
+⚠️  [W02] repos.repo: repo 'repo' is registered but referenced by no project
+⚠️  [W03] team.bootCorpus: §0a boot corpus is OFF (team.bootCorpus unset/false) — fires run in PULL mode and the push-path byte budget below is not being delivered against. Turn it on with: dev-loop team set team.bootCorpus true
+✅ repo 'repo' → <WS>/repo
+•  repo 'repo' has no deploy/ops config (interview-only fields) — fill via /dev-loop:add-repo, or team set repos.repo.deploy.* once it deploys
+⚠️  [W16] [loop] owner 'qa' has 1 open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest <DATE>) but no fire on record in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.qa.manual true is a config edit)
+⚠️  [W16] [loop] owner 'junior-dev' has 2 open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest <DATE>) but no fire on record in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.junior-dev.manual true is a config edit)
+⚠️  [W26] repo 'repo' (<WS>/repo) has 1 staged-but-uncommitted path: dirty-file.ts — `git rebase` refuses in this state exactly as it does on unmerged paths, so doc-land and every direct-checkout build stay blocked. Finish it: commit them, or `git rebase --continue` if a rebase is in progress.
+⚠️  [W33] repo 'repo' (<WS>/repo) has 1 uncommitted tracked modification: dirty-file.ts — the shared checkout is written by every non-worktree fire, and another fire's `git checkout` discards these silently (<DATE>: 5 files, no stash, no event). NO snapshot exists — nothing has copied this work; `dev-loop run` takes one at startup, or commit/stash it now
+⚠️  [W31] [loop] 'senior-dev' has 10 idle Todo slot(s) (0/10) and ZERO promotable Backlog — it can neither pull nor be given work, while 'junior-dev' holds 0 Backlog candidate(s). Promote or re-tier: a tier with capacity and nothing it may pull is idle capacity nobody is charged for noticing.
+⚠️  [W31] [loop] 'junior-dev' has 10 idle Todo slot(s) (0/10) and ZERO promotable Backlog — it can neither pull nor be given work, while 'senior-dev' holds 0 Backlog candidate(s). Promote or re-tier: a tier with capacity and nothing it may pull is idle capacity nobody is charged for noticing.
+⚠️  [W30] the lessons library has never been written (<WS>/.dev-loop/lessons has no INDEX.md) — it is loaded into every fire and is the loop's only cross-fire learning mechanism, so every fire is starting from zero. `reflect` is its only writer: check that it is in the run set (`dev-loop run --agents core,reflect`) and that its fires are landing.
+⚠️  [W32] this board has NEVER been snapshotted (<WS>/.dev-loop/snapshots is empty) — a single hub.db file holds every ticket, comment, document version and event, and there is no copy to restore from. Take one now: `dev-loop board snapshot` (the cadence is configured; it may not have run yet)
+⚠️  [W06] repo 'repo' is inside a git work-tree and .dev-loop/ is not gitignored — state/reports could be committed (add .dev-loop/ to .gitignore)
+⚠️  [W27] [loop] 1 non-terminal ticket with null assignee unreachable:
+dev-loop ticket update LOOP-1 --assignee junior-dev

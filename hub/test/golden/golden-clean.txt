@@ -1,0 +1,10 @@
+
+dev-loop workspace — 'golden-clean' @ <WS> (backend:service)
+✅ dev-loop.json valid (1 repos, 0 projects)
+⚠️  [W02] repos.repo: repo 'repo' is registered but referenced by no project
+⚠️  [W03] team.bootCorpus: §0a boot corpus is OFF (team.bootCorpus unset/false) — fires run in PULL mode and the push-path byte budget below is not being delivered against. Turn it on with: dev-loop team set team.bootCorpus true
+✅ repo 'repo' → <WS>/repo
+•  repo 'repo' has no deploy/ops config (interview-only fields) — fill via /dev-loop:add-repo, or team set repos.repo.deploy.* once it deploys
+⚠️  [W30] the lessons library has never been written (<WS>/.dev-loop/lessons has no INDEX.md) — it is loaded into every fire and is the loop's only cross-fire learning mechanism, so every fire is starting from zero. `reflect` is its only writer: check that it is in the run set (`dev-loop run --agents core,reflect`) and that its fires are landing.
+⚠️  [W32] this board has NEVER been snapshotted (<WS>/.dev-loop/snapshots is empty) — a single hub.db file holds every ticket, comment, document version and event, and there is no copy to restore from. Take one now: `dev-loop board snapshot` (the cadence is configured; it may not have run yet)
+⚠️  [W06] repo 'repo' is inside a git work-tree and .dev-loop/ is not gitignored — state/reports could be committed (add .dev-loop/ to .gitignore)
