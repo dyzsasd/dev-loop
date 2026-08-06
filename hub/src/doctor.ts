@@ -569,7 +569,8 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
         const ahead = parseInt(r.stdout.trim(), 10);
         if (isNaN(ahead)) { info(`[${ref}] W19: rev-list output unexpected — skipping`); continue; }
         if (ahead > 0) {
-          warn(`[W19] [${ref}] local ${defaultBranch} is ${ahead} commit(s) ahead of origin/${defaultBranch} — unpushed strategy/doc commits are invisible to every dev worktree (they branch off origin). Land them: dev-loop doc-land (design landing-discipline §4), or the operator runbook §4.3. Do NOT 'git reset --hard origin/${defaultBranch}' — it destroys them.`);
+          const qualifier = gitRefQualifier(dir, defaultBranch);
+          warn(`[W19] [${ref}] local ${defaultBranch} is ${ahead} commit(s) ahead of origin/${defaultBranch} (${qualifier}, as of last fetch) — unpushed strategy/doc commits are invisible to every dev worktree (they branch off origin). Land them: dev-loop doc-land (design landing-discipline §4), or the operator runbook §4.3. Do NOT 'git reset --hard origin/${defaultBranch}' — it destroys them.`);
         }
         // ahead === 0: in sync, silent
       } catch { info(`[${ref}] W19: git check skipped (best-effort)`); }
@@ -1399,6 +1400,23 @@ function packagedCodePaths(files: string[]): string[] {
   return out;
 }
 
+
+/**
+ * Resolve `origin/<branch>` to its short sha (e.g. `abc1234`) and relative age
+ * (e.g. `33 minutes ago`). Returns the qualifier string for display — sha only if age
+ * can't be resolved, "unknown" if neither can.
+ */
+function gitRefQualifier(dir: string, branch: string): string {
+  const shortR = spawnSync("git", ["-C", dir, "rev-parse", "--short", `origin/${branch}`],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  const ageR = spawnSync("git", ["-C", dir, "log", "-1", "--format=%ar", `origin/${branch}`],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  const refSha = shortR.stdout.trim() || "unknown";
+  const refAge = ageR.stdout.trim();
+  return refAge ? `${refSha}, ${refAge}` : refSha;
+}
+
+
 // W18 — installed CLI vs origin/main skew (design landing-observability §9.3).
 // Only fires when the running package's repository matches a configured landing:"pr" repo (the dogfooding
 // case). For all normal product workspaces this is a zero-cost n/a — no git calls, no output.
@@ -1496,9 +1514,8 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
       const codeBehind = isNaN(codeRaw) ? behind : codeRaw; // fallback to total when pathspec fails
       if (codeBehind > 0) {
         const docBehind = behind - codeBehind;
-        const shortR = spawnSync("git", ["-C", matchDir, "rev-parse", "--short", `origin/${matchBranch}`],
-          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-        const shortSha = shortR.stdout.trim() || "unknown";
+        const qualifier = gitRefQualifier(matchDir, matchBranch);
+        const shortSha = qualifier.split(",")[0].trim();
         const docNote = docBehind > 0 ? ` (+${docBehind} doc-only)` : "";
         const sourceNote = isSourceBuild
           ? "the installed CLI is a local source build — reinstall from the updated source"
@@ -1508,15 +1525,7 @@ function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; 
       }
       // codeBehind === 0: all commits are doc-only — silent (no behavior skew)
     } else {
-      // behind === 0, but only as fresh as the local tracking ref. Include the ref's
-      // short sha and age so the operator knows when this was last measured.
-      const shortRefR = spawnSync("git", ["-C", matchDir, "rev-parse", "--short", `origin/${matchBranch}`],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-      const ageR = spawnSync("git", ["-C", matchDir, "log", "-1", "--format=%ar", `origin/${matchBranch}`],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-      const refSha = shortRefR.stdout.trim() || "unknown";
-      const refAge = ageR.stdout.trim();
-      const qualifier = refAge ? `${refSha}, ${refAge}` : refSha;
+      const qualifier = gitRefQualifier(matchDir, matchBranch);
       pass(`[${matchRef}] installed ${pkgName} v${V} matches origin/${matchBranch} (${qualifier}) — no skew as of last fetch; run git fetch to confirm`);
     }
   } catch { info(`[${matchRef}] W18: git check skipped (best-effort)`); }

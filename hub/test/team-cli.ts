@@ -389,11 +389,15 @@ try {
     ok(/\[W19\]/.test(w19ahead.out), "W19 fires when local main is ahead of origin/main");
     ok(/DOCTOR_OK/.test(w19ahead.out), "W19 is warn-only — DOCTOR_OK still holds when local main is ahead");
     ok(/1 commit/.test(w19ahead.out), "W19 names the commit count");
+    ok(/\([a-f0-9]{7,}, \d+/.test(w19ahead.out), "LOOP-354 AC1: W19 includes sha and age qualifier");
+    ok(/as of last fetch/.test(w19ahead.out), "LOOP-354 AC1: W19 includes 'as of last fetch' caveat");
 
     // Case B: in sync after push → no W19
     gitW19(w19Clone, ["push", "-qu", "origin", "main"]);
     const w19sync = run("server", ["doctor"], { cwd: w19Root });
     ok(!/\[W19\]/.test(w19sync.out), "no W19 when local main is in sync with origin/main");
+    ok(/DOCTOR_OK/.test(w19sync.out), "DOCTOR_OK holds when in sync");
+    ok(!/as of last fetch/.test(w19sync.out), "LOOP-354 AC2: in-sync output is unchanged — no qualifier introduced");
     ok(/DOCTOR_OK/.test(w19sync.out), "DOCTOR_OK holds when in sync");
 
     // Case C: landing:"pr" repo with NO remote origin → info only, no W19 warn
