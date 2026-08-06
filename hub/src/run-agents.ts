@@ -781,7 +781,7 @@ function hardenLedgerPerms(p: string, existedBefore: boolean, mode: number, chmo
   } catch { /* raced away between the write and the stat — nothing to warn about */ }
 }
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
-  extra?: { suspectError?: boolean; interrupted?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number; usage?: FireUsage }): void {
+  extra?: { suspectError?: boolean; interrupted?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number; usage?: FireUsage; turns?: number | null }): void {
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail, provider); // P0-1a/P0-1b — every completed fire feeds the streak
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
@@ -804,7 +804,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
         // usage is numeric-only (FireUsage: tokens + cost + source/currency) — §16-safe for disk, and it's the
         // backend-agnostic soak/cost metric's ONLY source on linear (no fire.completed event there). Mirrors the
         // logEvent sibling below; the codex wiring stamped the event but missed this row (LOOP-83).
-        ...(extra?.usage ? { usage: extra.usage } : {}) };
+        ...(extra?.usage ? { usage: extra.usage } : {}), turns: extra?.turns ?? null }; // LOOP-318: null-not-absent
       const fileExisted = existsSync(fireLedgerPath);
       appendFileSync(fireLedgerPath, JSON.stringify(row) + "\n");
       hardenLedgerPerms(dir, dirExisted, 0o700, "700");                 // .dev-loop/team/ → owner-only
@@ -1324,8 +1324,10 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         log.write(`\n===== suspectError: exit 0 but output looks like a failure (${why}) =====\n`);
       }
       let usage: FireUsage | undefined;
+      let turns: number | null = null; // LOOP-318: null ⇒ not recoverable from this payload, NEVER 0
       if (usageAdapter) {
         try { const parsed = usageAdapter.parse(fullStdout); if (parsed) usage = parsed; } catch { /* usage is best-effort */ }
+        try { turns = usageAdapter.turns?.(fullStdout) ?? null; } catch { turns = null; }
       }
       const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop, budgetKilled); // P0-1b taxonomy (+ liveness "stalled"/"retry-loop" + LOOP-230 "budget-per-fire")
       if (interrupted) log.write(`\n===== interrupted: operator stop (SIGINT forwarded) — not charged to the agent =====\n`);
@@ -1337,6 +1339,10 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         ...(suspectError || errorClass || exitCode !== 0 ? { outputTail: outTail.slice(-400) } : {}),
         bootBytes: boot ? boot.bytes : 0, // LOOP-272: ALWAYS present — 0 means never assembled, which is a fact worth recording
         ...(usage ? { usage } : {}),
+        // LOOP-318 — ALWAYS present, and null when unknown. Omitting it would make an
+        // un-instrumented lane indistinguishable from an unparseable payload, and no already-run
+        // fire can be back-filled, so the distinction has to be recorded as it happens.
+        turns,
       };
       recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
