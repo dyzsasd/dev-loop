@@ -104,7 +104,8 @@ export function conventionsCmd(argv = process.argv.slice(2)): number {
   const noPrune = ws === null;
   const r = root ?? pluginRoot();
   let slice: ConventionsSlice;
-  slice = conventionsSlice(r, agent, ws, project, noPrune);
+  try { slice = conventionsSlice(r, agent, ws, project, noPrune); }
+  catch (e) { console.error(`dev-loop conventions: ${(e as Error).message}`); return 1; }
   if (noPrune) console.error("[conventions] warning: no workspace resolved — all spans emitted without config pruning (stdout clean for piping)");
   if (asJson) { console.log(JSON.stringify(slice, null, 2)); return 0; }
   console.log(slice.text);
