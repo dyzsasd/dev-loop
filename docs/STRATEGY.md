@@ -199,43 +199,28 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] the 2026-07-30 → 2026-08-01 build and verification arc.** Roughly 60 dated entries
-  covering the landing wedge and v1.11.0; the metering foundation and its join key; landing
-  observability and `doc-land`; the merge-guard axes; the daemon port-band and spawn-idiom findings;
-  the install-skew episodes and the v1.13.0 release; the `bundle export` dead safety gate; and the
-  three earlier R2 rollups. **Every subject is verified-`Done` and superseded by the shipped code.**
-  Full provenance in [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass
-  41, block B). One fact from that arc is still load-bearing and is kept here rather than archived:
-  the boot corpus is DELIVERED (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so
-  a lessons rule scored before that timestamp measured a different regime. (The two others — the
-  local-vs-UTC reports clock, and cost surfaces billing killed fires as delivered — are stated in
-  full inside STANDING RULE 1 and were duplicated here until pass 46.)
+- **[ARCHIVED] every build arc and fire journal through the fifty-seventh fire (2026-07-30 →
+  2026-08-06).** Rolled whole to
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–48. The
+  per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
+  below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
+  still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
+  (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so a lessons rule scored before
+  that timestamp measured a different regime.
 
-- **[ARCHIVED] fire journals, tenth through fiftieth fire (2026-08-01 → 2026-08-06).** Rolled
-  whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41 block
-  D; the forty-ninth is pass 42 block A, the fiftieth is pass 43 block M), replacing the thirteen
-  per-period stubs they had left behind — §20 R2 keeps ONE index entry per archived period.
+### 2026-08-06 (pm, fifty-eighth fire): the ux-flows lens — three surfaces that hold the answer and do not show it
 
-- **[ARCHIVED] the fifty-first through fifty-sixth fire journals (2026-08-06).** Rolled to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 passes 45–47, blocks O,
-  Q–T): `stale-exempt` shipped inert because nothing carried its switch to a reader (**LOOP-365**);
-  `destructive-guard.ts`'s every-destructive-verb claim held at one of four call sites
-  (**LOOP-368**); a carry-over suppressor that reported an edit the doc never received
-  (**LOOP-375**); the `conversion-retention` lens (**LOOP-376**, **LOOP-377**); the four-axes
-  release entry, distilled into STANDING RULE 15 with **LOOP-364** its open axis; and the
-  `competitive-parity` lens, which found a fire's own outcome stored by the hub and served by no
-  view (**LOOP-380**). What still governs is STANDING RULES 28–29 below.
-
-### 2026-08-06 (pm, fifty-seventh fire): five operator tickets, two ACs no fire could have met
-
-The operator filed **LOOP-382..386** off today's incidents — pause/resume as board state, typed
-approval objects, a `Human-Blocked` waiting-on discriminator, release resilience, a stale-board
-banner. All five arrived un-tiered, so none was pickable; grooming tiered each (§21b) and promoted
-three to senior, whose unblocked `Todo` depth was **0/10** while junior sat at **10/10**. Two
-carried ACs no fire could satisfy — see the ruling below. The `consistency` lens filed **LOOP-387**:
-the board-read verbs reject an unknown flag with exit 2 while `doctor`/`metrics`/`daemon status`
-accept anything and exit 0, so `doctor --json` prints human text and reports success — the
-CLI-layer instance of the defect LOOP-165 fixed at the op layer.
+`ux-flows`, on an unchanged product SHA. The three findings are one shape: a fact the system already
+holds, reaching no operator. `/reports` serves **3 of 33** artifacts and every report written since
+08-01 404s — `reportsRoot()` resolves through `devloopDataDir()`, the daemon sets no
+`DEVLOOP_DATA_DIR`, so it lands on the pre-1.0 machine-global `~/.dev-loop` fossil while
+`DEVLOOP_HUB_DB` in that same environment names the right directory (**LOOP-388**). The `Design:`
+pointer the junior tier is REQUIRED to read renders as plain text beside a linked `relatedTo` edge,
+and a design doc never names its children — the §21a review traversal is the one the UI cannot do
+(**LOOP-389**). The `/activity` KPI tiles are bare `<div>`s: *"2 awaiting you · Human-Blocked"* is
+the operator's own queue and dead-ends, while `?state=Human-Blocked` already renders exactly those
+two (**LOOP-390**). Grooming re-tiered **LOOP-381** to senior as `sensitive` — its ACs unit-test the
+two-phase commit that cascaded this board on 08-04 — and promoted it; junior held at 10/10.
 
 ## Personas
 
@@ -270,18 +255,16 @@ CLI-layer instance of the defect LOOP-165 fixed at the op layer.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, fifty-seventh fire) — an acceptance criterion that the system's own governance
-  forbids the implementer from meeting is a filing defect, and grooming is the only place it can be
-  caught cheaply.** STANDING RULE 5 already covers an AC contradicted by its ticket's own "Out of
-  scope"; this is the harder form — LOOP-385's AC3 was contradicted by the §17 firewall, and the
-  filer was the OPERATOR, whose tickets are the ones least likely to be re-read for feasibility.
-  Left standing it fails at verification, against an implementer who could not have complied.
-  **Check every AC against who is PERMITTED to perform it, not only whether it is testable.**
-  Corollary from the same fire: a 7-day aggregate is not a live condition. `rate-limit×85` has led
-  `metrics` all week and was banked as unfiled work; the last instance is `2026-08-04T17:32Z`, all
-  85 on `anthropic` at a median 2.5s (they die at launch, costing slots not tokens), and
-  `--window 1d` shows none. The model reconfiguration closed it. Re-date a standing number before
-  filing against it.
+- **2026-08-06 (pm, fifty-eighth fire) — a resolver that names the candidate it chose only when it
+  chooses NONE is silent in the one case that needs it: the partial hit.** `reportsRoot()` walks four
+  candidates, returns the first that exists, and prints the root only inside its empty-state string —
+  so a root holding zero files announces itself and a root holding 3 of 33 does not. Wrong-and-empty
+  is self-correcting; wrong-and-plausible is what runs for days, because nothing is missing enough to
+  prompt a check (**LOOP-388**). **A fallback chain discloses its winner unconditionally, not on
+  failure.** Corollary extending STANDING RULE 30: a REMOVAL is a change to a shared datum too. 1.0
+  removed the implicit machine-global chain and `paths.ts` says so in prose, but the enumeration
+  reached the config consumers only — `reportsRoot()` kept walking it for five more releases. Grep
+  for the OLD form in the fire that DELETES it, not only in the fire that adds one.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -499,22 +482,13 @@ CLI-layer instance of the defect LOOP-165 fixed at the op layer.
     plus every fire journal and the full-text rulings of the thirty-second through forty-seventh
     fires, rolled by **§20 R2 pass 41** → [`2026-08.md`](strategy-archive/2026-08.md), blocks B–I.
     What still governs from that span is STANDING RULES 15–22 above.
-  - **2026-08-06 (pm, forty-ninth fire)** — its journal, its three rulings, the local-source-build
-    pin retirement record, and the release-axes-agree entry, rolled by **§20 R2 pass 42** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks A–D. What still governs is STANDING RULES
-    **23–26** above; the pin's second clause is superseded by W36.
-  - **2026-08-06 (pm, fiftieth → fifty-third fires)** — the fifty-first and fifty-second fire
-    journals and the six full-text rulings of the fiftieth through fifty-third fires, rolled by
-    **§20 R2 pass 45** → [`2026-08.md`](strategy-archive/2026-08.md), blocks O–P. What still governs
-    is STANDING RULES **27–30** above, plus the two clauses folded into RULE 10.
-  - **2026-08-06 (pm, fifty-fourth → fifty-fifth fires)** — both journals, their two full-text
-    rulings, and the release-axes entry, rolled by **§20 R2 pass 46** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks Q–S. What still governs is STANDING RULES
-    **31–32** plus the clauses folded into RULES 8 and 15.
-  - **2026-08-06 (pm, fifty-sixth fire)** — its journal and its full-text ruling (a second
-    operating posture re-asks every operator artifact whether it survives the move), rolled by
-    **§20 R2 pass 47** → [`2026-08.md`](strategy-archive/2026-08.md), blocks T–T2. The finding it
-    produced is **LOOP-380**; nothing from it was promoted to a STANDING RULE.
+  - **2026-08-06 (pm, forty-ninth → fifty-seventh fires)** — every journal and full-text ruling of
+    that span, plus the local-source-build pin retirement record and both release-axes entries,
+    rolled by **§20 R2 passes 42 and 45–48** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks A–D, M, O–T2 and U–U3. What still governs is
+    STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
+    clause is superseded by W36. The findings that span produced and left open are **LOOP-380** and
+    **LOOP-387**.
 
 ## Candidate ideas
 
