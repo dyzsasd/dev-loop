@@ -30,6 +30,14 @@ export const SHARD_MAX_BYTES = 16 * 1024;
  * passes did not bound it (+1,036 B/fire measured).
  */
 export const STRATEGY_DOC_MAX_BYTES = 48 * 1024;
+/**
+ * The fraction of STRATEGY_DOC_MAX_BYTES at which checkStrategyDocBudget emits a soft advisory
+ * line (below the hard W37 warn). Set at 80% so there is ~9.6 KB of warning band before the budget
+ * is irrevocably blown — enough for roughly 9 fires at the measured grow rate of ~1,036 B/fire.
+ * The doc's actual post-LOOP-350 size is 45.8 KB against a 48 KB budget, so the soft line fires at
+ * ~38.4 KB — ~7.4 KB of headroom, roughly 7 fires, of advance notice.
+ */
+export const STRATEGY_DOC_WARN_FRACTION = 0.8;
 
 export function lessonsPaths(ws: Workspace): { dir: string; index: string; archive: string; shard: (project: string) => string } {
   const dir = wsLessonsDir(ws);
