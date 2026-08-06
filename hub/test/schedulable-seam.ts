@@ -8,7 +8,7 @@
 // The direction is the point: a caller that wants the full set asks for it. A default that is the
 // unsafe answer is what a new consumer gets for free, and that is how this ticket happened.
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deliveryProjects, loadWorkspace } from "../src/team-config.ts";
@@ -98,6 +98,21 @@ try {
     ok(rows.map((r) => r.key).join(",") === "b,c,d",
       `LOOP-271: the SQL predicate excludes only scratch:true — false, absent and unparseable all stay visible (got ${rows.map((r) => r.key).join(",")})`);
     db.close();
+  }
+
+  // ── LOOP-349: one definition of the SQL predicate, not three ─────────────────────────────
+  {
+    const here = import.meta.dirname;
+    const src = join(here, "..", "src");
+    const files = ["daemon.ts", "doctor.ts", "views/projects.ts"];
+    const inline = /json_valid.*settings_json.*json_extract.*scratch/;
+    for (const f of files) {
+      const content = readFileSync(join(src, f), "utf8");
+      ok(!inline.test(content), `LOOP-349: ${f} has no inline scratch SQL predicate left`);
+      ok(content.includes("NOT_SCRATCH_SQL"), `LOOP-349: ${f} imports the shared NOT_SCRATCH_SQL`);
+    }
+    const shared = readFileSync(join(src, "sql-predicates.ts"), "utf8");
+    ok(shared.includes("NOT_SCRATCH_SQL"), "LOOP-349: sql-predicates.ts exports NOT_SCRATCH_SQL");
   }
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }

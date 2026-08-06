@@ -4,6 +4,7 @@
 // DL-81: the `doctor` COMMAND additionally runs a service runtime-wiring reconcile (reads the product
 // .mcp.json / daemon runfile / autostart/hook presence + a localhost /api/health GET) — still READ-ONLY (no writes,
 // no auto-create); daemon version skew (W28) is gating, the rest is non-fatal. See serviceReconcile. Library callers (init-service) skip it.
+import { NOT_SCRATCH_SQL } from "./sql-predicates.ts";
 import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,7 +146,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
 
   // 4. Counts + per-project, and the unique-prefix integrity check (the real multi-project guard)
   const c = (sql: string) => (db!.prepare(sql).get() as { c: number }).c;
-  info(`projects=${c("SELECT count(*) c FROM projects WHERE CASE WHEN json_valid(settings_json) THEN json_extract(settings_json,'$.scratch') ELSE NULL END IS NOT 1")} tickets=${c("SELECT count(*) c FROM tickets")} docs=${c("SELECT count(*) c FROM documents")} actors=${c("SELECT count(*) c FROM actors")} events=${c("SELECT count(*) c FROM events")}`);
+  info(`projects=${c(`SELECT count(*) c FROM projects WHERE ${NOT_SCRATCH_SQL}`)} tickets=${c("SELECT count(*) c FROM tickets")} docs=${c("SELECT count(*) c FROM documents")} actors=${c("SELECT count(*) c FROM actors")} events=${c("SELECT count(*) c FROM events")}`);
   const projects = db.prepare("SELECT id, key, ticket_prefix FROM projects ORDER BY key").all() as { id: string; key: string; ticket_prefix: string }[];
   const countByProject = db.prepare("SELECT count(*) c FROM tickets WHERE project_id = ?");
   for (const p of projects) {
