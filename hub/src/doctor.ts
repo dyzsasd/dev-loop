@@ -12,7 +12,7 @@ import { isMainEntry } from "./is-entry.ts";
 import { dirtyTrackedFiles, listTreeSnapshots } from "./tree-snapshot.ts";
 import { readSchedulerBuild, schedulerAlive, schedulerSkew, pkgVersionOf, teamDirOf } from "./scheduler-build.ts"; // LOOP-253: W36
 import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP-329: W31 shares the tier predicate with the queue
-import { tryResolveStrategyDocStat } from "./context-bill.ts"; // LOOP-282: the §20 form-rule resolver, shared with the bill
+import { tryResolveStrategyDocStat, type StrategyDocStat } from "./context-bill.ts"; // LOOP-282: the §20 form-rule resolver, shared with the bill
 import { STRATEGY_DOC_MAX_BYTES, STRATEGY_DOC_WARN_FRACTION } from "./lessons.ts";
 import { reportTrailGaps } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
 import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
@@ -1003,9 +1003,19 @@ export function checkTierStarvation(ws: Workspace, boardDb: string, warn: (msg: 
 //
 // Warn-only, exactly like W03: an over-budget doc is a cost problem, not a broken workspace.
 // §16: the message names bytes, the limit and the PATH — never doc content.
-export function checkStrategyDocBudget(warn: (msg: string) => void, info: (msg: string) => void): void {
+//
+// `resolveStat` is the TEST SEAM (LOOP-406), not a production knob: both bands are decided from the
+// resolved stat alone, so without it the function's only observable behaviour is whatever the host
+// workspace's live doc happens to measure — one band per host, and never the one under test. That is
+// why LOOP-353's "three fixtures" landed as assertions about constants: there was nothing to drive.
+// The default keeps the single production call site (doctorWorkspace) byte-identical.
+export function checkStrategyDocBudget(
+  warn: (msg: string) => void,
+  info: (msg: string) => void,
+  resolveStat: () => StrategyDocStat | undefined = tryResolveStrategyDocStat,
+): void {
   try {
-    const stat = tryResolveStrategyDocStat();
+    const stat = resolveStat();
     if (!stat) return;                                   // absent / unreadable / not a repo file ⇒ no opinion
     const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
     const at = stat.bytes;
