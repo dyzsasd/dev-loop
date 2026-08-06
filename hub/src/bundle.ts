@@ -113,7 +113,7 @@ type ExportOpts = {
   out: string; recipients: string[]; recipientFiles: string[]; plaintext: boolean;
   noHubDb: boolean; backup: boolean; move: boolean; disposition: "migrate" | "fork";
   gitTokenEnv: string | undefined; sshKey: string | undefined;
-  includeEnv: string[]; runAgents: string; force: boolean; dir: string;
+  includeEnv: string[]; runAgents: string; force: boolean; dir: string; dirExplicit: boolean;
 };
 // bundle-export arg surface (1.8.1 quality-gauntlet drain: bundleExport CC 61 → phases).
 function parseExportArgs(rest: string[]): ExportOpts {
@@ -121,7 +121,7 @@ function parseExportArgs(rest: string[]): ExportOpts {
     out: "", recipients: [] as string[], recipientFiles: [] as string[], plaintext: false,
     noHubDb: false, backup: false, move: false, disposition: "migrate" as "migrate" | "fork",
     gitTokenEnv: undefined as string | undefined, sshKey: undefined as string | undefined,
-    includeEnv: [] as string[], runAgents: "core", force: false, dir: process.cwd(),
+    includeEnv: [] as string[], runAgents: "core", force: false, dir: process.cwd(), dirExplicit: false,
   };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]; const next = () => rest[++i] ?? die(`${a} requires a value`);
@@ -138,7 +138,7 @@ function parseExportArgs(rest: string[]): ExportOpts {
     else if (a === "--include-env") o.includeEnv.push(next());
     else if (a === "--run-agents") o.runAgents = next();
     else if (a === "--force") o.force = true;
-    else if (a === "--dir") o.dir = resolve(next());
+    else if (a === "--dir") { o.dir = resolve(next()); o.dirExplicit = true; }
     else die(`unknown option '${a}'`);
   }
   if (!o.out) die("--out <file> is required");
@@ -215,7 +215,7 @@ export async function bundleExport(argv: string[]): Promise<number> {
   if (sub !== "export") { console.error(`dev-loop bundle: unknown subcommand '${sub}' (only: export)`); return 2; }
   const o = parseExportArgs(rest);
 
-  const ws = tryResolveWorkspace(o.dir) ?? die(`no workspace at ${o.dir}`);
+  const ws = tryResolveWorkspace(o.dirExplicit ? o.dir : undefined) ?? die(`no workspace at ${o.dir}`); // LOOP-418
   console.log(`bundle export — workspace '${ws.file.team.key}' @ ${ws.root}${o.backup ? " (backup: live checkpoint)" : ""}`);
 
   // Doctor refusal (design §4.4 step 1): a workspace that fails its own health gate does not ship.
