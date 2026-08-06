@@ -199,29 +199,28 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the fifty-seventh fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the fifty-eighth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–48. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–49. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
   (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so a lessons rule scored before
   that timestamp measured a different regime.
 
-### 2026-08-06 (pm, fifty-eighth fire): the ux-flows lens — three surfaces that hold the answer and do not show it
+### 2026-08-06 (pm, fifty-ninth fire): the product SHA moved, and the first thing standing on it was a handler deleted to satisfy a compiler
 
-`ux-flows`, on an unchanged product SHA. The three findings are one shape: a fact the system already
-holds, reaching no operator. `/reports` serves **3 of 33** artifacts and every report written since
-08-01 404s — `reportsRoot()` resolves through `devloopDataDir()`, the daemon sets no
-`DEVLOOP_DATA_DIR`, so it lands on the pre-1.0 machine-global `~/.dev-loop` fossil while
-`DEVLOOP_HUB_DB` in that same environment names the right directory (**LOOP-388**). The `Design:`
-pointer the junior tier is REQUIRED to read renders as plain text beside a linked `relatedTo` edge,
-and a design doc never names its children — the §21a review traversal is the one the UI cannot do
-(**LOOP-389**). The `/activity` KPI tiles are bare `<div>`s: *"2 awaiting you · Human-Blocked"* is
-the operator's own queue and dead-ends, while `?state=Human-Blocked` already renders exactly those
-two (**LOOP-390**). Grooming re-tiered **LOOP-381** to senior as `sensitive` — its ACs unit-test the
-two-phase commit that cascaded this board on 08-04 — and promoted it; junior held at 10/10.
-
+`f7dbee0` (**LOOP-371**) moved the product SHA off `6422310` after six fires, so the lens list reset.
+The landed diff carries a delta outside its own ACs: the `try`/`catch` around `conventionsSlice` is
+gone. Measured on both trees through `cli.ts` with the fire env scrubbed — a malformed `Sections:`
+line, or an unknown `--agent`, went from **exit 1 and one line of stderr** to **exit 7 and a Node
+stack trace**, and 7 is outside the documented 0–5 exit contract. LOOP-371 is `qa`-owned and In
+Review, so this is a comment on it rather than a filing; the routing is QA's. The `data-analytics`
+lens then found **LOOP-397**: `amplification` — the ratio **LOOP-267** shipped — is `null` for all
+six agents in every production surface, because none of the three `fireMetrics` call sites passes
+the denominator. Promoted **LOOP-377**; junior returned to 10/10 and senior sits at 2/10 with no
+unblocked senior-tier candidate in `Backlog`. **LOOP-373** is unchanged (githubstatus: major,
+Partial System Outage, read at 17:40Z), so LOOP-348's design gate stays shut for a fourth fire.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -255,17 +254,24 @@ two-phase commit that cascaded this board on 08-04 — and promoted it; junior h
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, fifty-eighth fire) — a resolver that names the candidate it chose only when it
-  chooses NONE is silent in the one case that needs it: the partial hit.** `reportsRoot()` walks four
-  candidates, returns the first that exists, and prints the root only inside its empty-state string —
-  so a root holding zero files announces itself and a root holding 3 of 33 does not. Wrong-and-empty
-  is self-correcting; wrong-and-plausible is what runs for days, because nothing is missing enough to
-  prompt a check (**LOOP-388**). **A fallback chain discloses its winner unconditionally, not on
-  failure.** Corollary extending STANDING RULE 30: a REMOVAL is a change to a shared datum too. 1.0
-  removed the implicit machine-global chain and `paths.ts` says so in prose, but the enumeration
-  reached the config consumers only — `reportsRoot()` kept walking it for five more releases. Grep
-  for the OLD form in the fire that DELETES it, not only in the fire that adds one.
-
+- **2026-08-06 (pm, fifty-ninth fire) — the two ways a missing thing gets written down as normal:
+  delete the reporter, or assert the null.** LOOP-371's increment met a bare `try` with no `catch` —
+  a prior fire had dropped the catch block, and the resulting compile error was the last surviving
+  evidence that the handler was gone. The repair removed the `try` as well. Every error path in the
+  §0a pull verb now reaches the agent as a raw Node stack trace at exit 7, and `conventionsSlice`'s
+  own `throw new Error("… malformed Sections line …")` — a message written for a caller to print —
+  has no caller. **When a partial deletion leaves a syntax error, the compiler is naming what was
+  deleted: restoring that is the repair, and removing the remainder answers the compiler while
+  keeping the defect.** One commit later, the same shape by a different mechanism: `amplification`
+  (**LOOP-267**, Done) is `null` for every agent because all three production `fireMetrics` callers
+  omit the modeled-context argument — the only supplier in the repo is a test, and a second test
+  asserts that null as correct, so the omission is green (**LOOP-397**). Extending STANDING RULE 28:
+  **a test that asserts the degraded branch of an optional input converts "nobody wired this" into
+  "this is specified."** Before writing that assertion, name the production caller that exercises
+  the non-degraded branch; where only the test does, the assertion is the gap's alibi. Corollary on
+  display: `metrics.ts:1131` maps the null to an empty string, so the operator cannot separate
+  *unavailable* from *inapplicable* — the LOOP-268/332 null-honesty rule binds a figure's rendering,
+  not only its arithmetic.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -482,13 +488,13 @@ two-phase commit that cascaded this board on 08-04 — and promoted it; junior h
     plus every fire journal and the full-text rulings of the thirty-second through forty-seventh
     fires, rolled by **§20 R2 pass 41** → [`2026-08.md`](strategy-archive/2026-08.md), blocks B–I.
     What still governs from that span is STANDING RULES 15–22 above.
-  - **2026-08-06 (pm, forty-ninth → fifty-seventh fires)** — every journal and full-text ruling of
+  - **2026-08-06 (pm, forty-ninth → fifty-eighth fires)** — every journal and full-text ruling of
     that span, plus the local-source-build pin retirement record and both release-axes entries,
-    rolled by **§20 R2 passes 42 and 45–48** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks A–D, M, O–T2 and U–U3. What still governs is
+    rolled by **§20 R2 passes 42 and 45–49** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks A–D, M, O–U3 and V–V2. What still governs is
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
-    clause is superseded by W36. The findings that span produced and left open are **LOOP-380** and
-    **LOOP-387**.
+    clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
+    **LOOP-387** and **LOOP-388** → **LOOP-390**.
 
 ## Candidate ideas
 
