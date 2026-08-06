@@ -233,47 +233,51 @@ is precisely how the withdrawn one survived a day steering the top priority.
   delivered — 7.9% / 40.27 USD (**LOOP-219**), so a cost-per-change figure is an over-estimate and a
   floor on waste.
 
-- **[ARCHIVED] fire journals, tenth through forty-eighth fire (2026-08-01 → 2026-08-05).** Rolled
-  whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block
-  D), replacing the thirteen per-period stubs they had left behind. §20 R2 prescribes one index
-  entry per archived period; thirteen stubs for one archive is the residue this pass removed.
+- **[ARCHIVED] fire journals, tenth through forty-ninth fire (2026-08-01 → 2026-08-06).** Rolled
+  whole to [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41 block
+  D; the forty-ninth is pass 42 block A), replacing the thirteen per-period stubs they had left
+  behind. §20 R2 prescribes one index entry per archived period; thirteen stubs for one archive is
+  the residue pass 41 removed.
 
-- **2026-08-06 — the release axes agree, and for the first time the agreement is not a property of a
-  hand-built pin.** `dev-loop doctor` reports `installed @dyzsasd/dev-loop v1.15.0 matches
-  origin/main (8c09710) — no skew`, and the install is a real directory under
-  `/opt/homebrew/lib/node_modules/@dyzsasd/dev-loop`, not a symlink into a build tree: the
-  2026-08-01 local-source-build pin is **retired in fact**. Checked rather than assumed, because the
-  pin's hazard was that a `npm run build` in the pinned tree re-pointed every fire with no version
-  bump and no doctor signal — the installed `skills/sweep-agent/SKILL.md`, `skills/pm-agent/SKILL.md`
-  and `references/conventions.md` are **byte-identical to `origin/main`** (`cmp`, three matches).
-  That closes the SKILL-delivery axis, which the CLI-version axis never covered. §12b still applies
-  the moment any axis moves, and the daemons remain a fourth axis only `dev-loop daemon status`
-  reads.
+- **2026-08-06 — the release axes agree, and the agreement is no longer a property of a hand-built
+  pin.** Install is a real npm directory at `/opt/homebrew/lib/node_modules/@dyzsasd/dev-loop`
+  matching `origin/main` on version AND build commit, with `skills/` + `references/` verified
+  byte-identical (`cmp`); the local-source-build pin is retired in fact. Provenance in
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 42, blocks C+D).
+  **Four axes, not one** — CLI, SKILL corpus, daemons, and the `run-agents` scheduler (W36) — and
+  §12b applies the moment any of them moves. The daemon axis is only checked at version
+  granularity today: **LOOP-364**.
 
-### 2026-08-06 (pm, forty-ninth fire): a doc that outgrew its budget 3x while a rule to bound it ran every fire, and a board that finished its own backlog
+### 2026-08-06 (pm, fiftieth fire): three surfaces answer the same question at three different granularities, and the operator's board says "Nothing in flight" while two tickets are in flight
 
-**The pass that was designed before it was filed.** LOOP-350 arrived from the operator off a W37
-reading — `docs/STRATEGY.md` at 144.5 KB against a 48.0 KB budget — with the board otherwise drained.
-The design for it was already in this doc's own `Candidate ideas`, banked on 2026-08-05 and
-deliberately not filed then because junior sat 12/10 over the depth cap and a doc-size row would
-have been padding. It named the saving (~13.6 KB from the index recaps alone), the objection (those
-recaps are the only way to locate an archived ruling without opening a 300 KB archive), and the
-version worth building (move the recaps into a table of contents at the head of the archive). This
-pass executed that design unchanged. **A parking-lot entry with a named reversal condition is a
-spec; the fire that clears the condition should look for one before designing anew.**
+**The board the operator watches is under-reporting itself, and the arithmetic says so.** The web
+board at `/p/loop/` rendered `Backlog 1 · Todo 1 · In Progress 0 ("Nothing in flight") · Done 217 ·
+Canceled 31`. Those six numbers sum to **250 — exactly the row cap.** The real board held 4 / 6 / 2 /
+292 / 37. `views/board.ts` counts a column by `cards.length` over the *capped* array and renders its
+empty-state hint from the same array, while `ORDER BY priority ASC` — blind to state — decides which
+rows survive, so the 3.5% of the board that is open work falls off the end behind a wall of Urgent
+`Done`. The truncation notice beside it is correct and honest; the counts next to it are not. Filed
+as **LOOP-362**, and the thing that makes it worth a P1 is that it worsens monotonically: every
+ticket the loop closes widens the gap.
 
-**Why the budget was 3x breached with an R2 rule in force.** §20 R2 has been executed forty times,
-correctly each time, and still lost: it rolls one journal per fire while a fire appends a journal
-*and* one to three rulings. A procedure whose per-invocation output exceeds its per-invocation
-intake sets a slope, not a ceiling — which this doc had already recorded as a ruling (2026-08-03,
-twenty-third fire) and then went on violating for twenty-six passes. **The check that catches it is
-the one W37 performs: measure the artifact's total, not whether the procedure ran.**
+**Three surfaces, one question, three answers.** *Is the running daemon the code I have installed?*
+`daemon up` compares build commits (`sameDaemonCode`, LOOP-250's residue). `daemon status` and
+doctor's W28 compare version strings. `/api/health` has served `buildCommit` all along —
+`doctor.ts:1666` types the response body without the field and drops it before comparing. So the one
+surface the operator is *told* to run pre-flight is the coarsest of the three, and same-version
+commit skew reads as `DOCTOR_OK` (**LOOP-364**). Related shape in the report-trail check: W35 groups
+the fire ledger by agent and never reads `r.project`, so reflect's six `_team`-scoped fires are
+charged to every delivery project and reported untraced while their reports sit one directory over
+(**LOOP-363**). The ledger, the health body, and the lifecycle predicate each already carry the
+datum that settles the question; in all three cases the consumer discards it.
 
-**What the numbers say about the fires between.** The board went from 74 Backlog / 17 Todo at fire
-48 to **2 Backlog / 1 Todo** — 102 tickets to terminal state and 44 commits on `origin/main` in ~28
-hours, including the 1.15.0 release. Every dev tier is at **zero** servable Todo. The bottleneck
-moved from throughput to intake: for the first time in this loop's recorded history the constraint
-is that PM has not filed enough work, not that Dev cannot keep up.
+**What the parking lot was worth this fire.** Two banked entries named reversal conditions that had
+lapsed. One (`daemon serves stale VIEW code` — *"file when LOOP-195 ships and the operator still has
+to be told by hand"*) was re-verified against `origin/main` and became LOOP-364. The other
+(`accept-rate in the Reflect daily digest` — *"file when LOOP-98 reaches Done"*) was **discharged
+without a ticket**: reflect pastes `metrics --window 7d --json` verbatim, so LOOP-98's fix reached
+the digest by construction — observed at `verifyFails / acceptRate | 11 / 0.9141` in the
+2026-08-01 report. A cleared condition is a prompt to check, not a licence to file.
 
 ## Personas
 
@@ -308,34 +312,24 @@ is that PM has not filed enough work, not that Dev cannot keep up.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, forty-ninth fire) — a bounding procedure is audited against the artifact's
-  total, never against whether the procedure ran.** §20 R2 executed correctly on forty consecutive
-  passes and the doc it bounds still reached **3.0x** its budget, because the rule rolls one journal
-  per fire while a fire appends one journal *and* one to three rulings. Every pass was a compliant
-  pass; the aggregate was a monotone climb. What made it visible was not a review of the procedure
-  but a **measurement of its output** — W37, shipped by LOOP-282 for exactly this purpose. Where a
-  procedure exists to bound something, "did it run?" and "is the thing bounded?" have different
-  answers, and only the second is the point. Ask for the number, not the log.
+- **2026-08-06 (pm, fiftieth fire) — when several surfaces answer one question, the defect is
+  usually in which of them was upgraded, not in whether the datum exists.** Three consumers asked
+  *is the running daemon my installed code?* and gave three answers, because the finer datum
+  (`buildCommit`) reached the wire and then only ONE consumer. Same shape in W35: `r.project` is on
+  every ledger row and the grouping never reads it. Neither is a missing capability — both are a
+  capability that landed at one call site and was never propagated to its siblings. **When a shared
+  fact gains precision, the work is not done until every consumer of the coarser form is enumerated
+  and moved.** The cheap version of that audit is a grep for the OLD predicate, run in the same fire
+  that introduces the new one.
 
-- **2026-08-06 (pm, forty-ninth fire) — a parking-lot entry with a named reversal condition is a
-  spec, and the fire that clears the condition must look for it before designing anew.** The
-  `Candidate ideas` entry banked 2026-08-05 had already designed this rollup: the saving, the
-  objection that made the naive version wrong (collapsing the recaps costs discoverability of ~90
-  archived rulings), and the form that resolves it (recaps become a TOC at the head of the archive).
-  It was banked rather than filed on an explicitly stated constraint — junior at 12/10 over cap. When
-  LOOP-350 arrived, the constraint had lapsed and the design was sitting in the section the ticket
-  was about. **§20's parking lot earns its cost only if it is read at filing time**, so read it
-  there: a banked entry names both the work and the condition under which the work becomes correct.
-
-- **2026-08-06 (pm, forty-ninth fire) — SKILL delivery is its own release axis, and the CLI-version
-  axis never covered it.** Doctor's `no skew` line compares the installed CLI's version and build
-  commit against `origin/main`; it says nothing about whether the `skills/` and `references/` files a
-  fire reads come from the same tree. Under the retired local-source-build pin those were different
-  trees for days at a time, and a merged conventions fix changed no fire's behaviour until someone
-  pulled the build checkout by hand. Verified directly here — `cmp` on three governing files, three
-  matches — rather than inferred from the version line. **A delivery claim is made per artifact
-  class, not per package**: a CLI that matches and a SKILL corpus that does not are one green check
-  and one silent regression.
+- **2026-08-06 (pm, fiftieth fire) — a cap that is disclosed is not thereby made honest: every
+  figure computed downstream of it must be re-derived, or it silently reports the page as the
+  world.** The web board discloses its truncation correctly ("showing 250 of 333") and, beside that
+  notice, prints per-state counts and "nothing here" hints taken from the truncated array — so the
+  disclosure sits next to numbers it does not govern. The tell was arithmetic, not inspection: the
+  column counts summed to exactly the cap. **After adding a bound, list what else reads the bounded
+  set** — counts, empty states, aggregates, "is there any?" checks — because each of them silently
+  changes meaning from *about the board* to *about the page*.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -448,6 +442,28 @@ is that PM has not filed enough work, not that Dev cannot keep up.
      id resolves to a ticket; `relatedTo` accepts an unvalidated id, and `dependency-graph`'s
      integrity check covers `Blocked-by:` edges and no other kind. Verify the reference in the same
      fire that writes it.
+  23. **A procedure that exists to bound something is audited against the artifact's total, never
+     against whether the procedure ran.** §20 R2 ran correctly on forty consecutive passes and the
+     doc it bounds still reached 3.0x its budget, because it rolls one journal per fire while a fire
+     appends a journal *and* one to three rulings — every pass compliant, the aggregate a monotone
+     climb. "Did it run?" and "is it bounded?" have different answers and only the second is the
+     point. Ask for the number (W37), not the log. **Corollary, applied by pass 42: a bounding pass
+     must roll at least what the fire appends.**
+  24. **A `Candidate ideas` entry with a named reversal condition is a spec, and the fire that
+     clears the condition reads the parking lot BEFORE designing anew.** LOOP-350's whole design —
+     saving, objection, and the form that answered the objection — was sitting banked in the section
+     the ticket was about. The lot earns its cost only if it is read at filing time; a cleared
+     condition is a prompt to re-verify against the tree, not a licence to file (fire 50 discharged
+     one banked entry into LOOP-364 and closed another with no ticket at all).
+  25. **A delivery claim is made per artifact class, not per package.** Doctor's `no skew` line
+     compares the installed CLI; it says nothing about whether the `skills/` and `references/` files
+     a fire actually reads come from that tree. A CLI that matches and a SKILL corpus that does not
+     are one green check and one silent regression — verify each class directly (`cmp`), never infer
+     it from the version line.
+  26. **When one decision retires several options at once, check which option each argument was
+     actually about before treating the bundle as settled.** §9.7 retired auto-publish and the
+     local-source build together on arguments that only applied to the first; the second was
+     reinstated on its own merits three days later.
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
@@ -478,21 +494,6 @@ is that PM has not filed enough work, not that Dev cannot keep up.
     independently correct and does not depend on it. Recorded here because a proposal that lives only
     in a fire report dies with the fire.
 
-- **2026-08-01 → 2026-08-06 — RETIRED: the local-source-build pin.** Under the §9a authorization on
-  **LOOP-246** this host installed `dev-loop` from a build tree at
-  `/Users/shuai/workspace/dev-loop-build` rather than npm, removing the npm round-trip from the loop
-  while keeping the human release gate. **Retired 2026-08-06**: the install is now a plain npm
-  `v1.15.0` directory matching `origin/main`, verified byte-identical on three governing files. Full
-  text — mechanism, refresh procedure, and the correction that the pin was a *symlink* into a live
-  worktree rather than a snapshot copy — in
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block H). **Two
-  clauses survive as doctrine and are kept here:** *(i)* when a decision retires several options at
-  once, check which option each argument was actually about before treating the bundle as settled
-  (§9.7 retired auto-publish and local-build together on arguments that only applied to the first);
-  *(ii)* the refresh of any pinned build must restart the `run-agents` runner, because the scheduler
-  caches its module graph at boot and nothing detects that it is serving pre-refresh code
-  (**LOOP-253**).
-
 - **📚 ARCHIVE INDEX — where the rolled provenance lives.** §20 R2 keeps one line per archived
   period here; the searchable per-fire recaps are the table of contents at the head of each pass in
   the archive file (pass 41, blocks F and G, carries every recap this section used to hold).
@@ -506,6 +507,10 @@ is that PM has not filed enough work, not that Dev cannot keep up.
     plus every fire journal and the full-text rulings of the thirty-second through forty-seventh
     fires, rolled by **§20 R2 pass 41** → [`2026-08.md`](strategy-archive/2026-08.md), blocks B–I.
     What still governs from that span is STANDING RULES 15–22 above.
+  - **2026-08-06 (pm, forty-ninth fire)** — its journal, its three rulings, the local-source-build
+    pin retirement record, and the release-axes-agree entry, rolled by **§20 R2 pass 42** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks A–D. What still governs is STANDING RULES
+    **23–26** above; the pin's second clause is superseded by W36.
 
 ## Candidate ideas
 
@@ -541,13 +546,6 @@ being discharged: the `[ARCHIVED]`-index compaction it designed is this very pas
   the one-way hub→Linear `mirror` (a projection, not a bridge). Scope as its own epic when
   prioritized: exporter/importer per direction + `externalId` carry + id-remap + a runbook.
 
-- **Daemon serves stale VIEW code until restarted.** The daemon loads its views + routes at boot and
-  `daemon ensure` never restarts a live process, so after a ship that changes web-UI rendering the
-  operator sees fresh DATA with stale RENDERING — low severity, but this loop's daemon IS the
-  operator's observe surface. **REVERSAL CONDITION: LOOP-195 ships and the operator still has to be
-  told by hand**; filing the REMEDIATION half (a `daemon restart` verb / a served-commit banner)
-  before then duplicates LOOP-195's surface.
-
 - **A verify-fail should be reachable from a green suite — the "which case does the fixture dodge?"
   check.** LOOP-57 shipped 22/22 green and was still unusable: its case (c) chose a *doc* file for
   the divergence it tested, making the only distinction that mattered (tree comparison vs commit
@@ -562,9 +560,10 @@ being discharged: the `[ARCHIVED]`-index compaction it designed is this very pas
   remainder of six DL-era candidates rolled at R2 pass 18; the rest were filed or landed on the
   retired **DL-prefix** board.)
 
-- **Accept-rate in the Reflect daily digest — REVERSAL CONDITION: `LOOP-98` reaches `Done`.** The
-  other two thirds of the loop-cost-governance bank are discharged (budget ceiling filed as
-  **LOOP-197**; cost-per-accepted-change shipped 2026-08-03 via LOOP-127, verified live). This third
-  is genuinely blocked: it surfaces `acceptRate` itself, the metric LOOP-98 exists to fix. Lesson
-  kept from the entry that got this wrong: **check which quantity a surface actually divides by
-  before banking work behind another ticket.**
+- **DISCHARGED 2026-08-06 (fire 50), both loop-cost-governance banks.** *Daemon serves stale VIEW
+  code* → its condition lapsed (LOOP-195 Done, the operator still told by hand); re-verified against
+  `origin/main` and filed as **LOOP-364**, which is the sharper form: `/api/health` already serves
+  `buildCommit` and only `daemon up` reads it. *Accept-rate in the Reflect daily digest* → **no
+  ticket needed**: reflect pastes `metrics --window 7d --json` verbatim, so LOOP-98's fix arrived by
+  construction (`verifyFails / acceptRate | 11 / 0.9141`, 2026-08-01 digest). The bank is now empty
+  of cost-governance entries.
