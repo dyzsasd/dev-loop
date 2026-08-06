@@ -222,7 +222,11 @@ export function buildCommentBody(
       ? " Remedy: Step 0.5's re-freshen rebases this PR automatically at the next fire start (authoritative). Manually: rebase onto `origin/<defaultBranch>` and push with `--force-with-lease`; a pushed rebase clears this hold. If the PR tip is no longer behind `origin/<defaultBranch>`, treat this hold as already actioned."
       : ciFreshness.verdict === "red"
         ? " Remedy: read the failing check's log, fix in the worktree, re-push (Step 0.5's FAILED-check branch; cap ~2 cycles)."
-        : "";
+        // LOOP-407: an absent check has no log to read and no rebase to clear it — the workflow has to
+        // be made to run. Re-pushing the branch is what re-dispatches it once the forge is healthy.
+        : ciFreshness.verdict === "check-never-reported"
+          ? " Remedy: the check was never dispatched — this is NOT a wait. Confirm the forge is healthy (`gh run list --branch <head>`; check the forge's status page for an Actions incident), then re-dispatch by pushing to the branch (an empty commit or a rebase with `--force-with-lease`). Do not merge on `mergeStateStatus:CLEAN`: with no branch protection, CLEAN means nothing was measured."
+          : "";
     return `${APPLY_MARKER}${prRef} ciFreshness: ${ciFreshness.reason ?? "stale/red"}. Not merged.${remedy}`;
   }
   return `${APPLY_MARKER}${prRef} objection (no axis details). Not merged.`;
@@ -555,7 +559,15 @@ export function mergeGuard(
         ciFreshness = { trip: false, skipped: true, skipReason: "forge-unreachable", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
       } else {
         const fr = readCiFreshness(exec, ghRepo, prNumber, mergeChecks, defaultBranch, opts.ciIrrelevantPaths);
-        const trip = fr.verdict === "red" || (fr.verdict === "stale" && CI_FRESHNESS_STALE_TRIPS);
+        // LOOP-407 — `check-never-reported` trips UNCONDITIONALLY, like "red" and unlike "stale"
+        // (which is behind the rollback constant above). There is no advisory reading of it: the
+        // guard is the only machine gate on the Step 0.5 squash, `main` carries no branch
+        // protection, and the configured checks are absent, so a non-trip here IS the unverified
+        // merge. `pending` still does not trip — a check that exists and is running is §12c's
+        // "leave it for the next fire", and holding on it would objection-spam every open PR.
+        const trip = fr.verdict === "red"
+          || fr.verdict === "check-never-reported"
+          || (fr.verdict === "stale" && CI_FRESHNESS_STALE_TRIPS);
         ciFreshness = {
           trip,
           skipped: false,

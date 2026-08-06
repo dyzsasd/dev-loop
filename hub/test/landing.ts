@@ -780,5 +780,77 @@ function rollupJson(checks: Array<{ name: string; conclusion: string | null }>):
   ok(result!.state === "unknown", "LOOP-424 AC5: forge failure → state=unknown (unchanged)");
 }
 
+// ── LOOP-407: a required check that never RAN must not read as pending-and-harmless ──────────────
+// Observed 2026-08-06: during a GitHub Actions major_outage, PR #246 merged to main having run
+// NEITHER configured check. A PR with zero queued checks presents mergeStateStatus:CLEAN, and main
+// carries no branch protection, so nothing forge-side withheld it. The four PRs whose checks HAD
+// queued read UNSTABLE and correctly did not merge — the safer a PR looked, the less was measured.
+//
+// Before this change every one of the ABSENT cases below returned verdict:"pending", which
+// merge-guard does not trip on. Flipping the new branch off (deleting the `missing` check in
+// readCiFreshness) turns the four "check-never-reported" assertions red.
+{
+  // Rollup contents are the only variable; the compare calls only matter on the paths that reach
+  // them, and this double answers them as up-to-date so a verdict of "fresh-green" is reachable.
+  const mkRollupExec = (rollup: Array<{ name: string; conclusion: string | null }>): ExecFn => (args) => {
+    if (args[0] === "pr" && args[1] === "view") {
+      return { ok: true, stdout: JSON.stringify({ headRefOid: "abc123", statusCheckRollup: rollup }), stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1]).includes("/compare/")) {
+      return { ok: true, stdout: JSON.stringify({ behind_by: 0, base_commit: { sha: "abc123" }, files: [] }), stderr: "" };
+    }
+    return { ok: false, stdout: "", stderr: "unexpected" };
+  };
+  const TWO = ["Test (Node 23.6.0)", "Test (Node 24)"];
+  const readTwo = (rollup: Array<{ name: string; conclusion: string | null }>, checks = TWO) =>
+    readCiFreshness(mkRollupExec(rollup), "o/r", 1, checks, "main");
+
+  // AC1 — the incident itself: only an unrelated check reported. Both required checks are absent.
+  const a1 = readTwo([{ name: "GitGuardian Security Checks", conclusion: "SUCCESS" }]);
+  ok(a1.verdict === "check-never-reported",
+    `LOOP-407 AC1: a rollup omitting BOTH required checks ⇒ check-never-reported (got ${a1.verdict})`);
+  ok(TWO.every((c) => (a1.reason ?? "").includes(c)),
+    `LOOP-407 AC1: …and the reason names every missing check BY NAME (${a1.reason?.slice(0, 120)})`);
+
+  // AC1 — one present-and-green, one absent. The partial case is the one a "some reported" reading
+  // would wave through, and it is exactly PR #247's shape when a single job dispatches.
+  const a1b = readTwo([{ name: "Test (Node 24)", conclusion: "SUCCESS" }]);
+  ok(a1b.verdict === "check-never-reported",
+    `LOOP-407 AC1: ONE required check absent is enough (got ${a1b.verdict})`);
+  ok((a1b.reason ?? "").includes("Test (Node 23.6.0)") && !(a1b.reason ?? "").includes("Test (Node 24)"),
+    "LOOP-407 AC1: …and it names only the check that is actually missing");
+
+  // An entirely EMPTY rollup — the pure outage shape.
+  ok(readTwo([]).verdict === "check-never-reported",
+    "LOOP-407 AC1: an empty rollup ⇒ check-never-reported, not pending");
+
+  // The distinction the whole ticket rests on: PRESENT-but-unfinished is still `pending`. A check
+  // that exists and is running is §12c's "leave it for the next fire"; holding on it would
+  // objection-spam every open PR the moment CI is merely slow.
+  const p = readTwo([
+    { name: "Test (Node 23.6.0)", conclusion: null },
+    { name: "Test (Node 24)", conclusion: null },
+  ]);
+  ok(p.verdict === "pending",
+    `LOOP-407: a rollup where both checks are PRESENT and unfinished stays pending (got ${p.verdict})`);
+
+  // AC5 — the healthy path is untouched: all required checks SUCCESS and the head current.
+  const g = readTwo([
+    { name: "Test (Node 23.6.0)", conclusion: "SUCCESS" },
+    { name: "Test (Node 24)", conclusion: "SUCCESS" },
+  ]);
+  ok(g.verdict === "fresh-green", `LOOP-407 AC5: all required checks green ⇒ fresh-green, no new hold (got ${g.verdict})`);
+
+  // A FAILURE keeps its own verdict even when another required check never reported — red has a
+  // different remedy (read the log) and already trips, so it must not be renamed by this change.
+  const r = readTwo([{ name: "Test (Node 24)", conclusion: "FAILURE" }]);
+  ok(r.verdict === "red", `LOOP-407: an existing FAILURE still wins over absence (got ${r.verdict})`);
+
+  // AC2 — an EMPTY mergeChecks list is the "axis inapplicable" case and must not be re-read as
+  // absence. With no required checks configured there is nothing to be missing.
+  ok(readTwo([], []).verdict === "fresh-green",
+    "LOOP-407 AC2: empty mergeChecks ⇒ the axis stays inapplicable (no check-never-reported)");
+}
+
 console.log(fails === 0 ? "\nLANDING_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

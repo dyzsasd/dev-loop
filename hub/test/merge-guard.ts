@@ -993,6 +993,79 @@ exit 0
   ok(prTicketIds({ branch: "dev-loop/LOOP-2", commitMessages: ["LOOP-3"], title: "LOOP-2 in the title" }).join(",") === "LOOP-2,LOOP-3",
     "LOOP-150: the branch id stays FIRST even when a commit names another — it is the id the PR was cut for");
 
+// ══ LOOP-407: a required check that never RAN HOLDS the merge ════════════════════════════════
+// The guard is the only machine gate on the Step 0.5 squash (`main` carries no branch protection),
+// so a non-trip here IS the unverified merge. Measured 2026-08-06: PR #246 merged during a GitHub
+// Actions major_outage having run neither configured check, because a PR with zero queued checks
+// presents mergeStateStatus:CLEAN. The four PRs whose checks HAD queued read UNSTABLE and did not
+// merge — the safer a PR looked, the less had been measured.
+{
+  type ExecFn = (args: string[]) => { stdout: string; stderr: string; ok: boolean };
+  const GHREPO = "owner/repo407";
+  const repoDir = join(ROOT, "gh-repo");
+  const TWO = ["Test (Node 23.6.0)", "Test (Node 24)"];
+  // Rollup is the only variable; the compare answers "up to date" so no staleness confounds the
+  // verdict under test.
+  const mkExec = (rollup: Array<{ name: string; conclusion: string | null }>): ExecFn => (args: string[]) => {
+    if (args[0] === "pr" && args[1] === "view") {
+      return { ok: true, stdout: JSON.stringify({ headRefOid: "abc123", statusCheckRollup: rollup }), stderr: "" };
+    }
+    if (args[0] === "api" && args[1].startsWith("/repos/")) {
+      return { ok: true, stdout: JSON.stringify({ behind_by: 0, base_commit: { sha: "abc123" }, files: [] }), stderr: "" };
+    }
+    return { ok: false, stdout: "", stderr: "unexpected gh call" };
+  };
+  const guard = (rollup: Array<{ name: string; conclusion: string | null }>) => mergeGuard(repoDir, {
+    pr: 246, ghRepo: GHREPO, mergeChecks: TWO, defaultBranch: "main", exec: mkExec(rollup),
+  });
+
+  // AC1 — the incident shape: only an unrelated check reported.
+  const rAbsent = guard([{ name: "GitGuardian Security Checks", conclusion: "SUCCESS" }]);
+  ok(rAbsent.ciFreshness.verdict === "check-never-reported",
+    `LOOP-407 AC1: both required checks absent → verdict check-never-reported (got: ${rAbsent.ciFreshness.verdict})`);
+  ok(rAbsent.ciFreshness.trip, "LOOP-407 AC1: …and the axis TRIPS");
+  ok(rAbsent.trip, "LOOP-407 AC1/AC3: …so the overall guard trips — under --strict this exits 1 and HOLDS the Step 0.5 squash");
+
+  // AC1 — a partially-dispatched matrix is still a hold.
+  const rPartial = guard([{ name: "Test (Node 24)", conclusion: "SUCCESS" }]);
+  ok(rPartial.trip && rPartial.ciFreshness.verdict === "check-never-reported",
+    `LOOP-407 AC1: ONE absent required check still holds (got: ${rPartial.ciFreshness.verdict})`);
+
+  // The objection an operator actually reads must name the missing check and must NOT offer the
+  // rebase remedy — a rebase cannot dispatch a workflow the forge never scheduled.
+  const body = buildCommentBody(246, rAbsent.forgeReview, rAbsent.boardState, rAbsent.ciFreshness);
+  ok(TWO.every((c) => body.includes(c)), "LOOP-407 AC1: the objection body names every missing check");
+  ok(/never dispatched/.test(body) && !/force-with-lease.*rebase clears this hold/.test(body),
+    "LOOP-407: …and carries the re-dispatch remedy, not the staleness one");
+
+  // AC5 — the healthy path is untouched: all required checks green, head current, no trip.
+  const rGreen = guard(TWO.map((name) => ({ name, conclusion: "SUCCESS" })));
+  ok(!rGreen.trip && rGreen.ciFreshness.verdict === "fresh-green",
+    `LOOP-407 AC5: all required checks SUCCESS → no trip (verdict: ${rGreen.ciFreshness.verdict})`);
+
+  // PRESENT-but-running stays `pending` and does NOT trip — §12c's "leave it for the next fire".
+  // Tripping here would objection-spam every open PR whenever CI is merely slow.
+  const rPending = guard(TWO.map((name) => ({ name, conclusion: null })));
+  ok(!rPending.trip && rPending.ciFreshness.verdict === "pending",
+    `LOOP-407: queued-but-present checks stay pending and do not trip (verdict: ${rPending.ciFreshness.verdict})`);
+
+  // AC2 — empty mergeChecks keeps its EXISTING meaning: the axis is inapplicable and SKIPPED,
+  // a different thing from "configured checks are missing". The two must stay distinguishable.
+  const rEmpty = mergeGuard(repoDir, { pr: 246, ghRepo: GHREPO, mergeChecks: [], defaultBranch: "main", exec: mkExec([]) });
+  ok(rEmpty.ciFreshness.skipped && rEmpty.ciFreshness.skipReason === "no-merge-checks",
+    `LOOP-407 AC2: empty mergeChecks → skipReason no-merge-checks, unchanged (got: ${rEmpty.ciFreshness.skipReason})`);
+  ok(!rEmpty.ciFreshness.trip && rEmpty.ciFreshness.verdict === null,
+    "LOOP-407 AC2: …and it does not trip — an unconfigured axis is not a missing check");
+
+  // Infrastructure still fails OPEN: a dead gh degrades to `unknown`, never to a hold.
+  const rDead = mergeGuard(repoDir, {
+    pr: 246, ghRepo: GHREPO, mergeChecks: TWO, defaultBranch: "main",
+    exec: () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }); },
+  });
+  ok(!rDead.trip && rDead.ciFreshness.verdict === "unknown",
+    `LOOP-407: gh unavailable still degrades to unknown, not to a hold (got: ${rDead.ciFreshness.verdict})`);
+}
+
 }
 
 console.log(fails ? `${fails} CHECK(S) FAILED` : "merge-guard: all checks passed");
