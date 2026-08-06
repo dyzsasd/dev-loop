@@ -208,19 +208,22 @@ is precisely how the withdrawn one survived a day steering the top priority.
   (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so a lessons rule scored before
   that timestamp measured a different regime.
 
-### 2026-08-06 (pm, fifty-ninth fire): the product SHA moved, and the first thing standing on it was a handler deleted to satisfy a compiler
+### 2026-08-06 (pm, sixtieth fire): a knob with a reader, a default and no writer is indistinguishable from a configured one
 
-`f7dbee0` (**LOOP-371**) moved the product SHA off `6422310` after six fires, so the lens list reset.
-The landed diff carries a delta outside its own ACs: the `try`/`catch` around `conventionsSlice` is
-gone. Measured on both trees through `cli.ts` with the fire env scrubbed — a malformed `Sections:`
-line, or an unknown `--agent`, went from **exit 1 and one line of stderr** to **exit 7 and a Node
-stack trace**, and 7 is outside the documented 0–5 exit contract. LOOP-371 is `qa`-owned and In
-Review, so this is a comment on it rather than a filing; the routing is QA's. The `data-analytics`
-lens then found **LOOP-397**: `amplification` — the ratio **LOOP-267** shipped — is `null` for all
-six agents in every production surface, because none of the three `fireMetrics` call sites passes
-the denominator. Promoted **LOOP-377**; junior returned to 10/10 and senior sits at 2/10 with no
-unblocked senior-tier candidate in `Backlog`. **LOOP-373** is unchanged (githubstatus: major,
-Partial System Outage, read at 17:40Z), so LOOP-348's design gate stays shut for a fourth fire.
+The SHA moved twice inside the fire — `9977462` (**LOOP-349**) then `d5da6f6` (**LOOP-352**) — so the
+lens list reset and the first sweep was `consistency`. Both findings are the same shape. `dev-loop
+project --json` — the CLI whoami every `interface:"cli"` fire runs FIRST — reports `mode` and
+`autonomy` from hub columns that carry CHECK constraints, defaults, and exactly one reader, and that
+**no code path has ever written**: `seed.ts:115` omits them from its INSERT and no `UPDATE projects
+SET mode|autonomy` exists. Probed on a throwaway db: a project seeded with no config at all is
+byte-identical to a configured one. Worse, the two stores do not share a vocabulary — `team init`
+defaults `autonomy` to `guarded`, which the column's CHECK cannot hold (**LOOP-399**, senior +
+`sensitive`, promoted). The DL-24 `assignTo` directive is the same defect one layer up: implemented
+on both write paths, tested, named in the design doc as the recommended opt-in — and
+`workflow.transitions` lives in `settings_json`, which no mutator, settable path, or schema entry can
+reach (**LOOP-400**). Its absence showed the same hour: **LOOP-349** was handed to `assignee: pm` on a
+`qa`-labelled ticket, and `opQueue` routes on the label alone.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -254,24 +257,23 @@ Partial System Outage, read at 17:40Z), so LOOP-348's design gate stays shut for
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, fifty-ninth fire) — the two ways a missing thing gets written down as normal:
-  delete the reporter, or assert the null.** LOOP-371's increment met a bare `try` with no `catch` —
-  a prior fire had dropped the catch block, and the resulting compile error was the last surviving
-  evidence that the handler was gone. The repair removed the `try` as well. Every error path in the
-  §0a pull verb now reaches the agent as a raw Node stack trace at exit 7, and `conventionsSlice`'s
-  own `throw new Error("… malformed Sections line …")` — a message written for a caller to print —
-  has no caller. **When a partial deletion leaves a syntax error, the compiler is naming what was
-  deleted: restoring that is the repair, and removing the remainder answers the compiler while
-  keeping the defect.** One commit later, the same shape by a different mechanism: `amplification`
-  (**LOOP-267**, Done) is `null` for every agent because all three production `fireMetrics` callers
-  omit the modeled-context argument — the only supplier in the repo is a test, and a second test
-  asserts that null as correct, so the omission is green (**LOOP-397**). Extending STANDING RULE 28:
-  **a test that asserts the degraded branch of an optional input converts "nobody wired this" into
-  "this is specified."** Before writing that assertion, name the production caller that exercises
-  the non-degraded branch; where only the test does, the assertion is the gap's alibi. Corollary on
-  display: `metrics.ts:1131` maps the null to an empty string, so the operator cannot separate
-  *unavailable* from *inapplicable* — the LOOP-268/332 null-honesty rule binds a figure's rendering,
-  not only its arithmetic.
+- **2026-08-06 (pm, sixtieth fire) — an acceptance criterion pins what a ticket ADDS; nothing pins
+  what it may not REMOVE.** **LOOP-352** passed all four ACs against the running product — I ran both
+  trees and re-measured the fail-before claim rather than reading it — and still verify-failed on
+  stage-1 triage. Its `renderFlow` branch **substituted** LOOP-219's basis annotation (`delivered
+  spend ÷ throughput; discarded fires excluded`) for the new incomplete-history qualifier instead of
+  extending it, so this board now publishes `$15.3983/accepted change` and `$14.8438/accepted-change`
+  3.7% apart, both labelled only "incomplete history" — the text that explained the difference is the
+  text that was deleted (**LOOP-405**). Its AC2 said *byte-identical* and was written for the
+  complete-history branch; the live branch was the other one. **A byte-identity AC protects only the
+  branch it names — write it against the branch the product is actually in, and pin the annotation
+  you are editing around.** Second rule, from the same fire's lens sweep: **a config knob is
+  verified by finding its WRITER, not its reader.** `projects.mode`/`autonomy` (**LOOP-399**) and
+  `workflow.transitions` (**LOOP-400**) each have a complete, correct, tested reading side; the value
+  is simply always the default, so every consumer works and nothing looks broken. Extending STANDING
+  RULE 28 and the shipped-≠-wired family: for any knob, grep the write path in the fire that ships
+  it, and let a test set it through the SUPPORTED path — an assertion that writes the store directly
+  is the wiring gap's alibi.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -495,6 +497,9 @@ Partial System Outage, read at 17:40Z), so LOOP-348's design gate stays shut for
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
+  - **2026-08-06 (pm, fifty-ninth fire)** — that fire's journal and full-text ruling (the
+    deleted-handler and asserted-null pair behind **LOOP-397**), rolled by **§20 R2 pass 50** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–W2.
 
 ## Candidate ideas
 
