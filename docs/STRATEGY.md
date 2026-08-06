@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the sixty-fourth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the sixty-fifth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–55. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–56. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -209,26 +209,26 @@ is precisely how the withdrawn one survived a day steering the top priority.
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, sixty-fifth fire): two surfaces called "one family" can be consistent with each other and wrong together
+### 2026-08-06 (pm, sixty-sixth fire): a projection with two writers and one call site
 
-Product SHA unchanged at `a8c8e28` — `origin/main` moved only by my own pass-54 doc land — so the
-rotation advanced to `consistency`, run against the board, the surface the mandate's *observable*
-half rests on.
+Product SHA unchanged at `a8c8e28` — `origin/main` moved only by my own pass-55 doc land — so the
+rotation advanced to `ux-flows`, run by walking the operator's first load against the running daemon.
 
-**The board's four filters narrow the rendered page, not the query.** `state`/`type`/`label`/
-`assignee` are applied in JS after the SQL `LIMIT 250`; only `q` rides the `WHERE`. Measured on the
-running daemon against a read-only `GROUP BY` of `hub.db`: `?state=Backlog` renders 3 of 11,
-`?state=Todo` 12 of 27, `?assignee=junior-dev` 139 of 221 — while the truncation notice the cap was
-deliberately paired with tells the operator to *"narrow with a filter or search to reach the rest."*
-That same notice prints `showing 3 of 398` under the filter: numerator counted after it, denominator
-before (**LOOP-419**, blocked on LOOP-370 — same expression block, and LOOP-370's recovery stash has
-to keep applying).
+**A workspace with one real project still renders a chooser.** `dev-loop.json` marks `fixture`
+`"scratch": true`; its hub row carries `{}`. `NOT_SCRATCH_SQL` — the predicate LOOP-349 consolidated
+for exactly three surfaces — reads that row, so `views/projects.ts:34` lists `/p/fixture/` and
+`daemon.ts:625` computes `real` as `['fixture','loop']`, length 2, which suppresses the
+single-real-project 302. Counterfactual on an in-memory copy of the real table: writing
+`{"scratch":true}` into that one row returns `['loop']` and the redirect fires. `doctor` prints two
+counts of the same concept in one run — `1 projects` from config at `:393`, `projects=3` from the DB
+at `:149`. Root cause: `seedHubRow` projects the flag and is called from one site,
+`team add-project --scratch`; the settable path LOOP-327 added for the un-repairable-marker case
+writes `dev-loop.json` alone (**LOOP-420**, junior). Visibility only —
+`destructive-guard.ts:77` reads config deliberately, so the isolation gate is unaffected.
 
-**What made it findable was two surfaces disagreeing.** `/api/tickets?state=Backlog` returns 11
-where the board renders 3. Board: junior 10/10 at cap, senior 4/10 with nothing senior-tier
-promotable, Backlog 12 — and **LOOP-384**, an item of the operator's own first program under the
-live mandate, is one of the 12 the cap holds back.
-
+**The §9c pass retired its first edge in four fires:** LOOP-356 reached `Done` after fire 65 closed,
+leaving LOOP-357 in `Todo` behind a cleared blocker. Board: senior 4/10 → 5/10 (**LOOP-418**
+promoted, the only senior-tier row in the Backlog), junior 10/10 → 11/10 when that label retired.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -262,24 +262,25 @@ live mandate, is one of the 12 the cap holds back.
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, sixty-fifth fire) — a documented parity claim is a defect detector, and it earns
-  its keep by being checkable, not by being true.** `daemon.ts:23` names `list_issues`,
-  `/api/tickets` and the board as "ONE family"; `board.ts:176` says the board's filters "mirror
-  /api/tickets". They disagree — `?state=Backlog` is 11 on the API and 3 on the board — and **both
-  members are wrong**: the API misses 82 of 221 on `?assignee=junior-dev`, and the two differ only
-  because each sorts differently before the same 250-row cut. An undocumented pair would have gone
-  on quietly disagreeing, since each is self-consistent from inside; the written claim is what
-  pointed at the defect. **Ask of any "X mirrors Y" comment whether anything executes it** — where
-  nothing does, it is a hypothesis with a citation, and its value is as a lead, not as evidence.
-  Second, the sharper half: **a bound that is honestly disclosed can still make its own disclosure
-  false.** The cap ships a deliberate notice — the code argues a silent truncation "would be
-  strictly worse" — and the remediation that notice offers, *narrow with a filter*, is the one
-  action that cannot work, because the filters sit outside the bound the notice describes. The
-  instinct was right and stopped one step short: **the remediation a notice offers is part of the
-  claim and needs the same check as the number in it.** Third, the notice's arithmetic is STANDING
-  RULE 1's population mismatch again — numerator taken after the filters, denominator before — and
-  `/api/tickets` emits the identical pair as `X-Total-Count`/`X-Returned-Count`, so a client
-  comparing them reads 387 rows truncated where nothing was truncated at all.
+- **2026-08-06 (pm, sixty-sixth fire) — a design that cites an existing implementation as its
+  precedent inherits what that implementation actually does, so the citation has to be checked at its
+  call sites.** `hubDoc:design/project-config-projection` builds the config→hub-row projection for
+  `mode` and `autonomy`, and its call-site table justifies the shape with *"beside the existing
+  `scratch` projection, the precedent for this whole shape."* That projection covers one of
+  `scratch`'s two writers — `seedHubRow` at creation, nothing at `team set projects.<key>.scratch` —
+  so the citation names an instance of the defect the design exists to prevent, and the three
+  surfaces keyed on the mirror have never excluded a scratch project on this workspace
+  (**LOOP-420**). RULE 15 separates a commit from a running product; this is one rung further in,
+  where the code is present, imported and reached, by a proper subset of its writers. **Of a cited
+  precedent, ask which writers reach it, not whether it exists.** Second, the writer-side of
+  RULE 30: **a repair path that restores the source of truth and not its projections reproduces the
+  defect it was added to close.** LOOP-327 added the settable `scratch` path because a lost marker
+  was unrepairable through mutators; that path writes `dev-loop.json` and leaves every derived
+  surface on the old answer. A repair's completeness is measured against the set of stores that
+  answer the question, and the audit is RULE 30's grep run over writers instead of readers. Third, a
+  bound on RULE 13: one label drives both the pick set and `todoDepth`, so a `blocked` label
+  outliving its cleared blocker produces the board reading a genuinely full queue produces — junior
+  at 10/10 — and resolving the markers is the only check that separates them.
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
   1. **A value the system routes or reports on — a key that indexes data, a ratio that
@@ -503,48 +504,44 @@ live mandate, is one of the 12 the cap holds back.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → sixty-fourth fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → sixty-fifth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
-    **LOOP-417**), rolled by **§20 R2 passes 50–55** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA, AB. Findings still open from that
-    span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**.
+    **LOOP-417**; the parity-claim pair behind **LOOP-419**), rolled by **§20 R2 passes 50–56** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AC. Findings still open from that
+    span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**.
 
 ## Candidate ideas
-
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
 becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verbatim in
-[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block J). Two
-entries left this list by being FILED as the reversal condition they named had lapsed, and one by
-being discharged: the `[ARCHIVED]`-index compaction it designed is this very pass.)_
+[`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block J).)_
 
-  - **`Non-goals`' closing sentence will read as contradicted by the approvals module** (**LOOP-383**,
-    design verified and its six children promoted in the sixty-first fire). *"dev-loop is not a
-    human-approval workflow tool"* summarises the two clauses before it — no **default** step-by-step
-    gating, no interactive prompts — and the design keeps both: enforcement is a per-class enable list
-    defaulting to EMPTY, no prompt is issued, and no fire ever waits inline. So nothing is breached
-    and no direction change is needed. But a reader who meets `dev-loop approve` in the verb list
-    without reading the design's §1 will fairly read a contradiction. Wants one qualifying clause.
-    `Non-goals` is a direction section (§20 D4), so this is the operator's to write, not mine.
-    **Condition:** LOOP-366 ruled on — the operator closed that lane and instructed that no competing
-    park be opened, so this queues behind it alongside the stale '127.0.0.1 only' Hard invariant and
-    the Vision's present-tense 'chat bridge' claim.
+
+- **`Non-goals`' closing sentence will read as contradicted by the approvals module** (**LOOP-383**,
+  design verified, six children promoted in the sixty-first fire). *"dev-loop is not a human-approval
+  workflow tool"* summarises the two clauses before it — no **default** step-by-step gating, no
+  interactive prompts — and the design keeps both: enforcement is a per-class enable list defaulting
+  to EMPTY, no prompt is issued, no fire waits inline. Nothing is breached and no direction change is
+  needed; but a reader who meets `dev-loop approve` in the verb list without the design's §1 will
+  fairly read a contradiction, so it wants one qualifying clause. `Non-goals` is a direction section
+  (§20 D4) — the operator's to write. **CONDITION LAPSED:** LOOP-366 was ruled on 2026-08-06T18:53Z;
+  carried to the operator on that ticket in the sixty-sixth fire, together with the two claims below.
+
 
 - **The `Hard invariants` list in `Goals (north star)` still states "§16 (binds 127.0.0.1 only)",
   which the product deliberately relaxed.** `daemon.ts:913` reads `DEVLOOP_DAEMON_HOST` and 915–917
   permit a non-loopback bind whenever `DEVLOOP_UI_TOKEN(_FILE)` is set, refusing only the token-less
-  widening; the accurate invariant is written in that same file at 243–249. The doc inherited the
-  stale form from the module header LOOP-375 corrects. Not filed as a second operator park while
-  **LOOP-366** is pending a direction ruling — `Goals` is a D4 direction section, so the change
-  routes through the §9a investigation protocol, not through a dev ticket or an autonomous edit.
-  **A second stale claim rides the same proposal:** the Vision has the daemon serving humans via
-  "web UI, roadmap edit, chat bridge". The `channel.*` module is real and DL-1–DL-4 are Done, but the
-  2026-06-28 Director removal kept only the OUTBOUND half in use and recorded the inbound half
-  (`channel.poll`/`ack` + the DL-4 roadmap bridge inside it) as deliberately agent-unused — no agent
-  calls it, no CLI verb exposes it, no config registers a channel, `skills/`+`references/` never name
-  it. Present-tense "chat bridge" overstates a one-way channel. **REVERSAL CONDITION for both:
-  LOOP-366 is ruled on** — carry them with whatever §9a proposal follows it, not a competing park.
+  widening; the accurate invariant is in that same file at 243–249. The doc inherited the stale form
+  from the module header LOOP-375 corrects. **A second stale claim rides the same proposal:** the
+  Vision has the daemon serving humans via "web UI, roadmap edit, chat bridge". The `channel.*`
+  module is real and DL-1–DL-4 are Done, but the 2026-06-28 Director removal kept only the OUTBOUND
+  half in use and recorded the inbound half (`channel.poll`/`ack` + the DL-4 roadmap bridge inside
+  it) as deliberately agent-unused — no agent calls it, no CLI verb exposes it, no config registers a
+  channel, `skills/`+`references/` never name it. Present-tense "chat bridge" overstates a one-way
+  channel. Both sit in `Goals`/`Vision` D4 direction text. **CONDITION LAPSED for both** — carried to
+  the operator on LOOP-366 in the sixty-sixth fire.
+
 
 - **Close the config-mutator gap wholesale — an operator capability call, deliberately not filed.**
   `references/config-schema.md` marks each field with its `dev-loop team set` path: 13 rows carry a
