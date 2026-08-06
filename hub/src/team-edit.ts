@@ -214,6 +214,18 @@ export async function teamSet(argv: string[]): Promise<number> {
       if (typeof p.linearProjectId === "string" && p.linearProjectId.trim()) await stampFingerprint(ws, key, p.linearProjectId);
     }
   }
+  // LOOP-420: when setting projects.<key>.scratch, project the value to the hub row so
+  // NOT_SCRATCH_SQL (used by the project index, daemon redirect, and doctor count) reads
+  // an up-to-date mirror. Best-effort — never fail the set command on a db error.
+  const scratchMatch = path.match(/^projects\.([^.]+)\.scratch$/);
+  if (scratchMatch && ws.file.team.backend === "service") {
+    const key = scratchMatch[1];
+    const dbPath = wsHubDb(ws);
+    try {
+      const db = openDb(dbPath);
+      try { syncScratchProjectRow(db, key, coerced as boolean); console.log(`projected scratch=${JSON.stringify(coerced)} to hub row '${key}'`); } finally { db.close(); }
+    } catch { /* best-effort — never fail the set command */ }
+  }
   return 0;
 }
 
@@ -353,16 +365,27 @@ function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix
     const chosen = prefix ?? derivePrefix(db, key);
     try { ensureSeed(db, key, name ?? key, chosen); }
     catch (e) { die(`config written, but the hub row could not be seeded: ${(e as Error).message}\n  fix it by hand: dev-loop seed ${key} "<Project Name>" <UNIQUE_PREFIX>  (doctor reports the gap as W08)`, 1); }
-    if (scratch) {
-      const row = db.prepare("SELECT settings_json FROM projects WHERE key=?").get(key) as { settings_json: string | null } | undefined;
-      let settings: Record<string, unknown> = {};
-      try { settings = row?.settings_json ? (JSON.parse(row.settings_json) as Record<string, unknown>) : {}; } catch { /* malformed — start fresh */ }
-      db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify({ ...settings, scratch: true }), key);
-    }
+    if (scratch) syncScratchProjectRow(db, key, true);
     console.log(existed
       ? `hub row for '${key}' already present in ${dbPath} (labels backfilled; find-or-create)`
       : `seeded hub row '${key}' (prefix ${chosen}) in ${dbPath}`);
   } finally { db.close(); }
+}
+
+// LOOP-420: shared helper that projects the scratch field from config to the hub db row.
+// Called from seedHubRow (add-project --scratch) and from teamSet (projects.<key>.scratch set).
+// Additive to settings_json — never a replacement (existing keys like hub.transport, workflow, etc. are preserved).
+function syncScratchProjectRow(db: DatabaseSync, key: string, scratch: boolean): void {
+  const row = db.prepare("SELECT settings_json FROM projects WHERE key=?").get(key) as { settings_json: string | null } | undefined;
+  if (!row) return;
+  let settings: Record<string, unknown> = {};
+  try { settings = row.settings_json ? (JSON.parse(row.settings_json) as Record<string, unknown>) : {}; } catch { /* malformed — start fresh */ }
+  if (scratch) {
+    settings.scratch = true;
+  } else {
+    delete settings.scratch;
+  }
+  db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify(settings), key);
 }
 
 // A unique, derived ticket prefix: the key's alphanumerics uppercased (max 8), de-clashed with a numeric
