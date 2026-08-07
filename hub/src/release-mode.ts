@@ -27,6 +27,8 @@
 // workflow_dispatch-only and no fire may cut one). The defect is then expressible as a property
 // rather than a repro: the decision cannot read the branch tip, because there is no input for it.
 
+import { isMainEntry } from "./is-entry.ts";
+
 export type ReleaseMode = "fresh" | "resume" | "refuse";
 
 /** Everything the decision is allowed to know. Deliberately no branch tip, and no way to ask for one. */
@@ -123,9 +125,10 @@ export function main(argv: string[], out: (s: string) => void, err: (s: string) 
   return 0;
 }
 
-// Entry-point guard: the test imports releaseDecision/main without running the CLI. Compares
-// resolved paths rather than `import.meta.url === \`file://${process.argv[1]}\`` — that spelling
-// silently fails on any checkout path holding a URL-escaped character, which is the LOOP-58 defect.
-if (process.argv[1] && import.meta.filename === process.argv[1]) {
+// Entry-point guard: the test imports releaseDecision/main without running the CLI. `isMainEntry`
+// is the ONE spelling hub/src is allowed (LOOP-63, enforced by test/consistency.ts §8) — it realpaths
+// argv[1] and decodes import.meta.url, so it survives both the URL-escaped checkout path this guard
+// was written to handle and the symlinked path (/tmp→/private/tmp) that a hand-rolled compare misses.
+if (isMainEntry(import.meta.url)) {
   process.exit(main(process.argv.slice(2), (s) => console.log(s), (s) => console.error(s)));
 }
