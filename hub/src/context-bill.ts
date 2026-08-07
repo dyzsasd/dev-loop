@@ -353,18 +353,18 @@ function readHubDocBody(ws: Workspace, projectKey: string, slug: string): string
 // that has a strategyDoc configured (the legacy behaviour, except hub docs are now read from disk).
 // Returns undefined when no workspace is available; returns a stat with bytes=0 when the doc
 // is configured but unreadable (Linear form, missing hub db, or file not found).
-export function tryResolveStrategyDocStat(cwd?: string, projectKey?: string): StrategyDocStat | undefined {
+export function tryResolveStrategyDocStat(cwd?: string, projectKey?: string, ws?: Workspace): StrategyDocStat | undefined {
   try {
-    const ws = resolveWorkspace(cwd);
-    const keys = projectKey ? [projectKey] : Object.keys(ws.file.projects);
+    const resolved = ws ?? resolveWorkspace(cwd);
+    const keys = projectKey ? [projectKey] : Object.keys(resolved.file.projects);
     for (const key of keys) {
-      const project = ws.file.projects[key];
+      const project = resolved.file.projects[key];
       const docRef = project?.strategyDoc;
       if (!docRef) continue;
       // Check for hubDoc form — read from hub.db on disk (no daemon needed)
       const hubSlug = hubDocSlug(docRef);
       if (hubSlug) {
-        const body = readHubDocBody(ws, key, hubSlug);
+        const body = readHubDocBody(resolved, key, hubSlug);
         if (body === null) {
           return { bytes: 0, lines: 0, label: `absent (hubDoc — not found in hub store)` };
         }
@@ -381,7 +381,7 @@ export function tryResolveStrategyDocStat(cwd?: string, projectKey?: string): St
       const relPath = strategyDocRelPath(docRef);
       if (!relPath) continue;
       // Repo file — stat it from the first (primary) repo of this project
-      const repos = reposOfProject(ws, key);
+      const repos = reposOfProject(resolved, key);
       const repoPath = (repos.find((r) => r.role === "primary") ?? repos.find((r) => r.role === "docs") ?? repos[0])?.absPath;
       if (!repoPath) continue;
       const docPath = join(repoPath, relPath);
