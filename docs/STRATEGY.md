@@ -214,9 +214,9 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the seventy-eighth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the eighty-first fire (2026-07-30 →
   2026-08-07).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–69. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–70. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -224,31 +224,29 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-07 (pm, eighty-first fire): the remedy that could not reach the line that prescribes it
+### 2026-08-07 (pm, eighty-second fire): the guard shipped, and the path its own design called safe
 
-**The product moved for the first time in seven fires** — `5f5c23b` → `3a8ae99`, LOOP-428's check
-registry (+552/−252 across `doctor.ts` and `doctor-registry.ts`). Rotation reset. **And the reason
-fires seventy-nine and eighty wrote nothing is now cleared:** the shared checkout had six local
-commits duplicating a squash already on `origin`, so a doc-land would have reverted the
-operator-visible doc; it is back at `origin/main`, 0 ahead / 0 behind. Nothing pm-owned In Review,
-`needs-pm` empty, §9c 10 live edges and zero unparks due — every blocker still open.
+**The product moved by one commit** — `3a8ae99` → `a0d5749`, LOOP-369 (PR #240): `doc-land` no
+longer rebases whatever the shared checkout has checked out and writes it over `refs/heads/main`.
+Rotation reset; **trust-safety** taken because the move fixes a destructive git-write path. Nothing
+pm-owned In Review, `needs-pm` and `Human-Blocked` empty, §9c ten live edges and zero unparks due.
 
-**polish-performance lens — LOOP-442 filed: `doctor`'s two release-skew surfaces prescribe
-different remedies from the same number.** Measured live: `[W18]` ends *"the installed CLI is a
-local source build — reinstall from the updated source"*, and eleven lines later `NEXT:` — the one
-line an operator acts on without reading the rest — says *"cut a release … Dispatch
-release-npm.yml"*. `isSourceBuild` is function-local to `checkInstalledSkew`, used once, and
-dropped at the `return`; the two-field `{codeBehind, version}` shape is preserved at every hop to
-`nextStep`, which therefore **cannot** express the remedy its own sibling names. LOOP-250 named
-this exact second surface in its own description, was superseded by LOOP-324 for a red `main`, and
-that half was never delivered.
+**LOOP-443 filed — the same "success is inferred, not stated" defect, still live one step earlier.**
+LOOP-369 fixed Step 4 and its design then declared Step 1 safe *by definition*: *"the one place that
+genuinely means 'entered with nothing to land'"*. It does not. Step 1 reads `origin/<db>...<db>`
+alone (`doc-land.ts:229-235`) — *the default branch* has nothing ahead — so when another fire moves
+the shared checkout onto its ticket branch **before** PM commits, the doc commit lands there, the
+range is empty, and the verb prints `already up to date — nothing to land` at exit 0 having landed
+nothing. Only the ORDER separates this from LOOP-369's own incident. Measured on the post-fix source
+in a throwaway fixture, control decisive: same commit, checkout on `main` → `landed 1 commit(s)`.
+The verb already refuses the *uncommitted* form ("that is an unlanded doc edit"); committed to the
+wrong branch is the same edit on the exit-0 path. `:229-235` is `8a04d7b`, untouched by `a0d5749` —
+a residual on both axes, the installed tree included.
 
-**Grooming was the fire's larger yield.** LOOP-428 displaced `doctor.ts` by ~40 lines, and four
-Backlog tickets cited line numbers inside it — LOOP-440, LOOP-397, LOOP-412, LOOP-433. Each was
-re-measured against the new HEAD: every finding stands, every locator was stale, and each now
-carries a corrected-locator comment rather than a description rewrite, so Backlog age is unchanged.
-Promoted nothing: junior sits at 10/10 and **senior-tier promotable Backlog is zero for a third
-fire** while senior holds 14 In Progress.
+**Promoted 1 — the first senior-tier promotion in four fires, and the filing-time lever is why.**
+LOOP-443 is `sensitive` on its merits (a load-bearing git-write verb), so §21b routed it to senior
+with no re-tiering: senior Todo 2 → 3 of 10, junior untouched at 11/10. Backlog was 19 junior /
+1 senior (blocked) before it. The `a0d5749` locator sweep closed negative.
 
 ## Personas
 
@@ -278,23 +276,22 @@ fire** while senior holds 14 In Progress.
   `@dyzsasd/dev-loop`, `dev-loop.json`, `DEVLOOP_*` env, `.dev-loop/` state dir, `dev-loop/<id>`
   branch prefix, `/dev-loop:*` slash commands, and the `dev-loop` §2 safety label. Use it when
   speaking about a COMMAND, CONFIG KEY, PATH, or LABEL. These are VERBATIM — never brand-swept.
-- **`kaizen`** — the CLI command, from the phased rename (LOOP-181 Phase A ships the bin,
-  LOOP-182 Phase B flips the prose). `dev-loop` stays a permanent working alias, never removed.
+- **`kaizen`** — a permanent ALIAS of the `dev-loop` command, not its successor: LOOP-181 Phase A
+  shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
 
-- **2026-08-07 (pm, eighty-first fire) — when a supersession narrows scope, the findings the
-  superseded ticket NAMED are dropped, not inherited.** LOOP-250 taught W18 to tell a source build
-  from an npm install and named the `NEXT` hint as carrying the identical defect; it was superseded
-  by LOOP-324, scoped to a red `main`, and that half silently did not ship — `isSourceBuild` lives at
-  three lines inside one function and is discarded at its `return`. Check what the superseding ticket
-  actually covered before treating the original as discharged. Same shape as LOOP-424 → LOOP-433: a
-  remedy landing in the `pass` arm while the `warn` arm keeps a hardcoded verdict. **Corollary from
-  the same fire:** a refactor that moves code invalidates every queued ticket citing it, and no AC of
-  that refactor covers the damage — LOOP-428 shifted `doctor.ts` ~40 lines and left four correct
-  tickets pointing at the wrong code. Re-measure them before the next tier picks one up, and deliver
-  the correction as a **comment**: comments do not reset `updated_at`, and Backlog age ordering is
-  load-bearing.
+- **2026-08-07 (pm, eighty-second fire) — a fix's own design comment is where the next defect
+  hides, because it names the boundary it did not test.** LOOP-369 rewrote every inferred success in
+  `doc-land` into a stated one, then wrote that Step 1's early return is *"the one place that
+  genuinely means 'entered with nothing to land'"* — an unmeasured claim, load-bearing, and false
+  (LOOP-443). **The rule: when an increment declares a path out of scope by asserting a property of
+  it, verify that property; a scope boundary is a claim, not a fact.** Two corollaries measured on
+  the same verb. First, a defect class has as many members as it has INPUTS: LOOP-369 fixed the
+  branch the verb *rebases*, and the same wrong-branch assumption survived in the branch it
+  *reads*. Enumerate every site that consumes the misread value, not the one the incident hit.
+  Second, an ordering race has two orders — LOOP-369 measured "PM commits, then the checkout moves"
+  and fixed it; "the checkout moves, then PM commits" is the same race and was never asked about.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -528,7 +525,9 @@ fire** while senior holds 14 In Progress.
     rolled by **§20 R2 passes 50–69** →
     [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AP. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
-    **LOOP-429**, **LOOP-426**, **LOOP-436**.
+    **LOOP-429**, **LOOP-426**, **LOOP-436**. Extended by **pass 70** with the eighty-first fire's
+    journal and its supersession-narrows-scope ruling (fires 79–80 wrote nothing — the shared
+    checkout was diverged) → block **AQ**; still open from it: **LOOP-440**, **LOOP-442**.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
@@ -536,16 +535,14 @@ becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verba
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block J).)_
 
 
-- **`Vision` and `Glossary` state the Kaizen Factory rebrand as current direction; the operator
-  ruled it off 2026-08-05 and canceled LOOP-176/177/182 as a set.** `Vision:13-23` also carries a
-  standing *"must not be brand-swept"* instruction that presumes an active rename. Two facts the
-  revival path needs: the cancellation's premise that no ticket ever created a `kaizen` bin is false
-  — **LOOP-181** is `Done`, `hub/package.json:32-36` ships `kaizen` + `kaizen-hub`, and
-  `kaizen --version` returns 1.15.0, satisfying LOOP-182's Phase A gate; and `kaizen` is therefore a
-  shipped, installed command named in **zero** user-facing surfaces (`README.md`, `dev-loop --help`,
-  `docs/INDEX.md`, `docs/RUNNING.md` — all 0). Docs gap or deliberate silence is brand-gated, so it
-  is named rather than filed (the LOOP-416 shape). Both sections are D4. **REVERSAL CONDITION: the
-  operator rules on the brand** — carried on **LOOP-366** in the sixty-ninth fire.
+- **`kaizen` is a shipped, installed command named in ZERO user-facing surfaces.** **LOOP-181** is
+  `Done`, `hub/package.json:32-36` ships `kaizen` + `kaizen-hub`, and `kaizen --version` answers —
+  yet `README.md`, `dev-loop --help`, `docs/INDEX.md` and `docs/RUNNING.md` mention it 0 times.
+  Docs gap or deliberate silence is brand-gated, so it is named rather than filed (the LOOP-416
+  shape). **REVERSAL CONDITION: the operator rules on the brand** — carried on **LOOP-366** in the
+  sixty-ninth fire. _(The premise this entry opened with — that `Vision`/`Glossary` still assert the
+  rebrand as current direction — is discharged: LOOP-434 corrected `Vision`, and pass 70 corrected
+  the third copy in `Glossary`, which had `kaizen` as the command and `dev-loop` as the alias.)_
 
 - **Close the config-mutator gap wholesale — an operator capability call, deliberately not filed.**
   `references/config-schema.md` marks each field with its `dev-loop team set` path: 13 rows carry a
