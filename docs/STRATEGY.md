@@ -208,9 +208,9 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the seventy-fourth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the seventy-fifth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–65. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–66. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -218,33 +218,29 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, seventy-fifth fire): a park that ran through the ticket it parked
+### 2026-08-07 (pm, seventy-sixth fire): the operator landed the north star, and a fix beside the defect it named
 
-Product SHA unchanged at `9bb8d79` for a third fire — `origin/main` moved only by passes 63 and 64,
-both doc lands. `strategy-gaps`, the third lens at this SHA.
+Product SHA unchanged at `9bb8d79` for a fourth fire. **`origin/main` moved mid-fire to `a1531d7` —
+the operator's own land of LOOP-366, the first foreign edit to this doc.** `Goals (north star)` now
+records the cost program as shipped with a measured lever (38–60 KB pruned per fire) and states the
+standing mandate — make the loop observable and safe — with three measured gaps and a five-ticket
+first program. Checked rather than assumed: LOOP-382/383 Done, 385 In Progress, 384/386 Todo. The
+direction is already carried by live tickets, so it needs no filing.
 
-**Nothing filed, and that is the finding.** The candidate was real: the loop was fully deadlocked —
-14 open PRs, zero merge-eligible, `main` red for eight consecutive runs — and I could not name a
-product surface that says so. There is one, `W22`, and it is correct: it names the open-PR count,
-the red base, and `autoMerge cannot fire`. LOOP-424 made it honest one commit before this
-fire, so the lens rediscovered a capability that had just shipped.
+**LOOP-433 filed: the landing surface reports one cause while three are live.** Measured — 14 open
+PRs; 8 carry neither required check and read `CLEAN` *because* the checks are absent; 3 fail both;
+1 is genuinely green. `main` is red on typecheck, so `hasDayZeroStall` and `hasPrMissingChecks` are
+both true, and the ternary chain in `readLandingState` keeps exactly one. Three mechanisms, one
+ticket: the precedence erases co-occurring causes; `W22` never reads the `reason` it computes; and
+the missing-checks message counts `openLoopPRs`, printing 14 where 8 is the measured population.
+Dated, not hypothetical — when LOOP-423 lands and the base turns green, `W22` will read `required
+checks green — autoMerge cannot fire`. LOOP-424 fixed this shape in the pass arm one commit before
+and left it in the warn arm: **a fix that adopts a report's scope inherits its blind spot.**
 
-**LOOP-426 unparked and promoted; the deadlock it gates is measured.** Both required checks dispatch
-again, and every open PR fails both for exactly two reasons: branched before LOOP-423 ⇒ typecheck
-dies on its two errors and the job never reaches the tests; carrying LOOP-423 ⇒ typecheck passes and
-the sole failing suite is `doctor-golden.ts`, which is LOOP-426's. That is the whole of `main`'s red.
-The fix is three lines at one call site — `doctor-registry.ts` holds `ctx.ws` and drops it. Its
-branch-base instruction is two ACs that *measure* whether `main` typechecks rather than naming a
-branch, so it cannot rot.
-
-**LOOP-421 groomed.** My own ruling on it lived in a comment that closed by asking the implementer
-to carry it into the ACs — my job — leaving the ticket with no acceptance criteria at all. Six
-written; the load-bearing one is the mutation check.
-
-**Board.** Junior 10/10 → 11/10 (the recorded override; LOOP-426 sorts to rank 4.5, head of its
-slice); senior 4/10 with six free slots and no unblocked Backlog row — its only row, LOOP-379, is
-blocked by LOOP-372, a real dependency. §9c: 14 live edges, zero unparks, zero zero-edge parks.
-`needs-pm` and `_team` are empty; LOOP-366 is unchanged and still the operator's.
+**Board.** Junior 11/10, held; senior 5/10 with no unblocked Backlog row — LOOP-379 is still blocked
+by LOOP-372, whose PR is the one fully green PR on the board. Promoted nothing: the constraint is
+delivery, not discovery — 14 tickets sit In Progress behind PRs that cannot merge. §9c: 13 live
+edges, zero unparks, zero zero-edge parks. `needs-pm` and `_team` empty.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -278,17 +274,14 @@ blocked by LOOP-372, a real dependency. §9c: 14 live edges, zero unparks, zero 
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, seventy-fifth fire) — a park whose exit condition runs through the ticket it
-  parks is not a park, and a depth cap that meters against zero throughput meters nothing.**
-  LOOP-426. I parked it behind LOOP-406 in the sixty-ninth fire because the two edits *collide* —
-  they do, textually, in one signature — and recorded a collision as a dependency. senior-dev
-  measured the consequence: LOOP-406's own PR cannot go green until LOOP-426 lands, because the
-  suite LOOP-426 repairs is the one failing it. The park's exit ran through the ticket it parked.
-  **Two changes can share a line of code and still not depend on each other; the direction of a
-  dependency is not observable from the overlap.** Then the cap: junior's `Todo` was at 10 of 10 and
-  all 10 were undeliverable, because no PR on the board could merge. A cap meters commitment against
-  throughput, so at zero throughput it stops metering and starts holding its own purpose hostage.
-  Overridden by one, recorded rather than quietly taken.
+- **2026-08-07 (pm, seventy-sixth fire) — a watch that runs at boot cannot see an edit that arrives
+  mid-fire; the guard that held was the one at write time.** Doc-watch read clean at boot: the
+  stored hash matched `origin/main` exactly. Work later, the push aborted — `origin/main` had moved,
+  the operator had landed LOOP-366 into this same file, and my staged content was derived from the
+  superseded base. Nothing was lost, and nothing was lost *because* the landing path re-fetches and
+  asserts the base is unchanged before pushing, not because the watch caught it. **A precondition
+  checked once at the start of a long fire is a statement about the past.** Any check whose subject
+  can change while the fire runs has to be re-asserted at the moment it is relied on.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -513,14 +506,14 @@ blocked by LOOP-372, a real dependency. §9c: 14 live edges, zero unparks, zero 
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → seventy-fourth fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → seventy-fifth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–65** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AL. Findings still open from that
+    rolled by **§20 R2 passes 50–66** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AM. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-429**, **LOOP-426**.
 
