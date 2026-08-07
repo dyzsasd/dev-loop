@@ -214,9 +214,9 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the seventy-sixth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the seventy-seventh fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–67. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–68. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -224,31 +224,27 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-07 (pm, seventy-seventh fire): three cost surfaces, three answers, and none of them says so
+### 2026-08-07 (pm, seventy-eighth fire): a review-only intake produces only repair
 
-Product SHA unchanged at `9bb8d79` for a fifth fire — every commit since is doc-only. **The
-operator landed LOOP-434 as `bbb381e`**, retiring the three direction claims the product no longer
-held, and corrected the diff in flight: the bind invariant had a second copy under `Goals`
-**Hard invariants** that my diff never reached. 46,766 → 47,377 B. Whether the product name lapsed
-with the cancelled rebrand is with the human; `:13` and its `Glossary` entry stand untouched until
-they rule.
+Product SHA unchanged at `9bb8d79` for a sixth fire — everything since is doc-only, and doc-watch
+read clean at boot. Nothing In Review, `needs-pm` and `_team` empty, §9c 13 live edges and zero
+unparks due.
 
-**ux-flows lens — LOOP-435 filed: the only web cost surface is neither complete nor
-self-consistent.** Measured against the running daemon. `/p/loop/usage` reports 201 fires and
-$634.6989 under headings naming no scope, while the same `fire.completed` table holds 338 fires and
-$823.7506: `sweep` (131 fires) and `reflect` (6) log against `_team`, and no `/p/loop/*` page reads
-them or links to the sibling that does. **41% of fires and 23% of spend are missing from the surface
-an operator would check `team.budget.dailyUsd` against** — a ceiling enforced workspace-wide.
-Beside it, the page's own three numbers do not close: 197 × $3.2549 = $641.22 against a stated
-$634.6989, because the count printed under "priced" is `costMetered` (197) while the divisor is
-`costPriced` (195). A second gap surfaced with it — 923 rows in `fires.jsonl` against 338 in the
-hub — and stopped at the scheduler restart. Its cause is unestablished, so it is not filed.
+**conversion-retention lens — LOOP-436 filed: the documented three-command Quick start yields a loop
+that cannot work.** Measured on 1.15.1 in a scrubbed `/tmp` workspace. After `dev-loop init --yes`,
+`dev-loop run` skips pm, qa, senior-dev and junior-dev for want of a repo cwd and fires only
+`sweep` — the janitor, on an empty board — reprinting those four skip lines every five minutes
+indefinitely. Each surface on that path holds one piece and states none: `doctor` warns W01 and then
+prints `DOCTOR_OK`, `init`'s closing card offers `dev-loop run` unconditionally, and `run` computes
+"can never fire" once per agent per tick and logs it as debug.
 
-**Board.** Junior 11/10, held; senior 4/10 with six free slots and still no unblocked Backlog row —
-LOOP-379 waits on LOOP-372, whose PR is green and MERGEABLE and deliberately held by senior's own
-Step 0.5 while `main` is red. Promoted nothing, and that reads correctly: discovery is not the
-constraint. §9c: 14 live edges, zero unparks due, zero zero-edge parks. `needs-pm` and `_team`
-empty.
+**The structural finding is the board's own composition.** All 17 Backlog rows are `Improvement`;
+in three days I have filed 66 Improvements, 9 Bugs and **zero** Features. §21b routes an Improvement
+to junior and new capability to senior, so junior at 11/10 while senior holds four of ten with six
+free slots is not a scheduling artifact — **it is what a review-only intake produces.** Every
+Feature in flight descends from an operator-directed program. Promoted nothing again, correctly:
+the constraint is not discovery. LOOP-421 groomed — its superseded fix options sat at the same
+heading level as six decided ACs, one of them the option the ruling rejects.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -282,14 +278,14 @@ empty.
 
 ## Decisions (running log)
 
-- **2026-08-07 (pm, seventy-seventh fire) — a rule and a list of where it applies, shipped in one
-  acceptance criterion, and the list is what got built.** LOOP-332's AC2 opened generally — *no
-  render site prints the coverage count under the word "priced"* — then named two, both CLI. The
-  web site was not on the list and still carries the defect. The shape ran the other way inside
-  this fire too: my own LOOP-434 diff corrected the bind claim where I had found it and missed the
-  second copy, which the operator caught at landing. **An enumeration under a general rule is read
-  as that rule's scope**, so the unnamed instance survives — for whoever wrote the list, in either
-  direction. Fix the class, or say why the list is the class.
+- **2026-08-07 (pm, seventy-eighth fire) — the precedent was applied where it was found, not where
+  it matters most.** LOOP-90 taught `dev-loop run` to warn once at startup that a configured cadence
+  would never fire. Four hundred lines later the same file still says nothing at startup when an
+  agent can never fire *at all*; `init`'s `linear` card names its blocking precondition, the default
+  backend's card offers `dev-loop run` unconditionally. Both correct treatments already ship, in the
+  two files that hold both defects. **A fix lands at the site of discovery, so the severe member of
+  a class is the one nobody files** — the mild one is what had a ticket. Ask which case is worst,
+  not which case was reported.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -514,14 +510,14 @@ empty.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → seventy-sixth fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → seventy-seventh fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–67** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AN. Findings still open from that
+    rolled by **§20 R2 passes 50–68** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AO. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-429**, **LOOP-426**.
 
