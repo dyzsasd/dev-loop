@@ -17,10 +17,12 @@ product thesis verbatim: **改善 kaizen** — a system that improves itself in 
 steps, daily — and the **lights-out factory (黑灯工厂)** — a plant so automated it runs with the
 lights off. This loop is literally both: reflect / lessons / §17 IS a kaizen routine, and the
 operator reads one digest a day while the team ships. **Brand ↔ engine, like Code ↔ `code`:**
-every technical identifier below keeps the `dev-loop` name, and the CLI command becomes `kaizen`
-in a two-release phased rename (`dev-loop` remaining a permanent alias). Names in the rest of this
-document that refer to the engine, the config, the state dir, or the label are therefore correct
-as written and must not be brand-swept.
+every technical identifier below keeps the `dev-loop` name. **The phased rename was withdrawn
+(operator, 2026-08-05: LOOP-176 / LOOP-177 / LOOP-182 all `Canceled`).** Phase A had already
+shipped and stands: `hub/package.json` installs `kaizen` and `kaizen-hub` alongside `dev-loop`,
+so `kaizen` is a permanent alias rather than the future primary; `dev-loop` remains the CLI
+command. Names in the rest of this document that refer to the engine, the config, the state dir,
+or the label are correct as written and must not be brand-swept.
 
 dev-loop is a **standalone, long-lived coordination daemon** with **interchangeable AI-CLI
 clients**. The daemon is the system of record (the `node:sqlite` hub), the coordination
@@ -70,8 +72,9 @@ changes are operator git commits, surfaced as proposals), **§2 project isolatio
 = one pinned project, no cross-project endpoint — _amended 2026-07, D1/D2: one daemon now
 serves every hub project under `/p/<key>/`, and hub ops accept a role-gated `project` override:
 stewards any project or `_team`, PM `_team` only, delivery actors still refused server-side_),
-and **§16 secrets/localhost-only** (binds
-127.0.0.1 only; secrets live in env, referenced by name, read server-side; the SoR holds no
+and **§16 secrets/localhost-first** (binds loopback by
+default; a non-loopback bind is permitted only with `DEVLOOP_UI_TOKEN(_FILE)` set and is refused
+without one; secrets live in env, referenced by name, read server-side; the SoR holds no
 plaintext credential). The phased build is in `docs/design/daemon-multicli-repositioning.md`.
 
 ## Goals (north star)
@@ -103,8 +106,9 @@ the Claude plugin) unbroken byte-for-byte. **Full design + critique-folded decis
 **Hard invariants (transport-independent, every phase):** §17 firewall (no agent auto-edits a
 SKILL/conventions/plugin/code file — structural changes are operator-committed proposals);
 §2 isolation (one daemon = one pinned project, no cross-project endpoint — see the D1/D2
-amendment in the Vision above); §16 (binds 127.0.0.1
-only; secrets in env by name); identity is **cooperative, not anti-spoof** on one host (honest);
+amendment in the Vision above); §16 (binds loopback by default — a
+non-loopback bind requires `DEVLOOP_UI_TOKEN(_FILE)` and is refused without one; secrets in env by
+name); identity is **cooperative, not anti-spoof** on one host (honest);
 every mutating op-API endpoint passes the `writeOriginOk` CSRF/DNS-rebind guard first. Honest
 caveat: `doc.publish` over the op API becomes a cooperative (claim-based) gate vs today's
 daemon-process-identity gate — acceptable on one trusted host, revisit under Phase B.
@@ -170,7 +174,9 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
 ## Non-goals
 
 - **Not Linear-locked.** Linear is a default, never a requirement; the loop must keep
-  working on the `local` and `service` (hub) backends.
+  working on the `service` (hub) backend. *(The `local` file board was retired:
+  `team-config.ts` types `backend` as `"linear" | "service"` and emits E02 for anything else, so a
+  `local` workspace cannot load at all — `team init --backend local` is refused.)*
 - **No default human step-by-step gating.** Safety comes from machine gates (red build
   never ships, diff self-review, deploy smoke-check + auto-revert), not interactive
   approval prompts (`autonomy:"full"`). dev-loop is not a human-approval workflow tool.
