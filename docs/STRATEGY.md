@@ -214,9 +214,9 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the seventy-fifth fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the seventy-sixth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–66. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–67. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -224,29 +224,31 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-07 (pm, seventy-sixth fire): the operator landed the north star, and a fix beside the defect it named
+### 2026-08-07 (pm, seventy-seventh fire): three cost surfaces, three answers, and none of them says so
 
-Product SHA unchanged at `9bb8d79` for a fourth fire. **`origin/main` moved mid-fire to `a1531d7` —
-the operator's own land of LOOP-366, the first foreign edit to this doc.** `Goals (north star)` now
-records the cost program as shipped with a measured lever (38–60 KB pruned per fire) and states the
-standing mandate — make the loop observable and safe — with three measured gaps and a five-ticket
-first program. Checked rather than assumed: LOOP-382/383 Done, 385 In Progress, 384/386 Todo. The
-direction is already carried by live tickets, so it needs no filing.
+Product SHA unchanged at `9bb8d79` for a fifth fire — every commit since is doc-only. **The
+operator landed LOOP-434 as `bbb381e`**, retiring the three direction claims the product no longer
+held, and corrected the diff in flight: the bind invariant had a second copy under `Goals`
+**Hard invariants** that my diff never reached. 46,766 → 47,377 B. Whether the product name lapsed
+with the cancelled rebrand is with the human; `:13` and its `Glossary` entry stand untouched until
+they rule.
 
-**LOOP-433 filed: the landing surface reports one cause while three are live.** Measured — 14 open
-PRs; 8 carry neither required check and read `CLEAN` *because* the checks are absent; 3 fail both;
-1 is genuinely green. `main` is red on typecheck, so `hasDayZeroStall` and `hasPrMissingChecks` are
-both true, and the ternary chain in `readLandingState` keeps exactly one. Three mechanisms, one
-ticket: the precedence erases co-occurring causes; `W22` never reads the `reason` it computes; and
-the missing-checks message counts `openLoopPRs`, printing 14 where 8 is the measured population.
-Dated, not hypothetical — when LOOP-423 lands and the base turns green, `W22` will read `required
-checks green — autoMerge cannot fire`. LOOP-424 fixed this shape in the pass arm one commit before
-and left it in the warn arm: **a fix that adopts a report's scope inherits its blind spot.**
+**ux-flows lens — LOOP-435 filed: the only web cost surface is neither complete nor
+self-consistent.** Measured against the running daemon. `/p/loop/usage` reports 201 fires and
+$634.6989 under headings naming no scope, while the same `fire.completed` table holds 338 fires and
+$823.7506: `sweep` (131 fires) and `reflect` (6) log against `_team`, and no `/p/loop/*` page reads
+them or links to the sibling that does. **41% of fires and 23% of spend are missing from the surface
+an operator would check `team.budget.dailyUsd` against** — a ceiling enforced workspace-wide.
+Beside it, the page's own three numbers do not close: 197 × $3.2549 = $641.22 against a stated
+$634.6989, because the count printed under "priced" is `costMetered` (197) while the divisor is
+`costPriced` (195). A second gap surfaced with it — 923 rows in `fires.jsonl` against 338 in the
+hub — and stopped at the scheduler restart. Its cause is unestablished, so it is not filed.
 
-**Board.** Junior 11/10, held; senior 5/10 with no unblocked Backlog row — LOOP-379 is still blocked
-by LOOP-372, whose PR is the one fully green PR on the board. Promoted nothing: the constraint is
-delivery, not discovery — 14 tickets sit In Progress behind PRs that cannot merge. §9c: 13 live
-edges, zero unparks, zero zero-edge parks. `needs-pm` and `_team` empty.
+**Board.** Junior 11/10, held; senior 4/10 with six free slots and still no unblocked Backlog row —
+LOOP-379 waits on LOOP-372, whose PR is green and MERGEABLE and deliberately held by senior's own
+Step 0.5 while `main` is red. Promoted nothing, and that reads correctly: discovery is not the
+constraint. §9c: 14 live edges, zero unparks due, zero zero-edge parks. `needs-pm` and `_team`
+empty.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -280,14 +282,14 @@ edges, zero unparks, zero zero-edge parks. `needs-pm` and `_team` empty.
 
 ## Decisions (running log)
 
-- **2026-08-07 (pm, seventy-sixth fire) — a watch that runs at boot cannot see an edit that arrives
-  mid-fire; the guard that held was the one at write time.** Doc-watch read clean at boot: the
-  stored hash matched `origin/main` exactly. Work later, the push aborted — `origin/main` had moved,
-  the operator had landed LOOP-366 into this same file, and my staged content was derived from the
-  superseded base. Nothing was lost, and nothing was lost *because* the landing path re-fetches and
-  asserts the base is unchanged before pushing, not because the watch caught it. **A precondition
-  checked once at the start of a long fire is a statement about the past.** Any check whose subject
-  can change while the fire runs has to be re-asserted at the moment it is relied on.
+- **2026-08-07 (pm, seventy-seventh fire) — a rule and a list of where it applies, shipped in one
+  acceptance criterion, and the list is what got built.** LOOP-332's AC2 opened generally — *no
+  render site prints the coverage count under the word "priced"* — then named two, both CLI. The
+  web site was not on the list and still carries the defect. The shape ran the other way inside
+  this fire too: my own LOOP-434 diff corrected the bind claim where I had found it and missed the
+  second copy, which the operator caught at landing. **An enumeration under a general rule is read
+  as that rule's scope**, so the unnamed instance survives — for whoever wrote the list, in either
+  direction. Fix the class, or say why the list is the class.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -512,14 +514,14 @@ edges, zero unparks, zero zero-edge parks. `needs-pm` and `_team` empty.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → seventy-fifth fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → seventy-sixth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–66** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AM. Findings still open from that
+    rolled by **§20 R2 passes 50–67** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AN. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-429**, **LOOP-426**.
 
