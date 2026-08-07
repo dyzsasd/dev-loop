@@ -59,23 +59,48 @@ function gitErrText(e: unknown): { summary: string; detail: string } {
 /**
  * Rebase onto origin WITHOUT touching the shared checkout (LOOP-325).
  *
- * A temp worktree detached at HEAD does the rebase, and the shared branch ref is fast-forwarded
- * afterwards with `update-ref`. That call moves the ref only — no working-tree write, no index
- * write — so the unrelated modifications the caller measured stay byte-identical on disk. Their
- * staged/HEAD content is identical either side of the rebase (the rebase did not touch those paths),
- * so `git status` reports exactly what it reported before.
+ * A temp worktree detached at `refs/heads/<defaultBranch>` does the rebase, and the shared branch
+ * ref is moved afterwards with `update-ref`. That call moves the ref only — no working-tree write,
+ * no index write — so the unrelated modifications the caller measured stay byte-identical on disk.
+ * Their staged/HEAD content is identical either side of the rebase (the rebase did not touch those
+ * paths), so `git status` reports exactly what it reported before.
+ *
+ * LOOP-369 — it used to build the worktree from `HEAD`, i.e. from whatever the SHARED CHECKOUT
+ * happened to have checked out, while every check around it read `origin/<db>...<db>`. With the
+ * checkout on a feature branch the verb rebased that branch and then wrote the result over
+ * `refs/heads/<db>`, destroying what the branch held — including the doc commit it was invoked to
+ * land — and, because the range was empty afterwards, reported success. Measured on 2026-08-06:
+ * `refs/heads/main` moved BACKWARDS from `915496c` to `1a4e9d6` and the doc commit became
+ * unreachable from every ref, under the line `doc-land: landed`.
+ *
+ * The input is now the branch ref. Two guards make the whole class non-silent even if some other
+ * cause ever empties the range: the rebase may not lose commits (`beforeShas` minus the ones
+ * `git cherry` says are already upstream must survive), and the ref move is a compare-and-swap
+ * against the value read before the rebase, so a concurrent writer causes a refusal, not a lost
+ * update. Neither guard can be satisfied by destroying the work it is measuring.
  *
  * The worktree is removed on EVERY exit path. Leaving one behind would itself be the LOOP-132 defect
  * this session just added a doctor code for.
  */
 function isolatedRebase(
   repoDir: string, defaultBranch: string, gitIdArgs: string[], dirtyPaths: string[],
-): { ok: true } | { ok: false; blockedMsg: string } {
+): { ok: true; alreadyUpstream: number } | { ok: false; blockedMsg: string } {
   const g = (dir: string, args: string[]): string =>
     execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const lines = (s: string): string[] => s.split("\n").filter(Boolean);
+  // Read the ref — never HEAD — and pin its value for the compare-and-swap (AC3).
+  let before: string;
+  try { before = g(repoDir, ["rev-parse", `refs/heads/${defaultBranch}`]); }
+  catch (e) { return { ok: false, blockedMsg: `could not read refs/heads/${defaultBranch} before rebasing: ${gitErrText(e).summary}` }; }
+  // What the branch is carrying, and which of it origin already has BY PATCH. `git cherry` marks
+  // the latter with a leading '-': those are the commits a rebase may legitimately empty (AC4).
+  const beforeShas = lines(g(repoDir, ["rev-list", `origin/${defaultBranch}..${defaultBranch}`]));
+  let alreadyUpstream = 0;
+  try { alreadyUpstream = lines(g(repoDir, ["cherry", `origin/${defaultBranch}`, defaultBranch])).filter((l) => l.startsWith("-")).length; }
+  catch { /* cherry is advisory; a failure just makes the guard below stricter */ }
   const wt = join(tmpdir(), `dev-loop-docland-${process.pid}-${Math.trunc(performance.now() * 1000)}`);
   try {
-    g(repoDir, ["worktree", "add", "--detach", "-q", wt, "HEAD"]);
+    g(repoDir, ["worktree", "add", "--detach", "-q", wt, `refs/heads/${defaultBranch}`]);
   } catch (e) {
     return { ok: false, blockedMsg: `could not create an isolated worktree to rebase in (the shared checkout has ${dirtyPaths.length} unrelated dirty path(s), so rebasing in place would destroy them): ${gitErrText(e).summary}` };
   }
@@ -87,10 +112,29 @@ function isolatedRebase(
       return { ok: false, blockedMsg: `rebase onto origin/${defaultBranch} failed in an isolated worktree — the shared checkout was never written and its ${dirtyPaths.length} unrelated dirty path(s) are untouched. git says: ${gitErrText(e).summary}` };
     }
     const rebased = g(wt, ["rev-parse", "HEAD"]);
-    // Move the shared branch ref to the rebased commit. Ref-only: no checkout, no reset, no index.
-    try { g(repoDir, ["update-ref", `refs/heads/${defaultBranch}`, rebased]); }
-    catch (e) { return { ok: false, blockedMsg: `rebased cleanly but could not fast-forward ${defaultBranch}: ${gitErrText(e).summary}` }; }
-    return { ok: true };
+    // AC2 — a rebase may REWRITE commits; it may not make them vanish. Anything that was ahead and
+    // is not accounted for by patch-equivalence went missing, and the ref must not move.
+    const afterShas = lines(g(wt, ["rev-list", `origin/${defaultBranch}..${rebased}`]));
+    const expected = beforeShas.length - alreadyUpstream;
+    if (afterShas.length < expected) {
+      const afterSubjects = new Set(afterShas.map((s) => g(wt, ["log", "-1", "--format=%s", s])));
+      const missing = beforeShas
+        .map((s) => ({ sha: s, subject: g(repoDir, ["log", "-1", "--format=%s", s]) }))
+        .filter((c) => !afterSubjects.has(c.subject));
+      return {
+        ok: false,
+        blockedMsg: `REFUSED — rebasing onto origin/${defaultBranch} would drop ${expected - afterShas.length} commit(s) that origin does not already have. `
+          + `refs/heads/${defaultBranch} was NOT moved and still points at ${before.slice(0, 12)}. Missing:\n`
+          + missing.map((c) => `  ${c.sha.slice(0, 12)} ${c.subject}`).join("\n"),
+      };
+    }
+    // AC3 — compare-and-swap: pass the value read before the rebase, so a writer that moved the
+    // branch in the meantime makes this fail instead of silently overwriting their work.
+    try { g(repoDir, ["update-ref", `refs/heads/${defaultBranch}`, rebased, before]); }
+    catch (e) {
+      return { ok: false, blockedMsg: `rebased cleanly but ${defaultBranch} moved underneath us (expected it at ${before.slice(0, 12)}) — refusing to overwrite the newer value; re-run: ${gitErrText(e).summary}` };
+    }
+    return { ok: true, alreadyUpstream };
   } finally {
     try { g(repoDir, ["worktree", "remove", "--force", wt]); } catch { /* best-effort */ }
     try { rmSync(wt, { recursive: true, force: true }); } catch { /* best-effort */ }
@@ -204,17 +248,24 @@ Design: landing-discipline §4.6 (LOOP-57).`);
 
   // ── Steps 2–4 under the §7 repo lock (serializes fetch/rebase/push) ────────────
   return await withLock(lockPath, { totalMs: 60_000 }, async () => {
-    const attempt = async (): Promise<{ ok: boolean; blockedMsg?: string; isRejection?: boolean }> => {
+    const attempt = async (): Promise<{ ok: boolean; blockedMsg?: string; isRejection?: boolean; landed?: number }> => {
       // Step 2: fetch + rebase if origin has moved ahead
       try { git(["fetch", "origin", defaultBranch]); }
       catch (e) { process.stderr.write(`doc-land: fetch warning: ${gitErrText(e).summary}\n`); }
 
       // Narrow the fault boundary (LOOP-118): rev-list (cheap, read-only) is separated from the rebase
       // so a rev-list failure is never mislabelled "rebase failed".
+      // LOOP-369 — `entryAhead` is what this attempt SET OUT to land. Success is then a statement
+      // about what was pushed, not an observation that the range ended up empty: the clobber emptied
+      // the range by destroying it, and the old code read that emptiness as "landed".
       let behind = 0;
+      let entryAhead = 0;
+      let alreadyUpstream = 0;
       try {
         const counts = git(["rev-list", "--left-right", "--count", `origin/${defaultBranch}...${defaultBranch}`]);
-        behind = (counts || "0\t0").split("\t").map(Number)[0] || 0;
+        const [b, a] = (counts || "0\t0").split("\t").map(Number);
+        behind = b || 0;
+        entryAhead = a || 0;
       } catch (e) {
         return { ok: false, blockedMsg: `could not compare with origin/${defaultBranch}: ${gitErrText(e).summary}` };
       }
@@ -269,7 +320,16 @@ Design: landing-discipline §4.6 (LOOP-57).`);
               blockedMsg: `'${dirtyDoc.join(", ")}' has uncommitted changes — that is an unlanded doc edit, and landing around it would silently drop it. Commit or discard it, then re-run. (Distinct from an unmerged-index wedge: nothing is conflicted, the edit simply is not committed.)`,
             };
           }
-          const rebaseInWorktree = dirtyPaths.length > 0;
+          // LOOP-369 — the in-place rebase below is `git rebase origin/<db>` in the shared checkout,
+          // so it rebases whatever is CHECKED OUT. That is the same wrong-branch defect one step
+          // earlier, and the explicit `rebase <upstream> <branch>` form is not the answer: it checks
+          // the branch out, writing the shared checkout that LOOP-325 exists to leave alone. So the
+          // in-place fast path is reserved for the exact condition it was written for — clean tree,
+          // already on the default branch — and everything else goes through the isolated rebase,
+          // whose input is the ref.
+          let headBranch = "";
+          try { headBranch = git(["rev-parse", "--abbrev-ref", "HEAD"]); } catch { /* detached or worse ⇒ isolate */ }
+          const rebaseInWorktree = dirtyPaths.length > 0 || headBranch !== defaultBranch;
 
           // The isolated path: never write the shared checkout. A temp worktree detached at HEAD
           // rebases onto origin, the result is pushed from there, and the shared branch ref is
@@ -278,6 +338,7 @@ Design: landing-discipline §4.6 (LOOP-57).`);
           if (rebaseInWorktree) {
             const iso = isolatedRebase(repoDir, defaultBranch, gitIdArgs, dirtyPaths);
             if (!iso.ok) return { ok: false, blockedMsg: iso.blockedMsg };
+            alreadyUpstream = iso.alreadyUpstream;
           } else try {
             git([...gitIdArgs, "rebase", `origin/${defaultBranch}`]);
           } catch (e) {
@@ -348,17 +409,40 @@ Design: landing-discipline §4.6 (LOOP-57).`);
       }
 
       // Step 4: ff-only push (never force)
+      // LOOP-369 — count what is actually about to be pushed, so the success line can state it.
+      let toPush = 0;
+      try { toPush = Number(git(["rev-list", "--count", `origin/${defaultBranch}..${defaultBranch}`])) || 0; }
+      catch (e) { return { ok: false, blockedMsg: `could not count the commits to push: ${gitErrText(e).summary}` }; }
+      // AC4 — the one legitimate way to enter with commits and push none: origin already has them by
+      // patch, so the rebase emptied them. That is reported in its OWN words and is not a land. It is
+      // distinguishable from AC2's refusal, which exits non-zero and names commits as MISSING.
+      if (toPush === 0) {
+        // Step 1 runs before the fetch, against a possibly-stale origin ref, so "nothing to land"
+        // can only be settled here. Either way the verb SAYS which of the two it was — an exit 0
+        // that prints nothing is the same unreadable silence as a wrong success line.
+        console.log(entryAhead > 0
+          ? `doc-land: nothing new to land — the ${entryAhead} commit(s) on ${defaultBranch} are already upstream${alreadyUpstream > 0 ? ` (${alreadyUpstream} patch-equivalent to origin)` : ""}; origin/${defaultBranch} already carries this work`
+          : `doc-land: origin/${defaultBranch} is already up to date — nothing to land`);
+        return { ok: true, landed: 0 };
+      }
       try {
         git(["push", "origin", `${defaultBranch}:${defaultBranch}`]);
-        return { ok: true };
+        return { ok: true, landed: toPush };
       } catch (e) {
         return { ok: false, blockedMsg: `push rejected: ${gitErrText(e).summary}`, isRejection: true };
       }
     };
 
+    // LOOP-369 — the success line states what was PUSHED. A run that entered with commits and pushed
+    // none has no path to it: it either took AC4's already-upstream line above or refused.
+    const landedLine = (r: { landed?: number }, suffix = ""): void => {
+      if (dryRun || !r.landed) return;
+      console.log(`doc-land: landed ${r.landed} commit(s) to origin/${defaultBranch}${suffix}`);
+    };
+
     const first = await attempt();
     if (first.ok) {
-      if (!dryRun) console.log(`doc-land: landed — origin/${defaultBranch} is up to date`);
+      landedLine(first);
       return 0;
     }
 
@@ -367,7 +451,7 @@ Design: landing-discipline §4.6 (LOOP-57).`);
       process.stderr.write(`doc-land: push rejected — retrying once from fetch...\n`);
       const second = await attempt();
       if (second.ok) {
-        if (!dryRun) console.log(`doc-land: landed — origin/${defaultBranch} is up to date (after retry)`);
+        landedLine(second, " (after retry)");
         return 0;
       }
       process.stderr.write(`doc-land: BLOCKED — ${second.blockedMsg ?? "push rejected after one retry"}\n`);
