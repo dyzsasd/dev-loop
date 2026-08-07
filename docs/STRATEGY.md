@@ -134,30 +134,39 @@ Supporting goals (all in scope this milestone):
   resilience (shipped, v1.11.0) → observability/metering (LOOP-12..15 → LOOP-3 → LOOP-4);
   sequence quality-line filings behind it.*
 
-**Top priority (operator, 2026-08-01): CUT PER-FIRE COST — context and prompt compression.**
-Recorded under the explicit §9a authorization in **LOOP-228** (*"this intake IS the §9a authorization
-for the direction-section edits it implies"*). **Measured baseline — a snapshot, not a constant; re-derive it, do not quote it forward:** as of
-**2026-08-01T07:25Z**, **$627.42 across 131 priced fires = $4.79/fire** (ledger
-`.dev-loop/team/fires.jsonl`, metered era only — metering came on 2026-07-31T~14:00Z, and earlier
-fires carry no price at all). Per agent, mean $/fire: senior-dev 9.20, pm 7.44, reflect 4.60,
-junior-dev 4.41, sweep 2.90, qa 2.58. `cacheRead` is **41–61%** of every fire's bill;
-`references/conventions.md` is 75% of a PM fire's context. **The prior "~$6.68/fire over 142 metered
-fires" baseline was arithmetically impossible — two agents' stated means exceeded their own most
-expensive fire ever recorded — and is withdrawn** (found by PM under LOOP-233; re-derived
-independently and corrected by the operator, 2026-08-01 — LOOP-228 carries the corrected table).
-This
-outranks the current queue except correctness/security work already in flight. Program carried by
-**LOOP-228** (umbrella, holds the acceptance criteria) → **LOOP-232** (senior design-and-delegate) and
-**LOOP-233** (model tier — **CLOSED on the null, operator ruling 2026-08-01**: no tier change for
-pm / senior-dev / reflect, and **the bill is driven by context VOLUME, not model tier** — junior-dev,
-on the cheapest tier, reads more `cacheRead` per fire (8.69M) than pm (7.50M), senior-dev (7.12M) or
-reflect (3.79M), and sweep on sonnet is the most expensive agent per hour on this board. Do not
-re-open tiering on price; `effort` is refused on the same grounds, absent a measurement). Binding constraints from the operator: measure every
-change; never trade correctness for bytes (verification classes, block-vs-guess, §16, the §2 label
-stay); splitting files saves nothing; turns count as much as bytes; and `assembleBoot` is **not**
-re-proposed — LOOP-211/212 measured push-mode a net loss here (+44% cacheWrite / +25% cacheRead). **LOOP-239 (the per-agent cost surface) must land before this program measures
-anything against a baseline** — a figure no shipped surface can reproduce is unfalsifiable, and that
-is precisely how the withdrawn one survived a day steering the top priority.
+**SHIPPED (operator, 2026-08-06): CUT PER-FIRE COST — context and prompt compression (LOOP-228).**
+Program closed 2026-08-06T03:10Z; every child Done (LOOP-237/272/238/318/282). Verified on the
+installed 1.15.1 rather than claimed: `dev-loop conventions --agent <a>` prunes the §0a slice by
+**38–60 KB per fire** (junior-dev −59,999 B / −35%, senior-dev −58,315 B / −34%, qa −45,814 B / −27%,
+pm −37,960 B / −22%, against the full 169,401 B) — larger than the 21 KB the program claimed. The
+lever had shipped unreachable (`ENOENT` from every cwd, LOOP-351) and was repaired in 1.15.1; the
+measurement above is from after that repair. The measured-cost half is recorded as
+**not-yet-computable**, not as a result: the per-agent cost surface that would price it
+(LOOP-239) is `Canceled`, so no shipped surface can reproduce a per-fire figure today. Provenance,
+the withdrawn baselines, and the binding constraints are in `docs/strategy-archive/2026-08.md`.
+
+**Top priority (operator, 2026-08-06): MAKE THE LOOP OBSERVABLE AND SAFE.** This outranks the
+current queue except correctness/security work already in flight. Three measured gaps, each from
+this workspace's own instruments:
+
+1. **§22 leaves no durable trail.** pm 141, senior-dev 111, junior-dev 133, reflect 6 — **391 fires
+   in 7 days, zero daily reports written** (doctor W35 ×4). The operator cannot read what ran.
+2. **The board has been destroyed twice in three days.** 2026-08-04 (cascade delete, 19 tickets and
+   79 comments lost permanently) and 2026-08-06 (LOOP-367 — a `qa` fire restored the live board over
+   itself, then the daemon served an orphaned inode for 69 minutes while reporting healthy). Guards
+   have been landing per incident; LOOP-383's approval model is the first that closes the class.
+3. **Fire success is 76% over 762 fires**, `rate-limit` the top error class (85), then
+   `budget-per-fire` (12) and `stalled` (14).
+
+A fourth, found during the 2026-08-06 GitHub Actions outage and not yet a measurement of ours: a
+required check that never RAN presents as `CLEAN`, and `autoMerge` lands it — eight PRs merged on
+zero test signal (LOOP-407). The safer a PR looked, the less had been measured.
+
+First program: **LOOP-382** (pause/resume as board state) · **LOOP-383** (typed approval objects) ·
+**LOOP-384** (a `waiting-on` discriminator for Human-Blocked) · **LOOP-385** (release resilience) ·
+**LOOP-386** (the UI says when its view is stale). The through-line: every control that exists only
+in the operator's chat transcript is one the system cannot enforce, report, or recover.
+
 ## Non-goals
 
 - **Not Linear-locked.** Linear is a default, never a requirement; the loop must keep
