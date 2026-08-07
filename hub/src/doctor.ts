@@ -23,7 +23,7 @@ import { sameDaemonCode } from "./daemon-lifecycle.ts";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
-import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock } from "./team-config.ts";
+import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock, type ResolvedRepo } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { listSnapshots, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-340: W32 reads the same artifact convention Child B writes
 import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
@@ -35,7 +35,7 @@ import { claudeCliPermissions, DEVLOOP_PERMISSION, KAIZEN_PERMISSION } from "./t
 import * as metricsMod from "./metrics.ts";
 import { readLandingState } from "./landing.ts";
 const require_metrics = () => metricsMod;
-import { DOCTOR_CHECKS, runScoped, type DoctorCtx, type DoctorReport } from "./doctor-registry.ts";
+import { DOCTOR_CHECKS, runScoped, type DoctorCtx, type DoctorReport, type DoctorOut, type RepoCtx, type BoardCtx } from "./doctor-registry.ts";
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
 // the service runtime wiring (below). Library callers that only want the DB-integrity verdict (init-service
@@ -378,94 +378,105 @@ export function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void
 // Reports the E-code/W-code verdict for a dev-loop.json, that every registered repo exists and is a git
 // repo, and the two migration/leak warnings (W05 user-scope MCP for linear steward fires; W06 workspace
 // inside a git work-tree). Never writes, never repairs.
-export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null; fails: string[] }> {
-  let ok = true;
-  let stalledRepo: string | undefined;
-  let decisionStall: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null = null;
-  const fails: string[] = [];
-  const report: DoctorReport = {};
-  const pass = (m: string) => console.log("✅ " + m);
-  const fail = (m: string) => { console.log("❌ " + m); ok = false; fails.push(m); };
-  const warn = (m: string) => console.log("⚠️  " + m);
-  const info = (m: string) => console.log("•  " + m);
+// ── Registry check bodies (LOOP-428 Child C) ──────────────────────────────────
+// Every check below was inline in doctorWorkspace until Child C. They are extracted VERBATIM —
+// same conditions, same message strings, same order — so the golden harness (design §8) proves
+// no behavior change. doctorWorkspace itself is now the driver in design §5 and names no
+// individual check.
 
-  console.log(`\ndev-loop workspace — '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
-
+/** Row 1 — dev-loop.json validation (W01–W04, W07) + the two byte-budget warners. */
+export function checkConfigValidate(ws: Workspace, out: DoctorOut): void {
   const { errors, warnings } = validateTeamFile(ws.file);
-  if (errors.length) for (const e of errors) fail(`[${e.code}] ${e.path}: ${e.message}`);
-  else pass(`dev-loop.json valid (${Object.keys(ws.file.repos).length} repos, ${Object.values(ws.file.projects).filter((p) => !p.scratch).length} projects)`);
-  for (const w of [...warnings, ...checkLessonsBudget(ws), ...metricsMod.checkBudget(ws)]) warn(`[${w.code}] ${w.path}: ${w.message}`);
+  if (errors.length) for (const e of errors) out.fail(`[${e.code}] ${e.path}: ${e.message}`);
+  else out.pass(`dev-loop.json valid (${Object.keys(ws.file.repos).length} repos, ${Object.values(ws.file.projects).filter((p) => !p.scratch).length} projects)`);
+  for (const w of [...warnings, ...checkLessonsBudget(ws), ...metricsMod.checkBudget(ws)]) out.warn(`[${w.code}] ${w.path}: ${w.message}`);
+}
 
-  // Every registered repo exists on disk + is a git repo (path existence + realpath sanity).
-  for (const ref of Object.keys(ws.file.repos)) {
-    const r = effectiveRepo(ws, ref);
-    const dir = r.absPath;
-    if (!existsSync(dir)) fail(`repo '${ref}' path missing on disk: ${dir} (clone it, or /dev-loop:sync-repo)`);
-    else if (!isGitWorkTree(dir)) warn(`repo '${ref}' at ${dir} is not a git repo yet`);
-    else pass(`repo '${ref}' → ${dir}`);
-    // The add-repo --detect contract: interview-only fields stay unset, doctor makes the gap visible.
-    if (!r.deploy && !r.ops) info(`repo '${ref}' has no deploy/ops config (interview-only fields) — fill via /dev-loop:add-repo, or team set repos.${ref}.deploy.* once it deploys`);
-    // No-build-block nudge: if no build block is configured but detection finds gates in the tree,
-    // surface the gap. Info only — unwired gates are a recommendation, not a failure.
-    if (!r.build) {
-      try {
-        const detected = detectRepoFacts(dir);
-        if (detected.build && Object.keys(detected.build).length) {
-          const gates = Object.keys(detected.build).join("/");
-          info(`repo '${ref}' has no build gates configured, but detection finds ${gates} — wire them via 'dev-loop team add-repo ${ref} --detect' or 'dev-loop team set repos.${ref}.build.<gate> "<cmd>"'`);
-        }
-      } catch { /* detectRepoFacts is best-effort in doctor */ }
-    }
-    // Quality-gauntlet nudge: a repo with a test gate but no quality gate ships on binary green alone —
-    // the CRAP/mutation gate is what catches "complex ∧ untested" and tests that don't bite. Info, not a W-code.
-    if (r.build?.test && !r.build?.quality) info(`repo '${ref}' has a test gate but no quality gate — consider build.quality (e.g. "dev-loop quality --changed --threshold 30"; see references/config-schema.md)`);
+/** Row 2 (repo scope) — the repo exists on disk + is a git repo, plus the two config nudges. */
+export function checkRepoRegistered(ref: string, r: ResolvedRepo, dir: string, out: DoctorOut): void {
+  if (!existsSync(dir)) out.fail(`repo '${ref}' path missing on disk: ${dir} (clone it, or /dev-loop:sync-repo)`);
+  else if (!isGitWorkTree(dir)) out.warn(`repo '${ref}' at ${dir} is not a git repo yet`);
+  else out.pass(`repo '${ref}' → ${dir}`);
+  // The add-repo --detect contract: interview-only fields stay unset, doctor makes the gap visible.
+  if (!r.deploy && !r.ops) out.info(`repo '${ref}' has no deploy/ops config (interview-only fields) — fill via /dev-loop:add-repo, or team set repos.${ref}.deploy.* once it deploys`);
+  // No-build-block nudge: if no build block is configured but detection finds gates in the tree,
+  // surface the gap. Info only — unwired gates are a recommendation, not a failure.
+  if (!r.build) {
+    try {
+      const detected = detectRepoFacts(dir);
+      if (detected.build && Object.keys(detected.build).length) {
+        const gates = Object.keys(detected.build).join("/");
+        out.info(`repo '${ref}' has no build gates configured, but detection finds ${gates} — wire them via 'dev-loop team add-repo ${ref} --detect' or 'dev-loop team set repos.${ref}.build.<gate> "<cmd>"'`);
+      }
+    } catch { /* detectRepoFacts is best-effort in doctor */ }
   }
+  // Quality-gauntlet nudge: a repo with a test gate but no quality gate ships on binary green alone —
+  // the CRAP/mutation gate is what catches "complex ∧ untested" and tests that don't bite. Info, not a W-code.
+  if (r.build?.test && !r.build?.quality) out.info(`repo '${ref}' has a test gate but no quality gate — consider build.quality (e.g. "dev-loop quality --changed --threshold 30"; see references/config-schema.md)`);
+}
 
-  // W17 — projects with repos but no strategyDoc: the four doc-land / roadmap-banner / file-watcher
-  // consumers are silently inert without a resolvable repo-file strategyDoc pointer. ONE warning names
-  // all four consumers so the operator knows the blast radius of the missing field.
+/**
+ * Row 3 — W17: projects with repos but no strategyDoc. The four doc-land / roadmap-banner /
+ * file-watcher consumers are silently inert without a resolvable repo-file strategyDoc pointer.
+ * ONE warning names all four consumers so the operator knows the blast radius of the missing field.
+ */
+export function checkStrategyDocPointer(ws: Workspace, warn: (m: string) => void): void {
   for (const [key, p] of Object.entries(ws.file.projects)) {
     if ((p.repos ?? []).length > 0 && !p.strategyDoc)
       warn(`[W17] projects.${key}: has repos but no strategyDoc — doc-land, the /roadmap divergence banner, the strategy-doc file-watcher, and repoFileStrategyPath are inert; set it: dev-loop team set projects.${key}.strategyDoc docs/STRATEGY.md`);
   }
+}
 
-  // W05 — a linear team's steward fires run at the workspace ROOT (cwd), where a repo-level .mcp.json can't
-  // apply; the Linear MCP must be configured in USER scope or stewards are starved of the board.
+/**
+ * Row 4 — W05: a linear team's steward fires run at the workspace ROOT (cwd), where a repo-level
+ * .mcp.json can't apply; the Linear MCP must be configured in USER scope or stewards are starved
+ * of the board.
+ */
+export function checkLinearMcpScope(ws: Workspace, warn: (m: string) => void): void {
   if (ws.file.team.backend === "linear")
     warn(`[W05] linear steward fires run at the workspace root — ensure the Linear MCP is configured in USER scope (a repo .mcp.json won't apply there)`);
+}
 
-  // Director signal: 7d fire success from the fires.jsonl ledger (informational; a degrading agent —
-  // rising failures/timeouts/suspectErrors — should reach the operator without ssh'ing into logs).
-  try {
-    const { fireMetrics } = require_metrics();
-    const fm = fireMetrics(join(ws.root, ".dev-loop", "team", "fires.jsonl"), 7 * 86_400_000);
-    if (fm.fires > 0) {
-      const cls = Object.entries((fm.byErrorClass ?? {}) as Record<string, number>).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k}×${n}`).join(", ");
-      info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect${cls ? ` — top errors: ${cls}` : ""}`);
-      checkFailureTaxonomyBlind(fm, warn); // W24 (LOOP-204) — say when the line above is NOT complete
-    }
-  } catch { /* metrics are informational */ }
-
-  // W12 — comms webhook resolvability (the silent-failure killer). team.comms stores an env-var NAME
-  // (§16); when NEITHER the process env NOR .dev-loop/secrets.env supplies the VALUE, the entire
-  // notification layer silently no-ops: `notify` cannot send, the daemon Human-Blocked reminder never
-  // fires, the §22a digest never delivers — and nothing else surfaces it. Never prints the value.
-  const comms = ws.file.team.comms;
-  if (comms?.webhookEnv) {
-    loadWorkspaceSecrets(ws.root); // idempotent; makes this check self-contained for library callers
-    if (process.env[comms.webhookEnv] !== undefined) {
-      pass(`comms webhook ${comms.webhookEnv} resolvable (${secretsInjectedKeys(ws.root).has(comms.webhookEnv) ? "secrets.env" : "env"})`);
-    } else {
-      warn(`[W12] comms env ${comms.webhookEnv} unresolvable — notifications (notify / Human-Blocked reminder / §22a digest) will silently no-op; put ${comms.webhookEnv}=<url> in ${wsSecretsPath(ws.root)} or export it`);
-    }
+/**
+ * Row 5 — the 7d fire-success director signal from the fires.jsonl ledger, plus W24. Informational:
+ * a degrading agent (rising failures/timeouts/suspectErrors) should reach the operator without
+ * ssh'ing into logs.
+ */
+export function checkFiresTaxonomy(ws: Workspace, warn: (m: string) => void, info: (m: string) => void): void {
+  const { fireMetrics } = require_metrics();
+  const fm = fireMetrics(join(ws.root, ".dev-loop", "team", "fires.jsonl"), 7 * 86_400_000);
+  if (fm.fires > 0) {
+    const cls = Object.entries((fm.byErrorClass ?? {}) as Record<string, number>).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k}×${n}`).join(", ");
+    info(`fires (7d): ${fm.fires} — success ${fm.successRate === null ? "—" : Math.round(fm.successRate * 100) + "%"}, ${fm.failures} failed, ${fm.timeouts} timeout, ${fm.suspectErrors} suspect${cls ? ` — top errors: ${cls}` : ""}`);
+    checkFailureTaxonomyBlind(fm, warn); // W24 (LOOP-204) — say when the line above is NOT complete
   }
+}
 
-  // W13 — provider-registry auth resolvability (the W12 pattern; model-provider-routing). An entry whose
-  // auth env resolves neither from the process env nor .dev-loop/secrets.env makes every opencode fire on
-  // that provider fail pre-spawn (run-agents `provider-env-missing`) — surface it BEFORE the loop runs.
-  // Never prints the value.
-  const provs = ws.file.team.providers ?? {};
-  for (const [id, p] of Object.entries(provs)) {
+/**
+ * Row 6 — W12: comms webhook resolvability (the silent-failure killer). team.comms stores an env-var
+ * NAME (§16); when NEITHER the process env NOR .dev-loop/secrets.env supplies the VALUE, the entire
+ * notification layer silently no-ops: `notify` cannot send, the daemon Human-Blocked reminder never
+ * fires, the §22a digest never delivers — and nothing else surfaces it. Never prints the value.
+ */
+export function checkCommsWebhook(ws: Workspace, pass: (m: string) => void, warn: (m: string) => void): void {
+  const comms = ws.file.team.comms;
+  if (!comms?.webhookEnv) return;
+  loadWorkspaceSecrets(ws.root); // idempotent; makes this check self-contained for library callers
+  if (process.env[comms.webhookEnv] !== undefined) {
+    pass(`comms webhook ${comms.webhookEnv} resolvable (${secretsInjectedKeys(ws.root).has(comms.webhookEnv) ? "secrets.env" : "env"})`);
+  } else {
+    warn(`[W12] comms env ${comms.webhookEnv} unresolvable — notifications (notify / Human-Blocked reminder / §22a digest) will silently no-op; put ${comms.webhookEnv}=<url> in ${wsSecretsPath(ws.root)} or export it`);
+  }
+}
+
+/**
+ * Row 7 — W13: provider-registry auth resolvability (the W12 pattern; model-provider-routing). An
+ * entry whose auth env resolves neither from the process env nor .dev-loop/secrets.env makes every
+ * opencode fire on that provider fail pre-spawn (run-agents `provider-env-missing`) — surface it
+ * BEFORE the loop runs. Never prints the value.
+ */
+export function checkProviderAuth(ws: Workspace, pass: (m: string) => void, warn: (m: string) => void): void {
+  for (const [id, p] of Object.entries(ws.file.team.providers ?? {})) {
     loadWorkspaceSecrets(ws.root); // idempotent (same self-containment as W12)
     if (process.env[p.authTokenEnv] !== undefined) {
       pass(`provider '${id}' auth ${p.authTokenEnv} resolvable (${secretsInjectedKeys(ws.root).has(p.authTokenEnv) ? "secrets.env" : "env"})`);
@@ -473,169 +484,188 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
       warn(`[W13] provider '${id}' auth env ${p.authTokenEnv} unresolvable — its opencode fires fail pre-spawn (errorClass: provider-env-missing); put ${p.authTokenEnv}=<key> in ${wsSecretsPath(ws.root)} or export it`);
     }
   }
-  // W14 — workspace opencode.json carries the registry (sync drift). Read-only; the fix is operator-run.
-  if (Object.keys(provs).length) {
-    const drift = opencodeSyncDrift(ws.root, provs);
-    if (drift === null) pass(`opencode.json carries the ${Object.keys(provs).length} registry provider(s)`);
-    else warn(`[W14] ${drift} — run: dev-loop team sync-opencode`);
-  }
+}
 
-  // W15 — opencode preflight (model-provider-routing; PORTABILITY §5): the certified lane needs
-  // opencode >= 1.2.24 (`--variant`; OPENCODE_PERMISSION honored — an older binary may silently IGNORE
-  // the injected policy, the worst failure shape). Only when the config actually targets opencode.
+/** Row 8 — W14: the workspace opencode.json carries the registry (sync drift). Read-only; the fix is operator-run. */
+export function checkOpencodeDrift(ws: Workspace, pass: (m: string) => void, warn: (m: string) => void): void {
+  const provs = ws.file.team.providers ?? {};
+  if (!Object.keys(provs).length) return;
+  const drift = opencodeSyncDrift(ws.root, provs);
+  if (drift === null) pass(`opencode.json carries the ${Object.keys(provs).length} registry provider(s)`);
+  else warn(`[W14] ${drift} — run: dev-loop team sync-opencode`);
+}
+
+/**
+ * Row 9 — W15: opencode preflight (model-provider-routing; PORTABILITY §5). The certified lane needs
+ * opencode >= 1.2.24 (`--variant`; OPENCODE_PERMISSION honored — an older binary may silently IGNORE
+ * the injected policy, the worst failure shape). Only when the config actually targets opencode.
+ */
+export function checkOpencodeVersion(ws: Workspace, pass: (m: string) => void, warn: (m: string) => void): void {
   const OPENCODE_MIN_VERSION = "1.2.24";
+  const provs = ws.file.team.providers ?? {};
   const targetsOpencode = Object.keys(provs).length > 0
     || ws.file.team.defaultCodingAgent === "opencode"
     || Object.values(ws.file.team.agents ?? {}).some((a) => a?.codingAgent === "opencode")
     || Object.values(ws.file.projects).some((p) => projectCodingAgents(p).includes("opencode"));
-  if (targetsOpencode) {
-    const v = (() => { try { return execFileSync("opencode", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; } })();
-    if (!v) warn(`[W15] the config targets opencode but it is not runnable on PATH — those fires cannot launch; install opencode (certified ${OPENCODE_MIN_VERSION}, PORTABILITY §5)`);
-    else if (semverBefore(v, OPENCODE_MIN_VERSION)) warn(`[W15] opencode ${v} predates the certified ${OPENCODE_MIN_VERSION} — --variant/OPENCODE_PERMISSION behavior is unverified there (PORTABILITY §5); upgrade opencode`);
-    else pass(`opencode ${v} on PATH (certified ${OPENCODE_MIN_VERSION})`);
+  if (!targetsOpencode) return;
+  const v = (() => { try { return execFileSync("opencode", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; } })();
+  if (!v) warn(`[W15] the config targets opencode but it is not runnable on PATH — those fires cannot launch; install opencode (certified ${OPENCODE_MIN_VERSION}, PORTABILITY §5)`);
+  else if (semverBefore(v, OPENCODE_MIN_VERSION)) warn(`[W15] opencode ${v} predates the certified ${OPENCODE_MIN_VERSION} — --variant/OPENCODE_PERMISSION behavior is unverified there (PORTABILITY §5); upgrade opencode`);
+  else pass(`opencode ${v} on PATH (certified ${OPENCODE_MIN_VERSION})`);
+}
+
+/**
+ * Row 10 (board scope) — W16 owner-liveness (P1-4, the field's MP-156): an owner label whose actor
+ * never fires strands its Todo/In Review tickets forever, and nothing notices.
+ * agents.<h>.manual:true (team or project) downgrades the finding to an info line ("awaiting a human").
+ */
+export function checkOwnerLiveness(ctx: BoardCtx): void {
+  const { ws, db, projectKey: key, projectId: pid, out } = ctx;
+  const { ownerLiveness } = require_metrics();
+  const manual = new Set<string>();
+  for (const [h, a] of Object.entries(ws.file.team.agents ?? {})) if ((a as { manual?: boolean })?.manual === true) manual.add(h);
+  for (const [h, a] of Object.entries((effectiveProject(ws, key).agents ?? {}) as Record<string, { manual?: boolean }>)) if (a?.manual === true) manual.add(h);
+  for (const f of ownerLiveness(db, pid, join(ws.root, ".dev-loop", "team", "fires.jsonl"), { manualHandles: manual })) {
+    const age = f.lastFireTs ? `last fire ${f.lastFireTs.slice(0, 10)}` : "no fire on record";
+    if (f.manual) out.info(`[${key}] manual owner '${f.owner}': ${f.openTickets} open servable ticket(s) awaiting a human (oldest ${f.oldestUpdatedAt.slice(0, 10)})`);
+    else out.warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.${f.owner}.manual true is a config edit)`);
   }
+}
 
-  // W16 + W21 share the same db path; compute once to avoid repeated ?? (CC budget, LOOP-199).
-  const boardDb = opts.boardDb ?? wsHubDb(ws);
-  // Build the registry context (design §4/§5). Shared by the DOCTOR_CHECKS loop below.
-  const regCtx: DoctorCtx = { ws, opts, boardDb, out: { pass, fail, warn, info } };
-
-  // W16 — owner-liveness (P1-4, the field's MP-156): an owner label whose actor never fires strands its
-  // Todo/In Review tickets forever, and nothing notices. Service-backend only (needs the local board).
-  // agents.<h>.manual:true (team or project) downgrades the finding to an info line ("awaiting a human").
-  if (ws.file.team.backend === "service" && existsSync(boardDb)) {
-    try {
-      const { ownerLiveness } = require_metrics();
-      const db = openHubDbConn(boardDb);
-      try {
-        const manual = new Set<string>();
-        for (const [h, a] of Object.entries(ws.file.team.agents ?? {})) if ((a as { manual?: boolean })?.manual === true) manual.add(h);
-        for (const key of deliveryProjects(ws)) {
-          for (const [h, a] of Object.entries((effectiveProject(ws, key).agents ?? {}) as Record<string, { manual?: boolean }>)) if (a?.manual === true) manual.add(h);
-          const pid = findHubProject(db, key);
-          if (!pid) continue;
-          for (const f of ownerLiveness(db, pid, join(ws.root, ".dev-loop", "team", "fires.jsonl"), { manualHandles: manual })) {
-            const age = f.lastFireTs ? `last fire ${f.lastFireTs.slice(0, 10)}` : "no fire on record";
-            if (f.manual) info(`[${key}] manual owner '${f.owner}': ${f.openTickets} open servable ticket(s) awaiting a human (oldest ${f.oldestUpdatedAt.slice(0, 10)})`);
-            else warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.${f.owner}.manual true is a config edit)`);
-          }
-        }
-      } finally { db.close(); }
-    } catch { /* owner-liveness is best-effort — a missing ledger/db never fails doctor */ }
+/**
+ * Row 12 (board scope) — W21 sensitive mis-tier backstop (design sensitive-routing §§3-4):
+ * non-terminal tickets whose labels include `sensitive` AND are routed to the junior-dev tier
+ * (assignee or label). Layer-1/2 enforce at write/queue time; this layer surfaces pre-gate or
+ * raw-path rows.
+ */
+export function checkSensitiveMistier(ctx: BoardCtx): void {
+  const { db, projectKey: key, out } = ctx;
+  const { sensitiveMistier } = require_metrics();
+  const findings = sensitiveMistier(db, ctx.projectId);
+  if (findings.length) {
+    const ids = findings.map((f: { id: string }) => f.id).join(", ");
+    out.warn(`[W21] [${key}] ${findings.length} sensitive ticket(s) still assigned to junior-dev tier: ${ids} — re-tier: dev-loop ticket update <id> --assignee senior-dev --labels dev-loop,<other>,senior-dev`);
   }
+}
 
-  // W20 — operator decision queue stall: migrated to DOCTOR_CHECKS (row 11).
-
-  // W21 — sensitive mis-tier backstop (design sensitive-routing §§3-4): non-terminal tickets whose
-  // labels include `sensitive` AND are routed to the junior-dev tier (assignee or label). Layer-1/2
-  // enforce at write/queue time; this layer surfaces pre-gate or raw-path rows. Service-backend only.
-  if (ws.file.team.backend === "service" && existsSync(boardDb)) {
-    try {
-      const { sensitiveMistier } = require_metrics();
-      const db = openHubDbConn(boardDb);
-      try {
-        for (const key of deliveryProjects(ws)) {
-          const pid = findHubProject(db, key);
-          if (!pid) continue;
-          const findings = sensitiveMistier(db, pid);
-          if (findings.length) {
-            const ids = findings.map((f: { id: string }) => f.id).join(", ");
-            warn(`[W21] [${key}] ${findings.length} sensitive ticket(s) still assigned to junior-dev tier: ${ids} — re-tier: dev-loop ticket update <id> --assignee senior-dev --labels dev-loop,<other>,senior-dev`);
-          }
-        }
-      } finally { db.close(); }
-    } catch { /* W21 is best-effort — never fails doctor */ }
-  }
-
-  // W22 — landing stall: extracted to helper to keep doctorWorkspace CC in budget (design §5.1).
-  stalledRepo = await checkLandingW22Stall(ws, opts, { warn, info, pass });
-
-  // W19 — unpushed strategy/doc commits: local <defaultBranch> is ahead of origin (LOOP-56).
-  // A landing:"pr" repo where PM commits docs to local main but never pushes means every dev
-  // worktree (which branches off origin) silently misses those docs, and they land as passengers
-  // in dev PRs. Best-effort, warn/info only — NEVER flips DOCTOR_OK.
+/**
+ * Row 14 (repo scope) — W19: unpushed strategy/doc commits; local <defaultBranch> is ahead of
+ * origin (LOOP-56). A landing:"pr" repo where PM commits docs to local main but never pushes means
+ * every dev worktree (which branches off origin) silently misses those docs, and they land as
+ * passengers in dev PRs. Best-effort, warn/info only — NEVER flips DOCTOR_OK.
+ */
+export function checkUnpushedDocs(ctx: RepoCtx): void {
+  const { ref, repo, dir, out } = ctx;
+  if (ctx.ws.file.repos[ref]?.landing !== "pr") return;
+  const defaultBranch = repo.defaultBranch;
+  if (!existsSync(dir) || !isGitWorkTree(dir)) return;
   try {
-    for (const [ref, entry] of Object.entries(ws.file.repos)) {
-      if (entry.landing !== "pr") continue;
-      const { absPath: dir, defaultBranch } = effectiveRepo(ws, ref);
-      if (!existsSync(dir) || !isGitWorkTree(dir)) continue;
-      try {
-        const r = spawnSync("git", ["-C", dir, "rev-list", "--count", `origin/${defaultBranch}..${defaultBranch}`],
-          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-        if (r.status !== 0 || r.error) {
-          // origin/<branch> ref absent or git error — unknown, never warn (§LOOP-56 AC)
-          info(`[${ref}] W19: cannot check ahead-of-origin (origin/${defaultBranch} not resolved; best-effort)`);
-          continue;
-        }
-        const ahead = parseInt(r.stdout.trim(), 10);
-        if (isNaN(ahead)) { info(`[${ref}] W19: rev-list output unexpected — skipping`); continue; }
-        if (ahead > 0) {
-          const qualifier = gitRefQualifier(dir, defaultBranch);
-          warn(`[W19] [${ref}] local ${defaultBranch} is ${ahead} commit(s) ahead of origin/${defaultBranch} (${qualifier}, as of last fetch) — unpushed strategy/doc commits are invisible to every dev worktree (they branch off origin). Land them: dev-loop doc-land (design landing-discipline §4), or the operator runbook §4.3. Do NOT 'git reset --hard origin/${defaultBranch}' — it destroys them.`);
-        }
-        // ahead === 0: in sync, silent
-      } catch { info(`[${ref}] W19: git check skipped (best-effort)`); }
+    const r = spawnSync("git", ["-C", dir, "rev-list", "--count", `origin/${defaultBranch}..${defaultBranch}`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    if (r.status !== 0 || r.error) {
+      // origin/<branch> ref absent or git error — unknown, never warn (§LOOP-56 AC)
+      out.info(`[${ref}] W19: cannot check ahead-of-origin (origin/${defaultBranch} not resolved; best-effort)`);
+      return;
     }
-  } catch { /* W19 is best-effort — never fails doctor */ }
-
-  // W18 — installed CLI vs origin/main skew (LOOP-46 / design landing-observability §9.3).
-  // Extracted to helper to keep doctorWorkspace CC in budget. Best-effort; never flips DOCTOR_OK.
-  let skewResult: { codeBehind: number; version: string } | null = null;
-  try { skewResult = checkInstalledCliSkew(ws, { warn, info, pass }) ?? null; } catch { /* W18 is best-effort */ }
-
-  // W23 — CLI-rename permission drift (LOOP-181 / Phase A): a workspace whose .claude/settings.json was
-  // provisioned before the `kaizen` bin landed allows Bash(dev-loop *) but not Bash(kaizen *). Harmless
-  // today (still types `dev-loop`), but the instant prose flips to `kaizen` (Phase B) that
-  // workspace's fires are denied board access. Pre-emptive + warn-only (never flips DOCTOR_OK); the
-  // top-up is one command. Best-effort — a missing/malformed settings.json is not a drift finding.
-  try {
-    const perms = claudeCliPermissions(ws.root);
-    if (perms && perms.devloop && !perms.kaizen)
-      warn(`[W23] ${join(ws.root, ".claude", "settings.json")} allows ${DEVLOOP_PERMISSION} but not ${KAIZEN_PERMISSION} — the CLI is gaining a \`kaizen\` alias (LOOP-181); top up the allow-list so fires keep board access when prose flips: dev-loop team repair`);
-  } catch { /* W23 is best-effort — never fails doctor */ }
-
-  // ── DOCTOR_CHECKS-driven rows (design §4/§5) ──────────────────────────────────────
-  // 11 migrated rows: W20 (row 11) + rows 17-26. Every other check stays inline and runs
-  // after the table so the printed output order is unchanged (the golden proves it).
-  // Child C migrates the remaining 18 inline checks into the table.
-  for (const check of DOCTOR_CHECKS) {
-    try {
-      Object.assign(report, await runScoped(check, regCtx) ?? {});
-    } catch (e) {
-      if (check.bestEffort === false) throw e;
+    const ahead = parseInt(r.stdout.trim(), 10);
+    if (isNaN(ahead)) { out.info(`[${ref}] W19: rev-list output unexpected — skipping`); return; }
+    if (ahead > 0) {
+      const qualifier = gitRefQualifier(dir, defaultBranch);
+      out.warn(`[W19] [${ref}] local ${defaultBranch} is ${ahead} commit(s) ahead of origin/${defaultBranch} (${qualifier}, as of last fetch) — unpushed strategy/doc commits are invisible to every dev worktree (they branch off origin). Land them: dev-loop doc-land (design landing-discipline §4), or the operator runbook §4.3. Do NOT 'git reset --hard origin/${defaultBranch}' — it destroys them.`);
     }
-  }
+    // ahead === 0: in sync, silent
+  } catch { out.info(`[${ref}] W19: git check skipped (best-effort)`); }
+}
 
-  // W06 — git-work-tree leak checks: committable .dev-loop state/reports (I5 neighbor) or a bundle
-  // artifact carrying every secret VALUE + hub.db (LOOP-210). Extracted to a helper (same pattern as
-  // W26) to keep doctorWorkspace's cyclomatic complexity within the CRAP-ratchet budget; see
-  // checkGitTreeLeaks.
-  // LOOP-231: also check every configured repo work tree (same pattern as W19/W26).
+/**
+ * Row 16 — W23: CLI-rename permission drift (LOOP-181 / Phase A). A workspace whose
+ * .claude/settings.json was provisioned before the `kaizen` bin landed allows Bash(dev-loop *) but
+ * not Bash(kaizen *). Harmless today (still types `dev-loop`), but the instant prose flips to
+ * `kaizen` (Phase B) that workspace's fires are denied board access. Pre-emptive + warn-only.
+ */
+export function checkPermissionDrift(ws: Workspace, warn: (m: string) => void): void {
+  const perms = claudeCliPermissions(ws.root);
+  if (perms && perms.devloop && !perms.kaizen)
+    warn(`[W23] ${join(ws.root, ".claude", "settings.json")} allows ${DEVLOOP_PERMISSION} but not ${KAIZEN_PERMISSION} — the CLI is gaining a \`kaizen\` alias (LOOP-181); top up the allow-list so fires keep board access when prose flips: dev-loop team repair`);
+}
+
+/** Row 27 — W06 git-work-tree leak check on the workspace root. */
+export function checkTreeLeaksWorkspace(ws: Workspace, warn: (m: string) => void, info: (m: string) => void): void {
   checkGitTreeLeaks(ws.root, "workspace root", warn, info);
-  for (const ref of Object.keys(ws.file.repos)) {
-    const { absPath: dir } = effectiveRepo(ws, ref);
-    if (existsSync(dir) && isGitWorkTree(dir))
-      checkGitTreeLeaks(dir, `repo '${ref}'`, warn, info);
-  }
+}
 
-  // W27 — null-assignee stranded tickets in split-dev (LOOP-244): in a split-dev project a null
-  // assignee makes a ticket invisible to every actor's servable slice and to todoDepth. Extracted to
-  // helper to keep doctorWorkspace CC in budget. Best-effort; never flips DOCTOR_OK.
-  if (ws.file.team.backend === "service" && existsSync(boardDb)) {
-    try {
-      const db = openHubDbConn(boardDb);
+/** Row 28 (repo scope) — W06 on each configured repo work tree (LOOP-231, same pattern as W19/W26). */
+export function checkTreeLeaksRepo(ctx: RepoCtx): void {
+  if (existsSync(ctx.dir) && isGitWorkTree(ctx.dir))
+    checkGitTreeLeaks(ctx.dir, `repo '${ctx.ref}'`, ctx.out.warn, ctx.out.info);
+}
+
+/**
+ * Row 29 (board scope) — W27: null-assignee stranded tickets in split-dev (LOOP-244). In a
+ * split-dev project a null assignee makes a ticket invisible to every actor's servable slice and
+ * to todoDepth.
+ */
+export function checkNullAssigneeRow(ctx: BoardCtx): void {
+  const { ws, db, projectKey: key, projectId: pid, out } = ctx;
+  checkNullAssigneeStranded(db, pid, effectiveProject(ws, key).devSplit ?? false, (m) => out.warn(`[W27] [${key}] ${m}`));
+}
+
+/**
+ * Row 22 (board scope) — W31 tier starvation, on the DRIVER's db handle (design §7: this is the one
+ * check whose internals change). The per-project loop and the db open/close it used to do itself now
+ * belong to the driver; `checkTierStarvation` below keeps the old signature for its existing test.
+ */
+export function checkTierStarvationRow(ctx: BoardCtx): void {
+  const { ws, db, projectKey: key, projectId: pid, out } = ctx;
+  if (!(effectiveProject(ws, key).devSplit ?? false)) return; // one tier ⇒ no starved sibling to name
+  const cap = resolveTodoDepthCap(ws, key);
+  const todo = servableTodoDepth(db, pid);
+  const backlog = servableBacklogDepth(db, pid);
+  for (const tier of ["senior-dev", "junior-dev"] as const) {
+    const idle = cap - todo[tier];
+    if (idle < 1) continue;              // at or over cap — a full queue is not starvation
+    if (backlog[tier] > 0) continue;     // candidates exist — that is a grooming pass, not starvation
+    const sibling = tier === "senior-dev" ? "junior-dev" : "senior-dev";
+    out.warn(`[W31] [${key}] '${tier}' has ${idle} idle Todo slot(s) (${todo[tier]}/${cap}) and ZERO promotable Backlog — it can neither pull nor be given work, while '${sibling}' holds ${backlog[sibling]} Backlog candidate(s). Promote or re-tier: a tier with capacity and nothing it may pull is idle capacity nobody is charged for noticing.`);
+  }
+}
+
+/**
+ * doctorWorkspace — the DRIVER (design §5). It builds the four output sinks and the context, then
+ * runs DOCTOR_CHECKS in array order; array order IS the printed order (design §7). It names no
+ * individual check. The board db is opened LAZILY on the first board row and closed once here, which
+ * is why exactly one openHubDbConn call remains on this path.
+ */
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null; fails: string[] }> {
+  let ok = true;
+  const fails: string[] = [];
+  const out: DoctorOut = {
+    pass: (m: string) => console.log("✅ " + m),
+    fail: (m: string) => { console.log("❌ " + m); ok = false; fails.push(m); },
+    warn: (m: string) => console.log("⚠️  " + m),
+    info: (m: string) => console.log("•  " + m),
+  };
+
+  console.log(`\ndev-loop workspace — '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
+
+  const ctx: DoctorCtx = { ws, opts, boardDb: opts.boardDb ?? wsHubDb(ws), out };
+  const report: DoctorReport = {};
+  // Opened LAZILY on the first board row, closed once below. Held in an object rather than a bare
+  // `let` so the assignment inside the getter closure stays visible to control-flow analysis.
+  const held: { db: DatabaseSync | null } = { db: null };
+
+  try {
+    for (const check of DOCTOR_CHECKS) {
+      if (check.applies && !check.applies(ctx)) continue;
       try {
-        for (const key of deliveryProjects(ws)) {
-          const pid = findHubProject(db, key);
-          if (!pid) continue;
-          checkNullAssigneeStranded(db, pid, effectiveProject(ws, key).devSplit ?? false, (m) => warn(`[W27] [${key}] ${m}`));
-        }
-      } finally { db.close(); }
-    } catch { /* W27 is best-effort — never fails doctor */ }
-  }
+        Object.assign(report, await runScoped(check, ctx, () => (held.db ??= openHubDbConn(ctx.boardDb))) ?? {});
+      } catch (e) {
+        if (check.bestEffort === false) throw e;
+      }
+    }
+  } finally { held.db?.close(); }
 
-  // Object.assign spread from W20 (via DOCTOR_CHECKS) + inline W22/W18 assignments
-  return { ok, stalledRepo: stalledRepo ?? report.stalledRepo, decisionStall: report.decisionStall ?? decisionStall, skewResult: skewResult ?? report.skewResult, fails };
+  return { ok, stalledRepo: report.stalledRepo, decisionStall: report.decisionStall ?? null, skewResult: report.skewResult ?? null, fails };
 }
 
 export function isGitWorkTree(dir: string): boolean {
@@ -771,7 +801,7 @@ export function checkLessonsLiveness(ws: Workspace, warn: (m: string) => void): 
   } catch { /* best-effort — never fails doctor */ }
 }
 
-// W26 helper — extracted to keep doctorWorkspace CC in budget (LOOP-215). Best-effort; never throws.
+// W26 helper (LOOP-215) — registry row 17. Best-effort; never throws.
 export function warnUnmergedPaths(ws: Workspace, warn: (msg: string) => void): void {
   try {
     for (const ref of Object.keys(ws.file.repos)) {
@@ -1281,7 +1311,7 @@ function unignoredBundleArtifacts(root: string): { path: string; state: "untrack
   return pairs.map(([path, state]) => ({ path, state }));
 }
 
-// W27 helper — extracted to keep doctorWorkspace CC in budget (LOOP-244). Best-effort; never throws.
+// W27 helper (LOOP-244) — registry row 29 (board scope). Best-effort; never throws.
 // Flags non-terminal null-assignee tickets unreachable by every actor. Backlog is never flagged
 // (PM's backlog queue is label-blind in both modes — LOOP-293). Todo is only flagged in split-dev
 // (mine() makes null Todo dev's own in legacy); owner-labelled rows without a dev-tier get an operator
@@ -1362,7 +1392,7 @@ function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplit
 // W22 — landing stall: forge glance, warn/info only, never flips DOCTOR_OK (design §5.1).
 // Fires only when ≥1 qualifying repo (landing:"pr" + autoMerge). DEVLOOP_DOCTOR_NO_FORGE=1 → skip.
 // Returns the first stalled ghRepo name (for NEXT flip), or undefined.
-async function checkLandingW22Stall(
+export async function checkLandingW22Stall(
   ws: Workspace,
   opts: { exec?: import("./landing.ts").ExecFn },
   out: { warn: (m: string) => void; info: (m: string) => void; pass: (m: string) => void }
@@ -1429,7 +1459,7 @@ function gitRefQualifier(dir: string, branch: string): string {
 // case). For all normal product workspaces this is a zero-cost n/a — no git calls, no output.
 // DEVLOOP_W18_PKG_JSON overrides the package.json path for test injection (no real reinstall needed).
 // Returns { codeBehind, version } when honest code-commit skew > 0 (for the §9.8 NEXT hint); null otherwise.
-function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; info: (m: string) => void; pass: (m: string) => void }): { codeBehind: number; version: string } | null {
+export function checkInstalledCliSkew(ws: Workspace, out: { warn: (m: string) => void; info: (m: string) => void; pass: (m: string) => void }): { codeBehind: number; version: string } | null {
   const { warn, info, pass } = out;
   const here = dirname(fileURLToPath(import.meta.url));
   const pkgFile = process.env.DEVLOOP_W18_PKG_JSON ?? join(here, "..", "package.json");
