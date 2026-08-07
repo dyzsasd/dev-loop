@@ -5,11 +5,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execFileSync, spawn } from "node:child_process";
-import { rmSync, statSync, writeFileSync, existsSync, mkdtempSync, mkdirSync } from "node:fs";
+import { rmSync, statSync, readFileSync, writeFileSync, existsSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import { pkgVersion } from "../src/paths.ts";
+import { pkgVersion, pkgBuildCommit } from "../src/paths.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 
 const DB = "/tmp/hub-iso/hub.db";
@@ -210,7 +210,55 @@ writeFileSync(cfgCli, JSON.stringify({ projects: { alpha: { backend: "service", 
 const cliR = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: cfgCli, DEVLOOP_RUN_DIR: emptyRun, DEVLOOP_PLUGIN_ROOT: emptyRoot });
 ok(cliR.code === 0 && cliR.out.includes('.mcp.json — not required') && !cliR.out.includes("is not registered"),
    "doctor: a service project on interface=cli (D9 default) reports the .mcp.json registration NOT REQUIRED (no false 're-run init' warn)");
-try { for (const d of [recRoot, bareRepo, emptyRun, emptyRoot, okRepo, okRoot, okRun, binRepo]) rmSync(d, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
+// ── LOOP-364: W28 / daemon status must use sameDaemonCode, not version-only ──────────
+// Regression: same version + different buildCommit should warn; same version + same commit should not.
+{
+  // In dev worktrees build-commit.json is absent; write one so pkgBuildCommit() returns a real value.
+  const BC_FILE = new URL("../build-commit.json", import.meta.url).pathname;
+  const BC_BAK = existsSync(BC_FILE) ? readFileSync(BC_FILE, "utf8") : null;
+  const TEST_COMMIT = "0123456789abcdef0123456789abcdef01234567";
+  writeFileSync(BC_FILE, JSON.stringify({ commit: TEST_COMMIT }));
+  // Force re-read: pkgBuildCommit() caches; a fresh import is not possible, but the doctor
+  // subprocess reads the file fresh. In THIS process we use the hardcoded TEST_COMMIT.
+  try {
+    const l364run = mkdtempSync(join(tmpdir(), "l364-run-"));
+    const l364cfg = join(recRoot, "l364.projects.json");
+    writeFileSync(l364cfg, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: bareRepo } } }));
 
-console.log(fails === 0 ? "\nHUB_ISOLATION_OK" : `\n${fails} CHECK(S) FAILED`);
+    const withStub = async (body: object): Promise<{ out: string; code: number }> => {
+      const s = createServer((_req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(body)); });
+      await new Promise<void>((r) => s.listen(0, "127.0.0.1", () => r()));
+      const port = (s.address() as { port: number }).port;
+      writeFileSync(join(l364run, "daemon-alpha.json"), JSON.stringify({ project: "alpha", pid: process.pid, port, host: "127.0.0.1", url: `http://127.0.0.1:${port}`, startedAt: "2026-01-01T00:00:00.000Z" }));
+      const result = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: l364cfg, DEVLOOP_RUN_DIR: l364run, DEVLOOP_PLUGIN_ROOT: emptyRoot });
+      s.close();
+      return result;
+    };
+
+    // Case 1 (AC1): same version, DIFFERENT buildCommit → W28
+    const diffCommit = await withStub({ ok: true, project: "alpha", version: pkgVersion(), buildCommit: "0000000000000000000000000000000000000000" });
+    ok(diffCommit.out.includes("daemon /api/health reachable"), "LOOP-364 AC1: pass line present when commit differs");
+    ok(diffCommit.out.includes("[W28]") && diffCommit.out.includes("running old code"), "LOOP-364 AC1: same version + different commit triggers W28");
+    ok(diffCommit.code !== 0 && diffCommit.out.includes("DOCTOR_FAILED"), "LOOP-364 AC1: W28 flips exit to DOCTOR_FAILED");
+
+    // Case 2 (AC3): same version, SAME buildCommit → no W28
+    // Use TEST_COMMIT directly (not pkgBuildCommit()) to avoid caching issues in the test process
+    const sameCommit = await withStub({ ok: true, project: "alpha", version: pkgVersion(), buildCommit: TEST_COMMIT });
+    ok(sameCommit.out.includes("daemon /api/health reachable"), "LOOP-364 AC3: pass line present when commit matches");
+    ok(!sameCommit.out.includes("[W28]"), "LOOP-364 AC3: same version + same commit produces no W28");
+    ok(sameCommit.code === 0 && sameCommit.out.includes("DOCTOR_OK"), "LOOP-364 AC3: no W28 means DOCTOR_OK");
+
+    // Case 3 (AC4): buildCommit absent on both sides → version-only, no W28 (npm compat)
+    const noCommit = await withStub({ ok: true, project: "alpha", version: pkgVersion() });
+    ok(!noCommit.out.includes("[W28]"), "LOOP-364 AC4: buildCommit absent → no W28 (version-only fallback)");
+    ok(noCommit.code === 0 && noCommit.out.includes("DOCTOR_OK"), "LOOP-364 AC4: no W28 means DOCTOR_OK");
+
+    try { rmSync(l364run, { recursive: true, force: true }); } catch { /* best-effort */ }
+  } finally {
+    // Restore build-commit.json to original state
+    if (BC_BAK !== null) writeFileSync(BC_FILE, BC_BAK);
+    else try { rmSync(BC_FILE); } catch { /* best-effort */ }
+  }
+}
+
 process.exit(fails === 0 ? 0 : 1);
