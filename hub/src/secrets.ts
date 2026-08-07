@@ -54,6 +54,41 @@ export function secretsInjectedKeys(root: string): ReadonlySet<string> {
   return injectedByRoot.get(root) ?? new Set();
 }
 
+// Which keys the workspace DECLARES in its secrets.env — read from the file, independent of whether
+// the loader injected any of them. This is the set the per-fire strip needs (LOOP-432): "may this
+// fire hold this key?" is a POLICY question about the workspace's declared credentials, whereas
+// `secretsInjectedKeys` answers a PROVENANCE question ("did we write it, or was it already
+// exported?"). Keying the strip on provenance let a declared key that the operator ALSO exported in
+// the launching shell survive into every fire — the value is identical, only its route differed.
+// Same silent-no-op contract as loadWorkspaceSecrets: an absent or unreadable file yields an empty
+// set, never a throw, so a fire is never blocked by a missing/rotated secrets file.
+export function secretsDeclaredKeys(root: string): ReadonlySet<string> {
+  let content: string;
+  try { content = readFileSync(wsSecretsPath(root), "utf8"); } catch { return new Set(); }
+  return new Set(Object.keys(parseSecretsEnv(content)));
+}
+
+// Apply the per-fire secret scope to a fire env, IN PLACE, and report what it did by NAME.
+// `declared` is the workspace's declared key set (secretsDeclaredKeys); `keep` is the one auth lane
+// this fire's own runner resolves in-process. One loop is both the action and the report, so the
+// dry-run line (§16-safe: names only) cannot drift from the deletion it describes — a caller that
+// narrows `declared` narrows the log by the same step.
+// `kept` reports only keys actually PRESENT in the env: a keep-set entry the operator never set is
+// not something this fire is holding, and naming it would overstate the fire's credential surface.
+export function scopeFireSecrets(
+  env: Record<string, string | undefined>,
+  declared: Iterable<string>,
+  keep: ReadonlySet<string>,
+): { stripped: string[]; kept: string[] } {
+  const stripped: string[] = [];
+  for (const k of declared) {
+    if (keep.has(k)) continue;
+    if (env[k] !== undefined) stripped.push(k);
+    delete env[k];
+  }
+  return { stripped: stripped.sort(), kept: [...keep].filter((k) => env[k] !== undefined).sort() };
+}
+
 // Hydrate process.env from `<root>/.dev-loop/secrets.env`. Idempotent; called on every workspace
 // resolution (cheap: one read), so a daemon/scheduler that re-resolves keeps working after the file
 // first appears.

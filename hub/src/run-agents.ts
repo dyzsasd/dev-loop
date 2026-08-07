@@ -14,7 +14,7 @@ import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } f
 import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { notify } from "./comms.ts";
-import { secretsInjectedKeys } from "./secrets.ts"; // Q9: the per-fire secret-scoping strip set
+import { secretsDeclaredKeys, scopeFireSecrets } from "./secrets.ts"; // Q9/LOOP-432: the per-fire secret-scoping strip set
 import { assembleBootCorpus } from "./boot-prefix.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
@@ -1022,26 +1022,34 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   // ── Per-fire secret scoping (one-click Q9 / §7 boundary 5) ────────────────────────────────────────
   // Every fire's build/test/detect grandchildren inherit the fire env, so a secrets.env hydrated into
   // THIS scheduler's process.env would hand every key to every script an agent runs. Scope it: strip
-  // every key the WORKSPACE secrets file injected (secretsInjectedKeys — the §16 value set), then
-  // re-add only what THIS fire's own runner needs in-process:
+  // every key the WORKSPACE secrets file DECLARES (secretsDeclaredKeys), then re-add only what THIS
+  // fire's own runner needs in-process:
   //   • its registry provider's authTokenEnv (opencode resolves {env:VAR} in-process);
   //   • the ANTHROPIC_* ambient keys on a claude fire (its own auth lane).
   // Everything else re-sources from the FILE at use time — the `dev-loop` CLI grandchildren re-hydrate
   // secrets.env on workspace resolution (comms webhook for `notify`, mirror tokens), and git auth rides
   // the GIT_ASKPASS/deploy-key files (§4.1a) — so stripping loses no capability, only exposure. The
   // decrypt key (DEVLOOP_BUNDLE_KEY / AGE_IDENTITY_FILE) and the UI token never belong in a fire.
-  {
-    const injected = secretsInjectedKeys(opts.wsRoot ?? "");
+  //
+  // DECLARED, not injected (LOOP-432): `secretsInjectedKeys` is a provenance set — the loader records a
+  // key only when the real env did NOT already have one (secrets.ts, env-wins). So a declared key the
+  // operator also exported in the launching shell was never in it, and survived into every fire that
+  // had no lane for it. The strip is a policy question, and policy cannot key on which route the value
+  // took. Anything stripped here is by construction a key IN secrets.env, hence re-hydratable by the
+  // very mechanism the paragraph above relies on.
+  const secretScope = ((): { stripped: string[]; kept: string[] } => {
     const keep = new Set<string>();
     if (providerEntry) keep.add(providerEntry.authTokenEnv);
     if (profile.codingAgent === "claude") { keep.add("ANTHROPIC_API_KEY"); keep.add("ANTHROPIC_AUTH_TOKEN"); }
     if (profile.codingAgent === "codex") keep.add("OPENAI_API_KEY"); // its own auth lane, same rule as claude's
-    for (const k of injected) if (!keep.has(k)) delete env[k];
+    // The four absolute removals run FIRST, so the reported scope can never name one of them as
+    // `kept` — these leave a fire whatever the keep-set or the declared set says.
     delete env.DEVLOOP_BUNDLE_KEY;
     delete env.AGE_IDENTITY_FILE;
     delete env.DEVLOOP_UI_TOKEN;
     delete env.DEVLOOP_UI_TOKEN_FILE;
-  }
+    return scopeFireSecrets(env, secretsDeclaredKeys(opts.wsRoot ?? ""), keep);
+  })();
   if (profile.codingAgent === "opencode") {
     // Certified permission injection (PORTABILITY §5): wildcard-deny is what closes operator-installed
     // custom exec tools (they escape narrow patterns AND can drop the identity env — the tmux finding).
@@ -1077,6 +1085,9 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     const stallStr = effectiveStallMs > 0 ? formatDuration(effectiveStallMs) : "off";
     console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${dryProvider ? ` provider=${dryProvider}` : ""}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""} fireTimeout=${fireStr} stallTimeout=${stallStr}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
+    // §16: key NAMES only — this line exists so the operator can see which declared credentials a fire
+    // actually holds, and rendering any VALUE here would defeat the strip it is reporting on.
+    console.log(`[dry-run] ${agent}: secrets: stripped ${secretScope.stripped.join(", ") || "(none)"}; kept ${secretScope.kept.join(", ") || "(none)"}`);
     if (providerEnvMissing) console.log(`[dry-run] ${agent}: NOTE provider auth env ${providerEnvMissing} unresolvable — a real fire fails pre-spawn (doctor W13)`);
     return 0;
   }
