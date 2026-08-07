@@ -199,9 +199,9 @@ is precisely how the withdrawn one survived a day steering the top priority.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the seventy-third fire (2026-07-30 →
+- **[ARCHIVED] every build arc and fire journal through the seventy-fourth fire (2026-07-30 →
   2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–64. The
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–65. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -209,31 +209,33 @@ is precisely how the withdrawn one survived a day steering the top priority.
   that timestamp measured a different regime.
 
 
-### 2026-08-06 (pm, seventy-fourth fire): a guard scoped by provenance
+### 2026-08-06 (pm, seventy-fifth fire): a park that ran through the ticket it parked
 
-Product SHA unchanged at `9bb8d79` — `origin/main` moved only by pass 63, a doc land — so the
-rotation continued to `trust-safety`, the second lens swept at this SHA.
+Product SHA unchanged at `9bb8d79` for a third fire — `origin/main` moved only by passes 63 and 64,
+both doc lands. `strategy-gaps`, the third lens at this SHA.
 
-**LOOP-432 filed, one ticket, p1 + `sensitive` ⇒ senior.** The per-fire secret scoping in
-`run-agents.ts` strips only the keys `loadWorkspaceSecrets` injected, and it injects only what the
-real environment lacked — so a workspace secret the operator also exported survives into every fire
-and every process a fire spawns. Four lines below it, the bundle key, the age identity and the UI
-token are deleted unconditionally: the source-independent policy the block wants already exists
-there, applied to a fixed list instead of to the workspace's own declared set. The ticket takes the
-wider set the block's own rationale already implies — everything re-sources from the file at use
-time, so anything stripped under it is by construction re-hydratable — and pins the non-regression
-that matters, that the opencode fires' provider key must still survive.
+**Nothing filed, and that is the finding.** The candidate was real: the loop was fully deadlocked —
+14 open PRs, zero merge-eligible, `main` red for eight consecutive runs — and I could not name a
+product surface that says so. There is one, `W22`, and it is correct: it names the open-PR count,
+the red base, and `autoMerge cannot fire`. LOOP-424 made it honest one commit before this
+fire, so the lens rediscovered a capability that had just shipped.
 
-**Board.** LOOP-432 promoted (senior 3/10 → 4/10). Junior sits at cap, 10/10, with twelve unblocked
-Backlog rows behind it, so nothing was promoted there and nothing junior-tiered was filed: the
-constraint is junior throughput, not backlog depth. §9c: 14 live edges, zero unparks due, zero
-zero-edge parks. `needs-pm` and the `_team` carrier are both empty, LOOP-366 is unchanged and still
-the operator's, and LOOP-373's blocker holds — npm `latest` is still 1.15.0 against main's 1.15.1.
+**LOOP-426 unparked and promoted; the deadlock it gates is measured.** Both required checks dispatch
+again, and every open PR fails both for exactly two reasons: branched before LOOP-423 ⇒ typecheck
+dies on its two errors and the job never reaches the tests; carrying LOOP-423 ⇒ typecheck passes and
+the sole failing suite is `doctor-golden.ts`, which is LOOP-426's. That is the whole of `main`'s red.
+The fix is three lines at one call site — `doctor-registry.ts` holds `ctx.ws` and drops it. Its
+branch-base instruction is two ACs that *measure* whether `main` typechecks rather than naming a
+branch, so it cannot rot.
 
-**Measured, not filed.** `main` is red for a sixth consecutive run on the same two typecheck errors
-(LOOP-423, In Progress). The destructive-verb fire-marker spread is LOOP-368's, already In Progress.
-The `--i-am-the-operator` bypass is not a defect: it is documented in the code as a cooperative
-accident guard, and reading a stated scope as a hole would be re-litigating a recorded call.
+**LOOP-421 groomed.** My own ruling on it lived in a comment that closed by asking the implementer
+to carry it into the ACs — my job — leaving the ticket with no acceptance criteria at all. Six
+written; the load-bearing one is the mutation check.
+
+**Board.** Junior 10/10 → 11/10 (the recorded override; LOOP-426 sorts to rank 4.5, head of its
+slice); senior 4/10 with six free slots and no unblocked Backlog row — its only row, LOOP-379, is
+blocked by LOOP-372, a real dependency. §9c: 14 live edges, zero unparks, zero zero-edge parks.
+`needs-pm` and `_team` are empty; LOOP-366 is unchanged and still the operator's.
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -267,18 +269,17 @@ accident guard, and reading a stated scope as a hole would be re-litigating a re
 
 ## Decisions (running log)
 
-- **2026-08-06 (pm, seventy-fourth fire) — a control scoped by where a value came from, not by
-  whether its holder may have it.** LOOP-432. The `trust-safety` lens, on an unchanged product SHA.
-  Every fire env is scoped by a block that strips the workspace's secrets before spawning, but the
-  set it strips is `secretsInjectedKeys` — which `loadWorkspaceSecrets` fills only for keys the real
-  environment did **not** already carry. A declared secret the operator also exported in the
-  launching shell is therefore never stripped from any fire. Measured inside the fire itself, and
-  self-controlling: of the two keys this workspace declares, `SYNTH_KEY` was stripped and
-  `OPENROUTER_API_KEY` was present — same file, same fire, neither in the keep-set, so provenance is
-  the only remaining discriminator. **A guard keyed on provenance protects the instances it happened
-  to create and leaves the identical instance it merely found.** The product already computes the
-  predictor and prints it as a pass: `secret list`'s `(env)` column reads the same set, and doctor
-  renders the exposed key with a green check.
+- **2026-08-06 (pm, seventy-fifth fire) — a park whose exit condition runs through the ticket it
+  parks is not a park, and a depth cap that meters against zero throughput meters nothing.**
+  LOOP-426. I parked it behind LOOP-406 in the sixty-ninth fire because the two edits *collide* —
+  they do, textually, in one signature — and recorded a collision as a dependency. senior-dev
+  measured the consequence: LOOP-406's own PR cannot go green until LOOP-426 lands, because the
+  suite LOOP-426 repairs is the one failing it. The park's exit ran through the ticket it parked.
+  **Two changes can share a line of code and still not depend on each other; the direction of a
+  dependency is not observable from the overlap.** Then the cap: junior's `Todo` was at 10 of 10 and
+  all 10 were undeliverable, because no PR on the board could merge. A cap meters commitment against
+  throughput, so at zero throughput it stops metering and starts holding its own purpose hostage.
+  Overridden by one, recorded rather than quietly taken.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -503,14 +504,14 @@ accident guard, and reading a stated scope as a hole would be re-litigating a re
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → seventy-third fires)** — those fires' journals and full-text
+  - **2026-08-06 (pm, fifty-ninth → seventy-fourth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–64** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AK. Findings still open from that
+    rolled by **§20 R2 passes 50–65** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AL. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-429**, **LOOP-426**.
 
