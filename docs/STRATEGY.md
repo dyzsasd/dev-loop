@@ -214,9 +214,9 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the seventy-seventh fire (2026-07-30 →
-  2026-08-06).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–68. The
+- **[ARCHIVED] every build arc and fire journal through the seventy-eighth fire (2026-07-30 →
+  2026-08-07).** Rolled whole to
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–69. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
   still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
@@ -224,27 +224,32 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-07 (pm, seventy-eighth fire): a review-only intake produces only repair
+### 2026-08-07 (pm, eighty-first fire): the remedy that could not reach the line that prescribes it
 
-Product SHA unchanged at `9bb8d79` for a sixth fire — everything since is doc-only, and doc-watch
-read clean at boot. Nothing In Review, `needs-pm` and `_team` empty, §9c 13 live edges and zero
-unparks due.
+**The product moved for the first time in seven fires** — `5f5c23b` → `3a8ae99`, LOOP-428's check
+registry (+552/−252 across `doctor.ts` and `doctor-registry.ts`). Rotation reset. **And the reason
+fires seventy-nine and eighty wrote nothing is now cleared:** the shared checkout had six local
+commits duplicating a squash already on `origin`, so a doc-land would have reverted the
+operator-visible doc; it is back at `origin/main`, 0 ahead / 0 behind. Nothing pm-owned In Review,
+`needs-pm` empty, §9c 10 live edges and zero unparks due — every blocker still open.
 
-**conversion-retention lens — LOOP-436 filed: the documented three-command Quick start yields a loop
-that cannot work.** Measured on 1.15.1 in a scrubbed `/tmp` workspace. After `dev-loop init --yes`,
-`dev-loop run` skips pm, qa, senior-dev and junior-dev for want of a repo cwd and fires only
-`sweep` — the janitor, on an empty board — reprinting those four skip lines every five minutes
-indefinitely. Each surface on that path holds one piece and states none: `doctor` warns W01 and then
-prints `DOCTOR_OK`, `init`'s closing card offers `dev-loop run` unconditionally, and `run` computes
-"can never fire" once per agent per tick and logs it as debug.
+**polish-performance lens — LOOP-442 filed: `doctor`'s two release-skew surfaces prescribe
+different remedies from the same number.** Measured live: `[W18]` ends *"the installed CLI is a
+local source build — reinstall from the updated source"*, and eleven lines later `NEXT:` — the one
+line an operator acts on without reading the rest — says *"cut a release … Dispatch
+release-npm.yml"*. `isSourceBuild` is function-local to `checkInstalledSkew`, used once, and
+dropped at the `return`; the two-field `{codeBehind, version}` shape is preserved at every hop to
+`nextStep`, which therefore **cannot** express the remedy its own sibling names. LOOP-250 named
+this exact second surface in its own description, was superseded by LOOP-324 for a red `main`, and
+that half was never delivered.
 
-**The structural finding is the board's own composition.** All 17 Backlog rows are `Improvement`;
-in three days I have filed 66 Improvements, 9 Bugs and **zero** Features. §21b routes an Improvement
-to junior and new capability to senior, so junior at 11/10 while senior holds four of ten with six
-free slots is not a scheduling artifact — **it is what a review-only intake produces.** Every
-Feature in flight descends from an operator-directed program. Promoted nothing again, correctly:
-the constraint is not discovery. LOOP-421 groomed — its superseded fix options sat at the same
-heading level as six decided ACs, one of them the option the ruling rejects.
+**Grooming was the fire's larger yield.** LOOP-428 displaced `doctor.ts` by ~40 lines, and four
+Backlog tickets cited line numbers inside it — LOOP-440, LOOP-397, LOOP-412, LOOP-433. Each was
+re-measured against the new HEAD: every finding stands, every locator was stale, and each now
+carries a corrected-locator comment rather than a description rewrite, so Backlog age is unchanged.
+Promoted nothing: junior sits at 10/10 and **senior-tier promotable Backlog is zero for a third
+fire** while senior holds 14 In Progress.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -278,14 +283,18 @@ heading level as six decided ACs, one of them the option the ruling rejects.
 
 ## Decisions (running log)
 
-- **2026-08-07 (pm, seventy-eighth fire) — the precedent was applied where it was found, not where
-  it matters most.** LOOP-90 taught `dev-loop run` to warn once at startup that a configured cadence
-  would never fire. Four hundred lines later the same file still says nothing at startup when an
-  agent can never fire *at all*; `init`'s `linear` card names its blocking precondition, the default
-  backend's card offers `dev-loop run` unconditionally. Both correct treatments already ship, in the
-  two files that hold both defects. **A fix lands at the site of discovery, so the severe member of
-  a class is the one nobody files** — the mild one is what had a ticket. Ask which case is worst,
-  not which case was reported.
+- **2026-08-07 (pm, eighty-first fire) — when a supersession narrows scope, the findings the
+  superseded ticket NAMED are dropped, not inherited.** LOOP-250 taught W18 to tell a source build
+  from an npm install and named the `NEXT` hint as carrying the identical defect; it was superseded
+  by LOOP-324, scoped to a red `main`, and that half silently did not ship — `isSourceBuild` lives at
+  three lines inside one function and is discarded at its `return`. Check what the superseding ticket
+  actually covered before treating the original as discharged. Same shape as LOOP-424 → LOOP-433: a
+  remedy landing in the `pass` arm while the `warn` arm keeps a hardcoded verdict. **Corollary from
+  the same fire:** a refactor that moves code invalidates every queued ticket citing it, and no AC of
+  that refactor covers the damage — LOOP-428 shifted `doctor.ts` ~40 lines and left four correct
+  tickets pointing at the wrong code. Re-measure them before the next tier picks one up, and deliver
+  the correction as a **comment**: comments do not reset `updated_at`, and Backlog age ordering is
+  load-bearing.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -510,16 +519,16 @@ heading level as six decided ACs, one of them the option the ruling rejects.
     STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
     clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
     **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 (pm, fifty-ninth → seventy-seventh fires)** — those fires' journals and full-text
+  - **2026-08-06 → 08-07 (pm, fifty-ninth → seventy-eighth fires)** — those fires' journals and full-text
     rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
     ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
     presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
     **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
     **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–68** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AO. Findings still open from that
+    rolled by **§20 R2 passes 50–69** →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AP. Findings still open from that
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
-    **LOOP-429**, **LOOP-426**.
+    **LOOP-429**, **LOOP-426**, **LOOP-436**.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
