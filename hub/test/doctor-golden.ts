@@ -67,12 +67,6 @@ function normalize(raw: string, wsRoot: string): string {
   // Normalize PID numbers
   s = s.replace(/pid \d+/g, "pid <PID>");
 
-  // Normalize W37 strategy doc budget line (env-dependent bytes/lines)
-  s = s.replace(/•  strategy doc docs\/STRATEGY\.md is \d+\.\d+ KB \(\d+ lines\), at \d+% of its \d+\.\d+ KB budget — [\d.]+ KB remaining\. Remedy \(§20 R2\): roll superseded sections into strategy-archive\/ before it hits the hard ceiling\./g, "•  strategy doc docs/STRATEGY.md is <SIZE> KB (<LINES> lines), at <PCT>% of its <MAX> KB budget — <HEADROOM> KB remaining. Remedy (§20 R2): roll superseded sections into strategy-archive/ before it hits the hard ceiling.");
-
-  return s;
-  s = s.replace(/pid \d+/g, "pid <PID>");
-
   return s;
 }
 
