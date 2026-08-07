@@ -35,7 +35,7 @@ import { claudeCliPermissions, DEVLOOP_PERMISSION, KAIZEN_PERMISSION } from "./t
 import * as metricsMod from "./metrics.ts";
 import { readLandingState } from "./landing.ts";
 const require_metrics = () => metricsMod;
-import { DOCTOR_CHECKS, runScoped, type DoctorCtx, type DoctorReport, type DoctorOut, type RepoCtx, type BoardCtx } from "./doctor-registry.ts";
+import { DOCTOR_CHECKS, runScoped, isThenable, type DoctorCtx, type DoctorReport, type DoctorOut, type RepoCtx, type BoardCtx } from "./doctor-registry.ts";
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
 // the service runtime wiring (below). Library callers that only want the DB-integrity verdict (init-service
@@ -336,12 +336,13 @@ export function nextStep(ws: Workspace | null, errors: WsError[], unseeded: stri
 // ── W20 helper — extracted to keep doctorWorkspace CC under the CRAP gate threshold ─────────────────────
 // Reads the per-project decisionQueue and emits [W20] when non-empty. Best-effort; swallows all exceptions.
 // Returns the stall descriptor (oldest + count) for NEXT-line threading, or null when clean/unavailable.
-export function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void): { oldest: { id: string; enteredAt: string; state: string }; count: number } | null {
-  if (ws.file.team.backend !== "service" || !existsSync(wsHubDb(ws))) return null;
+export function checkDecisionQueueStall(ctx: DoctorCtx): { oldest: { id: string; enteredAt: string; state: string }; count: number } | null {
+  const { ws, out: { warn } } = ctx;
   try {
     const { decisionQueue, decisionEnteredAt } = require_metrics();
-    const db = openHubDbConn(wsHubDb(ws));
-    try {
+    // The DRIVER's handle (design §5) — never opened here, and never closed here.
+    const db = ctx.openBoardDb();
+    {
       // LOOP-207: age AND "oldest" ordering come from each item's into-queue-state transition event
       // (decisionEnteredAt), NEVER tickets.updated_at — an unrelated later write (a Sweep label repair on
       // a parked item, §9c edge re-pointing) must not reset its age nor change WHICH item is named oldest.
@@ -369,7 +370,7 @@ export function checkDecisionQueueStall(ws: Workspace, warn: (m: string) => void
         warn(`[W20] decision queue: ${allItems.length} waiting on you, oldest ${oldest.id} "${title60}" ${ageStr} (${stateLabel}) — rule on it: http://127.0.0.1:8787/ticket/${oldest.id}; full queue: dev-loop metrics${noCommsNote}`);
         return { oldest: { id: oldest.id, enteredAt: oldest.enteredAt, state: oldest.state }, count: allItems.length };
       }
-    } finally { db.close(); }
+    }
   } catch { /* decision-queue is best-effort — never fails doctor */ }
   return null;
 }
@@ -648,17 +649,23 @@ export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./la
 
   console.log(`\ndev-loop workspace — '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
 
-  const ctx: DoctorCtx = { ws, opts, boardDb: opts.boardDb ?? wsHubDb(ws), out };
   const report: DoctorReport = {};
-  // Opened LAZILY on the first board row, closed once below. Held in an object rather than a bare
-  // `let` so the assignment inside the getter closure stays visible to control-flow analysis.
+  // Opened LAZILY on the first row that needs the board, closed once below. Held in an object
+  // rather than a bare `let` so the assignment inside the getter closure stays visible to
+  // control-flow analysis. This is the ONLY openHubDbConn on the doctor path.
   const held: { db: DatabaseSync | null } = { db: null };
+  const boardDb = opts.boardDb ?? wsHubDb(ws);
+  const ctx: DoctorCtx = { ws, opts, boardDb, out, openBoardDb: () => (held.db ??= openHubDbConn(boardDb)) };
 
   try {
     for (const check of DOCTOR_CHECKS) {
       if (check.applies && !check.applies(ctx)) continue;
       try {
-        Object.assign(report, await runScoped(check, ctx, () => (held.db ??= openHubDbConn(ctx.boardDb))) ?? {});
+        // Await ONLY when the row actually returned a promise. `await`-ing a plain value still
+        // defers to a microtask, which would push every following row's output past a caller that
+        // does not await doctorWorkspace — the rows 1-12 synchronous prefix (test/secrets.ts).
+        const r = runScoped(check, ctx);
+        Object.assign(report, (isThenable(r) ? await r : r) ?? {});
       } catch (e) {
         if (check.bestEffort === false) throw e;
       }

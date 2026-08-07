@@ -7,6 +7,18 @@
 import type { Workspace, ResolvedRepo } from "./team-config.ts";
 import { effectiveRepo, deliveryProjects } from "./team-config.ts";
 import { findProject as findHubProject } from "./seed.ts";
+// Rows 1-12 are imported STATICALLY and run SYNCHRONOUSLY. That is not a style choice: until
+// row 13 (W22) the old doctorWorkspace emitted every line before its first `await`, and callers
+// that invoke doctorWorkspace WITHOUT awaiting it (test/secrets.ts) can only observe output
+// produced in that synchronous prefix. A dynamic import() here would push rows 1-12 behind a
+// microtask and silently empty their output for those callers.
+// The doctor.ts <-> doctor-registry.ts cycle is safe for these: they are hoisted function
+// declarations, referenced only inside run() closures, never called at module-evaluation time.
+import {
+  checkConfigValidate, checkRepoRegistered, checkStrategyDocPointer, checkLinearMcpScope,
+  checkFiresTaxonomy, checkCommsWebhook, checkProviderAuth, checkOpencodeDrift,
+  checkOpencodeVersion, checkOwnerLiveness, checkDecisionQueueStall, checkSensitiveMistier,
+} from "./doctor.ts";
 
 // ── Contracts (design §4) ────────────────────────────────────────────────────
 
@@ -24,6 +36,14 @@ export interface DoctorCtx {
   opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string };
   boardDb: string;               // opts.boardDb ?? wsHubDb(ws) — resolved ONCE
   out: DoctorOut;
+  /**
+   * THE board db handle, opened lazily on first use and closed once by the driver (design §5).
+   * Every row that needs the board calls this — no check opens or closes a db of its own, which
+   * is why exactly one openHubDbConn call remains on the doctor path. Board-scope rows get the
+   * handle pre-resolved on their BoardCtx; workspace-scope rows that need a cross-project
+   * aggregate (row 11) call it directly. NEVER close what this returns.
+   */
+  openBoardDb: () => import("node:sqlite").DatabaseSync;
 }
 
 /** Extra ctx for scope: "repo" rows — the driver iterates repos and supplies these. */
@@ -89,29 +109,62 @@ const require_fs = () => ({ existsSync: fsExistsSync });
  * Board rows are deliberately NOT grouped into one pass: design §7 — rows 10/12/22/29 are
  * interleaved with workspace rows, and grouping them would reorder doctor's output.
  */
-export async function runScoped(
-  check: DoctorCheck,
-  ctx: DoctorCtx,
-  openBoardDb: () => import("node:sqlite").DatabaseSync,
-): Promise<DoctorReport | void> {
-  if (check.scope === "workspace") return check.run(ctx);
+/** A value is awaitable. Used to keep SYNC rows off the microtask queue (see the import note above). */
+export function isThenable(v: unknown): v is PromiseLike<unknown> {
+  return !!v && typeof (v as { then?: unknown }).then === "function";
+}
 
+/** Build the per-item contexts a scoped row fans out over, in order. */
+function scopeItems(check: DoctorCheck, ctx: DoctorCtx): Array<RepoCtx | BoardCtx> {
   if (check.scope === "repo") {
-    const report: DoctorReport = {};
-    for (const ref of Object.keys(ctx.ws.file.repos)) {
+    return Object.keys(ctx.ws.file.repos).map((ref) => {
       const repo = effectiveRepo(ctx.ws, ref);
-      Object.assign(report, await check.run({ ...ctx, ref, repo, dir: repo.absPath }) ?? {});
-    }
-    return report;
+      return { ...ctx, ref, repo, dir: repo.absPath };
+    });
   }
-
-  // scope === "board"
-  const db = openBoardDb();
-  const report: DoctorReport = {};
+  const db = ctx.openBoardDb();
+  const items: BoardCtx[] = [];
   for (const projectKey of deliveryProjects(ctx.ws)) {
     const projectId = findHubProject(db, projectKey);
-    if (!projectId) continue;
-    Object.assign(report, await check.run({ ...ctx, db, projectKey, projectId }) ?? {});
+    if (!projectId) continue;                      // an unseeded key is skipped, never an error
+    items.push({ ...ctx, db, projectKey, projectId });
+  }
+  return items;
+}
+
+/** Finish a fan-out that turned out to be async, preserving item order (never concurrent). */
+async function runRest(
+  check: DoctorCheck, items: Array<RepoCtx | BoardCtx>, from: number,
+  pending: unknown, report: DoctorReport,
+): Promise<DoctorReport> {
+  Object.assign(report, (await pending) ?? {});
+  for (let j = from; j < items.length; j++) Object.assign(report, (await check.run(items[j])) ?? {});
+  return report;
+}
+
+/**
+ * Execute a single DoctorCheck, handling the scope fan-out (design §5).
+ * - "workspace" runs the check once with ctx.
+ * - "repo" iterates Object.keys(ws.file.repos) and hands each row a RepoCtx.
+ * - "board" takes THE driver handle, iterates deliveryProjects(ws), resolves findHubProject and
+ *   SKIPS unresolved keys, handing each row a BoardCtx.
+ *
+ * Deliberately NOT declared `async`: a sync row must return its value synchronously so its output
+ * lands before the caller's first await (see the rows 1-12 import note). Rows fan out SEQUENTIALLY
+ * — never Promise.all — so a repo's lines are never interleaved with another repo's.
+ *
+ * Board rows are also not grouped into one pass: design §7 — rows 10/12/22/29 are interleaved with
+ * workspace rows, and grouping them would reorder doctor's output.
+ */
+export function runScoped(check: DoctorCheck, ctx: DoctorCtx): DoctorReport | void | Promise<DoctorReport | void> {
+  if (check.scope === "workspace") return check.run(ctx);
+
+  const items = scopeItems(check, ctx);
+  const report: DoctorReport = {};
+  for (let i = 0; i < items.length; i++) {
+    const r = check.run(items[i]);
+    if (isThenable(r)) return runRest(check, items, i + 1, r, report);
+    Object.assign(report, r ?? {});
   }
   return report;
 }
@@ -121,9 +174,10 @@ export async function runScoped(
 // Child C seeds all 29 rows; the previous 11-row array is a subset of this one, unchanged
 // in relative order.
 //
-// Circular-dependency note: the run functions use dynamic await import() to reference
-// doctor.ts's helper functions. This avoids the cycle at module evaluation time.
-// At runtime the module graph is fully loaded.
+// Circular-dependency note: rows 13+ use a dynamic await import() to reach doctor.ts's helpers,
+// which avoids the cycle at module-evaluation time. Rows 1-12 cannot — they must stay synchronous
+// (see the import note at the top) — so they take a static import instead; that is safe because
+// they are hoisted function declarations never called during evaluation.
 
 export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
   // Row 1 — config validation (W01-W04, W07). NOT best-effort: a malformed config must fail doctor.
@@ -132,10 +186,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     id: "config-validate",
     scope: "workspace",
     bestEffort: false,
-    run: async (ctx) => {
-      const { checkConfigValidate } = await import("./doctor.ts");
-      checkConfigValidate(ctx.ws, ctx.out);
-    },
+    run: (ctx) => { checkConfigValidate(ctx.ws, ctx.out); },
   },
   // Row 2 — every registered repo exists on disk + is a git repo. NOT best-effort: `fail` here
   // is the one repo finding that flips DOCTOR_OK.
@@ -144,11 +195,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     id: "repo-registered",
     scope: "repo",
     bestEffort: false,
-    run: async (ctx) => {
-      const c = ctx as RepoCtx;
-      const { checkRepoRegistered } = await import("./doctor.ts");
-      checkRepoRegistered(c.ref, c.repo, c.dir, c.out);
-    },
+    run: (ctx) => { const c = ctx as RepoCtx; checkRepoRegistered(c.ref, c.repo, c.dir, c.out); },
   },
   // Row 3 — W17 (project has repos but no strategyDoc)
   {
@@ -156,10 +203,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     id: "w17-strategy-doc",
     scope: "workspace",
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkStrategyDocPointer } = await import("./doctor.ts");
-      checkStrategyDocPointer(ctx.ws, ctx.out.warn);
-    },
+    run: (ctx) => { checkStrategyDocPointer(ctx.ws, ctx.out.warn); },
   },
   // Row 4 — W05 (linear steward MCP scope)
   {
@@ -167,10 +211,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     id: "w05-linear-mcp-scope",
     scope: "workspace",
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkLinearMcpScope } = await import("./doctor.ts");
-      checkLinearMcpScope(ctx.ws, ctx.out.warn);
-    },
+    run: (ctx) => { checkLinearMcpScope(ctx.ws, ctx.out.warn); },
   },
   // Row 5 — the 7d fire signal + W24 (failure-taxonomy blind spot)
   {
@@ -178,10 +219,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     id: "fires-taxonomy",
     scope: "workspace",
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkFiresTaxonomy } = await import("./doctor.ts");
-      checkFiresTaxonomy(ctx.ws, ctx.out.warn, ctx.out.info);
-    },
+    run: (ctx) => { checkFiresTaxonomy(ctx.ws, ctx.out.warn, ctx.out.info); },
   },
   // Row 6 — W12 (comms webhook resolvability)
   {
@@ -189,10 +227,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     id: "w12-comms-webhook",
     scope: "workspace",
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkCommsWebhook } = await import("./doctor.ts");
-      checkCommsWebhook(ctx.ws, ctx.out.pass, ctx.out.warn);
-    },
+    run: (ctx) => { checkCommsWebhook(ctx.ws, ctx.out.pass, ctx.out.warn); },
   },
   // Row 7 — W13 (provider auth resolvability)
   {
@@ -200,10 +235,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     id: "w13-provider-auth",
     scope: "workspace",
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkProviderAuth } = await import("./doctor.ts");
-      checkProviderAuth(ctx.ws, ctx.out.pass, ctx.out.warn);
-    },
+    run: (ctx) => { checkProviderAuth(ctx.ws, ctx.out.pass, ctx.out.warn); },
   },
   // Row 8 — W14 (opencode.json registry drift)
   {
@@ -211,10 +243,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     id: "w14-opencode-drift",
     scope: "workspace",
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkOpencodeDrift } = await import("./doctor.ts");
-      checkOpencodeDrift(ctx.ws, ctx.out.pass, ctx.out.warn);
-    },
+    run: (ctx) => { checkOpencodeDrift(ctx.ws, ctx.out.pass, ctx.out.warn); },
   },
   // Row 9 — W15 (opencode preflight / certified version)
   {
@@ -222,10 +251,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     id: "w15-opencode-version",
     scope: "workspace",
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkOpencodeVersion } = await import("./doctor.ts");
-      checkOpencodeVersion(ctx.ws, ctx.out.pass, ctx.out.warn);
-    },
+    run: (ctx) => { checkOpencodeVersion(ctx.ws, ctx.out.pass, ctx.out.warn); },
   },
   // Row 10 — W16 (owner liveness) — board scope
   {
@@ -234,21 +260,18 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     scope: "board",
     applies: boardApplies,
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkOwnerLiveness } = await import("./doctor.ts");
-      checkOwnerLiveness(ctx as BoardCtx);
-    },
+    run: (ctx) => { checkOwnerLiveness(ctx as BoardCtx); },
   },
-  // Row 11 — W20 (operator decision queue stall) — stateful
+  // Row 11 — W20 (operator decision queue stall) — stateful. Workspace scope, not board: it emits
+  // ONE line for a CROSS-project aggregate (oldest item over all delivery projects), which a
+  // per-project board fan-out cannot express. It reads the board through ctx.openBoardDb().
   {
     codes: ["W20"],
     id: "w20-decision-stall",
     scope: "workspace",
+    applies: boardApplies,
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkDecisionQueueStall } = await import("./doctor.ts");
-      return { decisionStall: checkDecisionQueueStall(ctx.ws, ctx.out.warn) };
-    },
+    run: (ctx) => ({ decisionStall: checkDecisionQueueStall(ctx) }),
   },
   // Row 12 — W21 (sensitive mis-tier backstop) — board scope
   {
@@ -257,10 +280,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     scope: "board",
     applies: boardApplies,
     bestEffort: true,
-    run: async (ctx) => {
-      const { checkSensitiveMistier } = await import("./doctor.ts");
-      checkSensitiveMistier(ctx as BoardCtx);
-    },
+    run: (ctx) => { checkSensitiveMistier(ctx as BoardCtx); },
   },
   // Row 13 — W22 (landing stall) — stateful
   {
