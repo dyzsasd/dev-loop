@@ -211,6 +211,8 @@ export function readCiFreshness(
       // beats the exempt rule specifically: a truncated list of exempt files says nothing about the
       // files that were cut.
       let exempt = false;
+      // LOOP-365: when the delta is known AND ciIrrelevantPaths is unset, surface the knob.
+      let hint = "";
       const revResult = exec(["api", `/repos/${ghRepo}/compare/${testedHead}...${defaultBranch}`]);
       if (revResult.ok) {
         try {
@@ -227,6 +229,10 @@ export function readCiFreshness(
               exempt = true;
               composition = `delta touches ${names.length} CI-irrelevant file(s): ${shown}${names.length > 5 ? ` (+${names.length - 5} more)` : ""}`;
             }
+            // LOOP-365: when the delta is known and not truncated and ciIrrelevantPaths is unset, surface the knob.
+            if (!truncated && !exempt && (!ciIrrelevantPaths || ciIrrelevantPaths.length === 0)) {
+              hint = `no repos.<ref>.ciIrrelevantPaths is configured \u2014 if none of these files can affect a check result, set it with \`dev-loop team set repos.<ref>.ciIrrelevantPaths <comma-separated paths>\``;
+            }
           } else {
             composition = "delta touches 0 files (empty commits)";
           }
@@ -235,7 +241,8 @@ export function readCiFreshness(
       if (exempt) {
         return { verdict: "stale-exempt", behindBy, testedHead, currentTip, reason: `head is ${behindBy} commit(s) behind ${defaultBranch} tip ${currentTip ?? "unknown"}, but every file in the delta is configured CI-irrelevant (repos.<ref>.ciIrrelevantPaths) — re-verifying could not change a check result; ${composition}` };
       }
-      return { verdict: "stale", behindBy, testedHead, currentTip, reason: `checks green but head is ${behindBy} commit(s) behind ${defaultBranch} tip ${currentTip ?? "unknown"} — not re-verified against the current tip; ${composition}` };
+      // LOOP-365: the hint was set inside the try block where names/truncated are in scope
+      return { verdict: "stale", behindBy, testedHead, currentTip, reason: `checks green but head is ${behindBy} commit(s) behind ${defaultBranch} tip ${currentTip ?? "unknown"} — not re-verified against the current tip; ${composition}${hint ? ` ${hint}` : ""}` };
     }
     return { verdict: "fresh-green", behindBy: behindBy ?? 0, testedHead, currentTip, reason: "checks green and head is up to date with current tip" };
   } catch (e) {
