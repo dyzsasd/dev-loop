@@ -160,9 +160,7 @@ try {
 
   // The two layers now agree, which is the whole point of sharing the predicate.
   {
-    const rows = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-      .all(pid) as unknown as Array<{ id: string; description: string; state: string }>;
-    const ids = designParentIds(db, pid, rows);
+    const ids = designParentIds(db, pid);
     ok(["DP-P1", "DP-P2", "DP-P3", "DP-P4", "DP-P5"].every((p) => isDesignParent({ id: p, description: "" }, ids)),
       "LOOP-344: every parent form resolves through the ONE shared predicate both layers call");
     ok(!isDesignParent({ id: "DP-ORD", description: "an ordinary bug" }, ids),
@@ -221,9 +219,7 @@ try {
   // Asserted directly on the predicate rather than through the queue: it is the shared input to
   // three gates, and each gate's own routing is already covered above.
   {
-    const parents = (): Set<string> => designParentIds(db, pid,
-      db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-        .all(pid) as unknown as Array<{ id: string; description: string; state: string }>);
+    const parents = (): Set<string> => designParentIds(db, pid);
 
     // The three-ticket fixture from the ticket: an owner, a child, and a bystander that merely
     // quotes the doc in a sentence. Before the fix all THREE came back as parents.
@@ -342,6 +338,121 @@ try {
       "LOOP-372: a `Design: parent <id>` naming no ticket on this board is not returned");
     ok(parents().has("DP-P1"),
       "LOOP-372: …while a `parent <id>` that DOES name a real ticket still resolves (the check bounds the route, it does not remove it)");
+  }
+
+  // ── LOOP-378: the two layers agree, because the predicate owns its row set ────────────────────
+  // The predicate used to take its rows as an ARGUMENT, and the callers disagreed: opQueue passed
+  // non-terminal rows, the three ticketwrite gates passed all of them. Every link the derivation
+  // walks is board-wide, so that did not narrow the answer — it CHANGED it, through BOUND 3, since
+  // whether a slug is CONTESTED is a property of the row set. Measured on the live board the two
+  // views shared not one parent (11 vs 1, disjoint).
+  //
+  // The fixture is the smallest shape that separates them: one slug, two candidate owners, one of
+  // them terminal.
+  //   • all rows          → 2 candidates → BOUND 3 → the slug resolves to NOBODY.
+  //   • non-terminal rows → 1 candidate  → the survivor resolves as its parent.
+  // So the survivor is a design parent to the queue and an ordinary qa-owned Bug to the close gate:
+  // pm.verify shows work that the write layer will only let qa close. That is LOOP-345's inversion
+  // arriving through the argument instead of through a second copy of the code.
+  //
+  // Asserted through BOTH layers on purpose. A predicate-only assertion cannot see a caller pass the
+  // wrong rows — which is the entire defect — so this drives opQueue's routing and the real
+  // In Review → Done write path, and checks they say the SAME thing.
+  {
+    mk("L378-DONE", "the ration design\n\nhubDoc:design/ration-engine is the doc", "Done", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L378-OPEN", "also names hubDoc:design/ration-engine while explaining the fix", "In Review", ["dev-loop", "Bug", "qa"]);
+    mk("L378-CHILD", "Design: hubDoc:design/ration-engine\n\nbuild it", "Todo", ["dev-loop"]);
+
+    // Layer 1 — the queue. The contest is visible board-wide, so L378-OPEN is NOT a design parent
+    // and routes to its qa owner. Under the old opQueue row set the terminal candidate vanished,
+    // L378-OPEN won the slug uncontested, and it routed to pm.verify instead.
+    ok(!inVerify("pm", "L378-OPEN"),
+      "LOOP-378: the queue does not call a ticket a design parent on a contest only its row set hid");
+    ok(inVerify("qa", "L378-OPEN"),
+      "LOOP-378: …it reaches its qa owner's verify queue, as an ordinary Bug");
+
+    // Layer 2 — the write gate, driven through the real save_issue path. It must reach the same
+    // verdict: not a design parent ⇒ the §21a close rule does not fire and the qa owner may close.
+    ok(setState("pm", "L378-OPEN", "Done").ok === false,
+      "LOOP-378: the close gate agrees it is not a design parent — pm does not inherit a design parent's close right over it");
+    ok(setState("qa", "L378-OPEN", "Done").ok === true,
+      "LOOP-378: …and its qa owner closes it normally, so both layers answer one question one way");
+
+    // The other direction: a slug uncontested in EVERY row set still resolves, so the fix bounds the
+    // divergence without costing a real parent its routing. DP-P2's owner is terminal-free.
+    ok(inVerify("pm", "DP-P2") && !inVerify("qa", "DP-P2"),
+      "LOOP-378: an uncontested design parent is unaffected — this removes a disagreement, not the route");
+  }
+
+  // ── LOOP-378 BOUND 3a: a module designed TWICE keeps its live owner ───────────────────────────
+  // The case the board-wide row set makes routine rather than rare (raised on PR #270). §21a's design
+  // doc is a LIVING per-module document, so the SECOND design of a module produces two parents naming
+  // one slug BY CONSTRUCTION: the first `Done`, the current one open. Both declare `Mode: design`, so
+  // ranking on the declaration alone left them tied and BOUND 3 resolved the slug to NOBODY.
+  //
+  // WHERE THAT BITES, measured rather than assumed. Routing and the close gate do NOT notice: they go
+  // through `isDesignParent`, which short-circuits on the ticket's own `Mode: design` body. The
+  // consumer that reads `parentIds` MEMBERSHIP directly is LOOP-296's sensitive inheritance
+  // (ticketwrite.ts) — so the failure is silent and specific: a child staged under the second design
+  // of a SENSITIVE module stops inheriting `sensitive`, and with it the §21b senior re-tier. That is
+  // LOOP-290's shape — the one ticket editing an irreversible cascade-delete guard — arriving through
+  // the ranking instead of through the filer's judgement.
+  //
+  // So the arms below assert the predicate's membership and the inheriting write, NOT the routing:
+  // an assertion on routing here would pass with the tie-break removed (the marker carries it) and
+  // would be worth nothing.
+  {
+    const create = (title: string, desc: string, labels: string[], assignee: string | null) =>
+      (agentOp("save_issue", db, pid, "dp", "senior-dev",
+        { title, type: "Improvement", state: "Todo", description: desc, labels, ...(assignee ? { assignee } : {}) }) as OpResult)
+        .body as { id: string; labels: string[]; assignee: string | null };
+
+    mk("L378B-OLD", "Mode: design\n\nthe first cut of hubDoc:design/harvest-core", "Done", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    mk("L378B-NEW", "Mode: design\n\nthe second cut of hubDoc:design/harvest-core", "In Review", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    mk("L378B-CHILD", "Design: hubDoc:design/harvest-core\n\nan existing child, so the slug resolves at all", "Todo", ["dev-loop"]);
+
+    const parents = designParentIds(db, pid);
+    ok(parents.has("L378B-NEW"),
+      "LOOP-378 BOUND 3a: the LIVE design parent owns the slug even though a Done parent names the same living doc");
+    ok(!parents.has("L378B-OLD"),
+      "LOOP-378 BOUND 3a: …and the finished one does not — a design that is over cannot own a doc that is still being built to");
+
+    const child = create("child-of-second-design", "Design: hubDoc:design/harvest-core\n\nimplements the second cut", ["dev-loop"], "junior-dev");
+    ok(child.labels.includes("sensitive"),
+      `LOOP-378 BOUND 3a: a child of the SECOND design still inherits sensitive — the LOOP-296 path reads parentIds membership, which the tie had emptied (got ${JSON.stringify(child.labels)})`);
+    ok(child.assignee === "senior-dev" || child.labels.includes("senior-dev"),
+      `LOOP-378 BOUND 3a: …so the §21b senior re-tier still fires on it in the same write (assignee ${child.assignee})`);
+
+    // The tier is scoped to DECLARED designs. A live ordinary ticket that merely MENTIONS the slug
+    // must not win it just because the other candidate is terminal — that would be LOOP-372's
+    // over-match re-entering through the ranking, and it is the same shape the L378-OPEN arm above
+    // pins from the other side.
+    mk("L378B-DONEOWNER", "Mode: design\n\nthe design of hubDoc:design/mill-core", "Done", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    mk("L378B-MENTION", "an ordinary fix that mentions hubDoc:design/mill-core in passing", "In Review", ["dev-loop", "Bug", "qa"]);
+    mk("L378B-MCHILD", "Design: hubDoc:design/mill-core\n\nbuild it", "Todo", ["dev-loop"]);
+    const p2 = designParentIds(db, pid);
+    ok(!p2.has("L378B-MENTION"),
+      "LOOP-378 BOUND 3a: a live MENTION does not win the slug over a Done DECLARATION — the tier ranks inside declarations, never across them");
+    ok(!inVerify("pm", "L378B-MENTION") && inVerify("qa", "L378B-MENTION"),
+      "LOOP-378 BOUND 3a: …so it stays an ordinary qa-owned Bug on both layers");
+
+    // The RESIDUAL of that scoping, pinned so it can only change deliberately (PR #270 review;
+    // LOOP-379 owns the spec call). A genuine second design filed WITHOUT the `Mode: design` line
+    // ranks exactly as the bystander above does — nothing in either body tells the two apart — so
+    // the older declared parent keeps the slug. The consequence is real and is the price of the
+    // ordering: this ticket is routed to qa and its children inherit the OLD parent's labels.
+    // Asserting it here makes LOOP-379's eventual back-link signal a visible test change rather
+    // than a quiet re-ranking, and would have caught it being "fixed" by inverting the two keys.
+    mk("L378B-DECLARED-OLD", "Mode: design\n\nthe first cut of hubDoc:design/kiln-core", "Done", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L378B-UNDECLARED-NEW", "the second cut of hubDoc:design/kiln-core, filed without the mode line", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L378B-KCHILD", "Design: hubDoc:design/kiln-core\n\nbuild it", "Todo", ["dev-loop"]);
+    const p3 = designParentIds(db, pid);
+    ok(!p3.has("L378B-UNDECLARED-NEW"),
+      "LOOP-378 BOUND 3a residual: a live UNDECLARED successor ranks as a mention, so it does not take the slug — LOOP-379 owns the signal that would separate an owner from a citer");
+    ok(p3.has("L378B-DECLARED-OLD"),
+      "LOOP-378 BOUND 3a residual: …and the slug stays resolved to the declared owner rather than going contested — the declaration is the only ownership signal the ranking can see");
+    ok(!inVerify("pm", "L378B-UNDECLARED-NEW") && inVerify("qa", "L378B-UNDECLARED-NEW"),
+      "LOOP-378 BOUND 3a residual: …and both layers agree on that answer — the divergence LOOP-378 closes is gone even where the answer is the unhappy one");
   }
 
   db.close();

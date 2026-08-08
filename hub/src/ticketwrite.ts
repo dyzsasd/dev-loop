@@ -126,9 +126,7 @@ function designParentGate(
 ): string | null {
   if (!(fromState === "In Review" && next.state === "Done")) return null;
   if (actor === "operator") return null; // the operator is never gated by §21a routing
-  const rows = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-    .all(projectId) as unknown as Array<{ id: string; description: string; state: string }>;
-  const parentIds = designParentIds(db, projectId, rows);
+  const parentIds = designParentIds(db, projectId);
   const me = { id, description: next.description ?? storedRow?.description ?? "" };
   if (!isDesignParent(me, parentIds)) return null;
   // From here the §21a design rule DECIDES — see the DESIGN_PARENT_DECIDED sentinel at the call
@@ -146,6 +144,10 @@ function designParentGate(
   // PASS action, and §21a's pass action is "promote every staged child Backlog → Todo FIRST, THEN
   // move the parent Done". Backlog is invisible to every dev pick-query, so a parent closed over
   // Backlog children strands them with no owner and no signal.
+  // R2's own row set, fetched where it is used. It is NOT the predicate's input (LOOP-378): this
+  // asks which children are stranded, which is a question about rows, not about who the parent is.
+  const rows = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
+    .all(projectId) as unknown as Array<{ id: string; description: string; state: string }>;
   const stranded = rows.filter((t) => t.state === "Backlog" && isChildOf(t, id, rows));
   if (stranded.length)
     return `verify gate: In Review → Done blocked — ${id} is a design parent with ${stranded.length} staged child(ren) still in Backlog (${stranded.map((t) => t.id).join(", ")}). §21a's pass action promotes every child Backlog → Todo FIRST, then closes the parent; Backlog is invisible to every dev pick-query, so closing now strands them.`;
@@ -175,10 +177,8 @@ function designParentHandoffExemption(
   storedRow: { description?: string } | undefined,
 ): boolean {
   if (!(fromState === "In Progress" && next.state === "In Review")) return false;
-  const rows = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-    .all(projectId) as unknown as Array<{ id: string; description: string; state: string }>;
   const me = { id, description: next.description ?? storedRow?.description ?? "" };
-  return isDesignParent(me, designParentIds(db, projectId, rows));
+  return isDesignParent(me, designParentIds(db, projectId));
 }
 
 // A child of `parentId`: it carries a Design: pointer that resolves to this parent — either directly
@@ -317,7 +317,9 @@ function inheritSensitiveFromDesignParent(db: DatabaseSync, projectId: string, d
     // The direct form names the parent; the two doc forms name the DOC, so the parent is the ticket
     // that owns that slug. designParentIds already resolves all three — reuse it rather than
     // re-deriving, which is how the LOOP-344 inversion happened in the first place.
-    const parentIds = designParentIds(db, projectId, rows);
+    // The rows above carry `labels` for the lookup below; the predicate fetches its own board-wide
+    // set (LOOP-378) rather than borrowing this one, which is what kept the four call sites honest.
+    const parentIds = designParentIds(db, projectId);
     const direct = /^parent\s+(\S+)/i.exec(ptr);
     const slug = direct ? null : docSlugOf(ptr);
     const parent = direct
