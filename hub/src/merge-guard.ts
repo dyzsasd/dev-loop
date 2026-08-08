@@ -88,6 +88,7 @@ export type SkipReason =
   | "hub-db-unreadable"     // hub db present but would not open
   | "forge-unreachable"     // gh missing/unauth/offline/timeout, or the PR could not be read
   | "no-merge-checks"       // CI-freshness axis not configured: mergeChecks empty (inapplicable)
+  | "ci-config-ambiguous"   // CI-freshness config could not be SELECTED: ≥2 registry entries share the selected remote
   | "repo-not-automerge";   // CI-freshness axis inapplicable: repo is not landing:"pr" + autoMerge (LOOP-323 AC2)
 
 // unreachable  ⇒ §3.4 fail-open: an outage must never become a merge freeze.
@@ -99,6 +100,11 @@ export function skipClass(reason: SkipReason): SkipClass {
   switch (reason) {
     case "no-ticket-input":
     case "no-repo-resolved":
+    // Ambiguity is a property of the INVOCATION, not of the world: two registry entries share the
+    // selected remote, so `--repo <dir>` resolves it and no outage is involved. Classifying it
+    // `inapplicable` (which is what returning null used to buy) is the bug — it says "this axis has
+    // nothing to check" when the truth is "this axis could not find out what to check".
+    case "ci-config-ambiguous":
       return "untargeted";
     case "no-hub-db":
     case "hub-db-unreadable":
@@ -313,7 +319,9 @@ function ghRepoFromRemote(remote: string): string | null {
 // Ambiguity is refused, not guessed. Two registered GitHub repos and a bare `--pr 174` do not
 // identify a PR — picking one would let the guard check a DIFFERENT repo's PR #174 and report it
 // clean. The caller passes --repo; the CLI names the candidates so that is a two-second fix.
-function resolveGhRepo(repoDir: string): string | null {
+// Exported for `pr merge` (LOOP-444): that verb must address the SAME owner/repo the axes gated,
+// and re-deriving it there would let the gate and the squash disagree about which PR #n they meant.
+export function resolveGhRepo(repoDir: string): string | null {
   try {
     const remote = execFileSync("git", ["-C", repoDir, "config", "--get", "remote.origin.url"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -331,33 +339,81 @@ function resolveGhRepo(repoDir: string): string | null {
 // registry. Matches repoDir against each registered entry's absolute path (realpath-normalized on
 // both sides so a symlinked cwd still matches). Returns null when no workspace resolves or the dir
 // is not a registered repo — the axis then skips exactly as before this wiring existed.
-export function registryCiFreshnessConfig(
+// LOOP-444 follow-up: `ghRepo` is the SELECTED repo — the owner/repo the axes are actually gating,
+// as resolveGhRepo returned it. It exists because the two resolvers disagreed: resolveGhRepo falls
+// back to the registry when the cwd is not a git repo (LOOP-300 AC3), while this lookup matched by
+// PATH only. From the workspace root that combination resolved a repo and then found no config for
+// it, so mergeChecks came back empty and the CI axis skipped as `no-merge-checks` — a *resolution*
+// failure wearing the label of inapplicability. `merge-guard` only mis-reported it; `pr merge`
+// squashes on it, which is the very thing that verb exists to refuse. So when no registered path
+// matches, fall back to the entry whose remote IS the selected repo. Path match still wins, so every
+// existing caller keeps its answer; ambiguity (two entries, same remote) is refused, not guessed.
+export interface CiFreshnessConfig { mergeChecks: string[]; defaultBranch: string; repoEligible: boolean; ciIrrelevantPaths?: string[] }
+
+// The THREE distinguishable answers. They used to be two, because `ambiguous` was returned as
+// `null` — and a caller reading `null` omits mergeChecks, which makes the axis skip as
+// `no-merge-checks`: "I could not choose between two configs" arriving as "there is no config to
+// apply". For `merge-guard` that is a mis-report; for `pr merge` it is a squash with the CI axis
+// never run, which is the exact failure that verb exists to refuse. So the ambiguity is named here,
+// once, and each caller decides what to do with it.
+export type CiFreshnessConfigResolution =
+  | { kind: "resolved"; config: CiFreshnessConfig }
+  | { kind: "ambiguous"; ghRepo: string; paths: string[] }   // ≥2 registry entries share `ghRepo`
+  | { kind: "none" };                                        // no workspace, or no entry matches
+
+export function resolveRegistryCiFreshnessConfig(
   repoDir: string,
-): { mergeChecks: string[]; defaultBranch: string; repoEligible: boolean; ciIrrelevantPaths?: string[] } | null {
+  ghRepo?: string | null,
+): CiFreshnessConfigResolution {
+  type CfEntry = { path?: string; remote?: string; landing?: string; autoMerge?: boolean; mergeChecks?: string[]; defaultBranch?: string; ciIrrelevantPaths?: string[] };
   try {
     const ws = tryResolveWorkspace(repoDir);
-    if (!ws) return null;
+    if (!ws) return { kind: "none" };
     let real: string;
     try { real = realpathSync(repoDir); } catch { real = resolvePath(repoDir); }
-    for (const entry of Object.values(ws.file.repos ?? {})) {
-      const e = entry as { path?: string; landing?: string; autoMerge?: boolean; mergeChecks?: string[]; defaultBranch?: string; ciIrrelevantPaths?: string[] } | null;
-      if (!e?.path) continue;
+    // §19 defaultBranch chain: repo entry → team.git.defaultBranch → "main" (LOOP-188 pattern).
+    const teamBranch = (ws.file.team as { git?: { defaultBranch?: string } }).git?.defaultBranch;
+    const configOf = (e: CfEntry): CiFreshnessConfig => ({
+      mergeChecks: e.mergeChecks ?? [],
+      defaultBranch: e.defaultBranch ?? teamBranch ?? "main",
+      // AC2: the axis applies only where Step 0.5 merges — landing:"pr" + autoMerge (design §3).
+      repoEligible: e.landing === "pr" && e.autoMerge === true,
+      ciIrrelevantPaths: Array.isArray(e.ciIrrelevantPaths) ? e.ciIrrelevantPaths : undefined, // LOOP-335
+    });
+    const entries = (Object.values(ws.file.repos ?? {}) as (CfEntry | null)[]).filter((e): e is CfEntry => !!e);
+    for (const e of entries) {
+      if (!e.path) continue;
       const abs = resolvePath(ws.root, e.path);
       let absReal = abs;
       try { absReal = realpathSync(abs); } catch { /* keep abs */ }
       if (absReal !== real && abs !== real) continue;
-      // §19 defaultBranch chain: repo entry → team.git.defaultBranch → "main" (LOOP-188 pattern).
-      const teamBranch = (ws.file.team as { git?: { defaultBranch?: string } }).git?.defaultBranch;
-      return {
-        mergeChecks: e.mergeChecks ?? [],
-        defaultBranch: e.defaultBranch ?? teamBranch ?? "main",
-        // AC2: the axis applies only where Step 0.5 merges — landing:"pr" + autoMerge (design §3).
-        repoEligible: e.landing === "pr" && e.autoMerge === true,
-        ciIrrelevantPaths: Array.isArray(e.ciIrrelevantPaths) ? e.ciIrrelevantPaths : undefined, // LOOP-335
-      };
+      return { kind: "resolved", config: configOf(e) };
     }
-    return null;
-  } catch { return null; }
+    if (ghRepo) {
+      const byRemote = entries.filter((e) => e.remote && ghRepoFromRemote(e.remote) === ghRepo);
+      if (byRemote.length === 1) return { kind: "resolved", config: configOf(byRemote[0]!) };
+      // Two entries, distinct paths, SAME remote — a shape the config validator permits, and one
+      // `registryGhRepos` hides from `resolveGhRepo` because it dedupes remotes into a Set. So the
+      // repo resolves and its config does not. Report the ambiguity with its candidates; the remedy
+      // (`--repo <dir>`) is the caller's to take, and guessing an entry would gate one repo's config
+      // against another's checks.
+      if (byRemote.length > 1) {
+        return { kind: "ambiguous", ghRepo, paths: byRemote.map((e) => e.path ?? "<no path>").sort() };
+      }
+    }
+    return { kind: "none" };
+  } catch { return { kind: "none" }; }
+}
+
+// Back-compat read for callers that only need the happy path: `null` for BOTH "none" and
+// "ambiguous". Anything that gates a merge must use the resolution above instead — collapsing the
+// two here is exactly the conflation this pair was split to end.
+export function registryCiFreshnessConfig(
+  repoDir: string,
+  ghRepo?: string | null,
+): CiFreshnessConfig | null {
+  const r = resolveRegistryCiFreshnessConfig(repoDir, ghRepo);
+  return r.kind === "resolved" ? r.config : null;
 }
 
 export function registryGhRepos(startDir: string): string[] {
@@ -404,6 +460,11 @@ export function mergeGuard(
     // is not landing:"pr" + autoMerge, making the axis inapplicable with its own skipReason.
     // undefined (direct function callers, tests) ⇒ treated as eligible (back-compat).
     repoEligible?: boolean;
+    // LOOP-444 round 3: the caller COULD NOT SELECT a CI config (≥2 registry entries share the
+    // selected remote — resolveRegistryCiFreshnessConfig's `ambiguous`). Distinct from "mergeChecks
+    // is empty", which means the axis genuinely has nothing to check. Passed rather than re-derived
+    // so the axis reports why it did not run in the caller's own terms.
+    ciConfigAmbiguous?: boolean;
   } = {},
 ): MergeGuardResult {
   // ── Board-state axis (§3.3) ────────────────────────────────────────────────
@@ -543,6 +604,12 @@ export function mergeGuard(
   const mergeChecks = opts.mergeChecks;
   if (opts.pr === undefined || opts.pr === null) {
     ciFreshness = { trip: false, skipped: true, skipReason: "no-pr-arg", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
+  } else if (opts.ciConfigAmbiguous) {
+    // Checked BEFORE the two inapplicability branches: under ambiguity the caller has no config to
+    // pass, so `mergeChecks` is empty and `repoEligible` undefined for a reason that is neither
+    // "empty" nor "ineligible". Reporting either of those would be the conflation again, one layer
+    // down — and `untargeted` is what makes `pr merge` refuse instead of squashing (skipClass).
+    ciFreshness = { trip: false, skipped: true, skipReason: "ci-config-ambiguous", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
   } else if (opts.repoEligible === false) {
     ciFreshness = { trip: false, skipped: true, skipReason: "repo-not-automerge", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
   } else if (!mergeChecks || mergeChecks.length === 0) {
@@ -689,11 +756,15 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage ·
   // opts.mergeChecks was always undefined from the CLI and the axis short-circuited to
   // skipped:"no-merge-checks" on every real invocation — measured on PR #182, which merged with
   // both required checks FAILURE while the axis reported itself not configured.
-  const cfCfg = registryCiFreshnessConfig(repo);
+  // The config is looked up for the repo the axes will actually gate — resolveGhRepo may answer from
+  // the registry when the cwd is not the repo, and a path-only lookup then found nothing for it.
+  const cfRes = resolveRegistryCiFreshnessConfig(repo, resolveGhRepo(repo));
+  const cfCfg = cfRes.kind === "resolved" ? cfRes.config : null;
   let result: MergeGuardResult;
   try {
     result = mergeGuard(repo, {
       ticketId, pr, apply,
+      ...(cfRes.kind === "ambiguous" ? { ciConfigAmbiguous: true } : {}),
       ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible, ciIrrelevantPaths: cfCfg.ciIrrelevantPaths } : {}),
     });
   }
@@ -744,6 +815,8 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage ·
     if (cf.skipped && pr !== undefined) {
       const why = cf.skipReason === "no-merge-checks"
         ? "no mergeChecks configured — axis not applicable"
+        : cf.skipReason === "ci-config-ambiguous"
+          ? `${cfRes.kind === "ambiguous" ? `${cfRes.paths.length} repo entries share the remote ${cfRes.ghRepo} (${cfRes.paths.join(", ")})` : "the CI config could not be selected"} — pass --repo <dir> to say which one. This axis did NOT run; it is not "nothing to check"`
         : cf.skipReason === "no-repo-resolved"
           ? `could not resolve the GitHub repo from this directory or the workspace repo registry${candidates.length > 1 ? ` (registry has ${candidates.length}: ${candidates.join(", ")} — pass --repo <dir> to disambiguate)` : ""}`
           : "gh unavailable, forge unreachable, or no PR found";
