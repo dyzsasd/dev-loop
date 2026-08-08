@@ -224,29 +224,18 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-08 (pm, eighty-sixth fire): the page the operator is sent to cannot render what it is asked to approve
+### 2026-08-08 (pm, eighty-seventh fire): the check that watches for stranded work is gated on the watcher being dead
 
-**The product did not move** — `origin/main` stood at `b223a6c`, the SHA fire 85 recorded, so this
-fire opened the fresh rotation that fire 85 declared due. Lens: **ux-flows**, walking the operator's
-decision loop end to end — `doctor` → W20 → the prescribed ticket URL → the rendered page. Job A had
-nothing pm-verifiable (**LOOP-446** and **LOOP-448** both await the OPERATOR, no verdict on either);
-`needs-pm` empty on the board and on the `_team` carrier; §9c ten live edges, zero unparks due.
-
-**LOOP-449 filed — `renderMarkdown` is line-oriented, so the web UI cannot render a paragraph or a
-table.** One function (`hub/src/views/ui.ts:375`) emits one `<p>` per SOURCE LINE, has no arm for a
-pipe row, and applies inline transforms per line — so a wrapped paragraph shatters into fragments
-mid-sentence, a GFM table renders as literal pipes, and `**bold**` closed on the next line stays
-literal. Four call sites carry it: ticket descriptions, comments, the docs viewer, the §22 reports.
-Measured here — **137 of 429 ticket descriptions (32%) and 257 of 1899 comments (14%) carry a table;
-423 of 429 and 1123 of 1899 carry a wrapped paragraph** — with the counterweight stated: `STRATEGY.md`
-and all 40 report files have zero tables, so that half is carried by tickets and comments. It lands
-on the operator's own path: `doctor`'s NEXT line sends them to `/ticket/LOOP-446`, a §9a proposal
-whose findings table renders as pipe text.
-
-**Job B2 was a hard no-op, and the reason is structural.** Backlog 20 of 20 junior-tier; junior Todo
-12/10, over cap; senior Todo 5/10 with **zero promotable senior-tier Backlog** — the exact condition
-`servableBacklogDepth` (LOOP-329) exists to report. Senior is not idle either: 12 In Progress, 11 of
-them senior, several since 08-06. §21b forbids re-tiering to balance load, so surface it, don't fix it.
+Thirteen tickets are claimed; **nine have had no event of any kind for 34–45 h**, while the actors
+holding them fired **27** and **26** times over that same span. `doctor` ran clean and named none of
+them. The only check whose owned-set includes `In Progress` is W16 owner-liveness, and it emits solely
+when the owner has NOT fired in 7 d — so it is silent by construction in exactly the case its own
+comment calls the hardest strand (*"the state whose ONLY recovery is the claimant firing again"*).
+LOOP-102 added `In Progress` to that set for that reason; the addition is inert while the owner is
+alive. Filed **LOOP-450**. The release path is not at fault and was cleared by measurement, not
+assumption: `exit 125 ⇒ stalled` (×72) and `exit 126 ⇒ budget-per-fire` (×33) both DO release their
+claims — the nine stranded ones come from fires that exited **0**, where declining to release is
+correct.
 
 ## Personas
 
@@ -281,20 +270,15 @@ them senior, several since 08-06. §21b forbids re-tiering to balance load, so s
 
 ## Decisions (running log)
 
-- **2026-08-08 (pm, eighty-sixth fire) — a surface is only exercised when it is READ THE WAY THE
-  READER READS IT, and four hypotheses died to prove it.** The decision-queue plumbing is correct at
-  every layer: `decisionEnteredAt` reads the real transition from the ledger (LOOP-108/207), the queue
-  holds both waiting items oldest-first, the URL `doctor` prescribes returns 200 under the
-  multi-project routing, and `servableTodoDepth` was right where I first read it as off by one (the
-  board had moved mid-fire — LOOP-444 left `Todo` after my `queue` call). Every *query* answered
-  correctly; what failed was the last inch, the RENDER of the thing the operator is asked to approve.
-  **The rule: verifying a flow by its API is not verifying the flow; open the page.** **Corollary on
-  attribution:** the live UI could not serve as evidence — the daemon runs a build older than
-  `origin/main`, W36 says the scheduler's is older still — so the measurement was taken by copying the
-  one source file to /tmp and importing it from a `probe.mjs` (no imports, Node 23.6 strips types).
-  **And the counterweight belongs in the ticket:** the measurement that found 32% of tickets carry a
-  table found zero in `STRATEGY.md` and across 40 reports. A finding that reports only its supporting
-  half is an argument, not a measurement.
+- **2026-08-08 (pm, eighty-seventh fire) — a liveness proxy stops being evidence the moment the thing
+  it stands in for can fail on its own.** W16 treats *"the claimant fired again"* as recovery for a
+  held claim. It is not: senior-dev fired 27 times and advanced none of its eight. **The rule: when a
+  check substitutes a cheap signal for the condition it cares about, the substitution owes its own
+  test — the case where the proxy is TRUE and the condition is FALSE.** That case is the entire
+  finding. **Corollary on controls:** the first `doctor` probe this fire was wrapped in `timeout`,
+  which is not installed on this box; it exited 127 having measured nothing and reported "0 warnings"
+  — the exact shape of the result I was looking for. A control that can fail silently must report its
+  own exit code, or it is not a control.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -536,7 +520,9 @@ them senior, several since 08-06. §21b forbids re-tiering to balance load, so s
     ruling, plus the eighty-second fire's ruling — which pass 71's line claimed but did not roll —
     → block **AS**; still open from that fire: **LOOP-444**, **LOOP-445**, **LOOP-446**. Extended by
     **pass 73** with the eighty-FIFTH fire's journal and its containment-hides-the-condition ruling
-    → block **AT**; still open from it: **LOOP-447**.
+    → block **AT**; still open from it: **LOOP-447**. Extended by **pass 74** with the
+    eighty-SIXTH fire's journal and its verify-the-render ruling → block **AU**; still open
+    from it: **LOOP-449**.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
