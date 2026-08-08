@@ -27,6 +27,19 @@ export interface DesignParentTicket {
   state?: string;
 }
 
+// The states in which a ticket's work is over. Exported and consumed by agentops.ts rather than
+// re-spelled there: this module already owns the board-wide row set (BOUND 4), and the ranking below
+// keys an AUTHORIZATION decision on terminality — the same class of decision that put this predicate
+// in one module in the first place. (ticketwrite.ts keeps its own, deliberately narrower set: it
+// asks a different question — "may this state be MOVED OUT OF" — and answers it without `Duplicate`.)
+export const TERMINAL_STATES = new Set(["Done", "Canceled", "Duplicate"]);
+
+/** Candidates whose work is still open, or — when none are — the input unchanged. */
+function preferLive(ids: readonly string[], stateOf: Map<string, string>): readonly string[] {
+  const live = ids.filter((id) => !TERMINAL_STATES.has(stateOf.get(id) ?? ""));
+  return live.length ? live : ids;
+}
+
 // A `Design:` pointer binds ONLY as a bare line whose first non-whitespace token is the keyword —
 // the same rule `Blocked-by:`/`Unblocked-by:` follow (blocked-by.ts, asserted in its own suite), and
 // the rule the sweep SKILL was corrected to state (LOOP-343). A ticket that merely QUOTES the marker
@@ -122,11 +135,24 @@ export function designParentIds(db: DatabaseSync, projectId: string): Set<string
         candidates.set(slug, [...(candidates.get(slug) ?? []), t.id]);
       }
     }
+    const stateOf = new Map(board.map((t) => [t.id, t.state ?? ""]));
     for (const [, cands] of candidates) {
       // Rank, then require a UNIQUE winner. `Mode: design` is the one candidate-ranking signal that
       // is a declaration rather than a mention.
       const marked = cands.filter((id) => isDesignModeBody(bodyOf.get(id) ?? ""));
-      const winners = marked.length ? marked : cands;
+      // BOUND 3a — a DECLARED design that is over outranks nothing; a live one outranks it. §21a's
+      // design doc is a LIVING per-module document, so a module designed twice has two parents
+      // naming one slug BY CONSTRUCTION — the earlier one `Done`, the current one open. Ranking on
+      // the declaration alone made that normal lifecycle contested, and BOUND 3 then resolved the
+      // slug to NOBODY: the current parent lost its design-parent authorization on its second
+      // increment, so §21a's close gate stopped firing on it and its staged children stopped being
+      // gate-protected. Once the row set became the whole board (BOUND 4) that stopped being
+      // avoidable by narrowing the input, which is why the tie-break lives here instead.
+      //
+      // The tier applies ONLY inside `marked`. Extending it to bare mentions would let a live
+      // ordinary ticket win a slug purely because the other mention is terminal — LOOP-372's
+      // over-match, re-entering through the ranking. A mention never breaks a tie, at any state.
+      const winners = marked.length ? preferLive(marked, stateOf) : cands;
       // BOUND 3 — two tickets naming one slug is an ambiguous link, and the inference has nothing
       // left to break the tie with. Resolve it to NOBODY: returning both would grant the gate to a
       // ticket that is certainly wrong, and picking one by id order would decide an authorization
