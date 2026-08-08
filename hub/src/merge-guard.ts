@@ -333,30 +333,46 @@ export function resolveGhRepo(repoDir: string): string | null {
 // registry. Matches repoDir against each registered entry's absolute path (realpath-normalized on
 // both sides so a symlinked cwd still matches). Returns null when no workspace resolves or the dir
 // is not a registered repo — the axis then skips exactly as before this wiring existed.
+// LOOP-444 follow-up: `ghRepo` is the SELECTED repo — the owner/repo the axes are actually gating,
+// as resolveGhRepo returned it. It exists because the two resolvers disagreed: resolveGhRepo falls
+// back to the registry when the cwd is not a git repo (LOOP-300 AC3), while this lookup matched by
+// PATH only. From the workspace root that combination resolved a repo and then found no config for
+// it, so mergeChecks came back empty and the CI axis skipped as `no-merge-checks` — a *resolution*
+// failure wearing the label of inapplicability. `merge-guard` only mis-reported it; `pr merge`
+// squashes on it, which is the very thing that verb exists to refuse. So when no registered path
+// matches, fall back to the entry whose remote IS the selected repo. Path match still wins, so every
+// existing caller keeps its answer; ambiguity (two entries, same remote) is refused, not guessed.
 export function registryCiFreshnessConfig(
   repoDir: string,
+  ghRepo?: string | null,
 ): { mergeChecks: string[]; defaultBranch: string; repoEligible: boolean; ciIrrelevantPaths?: string[] } | null {
+  type CfEntry = { path?: string; remote?: string; landing?: string; autoMerge?: boolean; mergeChecks?: string[]; defaultBranch?: string; ciIrrelevantPaths?: string[] };
   try {
     const ws = tryResolveWorkspace(repoDir);
     if (!ws) return null;
     let real: string;
     try { real = realpathSync(repoDir); } catch { real = resolvePath(repoDir); }
-    for (const entry of Object.values(ws.file.repos ?? {})) {
-      const e = entry as { path?: string; landing?: string; autoMerge?: boolean; mergeChecks?: string[]; defaultBranch?: string; ciIrrelevantPaths?: string[] } | null;
-      if (!e?.path) continue;
+    // §19 defaultBranch chain: repo entry → team.git.defaultBranch → "main" (LOOP-188 pattern).
+    const teamBranch = (ws.file.team as { git?: { defaultBranch?: string } }).git?.defaultBranch;
+    const configOf = (e: CfEntry): { mergeChecks: string[]; defaultBranch: string; repoEligible: boolean; ciIrrelevantPaths?: string[] } => ({
+      mergeChecks: e.mergeChecks ?? [],
+      defaultBranch: e.defaultBranch ?? teamBranch ?? "main",
+      // AC2: the axis applies only where Step 0.5 merges — landing:"pr" + autoMerge (design §3).
+      repoEligible: e.landing === "pr" && e.autoMerge === true,
+      ciIrrelevantPaths: Array.isArray(e.ciIrrelevantPaths) ? e.ciIrrelevantPaths : undefined, // LOOP-335
+    });
+    const entries = (Object.values(ws.file.repos ?? {}) as (CfEntry | null)[]).filter((e): e is CfEntry => !!e);
+    for (const e of entries) {
+      if (!e.path) continue;
       const abs = resolvePath(ws.root, e.path);
       let absReal = abs;
       try { absReal = realpathSync(abs); } catch { /* keep abs */ }
       if (absReal !== real && abs !== real) continue;
-      // §19 defaultBranch chain: repo entry → team.git.defaultBranch → "main" (LOOP-188 pattern).
-      const teamBranch = (ws.file.team as { git?: { defaultBranch?: string } }).git?.defaultBranch;
-      return {
-        mergeChecks: e.mergeChecks ?? [],
-        defaultBranch: e.defaultBranch ?? teamBranch ?? "main",
-        // AC2: the axis applies only where Step 0.5 merges — landing:"pr" + autoMerge (design §3).
-        repoEligible: e.landing === "pr" && e.autoMerge === true,
-        ciIrrelevantPaths: Array.isArray(e.ciIrrelevantPaths) ? e.ciIrrelevantPaths : undefined, // LOOP-335
-      };
+      return configOf(e);
+    }
+    if (ghRepo) {
+      const byRemote = entries.filter((e) => e.remote && ghRepoFromRemote(e.remote) === ghRepo);
+      if (byRemote.length === 1) return configOf(byRemote[0]!);
     }
     return null;
   } catch { return null; }
@@ -691,7 +707,9 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage ·
   // opts.mergeChecks was always undefined from the CLI and the axis short-circuited to
   // skipped:"no-merge-checks" on every real invocation — measured on PR #182, which merged with
   // both required checks FAILURE while the axis reported itself not configured.
-  const cfCfg = registryCiFreshnessConfig(repo);
+  // The config is looked up for the repo the axes will actually gate — resolveGhRepo may answer from
+  // the registry when the cwd is not the repo, and a path-only lookup then found nothing for it.
+  const cfCfg = registryCiFreshnessConfig(repo, resolveGhRepo(repo));
   let result: MergeGuardResult;
   try {
     result = mergeGuard(repo, {

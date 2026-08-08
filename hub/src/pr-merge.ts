@@ -230,6 +230,25 @@ export function prMerge(
   }
 }
 
+// ONE resolution for the whole verb: which GitHub repo this call addresses, and the CI-freshness
+// config OF THAT REPO.
+//
+// It is one function because it was two, and they disagreed. `resolveGhRepo` answers from the
+// workspace repo registry when the cwd is not a git repo (LOOP-300 AC3) — a mode this verb's own
+// --help advertises — while the config lookup matched a REGISTERED PATH only. Run from the
+// workspace root, the pair resolved a repo and then no config for it: `mergeChecks` empty, the CI
+// axis skipped as `no-merge-checks`, no hold, and the squash issued with the check axis never run.
+// A gate that skipped CI because it could not find its own config is not a gate that passed, and
+// this verb exists precisely to refuse that squash (LOOP-423 is what one costs). Resolving the repo
+// FIRST and reading the config for that repo is what makes the two answers the same answer.
+export function resolvePrMergeTarget(repoDir: string): {
+  ghRepo: string | null;
+  ciConfig: ReturnType<typeof registryCiFreshnessConfig>;
+} {
+  const ghRepo = resolveGhRepo(repoDir);
+  return { ghRepo, ciConfig: registryCiFreshnessConfig(repoDir, ghRepo) };
+}
+
 // The exit code for a result, so the CLI and any programmatic caller cannot disagree about it.
 export function prMergeExit(r: PrMergeResult): number {
   if (r.merged || r.alreadyMerged) return PR_MERGE_EXIT.merged;
@@ -292,12 +311,14 @@ if (isMainEntry(import.meta.url)) {
     process.exit(PR_MERGE_EXIT.usage);
   }
 
-  // Same registry resolution the guard's CLI does, so both surfaces gate on identical config.
-  const cfCfg = registryCiFreshnessConfig(repo);
+  // Same registry resolution the guard's CLI does, so both surfaces gate on identical config — and
+  // resolved ONCE, so the repo the config describes is the repo the axes gate and the squash targets.
+  const { ghRepo: resolvedRepo, ciConfig: cfCfg } = resolvePrMergeTarget(repo);
   let result: PrMergeResult;
   try {
     result = prMerge(repo, {
       pr, apply,
+      ...(resolvedRepo ? { ghRepo: resolvedRepo } : {}),
       ...(ticketId !== undefined ? { ticketId } : {}),
       ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible, ciIrrelevantPaths: cfCfg.ciIrrelevantPaths } : {}),
     });

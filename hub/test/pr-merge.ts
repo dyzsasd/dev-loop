@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb } from "../src/db.ts";
 import { EXIT_UNEVALUATED } from "../src/merge-guard.ts";
-import { prMerge, prMergeExit, mergeArgvFor, PR_MERGE_EXIT, type PrMergeResult } from "../src/pr-merge.ts";
+import { prMerge, prMergeExit, mergeArgvFor, resolvePrMergeTarget, PR_MERGE_EXIT, type PrMergeResult } from "../src/pr-merge.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -271,6 +271,82 @@ try {
     ok(r.ghRepo === null && !r.merged, "usage: an unresolvable repo does not merge");
     ok(prMergeExit(r) === PR_MERGE_EXIT.usage, `usage: exit 2 (got ${prMergeExit(r)})`);
     ok(calls.length === 0, "usage: not a single gh call — it cannot address a PR without owner/repo");
+  }
+
+  // ── The CI config is resolved for the SELECTED repo, not the invocation dir ────────────────────
+  //
+  // Review of this ticket's own PR found the verb could still squash with the CI axis never run.
+  // `resolveGhRepo` answers from the workspace repo registry when the cwd is not a git repo
+  // (LOOP-300 AC3) — the mode --help advertises — while the config lookup matched a REGISTERED PATH
+  // only. Run from the workspace ROOT the pair resolved a repo and then no config for it:
+  // mergeChecks empty ⇒ ciFreshness skipped as `no-merge-checks` ⇒ no hold ⇒ squash. A gate that
+  // skipped CI because it could not find its own config had not passed anything, and this is the
+  // LOOP-423 merge re-created inside the verb built to refuse it.
+  //
+  // FAIL-BEFORE (keyed on the invocation dir): ciConfig is null here, so the missing-check arm
+  // passes no mergeChecks and MERGES — `merges=1`, the incident itself. PASS-AFTER: `merges=0`.
+  {
+    const wsRoot = join(ROOT, "ws444");
+    mkdirSync(join(wsRoot, "the-repo"), { recursive: true });
+    writeFileSync(join(wsRoot, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "t444", backend: "service", git: { defaultBranch: "main" } },
+      repos: {
+        "the-repo": {
+          path: "the-repo", remote: `git@github.com:${GHREPO}.git`,
+          landing: "pr", autoMerge: true, mergeChecks: CHECKS,
+        },
+      },
+      projects: {},
+    }, null, 2) + "\n");
+
+    // DEVLOOP_WORKSPACE / DEVLOOP_HUB_DB OUTRANK the directory argument (LOOP-418), so under a fire's
+    // env this arm would resolve the LIVE workspace and measure the wrong repo's config entirely.
+    const saved: Record<string, string | undefined> = {
+      DEVLOOP_WORKSPACE: process.env.DEVLOOP_WORKSPACE, DEVLOOP_HUB_DB: process.env.DEVLOOP_HUB_DB,
+    };
+    delete process.env.DEVLOOP_WORKSPACE; delete process.env.DEVLOOP_HUB_DB;
+    try {
+      const target = resolvePrMergeTarget(wsRoot);
+      ok(target.ghRepo === GHREPO,
+        `selected-repo config: the repo resolves from the registry at the workspace ROOT (got ${target.ghRepo})`);
+      ok(target.ciConfig !== null,
+        "selected-repo config: …and so does ITS CI config — one resolution, so the two cannot disagree");
+      ok(JSON.stringify(target.ciConfig?.mergeChecks) === JSON.stringify(CHECKS),
+        `selected-repo config: the required checks are the registry entry's (got ${JSON.stringify(target.ciConfig?.mergeChecks)})`);
+      ok(target.ciConfig?.repoEligible === true,
+        "selected-repo config: landing:\"pr\" + autoMerge ⇒ the axis applies to this repo");
+
+      // The consequence, on the argv — driven exactly as the CLI drives it: the config comes from the
+      // resolution and NOTHING is hand-passed, so a null config reproduces the pre-fix squash rather
+      // than throwing.
+      const drive = (rollup: Array<{ name: string; conclusion: string | null }>): { r: PrMergeResult; merges: number; exit: number } => {
+        const { exec, calls } = mkExec({ ticket: "PM-1", rollup });
+        const cfg = target.ciConfig;
+        const r = prMerge(wsRoot, {
+          pr: PR, dbPath, exec, agentReviewers: [], apply: false,
+          ...(target.ghRepo ? { ghRepo: target.ghRepo } : {}),
+          ...(cfg ? { mergeChecks: cfg.mergeChecks, defaultBranch: cfg.defaultBranch, repoEligible: cfg.repoEligible, ciIrrelevantPaths: cfg.ciIrrelevantPaths } : {}),
+        });
+        return { r, merges: mergeCalls(calls).length, exit: prMergeExit(r) };
+      };
+
+      const missing = drive([{ name: "GitGuardian Security Checks", conclusion: "SUCCESS" }]);
+      ok(missing.merges === 0 && missing.exit === PR_MERGE_EXIT.held,
+        `selected-repo config: a required check that never reported HOLDS the squash from the workspace root (merges=${missing.merges}, exit=${missing.exit})`);
+      ok(missing.r.holds[0]?.token === "check-never-reported",
+        `selected-repo config: …and the hold names the cause (got '${missing.r.holds[0]?.token}')`);
+
+      // Control, same fixture and same double: a GREEN rollup still merges. Without it the arm above
+      // would pass just as well if resolving the config had broken merging altogether.
+      const green = drive(greenRollup);
+      ok(green.merges === 1 && green.exit === PR_MERGE_EXIT.merged,
+        `selected-repo config control: a green rollup still merges, so the hold above is the CHECKS talking (merges=${green.merges}, exit=${green.exit})`);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
   }
 
   // ── AC5: merge-guard's exit contract is not renumbered ─────────────────────────────────────────
