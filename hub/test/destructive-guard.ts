@@ -210,15 +210,115 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
 // The inventory is parsed from the module rather than listed by hand, so a NEW export that nobody
 // tested fails this arm instead of passing unnoticed. The expected-set assertion above the loop is
 // what keeps the loop from passing vacuously if the parse ever breaks and yields nothing.
+//
+// Two ways that guarantee can hold on paper and be green anyway — both closed here, because an
+// assertion that cannot discriminate is worse than no assertion (PR #271 review):
+//   1. An export written in a form the parse does not recognize (`export async function`,
+//      `export class`, `export let`, `export { name }`, `export * from`) would be MISSING from the
+//      inventory, and the unchanged expected list would still match. So every `export` line is
+//      CLASSIFIED, and one that matches no known form FAILS this arm rather than being skipped.
+//   2. "Exercised" measured by a raw word search counts a name that survives only in a comment or
+//      an assertion label — deleting every real call to `activeFireMarker` would leave this map
+//      green off the section comments alone. So each suite is reduced to its EXECUTABLE text first
+//      (`codeOnly` below), and that reduction is itself asserted.
 {
   const src = readFileSync(join(hubRoot, "src", "destructive-guard.ts"), "utf8");
-  const runtimeExports = [...src.matchAll(/^export (?:function|const) (\w+)/gm)].map((m) => m[1]).sort();
+
+  // Every `export` line is classified into: type-only (no runtime value to exercise), a declaration
+  // whose name we capture, a named re-export list, or UNREADABLE — which fails.
+  const TYPE_ONLY = /^export\s+(?:type|interface)\b/;
+  const DECLARED = /^export\s+(?:async\s+)?(?:function\s*\*?|const|let|var|class)\s+(\w+)/;
+  const NAMED_LIST = /^export\s*\{([^}]*)\}/;
+  const runtime: string[] = [];
+  const unreadable: string[] = [];
+  for (const line of src.split("\n")) {
+    if (!/^export\b/.test(line)) continue;
+    if (TYPE_ONLY.test(line)) continue;
+    const declared = DECLARED.exec(line);
+    if (declared) { runtime.push(declared[1]); continue; }
+    const list = NAMED_LIST.exec(line);
+    if (list) {
+      for (const spec of list[1].split(",")) {
+        const s = spec.trim();
+        if (!s || /^type\b/.test(s)) continue;
+        const parts = s.split(/\s+as\s+/);       // a suite imports the EXPORTED name, not the local one
+        runtime.push((parts[1] ?? parts[0]).trim());
+      }
+      continue;
+    }
+    unreadable.push(line.trim());
+  }
+  ok(unreadable.length === 0,
+    `coverage map: every export line is a form this inventory can read — extend the classifier before adding one it cannot (unreadable: ${unreadable.join(" | ") || "none"})`);
+
+  const runtimeExports = [...runtime].sort();
   const expected = [
     "FIRE_MARKERS", "TOKEN_PREFIX", "activeFireMarker", "commitBothHalves",
     "confirmationToken", "isScratchProject", "isolationVerdict", "workspaceIsolationVerdict",
   ];
   ok(runtimeExports.join(",") === expected.join(","),
     `coverage map: the module's runtime exports are the known set — a new export must be added here WITH a test (got: ${runtimeExports.join(",")})`);
+
+  // Reduce a suite to the text that RUNS: comments and string literals hold prose, so they are
+  // dropped; a template SUBSTITUTION is code and is kept (`${confirmationToken(k)}` is a real call);
+  // a regex literal is evaluated, so it is kept too. Dropped constructs collapse to a space so two
+  // identifiers never fuse. In code, `\x` is consumed as an escape pair — that is what keeps the
+  // `\/\/` inside a regex from reading as the start of a comment.
+  const codeOnly = (text: string): string => {
+    const stack: ("code" | "tmpl")[] = ["code"];
+    const outerDepths: number[] = [];
+    let depth = 0;                             // brace depth of the innermost `${…}` frame
+    let out = "";
+    let i = 0;
+    while (i < text.length) {
+      const c = text[i];
+      if (stack[stack.length - 1] === "tmpl") {
+        if (c === "\\") { i += 2; continue; }
+        if (c === "`") { stack.pop(); out += " "; i++; continue; }
+        if (c === "$" && text[i + 1] === "{") { stack.push("code"); outerDepths.push(depth); depth = 0; out += " "; i += 2; continue; }
+        i++; continue;                         // template prose
+      }
+      if (c === "\\") { out += " "; i += 2; continue; }
+      if (c === "/" && text[i + 1] === "/") { while (i < text.length && text[i] !== "\n") i++; continue; }
+      if (c === "/" && text[i + 1] === "*") {
+        i += 2;
+        while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
+        i += 2; out += " "; continue;
+      }
+      if (c === '"' || c === "'") {
+        i++;
+        while (i < text.length && text[i] !== c) { if (text[i] === "\\") i++; i++; }
+        i++; out += " "; continue;
+      }
+      if (c === "`") { stack.push("tmpl"); i++; continue; }
+      if (c === "{") depth++;
+      if (c === "}") {
+        if (depth === 0 && stack.length > 1) { stack.pop(); depth = outerDepths.pop() ?? 0; out += " "; i++; continue; }
+        depth--;
+      }
+      out += c; i++;
+    }
+    return out;
+  };
+
+  // The reduction is asserted, not trusted: this map's honesty rests entirely on it. Every name
+  // below appears in THIS file only inside these probe literals, so the arms are independent of the
+  // suite's own coverage — the scrub drops them here and the real call sites above are what count.
+  const probe = codeOnly([
+    "// activeFireMarker, in a line comment",
+    "/* isolationVerdict, in a block comment */",
+    'ok(x, "confirmationToken, in an assertion label");',
+    "const s = `prose isScratchProject ${commitBothHalves(p)} more prose`;",
+    "const re = /FIRE_MARKERS/;",
+  ].join("\n"));
+  for (const prose of ["activeFireMarker", "isolationVerdict", "confirmationToken", "isScratchProject"]) {
+    ok(!new RegExp(`\\b${prose}\\b`).test(probe),
+      `coverage map: the scrub drops ${prose} when it survives only in prose — a deleted call arm cannot read as coverage`);
+  }
+  for (const code of ["commitBothHalves", "FIRE_MARKERS", "ok", "re"]) {
+    ok(new RegExp(`\\b${code}\\b`).test(probe),
+      `coverage map: the scrub keeps ${code} — a template substitution, a regex literal and a call are executable references`);
+  }
 
   const importRe = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*"\.\.\/src\/destructive-guard\.ts"/;
   const suites = readdirSync(join(hubRoot, "test")).filter((f) => f.endsWith(".ts") && f !== "run-all.ts");
@@ -228,7 +328,7 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
     const m = importRe.exec(text);
     if (!m) continue;                          // a file that only MENTIONS the module is not coverage
     const imported = m[1].split(",").map((s) => s.trim().split(/\s+as\s+/)[0]).filter(Boolean);
-    const body = text.replace(m[0], "");       // the import itself must not count as a use
+    const body = codeOnly(text.replace(m[0], ""));   // the import itself must not count as a use
     for (const name of imported) {
       if (!new RegExp(`\\b${name}\\b`).test(body)) continue;
       coverage.set(name, [...(coverage.get(name) ?? []), file]);
