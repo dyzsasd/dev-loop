@@ -319,15 +319,31 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
     ok(new RegExp(`\\b${code}\\b`).test(probe),
       `coverage map: the scrub keeps ${code} — a template substitution, a regex literal and a call are executable references`);
   }
+  // The other half of "exercised", which no scrub can decide: a TYPE-ONLY import is erased before
+  // anything runs, so it is not coverage however the name is then mentioned. Asserted on the
+  // predicate itself, since no suite in the tree imports this module that way today — which is
+  // exactly why it would have gone unnoticed.
+  const importsAsValue = (text: string): boolean =>
+    /import\s*\{([^}]*)\}\s*from\s*"\.\.\/src\/destructive-guard\.ts"/.test(text);
+  ok(!importsAsValue('import type { commitBothHalves } from "../src/destructive-guard.ts";\ntype T = typeof commitBothHalves;\n'),
+    "coverage map: a type-only import is NOT coverage — it is erased before anything runs");
+  ok(importsAsValue('import { commitBothHalves } from "../src/destructive-guard.ts";\ncommitBothHalves(p);\n'),
+    "coverage map: …while a value import still is");
 
-  const importRe = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*"\.\.\/src\/destructive-guard\.ts"/;
+  // A VALUE import only — `import type { … }` is erased before anything runs, so a suite that
+  // imports a name that way and mentions it in a type position (`typeof commitBothHalves`) has not
+  // exercised it. The scrub cannot catch that, because a type annotation IS code; the fix has to be
+  // here, at what counts as an import (PR #271 review, second round). Inline `{ type X, y }`
+  // specifiers are dropped for the same reason.
+  const importRe = /import\s*\{([^}]*)\}\s*from\s*"\.\.\/src\/destructive-guard\.ts"/;
   const suites = readdirSync(join(hubRoot, "test")).filter((f) => f.endsWith(".ts") && f !== "run-all.ts");
   const coverage = new Map<string, string[]>();
   for (const file of suites) {
     const text = readFileSync(join(hubRoot, "test", file), "utf8");
     const m = importRe.exec(text);
     if (!m) continue;                          // a file that only MENTIONS the module is not coverage
-    const imported = m[1].split(",").map((s) => s.trim().split(/\s+as\s+/)[0]).filter(Boolean);
+    const imported = m[1].split(",").map((s) => s.trim()).filter((s) => s && !/^type\b/.test(s))
+      .map((s) => s.split(/\s+as\s+/)[0]!).filter(Boolean);
     const body = codeOnly(text.replace(m[0], ""));   // the import itself must not count as a use
     for (const name of imported) {
       if (!new RegExp(`\\b${name}\\b`).test(body)) continue;
