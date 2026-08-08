@@ -700,6 +700,57 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
     "LOOP-335: a non-slash entry is an EXACT match, not a prefix");
   ok(!deltaIsCiIrrelevant([], ["docs/STRATEGY.md"]), "LOOP-335: an empty delta is never exempt");
 }
+// ── LOOP-365: surface the ciIrrelevantPaths knob in the stale reason ─────────────
+{
+  // Reuse the LOOP-335 exec helper pattern: green checks, head 2 behind.
+  const mkExec = (revFiles: string[] | "fail" | "unparseable", extra: Record<string, unknown> = {}): ExecFn => (args) => {
+    if (args[0] === "pr" && args[1] === "view") {
+      return { ok: true, stdout: JSON.stringify({ headRefOid: "abc123", statusCheckRollup: [{ name: "Test", conclusion: "SUCCESS", status: "COMPLETED" }] }), stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1]).includes("/compare/main...")) {
+      return { ok: true, stdout: JSON.stringify({ behind_by: 2, base_commit: { sha: "tip999" } }), stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1]).includes("/compare/abc123...")) {
+      if (revFiles === "fail") return { ok: false, stdout: "", stderr: "compare failed" };
+      if (revFiles === "unparseable") return { ok: true, stdout: "{not json", stderr: "" };
+      return { ok: true, stdout: JSON.stringify({ files: revFiles.map((f) => ({ filename: f })), ...extra }), stderr: "" };
+    }
+    return { ok: false, stdout: "", stderr: "unexpected" };
+  };
+  const read = (revFiles: string[] | "fail" | "unparseable", irrelevant?: string[], extra: Record<string, unknown> = {}) =>
+    readCiFreshness(mkExec(revFiles, extra), "o/r", 1, ["Test"], "main", irrelevant);
+
+  // AC1 — hint present when stale, delta known, ciIrrelevantPaths unset.
+  const a1 = read(["docs/STRATEGY.md", "docs/strategy-archive/2026-08.md"], undefined);
+  ok(a1.verdict === "stale", `LOOP-365 AC1: stale with unset ciIrrelevantPaths (got ${a1.verdict})`);
+  ok((a1.reason ?? "").includes("ciIrrelevantPaths"),
+    `LOOP-365 AC1: reason names the unset knob (${a1.reason?.slice(0, 120)})`);
+  ok((a1.reason ?? "").includes("dev-loop team set"),
+    "LOOP-365 AC1: reason includes the mutator invocation");
+
+  // AC2 — no hint when ciIrrelevantPaths IS configured.
+  const a2 = read(["docs/STRATEGY.md", "hub/src/landing.ts"], ["docs/STRATEGY.md"]);
+  ok(a2.verdict === "stale", `LOOP-365 AC2: stale with configured ciIrrelevantPaths but mixed delta (got ${a2.verdict})`);
+  ok(!(a2.reason ?? "").includes("ciIrrelevantPaths"),
+    "LOOP-365 AC2: no hint when ciIrrelevantPaths IS configured");
+
+  // AC3 — no hint when composition is unknown (fail, unparseable, empty).
+  const a3a = read("fail", undefined);
+  ok(a3a.verdict === "stale", `LOOP-365 AC3(i): stale from failed compare (got ${a3a.verdict})`);
+  ok(!(a3a.reason ?? "").includes("ciIrrelevantPaths"),
+    "LOOP-365 AC3(i): no hint when composition unknown (compare failed)");
+
+  const a3b = read("unparseable", undefined);
+  ok(a3b.verdict === "stale", `LOOP-365 AC3(ii): stale from unparseable compare (got ${a3b.verdict})`);
+  ok(!(a3b.reason ?? "").includes("ciIrrelevantPaths"),
+    "LOOP-365 AC3(ii): no hint when composition unknown (unparseable)");
+
+  const a3c = read([], undefined);
+  ok(a3c.verdict === "stale", `LOOP-365 AC3(iii): stale from empty delta (got ${a3c.verdict})`);
+  ok(!(a3c.reason ?? "").includes("ciIrrelevantPaths"),
+    "LOOP-365 AC3(iii): no hint when delta empty (no files)");
+}
+
 
 // ── LOOP-424: W22 landing-health line blind to missing PR checks ──────────────────
 
