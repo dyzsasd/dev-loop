@@ -435,6 +435,24 @@ try {
       "LOOP-378 BOUND 3a: a live MENTION does not win the slug over a Done DECLARATION — the tier ranks inside declarations, never across them");
     ok(!inVerify("pm", "L378B-MENTION") && inVerify("qa", "L378B-MENTION"),
       "LOOP-378 BOUND 3a: …so it stays an ordinary qa-owned Bug on both layers");
+
+    // The RESIDUAL of that scoping, pinned so it can only change deliberately (PR #270 review;
+    // LOOP-379 owns the spec call). A genuine second design filed WITHOUT the `Mode: design` line
+    // ranks exactly as the bystander above does — nothing in either body tells the two apart — so
+    // the older declared parent keeps the slug. The consequence is real and is the price of the
+    // ordering: this ticket is routed to qa and its children inherit the OLD parent's labels.
+    // Asserting it here makes LOOP-379's eventual back-link signal a visible test change rather
+    // than a quiet re-ranking, and would have caught it being "fixed" by inverting the two keys.
+    mk("L378B-DECLARED-OLD", "Mode: design\n\nthe first cut of hubDoc:design/kiln-core", "Done", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L378B-UNDECLARED-NEW", "the second cut of hubDoc:design/kiln-core, filed without the mode line", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L378B-KCHILD", "Design: hubDoc:design/kiln-core\n\nbuild it", "Todo", ["dev-loop"]);
+    const p3 = designParentIds(db, pid);
+    ok(!p3.has("L378B-UNDECLARED-NEW"),
+      "LOOP-378 BOUND 3a residual: a live UNDECLARED successor ranks as a mention, so it does not take the slug — LOOP-379 owns the signal that would separate an owner from a citer");
+    ok(p3.has("L378B-DECLARED-OLD"),
+      "LOOP-378 BOUND 3a residual: …and the slug stays resolved to the declared owner rather than going contested — the declaration is the only ownership signal the ranking can see");
+    ok(!inVerify("pm", "L378B-UNDECLARED-NEW") && inVerify("qa", "L378B-UNDECLARED-NEW"),
+      "LOOP-378 BOUND 3a residual: …and both layers agree on that answer — the divergence LOOP-378 closes is gone even where the answer is the unhappy one");
   }
 
   db.close();

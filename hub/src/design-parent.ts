@@ -140,7 +140,7 @@ export function designParentIds(db: DatabaseSync, projectId: string): Set<string
       // Rank, then require a UNIQUE winner. `Mode: design` is the one candidate-ranking signal that
       // is a declaration rather than a mention.
       const marked = cands.filter((id) => isDesignModeBody(bodyOf.get(id) ?? ""));
-      // BOUND 3a — a DECLARED design that is over outranks nothing; a live one outranks it. §21a's
+      // BOUND 3a — among DECLARED designs, a live one outranks one whose work is over. §21a's
       // design doc is a LIVING per-module document, so a module designed twice has two parents
       // naming one slug BY CONSTRUCTION — the earlier one `Done`, the current one open. Ranking on
       // the declaration alone made that normal lifecycle contested, and BOUND 3 then resolved the
@@ -149,9 +149,20 @@ export function designParentIds(db: DatabaseSync, projectId: string): Set<string
       // gate-protected. Once the row set became the whole board (BOUND 4) that stopped being
       // avoidable by narrowing the input, which is why the tie-break lives here instead.
       //
-      // The tier applies ONLY inside `marked`. Extending it to bare mentions would let a live
-      // ordinary ticket win a slug purely because the other mention is terminal — LOOP-372's
-      // over-match, re-entering through the ranking. A mention never breaks a tie, at any state.
+      // The two keys are ORDERED and the order is not interchangeable: the DECLARATION is primary
+      // and liveness only breaks ties inside it. Lifting liveness above the declaration — ranking
+      // `cands` by state first, as PR #270's review proposed — would let a live ordinary ticket win
+      // a slug purely because the other candidate is terminal: LOOP-372's over-match, re-entering
+      // through the ranking. This file's own LOOP-378 fixture (two undeclared mentions, one of them
+      // terminal) pins that shape to NOBODY, so the two orderings are not both satisfiable.
+      //
+      // KNOWN RESIDUAL, asserted in the suite rather than left to be rediscovered (PR #270 review;
+      // owned by LOOP-379): a live parent that declares NO mode loses its slug to an older declared
+      // one. To this function it is indistinguishable from a bystander that cites the doc in prose,
+      // and the two MUST rank alike or the paragraph above stops being true. The fix for an
+      // invisible parent is the declaration; the fix for the inference is a signal that separates
+      // owning a design from citing one — §21a's mandatory child `relatedTo` back-link is the
+      // candidate, and choosing it is a spec call, not something to settle inside a tie-break.
       const winners = marked.length ? preferLive(marked, stateOf) : cands;
       // BOUND 3 — two tickets naming one slug is an ambiguous link, and the inference has nothing
       // left to break the tie with. Resolve it to NOBODY: returning both would grant the gate to a
