@@ -27,6 +27,19 @@ export interface DesignParentTicket {
   state?: string;
 }
 
+// The states in which a ticket's work is over. Exported and consumed by agentops.ts rather than
+// re-spelled there: this module already owns the board-wide row set (BOUND 4), and the ranking below
+// keys an AUTHORIZATION decision on terminality — the same class of decision that put this predicate
+// in one module in the first place. (ticketwrite.ts keeps its own, deliberately narrower set: it
+// asks a different question — "may this state be MOVED OUT OF" — and answers it without `Duplicate`.)
+export const TERMINAL_STATES = new Set(["Done", "Canceled", "Duplicate"]);
+
+/** Candidates whose work is still open, or — when none are — the input unchanged. */
+function preferLive(ids: readonly string[], stateOf: Map<string, string>): readonly string[] {
+  const live = ids.filter((id) => !TERMINAL_STATES.has(stateOf.get(id) ?? ""));
+  return live.length ? live : ids;
+}
+
 // A `Design:` pointer binds ONLY as a bare line whose first non-whitespace token is the keyword —
 // the same rule `Blocked-by:`/`Unblocked-by:` follow (blocked-by.ts, asserted in its own suite), and
 // the rule the sweep SKILL was corrected to state (LOOP-343). A ticket that merely QUOTES the marker
@@ -57,15 +70,30 @@ export function designPointerOf(description: string): string | null {
  * into the parent role. `isDesignParent` is not a display predicate — it decides pm/qa queue
  * routing, the LOOP-345 close gate, and the LOOP-360 zero-commit handoff exemption — so an
  * over-match hands ordinary code tickets an authorization they were never meant to have.
+ *
+ * BOUND 4 — the row set is the WHOLE BOARD, and it is not a parameter (LOOP-378). Every link this
+ * function walks is board-wide: a child in `Todo` resolves a parent that may be `Done`, and a slug's
+ * candidate set may hold terminal and non-terminal tickets at once. So restricting the input does
+ * not merely hide terminal rows from the answer — it CHANGES the answer for the rows that remain,
+ * most sharply through BOUND 3, since whether a slug is contested is a property of the row set.
+ * While the rows came in as an argument the callers disagreed: `opQueue` passed non-terminal rows
+ * and the three `ticketwrite` gates passed all of them. Measured on this board with LOOP-372's fix
+ * in place, the two views shared NOT ONE parent — 11 ids to `ticketwrite`, 1 to `opQueue`, disjoint
+ * — and LOOP-379 was a design parent to the queue and not to the close gate. That is the precise
+ * inversion LOOP-345 exists to prevent, in its own words: the layer that SHOWS the work refused the
+ * write, and the layer that PERMITS the write hid the work. One predicate asked one question cannot
+ * be enforced by convention at four call sites, so the query lives HERE and the parameter is gone;
+ * a caller that wants a narrower view filters what it DISPLAYS, after the predicate, never what the
+ * predicate derives from.
  */
-export function designParentIds(db: DatabaseSync, projectId: string, rows?: DesignParentTicket[]): Set<string> {
-  const open = rows ?? (db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-    .all(projectId) as unknown as DesignParentTicket[]);
+export function designParentIds(db: DatabaseSync, projectId: string): Set<string> {
+  const board = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
+    .all(projectId) as unknown as DesignParentTicket[];
   const out = new Set<string>();
-  const onBoard = new Set(open.map((t) => t.id));
+  const onBoard = new Set(board.map((t) => t.id));
   const slugToChildren = new Map<string, string[]>();
 
-  for (const t of open) {
+  for (const t of board) {
     const ptr = designPointerOf(t.description ?? "");
     if (!ptr) continue;
     const asParent = /^parent\s+(\S+)/i.exec(unwrapCodeSpan(ptr));
@@ -88,9 +116,9 @@ export function designParentIds(db: DatabaseSync, projectId: string, rows?: Desi
   // the parents that were already being routed correctly. So the marker RANKS candidates below; it
   // never gates them.
   if (slugToChildren.size) {
-    const bodyOf = new Map(open.map((t) => [t.id, t.description ?? ""]));
+    const bodyOf = new Map(board.map((t) => [t.id, t.description ?? ""]));
     const candidates = new Map<string, string[]>();
-    for (const t of open) {
+    for (const t of board) {
       const body = t.description ?? "";
       // BOUND 2 — a ticket that DECLARES a non-design mode is not a design parent, whatever its
       // prose mentions. §21a defines exactly two modes and `Mode: direct-code` is the ticket saying
@@ -107,11 +135,35 @@ export function designParentIds(db: DatabaseSync, projectId: string, rows?: Desi
         candidates.set(slug, [...(candidates.get(slug) ?? []), t.id]);
       }
     }
+    const stateOf = new Map(board.map((t) => [t.id, t.state ?? ""]));
     for (const [, cands] of candidates) {
       // Rank, then require a UNIQUE winner. `Mode: design` is the one candidate-ranking signal that
       // is a declaration rather than a mention.
       const marked = cands.filter((id) => isDesignModeBody(bodyOf.get(id) ?? ""));
-      const winners = marked.length ? marked : cands;
+      // BOUND 3a — among DECLARED designs, a live one outranks one whose work is over. §21a's
+      // design doc is a LIVING per-module document, so a module designed twice has two parents
+      // naming one slug BY CONSTRUCTION — the earlier one `Done`, the current one open. Ranking on
+      // the declaration alone made that normal lifecycle contested, and BOUND 3 then resolved the
+      // slug to NOBODY: the current parent lost its design-parent authorization on its second
+      // increment, so §21a's close gate stopped firing on it and its staged children stopped being
+      // gate-protected. Once the row set became the whole board (BOUND 4) that stopped being
+      // avoidable by narrowing the input, which is why the tie-break lives here instead.
+      //
+      // The two keys are ORDERED and the order is not interchangeable: the DECLARATION is primary
+      // and liveness only breaks ties inside it. Lifting liveness above the declaration — ranking
+      // `cands` by state first, as PR #270's review proposed — would let a live ordinary ticket win
+      // a slug purely because the other candidate is terminal: LOOP-372's over-match, re-entering
+      // through the ranking. This file's own LOOP-378 fixture (two undeclared mentions, one of them
+      // terminal) pins that shape to NOBODY, so the two orderings are not both satisfiable.
+      //
+      // KNOWN RESIDUAL, asserted in the suite rather than left to be rediscovered (PR #270 review;
+      // owned by LOOP-379): a live parent that declares NO mode loses its slug to an older declared
+      // one. To this function it is indistinguishable from a bystander that cites the doc in prose,
+      // and the two MUST rank alike or the paragraph above stops being true. The fix for an
+      // invisible parent is the declaration; the fix for the inference is a signal that separates
+      // owning a design from citing one — §21a's mandatory child `relatedTo` back-link is the
+      // candidate, and choosing it is a spec call, not something to settle inside a tie-break.
+      const winners = marked.length ? preferLive(marked, stateOf) : cands;
       // BOUND 3 — two tickets naming one slug is an ambiguous link, and the inference has nothing
       // left to break the tie with. Resolve it to NOBODY: returning both would grant the gate to a
       // ticket that is certainly wrong, and picking one by id order would decide an authorization
