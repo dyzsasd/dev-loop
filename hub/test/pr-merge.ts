@@ -17,7 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb } from "../src/db.ts";
-import { EXIT_UNEVALUATED } from "../src/merge-guard.ts";
+import { EXIT_UNEVALUATED, skipClass } from "../src/merge-guard.ts";
 import { prMerge, prMergeExit, mergeArgvFor, resolvePrMergeTarget, PR_MERGE_EXIT, type PrMergeResult } from "../src/pr-merge.ts";
 
 let fails = 0;
@@ -251,6 +251,24 @@ try {
     const again = run({ ticket: "PM-2" });
     ok(again.r.guard?.applied?.action === "already_present", `apply: idempotent on re-run (got ${again.r.guard?.applied?.action})`);
     ok(readComments("PM-2").length === 1, "apply: …no duplicate comment");
+
+    // Review round 3, finding 2: report a board write only when one HAPPENED.
+    //
+    // `applyTrip` runs when the GUARD trips. A readiness hold (draft / conflict / unknown
+    // mergeability) and a non-tripping CI state (pending, unknown, an untargeted skip) hold the
+    // squash with no axis objecting — so no comment is written and no ticket is routed. The CLI
+    // nonetheless printed "The objection is recorded on the ticket" whenever --apply was requested,
+    // which invites an operator to look for an audit trail and a routing action that do not exist.
+    // The message is now keyed on the recorded action; this pins the fact it keys on.
+    //
+    // PM-3 is In Progress, so the board axis does NOT trip: the DRAFT is the only thing holding.
+    const draft = run({ ticket: "PM-3", isDraft: true });     // apply ON
+    ok(draft.r.holds.length > 0 && draft.r.holds.every((h) => h.axis === "readiness"),
+      `apply: a draft PR holds on readiness alone (got ${JSON.stringify(draft.r.holds.map((h) => h.axis))})`);
+    ok(draft.r.guard?.applied === undefined,
+      `apply: …and NOTHING was recorded on the board, so the CLI must not claim it was (got ${JSON.stringify(draft.r.guard?.applied)})`);
+    ok(readComments("PM-3").length === 0,
+      `apply: …confirmed against the ticket itself — zero comments (got ${readComments("PM-3").length})`);
   }
 
   // ── Idempotent re-run: an already-merged PR is a no-op, not a hold ─────────────────────────────
@@ -327,11 +345,12 @@ try {
       const target = resolvePrMergeTarget(wsRoot);
       ok(target.ghRepo === GHREPO,
         `selected-repo config: the repo resolves from the registry at the workspace ROOT (got ${target.ghRepo})`);
-      ok(target.ciConfig !== null,
-        "selected-repo config: …and so does ITS CI config — one resolution, so the two cannot disagree");
-      ok(JSON.stringify(target.ciConfig?.mergeChecks) === JSON.stringify(CHECKS),
-        `selected-repo config: the required checks are the registry entry's (got ${JSON.stringify(target.ciConfig?.mergeChecks)})`);
-      ok(target.ciConfig?.repoEligible === true,
+      ok(target.ciConfig.kind === "resolved",
+        `selected-repo config: …and so does ITS CI config — one resolution, so the two cannot disagree (got '${target.ciConfig.kind}')`);
+      const sel = target.ciConfig.kind === "resolved" ? target.ciConfig.config : null;
+      ok(JSON.stringify(sel?.mergeChecks) === JSON.stringify(CHECKS),
+        `selected-repo config: the required checks are the registry entry's (got ${JSON.stringify(sel?.mergeChecks)})`);
+      ok(sel?.repoEligible === true,
         "selected-repo config: landing:\"pr\" + autoMerge ⇒ the axis applies to this repo");
 
       // The consequence, on the argv — driven exactly as the CLI drives it: the config comes from the
@@ -339,7 +358,7 @@ try {
       // than throwing.
       const drive = (rollup: Array<{ name: string; conclusion: string | null }>): { r: PrMergeResult; merges: number; exit: number } => {
         const { exec, calls } = mkExec({ ticket: "PM-1", rollup });
-        const cfg = target.ciConfig;
+        const cfg = sel;
         const r = prMerge(wsRoot, {
           pr: PR, dbPath, exec, agentReviewers: [], apply: false,
           ...(target.ghRepo ? { ghRepo: target.ghRepo } : {}),
@@ -359,6 +378,100 @@ try {
       const green = drive(greenRollup);
       ok(green.merges === 1 && green.exit === PR_MERGE_EXIT.merged,
         `selected-repo config control: a green rollup still merges, so the hold above is the CHECKS talking (merges=${green.merges}, exit=${green.exit})`);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+  }
+
+  // ── Review round 3, finding 1: AMBIGUOUS CI config must hold, not read as "no config" ──────────
+  //
+  // The residual left by the selected-repo fix above. A workspace may hold two repo entries with
+  // DISTINCT paths and the SAME GitHub remote — the config validator permits it. `registryGhRepos`
+  // dedupes remotes into a Set, so `resolveGhRepo` succeeds and picks the repo; the by-remote
+  // fallback then found two candidates and returned `null`, the same value that means "there is no
+  // entry". The caller omitted every CI option, the axis skipped as `no-merge-checks`, and the
+  // squash issued: the config-resolution failure of the previous finding, wearing a different mask.
+  //
+  // "I could not choose" and "there is nothing to choose" are different facts, so they are now
+  // different values, and the skip is classified `untargeted` — the caller can fix it with --repo.
+  //
+  // FAIL-BEFORE / PASS-AFTER: `node hub/test/pr-merge.ts`. Against the pre-fix tree ciConfig is
+  // `null` for this fixture, no mergeChecks reach the guard, and the missing-check arm MERGES
+  // (merges=1) with a red-adjacent rollup nothing ever validated.
+  {
+    const ambRoot = join(ROOT, "ws444amb");
+    mkdirSync(join(ambRoot, "repo-a"), { recursive: true });
+    mkdirSync(join(ambRoot, "repo-b"), { recursive: true });
+    writeFileSync(join(ambRoot, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "t444amb", backend: "service", git: { defaultBranch: "main" } },
+      repos: {
+        // Same remote, two checkouts, DIFFERENT required checks — so guessing an entry is not a
+        // harmless tie-break: it would gate one checkout's PR against the other's check names.
+        "repo-a": { path: "repo-a", remote: `git@github.com:${GHREPO}.git`, landing: "pr", autoMerge: true, mergeChecks: CHECKS },
+        "repo-b": { path: "repo-b", remote: `https://github.com/${GHREPO}.git`, landing: "pr", autoMerge: true, mergeChecks: ["Other"] },
+      },
+      projects: {},
+    }, null, 2) + "\n");
+
+    const saved: Record<string, string | undefined> = {
+      DEVLOOP_WORKSPACE: process.env.DEVLOOP_WORKSPACE, DEVLOOP_HUB_DB: process.env.DEVLOOP_HUB_DB,
+    };
+    delete process.env.DEVLOOP_WORKSPACE; delete process.env.DEVLOOP_HUB_DB;
+    try {
+      const target = resolvePrMergeTarget(ambRoot);
+      ok(target.ghRepo === GHREPO,
+        `ambiguous config: the repo still RESOLVES (the remotes dedupe) — which is what hid this (got ${target.ghRepo})`);
+      ok(target.ciConfig.kind === "ambiguous",
+        `ambiguous config: …but its CI config reports AMBIGUOUS, not 'none' (got '${target.ciConfig.kind}')`);
+      ok(target.ciConfig.kind === "ambiguous" && JSON.stringify(target.ciConfig.paths) === JSON.stringify(["repo-a", "repo-b"]),
+        `ambiguous config: and it names the candidates the operator must pick between (got ${JSON.stringify(target.ciConfig.kind === "ambiguous" ? target.ciConfig.paths : null)})`);
+
+      // Driven exactly as the CLI drives it — nothing hand-passed — so a pre-fix `null` reproduces
+      // the squash instead of throwing.
+      const { exec, calls } = mkExec({ ticket: "PM-1", rollup: greenRollup });
+      const cfg = target.ciConfig.kind === "resolved" ? target.ciConfig.config : null;
+      const r = prMerge(ambRoot, {
+        pr: PR, dbPath, exec, agentReviewers: [], apply: false,
+        ...(target.ghRepo ? { ghRepo: target.ghRepo } : {}),
+        ...(target.ciConfig.kind === "ambiguous" ? { ciConfigAmbiguous: true } : {}),
+        ...(cfg ? { mergeChecks: cfg.mergeChecks, defaultBranch: cfg.defaultBranch, repoEligible: cfg.repoEligible, ciIrrelevantPaths: cfg.ciIrrelevantPaths } : {}),
+      });
+      const merges = mergeCalls(calls).length;
+      ok(merges === 0 && prMergeExit(r) === PR_MERGE_EXIT.held,
+        `ambiguous config: NO merge is issued (merges=${merges}, exit=${prMergeExit(r)})`);
+      ok(r.holds.some((h) => h.axis === "ciFreshness" && h.token === "ci-config-ambiguous"),
+        `ambiguous config: the hold names the axis and the cause (got ${JSON.stringify(r.holds.map((h) => h.token))})`);
+      ok(r.guard?.ciFreshness.skipReason === "ci-config-ambiguous",
+        `ambiguous config: the axis records WHY it did not run, not that it had nothing to check (got '${r.guard?.ciFreshness.skipReason}')`);
+
+      // The classification is what does the work, and it is asserted directly: `untargeted` is the
+      // class `holdsFrom` keys on, so any future untargeted skip fails closed without a new arm.
+      ok(skipClass("ci-config-ambiguous") === "untargeted",
+        `ambiguous config: the skip is 'untargeted' — the caller can fix it (got '${skipClass("ci-config-ambiguous")}')`);
+
+      // Control: the SAME fixture with the ambiguity removed merges. Without it these arms would
+      // pass equally well if the fix had frozen this workspace shape outright.
+      writeFileSync(join(ambRoot, "dev-loop.json"), JSON.stringify({
+        schemaVersion: 2,
+        team: { key: "t444amb", backend: "service", git: { defaultBranch: "main" } },
+        repos: { "repo-a": { path: "repo-a", remote: `git@github.com:${GHREPO}.git`, landing: "pr", autoMerge: true, mergeChecks: CHECKS } },
+        projects: {},
+      }, null, 2) + "\n");
+      const t2 = resolvePrMergeTarget(ambRoot);
+      ok(t2.ciConfig.kind === "resolved",
+        `ambiguous config control: one entry ⇒ 'resolved' (got '${t2.ciConfig.kind}')`);
+      const c2 = t2.ciConfig.kind === "resolved" ? t2.ciConfig.config : null;
+      const { exec: e2, calls: k2 } = mkExec({ ticket: "PM-1", rollup: greenRollup });
+      const r2 = prMerge(ambRoot, {
+        pr: PR, dbPath, exec: e2, agentReviewers: [], apply: false,
+        ...(t2.ghRepo ? { ghRepo: t2.ghRepo } : {}),
+        ...(c2 ? { mergeChecks: c2.mergeChecks, defaultBranch: c2.defaultBranch, repoEligible: c2.repoEligible } : {}),
+      });
+      ok(mergeCalls(k2).length === 1 && r2.merged,
+        `ambiguous config control: …and it MERGES on green — the hold above is the ambiguity talking, not a freeze (merges=${mergeCalls(k2).length})`);
     } finally {
       for (const [k, v] of Object.entries(saved)) {
         if (v === undefined) delete process.env[k]; else process.env[k] = v;
