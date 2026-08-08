@@ -439,5 +439,170 @@ ok(/\.lbl\.vpend\{[^}]*var\(--c-warn\)/.test(STYLE) && /\.lbl\.vpub\{[^}]*var\(-
 ok(/\.diff \.da\{[^}]*var\(--c-ok\)/.test(STYLE) && /\.diff \.dd\{[^}]*var\(--c-bug\)/.test(STYLE), "docs: diff added/removed lines tint via --c-ok/--c-bug (token-only)");
 ok(/\.diff \.da,\.diff \.dd,\.diff \.dc\{display:block\}/.test(STYLE), "docs: diff lines are block spans (pre-safe, no doubled newlines)");
 
+// ══ LOOP-362: column counts and empty-state hints from the real board, not the truncated page ══
+// Seed > BOARD_ROW_CAP tickets where terminal (Done) rows at high priority would crowd out
+// open rows under the old ORDER BY priority ASC. Assert that count pills show the REAL per-state
+// totals (from GROUP BY) and that no state with tickets renders an empty-column hint.
+{
+  const cdb = openDb(":memory:");
+  const C_NOW = Date.parse("2026-08-06T12:00:00.000Z");
+  const C_UPD = "2026-08-05T12:00:00.000Z";
+  cdb.prepare("INSERT INTO projects(id,key,name,ticket_prefix,created_at) VALUES ('cp','cap','Cap','C',?)").run(C_UPD);
+  const ins = cdb.prepare(
+    "INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES (?,?,?,'','Improvement',?,null,?,'[]','[]','pm',?,?)"
+  );
+  // 5 In Progress tickets at priority 3 (open work — sorts after Done under old ORDER BY priority ASC)
+  for (let i = 0; i < 5; i++) ins.run(`C-IP-${i}`, "cp", `open ${i}`, "In Progress", 3, C_UPD, C_UPD);
+  // 2 Todo tickets at priority 3
+  ins.run("C-TODO-0", "cp", "queued 0", "Todo", 3, C_UPD, C_UPD);
+  ins.run("C-TODO-1", "cp", "queued 1", "Todo", 3, C_UPD, C_UPD);
+  // 245 Done tickets at priority 1 (terminal — would fill most of the 250 cap under old ordering)
+  for (let i = 0; i < 245; i++) ins.run(`C-DONE-${i}`, "cp", `done ${i}`, "Done", 1, C_UPD, C_UPD);
+  // 252 total — past the 250 cap
+
+  const cap = boardPage(cdb, "cp", "cap", {}, false, undefined, { nowMs: C_NOW });
+  ok(/In Progress<span class="count">5<\/span>/.test(cap),
+    "LOOP-362 AC: In Progress count pill shows real count 5, not a truncated subset");
+  ok(!cap.includes("Nothing in flight"),
+    "LOOP-362 AC: 'Nothing in flight' never renders when In Progress tickets exist");
+  ok(/Todo<span class="count">2<\/span>/.test(cap),
+    "LOOP-362 AC: Todo count pill shows real count 2");
+  ok(!cap.includes("Nothing queued"),
+    "LOOP-362 AC: 'Nothing queued' never renders when Todo tickets exist");
+  ok(cap.includes("C-IP-0") && cap.includes("C-IP-4") && cap.includes("C-TODO-0") && cap.includes("C-TODO-1"),
+    "LOOP-362 AC: All 7 non-terminal tickets render as cards (every InProgress and Todo id present)");
+  ok(cap.includes("showing 250 of 252"),
+    "LOOP-362 AC: truncation notice renders honest board total (showing 250 of 252)");
+  cdb.close();
+}
+
+// ── LOOP-362 AC4: the counts honour the active filter, and the CARDS honour the same one ────────
+// The filter used to run in JS AFTER the LIMIT, so a matching row sorting past row 250 was counted
+// by the pill and absent from the board. The fixture forces exactly that: 250 Improvements at the
+// top priority fill the cap, and every Bug sorts behind them. A filtered total of ZERO cannot
+// discriminate here (an ignored filter and an honoured one both yield 0) — these counts are non-zero.
+{
+  const fdb = openDb(":memory:");
+  const F_NOW = Date.parse("2026-08-06T12:00:00.000Z");
+  const F_UPD = "2026-08-05T12:00:00.000Z";
+  fdb.prepare("INSERT INTO projects(id,key,name,ticket_prefix,created_at) VALUES ('fp','filt','Filt','F',?)").run(F_UPD);
+  const fins = fdb.prepare(
+    "INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES (?,?,?,'',?,?,null,?,'[]','[]','pm',?,?)"
+  );
+  for (let i = 0; i < 250; i++) fins.run(`F-IMP-${i}`, "fp", `imp ${i}`, "Improvement", "Todo", 0, F_UPD, F_UPD);
+  for (let i = 0; i < 3; i++) fins.run(`F-BUG-${i}`, "fp", `bug ${i}`, "Bug", "Todo", 4, F_UPD, F_UPD);
+  fins.run("F-BUG-IP", "fp", "bug in flight", "Bug", "In Progress", 4, F_UPD, F_UPD);
+  // 254 total; unfiltered Todo is 253, so a pill of 3 can only come from an honoured filter.
+
+  const fCap = boardPage(fdb, "fp", "filt", { type: "Bug" }, false, undefined, { nowMs: F_NOW });
+  ok(/Todo<span class="count">3<\/span>/.test(fCap),
+    "LOOP-362 AC4: filtered by Bug — the Todo pill counts the FILTERED total (3), not the board's 253");
+  ok(/In Progress<span class="count">1<\/span>/.test(fCap),
+    "LOOP-362 AC4: filtered by Bug — the In Progress pill counts the one Bug in flight");
+  ok(fCap.includes("F-BUG-0") && fCap.includes("F-BUG-1") && fCap.includes("F-BUG-2") && fCap.includes("F-BUG-IP"),
+    "LOOP-362 AC3/AC4: every matching row renders as a card even though it sorts past the 250 cap (the filter runs in SQL, not after the LIMIT)");
+  ok(!fCap.includes("F-IMP-"),
+    "LOOP-362 AC4: no non-matching row leaks into a filtered board");
+  ok(!fCap.includes("Nothing queued") && !fCap.includes("Nothing in flight"),
+    "LOOP-362 AC2: no empty-state hint renders in a filtered column that holds matching tickets");
+  fdb.close();
+}
+
+// ── LOOP-362 AC4: a state whose filtered count is genuinely zero still shows its hint ────────────
+// The control for the arm above: the hint must not become unreachable, only untruthful-proof.
+{
+  const zdb = openDb(":memory:");
+  const Z_NOW = Date.parse("2026-08-06T12:00:00.000Z");
+  const Z_UPD = "2026-08-05T12:00:00.000Z";
+  zdb.prepare("INSERT INTO projects(id,key,name,ticket_prefix,created_at) VALUES ('zp','zero','Zero','Z',?)").run(Z_UPD);
+  zdb.prepare(
+    "INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES ('Z-IMP','zp','imp','','Improvement','Todo',null,2,'[]','[]','pm',?,?)"
+  ).run(Z_UPD, Z_UPD);
+  const zCap = boardPage(zdb, "zp", "zero", { type: "Bug" }, false, undefined, { nowMs: Z_NOW });
+  ok(/Todo<span class="count">0<\/span>/.test(zCap) && zCap.includes("Nothing queued"),
+    "LOOP-362 AC2 control: a truly-zero filtered column keeps its COL_HINTS empty-state string");
+  zdb.close();
+}
+
+// ── LOOP-362 AC4: the label filter matches label ELEMENTS, in SQL, exactly ───────────────────────
+// Moving the filters into SQL had to keep `labels.includes(label)`'s exact-element semantics.
+// `json_each` does; a `labels LIKE '%"…"%'` spelling would let a LIKE metacharacter wildcard the
+// count. Both wrong-answer shapes are asserted, not just the happy path.
+{
+  const ldb = openDb(":memory:");
+  const L_UPD = "2026-08-05T12:00:00.000Z";
+  ldb.prepare("INSERT INTO projects(id,key,name,ticket_prefix,created_at) VALUES ('lp','lab','Lab','L',?)").run(L_UPD);
+  ldb.prepare(
+    "INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES ('L-1','lp','labelled','','Bug','Todo',null,1,'[\"qa\",\"dev-loop\"]','[]','pm',?,?)"
+  ).run(L_UPD, L_UPD);
+  const pill = (h: string) => /Todo<span class="count">(\d+)<\/span>/.exec(h)?.[1];
+  const at = (label: string) => pill(boardPage(ldb, "lp", "lab", { label }, false, undefined, { nowMs: Date.parse("2026-08-06T12:00:00.000Z") }));
+  ok(at("qa") === "1", "LOOP-362 AC4: an exact label match counts the ticket");
+  ok(at("q") === "0", "LOOP-362 AC4: a label that is only a PREFIX of a real one matches nothing");
+  ok(at("%") === "0", "LOOP-362 AC4: a LIKE metacharacter as the label matches nothing (json_each, not LIKE)");
+  ldb.close();
+}
+
+// ── LOOP-362 AC1/AC2 in SWIMLANE mode: each lane counts ITS OWN work ─────────────────────────────
+// A single board-wide per-state map would print every lane the whole board's numbers — the exact
+// count/hint contradiction this ticket removes, reintroduced one level down. alice and bob hold
+// disjoint states so a leaked global count is unambiguous.
+{
+  const sdb = openDb(":memory:");
+  const S_NOW = Date.parse("2026-08-06T12:00:00.000Z");
+  const S_UPD = "2026-08-05T12:00:00.000Z";
+  sdb.prepare("INSERT INTO projects(id,key,name,ticket_prefix,created_at) VALUES ('sp','swim','Swim','S',?)").run(S_UPD);
+  const sins = sdb.prepare(
+    "INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES (?,?,?,'','Improvement',?,?,3,'[]','[]','pm',?,?)"
+  );
+  for (let i = 0; i < 3; i++) sins.run(`S-A-${i}`, "sp", `alice ${i}`, "In Progress", "alice", S_UPD, S_UPD);
+  for (let i = 0; i < 2; i++) sins.run(`S-B-${i}`, "sp", `bob ${i}`, "Todo", "bob", S_UPD, S_UPD);
+
+  const swimHtml = boardPage(sdb, "sp", "swim", {}, false, "assignee", { nowMs: S_NOW });
+  const lanes = new Map<string, string>(
+    swimHtml.split('<section class="lane">').slice(1)
+      .map((l) => [/class="lane-h">@?([A-Za-z]+)/.exec(l)?.[1] ?? "?", l] as [string, string]),
+  );
+  const alice = lanes.get("alice") ?? "", bob = lanes.get("bob") ?? "";
+  ok(lanes.size === 2 && !!alice && !!bob, "LOOP-362 swimlanes: both assignee lanes render");
+  ok(/In Progress<span class="count">3<\/span>/.test(alice) && /Todo<span class="count">0<\/span>/.test(alice),
+    "LOOP-362 AC1: alice's lane counts HER 3 In Progress and her 0 Todo — not the board's");
+  ok(/In Progress<span class="count">0<\/span>/.test(bob) && /Todo<span class="count">2<\/span>/.test(bob),
+    "LOOP-362 AC1: bob's lane counts HIS 2 Todo and his 0 In Progress — not the board's");
+  ok(alice.includes("Nothing queued") && !alice.includes("Nothing in flight"),
+    "LOOP-362 AC2: alice's empty Todo column shows the hint; her populated In Progress column does not");
+  ok(bob.includes("Nothing in flight") && !bob.includes("Nothing queued"),
+    "LOOP-362 AC2: bob's empty In Progress column shows the hint; his populated Todo column does not");
+  ok(/lane-h">@alice<span class="count">3<\/span>/.test(alice) && /lane-h">@bob<span class="count">2<\/span>/.test(bob),
+    "LOOP-362 AC1: each lane header pill equals the sum of its own columns");
+  sdb.close();
+}
+
+// ── LOOP-362 AC2: a column whose every row the cap shed never claims to be empty ─────────────────
+// 260 open rows exceed the cap on their own, so the 4 Done rows are shed entirely. The pill must
+// still read 4, and "Nothing finished yet" — an EMPTY-state hint — must not appear beside it.
+{
+  const tdb = openDb(":memory:");
+  const T_NOW = Date.parse("2026-08-06T12:00:00.000Z");
+  const T_UPD = "2026-08-05T12:00:00.000Z";
+  tdb.prepare("INSERT INTO projects(id,key,name,ticket_prefix,created_at) VALUES ('tp','trunc','Trunc','T',?)").run(T_UPD);
+  const tins = tdb.prepare(
+    "INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES (?,?,?,'','Improvement',?,null,3,'[]','[]','pm',?,?)"
+  );
+  for (let i = 0; i < 260; i++) tins.run(`T-TODO-${i}`, "tp", `todo ${i}`, "Todo", T_UPD, T_UPD);
+  for (let i = 0; i < 4; i++) tins.run(`T-DONE-${i}`, "tp", `done ${i}`, "Done", T_UPD, T_UPD);
+
+  const tCap = boardPage(tdb, "tp", "trunc", {}, false, undefined, { nowMs: T_NOW });
+  ok(/Done<span class="count">4<\/span>/.test(tCap),
+    "LOOP-362 AC1: the Done pill reads 4 even though the cap rendered none of them");
+  ok(!tCap.includes("Nothing finished yet"),
+    "LOOP-362 AC2: a column holding rows the cap shed does not render its COL_HINTS empty-state string");
+  ok(tCap.includes("4 not shown"),
+    "LOOP-362 AC2: it says the rows exist but are not shown, instead of claiming emptiness");
+  ok(tCap.includes("showing 250 of 264"),
+    "LOOP-362 AC5: the truncation notice still reports the honest board total");
+  tdb.close();
+}
+
 console.log(fails === 0 ? "\nWEBUI_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
