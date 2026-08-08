@@ -168,21 +168,49 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
   // The cap is deliberately paired with an HONEST NOTICE below: a silent truncation on the surface
   // the operator uses to see their own board would be strictly worse than the current honest
   // slowness. LIMIT+1 probes for a further page without a second count query.
-  const boardTotal = (db.prepare(`SELECT COUNT(*) AS n FROM tickets WHERE project_id=?${qWhere}`).get(projectId, ...qArgs) as { n: number }).n;
-  let tickets = (db.prepare(`SELECT * FROM tickets WHERE project_id=?${qWhere} ORDER BY priority ASC, updated_at DESC LIMIT ?`)
-    .all(projectId, ...qArgs, BOARD_ROW_CAP) as Record<string, any>[]).map(toTicket);
+  // LOOP-362/LOOP-370: ONE predicate answers the board's question, and the card query, the count
+  // query and boardTotal all read it. The filters used to run in JS *after* the LIMIT, so a matching
+  // row that sorted past row 250 was silently absent from the cards while the count pill (and the
+  // "narrow with a filter to reach the rest" notice) still promised it — two spellings of one filter,
+  // free to disagree. Exact-element `json_each` is the SQL twin of the old `labels.includes(label)`:
+  // a `labels LIKE '%"x"%'` spelling would carry LIKE-metacharacter and embedded-quote hazards.
+  const fClauses: string[] = [];
+  const fArgs: string[] = [];
+  if (f.state) { fClauses.push("state=?"); fArgs.push(f.state); }
+  if (f.type) { fClauses.push("type=?"); fArgs.push(f.type); }
+  if (f.label) { fClauses.push("EXISTS(SELECT 1 FROM json_each(tickets.labels) WHERE value=?)"); fArgs.push(f.label); }
+  if (f.assignee) { fClauses.push("assignee=?"); fArgs.push(f.assignee); }
+  const where = `project_id=?${qWhere}${fClauses.length ? ` AND ${fClauses.join(" AND ")}` : ""}`;
+  const whereArgs: string[] = [projectId, ...qArgs, ...fArgs];
+  const boardTotal = (db.prepare(`SELECT COUNT(*) AS n FROM tickets WHERE ${where}`).get(...whereArgs) as { n: number }).n;
+  // LOOP-362: terminal rows sort LAST, so the cap sheds finished work before it sheds open work —
+  // the board's job is the work in flight.
+  const tickets = (db.prepare(`SELECT * FROM tickets WHERE ${where} ORDER BY CASE WHEN state IN ('Done','Canceled','Duplicate') THEN 1 ELSE 0 END, priority ASC, updated_at DESC LIMIT ?`)
+    .all(...whereArgs, BOARD_ROW_CAP) as Record<string, any>[]).map(toTicket);
   const boardTruncated = boardTotal > tickets.length;
-  // mirror /api/tickets: each present (non-empty) filter narrows the set
-  if (f.state) tickets = tickets.filter((t) => t.state === f.state);
-  if (f.type) tickets = tickets.filter((t) => t.type === f.type);
-  if (f.label) tickets = tickets.filter((t) => t.labels.includes(f.label!));
-  if (f.assignee) tickets = tickets.filter((t) => t.assignee === f.assignee);
-
   // DL-31: ?group=assignee (validated upstream to the one known value) switches the board to assignee
-  // swimlanes. swim===false is byte-identical to the pre-DL-31 board apart from the always-present group
-  // toggle. The URL helper carries `group` so filter/search/chip links keep the active view (deep-linkable);
-  // F2: it emits the canonical /p/<key>/ URL (href) so a filter click never drops off the project.
+  // swimlanes. Resolved before the count query because it decides that query's grain: in swimlane mode
+  // the unit a count pill describes is (lane, state), and one global per-state map would print EVERY
+  // lane the whole board's numbers (LOOP-370).
   const swim = group === "assignee";
+  const laneKey = (a: string | null | undefined): string => a ?? "";
+  // LOOP-362: counts come from the DB, never from the rendered cards — cards.length is a count of the
+  // page, and the page is capped. Summing the swimlane grain back up keeps stateCounts right in both.
+  const countRows = db.prepare(
+    `SELECT ${swim ? "assignee, " : ""}state, COUNT(*) AS n FROM tickets WHERE ${where} GROUP BY ${swim ? "assignee, " : ""}state`,
+  ).all(...whereArgs) as { assignee?: string | null; state: string; n: number }[];
+  const stateCounts = new Map<string, number>();
+  const laneCounts = new Map<string, Map<string, number>>();
+  for (const r of countRows) {
+    stateCounts.set(r.state, (stateCounts.get(r.state) ?? 0) + r.n);
+    if (!swim) continue;
+    const k = laneKey(r.assignee);
+    (laneCounts.get(k) ?? laneCounts.set(k, new Map()).get(k)!).set(r.state, r.n);
+  }
+
+  // swim===false is byte-identical to the pre-DL-31 board apart from the always-present group toggle.
+  // The URL helper carries `group` so filter/search/chip links keep the active view (deep-linkable);
+  // F2: it emits the canonical /p/<key>/ URL (href) so a filter click never drops off the project.
   const qstr = (over: { omit?: string; group?: string | null } = {}) => {
     const p = new URLSearchParams();
     for (const k of FILTER_KEYS) if (f[k] && k !== over.omit) p.set(k, f[k]!);
@@ -218,21 +246,27 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
 
   // Column ordering computed ONCE over the full filtered set so every swimlane shares an aligned column
   // layout (CORE_STATES always render; populated extras appended, non-STATE_ORDER states last).
-  const allByState = new Map<string, ReturnType<typeof toTicket>[]>();
-  for (const t of tickets) (allByState.get(t.state) ?? allByState.set(t.state, []).get(t.state)!).push(t);
+  // LOOP-362: "populated" means populated on the BOARD, not on the page — keyed off the rendered rows,
+  // a state whose every row was shed by the cap lost its column, and with it its count.
   const states = [
-    ...STATE_ORDER.filter((s) => CORE_STATES.includes(s) || allByState.has(s)),
-    ...[...allByState.keys()].filter((s) => !STATE_ORDER.includes(s)),
+    ...STATE_ORDER.filter((s) => CORE_STATES.includes(s) || stateCounts.has(s)),
+    ...[...stateCounts.keys()].filter((s) => !STATE_ORDER.includes(s)).sort(),
   ];
   // F3 column wells: a surface-2 rounded well per state; header = state dot + name + count pill;
   // an empty column renders its guided hint in a dashed drop-zone box (not an em-dash).
-  const columnsFor = (subset: ReturnType<typeof toTicket>[]): string => {
+  const columnsFor = (subset: ReturnType<typeof toTicket>[], counts: Map<string, number>): string => {
     const byState = new Map<string, ReturnType<typeof toTicket>[]>();
     for (const t of subset) (byState.get(t.state) ?? byState.set(t.state, []).get(t.state)!).push(t);
     const cols = states.map((s) => {
       const cards = byState.get(s) ?? [];
-      const body = cards.length ? cards.map((t) => cardHtml(projectKey, t, nowMs, f.q)).join("") : `<p class="col-empty">${esc(COL_HINTS[s] ?? "No tickets")}</p>`;
-      return `<section class="col"><h2>${stateDot(s)}${esc(s)}${countPill(cards.length)}</h2>${body}</section>`;
+      const realCount = counts.get(s) ?? 0;
+      // LOOP-362: COL_HINTS is an EMPTY-state hint, so it may only speak when the column really is
+      // empty. A column holding rows the cap shed says THAT instead — "Nothing in flight" beside a
+      // pill reading 5 is the contradiction this ticket exists to remove.
+      const body = cards.length
+        ? cards.map((t) => cardHtml(projectKey, t, nowMs, f.q)).join("")
+        : `<p class="col-empty">${esc(realCount ? `${realCount} not shown — narrow with a filter or search` : (COL_HINTS[s] ?? "No tickets"))}</p>`;
+      return `<section class="col"><h2>${stateDot(s)}${esc(s)}${countPill(realCount)}</h2>${body}</section>`;
     }).join("");
     return `<div class="board">${cols}</div>`;
   };
@@ -249,10 +283,14 @@ export function boardPage(db: DatabaseSync, projectId: string, projectKey: strin
     boardHtml = `<div class="swimlanes">` + lanesKeys.map((a) => {
       const subset = tickets.filter((t) => (a === null ? !t.assignee : t.assignee === a));
       const label = a === null ? "unassigned" : `@${a}`;
-      return `<section class="lane"><h2 class="lane-h">${esc(label)}${countPill(subset.length)}</h2>${columnsFor(subset)}</section>`;
+      // this lane's OWN per-state counts; its header pill is their sum, so a lane header can never
+      // disagree with the columns beneath it.
+      const counts = laneCounts.get(laneKey(a)) ?? new Map<string, number>();
+      const laneTotal = [...counts.values()].reduce((x, y) => x + y, 0);
+      return `<section class="lane"><h2 class="lane-h">${esc(label)}${countPill(laneTotal)}</h2>${columnsFor(subset, counts)}</section>`;
     }).join("") + `</div>`;
   } else {
-    boardHtml = columnsFor(tickets);
+    boardHtml = columnsFor(tickets, stateCounts);
   }
 
   // F3 empty states (replaces the bare one-line paragraph): a genuinely empty, unfiltered board renders
