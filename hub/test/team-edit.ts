@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { detectRepoFacts, workflowJobNames, SETTABLE } from "../src/team-edit.ts";
 import { openDb } from "../src/db.ts";
 import { confirmationToken, isScratchProject, isolationVerdict, TOKEN_PREFIX, commitBothHalves } from "../src/destructive-guard.ts";
+import { NOT_SCRATCH_SQL } from "../src/sql-predicates.ts";
 import type { Workspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 
@@ -637,9 +638,20 @@ try {
     // AC4: NOT_SCRATCH_SQL predicate excludes scratch project
     sql420('db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify({scratch:true}),"p420")');
     const total = sql420('const a=db.prepare("SELECT count(*) as cnt FROM projects").get();console.log(JSON.stringify(a.cnt))');
-    const nonScratch = sql420('const r=db.prepare("SELECT count(*) as cnt FROM projects WHERE CASE WHEN json_valid(settings_json) THEN json_extract(settings_json,\x27$.scratch\x27) ELSE NULL END IS NOT 1").get();console.log(JSON.stringify(r.cnt))');
-    ok(Number(total) === 2 && Number(nonScratch) === 1,
-      `LOOP-420 AC4: NOT_SCRATCH_SQL excludes scratch project (total=${total}, nonScratch=${nonScratch})`);
+    // LOOP-429: run the SHARED constant, never a copy of it. This assertion previously inlined the
+    // predicate character-for-character, so inverting NOT_SCRATCH_SQL — which reverses all three
+    // production consumers — left it green on the same numbers. JSON.stringify embeds the SQL (it
+    // contains single quotes) into the `node -e` source the subprocess parses.
+    const nonScratchSql = JSON.stringify(`SELECT count(*) as cnt FROM projects WHERE ${NOT_SCRATCH_SQL}`);
+    const nonScratch = sql420(`const r=db.prepare(${nonScratchSql}).get();console.log(JSON.stringify(r.cnt))`);
+    // The COUNT alone cannot see an inversion. This fixture holds exactly two projects — `_team` and
+    // the scratch `p420` — so `IS NOT 1` and `IS 1` both return 1, and importing the shared constant
+    // is necessary but not sufficient. Assert WHICH row survives: under `IS NOT 1` it is `_team`,
+    // under the inverse it is `p420`, and that is the difference the count throws away.
+    const keptSql = JSON.stringify(`SELECT key FROM projects WHERE ${NOT_SCRATCH_SQL} ORDER BY key`);
+    const kept = sql420(`const rs=db.prepare(${keptSql}).all();console.log(rs.map(r=>r.key).join(','))`);
+    ok(Number(total) === 2 && Number(nonScratch) === 1 && kept === "_team",
+      `LOOP-420 AC4: NOT_SCRATCH_SQL excludes scratch project (total=${total}, nonScratch=${nonScratch}, kept=${kept})`);
   }
 
 
