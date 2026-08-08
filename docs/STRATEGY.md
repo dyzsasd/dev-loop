@@ -224,29 +224,26 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-07 (pm, eighty-second fire): the guard shipped, and the path its own design called safe
+### 2026-08-08 (pm, eighty-fourth fire): the instrument that reports the failures is itself miscounting
 
-**The product moved by one commit** — `3a8ae99` → `a0d5749`, LOOP-369 (PR #240): `doc-land` no
-longer rebases whatever the shared checkout has checked out and writes it over `refs/heads/main`.
-Rotation reset; **trust-safety** taken because the move fixes a destructive git-write path. Nothing
-pm-owned In Review, `needs-pm` and `Human-Blocked` empty, §9c ten live edges and zero unparks due.
+**The product moved four commits** — `a0d5749` → `a12bfab` (LOOP-432, LOOP-372, LOOP-370, LOOP-407).
+Rotation reset; **strategy-gaps** taken, unswept across three rotations. Two pm-owned items verified
+and closed: **LOOP-370** (board pills — all 7 states correct against the true 424 rows) and
+**LOOP-407** (an absent required check is now an unconditional hold; doctor W38). Both were exercised
+against the MERGED TREE in an isolated clone, because the installed `dist/` predates both — the live
+board still shows the pre-fix pills, which is the un-published merge, not a regression.
 
-**LOOP-443 filed — the same "success is inferred, not stated" defect, still live one step earlier.**
-LOOP-369 fixed Step 4 and its design then declared Step 1 safe *by definition*: *"the one place that
-genuinely means 'entered with nothing to land'"*. It does not. Step 1 reads `origin/<db>...<db>`
-alone (`doc-land.ts:229-235`) — *the default branch* has nothing ahead — so when another fire moves
-the shared checkout onto its ticket branch **before** PM commits, the doc commit lands there, the
-range is empty, and the verb prints `already up to date — nothing to land` at exit 0 having landed
-nothing. Only the ORDER separates this from LOOP-369's own incident. Measured on the post-fix source
-in a throwaway fixture, control decisive: same commit, checkout on `main` → `landed 1 commit(s)`.
-The verb already refuses the *uncommitted* form ("that is an unlanded doc edit"); committed to the
-wrong branch is the same edit on the exit-0 path. `:229-235` is `8a04d7b`, untouched by `a0d5749` —
-a residual on both axes, the installed tree included.
+**LOOP-445 filed — `budget-per-fire` is not measuring the budget.** The watchdog kills on a modeled
+deadline (`perFireUsd / ratePerMs`) and never compares actual spend. Fire 83 spent **$4.34 against a
+$20 ceiling** and was ledgered a breach; the twelve pm fires before it read *turns 2, zero tokens,
+46–63 min, $0* — wedged fires wearing the budget label, because `breaker.ts:26` short-circuits on
+`budgetKilled` ahead of the liveness arm. Self-reinforcing: each kill ledgers `costUsd: 0`, so the
+profile reads unpriced and the fallback re-arms the same deadline.
 
-**Promoted 1 — the first senior-tier promotion in four fires, and the filing-time lever is why.**
-LOOP-443 is `sensitive` on its merits (a load-bearing git-write verb), so §21b routed it to senior
-with no re-tiering: senior Todo 2 → 3 of 10, junior untouched at 11/10. Backlog was 19 junior /
-1 senior (blocked) before it. The `a0d5749` locator sweep closed negative.
+**The trail gap and the failure rate are one phenomenon** — a §22 report is written at fire close, so
+fire 83 verified LOOP-432, posted its verdict, and died before writing one, which is also junior-dev's
+1-of-7. The three stale north-star measurements are a DIRECTION edit, so they went to **LOOP-446** as
+a §9a proposal parked for the operator, not a commit.
 
 ## Personas
 
@@ -280,6 +277,18 @@ with no re-tiering: senior Todo 2 → 3 of 10, junior untouched at 11/10. Backlo
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-08 (pm, eighty-fourth fire) — an instrument that reports a kill must report the
+  measurement that justified it, or the kill becomes evidence for itself.** `perFireUsd`'s watchdog
+  cannot know cost mid-flight, so it kills on a modeled deadline — defensible. Ledgering that kill as
+  `budget-per-fire` without comparing the fire's recorded spend is not: $4.34 against a $20 ceiling
+  reads identically to a real breach, and so does a wedged fire that burned zero tokens (LOOP-445).
+  **The rule: when a guard acts on an ESTIMATE, the record it writes must name the estimate as such
+  and carry the measured value beside it** — otherwise the next reader, and the next rate median,
+  treat the estimate as a measurement. The self-reinforcing half is the tell: each kill writes
+  `costUsd: 0`, which keeps the profile unpriced and the fallback armed. **Corollary:** two gaps
+  reported separately may be one cause seen twice — the durable-trail hole and the failure rate are
+  both "the fire did not reach its close step", and work aimed at DETECTING the hole cannot close it.
 
 - **2026-08-07 (pm, eighty-second fire) — a fix's own design comment is where the next defect
   hides, because it names the boundary it did not test.** LOOP-369 rewrote every inferred success in
@@ -527,7 +536,9 @@ with no re-tiering: senior Todo 2 → 3 of 10, junior untouched at 11/10. Backlo
     span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
     **LOOP-429**, **LOOP-426**, **LOOP-436**. Extended by **pass 70** with the eighty-first fire's
     journal and its supersession-narrows-scope ruling (fires 79–80 wrote nothing — the shared
-    checkout was diverged) → block **AQ**; still open from it: **LOOP-440**, **LOOP-442**.
+    checkout was diverged) → block **AQ**, and by **pass 71** with the eighty-second fire's journal
+    and its scope-boundary-is-a-claim ruling → block **AR**; still open from the two: **LOOP-440**,
+    **LOOP-442**, **LOOP-443**.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
@@ -540,9 +551,7 @@ becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verba
   yet `README.md`, `dev-loop --help`, `docs/INDEX.md` and `docs/RUNNING.md` mention it 0 times.
   Docs gap or deliberate silence is brand-gated, so it is named rather than filed (the LOOP-416
   shape). **REVERSAL CONDITION: the operator rules on the brand** — carried on **LOOP-366** in the
-  sixty-ninth fire. _(The premise this entry opened with — that `Vision`/`Glossary` still assert the
-  rebrand as current direction — is discharged: LOOP-434 corrected `Vision`, and pass 70 corrected
-  the third copy in `Glossary`, which had `kaizen` as the command and `dev-loop` as the alias.)_
+  sixty-ninth fire. _(Opening premise discharged: LOOP-434 and pass 70 corrected all three copies.)_
 
 - **Close the config-mutator gap wholesale — an operator capability call, deliberately not filed.**
   `references/config-schema.md` marks each field with its `dev-loop team set` path: 13 rows carry a
