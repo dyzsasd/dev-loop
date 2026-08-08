@@ -97,7 +97,16 @@ export type ExecFn = (args: string[]) => { stdout: string; stderr: string; ok: b
 // LOOP-335: `stale-exempt` — genuinely behind, but the delta cannot change any check result.
 // NOT folded into "fresh-green": the head really IS behind, and the dev-agent SKILL keys its
 // re-freshen trigger on verdict:"stale". A new name keeps that trigger correct with no §17 edit.
-export type CiFreshnessVerdict = "fresh-green" | "stale" | "stale-exempt" | "red" | "pending" | "unknown";
+//
+// LOOP-407: `check-never-reported` — a check named in `mergeChecks` is ABSENT from the rollup, so it
+// was never dispatched and never will report on its own. Split out of `pending` because the two need
+// opposite handling: `pending` is a check that exists and is still running (wait for it), while an
+// absent check is a hole in the evidence that waiting cannot fill. Measured 2026-08-06: during a
+// GitHub Actions `major_outage` PR #246 merged having run NEITHER configured check — a PR with zero
+// queued checks presents `mergeStateStatus: CLEAN`, and with no branch protection on `main` there was
+// no forge-side gate to withhold it. The four PRs whose checks HAD queued read `UNSTABLE` and
+// correctly did not merge: the safer a PR looked, the less had been measured.
+export type CiFreshnessVerdict = "fresh-green" | "stale" | "stale-exempt" | "red" | "check-never-reported" | "pending" | "unknown";
 
 /**
  * Is every file in the delta CI-irrelevant? (LOOP-335)
@@ -152,6 +161,21 @@ export function readCiFreshness(
       const relevant = checks.filter((c) => mergeChecks.includes(c.name));
       if (relevant.some((c) => c.conclusion === "FAILURE")) {
         return { verdict: "red", behindBy: null, testedHead, currentTip: null, reason: "required check(s) have FAILURE conclusion" };
+      }
+      // LOOP-407 — absence is evaluated BEFORE pending, and after FAILURE so an existing red keeps
+      // its own (already-tripping) verdict and remedy. A required check with no entry in the rollup
+      // at all was never dispatched: waiting cannot produce it, so it must not share `pending`'s
+      // "come back next fire" reading. Named by name — the operator has to know WHICH check is
+      // missing to re-run it.
+      const missing = mergeChecks.filter((need) => !checks.some((c) => c.name === need));
+      if (missing.length > 0) {
+        return {
+          verdict: "check-never-reported",
+          behindBy: null,
+          testedHead,
+          currentTip: null,
+          reason: `required check(s) never reported: ${missing.join(", ")} — absent from the PR's check rollup, so they were never dispatched (a PR with no queued checks reads mergeStateStatus:CLEAN and would merge unverified)`,
+        };
       }
       const allSuccess = mergeChecks.every((need) => relevant.some((c) => c.name === need && c.conclusion === "SUCCESS"));
       if (!allSuccess) {
