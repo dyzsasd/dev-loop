@@ -1,0 +1,329 @@
+// pr merge — ONE verb that gates and lands a feature PR (LOOP-444).
+//
+// WHY THIS EXISTS. Until now Step 0.5 was two things an agent did in sequence: run
+// `dev-loop merge-guard --pr <n> --strict --apply`, read its exit code, then run
+// `gh pr merge <n> --squash --delete-branch`. Nothing machine-side refused the second when the
+// first was skipped, so the enforcement lived in whichever tier reasoned carefully about its
+// instructions. Measured 2026-08-06: `62178e6` (LOOP-357) merged at 20:52:11Z with NO required
+// check in its rollup — 9 minutes after correct hold comments had been posted on sibling PRs, by a
+// direct `gh pr merge` from a fire (`autoMergeRequest: None`); `c3454b7` (LOOP-355) landed the same
+// way and broke `main`'s typecheck (LOOP-423). The hold held in the tier that consulted the guard
+// and not in the tier that didn't.
+//
+// So the guard's verdict stops being advisory output a caller may ignore and becomes the
+// PRECONDITION OF THE SAME CALL. There is no argv that squashes without the axes running: the
+// merge subprocess is issued from inside this function, after they clear.
+//
+// It deliberately does NOT do branch protection on the forge — conventions §12c explains why
+// required-check gating deadlocks the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs
+// (W38 names that posture). This is the in-product gate instead.
+import { isMainEntry } from "./is-entry.ts";
+import type { ExecFn } from "./landing.ts";
+import { defaultGhExec } from "./landing.ts";
+import {
+  mergeGuard, unevaluatedHold, registryCiFreshnessConfig, registryGhRepos, resolveGhRepo,
+  type MergeGuardResult, type SkipReason,
+} from "./merge-guard.ts";
+
+// One hold per axis that objected — never one collapsed "refused".
+//
+// AC4: `check-never-reported`, a board-state hold and a forge-review hold are three different next
+// actions (re-dispatch the workflow / fix the ticket state / resolve the thread), and two of them
+// can hold the same PR at once. A single exit code cannot carry that, and re-deriving one sentence
+// over co-occurring causes is the mistake LOOP-433 records on the doctor side. So the exit code says
+// only "held", and the holds are enumerated — one line, one machine `token`, per objecting axis.
+export interface PrMergeHold {
+  // `readiness` is not a guard axis: it is the green-AND-mergeable pre-filter §12c had the AGENT do
+  // before it ran the guard at all. Folding the guard into the squash while dropping that filter
+  // would be a REGRESSION — the verb would happily squash a PR whose checks are still running,
+  // which the two-step never did. So the filter moves inside too, and it is labelled honestly.
+  axis: "readiness" | "boardState" | "forgeReview" | "ciFreshness";
+  token: string;   // stable machine token: pr-not-open | pr-draft | not-mergeable |
+                   // mergeability-unknown | board-not-merge-eligible | unresolved-review | <ciVerdict>
+  detail: string;  // the human line — the guard's own objection text for this axis
+}
+
+export interface PrMergeResult {
+  merged: boolean;
+  // Already MERGED before this call: the idempotent re-run §12c requires ("a second dev fire finds
+  // the PR already merged and no-ops"). Checked BEFORE the guard on purpose — post-merge the ticket
+  // is normally `In Review`, so the board axis would trip and a re-run would report a hold on work
+  // that already landed (the LOOP-216 shape).
+  alreadyMerged: boolean;
+  holds: PrMergeHold[];
+  // The guard ran but gated nothing it could have gated (merge-guard's EXIT_UNEVALUATED case).
+  unevaluated: SkipReason | null;
+  // Null when no repo could be resolved: this verb cannot address a PR without owner/repo, and
+  // guessing between two registered repos would gate a DIFFERENT repo's PR #n (merge-guard's rule).
+  ghRepo: string | null;
+  guard: MergeGuardResult | null;
+  // The argv actually issued to `gh`, or null when no merge was attempted. This is the field the
+  // regression test asserts on: "no merge happened" must be checkable, not inferred.
+  mergeArgv: string[] | null;
+  mergeError: string | null;
+}
+
+// This verb's exit contract. merge-guard's own numbering (0/1/2/3) is NOT re-used loosely: 3 keeps
+// its exact meaning (could not evaluate), and 4 is added for "the gate cleared and the squash
+// itself failed" — a caller must not read a forge error as a human objection. AC5: `merge-guard`'s
+// contract for direct callers is untouched; this adds a caller, it does not re-number them.
+export const PR_MERGE_EXIT = {
+  merged: 0,       // squashed, or already merged (idempotent no-op)
+  held: 1,         // ≥1 axis objected — every objecting axis is named
+  usage: 2,        // bad invocation, incl. no/ambiguous repo resolution
+  unevaluated: 3,  // --strict semantics: the gate checked nothing it could have checked
+  mergeFailed: 4,  // axes clear, `gh pr merge` failed (forge error) — NOT an objection
+} as const;
+
+// The squash Step 0.5 issues today, plus the explicit `--repo`. The repo is explicit because this
+// verb inherits merge-guard's cwd-independence (LOOP-300 AC3: --pr resolves through the workspace
+// repo registry), and a `gh pr merge` without --repo only works when the cwd IS the repo — the verb
+// would then gate correctly from the workspace root and fail to land. `--delete-branch` is kept:
+// §12c requires it ("feature branches must not pile up").
+export function mergeArgvFor(pr: number | string, ghRepo: string): string[] {
+  return ["pr", "merge", String(pr), "--repo", ghRepo, "--squash", "--delete-branch"];
+}
+
+function holdsFrom(g: MergeGuardResult): PrMergeHold[] {
+  const holds: PrMergeHold[] = [];
+  const bs = g.boardState, fr = g.forgeReview, cf = g.ciFreshness;
+  if (!bs.skipped && bs.trip) {
+    holds.push({
+      axis: "boardState",
+      token: "board-not-merge-eligible",
+      detail: `ticket ${bs.ticketId} is ${bs.ticketState} — not merge-eligible on the board`,
+    });
+  }
+  if (!fr.skipped && fr.trip) {
+    const who = [...fr.changeRequesters, ...fr.unresolvedThreadAuthors].filter((v, i, a) => a.indexOf(v) === i);
+    holds.push({
+      axis: "forgeReview",
+      token: "unresolved-review",
+      detail: `PR has an unresolved objection from ${who.map((l) => `@${l}`).join(", ")} (CHANGES_REQUESTED or unresolved thread)`,
+    });
+  }
+  if (!cf.skipped && cf.trip) {
+    // The ciFreshness token IS the verdict, so `check-never-reported` (the workflow never
+    // dispatched — a rebase cannot fix it) stays distinct from `stale` (a rebase is exactly the
+    // fix) and from `red` (read the log). Collapsing them would send the wrong remedy.
+    holds.push({
+      axis: "ciFreshness",
+      token: cf.verdict ?? "unknown",
+      detail: `PR CI verdict=${cf.verdict ?? "unknown"}${cf.reason ? ` (${cf.reason})` : ""}`,
+    });
+  } else if (!cf.skipped && cf.verdict === "pending") {
+    // `pending` deliberately does NOT trip the guard — tripping would objection-spam every open PR
+    // whenever CI is merely slow (LOOP-407). But "not an objection" is not "may be merged": the
+    // checks have not reported SUCCESS, and merging now is precisely the unverified merge this whole
+    // ticket exists to prevent. It holds HERE, where the squash lives, and writes nothing to the
+    // board — §12c's "pending ⇒ leave it for the next fire", enforced instead of instructed.
+    holds.push({
+      axis: "ciFreshness",
+      token: "pending",
+      detail: `PR CI verdict=pending${cf.reason ? ` (${cf.reason})` : ""} — leave it for the next fire`,
+    });
+  }
+  return holds;
+}
+
+// The green-AND-mergeable pre-filter, from ONE `gh pr view`. Returns the holds it found, plus
+// whether the PR is already merged (which is not a hold — see PrMergeResult.alreadyMerged).
+function readinessHolds(
+  exec: ExecFn, pr: number | string, ghRepo: string,
+): { holds: PrMergeHold[]; alreadyMerged: boolean; read: boolean } {
+  let data: { state?: string; isDraft?: boolean; mergeable?: string };
+  try {
+    const r = exec(["pr", "view", String(pr), "--repo", ghRepo, "--json", "state,isDraft,mergeable"]);
+    if (!r.ok) return { holds: [], alreadyMerged: false, read: false };
+    data = JSON.parse(r.stdout) as typeof data;
+  } catch {
+    // Unreadable: do NOT invent a hold. The guard's axes read the same forge and have their own
+    // degrade rules (§3.4 — an outage must not become a merge freeze), and if everything degrades the
+    // merge attempt itself fails against that same forge and surfaces as mergeFailed.
+    return { holds: [], alreadyMerged: false, read: false };
+  }
+  if (data.state === "MERGED") return { holds: [], alreadyMerged: true, read: true };
+  const holds: PrMergeHold[] = [];
+  if (data.state && data.state !== "OPEN") {
+    holds.push({ axis: "readiness", token: "pr-not-open", detail: `PR state is ${data.state} — there is nothing to land` });
+  }
+  if (data.isDraft) {
+    holds.push({ axis: "readiness", token: "pr-draft", detail: "PR is a DRAFT — mark it ready for review first" });
+  }
+  if (data.mergeable === "CONFLICTING") {
+    holds.push({ axis: "readiness", token: "not-mergeable", detail: `PR conflicts with the base branch — rebase the branch and force-with-lease (§12c: DIRTY never self-heals)` });
+  } else if (data.mergeable !== undefined && data.mergeable !== "MERGEABLE") {
+    // UNKNOWN: the forge has not finished computing mergeability (normal for a few seconds after a
+    // push). §12c merges only a PR that IS mergeable, so this fails closed and retries next fire —
+    // a transient recompute, not an outage, so no fail-open exception applies.
+    holds.push({ axis: "readiness", token: "mergeability-unknown", detail: `PR mergeability is ${data.mergeable} — the forge has not computed it yet; re-run once it settles` });
+  }
+  return { holds, alreadyMerged: false, read: true };
+}
+
+export function prMerge(
+  repoDir: string,
+  opts: {
+    pr: number | string;
+    ticketId?: string;
+    ghRepo?: string;
+    dbPath?: string;
+    apply?: boolean;              // default true — this verb replaces `merge-guard --strict --apply`
+    exec?: ExecFn;                // injected gh exec; the seam hub/test/merge-guard.ts already uses
+    agentReviewers?: string[];
+    mergeChecks?: string[];
+    ciIrrelevantPaths?: string[];
+    defaultBranch?: string;
+    repoEligible?: boolean;
+  },
+): PrMergeResult {
+  const exec = opts.exec ?? defaultGhExec;
+  const apply = opts.apply ?? true;
+  const ghRepo = opts.ghRepo ?? resolveGhRepo(repoDir);
+  const base: PrMergeResult = {
+    merged: false, alreadyMerged: false, holds: [], unevaluated: null,
+    ghRepo, guard: null, mergeArgv: null, mergeError: null,
+  };
+  if (!ghRepo) return base;
+
+  // Readiness first, because ALREADY-MERGED is decided here (see PrMergeResult.alreadyMerged) and a
+  // merged PR must short-circuit before the guard can object to the now-In-Review ticket.
+  const readiness = readinessHolds(exec, opts.pr, ghRepo);
+  if (readiness.alreadyMerged) return { ...base, alreadyMerged: true };
+
+  // The guard runs even when readiness already holds: a board-state or review objection is true
+  // regardless of whether the PR happens to be mergeable, and reporting every cause at once is the
+  // point (AC4). It also means the objection reaches the ticket on the first run, not the third.
+  const guard = mergeGuard(repoDir, {
+    pr: opts.pr, ghRepo, apply, exec,
+    ...(opts.ticketId !== undefined ? { ticketId: opts.ticketId } : {}),
+    ...(opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {}),
+    ...(opts.agentReviewers !== undefined ? { agentReviewers: opts.agentReviewers } : {}),
+    ...(opts.mergeChecks !== undefined ? { mergeChecks: opts.mergeChecks } : {}),
+    ...(opts.ciIrrelevantPaths !== undefined ? { ciIrrelevantPaths: opts.ciIrrelevantPaths } : {}),
+    ...(opts.defaultBranch !== undefined ? { defaultBranch: opts.defaultBranch } : {}),
+    ...(opts.repoEligible !== undefined ? { repoEligible: opts.repoEligible } : {}),
+  });
+  const holds = [...readiness.holds, ...holdsFrom(guard)];
+  if (holds.length > 0) return { ...base, guard, holds };
+
+  // No axis objected — but under --strict a run that gated NOTHING it could have gated must not
+  // report a clean pass either (LOOP-300 AC1). Same rule, same reason: a gate that checked nothing
+  // has not cleared anything.
+  //
+  // Honest status: this branch is a FORWARD GUARD, not a live path. `unevaluatedHold` fires only on
+  // an `untargeted` skip, and both of those reasons (`no-ticket-input`, `no-repo-resolved`) are
+  // unreachable from here — this function always supplies `pr`, and it returned above if the repo
+  // did not resolve. It stays because the classifier is shared and open to extension: a future
+  // untargeted reason that CAN arise here must hold the squash, not slip through as clean. Its
+  // mapping is pinned directly in hub/test/pr-merge.ts, which says the same thing.
+  const hold = unevaluatedHold(guard);
+  if (hold) return { ...base, guard, unevaluated: hold };
+
+  const mergeArgv = mergeArgvFor(opts.pr, ghRepo);
+  try {
+    const r = exec(mergeArgv);
+    if (!r.ok) return { ...base, guard, mergeArgv, mergeError: (r.stderr || r.stdout || "gh pr merge failed").trim().split("\n")[0]! };
+    return { ...base, guard, mergeArgv, merged: true };
+  } catch (e) {
+    return { ...base, guard, mergeArgv, mergeError: (e as Error).message.split("\n")[0]! };
+  }
+}
+
+// The exit code for a result, so the CLI and any programmatic caller cannot disagree about it.
+export function prMergeExit(r: PrMergeResult): number {
+  if (r.merged || r.alreadyMerged) return PR_MERGE_EXIT.merged;
+  if (r.holds.length > 0) return PR_MERGE_EXIT.held;
+  if (r.unevaluated) return PR_MERGE_EXIT.unevaluated;
+  if (!r.ghRepo) return PR_MERGE_EXIT.usage;
+  return PR_MERGE_EXIT.mergeFailed;
+}
+
+const HELP = `dev-loop pr merge <n> — gate and land a feature PR in ONE call (LOOP-444).
+
+Usage: dev-loop pr merge <n> [--repo <dir>] [--ticket <id>] [--no-apply] [--json]
+  <n>            PR number
+  --repo <dir>   repo directory (default: cwd; the GitHub repo is also read from the workspace
+                 repo registry when the cwd is not the target repo — two registered GitHub repos
+                 are ambiguous and refused, never guessed)
+  --ticket <id>  explicit ticket id for the board axis (default: the PR's dev-loop/<id> head)
+  --no-apply     do not post the objection comment / route the ticket on a hold (read-only gate)
+  --json         emit the result as JSON
+
+This is \`merge-guard --strict --apply\` AND \`gh pr merge --squash --delete-branch\` as ONE
+operation: the guard's three axes (board state, forge review, CI freshness) run inside this call
+and the squash happens only when they all clear. There is no argv that skips the gate — that
+skippability is what let a fire merge past a correct hold and break main (LOOP-423).
+
+A hold names EVERY axis that objected, one line each with a machine token
+(board-not-merge-eligible | unresolved-review | check-never-reported | stale | red), because the
+remedies differ and two axes can hold the same PR at once.
+
+Exit codes: 0 merged (or already merged — idempotent) · 1 HELD by the gate · 2 usage/repo
+  unresolved · 3 the gate could not evaluate any axis it could have (merge-guard's exit 3, same
+  meaning) · 4 the gate cleared and \`gh pr merge\` itself failed (a forge error, not an objection).
+\`dev-loop merge-guard\`'s own exit contract is unchanged — this adds a caller.`;
+
+if (isMainEntry(import.meta.url)) {
+  const argv = process.argv.slice(2);
+  if (argv[0] === "--help" || argv[0] === "-h" || argv.length === 0) { console.log(HELP); process.exit(0); }
+  const sub = argv[0];
+  if (sub !== "merge") {
+    console.error(`dev-loop pr: unknown subcommand '${sub}' (expected: merge)`);
+    process.exit(PR_MERGE_EXIT.usage);
+  }
+  let repo = process.cwd();
+  let pr: string | undefined;
+  let ticketId: string | undefined;
+  let apply = true;
+  let asJson = false;
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--repo") repo = argv[++i] ?? "";
+    else if (a === "--ticket") ticketId = argv[++i];
+    else if (a === "--no-apply") apply = false;
+    else if (a === "--json") asJson = true;
+    else if (a === "--help" || a === "-h") { console.log(HELP); process.exit(0); }
+    else if (!a.startsWith("-") && pr === undefined) pr = a;
+    else { console.error(`dev-loop pr merge: unknown option '${a}'`); process.exit(PR_MERGE_EXIT.usage); }
+  }
+  if (!pr || !/^\d+$/.test(pr)) {
+    console.error("dev-loop pr merge: a PR NUMBER is required — `dev-loop pr merge <n>`");
+    process.exit(PR_MERGE_EXIT.usage);
+  }
+
+  // Same registry resolution the guard's CLI does, so both surfaces gate on identical config.
+  const cfCfg = registryCiFreshnessConfig(repo);
+  let result: PrMergeResult;
+  try {
+    result = prMerge(repo, {
+      pr, apply,
+      ...(ticketId !== undefined ? { ticketId } : {}),
+      ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible, ciIrrelevantPaths: cfCfg.ciIrrelevantPaths } : {}),
+    });
+  } catch (e) {
+    console.error(`dev-loop pr merge: ${(e as Error).message.split("\n")[0]}`);
+    process.exit(PR_MERGE_EXIT.usage);
+  }
+
+  const exit = prMergeExit(result);
+  if (asJson) {
+    console.log(JSON.stringify({ ...result, exit }, null, 2));
+  } else if (result.alreadyMerged) {
+    console.log(`pr merge: PR #${pr} is already merged — nothing to do`);
+  } else if (!result.ghRepo) {
+    const candidates = registryGhRepos(repo);
+    console.error(`pr merge: could not resolve the GitHub repo from '${repo}' or the workspace repo registry${candidates.length > 1 ? ` (registry has ${candidates.length}: ${candidates.join(", ")} — pass --repo <dir> to disambiguate)` : ""}`);
+  } else if (result.holds.length > 0) {
+    console.error(`pr merge: ⛔ HELD — PR #${pr} was NOT merged (${result.holds.length} objection${result.holds.length > 1 ? "s" : ""}):`);
+    for (const h of result.holds) console.error(`  [${h.token}] ${h.axis}: ${h.detail}`);
+    if (apply) console.error("  The objection is recorded on the ticket. Fix the cause named above and re-run this verb.");
+  } else if (result.unevaluated) {
+    console.error(`pr merge: ⛔ COULD NOT EVALUATE — no axis ran (${result.unevaluated}); PR #${pr} was NOT merged. A gate that checked nothing has not cleared anything: fix the invocation (--repo <dir> / --ticket <id>) and re-run.`);
+  } else if (result.mergeError) {
+    console.error(`pr merge: the gate CLEARED but \`gh ${result.mergeArgv?.join(" ")}\` failed — ${result.mergeError}`);
+  } else {
+    console.log(`pr merge: ✅ gate clear on all evaluated axes — PR #${pr} squashed and its branch deleted`);
+  }
+  process.exit(exit);
+}

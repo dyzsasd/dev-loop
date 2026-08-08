@@ -313,7 +313,9 @@ function ghRepoFromRemote(remote: string): string | null {
 // Ambiguity is refused, not guessed. Two registered GitHub repos and a bare `--pr 174` do not
 // identify a PR — picking one would let the guard check a DIFFERENT repo's PR #174 and report it
 // clean. The caller passes --repo; the CLI names the candidates so that is a two-second fix.
-function resolveGhRepo(repoDir: string): string | null {
+// Exported for `pr merge` (LOOP-444): that verb must address the SAME owner/repo the axes gated,
+// and re-deriving it there would let the gate and the squash disagree about which PR #n they meant.
+export function resolveGhRepo(repoDir: string): string | null {
   try {
     const remote = execFileSync("git", ["-C", repoDir, "config", "--get", "remote.origin.url"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();

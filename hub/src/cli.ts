@@ -62,6 +62,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "export-desktop-skill": ["export-desktop-skill"],// render a self-contained Claude Desktop skill for an agent + project (P2-12)
   worktree:         ["worktree"],                  // add <id> [--repo <ref>] — create dev worktree off origin/<defaultBranch> (LOOP-54; LOOP-37 adds path + reaper)
   "merge-guard":    ["merge-guard"],               // LOOP-64+67: forge review (§3.1/§3.2) + board-state (§3.3) axes — trip on human CHANGES_REQUESTED or non-merge-eligible ticket (design: merge-review-guard)
+  pr:               ["pr-merge"],                  // LOOP-444: `pr merge <n>` — the guard's three axes AND the squash as ONE call, so a skipped gate is not an available argv
   "doc-land":       ["doc-land"],                  // LOOP-57: land PM's doc-only strategyDoc commits to origin/<defaultBranch> ff-only (design: landing-discipline §4.6)
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
@@ -113,6 +114,11 @@ Usage: dev-loop <command> [args]
   merge-guard [--repo <dir>] [--pr <n>] [--ticket <id>] [--strict] [--json]
                               refuse merge on human CHANGES_REQUESTED (forge axis, --pr) or non-merge-eligible
                               ticket (board-state axis); both degrade silently (design: merge-review-guard; LOOP-64+67)
+  pr merge <n> [--repo <dir>] [--ticket <id>] [--no-apply] [--json]   gate AND land a feature PR in ONE call:
+                              the guard's three axes run inside it and the --squash --delete-branch happens only
+                              when they clear, so skipping the gate is not an available argv (LOOP-444). Exit
+                              0 merged/already-merged · 1 HELD (every objecting axis named) · 2 usage · 3
+                              nothing evaluable · 4 gate clear but the squash failed
   doc-land [--repo <ref>] [--dry-run]   land PM's doc-only strategyDoc progress commits to origin/<defaultBranch>
                               ff-only (design: landing-discipline §4.6; LOOP-57)
   init-service <key> <name> <PREFIX>   (legacy) turnkey-bootstrap a service project — start at \`init\`/\`up\` instead
@@ -172,7 +178,7 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror",
-  "worktree", "merge-guard", "doc-land"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table; doc-land calls pushGuard
+  "worktree", "merge-guard", "pr", "doc-land"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {
