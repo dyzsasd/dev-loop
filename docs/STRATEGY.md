@@ -219,30 +219,32 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–70. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
-  still load-bearing and is kept here rather than archived:** the boot corpus is DELIVERED
-  (`--assemble-boot`, 98–147 KB per fire) from 2026-07-31T23:00:15Z, so a lessons rule scored before
-  that timestamp measured a different regime.
+  still load-bearing and is kept here rather than archived, CORRECTED 2026-08-08 (pass 76):** the
+  boot corpus PUSH path (`--assemble-boot`, 98–147 KB per fire) ran from 2026-07-31T23:00:15Z and
+  stopped. Measured over the whole ledger: **16 of 1,082 fires ever carried `bootBytes` > 0** — 12 on
+  07-31, 4 on 08-01, none since. That is configuration, not breakage (`team.bootCorpus` is
+  default-OFF, `team-config.ts:87`, and is unset here), so the live delivery path is and has been
+  PULL: each agent reads the lessons library itself at §0a. A lessons rule scored outside that
+  two-day window was scored under the pull regime.
 
 
-### 2026-08-08 (pm, eighty-eighth fire): the fix was right and its guard shipped into the one arm CI never runs
+### 2026-08-08 (pm, eighty-ninth fire): the loop kept producing and stopped landing
 
-**LOOP-426 verify-FAILED on AC3 — and the code stays.** `b02f4a6` genuinely fixes W37: a temp
-workspace whose `strategyDoc` is a 60.0 KB file, checked with the fire env still pointing here,
-reports 60.0 KB and not this workspace's 46.0 KB. Eight of nine ACs pass, `npm test` is 123/123, both
-required checks are SUCCESS. What is missing is the test AC3 required — and its absence is not
-cosmetic. `checkStrategyDocBudget` is called **exactly once in the whole test tree**, and that call
-passes the *ambient* workspace, the one input the ticket existed to stop trusting. Mutation-tested
-rather than argued: restoring the pre-fix source makes `doctor-golden.ts` fail **with the fire env
-set** and pass **with it scrubbed** — and `run-all.ts:56` scrubs, so the only arm that detects this
-defect is the one arm CI executes never. Canceled; superseded by **LOOP-452** (senior-dev,
-`Mode: direct-code`).
+**Eight finished increments are green and parked.** PRs #243 #247 #253 #254 #257 #261 #262 #265 are
+all `CLEAN` with both required checks `SUCCESS`; seven share **one push timestamp to the second**
+(2026-08-07T06:14:0xZ) and none had moved 34 hours later. Merges per day: 26 (08-05), 24 (08-06),
+**4** (08-07), **6** (08-08), while the open count held at 13. Two candidate causes were measured and
+BOTH died: `autoMerge: true` is not GitHub auto-merge but "whether Dev may merge its own green PR"
+(`config-schema.md:214`, gated at `landing.ts:440`), so `autoMergeRequest: null` on all 13 is by
+design; and there is no forge-side lander by intention. What is left is the real shape: **landing is
+coupled to the ticket's own owner firing on it again**, and the `In Progress` rows that owner sees
+carry no PR state — nine rows, and nothing says which is one rebase from Done. Filed **LOOP-454**
+(P1) for the agent-side signal; LOOP-450 is its operator-side twin.
 
-**A second block was answerable in a sentence and had cost a fire.** LOOP-401 sat `blocked` on a
-`Design:` pointer junior-dev read as broken; the doc was intact at 16,676 B. The pointer encodes
-kind/slug, so `doc get --slug design/scheduler-pause` asks for a document that never existed and
-returns that **at exit 0** — indistinguishable from absence. Answered, unparked, filed **LOOP-451**,
-and inoculated LOOP-402/403/404, which carry the identical pointer. The park was also zero-edge: a
-`blocked` label with no `Blocked-by:` marker, which §9c can never release.
+**LOOP-375 passed.** The daemon header now describes the module that exists — two connections, three
+POST families, the real bind policy — and both anchors it introduces resolve to real code. Comment-only
+was proved by diffing the two trees with trailing comments stripped, not by the ticket's own grep,
+which counts a `code; // comment` line as changed and would fail a correct fix.
 
 ## Personas
 
