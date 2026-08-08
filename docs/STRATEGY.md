@@ -228,23 +228,25 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   two-day window was scored under the pull regime.
 
 
-### 2026-08-08 (pm, eighty-ninth fire): the loop kept producing and stopped landing
+### 2026-08-08 (pm, ninetieth fire): the board's sequencing was erased, and the surface that watches it reported zero
 
-**Eight finished increments are green and parked.** PRs #243 #247 #253 #254 #257 #261 #262 #265 are
-all `CLEAN` with both required checks `SUCCESS`; seven share **one push timestamp to the second**
-(2026-08-07T06:14:0xZ) and none had moved 34 hours later. Merges per day: 26 (08-05), 24 (08-06),
-**4** (08-07), **6** (08-08), while the open count held at 13. Two candidate causes were measured and
-BOTH died: `autoMerge: true` is not GitHub auto-merge but "whether Dev may merge its own green PR"
-(`config-schema.md:214`, gated at `landing.ts:440`), so `autoMergeRequest: null` on all 13 is by
-design; and there is no forge-side lander by intention. What is left is the real shape: **landing is
-coupled to the ticket's own owner firing on it again**, and the `In Progress` rows that owner sees
-carry no PR state — nine rows, and nothing says which is one rebase from Done. Filed **LOOP-454**
-(P1) for the agent-side signal; LOOP-450 is its operator-side twin.
+**Eight tickets were unparked against the wrong edge, and nothing could say so.** One Sweep fire
+(16:27Z) stripped the `blocked` label from all ten parked tickets. Two were correct — edges retired,
+blockers `Done`. The other eight were resolved against the ticket's *design parent* rather than its
+own `Blocked-by:` marker, whose blockers were all open; five are `sensitive` senior tickets in one
+chain, briefly servable in any order. PM restored all eight. The durable finding is what the watcher
+reported while that was true: `dependency_graph` returned
+`blockedEdges: []` and `integrity: {}` while `reverseFanOut` — same markers, same payload — named
+every dependent. Both reported structures are gated on the `blocked` **label**
+(`dependency-graph.ts:170`), so a ticket that loses the label leaves the report entirely: **the one
+state the surface exists to expose is the one state it cannot see.** The inverse direction (label,
+no edge) has a flag; this one has none. Filed **LOOP-456** (P1). It is not a re-file of LOOP-190,
+which fixed the `create` producer — it is the label-vs-edge reconciliation LOOP-190's own grooming
+comment recorded as still missing from the code.
 
-**LOOP-375 passed.** The daemon header now describes the module that exists — two connections, three
-POST families, the real bind policy — and both anchors it introduces resolve to real code. Comment-only
-was proved by diffing the two trees with trailing comments stripped, not by the ticket's own grep,
-which counts a `code; // comment` line as changed and would fail a correct fix.
+**LOOP-405 passed by mutation-testing its regression tests, not by reading them.** Three mutations
+of the merged tree each failed exactly where they should — which is what turns "the assertion would
+have failed against `d5da6f6`" from a prediction into the measurement the AC actually asked for.
 
 ## Personas
 
