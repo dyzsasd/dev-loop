@@ -96,15 +96,15 @@ jobs:
           echo "Releasing: $CURRENT → $VERSION (bump: $BUMP)"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
+      # LOOP-385: this step PROBES (git + npm) and `release-mode.ts` DECIDES, once, for the whole job.
+      # It used to decide inline and only echo the result, so two later steps re-derived "are we
+      # resuming?" by comparing the tag against HEAD — and HEAD is the BRANCH TIP, which any commit
+      # landing after the tag moves. That made every `bump: explicit` resume fail permanently.
+      # The decision is exported as RELEASE_MODE (fresh|resume) + PUBLISH_REF for every step below.
       - name: Validate release target
         shell: bash
         run: |
           set -euo pipefail
-
-          if [ "${GITHUB_REF_TYPE}" != "branch" ]; then
-            echo "Run this workflow from a branch, not ${GITHUB_REF_TYPE}."
-            exit 1
-          fi
 
           git fetch --force --tags origin
           python3 security/source_integrity.py --all-history
@@ -112,22 +112,37 @@ jobs:
           if npm view "$PACKAGE_NAME@$VERSION" version >/dev/null 2>&1; then
             NPM_EXISTS=1
           fi
+          TAG_EXISTS=0
           if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
-            if [ "$NPM_EXISTS" = "1" ]; then
-              echo "v$VERSION is already fully released (tag + npm)."
-              exit 1
-            fi
-            # Tag was pushed but a later step failed: re-running (bump: explicit) resumes the publish.
-            echo "Tag v$VERSION exists but $PACKAGE_NAME@$VERSION is not on npm — resuming publish."
-          elif [ "$NPM_EXISTS" = "1" ]; then
-            echo "$PACKAGE_NAME@$VERSION is on npm but tag v$VERSION is missing — reconcile manually."
-            exit 1
+            TAG_EXISTS=1
           fi
+
+          # Refusals exit 1 from here, exactly as the inline rules did.
+          node hub/src/release-mode.ts \
+            --version "$VERSION" \
+            --tag-exists "$TAG_EXISTS" \
+            --npm-exists "$NPM_EXISTS" \
+            --ref-type "${GITHUB_REF_TYPE}" \
+            --package "$PACKAGE_NAME" >> "$GITHUB_ENV"
+
+      # The resume publishes the TAGGED tree, never whatever the branch has drifted to since. After
+      # this checkout the `HEAD == tag` assertions further down are true by construction — which is
+      # why they are kept rather than deleted: on the path that decides which tree becomes a public
+      # package, the guarantee is strengthened, not dropped.
+      - name: Check out the release tag (resume only)
+        if: env.RELEASE_MODE == 'resume'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$PUBLISH_REF"
+          echo "Publishing from $PUBLISH_REF ($(git rev-parse HEAD))."
 
       # The changelog IS the release gate: every release ships a "## <version>" section. Accumulate
       # entries under "## Unreleased" between releases — this step stamps it into the version being
       # cut (the rename rides the release commit). A release with NO changelog section is refused.
+      # Fresh only: a resume's tagged tree already carries the stamped section.
       - name: Stamp the changelog section
+        if: env.RELEASE_MODE == 'fresh'
         shell: bash
         run: |
           set -euo pipefail
@@ -146,7 +161,9 @@ jobs:
         working-directory: hub
         run: npm ci --ignore-scripts
 
+      # Fresh only: a resume's tagged tree already carries the stamped manifests + lockfile.
       - name: Stamp version files
+        if: env.RELEASE_MODE == 'fresh'
         working-directory: hub
         run: |
           node src/release-version.ts "$VERSION"
@@ -167,7 +184,9 @@ jobs:
       - name: Verify source integrity (post-build)
         run: python3 security/source_integrity.py --whole-tree
 
+      # Fresh only: a resume has both the release commit and the tag already, on the remote.
       - name: Commit and tag release
+        if: env.RELEASE_MODE == 'fresh'
         shell: bash
         run: |
           set -euo pipefail
@@ -213,22 +232,42 @@ jobs:
 
       # Push BEFORE publish: npm versions are irrevocable, git pushes are recoverable.
       # A failed publish leaves a pushed tag; re-running with bump: explicit resumes from it.
+      #
+      # `--atomic` with BOTH refs is what bounds the fresh-release race (AC2): if the branch moved
+      # during the ~9-minute test phase the branch update is non-fast-forward, the WHOLE push is
+      # rejected, and the tag does not reach the remote either. The job then fails here, with git's
+      # own "fetch first" message, having left no half-tagged state to clean up. Do not split this
+      # into two pushes.
+      # Fresh only: a resume's commit and tag are already on the remote — there is nothing to push.
       - name: Push release commit and tag
+        if: env.RELEASE_MODE == 'fresh'
         shell: bash
         run: |
           set -euo pipefail
           git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "v$VERSION"
 
+      # The last gate before an irrevocable npm publish: what is about to be published must BE the
+      # released ref on the remote. The question differs by mode, and conflating them is the bug this
+      # ticket fixes — on a resume the branch has legitimately moved on and asserting against it is
+      # what made every resume dispatch fail. The TAG assertion holds on both paths.
       - name: Verify remote release refs before publish
         shell: bash
         run: |
           set -euo pipefail
           EXPECTED="$(git rev-parse HEAD)"
-          REMOTE_BRANCH="$(git ls-remote --heads origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 { print $1 }')"
           REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/v$VERSION^{}" | awk 'NR == 1 { print $1 }')"
-          if [ "$REMOTE_BRANCH" != "$EXPECTED" ] || [ "$REMOTE_TAG" != "$EXPECTED" ]; then
-            echo "Remote branch/tag no longer match release commit $EXPECTED."
+          if [ "$REMOTE_TAG" != "$EXPECTED" ]; then
+            echo "Remote tag v$VERSION ($REMOTE_TAG) is not the commit about to be published ($EXPECTED)."
             exit 1
+          fi
+          if [ "$RELEASE_MODE" = "fresh" ]; then
+            REMOTE_BRANCH="$(git ls-remote --heads origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 { print $1 }')"
+            if [ "$REMOTE_BRANCH" != "$EXPECTED" ]; then
+              echo "Remote branch ${GITHUB_REF_NAME} no longer matches release commit $EXPECTED."
+              exit 1
+            fi
+          else
+            echo "Resume: publishing the tagged commit $EXPECTED; the branch tip is deliberately not asserted."
           fi
 
       # Auth, either of (docs/RELEASING.md):
