@@ -25,7 +25,7 @@ import { TEAM_INTAKE_PROJECT } from "./team-config.ts"; // D1: the reserved "_te
 import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type State, type Ticket } from "./db.ts";
 import { ticketSearchClause } from "./ticket-search.ts"; // LOOP-97: the ONE search predicate, shared with views/board.ts
 import { isDevTierActor, servableSlice, servableTodoDepth } from "./servable.ts"; // LOOP-144/LOOP-251: shared dev-tier servable predicate + todoDepth from the same predicate
-import { designParentIds, isDesignParent } from "./design-parent.ts"; // LOOP-344: ONE definition, shared with the write layer's verify gate (LOOP-345)
+import { designParentIds, isDesignParent, TERMINAL_STATES } from "./design-parent.ts"; // LOOP-344: ONE definition, shared with the write layer's verify gate (LOOP-345)
 import { insertTicket, updateTicketRow, insertComment, loadRelease, verifyCreateGateRejection } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
 // gate) + the docstore-error→HTTP-status map are reused VERBATIM from the shared, side-effect-free docstore
@@ -234,7 +234,6 @@ function opListIssues(db: DatabaseSync, projectId: string, actor: string, a: Lis
 // per the §21b/§18 assignee encoding) + their own In Progress (Step-0 orphan input); pm gets its verify /
 // unblock / groom lists + the §5a todoDepth cap input; qa gets its verify list + the project's blocked set
 // (Job B routes by bail-shape). Summaries only (no description bodies) — get_issue fetches the one you pick.
-const TERMINAL_STATES = new Set(["Done", "Canceled", "Duplicate"]);
 function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
   const summary = (t: Ticket): Ticket => ({ ...t, description: "" });
   const byState = (state: string): Ticket[] =>

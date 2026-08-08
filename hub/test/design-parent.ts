@@ -384,6 +384,59 @@ try {
       "LOOP-378: an uncontested design parent is unaffected — this removes a disagreement, not the route");
   }
 
+  // ── LOOP-378 BOUND 3a: a module designed TWICE keeps its live owner ───────────────────────────
+  // The case the board-wide row set makes routine rather than rare (raised on PR #270). §21a's design
+  // doc is a LIVING per-module document, so the SECOND design of a module produces two parents naming
+  // one slug BY CONSTRUCTION: the first `Done`, the current one open. Both declare `Mode: design`, so
+  // ranking on the declaration alone left them tied and BOUND 3 resolved the slug to NOBODY.
+  //
+  // WHERE THAT BITES, measured rather than assumed. Routing and the close gate do NOT notice: they go
+  // through `isDesignParent`, which short-circuits on the ticket's own `Mode: design` body. The
+  // consumer that reads `parentIds` MEMBERSHIP directly is LOOP-296's sensitive inheritance
+  // (ticketwrite.ts) — so the failure is silent and specific: a child staged under the second design
+  // of a SENSITIVE module stops inheriting `sensitive`, and with it the §21b senior re-tier. That is
+  // LOOP-290's shape — the one ticket editing an irreversible cascade-delete guard — arriving through
+  // the ranking instead of through the filer's judgement.
+  //
+  // So the arms below assert the predicate's membership and the inheriting write, NOT the routing:
+  // an assertion on routing here would pass with the tie-break removed (the marker carries it) and
+  // would be worth nothing.
+  {
+    const create = (title: string, desc: string, labels: string[], assignee: string | null) =>
+      (agentOp("save_issue", db, pid, "dp", "senior-dev",
+        { title, type: "Improvement", state: "Todo", description: desc, labels, ...(assignee ? { assignee } : {}) }) as OpResult)
+        .body as { id: string; labels: string[]; assignee: string | null };
+
+    mk("L378B-OLD", "Mode: design\n\nthe first cut of hubDoc:design/harvest-core", "Done", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    mk("L378B-NEW", "Mode: design\n\nthe second cut of hubDoc:design/harvest-core", "In Review", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    mk("L378B-CHILD", "Design: hubDoc:design/harvest-core\n\nan existing child, so the slug resolves at all", "Todo", ["dev-loop"]);
+
+    const parents = designParentIds(db, pid);
+    ok(parents.has("L378B-NEW"),
+      "LOOP-378 BOUND 3a: the LIVE design parent owns the slug even though a Done parent names the same living doc");
+    ok(!parents.has("L378B-OLD"),
+      "LOOP-378 BOUND 3a: …and the finished one does not — a design that is over cannot own a doc that is still being built to");
+
+    const child = create("child-of-second-design", "Design: hubDoc:design/harvest-core\n\nimplements the second cut", ["dev-loop"], "junior-dev");
+    ok(child.labels.includes("sensitive"),
+      `LOOP-378 BOUND 3a: a child of the SECOND design still inherits sensitive — the LOOP-296 path reads parentIds membership, which the tie had emptied (got ${JSON.stringify(child.labels)})`);
+    ok(child.assignee === "senior-dev" || child.labels.includes("senior-dev"),
+      `LOOP-378 BOUND 3a: …so the §21b senior re-tier still fires on it in the same write (assignee ${child.assignee})`);
+
+    // The tier is scoped to DECLARED designs. A live ordinary ticket that merely MENTIONS the slug
+    // must not win it just because the other candidate is terminal — that would be LOOP-372's
+    // over-match re-entering through the ranking, and it is the same shape the L378-OPEN arm above
+    // pins from the other side.
+    mk("L378B-DONEOWNER", "Mode: design\n\nthe design of hubDoc:design/mill-core", "Done", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    mk("L378B-MENTION", "an ordinary fix that mentions hubDoc:design/mill-core in passing", "In Review", ["dev-loop", "Bug", "qa"]);
+    mk("L378B-MCHILD", "Design: hubDoc:design/mill-core\n\nbuild it", "Todo", ["dev-loop"]);
+    const p2 = designParentIds(db, pid);
+    ok(!p2.has("L378B-MENTION"),
+      "LOOP-378 BOUND 3a: a live MENTION does not win the slug over a Done DECLARATION — the tier ranks inside declarations, never across them");
+    ok(!inVerify("pm", "L378B-MENTION") && inVerify("qa", "L378B-MENTION"),
+      "LOOP-378 BOUND 3a: …so it stays an ordinary qa-owned Bug on both layers");
+  }
+
   db.close();
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
