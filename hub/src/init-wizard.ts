@@ -124,12 +124,12 @@ export async function initWizard(argv = process.argv.slice(2)): Promise<number> 
 
       // ── (c) compose `team init` — validates, scaffolds .dev-loop/, seeds the service hub (_team row),
       // and provisions the Claude permissions entry (D8/(e)). Its remaining defaults are the wizard's:
-      // deploy prod=manual · reports files · autonomy guarded · mode dry-run.
+      // deploy prod=manual · reports files · autonomy ask · mode dry-run.
       const initArgs = ["--dir", dir, "--key", key, "--backend", backend, "--yes"];
       if (linearTeam) initArgs.push("--linear-team", linearTeam);
       teamInit(initArgs, { next: false }); // exits non-zero itself on a validation failure (wizard is resumable)
-      console.log("Defaults applied: mode=dry-run · autonomy=guarded · deploy prod=manual · reports=files");
-      console.log("  (flip live later: dev-loop team set team.mode live — the settable whitelist is in references/config-schema.md; edit dev-loop.json + `dev-loop doctor` for the rest)");
+      console.log("Defaults applied: mode=dry-run · autonomy=ask · deploy prod=manual · reports=files");
+      console.log("  (flip live later: dev-loop team set team.mode live · dev-loop team set team.autonomy full — the settable whitelist is in references/config-schema.md; edit dev-loop.json + `dev-loop doctor` for the rest)");
     }
 
     // Pin every composed mutator + the doctor run below to THIS workspace, regardless of the launch cwd

@@ -127,6 +127,41 @@ try {
   const badRevalidate = run("team", ["set", "projects.web.weight", "-1"], { cwd: lin });
   ok(badRevalidate.code === 1 && /E08/.test(badRevalidate.out), "team set re-validates the WHOLE file (E08 rejects a negative weight)");
 
+  // ═══ team.autonomy / projects.<k>.{mode,autonomy} — the three paths that had no writer (LOOP-408) ═══
+  // Before this, `autonomy` could be set by NOTHING after `team init`: the operator's only route to
+  // the §12a knob was the hand-edit the operator console forbids as its hard rule 1.
+  ok(run("team", ["set", "team.autonomy", "full"], { cwd: lin }).code === 0
+    && readJson(join(lin, "dev-loop.json")).team.autonomy === "full",
+    "team set writes team.autonomy (the knob that had no writer at all)");
+  ok(run("team", ["set", "projects.web.mode", "dry-run"], { cwd: lin }).code === 0
+    && readJson(join(lin, "dev-loop.json")).projects.web.mode === "dry-run",
+    "team set writes projects.<k>.mode");
+  ok(run("team", ["set", "projects.web.autonomy", "full"], { cwd: lin }).code === 0
+    && readJson(join(lin, "dev-loop.json")).projects.web.autonomy === "full",
+    "team set writes projects.<k>.autonomy");
+  // The alias is normalized AT THE WRITE BOUNDARY: accepted on the way in, never persisted. This is
+  // what stops the settable surface from re-introducing the token the rest of the ticket removed.
+  const aliasSet = run("team", ["set", "team.autonomy", "guarded"], { cwd: lin });
+  ok(aliasSet.code === 0 && readJson(join(lin, "dev-loop.json")).team.autonomy === "ask",
+    "team set team.autonomy guarded STORES \"ask\" (alias normalized at the write boundary, never persisted)");
+  ok(/→ "ask"/.test(aliasSet.out), "team set reports the value it actually wrote, not the token typed");
+  const badAutonomy = run("team", ["set", "team.autonomy", "yolo"], { cwd: lin });
+  ok(badAutonomy.code === 2 && /must be one of ask\|full\|guarded/.test(badAutonomy.out),
+    "team set refuses an out-of-set autonomy with the legal list");
+
+  // `team init --autonomy guarded` — the flag an existing operator script may already pass. It stays
+  // ACCEPTED (no script breaks) and lands as the canonical token, so the alias has exactly one
+  // lifetime: the width of the call that carries it.
+  const initAlias = join(tmp, "init-alias");
+  const ia = run("team", ["init", "--dir", initAlias, "--key", "alias-team", "--backend", "service", "--autonomy", "guarded", "--yes"]);
+  ok(ia.code === 0 && readJson(join(initAlias, "dev-loop.json")).team.autonomy === "ask",
+    "team init --autonomy guarded still works and writes \"ask\"");
+  const initBad = join(tmp, "init-bad");
+  const ib = run("team", ["init", "--dir", initBad, "--key", "bad-team", "--backend", "service", "--autonomy", "fulll", "--yes"]);
+  ok(ib.code !== 0 && /E19/.test(ib.out) && /team\.autonomy/.test(ib.out),
+    "team init refuses an unknown --autonomy token with E19 naming the config path");
+  ok(/--autonomy ask\|full/.test(run("team", ["init", "--help"]).out), "team init --help advertises the canonical tokens");
+
   // ═══ projects.<k>.communication.* — the whitelisted per-project article config (E14) ═══
   ok(run("team", ["set", "projects.web.communication.language", "fr"], { cwd: lin }).code === 0
     && readJson(join(lin, "dev-loop.json")).projects.web.communication.language === "fr",
