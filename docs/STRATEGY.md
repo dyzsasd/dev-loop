@@ -224,26 +224,29 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-08 (pm, eighty-fourth fire): the instrument that reports the failures is itself miscounting
+### 2026-08-08 (pm, eighty-fifth fire): the breaker held the cadence, and three lanes died anyway
 
-**The product moved four commits** — `a0d5749` → `a12bfab` (LOOP-432, LOOP-372, LOOP-370, LOOP-407).
-Rotation reset; **strategy-gaps** taken, unswept across three rotations. Two pm-owned items verified
-and closed: **LOOP-370** (board pills — all 7 states correct against the true 424 rows) and
-**LOOP-407** (an absent required check is now an unconditional hold; doctor W38). Both were exercised
-against the MERGED TREE in an isolated clone, because the installed `dist/` predates both — the live
-board still shows the pre-fix pills, which is the un-published merge, not a regression.
+**The product did not move** — `origin/main` advanced only by fire 84's own doc-land, so `a12bfab`
+stands and the rotation continued rather than resetting. Lens: **loop-reliability**, a rubric
+extension taken because this product IS the loop, so the running fleet is a review surface.
+Nothing pm-verifiable In Review (**LOOP-446** is an §9a investigation awaiting the OPERATOR, no
+verdict yet), `needs-pm` empty, `Human-Blocked` empty, §9c ten live edges and zero unparks due.
 
-**LOOP-445 filed — `budget-per-fire` is not measuring the budget.** The watchdog kills on a modeled
-deadline (`perFireUsd / ratePerMs`) and never compares actual spend. Fire 83 spent **$4.34 against a
-$20 ceiling** and was ledgered a breach; the twelve pm fires before it read *turns 2, zero tokens,
-46–63 min, $0* — wedged fires wearing the budget label, because `breaker.ts:26` short-circuits on
-`budgetKilled` ahead of the liveness arm. Self-reinforcing: each kill ledgers `costUsd: 0`, so the
-profile reads unpriced and the fallback re-arms the same deadline.
+**LOOP-447 filed — three of six agents produced nothing for 24–32 hours and no surface said so.**
+junior-dev 24 consecutive stalled fires over 31.8 h, sweep 22 / 28.6 h, qa 20 / 23.7 h, all on the
+one `openrouter/deepseek` lane from 2026-08-07T06:14Z. The breaker was **not** at fault: the measured
+launch gaps show it tripping exactly as designed — dense for four or five fires, then a clean
+~60–90 min probe cadence. What failed is that an open breaker is a console line and an optional
+comms ping, never a state anything can be asked about. `doctor` has no code for it (W31 warns about
+the *opposite* condition, a starved tier); `metrics` prints `stalled×87` with no per-agent grain or
+recency; the board renders no fire outcome at all (LOOP-380). Cost: 87 wedged fires, median 17 min
+each, ≈29 slot-hours returning nothing.
 
-**The trail gap and the failure rate are one phenomenon** — a §22 report is written at fire close, so
-fire 83 verified LOOP-432, posted its verdict, and died before writing one, which is also junior-dev's
-1-of-7. The three stale north-star measurements are a DIRECTION edit, so they went to **LOOP-446** as
-a §9a proposal parked for the operator, not a commit.
+**The tier imbalance now has a measured cause.** Fire success over the last 700 fires: qa 82 %,
+pm 76 %, sweep 66 %, **junior-dev 55 %, senior-dev 55 %** — the two BUILDER tiers are the least
+reliable lanes, so junior's Backlog is deep because the lane draining it works half the time, not
+because PM over-files. The classes never cross: `stalled` only on opencode/deepseek,
+`budget-per-fire` only on claude/opus.
 
 ## Personas
 
@@ -278,29 +281,21 @@ a §9a proposal parked for the operator, not a commit.
 
 ## Decisions (running log)
 
-- **2026-08-08 (pm, eighty-fourth fire) — an instrument that reports a kill must report the
-  measurement that justified it, or the kill becomes evidence for itself.** `perFireUsd`'s watchdog
-  cannot know cost mid-flight, so it kills on a modeled deadline — defensible. Ledgering that kill as
-  `budget-per-fire` without comparing the fire's recorded spend is not: $4.34 against a $20 ceiling
-  reads identically to a real breach, and so does a wedged fire that burned zero tokens (LOOP-445).
-  **The rule: when a guard acts on an ESTIMATE, the record it writes must name the estimate as such
-  and carry the measured value beside it** — otherwise the next reader, and the next rate median,
-  treat the estimate as a measurement. The self-reinforcing half is the tell: each kill writes
-  `costUsd: 0`, which keeps the profile unpriced and the fallback armed. **Corollary:** two gaps
-  reported separately may be one cause seen twice — the durable-trail hole and the failure rate are
-  both "the fire did not reach its close step", and work aimed at DETECTING the hole cannot close it.
-
-- **2026-08-07 (pm, eighty-second fire) — a fix's own design comment is where the next defect
-  hides, because it names the boundary it did not test.** LOOP-369 rewrote every inferred success in
-  `doc-land` into a stated one, then wrote that Step 1's early return is *"the one place that
-  genuinely means 'entered with nothing to land'"* — an unmeasured claim, load-bearing, and false
-  (LOOP-443). **The rule: when an increment declares a path out of scope by asserting a property of
-  it, verify that property; a scope boundary is a claim, not a fact.** Two corollaries measured on
-  the same verb. First, a defect class has as many members as it has INPUTS: LOOP-369 fixed the
-  branch the verb *rebases*, and the same wrong-branch assumption survived in the branch it
-  *reads*. Enumerate every site that consumes the misread value, not the one the incident hit.
-  Second, an ordering race has two orders — LOOP-369 measured "PM commits, then the checkout moves"
-  and fixed it; "the checkout moves, then PM commits" is the same race and was never asked about.
+- **2026-08-08 (pm, eighty-fifth fire) — a control that CONTAINS a failure is not a control that
+  REPORTS it, and containment makes the silence worse.** The P0-1a breaker was built for a 48-hour
+  outage whose stated cost was *"discovered by reading metrics after the fact"*. It fixed the
+  cadence half and the discovery half recurred verbatim: three lanes dead 24–32 h, found only by
+  hand-reading the fire ledger (LOOP-447). Containment is what hid it — the probe cadence turned a
+  loud failure into a quiet one while the queues those agents own sat untouched. **The rule: every
+  control that acts on a condition must leave the condition ANSWERABLE — an event emitted once at
+  the transition is not a state, and a count without grain or recency is not either.** `stalled×87`
+  cannot distinguish 87 scattered flakes from three agents dead since yesterday, and those have
+  different remedies. **Corollary on method:** a finding that RESEMBLES a known defect must be tested
+  against the mechanism, not the resemblance. Three hypotheses died before one ticket was filed —
+  `stalled` is mislabelled like LOOP-445's budget kill (no: the watchdog measures real silence);
+  `stalled` belongs in `PROVIDER_SCOPED_CLASSES` (no: the per-agent breaker already trips);
+  `bootBytes: 0` on 1047 of 1063 rows is an unread surface (no: 0 is expected under pull-mode).
+  Filing on resemblance would have produced three wrong tickets aimed at working code.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -538,7 +533,9 @@ a §9a proposal parked for the operator, not a commit.
     journal and its supersession-narrows-scope ruling (fires 79–80 wrote nothing — the shared
     checkout was diverged) → block **AQ**, and by **pass 71** with the eighty-second fire's journal
     and its scope-boundary-is-a-claim ruling → block **AR**; still open from the two: **LOOP-440**,
-    **LOOP-442**, **LOOP-443**.
+    **LOOP-442**, **LOOP-443**. Extended by **pass 72** with the eighty-FOURTH fire's journal and
+    ruling, plus the eighty-second fire's ruling — which pass 71's line claimed but did not roll —
+    → block **AS**; still open from that fire: **LOOP-444**, **LOOP-445**, **LOOP-446**.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
