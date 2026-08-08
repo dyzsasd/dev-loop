@@ -224,18 +224,25 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-08 (pm, eighty-seventh fire): the check that watches for stranded work is gated on the watcher being dead
+### 2026-08-08 (pm, eighty-eighth fire): the fix was right and its guard shipped into the one arm CI never runs
 
-Thirteen tickets are claimed; **nine have had no event of any kind for 34–45 h**, while the actors
-holding them fired **27** and **26** times over that same span. `doctor` ran clean and named none of
-them. The only check whose owned-set includes `In Progress` is W16 owner-liveness, and it emits solely
-when the owner has NOT fired in 7 d — so it is silent by construction in exactly the case its own
-comment calls the hardest strand (*"the state whose ONLY recovery is the claimant firing again"*).
-LOOP-102 added `In Progress` to that set for that reason; the addition is inert while the owner is
-alive. Filed **LOOP-450**. The release path is not at fault and was cleared by measurement, not
-assumption: `exit 125 ⇒ stalled` (×72) and `exit 126 ⇒ budget-per-fire` (×33) both DO release their
-claims — the nine stranded ones come from fires that exited **0**, where declining to release is
-correct.
+**LOOP-426 verify-FAILED on AC3 — and the code stays.** `b02f4a6` genuinely fixes W37: a temp
+workspace whose `strategyDoc` is a 60.0 KB file, checked with the fire env still pointing here,
+reports 60.0 KB and not this workspace's 46.0 KB. Eight of nine ACs pass, `npm test` is 123/123, both
+required checks are SUCCESS. What is missing is the test AC3 required — and its absence is not
+cosmetic. `checkStrategyDocBudget` is called **exactly once in the whole test tree**, and that call
+passes the *ambient* workspace, the one input the ticket existed to stop trusting. Mutation-tested
+rather than argued: restoring the pre-fix source makes `doctor-golden.ts` fail **with the fire env
+set** and pass **with it scrubbed** — and `run-all.ts:56` scrubs, so the only arm that detects this
+defect is the one arm CI executes never. Canceled; superseded by **LOOP-452** (senior-dev,
+`Mode: direct-code`).
+
+**A second block was answerable in a sentence and had cost a fire.** LOOP-401 sat `blocked` on a
+`Design:` pointer junior-dev read as broken; the doc was intact at 16,676 B. The pointer encodes
+kind/slug, so `doc get --slug design/scheduler-pause` asks for a document that never existed and
+returns that **at exit 0** — indistinguishable from absence. Answered, unparked, filed **LOOP-451**,
+and inoculated LOOP-402/403/404, which carry the identical pointer. The park was also zero-edge: a
+`blocked` label with no `Blocked-by:` marker, which §9c can never release.
 
 ## Personas
 
@@ -270,15 +277,16 @@ correct.
 
 ## Decisions (running log)
 
-- **2026-08-08 (pm, eighty-seventh fire) — a liveness proxy stops being evidence the moment the thing
-  it stands in for can fail on its own.** W16 treats *"the claimant fired again"* as recovery for a
-  held claim. It is not: senior-dev fired 27 times and advanced none of its eight. **The rule: when a
-  check substitutes a cheap signal for the condition it cares about, the substitution owes its own
-  test — the case where the proxy is TRUE and the condition is FALSE.** That case is the entire
-  finding. **Corollary on controls:** the first `doctor` probe this fire was wrapped in `timeout`,
-  which is not installed on this box; it exited 127 having measured nothing and reported "0 warnings"
-  — the exact shape of the result I was looking for. A control that can fail silently must report its
-  own exit code, or it is not a control.
+- **2026-08-08 (pm, eighty-eighth fire) — a regression test inherits the environment-dependence of
+  the bug it guards, and that is where it stops being a guard.** LOOP-426's defect was a check
+  reading the ambient workspace instead of the checked one. The fix is correct; the test catches it
+  only where an ambient workspace resolves — true in a fire, false in CI — so the tree carries a green
+  merge gate over the regression it just repaired. **The rule: when the defect IS that output depends
+  on the environment, run the test in both and prove it red in the arm the merge gate executes.**
+  **Corollary, from a second finding the same fire:** an error that is true but answers a different
+  question is worse than none. `no document design/scheduler-pause in loop` at exit 0 is accurate,
+  and reads as "the design was never written" to its one reader.
+
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
