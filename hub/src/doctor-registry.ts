@@ -486,4 +486,17 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       checkNullAssigneeRow(ctx as BoardCtx);
     },
   },
+  // Row 30 — W39 (secrets.env exposure, LOOP-430). Registered here rather than inline in
+  // doctorWorkspace: that function sits at CRAP 89.6 against the 90 gate (LOOP-348), so an inline
+  // block reads green locally and turns CI red.
+  {
+    codes: ["W39"],
+    id: "w39-secrets-perms",
+    scope: "workspace",
+    bestEffort: true,
+    run: async (ctx) => {
+      const { checkSecretsPerms } = await import("./doctor.ts");
+      checkSecretsPerms(ctx.ws, ctx.out.warn);
+    },
+  },
 ];

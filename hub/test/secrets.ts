@@ -4,7 +4,7 @@
 // perms warning, and the end-to-end acceptance: webhook ONLY in secrets.env + clean shell ⇒ notify delivers.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +41,15 @@ const capture = (fn: () => void): string => {
   const orig = console.log;
   console.log = (m?: unknown) => { lines.push(String(m)); };
   try { fn(); } finally { console.log = orig; }
+  return lines.join("\n");
+};
+// doctorWorkspace's DOCTOR_CHECKS rows (LOOP-357) run after an await, so the sync capture above
+// returns before any registry row has emitted. Anything asserted on a registry row needs this one.
+const captureAsync = async (fn: () => unknown): Promise<string> => {
+  const lines: string[] = [];
+  const orig = console.log;
+  console.log = (m?: unknown) => { lines.push(String(m)); };
+  try { await fn(); } finally { console.log = orig; }
   return lines.join("\n");
 };
 
@@ -246,6 +255,47 @@ try {
     ok(/hello/.test((server as unknown as { lastBody?: string }).lastBody ?? ""), "e2e: the webhook actually received the payload");
     ok(!childOut.includes(`127.0.0.1:${port}`), "e2e: notify output never echoes the webhook URL");
     server.close();
+
+    // ── W39 (LOOP-430): a group/world-readable secrets.env is REPORTABLE from doctor ──────────
+    // Drives the shipped check, never a re-implementation of the mode arithmetic (AC5).
+    {
+      const { checkSecretsPerms } = await import("../src/doctor.ts");
+      const warnsOf = (root: string): string[] => {
+        const got: string[] = [];
+        checkSecretsPerms(loadWorkspace(root), (m) => got.push(m));
+        return got;
+      };
+
+      const loose = mkWs("w39-loose", "DL_SECTEST_W39", "DL_SECTEST_W39=https://hook.example/w39-secret\n");
+      chmodSync(wsSecretsPath(loose), 0o644);
+      const looseWarns = warnsOf(loose);
+      ok(looseWarns.length === 1, `AC1/AC5: a mode-644 secrets.env yields exactly ONE warn row (got ${looseWarns.length})`);
+      const w = looseWarns[0] ?? "";
+      ok(w.startsWith("[W39] "), `AC1: the row carries the W39 code (got ${JSON.stringify(w.slice(0, 12))})`);
+      ok(w.includes(wsSecretsPath(loose)), "AC1: the row names the exact secrets.env path");
+      ok(/mode 644\b/.test(w), `AC1: the row states the OBSERVED octal mode, not a constant (got ${JSON.stringify(w.match(/mode \d+/)?.[0] ?? "none")})`);
+      ok(w.includes(`chmod 600 ${wsSecretsPath(loose)}`), "AC1: the row states the remedy");
+      ok(!w.includes("w39-secret"), "§16: the W39 row never prints a stored VALUE");
+
+      // AC3 — the check has no once-per-process latch (secrets.ts's stderr line does; this must not).
+      ok(warnsOf(loose).length === 1, "AC3: the check reports AGAIN on a second call in the SAME process (no permsWarned latch)");
+
+      // AC4 — 600 and absent are both legitimate, neither warns.
+      const tight = mkWs("w39-tight", "DL_SECTEST_W39T", "DL_SECTEST_W39T=x\n"); // mkWs chmods 600
+      ok((statSync(wsSecretsPath(tight)).mode & 0o777) === 0o600, `AC4 precondition: the tight fixture really is 600 (got ${(statSync(wsSecretsPath(tight)).mode & 0o777).toString(8)})`);
+      ok(warnsOf(tight).length === 0, "AC4: a 600 secrets.env is NOT a warning");
+      const absent = mkWs("w39-absent", "DL_SECTEST_W39A"); // no secrets.env written at all
+      ok(!existsSync(wsSecretsPath(absent)), "AC4 precondition: the absent fixture really has no secrets.env");
+      ok(warnsOf(absent).length === 0, "AC4: an absent secrets.env is NOT a warning");
+
+      // AC1/AC2 end-to-end — the row reaches doctor's STDOUT through the LOOP-357 registry driver.
+      const dOut = await captureAsync(() => doctorWorkspace(loadWorkspace(loose)));
+      ok(/⚠️.*\[W39\]/.test(dOut) && dOut.includes(wsSecretsPath(loose)), "AC1/AC2: [W39] reaches doctor stdout via the check registry");
+      ok(!dOut.includes("w39-secret"), "§16: doctor's stdout never prints the stored value");
+
+      // AC6 — the verdict contract: warn-only. A warn must not flip doctor's ok.
+      ok(!/^❌/m.test(dOut), "AC6: W39 is warn-only — it emits no ❌ row, so doctor's verdict is unchanged");
+    }
 
     console.log(fails === 0 ? "\nSECRETS_OK" : `\n${fails} CHECK(S) FAILED`);
     try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }

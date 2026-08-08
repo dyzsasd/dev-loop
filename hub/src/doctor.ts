@@ -26,7 +26,7 @@ import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPa
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock, type ResolvedRepo } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { listSnapshots, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-340: W32 reads the same artifact convention Child B writes
-import { loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
+import { loadWorkspaceSecrets, loosePermsFinding, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
 import { opencodeSyncDrift } from "./opencode-sync.ts";
 import { openDb as openHubDbConn } from "./db.ts";
 import { findProject as findHubProject } from "./seed.ts";
@@ -788,6 +788,21 @@ export function checkBoardSnapshotW32(ws: Workspace, warn: (m: string) => void, 
       warn(`[W32] the newest board snapshot is ${ageH >= 48 ? `${Math.floor(ageH / 24)}d` : `${ageH}h`} old, more than twice the configured ${Math.round(cfg.intervalMs / 3_600_000)}h cadence — the timer has stopped, not merely slipped. Check the daemon is up (\`dev-loop hub status\`) and that ${cfg.dir} is writable; take one by hand meanwhile: \`dev-loop board snapshot\``);
     }
   } catch { /* best-effort — never fails doctor, never masks another check */ }
+}
+
+// ── W39 (LOOP-430) — a group/world-readable secrets.env is invisible to the pre-run surface ─────
+// secrets.env holds live provider API keys and the git deploy token. The condition was already
+// DETECTED (secrets.ts warnLoosePerms) but only as a codeless stderr line, latched once per process
+// — so `dev-loop doctor`, the one surface an operator is told to read before an unattended run,
+// exited 0 with a world-readable credential file and said nothing.
+//
+// Warn-only, deliberately (LOOP-430 AC6): it can fire on a pre-existing workspace the operator has
+// not touched, and failing doctor there would block the run rather than inform it. The remedy is one
+// command, and W39 is in the band the operator is instructed to read.
+export function checkSecretsPerms(ws: Workspace, warn: (m: string) => void): void {
+  const finding = loosePermsFinding(ws.root);
+  if (!finding) return; // absent file or owner-only bits — both legitimate (AC4)
+  warn(`[W39] ${finding.path} is readable by group/others (mode ${finding.mode}) — it holds live provider keys and the git deploy token, so every local account can read them; tighten it: chmod 600 ${finding.path}`);
 }
 
 // ── W30 (LOOP-91) — the lessons library has no liveness check ───────────────────────────────────
