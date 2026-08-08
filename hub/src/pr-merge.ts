@@ -21,8 +21,8 @@ import { isMainEntry } from "./is-entry.ts";
 import type { ExecFn } from "./landing.ts";
 import { defaultGhExec } from "./landing.ts";
 import {
-  mergeGuard, unevaluatedHold, registryCiFreshnessConfig, registryGhRepos, resolveGhRepo,
-  type MergeGuardResult, type SkipReason,
+  mergeGuard, unevaluatedHold, resolveRegistryCiFreshnessConfig, registryGhRepos, resolveGhRepo, skipClass,
+  type MergeGuardResult, type SkipReason, type CiFreshnessConfigResolution,
 } from "./merge-guard.ts";
 
 // One hold per axis that objected — never one collapsed "refused".
@@ -120,7 +120,22 @@ function holdsFrom(g: MergeGuardResult): PrMergeHold[] {
       detail: `PR has an unresolved objection from ${who.map((l) => `@${l}`).join(", ")} (CHANGES_REQUESTED or unresolved thread)`,
     });
   }
-  if (!cf.skipped && cf.trip) {
+  if (cf.skipped) {
+    // A SKIPPED CI axis normally lets the squash proceed, and must keep doing so: `no-pr-arg` and
+    // `repo-not-automerge` mean the axis has nothing to say, and `forge-unreachable` is §3.4's
+    // fail-open (an outage may not become a merge freeze). But `untargeted` is neither — it means
+    // the axis could not work out WHAT to check and the caller can fix that. Letting it through is
+    // how "ambiguity reported as absence" reached the squash. Keyed on the CLASS, not on the one
+    // reason found today: any future untargeted skip fails closed here by construction, the same
+    // reason CI_VERDICT_CLEARS_SQUASH is an allowlist.
+    if (cf.skipReason && skipClass(cf.skipReason) === "untargeted") {
+      holds.push({
+        axis: "ciFreshness",
+        token: cf.skipReason,
+        detail: `the CI axis did not run (${cf.skipReason}) — the invocation did not identify what to check, so no check has cleared this squash; fix it with --repo <dir> and re-run`,
+      });
+    }
+  } else if (cf.trip) {
     // The ciFreshness token IS the verdict, so `check-never-reported` (the workflow never
     // dispatched — a rebase cannot fix it) stays distinct from `stale` (a rebase is exactly the
     // fix) and from `red` (read the log). Collapsing them would send the wrong remedy.
@@ -129,7 +144,7 @@ function holdsFrom(g: MergeGuardResult): PrMergeHold[] {
       token: cf.verdict ?? "unknown",
       detail: `PR CI verdict=${cf.verdict ?? "unknown"}${cf.reason ? ` (${cf.reason})` : ""}`,
     });
-  } else if (!cf.skipped && !CI_VERDICT_CLEARS_SQUASH.has(cf.verdict ?? "unknown")) {
+  } else if (!CI_VERDICT_CLEARS_SQUASH.has(cf.verdict ?? "unknown")) {
     // An evaluated axis that did not trip is still not permission to squash. The guard's TRIP set is
     // deliberately narrow — `pending` and `unknown` do not trip, because tripping would objection-spam
     // every open PR whenever CI is merely slow (LOOP-407) or the forge blinked (§3.4: a gate must not
@@ -210,6 +225,7 @@ export function prMerge(
     ciIrrelevantPaths?: string[];
     defaultBranch?: string;
     repoEligible?: boolean;
+    ciConfigAmbiguous?: boolean;  // ≥2 registry entries share the selected remote — see holdsFrom
   },
 ): PrMergeResult {
   const exec = opts.exec ?? defaultGhExec;
@@ -238,6 +254,7 @@ export function prMerge(
     ...(opts.ciIrrelevantPaths !== undefined ? { ciIrrelevantPaths: opts.ciIrrelevantPaths } : {}),
     ...(opts.defaultBranch !== undefined ? { defaultBranch: opts.defaultBranch } : {}),
     ...(opts.repoEligible !== undefined ? { repoEligible: opts.repoEligible } : {}),
+    ...(opts.ciConfigAmbiguous ? { ciConfigAmbiguous: true } : {}),
   });
   const holds = [...readiness.holds, ...holdsFrom(guard)];
   if (holds.length > 0) return { ...base, guard, holds };
@@ -281,12 +298,15 @@ export function prMerge(
 // A gate that skipped CI because it could not find its own config is not a gate that passed, and
 // this verb exists precisely to refuse that squash (LOOP-423 is what one costs). Resolving the repo
 // FIRST and reading the config for that repo is what makes the two answers the same answer.
+// It returns the RESOLUTION, not a config-or-null: "could not choose between two entries" and
+// "there is no entry" produce different squash decisions here, and collapsing them into null is
+// what let an ambiguous workspace merge with the CI axis never run.
 export function resolvePrMergeTarget(repoDir: string): {
   ghRepo: string | null;
-  ciConfig: ReturnType<typeof registryCiFreshnessConfig>;
+  ciConfig: CiFreshnessConfigResolution;
 } {
   const ghRepo = resolveGhRepo(repoDir);
-  return { ghRepo, ciConfig: registryCiFreshnessConfig(repoDir, ghRepo) };
+  return { ghRepo, ciConfig: resolveRegistryCiFreshnessConfig(repoDir, ghRepo) };
 }
 
 // The exit code for a result, so the CLI and any programmatic caller cannot disagree about it.
@@ -359,13 +379,15 @@ if (isMainEntry(import.meta.url)) {
 
   // Same registry resolution the guard's CLI does, so both surfaces gate on identical config — and
   // resolved ONCE, so the repo the config describes is the repo the axes gate and the squash targets.
-  const { ghRepo: resolvedRepo, ciConfig: cfCfg } = resolvePrMergeTarget(repo);
+  const { ghRepo: resolvedRepo, ciConfig: cfRes } = resolvePrMergeTarget(repo);
+  const cfCfg = cfRes.kind === "resolved" ? cfRes.config : null;
   let result: PrMergeResult;
   try {
     result = prMerge(repo, {
       pr, apply,
       ...(resolvedRepo ? { ghRepo: resolvedRepo } : {}),
       ...(ticketId !== undefined ? { ticketId } : {}),
+      ...(cfRes.kind === "ambiguous" ? { ciConfigAmbiguous: true } : {}),
       ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible, ciIrrelevantPaths: cfCfg.ciIrrelevantPaths } : {}),
     });
   } catch (e) {
@@ -384,7 +406,24 @@ if (isMainEntry(import.meta.url)) {
   } else if (result.holds.length > 0) {
     console.error(`pr merge: ⛔ HELD — PR #${pr} was NOT merged (${result.holds.length} objection${result.holds.length > 1 ? "s" : ""}):`);
     for (const h of result.holds) console.error(`  [${h.token}] ${h.axis}: ${h.detail}`);
-    if (apply) console.error("  The objection is recorded on the ticket. Fix the cause named above and re-run this verb.");
+    if (cfRes.kind === "ambiguous") {
+      console.error(`  The CI config was ambiguous: ${cfRes.paths.length} repo entries share the remote ${cfRes.ghRepo} (${cfRes.paths.join(", ")}). Pass --repo <dir> to name the one to gate.`);
+    }
+    // Only claim a board write that HAPPENED. `applyTrip` runs when the guard TRIPS; a readiness
+    // hold (draft/conflict/unknown-mergeability) and a non-tripping CI state (pending/unknown, and
+    // an untargeted skip) hold this squash without any axis objecting, so nothing was written and
+    // there is no audit trail to point an operator at. Reporting one anyway invites reliance on a
+    // routing action that never occurred — so the line is keyed on the recorded action, not on
+    // `apply` having been requested. `already_present` counts: the objection IS on the ticket.
+    const applied = result.guard?.applied?.action;
+    if (applied === "wrote" || applied === "already_present") {
+      console.error("  The objection is recorded on the ticket. Fix the cause named above and re-run this verb.");
+    } else {
+      // Only say what did NOT happen when the caller ASKED for it; under --no-apply nobody expected
+      // a write, and reporting its absence would be noise rather than a correction.
+      if (apply) console.error("  No ticket comment was written: no axis objected — these holds are states of the world, not objections anyone must answer.");
+      console.error("  Fix the cause named above and re-run this verb.");
+    }
   } else if (result.unevaluated) {
     console.error(`pr merge: ⛔ COULD NOT EVALUATE — no axis ran (${result.unevaluated}); PR #${pr} was NOT merged. A gate that checked nothing has not cleared anything: fix the invocation (--repo <dir> / --ticket <id>) and re-run.`);
   } else if (result.mergeError) {
