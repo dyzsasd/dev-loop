@@ -415,7 +415,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     bestEffort: true,
     run: async (ctx) => {
       const { checkStrategyDocBudget } = await import("./doctor.ts");
-      checkStrategyDocBudget(ctx.out.warn, ctx.out.info);
+      checkStrategyDocBudget(ctx.ws, ctx.out.warn, ctx.out.info);
     },
   },
   // Row 24 — W30 (lessons liveness, LOOP-91)

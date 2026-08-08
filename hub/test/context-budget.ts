@@ -15,7 +15,8 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONVENTIONS_BUDGETS } from "../src/context-bill.ts"; // LOOP-238: the conventions ratchet
 import { conventionsSlice } from "../src/conventions-verb.ts";
-import { loadWorkspace } from "../src/team-config.ts";
+import { loadWorkspace, type Workspace } from "../src/team-config.ts";
+import { tryResolveWorkspace } from "../src/workspace.ts";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
@@ -516,10 +517,14 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
   {
     const warns: string[] = [];
     const infos: string[] = [];
-    checkStrategyDocBudget(
-      (msg) => warns.push(msg),
-      (msg) => infos.push(msg),
+    const ws = tryResolveWorkspace();
+    if (ws) {
+      checkStrategyDocBudget(
+        ws,
+        (msg) => warns.push(msg),
+        (msg) => infos.push(msg),
     );
+    }
     // In THIS workspace the doc may be under soft, between soft and hard, or over hard — assert shape.
     if (warns.length) {
       ok(/\[W37\]/.test(warns[0]), "LOOP-282: the over-budget warning carries W37");

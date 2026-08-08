@@ -1018,9 +1018,9 @@ export function checkTierStarvation(ws: Workspace, boardDb: string, warn: (msg: 
 //
 // Warn-only, exactly like W03: an over-budget doc is a cost problem, not a broken workspace.
 // §16: the message names bytes, the limit and the PATH — never doc content.
-export function checkStrategyDocBudget(warn: (msg: string) => void, info: (msg: string) => void): void {
+export function checkStrategyDocBudget(ws: import("./team-config.ts").Workspace, warn: (msg: string) => void, info: (msg: string) => void): void {
   try {
-    const stat = tryResolveStrategyDocStat();
+    const stat = tryResolveStrategyDocStat(undefined, undefined, ws);
     if (!stat) return;                                   // absent / unreadable / not a repo file ⇒ no opinion
     const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
     const at = stat.bytes;
