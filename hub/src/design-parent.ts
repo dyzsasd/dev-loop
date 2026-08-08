@@ -57,15 +57,30 @@ export function designPointerOf(description: string): string | null {
  * into the parent role. `isDesignParent` is not a display predicate — it decides pm/qa queue
  * routing, the LOOP-345 close gate, and the LOOP-360 zero-commit handoff exemption — so an
  * over-match hands ordinary code tickets an authorization they were never meant to have.
+ *
+ * BOUND 4 — the row set is the WHOLE BOARD, and it is not a parameter (LOOP-378). Every link this
+ * function walks is board-wide: a child in `Todo` resolves a parent that may be `Done`, and a slug's
+ * candidate set may hold terminal and non-terminal tickets at once. So restricting the input does
+ * not merely hide terminal rows from the answer — it CHANGES the answer for the rows that remain,
+ * most sharply through BOUND 3, since whether a slug is contested is a property of the row set.
+ * While the rows came in as an argument the callers disagreed: `opQueue` passed non-terminal rows
+ * and the three `ticketwrite` gates passed all of them. Measured on this board with LOOP-372's fix
+ * in place, the two views shared NOT ONE parent — 11 ids to `ticketwrite`, 1 to `opQueue`, disjoint
+ * — and LOOP-379 was a design parent to the queue and not to the close gate. That is the precise
+ * inversion LOOP-345 exists to prevent, in its own words: the layer that SHOWS the work refused the
+ * write, and the layer that PERMITS the write hid the work. One predicate asked one question cannot
+ * be enforced by convention at four call sites, so the query lives HERE and the parameter is gone;
+ * a caller that wants a narrower view filters what it DISPLAYS, after the predicate, never what the
+ * predicate derives from.
  */
-export function designParentIds(db: DatabaseSync, projectId: string, rows?: DesignParentTicket[]): Set<string> {
-  const open = rows ?? (db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-    .all(projectId) as unknown as DesignParentTicket[]);
+export function designParentIds(db: DatabaseSync, projectId: string): Set<string> {
+  const board = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
+    .all(projectId) as unknown as DesignParentTicket[];
   const out = new Set<string>();
-  const onBoard = new Set(open.map((t) => t.id));
+  const onBoard = new Set(board.map((t) => t.id));
   const slugToChildren = new Map<string, string[]>();
 
-  for (const t of open) {
+  for (const t of board) {
     const ptr = designPointerOf(t.description ?? "");
     if (!ptr) continue;
     const asParent = /^parent\s+(\S+)/i.exec(unwrapCodeSpan(ptr));
@@ -88,9 +103,9 @@ export function designParentIds(db: DatabaseSync, projectId: string, rows?: Desi
   // the parents that were already being routed correctly. So the marker RANKS candidates below; it
   // never gates them.
   if (slugToChildren.size) {
-    const bodyOf = new Map(open.map((t) => [t.id, t.description ?? ""]));
+    const bodyOf = new Map(board.map((t) => [t.id, t.description ?? ""]));
     const candidates = new Map<string, string[]>();
-    for (const t of open) {
+    for (const t of board) {
       const body = t.description ?? "";
       // BOUND 2 — a ticket that DECLARES a non-design mode is not a design parent, whatever its
       // prose mentions. §21a defines exactly two modes and `Mode: direct-code` is the ticket saying
