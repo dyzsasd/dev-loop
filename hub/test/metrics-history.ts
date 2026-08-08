@@ -98,7 +98,58 @@ try {
   const costLine2 = lines2.find((l) => l.startsWith("cost:"));
   const hasUnqualified = /\(\$[\d.]+\/accepted change\)$/.test(costLine2 ?? "");
   ok(hasUnqualified, "LOOP-352 AC2: full history → unqualified ratio (byte-identical)");
+ok(hasUnqualified, "LOOP-405 AC3: full history → unqualified ratio (byte-identical to LOOP-352 AC2)");
 
+// === LOOP-405 AC4: renderHuman incomplete-history branch does NOT substitute the basis ===
+// The costLine was captured with historyIncomplete=true (LOOP-352 AC1 fixture)
+do {
+  ok(costLine?.includes("accepted change") ?? false, "LOOP-405 AC4: renderHuman cost line includes 'accepted change'");
+  ok(costLine?.includes("incomplete history") ?? false, "LOOP-405 AC4: renderHuman cost line includes incomplete-history qualification");
+  const match = costLine?.match(/\$[\d.]+\/accepted change/);
+  ok(match?.length ? match.length > 0 : false, "LOOP-405 AC4: renderHuman cost line has $/accepted change value (basis is not substituted)");
+} while (false);
+
+  const report: import("../src/metrics.ts").UsageReport = {
+    windowMs: 7 * 86_400_000,
+    totalFires: 10,
+    meteredFires: 10,
+    overall: { costUsd: 100, discardedUsd: 20, fires: 10, metered: 10, discardedFires: 2, costMetered: 8, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, costPriced: 8 },
+    byDimension: {},
+  };
+
+  const threeDaysAgo = Date.now() - 3 * 86_400_000;
+
+  // True-branch: historyIncomplete === true
+  do {
+    const flowLines: string[] = [];
+    const origLog2 = console.log;
+    console.log = (...args: string[]) => flowLines.push(args.join(" "));
+    const { renderFlow } = await import("../src/metrics.ts");
+    renderFlow(report, 5, null, true, new Date(threeDaysAgo).toISOString());
+    console.log = origLog2;
+    const flowLine = flowLines.find((l) => l.includes("cost-per-accepted-change"));
+    ok(!!flowLine, "LOOP-405 AC2: flow cost line printed (history incomplete)");
+    ok(flowLine!.includes("delivered spend ÷ throughput"), "LOOP-405 AC2 true: includes basis annotation");
+    ok(flowLine!.includes("discarded fires excluded"), "LOOP-405 AC2 true: includes 'discarded fires excluded'");
+    ok(flowLine!.includes("incomplete history"), "LOOP-405 AC2 true: includes incomplete-history qualification");
+  } while (false);
+
+  // False-branch: historyIncomplete === false
+  do {
+    const flowLines: string[] = [];
+    const origLog3 = console.log;
+    console.log = (...args: string[]) => flowLines.push(args.join(" "));
+    const { renderFlow } = await import("../src/metrics.ts");
+    renderFlow(report, 5, null, false, null);
+    console.log = origLog3;
+    const flowLine = flowLines.find((l) => l.includes("cost-per-accepted-change"));
+    ok(!!flowLine, "LOOP-405 AC2: flow cost line printed (history complete)");
+    ok(flowLine!.includes("delivered spend ÷ throughput"), "LOOP-405 AC2 false: includes basis annotation");
+    ok(flowLine!.includes("discarded fires excluded"), "LOOP-405 AC2 false: includes 'discarded fires excluded'");
+    ok(!flowLine!.includes("incomplete history"), "LOOP-405 AC2 false: does NOT include incomplete-history qualification");
+  } while (false);
+
+// === LOOP-405 AC3 (same line as LOOP-352 AC2 — complete-history branch byte-identical) ===
   db.close();
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
