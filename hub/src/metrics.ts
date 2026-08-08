@@ -1302,7 +1302,7 @@ export function renderFlow(report: UsageReport, throughput: number | null, board
   const deliveredUsd = cell.costUsd !== null && cell.discardedUsd !== null ? cell.costUsd - cell.discardedUsd : cell.costUsd;
   const cpa = deliveredUsd !== null && throughput !== null && throughput > 0
     ? historyIncomplete && historyFloor
-      ? usd(deliveredUsd / throughput) + "/accepted-change (incomplete history — ledger begins " + historyFloor.slice(0, 10) + ", " + Math.round((Date.now() - Date.parse(historyFloor)) / 86_400_000) + "d)"
+      ? usd(deliveredUsd / throughput) + "/accepted-change (delivered spend ÷ throughput; discarded fires excluded; incomplete history — ledger begins " + historyFloor.slice(0, 10) + ", " + Math.round((Date.now() - Date.parse(historyFloor)) / 86_400_000) + "d)"
       : usd(deliveredUsd / throughput) + "/accepted-change (delivered spend ÷ throughput; discarded fires excluded)"
     : "unavailable";
   const perFire = cell.costUsd !== null && cell.costPriced > 0
