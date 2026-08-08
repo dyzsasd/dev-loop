@@ -293,6 +293,20 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       return { stalledRepo: await checkLandingW22Stall(ctx.ws, ctx.opts, ctx.out) };
     },
   },
+  // Row 13a — W38 (mergeChecks on an unprotected default branch, LOOP-407). Not a design §7 row:
+  // it is a NEW check, so it carries no §7 number and does not renumber the rows below it. Placed
+  // here rather than at the array tail because doctorWorkspace called it between W22 and W19, and
+  // the registry order IS the emission order.
+  {
+    codes: ["W38"],
+    id: "w38-mergechecks-unprotected",
+    scope: "workspace",
+    bestEffort: true,
+    run: async (ctx) => {
+      const { checkMergeChecksUnprotectedW38 } = await import("./doctor.ts");
+      await checkMergeChecksUnprotectedW38(ctx.ws, ctx.opts, ctx.out.warn);
+    },
+  },
   // Row 14 — W19 (unpushed doc commits) — repo scope
   {
     codes: ["W19"],

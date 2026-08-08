@@ -33,7 +33,7 @@ import { findProject as findHubProject } from "./seed.ts";
 import { detectRepoFacts } from "./team-edit.ts";
 import { claudeCliPermissions, DEVLOOP_PERMISSION, KAIZEN_PERMISSION } from "./team-init.ts";
 import * as metricsMod from "./metrics.ts";
-import { readLandingState } from "./landing.ts";
+import { readLandingState, defaultGhExec } from "./landing.ts";
 const require_metrics = () => metricsMod;
 import { DOCTOR_CHECKS, runScoped, isThenable, type DoctorCtx, type DoctorReport, type DoctorOut, type RepoCtx, type BoardCtx } from "./doctor-registry.ts";
 
@@ -1429,6 +1429,43 @@ export async function checkLandingW22Stall(
     }
   } catch { /* W22 is best-effort — never fails doctor */ }
   return stalledRepo;
+}
+
+// ── W38 (LOOP-407) — `mergeChecks` configured, but the forge cannot enforce them ──────────────────
+// EXTRACTED, not inlined, and the reason is mechanical: `doctorWorkspace` sits at CRAP 89.6 against
+// the gate's 90 (LOOP-348), so an inline branch here is a green local diff and a red pipeline. The
+// W20/W22/W33 helpers above were extracted for the same reason.
+//
+// What it catches: a repo declares required checks AND `autoMerge`, but its default branch carries no
+// branch protection — so `mergeChecks` is enforced ONLY by `dev-loop merge-guard` at Step 0.5, and
+// nothing forge-side withholds a merge. That is this workspace's standing state and it has produced
+// two incidents (LOOP-149 2026-07-31; LOOP-407 2026-08-06, where PR #246 merged during an Actions
+// outage having run neither configured check). Naming it once beats rediscovering it per incident.
+//
+// Best-effort and fail-OPEN, matching every other forge axis: only an explicit "Branch not protected"
+// answer warns. A missing `gh`, an unreachable forge, or a 403 from a token without admin scope all
+// leave the check silent — the guard never blocks on infrastructure, only on a real finding.
+export async function checkMergeChecksUnprotectedW38(
+  ws: Workspace,
+  opts: { exec?: import("./landing.ts").ExecFn },
+  warn: (m: string) => void,
+): Promise<void> {
+  if (process.env.DEVLOOP_DOCTOR_NO_FORGE === "1") return;
+  const exec = opts.exec ?? defaultGhExec;
+  for (const [ref, entry] of Object.entries(ws.file.repos)) {
+    if (entry.landing !== "pr" || !entry.autoMerge || !entry.mergeChecks?.length) continue;
+    const m = (entry.remote ?? "").match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
+    if (!m) continue; // not a GitHub remote — no protection API to consult
+    const ghRepo = m[1]!;
+    const branch = effectiveRepo(ws, ref).defaultBranch;
+    try {
+      const r = exec(["api", `repos/${ghRepo}/branches/${branch}/protection`]);
+      if (r.ok) continue; // protected — the forge can enforce
+      // The 404 body is the ONLY signal we act on; every other failure is infrastructure.
+      if (!/Branch not protected/i.test(`${r.stdout}\n${r.stderr}`)) continue;
+      warn(`[W38] [${ref}] repos.${ref}.mergeChecks declares ${entry.mergeChecks.length} required check(s) (${entry.mergeChecks.join(", ")}) with autoMerge on, but '${branch}' has NO branch protection — the forge cannot withhold a merge, so those checks are enforced only by \`dev-loop merge-guard\` at Step 0.5. A PR whose checks never dispatched reads mergeStateStatus:CLEAN and would merge unverified. Either protect the branch with those checks required (gh api -X PUT repos/${ghRepo}/branches/${branch}/protection …), or treat merge-guard as load-bearing and never merge on CLEAN alone.`);
+    } catch { /* W38 is best-effort — never fails doctor */ }
+  }
 }
 
 // Resolve hub/package.json 'files' to git-repo paths for the W18 code-commit pathspec.
