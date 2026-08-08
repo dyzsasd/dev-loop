@@ -160,9 +160,7 @@ try {
 
   // The two layers now agree, which is the whole point of sharing the predicate.
   {
-    const rows = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-      .all(pid) as unknown as Array<{ id: string; description: string; state: string }>;
-    const ids = designParentIds(db, pid, rows);
+    const ids = designParentIds(db, pid);
     ok(["DP-P1", "DP-P2", "DP-P3", "DP-P4", "DP-P5"].every((p) => isDesignParent({ id: p, description: "" }, ids)),
       "LOOP-344: every parent form resolves through the ONE shared predicate both layers call");
     ok(!isDesignParent({ id: "DP-ORD", description: "an ordinary bug" }, ids),
@@ -221,9 +219,7 @@ try {
   // Asserted directly on the predicate rather than through the queue: it is the shared input to
   // three gates, and each gate's own routing is already covered above.
   {
-    const parents = (): Set<string> => designParentIds(db, pid,
-      db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-        .all(pid) as unknown as Array<{ id: string; description: string; state: string }>);
+    const parents = (): Set<string> => designParentIds(db, pid);
 
     // The three-ticket fixture from the ticket: an owner, a child, and a bystander that merely
     // quotes the doc in a sentence. Before the fix all THREE came back as parents.
@@ -342,6 +338,50 @@ try {
       "LOOP-372: a `Design: parent <id>` naming no ticket on this board is not returned");
     ok(parents().has("DP-P1"),
       "LOOP-372: …while a `parent <id>` that DOES name a real ticket still resolves (the check bounds the route, it does not remove it)");
+  }
+
+  // ── LOOP-378: the two layers agree, because the predicate owns its row set ────────────────────
+  // The predicate used to take its rows as an ARGUMENT, and the callers disagreed: opQueue passed
+  // non-terminal rows, the three ticketwrite gates passed all of them. Every link the derivation
+  // walks is board-wide, so that did not narrow the answer — it CHANGED it, through BOUND 3, since
+  // whether a slug is CONTESTED is a property of the row set. Measured on the live board the two
+  // views shared not one parent (11 vs 1, disjoint).
+  //
+  // The fixture is the smallest shape that separates them: one slug, two candidate owners, one of
+  // them terminal.
+  //   • all rows          → 2 candidates → BOUND 3 → the slug resolves to NOBODY.
+  //   • non-terminal rows → 1 candidate  → the survivor resolves as its parent.
+  // So the survivor is a design parent to the queue and an ordinary qa-owned Bug to the close gate:
+  // pm.verify shows work that the write layer will only let qa close. That is LOOP-345's inversion
+  // arriving through the argument instead of through a second copy of the code.
+  //
+  // Asserted through BOTH layers on purpose. A predicate-only assertion cannot see a caller pass the
+  // wrong rows — which is the entire defect — so this drives opQueue's routing and the real
+  // In Review → Done write path, and checks they say the SAME thing.
+  {
+    mk("L378-DONE", "the ration design\n\nhubDoc:design/ration-engine is the doc", "Done", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L378-OPEN", "also names hubDoc:design/ration-engine while explaining the fix", "In Review", ["dev-loop", "Bug", "qa"]);
+    mk("L378-CHILD", "Design: hubDoc:design/ration-engine\n\nbuild it", "Todo", ["dev-loop"]);
+
+    // Layer 1 — the queue. The contest is visible board-wide, so L378-OPEN is NOT a design parent
+    // and routes to its qa owner. Under the old opQueue row set the terminal candidate vanished,
+    // L378-OPEN won the slug uncontested, and it routed to pm.verify instead.
+    ok(!inVerify("pm", "L378-OPEN"),
+      "LOOP-378: the queue does not call a ticket a design parent on a contest only its row set hid");
+    ok(inVerify("qa", "L378-OPEN"),
+      "LOOP-378: …it reaches its qa owner's verify queue, as an ordinary Bug");
+
+    // Layer 2 — the write gate, driven through the real save_issue path. It must reach the same
+    // verdict: not a design parent ⇒ the §21a close rule does not fire and the qa owner may close.
+    ok(setState("pm", "L378-OPEN", "Done").ok === false,
+      "LOOP-378: the close gate agrees it is not a design parent — pm does not inherit a design parent's close right over it");
+    ok(setState("qa", "L378-OPEN", "Done").ok === true,
+      "LOOP-378: …and its qa owner closes it normally, so both layers answer one question one way");
+
+    // The other direction: a slug uncontested in EVERY row set still resolves, so the fix bounds the
+    // divergence without costing a real parent its routing. DP-P2's owner is terminal-free.
+    ok(inVerify("pm", "DP-P2") && !inVerify("qa", "DP-P2"),
+      "LOOP-378: an uncontested design parent is unaffected — this removes a disagreement, not the route");
   }
 
   db.close();

@@ -257,7 +257,11 @@ function opQueue(db: DatabaseSync, projectId: string, actor: string): OpResult {
     // reaching the wrong verifier. It is shared rather than fixed in place because LOOP-345 keys an
     // AUTHORIZATION decision on the same question, and two copies of that is how a gate ends up
     // enforcing something different from what the queue displays.
-    const parentIds = designParentIds(db, projectId, open);
+    // LOOP-378 — derived from the WHOLE board, never from `open`. The reverse links are board-wide,
+    // so passing the non-terminal rows changed the answer rather than narrowing it: this queue and
+    // the ticketwrite close gate then disagreed about the same ticket. `open` still bounds what is
+    // DISPLAYED below; it no longer bounds what the predicate derives from.
+    const parentIds = designParentIds(db, projectId);
     const verify = byState("In Review").filter((t) =>
       actor === "pm"
         ? (isDesignParent(t, parentIds) || t.labels.includes("pm"))
