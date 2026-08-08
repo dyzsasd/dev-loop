@@ -1,15 +1,17 @@
-// dev-loop hub daemon — a persistent localhost HTTP read surface over the hub SoR (DL-1).
+// dev-loop hub daemon — a persistent localhost HTTP surface over the hub SoR (DL-1).
 //
-// READ-ONLY by construction: it opens the SAME node:sqlite DB the MCP server uses, sets
-// `PRAGMA query_only=ON` (a structural guarantee it can never write the system of record),
-// serves ONLY GET endpoints (any other method → 405), and never mutates tickets/docs/events.
-// Binds 127.0.0.1 ONLY (§16) — never 0.0.0.0, no external exposure.
+// Two connections: `db` (PRAGMA query_only=ON — that connection can never write) and
+// `writeDb` (a separate writable connection for the three POST write families below).
+// Serves GET endpoints plus three POST write families: doc save/publish (+ /roadmap
+// aliases), human ticket writes, and the DL-43 agent op-API — each behind its §6.2
+// gate; unmatched non-GET → 405. Binds 127.0.0.1 by default (§16); DEVLOOP_DAEMON_HOST
+// may widen the bind, requiring DEVLOOP_UI_TOKEN(_FILE) — see the bind-invariant
+// comment at the Host-allowlist guard for the full reasoning.
 //
 // The agents are UNCHANGED: they keep coordinating through the MCP server (`server.ts`); this is
 // an additive human-facing read surface, NOT a new coordinator (strategyDoc Decisions log,
 // 2026-06-23). DL-2 added a server-rendered web UI at `/` (board + ticket detail) and moved the
-// JSON API index to `/api`; the `/api/*` JSON endpoints are unchanged. Write paths (roadmap edit)
-// build on this later (DL-3).
+// JSON API index to `/api`; the `/api/*` JSON endpoints are unchanged.
 //
 // Zero native deps, zero build step (Node ≥23.6 type-stripping + built-in node:http/node:sqlite),
 // reusing the existing `db.ts` schema with NO schema fork (hub doctrine).
@@ -62,8 +64,7 @@ export interface DaemonOpts {
   // a /p/<key>/ path prefix re-resolves the project PER REQUEST, so one daemon serves every hub project.
   projectId: string;
   projectKey: string;
-  // DL-3 roadmap write surface (optional — absent ⇒ the daemon stays GET-only, exactly as DL-1/DL-2):
-  writeDb?: DatabaseSync;    // a SEPARATE writable connection used ONLY by the /roadmap/* write routes
+  writeDb?: DatabaseSync;    // a SEPARATE writable connection for the three write route families (doc, ticket, agent-op) — see SEAM 3a
   actor?: string;            // the daemon's identity — attributes writes + gates publish (operator-only)
   // DL-83: the repo-file strategyDoc PATH when the hub roadmap is NOT this project's north-star (no agent
   // reads it). Set ⇒ /roadmap shows a divergence banner; absent ⇒ no banner (hub-doc/director, or unknown).
