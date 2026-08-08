@@ -224,29 +224,29 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   that timestamp measured a different regime.
 
 
-### 2026-08-08 (pm, eighty-fifth fire): the breaker held the cadence, and three lanes died anyway
+### 2026-08-08 (pm, eighty-sixth fire): the page the operator is sent to cannot render what it is asked to approve
 
-**The product did not move** — `origin/main` advanced only by fire 84's own doc-land, so `a12bfab`
-stands and the rotation continued rather than resetting. Lens: **loop-reliability**, a rubric
-extension taken because this product IS the loop, so the running fleet is a review surface.
-Nothing pm-verifiable In Review (**LOOP-446** is an §9a investigation awaiting the OPERATOR, no
-verdict yet), `needs-pm` empty, `Human-Blocked` empty, §9c ten live edges and zero unparks due.
+**The product did not move** — `origin/main` stood at `b223a6c`, the SHA fire 85 recorded, so this
+fire opened the fresh rotation that fire 85 declared due. Lens: **ux-flows**, walking the operator's
+decision loop end to end — `doctor` → W20 → the prescribed ticket URL → the rendered page. Job A had
+nothing pm-verifiable (**LOOP-446** and **LOOP-448** both await the OPERATOR, no verdict on either);
+`needs-pm` empty on the board and on the `_team` carrier; §9c ten live edges, zero unparks due.
 
-**LOOP-447 filed — three of six agents produced nothing for 24–32 hours and no surface said so.**
-junior-dev 24 consecutive stalled fires over 31.8 h, sweep 22 / 28.6 h, qa 20 / 23.7 h, all on the
-one `openrouter/deepseek` lane from 2026-08-07T06:14Z. The breaker was **not** at fault: the measured
-launch gaps show it tripping exactly as designed — dense for four or five fires, then a clean
-~60–90 min probe cadence. What failed is that an open breaker is a console line and an optional
-comms ping, never a state anything can be asked about. `doctor` has no code for it (W31 warns about
-the *opposite* condition, a starved tier); `metrics` prints `stalled×87` with no per-agent grain or
-recency; the board renders no fire outcome at all (LOOP-380). Cost: 87 wedged fires, median 17 min
-each, ≈29 slot-hours returning nothing.
+**LOOP-449 filed — `renderMarkdown` is line-oriented, so the web UI cannot render a paragraph or a
+table.** One function (`hub/src/views/ui.ts:375`) emits one `<p>` per SOURCE LINE, has no arm for a
+pipe row, and applies inline transforms per line — so a wrapped paragraph shatters into fragments
+mid-sentence, a GFM table renders as literal pipes, and `**bold**` closed on the next line stays
+literal. Four call sites carry it: ticket descriptions, comments, the docs viewer, the §22 reports.
+Measured here — **137 of 429 ticket descriptions (32%) and 257 of 1899 comments (14%) carry a table;
+423 of 429 and 1123 of 1899 carry a wrapped paragraph** — with the counterweight stated: `STRATEGY.md`
+and all 40 report files have zero tables, so that half is carried by tickets and comments. It lands
+on the operator's own path: `doctor`'s NEXT line sends them to `/ticket/LOOP-446`, a §9a proposal
+whose findings table renders as pipe text.
 
-**The tier imbalance now has a measured cause.** Fire success over the last 700 fires: qa 82 %,
-pm 76 %, sweep 66 %, **junior-dev 55 %, senior-dev 55 %** — the two BUILDER tiers are the least
-reliable lanes, so junior's Backlog is deep because the lane draining it works half the time, not
-because PM over-files. The classes never cross: `stalled` only on opencode/deepseek,
-`budget-per-fire` only on claude/opus.
+**Job B2 was a hard no-op, and the reason is structural.** Backlog 20 of 20 junior-tier; junior Todo
+12/10, over cap; senior Todo 5/10 with **zero promotable senior-tier Backlog** — the exact condition
+`servableBacklogDepth` (LOOP-329) exists to report. Senior is not idle either: 12 In Progress, 11 of
+them senior, several since 08-06. §21b forbids re-tiering to balance load, so surface it, don't fix it.
 
 ## Personas
 
@@ -281,21 +281,20 @@ because PM over-files. The classes never cross: `stalled` only on opencode/deeps
 
 ## Decisions (running log)
 
-- **2026-08-08 (pm, eighty-fifth fire) — a control that CONTAINS a failure is not a control that
-  REPORTS it, and containment makes the silence worse.** The P0-1a breaker was built for a 48-hour
-  outage whose stated cost was *"discovered by reading metrics after the fact"*. It fixed the
-  cadence half and the discovery half recurred verbatim: three lanes dead 24–32 h, found only by
-  hand-reading the fire ledger (LOOP-447). Containment is what hid it — the probe cadence turned a
-  loud failure into a quiet one while the queues those agents own sat untouched. **The rule: every
-  control that acts on a condition must leave the condition ANSWERABLE — an event emitted once at
-  the transition is not a state, and a count without grain or recency is not either.** `stalled×87`
-  cannot distinguish 87 scattered flakes from three agents dead since yesterday, and those have
-  different remedies. **Corollary on method:** a finding that RESEMBLES a known defect must be tested
-  against the mechanism, not the resemblance. Three hypotheses died before one ticket was filed —
-  `stalled` is mislabelled like LOOP-445's budget kill (no: the watchdog measures real silence);
-  `stalled` belongs in `PROVIDER_SCOPED_CLASSES` (no: the per-agent breaker already trips);
-  `bootBytes: 0` on 1047 of 1063 rows is an unread surface (no: 0 is expected under pull-mode).
-  Filing on resemblance would have produced three wrong tickets aimed at working code.
+- **2026-08-08 (pm, eighty-sixth fire) — a surface is only exercised when it is READ THE WAY THE
+  READER READS IT, and four hypotheses died to prove it.** The decision-queue plumbing is correct at
+  every layer: `decisionEnteredAt` reads the real transition from the ledger (LOOP-108/207), the queue
+  holds both waiting items oldest-first, the URL `doctor` prescribes returns 200 under the
+  multi-project routing, and `servableTodoDepth` was right where I first read it as off by one (the
+  board had moved mid-fire — LOOP-444 left `Todo` after my `queue` call). Every *query* answered
+  correctly; what failed was the last inch, the RENDER of the thing the operator is asked to approve.
+  **The rule: verifying a flow by its API is not verifying the flow; open the page.** **Corollary on
+  attribution:** the live UI could not serve as evidence — the daemon runs a build older than
+  `origin/main`, W36 says the scheduler's is older still — so the measurement was taken by copying the
+  one source file to /tmp and importing it from a `probe.mjs` (no imports, Node 23.6 strips types).
+  **And the counterweight belongs in the ticket:** the measurement that found 32% of tickets carry a
+  table found zero in `STRATEGY.md` and across 40 reports. A finding that reports only its supporting
+  half is an argument, not a measurement.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
@@ -535,7 +534,9 @@ because PM over-files. The classes never cross: `stalled` only on opencode/deeps
     and its scope-boundary-is-a-claim ruling → block **AR**; still open from the two: **LOOP-440**,
     **LOOP-442**, **LOOP-443**. Extended by **pass 72** with the eighty-FOURTH fire's journal and
     ruling, plus the eighty-second fire's ruling — which pass 71's line claimed but did not roll —
-    → block **AS**; still open from that fire: **LOOP-444**, **LOOP-445**, **LOOP-446**.
+    → block **AS**; still open from that fire: **LOOP-444**, **LOOP-445**, **LOOP-446**. Extended by
+    **pass 73** with the eighty-FIFTH fire's journal and its containment-hides-the-condition ruling
+    → block **AT**; still open from it: **LOOP-447**.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
