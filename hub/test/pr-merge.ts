@@ -61,6 +61,13 @@ try {
     changesRequestedBy?: string;
     mergeOk?: boolean;
     mergeStderr?: string;
+    // The head SHA each read reports. Two knobs, not one, because the whole point of the
+    // --match-head-commit pin is the window in which they DIFFER: the checks ran on one revision and
+    // the merge would land another.
+    prHeadSha?: string;       // what `pr view` (readiness) reports
+    ciHeadSha?: string;       // what the check-rollup read reports — the SHA the checks ran on
+    compareOk?: boolean;      // false ⇒ the compare call fails ⇒ readCiFreshness degrades to `unknown`
+    files?: string[];         // the compare delta's filenames — an EMPTY list is fail-closed, never exempt
   };
 
   // A STRICT double: it answers exactly the seven gh calls this flow makes and refuses anything
@@ -78,8 +85,11 @@ try {
           ? { ok: false, stdout: "", stderr: s.mergeStderr ?? "gh: merge failed" }
           : { ok: true, stdout: "", stderr: "" };
       }
-      if (fields === "state,isDraft,mergeable") {
-        return json({ state: s.state ?? "OPEN", isDraft: s.isDraft ?? false, mergeable: s.mergeable ?? "MERGEABLE" });
+      if (fields === "state,isDraft,mergeable,headRefOid") {
+        return json({
+          state: s.state ?? "OPEN", isDraft: s.isDraft ?? false, mergeable: s.mergeable ?? "MERGEABLE",
+          headRefOid: s.prHeadSha ?? "head000",
+        });
       }
       // The guard's --apply path re-reads `state` on its own (LOOP-216: never post an objection on a
       // PR that already landed). Two calls, one field — left as-is rather than threading a cached
@@ -98,13 +108,20 @@ try {
         });
       }
       if (fields === "headRefOid,statusCheckRollup") {
-        return json({ headRefOid: "head000", statusCheckRollup: s.rollup ?? greenRollup });
+        return json({ headRefOid: s.ciHeadSha ?? "head000", statusCheckRollup: s.rollup ?? greenRollup });
       }
       if (args[0] === "api" && args[1] === "graphql") {
         return json({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
       }
       if (args[0] === "api" && args[1]?.startsWith(`/repos/${GHREPO}/compare/`)) {
-        return json({ behind_by: s.behindBy ?? 0, base_commit: { sha: "tip999" }, files: [] });
+        // A failing compare is the real degrade path readCiFreshness has: the rollup read fine, so
+        // the axis is EVALUATED, but freshness against the tip could not be computed ⇒ `unknown`.
+        if (s.compareOk === false) return { ok: false, stdout: "", stderr: "gh: 502 Bad Gateway" };
+        return json({
+          behind_by: s.behindBy ?? 0, base_commit: { sha: "tip999" },
+          files: (s.files ?? []).map((filename) => ({ filename })),
+          total_commits: 1, commits: [{}],
+        });
       }
       refused.push(args);
       return { ok: false, stdout: "", stderr: `unexpected gh call: ${args.join(" ")}` };
@@ -133,11 +150,11 @@ try {
     // The pinned argv. `--repo` is explicit because this verb inherits merge-guard's
     // cwd-independence (LOOP-300 AC3) and a bare `gh pr merge` only works inside the repo — it
     // would gate correctly from the workspace root and then fail to land.
-    const want = ["pr", "merge", "101", "--repo", GHREPO, "--squash", "--delete-branch"];
+    const want = ["pr", "merge", "101", "--repo", GHREPO, "--squash", "--delete-branch", "--match-head-commit", "head000"];
     ok(JSON.stringify(m[0]) === JSON.stringify(want),
-      `AC2: the argv is the Step 0.5 squash — ${JSON.stringify(want)} (got ${JSON.stringify(m[0])})`);
+      `AC2: the argv is the Step 0.5 squash, pinned to the judged head — ${JSON.stringify(want)} (got ${JSON.stringify(m[0])})`);
     ok(JSON.stringify(r.mergeArgv) === JSON.stringify(want), "AC2: the result reports the argv it issued");
-    ok(JSON.stringify(mergeArgvFor(PR, GHREPO)) === JSON.stringify(want), "AC2: mergeArgvFor is that same one definition, not a second spelling");
+    ok(JSON.stringify(mergeArgvFor(PR, GHREPO, "head000")) === JSON.stringify(want), "AC2: mergeArgvFor is that same one definition, not a second spelling");
     ok(refused.length === 0, `AC2: the double was asked nothing it was not written for — it refuses unknown argv, so an arm cannot pass on an accommodating mock (refused: ${refused.map((c) => c.join(" ")).join("; ") || "none"})`);
   }
 
@@ -347,6 +364,99 @@ try {
         if (v === undefined) delete process.env[k]; else process.env[k] = v;
       }
     }
+  }
+
+  // ── Review of this PR, finding 1: an EVALUATED-but-uncertified CI axis must hold ───────────────
+  //
+  // `readCiFreshness` degrades to verdict `unknown` whenever the rollup read or the compare call
+  // fails (hub/src/landing.ts) — and `unknown` does not TRIP the guard, deliberately: §3.4 says a
+  // forge outage must not become a merge freeze for an advisory gate. But the axis is not SKIPPED
+  // either, so `unevaluatedHold` sees an evaluated run and, before the fix, the verb went straight
+  // on to squash. The forge that failed the compare call can still answer the merge endpoint, so an
+  // unverified head lands — the exact merge this verb exists to refuse.
+  //
+  // The fix is an allowlist (`fresh-green` / `stale-exempt`) rather than a blocklist of bad
+  // verdicts, so a verdict added to CiFreshnessVerdict later fails CLOSED instead of silently
+  // re-opening this hole. These arms pin both halves of that.
+  //
+  // FAIL-BEFORE / PASS-AFTER: `node hub/test/pr-merge.ts`. Reverting holdsFrom's ciFreshness branch
+  // to the old `else if (cf.verdict === "pending")` shape gives `merges=1, exit=0` here — the
+  // unverified squash itself — and these checks fail; with the allowlist, `merges=0, exit=1`.
+  {
+    const unk = run({ ticket: "PM-1", compareOk: false }, { apply: false });
+    ok(unk.r.guard?.ciFreshness.skipped === false,
+      "ci-unknown: the axis RAN — this is not the skipped/degraded case, which has its own rule");
+    ok(unk.r.guard?.ciFreshness.verdict === "unknown",
+      `ci-unknown: a failed compare degrades the verdict to 'unknown' (got '${unk.r.guard?.ciFreshness.verdict}')`);
+    ok(unk.r.guard?.ciFreshness.trip === false,
+      "ci-unknown: …and it still does NOT trip the guard — §3.4's fail-open for an outage is unchanged");
+    ok(unk.exit === PR_MERGE_EXIT.held,
+      `ci-unknown: but the VERB holds — 'not an objection' is not 'may be merged' (got exit ${unk.exit})`);
+    ok(mergeCalls(unk.calls).length === 0, "ci-unknown: NO merge subprocess was issued");
+    ok(unk.r.holds.length === 1 && unk.r.holds[0]?.token === "unknown",
+      `ci-unknown: the hold names the verdict, so the remedy is readable (got ${unk.r.holds.map((h) => h.token).join("+") || "none"})`);
+    ok(/never certified green/.test(unk.r.holds[0]?.detail ?? ""),
+      `ci-unknown: …and says what is missing rather than asserting a failure (got: ${unk.r.holds[0]?.detail})`);
+
+    // The allowlist is the gate: `stale-exempt` — behind the tip, but every file in the delta is
+    // configured CI-irrelevant — is a POSITIVE certification and still merges. Without this control
+    // the arms above would pass equally well if the fix had simply frozen every merge.
+    const exempt = (() => {
+      const { exec, calls } = mkExec({ ticket: "PM-1", behindBy: 2, files: ["docs/STRATEGY.md"] });
+      const r = prMerge(repoDir, {
+        pr: PR, ghRepo: GHREPO, dbPath, exec, agentReviewers: [], apply: false,
+        mergeChecks: CHECKS, defaultBranch: "main", repoEligible: true, ciIrrelevantPaths: ["docs/"],
+      });
+      return { r, merges: mergeCalls(calls).length, exit: prMergeExit(r) };
+    })();
+    ok(exempt.r.guard?.ciFreshness.verdict === "stale-exempt",
+      `ci-unknown control: a CI-irrelevant delta reads 'stale-exempt' (got '${exempt.r.guard?.ciFreshness.verdict}')`);
+    ok(exempt.merges === 1 && exempt.exit === PR_MERGE_EXIT.merged,
+      `ci-unknown control: …and STILL merges — the allowlist admits it, so the holds above are the verdict talking, not a freeze (merges=${exempt.merges}, exit=${exempt.exit})`);
+  }
+
+  // ── Review of this PR, finding 2: the squash is pinned to the head the gate judged ─────────────
+  //
+  // The axes read a head SHA and its checks; the squash is a separate forge call seconds later. A
+  // push landing in that window merges a head no axis ever saw, and this project has NO forge-side
+  // required-check protection by design (§12c: it deadlocks the release pipeline's deploy/* PRs), so
+  // nothing else would catch it. `--match-head-commit` makes the FORGE refuse that.
+  //
+  // FAIL-BEFORE / PASS-AFTER: `node hub/test/pr-merge.ts`. Dropping the flag from mergeArgvFor gives
+  // an argv with no SHA precondition and these checks fail.
+  {
+    const { r, calls } = run({ ticket: "PM-1", prHeadSha: "head000", ciHeadSha: "head000" }, { apply: false });
+    const argv = mergeCalls(calls)[0] ?? [];
+    const i = argv.indexOf("--match-head-commit");
+    ok(i > -1 && argv[i + 1] === "head000",
+      `head-pin: the squash carries --match-head-commit <judged SHA> (got ${JSON.stringify(argv)})`);
+    ok(r.merged, "head-pin: …and a matching head still merges normally");
+
+    // Which SHA, when the two reads disagree: the one the CHECKS ran on. `testedHead` is the
+    // revision the CI axis certified; the readiness read is a different call and can already be
+    // looking at a newer head. Pinning to the readiness SHA would authorise a revision no check
+    // covered — the same hole, one call later.
+    const moved = run({ ticket: "PM-1", prHeadSha: "newerHead", ciHeadSha: "checkedHead" }, { apply: false });
+    const margv = mergeCalls(moved.calls)[0] ?? [];
+    ok(margv[margv.indexOf("--match-head-commit") + 1] === "checkedHead",
+      `head-pin: the pin is the CHECKED head, not whatever the readiness read saw (got ${JSON.stringify(margv)})`);
+
+    // Fallback: with the CI axis skipped there is no certified SHA, but a mid-flight push is still
+    // not something to land silently — the readiness head pins it.
+    const { exec, calls: c2 } = mkExec({ ticket: "PM-1", prHeadSha: "readinessHead" });
+    prMerge(repoDir, {
+      pr: PR, ghRepo: GHREPO, dbPath, exec, agentReviewers: [], apply: false,
+      mergeChecks: CHECKS, defaultBranch: "main", repoEligible: false,   // ⇒ ciFreshness skipped, testedHead null
+    });
+    const fargv = mergeCalls(c2)[0] ?? [];
+    ok(fargv[fargv.indexOf("--match-head-commit") + 1] === "readinessHead",
+      `head-pin: a skipped CI axis falls back to the readiness head rather than dropping the pin (got ${JSON.stringify(fargv)})`);
+
+    // And with no SHA at all the flag is omitted rather than emitted empty — an empty
+    // --match-head-commit would be a usage error against the real gh, turning every such merge into
+    // a spurious exit 4.
+    ok(!mergeArgvFor(PR, GHREPO, null).includes("--match-head-commit"),
+      `head-pin: no known SHA ⇒ no flag, never an empty one (got ${JSON.stringify(mergeArgvFor(PR, GHREPO, null))})`);
   }
 
   // ── AC5: merge-guard's exit contract is not renumbered ─────────────────────────────────────────

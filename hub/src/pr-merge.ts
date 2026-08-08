@@ -80,9 +80,27 @@ export const PR_MERGE_EXIT = {
 // repo registry), and a `gh pr merge` without --repo only works when the cwd IS the repo — the verb
 // would then gate correctly from the workspace root and fail to land. `--delete-branch` is kept:
 // §12c requires it ("feature branches must not pile up").
-export function mergeArgvFor(pr: number | string, ghRepo: string): string[] {
-  return ["pr", "merge", String(pr), "--repo", ghRepo, "--squash", "--delete-branch"];
+//
+// `--match-head-commit` is what makes the gate's verdict apply to the revision it actually judged.
+// The axes read a head SHA and its checks; the squash is a SEPARATE forge call some seconds later.
+// A push landing in that window merges a head no axis ever saw — and this project deliberately has
+// NO forge-side required-check protection (§12c: required-check gating deadlocks the release
+// pipeline's GITHUB_TOKEN-created deploy/* PRs), so nothing else would catch it. The flag makes the
+// forge itself refuse a head that moved, which surfaces as `mergeFailed` (exit 4) and re-gates from
+// scratch on the next fire — the correct outcome, since the new head has not been judged.
+export function mergeArgvFor(pr: number | string, ghRepo: string, headSha?: string | null): string[] {
+  return [
+    "pr", "merge", String(pr), "--repo", ghRepo, "--squash", "--delete-branch",
+    ...(headSha ? ["--match-head-commit", headSha] : []),
+  ];
 }
+
+// The ONLY ciFreshness verdicts that let the squash proceed — an allowlist, deliberately (see the
+// ciFreshness branch in holdsFrom). `fresh-green`: checks green against the current tip.
+// `stale-exempt`: behind the tip, but every file in the delta is configured CI-irrelevant, so
+// re-verifying could not change a check result (LOOP-323). Every other verdict — including the ones
+// the guard does not TRIP on — holds this call.
+const CI_VERDICT_CLEARS_SQUASH: ReadonlySet<string> = new Set(["fresh-green", "stale-exempt"]);
 
 function holdsFrom(g: MergeGuardResult): PrMergeHold[] {
   const holds: PrMergeHold[] = [];
@@ -111,16 +129,29 @@ function holdsFrom(g: MergeGuardResult): PrMergeHold[] {
       token: cf.verdict ?? "unknown",
       detail: `PR CI verdict=${cf.verdict ?? "unknown"}${cf.reason ? ` (${cf.reason})` : ""}`,
     });
-  } else if (!cf.skipped && cf.verdict === "pending") {
-    // `pending` deliberately does NOT trip the guard — tripping would objection-spam every open PR
-    // whenever CI is merely slow (LOOP-407). But "not an objection" is not "may be merged": the
-    // checks have not reported SUCCESS, and merging now is precisely the unverified merge this whole
-    // ticket exists to prevent. It holds HERE, where the squash lives, and writes nothing to the
-    // board — §12c's "pending ⇒ leave it for the next fire", enforced instead of instructed.
+  } else if (!cf.skipped && !CI_VERDICT_CLEARS_SQUASH.has(cf.verdict ?? "unknown")) {
+    // An evaluated axis that did not trip is still not permission to squash. The guard's TRIP set is
+    // deliberately narrow — `pending` and `unknown` do not trip, because tripping would objection-spam
+    // every open PR whenever CI is merely slow (LOOP-407) or the forge blinked (§3.4: a gate must not
+    // become a merge freeze). But "not an objection" is not "may be merged", and this is the call that
+    // performs the squash: it may proceed only on a verdict that POSITIVELY certifies the checks.
+    //
+    // So the allowlist above is the gate, not a blocklist of known-bad verdicts. `unknown` is the
+    // reason it is written that way: `readCiFreshness` degrades to it whenever the rollup read or the
+    // compare call fails (hub/src/landing.ts) — the checks were never certified against the tip — yet
+    // `gh pr merge` against the same forge can still succeed, landing exactly the unverified merge
+    // this ticket exists to prevent. A blocklist also silently re-opens the hole every time a new
+    // verdict is added to CiFreshnessVerdict; an allowlist fails closed on one by construction.
+    //
+    // These hold WITHOUT writing to the board: they are states of the world, not objections anyone
+    // must answer — §12c's "pending ⇒ leave it for the next fire", enforced instead of instructed.
+    const v = cf.verdict ?? "unknown";
     holds.push({
       axis: "ciFreshness",
-      token: "pending",
-      detail: `PR CI verdict=pending${cf.reason ? ` (${cf.reason})` : ""} — leave it for the next fire`,
+      token: v,
+      detail: v === "pending"
+        ? `PR CI verdict=pending${cf.reason ? ` (${cf.reason})` : ""} — leave it for the next fire`
+        : `PR CI verdict=${v}${cf.reason ? ` (${cf.reason})` : ""} — the checks were never certified green against the tip, so nothing has cleared this squash`,
     });
   }
   return holds;
@@ -130,19 +161,23 @@ function holdsFrom(g: MergeGuardResult): PrMergeHold[] {
 // whether the PR is already merged (which is not a hold — see PrMergeResult.alreadyMerged).
 function readinessHolds(
   exec: ExecFn, pr: number | string, ghRepo: string,
-): { holds: PrMergeHold[]; alreadyMerged: boolean; read: boolean } {
-  let data: { state?: string; isDraft?: boolean; mergeable?: string };
+): { holds: PrMergeHold[]; alreadyMerged: boolean; read: boolean; headSha: string | null } {
+  let data: { state?: string; isDraft?: boolean; mergeable?: string; headRefOid?: string };
   try {
-    const r = exec(["pr", "view", String(pr), "--repo", ghRepo, "--json", "state,isDraft,mergeable"]);
-    if (!r.ok) return { holds: [], alreadyMerged: false, read: false };
+    // `headRefOid` rides this existing read rather than costing a call of its own: it is the head the
+    // gate is about to judge, and the fallback SHA for the merge's --match-head-commit pin when the
+    // CI axis was skipped and so reported no testedHead of its own.
+    const r = exec(["pr", "view", String(pr), "--repo", ghRepo, "--json", "state,isDraft,mergeable,headRefOid"]);
+    if (!r.ok) return { holds: [], alreadyMerged: false, read: false, headSha: null };
     data = JSON.parse(r.stdout) as typeof data;
   } catch {
     // Unreadable: do NOT invent a hold. The guard's axes read the same forge and have their own
     // degrade rules (§3.4 — an outage must not become a merge freeze), and if everything degrades the
     // merge attempt itself fails against that same forge and surfaces as mergeFailed.
-    return { holds: [], alreadyMerged: false, read: false };
+    return { holds: [], alreadyMerged: false, read: false, headSha: null };
   }
-  if (data.state === "MERGED") return { holds: [], alreadyMerged: true, read: true };
+  const headSha = data.headRefOid ?? null;
+  if (data.state === "MERGED") return { holds: [], alreadyMerged: true, read: true, headSha };
   const holds: PrMergeHold[] = [];
   if (data.state && data.state !== "OPEN") {
     holds.push({ axis: "readiness", token: "pr-not-open", detail: `PR state is ${data.state} — there is nothing to land` });
@@ -158,7 +193,7 @@ function readinessHolds(
     // a transient recompute, not an outage, so no fail-open exception applies.
     holds.push({ axis: "readiness", token: "mergeability-unknown", detail: `PR mergeability is ${data.mergeable} — the forge has not computed it yet; re-run once it settles` });
   }
-  return { holds, alreadyMerged: false, read: true };
+  return { holds, alreadyMerged: false, read: true, headSha };
 }
 
 export function prMerge(
@@ -220,7 +255,12 @@ export function prMerge(
   const hold = unevaluatedHold(guard);
   if (hold) return { ...base, guard, unevaluated: hold };
 
-  const mergeArgv = mergeArgvFor(opts.pr, ghRepo);
+  // Pin the squash to the revision the gate judged. The CI axis's `testedHead` is the strongest
+  // answer — it is the SHA the checks actually ran on — so it wins; the readiness read's headRefOid
+  // is the fallback for a skipped CI axis (repo-not-automerge / no-merge-checks), where there is no
+  // certified SHA but a mid-flight push is still not something to land silently.
+  const pinnedHead = guard.ciFreshness.testedHead ?? readiness.headSha;
+  const mergeArgv = mergeArgvFor(opts.pr, ghRepo, pinnedHead);
   try {
     const r = exec(mergeArgv);
     if (!r.ok) return { ...base, guard, mergeArgv, mergeError: (r.stderr || r.stdout || "gh pr merge failed").trim().split("\n")[0]! };
@@ -273,6 +313,12 @@ This is \`merge-guard --strict --apply\` AND \`gh pr merge --squash --delete-bra
 operation: the guard's three axes (board state, forge review, CI freshness) run inside this call
 and the squash happens only when they all clear. There is no argv that skips the gate — that
 skippability is what let a fire merge past a correct hold and break main (LOOP-423).
+
+The squash carries \`--match-head-commit <the SHA the checks ran on>\`, so a push that lands
+between the gate's read and the merge cannot slip an unjudged head past it (this project has no
+forge-side required-check protection by design). Only a verdict that positively certifies the
+checks — \`fresh-green\` or \`stale-exempt\` — clears the squash; \`pending\` and \`unknown\`
+HOLD without writing to the board, since neither is evidence the checks passed.
 
 A hold names EVERY axis that objected, one line each with a machine token
 (board-not-merge-eligible | unresolved-review | check-never-reported | stale | red), because the
@@ -343,6 +389,9 @@ if (isMainEntry(import.meta.url)) {
     console.error(`pr merge: ⛔ COULD NOT EVALUATE — no axis ran (${result.unevaluated}); PR #${pr} was NOT merged. A gate that checked nothing has not cleared anything: fix the invocation (--repo <dir> / --ticket <id>) and re-run.`);
   } else if (result.mergeError) {
     console.error(`pr merge: the gate CLEARED but \`gh ${result.mergeArgv?.join(" ")}\` failed — ${result.mergeError}`);
+    if (/head.*match|match.*head|not match/i.test(result.mergeError)) {
+      console.error("  The PR head moved after the gate read it, so --match-head-commit refused the squash. That is the pin working: the new head has not been judged. Re-run this verb to gate the new head.");
+    }
   } else {
     console.log(`pr merge: ✅ gate clear on all evaluated axes — PR #${pr} squashed and its branch deleted`);
   }
