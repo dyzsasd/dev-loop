@@ -64,6 +64,14 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "merge-guard":    ["merge-guard"],               // LOOP-64+67: forge review (§3.1/§3.2) + board-state (§3.3) axes — trip on human CHANGES_REQUESTED or non-merge-eligible ticket (design: merge-review-guard)
   pr:               ["pr-merge"],                  // LOOP-444: `pr merge <n>` — the guard's three axes AND the squash as ONE call, so a skipped gate is not an available argv
   "doc-land":       ["doc-land"],                  // LOOP-57: land PM's doc-only strategyDoc commits to origin/<defaultBranch> ff-only (design: landing-discipline §4.6)
+  // LOOP-392 (approvals C2): typed human authorization the system can consult. approve/revoke are
+  // FIRE-REFUSED inside approvals-cli.ts (design §2) — the property every consumer of an approval rests
+  // on; request/approvals are agent-callable. Deliberately ABSENT from ATTACH_OK below: they are
+  // direct-db verbs, so over an attach they would silently write the LOCAL board.
+  approve:          ["approvals-cli", "approve"],
+  revoke:           ["approvals-cli", "revoke"],
+  approvals:        ["approvals-cli", "approvals"],
+  request:          ["approvals-cli", "request"],
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
   // via `node hub/src/release-version.ts <semver>` (Codex review 2026-06-27).
@@ -121,6 +129,16 @@ Usage: dev-loop <command> [args]
                               nothing evaluable · 4 gate clear but the squash failed
   doc-land [--repo <ref>] [--dry-run]   land PM's doc-only strategyDoc progress commits to origin/<defaultBranch>
                               ff-only (design: landing-discipline §4.6; LOOP-57)
+  approve <key> [--expires 24h|never] [--note T] [--project K|--workspace] [--json]
+  approve --request <approval-id> […]   grant a typed approval — OPERATOR-ONLY, refused inside an agent
+                              fire: an approval a fire could grant itself would authorise nothing (LOOP-392)
+  revoke <key|approval-id> [--note T] [--json]   end one early (operator-only, refused inside a fire)
+  approvals [--key K] [--state S] [--project K|--workspace|--all] [--json]   list them, state derived at
+                              read time — read-only, agent-callable, ledgers nothing
+  request <key> --ticket <id> [--note T]   file a typed request for an approval this caller cannot grant
+                              itself — agent-callable, authorises nothing, and nothing waits on it
+                              (an action key names an END STATE: push:main:<sha>, never push:main —
+                              run \`dev-loop approve --help\` for the grammar)
   init-service <key> <name> <PREFIX>   (legacy) turnkey-bootstrap a service project — start at \`init\`/\`up\` instead
   run [--background] [--cli claude|codex|opencode] [--agents core,outward]   schedule agents by calling the
                               selected CLI; --background detaches (log → .dev-loop/run.log), \`stop\` ends it
@@ -178,7 +196,8 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror",
-  "worktree", "merge-guard", "pr", "doc-land"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard
+  "worktree", "merge-guard", "pr", "doc-land",
+  "approve", "revoke", "approvals", "request"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard; the approvals verbs read/write the approvals table
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {
