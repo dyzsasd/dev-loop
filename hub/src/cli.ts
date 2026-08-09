@@ -132,7 +132,9 @@ Usage: dev-loop <command> [args]
   approve <key> [--expires 24h|never] [--note T] [--project K|--workspace] [--json]
   approve --request <approval-id> […]   grant a typed approval — OPERATOR-ONLY, refused inside an agent
                               fire: an approval a fire could grant itself would authorise nothing (LOOP-392)
-  revoke <key|approval-id> [--note T] [--json]   end one early (operator-only, refused inside a fire)
+  revoke <key|approval-id> [--note T] [--project K|--workspace] [--json]   end one early (operator-only,
+                              refused inside a fire). A KEY resolves within the scope only — another
+                              project's grant is not yours to end from here
   approvals [--key K] [--state S] [--project K|--workspace|--all] [--json]   list them, state derived at
                               read time — read-only, agent-callable, ledgers nothing
   request <key> --ticket <id> [--note T]   file a typed request for an approval this caller cannot grant

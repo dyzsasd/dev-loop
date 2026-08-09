@@ -88,13 +88,20 @@ dev-loop approve --request <approval-id> [--expires …] [--note …] [--json]
                    standing capability, which is the thing the key grammar exists to prevent.
   --workspace      scope the grant to the whole workspace (covers every project) rather than one.`,
 
-    revoke: `dev-loop revoke <key|approval-id> [--note <text>] [--project <key>] [--json]
+    revoke: `dev-loop revoke <key|approval-id> [--note <text>] [--project <key>|--workspace] [--json]
 
   End an approval early. OPERATOR-ONLY: refused inside an agent fire, for the same reason approve is.
 
-  <key> resolves to the one live (requested or granted) approval for that key; when several match,
-  the ids are listed and you pass the one you mean. An already terminal approval is not revocable —
-  there is nothing left to end.`,
+  <key> resolves to the one live (requested or granted) approval for that key WITHIN THE RESOLVED
+  SCOPE — the booted project (or --project) plus workspace-scoped grants, exactly what 'dev-loop
+  approvals' lists. Another project's grant is not yours to end from here. When several match, the
+  ids are listed and you pass the one you mean.
+
+  --workspace      resolve the key among workspace-scoped grants only.
+  <approval-id>    names one row directly, and already carries its scope: --project/--workspace are
+                   refused with an id rather than silently ignored.
+
+  An already terminal approval is not revocable — there is nothing left to end.`,
 
     approvals: `dev-loop approvals [--key <key>] [--state <state>] [--project <key>|--workspace|--all]
                    [--json]
@@ -161,12 +168,35 @@ export function parseArgs(argv: readonly string[]): Parsed {
       continue;
     }
     if (!VALUE_FLAGS.has(name)) return { positional, flags, error: `unknown flag '--${name}'` };
-    const value = eq >= 0 ? a.slice(eq + 1) : argv[++i];
+    if (eq >= 0) { flags[name] = a.slice(eq + 1); continue; }
+    const value = argv[i + 1];
     if (value === undefined) return { positional, flags, error: `--${name} needs a value` };
+    // A dangling flag whose neighbour is another option must NOT swallow it: `request <key> --ticket
+    // --workspace` would otherwise record "--workspace" as the ticket AND lose the scope flag, writing
+    // a row with a value and a scope the caller never asked for. Refuse instead — the `=` form stays
+    // available for the rare value that genuinely begins with `--`.
+    if (value.startsWith("--")) {
+      return { positional, flags, error: `--${name} needs a value, but the next argument is the flag '${value}' (write --${name}=<value> if the value really starts with '--')` };
+    }
     flags[name] = value;
+    i++;
   }
   return { positional, flags, error: null };
 }
+
+/**
+ * Which flags each verb accepts. The parser recognises the UNION of all four verbs' flags (one lexer,
+ * four verbs), and each handler reads only the fields it consumes — so without this table a flag meant
+ * for another verb parses cleanly and is then read by nobody, and the caller is told nothing. That is
+ * the same failure the mutually-exclusive shapes below refuse rather than resolve by precedence: a
+ * silently-discarded flag lets the operator believe they wrote something they did not.
+ */
+export const VERB_FLAGS: Record<Verb, ReadonlySet<string>> = {
+  approve: new Set(["expires", "note", "ticket", "project", "workspace", "request", "json", "help"]),
+  revoke: new Set(["note", "project", "workspace", "json", "help"]),
+  approvals: new Set(["key", "state", "project", "workspace", "all", "json", "help"]),
+  request: new Set(["ticket", "note", "project", "workspace", "json", "help"]),
+};
 
 const str = (f: Record<string, string | true>, k: string): string | undefined =>
   typeof f[k] === "string" ? (f[k] as string) : undefined;
@@ -190,6 +220,15 @@ function resolveScope(db: DatabaseSync, flags: Record<string, string | true>): S
   if (!id) return `unknown project '${key}' — it is not seeded in this workspace's board`;
   return { projectId: id, label: key };
 }
+
+/**
+ * The rows a scope can see: its own project's, plus workspace-scoped rows, which cover every project
+ * by definition. ONE predicate, shared by the listing and by revoke's key resolution — a revoke that
+ * searched wider than the listing showed would end an authorization the operator never saw, in a
+ * project they did not name.
+ */
+const inScope = (scope: Scope) => (r: { project_id: string | null }): boolean =>
+  scope.projectId === null ? r.project_id === null : r.project_id === scope.projectId || r.project_id === null;
 
 // ─── rendering ────────────────────────────────────────────────────────────────────────────────────
 const fmt = (r: ApprovalListItem): string => {
@@ -248,6 +287,17 @@ export function approvalsCmd(argv: readonly string[] = process.argv.slice(2)): n
     }
   }
 
+  // Checked AFTER the invariant on purpose: inside a fire, `approve`/`revoke` must answer with the
+  // refusal above whatever flags were typed, never with a usage note that reads like the flags were
+  // the only problem.
+  const stray = Object.keys(flags).filter((f) => !VERB_FLAGS[v].has(f));
+  if (stray.length) {
+    const list = stray.map((f) => `--${f}`).join(", ");
+    console.error(`dev-loop ${v}: ${list} ${stray.length > 1 ? "do" : "does"} not apply to '${v}' — ${stray.length > 1 ? "they would be" : "it would be"} parsed and then read by nobody`);
+    usage(v);
+    return 2;
+  }
+
   let db: DatabaseSync;
   try { db = openDb(resolveHubDbPath()); }
   catch (e) { console.error(`dev-loop ${v}: cannot open the board — ${(e as Error).message}`); return 5; }
@@ -301,10 +351,7 @@ function listVerb(
     if (typeof scope === "string") { console.error(`dev-loop approvals: ${scope}`); return 2; }
     // A workspace-scoped grant covers every project by definition, so a project listing that hid one
     // would misreport what is in force here. `--workspace` narrows to workspace rows only.
-    const rows = listApprovals(db, { actionKey: key, now });
-    items = scope.projectId === null
-      ? rows.filter((r) => r.project_id === null)
-      : rows.filter((r) => r.project_id === scope.projectId || r.project_id === null);
+    items = listApprovals(db, { actionKey: key, now }).filter(inScope(scope));
     label = scope.projectId === null ? "workspace scope" : `project ${scope.label} (+ workspace-scoped)`;
   }
   if (state !== undefined) items = items.filter((i) => i.state === state);
@@ -395,19 +442,34 @@ function revokeVerb(
   // shapes are told apart by the grammar itself rather than by a flag the caller must remember.
   const parsed = parseActionKey(target);
   if (!parsed.ok) {
+    // An explicit id names ONE row, which already carries its scope. A scope flag passed alongside it
+    // could only be silently ignored — the shape `approve --request` refuses rather than resolves by
+    // precedence, for the same reason: the caller would believe they had constrained the write.
+    for (const [flag, given] of [["--project", str(flags, "project") !== undefined], ["--workspace", flags.workspace === true]] as const) {
+      if (given) {
+        console.error(`dev-loop revoke: ${flag} does not apply to an explicit approval id — the row it names already carries its scope; pass the KEY to revoke within a scope`);
+        return 2;
+      }
+    }
     const row = revokeApproval(db, target, actor, note); // not-found ⇒ ApprovalError ⇒ exit 1
     emit(withState(row, db), json, `revoked ${row.action_key}`);
     return 0;
   }
 
+  // Key resolution is SCOPED (the same predicate the listing uses). Unscoped, `revoke <key> --project a`
+  // matched every project's row for that key and ended one belonging to project b — cancelling an
+  // authorization in a project the operator never named, which they would then believe was still in force.
+  const scope = resolveScope(db, flags);
+  if (typeof scope === "string") { console.error(`dev-loop revoke: ${scope}`); return 2; }
   const live = listApprovals(db, { actionKey: parsed.parsed.key, now })
+    .filter(inScope(scope))
     .filter((r) => r.state === "requested" || r.state === "granted");
   if (!live.length) {
-    console.error(`dev-loop revoke: no live approval for ${JSON.stringify(parsed.parsed.key)} — nothing to revoke (see: dev-loop approvals --key ${parsed.parsed.key} --all)`);
+    console.error(`dev-loop revoke: no live approval for ${JSON.stringify(parsed.parsed.key)} in ${scope.label} scope — nothing to revoke (see: dev-loop approvals --key ${parsed.parsed.key} --all)`);
     return 1;
   }
   if (live.length > 1) {
-    console.error(`dev-loop revoke: ${live.length} live approvals share the key ${JSON.stringify(parsed.parsed.key)} — pass the one you mean by id:`);
+    console.error(`dev-loop revoke: ${live.length} live approvals share the key ${JSON.stringify(parsed.parsed.key)} in ${scope.label} scope — pass the one you mean by id:`);
     for (const r of live) console.error(fmt(r));
     return 2;
   }

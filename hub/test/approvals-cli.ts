@@ -16,7 +16,7 @@ import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
 import { listApprovals, type ApprovalListItem } from "../src/approvals.ts";
 import { TOKEN_PREFIX } from "../src/destructive-guard.ts";
-import { FIRE_REFUSED_VERBS, VERBS } from "../src/approvals-cli.ts";
+import { FIRE_REFUSED_VERBS, VERB_FLAGS, VERBS } from "../src/approvals-cli.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -220,6 +220,84 @@ try {
     const badRequest = run(["request", "push:main", "--ticket", "AP-1"], "DEVLOOP_DEV_SPLIT");
     ok(badRequest.code === 2, `AC6 request lints the key too (got ${badRequest.code})`);
     ok(rows().every((r) => r.action_key !== "push:main"), "AC6 no capability key entered the store by either path");
+  }
+
+  // ── Review findings (Codex, PR #280) — the three defects the verb surface shipped with ───────────
+  //
+  // All three share one shape: an argument the caller wrote is read by a code path that was never
+  // told what it meant, so the command succeeds while doing something other than what was typed. Each
+  // is asserted in BOTH directions — the refusal AND the control that still works — because a fix
+  // that simply refused more would be indistinguishable here from a correct one.
+  {
+    // P1 — key-based revocation searched EVERY project. Granting in 'bp' and revoking with
+    // --project ap exited 0 and ended bp's grant: an authorization cancelled in a project the
+    // operator never named, which they would then believe was still in force.
+    { const db = openDb(DB); ensureSeed(db, "bp", "Approvals B", "BP"); db.close(); }
+    const OTHER = `push:main:${"e".repeat(40)}`;
+    ok(run(["approve", OTHER, "--project", "bp"]).code === 0, "P1 fixture: a grant scoped to project bp");
+    ok(byKey(OTHER)?.state === "granted", "P1 fixture: bp's grant is live");
+
+    const crossProject = run(["revoke", OTHER, "--project", "ap"]);
+    ok(crossProject.code === 1, `P1 revoking bp's key from project ap finds nothing to revoke (got ${crossProject.code})`);
+    ok(byKey(OTHER)?.state === "granted",
+      `P1 bp's grant is UNTOUCHED by a revoke aimed at ap (state=${byKey(OTHER)?.state})`);
+    ok(crossProject.err.includes("ap"), "P1 the refusal names the scope it searched, so the operator can see why");
+
+    // Control A: the SAME key revokes cleanly from its own project — the fix scopes, it does not break revoke.
+    ok(run(["revoke", OTHER, "--project", "bp"]).code === 0, "P1 control: the owning project revokes it");
+    ok(byKey(OTHER)?.state === "revoked", `P1 control: and it is revoked (state=${byKey(OTHER)?.state})`);
+
+    // Control B: a workspace-scoped grant covers every project, so it MUST stay revocable from one —
+    // the over-narrow fix (project rows only) fails exactly here.
+    const WS = `push:main:${"f".repeat(40)}`;
+    ok(run(["approve", WS, "--workspace"]).code === 0, "P1 control: a workspace-scoped grant");
+    ok(run(["revoke", WS]).code === 0, "P1 control: a workspace-scoped grant is revocable from project scope");
+    ok(byKey(WS)?.state === "revoked", `P1 control: and it ended (state=${byKey(WS)?.state})`);
+
+    // An explicit id already carries its scope, so a scope flag with it could only be ignored.
+    const ID = `reopen:AP-55`;
+    ok(run(["request", ID, "--ticket", "AP-55"], "DEVLOOP_DEV_SPLIT").code === 0, "P1 fixture: a request to revoke by id");
+    const rid = byKey(ID)!.id;
+    ok(run(["revoke", rid, "--project", "ap"]).code === 2, "P1 --project with an explicit id is refused, not ignored");
+    ok(byKey(ID)?.state === "requested", `P1 that refusal revoked nothing (state=${byKey(ID)?.state})`);
+    ok(run(["revoke", rid]).code === 0, "P1 control: the same id revokes cleanly with no scope flag");
+  }
+  {
+    // P2 — one union of every verb's flags meant a flag for another verb parsed and was then read by
+    // nobody: `request … --expires never --state granted --all` exited 0 having applied none of them.
+    const KEY = "reopen:AP-77";
+    const strays = run(["request", KEY, "--ticket", "AP-77", "--expires", "never", "--state", "granted", "--all"]);
+    ok(strays.code === 2, `P2 flags that do not apply to 'request' are a usage error (got ${strays.code})`);
+    ok(!byKey(KEY), "P2 and nothing was written while those flags were being ignored");
+    for (const f of ["--expires", "--state", "--all"]) {
+      ok(strays.err.includes(f), `P2 the refusal names ${f}, so the caller knows which flag did nothing`);
+    }
+    // Control: the same command without the strays still works — the allowlist admits its own verb's flags.
+    ok(run([                       "request", KEY, "--ticket", "AP-77", "--note", "n"]).code === 0,
+      "P2 control: request with only its own flags still succeeds");
+    ok(byKey(KEY)?.state === "requested", "P2 control: and it landed");
+    // Control: a flag legal for ANOTHER verb is legal for the verb that owns it.
+    ok(run(["approvals", "--state", "granted"]).code === 0, "P2 control: --state is accepted by the verb that reads it");
+
+    // The table the code gates on is the table this suite names — not two lists that can drift apart.
+    for (const v of VERBS) ok(VERB_FLAGS[v].has("json") && VERB_FLAGS[v].has("help"),
+      `P2 every verb admits --json/--help (${v})`);
+  }
+  {
+    // P3 — a value flag swallowed a following option: `request <key> --ticket --workspace` recorded
+    // "--workspace" as the ticket AND lost the scope flag, writing a project-scoped row from a
+    // command that asked for a workspace-scoped one.
+    const KEY = "reopen:AP-88";
+    const dangling = run(["request", KEY, "--ticket", "--workspace"]);
+    ok(dangling.code === 2, `P3 a value flag followed by another option is a usage error (got ${dangling.code})`);
+    ok(!rows().some((r) => r.ticket_id === "--workspace"), "P3 no row recorded a flag as its ticket id");
+    ok(!byKey(KEY), "P3 and the malformed invocation wrote nothing at all");
+    ok(dangling.err.includes("--workspace"), "P3 the refusal names the token it refused to swallow");
+
+    // Control: the '=' form still carries a value that genuinely begins with '--'.
+    const eqForm = run(["request", KEY, "--ticket=--odd-but-real"]);
+    ok(eqForm.code === 0, `P3 control: --flag=<value> still accepts a value starting with '--' (got ${eqForm.code}; ${eqForm.err.trim().slice(0, 160)})`);
+    ok(byKey(KEY)?.ticket_id === "--odd-but-real", `P3 control: and it is stored verbatim (ticket=${byKey(KEY)?.ticket_id})`);
   }
 
   console.log(fails ? `\n${fails} assertion(s) failed` : "\nAPPROVALS_CLI_OK");
