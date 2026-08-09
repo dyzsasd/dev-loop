@@ -262,6 +262,18 @@ export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number
   return total;
 }
 
+// LOOP-445 — render a USD amount for an operator without rounding a real, nonzero quantity to "0.00".
+// Cents are the right unit for the budget numbers an operator reads, but some of them are legitimately
+// sub-cent: a fractional perFireUsd ceiling, and a spend measured moments into a fire. `toFixed(2)` turns
+// every one of those into the string that means "nothing was spent" — the same conflation between a
+// measured zero and an unmeasured one that this ticket exists to remove. The watchdog's kill message
+// renders BOTH the ceiling and the fire's own spend through this one function, so the two halves of that
+// comparison cannot drift to different precisions. (Distinct from `usd()` below, which is the 4-decimal
+// per-fire cost renderer.)
+export function usdLabel(n: number): string {
+  return Math.abs(n) >= 0.01 ? n.toFixed(2) : String(n);
+}
+
 const WATCHDOG_KILL_EXITS = new Set([124, 125, 126]); // 124 wall-timeout · 125 stalled/retry-loop · 126 perFireUsd (LOOP-445)
 // ─── ratePerMsFor (LOOP-230) — per-profile $/ms for the in-flight perFireUsd watchdog ─────────────────────
 // The perFireUsd watchdog (run-agents.ts, budget-ceiling Child 4) has no mid-flight cost signal — cost is
@@ -271,6 +283,16 @@ const WATCHDOG_KILL_EXITS = new Set([124, 125, 126]); // 124 wall-timeout · 125
 // profile has no priced history yet. NEVER returns 0 (a 0 rate ⇒ an infinite deadline ⇒ no enforcement at all).
 // LOOP-445 — killed rows are excluded from the median below; these are the exit codes that mark one.
 export function ratePerMsFor(rows: FireRow[], codingAgent: string | null | undefined, model: string | null | undefined, windowMs: number, nowMs: number): number {
+  return ratePerMsBasis(rows, codingAgent, model, windowMs, nowMs).ratePerMs;
+}
+
+// LOOP-445 — the rate AND its provenance, from one derivation. `measured:false` means the number returned is
+// FALLBACK_RATE_PER_MS: no eligible sample survived, so nothing about this profile's real burn was observed.
+// The two must come from the same computation. When provenance was derived separately — by counting rows that
+// merely LOOK priced — a profile whose only priced history was watchdog-killed rows reported a hardcoded
+// fallback deadline to the operator under the word "measured": the same "a model presented as a measurement"
+// defect this ticket exists to remove, one layer up in the display.
+export function ratePerMsBasis(rows: FireRow[], codingAgent: string | null | undefined, model: string | null | undefined, windowMs: number, nowMs: number): { ratePerMs: number; measured: boolean } {
   const cutoff = nowMs - windowMs;
   const key = `${codingAgent ?? ""}/${model ?? ""}`;
   const rates: number[] = [];
@@ -292,7 +314,9 @@ export function ratePerMsFor(rows: FireRow[], codingAgent: string | null | undef
       rates.push(r.usage.costUsd / r.durationMs);
   }
   const m = median(rates);
-  return m != null && m > 0 ? m : FALLBACK_RATE_PER_MS; // 0/absent ⇒ the conservative floor, never an infinite deadline
+  // 0/absent ⇒ the conservative floor, never an infinite deadline. An all-$0 median is NOT a measurement
+  // either: it is the fallback's other entry point, so it reports `measured:false` alongside the same rate.
+  return m != null && m > 0 ? { ratePerMs: m, measured: true } : { ratePerMs: FALLBACK_RATE_PER_MS, measured: false };
 }
 
 // ─── checkBudget (LOOP-229) — doctor's budget-ceiling health line ─────────────────────────────────────────
@@ -466,31 +490,38 @@ export function perFireDeadline(
 }
 
 // LOOP-297 — the profiles present in the window, with the deadline each one's ceiling actually arms.
-export interface ProfileDeadline { codingAgent: string; model: string; usdPerHour: number; deadlineMinutes: number | null; priced: boolean; fires: number }
+// `rateMeasured` describes THE RATE ON THE ROW, not the profile's billing history — renderCost prints it as
+// "measured" vs "FALLBACK rate", so it has to answer the question that label asks. It was previously counted
+// here from rows that merely looked priced, using a predicate the rate derivation did not share: a profile
+// whose only priced rows were watchdog-killed contributed zero samples to the median (they are truncated, not
+// rates) yet still satisfied this count, so a hardcoded fallback deadline was displayed as data-derived.
+export interface ProfileDeadline { codingAgent: string; model: string; usdPerHour: number; deadlineMinutes: number | null; rateMeasured: boolean; fires: number }
 export function profileDeadlines(rows: FireRow[], ceilingUsd: number | null, windowMs: number, nowMs: number): ProfileDeadline[] {
   const cutoff = nowMs - windowMs;
-  const seen = new Map<string, { codingAgent: string; model: string; fires: number; priced: number }>();
+  const seen = new Map<string, { codingAgent: string; model: string; fires: number }>();
   for (const r of rows) {
     const t = Date.parse(r.ts);
     if (t < cutoff || t > nowMs) continue;
     const codingAgent = r.codingAgent ?? "";
     const model = r.model ?? "";
     const k = `${codingAgent}/${model}`;
-    const e = seen.get(k) ?? { codingAgent, model, fires: 0, priced: 0 };
+    const e = seen.get(k) ?? { codingAgent, model, fires: 0 };
     e.fires++;
-    if (r.usage != null && r.usage.costUsd != null && r.usage.costUsd > 0 && typeof r.durationMs === "number" && r.durationMs > 0) e.priced++;
     seen.set(k, e);
   }
   const out: ProfileDeadline[] = [];
   for (const e of seen.values()) {
     const d = perFireDeadline(ceilingUsd, rows, e.codingAgent, e.model, nowMs);
-    const ratePerMs = d?.ratePerMs ?? ratePerMsFor(rows, e.codingAgent, e.model, RATE_WINDOW_MS, nowMs);
+    // One derivation supplies both the rate and its provenance, over the SAME window perFireDeadline uses,
+    // so the label can never describe a different number than the one printed beside it.
+    const basis = ratePerMsBasis(rows, e.codingAgent, e.model, RATE_WINDOW_MS, nowMs);
+    const ratePerMs = d?.ratePerMs ?? basis.ratePerMs;
     out.push({
       codingAgent: e.codingAgent || "(unset)",
       model: e.model || "(cli default)",
       usdPerHour: ratePerMs * 3_600_000,
       deadlineMinutes: d ? d.deadlineMs / 60_000 : null,
-      priced: e.priced > 0,
+      rateMeasured: basis.measured,
       fires: e.fires,
     });
   }
@@ -1295,7 +1326,7 @@ export function renderCost(report: UsageReport, byDim?: UsageDimension, budget?:
     console.log(`  per-fire ceiling: $${deadlines.ceilingUsd.toFixed(2)} — the deadline it ARMS, by profile:`);
     for (const d of deadlines.rows) {
       const mins = d.deadlineMinutes === null ? "never (beyond the timer limit)" : `${d.deadlineMinutes.toFixed(1)} min`;
-      const basis = d.priced ? "measured" : "FALLBACK rate — no priced history for this profile";
+      const basis = d.rateMeasured ? "measured" : "FALLBACK rate — no usable rate sample for this profile";
       // AC3: when the budget deadline lands inside the wall timeout, the ceiling — not fireTimeout —
       // is what actually bounds the fire. Legitimate, but it must be legible.
       const undercuts = d.deadlineMinutes !== null && deadlines.wallMinutes > 0 && d.deadlineMinutes < deadlines.wallMinutes

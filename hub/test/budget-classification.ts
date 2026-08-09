@@ -13,7 +13,10 @@
 //
 // These assertions pin the CLASS against the numbers, so re-introducing the short-circuit fails here.
 import { classifyFireError } from "../src/breaker.ts";
-import { ratePerMsFor, type FireRow } from "../src/metrics.ts";
+// NB: usdLabel lives in metrics.ts, not run-agents.ts, deliberately — run-agents.ts calls main()
+// unconditionally at import (LOOP-58 deleted its entry-point guard), so a test that imported the helper
+// from there would launch the scheduler.
+import { ratePerMsFor, profileDeadlines, usdLabel, type FireRow } from "../src/metrics.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -107,6 +110,40 @@ for (const exit of [124, 125, 126]) {
 // Guard the other direction: an ORDINARY failure is NOT a watchdog kill and must still count.
 ok(Math.abs(rate([row({ costUsd: 6, durationMs: 1_200_000, exitCode: 1 })]) - 6 / 1_200_000) < 1e-12,
   "AC3: exit 1 (an ordinary task failure) still counts — the exclusion is watchdog kills only, not all failures");
+
+// ── The two review findings on PR #276 — the same defect class, one layer up in the DISPLAY ──────────
+//
+// AC3 above removed killed rows from the rate median. That created a profile whose priced rows all became
+// ineligible, and the operator-facing display had a SECOND, independent notion of "priced" that still
+// counted them — so `dev-loop metrics --cost` printed a hardcoded fallback deadline under the word
+// "measured". Reporting a model as a measurement is precisely what this ticket exists to stop, so the
+// provenance now comes from the same derivation as the rate.
+{
+  const killedOnly = [
+    row({ costUsd: 4.34, durationMs: 2_892_000, exitCode: 126 }),
+    row({ costUsd: 5.97, durationMs: 3_534_000, exitCode: 126 }),
+  ];
+  const pd = profileDeadlines(killedOnly, 20, WINDOW, NOW).find((d) => d.model === "claude-opus-5");
+  ok(pd !== undefined && pd.rateMeasured === false,
+    "PR#276: a profile whose ONLY priced rows are watchdog kills reports its deadline as FALLBACK, not measured");
+  ok(pd !== undefined && Math.abs(pd.usdPerHour - FALLBACK * 3_600_000) < 1e-9,
+    "PR#276: ...and the rate it displays IS the fallback — the label and the number describe the same thing");
+  // The other direction: an eligible sample must still be labelled measured, or the fix is just "always false".
+  const pdOk = profileDeadlines([PRICED], 20, WINDOW, NOW).find((d) => d.model === "claude-opus-5");
+  ok(pdOk !== undefined && pdOk.rateMeasured === true && Math.abs(pdOk.usdPerHour - 5e-6 * 3_600_000) < 1e-9,
+    "PR#276: a profile with a real eligible sample is still labelled measured, at its own measured rate");
+}
+
+// The kill message states the fire's own spend. `toFixed(2)` renders every sub-cent amount as "$0.00" —
+// the string that means "this fire spent nothing", which is the same conflation between a measured zero
+// and an unmeasured one. Both the ceiling and the spend go through one precision-preserving helper.
+ok(usdLabel(0.0001) !== "0.00" && Number(usdLabel(0.0001)) === 0.0001,
+  "PR#276: a sub-cent MEASURED spend keeps its precision — it must never render as $0.00");
+ok(usdLabel(0.002) !== "0.00" && Number(usdLabel(0.002)) === 0.002,
+  "PR#276: a sub-cent ceiling ($0.002, the fixture's own value) keeps its precision too");
+ok(usdLabel(0) === "0", "PR#276: a genuine zero still reads as zero");
+ok(usdLabel(4.34) === "4.34" && usdLabel(20) === "20.00",
+  "PR#276: cent-or-larger amounts keep the two-decimal money rendering operators read");
 
 console.log(fails ? `\n${fails} CHECK(S) FAILED` : "\nBUDGET_CLASSIFICATION_OK");
 process.exit(fails ? 1 : 0);

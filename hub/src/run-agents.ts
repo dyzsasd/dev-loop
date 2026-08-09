@@ -30,7 +30,7 @@ import { breaker, formatBreakerMsg, providerOf, classifyFireError } from "./brea
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
 import { lastFirePerAgent, seedSlotNextAt } from "./run-agents-seed.ts"; // LOOP-273: a restart must not be a cadence reset
-import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, DEFAULT_PER_FIRE_USD, type FireUsage } from "./metrics.ts";
+import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, usdLabel, DEFAULT_PER_FIRE_USD, type FireUsage } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -1265,7 +1265,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
     if (budget) {
       const { deadlineMs: budgetMs, ratePerMs } = budget;
       const ceiling = perFireCeilingUsd as number;
-      const ceilingLabel = ceiling >= 0.01 ? ceiling.toFixed(2) : String(ceiling); // a sub-cent ceiling must not print as "$0.00"
+      const ceilingLabel = usdLabel(ceiling);
       const estRatePerHr = ratePerMs * 3_600_000;             // the measured rate itself — a clamped deadline must not distort it
       budgetTimer = setTimeout(() => {
         if (timedOut || stalled) return; // a wall/stall kill is already in flight — don't double-fire
@@ -1276,7 +1276,11 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         // events, claude's `--output-format json` buffers until exit — so this reports "not yet observable"
         // rather than implying $0, which is the very conflation the ticket is about.
         const spentNow = ((): number | null => { try { return usageAdapter?.parse(fullStdout)?.costUsd ?? null; } catch { return null; } })();
-        const spentLabel = spentNow === null ? "not yet observable on this lane" : `$${spentNow.toFixed(2)}`;
+        // A measured spend goes through the SAME precision-preserving label as the ceiling: two cents-only
+        // renderings of the same quantity would let a sub-cent measured spend print as "$0.00" — which reads
+        // as "this fire spent nothing", the exact conflation between a measured zero and an unmeasured one
+        // that this ticket exists to remove. One helper, so the two can never drift apart again.
+        const spentLabel = spentNow === null ? "not yet observable on this lane" : `$${usdLabel(spentNow)}`;
         console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}) — SIGTERM (SIGKILL in 10s)`);
         log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}): SIGTERM =====\n`);
         killGroup("SIGTERM");
