@@ -165,13 +165,40 @@ interface Parsed {
 const VALUE_FLAGS = new Set(["expires", "note", "ticket", "project", "request", "key", "state"]);
 const BOOL_FLAGS = new Set(["json", "workspace", "all", "help"]);
 
+/**
+ * An argument that EXPANDED TO NOTHING is not an argument that was left out.
+ *
+ * Every reader downstream asks a value for its truthiness, so `""` answered "the caller did not pass
+ * this" — and `approve <key> --request="$ID"` with an unset `ID` skipped the <key>/--request
+ * mutual-exclusion refusal and wrote a FRESH grant in the resolved scope, losing the stored request's
+ * key, ticket and scope. That is precisely the outcome that refusal exists to prevent, produced by a
+ * shell expansion that reads as correct at the call site.
+ *
+ * The rule lives HERE, once, rather than at each reader, for the reason round 3 charged for on the
+ * control-character rule one flag over: a reader that has to remember to tell `""` from absent is the
+ * shape that produced this, and the next flag added would arrive without the memory. No value flag or
+ * positional on this surface (a key, an approval id, a ticket id, a project key, a duration, a note)
+ * has a meaningful empty value, so nothing legitimate is refused by making emptiness the argument's
+ * own error.
+ */
+const EMPTY_ARG = (what: string): string =>
+  `${what} is empty — an unset shell variable expands to nothing, and an authorization must not be ` +
+  `granted on the part that was left out. Omit it if you mean to omit it.`;
+
 export function parseArgs(argv: readonly string[]): Parsed {
   const positional: string[] = [];
   const flags: Record<string, string | true> = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h") { flags.help = true; continue; }
-    if (!a.startsWith("--")) { positional.push(a); continue; }
+    if (!a.startsWith("--")) {
+      // The same failure through the other carrier: `approve "$KEY" --request <id>` with an unset KEY
+      // left a falsy key, so the two-shapes refusal passed and the request was granted as though no
+      // key had been typed.
+      if (a.trim() === "") return { positional, flags, error: EMPTY_ARG("an argument") };
+      positional.push(a);
+      continue;
+    }
     const eq = a.indexOf("=");
     const name = (eq >= 0 ? a.slice(2, eq) : a.slice(2));
     if (BOOL_FLAGS.has(name)) {
@@ -196,6 +223,11 @@ export function parseArgs(argv: readonly string[]): Parsed {
     const raw = eq >= 0 ? a.slice(eq + 1) : argv[i + 1];
     if (typeof raw === "string" && /[\p{Cc}\p{Cf}]/u.test(raw)) {
       return { positional, flags, error: `--${name} contains a control character — these values are shown to the operator who acts on them, so they must be exactly what they look like` };
+    }
+    // Checked after the control-character rule so a value that is BOTH (a lone newline) is named as
+    // the sharper of the two. Both spellings reach here: `--request=` and `--request ""`.
+    if (typeof raw === "string" && raw.trim() === "") {
+      return { positional, flags, error: EMPTY_ARG(`--${name}`) };
     }
     if (eq >= 0) { flags[name] = a.slice(eq + 1); continue; }
     const value = argv[i + 1];
@@ -457,8 +489,11 @@ function approveVerb(
     // Same doctrine as the ambiguous-grant refusal above, one level out: the stored request already
     // names its ticket and its scope. Silently ignoring a --ticket/--project passed here would let the
     // operator believe they re-targeted the grant they were making.
-    for (const [flag, val] of [["--ticket", ticket], ["--project", str(flags, "project")]] as const) {
-      if (val) {
+    // Presence, not truthiness — the same question revoke's id path asks of the same two flags. The
+    // parser now refuses an empty value outright, so the two forms agree today; asking the question
+    // the same way in both places is what keeps them agreeing when the next flag is added.
+    for (const [flag, given] of [["--ticket", ticket !== null], ["--project", str(flags, "project") !== undefined]] as const) {
+      if (given) {
         console.error(`dev-loop approve: ${flag} does not apply to --request ${JSON.stringify(requestId)} — the stored request already carries its ticket and scope`);
         return 2;
       }

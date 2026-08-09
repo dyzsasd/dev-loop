@@ -432,6 +432,52 @@ try {
       "P8 control: a key with no rows still returns an empty listing, so the match is not vacuous");
   }
 
+  {
+    // P9 — an argument that EXPANDED TO NOTHING was read as an argument that was not given. Every
+    // reader tested its value for truthiness, so `""` was indistinguishable from absent: with an
+    // unset ID, `approve <key> --request="$ID"` skipped the <key>/--request mutual-exclusion refusal
+    // and wrote a FRESH grant in the resolved scope — the exact outcome that refusal exists to
+    // prevent, from a call site that reads as correct.
+    const fixture = run(["request", "reopen:AP-901", "--ticket", "AP-901"], "DEVLOOP_DEV_SPLIT");
+    ok(fixture.code === 0, `P9 fixture: a standing request the operator means to grant (got ${fixture.code})`);
+    const reqId = byKey("reopen:AP-901")!.id;
+
+    const KEY = `push:empty:${SHA}`;
+    const eq = run(["approve", KEY, "--request="]);
+    ok(eq.code === 2, `P9 an empty --request is a usage error, not an ignored flag (got ${eq.code})`);
+    // The exit code alone cannot tell a refusal from a write that also printed one — and the write is
+    // the whole defect, so assert the store directly.
+    ok(!byKey(KEY), "P9 and NO fresh grant was written in the resolved scope");
+    const spaced = run(["approve", KEY, "--request", ""]);
+    ok(spaced.code === 2, `P9 the space-separated spelling is the same input, and is refused too (got ${spaced.code})`);
+    ok(!byKey(KEY), "P9 and it wrote nothing either");
+
+    // The class, not the field: the rule is the argument's, so every value flag carries it.
+    const K2 = `push:e2:${SHA}`;
+    ok(run(["approve", K2, "--expires="]).code === 2, "P9 an empty --expires is refused — an unbounded grant is what a dropped bound produces");
+    ok(!byKey(K2), "P9 and no grant was written by the emptied bound");
+    ok(run(["request", "reopen:AP-902", "--ticket="], "DEVLOOP_DEV_SPLIT").code === 2,
+      "P9 an empty --ticket is refused on the agent-callable verb too");
+    ok(!byKey("reopen:AP-902"), "P9 and no untraceable request was filed");
+
+    // The other carrier: an empty POSITIONAL. `approve "$KEY" --request <id>` with an unset KEY left a
+    // falsy key, so the two-shapes refusal passed and the request was granted as though no key was typed.
+    const emptyKey = run(["approve", "", "--request", reqId]);
+    ok(emptyKey.code === 2, `P9 an empty <key> alongside --request is refused, not resolved to the request (got ${emptyKey.code})`);
+    ok(byKey("reopen:AP-901")?.state === "requested",
+      `P9 and the stored request was NOT granted by it (state=${byKey("reopen:AP-901")?.state})`);
+
+    // Controls — both directions. A rule that refused every argument would satisfy every assertion
+    // above while destroying the surface, so each refused shape is re-run with a real value.
+    ok(run(["approve", "--request", reqId]).code === 0, "P9 control: the same request still grants when it is named");
+    ok(byKey("reopen:AP-901")?.state === "granted", "P9 control: and it landed");
+    const K3 = `push:e3:${SHA}`;
+    ok(run(["approve", K3, "--expires", "1h"]).code === 0, "P9 control: a real --expires still grants");
+    ok(byKey(K3)?.state === "granted", "P9 control: and that grant landed too");
+    ok(run(["request", "reopen:AP-903", "--ticket", "AP-903"], "DEVLOOP_DEV_SPLIT").code === 0,
+      "P9 control: a real --ticket is still requestable from inside a fire");
+  }
+
   console.log(fails ? `\n${fails} assertion(s) failed` : "\nAPPROVALS_CLI_OK");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
