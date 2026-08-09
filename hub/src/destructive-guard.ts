@@ -17,6 +17,20 @@
 //
 // Scope note: the recoverability guard (`--force` over ticket/repo counts) keeps its current meaning and this
 // module never widens it. The two gates compose; `--force` must never become the token.
+//
+// ── What the inventory above is, and what it is NOT (LOOP-368 AC7) ─────────────────────────────
+//
+// The claim "every verb that destroys operator data calls in here" is enforced by
+// `hub/test/destructive-fire-gate.ts`. The inventory it enforces is exactly "callers of this module":
+// the `hub/src/*.ts` files importing `isolationVerdict` / `workspaceIsolationVerdict`. That suite
+// discovers them from the source, so a NEW destructive verb that imports the gate is covered the
+// moment it is written, and one added without a case in its table turns the suite red.
+//
+// A verb that destroys operator data and does NOT import this module is uncovered, by construction.
+// No source-level test can find it — "destroys operator data" is not a property of a file's imports.
+// That residual gap is stated here rather than left implied, because the sentence above reads like a
+// guarantee and it is only a guarantee about this module's callers. `--force-reseed` was exactly such
+// a verb for two tickets (LOOP-316), and it was found by an incident, not by a test.
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { Workspace } from "./team-config.ts";
@@ -55,6 +69,13 @@ export interface IsolationVerdict {
   scratch: boolean;         // target is marked scratch:true in config
   requiredToken: string;    // `--i-understand-this-deletes-<key>`
   tokenPresent: boolean;    // the caller passed exactly that token
+  // LOOP-368. The marker that made this a fire refusal, else null. Carried as DATA because the two
+  // refusals need DIFFERENT remedies and a caller cannot tell them apart from `refusal` alone:
+  // team-edit's `--dry-run` renders its own "→ WOULD REFUSE (… needs <token>)" line, which under a
+  // fire would name the token as the way through — the LOOP-367 failure verbatim. It is also what
+  // lets a caller distinguish "refused because a fire asked" (an error) from "skipped a non-scratch
+  // candidate" (routine), which is the whole of team-repair's exit-code decision.
+  fireMarker: string | null;
   refusal: string | null;   // null ⇒ the gate allows it; else the operator-facing reason
 }
 
@@ -85,20 +106,50 @@ naming token: pass ${confirmationToken(key)}. (--force does NOT grant this; it o
 overrides the ticket/repo recoverability guard, which is a different question.)`;
 }
 
+// LOOP-368. The fire refusal, for every caller of this module — the question LOOP-367 added to
+// `board restore` alone, asked here instead so a fifth destructive verb inherits it by construction.
+//
+// It names NO remedy that the refused party can reach. That is the entire lesson of LOOP-367: the
+// isolation refusal named its token, and the fire that read it supplied the token 39 seconds later.
+// So this message states what does NOT work (the token, --force, any flag) and routes the only real
+// remedies elsewhere — the board, for an operator to act on, or a disposable workspace, for a test.
+function fireRefusalFor(target: string, marker: string): string {
+  return `refusing inside an agent fire (${marker} is set): destroying ${target} is an OPERATOR action. \
+The naming token does NOT grant this — it answers "did you mean this target?", not "may a fire do this at \
+all", and neither does --force or any other flag; there is no bypass. Nothing has been written. If this is \
+genuinely needed, file it on the board for the operator; to exercise the verb, use a disposable workspace \
+(mkdtemp + dev-loop team init --dir <tmp>) with the fire markers unset.`;
+}
+
 // The verdict as DATA, so a `--dry-run` preview can report the same decision the live path enforces instead
 // of re-deriving it (LOOP-290's rule: the preview derives from the same facts the live guard consumes).
 //
 // `tokenPresent` is an EXACT match against argv — never `startsWith(TOKEN_PREFIX)`, which would let
 // `--i-understand-this-deletes-anything` name any project at all and reopen the whole hole.
-export function isolationVerdict(ws: Workspace, key: string, argv: readonly string[]): IsolationVerdict {
+//
+// LOOP-368: the FIRE question is asked here, first, so that every caller inherits it — asking it per
+// caller is what left three of the four verbs exposed after LOOP-367 fixed the fourth. `env` is a
+// parameter (defaulting to the real one) so an in-process test can state which side of the gate it
+// means; every product caller passes nothing and gets `process.env`.
+export function isolationVerdict(
+  ws: Workspace, key: string, argv: readonly string[], env: NodeJS.ProcessEnv = process.env,
+): IsolationVerdict {
   const scratch = isScratchProject(ws, key);
   const requiredToken = confirmationToken(key);
   const tokenPresent = argv.includes(requiredToken);
+  const fireMarker = activeFireMarker(env);
   return {
     scratch,
     requiredToken,
     tokenPresent,
-    refusal: scratch || tokenPresent ? null : refusalFor(key),
+    fireMarker,
+    // Order is the point (AC2): the fire question is answered BEFORE scratch and BEFORE the token, so
+    // neither can satisfy it. `scratch: true` not satisfying it is deliberate — `team repair --reap`'s
+    // candidates are scratch BY DEFINITION, so a scratch exemption would leave that verb ungated,
+    // which is the state this ticket exists to end.
+    refusal: fireMarker ? fireRefusalFor(`project '${key}'`, fireMarker)
+      : scratch || tokenPresent ? null
+      : refusalFor(key),
   };
 }
 
@@ -123,17 +174,23 @@ export function isolationVerdict(ws: Workspace, key: string, argv: readonly stri
 // Scope note, so this is not read as wider than it is: hub.db is ALREADY protected and stays that
 // way (bundle.ts is restore-onto-empty; the live board wins and the bundle copy is ignored). The
 // unprotected data was config + secrets only.
-export function workspaceIsolationVerdict(ws: Workspace, argv: readonly string[]): IsolationVerdict {
+export function workspaceIsolationVerdict(
+  ws: Workspace, argv: readonly string[], env: NodeJS.ProcessEnv = process.env,
+): IsolationVerdict {
   const key = ws.file.team.key;
   const requiredToken = confirmationToken(key);
   const tokenPresent = argv.includes(requiredToken);
+  const fireMarker = activeFireMarker(env);   // LOOP-368 — same question, same precedence, both verdicts
   // A workspace has no `scratch` field — the concept is per-project. A workspace-level destroy is
   // therefore ALWAYS token-gated, which is the fail-safe direction.
   return {
     scratch: false,
     requiredToken,
     tokenPresent,
-    refusal: tokenPresent ? null : `refusing to overwrite the live workspace '${key}': --force-reseed replaces dev-loop.json AND .dev-loop/secrets.env (every key in this workspace). --force-reseed does NOT grant this — pass ${requiredToken} to confirm you mean THIS workspace. Nothing has been written.`,
+    fireMarker,
+    refusal: fireMarker ? fireRefusalFor(`the live workspace '${key}'`, fireMarker)
+      : tokenPresent ? null
+      : `refusing to overwrite the live workspace '${key}': --force-reseed replaces dev-loop.json AND .dev-loop/secrets.env (every key in this workspace). --force-reseed does NOT grant this — pass ${requiredToken} to confirm you mean THIS workspace. Nothing has been written.`,
   };
 }
 

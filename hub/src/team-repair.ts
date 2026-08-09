@@ -100,6 +100,13 @@ export async function teamRepair(argv = process.argv.slice(2)): Promise<number> 
   //    keeps every automatic/non-interactive caller (e.g. `dev-loop up --bundle`, bundle.ts:380 — which
   //    runs BEFORE the doctor gate) non-destructive by default: no unattended, irreversible deletion.
   const reapForReal = reap && !dryRun;
+  // LOOP-368. Set when a project reap was refused because this is a fire. It decides the EXIT CODE
+  // only, and only for a real `--reap`: a run that asked to destroy something, destroyed nothing, and
+  // exited 0 has told its caller the reap happened. A report-only pass and a `--dry-run` still print
+  // the refusal (the preview must not disagree with enforcement) but stay 0 — a preview is not a
+  // failure. An ordinary non-scratch skip stays 0 as it always has; this is keyed on the marker, not
+  // on `refusal`, precisely so that unchanged behaviour stays unchanged.
+  let fireRefusedReap = false;
   for (const ref of Object.keys(ws.file.repos)) {
     const dir = effectiveRepo(ws, ref).absPath;
     if (!existsSync(dir) || !isGitRepo(dir)) continue;
@@ -138,6 +145,11 @@ export async function teamRepair(argv = process.argv.slice(2)): Promise<number> 
       // pinned by the gate plus its test. The reap has no per-project token to offer, so it passes none: a
       // non-scratch candidate can only ever be skipped here, never reaped.
       const isolation = isolationVerdict(ws, key, []);
+      // LOOP-368: the fire refusal arrives through the SAME verdict, so it lands here — at the reap
+      // path, inside the loop — and the benign half of `team repair` (worktree repair + prune, the
+      // index, the WAL truncate) is untouched. That placement is required: /dev-loop:sync-repo runs
+      // this verb WITHOUT --reap and must keep working inside a fire.
+      if (isolation.fireMarker) fireRefusedReap = true;
       if (isolation.refusal) { info(`project '${key}': ${isolation.refusal.replace(/\s+/g, " ")} — skipping`); continue; }
       // Fail closed, gating the WHOLE iteration (before the config write below): an unreadable db
       // means the ticket count is unknown, so skip loudly rather than reap on an assumed 0. (LOOP-280)
@@ -191,6 +203,11 @@ export async function teamRepair(argv = process.argv.slice(2)): Promise<number> 
     db?.close();
   }
 
+  if (reapForReal && fireRefusedReap) {
+    // Everything above still ran — this is the reap, and only the reap, reporting that it did not.
+    console.error("\ndev-loop team repair: --reap was refused inside an agent fire (see above); the non-destructive repairs above all completed.");
+    return 4;
+  }
   console.log(dryRun ? "\nREPAIR_DRYRUN_OK" : "\nREPAIR_OK");
   return 0;
 }
