@@ -1156,14 +1156,16 @@ them here, at fire-start (alongside orphan reclaim, Step 0), never inline. In on
 
 First `git -C <repo> worktree prune` (§7). Then:
 - **Feature PRs (when `git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"` —
-  for each (`gh pr checks <pr>` + `gh pr view <pr> --json mergeable,mergeStateStatus`):
-  - **every `git.mergeChecks` green AND `MERGEABLE`** → **first run the merge guard**
-    `dev-loop merge-guard --pr <pr> --strict --apply`. **A non-zero exit HOLDS the merge** — do not
-    squash, leave the PR open, move on to the next one. The guard has already recorded the
-    objection on the ticket, so no second notification path is needed. On exit 0 →
-    `gh pr merge <pr> --squash --delete-branch` (feature branches must not pile up), then
-    `git worktree remove --force` the ticket's worktree, then move the ticket
-    `In Progress → In Review`.
+  for each open PR:
+  - `dev-loop pr merge <pr>` — readiness (pending/conflicting/draft/mergeability-unknown)
+    and the guard's axes all run INSIDE the verb; do not pre-filter on green or mergeable. It
+    squashes only when the axes clear, deleting the feature branch. On exit 0 →
+    `git worktree remove --force` the ticket's worktree, move the ticket
+    `In Progress → In Review`. Exit 1 = HELD, not merged — each objecting
+    guard axis is already on the ticket; a readiness-only hold writes nothing (re-run once the
+    forge settles). Exit 5 = landing lock busy — a retry, not an objection. 2 usage · 3 nothing
+    evaluable · 4 gate clear but the squash failed. The FAILED / DIRTY / Pending bullets
+    below are the remedies for what the verb reports.
   - **a check FAILED** (CI is the build gate) → read the CI log, **fix in the worktree + re-push**;
     cap ~2 cycles → `fix-exhausted` block.
   - **`mergeStateStatus:DIRTY`** (conflicts `defaultBranch` — never self-heals) → in the worktree,
@@ -1180,15 +1182,16 @@ First `git -C <repo> worktree prune` (§7). Then:
   (These PRs are `GITHUB_TOKEN`-created, so the PR checks don't run on them; merge on mergeable,
   don't wait for checks that will never report.)
 
-**The merge guard (`dev-loop merge-guard`) is the machine gate on this pass**, and green checks are
-not sufficient to merge. It trips on two axes: a **human's** unresolved `CHANGES_REQUESTED` or
-unresolved review thread on the PR (agent reviewers are excluded — the loop may not merge over a
-person's objection), and a ticket that is **not merge-eligible** on the board (e.g. already
-`In Review`, `Canceled`, or `Duplicate` — the shape that once merged a Canceled ticket's work).
-Exit codes: **0 = clear to merge**, **1 = tripped under `--strict`**, **2 = usage/internal error**.
-Both axes **degrade silently to a pass** when their evidence is unreachable (no `gh`, forge
-unreachable, or no hub DB on `linear`/`local`), so the guard never blocks on infrastructure — only
-on a real objection. `--apply` posts the objection to the ticket and routes it, once (idempotent).
+**The machine gate on this pass runs INSIDE `dev-loop pr merge`**, and green checks are not
+sufficient: the verb squashes only when the guard's axes clear — a **human's** unresolved
+`CHANGES_REQUESTED` or review thread (agent reviewers are excluded — the loop may not merge over a
+person's objection), a ticket **not merge-eligible** on the board (already `In Review`, `Canceled`,
+or `Duplicate`), and CI freshness (green computed against a base behind the tip). Axes **degrade
+silently to a pass** when their evidence is unreachable (no `gh`, forge
+unreachable, no hub DB on `linear`/`local`). An axis OBJECTION is posted to the ticket once
+(idempotent); readiness and CI-pending/unknown holds refuse the squash but write nothing — re-run,
+don't wait. `dev-loop merge-guard` stays the read-only/diagnostic
+surface (`--json`; `--strict`/`--apply` unchanged) — for inspecting a hold, not the merge path.
 
 Both are **idempotent + race-safe**: a second dev fire finds the PR already merged and no-ops; the
 merge is atomic. A PR that isn't ready is left for the next fire — **never force-merged**. This is
