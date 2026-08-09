@@ -27,7 +27,7 @@ import {
   strategyDocRelPath,
   tryResolveStrategyDocStat,
 } from "../src/context-bill.ts";
-import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES, STRATEGY_DOC_MAX_BYTES, STRATEGY_DOC_WARN_FRACTION } from "../src/lessons.ts";
+import { INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES, STRATEGY_DOC_MAX_BYTES } from "../src/lessons.ts";
 import { checkStrategyDocBudget } from "../src/doctor.ts"; // LOOP-282
 import { openDb } from "../src/db.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
@@ -513,7 +513,12 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
   ok(billSrc.includes("STRATEGY_DOC_MAX_BYTES") && doctorSrc.includes("STRATEGY_DOC_MAX_BYTES"),
     "LOOP-282: the bill and doctor share ONE exported budget — two literals is how a budget and its report drift");
 
-  // The W37 check itself: derived, silent when absent, warn-only, and §16-safe.
+  // The DEFAULT resolver path (LOOP-406). The band fixtures below inject `resolveStat`, so nothing
+  // else would notice if the default stopped being `tryResolveStrategyDocStat` — this call is the only
+  // coverage that the two-argument production form still resolves the live workspace doc at all.
+  // What it can assert is band-INDEPENDENT: this host's doc sits in whichever band it sits in (that is
+  // the ticket's finding — an ambient doc is not a fixture), so it asserts the invariant that holds in
+  // every band, plus the message shape of whichever line did emit.
   {
     const warns: string[] = [];
     const infos: string[] = [];
@@ -523,58 +528,106 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
         ws,
         (msg) => warns.push(msg),
         (msg) => infos.push(msg),
-    );
+      );
+      ok(warns.length + infos.length <= 1,
+        `LOOP-406: the default resolver emits at most ONE line — the bands are exclusive (got ${warns.length} warn + ${infos.length} info)`);
+      for (const line of warns) {
+        ok(/\[W37\]/.test(line), "LOOP-282: the over-budget warning carries W37");
+        ok(/budget/.test(line) && /KB/.test(line), "LOOP-282: …naming the measured bytes and the limit");
+        ok(/strategy-archive/.test(line), "LOOP-282: …and the §20 R2 remediation");
+      }
+      for (const line of infos) {
+        ok(!/\[W37\]/.test(line), "LOOP-353: soft advisory line does not carry W37");
+        ok(/strategy-archive/.test(line), "LOOP-353: soft advisory names the §20 R2 remedy");
+      }
     }
-    // In THIS workspace the doc may be under soft, between soft and hard, or over hard — assert shape.
-    if (warns.length) {
-      ok(/\[W37\]/.test(warns[0]), "LOOP-282: the over-budget warning carries W37");
-      ok(/budget/.test(warns[0]) && /KB/.test(warns[0]), "LOOP-282: …naming the measured bytes and the limit");
-      ok(/strategy-archive/.test(warns[0]), "LOOP-282: …and the §20 R2 remediation");
-      // Over hard: no info line (W37 only, AC2)
-      ok(infos.length === 0, "LOOP-353: over hard budget — no advisory info line (W37 only)");
-    } else if (infos.length) {
-      ok(!/\[W37\]/.test(infos[0]), "LOOP-353: soft advisory line does not carry W37");
-      ok(/strategy-archive/.test(infos[0]), "LOOP-353: soft advisory names the §20 R2 remedy");
-    } else {
-      ok(true, "LOOP-282: this workspace's strategy doc is within budget — W37 is silent (the shape is asserted on the over-budget fixture below)");
-    }
-  }
-
-  // The discriminating fixture: a doc deliberately over budget must warn, and one under must not.
-  // Asserted through the same comparison the check makes, since tryResolveStrategyDocStat reads the
-  // ambient workspace and this must hold on any host.
-  {
-    const over = { bytes: STRATEGY_DOC_MAX_BYTES + 1, lines: 10, label: "docs/STRATEGY.md" };
-    const under = { bytes: STRATEGY_DOC_MAX_BYTES, lines: 10, label: "docs/STRATEGY.md" };
-    ok(over.bytes > STRATEGY_DOC_MAX_BYTES, "LOOP-282: one byte over the budget is OVER — the gate is not approximate");
-    ok(!(under.bytes > STRATEGY_DOC_MAX_BYTES), "LOOP-282: …and exactly at the budget is WITHIN it");
   }
 }
 
-// ── LOOP-353: W37 warning band — soft line before the hard budget ───────────────────────────
-// Three fixtures: under the soft threshold (silent), between soft and hard (info only), over hard (W37 only).
-// The middle fixture must fail against today's code (before this ticket) — state fail-before/pass-after.
+// ── LOOP-353 / LOOP-406: W37 warning band — soft line before the hard budget ─────────────────────
+// LOOP-353 shipped the band correctly and the tests for it as SIX assertions about constants
+// (`warnAt > 0`, `x + 1 > x`, `WARN_FRACTION === 0.8`, …), none of which called the function. Measured
+// on the merge commit 1673c9b: disabling the soft-band emission left the suite green. LOOP-406 removes
+// those six and drives the real function through the `resolveStat` seam instead, so each band is
+// exercised on every host rather than whichever one this workspace's live doc happens to sit in.
+//
+// The counts are asserted EXACTLY (=== 0 / === 1), never `if (x.length)` — a shape-branch is what let
+// the pre-existing ambient block pass in every band, including with the feature deleted.
 {
-  const warnAt = Math.round(STRATEGY_DOC_MAX_BYTES * STRATEGY_DOC_WARN_FRACTION);
+  // The band opens at 80% of the hard budget — LOOP-353's specified fraction, written here as the SPEC
+  // literal rather than imported from STRATEGY_DOC_WARN_FRACTION. A fixture derived from the constant it
+  // is checking moves with it, so a silent change of the fraction would stay green; derived from the spec,
+  // fixtures 1 and 2 below fail the moment the product's band starts anywhere else. That is the
+  // behavioural REPLACEMENT AC5 allows for LOOP-353's `WARN_FRACTION === 0.8` (a constant compared to its
+  // own literal), and it is why that assertion is not simply deleted.
+  const SPEC_WARN_FRACTION = 0.8;
+  const warnAt = Math.round(STRATEGY_DOC_MAX_BYTES * SPEC_WARN_FRACTION);
+  const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
+  // Drive the real check with a doc of exactly `bytes`, bypassing the ambient workspace.
+  //
+  // The workspace argument (LOOP-426: W37 measures the workspace it is PASSED, not the ambient env) is
+  // poisoned rather than stubbed. `resolveStat` is meant to replace the ambient resolution ENTIRELY, so
+  // nothing downstream of it may touch `ws`; if that ever stopped holding, these fixtures would quietly
+  // go back to measuring the host's own doc — which is the exact defect LOOP-406 exists to remove. A
+  // proxy that throws on any access turns that silent regression into a loud one.
+  const POISONED_WS = new Proxy({} as Workspace, {
+    get(_t, prop) { throw new Error(`LOOP-406: checkStrategyDocBudget read ws.${String(prop)} despite an injected resolveStat`); },
+  });
+  const run = (bytes: number) => {
+    const warns: string[] = [];
+    const infos: string[] = [];
+    checkStrategyDocBudget(
+      POISONED_WS,
+      (msg) => warns.push(msg),
+      (msg) => infos.push(msg),
+      () => ({ bytes, lines: 10, label: "docs/STRATEGY.md" }),
+    );
+    return { warns, infos };
+  };
 
-  // Fixture 1: under soft threshold — silent (no warn, no info)
-  ok(warnAt > 0, `LOOP-353: soft threshold is ${warnAt} B (${(warnAt / 1024).toFixed(1)} KB)`);
-  ok(warnAt < STRATEGY_DOC_MAX_BYTES, "LOOP-353: soft threshold is below the hard budget");
-
-  // Fixture 2: at soft threshold, still under hard — info only, DOCTOR_OK preserved
+  // Fixture 1 — under the soft threshold: silent. Boundary value (warnAt - 1), because the band edge
+  // is where an `>` / `>=` slip lives; a comfortable 10 KB would pass against a broken comparison.
   {
-    const headroom = STRATEGY_DOC_MAX_BYTES - warnAt;
-    ok(headroom > 0, `LOOP-353: at the soft threshold there is ${headroom} B of headroom`);
+    const { warns, infos } = run(warnAt - 1);
+    ok(warns.length === 0, `LOOP-406 AC2: ${kb(warnAt - 1)} (one byte under the soft threshold) emits NO warning (got ${warns.length})`);
+    ok(infos.length === 0, `LOOP-406 AC2: …and NO advisory either — under the band the check is silent (got ${infos.length})`);
   }
 
-  // Fixture 3: over hard — W37 only, unchanged
-  ok(STRATEGY_DOC_MAX_BYTES + 1 > STRATEGY_DOC_MAX_BYTES, "LOOP-353: one byte over the hard budget is OVER");
+  // Fixture 2 — at the soft threshold, under the hard budget: exactly one info, no warn. This is the
+  // fixture LOOP-353 AC4 asked for and never got: it fails against pre-LOOP-353 code (no soft band)
+  // and against any tree where the soft emission is disabled.
+  {
+    const at = warnAt;
+    const headroom = STRATEGY_DOC_MAX_BYTES - at;
+    const { warns, infos } = run(at);
+    ok(warns.length === 0, `LOOP-406 AC2: ${kb(at)} is within the hard budget — no W37 warning (got ${warns.length})`);
+    ok(infos.length === 1, `LOOP-406 AC2: …and EXACTLY one soft advisory (got ${infos.length})`);
+    const line = infos[0] ?? "";
+    ok(line.includes(kb(at)), `LOOP-406 AC2: the advisory names the measured size ${kb(at)}`);
+    ok(line.includes(kb(STRATEGY_DOC_MAX_BYTES)), `LOOP-406 AC2: …the budget ${kb(STRATEGY_DOC_MAX_BYTES)}`);
+    ok(line.includes(kb(headroom)), `LOOP-406 AC2: …the remaining headroom ${kb(headroom)}`);
+    ok(line.includes("§20 R2") && line.includes("strategy-archive/"), "LOOP-406 AC2: …and the §20 R2 remedy");
+    ok(!line.includes("[W37]"), "LOOP-406 AC2: …carrying no W37 code — the soft band preserves DOCTOR_OK");
+  }
 
-  // Soft threshold fraction sanity
-  ok(STRATEGY_DOC_WARN_FRACTION > 0 && STRATEGY_DOC_WARN_FRACTION < 1,
-    `LOOP-353: STRATEGY_DOC_WARN_FRACTION (${STRATEGY_DOC_WARN_FRACTION}) is between 0 and 1`);
-  ok(STRATEGY_DOC_WARN_FRACTION === 0.8,
-    `LOOP-353: STRATEGY_DOC_WARN_FRACTION is 0.8 as specified (got ${STRATEGY_DOC_WARN_FRACTION})`);
+  // Fixture 3 — over the hard budget: exactly one W37 warning and ZERO infos. The zero-infos half is
+  // LOOP-353's AC2 exclusivity claim, which nothing tested; it fails if the hard branch stops
+  // returning early and both lines emit.
+  {
+    const at = STRATEGY_DOC_MAX_BYTES + 1;
+    const { warns, infos } = run(at);
+    ok(warns.length === 1, `LOOP-406 AC2: one byte over the budget emits EXACTLY one warning (got ${warns.length})`);
+    ok(infos.length === 0, `LOOP-406 AC2/AC4: …and ZERO advisories — the two bands are exclusive (got ${infos.length})`);
+    ok((warns[0] ?? "").includes("[W37]"), "LOOP-406 AC2: …and it is W37");
+  }
+
+  // The hard budget is inclusive on the safe side: exactly AT the budget is WITHIN it. LOOP-282
+  // asserted this as `!(under.bytes > STRATEGY_DOC_MAX_BYTES)` — the comparison restated, not the
+  // function's answer to it. With the seam it can be asked of the function directly.
+  {
+    const { warns } = run(STRATEGY_DOC_MAX_BYTES);
+    ok(warns.length === 0, `LOOP-406: exactly ${kb(STRATEGY_DOC_MAX_BYTES)} is WITHIN budget — the gate is not off by one (got ${warns.length} warning(s))`);
+  }
 }
 
 console.log(fails === 0 ? "\nCONTEXT_BUDGET_OK" : `\n${fails} CHECK(S) FAILED — a SKILL is over budget or its Sections line drifted`);
