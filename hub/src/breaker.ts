@@ -22,12 +22,78 @@ export function providerOf(profile: { codingAgent: string; model?: string }): st
   return profile.codingAgent === "claude" ? "anthropic" : "openai";
 }
 
-export function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false): string | null {
-  if (budgetKilled) return "budget-per-fire"; // LOOP-230: the perFireUsd watchdog killed this fire — DISTINCT from a wall-timeout (never "timeout")
+// LOOP-445 — what a budget kill MEASURED, handed to the classifier so the class states a fact rather
+// than which timer happened to fire. The perFireUsd watchdog kills on a MODELED wall-clock deadline
+// (perFireUsd / ratePerMs) because mid-flight cost is not observable on every lane; the fire's real
+// usage IS known by the time this runs (the adapter parses the buffer at finalize), so the label is
+// decided there instead of being asserted at arm time.
+//   • spentUsd — the fire's measured spend, null when the payload was unparseable/absent.
+//   • totalTokens — measured tokens across every bucket, null when usage was never parsed. ZERO is a
+//     measurement, not an absence: it is what a wedged fire records.
+// Deliberately NOT part of this: output bytes. The deferred-echo lane (claude, `--output-format json`)
+// buffers until exit, so a KILLED claude fire has an empty tail whether it did nothing or spent $4.34
+// over 2.5M cache-read tokens — the three 2026-08-08 pm rows that motivated this all had `outputTail: ""`.
+// Bytes cannot separate wedged from productive there; tokens can.
+export interface BudgetKillEvidence { ceilingUsd?: number | null; spentUsd?: number | null; totalTokens?: number | null }
+
+// A fire that consumed ZERO tokens is wedged — it never reached the provider — whichever watchdog
+// noticed. This is the AC2 precedence: the liveness arm names the fire, the budget arm does not get to
+// claim it just because its timer tripped first. It matters most on the claude lanes, where the stall
+// watchdog is DISARMED by default (effectiveStallMs = 0 — claude buffers, so silence is not evidence),
+// leaving the budget timer as the only armed watchdog and every wedged fire wearing its label.
+function wedged(e?: BudgetKillEvidence): boolean {
+  // A fire that was BILLED something reached the provider, whatever its token buckets say. Without this
+  // guard a payload whose token fields are all null (they are individually optional on every adapter)
+  // sums to 0 and would be called wedged while carrying a real cost — the same conflation of "measured
+  // zero" with "not measured" that this ticket exists to remove, reintroduced one level down.
+  if (typeof e?.spentUsd === "number" && e.spentUsd > 0) return false;
+  return e?.totalTokens === 0;
+}
+// A breach is claimable only when the spend was MEASURED and reached the ceiling. Unknown spend is not
+// a breach: it is an unknown, and the modeled class says so.
+function measuredBreach(e?: BudgetKillEvidence): boolean {
+  return typeof e?.spentUsd === "number" && typeof e?.ceilingUsd === "number" && e.spentUsd >= e.ceilingUsd;
+}
+
+export function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false, evidence?: BudgetKillEvidence): string | null {
+  if (budgetKilled) {
+    // A MEASURED breach is a fact about the fire, so it outranks every inference below.
+    // LOOP-445 AC1 — ships option (b): the kill still happens on the modeled deadline, but only a
+    // MEASURED breach may wear "budget-per-fire". "budget-deadline" names a kill the model justified
+    // and the meter did not, which is what a $4.34 fire against a $20 ceiling actually was.
+    if (measuredBreach(evidence)) return "budget-per-fire";
+    // The breach above is the ONLY measurement that answers "why did this fire end". Everything below
+    // it is an inference from an absence, and one thing fills that absence with a fact: the tail. A
+    // provider REJECTION (429, an expired key, a session cap) is answered before a token is billed, so
+    // consult it before naming the kill after whichever timer fired. This is not cosmetic: neither
+    // "stalled" nor "budget-deadline" is in PROVIDER_SCOPED_CLASSES, so a misfiled rejection
+    // accumulates only against the one agent that saw it while every sibling on the same exhausted key
+    // keeps firing at full cadence into the outage the breaker exists to stop.
+    //
+    // Rounds 3 and 4 gated this on the fire having measured NO work, which reads a rejection as
+    // something only an idle fire can suffer. A multi-turn fire bills a token-bearing step, THEN meets
+    // the 429 and retries against it until the deadline trips: usage is positive, the tail says
+    // rate-limit, and the gate sent it to "budget-deadline" with the provider breaker disengaged —
+    // this ticket's own defect class, one arm further down, for the third time. Work measured earlier
+    // is not evidence about why the fire ENDED; only a measured breach is, and it is already above.
+    const rejection = tailErrorClass(tail);
+    if (rejection) return rejection;
+    // LOOP-445 AC2 — zero tokens outranks the budget arm: with no rejection to explain them, zero
+    // MEASURED tokens is a wedge. Unknown tokens is not — an unknown stays an unknown (AC1).
+    if (wedged(evidence)) return "stalled";
+    return "budget-deadline";
+  }
   if (retryLoop) return "retry-loop"; // liveness watchdog kill — visible retry loop (output arriving but no new content)
   if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
   if (timedOut) return "timeout";
   if (exitCode === 0) return null;
+  return tailErrorClass(tail);
+}
+
+// The tail taxonomy. Extracted so the budget arm above consults THIS derivation rather than a second
+// copy of the patterns: two copies drift, and a regression test written against a copy passes while the
+// path it claims to cover is broken.
+function tailErrorClass(tail: string): string | null {
   const t = tail.toLowerCase();
   // LOOP-114 — Claude Code emits "You've hit your session limit · resets 12:20am (Europe/Paris)".
   // It matched NOTHING: not "usage limit", not "rate limit". Every single non-timeout failure this
