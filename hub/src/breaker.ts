@@ -58,7 +58,16 @@ function measuredBreach(e?: BudgetKillEvidence): boolean {
 export function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false, evidence?: BudgetKillEvidence): string | null {
   if (budgetKilled) {
     // LOOP-445 AC2 — zero tokens outranks the budget arm.
-    if (wedged(evidence)) return "stalled";
+    if (wedged(evidence)) {
+      // ...but zero tokens only INFERS "never reached the provider"; it does not observe it. A provider
+      // REJECTION — 429, an expired key, a session cap — is answered before a single token is billed, so
+      // it presents with exactly the wedged fire's numbers while meaning the opposite. Positive evidence
+      // in the tail therefore refutes the inference. Getting this wrong is not cosmetic: "stalled" is not
+      // in PROVIDER_SCOPED_CLASSES, so a misfiled rejection accumulates only against the one agent that
+      // saw it, and every sibling agent on the same exhausted key keeps firing at full cadence into the
+      // outage the breaker exists to stop.
+      return tailErrorClass(tail) ?? "stalled";
+    }
     // LOOP-445 AC1 — ships option (b): the kill still happens on the modeled deadline, but only a
     // MEASURED breach may wear "budget-per-fire". "budget-deadline" names a kill the model justified
     // and the meter did not, which is what a $4.34 fire against a $20 ceiling actually was.
@@ -68,6 +77,13 @@ export function classifyFireError(exitCode: number, timedOut: boolean, tail: str
   if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
   if (timedOut) return "timeout";
   if (exitCode === 0) return null;
+  return tailErrorClass(tail);
+}
+
+// The tail taxonomy. Extracted so the budget arm above consults THIS derivation rather than a second
+// copy of the patterns: two copies drift, and a regression test written against a copy passes while the
+// path it claims to cover is broken.
+function tailErrorClass(tail: string): string | null {
   const t = tail.toLowerCase();
   // LOOP-114 — Claude Code emits "You've hit your session limit · resets 12:20am (Europe/Paris)".
   // It matched NOTHING: not "usage limit", not "rate limit". Every single non-timeout failure this

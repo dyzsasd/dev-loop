@@ -12,7 +12,7 @@
 // armed watchdog on the lane where all three of these fires ran.
 //
 // These assertions pin the CLASS against the numbers, so re-introducing the short-circuit fails here.
-import { classifyFireError } from "../src/breaker.ts";
+import { classifyFireError, PROVIDER_SCOPED_CLASSES } from "../src/breaker.ts";
 // NB: usdLabel lives in metrics.ts, not run-agents.ts, deliberately — run-agents.ts calls main()
 // unconditionally at import (LOOP-58 deleted its entry-point guard), so a test that imported the helper
 // from there would launch the scheduler.
@@ -74,6 +74,57 @@ ok(classifyFireError(125, false, "", true, true, false) === "retry-loop", "uncha
 ok(classifyFireError(124, true, "", false, false, false) === "timeout", "unchanged: the wall-timeout arm");
 ok(classifyFireError(1, false, "429 too many requests\n") === "rate-limit", "unchanged: the tail taxonomy");
 ok(classifyFireError(0, false, "") === null, "unchanged: exit 0 is never a failure class");
+
+// ── Round-3 review finding on PR #276 — a rejection is not a wedge ───────────────────────────────
+//
+// AC2 reads zero tokens as "the fire never reached the provider". That is an INFERENCE from an absence,
+// and one thing produces the same absence while meaning the opposite: a provider REJECTION. A 429, an
+// expired key, and a session cap are all answered before a token is billed, so they arrive with the
+// wedged fire's exact numbers — zero tokens, zero cost.
+//
+// The consequence is operational, not cosmetic. "stalled" is not provider-scoped, so a rejection filed
+// as a wedge accumulates only against the agent that happened to see it, while every sibling agent on
+// the same exhausted key keeps firing at full cadence into the outage the provider breaker exists to
+// stop. So these assertions pin the BREAKER SCOPE, not just the string.
+{
+  const REJECTED = { ceilingUsd: 20, spentUsd: 0, totalTokens: 0 }; // identical numbers to WEDGED — that is the point
+  const rejections: [string, string][] = [
+    ["429 too many requests\n", "rate-limit"],
+    ["Error: overloaded_error\n", "rate-limit"],
+    ["invalid api key · please run /login\n", "auth"],
+    ["You've hit your session limit · resets 12:20am (Europe/Paris)\n", "session-limit"],
+    ["credit balance too low\n", "spend-limit"],
+  ];
+  for (const [tail, want] of rejections) {
+    const got = classifyFireError(126, false, tail, false, false, KILLED, REJECTED);
+    ok(got === want,
+      `PR#276 round 3: a budget kill whose tail says ${JSON.stringify(tail.trim().slice(0, 32))} is "${want}", not a wedge (got "${got}")`);
+    ok(got !== null && PROVIDER_SCOPED_CLASSES.has(got),
+      `PR#276 round 3: …and it keeps a PROVIDER-scoped class, so the sibling agents on that key are capped too (got "${got}")`);
+  }
+
+  // Mutation guard, the other direction: with NO evidence in the tail the wedge inference still stands.
+  // Delete the wedge arm and this fails; delete the tail consultation and the block above fails.
+  ok(classifyFireError(126, false, "", false, false, KILLED, REJECTED) === "stalled",
+    "PR#276 round 3: an empty tail leaves zero tokens as the only evidence — still a wedge");
+  ok(classifyFireError(126, false, "Wrote 3 files.\nDone.\n", false, false, KILLED, REJECTED) === "stalled",
+    "PR#276 round 3: a tail with no provider-error evidence does not refute the wedge either");
+
+  // The tail may only refute an INFERENCE, never override a MEASUREMENT. A fire that burned tokens was
+  // not wedged, so nothing about it is in question: the deadline is why it ended.
+  ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, PRODUCTIVE) === "budget-deadline",
+    "PR#276 round 3: a kill that DID consume tokens is still the deadline's — a tail pattern does not hijack it");
+  // AC6 must survive the new arm: a measured breach is a fact, and no tail string outranks it.
+  ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, { ceilingUsd: 20, spentUsd: 20.01, totalTokens: 9_000_000 }) === "budget-per-fire",
+    "PR#276 round 3: a MEASURED breach still classifies budget-per-fire whatever its tail says (AC6 survives)");
+
+  // One derivation, asserted by RUNNING both paths rather than by re-stating the patterns: a copied
+  // predicate would agree with itself here while the shipped path drifted.
+  for (const [tail] of rejections) {
+    ok(classifyFireError(126, false, tail, false, false, KILLED, REJECTED) === classifyFireError(1, false, tail),
+      `PR#276 round 3: the budget arm and the ordinary failure path read ${JSON.stringify(tail.trim().slice(0, 24))} identically`);
+  }
+}
 
 // ── AC3 — a watchdog-killed fire is a TRUNCATED sample, never a rate observation ─────────────────
 const WINDOW = 7 * 86_400_000;
