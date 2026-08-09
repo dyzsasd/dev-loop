@@ -249,11 +249,14 @@ try {
   // reap now depends on — and it does fail pre-fix, because destructive-guard.ts does not exist there.
   const gateWs = (projects: Record<string, { scratch?: boolean }>) => ({ file: { projects } } as unknown as Workspace);
   // The reap offers no token (there is none to offer on `team repair --reap`), so this is the exact call it makes.
-  ok(isolationVerdict(gateWs({ "to-reap": { scratch: true } }), "to-reap", []).refusal === null,
+  // LOOP-368: pinned to a no-fire env, because the verdict now answers the fire question too and these
+  // three are the TOKEN half's contract. The fire half is asserted in destructive-fire-gate.ts.
+  const noFire = scrubFireEnv();
+  ok(isolationVerdict(gateWs({ "to-reap": { scratch: true } }), "to-reap", [], noFire).refusal === null,
     "LOOP-305: the reap's own call shape (no token) ALLOWS a scratch candidate — the gate does not break the reaper");
-  ok(isolationVerdict(gateWs({ "real-proj": {} }), "real-proj", []).refusal !== null,
+  ok(isolationVerdict(gateWs({ "real-proj": {} }), "real-proj", [], noFire).refusal !== null,
     "LOOP-305 AC6: the same call REFUSES a non-scratch project — so a widened candidate filter alone can no longer reap one");
-  ok(isolationVerdict(gateWs({ other: { scratch: true } }), "vanished", []).refusal !== null,
+  ok(isolationVerdict(gateWs({ other: { scratch: true } }), "vanished", [], noFire).refusal !== null,
     "LOOP-305 AC6: a candidate key absent from config refuses too (fail closed — config is the only authority)");
   ok(confirmationToken("real-proj") === `${TOKEN_PREFIX}real-proj` && TOKEN_PREFIX === "--i-understand-this-deletes-",
     "LOOP-305: the token spelling has ONE definition, shared by every destructive verb that recognises it");
