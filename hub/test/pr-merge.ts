@@ -13,12 +13,13 @@
 //
 // This file does NOT re-assert merge-guard's own verdicts (LOOP-407 and LOOP-242 own those); it pins
 // the verb's contract: what it issues, what it refuses to issue, and how a refusal reads.
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb } from "../src/db.ts";
+import { acquireLock } from "../src/locks.ts";
 import { EXIT_UNEVALUATED, skipClass } from "../src/merge-guard.ts";
-import { prMerge, prMergeExit, mergeArgvFor, resolvePrMergeTarget, PR_MERGE_EXIT, type PrMergeResult } from "../src/pr-merge.ts";
+import { prMerge, prMergeExit, mergeArgvFor, resolvePrMergeTarget, prMergeLockPath, PR_MERGE_EXIT, type PrMergeResult } from "../src/pr-merge.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -129,11 +130,16 @@ try {
     return { exec, calls, refused };
   };
 
-  const run = (s: Scenario, opts: { apply?: boolean } = {}): { r: PrMergeResult; calls: Call[]; refused: Call[]; exit: number } => {
+  const run = async (s: Scenario, opts: { apply?: boolean } = {}): Promise<{ r: PrMergeResult; calls: Call[]; refused: Call[]; exit: number }> => {
     const { exec, calls, refused } = mkExec(s);
-    const r = prMerge(repoDir, {
+    const r = await prMerge(repoDir, {
       pr: PR, ghRepo: GHREPO, dbPath, exec, agentReviewers: [],
       mergeChecks: CHECKS, defaultBranch: "main", repoEligible: true,
+      // Hermetic: an explicit lock path keeps these arms out of whatever workspace the runner
+      // happens to sit in. LOOP-418 is the reason it is passed rather than resolved — a per-file
+      // test run inside a fire resolves the LIVE workspace, so a default-resolved lock would put
+      // this suite's lock files in the operator's workspace.
+      lockPath: join(ROOT, "locks", "arm.lock"),
       ...(opts.apply !== undefined ? { apply: opts.apply } : {}),
     });
     return { r, calls, refused, exit: prMergeExit(r) };
@@ -142,7 +148,7 @@ try {
 
   // ── AC2: all axes clean → it squashes, with the argv pinned ────────────────────────────────────
   {
-    const { r, calls, refused, exit } = run({ ticket: "PM-1" }, { apply: false });
+    const { r, calls, refused, exit } = await run({ ticket: "PM-1" }, { apply: false });
     ok(r.merged, "AC2: every evaluated axis clean → merged");
     ok(exit === PR_MERGE_EXIT.merged && exit === 0, `AC2: exit 0 (got ${exit})`);
     const m = mergeCalls(calls);
@@ -161,8 +167,8 @@ try {
   // ── AC1 + AC4: each axis holds, names itself, and issues NO merge ──────────────────────────────
   // One arm per axis. `axisHold` is the shared shape check: non-zero exit, no merge subprocess, and
   // a hold whose token identifies the cause — never one undifferentiated "refused".
-  const axisHold = (label: string, s: Scenario, token: string, detailProbe: RegExp): PrMergeResult => {
-    const { r, calls, exit } = run(s, { apply: false });
+  const axisHold = async (label: string, s: Scenario, token: string, detailProbe: RegExp): Promise<PrMergeResult> => {
+    const { r, calls, exit } = await run(s, { apply: false });
     ok(!r.merged, `AC1 ${label}: NOT merged`);
     ok(exit === PR_MERGE_EXIT.held, `AC1 ${label}: exit 1 (held) — non-zero, so §12c's "non-zero HOLDS that merge" already does the right thing (got ${exit})`);
     ok(mergeCalls(calls).length === 0, `AC1 ${label}: NO \`gh pr merge\` subprocess was issued`);
@@ -173,22 +179,22 @@ try {
     return r;
   };
 
-  axisHold("boardState", { ticket: "PM-2" }, "board-not-merge-eligible", /PM-2 is In Review/);
-  axisHold("forgeReview", { ticket: "PM-1", changesRequestedBy: "bob" }, "unresolved-review", /@bob/);
-  axisHold("ciFreshness/check-never-reported",
+  await axisHold("boardState", { ticket: "PM-2" }, "board-not-merge-eligible", /PM-2 is In Review/);
+  await axisHold("forgeReview", { ticket: "PM-1", changesRequestedBy: "bob" }, "unresolved-review", /@bob/);
+  await axisHold("ciFreshness/check-never-reported",
     { ticket: "PM-1", rollup: [{ name: "GitGuardian Security Checks", conclusion: "SUCCESS" }] },
     "check-never-reported", /never reported: Test \(Node 23\.6\.0\), Test \(Node 24\)/);
-  axisHold("ciFreshness/red",
+  await axisHold("ciFreshness/red",
     { ticket: "PM-4", rollup: [{ name: CHECKS[0]!, conclusion: "FAILURE" }, { name: CHECKS[1]!, conclusion: "SUCCESS" }] },
     "red", /verdict=red/);
-  axisHold("ciFreshness/stale", { ticket: "PM-5", behindBy: 3 }, "stale", /3 commit\(s\) behind/);
+  await axisHold("ciFreshness/stale", { ticket: "PM-5", behindBy: 3 }, "stale", /3 commit\(s\) behind/);
 
   // AC4, the part a single exit code cannot express: two axes holding the SAME PR stay two lines
   // with two tokens. `check-never-reported` (re-dispatch the workflow) and a board-state hold (fix
   // the ticket) are different next actions, and collapsing co-occurring causes into one sentence is
   // the mistake LOOP-433 records on the doctor side.
   {
-    const { r, calls, exit } = run({ ticket: "PM-2", rollup: [] }, { apply: false });
+    const { r, calls, exit } = await run({ ticket: "PM-2", rollup: [] }, { apply: false });
     ok(exit === PR_MERGE_EXIT.held, "AC4 co-occurring: still exit 1");
     ok(mergeCalls(calls).length === 0, "AC4 co-occurring: no merge issued");
     ok(r.holds.length === 2, `AC4 co-occurring: BOTH axes are reported (got ${r.holds.length})`);
@@ -204,33 +210,33 @@ try {
   // (LOOP-407 — tripping would objection-spam every slow PR), so nothing else would stand between a
   // still-running CI and a squash. These arms are that filter.
   {
-    const pend = run({ ticket: "PM-1", rollup: CHECKS.map((name) => ({ name, conclusion: null })) }, { apply: false });
+    const pend = await run({ ticket: "PM-1", rollup: CHECKS.map((name) => ({ name, conclusion: null })) }, { apply: false });
     ok(pend.r.guard?.ciFreshness.trip === false, "readiness: pending checks still do NOT trip the guard (LOOP-407 unchanged)");
     ok(pend.exit === PR_MERGE_EXIT.held, `readiness: …but the VERB holds — a pending PR is not merged (got exit ${pend.exit})`);
     ok(mergeCalls(pend.calls).length === 0, "readiness: no merge subprocess while CI is still running");
     ok(pend.r.holds.length === 1 && pend.r.holds[0]?.token === "pending",
       `readiness: token 'pending' — "leave it for the next fire", not an objection (got ${pend.r.holds.map((h) => h.token).join("+")})`);
 
-    const dirty = run({ ticket: "PM-1", mergeable: "CONFLICTING" }, { apply: false });
+    const dirty = await run({ ticket: "PM-1", mergeable: "CONFLICTING" }, { apply: false });
     ok(dirty.exit === PR_MERGE_EXIT.held && mergeCalls(dirty.calls).length === 0, "readiness: a CONFLICTING PR is held, not merged");
     ok(dirty.r.holds.some((h) => h.axis === "readiness" && h.token === "not-mergeable"),
       `readiness: token 'not-mergeable' (got ${dirty.r.holds.map((h) => h.token).join("+")})`);
 
-    const unknown = run({ ticket: "PM-1", mergeable: "UNKNOWN" }, { apply: false });
+    const unknown = await run({ ticket: "PM-1", mergeable: "UNKNOWN" }, { apply: false });
     ok(unknown.r.holds.some((h) => h.token === "mergeability-unknown") && mergeCalls(unknown.calls).length === 0,
       "readiness: mergeability UNKNOWN fails closed — §12c merges only what IS mergeable");
 
-    const draft = run({ ticket: "PM-1", isDraft: true }, { apply: false });
+    const draft = await run({ ticket: "PM-1", isDraft: true }, { apply: false });
     ok(draft.r.holds.some((h) => h.token === "pr-draft") && mergeCalls(draft.calls).length === 0,
       "readiness: a DRAFT PR is held");
 
-    const closed = run({ ticket: "PM-1", state: "CLOSED" }, { apply: false });
+    const closed = await run({ ticket: "PM-1", state: "CLOSED" }, { apply: false });
     ok(closed.r.holds.some((h) => h.token === "pr-not-open") && mergeCalls(closed.calls).length === 0,
       "readiness: a CLOSED PR is held — there is nothing to land");
 
     // Readiness and a guard axis can hold the same PR, and both are reported: the guard still runs,
     // so the board objection reaches the ticket on the FIRST run rather than after the rebase.
-    const both = run({ ticket: "PM-2", mergeable: "CONFLICTING" }, { apply: false });
+    const both = await run({ ticket: "PM-2", mergeable: "CONFLICTING" }, { apply: false });
     ok(both.r.holds.length === 2 && new Set(both.r.holds.map((h) => h.axis)).size === 2,
       `readiness: a conflicting PR on a non-eligible ticket reports BOTH causes (got ${both.r.holds.map((h) => `${h.axis}:${h.token}`).join("+")})`);
   }
@@ -243,12 +249,12 @@ try {
       finally { db.close(); }
     };
     ok(readComments("PM-2").length === 0, "apply: the arms above ran with apply:false and wrote nothing (setup check)");
-    const { r, calls } = run({ ticket: "PM-2" });            // apply defaults ON — this verb replaces `--strict --apply`
+    const { r, calls } = await run({ ticket: "PM-2" });            // apply defaults ON — this verb replaces `--strict --apply`
     ok(r.guard?.applied?.action === "wrote", `apply: a hold posts the guard's objection (got ${r.guard?.applied?.action})`);
     const posted = readComments("PM-2");
     ok(posted.length === 1 && posted[0]!.includes("⛔ merge-guard:"), `apply: exactly one objection comment on the ticket (got ${posted.length})`);
     ok(mergeCalls(calls).length === 0, "apply: …and still no merge");
-    const again = run({ ticket: "PM-2" });
+    const again = await run({ ticket: "PM-2" });
     ok(again.r.guard?.applied?.action === "already_present", `apply: idempotent on re-run (got ${again.r.guard?.applied?.action})`);
     ok(readComments("PM-2").length === 1, "apply: …no duplicate comment");
 
@@ -262,7 +268,7 @@ try {
     // The message is now keyed on the recorded action; this pins the fact it keys on.
     //
     // PM-3 is In Progress, so the board axis does NOT trip: the DRAFT is the only thing holding.
-    const draft = run({ ticket: "PM-3", isDraft: true });     // apply ON
+    const draft = await run({ ticket: "PM-3", isDraft: true });     // apply ON
     ok(draft.r.holds.length > 0 && draft.r.holds.every((h) => h.axis === "readiness"),
       `apply: a draft PR holds on readiness alone (got ${JSON.stringify(draft.r.holds.map((h) => h.axis))})`);
     ok(draft.r.guard?.applied === undefined,
@@ -276,7 +282,7 @@ try {
   // that already landed (the LOOP-216 shape). The merged check therefore runs BEFORE the guard, and
   // that ordering is what this arm pins.
   {
-    const { r, calls, exit } = run({ ticket: "PM-7", state: "MERGED" });
+    const { r, calls, exit } = await run({ ticket: "PM-7", state: "MERGED" });
     ok(r.alreadyMerged && !r.merged, "idempotent: an already-MERGED PR reports alreadyMerged");
     ok(exit === PR_MERGE_EXIT.merged, `idempotent: exit 0 — a landed PR is not a failure (got ${exit})`);
     ok(mergeCalls(calls).length === 0, "idempotent: no second merge attempt");
@@ -285,14 +291,14 @@ try {
   {
     // Same PR state, but the ticket is In Review — the exact combination a second fire meets. It must
     // still be exit 0, or every landed ticket would collect a spurious objection.
-    const { r, exit } = run({ ticket: "PM-2", state: "MERGED" });
+    const { r, exit } = await run({ ticket: "PM-2", state: "MERGED" });
     ok(exit === PR_MERGE_EXIT.merged && r.guard === null,
       `idempotent: MERGED + In Review ticket is still a clean no-op (got exit ${exit})`);
   }
 
   // ── A forge error after a clear gate is NOT an objection ───────────────────────────────────────
   {
-    const { r, calls, exit } = run({ ticket: "PM-6", mergeOk: false, mergeStderr: "GraphQL: Base branch was modified" }, { apply: false });
+    const { r, calls, exit } = await run({ ticket: "PM-6", mergeOk: false, mergeStderr: "GraphQL: Base branch was modified" }, { apply: false });
     ok(!r.merged && r.holds.length === 0, "mergeFailed: no axis objected");
     ok(mergeCalls(calls).length === 1, "mergeFailed: the merge WAS attempted (the gate had cleared)");
     ok(exit === PR_MERGE_EXIT.mergeFailed && exit === 4, `mergeFailed: its own exit code 4, distinct from a hold (got ${exit})`);
@@ -302,7 +308,7 @@ try {
   // ── No repo resolved → usage, and still no merge ───────────────────────────────────────────────
   {
     const { exec, calls } = mkExec({ ticket: "PM-1" });
-    const r = prMerge(join(ROOT, "not-a-repo"), { pr: PR, dbPath, exec });   // no ghRepo, nothing to resolve from
+    const r = await prMerge(join(ROOT, "not-a-repo"), { pr: PR, dbPath, exec });   // no ghRepo, nothing to resolve from
     ok(r.ghRepo === null && !r.merged, "usage: an unresolvable repo does not merge");
     ok(prMergeExit(r) === PR_MERGE_EXIT.usage, `usage: exit 2 (got ${prMergeExit(r)})`);
     ok(calls.length === 0, "usage: not a single gh call — it cannot address a PR without owner/repo");
@@ -356,10 +362,10 @@ try {
       // The consequence, on the argv — driven exactly as the CLI drives it: the config comes from the
       // resolution and NOTHING is hand-passed, so a null config reproduces the pre-fix squash rather
       // than throwing.
-      const drive = (rollup: Array<{ name: string; conclusion: string | null }>): { r: PrMergeResult; merges: number; exit: number } => {
+      const drive = async (rollup: Array<{ name: string; conclusion: string | null }>): Promise<{ r: PrMergeResult; merges: number; exit: number }> => {
         const { exec, calls } = mkExec({ ticket: "PM-1", rollup });
         const cfg = sel;
-        const r = prMerge(wsRoot, {
+        const r = await prMerge(wsRoot, {
           pr: PR, dbPath, exec, agentReviewers: [], apply: false,
           ...(target.ghRepo ? { ghRepo: target.ghRepo } : {}),
           ...(cfg ? { mergeChecks: cfg.mergeChecks, defaultBranch: cfg.defaultBranch, repoEligible: cfg.repoEligible, ciIrrelevantPaths: cfg.ciIrrelevantPaths } : {}),
@@ -367,7 +373,7 @@ try {
         return { r, merges: mergeCalls(calls).length, exit: prMergeExit(r) };
       };
 
-      const missing = drive([{ name: "GitGuardian Security Checks", conclusion: "SUCCESS" }]);
+      const missing = await drive([{ name: "GitGuardian Security Checks", conclusion: "SUCCESS" }]);
       ok(missing.merges === 0 && missing.exit === PR_MERGE_EXIT.held,
         `selected-repo config: a required check that never reported HOLDS the squash from the workspace root (merges=${missing.merges}, exit=${missing.exit})`);
       ok(missing.r.holds[0]?.token === "check-never-reported",
@@ -375,7 +381,7 @@ try {
 
       // Control, same fixture and same double: a GREEN rollup still merges. Without it the arm above
       // would pass just as well if resolving the config had broken merging altogether.
-      const green = drive(greenRollup);
+      const green = await drive(greenRollup);
       ok(green.merges === 1 && green.exit === PR_MERGE_EXIT.merged,
         `selected-repo config control: a green rollup still merges, so the hold above is the CHECKS talking (merges=${green.merges}, exit=${green.exit})`);
     } finally {
@@ -433,7 +439,7 @@ try {
       // the squash instead of throwing.
       const { exec, calls } = mkExec({ ticket: "PM-1", rollup: greenRollup });
       const cfg = target.ciConfig.kind === "resolved" ? target.ciConfig.config : null;
-      const r = prMerge(ambRoot, {
+      const r = await prMerge(ambRoot, {
         pr: PR, dbPath, exec, agentReviewers: [], apply: false,
         ...(target.ghRepo ? { ghRepo: target.ghRepo } : {}),
         ...(target.ciConfig.kind === "ambiguous" ? { ciConfigAmbiguous: true } : {}),
@@ -465,7 +471,7 @@ try {
         `ambiguous config control: one entry ⇒ 'resolved' (got '${t2.ciConfig.kind}')`);
       const c2 = t2.ciConfig.kind === "resolved" ? t2.ciConfig.config : null;
       const { exec: e2, calls: k2 } = mkExec({ ticket: "PM-1", rollup: greenRollup });
-      const r2 = prMerge(ambRoot, {
+      const r2 = await prMerge(ambRoot, {
         pr: PR, dbPath, exec: e2, agentReviewers: [], apply: false,
         ...(t2.ghRepo ? { ghRepo: t2.ghRepo } : {}),
         ...(c2 ? { mergeChecks: c2.mergeChecks, defaultBranch: c2.defaultBranch, repoEligible: c2.repoEligible } : {}),
@@ -496,7 +502,7 @@ try {
   // to the old `else if (cf.verdict === "pending")` shape gives `merges=1, exit=0` here — the
   // unverified squash itself — and these checks fail; with the allowlist, `merges=0, exit=1`.
   {
-    const unk = run({ ticket: "PM-1", compareOk: false }, { apply: false });
+    const unk = await run({ ticket: "PM-1", compareOk: false }, { apply: false });
     ok(unk.r.guard?.ciFreshness.skipped === false,
       "ci-unknown: the axis RAN — this is not the skipped/degraded case, which has its own rule");
     ok(unk.r.guard?.ciFreshness.verdict === "unknown",
@@ -514,11 +520,12 @@ try {
     // The allowlist is the gate: `stale-exempt` — behind the tip, but every file in the delta is
     // configured CI-irrelevant — is a POSITIVE certification and still merges. Without this control
     // the arms above would pass equally well if the fix had simply frozen every merge.
-    const exempt = (() => {
+    const exempt = await (async () => {
       const { exec, calls } = mkExec({ ticket: "PM-1", behindBy: 2, files: ["docs/STRATEGY.md"] });
-      const r = prMerge(repoDir, {
+      const r = await prMerge(repoDir, {
         pr: PR, ghRepo: GHREPO, dbPath, exec, agentReviewers: [], apply: false,
         mergeChecks: CHECKS, defaultBranch: "main", repoEligible: true, ciIrrelevantPaths: ["docs/"],
+        lockPath: join(ROOT, "locks", "exempt.lock"),
       });
       return { r, merges: mergeCalls(calls).length, exit: prMergeExit(r) };
     })();
@@ -538,7 +545,7 @@ try {
   // FAIL-BEFORE / PASS-AFTER: `node hub/test/pr-merge.ts`. Dropping the flag from mergeArgvFor gives
   // an argv with no SHA precondition and these checks fail.
   {
-    const { r, calls } = run({ ticket: "PM-1", prHeadSha: "head000", ciHeadSha: "head000" }, { apply: false });
+    const { r, calls } = await run({ ticket: "PM-1", prHeadSha: "head000", ciHeadSha: "head000" }, { apply: false });
     const argv = mergeCalls(calls)[0] ?? [];
     const i = argv.indexOf("--match-head-commit");
     ok(i > -1 && argv[i + 1] === "head000",
@@ -549,7 +556,7 @@ try {
     // revision the CI axis certified; the readiness read is a different call and can already be
     // looking at a newer head. Pinning to the readiness SHA would authorise a revision no check
     // covered — the same hole, one call later.
-    const moved = run({ ticket: "PM-1", prHeadSha: "newerHead", ciHeadSha: "checkedHead" }, { apply: false });
+    const moved = await run({ ticket: "PM-1", prHeadSha: "newerHead", ciHeadSha: "checkedHead" }, { apply: false });
     const margv = mergeCalls(moved.calls)[0] ?? [];
     ok(margv[margv.indexOf("--match-head-commit") + 1] === "checkedHead",
       `head-pin: the pin is the CHECKED head, not whatever the readiness read saw (got ${JSON.stringify(margv)})`);
@@ -557,7 +564,7 @@ try {
     // Fallback: with the CI axis skipped there is no certified SHA, but a mid-flight push is still
     // not something to land silently — the readiness head pins it.
     const { exec, calls: c2 } = mkExec({ ticket: "PM-1", prHeadSha: "readinessHead" });
-    prMerge(repoDir, {
+    await prMerge(repoDir, {
       pr: PR, ghRepo: GHREPO, dbPath, exec, agentReviewers: [], apply: false,
       mergeChecks: CHECKS, defaultBranch: "main", repoEligible: false,   // ⇒ ciFreshness skipped, testedHead null
     });
@@ -570,6 +577,186 @@ try {
     // a spurious exit 4.
     ok(!mergeArgvFor(PR, GHREPO, null).includes("--match-head-commit"),
       `head-pin: no known SHA ⇒ no flag, never an empty one (got ${JSON.stringify(mergeArgvFor(PR, GHREPO, null))})`);
+  }
+
+  // ── LOOP-455: the axes and the squash are ONE critical section, per repo ───────────────────────
+  //
+  // FAIL-BEFORE / PASS-AFTER: `node hub/test/pr-merge.ts`. Against the pre-fix tree (a synchronous
+  // `prMerge` that takes no lock) the first arm below reports
+  //   ❌ LOOP-455/AC1: the axes do not run until the lock is free (0 gh calls while held) — got 7
+  //   ❌ LOOP-455/AC2: the second call re-read freshness against the MOVED base and held as stale
+  // because the call reads its axes immediately, sees behind_by=0, and squashes on a verdict
+  // computed against a base that fire 1 has already superseded. After the fix it waits, re-reads,
+  // and holds. Both arms pass.
+  {
+    const held = join(ROOT, "locks", "contended.lock");
+
+    // AC1 + AC2 — the interleaving the ticket describes, driven through the injected exec seam.
+    // Fire 1 is modelled by HOLDING the lock (it is mid-landing); the base moving under fire 2 is
+    // modelled by flipping `behindBy` while fire 2 is blocked. What is asserted is not "it waited"
+    // but the consequence that matters: fire 2's freshness verdict is computed AFTER the base moved.
+    {
+      const scenario: Scenario = { ticket: "PM-1", behindBy: 0 };   // mutated below, mid-flight
+      const { exec, calls } = mkExec(scenario);
+      const release = await acquireLock(held, { totalMs: 5_000, staleMs: 60_000 });
+
+      const inflight = prMerge(repoDir, {
+        pr: PR, ghRepo: GHREPO, dbPath, exec, agentReviewers: [], apply: false,
+        mergeChecks: CHECKS, defaultBranch: "main", repoEligible: true,
+        lockPath: held, lockWaitMs: 5_000,
+      });
+
+      await new Promise((r) => setTimeout(r, 300));
+      // The load-bearing assertion for AC1: with the lock held, the gate has not read ANYTHING.
+      // If the axes ran here they would be reading the pre-squash world, which is the whole defect.
+      ok(calls.length === 0,
+        `LOOP-455/AC1: the axes do not run until the lock is free (0 gh calls while held) — got ${calls.length}`);
+
+      scenario.behindBy = 5;    // fire 1's squash landed: main is now T+1 and this PR is behind it
+      release();
+
+      const r = await inflight;
+      ok(mergeCalls(calls).length === 0, `LOOP-455/AC2: the second call issues NO squash (got ${mergeCalls(calls).length})`);
+      ok(prMergeExit(r) === PR_MERGE_EXIT.held && r.holds[0]?.token === "stale",
+        `LOOP-455/AC2: the second call re-read freshness against the MOVED base and held as stale (exit ${prMergeExit(r)}, token '${r.holds[0]?.token}')`);
+    }
+
+    // AC3 — contention that outlasts the wait has ONE defined outcome: exit 5, nothing merged, and
+    // nothing read. Never a silent pass, and never exit 1: no axis objected, so there is no
+    // objection on the ticket for a caller to go and read.
+    {
+      const { exec, calls } = mkExec({ ticket: "PM-1" });
+      const release = await acquireLock(held, { totalMs: 5_000, staleMs: 60_000 });
+      const r = await prMerge(repoDir, {
+        pr: PR, ghRepo: GHREPO, dbPath, exec, agentReviewers: [], apply: false,
+        mergeChecks: CHECKS, defaultBranch: "main", repoEligible: true,
+        lockPath: held, lockWaitMs: 150,
+      });
+      release();
+      ok(prMergeExit(r) === PR_MERGE_EXIT.lockUnavailable && PR_MERGE_EXIT.lockUnavailable === 5,
+        `LOOP-455/AC3: contention past --lock-wait exits 5 (got ${prMergeExit(r)})`);
+      ok(r.lockUnavailable !== null && !r.merged && r.mergeArgv === null,
+        "LOOP-455/AC3: …reported as a lock failure, with no merge attempted");
+      ok(r.holds.length === 0, `LOOP-455/AC3: …and NOT as a hold — a hold names an objection somebody must answer (got ${r.holds.length})`);
+      ok(calls.length === 0, `LOOP-455/AC3: the gate never ran at all (got ${calls.length} gh calls)`);
+    }
+
+    // AC4 — the uncontended path is untouched: same argv, and the lock is RELEASED afterwards, so a
+    // second landing in the same repo is not blocked by the first having finished.
+    {
+      const { r, calls } = await run({ ticket: "PM-1" }, { apply: false });
+      const want = ["pr", "merge", "101", "--repo", GHREPO, "--squash", "--delete-branch", "--match-head-commit", "head000"];
+      ok(r.merged && JSON.stringify(mergeCalls(calls)[0]) === JSON.stringify(want),
+        "LOOP-455/AC4: an uncontended call issues the same argv it did before the lock existed");
+      ok(!existsSync(join(ROOT, "locks", "arm.lock")),
+        "LOOP-455/AC4: …and the lock is released, so it does not leak into the next landing");
+    }
+
+    // AC5a — a lock left by a CRASHED fire is broken, not waited out. Without this a budget-killed
+    // fire (routine here) would freeze every later merge in the repo until a human deleted a file.
+    {
+      const dead = join(ROOT, "locks", "dead.lock");
+      mkdirSync(join(ROOT, "locks"), { recursive: true });
+      writeFileSync(dead, JSON.stringify({ pid: 999_999, at: new Date().toISOString() }));  // no such process
+      const { exec, calls } = mkExec({ ticket: "PM-1" });
+      const r = await prMerge(repoDir, {
+        pr: PR, ghRepo: GHREPO, dbPath, exec, agentReviewers: [], apply: false,
+        mergeChecks: CHECKS, defaultBranch: "main", repoEligible: true,
+        lockPath: dead, lockWaitMs: 1_000,
+      });
+      ok(r.merged && mergeCalls(calls).length === 1,
+        `LOOP-455/AC5: a dead holder's lock is broken on liveness, so a killed fire cannot freeze the queue (merged=${r.merged})`);
+    }
+
+    // AC5b — an INFRASTRUCTURAL lock failure fails CLOSED. This is the classification the ticket
+    // asks to be made deliberately: §3.4 fails OPEN for a forge outage because an outage must not
+    // become a merge freeze, but a lock that cannot be taken is evidence about another WRITER, not
+    // about the forge — so it holds. `.git` is a file in this fixture, so the lock's parent
+    // directory cannot be created (ENOTDIR).
+    {
+      const { exec, calls } = mkExec({ ticket: "PM-1" });
+      const r = await prMerge(repoDir, {
+        pr: PR, ghRepo: GHREPO, dbPath, exec, agentReviewers: [], apply: false,
+        mergeChecks: CHECKS, defaultBranch: "main", repoEligible: true,
+        lockPath: join(repoDir, ".git", "nope", "x.lock"), lockWaitMs: 200,
+      });
+      ok(prMergeExit(r) === PR_MERGE_EXIT.lockUnavailable && mergeCalls(calls).length === 0,
+        `LOOP-455/AC5: a lock that cannot be created fails CLOSED — no squash (exit ${prMergeExit(r)}, merges ${mergeCalls(calls).length})`);
+    }
+
+    // AC1 — the lock a registered repo resolves to is BYTE-IDENTICAL to the one
+    // `dev-loop with-repo-lock <ref>` takes, so a squash and a merge-back push cannot both move
+    // `defaultBranch` at once. The env scrub is LOOP-418: a per-file run inside a fire resolves the
+    // LIVE workspace from DEVLOOP_HUB_DB and would answer for the wrong tree.
+    {
+      const saved: Record<string, string | undefined> = {};
+      for (const k of ["DEVLOOP_HUB_DB", "DEVLOOP_RUN_DIR", "DEVLOOP_WORKSPACE", "DEVLOOP_DATA_DIR", "DEVLOOP_PROJECTS_JSON"]) {
+        saved[k] = process.env[k]; delete process.env[k];
+      }
+      try {
+        const wsr = join(ROOT, "ws455");
+        const wrepo = join(wsr, "checkout");
+        mkdirSync(wrepo, { recursive: true });
+        writeFileSync(join(wsr, "dev-loop.json"), JSON.stringify({
+          schemaVersion: 2, team: { key: "t455", backend: "service" },
+          repos: { mine: { path: "checkout", remote: `git@github.com:${GHREPO}.git` } },
+          projects: {},
+        }));
+        const viaPath = prMergeLockPath(wrepo, GHREPO);
+        ok(viaPath.endsWith(join(".dev-loop", "locks", "repo-mine.lock")),
+          `LOOP-455/AC1: a registered repo locks on with-repo-lock's own name repo-<ref> (got ${viaPath})`);
+        // From the workspace root — the cwd-independent invocation --help advertises — the ref is
+        // matched by REMOTE, so both invocations serialize on one lock rather than two.
+        const viaRemote = prMergeLockPath(wsr, GHREPO);
+        ok(viaRemote === viaPath,
+          `LOOP-455/AC1: the same repo resolves to the SAME lock from the workspace root (got ${viaRemote} vs ${viaPath})`);
+
+        // …and from the TICKET WORKTREE, with the registry entry's OPTIONAL `remote` absent. Those
+        // are the two conditions under which the ref match used to fall through — the worktree path
+        // equals no registered `path`, and with no `remote` there is nothing left to match on — so
+        // the name became `repo-gh-<owner-repo>` while `with-repo-lock <ref>` kept taking
+        // `repo-<ref>`. Two names is not serialization, and §7 makes the worktree the NORMAL place a
+        // dev tier lands from, so this is the common invocation rather than an exotic one.
+        const wsw = join(ROOT, "ws455w");
+        const clone = join(wsw, "checkout");
+        const gitdir = join(clone, ".git", "worktrees", "LOOP-455");
+        const wt = join(wsw, "wt", "LOOP-455");
+        mkdirSync(gitdir, { recursive: true });
+        mkdirSync(wt, { recursive: true });
+        writeFileSync(join(wsw, "dev-loop.json"), JSON.stringify({
+          schemaVersion: 2, team: { key: "t455w", backend: "service" },
+          repos: { mine: { path: "checkout" } },   // no `remote` — the field is optional
+          projects: {},
+        }));
+        writeFileSync(join(wt, ".git"), `gitdir: ${gitdir}\n`);
+        const viaWorktree = prMergeLockPath(wt, GHREPO);
+        ok(viaWorktree === prMergeLockPath(clone, GHREPO) &&
+           viaWorktree.endsWith(join(".dev-loop", "locks", "repo-mine.lock")),
+          `LOOP-455/AC1: landing from a ticket worktree of a remote-less registry entry takes the ref's own lock, not a second name (got ${viaWorktree})`);
+        // …and from a SUBDIRECTORY of that worktree. `pr merge` runs from wherever the fire happens
+        // to be, so a name that only answers at the worktree root is a name that changes with the
+        // cwd — and a lock whose name changes with the cwd is not a lock.
+        const inner = join(wt, "hub", "src");
+        mkdirSync(inner, { recursive: true });
+        ok(prMergeLockPath(inner, GHREPO) === viaWorktree,
+          `LOOP-455/AC1: a subdirectory of the worktree resolves to the same lock as its root (got ${prMergeLockPath(inner, GHREPO)})`);
+        // Same for a package subdirectory of the base clone itself — `hub/` is where this repo's
+        // commands are actually run from.
+        const pkg = join(clone, "hub");
+        mkdirSync(pkg, { recursive: true });
+        ok(prMergeLockPath(pkg, GHREPO) === viaWorktree,
+          `LOOP-455/AC1: a package subdirectory of the clone resolves to the same lock (got ${prMergeLockPath(pkg, GHREPO)})`);
+        // The structural match is on `.git/worktrees/`, so a SUBMODULE does not borrow its
+        // superproject's lock — it is a different repo that happens to nest.
+        const sub = join(wsw, "checkout", "vendor", "sub");
+        mkdirSync(sub, { recursive: true });
+        writeFileSync(join(sub, ".git"), `gitdir: ${join(clone, ".git", "modules", "sub")}\n`);
+        ok(prMergeLockPath(sub, GHREPO).endsWith(join(".dev-loop", "locks", `repo-gh-${GHREPO.replace("/", "-")}.lock`)),
+          `LOOP-455/AC1: a submodule is not a worktree — it does not resolve to the superproject's ref lock (got ${prMergeLockPath(sub, GHREPO)})`);
+      } finally {
+        for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v;
+      }
+    }
   }
 
   // ── AC5: merge-guard's exit contract is not renumbered ─────────────────────────────────────────
@@ -587,7 +774,7 @@ try {
   // directly, since the exec seam cannot reach it.
   const synthetic: PrMergeResult = {
     merged: false, alreadyMerged: false, holds: [], unevaluated: "no-ticket-input",
-    ghRepo: GHREPO, guard: null, mergeArgv: null, mergeError: null,
+    ghRepo: GHREPO, guard: null, mergeArgv: null, mergeError: null, lockUnavailable: null,
   };
   ok(prMergeExit(synthetic) === PR_MERGE_EXIT.unevaluated,
     "AC5: a run that evaluated nothing it could have maps to exit 3, never to 0");
