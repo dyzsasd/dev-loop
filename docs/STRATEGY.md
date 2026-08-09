@@ -209,6 +209,20 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   share the same `next-project` rotation picker.
 - **Operator steering:** daily/weekly reports and 点评 are distilled into lessons; direction lands
   through the strategy/doc system and operator-reviewed changes.
+- **Landing is serialized per repo, and `pr merge` has a fifth exit code (LOOP-455, verified-Done
+  2026-08-09, `fbe76ed`).** `dev-loop pr merge` now takes the per-repo lock ITSELF and holds it
+  across gate-axes-then-squash, on the same `repo-<ref>` name `dev-loop with-repo-lock <ref>` takes
+  — so a squash and a `landing:"direct"` merge-back cannot both move `defaultBranch`, and two
+  concurrent fires can no longer both land against a base neither one's checks covered. **What a
+  fire must act on: exit `5` means "another fire is landing — re-run", NOT an objection.** Nothing
+  is written to the ticket on a 5, so a caller that treats it as a hold goes hunting for a comment
+  that was never posted. Contention waits `--lock-wait` (default 120s) first; a crashed fire's lock
+  is broken on a liveness check, so a budget kill cannot freeze the queue. One stale policy
+  (`REPO_LOCK_STALE_MS`, 15m) now binds every `repo-<ref>` contender — `pr merge`, `with-repo-lock`,
+  `doc-land`, `worktree add`/`reap` — because staleness is judged by the CONTENDER, so a single
+  holdout on the old 30s default reopened the hole for everyone. Residual, filed not forgotten:
+  two registered refs sharing one GitHub remote still take different locks (LOOP-480; exposure here
+  is zero, the registry has one entry).
 
 - **Release history is `CHANGELOG.md`, not this section** — the always-current user-facing picture
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
@@ -313,6 +327,24 @@ that is a DIRECTION section, and its correction is LOOP-446, 29 h in the operato
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-09 (pm, one-hundred-fourth fire) — a routing MARKER is not prose, and the fix for a
+  false marker is the marker, never the gate.** Verifying LOOP-455 (`In Review → Done`) was REFUSED
+  by the §21a close gate: `LOOP-455 is a design parent with 1 staged child(ren) still in Backlog
+  (LOOP-480)`. It was true of the encoding and false of the world — LOOP-480 opened with a bare
+  `Design: parent LOOP-455` line, which `design-parent.ts` reads as the §21a CHILD marker and which
+  therefore makes the ticket it names a design parent BOARD-WIDE. LOOP-455 is a direct-code
+  escalation: no `Mode: design` body, no design doc, and LOOP-480 decomposes nothing — its own text
+  says its fix "contradicts LOOP-455's own AC1", i.e. it is explicitly outside that scope. **The
+  call: correct the data, not the gate.** The pointer line was removed from LOOP-480 (its
+  `relatedTo` kinship untouched) and the close then landed. The rejected alternative was promoting
+  LOOP-480 to satisfy §21a's pass action — which would have accepted the false premise, breached the
+  §5a senior cap at 10/10, and jumped a ticket ahead of rows that had waited longer. **The rule: a
+  deferred slice is a SIBLING — it takes `relatedTo` and never a `Design:` pointer; a pointer keyword
+  at the start of a line is a state-machine write, so a filer who means "see also" must not spell it
+  that way.** Generalizes the same shape already recorded for `Blocked-by:`/`Unblocked-by:`.
+  Cost of the mis-encoding: a verified increment sat closeable-but-refused, and the refusal surfaced
+  only at the parent's close, not at the child's filing. LOOP-455, LOOP-480.
 
 - **2026-08-09 (pm, ninety-fourth fire) — a coverage predicate must select on the PROPERTY it
   certifies, not on one spelling of it.** LOOP-368's AC6 enumerates its covered set as "files
