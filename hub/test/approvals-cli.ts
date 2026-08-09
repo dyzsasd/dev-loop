@@ -37,12 +37,12 @@ interface Run { code: number; out: string; err: string }
  * explicit argument rather than something inherited: scrubFireEnv() strips the markers this suite is
  * itself running under, and each case then puts back exactly the one it means to test.
  */
-function run(args: string[], fire?: "DEVLOOP_DEV_SPLIT" | "DEVLOOP_TEAM_SCOPE"): Run {
+function run(args: string[], fire?: "DEVLOOP_DEV_SPLIT" | "DEVLOOP_TEAM_SCOPE", actor?: string): Run {
   const env: Record<string, string | undefined> = {
     ...scrubFireEnv(),
     DEVLOOP_HUB_DB: DB,
     DEVLOOP_PROJECT: "ap",
-    DEVLOOP_ACTOR: fire ? "senior-dev" : "operator",
+    DEVLOOP_ACTOR: actor ?? (fire ? "senior-dev" : "operator"),
   };
   if (fire) env[fire] = "true";
   const r = spawnSync("node", [CLI, ...args], { cwd: tmp, env: env as NodeJS.ProcessEnv, encoding: "utf8" });
@@ -298,6 +298,69 @@ try {
     const eqForm = run(["request", KEY, "--ticket=--odd-but-real"]);
     ok(eqForm.code === 0, `P3 control: --flag=<value> still accepts a value starting with '--' (got ${eqForm.code}; ${eqForm.err.trim().slice(0, 160)})`);
     ok(byKey(KEY)?.ticket_id === "--odd-but-real", `P3 control: and it is stored verbatim (ticket=${byKey(KEY)?.ticket_id})`);
+  }
+
+  {
+    // P4 — a typo'd DEVLOOP_ACTOR wrote a real grant attributed to nobody. The other direct-DB write
+    // surface (cli-agentops.ts) has refused a phantom actor since G1; this one did not, so
+    // `DEVLOOP_ACTOR=opertaor dev-loop approve <key>` exited 0 and left a GRANTED row whose grantor
+    // the workspace has never heard of — on the one surface where the identity IS the record.
+    const PHANTOM = "opertaor";
+    const KEY = `push:release:${SHA}`;
+    const before = rows().length;
+
+    const granted = run(["approve", KEY], undefined, PHANTOM);
+    ok(granted.code === 4, `P4 approve under a phantom actor is an identity failure, exit 4 (got ${granted.code})`);
+    ok(!byKey(KEY), "P4 and no grant was written for it");
+    ok(granted.err.includes(PHANTOM), `P4 the refusal names the handle it did not recognise`);
+    ok(granted.err.includes("operator"), "P4 and lists the handles that ARE known, so the typo is fixable");
+
+    ok(run(["request", "reopen:AP-91", "--ticket", "AP-91"], undefined, PHANTOM).code === 4,
+      "P4 request is refused too — a pending row is attributed the same way a grant is");
+    ok(!byKey("reopen:AP-91"), "P4 and that request wrote nothing");
+
+    // A revoke ENDS an authorization; recording who did that against a name nobody owns is the same hole.
+    const LIVE = `push:main:${SHA}`;
+    ok(run(["approve", LIVE]).code === 0, "P4 fixture: a live grant to aim a phantom revoke at");
+    ok(run(["revoke", LIVE], undefined, PHANTOM).code === 4, "P4 revoke under a phantom actor is refused");
+    ok(byKey(LIVE)?.state === "granted", `P4 and the grant it aimed at is untouched (state=${byKey(LIVE)?.state})`);
+    ok(rows().length === before + 1, `P4 exactly one row (the fixture) was added across every phantom call`);
+
+    // Both directions, per this suite's own rule: a guard that refuses EVERYTHING would pass every
+    // assertion above while costing the operator the only way to SEE the state. Reading attributes
+    // nothing, so it stays open — and the same handle that cannot write can still look.
+    const listed = run(["approvals", "--json"], undefined, PHANTOM);
+    ok(listed.code === 0, `P4 control: the READ verb still answers a phantom actor (got ${listed.code})`);
+    ok(listed.out.includes(LIVE), "P4 control: and returns the real listing, not an empty one");
+    // Control: a known actor still writes — the gate discriminates by roster, not by refusing.
+    ok(run(["revoke", LIVE]).code === 0, "P4 control: the same revoke from a KNOWN actor succeeds");
+    ok(byKey(LIVE)?.state === "revoked", `P4 control: and it ended (state=${byKey(LIVE)?.state})`);
+  }
+  {
+    // P5 — `revoke` chose the id path for anything that failed the KEY grammar, but a parse failure
+    // only proves the target is not a legal key. So a mistyped key was answered as a missing id:
+    // `revoke push:main` returned a domain error naming nothing the caller could fix, and adding
+    // --project returned the unrelated note that a scope cannot accompany an id.
+    const MALFORMED = "push:main"; // a capability, not an end state — the design's own illegal example
+    const bare = run(["revoke", MALFORMED]);
+    ok(bare.code === 2, `P5 a malformed KEY is a usage error, not a missing id (got ${bare.code})`);
+    ok(bare.err.includes("end state"), "P5 and the message explains the key grammar it failed");
+    ok(!bare.err.includes("approval id"), "P5 it does not describe the input as an id the store lacks");
+
+    const scoped = run(["revoke", MALFORMED, "--project", "ap"]);
+    ok(scoped.code === 2, `P5 --project alongside a malformed key is still the key's error (got ${scoped.code})`);
+    ok(scoped.err.includes("end state"), "P5 and it names the key, not the scope flag");
+
+    // Control: the id path survives — a well-formed id that names no row is a DOMAIN error (exit 1),
+    // which is what distinguishes "you typed a bad key" from "that approval does not exist".
+    const ABSENT = "00000000-0000-4000-8000-000000000000";
+    const missing = run(["revoke", ABSENT]);
+    ok(missing.code === 1, `P5 control: an unknown but well-formed id is a domain error (got ${missing.code})`);
+    // Control: a legal key still resolves and revokes.
+    const OKKEY = `push:ctl:${SHA}`;
+    ok(run(["approve", OKKEY]).code === 0, "P5 control fixture: a legal key grants");
+    ok(run(["revoke", OKKEY]).code === 0, "P5 control: and the same legal key revokes");
+    ok(byKey(OKKEY)?.state === "revoked", `P5 control: through the key path (state=${byKey(OKKEY)?.state})`);
   }
 
   console.log(fails ? `\n${fails} assertion(s) failed` : "\nAPPROVALS_CLI_OK");

@@ -20,8 +20,8 @@
 // and reading the record authorise nothing, and a fire that could not ask would route around the
 // module entirely (design §1: a missing approval is a typed request and a moved-on fire, never a wait).
 import { isMainEntry } from "./is-entry.ts";
-import { openDb } from "./db.ts";
-import { findProject } from "./seed.ts";
+import { openDb, actorExists, listActorHandles } from "./db.ts";
+import { ensureActors, findProject } from "./seed.ts";
 import { resolveHubDbPath } from "./workspace.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { activeFireMarker } from "./destructive-guard.ts"; // the ONE fire-marker list, owned there
@@ -37,6 +37,18 @@ export type Verb = (typeof VERBS)[number];
 
 /** The verbs a fire may not run (design §2). Exported so a test names the same set the code does. */
 export const FIRE_REFUSED_VERBS: ReadonlySet<Verb> = new Set<Verb>(["approve", "revoke"]);
+
+/**
+ * The verbs that WRITE an approval row, and so must carry a real actor (G1, below).
+ *
+ * `approvals` is deliberately outside this set: a listing attributes nothing, so refusing it on a
+ * bad DEVLOOP_ACTOR would cost the operator their only way to SEE the state without protecting any
+ * record. The guard exists to keep an unattributable row out of the store, not to gate reading.
+ */
+export const WRITING_VERBS: ReadonlySet<Verb> = new Set<Verb>(["approve", "revoke", "request"]);
+
+/** The shape `randomUUID()` writes into `approvals.id` — how `revoke` tells an id from a key. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // An ApprovalError is either "you typed the key/expiry wrong" (usage, exit 2 — AC6) or "the record
 // says no" (domain, exit 1). Splitting them here rather than at each throw site keeps the mapping in
@@ -299,12 +311,30 @@ export function approvalsCmd(argv: readonly string[] = process.argv.slice(2)): n
   }
 
   let db: DatabaseSync;
-  try { db = openDb(resolveHubDbPath()); }
+  try {
+    db = openDb(resolveHubDbPath());
+    ensureActors(db); // idempotent; the G1 guard below needs the roster present to answer at all
+  }
   catch (e) { console.error(`dev-loop ${v}: cannot open the board — ${(e as Error).message}`); return 5; }
 
   const json = flags.json === true;
   const now = new Date().toISOString();
   const actor = process.env.DEVLOOP_ACTOR?.trim() || "operator";
+
+  // G1 phantom-actor guard — the same one cli-agentops.ts applies to the other direct-DB write
+  // surface, and this surface needs it MORE: an approval's entire value is the identity that granted
+  // it, the grantor/revoker columns carry no foreign key to the roster, and the fire refusal above
+  // rests on DEVLOOP_ACTOR being a name the workspace actually knows. Without this, a typo
+  // (`DEVLOOP_ACTOR=opertaor dev-loop approve <key>`) exits 0 and leaves a GRANTED row authorising a
+  // real action on behalf of nobody — an authorisation no one can be asked about afterwards.
+  if (WRITING_VERBS.has(v) && !actorExists(db, actor)) {
+    console.error(
+      `dev-loop ${v}: DEVLOOP_ACTOR='${actor}' is not a known actor, so this ${v} could only be ` +
+      `recorded against a name the workspace does not have. Valid: ${listActorHandles(db).join(", ")}. ` +
+      `Nothing has been written.`,
+    );
+    return 4;
+  }
 
   try {
     if (v === "approvals") return listVerb(db, flags, positional, json, now);
@@ -438,10 +468,13 @@ function revokeVerb(
   if (positional.length > 1) { console.error(`dev-loop revoke: unexpected argument '${positional[1]}'`); return 2; }
   const note = str(flags, "note") ?? null;
 
-  // A UUID is never a legal action key (its first segment is not a registered class), so the two
-  // shapes are told apart by the grammar itself rather than by a flag the caller must remember.
-  const parsed = parseActionKey(target);
-  if (!parsed.ok) {
+  // The two shapes are told apart by the ID's own grammar rather than by a flag the caller must
+  // remember. Asking "is this a UUID?" is the load-bearing direction: failing the KEY grammar only
+  // proves the target is not a legal key, so routing every parse failure to the id path answered a
+  // mistyped key (`revoke push:main`) with "no such approval id" — a domain error, exit 1, naming
+  // nothing the caller could fix — and `--project` alongside it with the unrelated note that a scope
+  // cannot accompany an id. A malformed key is a malformed key, and says so.
+  if (UUID.test(target)) {
     // An explicit id names ONE row, which already carries its scope. A scope flag passed alongside it
     // could only be silently ignored — the shape `approve --request` refuses rather than resolves by
     // precedence, for the same reason: the caller would believe they had constrained the write.
@@ -455,6 +488,11 @@ function revokeVerb(
     emit(withState(row, db), json, `revoked ${row.action_key}`);
     return 0;
   }
+
+  // Not a UUID ⇒ the caller meant a key, so a bad one is answered in the key's own terms — the same
+  // usage error (exit 2, AC6) `approvals --key` and `approve` already give for the same input.
+  const parsed = parseActionKey(target);
+  if (!parsed.ok) { console.error(`dev-loop revoke: ${parsed.message}`); return 2; }
 
   // Key resolution is SCOPED (the same predicate the listing uses). Unscoped, `revoke <key> --project a`
   // matched every project's row for that key and ended one belonging to project b — cancelling an
